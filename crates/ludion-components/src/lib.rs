@@ -4716,6 +4716,11 @@ pub struct ParticleEmitter {
     #[schemars(range(min = 0.0, max = 1.0))]
     #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
     pub softness: f32,
+    /// Lights the particles (default `false`: the authored colour is the look). `true`: a
+    /// particle's colour is its albedo times the light reaching its centre, with the lit sprite's
+    /// terms (ambient, point, spot, sun); shadow maps are ignored. Omitted from the text when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lit: bool,
     /// Names this emitter's random stream (default `0`). Two emitters sharing a seed draw the same
     /// lives, speeds and directions — which is a feature for a rank of torches and a mistake for a
     /// pair of impacts meant to look different.
@@ -4744,6 +4749,7 @@ impl Default for ParticleEmitter {
             end_color: [1.0, 1.0, 1.0, 0.0],
             blend: ParticleBlend::Alpha,
             softness: 0.5,
+            lit: false,
             seed: 0,
         }
     }
@@ -5692,6 +5698,7 @@ mod tests {
             "end_color",
             "shape",
             "blend",
+            "lit",
         ] {
             assert!(
                 props[field].get("x-ui-range").is_none(),
@@ -5966,6 +5973,29 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<ParticleEmitter>(json).unwrap(),
             emitter
+        );
+    }
+
+    /// `lit` is off by default and absent from the serialized form when off, so the hash, snapshots
+    /// and canonical text of every unlit emitter are unmoved.
+    #[test]
+    fn particle_lit_is_omitted_when_false_and_round_trips_when_true() {
+        let unlit = serde_json::to_value(ParticleEmitter::default()).unwrap();
+        assert!(unlit.get("lit").is_none());
+        let lit = ParticleEmitter {
+            lit: true,
+            ..ParticleEmitter::default()
+        };
+        let json = serde_json::to_value(&lit).unwrap();
+        assert_eq!(json["lit"], serde_json::json!(true));
+        assert_eq!(
+            serde_json::from_value::<ParticleEmitter>(json).unwrap(),
+            lit
+        );
+        assert!(
+            !serde_json::from_value::<ParticleEmitter>(serde_json::json!({}))
+                .unwrap()
+                .lit
         );
     }
 

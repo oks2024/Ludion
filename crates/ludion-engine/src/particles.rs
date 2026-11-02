@@ -609,6 +609,7 @@ impl EmitterContext {
             color,
             softness: self.emitter.softness,
             additive: self.emitter.blend == ParticleBlend::Additive,
+            lit: self.emitter.lit,
         })
     }
 }
@@ -1343,26 +1344,35 @@ mod tests {
         assert!((big.center.y - unit.center.y * 3.0).abs() < 1e-4);
     }
 
-    /// The blend flag and the camera basis travel verbatim onto every instance.
+    /// The blend and lit flags and the camera basis travel verbatim onto every instance, at full
+    /// and at a thinned density.
     #[test]
     fn the_blend_flag_and_camera_basis_reach_every_instance() {
         let emitter = ParticleEmitter {
             blend: ParticleBlend::Additive,
             softness: 0.25,
+            lit: true,
             ..endless()
         };
         let basis = CameraBasis {
             right: Vec3::new(0.0, 0.0, 1.0),
             up: Vec3::Y,
         };
-        let instances: Vec<_> =
-            evaluate(&emitter, &Transform::default(), at(0), 1.0, basis).collect();
-        assert!(!instances.is_empty());
-        assert!(
-            instances
-                .iter()
-                .all(|p| p.additive && p.softness == 0.25 && p.right == basis.right)
-        );
+        for density in [1.0, 0.5] {
+            let instances: Vec<_> =
+                evaluate(&emitter, &Transform::default(), at(0), density, basis).collect();
+            assert!(!instances.is_empty());
+            assert!(
+                instances.iter().all(|p| {
+                    p.additive && p.lit && p.softness == 0.25 && p.right == basis.right
+                })
+            );
+        }
+        let unlit = ParticleEmitter {
+            lit: false,
+            ..emitter
+        };
+        assert!(evaluate(&unlit, &Transform::default(), at(0), 1.0, basis).all(|p| !p.lit));
     }
 
     /// The camera basis is the inverse view matrix's first two columns — the same derivation the

@@ -360,3 +360,35 @@ fn a_host_aa_mode_dumps_the_smaa_passes_after_composite() {
     .unwrap();
     assert_eq!(off, SNAPSHOT);
 }
+
+/// `ParticleEmitter.lit` leaves the schedule alone: absent, `lit: false` and `lit: true` dump
+/// byte-identical graphs, because the light set is bound inside the existing `scene` pass.
+#[test]
+fn a_lit_particle_scene_dumps_the_same_graph_as_an_unlit_one() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("lit-particle-graph-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dump = |name: &str, lit_line: &str| {
+        let scene = format!(
+            "format: 1\nentities:\n  - name: camera\n    components:\n      Camera: {{}}\n  \
+             - name: lamp\n    components:\n      PointLight: {{}}\n  - name: motes\n    \
+             components:\n      ParticleEmitter:\n        rate: 20.0\n{lit_line}"
+        );
+        let path = dir.join(format!("{name}.yaml"));
+        std::fs::write(&path, scene).unwrap();
+        ludion_engine::dump_scene_graph_json(
+            &path,
+            FrameSize::native(64, 64),
+            &QualitySetting::full(),
+            AntiAliasing::Off,
+        )
+        .expect("the scene validates and schedules")
+    };
+    let absent = dump("absent", "");
+    assert_eq!(absent, dump("off", "        lit: false\n"));
+    assert_eq!(absent, dump("on", "        lit: true\n"));
+    assert_eq!(
+        absent, SNAPSHOT,
+        "a lit emitter must not change the pass list"
+    );
+}

@@ -103,9 +103,10 @@ fn all_repo_shaders_reflect_and_unify() {
         vec![ShaderStage::Vertex, ShaderStage::Fragment]
     );
 
-    // The whole light group is read by fragment stages only — the header uniform and all three
-    // read-only storage buffers, each sized to ONE element (naga sizes a runtime array that way, so
-    // `min_binding_size` is the element stride, not the buffer's length).
+    // The whole light group is read by the fragment stages and by the particle vertex stage (a lit
+    // particle's centre) — the header uniform and all three read-only storage buffers, each sized
+    // to ONE element (naga sizes a runtime array that way, so `min_binding_size` is the element
+    // stride, not the buffer's length).
     for (name, min) in [
         ("lights", 64u32),
         ("light_list", 48),
@@ -114,7 +115,10 @@ fn all_repo_shaders_reflect_and_unify() {
     ] {
         let binding = reflection.binding_named(name).unwrap();
         assert_eq!(binding.group, 1);
-        assert_eq!(binding.visibility, vec![ShaderStage::Fragment]);
+        assert_eq!(
+            binding.visibility,
+            vec![ShaderStage::Vertex, ShaderStage::Fragment]
+        );
         let BindingKind::Buffer { min_size, .. } = binding.kind else {
             panic!("{name} must be a buffer binding");
         };

@@ -45,6 +45,7 @@ mod impulse;
 mod input_headless;
 mod joint_motor;
 mod lane;
+mod lit_particles;
 mod live_record;
 mod local_shadow_fade;
 mod mesh_collider;

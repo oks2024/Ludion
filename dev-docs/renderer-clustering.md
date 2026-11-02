@@ -16,7 +16,7 @@ authoring side is `ludion docs lighting`.
 - `crates/ludion-renderer/src/shaders/snippets/lights.wgsl` — the GPU half, and the source of truth
   for the grid's shape: the `CLUSTER_TILES_X`/`CLUSTER_TILES_Y`/`CLUSTER_SLICES` consts,
   `Light`/`LightHeader`, all four `@group(1)` bindings, and `cluster_slice(frag_pos, view_dist_sq)`.
-  Composed ahead of both `mesh.wgsl` and `sprite.wgsl`, so one declaration serves both consumers.
+  Composed ahead of `mesh.wgsl`, `sprite.wgsl` and `particle.wgsl` (a lit particle looks its cell up once, at its centre, in the vertex stage), so one declaration serves every consumer.
 - `crates/ludion-renderer/src/cluster.rs` — the CPU half, and **the only place the which-lights-in-
   which-cell decision is made**: `build_lights` (the frame's whole payload), `cull` (the shipping
   build), `degenerate` (`#[cfg(test)]` — the oracle), `cluster_stats` (the profiler's adapter-free
@@ -61,7 +61,7 @@ radius `R/(2cosθ)`, widened 0.1% — and the range sphere at the apex for anyth
 
 - **Conservatism is mandatory; tightness is negotiable.** Every light whose range sphere can reach a
   fragment in a cell must appear in that cell's list. A light admitted *spuriously* costs a loop
-  iteration and contributes exactly `+0.0` — both consumers' attenuation is a hard zero at
+  iteration and contributes exactly `+0.0` — every consumer's attenuation is a hard zero at
   `dist >= range`, a spot's cone factor (`spot_cone`) is a hard zero at or outside its outer cone,
   and `acc + 0.0` is bit-preserving — so over-inclusion cannot move a pixel; a light
   *missed* is a visible hole. Every margin rounds outward, and a new or tightened test owes a

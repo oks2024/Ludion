@@ -1,6 +1,6 @@
 // Shared clustered-forward light bindings: the per-frame header uniform plus the three storage
-// buffers every lit shader (mesh, sprite) reads, all at @group(1). Composed ahead of both bodies so
-// the structs, the grid shape and the bindings live in exactly one place
+// buffers every lit shader (mesh, sprite, particle) reads, all at @group(1). Composed ahead of every
+// body so the structs, the grid shape and the bindings live in exactly one place
 // (Plan/shader-bindgen.md decision 16, Plan/clustered-forward.md decision 5).
 //
 // THE SHAPE. `light_list` carries **every** light in the scene — there is no cap and no selection.
@@ -15,13 +15,13 @@
 //     extract order, so a fragment sums its lights in exactly the order a flat loop would. Float
 //     addition order is preserved. Never re-associate the sum; never sort a cell's list by anything
 //     but the light index.
-//   - Both consumers' attenuation is `clamp(1 - dist/range, 0, 1)` squared — a hard zero at range —
+//   - Every consumer's attenuation is `clamp(1 - dist/range, 0, 1)` squared — a hard zero at range —
 //     so a light the CPU build admits *conservatively* contributes exactly +0.0 and cannot move a
 //     pixel. A light the build *misses* is a visible hole; conservatism is mandatory, tightness is
 //     negotiable.
 //
 // THE LOOP BOUND IS NON-UNIFORM, which forbids implicit derivatives inside a light loop: no
-// `textureSample`, no `dpdx`/`dpdy`. Both consumers' loops are ALU-only today and must stay that way
+// `textureSample`, no `dpdx`/`dpdy`. Every consumer's loop is ALU-only today and must stay that way
 // (an effect that wants a per-light texture read moves the read out of the loop, or pays
 // `textureSampleLevel`).
 
@@ -46,8 +46,8 @@ struct LightHeader {
     // halving of `log2` folded into `scale` CPU-side, which spares every lit fragment a square root;
     // both terms are computed CPU-side.
     grid: vec4<f32>,
-    // The sun, for the sprite shader only (the mesh shader reads its own `sun` uniform, which also
-    // carries the shadow map). xyz = normalized travel direction, w unused.
+    // The sun, for the sprite and particle shaders (the mesh shader reads its own `sun` uniform,
+    // which also carries the shadow map). xyz = normalized travel direction, w unused.
     sun_direction: vec4<f32>,
     // rgb = the sun's premultiplied colour, zero for a sunless frame, w unused.
     sun_color: vec4<f32>,

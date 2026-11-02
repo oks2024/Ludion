@@ -455,6 +455,7 @@ const PARTICLE_EMITTER_SCHEMA = {
     end_color: { type: 'array', items: { type: 'number', format: 'float' }, minItems: 4, maxItems: 4 },
     blend: { $ref: '#/$defs/ParticleBlend' },
     softness: { type: 'number', format: 'float', minimum: 0.0, maximum: 1.0, 'x-ui-range': [0.0, 1.0] },
+    lit: { type: 'boolean' },
     seed: { type: 'integer', format: 'uint64', minimum: 0 },
   },
   $defs: {
@@ -496,6 +497,7 @@ const PARTICLE_EMITTER_DEFAULT = {
   end_color: [1, 1, 1, 0],
   blend: 'alpha',
   softness: 0.5,
+  lit: false,
   seed: 0,
 };
 
@@ -989,6 +991,7 @@ describe('deriveFields', () => {
       ['end_color', 'vector'],
       ['blend', 'variant'],
       ['softness', 'number'],
+      ['lit', 'boolean'],
       ['seed', 'number'],
     ]);
     expect(fields.some((f) => f.kind === 'json')).toBe(false);

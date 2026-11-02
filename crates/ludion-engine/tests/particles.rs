@@ -249,3 +249,26 @@ fn the_particle_list_is_identical_at_every_thread_count() {
     assert!(!one.is_empty());
     assert_eq!(one, particles_at_threads(&small, 90, 8), "small scene");
 }
+
+/// `lit` is hashed only when set: an emitter authored with `lit: false` runs the same `WorldHash`
+/// trace, and extracts the same particles, as one that omits the field.
+#[test]
+fn an_explicit_lit_false_leaves_the_hash_and_the_particles_unmoved() {
+    let explicit = SCENE.replace(
+        "        seed: 11\n",
+        "        seed: 11\n        lit: false\n",
+    );
+    assert_ne!(explicit, SCENE, "the edit must land");
+
+    let trace = |scene: &str| {
+        let mut engine = engine_with(scene);
+        let hashes =
+            ludion_engine::drive_hashes(&mut engine, vec![step(20)]).expect("the session drives");
+        (hashes, particles_at(&engine, 20))
+    };
+    let (absent_hashes, absent_particles) = trace(SCENE);
+    let (explicit_hashes, explicit_particles) = trace(&explicit);
+    assert!(!absent_particles.is_empty());
+    assert_eq!(absent_hashes, explicit_hashes, "lit: false moved a hash");
+    assert_eq!(absent_particles, explicit_particles);
+}

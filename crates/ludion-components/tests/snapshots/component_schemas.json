@@ -3413,6 +3413,10 @@
           1.0
         ]
       },
+      "lit": {
+        "description": "Lights the particles (default `false`: the authored colour is the look). `true`: a\nparticle's colour is its albedo times the light reaching its centre, with the lit sprite's\nterms (ambient, point, spot, sun); shadow maps are ignored. Omitted from the text when false.",
+        "type": "boolean"
+      },
       "seed": {
         "description": "Names this emitter's random stream (default `0`). Two emitters sharing a seed draw the same\nlives, speeds and directions — which is a feature for a rank of torches and a mistake for a\npair of impacts meant to look different.",
         "type": "integer",

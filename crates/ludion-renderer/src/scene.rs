@@ -177,6 +177,8 @@ pub struct ParticleInstance {
     pub softness: f32,
     /// Additive: the shader forces the output alpha to zero under the premultiplied blend.
     pub additive: bool,
+    /// Lit: the colour is shaded once, at the centre, by the lit sprite's light rule.
+    pub lit: bool,
 }
 
 /// The world-space Y offset every ground marker is lifted by, so a marker lying on a floor never

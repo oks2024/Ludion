@@ -61,6 +61,7 @@ ParticleEmitter:
     - 0.0
   blend: additive                    # alpha | additive (default alpha)
   softness: 0.8                      # 0 = hard circle, 1 = gaussian smudge (default 0.5, [0,1]: L1014)
+  lit: false                         # true: colour is albedo x the light at the particle's centre (default false; omitted from text when false)
   seed: 101                          # names this emitter's random stream (default 0)
 ```
 
@@ -120,12 +121,50 @@ one-line row form.
   (`ludion explain L2107`).
 - `--quality low` thins every emitter to a quarter of its `rate` and `burst` at extract
   (`particle_density`, see the `quality` topic) — a machine's lever, never content.
-- **Draw order is fixed: after opaque meshes and sprites, before text; unlit.** A scene with no
+- **Draw order is fixed: after opaque meshes and sprites, before text.** A scene with no
   `ParticleEmitter` (or one drawing nothing) issues no particle draw at all — byte-identical to the
   pre-particle pipeline.
+- **Particles are unlit unless `lit: true`.** Unlit, the authored colour is the look. Lit, a
+  particle's colour is its albedo (`start_color`/`end_color`, lerped) times the light reaching its
+  centre, evaluated once per particle with exactly the lit sprite's terms: the scene's flat ambient
+  (`Environment.ambient`, else the default ambient), every point and spot light in range, and the
+  sun, all two-sided. Shadow maps are ignored, and there is no IBL or probe term. Both blends take it
+  (additive lit motes add albedo × light). Alpha is untouched.
+### Recipe: motes in a lamp pool
+
+Faint additive motes over the whole room with `lit: true` glow only inside a lamp's reach:
+
+```yaml
+ParticleEmitter:
+  shape: box
+  extent:  # spans depth through the lamp's plane
+    - 10.0
+    - 2.4
+    - 8.0
+  rate: 220.0
+  life:
+    - 3.0
+    - 5.0
+  speed:
+    - 0.02
+    - 0.12
+  start_size: 0.09
+  end_size: 0.09
+  blend: additive
+  lit: true
+```
+
+The pool's extent is the light's `range`; a lamp that toggles or moves just works. The darkness
+outside needs `Environment.ambient` low (ambient lights every mote equally). See
+`examples/gallery/particles-lit.yaml`.
 
 ## Gotchas
 
+- A lit particle's light term is `|n·l|` with `n` the camera-facing normal, so a mote in the plane
+  through the lamp perpendicular to the view dims toward zero. A mote field lying in the lamp's plane
+  under a near-level camera shows a dim lane there: give the field depth or the camera some pitch.
+- A lit particle reads the light cell at its centre. A centre off-screen reads the nearest edge tile's
+  lights, so a large disc close to the camera can shade slightly differently from its visible part.
 - Re-stamping `started` every frame (a per-frame write with no edge check) freezes the effect at age
   zero forever — see the `started`-is-a-stamp rule above.
 - An emitter placed on a scaled model entity inherits that scale on `extent`, both `speed` bounds and

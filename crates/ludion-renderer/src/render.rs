@@ -171,8 +171,8 @@ struct ParticleInstanceRaw {
     right: [f32; 3],
     up: [f32; 3],
     color: [f32; 4],
-    /// `(size, softness, additive, pad)` — diameter in world units, the falloff shape in `[0, 1]`,
-    /// and `1.0` for an additive particle.
+    /// `(size, softness, additive, lit)` — diameter in world units, the falloff shape in `[0, 1]`,
+    /// `1.0` for an additive particle and `1.0` for a lit one.
     params: [f32; 4],
 }
 
@@ -3171,7 +3171,12 @@ fn particle_raws(view: &Mat4, particles: &[ParticleInstance]) -> Vec<ParticleIns
                 right: p.right.to_array(),
                 up: p.up.to_array(),
                 color: p.color,
-                params: [p.size, p.softness, if p.additive { 1.0 } else { 0.0 }, 0.0],
+                params: [
+                    p.size,
+                    p.softness,
+                    if p.additive { 1.0 } else { 0.0 },
+                    if p.lit { 1.0 } else { 0.0 },
+                ],
             }
         })
         .collect()
@@ -4826,6 +4831,7 @@ impl FrameRecorder<'_> {
         if let Some(particles) = &self.particle_draw {
             rp.set_pipeline(self.r.pipeline(ShaderId::Particle));
             rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
+            rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
             rp.set_vertex_buffer(0, particles.instances.slice(..));
             rp.draw(0..6, 0..particles.count);
         }
@@ -6411,7 +6417,12 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::Sprite,
         file_name: "sprite.wgsl",
         body: include_str!("shaders/sprite.wgsl"),
-        snippets: &[Snippet::Camera, Snippet::ClusterGrid, Snippet::Lights],
+        snippets: &[
+            Snippet::Camera,
+            Snippet::ClusterGrid,
+            Snippet::Lights,
+            Snippet::BillboardLight,
+        ],
         layouts: &[
             Some(LayoutId::Camera),
             Some(LayoutId::Lights),
@@ -6422,10 +6433,15 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::Particle,
         file_name: "particle.wgsl",
         body: include_str!("shaders/particle.wgsl"),
-        // The camera to billboard against, and nothing else: particles are unlit, so the clustered
-        // light set they would otherwise compose has nothing to contribute.
-        snippets: &[Snippet::Camera],
-        layouts: &[Some(LayoutId::Camera)],
+        // The camera to billboard against and the sprite's light rule, which a lit instance runs
+        // once per centre in the vertex stage; an unlit instance never reads the light set.
+        snippets: &[
+            Snippet::Camera,
+            Snippet::ClusterGrid,
+            Snippet::Lights,
+            Snippet::BillboardLight,
+        ],
+        layouts: &[Some(LayoutId::Camera), Some(LayoutId::Lights)],
     },
     ShaderDesc {
         id: ShaderId::Text,
@@ -6770,7 +6786,8 @@ impl ShaderId {
 /// pipeline (`Renderer::reload_snippet`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Snippet {
-    /// `Camera` uniform struct + its `@group(0)` binding (mesh, sprite, text, ground marker).
+    /// `Camera` uniform struct + its `@group(0)` binding (mesh, sprite, particle, text, ground
+    /// marker).
     Camera,
     /// The cluster grid's consts and `cluster_cell`, binding-free (`lights.wgsl`'s index, the
     /// reflections pass's probe masks).
@@ -6779,7 +6796,7 @@ enum Snippet {
     /// (reflections; the twins of `probe.rs`).
     Probes,
     /// The clustered-forward light set: the grid consts, the `Light`/`LightHeader` structs, all four
-    /// `@group(1)` bindings and the `cluster_slice` lookup (mesh, sprite).
+    /// `@group(1)` bindings and the `cluster_slice` lookup (mesh, sprite, particle).
     Lights,
     /// The fullscreen-triangle `VsOut` + `vs_main` (blit, blur, threshold, composite).
     FullscreenVs,
@@ -6833,6 +6850,9 @@ enum Snippet {
     /// `ProjectorDecal`, the unit-cube vertex, the angle fade and the map gradient clamp,
     /// binding-free (projector, decal_lit).
     Decal,
+    /// `shade_two_sided`, the light rule of a flat camera-facing billboard (sprite, and a lit
+    /// particle's centre); needs the `Camera` and `Lights` snippets ahead of it.
+    BillboardLight,
 }
 
 impl Snippet {
@@ -6862,6 +6882,7 @@ impl Snippet {
             Snippet::Glyph => "glyph.wgsl",
             Snippet::RoundedBox => "rounded_box.wgsl",
             Snippet::Decal => "decal.wgsl",
+            Snippet::BillboardLight => "billboard_light.wgsl",
         }
     }
 
@@ -6890,6 +6911,7 @@ impl Snippet {
             Snippet::Glyph => include_str!("shaders/snippets/glyph.wgsl"),
             Snippet::RoundedBox => include_str!("shaders/snippets/rounded_box.wgsl"),
             Snippet::Decal => include_str!("shaders/snippets/decal.wgsl"),
+            Snippet::BillboardLight => include_str!("shaders/snippets/billboard_light.wgsl"),
         }
     }
 
@@ -6919,6 +6941,7 @@ impl Snippet {
             Snippet::Glyph,
             Snippet::RoundedBox,
             Snippet::Decal,
+            Snippet::BillboardLight,
         ]
         .into_iter()
         .find(|s| s.file_name() == name)
@@ -7537,7 +7560,7 @@ const GROUND_MARKER_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_at
 /// flags lane, the hit-flash lane, and the tiling/scroll lane), locations 0-7.
 const SPRITE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4, 5 => Uint32, 6 => Float32x4, 7 => Float32x4];
 /// Particle per-instance attributes (`ParticleInstanceRaw`: center/right/up/color, then the
-/// `(size, softness, additive, pad)` lane), locations 0-4.
+/// `(size, softness, additive, lit)` lane), locations 0-4.
 const PARTICLE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4];
 /// Text per-vertex attributes (`TextVertexRaw`: position/uv/color/sdf), locations 0-3.
 const TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 4] =
@@ -21016,6 +21039,7 @@ mod tests {
             color,
             softness,
             additive: false,
+            lit: false,
         }
     }
 
@@ -21249,6 +21273,130 @@ mod tests {
                 lit >= dark,
                 "additive particle darkened byte {i}: {lit} < {dark}",
             );
+        }
+    }
+
+    /// A camera at the origin looking down −Z over an empty, unlit-ambient scene: the fixture the
+    /// lit-particle tests share, so a world position lands at a known pixel.
+    fn dark_particle_scene(w: u32, h: u32) -> RenderScene {
+        let mut scene = RenderScene::empty((w, h));
+        scene.ambient = [0.0; 3];
+        scene.camera = origin_camera(w, h);
+        scene
+    }
+
+    /// **A lit particle follows the light, an unlit twin ignores it**, for both blends and for a
+    /// point light and a spot: a hard disc inside the light's reach is far brighter than one outside
+    /// it, while the unlit twins render the same pixel at both positions. The light sits 1.5 units
+    /// nearer the camera than the discs on purpose: the term is `|n·l|` with `n` the camera-facing
+    /// normal, so a light in the discs' own plane would be exactly edge-on and give zero.
+    #[test]
+    fn needs_gpu_lit_particles_follow_the_light_and_unlit_twins_do_not() {
+        let Some(renderer) = skip_or_renderer("lit_particles_follow_the_light") else {
+            return;
+        };
+        let (w, h) = (96u32, 96u32);
+        let size = FrameSize::native(w, h);
+        let inside = Vec3::new(-1.5, 0.0, -6.0);
+        let outside = Vec3::new(1.0, 0.0, -6.0);
+        let cam = origin_camera(w, h);
+        let (pi, po) = (project(&cam, inside, w, h), project(&cam, outside, w, h));
+
+        for additive in [false, true] {
+            for spot in [false, true] {
+                let mut scene = dark_particle_scene(w, h);
+                if spot {
+                    scene.spot_lights = vec![spot_light(
+                        Vec3::new(-1.5, 0.0, -4.5),
+                        Vec3::NEG_Z,
+                        6.0,
+                        6.0,
+                        10.0,
+                        20.0,
+                    )];
+                } else {
+                    // Range 2.5 reaches the inside disc (1.5 away) and not the outside one (~2.9).
+                    scene.lights = vec![point_light(Vec3::new(-1.5, 0.0, -4.5), 6.0, 2.5)];
+                }
+                let name = format!("additive={additive} spot={spot}");
+                let mut render = |lit: bool| {
+                    scene.particles = [inside, outside]
+                        .iter()
+                        .map(|&c| ParticleInstance {
+                            additive,
+                            lit,
+                            ..particle(c, 0.8, [1.0; 4], 0.0)
+                        })
+                        .collect();
+                    renderer.render(&scene, size).expect("particle render")
+                };
+                let lit = render(true);
+                let unlit = render(false);
+                assert!(
+                    luma(&lit, pi.0, pi.1) > luma(&lit, po.0, po.1) + 60,
+                    "{name}: the lit disc inside the light must outshine the one outside",
+                );
+                // Within the output dither's step: the light moves nothing but noise.
+                assert!(
+                    luma(&unlit, pi.0, pi.1).abs_diff(luma(&unlit, po.0, po.1)) <= 6,
+                    "{name}: an unlit twin ignores the light",
+                );
+            }
+        }
+    }
+
+    /// **One rule**: a lit particle's centre pixel is the lit sprite's, for the same point, colour,
+    /// blend and light. The light is small and sits well off the screen centre and the main diagonal,
+    /// so only the few tiles near the disc file it: a wrong or Y-flipped cell in the vertex stage
+    /// would read an empty cell and drop the light, and this test would go red.
+    #[test]
+    fn needs_gpu_a_lit_particle_matches_a_lit_sprite_at_its_centre() {
+        let Some(renderer) = skip_or_renderer("lit_particle_matches_lit_sprite") else {
+            return;
+        };
+        let (w, h) = (96u32, 96u32);
+        let size = FrameSize::native(w, h);
+        let centre = Vec3::new(2.0, -1.2, -6.0);
+        let (cx, cy) = project(&origin_camera(w, h), centre, w, h);
+
+        for additive in [false, true] {
+            let mut scene = dark_particle_scene(w, h);
+            scene.lights = vec![point_light(Vec3::new(2.0, -1.2, -5.4), 3.0, 1.4)];
+            scene.sprites = vec![crate::scene::SpriteInstance {
+                center: centre,
+                right: Vec3::new(0.5, 0.0, 0.0),
+                up: Vec3::new(0.0, 0.5, 0.0),
+                color: [0.8, 0.6, 0.4, 1.0],
+                texture: None,
+                uv: crate::scene::SpriteInstance::FULL_UV,
+                lit: true,
+                layer: 0,
+                additive,
+                flash: 0.0,
+                flash_color: [1.0; 3],
+                uv_repeat: crate::scene::SpriteInstance::NO_TILING,
+                uv_offset: [0.0; 2],
+            }];
+            let sprite = renderer.render(&scene, size).expect("sprite render");
+            scene.sprites.clear();
+            scene.particles = vec![ParticleInstance {
+                additive,
+                lit: true,
+                ..particle(centre, 0.5, [0.8, 0.6, 0.4, 1.0], 0.0)
+            }];
+            let disc = renderer.render(&scene, size).expect("particle render");
+
+            let (s, d) = (rgb_at(&sprite, cx, cy), rgb_at(&disc, cx, cy));
+            assert!(
+                s.iter().map(|&c| c as u32).sum::<u32>() > 60,
+                "additive={additive}: the sprite centre must be genuinely lit, got {s:?}",
+            );
+            for c in 0..3 {
+                assert!(
+                    (s[c] as i32 - d[c] as i32).abs() <= 3,
+                    "additive={additive}: sprite {s:?} vs particle {d:?} at the centre",
+                );
+            }
         }
     }
 

@@ -11,9 +11,10 @@
 // lit and an unlit quad of the same texture stay in one batch.
 
 // The `Camera` uniform (@group 0) and the clustered-forward light set (@group 1: the `LightHeader`
-// uniform, `light_list`, `cluster_table`, `cluster_lights`) are shared snippets composed ahead of
-// this file (`shaders/snippets/camera.wgsl`, `snippets/lights.wgsl`) — see Plan/shader-bindgen.md
-// decision 16. This body declares only the sprite-specific texture group.
+// uniform, `light_list`, `cluster_table`, `cluster_lights`) and `shade_two_sided` are shared snippets
+// composed ahead of this file (`shaders/snippets/camera.wgsl`, `snippets/lights.wgsl`,
+// `snippets/billboard_light.wgsl`) — see Plan/shader-bindgen.md decision 16. This body declares only
+// the sprite-specific texture group.
 
 @group(2) @binding(0) var sprite_tex: texture_2d<f32>;
 @group(2) @binding(1) var sprite_sampler: sampler;
@@ -78,31 +79,6 @@ fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
     out.rect = in.uv;
     out.uv_tile = in.uv_tile;
     return out;
-}
-
-// `frag_pos` is the fragment's framebuffer position (`@builtin(position)`.xy) — the tile half of the
-// cluster lookup; the shell half is the radial camera distance. The clustered loop walks this
-// fragment's own cell's slice in stored order, which is the same order (and therefore the same float
-// sum) a flat loop over every light would produce — see the snippet's identity argument.
-fn shade_two_sided(world_pos: vec3<f32>, n: vec3<f32>, frag_pos: vec2<f32>) -> vec3<f32> {
-    var acc = lights.ambient.rgb;
-    let normal = normalize(n);
-    let to_camera = camera.cam_pos.xyz - world_pos;
-    let slice = cluster_slice(frag_pos, dot(to_camera, to_camera));
-    for (var i: u32 = 0u; i < slice.y; i = i + 1u) {
-        let light = light_list[cluster_lights[slice.x + i]];
-        let to_light = light.position.xyz - world_pos;
-        let dist = length(to_light);
-        let range = max(light.position.w, 1e-3);
-        let atten = clamp(1.0 - dist / range, 0.0, 1.0);
-        // Two-sided: a flat sprite lights the same from either face.
-        let l = normalize(to_light);
-        let ndl = abs(dot(normal, l));
-        acc = acc + light.color.rgb * spot_factor(light, l) * ndl * atten * atten;
-    }
-    // The sun, two-sided like the point lights and unshadowed, with no IBL. A sunless frame adds +0.0.
-    acc = acc + lights.sun_color.rgb * abs(dot(normal, lights.sun_direction.xyz));
-    return acc;
 }
 
 @fragment

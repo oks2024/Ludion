@@ -1,0 +1,146 @@
+# Feature: ParticleEmitter.lit - motes that take the light. A dark room (zero ambient, black sky) with
+# one overhead point lamp pooling on the left and one spot crossing on the right, and a single additive
+# `lit: true` emitter of small motes over the whole room, spanning depth through the lamp's plane. A
+# mote glows only where a lamp reaches it, so the pools read as dust in the beams; outside the lamps the
+# motes are black and add nothing. Lit particles use the lit sprite's rule (ambient, point, spot, sun,
+# two-sided, unshadowed) evaluated once at each mote's centre. The camera is near-horizontal, a chase view.
+format: 1
+name: "particles-lit - ParticleEmitter lit: motes in a lamp pool and a spot beam"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.8
+          - 12.0
+        rotation:
+          - -3.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: dark
+    components:
+      Environment:
+        sky_zenith:
+          - 0.0
+          - 0.0
+          - 0.0
+        sky_horizon:
+          - 0.0
+          - 0.0
+          - 0.0
+        sky_ground:
+          - 0.0
+          - 0.0
+          - 0.0
+        ambient:
+          - 0.0
+          - 0.0
+          - 0.0
+  - name: floor
+    components:
+      Transform:
+        scale:
+          - 30.0
+          - 1.0
+          - 30.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.2
+          - 0.2
+          - 0.22
+          - 1.0
+  - name: back-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - -9.0
+        scale:
+          - 30.0
+          - 6.0
+          - 0.3
+      Mesh:
+        shape: cube
+        color:
+          - 0.25
+          - 0.24
+          - 0.22
+          - 1.0
+  - name: lamp-left
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 4.2
+          - 0.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.82
+          - 0.55
+        intensity: 4.0
+        range: 7.0
+  - name: spot-right
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 5.0
+          - 1.5
+      SpotLight:
+        color:
+          - 0.7
+          - 0.85
+          - 1.0
+        intensity: 6.0
+        range: 9.0
+        direction:
+          - -0.35
+          - -1.0
+          - -0.3
+        inner_angle: 14.0
+        outer_angle: 26.0
+  - name: motes
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.4
+          - 0.0
+      ParticleEmitter:
+        shape: box
+        extent:
+          - 10.0
+          - 2.4
+          - 8.0
+        rate: 220.0
+        life:
+          - 3.0
+          - 5.0
+        speed:
+          - 0.02
+          - 0.12
+        spread_deg: 180.0
+        start_size: 0.09
+        end_size: 0.09
+        start_color:
+          - 1.0
+          - 0.95
+          - 0.85
+          - 0.9
+        end_color:
+          - 1.0
+          - 0.95
+          - 0.85
+          - 0.9
+        blend: additive
+        softness: 0.35
+        lit: true
+        seed: 37

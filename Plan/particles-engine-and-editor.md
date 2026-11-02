@@ -1,6 +1,7 @@
 # Plan: Particles — a stateless engine emitter and its editor surface
 
 > Status: **Wave 4 COMPLETE (2026-09-06) — the plan's mechanized half is in the tree; what remains is the pinned-box measurements and the human sittings.**
+> **2026-11-02 log — lit particles (Clockout 0037).** `ParticleEmitter.lit` (serde-default false, omitted from text when false, so no hash, snapshot or replay moved): a lit particle's colour is albedo × the light at its centre, the lit sprite's rule (`snippets/billboard_light.wgsl`, one definition shared with `sprite.wgsl`), shaded once per centre in the vertex stage. Gallery `particles-lit`, `docs/particles.md`. Decision 5 amended below.
 > **2026-09-13 log — the held gameplay clock (shmup request 22).** `GameClock` (`ludion_core::time`, in the prelude) is the resource a game holds each frozen frame; the driver folds it at tick start and `SystemCtx` carries `game_frame`/`game_time`/`game_dt`. The kernel stays pure: `extract_inner` reads the clock once and passes gameplay time down, so emitters, flipbooks, clips and volleys freeze together. Snapshotted (the `rng` precedent, omitted when unheld), never a `WorldHash` term, held = 0 the identity — no scene, replay, hash or snapshot moved. `ludion docs game-clock` owns the rules; `crates/ludion-engine/tests/game_clock.rs` is the instrument.
 > **2026-10-10 log — par over the emitter list.** Decision 9's first trigger is built: `extract_particles` evaluates emitters through `ludion_core::par` (one emitter a chunk, results concatenated in chunk order, so the list is element-for-element the sequential one; a frame under 4096 live particles runs on one thread and pays no spawn). RTX 3090, 120-frame release profile: extract median **1.129 ms** at 8 threads (1.134 / 1.106 / 1.345 / 1.124) against 2.898 at `--threads 1`; the loop test reads 3.296 ms @ 1 thread, 1.210 @ 8. The parallel reading still passes the 1 ms line, so the second trigger (stateless vertex-shader evaluation) is reached — recorded, not acted on. `extract_ms` re-calibrated 5.0 → 2.5. `tests/particles.rs` pins the list equal at 1/2/8 threads. Zero hash, schema, golden or replay movement; the M4 re-measure is owed.
 > Wave 4 log: scale, measured before engineered (decision 9); zero wire / schema / hash / replay movement.
@@ -392,8 +393,8 @@ pins it). Cost is attributed to `scene` in `--dump-timings`, as the sky's and th
 - *Rejected — reuse the sprite pipeline:* it is lit (a cluster loop per fragment, wrong for
   embers), texture-batched (the white fallback per draw), straight-alpha, and cannot do additive
   without a second pipeline. A textured particle waits on the atlas regardless.
-- *Rejected — lit particles, soft-depth intersection, per-particle rotation:* each is deferred with
-  a trigger below.
+- *Rejected — soft-depth intersection, per-particle rotation:* each is deferred with a trigger below.
+- *Amendment 2026-11-02 — opt-in lit particles (Clockout 0037).* Decision 5 held "unlit"; a mote pool in a lamp (a request from a shipping game) needs the opposite, so `ParticleEmitter.lit` (default false) opts an emitter in. The rule is the lit sprite's `shade_two_sided` (ambient, point, spot, sun; two-sided, unshadowed, no IBL), moved to one snippet shared with `sprite.wgsl`. It runs once per particle centre in the vertex stage: a CPU twin would be a second copy of the WGSL rule and book its cost to `extract_ms`, and per-fragment shading would cost a cluster loop per pixel for a flat disc. The unlit path is byte-identical (the flag rides the formerly padded `params.w`).
 
 **6. Zero wire movement; the editor surface is an Effects view in the Voxel Artist's shape, plus a
 palette archetype.** The view owns a stage session (a second host-spawned `ludion serve`, the
@@ -604,8 +605,8 @@ prelude and `docs/components.md` row point at it. The `ludion-docs` skill writes
   in the reference game, or the Game Designer view wanting a doc form for it.
 - **World-space emission from a moving emitter** (decision 2) — trigger: a sitting judging the
   burst-left-behind trail idiom insufficient for the tracer bolt.
-- **Lit particles** — trigger: a smoke plume in a torch-lit street reading flat at a sitting;
-  the sprite-engine's `lit: bool` is the shape.
+- **Shadow-map sampling for lit particles** — trigger: a sitting sees motes glowing behind a wall.
+- **A wrap term for lit particles** — trigger: a sitting sees a mote lane dim near the lamp's plane at a level camera (the `|n·l|` zero; `docs/particles.md` Gotchas).
 - **Soft-depth intersection** (fading a particle where it crosses geometry) — trigger: hard cuts at
   the ground reading wrong at a sitting; needs a depth copy or a later pass, both real costs.
 - **Per-particle rotation / spin, stretched sparks along velocity, sub-emitters, collision** —

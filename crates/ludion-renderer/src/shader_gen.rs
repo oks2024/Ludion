@@ -18,17 +18,17 @@ pub const BRDF_SAMPLES: u32 = 256;
 
 /// `CLUSTER_SLICES`, hoisted from WGSL `const CLUSTER_SLICES: u32`.
 ///
-/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `probe_debug.wgsl`, `reflections.wgsl`, `sprite.wgsl`.
+/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `probe_debug.wgsl`, `reflections.wgsl`, `sprite.wgsl`.
 pub const CLUSTER_SLICES: u32 = 16;
 
 /// `CLUSTER_TILES_X`, hoisted from WGSL `const CLUSTER_TILES_X: u32`.
 ///
-/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `probe_debug.wgsl`, `reflections.wgsl`, `sprite.wgsl`.
+/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `probe_debug.wgsl`, `reflections.wgsl`, `sprite.wgsl`.
 pub const CLUSTER_TILES_X: u32 = 16;
 
 /// `CLUSTER_TILES_Y`, hoisted from WGSL `const CLUSTER_TILES_Y: u32`.
 ///
-/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `probe_debug.wgsl`, `reflections.wgsl`, `sprite.wgsl`.
+/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `probe_debug.wgsl`, `reflections.wgsl`, `sprite.wgsl`.
 pub const CLUSTER_TILES_Y: u32 = 9;
 
 /// `FLAG_ADDITIVE`, hoisted from WGSL `const FLAG_ADDITIVE: u32`.
@@ -489,7 +489,7 @@ const _: () = assert!(core::mem::offset_of!(HizParams, pad) == 8);
 
 /// WGSL `struct Light`.
 ///
-/// Declared in `decal_lit.wgsl`, `gi_bake.wgsl`, `gi_inject.wgsl`, `mesh.wgsl`, `sprite.wgsl`.
+/// Declared in `decal_lit.wgsl`, `gi_bake.wgsl`, `gi_inject.wgsl`, `mesh.wgsl`, `particle.wgsl`, `sprite.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct Light {
@@ -504,7 +504,7 @@ const _: () = assert!(core::mem::offset_of!(Light, axis) == 32);
 
 /// WGSL `struct LightHeader`.
 ///
-/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `sprite.wgsl`.
+/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `sprite.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct LightHeader {
@@ -1691,7 +1691,7 @@ pub const ATLAS_TEX_BINDING: u32 = 0;
 pub const DEBUG_DEPTH_GROUP: u32 = 1;
 pub const DEBUG_DEPTH_BINDING: u32 = 0;
 
-/// `lights` — `@group(1) @binding(0)`, in `decal_lit.wgsl`, `mesh.wgsl`, `sprite.wgsl`.
+/// `lights` — `@group(1) @binding(0)`, in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `sprite.wgsl`.
 pub const LIGHTS_GROUP: u32 = 1;
 pub const LIGHTS_BINDING: u32 = 0;
 
@@ -1715,7 +1715,7 @@ pub const ATLAS_SAMPLER_BINDING: u32 = 1;
 pub const DEBUG_VIEW_GROUP: u32 = 1;
 pub const DEBUG_VIEW_BINDING: u32 = 1;
 
-/// `light_list` — `@group(1) @binding(1)`, in `decal_lit.wgsl`, `mesh.wgsl`, `sprite.wgsl`.
+/// `light_list` — `@group(1) @binding(1)`, in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `sprite.wgsl`.
 pub const LIGHT_LIST_GROUP: u32 = 1;
 pub const LIGHT_LIST_BINDING: u32 = 1;
 
@@ -1731,7 +1731,7 @@ pub const RECT_SAMPLER_BINDING: u32 = 1;
 pub const RECV_IDS_GROUP: u32 = 1;
 pub const RECV_IDS_BINDING: u32 = 1;
 
-/// `cluster_table` — `@group(1) @binding(2)`, in `decal_lit.wgsl`, `mesh.wgsl`, `sprite.wgsl`.
+/// `cluster_table` — `@group(1) @binding(2)`, in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `sprite.wgsl`.
 pub const CLUSTER_TABLE_GROUP: u32 = 1;
 pub const CLUSTER_TABLE_BINDING: u32 = 2;
 
@@ -1739,7 +1739,7 @@ pub const CLUSTER_TABLE_BINDING: u32 = 2;
 pub const RECV_DRAW_GROUP: u32 = 1;
 pub const RECV_DRAW_BINDING: u32 = 2;
 
-/// `cluster_lights` — `@group(1) @binding(3)`, in `decal_lit.wgsl`, `mesh.wgsl`, `sprite.wgsl`.
+/// `cluster_lights` — `@group(1) @binding(3)`, in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `sprite.wgsl`.
 pub const CLUSTER_LIGHTS_GROUP: u32 = 1;
 pub const CLUSTER_LIGHTS_BINDING: u32 = 3;
 
@@ -2576,7 +2576,7 @@ pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r
     })
 }
 
-/// Bind group layout `lights_light_list_cluster_table_cluster_lights` (@group 1), from `decal_lit.wgsl`, `mesh.wgsl`, `sprite.wgsl`.
+/// Bind group layout `lights_light_list_cluster_table_cluster_lights` (@group 1), from `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `sprite.wgsl`.
 pub fn create_lights_light_list_cluster_table_cluster_lights_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
@@ -2585,7 +2585,7 @@ pub fn create_lights_light_list_cluster_table_cluster_lights_bgl(
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: LIGHTS_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -2595,7 +2595,7 @@ pub fn create_lights_light_list_cluster_table_cluster_lights_bgl(
             },
             wgpu::BindGroupLayoutEntry {
                 binding: LIGHT_LIST_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
@@ -2605,7 +2605,7 @@ pub fn create_lights_light_list_cluster_table_cluster_lights_bgl(
             },
             wgpu::BindGroupLayoutEntry {
                 binding: CLUSTER_TABLE_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
@@ -2615,7 +2615,7 @@ pub fn create_lights_light_list_cluster_table_cluster_lights_bgl(
             },
             wgpu::BindGroupLayoutEntry {
                 binding: CLUSTER_LIGHTS_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,

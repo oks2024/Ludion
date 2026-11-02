@@ -717,6 +717,7 @@ mod tests {
             color: [1.0, 1.0, 1.0, alpha],
             softness: 0.0,
             additive: false,
+            lit: false,
         }
     }
 
