@@ -157,7 +157,9 @@ const GPU_BODY_EXEMPT = new Map([
   ['crates/ludion-testkit/tests/gallery.rs::broken_voxel_model_document_fails_with_diagnostics_not_panic', 'asserts no adapter was requested; no device'],
 ]);
 // `needs_gpu_` files with no marker of their own, with the real reason.
-const GPU_FILE_EXEMPT = new Map([]);
+const GPU_FILE_EXEMPT = new Map([
+  ['crates/ludion-engine/tests/local_shadow_fade.rs', 'profile_scene puts the device up inside the library call'],
+]);
 
 const normalize = (s) => s.replace(/\s+/g, ' ').trim();
 

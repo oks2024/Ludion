@@ -101,7 +101,7 @@ fn passes(path: &Path) -> Vec<String> {
 }
 
 #[test]
-fn lights_past_their_distance_are_not_requested_and_cost_no_views() {
+fn needs_gpu_lights_past_their_distance_are_not_requested_and_cost_no_views() {
     // Two lights inside a 40 m limit, three past a 5 m one.
     let scratch = Scratch::new("mixed");
     let path = scratch.scene(
@@ -118,7 +118,7 @@ fn lights_past_their_distance_are_not_requested_and_cost_no_views() {
 }
 
 #[test]
-fn a_scene_with_every_light_past_its_distance_schedules_no_local_shadow_pass() {
+fn needs_gpu_a_scene_with_every_light_past_its_distance_schedules_no_local_shadow_pass() {
     let scratch = Scratch::new("past");
     let past = scratch.scene("past", &[(-1.0, 5.0), (1.0, 5.0)]);
     assert_eq!(requested_and_views(&past), (0, 0, 0, 0));
