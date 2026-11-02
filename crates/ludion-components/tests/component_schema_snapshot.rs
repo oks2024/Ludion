@@ -17,8 +17,10 @@ const SNAPSHOT: &str = include_str!("snapshots/component_schemas.json");
 #[test]
 fn component_schemas_match_committed_snapshot() {
     let registry = ludion_components::builtin_registry();
-    let schemas: BTreeMap<&str, &serde_json::Value> =
-        registry.iter().map(|info| (info.name(), info.schema())).collect();
+    let schemas: BTreeMap<&str, &serde_json::Value> = registry
+        .iter()
+        .map(|info| (info.name(), info.schema()))
+        .collect();
     let mut document = serde_json::to_string_pretty(&schemas).expect("serialize component schemas");
     document.push('\n');
 
