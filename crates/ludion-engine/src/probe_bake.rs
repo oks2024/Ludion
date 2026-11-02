@@ -486,7 +486,7 @@ entities:
         assert!(scene.gi.is_some(), "the GiVolume bakes");
         assert!(scene.environment.is_some_and(|env| env.sun_disc_size > 0.0));
         assert_eq!(scene.probes.len(), 1);
-        let irradiance = renderer.read_probe_irradiance(&scene);
+        let irradiance = renderer.read_probe_irradiance(&scene).unwrap();
         assert_eq!(irradiance.len(), 1);
         assert!(irradiance[0].baked.iter().flatten().any(|&e| e > 0.0));
         assert_eq!(irradiance[0].live, irradiance[0].baked);

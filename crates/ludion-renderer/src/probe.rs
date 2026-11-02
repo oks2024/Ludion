@@ -125,10 +125,20 @@ pub fn probe_lookup(probe: &ProbeData, p: Vec3, r: Vec3) -> Vec3 {
 }
 
 #[cfg(test)]
-/// The live-to-baked irradiance ratio per channel; 1 where the baked value is too small to divide
+/// The relight ratio's ceiling; the WGSL twin is `MAX_RELIGHT_RATIO`.
+const MAX_RELIGHT_RATIO: f32 = 16.0;
+
+#[cfg(test)]
+/// The live-to-baked irradiance ratio per channel, at most [`MAX_RELIGHT_RATIO`]; 1 where the baked value is too small to divide
 /// by. The WGSL twin is `probe_ratio`.
 pub fn ratio(baked: Vec3, live: Vec3) -> Vec3 {
-    let channel = |b: f32, l: f32| if b > 1e-6 { l / b } else { 1.0 };
+    let channel = |b: f32, l: f32| {
+        if b > 1e-6 {
+            (l / b).min(MAX_RELIGHT_RATIO)
+        } else {
+            1.0
+        }
+    };
     Vec3::new(
         channel(baked.x, live.x),
         channel(baked.y, live.y),
@@ -351,6 +361,10 @@ mod tests {
         assert_eq!(r, Vec3::new(2.0, 1.0, 0.5));
         let same = Vec3::new(0.3, 0.07, 1.9);
         assert_eq!(ratio(same, same), Vec3::ONE);
+        assert_eq!(
+            ratio(Vec3::splat(0.01), Vec3::splat(5.0)),
+            Vec3::splat(16.0)
+        );
     }
 
     #[test]

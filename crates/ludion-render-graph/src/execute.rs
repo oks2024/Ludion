@@ -102,7 +102,8 @@ pub struct RenderedImage {
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
-    /// Packed RGBA8 bytes, `width * height * 4` long, row-major, top row first.
+    /// The output format's tightly packed texels, row-major, top row first: RGBA8 (`width * height * 4`
+    /// bytes) for a present target, the format's own texel size for any other output.
     pub rgba: Vec<u8>,
 }
 
@@ -162,20 +163,24 @@ fn headless_tiers(pinned: Option<wgpu::Backends>) -> Vec<(wgpu::Backends, bool)>
     }
 }
 
-/// Refuses a copy source that is not an output-kind resource: only outputs are exempt from
-/// transient aliasing, so any other resource's texture may hold another resource's pixels by the
-/// time the copy runs.
+/// Refuses a copy source that is not an output-kind resource and shares its physical texture with
+/// another resource: transient aliasing means that texture may hold the other resource's pixels by
+/// the time the copy runs. An unaliased transient is safe to copy.
 fn check_copy_sources(
     schedule: &Schedule,
     sources: impl IntoIterator<Item = ResourceId>,
 ) -> Result<(), Diagnostic> {
     for id in sources {
         let decl = schedule.resource(id);
-        if decl.kind != ResourceKind::Output {
+        if decl.kind == ResourceKind::Output {
+            continue;
+        }
+        let physical = schedule.aliasing.assignment[id.index()];
+        if schedule.aliasing.physicals[physical].resources.len() > 1 {
             return Err(Diagnostic::new(
                 code::RENDER_GPU_ERROR,
                 format!(
-                    "`{}` is a copy source but is not an output resource",
+                    "`{}` is a copy source but shares its texture with another resource",
                     decl.name
                 ),
             )
@@ -1286,17 +1291,38 @@ fn build_pipelines(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn a_copy_source_must_be_an_output_resource() {
+    fn an_aliased_copy_source_must_be_an_output_resource() {
+        let mut graph = crate::RenderGraph::new();
+        let a = graph.transient("a", crate::TextureDesc::color(8, 8));
+        let b = graph.transient("b", crate::TextureDesc::color(8, 8));
+        let c = graph.transient("c", crate::TextureDesc::color(8, 8));
+        let out = graph.output("final", crate::TextureDesc::present_target(8, 8));
+        graph.add_external_pass("p1", "p1", vec![], vec![a]);
+        graph.add_external_pass("p2", "p2", vec![a], vec![b]);
+        graph.add_external_pass("p3", "p3", vec![b], vec![c]);
+        graph.add_external_pass("p4", "p4", vec![c], vec![out]);
+        let schedule = crate::schedule(&graph).unwrap();
+        let assignment = &schedule.aliasing.assignment;
+        assert_eq!(
+            assignment[a.index()],
+            assignment[c.index()],
+            "a is dead before c is born"
+        );
+        assert!(check_copy_sources(&schedule, [out]).is_ok());
+        let err = check_copy_sources(&schedule, [out, c]).unwrap_err();
+        assert_eq!(err.code.as_str(), "L2010");
+        assert!(err.message.contains("`c`"), "{}", err.message);
+    }
+
+    #[test]
+    fn an_unaliased_transient_may_be_a_copy_source() {
         let mut graph = crate::RenderGraph::new();
         let mid = graph.transient("mid", crate::TextureDesc::color(8, 8));
-        let out = graph.output("final", crate::TextureDesc::present_target(8, 8));
+        let out = graph.output("final", crate::TextureDesc::hdr_color(4, 4));
         graph.add_external_pass("a", "a", vec![], vec![mid]);
         graph.add_external_pass("b", "b", vec![mid], vec![out]);
         let schedule = crate::schedule(&graph).unwrap();
-        assert!(check_copy_sources(&schedule, [out]).is_ok());
-        let err = check_copy_sources(&schedule, [out, mid]).unwrap_err();
-        assert_eq!(err.code.as_str(), "L2010");
-        assert!(err.message.contains("`mid`"), "{}", err.message);
+        assert!(check_copy_sources(&schedule, [mid]).is_ok());
     }
 
     use super::*;

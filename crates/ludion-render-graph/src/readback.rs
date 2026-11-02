@@ -25,7 +25,7 @@ use ludion_core::diagnostics::Diagnostic;
 use crate::execute::{Gpu, PassRecorder, PhysicalCache, RenderedImage};
 use crate::pass_timing::{FramePlan, PassTimingRing};
 use crate::present::PresentTarget;
-use crate::resource::{ResourceId, TextureDesc, TextureFormat};
+use crate::resource::{ResourceId, TextureDesc};
 use crate::schedule::Schedule;
 
 /// Rounds `value` up to the next multiple of wgpu's copy row alignment (256 bytes).
@@ -112,23 +112,8 @@ fn copy_texture_to_buffer(
     );
 }
 
-/// Refuses a readback of any format but `Rgba8UnormSrgb`: the returned bytes are tightly packed
-/// RGBA8, so another format's texels would be mis-sized and mis-read.
-///
-/// # Errors
-/// `L2005`.
-fn require_rgba8(desc: &TextureDesc) -> Result<(), Diagnostic> {
-    if desc.format == TextureFormat::Rgba8UnormSrgb {
-        return Ok(());
-    }
-    Err(map_failure(format!(
-        "the output is {} but readback returns packed RGBA8 (rgba8unorm_srgb)",
-        desc.format.as_str()
-    )))
-}
-
 /// The blocking readback path: copy `texture` to a staging buffer, `poll(Wait)`, and return packed
-/// RGBA8. Used by `ludion render` and any lockstep caller.
+/// texels (RGBA8 for a present target). Used by `ludion render` and any lockstep caller.
 ///
 /// # Errors
 /// `L2005` if the buffer cannot be mapped.
@@ -137,7 +122,6 @@ pub(crate) fn read_texture_to_image(
     texture: &wgpu::Texture,
     desc: &TextureDesc,
 ) -> Result<RenderedImage, Diagnostic> {
-    require_rgba8(desc)?;
     let layout = RowLayout::of(desc);
     let buffer = staging_buffer(&gpu.device, &layout);
 
@@ -744,9 +728,6 @@ impl Gpu {
         timing: Option<&mut PassTimingRing<S>>,
         sinks: FrameSinks<'_>,
     ) -> Result<Option<(S, RenderedImage)>, Diagnostic> {
-        if sinks.readback {
-            require_rgba8(schedule.resource(output).desc())?;
-        }
         self.guarded(|| {
             self.render_frame_unguarded(schedule, output, recorder, ring, stamp, timing, sinks)
         })
@@ -948,14 +929,6 @@ impl Gpu {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn readback_refuses_a_non_rgba8_output() {
-        assert!(require_rgba8(&TextureDesc::present_target(4, 4)).is_ok());
-        let err = require_rgba8(&TextureDesc::hdr_color(4, 4)).unwrap_err();
-        assert_eq!(err.code.as_str(), "L2005");
-        assert!(err.message.contains("rgba16float"), "{}", err.message);
-    }
-
     use std::sync::mpsc::{Sender, channel};
 
     use super::*;

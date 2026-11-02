@@ -6,6 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::f32::consts::FRAC_PI_2;
 use std::path::PathBuf;
 
+use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::{Mat4, Vec3};
 
 use crate::frame_observer::{FrameObserver, FramePhase};
@@ -212,20 +213,24 @@ impl Renderer {
     /// Captures `scene`'s probes fresh and reads them back, in slot order. A dump path: it captures
     /// every probe rather than loading from the store, and leaves the resident cubes a fresh capture
     /// of the same probe set.
+    ///
+    /// # Errors
+    /// `L2010` / `L2011` if a capture met a GPU fault.
     pub fn read_probes(
         &self,
         scene: &RenderScene,
         mut observer: Option<&mut dyn FrameObserver>,
-    ) -> Vec<ProbeReadback> {
+    ) -> Result<Vec<ProbeReadback>, Diagnostic> {
         let count = scene.probes.len().min(MAX_PROBES);
         if count == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let probes = &self.probes;
         probes.retain.set(true);
         probes.recapture();
-        probes.resolve(self, scene, &mut observer);
+        let resolved = probes.resolve(self, scene, &mut observer);
         probes.retain.set(false);
+        resolved?;
         let captured = std::mem::take(&mut *probes.captured.borrow_mut());
         let cubes = probes.cubes().expect("the scene has probes");
         let keys = store_keys(self, scene, cubes.face_size);
@@ -235,7 +240,7 @@ impl Renderer {
         for (rank, &slot) in by_rank.iter().enumerate() {
             rank_of[slot] = rank as u32;
         }
-        (0..count)
+        Ok((0..count)
             .map(|slot| ProbeReadback {
                 entity: scene.probes[slot].entity,
                 slot: slot as u32,
@@ -251,7 +256,7 @@ impl Renderer {
                     .map(|level| f16_texels(level))
                     .collect(),
             })
-            .collect()
+            .collect())
     }
 }
 
@@ -342,18 +347,22 @@ impl Probes {
     /// Captures and prefilters `scene`'s probes unless the probe set is the one already resident.
     /// An `observer` brackets each captured probe as `ProbeBake`; loaded probes are not bracketed.
     /// A scene with no probes frees the array and does no GPU work.
+    ///
+    /// # Errors
+    /// A GPU fault during a capture (`L2010` / `L2011`). Nothing is cached and no store entry is
+    /// written for the failed probe, so the next call recaptures it.
     pub(crate) fn resolve(
         &self,
         r: &Renderer,
         scene: &RenderScene,
         observer: &mut Option<&mut dyn FrameObserver>,
-    ) {
+    ) -> Result<(), Diagnostic> {
         debug_assert!(scene.probes.len() <= MAX_PROBES, "13 caps the probe list");
         let probes = &scene.probes[..scene.probes.len().min(MAX_PROBES)];
         if probes.is_empty() {
             self.cache.borrow_mut().take();
             self.report.borrow_mut().probes.clear();
-            return;
+            return Ok(());
         }
         let face_size = r.ibl_specular_size();
         let keys = store_keys(r, scene, face_size);
@@ -364,7 +373,7 @@ impl Probes {
             .as_ref()
             .is_some_and(|(cached, _)| *cached == key)
         {
-            return;
+            return Ok(());
         }
 
         let gpu = r.gpu();
@@ -424,7 +433,7 @@ impl Probes {
                 continue;
             }
             let mut baked = [[0.0; 3]; 6];
-            r.observed_phase(observer, FramePhase::ProbeBake, || {
+            let captured = r.observed_phase(observer, FramePhase::ProbeBake, || {
                 for face in 0..6 {
                     let derived = face_scene(capture_world(scene), probe.position, face);
                     // The irradiance is a property of the capture point, not of a face: face 0 reads it.
@@ -434,7 +443,7 @@ impl Probes {
                         face == 0,
                         face_layer(&source, face),
                         face_layer(&emissive_source, face),
-                    );
+                    )?;
                     if let Some(e) = measured {
                         baked = e;
                     }
@@ -469,7 +478,13 @@ impl Probes {
                         baked,
                     );
                 }
+                Ok::<(), Diagnostic>(())
             });
+            if let Err(fault) = captured {
+                // Retained captures are all-or-nothing, like the resident cache.
+                self.captured.borrow_mut().clear();
+                return Err(fault);
+            }
             irradiance.push(baked);
             resolved.push(ResolvedProbe {
                 entity: probe.entity,
@@ -506,6 +521,7 @@ impl Probes {
             face_size,
         };
         *self.cache.borrow_mut() = Some((key, cubes));
+        Ok(())
     }
 
     /// The resident captures, or `None` for a scene without probes.
@@ -603,7 +619,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn resolve(r: &Renderer, scene: &RenderScene) {
-        r.probes.resolve(r, scene, &mut None);
+        r.probes.resolve(r, scene, &mut None).unwrap();
     }
 
     pub(crate) fn lit_scene() -> RenderScene {
@@ -749,6 +765,33 @@ pub(crate) mod tests {
         }
     }
 
+    /// A face copied into a cube smaller than the face is a GPU validation fault: the capture
+    /// returns it as `L2010` instead of panicking the sim thread.
+    #[test]
+    fn needs_gpu_a_faulting_capture_is_an_error_not_a_panic() {
+        let Some(r) = renderer_or_skip("probe capture fault") else {
+            return;
+        };
+        let scene = lit_scene();
+        let face_size = r.ibl_specular_size();
+        let small = ibl::source_cube(r.gpu().device(), face_size / 2);
+        let derived = face_scene(capture_world(&scene), Vec3::new(0.0, 1.5, 0.0), 0);
+        let err = r
+            .capture_probe_face(
+                &derived,
+                face_size,
+                true,
+                face_layer(&small, 0),
+                face_layer(&small, 0),
+            )
+            .expect_err("the copy overruns the destination");
+        assert_eq!(err.code.as_str(), "L2010", "{err:?}");
+        assert!(
+            r.probes.cubes().is_none(),
+            "a failed capture caches nothing"
+        );
+    }
+
     #[test]
     fn needs_gpu_read_probes_returns_every_slot() {
         let (Some(mut stored), Some(dumped), Some(fresh)) = (
@@ -775,7 +818,7 @@ pub(crate) mod tests {
             .map(|p| p.key.expect("a store-backed resolve records keys"))
             .collect();
 
-        let readbacks = dumped.read_probes(&scene, None);
+        let readbacks = dumped.read_probes(&scene, None).unwrap();
         assert_eq!(readbacks.len(), 2);
         let max_lod = dumped.probes.cubes().expect("resident").max_lod;
         for (slot, probe) in readbacks.iter().enumerate() {
@@ -790,7 +833,7 @@ pub(crate) mod tests {
             assert_eq!(probe.levels.len() as u32, max_lod + 1);
         }
         assert_ne!(readbacks[0].key, readbacks[1].key);
-        let again = dumped.read_probes(&scene, None);
+        let again = dumped.read_probes(&scene, None).unwrap();
         for (a, b) in readbacks.iter().zip(&again) {
             assert!(
                 a.captured == b.captured && a.levels == b.levels,

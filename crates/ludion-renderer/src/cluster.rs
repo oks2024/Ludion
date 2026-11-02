@@ -39,8 +39,7 @@ const CLUSTER_CELLS: usize = (CLUSTER_TILES_X * CLUSTER_TILES_Y * CLUSTER_SLICES
 /// `[CLUSTER_SHELL_NEAR, CLUSTER_SHELL_FAR]` geometrically, so each is a constant *fraction* wider
 /// than the one before it rather than a constant number of units — the near shells stay fine where
 /// point lights crowd, the far ones stay cheap. Both are exact powers of two, which makes the
-/// `log2`-derived scale/bias below exact on every platform (`Plan/clustered-forward.md` decision 4;
-/// a per-frame fitted range is deferred until occupancy stats measure the waste).
+/// `log2`-derived scale/bias below exact on every platform (`Plan/clustered-forward.md` decision 4).
 const CLUSTER_SHELL_NEAR: f32 = 1.0;
 const CLUSTER_SHELL_FAR: f32 = 512.0;
 
@@ -484,8 +483,7 @@ fn shell_of(dist_sq: f32, (scale, bias): (f32, f32)) -> u32 {
 /// that precondition — that is the `None` the plan's "behind-camera / near-plane-spanning lights
 /// take the full-tile fallback" rule names.
 ///
-/// Tightness is the negotiable half: an exact sphere-frustum refinement is deferred behind the
-/// plan's occupancy-stats trigger.
+/// The range is conservative, not tight: it may include tiles the sphere does not touch.
 fn tile_range(
     center: Vec3,
     range: f32,

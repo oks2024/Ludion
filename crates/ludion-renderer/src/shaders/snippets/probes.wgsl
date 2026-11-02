@@ -79,9 +79,12 @@ fn probe_axis_rows(n: vec3<f32>) -> vec3<u32> {
     return vec3<u32>(select(1u, 0u, n.x >= 0.0), select(3u, 2u, n.y >= 0.0), select(5u, 4u, n.z >= 0.0));
 }
 
-// The live-to-baked irradiance ratio, per channel; 1 where the baked value is too small to divide by.
+// The ceiling on the relight ratio: a near-dark capture lit up live would otherwise blow the relit radiance to infinity.
+const MAX_RELIGHT_RATIO: f32 = 16.0;
+
+// The live-to-baked irradiance ratio, per channel, at most `MAX_RELIGHT_RATIO`; 1 where the baked value is too small to divide by.
 fn probe_ratio(baked: vec3<f32>, live: vec3<f32>) -> vec3<f32> {
-    return select(vec3<f32>(1.0), live / baked, baked > vec3<f32>(1e-6));
+    return min(select(vec3<f32>(1.0), live / baked, baked > vec3<f32>(1e-6)), vec3<f32>(MAX_RELIGHT_RATIO));
 }
 
 // The ratio along a facing with ambient-cube weights `w` (`n * n`) over the baked rows `b*` and the

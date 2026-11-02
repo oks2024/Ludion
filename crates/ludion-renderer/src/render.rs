@@ -1071,7 +1071,7 @@ impl Renderer {
         let size = size.validate()?;
         let (graph, output) = build_frame_graph(size, self.frame_chain(scene));
         let scheduled = schedule(&graph)?;
-        let recorder = self.prepare_frame(scene, size, None);
+        let recorder = self.prepare_frame(scene, size, None)?;
         self.gpu.execute(&scheduled, output, &recorder)
     }
 
@@ -1111,7 +1111,7 @@ impl Renderer {
         let size = size.validate()?;
         let (graph, output) = build_frame_graph(size, self.frame_chain(scene));
         let scheduled = schedule(&graph)?;
-        let recorder = self.prepare_frame(scene, size, Some(observer));
+        let recorder = self.prepare_frame(scene, size, Some(observer))?;
         self.gpu.execute(&scheduled, output, &recorder)
     }
 
@@ -1213,7 +1213,7 @@ impl Renderer {
         let size = size.validate()?;
         let (graph, output) = build_frame_graph(size, self.frame_chain(scene));
         let scheduled = schedule(&graph)?;
-        let recorder = self.prepare_frame(scene, size, None);
+        let recorder = self.prepare_frame(scene, size, None)?;
         self.gpu
             .render_frame(&scheduled, output, &recorder, ring, stamp, timing, sinks)
     }
@@ -1259,7 +1259,7 @@ impl Renderer {
         let size = size.validate()?;
         let (graph, output) = build_frame_graph(size, self.frame_chain(scene));
         let scheduled = schedule(&graph)?;
-        let recorder = self.prepare_frame(scene, size, None);
+        let recorder = self.prepare_frame(scene, size, None)?;
         self.gpu
             .dump_timings_json(&scheduled, output, Some(&recorder))
     }
@@ -1395,6 +1395,9 @@ impl Renderer {
     /// Renders one derived probe-face scene through the capture graph and copies the result into
     /// `dest` and its emissive part into `emissive_dest`. With `measure`, also returns the irradiance at the face's camera, composed from the
     /// face scene's own environment, GI volumes and ambient (`probe_relight.wgsl`).
+    ///
+    /// # Errors
+    /// `L2010` / `L2011` if the GPU rejected the work or the device was lost.
     pub(crate) fn capture_probe_face(
         &self,
         face_scene: &RenderScene,
@@ -1402,29 +1405,29 @@ impl Renderer {
         measure: bool,
         dest: wgpu::TexelCopyTextureInfo<'_>,
         emissive_dest: wgpu::TexelCopyTextureInfo<'_>,
-    ) -> Option<AxisIrradiance> {
+    ) -> Result<Option<AxisIrradiance>, Diagnostic> {
         let size = FrameSize::native(face_size, face_size);
         let chain = PostChain::for_scene(face_scene).masked(&self.quality, &self.quality_params);
         let (graph, output, emissive) = build_probe_capture_graph(face_size, chain);
         let schedule = schedule(&graph).expect("the probe capture graph schedules");
-        let recorder = self.prepare_frame(face_scene, size, None);
-        self.gpu
-            .execute_into(
-                &schedule,
-                &recorder,
-                &[(output, dest), (emissive, emissive_dest)],
-            )
-            .expect("a probe face renders");
-        measure.then(|| {
-            self.probe_relight.measure(
-                &self.gpu,
-                &recorder.resolved_env,
-                &recorder.resolved_gi,
-                recorder.gi_strengths,
-                face_scene.ambient,
-                &[face_scene.camera.position],
-            )[0]
-        })
+        let recorder = self.prepare_frame(face_scene, size, None)?;
+        self.gpu.execute_into(
+            &schedule,
+            &recorder,
+            &[(output, dest), (emissive, emissive_dest)],
+        )?;
+        if !measure {
+            return Ok(None);
+        }
+        let measured = self.probe_relight.measure(
+            &self.gpu,
+            &recorder.resolved_env,
+            &recorder.resolved_gi,
+            recorder.gi_strengths,
+            face_scene.ambient,
+            &[face_scene.camera.position],
+        )?;
+        Ok(Some(measured[0]))
     }
 
     /// The baked and the live diffuse irradiance at each of `scene`'s probes, in [`probe_rank`]
@@ -1432,13 +1435,19 @@ impl Renderer {
     /// `live` the relight kernel run over the probe's centre against this frame's environment and
     /// GI volumes. A static scene has them bit-equal, which makes the relight ratio exactly 1.
     /// Resolves (captures or loads) the probes first; empty for a probe-free scene.
-    pub fn read_probe_irradiance(&self, scene: &RenderScene) -> Vec<ProbeIrradiance> {
+    ///
+    /// # Errors
+    /// `L2010` / `L2011` if the GPU rejected the work or the device was lost.
+    pub fn read_probe_irradiance(
+        &self,
+        scene: &RenderScene,
+    ) -> Result<Vec<ProbeIrradiance>, Diagnostic> {
         if scene.probes.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        let recorder = self.prepare_frame(scene, FrameSize::native(64, 64), None);
+        let recorder = self.prepare_frame(scene, FrameSize::native(64, 64), None)?;
         let Some(cubes) = self.probes.cubes() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let held = &scene.probes[..scene.probes.len().min(MAX_PROBES)];
         let mut order: Vec<usize> = (0..held.len()).collect();
@@ -1451,15 +1460,15 @@ impl Renderer {
             recorder.gi_strengths,
             scene.ambient,
             &centres,
-        );
-        order
+        )?;
+        Ok(order
             .iter()
             .zip(live)
             .map(|(&i, live)| ProbeIrradiance {
                 baked: cubes.irradiance[i],
                 live,
             })
-            .collect()
+            .collect())
     }
 
     /// Uploads every per-frame resource and returns the recorder that will draw it. `size` rides
@@ -1471,14 +1480,17 @@ impl Renderer {
     ///
     /// An `observer` brackets the upload and GI bake work, fencing after each (see
     /// [`FrameObserver`]); `None` leaves the frame exactly as it was.
+    ///
+    /// # Errors
+    /// `L2010` / `L2011` if a live probe capture met a GPU fault.
     fn prepare_frame(
         &self,
         scene: &RenderScene,
         size: FrameSize,
         mut observer: Option<&mut dyn FrameObserver>,
-    ) -> FrameRecorder<'_> {
+    ) -> Result<FrameRecorder<'_>, Diagnostic> {
         let device = self.gpu.device();
-        self.probes.resolve(self, scene, &mut observer);
+        self.probes.resolve(self, scene, &mut observer)?;
         // The one place "which conditional passes does this scene need" is answered, shared with the
         // graph the executor is about to build — masking included, so a recorder can never disagree
         // with it about which inputs a pass was handed.
@@ -1788,7 +1800,7 @@ impl Renderer {
         let text_draws = self.build_text_draws(scene, device, &textures);
         let ui_batches = self.build_ui_batches(scene, device, &textures);
 
-        FrameRecorder {
+        Ok(FrameRecorder {
             r: self,
             size,
             camera_bg,
@@ -1843,7 +1855,7 @@ impl Renderer {
             particle_draw,
             text_draws,
             ui_batches,
-        }
+        })
     }
 
     /// Packs the scene's decals for both decal passes and resolves each batch's maps from the mesh-map
@@ -14655,7 +14667,7 @@ mod tests {
             .and_then(|declared| declared.depth)
             .expect("the graph schedules the local shadow pass");
         let scheduled = schedule(&graph).expect("the graph schedules");
-        let recorder = renderer.prepare_frame(&scene, size, None);
+        let recorder = renderer.prepare_frame(&scene, size, None).unwrap();
         let granted: Vec<_> = recorder
             .local_shadow
             .as_ref()
@@ -14777,7 +14789,7 @@ mod tests {
             .desc;
         let extent = (desc.extent.width, desc.extent.height);
         let scheduled = schedule(&graph).expect("the graph schedules");
-        let recorder = renderer.prepare_frame(scene, size, None);
+        let recorder = renderer.prepare_frame(scene, size, None).unwrap();
         let copy = renderer
             .gpu
             .device()
@@ -14932,7 +14944,7 @@ mod tests {
         let chain =
             PostChain::for_scene(&scene).masked(&renderer.quality, &renderer.quality_params);
         assert_eq!(chain.sun_cascades, None);
-        let recorder = renderer.prepare_frame(&scene, size, None);
+        let recorder = renderer.prepare_frame(&scene, size, None).unwrap();
         assert!(recorder.sun_cascades.is_none() && recorder.sun_cascade_casters.is_empty());
         let (graph, _) = build_frame_graph(size, chain);
         let map = graph
@@ -18803,7 +18815,7 @@ mod tests {
             };
             let (graph, output) = build_frame_graph(size, chain);
             let scheduled = schedule(&graph).expect("the ssr graph schedules");
-            let recorder = renderer.prepare_frame(&scene, size, None);
+            let recorder = renderer.prepare_frame(&scene, size, None).unwrap();
             let with_ssr = renderer
                 .gpu
                 .execute(&scheduled, output, &recorder)
@@ -18853,7 +18865,7 @@ mod tests {
         };
         let (graph, output) = build_frame_graph(size, chain);
         let scheduled = schedule(&graph).expect("the ssr graph schedules");
-        let recorder = renderer.prepare_frame(&scene, size, None);
+        let recorder = renderer.prepare_frame(&scene, size, None).unwrap();
         let on = renderer
             .gpu
             .execute(&scheduled, output, &recorder)
@@ -18920,7 +18932,7 @@ mod tests {
         };
         let (graph, output) = build_frame_graph(size, chain);
         let scheduled = schedule(&graph).expect("the ssr graph schedules");
-        let recorder = renderer.prepare_frame(&scene, size, None);
+        let recorder = renderer.prepare_frame(&scene, size, None).unwrap();
         let on = renderer
             .gpu
             .execute(&scheduled, output, &recorder)
@@ -19179,7 +19191,7 @@ mod tests {
         size: FrameSize,
     ) -> (u32, u32, Vec<[f32; 4]>) {
         let (graph, trace) = crate::graph::build_ssr_trace_graph(size);
-        let recorder = renderer.prepare_frame(scene, size, None);
+        let recorder = renderer.prepare_frame(scene, size, None).unwrap();
         let image = renderer
             .gpu
             .execute(

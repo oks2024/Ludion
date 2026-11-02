@@ -86,7 +86,9 @@ pub fn render_probe_dump(
     let mut renderer = Renderer::new().map_err(|d| vec![d])?;
     renderer.set_quality(quality.quality, quality.params);
     let mut clock = crate::profile::SpanClock::default();
-    let readbacks = renderer.read_probes(&scene, Some(&mut clock));
+    let readbacks = renderer
+        .read_probes(&scene, Some(&mut clock))
+        .map_err(|d| vec![d])?;
     let (keys, key_source) = if overrides.is_empty() {
         (store_host_keys(path, quality)?, "store-host")
     } else {

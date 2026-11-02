@@ -4,6 +4,7 @@
 //! `probe_relight` graph pass writes E at the ranked probes' centres into the `probe_live`
 //! transient; the `reflections` pass scales the captured geometry radiance by their ratio.
 
+use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::Vec3;
 use ludion_render_graph::Gpu;
 use wgpu::util::DeviceExt;
@@ -194,6 +195,10 @@ impl ProbeRelight {
     /// One-shot relight over `points`, read back synchronously: E per point and cube axis. The capture-time
     /// measurement and the tests' seam; it runs the same kernel into a scratch table in its own
     /// submit.
+    ///
+    /// # Errors
+    /// `L2010` if the device cannot poll or the readback buffer cannot map, or a fault the GPU
+    /// reported meanwhile (`L2010` / `L2011`, as [`Gpu::take_fault`] gives it).
     pub(crate) fn measure(
         &self,
         gpu: &Gpu,
@@ -202,7 +207,7 @@ impl ProbeRelight {
         strengths: GiStrengths,
         ambient: [f32; 3],
         points: &[Vec3],
-    ) -> Vec<AxisIrradiance> {
+    ) -> Result<Vec<AxisIrradiance>, Diagnostic> {
         let device = gpu.device();
         let scratch = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("probe relight scratch"),
@@ -258,11 +263,32 @@ impl ProbeRelight {
         staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("the device polls");
-        rx.recv().unwrap().expect("the buffer maps");
-        let mapped = staging.slice(..).get_mapped_range().expect("mapped range");
+        let poll = device.poll(wgpu::PollType::wait_indefinitely());
+        // A fault the GPU raised is the cause of any poll or map failure below, so it wins.
+        let mapped = match poll {
+            Ok(_) => rx
+                .recv()
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.map_err(|e| e.to_string()))
+                .and_then(|()| {
+                    staging
+                        .slice(..)
+                        .get_mapped_range()
+                        .map_err(|e| e.to_string())
+                }),
+            Err(e) => Err(e.to_string()),
+        };
+        let mapped = match mapped {
+            Ok(mapped) => mapped,
+            Err(reason) => {
+                return Err(gpu.take_fault().unwrap_or_else(|| {
+                    Diagnostic::new(
+                        ludion_core::codes::code::RENDER_GPU_ERROR,
+                        format!("the probe relight readback failed: {reason}"),
+                    )
+                }));
+            }
+        };
         let floats: &[f32] = bytemuck::cast_slice(&mapped);
         let texel = |axis: usize, point: usize| {
             let at = (axis * MAX_PROBES + point) * 4;
@@ -273,7 +299,7 @@ impl ProbeRelight {
             .collect();
         drop(mapped);
         staging.unmap();
-        out
+        Ok(out)
     }
 }
 
@@ -313,7 +339,9 @@ mod tests {
         let gi = gi.resolve(gpu, None);
         let relight = ProbeRelight::new(gpu);
         let ambient = [0.05, 0.1, 0.2];
-        let out = relight.measure(gpu, &env, &gi, NO_GI, ambient, &[Vec3::new(1.0, 2.0, 3.0)]);
+        let out = relight
+            .measure(gpu, &env, &gi, NO_GI, ambient, &[Vec3::new(1.0, 2.0, 3.0)])
+            .unwrap();
         assert_eq!(out, vec![[ambient; 6]]);
     }
 
@@ -329,7 +357,9 @@ mod tests {
         let gi = gi.resolve(gpu, None);
         let relight = ProbeRelight::new(gpu);
         let ambient = [0.05, 0.1, 0.2];
-        let got = relight.measure(gpu, &env, &gi, NO_GI, ambient, &[Vec3::ZERO])[0];
+        let got = relight
+            .measure(gpu, &env, &gi, NO_GI, ambient, &[Vec3::ZERO])
+            .unwrap()[0];
 
         // Each axis direction is the centre of a cube face: the mean of its four centre texels.
         let mip0 = &read_rgba16_mips(gpu, env.irradiance.texture())[0];
@@ -366,7 +396,9 @@ mod tests {
         let relight = ProbeRelight::new(gpu);
         let ambient = [0.01, 0.02, 0.03];
         let point = Vec3::new(4.0, 5.0, 6.0);
-        let alone = relight.measure(gpu, &env, &gi, NO_GI, ambient, &[point]);
+        let alone = relight
+            .measure(gpu, &env, &gi, NO_GI, ambient, &[point])
+            .unwrap();
         let batch: Vec<Vec3> = (0..MAX_PROBES)
             .map(|i| {
                 if i == 17 {
@@ -376,7 +408,9 @@ mod tests {
                 }
             })
             .collect();
-        let many = relight.measure(gpu, &env, &gi, NO_GI, ambient, &batch);
+        let many = relight
+            .measure(gpu, &env, &gi, NO_GI, ambient, &batch)
+            .unwrap();
         assert_eq!(alone[0], many[17], "all six axes");
     }
 }

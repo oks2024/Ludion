@@ -446,7 +446,7 @@ mod tests {
         scene.probe_world = Some(ProbeWorld::new(scene.clone()));
         let centre = Vec3::ZERO;
 
-        let before_e = r.read_probe_irradiance(&scene)[0];
+        let before_e = r.read_probe_irradiance(&scene).unwrap()[0];
         assert_eq!(
             before_e.live, before_e.baked,
             "a fresh capture is its own baseline"
@@ -454,7 +454,7 @@ mod tests {
         let before = r.render(&scene, size).expect("baseline");
         env.sky_zenith = [0.12, 0.05, 0.02];
         scene.environment = Some(env);
-        let after_e = r.read_probe_irradiance(&scene)[0];
+        let after_e = r.read_probe_irradiance(&scene).unwrap()[0];
         let after = r.render(&scene, size).expect("moved zenith");
         assert_eq!(
             r.probe_resolve().resolve,

@@ -64,8 +64,8 @@ impl DecalPass {
 /// The occlusion tile edge a small caster count gets, in texels.
 pub const OCCLUSION_TILE: u32 = 128;
 
-/// The occlusion atlas's edge ceiling, in texels. Past `OCCLUSION_TILE²`-worth of casters the
-/// tiles shrink to stay under it.
+/// The occlusion atlas's edge ceiling, in texels. Past 256 casters the tiles shrink to stay under
+/// it, down to one texel each: up to 2048² casters.
 pub const OCCLUSION_ATLAS_MAX: u32 = 2048;
 
 /// The headroom added to a footprint's half-extent so the soft edge and anti-aliasing fringe fit
@@ -74,7 +74,7 @@ const FOOTPRINT_PAD: f32 = 1.05;
 
 /// The occlusion atlas: a square grid of square tiles, one per caster, row-major.
 ///
-/// There is no cap on the caster count. Past 256 casters the tiles shrink (the lowest `EntityId`s
+/// The caster count is capped only by the ceiling (2048² one-texel tiles). Past 256 casters the tiles shrink (the lowest `EntityId`s
 /// come first, the extract order) so the atlas never grows beyond [`OCCLUSION_ATLAS_MAX`]; nothing
 /// is dropped and no diagnostic is raised.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

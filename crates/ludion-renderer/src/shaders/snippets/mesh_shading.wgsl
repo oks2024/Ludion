@@ -554,7 +554,7 @@ fn shade(
         let dist = length(to_light);
         let range = max(light.position.w, 1e-3);
         let atten = clamp(1.0 - dist / range, 0.0, 1.0);
-        let l = normalize(to_light);
+        let l = to_light / max(dist, 1e-6);
         let h = normalize(l + v);
         let ndl = max(dot(n, l), 0.0);
         let ndh = max(dot(n, h), 0.0);
