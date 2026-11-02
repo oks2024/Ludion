@@ -24,7 +24,7 @@
 //   - It does not follow trailing `#` comments on a value line. Nothing in the format needs one, no
 //     authored model has one, and `#` is a legal palette glyph — guessing would corrupt a row.
 //
-// The format it reads is `crates/ludion-scene/src/voxel.rs` (7 keys since wave 0: `format`, `kind`,
+// The format it reads is `crates/ludion-scene/src/voxel.rs` (7 keys: `format`, `kind`,
 // `name`, `size`, `scale`, `palette`, `slices`). `slices[y][z]` is bottom-up, character `c` of a row
 // is `x = c`, `.` is empty, and a palette entry carries `color` plus optional `emissive`/`metallic`/
 // `roughness`. Both authored idioms are accepted: canonical bare scalars (`- A.`, what `emit_voxel`

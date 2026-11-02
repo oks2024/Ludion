@@ -1,7 +1,7 @@
 // Turns a completed mutation (the command that was sent + the body it resolved with) into the
 // {@link UndoEntry} that inverts it. Pure and transport-free, so the mapping is unit-testable without
-// a socket (see mutations.test.ts) and can be reused by any client that records history — Wave 2's
-// inspector edits and Wave 4's entity palette both funnel through here.
+// a socket (see mutations.test.ts) and can be reused by any client that records history — the
+// inspector edits and the entity palette both funnel through here.
 //
 // The inverse data rides the mutation's own response (Plan/phase-6-editing.md decision #2), so this
 // reads it back off the body: `component.set` → `{previous}` (absent = the set was a fresh insert),

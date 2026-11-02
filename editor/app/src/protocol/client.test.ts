@@ -3,6 +3,12 @@ import type { Command } from '@ludion/protocol';
 import { classifyMessage, CONNECT_TIMEOUT_MS, ProtocolClient, ProtocolClientError, ProtocolError } from './client';
 
 describe('classifyMessage (protocol demux)', () => {
+  it('classifies an unsafe u64 in a response as a bigint', () => {
+    const msg = classifyMessage('{"id":1,"ok":{"kind":"component","value":{"seed":18446744073709551614}}}');
+    if (msg.kind !== 'response') throw new Error('expected a response');
+    expect((msg.response as unknown as { ok: { value: { seed: unknown } } }).ok.value.seed).toBe(18446744073709551614n);
+  });
+
   it('classifies an ok Response by its id field', () => {
     const raw = JSON.stringify({ id: 42, ok: { kind: 'ack' }, frame: 1203 });
     const msg = classifyMessage(raw);

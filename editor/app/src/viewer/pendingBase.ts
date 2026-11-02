@@ -12,6 +12,7 @@
 // assembly (or a rejected value poisons every later commit). They are pure so they are testable
 // without React — `vite.config.ts` collects `src/**/*.test.ts` under `environment: 'node'`. The refs,
 // the state mirror and the `component.set` round trip live in `useComponentCommit.ts`.
+import { stringifyWire } from '../protocol/wireJson';
 
 /** Consecutive refreshes that neither match the base nor race a send before the base yields anyway.
  *  Two, because two cycles guarantee at least one poll that began after the set applied. */
@@ -38,7 +39,7 @@ export interface PollOutcome {
 /**
  * Whether the poll has caught up with the pending base.
  *
- * It has when the polled value deep-equals the base — `JSON.stringify` is fine here: small canonical
+ * It has when the polled value deep-equals the base — `stringifyWire` is fine here: small canonical
  * wire data, and key order is preserved because the assembled value spreads the polled one. Failing
  * that, ownership yields after {@link STALE_POLL_LIMIT} consecutive refreshes with nothing in flight,
  * which is the fallback for the value the engine legitimately never echoes back byte-for-byte (f64→f32
@@ -51,7 +52,7 @@ export function pollHandback(refresh: PollRefresh): PollOutcome {
   if (base === null) {
     return { handback: false, stalePolls };
   }
-  if (JSON.stringify(polled) === JSON.stringify(base)) {
+  if (stringifyWire(polled) === stringifyWire(base)) {
     return { handback: true, stalePolls: 0 };
   }
   if (inflight > 0) {

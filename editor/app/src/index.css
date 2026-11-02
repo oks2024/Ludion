@@ -2781,7 +2781,7 @@ button.project-name:hover {
   line-height: 1.6;
 }
 
-/* --- Voxel Artist view (Plan/editor-voxel-artist.md wave 3) ---------------------------------- */
+/* --- Voxel Artist view (Plan/editor-voxel-artist.md) ---------------------------------- */
 
 .vx-browser {
   /* The library is the column's primary surface: it gets more of the height than the model panel,
@@ -3004,7 +3004,7 @@ button.project-name:hover {
   box-shadow: 0 0 4px rgba(255, 255, 255, 0.9);
 }
 
-/* --- palette editor (wave 4) ------------------------------------------------------------------ */
+/* --- palette editor ------------------------------------------------------------------ */
 
 .vx-editor {
   display: flex;
@@ -3188,7 +3188,7 @@ button.project-name:hover {
   text-wrap: pretty;
 }
 
-/* --- slice painter (wave 4) -------------------------------------------------------------------- */
+/* --- slice painter -------------------------------------------------------------------- */
 
 .vx-painter {
   --vx-cell: 18px;

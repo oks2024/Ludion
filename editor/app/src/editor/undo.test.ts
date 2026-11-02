@@ -4,6 +4,7 @@ import {
   type CallFn,
   type EntityId,
   type UndoEntry,
+  UNDO_LIMIT,
   UndoHistory,
   executeRedo,
   executeUndo,
@@ -791,5 +792,22 @@ describe('undo remaps every engine-marked entity-ref field, not just Parent and 
     await executeUndo(h, call);
 
     expect(paramsOf(calls[1]!).components).toEqual({ Leash: { holder: ref(P2), slack: 2 } });
+  });
+});
+
+describe('UndoHistory cap', () => {
+  const entry = (n: number): UndoEntry => ({ kind: 'spawn', entity: n as unknown as EntityId } as unknown as UndoEntry);
+
+  it('keeps the newest UNDO_LIMIT groups and still redoes', () => {
+    const h = new UndoHistory();
+    for (let i = 0; i < UNDO_LIMIT + 5; i += 1) h.push(entry(i));
+    const popped: UndoEntry[][] = [];
+    for (let g = h.popUndo(); g !== undefined; g = h.popUndo()) popped.push(g);
+    expect(popped).toHaveLength(UNDO_LIMIT);
+    expect(popped.at(-1)).toEqual([entry(5)]);
+    h.pushRedo(popped[0]!);
+    expect(h.canRedo).toBe(true);
+    h.pushUndo(h.popRedo()!);
+    expect(h.canUndo).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 // The slider range for every numeric field `doc.ts` can produce — one `sliderRange` call per
 // `NumberField`, so the inspector never special-cases a key itself.
 //
-// Ranges come from `Plan/mesh-modeling.md` wave 2's authored table, not from the format's own
+// Ranges come from `Plan/mesh-modeling.md`'s authored table, not from the format's own
 // validity rules (`docs/sculpt-format.md`): a slider is a drag surface, not a validator, so its
 // bounds are chosen to keep a drag USEFUL — wide enough to reach a sensibly different model, narrow
 // enough that a pixel of drag is a visible step. `check-scene` still has the final word on whether a

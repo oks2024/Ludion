@@ -17,11 +17,11 @@ import {
   strokeExtend,
   strokeStart,
   undoStep,
-  UNDO_LIMIT,
   type UndoStack,
   type UndoStep,
 } from './paint';
 import { applySpliceSteps } from './patch';
+import { UNDO_LIMIT } from '../undo';
 
 // The frozen stage library again — the grids this panel draws are the authored ones.
 const MODELS = import.meta.glob('../../../fixtures/stage/scenes/voxels/*.voxel.yaml', {

@@ -9,6 +9,7 @@
 
 import type { Command, ResponseBody } from '@ludion/protocol';
 import { entityRef } from '../protocol/commands';
+import { stringifyWire } from '../protocol/wireJson';
 import { componentNames as registryComponentNames } from './entity-ops';
 import type { PrefabLink } from './hierarchy';
 import type { CallFn, EntityId, UndoEntry } from './undo';
@@ -72,7 +73,7 @@ export function revertEntries(before: ComponentSnapshot, after: ComponentSnapsho
         entries.push({ kind: 'set', entity, component: name, before: null, after: a });
       } else if (a === undefined) {
         entries.push({ kind: 'remove', entity, component: name, before: b });
-      } else if (JSON.stringify(b) !== JSON.stringify(a)) {
+      } else if (stringifyWire(b) !== stringifyWire(a)) {
         entries.push({ kind: 'set', entity, component: name, before: b, after: a });
       }
     }

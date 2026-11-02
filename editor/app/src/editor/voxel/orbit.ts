@@ -291,8 +291,8 @@ export interface Sphere {
  * `fill-frame` frames the subject alone, so a 4-cell prop and a 40-cell building look the same size
  * — the view for reading SHAPE. `declared-scale` frames the subject together with the stage's
  * `adventurer` reference, so apparent size tracks real size and the model stands beside the figure
- * at its declared scale — the size judgment a contact sheet cannot give, and the reason wave 0 added
- * the `scale` key at all.
+ * at its declared scale — the size judgment a contact sheet cannot give, and the reason the format has
+ * a `scale` key at all.
  */
 export type FramingMode = 'fill-frame' | 'declared-scale';
 

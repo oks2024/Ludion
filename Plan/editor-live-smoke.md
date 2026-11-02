@@ -230,3 +230,6 @@ With vigil (in the repo) and a project outside the repo, no view shows an "outsi
 - Performance: save.
 
 **Pattern tab, New pattern with an existing name (code audit H-02):** type a name whose slug is already listed (try a different case too) and press New: the note reads "already exists — pick it from the list to open it", the file's bytes are unchanged, and nothing is rewritten. A non-pattern `.yaml` at that path reads the host's "already exists" error instead.
+
+## Inspector u64 round trip (audit 2026-10-31 16/M1)
+With vigil playing a random-shape volley, select the live `Volley` in the inspector (edit mode) and nudge `angle_deg`: in-flight bullets keep their angles and speeds, no killed bullet reappears, and the `seed` field shows the same digits before and after.

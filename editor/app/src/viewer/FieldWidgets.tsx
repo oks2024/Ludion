@@ -45,8 +45,9 @@
 // a DOM.
 
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
+import { parseWire, stringifyWire } from '../protocol/wireJson';
 import type { DiagnosticView } from './diagnostic';
-import type { FieldDescriptor, FieldPath, FieldRange, VariantOption } from './inspect-fields';
+import { parseNumberDraft, type FieldDescriptor, type FieldPath, type FieldRange, type VariantOption } from './inspect-fields';
 import { niceStep, SliderDrag, widen, type SliderInstruction } from './slider';
 import type { CommitCadence } from './useComponentCommit';
 
@@ -86,7 +87,7 @@ export function channelName(index: number, length: number): string {
 }
 
 /** `<select>` value prefix for a data-carrying (`'asset'`-kind) variant, keyed by its property so two
- *  object variants (e.g. `MeshSource`'s `asset` and `voxel`, Phase 10 Wave 5) get distinct tags instead
+ *  object variants (e.g. `MeshSource`'s `asset` and `voxel`) get distinct tags instead
  *  of colliding on one sentinel. Distinct from every unit value the engine actually emits (bare
  *  lowercase identifiers like `cube`), so it never collides with a real variant name either. */
 const VARIANT_OBJECT_TAG_PREFIX = '__variant_object__:';
@@ -193,7 +194,9 @@ export function FieldWidget({
           className="field-input"
           inputMode={field.integer ? 'numeric' : 'decimal'}
           text={numText(value)}
-          onCommit={(draft) => commitNumber(draft, field.integer, value, (n) => commit(field.path, n))}
+          onCommit={(draft) =>
+            commitNumber(draft, field.integer, field.wide, value, (n) => commit(field.path, n))
+          }
         />
       );
     case 'boolean':
@@ -263,7 +266,7 @@ export function FieldWidget({
                   inputMode={field.integer ? 'numeric' : 'decimal'}
                   text={numText(element)}
                   onCommit={(draft) =>
-                    commitNumber(draft, field.integer, element, (n) => commit([...field.path, i], n))
+                    commitNumber(draft, field.integer, field.wide, element, (n) => commit([...field.path, i], n))
                   }
                 />
               );
@@ -292,7 +295,7 @@ export function FieldWidget({
           onCommit={(draft) => {
             let parsed: unknown;
             try {
-              parsed = JSON.parse(draft);
+              parsed = parseWire(draft);
             } catch (err) {
               onError({
                 code: null,
@@ -456,7 +459,9 @@ export function RangeInput({
           autoFocus
           inputMode={integer ? 'numeric' : 'decimal'}
           text={numText(shown)}
-          onCommit={(draft) => commitNumber(draft, integer, value, send)}
+          onCommit={(draft) => commitNumber(draft, integer, false, value, (n) => {
+            if (typeof n === 'number') send(n);
+          })}
           onDone={() => setTyping(false)}
         />
       ) : (
@@ -564,12 +569,12 @@ function DraftInput({
 function commitNumber(
   draft: string,
   integer: boolean,
+  wide: boolean,
   current: unknown,
-  send: (value: number) => void,
+  send: (value: number | bigint) => void,
 ): void {
-  const trimmed = draft.trim();
-  const n = Number(trimmed);
-  if (trimmed === '' || !Number.isFinite(n) || (integer && !Number.isInteger(n))) {
+  const n = parseNumberDraft(draft, integer, wide);
+  if (n === null) {
     return;
   }
   if (n === current) {
@@ -587,7 +592,7 @@ function strText(value: unknown): string {
 }
 
 function jsonText(value: unknown): string {
-  return value === undefined ? '' : JSON.stringify(value, null, 2);
+  return value === undefined ? '' : stringifyWire(value, 2);
 }
 
 /** A CSS `rgba(...)` from the first 3–4 entries of a normalised (0–1) color array, clamped. */

@@ -2,7 +2,7 @@
 // exact source position of its scalar — the `voxel/doc.ts` precedent, applied to the implicit-
 // surface format (`ludion docs sculpt-format`).
 //
-// WHY POSITIONS, NOT A PARSE TREE. The inspector this module feeds (`Plan/mesh-modeling.md` wave 2)
+// WHY POSITIONS, NOT A PARSE TREE. The inspector this module feeds (`Plan/mesh-modeling.md`)
 // drags a slider over a value that already sits in a hand-authored file — a header docstring, a
 // comment above a part, an authored (not sorted) part order. A canonical re-emit would erase all of
 // that and turn a one-number change into a whole-file diff, so `edit.ts` splices the source at the

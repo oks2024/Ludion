@@ -18,6 +18,7 @@
 
 import type { Command, ResponseBody } from '@ludion/protocol';
 import { componentSet } from '../protocol/commands';
+import { stringifyWire } from '../protocol/wireJson';
 import { type EntityRefIndex, remapRefsAt } from './entityRefs';
 
 const NO_SUFFIXES: readonly string[] = [];
@@ -217,6 +218,9 @@ export function redoCommand(entry: UndoEntry): Command {
   }
 }
 
+/** How many steps back any editor history remembers — bounds memory, not reach. */
+export const UNDO_LIMIT = 64;
+
 /**
  * Two stacks of *groups*. Each stack element is an ordered `UndoEntry[]` that undoes/redoes as ONE
  * user-visible step — a lone inspector edit is a group of one; a cascade (e.g. destroying a parent,
@@ -245,9 +249,17 @@ export class UndoHistory {
     this.refs = refs;
   }
 
+  /** Drops the oldest groups beyond {@link UNDO_LIMIT}; the redo stack only holds popped undo groups. */
+  private cap(): void {
+    if (this.undoStack.length > UNDO_LIMIT) {
+      this.undoStack.splice(0, this.undoStack.length - UNDO_LIMIT);
+    }
+  }
+
   /** Records a single edit as its own one-entry undoable group and drops any redo branch. */
   push(entry: UndoEntry): void {
     this.undoStack.push([entry]);
+    this.cap();
     this.redoStack = [];
   }
 
@@ -255,6 +267,7 @@ export class UndoHistory {
   pushGroup(entries: UndoEntry[]): void {
     if (entries.length === 0) return;
     this.undoStack.push([...entries]);
+    this.cap();
     this.redoStack = [];
   }
 
@@ -296,6 +309,7 @@ export class UndoHistory {
   /** Pushes a group onto the undo stack without clearing redo (used when a redo re-enters history). */
   pushUndo(group: UndoEntry[]): void {
     this.undoStack.push(group);
+    this.cap();
   }
 
   /** Pushes a group onto the redo stack (used when an undo moves a group across). */
@@ -366,7 +380,7 @@ async function runGroup(
       const sent = new Map<string, string>();
       const components = componentsOf(entry);
       for (const name of refs.keys()) {
-        if (components?.[name] !== undefined) sent.set(name, JSON.stringify(components[name]));
+        if (components?.[name] !== undefined) sent.set(name, stringifyWire(components[name]));
       }
       sentRefs.set(i, sent);
       wg = remapGroup(wg, refs, from, newId);
@@ -382,7 +396,7 @@ async function runGroup(
     const components = componentsOf(entry);
     for (const [name, before] of [...sent].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) {
       const value = components?.[name];
-      if (value === undefined || JSON.stringify(value) === before) continue;
+      if (value === undefined || stringifyWire(value) === before) continue;
       try {
         await call(componentSet(entry.entity, name, value as object));
       } catch (error) {

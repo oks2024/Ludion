@@ -18,7 +18,7 @@ const GAIN = GRADE_BANDS[2];
 const GAIN_RANGE: FieldRange = { min: 0, max: 2, hardMin: null, hardMax: null };
 
 function vectorField(name: string, range: FieldRange | null, length = 3): FieldDescriptor {
-  return { kind: 'vector', path: [name], label: name, length, integer: false, color: false, range };
+  return { kind: 'vector', path: [name], label: name, length, integer: false, wide: false, color: false, range };
 }
 
 // --- which fields get the control ------------------------------------------------------------------
@@ -35,6 +35,7 @@ describe('gradeControl', () => {
         path: [scalar],
         label: scalar,
         integer: false,
+        wide: false,
         range: { min: -1, max: 1, hardMin: -1, hardMax: 1 },
       };
       expect(gradeControl(field)).toBeNull();

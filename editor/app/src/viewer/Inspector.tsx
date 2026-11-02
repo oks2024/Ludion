@@ -1,13 +1,13 @@
 // The entity inspector: a live list of entities and, for the selected one, its component values.
 //
-// It reads only public protocol commands (the Phase 4 parity requirement): `engine.describe` once to
+// It reads only public protocol commands (the parity gate): `engine.describe` once to
 // learn the registry's component schemas, then `query.entities` on a modest poll — filtered to
 // nothing (every live entity) and including every component name, so each match carries exactly the
 // components it actually has, with their current values. The poll is visibility-aware and
 // non-overlapping (see `usePolling`); it stops when the tab is hidden and never stacks requests.
 //
-// Two faces, chosen by `mode` (Plan/phase-6-editing.md Wave 2):
-//   - **play** — the selected entity's components pretty-print read-only (`JSON.stringify`).
+// Two faces, chosen by `mode` (Plan/phase-6-editing.md):
+//   - **play** — the selected entity's components pretty-print read-only (`stringifyWire`).
 //   - **edit** — each component renders as a widget form derived from its JSON Schema (numbers,
 //     vectors, colors, strings, booleans; a raw-JSON textarea for anything the schema doesn't cleanly
 //     describe). Editing a field draft-and-commits: on commit the *full* component value is written
@@ -23,6 +23,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { ProtocolClient } from '../protocol/client';
+import { stringifyWire } from '../protocol/wireJson';
 import type { EntityMatch } from '@ludion/protocol';
 import type { EditorMode, EntityId } from '../App';
 import { toDiagnostic, type DiagnosticView } from './diagnostic';
@@ -150,7 +151,7 @@ function ComponentValues({ match }: { readonly match: EntityMatch }) {
         <div key={name} className="card">
           <div className="card-title">{name}</div>
           <div className="card-body">
-            <pre className="card-json">{JSON.stringify(components[name], null, 2)}</pre>
+            <pre className="card-json">{stringifyWire(components[name], 2)}</pre>
           </div>
         </div>
       ))}

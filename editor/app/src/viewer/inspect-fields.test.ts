@@ -5,7 +5,8 @@
 // as `["string","null"]`, unit/tagged enums behind `$ref` into `$defs`).
 
 import { describe, expect, it } from 'vitest';
-import { applyFieldEdit, deriveFields, valueAtPath, type FieldDescriptor } from './inspect-fields';
+import { parseWire, stringifyWire } from '../protocol/wireJson';
+import { applyFieldEdit, deriveFields, parseNumberDraft, valueAtPath, type FieldDescriptor } from './inspect-fields';
 
 // --- Real schemars v1 fixtures ------------------------------------------------------------------
 
@@ -522,7 +523,7 @@ describe('deriveFields', () => {
     });
     expect(fields.map((f) => f.label)).toEqual(['translation', 'rotation', 'scale']);
     for (const f of fields) {
-      expect(f).toMatchObject({ kind: 'vector', length: 3, integer: false, color: false });
+      expect(f).toMatchObject({ kind: 'vector', length: 3, integer: false, wide: false, color: false });
     }
     expect(fields[0].path).toEqual(['translation']);
   });
@@ -553,7 +554,7 @@ describe('deriveFields', () => {
       far: 1000,
     });
     expect(field(fields, 'projection')).toEqual({ kind: 'json', path: ['projection'], label: 'projection' });
-    expect(field(fields, 'near')).toEqual({ kind: 'number', path: ['near'], label: 'near', integer: false, range: null });
+    expect(field(fields, 'near')).toEqual({ kind: 'number', path: ['near'], label: 'near', integer: false, wide: false, range: null });
     expect(field(fields, 'far')).toMatchObject({ kind: 'number', integer: false });
   });
 
@@ -653,9 +654,9 @@ describe('deriveFields', () => {
       emissive: 0,
     });
     const unit = { min: 0, max: 1, hardMin: 0, hardMax: 1 };
-    expect(field(fields, 'roughness')).toEqual({ kind: 'number', path: ['roughness'], label: 'roughness', integer: false, range: unit });
-    expect(field(fields, 'metallic')).toEqual({ kind: 'number', path: ['metallic'], label: 'metallic', integer: false, range: unit });
-    expect(field(fields, 'emissive')).toEqual({ kind: 'number', path: ['emissive'], label: 'emissive', integer: false, range: null });
+    expect(field(fields, 'roughness')).toEqual({ kind: 'number', path: ['roughness'], label: 'roughness', integer: false, wide: false, range: unit });
+    expect(field(fields, 'metallic')).toEqual({ kind: 'number', path: ['metallic'], label: 'metallic', integer: false, wide: false, range: unit });
+    expect(field(fields, 'emissive')).toEqual({ kind: 'number', path: ['emissive'], label: 'emissive', integer: false, wide: false, range: null });
     expect(field(fields, 'shape')).toMatchObject({ kind: 'variant' });
   });
 
@@ -720,11 +721,11 @@ describe('deriveFields', () => {
         { kind: 'unit', value: 'bottom_right' },
       ],
     });
-    expect(field(fields, 'offset')).toEqual({ kind: 'vector', path: ['offset'], label: 'offset', length: 2, integer: false, color: false, range: null });
-    expect(field(fields, 'size')).toEqual({ kind: 'vector', path: ['size'], label: 'size', length: 2, integer: false, color: false, range: null });
+    expect(field(fields, 'offset')).toEqual({ kind: 'vector', path: ['offset'], label: 'offset', length: 2, integer: false, wide: false, color: false, range: null });
+    expect(field(fields, 'size')).toEqual({ kind: 'vector', path: ['size'], label: 'size', length: 2, integer: false, wide: false, color: false, range: null });
     expect(field(fields, 'texture')).toEqual({ kind: 'string', path: ['texture'], label: 'texture', nullable: true });
-    expect(field(fields, 'color')).toEqual({ kind: 'vector', path: ['color'], label: 'color', length: 4, integer: false, color: true, range: null });
-    expect(field(fields, 'order')).toEqual({ kind: 'number', path: ['order'], label: 'order', integer: true, range: null });
+    expect(field(fields, 'color')).toEqual({ kind: 'vector', path: ['color'], label: 'color', length: 4, integer: false, wide: false, color: true, range: null });
+    expect(field(fields, 'order')).toEqual({ kind: 'number', path: ['order'], label: 'order', integer: true, wide: false, range: null });
   });
 
   // `UiText` shares `UiRect`'s `anchor`/`offset`/`color`/`order` shapes; `text` is a plain
@@ -756,9 +757,9 @@ describe('deriveFields', () => {
       ],
     });
     expect(field(fields, 'text')).toEqual({ kind: 'string', path: ['text'], label: 'text', nullable: false });
-    expect(field(fields, 'size')).toEqual({ kind: 'number', path: ['size'], label: 'size', integer: false, range: null });
+    expect(field(fields, 'size')).toEqual({ kind: 'number', path: ['size'], label: 'size', integer: false, wide: false, range: null });
     expect(field(fields, 'color')).toMatchObject({ kind: 'vector', length: 4, color: true });
-    expect(field(fields, 'order')).toEqual({ kind: 'number', path: ['order'], label: 'order', integer: true, range: null });
+    expect(field(fields, 'order')).toEqual({ kind: 'number', path: ['order'], label: 'order', integer: true, wide: false, range: null });
   });
 
   // Environment/IBL Wave 1: `Environment` renders as four 3-wide numeric vectors (the sky/ambient
@@ -787,7 +788,7 @@ describe('deriveFields', () => {
       expect(field(fields, label)).toMatchObject({ kind: 'vector', length: 3 });
     }
     for (const label of ['sun_disc_size', 'sun_disc_intensity', 'ibl_intensity']) {
-      expect(field(fields, label)).toEqual({ kind: 'number', path: [label], label, integer: false, range: null });
+      expect(field(fields, label)).toEqual({ kind: 'number', path: [label], label, integer: false, wide: false, range: null });
     }
     // None fell to the raw-JSON bucket — the whole component is editable.
     expect(fields.some((f) => f.kind === 'json')).toBe(false);
@@ -802,14 +803,14 @@ describe('deriveFields', () => {
       kind: 'number',
       path: ['fade'],
       label: 'fade',
-      integer: false,
+      integer: false, wide: false,
       range: { min: 0, max: 1, hardMin: 0, hardMax: 1 },
     });
     expect(field(fields, 'height_min')).toEqual({
       kind: 'number',
       path: ['height_min'],
       label: 'height_min',
-      integer: false,
+      integer: false, wide: false,
       range: null,
     });
   });
@@ -848,7 +849,7 @@ describe('deriveFields', () => {
       path: ['lift'],
       label: 'lift',
       length: 3,
-      integer: false,
+      integer: false, wide: false,
       color: false,
       range: { min: 0, max: 0.2, hardMin: null, hardMax: null },
     });
@@ -947,21 +948,21 @@ describe('deriveFields', () => {
         { kind: 'unit', value: 'bottom_right' },
       ],
     });
-    expect(field(fields, 'offset')).toEqual({ kind: 'vector', path: ['offset'], label: 'offset', length: 2, integer: false, color: false, range: null });
+    expect(field(fields, 'offset')).toEqual({ kind: 'vector', path: ['offset'], label: 'offset', length: 2, integer: false, wide: false, color: false, range: null });
     expect(field(fields, 'title')).toEqual({ kind: 'string', path: ['title'], label: 'title', nullable: false });
     expect(field(fields, 'items')).toEqual({ kind: 'json', path: ['items'], label: 'items' });
-    expect(field(fields, 'selected')).toEqual({ kind: 'number', path: ['selected'], label: 'selected', integer: true, range: null });
-    expect(field(fields, 'size')).toEqual({ kind: 'number', path: ['size'], label: 'size', integer: false, range: null });
-    expect(field(fields, 'line_spacing')).toEqual({ kind: 'number', path: ['line_spacing'], label: 'line_spacing', integer: false, range: null });
-    expect(field(fields, 'padding')).toEqual({ kind: 'number', path: ['padding'], label: 'padding', integer: false, range: null });
+    expect(field(fields, 'selected')).toEqual({ kind: 'number', path: ['selected'], label: 'selected', integer: true, wide: false, range: null });
+    expect(field(fields, 'size')).toEqual({ kind: 'number', path: ['size'], label: 'size', integer: false, wide: false, range: null });
+    expect(field(fields, 'line_spacing')).toEqual({ kind: 'number', path: ['line_spacing'], label: 'line_spacing', integer: false, wide: false, range: null });
+    expect(field(fields, 'padding')).toEqual({ kind: 'number', path: ['padding'], label: 'padding', integer: false, wide: false, range: null });
     for (const label of ['color', 'selected_color', 'disabled_color']) {
       expect(field(fields, label)).toMatchObject({ kind: 'vector', length: 4, color: true });
     }
     // `background` doesn't match the `colou?r` label heuristic, so it derives as an ordinary
     // (non-swatched) 4-wide vector, same degradation `Sprite.size`/`UiRect.offset` accept elsewhere.
-    expect(field(fields, 'background')).toEqual({ kind: 'vector', path: ['background'], label: 'background', length: 4, integer: false, color: false, range: null });
-    expect(field(fields, 'order')).toEqual({ kind: 'number', path: ['order'], label: 'order', integer: true, range: null });
-    expect(field(fields, 'max_visible')).toEqual({ kind: 'number', path: ['max_visible'], label: 'max_visible', integer: true, range: null });
+    expect(field(fields, 'background')).toEqual({ kind: 'vector', path: ['background'], label: 'background', length: 4, integer: false, wide: false, color: false, range: null });
+    expect(field(fields, 'order')).toEqual({ kind: 'number', path: ['order'], label: 'order', integer: true, wide: false, range: null });
+    expect(field(fields, 'max_visible')).toEqual({ kind: 'number', path: ['max_visible'], label: 'max_visible', integer: true, wide: false, range: null });
   });
 
   // particles (`Plan/particles-engine-and-editor.md`): every one of `ParticleEmitter`'s 19 fields
@@ -1017,13 +1018,13 @@ describe('deriveFields', () => {
     for (const [label, { min, max }] of Object.entries(ranged)) {
       expect(field(fields, label), label).toMatchObject({ range: { min, max } });
     }
-    expect(field(fields, 'started')).toEqual({ kind: 'number', path: ['started'], label: 'started', integer: true, range: null });
-    expect(field(fields, 'seed')).toEqual({ kind: 'number', path: ['seed'], label: 'seed', integer: true, range: null });
+    expect(field(fields, 'started')).toEqual({ kind: 'number', path: ['started'], label: 'started', integer: true, wide: true, range: null });
+    expect(field(fields, 'seed')).toEqual({ kind: 'number', path: ['seed'], label: 'seed', integer: true, wide: true, range: null });
     // burst is the integer among the thirteen — still gets a track like any other, its automatic
     // `minimum: 0` riding along as the range's hard lower bound.
     expect(field(fields, 'burst')).toMatchObject({
       kind: 'number',
-      integer: true,
+      integer: true, wide: false,
       range: { min: 0, max: 512, hardMin: 0, hardMax: null },
     });
   });
@@ -1069,13 +1070,13 @@ describe('deriveFields', () => {
 describe('deriveFields edge cases', () => {
   it('marks JSON Schema integer fields as integer', () => {
     const fields = deriveFields({ type: 'object', properties: { count: { type: 'integer' } } }, { count: 3 });
-    expect(field(fields, 'count')).toEqual({ kind: 'number', path: ['count'], label: 'count', integer: true, range: null });
+    expect(field(fields, 'count')).toEqual({ kind: 'number', path: ['count'], label: 'count', integer: true, wide: false, range: null });
   });
 
   it('reads a bounded integer field’s range like any other number', () => {
     const schema = { type: 'object', properties: { order: { type: 'integer', minimum: -8, maximum: 8 } } };
     expect(field(deriveFields(schema, { order: 0 }), 'order')).toMatchObject({
-      integer: true,
+      integer: true, wide: false,
       range: { min: -8, max: 8, hardMin: -8, hardMax: 8 },
     });
   });
@@ -1328,5 +1329,45 @@ describe('applyFieldEdit', () => {
     // …whereas assembling B from the stale polled base loses A — the race the pending base prevents.
     const clobbered = applyFieldEdit(polled, ['translation', 1], 7) as { translation: number[] };
     expect(clobbered.translation).toEqual([0, 7, 0]);
+  });
+});
+
+// --- 64-bit integers survive an inspector round trip ---------------------------------------------
+
+describe('u64 round trip', () => {
+  const VOLLEY =
+    '{"pattern":"p","count":8,"angle_deg":3.5,"speed":[2.0,4.0],"seed":18446744073709551614,' +
+    '"killed":[9223372036854775809,0,18446744073709551615,1]}';
+
+  it('a Volley nudge keeps seed and killed digit-exact', () => {
+    const edited = applyFieldEdit(parseWire(VOLLEY), ['angle_deg'], 12.5);
+    expect(stringifyWire(edited)).toBe(
+      '{"pattern":"p","count":8,"angle_deg":12.5,"speed":[2,4],"seed":18446744073709551614,' +
+        '"killed":[9223372036854775809,0,18446744073709551615,1]}',
+    );
+  });
+
+  it('a ParticleEmitter edit keeps a seed above 2^53', () => {
+    const edited = applyFieldEdit(parseWire('{"rate":10.0,"seed":18446744073709551615}'), ['rate'], 12);
+    expect(stringifyWire(edited)).toBe('{"rate":12,"seed":18446744073709551615}');
+  });
+
+  it('a typed wide draft becomes a bigint, a safe one a number', () => {
+    expect(parseNumberDraft('18446744073709551614', true, true)).toBe(18446744073709551614n);
+    expect(parseNumberDraft(' 42 ', true, true)).toBe(42);
+    expect(parseNumberDraft('1.5', true, true)).toBeNull();
+  });
+
+  it('derives wide from the schema format', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        seed: { type: 'integer', format: 'uint64', minimum: 0 },
+        count: { type: 'integer', format: 'uint32', minimum: 0 },
+        killed: { type: 'array', items: { type: 'integer', format: 'uint64' }, minItems: 4, maxItems: 4 },
+      },
+    };
+    const fields = deriveFields(schema, {});
+    expect(fields.map((f) => (f.kind === 'number' || f.kind === 'vector' ? f.wide : null))).toEqual([true, false, true]);
   });
 });

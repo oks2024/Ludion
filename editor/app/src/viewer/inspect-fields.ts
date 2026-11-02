@@ -1,4 +1,4 @@
-// Schema-driven field derivation for the editable inspector (Phase 6 Wave 2).
+// Schema-driven field derivation for the editable inspector.
 //
 // The inspector edits a component by writing its *whole* value back with `component.set` (the wire
 // takes the full component, never a patch). This module is the pure bridge between a component's
@@ -29,9 +29,9 @@
 // Enums, `anyOf`/`allOf`, `const`, and nested structs all fall to the raw-JSON widget — the deliberate
 // "shape we don't cleanly widget" bucket. `oneOf` gets one narrow exception (see `deriveVariantOptions`
 // below): bare-string unit variants (`{"type":"string","const":"cube"}`, one branch per value), alone
-// (a plain unit enum like `Collider.body` — Phase 12 Wave 5) or mixed with one or more
-// single-string-property object variants (`{"asset": "…"}`, `{"voxel": "…"}`, Mesh's `MeshSource` —
-// Phase 8 Wave 2, generalized to N object variants in Phase 10 Wave 5), become a dropdown widget
+// (a plain unit enum like `Collider.body`) or mixed with one or more
+// single-string-property object variants (`{"asset": "…"}`, `{"voxel": "…"}`, Mesh's `MeshSource`,
+// with any number of object variants), become a dropdown widget
 // (plus a text input when an object variant is selected). A `oneOf` of object variants alone (no unit
 // branch at all) still falls to raw JSON, same as any other unsupported shape.
 
@@ -58,6 +58,8 @@ export interface NumberField {
   readonly label: string;
   /** True for JSON Schema `integer`: a fractional draft is rejected on commit. */
   readonly integer: boolean;
+  /** True for a 64-bit (or pointer-sized) integer: a draft beyond 2^53 is sent as a `bigint`. */
+  readonly wide: boolean;
   /** `null` when the schema states no usable travel: the field is a plain number box. */
   readonly range: FieldRange | null;
 }
@@ -87,6 +89,8 @@ export interface VectorField {
   readonly label: string;
   readonly length: number;
   readonly integer: boolean;
+  /** True for 64-bit (or pointer-sized) integer elements: see {@link NumberField.wide}. */
+  readonly wide: boolean;
   readonly color: boolean;
   /** Understood per element (every component of a vector shares one range); `null` when the schema
    *  states no usable travel. */
@@ -251,7 +255,7 @@ function singleStringValue(branch: Record<string, unknown>): string | null {
  *  other unsupported `oneOf` (e.g. `Projection`'s struct variants, or `Collider.shape`'s
  *  number/array-payload variants). Object branches are optional: a `oneOf` of unit branches alone —
  *  what schemars emits for a plain unit enum with per-variant doc comments, e.g. `Collider.body`
- *  (`static`/`dynamic`, Phase 12 Wave 5) — is a plain dropdown with no text input. Returns `null` for
+ *  (`static`/`dynamic`) — is a plain dropdown with no text input. Returns `null` for
  *  anything outside this shape (a non-string/optional/duplicate property, a non-object/non-string
  *  branch, no unit branch, …), which sends the field to the raw JSON fallback — never a crash, never
  *  a dropped field. */
@@ -356,6 +360,7 @@ function deriveField(
             path,
             label,
             integer: type === 'integer',
+            wide: type === 'integer' && isWideFormat(resolved.format),
             range: deriveRange(resolved, resolved),
           };
     case 'string':
@@ -389,6 +394,7 @@ function deriveField(
         label,
         length: min,
         integer: itemType === 'integer',
+        wide: itemType === 'integer' && isWideFormat(items.format),
         color: isColorish(label, min),
         range: deriveRange(resolved, items),
       };
@@ -396,6 +402,28 @@ function deriveField(
     default:
       return json;
   }
+}
+
+function isWideFormat(format: unknown): boolean {
+  return format === 'uint64' || format === 'int64' || format === 'uint' || format === 'int';
+}
+
+/**
+ * Parses a number box's draft. A wide integer beyond the safe range becomes a `bigint`, so a typed
+ * u64 reaches the wire digit-exact. `null` rejects the draft (empty, non-finite, or fractional for
+ * an integer field).
+ */
+export function parseNumberDraft(draft: string, integer: boolean, wide: boolean): number | bigint | null {
+  const trimmed = draft.trim();
+  if (wide && /^-?\d+$/.test(trimmed)) {
+    const n = Number(trimmed);
+    return Number.isSafeInteger(n) ? n : BigInt(trimmed);
+  }
+  const n = Number(trimmed);
+  if (trimmed === '' || !Number.isFinite(n) || (integer && !Number.isInteger(n))) {
+    return null;
+  }
+  return n;
 }
 
 /**

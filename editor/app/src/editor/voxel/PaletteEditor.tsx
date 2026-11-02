@@ -1,4 +1,4 @@
-// The palette entry editor — the swatch strip's second duty, and the highest-value half of wave 4.
+// The palette entry editor — the swatch strip's second duty.
 //
 // This is the control that retires the G7 friction directly: drag the color while watching the model
 // under the game's own `env-night.yaml`. So the panel carries a one-click shortcut to the night rig

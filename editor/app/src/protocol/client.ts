@@ -24,6 +24,7 @@ import type {
   WireErrorSchema,
 } from '@ludion/protocol';
 import { decodeFrameHeader, type DecodedFrame } from './frames';
+import { parseWire, stringifyWire } from './wireJson';
 
 export const PROTOCOL_VERSION = 1;
 export const CLIENT_NAME = 'ludion-viewer';
@@ -90,7 +91,7 @@ export interface FullResponse {
 export function classifyMessage(raw: string): IncomingMessage {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = parseWire(raw);
   } catch (cause) {
     throw new ProtocolClientError(`malformed JSON from server: ${String(cause)}`);
   }
@@ -250,7 +251,7 @@ export class ProtocolClient {
     const request = { v: PROTOCOL_VERSION, id, ...command } as Request;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      ws.send(JSON.stringify(request));
+      ws.send(stringifyWire(request));
     });
   }
 

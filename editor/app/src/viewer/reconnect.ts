@@ -1,4 +1,4 @@
-// Reconnect state machine for the editor (Phase 7 Wave 4, Plan/phase-7-designer-flow.md decision 6).
+// Reconnect state machine for the editor (Plan/phase-7-designer-flow.md decision 6).
 //
 // `ludion dev` restarts the game process on every hot reload: the `ws://` endpoint vanishes for a
 // 1–3 s "blink" and comes back on the SAME port. The editor must ride that blink without the human

@@ -29,6 +29,7 @@
 
 import { sliceRow, EMPTY_GLYPH, type VoxelDoc } from './doc';
 import { invertSplices, type CellPaint, type Splice } from './edit';
+import { UNDO_LIMIT } from '../undo';
 
 /** The x/z extent of a layer, in cells. */
 export interface GridBounds {
@@ -224,10 +225,6 @@ export interface UndoStack {
 }
 
 export const EMPTY_UNDO: UndoStack = { past: [], future: [] };
-
-/** How many steps back the painter remembers. A stroke is one entry, so this is strokes, not cells;
- *  the bound exists to cap memory, not to shorten the human's reach. */
-export const UNDO_LIMIT = 64;
 
 /**
  * Records what an edit did. `opens` (from `opensUndoEntry`) starts a new entry; otherwise the edit

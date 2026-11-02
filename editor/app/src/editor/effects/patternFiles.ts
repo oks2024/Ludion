@@ -9,7 +9,7 @@
 // it runs once per file in a directory listing, and a malformed document must read as "not a
 // pattern" rather than throw.
 //
-// A DOC KEY IS CONTENT-ROOT-RELATIVE AND FORWARD-SLASHED (`Plan/projectile-patterns.md` Wave 1
+// A DOC KEY IS CONTENT-ROOT-RELATIVE AND FORWARD-SLASHED (`Plan/projectile-patterns.md`
 // ruling 1): `patterns/boss.yaml`, never a name and never an absolute path. It is what
 // `PatternPlayer.pattern`, a timeline's `play:` and `asset.reload { path }` all take.
 //
