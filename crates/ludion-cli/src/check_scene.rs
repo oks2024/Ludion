@@ -214,9 +214,7 @@ pub fn run(
         // `kind: assembly` runs the same authoring views over its *composed* grid
         // (`Plan/voxel-animation.md` decision 11) — checked before the catch-all usage error below,
         // so this is the one other kind the voxel-view flags are legal against.
-        Some(kind) if kind == "assembly" && !sculpt_views.any() => {
-            run_assembly(reporter, &source, views)
-        }
+        Some(kind) if kind == "assembly" && !sculpt_views.any() => run_assembly(reporter, views),
         // `kind: sculpt` is the one kind the sculpt-view flags are legal against; a voxel-view flag
         // here falls through to the catch-all below, which already names "sculpt" correctly.
         Some(kind) if kind == "sculpt" && !views.any() => {
@@ -1253,27 +1251,24 @@ fn filter_keyword(filter: ludion_scene::AtlasFilter) -> &'static str {
 /// model, `Plan/voxel-animation.md` decisions 3, 4 and 9) — the one `check-scene` path that touches
 /// more than the one file it was given.
 ///
-/// `ludion_engine::load_assembly` is the full multi-file pass: it re-reads the assembly plus every
-/// part file it names (each resolved relative to the assembly file's own directory), cross-validates
-/// them (unknown glyphs, parts that don't fit the grid), and meshes each part — the `root`/`rel` pair
-/// it takes is derived from `path` the way `load_engine` derives a scene's project root: the file's
-/// parent directory is `root`, its file name is `rel`, so a part's `file:` entry resolves exactly as
-/// it would for a game booted from this same directory. Once that full pass is clean, `source` (the
-/// text already in hand) is re-checked with `ludion_scene::check_assembly` to recover the authored
-/// fields (`file`/`place`/`parent`/`mirror`) the meshed [`ludion_engine::AssemblyData`] does not
-/// carry — guaranteed to succeed, since the full pass already validated the same document.
+/// `ludion_engine::load_assembly_meshed_documents` is the full multi-file pass: it reads the assembly
+/// plus every part and clip file it names once (each resolved relative to the assembly file's own
+/// directory), cross-validates them (unknown glyphs, parts that don't fit the grid), and meshes each
+/// part. The one call provides both the meshed [`ludion_engine::AssemblyData`] and the parsed
+/// documents, so the authored fields (`file`/`place`/`parent`/`mirror`) and the part documents come
+/// from the same bytes as the meshes. The `root`/`rel` pair it takes is derived from `path` the way
+/// `load_engine` derives a scene's project root: the file's parent directory is `root`, its file name
+/// is `rel`, so a part's `file:` entry resolves exactly as it would for a game booted from this same
+/// directory.
 ///
 /// After that report, the assembled-grid analysis family runs (`Plan/voxel-animation.md` decision
-/// 11): `ludion_engine::load_assembly_documents` resolves the same assembly and parts a second time
-/// (the `run_assembly`/model-view harness double-parse precedent — the part *documents*, not the
-/// meshed geometry, are what the composition needs, and [`ludion_engine::load_assembly`] above
-/// discards them once meshed) so [`ludion_scene::assembly_assembled_grid`] can compose every part into
-/// one assembly-global grid at rest pose. The composed grid's connectivity (`L1129`) always prints,
+/// 11): [`ludion_scene::assembly_assembled_grid`] composes every part into one assembly-global grid
+/// at rest pose. The composed grid's connectivity (`L1129`) always prints,
 /// exactly like a plain voxel document's, followed by the overlap / joint-plug lint (`L1143`,
 /// decision 10), unconditional for the same reason and silent on a plugged joint; `views`'
 /// authoring flags run over the same composed grid,
 /// with a per-cell part-attribution addendum a plain voxel report has no parts to name.
-fn run_assembly(mut reporter: Reporter, source: &str, views: &VoxelViews) -> ExitCode {
+fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
     let path = reporter.path;
     let root = path.parent().unwrap_or_else(|| Path::new("."));
     let rel = path
@@ -1281,24 +1276,16 @@ fn run_assembly(mut reporter: Reporter, source: &str, views: &VoxelViews) -> Exi
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
 
-    let data = match ludion_engine::load_assembly(
+    let (data, assembly, parts) = match ludion_engine::load_assembly_meshed_documents(
         ludion_assets::AssetRoot::local_document_unconfined(root),
         &rel,
     ) {
-        Ok(data) => data,
+        Ok(loaded) => loaded,
         Err(diagnostics) => return reporter.fail(diagnostics),
     };
-    let assembly = ludion_scene::check_assembly(source)
-        .expect("load_assembly already validated this exact document");
-
-    let (grid_assembly, parts, ..) = ludion_engine::load_assembly_documents(
-        ludion_assets::AssetRoot::local_document_unconfined(root),
-        &rel,
-    )
-    .expect("load_assembly already validated this exact document and its parts");
-    let grid = ludion_scene::assembly_assembled_grid(&grid_assembly, &parts);
+    let grid = ludion_scene::assembly_assembled_grid(&assembly, &parts);
     let owners = Owners {
-        assembly: &grid_assembly,
+        assembly: &assembly,
         grid: &grid,
     };
     // Connectivity always runs over the composed grid, exactly as it always runs over a plain voxel
@@ -1307,7 +1294,7 @@ fn run_assembly(mut reporter: Reporter, source: &str, views: &VoxelViews) -> Exi
     // The overlap / joint-plug lint (`L1143`) is unconditional for the same reason: a wrong pivot is
     // found by checking the model, not by remembering to pass a flag. A plug at its joint is silent,
     // so a well-authored assembly prints nothing here.
-    let overlap = ludion_scene::assembly_overlap_lint(&grid_assembly, &parts, &grid);
+    let overlap = ludion_scene::assembly_overlap_lint(&assembly, &parts, &grid);
 
     let part_meshes: Vec<(u64, u64, u64)> = data
         .parts
@@ -1556,9 +1543,10 @@ fn run_character(mut reporter: Reporter, source: &str) -> ExitCode {
         Ok(data) => data,
         Err(diagnostics) => return reporter.fail(diagnostics),
     };
-    let name = ludion_scene::check_character(source)
-        .expect("load_character already validated this exact document")
-        .name;
+    let name = match ludion_scene::check_character(source) {
+        Ok(character) => character.name,
+        Err(diagnostics) => return reporter.fail(diagnostics),
+    };
     let contacts = match ludion_engine::contact_heights(
         ludion_assets::AssetRoot::local_document_unconfined(root),
         &data,

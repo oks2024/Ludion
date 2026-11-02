@@ -109,8 +109,8 @@ mod voxelizer;
 
 pub use animation_events::{AnimationEvents, ClipEvent, animation_events};
 pub use assembly_mesh::{
-    AssemblyData, AssemblyPartData, LoadedAssemblyDocuments, load as load_assembly,
-    load_documents as load_assembly_documents, mesh_assembly,
+    AssemblyData, AssemblyPartData, MeshedAssemblyDocuments, load as load_assembly,
+    load_meshed_documents as load_assembly_meshed_documents, mesh_assembly,
 };
 pub use audio::{
     AudioCategory, AudioEvent, AudioLogEntry, AudioMessage, AudioQueue, CategoryGains, LoopId,

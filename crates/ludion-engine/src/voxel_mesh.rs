@@ -1,8 +1,8 @@
 //! Meshing a `Mesh.shape: voxel` document into renderer-ready [`MeshData`].
 //!
-//! A voxel model is a strict-YAML `voxels/*.voxel.yaml` document ([`ludion_scene::check_voxel`], Wave
-//! 1). This module is the engine-side seam that turns one into the plain vertex data the renderer
-//! consumes — the voxel sibling of [`crate::mesh_asset`], with the same `load(root, rel)` signature:
+//! A voxel model is a strict-YAML `voxels/*.voxel.yaml` document ([`ludion_scene::check_voxel`]). This
+//! module is the engine-side seam that turns one into the plain vertex data the renderer consumes —
+//! the voxel sibling of [`crate::mesh_asset`], with the same `load(root, rel)` signature:
 //! read the bytes ([`ludion_assets`]), parse + validate ([`ludion_scene`]), then **greedily mesh**
 //! the grid into an indexed, per-quad-colored triangle list. The renderer never sees YAML;
 //! `ludion-scene` never sees a wgpu type; both invariants hold because the meshing lives here.
@@ -20,9 +20,8 @@
 //!
 //! Normals are exact axis-aligned ±1 unit vectors (no normalization, no float error); every
 //! coordinate is a small integer ± a half-integer, exact in `f32`. Grid reads go through
-//! [`Grid::at`], which treats out-of-bounds as empty — the chunked-voxel-worlds seam, costing
-//! nothing today. Grid→model space is bottom-center, 1 voxel = 1 unit: cell `(x, y, z)` spans
-//! `[x−sx/2, x+1−sx/2] × [y, y+1] × [z−sz/2, z+1−sz/2]`.
+//! [`Grid::at`], which treats out-of-bounds as empty. Grid→model space is bottom-center, 1 voxel = 1
+//! unit: cell `(x, y, z)` spans `[x−sx/2, x+1−sx/2] × [y, y+1] × [z−sz/2, z+1−sz/2]`.
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -96,10 +95,9 @@ pub(crate) fn read_document(
 
 /// A dense palette-index grid, built once from a [`VoxelDocument`] by one linear
 /// [`VoxelDocument::for_each_cell`] sweep. `at` is the single bounds-checked lookup the mesher reads
-/// through — out-of-bounds reads as empty (`None`), the seam a chunked-voxel-worlds phase would read
-/// across. The grid exists for the *shape* of the mesher's access: a greedy merge walks neighbours
-/// along every axis and re-reads each plane's cells, which row strings answer only by decoding a row
-/// again. The emitted stream is a pure function of the document either way.
+/// through — out-of-bounds reads as empty (`None`). The grid exists for the *shape* of the mesher's access: a
+/// greedy merge walks neighbours along every axis and re-reads each plane's cells, which row strings
+/// answer only by decoding a row again. The emitted stream is a pure function of the document either way.
 struct Grid {
     /// Extent in cells, as `i64` so a neighbor at `−1` is expressible without underflow.
     size: [i64; 3],
@@ -122,7 +120,7 @@ impl Grid {
     }
 
     /// The palette index of cell `c`, or `None` for an empty or out-of-bounds cell. Out-of-bounds
-    /// reads as empty deliberately — the chunked-worlds seam.
+    /// reads as empty deliberately.
     fn at(&self, c: [i64; 3]) -> Option<u8> {
         let [x, y, z] = c;
         let [sx, sy, sz] = self.size;
@@ -135,7 +133,7 @@ impl Grid {
 }
 
 /// One occupied cell's renderer-relevant data — the D15 accessor's per-cell payload
-/// (`Plan/gi-wave0-voxelizer.md` §6): enough for a consumer (the W0 voxelizer) to deposit a
+/// (`Plan/gi-wave0-voxelizer.md` §6): enough for a consumer (the GI voxelizer) to deposit a
 /// world-space GI cell without re-resolving the palette.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VoxelCell {
@@ -901,7 +899,7 @@ mod tests {
     }
 
     /// The bounds-checked grid lookup reads out-of-bounds — negative or beyond the extent — as empty
-    /// (`None`), the chunked-voxel-worlds seam. In-bounds cells read their palette index.
+    /// (`None`). In-bounds cells read their palette index.
     #[test]
     fn grid_reads_out_of_bounds_as_empty() {
         let model = doc([2, 1, 1], vec![entry("A", RED)], &[&["A."]]);

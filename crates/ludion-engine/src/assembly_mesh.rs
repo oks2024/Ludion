@@ -248,24 +248,21 @@ pub(crate) fn read_clip(
 /// [`load_documents`]'s success value: the parsed assembly, its resolved parts (aligned by index with
 /// `assembly.parts`), the assembly's content hash, and the reload dependency list as `(path, content
 /// hash)` pairs — aliased so the signature stays readable and `clippy::type_complexity` stays quiet.
-pub type LoadedAssemblyDocuments = (AssemblyDocument, Vec<PartDocument>, u64, Vec<(String, u64)>);
+pub(crate) type LoadedAssemblyDocuments =
+    (AssemblyDocument, Vec<PartDocument>, u64, Vec<(String, u64)>);
 
 /// Reads and validates the assembly document at `root`/`rel` together with every part file it names,
-/// stopping short of meshing — the read/parse/cross-validate half of `load_with_sources`, split out
-/// for a caller that wants the resolved documents themselves rather than geometry (grid-level analysis
-/// over the assembled grid, `Plan/voxel-animation.md` decision 11, needs the raw per-part slices
-/// [`mesh_assembly`] consumes and discards).
+/// stopping short of meshing — the read/parse/cross-validate half shared by `load_with_sources` and
+/// [`load_meshed_documents`].
 ///
 /// Returns the parsed assembly, its resolved parts (aligned by index with `assembly.parts`, the
 /// [`ludion_scene::check_assembly_parts`] convention), the same content hash `load_with_sources`
-/// derives its mesh keys from, and the same reload dependency list. A caller that wants both the
-/// documents and the mesh can pass this result straight to [`mesh_assembly`] without reading any file
-/// twice.
+/// derives its mesh keys from, and the same reload dependency list.
 ///
 /// # Errors
 /// Exactly [`load`]'s: `L1101` per unreadable file, `L1137`/`L1138` for the assembly,
 /// `L1139`/`L1140` for a part.
-pub fn load_documents(
+pub(crate) fn load_documents(
     root: ludion_assets::AssetRoot<'_>,
     rel: &str,
 ) -> Result<LoadedAssemblyDocuments, Vec<Diagnostic>> {
@@ -308,6 +305,26 @@ pub fn load_documents(
 
     let hash = fold_source_hashes(bytes.hash, &part_hashes);
     Ok((assembly, parts, hash, sources))
+}
+
+/// [`load_meshed_documents`]'s success value: the meshed assembly with the parsed assembly and its
+/// resolved parts (aligned by index with `assembly.parts`) it was meshed from.
+pub type MeshedAssemblyDocuments = (AssemblyData, AssemblyDocument, Vec<PartDocument>);
+
+/// [`load`], additionally returning the documents the mesh was built from — for a caller that
+/// analyses the assembled grid. Each file is read once, so the mesh and the documents cannot
+/// disagree about a file that changed between two reads.
+///
+/// # Errors
+/// Exactly [`load`]'s.
+pub fn load_meshed_documents(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<MeshedAssemblyDocuments, Vec<Diagnostic>> {
+    let (assembly, parts, hash, mut sources) = load_documents(root, rel)?;
+    let clips = read_clips(root, rel, &assembly, &mut sources)?;
+    let data = mesh_assembly(&assembly, &parts, &clips, hash);
+    Ok((data, assembly, parts))
 }
 
 /// Reads and validates one part document at `root`/`rel`, returning it with its bytes' content hash.

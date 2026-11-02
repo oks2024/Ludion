@@ -59,7 +59,7 @@ is `L1005` and does not parse):
 | `kind` | yes | `animation` |
 | `name` | no | human label |
 | `generated_from` | no | source path of an imported clip; a derived clip is never hand-edited and carries no `events` |
-| `duration` | yes | clip length in seconds; finite and strictly positive |
+| `duration` | yes | clip length in seconds; finite, strictly positive, at most 3600 |
 | `loop` | yes | `true` wraps at `duration`; `false` is a one-shot that holds its final pose |
 | `events` | no | named instants `{t, name}`, `t` within `[0, duration]` and strictly increasing, `name` non-empty |
 | `tracks` | yes | target name → the channels animating it; at least one track |

@@ -963,8 +963,16 @@ fn shapes_meet(a: &Shape, ac: [f32; 2], b: &Shape, bc: [f32; 2], touching: bool)
 /// Whether a circle (center `cc`, radius `r`) meets an AABB (center `bc`, half-extents `he`):
 /// the circle center's distance to the box's nearest point is within the radius.
 fn circle_aabb_meet(cc: [f32; 2], r: f32, bc: [f32; 2], he: [f32; 2], touching: bool) -> bool {
-    let nearest_x = cc[0].clamp(bc[0] - he[0], bc[0] + he[0]);
-    let nearest_z = cc[1].clamp(bc[1] - he[1], bc[1] + he[1]);
+    let (lo_x, hi_x) = (bc[0] - he[0], bc[0] + he[0]);
+    let (lo_z, hi_z) = (bc[1] - he[1], bc[1] + he[1]);
+    // `f32::clamp` panics unless `lo <= hi`. This is false for a NaN or inverted bound: a miss, as
+    // NaN is everywhere else in the narrow phase.
+    let ordered = lo_x <= hi_x && lo_z <= hi_z;
+    if !ordered {
+        return false;
+    }
+    let nearest_x = cc[0].clamp(lo_x, hi_x);
+    let nearest_z = cc[1].clamp(lo_z, hi_z);
     within(
         distance_squared(cc, [nearest_x, nearest_z]),
         r * r,
@@ -1427,6 +1435,76 @@ mod tests {
         assert_eq!(hits, vec![box_e]);
         // Just out of reach.
         assert!(overlaps(&world, Shape::Circle { radius: 1.0 }, [0.0, 0.0], None).is_empty());
+    }
+
+    #[test]
+    fn circle_aabb_meet_non_finite_or_inverted_is_a_miss() {
+        let n = f32::NAN;
+        let i = f32::INFINITY;
+        let cases: [([f32; 2], [f32; 2], [f32; 2]); 7] = [
+            ([0.0, 0.0], [n, 0.0], [1.0, 1.0]),
+            ([0.0, 0.0], [0.0, n], [1.0, 1.0]),
+            ([0.0, 0.0], [0.0, 0.0], [n, 1.0]),
+            ([0.0, 0.0], [0.0, 0.0], [-1.0, 1.0]),
+            ([0.0, 0.0], [i, 0.0], [i, 1.0]),
+            ([n, 0.0], [0.0, 0.0], [1.0, 1.0]),
+            ([0.0, n], [0.0, 0.0], [1.0, 1.0]),
+        ];
+        for (cc, bc, he) in cases {
+            for touching in [false, true] {
+                assert!(
+                    !circle_aabb_meet(cc, 1.0, bc, he, touching),
+                    "{cc:?} {bc:?} {he:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn circle_aabb_meet_finite_pin() {
+        let (bc, he) = ([0.0, 0.0], [1.0, 1.0]);
+        assert!(circle_aabb_meet([0.5, 0.5], 0.1, bc, he, false));
+        assert!(!circle_aabb_meet([5.0, 0.0], 1.0, bc, he, false));
+        // Circle center at (2, 1): one unit from the box corner (1, 1), radius 1.
+        assert!(circle_aabb_meet([2.0, 1.0], 1.0, bc, he, true));
+        assert!(!circle_aabb_meet([2.0, 1.0], 1.0, bc, he, false));
+    }
+
+    #[test]
+    fn nan_centres_through_the_public_api_do_not_panic() {
+        let mut world = World::new();
+        spawn_collider(
+            &mut world,
+            [f32::NAN, 0.0],
+            Shape::Aabb {
+                half_extents: [1.0, 1.0],
+            },
+            Body::new_static(),
+        );
+        spawn_collider(
+            &mut world,
+            [0.0, 0.0],
+            Shape::Circle { radius: 1.0 },
+            Body::new_static(),
+        );
+        let mover = spawn_collider(
+            &mut world,
+            [5.0, 5.0],
+            Shape::Aabb {
+                half_extents: [1.0, 1.0],
+            },
+            Body::new_static(),
+        );
+        rebuild::<Pos, NoParent>(&mut world, &ctx());
+        // The NaN-centred box is never hit by a circle at the origin.
+        let hits = overlaps(&world, Shape::Circle { radius: 0.5 }, [0.0, 0.0], None);
+        assert_eq!(hits.len(), 1);
+        // An AABB probe at a NaN centre hits nothing.
+        let aabb = Shape::Aabb {
+            half_extents: [1.0, 1.0],
+        };
+        assert!(overlaps(&world, aabb, [f32::NAN, 0.0], None).is_empty());
+        let _ = move_and_slide_at(&world, mover, [0.0, 0.0], [f32::NAN, f32::NAN]);
     }
 
     #[test]

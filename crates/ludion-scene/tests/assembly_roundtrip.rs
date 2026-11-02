@@ -1013,6 +1013,43 @@ parts:
     assert!(grid.overlaps().is_empty());
 }
 
+/// A `place` near `u32::MAX` degrades to an empty grid; the composition never overflows.
+#[test]
+fn assembled_grid_survives_a_place_that_overflows_u32() {
+    let source = "\
+format: 1
+kind: assembly
+size:
+  - 3
+  - 1
+  - 1
+palette:
+  A:
+    color:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 1.0
+parts:
+  - name: far
+    file: parts/far.part.yaml
+    place:
+      - 0
+      - 0
+      - 0
+";
+    // `check_assembly` refuses an out-of-range `place`, so move it after validation.
+    let mut doc = check_assembly(source).expect("valid assembly");
+    doc.parts[0].place = [u32::MAX, 0, 0];
+    let far = PartDocument {
+        name: None,
+        size: [2, 1, 1],
+        slices: vec![vec!["AA".to_string()]],
+    };
+    let grid = assembly_assembled_grid(&doc, &[far]);
+    assert_eq!(grid.voxel.slices, vec![vec!["...".to_string()]]);
+}
+
 /// A `mirror: x` part's cells are already reversed by [`assembly_part_voxel`] before composition —
 /// `assembled_grid` must compose exactly that mirrored grid, not the part's raw, unmirrored one.
 #[test]

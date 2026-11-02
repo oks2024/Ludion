@@ -239,18 +239,20 @@ pub struct VoxelDocument {
 }
 
 impl VoxelDocument {
-    /// The total number of grid cells (`size.x * size.y * size.z`), computed in `u64` so a large
-    /// declared `size` cannot overflow.
+    /// The total number of grid cells (`size.x * size.y * size.z`), computed in `u64` and
+    /// saturating at `u64::MAX`, so a huge declared `size` stays over any cap instead of wrapping
+    /// under it.
     pub fn cell_count(&self) -> u64 {
-        u64::from(self.size[0]) * u64::from(self.size[1]) * u64::from(self.size[2])
+        u64::from(self.size[0])
+            .saturating_mul(u64::from(self.size[1]))
+            .saturating_mul(u64::from(self.size[2]))
     }
 
     /// The palette index of the cell at `(x, y, z)`, or `None` for an empty cell (`.`), an
     /// out-of-range coordinate, or a glyph that names no palette entry.
     ///
-    /// Out-of-range reads as empty deliberately — the seam a chunked voxel world would read
-    /// through, costing nothing. Call on a [`crate::validate_voxel`]-clean document for a
-    /// total, dimension-consistent grid.
+    /// Out-of-range reads as empty deliberately. Call on a [`crate::validate_voxel`]-clean document
+    /// for a total, dimension-consistent grid.
     pub fn palette_index(&self, x: u32, y: u32, z: u32) -> Option<u8> {
         if x >= self.size[0] || y >= self.size[1] || z >= self.size[2] {
             return None;
@@ -2451,6 +2453,16 @@ fn bad_color_channel(pointer: &str, segment: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cell_count_saturates_instead_of_wrapping() {
+        let doc = |size| VoxelDocument {
+            size,
+            ..Default::default()
+        };
+        assert_eq!(doc([u32::MAX; 3]).cell_count(), u64::MAX);
+        assert_eq!(doc([2, 3, 4]).cell_count(), 24);
+    }
 
     const GEM: &str = "\
 format: 1

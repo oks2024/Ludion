@@ -896,11 +896,16 @@ fn missing_key(key: &str, help: &str) -> Diagnostic {
     )
 }
 
+/// The longest clip a document may declare, in seconds: a clip's length bounds what its readers
+/// sample.
+const MAX_CLIP_DURATION: f64 = 3600.0;
+
 /// Validates data-consistency invariants of an already-parsed [`AnimationDocument`] (`L1142`):
-/// `duration` is finite and positive, `tracks` is non-empty, every track animates at least one
-/// channel, every keyframe's `t`/`v` are finite with `t` inside `[0, duration]`, and each
-/// channel's keyframe times strictly increase, `scale` components are positive (`L1142`); events
-/// are valid instants with a name, strictly increasing, on a non-derived clip (`L1198`).
+/// `duration` is finite, positive and at most [`MAX_CLIP_DURATION`], `tracks` is non-empty, every
+/// track animates at least one channel, every keyframe's `t`/`v` are finite with `t` inside
+/// `[0, duration]`, and each channel's keyframe times strictly increase, `scale` components are
+/// positive (`L1142`); events are valid instants with a name, strictly increasing, on a non-derived
+/// clip (`L1198`).
 ///
 /// Independent of how the document was built — a hand-authored one via [`parse`], or one assembled
 /// programmatically — so this is the one place those invariants are enforced (the "declared
@@ -919,6 +924,20 @@ pub(crate) fn validate(doc: &AnimationDocument) -> Vec<Diagnostic> {
             )
             .with_path("/duration")
             .with_help("set `duration` to the clip's length in seconds, e.g. `duration: 0.6`"),
+        );
+    } else if doc.duration > MAX_CLIP_DURATION {
+        diagnostics.push(
+            Diagnostic::new(
+                code::ANIMATION_DATA_CONSISTENCY,
+                format!(
+                    "`duration` must be at most {MAX_CLIP_DURATION} seconds, found {}",
+                    doc.duration
+                ),
+            )
+            .with_path("/duration")
+            .with_help(
+                "split the clip into shorter ones, or fix a mistyped `duration` (it is in seconds)",
+            ),
         );
     }
     if doc.tracks.is_empty() {

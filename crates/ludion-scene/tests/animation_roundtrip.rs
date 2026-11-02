@@ -547,6 +547,30 @@ fn non_finite_or_non_positive_duration_is_l1142() {
     assert!(has_code_at(&validate_animation(&doc), "L1142", "/duration"));
 }
 
+#[test]
+fn duration_ceiling_is_inclusive_and_l1142_beyond() {
+    let clip = |duration: f64| AnimationDocument {
+        duration,
+        tracks: vec![AnimationTrack {
+            target: "torso".to_string(),
+            rotation: Vec::new(),
+            translation: vec![Keyframe {
+                t: 0.0,
+                v: [0.0, 0.0, 0.0],
+                ease: Ease::Linear,
+            }],
+            scale: Vec::new(),
+        }],
+        ..Default::default()
+    };
+    assert!(validate_animation(&clip(3600.0)).is_empty());
+    assert!(has_code_at(
+        &validate_animation(&clip(3600.5)),
+        "L1142",
+        "/duration"
+    ));
+}
+
 // --- Committed clips ---------------------------------------------------------------------------
 
 /// Every committed (or frozen vigil) clip re-emits byte-identically once its whole-line comments

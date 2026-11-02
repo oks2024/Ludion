@@ -81,3 +81,38 @@ fn a_bad_overlay_is_l1200() {
     assert!(stderr.contains("L1200"), "stderr was: {stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A clip far past the duration ceiling is refused at the document, not sampled for hours.
+#[test]
+fn a_huge_clip_duration_is_l1142() {
+    let dir = std::env::temp_dir().join(format!(
+        "ludion-check-character-huge-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("characters")).unwrap();
+    std::fs::create_dir_all(dir.join("meshes")).unwrap();
+    std::fs::create_dir_all(dir.join("clips")).unwrap();
+    for file in ["meshes/skin-mannequin.mesh.yaml", "clips/run.anim.yaml"] {
+        std::fs::copy(gallery().join(file), dir.join(file)).unwrap();
+    }
+    let run = std::fs::read_to_string(dir.join("clips/run.anim.yaml")).unwrap();
+    assert!(run.contains("duration: 0.8"));
+    std::fs::write(
+        dir.join("clips/run.anim.yaml"),
+        run.replace("duration: 0.8", "duration: 1000000000.0"),
+    )
+    .unwrap();
+    let character = dir.join("characters/hero.character.yaml");
+    std::fs::write(
+        &character,
+        "format: 1\nkind: character\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  run:\n    clip: ../clips/run.anim.yaml\n",
+    )
+    .unwrap();
+
+    let output = run_check_scene(&character);
+    assert!(!output.status.success(), "expected a non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1142"), "stderr was: {stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

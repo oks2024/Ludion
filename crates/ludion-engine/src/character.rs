@@ -239,13 +239,6 @@ pub fn contact_heights(
     let mut scratch = Vec::with_capacity(joints.len());
     for binding in &data.clips {
         let duration = binding.clip.duration;
-        let steps = (duration * CONTACT_SAMPLE_RATE).floor() as u32;
-        let mut times: Vec<f64> = (0..=steps)
-            .map(|i| f64::from(i) / CONTACT_SAMPLE_RATE)
-            .collect();
-        if times.last() != Some(&duration) {
-            times.push(duration);
-        }
         let mut heights: Vec<JointHeight> = contact
             .iter()
             .map(|&j| JointHeight {
@@ -257,6 +250,13 @@ pub fn contact_heights(
             })
             .collect();
         if !heights.is_empty() {
+            let steps = (duration * CONTACT_SAMPLE_RATE).floor() as u32;
+            let mut times: Vec<f64> = (0..=steps)
+                .map(|i| f64::from(i) / CONTACT_SAMPLE_RATE)
+                .collect();
+            if times.last() != Some(&duration) {
+                times.push(duration);
+            }
             for &t in &times {
                 palette.clear();
                 crate::extract::sampled_palette(

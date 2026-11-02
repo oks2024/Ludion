@@ -2139,8 +2139,8 @@ impl<'a> ClipSource<'a> {
                     model.parent().unwrap_or_else(|| Path::new(".")),
                 );
                 let rel = loaded.bounds.file_name.as_str();
-                let data = crate::assembly_mesh::load(root, rel)?;
-                let (assembly, parts, ..) = crate::assembly_mesh::load_documents(root, rel)?;
+                let (data, assembly, parts) =
+                    crate::assembly_mesh::load_meshed_documents(root, rel)?;
                 let grid = ludion_scene::assembly_assembled_grid(&assembly, &parts);
                 let rest = part_placements(&data, None);
                 Ok(ClipSource::Assembly(Box::new(AssemblyPosing {

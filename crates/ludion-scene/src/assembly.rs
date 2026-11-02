@@ -1881,7 +1881,11 @@ pub(crate) fn assembled_grid(assembly: &AssemblyDocument, parts: &[PartDocument]
             let Some(palette_index) = palette_index else {
                 return;
             };
-            let (gx, gy, gz) = (px + x, py + y, pz + z);
+            let (Some(gx), Some(gy), Some(gz)) =
+                (px.checked_add(x), py.checked_add(y), pz.checked_add(z))
+            else {
+                return;
+            };
             if gx >= sx || gy >= sy || gz >= sz {
                 return;
             }

@@ -724,13 +724,12 @@ pub mod code {
     pub const ANIMATION_DOCUMENT_STRUCTURE: DiagnosticCode = DiagnosticCode::new("L1141");
 
     /// `L1142` — an animation clip document parsed structurally cleanly, but its data does not hang
-    /// together: `duration` is not finite or not greater than zero, `tracks` is empty, a track
-    /// animates no channel, a declared channel has zero keyframes, a keyframe's `t` or `v` is not
-    /// finite, a keyframe's `t` falls outside `[0, duration]`, a channel's keyframe times are not
-    /// strictly increasing, a `scale` component is not greater than zero, or a non-`step` `rotation`
-    /// segment turns 180 degrees or more on an Euler axis or combined across axes. The
-    /// `L1114`/`L1140`
-    /// analog for the animation family. Raised by `ludion-scene`.
+    /// together: `duration` is not finite, not greater than zero or over 3600 seconds, `tracks` is
+    /// empty, a track animates no channel, a declared channel has zero keyframes, a keyframe's `t` or
+    /// `v` is not finite, a keyframe's `t` falls outside `[0, duration]`, a channel's keyframe times
+    /// are not strictly increasing, a `scale` component is not greater than zero, or a non-`step`
+    /// `rotation` segment turns 180 degrees or more on an Euler axis or combined across axes. The
+    /// `L1114`/`L1140` analog for the animation family. Raised by `ludion-scene`.
     pub const ANIMATION_DATA_CONSISTENCY: DiagnosticCode = DiagnosticCode::new("L1142");
 
     /// `L1143` — two parts of an assembly overlap in the composed rest-pose grid in a way the
@@ -4349,7 +4348,7 @@ An animation clip document parsed structurally cleanly, but its data does not ha
 
 Specifically, one of:
 
-  - `duration` is not finite or not strictly greater than zero;
+  - `duration` is not finite, not strictly greater than zero, or over 3600 seconds;
   - `tracks` is empty (a clip must animate at least one target);
   - a track declares none of the `rotation`, `translation` or `scale` channels — including a
     channel key present with zero keyframes, which reads the same as never declaring it;
@@ -4365,11 +4364,11 @@ Specifically, one of:
 The JSON Pointer names the offending clip field, track, or keyframe. Event data (`events`) is the
 separate `L1198`.
 
-Fix: give `duration` a finite, positive value; author at least one track with at least one
-non-empty channel; keep every keyframe's `t` inside `[0, duration]`; and order each channel's
-keyframes with strictly increasing `t`; keep `scale` positive; split a rotation that turns half a
-circle or more, on an axis or combined, into shorter segments. Shape/type problems (a missing key, a wrong-typed value, a
-bad `kind`, a malformed `v`) are the separate `L1141`.",
+Fix: give `duration` a finite, positive value of at most 3600 seconds; author at least one track
+with at least one non-empty channel; keep every keyframe's `t` inside `[0, duration]`; and order
+each channel's keyframes with strictly increasing `t`; keep `scale` positive; split a rotation that
+turns half a circle or more, on an axis or combined, into shorter segments. Shape/type problems (a
+missing key, a wrong-typed value, a bad `kind`, a malformed `v`) are the separate `L1141`.",
     },
     CodeEntry {
         code: code::ASSEMBLY_UNEXPECTED_OVERLAP,
