@@ -199,7 +199,7 @@ pub use prefab_clips::{
     PrefabClipData, load as load_prefab_clips, prefab_clip_target_diagnostics, prefab_part_names,
 };
 pub use prefab_ops::{PrefabApplied, PrefabReverted, revert_prefab, unpack_prefab};
-pub use probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
+pub use probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource, prune_probe_store};
 pub use probe_check::scene_probe_diagnostics;
 pub use probe_dump::{DumpedProbe, ProbeDumpOutcome, render_probe_dump};
 pub use profile::{
@@ -260,8 +260,8 @@ pub use voxel_sheet::{GiSheetOutcome, VoxelSheetOutcome, render_gi_sheet, render
 // along because [`Engine::attach_surface`] returns one: a windowed host must be able to name what
 // it holds.
 pub use ludion_renderer::{
-    AntiAliasing, DebugView, FrameSize, GpuUploads, PresentSize, Quality, QualityParams,
-    RenderScale, dump_frame_graph_json,
+    AntiAliasing, DebugView, FrameSize, GpuUploads, PresentSize, ProbePrune, Quality,
+    QualityParams, RenderScale, dump_frame_graph_json,
 };
 
 #[cfg(test)]

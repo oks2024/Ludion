@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ludion_core::diagnostics::Diagnostic;
-use ludion_engine::{Engine, ProbeBakeReport, ProbeOutcome, QualitySetting};
+use ludion_engine::{Engine, ProbeBakeReport, ProbeOutcome, ProbePrune, QualitySetting};
 
 use crate::diagnostic;
 
@@ -119,12 +119,30 @@ pub(crate) struct Warmed {
     pub scenes: usize,
     /// Scenes the CLI cannot load (a game's components), as project-relative paths.
     pub skipped: Vec<String>,
+    /// The store key of every probe the warm resolved, loaded or captured.
+    pub keys: Vec<u64>,
+    /// The bake error that stopped the warm; no adapter is not one.
+    pub failure: Option<Diagnostic>,
+    /// Scenes that failed to load for a reason other than a game's components. Reported, never fatal.
+    pub load_errors: Vec<Diagnostic>,
+    /// What the store prune that follows the warm removed.
+    pub pruned: ProbePrune,
 }
 
-/// Warms the probe store for the project's default-scene directory. Costs nothing without probes:
-/// no GPU is touched unless a scene holds a `ReflectionProbe`. Stops quietly at no adapter, and says
-/// so once when the lane forbids a GPU (`quiet` silences the notes for `--json`).
-pub(crate) fn warm(project: &Path, scene_dir: &Path, quiet: bool) -> Warmed {
+/// True unless the warm hit a real bake error (a GPU fault would hit the host as well).
+pub(crate) fn warm_ok(warmed: &Warmed) -> bool {
+    warmed.failure.is_none()
+}
+
+/// Warms the probe store for the project's default-scene directory at `quality`. Costs nothing
+/// without probes: no GPU is touched unless a scene holds a `ReflectionProbe`. Stops quietly at no
+/// adapter, and says so once when the lane forbids a GPU (`quiet` silences the notes for `--json`).
+pub(crate) fn warm(
+    project: &Path,
+    scene_dir: &Path,
+    quality: &QualitySetting,
+    quiet: bool,
+) -> Warmed {
     let mut warmed = Warmed::default();
     let scenes = probe_scenes(&project.join(scene_dir));
     if scenes.is_empty() {
@@ -136,45 +154,59 @@ pub(crate) fn warm(project: &Path, scene_dir: &Path, quiet: bool) -> Warmed {
         }
         return warmed;
     }
-    let quality = match ludion_engine::resolve_startup_quality(None, None) {
-        Ok(quality) => quality,
-        Err(invalid) => {
-            diagnostic::print(&invalid);
-            return warmed;
-        }
-    };
     for scene in scenes {
         let rel = scene.strip_prefix(project).unwrap_or(&scene);
         let rel = rel.to_string_lossy().replace('\\', "/");
-        let mut engine = match load_quiet(&scene, &quality) {
+        let mut engine = match load_quiet(&scene, quality) {
             Ok(engine) => engine,
-            Err(_) => {
+            Err(error) if error.code == ludion_core::codes::code::SCENE_UNKNOWN_COMPONENT => {
                 warmed.skipped.push(rel);
                 continue;
             }
-        };
-        match engine.bake_probes(None) {
-            Ok(report) => {
-                warmed.scenes += 1;
-                for probe in &report.probes {
-                    match probe.outcome {
-                        ProbeOutcome::Captured => warmed.captured += 1,
-                        ProbeOutcome::Loaded => warmed.stored += 1,
-                    }
-                }
-            }
             Err(error) => {
-                if !ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&error)) {
-                    diagnostic::print(&error);
-                }
-                if !quiet {
-                    println!("probes: warming stopped at {rel} ({})", error.code);
-                }
-                break;
+                diagnostic::print(&error);
+                warmed.load_errors.push(error);
+                continue;
             }
+        };
+        if record_bake(&mut warmed, &rel, engine.bake_probes(None), quiet) {
+            break;
         }
     }
     warmed
+}
+
+/// Folds one scene's bake into `warmed`; true means the warm stops. A real error is kept as the
+/// warm's `failure`; no adapter stops it without one.
+fn record_bake(
+    warmed: &mut Warmed,
+    rel: &str,
+    result: Result<ProbeBakeReport, Diagnostic>,
+    quiet: bool,
+) -> bool {
+    match result {
+        Ok(report) => {
+            warmed.scenes += 1;
+            for probe in &report.probes {
+                warmed.keys.push(probe.key);
+                match probe.outcome {
+                    ProbeOutcome::Captured => warmed.captured += 1,
+                    ProbeOutcome::Loaded => warmed.stored += 1,
+                }
+            }
+            false
+        }
+        Err(error) => {
+            if !ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&error)) {
+                diagnostic::print(&error);
+                warmed.failure = Some(error.clone());
+            }
+            if !quiet {
+                println!("probes: warming stopped at {rel} ({})", error.code);
+            }
+            true
+        }
+    }
 }
 
 #[cfg(test)]
@@ -289,5 +321,41 @@ mod tests {
     fn a_non_yaml_mention_does_not_widen_the_list() {
         let dir = tree(&[("notes.txt", PROBE_SCENE), ("a.yaml", SCENE)]);
         assert!(relative(&dir).is_empty());
+    }
+
+    #[test]
+    fn a_real_bake_error_is_the_warms_failure_and_stops_it() {
+        let mut warmed = Warmed::default();
+        let error = Diagnostic::new(ludion_core::codes::code::RENDER_GPU_ERROR, "a fault");
+        assert!(warm_ok(&warmed));
+        assert!(record_bake(&mut warmed, "a.yaml", Err(error), true));
+        assert_eq!(
+            warmed.failure.as_ref().map(|d| d.code),
+            Some(ludion_core::codes::code::RENDER_GPU_ERROR)
+        );
+        assert!(!warm_ok(&warmed));
+    }
+
+    #[test]
+    fn a_baked_scene_collects_its_keys_and_counts() {
+        use ludion_engine::ProbeBake;
+        let mut warmed = Warmed::default();
+        let probe = |key, outcome| ProbeBake {
+            entity: ludion_core::ids::EntityId::new(1, 0),
+            name: None,
+            key,
+            outcome,
+        };
+        let report = ProbeBakeReport {
+            store: PathBuf::new(),
+            probes: vec![
+                probe(7, ProbeOutcome::Captured),
+                probe(9, ProbeOutcome::Loaded),
+            ],
+        };
+        assert!(!record_bake(&mut warmed, "a.yaml", Ok(report), true));
+        assert_eq!(warmed.keys, [7, 9]);
+        assert_eq!((warmed.captured, warmed.stored, warmed.scenes), (1, 1, 1));
+        assert!(warm_ok(&warmed));
     }
 }

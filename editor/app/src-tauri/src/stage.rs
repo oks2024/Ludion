@@ -1669,7 +1669,7 @@ fn sync_project(
         return Ok(());
     }
     Err(format!(
-        "could not sync the project's derived imports (`ludion sync --project {project}`): {}",
+        "could not sync the project (`ludion sync --project {project}`): {}",
         String::from_utf8_lossy(&output.stderr).trim()
     ))
 }

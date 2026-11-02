@@ -893,10 +893,15 @@ enum Command {
     ///
     /// Last, sync warms the reflection-probe store: each scene under the default scene's directory
     /// that holds a `ReflectionProbe` and loads with the built-in registry is baked as `bake-probes`
-    /// does, at this machine's quality. A project without probes touches no GPU; a lane with no GPU
-    /// skips. A scene the CLI cannot load (a game's components) is named, to bake with the game's
-    /// `--bake-probes`. Warming never changes the exit code; `--json` adds `probes_captured`,
-    /// `probes_stored` and `probe_scenes_skipped`.
+    /// does, at `--quality`, else this machine's. A project without probes touches no GPU; a lane
+    /// with no GPU skips. A scene the CLI cannot load (a game's components) is named, to bake with
+    /// the game's `--bake-probes`; a scene that fails to load otherwise is reported and the sync
+    /// still exits 0 (`check-scene` gates it). A bake error exits 1, no adapter does not. Then the
+    /// sync prunes the probe store by last-used time: an entry unused for 14 days goes, then the
+    /// oldest past a 4 GiB cap, never one used within 24 hours or resolved by this warm; a dead
+    /// writer's temp goes after an hour. A cap still exceeded is reported and exits 0. `--json`
+    /// adds `probes_captured`, `probes_stored`, `probe_scenes_skipped`, `probes_pruned`,
+    /// `probes_pruned_bytes`, `probe_store_bytes` and `probe_store_over_cap`.
     Sync {
         /// The game's project directory (the one holding `ludion.toml`).
         #[arg(long, default_value = ".")]
@@ -2288,6 +2293,7 @@ fn main() -> std::process::ExitCode {
                     .filter_map(|name| ludion_assets::cooked::CookTarget::from_name(name))
                     .collect(),
             },
+            &quality,
         ),
         Command::Profile {
             scene,

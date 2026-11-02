@@ -25,7 +25,7 @@ cover. Probes are authored text; the captured pixels are derived and never commi
 4. `ludion bake-probes <scene>` fills the probe store for a CLI-loadable scene (`--probe <Name>`
    recaptures one, `--json` for tooling); a game's scene is baked by the game binary's
    `--bake-probes` (with `--bake-probe <Name>`), because the CLI cannot load a game's components.
-   `ludion sync` warms the store for each CLI-loadable scene that names a probe, or every scene when a prefab or other document carries one.
+   `ludion sync` warms the store for each CLI-loadable scene that names a probe, or every scene when a prefab or other document carries one, at `--quality` (else this machine's). It also drops entries unused for 14 days, or the oldest past a 4 GiB cap; one dropped by mistake only costs a recapture.
 5. `run`, `serve` and `dev` read the store; `--probes rebake` captures afresh and leaves it alone.
    A probe added, moved or removed in a live session is captured on the spot — no bake step. A
    geometry, light or sky edit shows in the probes after a reload (`scene.load`, `asset.reload`).

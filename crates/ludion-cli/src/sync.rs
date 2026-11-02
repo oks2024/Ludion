@@ -39,6 +39,7 @@ use crate::cook::{CookOutcome, CookRequest, CookTree, check_roots, cook_project}
 use crate::diagnostic;
 use ludion_assets::cooked::CookTarget;
 use ludion_engine::manifest::{self, ImportSection};
+use ludion_engine::{ProbePrune, QualitySetting};
 use ludion_import::import_gltf;
 
 use crate::bake_probes::{self, Warmed};
@@ -378,8 +379,13 @@ pub(crate) fn ensure_fresh(project: &Path, cook: &CookRequest) -> Result<Summary
 }
 
 /// Runs `ludion sync`. Exit 1 when the manifest is unusable, a table is refused (nothing is
-/// written), or any entry failed to import or cook.
-pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
+/// written), any entry failed to import or cook, or the probe warm hit a bake error.
+pub(crate) fn run(
+    project: &Path,
+    json: bool,
+    cook: &CookRequest,
+    quality: &QualitySetting,
+) -> ExitCode {
     let outcome = match sync_project(project, cook) {
         Ok(outcome) => outcome,
         Err(diagnostics) => {
@@ -399,11 +405,18 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
                 project.join("ludion.toml").display()
             );
         }
-        let warmed = warm_probes(project, json);
+        let warmed = warm_probes(project, json, quality);
+        let ok = bake_probes::warm_ok(&warmed);
         if json {
-            print_json(true, &outcome, &warmed, &[]);
+            print_json(ok, &outcome, &warmed, &warm_diagnostics(&warmed));
+        } else {
+            print_warmed(&warmed);
         }
-        return ExitCode::SUCCESS;
+        return if ok {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
     }
     for (stem, diagnostics) in &outcome.failed {
         eprintln!("sync: could not import `{stem}`:");
@@ -421,8 +434,10 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
     for warning in outcome.cook.iter().flat_map(|cook| &cook.warnings) {
         diagnostic::print(warning);
     }
-    let ok = outcome.failed.is_empty() && cook_failed.clone().next().is_none();
-    let warmed = warm_probes(project, json);
+    let warmed = warm_probes(project, json, quality);
+    let ok = outcome.failed.is_empty()
+        && cook_failed.clone().next().is_none()
+        && bake_probes::warm_ok(&warmed);
     if json {
         let rendered: Vec<Diagnostic> = outcome
             .warnings
@@ -431,6 +446,7 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
             .chain(cook_failed.flat_map(|failed| &failed.diagnostics))
             .chain(outcome.cook.iter().flat_map(|cook| &cook.warnings))
             .cloned()
+            .chain(warm_diagnostics(&warmed))
             .collect();
         print_json(ok, &outcome, &warmed, &rendered);
     } else {
@@ -470,17 +486,33 @@ pub(crate) fn run(project: &Path, json: bool, cook: &CookRequest) -> ExitCode {
     }
 }
 
-/// Warms the probe store for the default scene's directory. Human progress notes print only when
-/// `quiet` is false, so `--json` keeps stdout to the one object. A manifest `run` has already loaded
-/// is read again here, cheaply.
-fn warm_probes(project: &Path, quiet: bool) -> Warmed {
+/// Warms the probe store for the default scene's directory at `quality`, then prunes it. Human
+/// progress notes print only when `quiet` is false, so `--json` keeps stdout to the one object. A
+/// manifest `run` has already loaded is read again here, cheaply. The prune runs on every path out
+/// of the warm (no probes, no GPU, a stopped warm); `keys` is what this warm resolved.
+// The prune reads the wall clock for entry ages: a pipeline verb's cache hygiene, never the sim.
+#[allow(clippy::disallowed_methods)]
+fn warm_probes(project: &Path, quiet: bool, quality: &QualitySetting) -> Warmed {
     let Ok(manifest) = manifest::load(project) else {
         return Warmed::default();
     };
     let Some(scene_dir) = manifest.default_scene.parent() else {
         return Warmed::default();
     };
-    bake_probes::warm(project, scene_dir, quiet)
+    let mut warmed = bake_probes::warm(project, scene_dir, quality, quiet);
+    warmed.pruned =
+        ludion_engine::prune_probe_store(project, &warmed.keys, std::time::SystemTime::now());
+    warmed
+}
+
+/// The diagnostics the warm adds to the envelope: the load errors, then the bake failure.
+fn warm_diagnostics(warmed: &Warmed) -> Vec<Diagnostic> {
+    warmed
+        .load_errors
+        .iter()
+        .chain(&warmed.failure)
+        .cloned()
+        .collect()
 }
 
 /// The human summary of a warm, silent when no scene held a probe.
@@ -497,6 +529,28 @@ fn print_warmed(warmed: &Warmed) {
             warmed.skipped.len()
         );
     }
+    for line in pruned_lines(&warmed.pruned) {
+        println!("{line}");
+    }
+}
+
+/// The prune's human lines: what was removed, and a cap still exceeded.
+fn pruned_lines(pruned: &ProbePrune) -> Vec<String> {
+    let mut lines = Vec::new();
+    let removed = pruned.entries + pruned.temps;
+    if removed > 0 {
+        lines.push(format!(
+            "probes: pruned {removed} ({:.1} MB)",
+            pruned.bytes as f64 / 1e6
+        ));
+    }
+    if pruned.over_cap {
+        lines.push(format!(
+            "probes: the store is {:.2} GiB, over the 4 GiB cap; everything left was used within 24 h or belongs to this warm, so nothing more was removed",
+            pruned.store_bytes as f64 / (1u64 << 30) as f64
+        ));
+    }
+    lines
 }
 
 /// The shared `--json` envelope: the per-stem lists, then `rendered` — every diagnostic the run
@@ -531,6 +585,10 @@ fn print_json(ok: bool, outcome: &Outcome, warmed: &Warmed, rendered: &[Diagnost
         "probes_captured": warmed.captured,
         "probes_stored": warmed.stored,
         "probe_scenes_skipped": warmed.skipped,
+        "probes_pruned": warmed.pruned.entries + warmed.pruned.temps,
+        "probes_pruned_bytes": warmed.pruned.bytes,
+        "probe_store_bytes": warmed.pruned.store_bytes,
+        "probe_store_over_cap": warmed.pruned.over_cap,
     });
     let envelope = serde_json::Value::Object(diagnostic::json_envelope(ok, fields, rendered));
     println!("{envelope}");
@@ -1032,5 +1090,20 @@ mod tests {
         assert_eq!(ensure_fresh(&dir, &cook).unwrap(), Summary::default());
         assert_eq!(dir.read_dir().unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_prune_lines_report_removals_and_an_exceeded_cap() {
+        assert!(pruned_lines(&ProbePrune::default()).is_empty());
+        let lines = pruned_lines(&ProbePrune {
+            entries: 2,
+            temps: 1,
+            bytes: 3_000_000,
+            store_bytes: 5 << 30,
+            over_cap: true,
+        });
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("pruned 3 (3.0 MB)"), "{lines:?}");
+        assert!(lines[1].contains("5.00 GiB") && lines[1].contains("4 GiB cap"));
     }
 }

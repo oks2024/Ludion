@@ -10,6 +10,7 @@
 //! do not see it.
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -71,6 +72,27 @@ pub(crate) fn store_dir(project_root: &Path) -> PathBuf {
     crate::manifest::find(project_root)
         .unwrap_or_else(|| project_root.to_path_buf())
         .join(".ludion/cooked/probes")
+}
+
+/// Bounds the probe store under the project holding `project_root`'s manifest (see
+/// [`ludion_renderer::prune_store`]): entries unused for 14 days go, then the oldest past a 4 GiB
+/// cap, never one used within 24 hours or named in `keep`. Only that project's store is reached.
+///
+/// # Example
+/// ```
+/// use std::time::SystemTime;
+/// let dir = std::env::temp_dir().join(format!("ludion-prune-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(&dir).unwrap();
+/// let report = ludion_engine::prune_probe_store(&dir, &[], SystemTime::now());
+/// assert_eq!((report.entries, report.temps), (0, 0));
+/// let _ = std::fs::remove_dir_all(&dir);
+/// ```
+pub fn prune_probe_store(
+    project_root: &Path,
+    keep: &[u64],
+    now: SystemTime,
+) -> ludion_renderer::ProbePrune {
+    ludion_renderer::prune_store(&store_dir(project_root), keep, now)
 }
 
 /// How a baked probe's cube was obtained.

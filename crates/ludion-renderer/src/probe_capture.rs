@@ -150,6 +150,8 @@ pub(crate) struct Probes {
     retain: Cell<bool>,
     /// One entry per slot of the retained resolve; `None` for a slot the store supplied.
     captured: RefCell<Vec<Option<Vec<u8>>>>,
+    /// The last store-hit stamp thread (`probe_store::stamp_used`); production never joins it.
+    pub(crate) stamping: RefCell<Option<std::thread::JoinHandle<()>>>,
 }
 
 /// One probe as `Renderer::read_probes` returns it, for a dump or a test.
@@ -286,6 +288,7 @@ impl Probes {
             report: RefCell::new(ProbeResolve::default()),
             retain: Cell::new(false),
             captured: RefCell::new(Vec::new()),
+            stamping: RefCell::new(None),
         }
     }
 
@@ -407,6 +410,7 @@ impl Probes {
         }
         let mut resolved = Vec::with_capacity(probes.len());
         let mut irradiance = Vec::with_capacity(probes.len());
+        let mut hits = Vec::new();
         // No borrow of the cache is held below: a face's own `prepare_frame` resolves its
         // probe-less scene back through here.
         for (slot, probe) in probes.iter().enumerate() {
@@ -416,6 +420,9 @@ impl Probes {
                 probe_store::read_entry(dir, key, face_size, array.mip_level_count())
             });
             if let Some(cube) = loaded {
+                if let Some((dir, key)) = entry {
+                    hits.push(probe_store::entry_path(dir, key));
+                }
                 probe_store::write_slot(gpu, &array, slot, &cube.levels);
                 if let Some(levels) = &cube.emissive {
                     let target = emissive_slot(&emissive_array);
@@ -504,6 +511,9 @@ impl Probes {
                 key: entry.map(|(_, key)| key),
                 loaded: false,
             });
+        }
+        if !hits.is_empty() {
+            *self.stamping.borrow_mut() = probe_store::stamp_used(hits);
         }
         {
             let mut report = self.report.borrow_mut();

@@ -6,9 +6,16 @@
 //! parameters, the renderer's shader code key, the face size and [`PROBE_BAKE_VERSION`], plus the
 //! probe's capture point. Shape, blend and priority shade the probe; they are not captured, so they
 //! are not in the key.
+//!
+//! The adapter is not a key term, deliberately: `ludion export` bakes on the dev machine's GPU and
+//! ships the entries, and the device looks them up by key, so an adapter term would make every
+//! shipped entry miss. The bytes differ across adapters only perceptually, and `--probes rebake` is
+//! the escape.
 
 use std::fmt::Debug;
+use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use ludion_assets::content_hash;
 use ludion_assets::cooked::{ProbeCube, cooked_file_name, read_probe_cube, write_probe_cube};
@@ -49,7 +56,8 @@ impl KeyWriter {
     }
 
     /// A value through `Debug`: every field is included, so a new one enters the key unasked, and
-    /// `f32` prints shortest round-trip, which is deterministic.
+    /// `f32` prints shortest round-trip, which is deterministic. `-0.0` prints differently from
+    /// `0.0`; the cost is a spurious miss and one recapture, so it is not normalised.
     fn debug(&mut self, v: &impl Debug) {
         self.str(&format!("{v:?}"));
     }
@@ -170,7 +178,7 @@ pub(crate) fn probe_key(world: u64, position: Vec3) -> u64 {
 }
 
 /// The entry path of `key` under `dir`.
-fn entry_path(dir: &Path, key: u64) -> PathBuf {
+pub(crate) fn entry_path(dir: &Path, key: u64) -> PathBuf {
     dir.join(cooked_file_name(key))
 }
 
@@ -200,6 +208,192 @@ pub(crate) fn write_entry(
     if write().is_err() {
         let _ = std::fs::remove_file(&temp);
     }
+}
+
+/// Stamps `paths` as used now, on a short-lived named thread: a store hit lands on the sim thread
+/// inside a frame, which reads no clock and waits on no stamp I/O. Best-effort and silent: a failed
+/// spawn, a read-only store or a process that exits first only loses a stamp, which means an earlier
+/// eviction and one recapture.
+pub(crate) fn stamp_used(paths: Vec<PathBuf>) -> Option<std::thread::JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name("probe-store-stamp".to_owned())
+        .spawn(move || {
+            // The clock is read here and nowhere else: the stamp is a cache-eviction hint and no
+            // time reaches a pixel, the sim or a frame.
+            #[allow(clippy::disallowed_methods)]
+            let now = SystemTime::now();
+            for path in paths {
+                let _ = File::options()
+                    .write(true)
+                    .open(&path)
+                    .and_then(|file| file.set_modified(now));
+            }
+        })
+        .ok()
+}
+
+/// What [`prune_store`] removed and what the store holds afterwards.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+pub struct ProbePrune {
+    /// Entries removed.
+    pub entries: usize,
+    /// Dead temp files removed.
+    pub temps: usize,
+    /// Bytes those removals freed.
+    pub bytes: u64,
+    /// Bytes the store's entries and temps hold after the prune.
+    pub store_bytes: u64,
+    /// The store still exceeds the cap: everything left was used recently or belongs to this warm.
+    pub over_cap: bool,
+}
+
+struct Limits {
+    unused_ttl: Duration,
+    recent_floor: Duration,
+    cap: u64,
+    temp_ttl: Duration,
+}
+
+impl Limits {
+    const DEFAULT: Limits = Limits {
+        unused_ttl: UNUSED_TTL,
+        recent_floor: RECENT_FLOOR,
+        cap: STORE_CAP,
+        temp_ttl: TEMP_TTL,
+    };
+}
+
+/// An entry unused this long is removed.
+const UNUSED_TTL: Duration = Duration::from_secs(14 * 24 * 3600);
+/// The store's size cap; the oldest entries go first once it is exceeded.
+const STORE_CAP: u64 = 4 << 30;
+/// An entry used within this window is never removed to meet the cap.
+const RECENT_FLOOR: Duration = Duration::from_secs(24 * 3600);
+/// A temp file older than this is the debris of a dead writer.
+const TEMP_TTL: Duration = Duration::from_secs(3600);
+
+/// Bounds the store at `dir` by last-used age (an entry's mtime: a write sets it, a store hit
+/// refreshes it): entries unused past [`UNUSED_TTL`] go, then the oldest until the store fits
+/// [`STORE_CAP`], never one used within [`RECENT_FLOOR`]. An entry whose key is in `keep` (what the
+/// caller just resolved) is never removed. A temp older than [`TEMP_TTL`] goes; a live writer's is
+/// fresh. Any other name is left alone. A cache: failures are dropped.
+pub fn prune_store(dir: &Path, keep: &[u64], now: SystemTime) -> ProbePrune {
+    prune_with(dir, keep, now, &Limits::DEFAULT)
+}
+
+struct Held {
+    path: PathBuf,
+    name: String,
+    key: u64,
+    size: u64,
+    age: Duration,
+}
+
+fn prune_with(dir: &Path, keep: &[u64], now: SystemTime, limits: &Limits) -> ProbePrune {
+    let mut report = ProbePrune::default();
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return report;
+    };
+    let mut entries: Vec<Held> = Vec::new();
+    for item in read.flatten() {
+        let Ok(meta) = item.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let name = item.file_name().to_string_lossy().into_owned();
+        let size = meta.len();
+        let Ok(modified) = meta.modified() else {
+            report.store_bytes += size;
+            continue;
+        };
+        // A future mtime (a clock step) reads as just used.
+        let age = now.duration_since(modified).unwrap_or(Duration::ZERO);
+        if is_temp_name(&name) {
+            if age > limits.temp_ttl && std::fs::remove_file(item.path()).is_ok() {
+                report.temps += 1;
+                report.bytes += size;
+            } else {
+                report.store_bytes += size;
+            }
+        } else if let Some(key) = entry_key(&name) {
+            entries.push(Held {
+                path: item.path(),
+                name,
+                key,
+                size,
+                age,
+            });
+        }
+    }
+    let removable = |held: &Held| !keep.contains(&held.key);
+    let mut survivors = Vec::new();
+    for held in entries {
+        if held.age > limits.unused_ttl
+            && removable(&held)
+            && std::fs::remove_file(&held.path).is_ok()
+        {
+            report.entries += 1;
+            report.bytes += held.size;
+        } else {
+            survivors.push(held);
+        }
+    }
+    evict_over_cap(&mut survivors, &mut report, limits, removable);
+    report.store_bytes += survivors.iter().map(|held| held.size).sum::<u64>();
+    report.over_cap = report.store_bytes > limits.cap;
+    report
+}
+
+/// Removes the oldest of `held` that are removable and not recent until the store fits the cap, or
+/// nothing eligible is left. `report.store_bytes` carries the temps' bytes on entry.
+fn evict_over_cap(
+    held: &mut Vec<Held>,
+    report: &mut ProbePrune,
+    limits: &Limits,
+    removable: impl Fn(&Held) -> bool,
+) {
+    let mut total = report.store_bytes + held.iter().map(|h| h.size).sum::<u64>();
+    if total <= limits.cap {
+        return;
+    }
+    held.sort_by(|a, b| b.age.cmp(&a.age).then_with(|| a.name.cmp(&b.name)));
+    let mut kept = Vec::with_capacity(held.len());
+    for entry in held.drain(..) {
+        if total > limits.cap
+            && entry.age >= limits.recent_floor
+            && removable(&entry)
+            && std::fs::remove_file(&entry.path).is_ok()
+        {
+            total -= entry.size;
+            report.entries += 1;
+            report.bytes += entry.size;
+        } else {
+            kept.push(entry);
+        }
+    }
+    *held = kept;
+}
+
+/// `<16 lowercase hex>` and the rest of the name, when the name starts that way.
+fn hex_stem(name: &str) -> Option<(u64, &str)> {
+    let (stem, rest) = name.split_at_checked(16)?;
+    stem.bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        .then(|| u64::from_str_radix(stem, 16).ok().map(|key| (key, rest)))?
+}
+
+/// The key of an entry named exactly `<16 hex>.ktx2`.
+fn entry_key(name: &str) -> Option<u64> {
+    hex_stem(name).and_then(|(key, rest)| (rest == ".ktx2").then_some(key))
+}
+
+/// A writer's temp: exactly `<16 hex>.<digits>.tmp`.
+fn is_temp_name(name: &str) -> bool {
+    hex_stem(name).is_some_and(|(_, rest)| {
+        rest.strip_prefix('.')
+            .and_then(|r| r.strip_suffix(".tmp"))
+            .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+    })
 }
 
 /// One slot's six layers of every mip as raw `Rgba16Float` bytes: per mip, the faces back to back
@@ -316,6 +510,7 @@ fn slot_copy(array: &wgpu::Texture, slot: u32, mip: u32) -> wgpu::TexelCopyTextu
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // tests set and read mtimes on the wall clock
 mod tests {
     use std::sync::Arc;
 
@@ -639,6 +834,182 @@ mod tests {
         names
     }
 
+    const DAY: Duration = Duration::from_secs(24 * 3600);
+
+    fn hex(key: u64) -> String {
+        format!("{key:016x}")
+    }
+
+    /// Writes `name` of `size` bytes, last used `age` before `now`.
+    fn put(dir: &Path, name: &str, size: usize, now: SystemTime, age: Duration) {
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, vec![0u8; size]).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(now - age)
+            .unwrap();
+    }
+
+    fn present(dir: &Path) -> Vec<String> {
+        entries(dir)
+    }
+
+    fn limits(cap: u64) -> Limits {
+        Limits {
+            unused_ttl: 14 * DAY,
+            recent_floor: DAY,
+            cap,
+            temp_ttl: Duration::from_secs(3600),
+        }
+    }
+
+    #[test]
+    fn prune_removes_the_old_and_unreferenced() {
+        let dir = temp_store("prune-old");
+        let now = SystemTime::now();
+        put(&dir, &format!("{}.ktx2", hex(1)), 10, now, 15 * DAY);
+        put(&dir, &format!("{}.ktx2", hex(2)), 10, now, 13 * DAY);
+        let report = prune_store(&dir, &[], now);
+        assert_eq!(present(&dir), [format!("{}.ktx2", hex(2))]);
+        assert_eq!(
+            (report.entries, report.bytes, report.store_bytes),
+            (1, 10, 10)
+        );
+        assert!(!report.over_cap);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn this_warms_key_survives_at_any_age_and_over_the_cap() {
+        let dir = temp_store("prune-keep");
+        let now = SystemTime::now();
+        put(&dir, &format!("{}.ktx2", hex(1)), 100, now, 400 * DAY);
+        put(&dir, &format!("{}.ktx2", hex(2)), 100, now, 300 * DAY);
+        let report = prune_with(&dir, &[1], now, &limits(50));
+        assert_eq!(present(&dir), [format!("{}.ktx2", hex(1))]);
+        assert_eq!(report.entries, 1);
+        assert!(report.over_cap, "the kept entry alone exceeds the cap");
+        assert_eq!(report.store_bytes, 100);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_recent_entry_not_in_keep_survives() {
+        let dir = temp_store("prune-recent");
+        let now = SystemTime::now();
+        put(&dir, &format!("{}.ktx2", hex(3)), 10, now, 2 * DAY);
+        prune_store(&dir, &[], now);
+        assert_eq!(present(&dir).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_future_mtime_and_foreign_names_are_kept() {
+        let dir = temp_store("prune-foreign");
+        let now = SystemTime::now();
+        put(&dir, &format!("{}.ktx2", hex(4)), 10, now, Duration::ZERO);
+        File::options()
+            .write(true)
+            .open(dir.join(format!("{}.ktx2", hex(4))))
+            .unwrap()
+            .set_modified(now + 5 * DAY)
+            .unwrap();
+        for name in ["notes.ktx2", "junk.tmp", ".x.tmp", "ABCDEF0123456789.ktx2"] {
+            put(&dir, name, 10, now, 900 * DAY);
+        }
+        prune_store(&dir, &[], now);
+        assert_eq!(present(&dir).len(), 5, "{:?}", present(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_live_writers_temp_survives_and_an_aged_one_goes() {
+        let dir = temp_store("prune-temp");
+        let now = SystemTime::now();
+        let fresh = format!("{}.123.tmp", hex(5));
+        let aged = format!("{}.456.tmp", hex(6));
+        put(&dir, &fresh, 10, now, Duration::from_secs(60));
+        put(&dir, &aged, 10, now, Duration::from_secs(2 * 3600));
+        let report = prune_store(&dir, &[], now);
+        assert_eq!(present(&dir), [fresh]);
+        assert_eq!((report.temps, report.entries, report.bytes), (1, 0, 10));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_cap_evicts_oldest_first() {
+        let dir = temp_store("prune-cap");
+        let now = SystemTime::now();
+        for (key, days) in [(1, 10), (2, 8), (3, 6), (4, 4)] {
+            put(&dir, &format!("{}.ktx2", hex(key)), 100, now, days * DAY);
+        }
+        let report = prune_with(&dir, &[], now, &limits(250));
+        assert_eq!(
+            present(&dir),
+            [format!("{}.ktx2", hex(3)), format!("{}.ktx2", hex(4))]
+        );
+        assert_eq!((report.entries, report.store_bytes), (2, 200));
+        assert!(!report.over_cap);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_entry_under_24_hours_survives_over_the_cap() {
+        let dir = temp_store("prune-floor");
+        let now = SystemTime::now();
+        put(&dir, &format!("{}.ktx2", hex(1)), 100, now, 5 * DAY);
+        put(&dir, &format!("{}.ktx2", hex(2)), 100, now, DAY / 2);
+        put(&dir, &format!("{}.ktx2", hex(3)), 100, now, DAY / 4);
+        let report = prune_with(&dir, &[], now, &limits(100));
+        assert_eq!(present(&dir).len(), 2);
+        assert!(report.over_cap);
+        assert_eq!(report.store_bytes, 200);
+        assert_eq!(report.entries, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_store_prunes_nothing() {
+        let dir = temp_store("prune-missing");
+        assert_eq!(
+            prune_store(&dir, &[], SystemTime::now()),
+            ProbePrune::default()
+        );
+    }
+
+    #[test]
+    fn stamping_refreshes_the_mtime_and_tolerates_bad_paths() {
+        let dir = temp_store("stamp");
+        let now = SystemTime::now();
+        let name = format!("{}.ktx2", hex(9));
+        put(&dir, &name, 10, now, 30 * DAY);
+        let path = dir.join(&name);
+        let readonly = dir.join("ro.ktx2");
+        put(&dir, "ro.ktx2", 1, now, 30 * DAY);
+        let mut permissions = std::fs::metadata(&readonly).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&readonly, permissions).unwrap();
+        let handle = stamp_used(vec![
+            dir.join("absent.ktx2"),
+            readonly.clone(),
+            path.clone(),
+        ])
+        .unwrap();
+        handle.join().unwrap();
+        let age = SystemTime::now()
+            .duration_since(std::fs::metadata(&path).unwrap().modified().unwrap())
+            .unwrap_or_default();
+        assert!(age < DAY, "the hit was not stamped: {age:?}");
+        let mut permissions = std::fs::metadata(&readonly).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&readonly, permissions).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn needs_gpu_a_store_miss_then_hit_gives_identical_bytes() {
         let dir = temp_store("hit");
@@ -656,8 +1027,26 @@ mod tests {
         assert_eq!(names.len(), 2, "{names:?}");
         assert!(names.iter().all(|n| n.ends_with(".ktx2")), "{names:?}");
 
+        let old = SystemTime::now() - 30 * DAY;
+        for name in &names {
+            File::options()
+                .write(true)
+                .open(dir.join(name))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
         resolve(&b, &scene);
         assert_eq!(loaded_captured(&b), (2, 0));
+        let stamping = b.probes.stamping.borrow_mut().take().expect("a hit stamps");
+        stamping.join().unwrap();
+        for name in &names {
+            let modified = std::fs::metadata(dir.join(name))
+                .unwrap()
+                .modified()
+                .unwrap();
+            assert!(modified > old + DAY, "{name} was not stamped on a hit");
+        }
         resolve(&c, &scene);
         assert_eq!(loaded_captured(&c), (0, 2));
         let (bytes_a, bytes_b, bytes_c) = (array_bytes(&a), array_bytes(&b), array_bytes(&c));
