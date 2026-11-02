@@ -1434,6 +1434,14 @@ pub(crate) fn validate(doc: &MeshDocument) -> Vec<Diagnostic> {
                      compute faceted normals at load",
                 ),
             );
+        } else {
+            push_degenerate_vectors(
+                normals,
+                "normals",
+                "a normal",
+                "drop `normals` and let the loader compute faceted ones",
+                &mut diagnostics,
+            );
         }
     }
 
@@ -1484,6 +1492,19 @@ pub(crate) fn validate(doc: &MeshDocument) -> Vec<Diagnostic> {
                     "supply exactly 4 tangent floats per vertex, or omit `tangents` entirely (only \
                      a normal map needs them)",
                 ),
+            );
+        }
+        if tangents.len() == vertex_count * 4 {
+            let xyz: Vec<f64> = tangents
+                .chunks_exact(4)
+                .flat_map(|t| [t[0], t[1], t[2]])
+                .collect();
+            push_degenerate_vectors(
+                &xyz,
+                "tangents",
+                "a tangent",
+                "drop `TANGENT` and let the importer regenerate it",
+                &mut diagnostics,
             );
         }
         // The w component carries handedness as a sign, so anything between the two signs is a
@@ -1576,6 +1597,34 @@ pub(crate) fn validate(doc: &MeshDocument) -> Vec<Diagnostic> {
 /// perceptual `[0, 1]`, `emissive` is a non-negative HDR intensity multiplier
 /// (`Plan/phase-11-pbr.md` decision 1). A no-op when `values` is `None` — an absent list means
 /// "use the default material value".
+/// Squared length under which an authored normal or tangent counts as zero-length: normalizing it
+/// in the shader yields NaN or an arbitrary frame.
+pub const DEGENERATE_VECTOR_LENGTH_SQUARED: f64 = 1e-12;
+
+/// L1111 for each finite 3-vector in `flat` (a flat `xyz` list) whose length is near zero.
+fn push_degenerate_vectors(
+    flat: &[f64],
+    field: &str,
+    noun: &str,
+    help: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (vertex, v) in flat.chunks_exact(3).enumerate() {
+        if v.iter().all(|c| c.is_finite())
+            && v.iter().map(|c| c * c).sum::<f64>() < DEGENERATE_VECTOR_LENGTH_SQUARED
+        {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::MESH_DATA_CONSISTENCY,
+                    format!("`{field}` vertex {vertex} is {noun} of near-zero length"),
+                )
+                .with_path(format!("/{field}/{}", vertex * 3))
+                .with_help(help),
+            );
+        }
+    }
+}
+
 fn check_material_list(
     values: Option<&[f64]>,
     field: &str,
@@ -2576,6 +2625,33 @@ indices:
                 .any(|d| d.code == code::MESH_DATA_CONSISTENCY
                     && d.path.as_deref() == Some("/tangents/3"))
         );
+    }
+
+    #[test]
+    fn a_zero_length_tangent_or_normal_is_l1111() {
+        let doc = MeshDocument {
+            positions: vec![0.0, 0.0, 0.0],
+            tangents: Some(vec![0.0, 0.0, 0.0, 1.0]),
+            normals: Some(vec![0.0, 0.0, 0.0]),
+            indices: vec![0, 0, 0],
+            ..Default::default()
+        };
+        let diagnostics = validate(&doc);
+        for path in ["/tangents/0", "/normals/0"] {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.code == code::MESH_DATA_CONSISTENCY
+                        && d.path.as_deref() == Some(path)),
+                "{path}: {diagnostics:?}"
+            );
+        }
+        let ok = MeshDocument {
+            tangents: Some(vec![1.0, 0.0, 0.0, 1.0]),
+            normals: Some(vec![0.0, 0.0, 1.0]),
+            ..doc
+        };
+        assert!(validate(&ok).is_empty());
     }
 
     #[test]

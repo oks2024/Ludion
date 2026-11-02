@@ -41,7 +41,7 @@ The prefab gains an optional `clips:` map, short name to clip file, resolved aga
 - **`Animation` goes on the root part** (`PrefabInstance.root` equals the entity). Put it in an `overrides:` entry, or write it after `spawn_prefab`. The `clip` name resolves through the instanced prefab's `clips:` map.
 - **Two instances animate independently**, each with its own `Animation`.
 - **A track must name a part: `L1314`** from `check-scene` (`the clip snap animates lidd, which is not a part of this prefab`), with the nearest part name as the fix. Playback draws an unmatched track's part at rest, silently, so run the check.
-- **Visual only.** Posing happens at extract; the sim `Transform`, the `WorldHash` and recordings are unchanged. Children of a posed part follow, and so do point and spot lights, rendered reflection probes, decals, particles and drop shadows under it; **colliders, cameras and the sun do not**, and the `probes` debug lines stay at the stored pose — move an analytic collider from game code.
+- **Visual only.** Posing happens at extract; the sim `Transform`, the `WorldHash` and recordings are unchanged. Children of a posed part follow, and so do point and spot lights (in position — a spot's aim is its world-space `direction`, not the part's rotation), rendered reflection probes, decals, particles and drop shadows under it; **colliders, cameras and the sun do not**, and the `probes` debug lines stay at the stored pose — move an analytic collider from game code.
 - **`animation_events` needs one more query.** A game registering that system declares `.query::<(&Animation, &PrefabInstance)>()` or the query-drift gate reports `L1126`.
 - **Profiling:** the load report gains a `prefab_clips` row (`ludion docs profiling`).
 

@@ -121,7 +121,9 @@ one-line row form.
   (`ludion explain L2107`).
 - `--quality low` thins every emitter to a quarter of its `rate` and `burst` at extract
   (`particle_density`, see the `quality` topic) — a machine's lever, never content.
-- **Draw order is fixed: after opaque meshes and sprites, before text.** A scene with no
+- **Draw order is fixed: after opaque meshes and sprites, before text.** So a particle always paints
+  over every sprite — including a background emitter behind a foreground sprite, which no `layer`
+  or depth can reorder. A scene with no
   `ParticleEmitter` (or one drawing nothing) issues no particle draw at all — byte-identical to the
   pre-particle pipeline.
 - **Particles are unlit unless `lit: true`.** Unlit, the authored colour is the look. Lit, a

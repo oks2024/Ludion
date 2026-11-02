@@ -457,6 +457,76 @@ pub fn scene_sun_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// Degrees `sun_disc_size` may differ from twice `angular_radius` before `L1331` fires.
+const SUN_DISC_TOLERANCE_DEGREES: f64 = 0.05;
+
+/// `L1330` for each `PostProcess` with `dof > 0` and an authored `focus_distance` of 0, and `L1331` for
+/// each `Environment` whose positive `sun_disc_size` is not twice a positive
+/// `DirectionalLight.angular_radius` authored anywhere in the scene.
+pub fn scene_lens_and_sun_disc_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let field = |value: &serde_json::Value, key: &str| {
+        value.get(key).and_then(crate::components::as_stored_f32)
+    };
+    let mut diagnostics = Vec::new();
+    let radius = scene.entities.iter().find_map(|entity| {
+        let (_, light) = entity
+            .components
+            .iter()
+            .find(|(name, _)| name == "DirectionalLight")?;
+        field(light, "angular_radius").filter(|r| *r > 0.0)
+    });
+    for (index, entity) in scene.entities.iter().enumerate() {
+        for (name, value) in &entity.components {
+            match name.as_str() {
+                "PostProcess"
+                    if field(value, "dof").is_some_and(|d| d > 0.0)
+                        && field(value, "focus_distance") == Some(0.0) =>
+                {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            code::CAMERA_DOF_FOCUS_ZERO,
+                            "this `PostProcess` enables `dof` with `focus_distance: 0`; the focal plane \
+                             sits at the lens, so the whole scene is defocused",
+                        )
+                        .with_path(format!(
+                            "/entities/{index}/components/PostProcess/focus_distance"
+                        ))
+                        .with_help("focus on the subject's distance from the camera"),
+                    );
+                }
+                "Environment" => {
+                    let (Some(disc), Some(radius)) =
+                        (field(value, "sun_disc_size").filter(|d| *d > 0.0), radius)
+                    else {
+                        continue;
+                    };
+                    if (disc - 2.0 * radius).abs() > SUN_DISC_TOLERANCE_DEGREES {
+                        diagnostics.push(
+                            Diagnostic::new(
+                                code::SUN_DISC_SIZE_MISMATCH,
+                                format!(
+                                    "`sun_disc_size` is {disc} (the full angle) but the sun's \
+                                     `angular_radius` is {radius} (the half angle), so the sky \
+                                     disc and the sun's highlight differ in size"
+                                ),
+                            )
+                            .with_path(format!(
+                                "/entities/{index}/components/Environment/sun_disc_size"
+                            ))
+                            .with_help(format!(
+                                "set `sun_disc_size` to {} (twice `angular_radius`), or drop one",
+                                2.0 * radius
+                            )),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    diagnostics
+}
+
 /// `L1323` (a warning) for each `PointLight`/`SpotLight` that sets `shadow_distance` or a non-zero
 /// `shadow_fade` without `cast_shadows: true`: with no shadow to fade, the field does nothing.
 pub fn scene_local_light_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
@@ -764,6 +834,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_camera_rig_diagnostics(scene));
     diagnostics.extend(scene_sun_diagnostics(scene));
     diagnostics.extend(scene_local_light_diagnostics(scene));
+    diagnostics.extend(scene_lens_and_sun_disc_diagnostics(scene));
     diagnostics.extend(scene_preload_diagnostics(project_root, scene));
     // The mesh-asset pass reports a missing skinned mesh at its entity; the skin-bone and
     // parent-joint passes read the same files and push the reader's bare diagnostic, dropped here.
@@ -1203,6 +1274,67 @@ entities:
         let source = format!("format: 1\nentities:\n  - components:\n      {component}:\n{light}");
         ludion_scene::check(&source, &crate::builtin_registry())
             .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"))
+    }
+
+    fn lens_scene(body: &str) -> Scene {
+        let source = format!("format: 1\nentities:\n{body}");
+        ludion_scene::check(&source, &crate::builtin_registry())
+            .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"))
+    }
+
+    #[test]
+    fn dof_with_a_zero_focus_distance_is_l1324() {
+        let found = scene_lens_and_sun_disc_diagnostics(&lens_scene(
+            "  - components:\n      PostProcess:\n        dof: 0.1\n        focus_distance: 0.0\n",
+        ));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::CAMERA_DOF_FOCUS_ZERO);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/PostProcess/focus_distance")
+        );
+    }
+
+    #[test]
+    fn dof_with_a_focus_distance_or_no_dof_is_clean() {
+        for camera in [
+            "        dof: 0.1\n        focus_distance: 6.0\n",
+            "        dof: 0.1\n",
+            "        focus_distance: 0.0\n",
+        ] {
+            let scene = lens_scene(&format!("  - components:\n      PostProcess:\n{camera}"));
+            assert!(
+                scene_lens_and_sun_disc_diagnostics(&scene).is_empty(),
+                "{camera}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sun_disc_that_is_not_twice_the_radius_is_l1325() {
+        let found = scene_lens_and_sun_disc_diagnostics(&lens_scene(
+            "  - components:\n      DirectionalLight:\n        angular_radius: 0.5\n  - components:\n      Environment:\n        sun_disc_size: 0.5\n",
+        ));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::SUN_DISC_SIZE_MISMATCH);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/1/components/Environment/sun_disc_size")
+        );
+    }
+
+    #[test]
+    fn a_matching_or_half_authored_sun_disc_is_clean() {
+        for body in [
+            "  - components:\n      DirectionalLight:\n        angular_radius: 0.5\n  - components:\n      Environment:\n        sun_disc_size: 1.0\n",
+            "  - components:\n      DirectionalLight:\n        angular_radius: 0.5\n",
+            "  - components:\n      Environment:\n        sun_disc_size: 1.0\n",
+        ] {
+            assert!(
+                scene_lens_and_sun_disc_diagnostics(&lens_scene(body)).is_empty(),
+                "{body}"
+            );
+        }
     }
 
     #[test]

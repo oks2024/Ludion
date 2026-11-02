@@ -417,6 +417,7 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: [1.0, 1.0],
             uv_offset: [0.0, 0.0],
+            sort_anchor: None,
         }
     }
 

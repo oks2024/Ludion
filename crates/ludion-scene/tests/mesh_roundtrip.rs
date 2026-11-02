@@ -46,6 +46,17 @@ fn indices_for(vertex_count: usize) -> BoxedStrategy<Vec<u32>> {
         .boxed()
 }
 
+/// `rows` of `stride` floats with every leading xyz made non-degenerate: the validator refuses a
+/// normal or tangent of near-zero length.
+fn non_degenerate(mut flat: Vec<f64>, stride: usize) -> Vec<f64> {
+    for row in flat.chunks_exact_mut(stride) {
+        if row[..3].iter().map(|c| c * c).sum::<f64>() < 1e-9 {
+            row[0] = 1.0;
+        }
+    }
+    flat
+}
+
 /// Valid tangents for a mesh with `vertex_count` vertices: 4 floats per vertex, the handedness `w`
 /// exactly `-1` or `1`.
 fn tangents_for(vertex_count: usize) -> impl Strategy<Value = Vec<f64>> {
@@ -108,10 +119,14 @@ fn mesh_textures() -> impl Strategy<Value = MeshTextures> {
 fn mesh_doc() -> impl Strategy<Value = MeshDocument> {
     (0usize..8).prop_flat_map(|vertex_count| {
         let positions = proptest::collection::vec(finite_f64(), vertex_count * 3);
-        let normals =
-            proptest::option::of(proptest::collection::vec(finite_f64(), vertex_count * 3));
+        let normals = proptest::option::of(
+            proptest::collection::vec(finite_f64(), vertex_count * 3)
+                .prop_map(|flat| non_degenerate(flat, 3)),
+        );
         let uvs = proptest::option::of(proptest::collection::vec(finite_f64(), vertex_count * 2));
-        let tangents = proptest::option::of(tangents_for(vertex_count));
+        let tangents = proptest::option::of(
+            tangents_for(vertex_count).prop_map(|flat| non_degenerate(flat, 4)),
+        );
         let emissive =
             proptest::option::of(proptest::collection::vec(non_negative_f64(), vertex_count));
         let metallic = proptest::option::of(proptest::collection::vec(unit_f64(), vertex_count));

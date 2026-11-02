@@ -810,6 +810,7 @@ fn extract_inner(
             flash_color: sprite.flash_color,
             uv_repeat,
             uv_offset,
+            sort_anchor: sprite.sort_anchor,
         });
     }
 
@@ -2179,6 +2180,7 @@ fn extract_volleys(
                 flash_color: [1.0; 3],
                 uv_repeat: SpriteInstance::NO_TILING,
                 uv_offset: [0.0; 2],
+                sort_anchor: None,
             });
         }
     }
@@ -2864,6 +2866,9 @@ pub(crate) struct PlacedSprite<'w> {
     pub(crate) site: TextureSite,
     /// World-space center of the quad.
     pub(crate) center: Vec3,
+    /// Where the draw order measures depth when that is not `center`: the entity translation of a
+    /// non-billboard sprite (its pivot-shifted centre can sit far from the point it stands on).
+    pub(crate) sort_anchor: Option<Vec3>,
     /// FULL width vector (see the sizing comment below): `|right|` is the drawn width in world units.
     pub(crate) right: Vec3,
     /// FULL height vector: `|up|` is the drawn height in world units.
@@ -3226,6 +3231,7 @@ pub(crate) fn place<'w>(
                 id,
                 site: TextureSite::Sprite(index),
                 center,
+                sort_anchor: (!sprite.billboard).then_some(translation),
                 right,
                 up,
                 color: sprite.color,
@@ -3272,6 +3278,7 @@ pub(crate) fn place<'w>(
                         id,
                         site: TextureSite::TilemapCell(index, glyph),
                         center,
+                        sort_anchor: None,
                         right,
                         up,
                         color: tile.color,

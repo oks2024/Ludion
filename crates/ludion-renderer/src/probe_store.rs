@@ -527,6 +527,7 @@ mod tests {
                     flash_color: [1.0; 3],
                     uv_repeat: SpriteInstance::NO_TILING,
                     uv_offset: [0.0; 2],
+                    sort_anchor: None,
                 })
             }),
             ("the sun disc", |f| {

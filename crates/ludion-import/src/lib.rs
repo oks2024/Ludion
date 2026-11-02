@@ -129,7 +129,7 @@ pub use provenance::relative_to;
 use skin::{SkinBinding, bind_skin, map_weights};
 use sources::{Buffers, resolve_image};
 pub use tangents::compute_tangents;
-use tangents::faceted_normals;
+use tangents::{faceted_normals, repair_degenerate_tangents};
 pub use tree::{GltfImported, import_gltf};
 
 /// The glTF features that are an `L1202`, as short phrases. `ludion import --help`, the `L1202`
@@ -1380,6 +1380,25 @@ fn build_mesh_document(
             weights: mapped.weights,
             bone_indices: mapped.bone_indices,
         });
+    }
+
+    // An authored TANGENT of near-zero length is refused by the mesh validator; it takes the
+    // generator's collapse fallback instead of failing the import.
+    if doc.tangents.is_some()
+        && doc
+            .indices
+            .iter()
+            .all(|&i| (i as usize) < doc.positions.len() / 3)
+    {
+        let normals = match &doc.normals {
+            Some(n) if n.len() == doc.positions.len() => n.clone(),
+            _ => faceted_normals(&doc.positions, &doc.indices),
+        };
+        if let Some(tangents) = doc.tangents.as_mut()
+            && tangents.len() / 4 * 3 == doc.positions.len()
+        {
+            repair_degenerate_tangents(&normals, tangents);
+        }
     }
 
     // The tangent pass indexes by the raw index list, so the data must be consistent before it runs.

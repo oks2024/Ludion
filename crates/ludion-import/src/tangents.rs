@@ -9,6 +9,8 @@
 //! `f64::sqrt` — no `glam`, no trigonometry — in a fixed association order, so the result is
 //! bit-identical on x86_64 and arm64: the same property `ludion-sculpt`'s `edt` module leans on.
 
+use ludion_scene::DEGENERATE_VECTOR_LENGTH_SQUARED;
+
 /// Per-vertex tangents (xyz + handedness `w` in `{-1.0, 1.0}`), 4 values per vertex, from flat
 /// positions (3/vertex), normals (3/vertex), uvs (2/vertex) and a triangle index list. The frame
 /// follows glTF: `cross(n, t) * w` points toward decreasing `v` (image-up), as Blender's exporter
@@ -90,9 +92,22 @@ pub fn compute_tangents(
     out
 }
 
+/// Replaces every authored tangent whose xyz is near zero (the mesh validator refuses those) with
+/// the same normal-orthogonal axis [`compute_tangents`] falls back to, keeping its handedness `w`.
+/// A verbatim `TANGENT` is otherwise untouched.
+pub(crate) fn repair_degenerate_tangents(normals: &[f64], tangents: &mut [f64]) {
+    for (v, t) in tangents.chunks_exact_mut(4).enumerate() {
+        if dot3([t[0], t[1], t[2]], [t[0], t[1], t[2]]) < DEGENERATE_VECTOR_LENGTH_SQUARED {
+            let n = normalize3(vec3_at(normals, v)).unwrap_or([0.0, 0.0, 1.0]);
+            let axis = orthogonal_axis(n);
+            t[..3].copy_from_slice(&axis);
+        }
+    }
+}
+
 /// Per-vertex faceted normals (3/vertex) from flat positions and a triangle index list: the
 /// area-weighted sum of the incident face normals, normalized (a vertex on no triangle, or whose
-/// faces cancel, gets zero — [`compute_tangents`] then falls back to an axis).
+/// faces cancel, gets +z, so the committed mesh never carries a zero-length normal).
 ///
 /// Mirrors `ludion_engine::mesh_asset::compute_faceted_normals` (which the loader runs when a mesh
 /// document omits `normals`) in `f64`, so a primitive that carries a normal map but no `NORMAL` can
@@ -113,7 +128,7 @@ pub(crate) fn faceted_normals(positions: &[f64], indices: &[u32]) -> Vec<f64> {
     }
     let mut out = Vec::with_capacity(vertex_count * 3);
     for normal in &accumulated {
-        out.extend_from_slice(&normalize3(*normal).unwrap_or([0.0; 3]));
+        out.extend_from_slice(&normalize3(*normal).unwrap_or([0.0, 0.0, 1.0]));
     }
     out
 }
@@ -179,6 +194,22 @@ fn normalize3(v: [f64; 3]) -> Option<[f64; 3]> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_zero_length_authored_tangent_takes_the_collapse_fallback() {
+        let normals = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let mut tangents = [0.0, 0.0, 0.0, -1.0, 1.0, 0.0, 0.0, 1.0];
+        super::repair_degenerate_tangents(&normals, &mut tangents);
+        let t = &tangents[..3];
+        assert!((t.iter().map(|c| c * c).sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!(t[2].abs() < 1e-12, "orthogonal to the normal");
+        assert_eq!(tangents[3], -1.0, "handedness is kept");
+        assert_eq!(
+            &tangents[4..],
+            &[1.0, 0.0, 0.0, 1.0],
+            "a good tangent is verbatim"
+        );
+    }
+
     use super::*;
 
     /// Two triangles forming a unit quad in the XY plane, UVs mapped 1:1 to x/y, normal +z.

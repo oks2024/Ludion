@@ -1584,6 +1584,15 @@ pub mod code {
     /// `cast_shadows: true`, so the field does nothing.
     pub const LOCAL_LIGHT_SHADOW_FADE_UNUSED: DiagnosticCode = DiagnosticCode::new("L1323");
 
+    /// `L1330` — a `PostProcess` enables depth of field (`dof > 0`) with an authored `focus_distance`
+    /// of 0, which focuses on the lens itself and blurs the whole scene.
+    pub const CAMERA_DOF_FOCUS_ZERO: DiagnosticCode = DiagnosticCode::new("L1330");
+
+    /// `L1331` — `Environment.sun_disc_size` and `DirectionalLight.angular_radius` are both
+    /// authored and positive but the disc is not twice the radius, so the sky disc and the sun's
+    /// specular highlight disagree.
+    pub const SUN_DISC_SIZE_MISMATCH: DiagnosticCode = DiagnosticCode::new("L1331");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7874,6 +7883,29 @@ only that is set). The light has no shadow to fade, so the field does nothing.
 Fix: set `cast_shadows: true`, or remove `shadow_distance` and `shadow_fade`.",
     },
     CodeEntry {
+        code: code::CAMERA_DOF_FOCUS_ZERO,
+        severity: Severity::Warning,
+        title: "depth of field is on but focus_distance is 0",
+        explanation: "\
+A `PostProcess` has `dof` above 0 and an authored `focus_distance` of 0 (pointer
+`/entities/{i}/components/PostProcess/focus_distance`). The focal plane is then at the lens, so every
+surface in front of the camera is defocused and the scene blurs.
+
+Fix: set `focus_distance` to the subject's distance from the camera, or set `dof` to 0.",
+    },
+    CodeEntry {
+        code: code::SUN_DISC_SIZE_MISMATCH,
+        severity: Severity::Warning,
+        title: "sun disc size and light angular radius disagree",
+        explanation: "\
+`Environment.sun_disc_size` is the sky disc's full angle and `DirectionalLight.angular_radius` is
+the sun's half angle, both in degrees. Both are authored and positive but `sun_disc_size` is not
+twice `angular_radius` (pointer `/entities/{i}/components/Environment/sun_disc_size`), so the
+disc in the sky and the specular highlight on glossy surfaces differ in size.
+
+Fix: set `sun_disc_size` to twice `angular_radius`, or drop one of the two.",
+    },
+    CodeEntry {
         code: code::CONTENT_PATH_OUTSIDE_ROOT,
         severity: Severity::Error,
         title: "a content or payload path leaves the content root",
@@ -10742,6 +10774,8 @@ mod tests {
         code::CONTENT_PATH_OUTSIDE_ROOT,
         code::LOCAL_LIGHT_INVALID_SHADOW_DISTANCE,
         code::LOCAL_LIGHT_SHADOW_FADE_UNUSED,
+        code::CAMERA_DOF_FOCUS_ZERO,
+        code::SUN_DISC_SIZE_MISMATCH,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -11004,6 +11038,8 @@ mod tests {
             code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
             code::UI_RECT_FILL_IGNORES_PLACEMENT,
             code::LOCAL_LIGHT_SHADOW_FADE_UNUSED,
+            code::CAMERA_DOF_FOCUS_ZERO,
+            code::SUN_DISC_SIZE_MISMATCH,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,
