@@ -1,7 +1,10 @@
 //! The importer fingerprint: a hash of every source the importer's output can depend on.
 //!
-//! The closure is derived, never listed: `cargo metadata --no-deps` is walked from `ludion-import`
-//! over its non-dev path dependencies, so a new dependency joins the fingerprint with no edit here.
+//! The closure is derived, never listed: one `cargo metadata --offline` call is walked from
+//! `ludion-import` over its non-dev path dependencies, so a new dependency joins the fingerprint
+//! with no edit here. The call lists every package, so a path crate outside the workspace (an
+//! `exclude`d vendored one) is found without opening its own manifest as a root, which cargo
+//! refuses when the checkout nests inside another workspace.
 //! The `build.rs` reruns on mtime (`rerun-if-changed`) but the hash is of content, so a touch
 //! reruns it and yields the same constant; the one miss is an edit whose file and directory mtimes
 //! all predate the last build-script run. A packaged crate (`Cargo.toml.orig` beside the manifest)
@@ -41,7 +44,7 @@ fn metadata(cargo: &Path, manifest: &Path) -> Result<(PathBuf, Vec<Package>), St
     let output = Command::new(cargo)
         .args([
             "metadata",
-            "--no-deps",
+            "--offline",
             "--format-version",
             "1",
             "--manifest-path",
@@ -94,7 +97,7 @@ fn metadata(cargo: &Path, manifest: &Path) -> Result<(PathBuf, Vec<Package>), St
     Ok((PathBuf::from(workspace_root), packages))
 }
 
-/// Walks the non-dev path dependencies of `root_pkg` (a member of the workspace at `manifest`).
+/// Walks the non-dev path dependencies of `root_pkg` (a package of the workspace at `manifest`).
 pub fn closure(cargo: &Path, manifest: &Path, root_pkg: &str) -> Result<Closure, String> {
     let (workspace_root, packages) = metadata(cargo, manifest)?;
     let root = packages
@@ -111,13 +114,6 @@ pub fn closure(cargo: &Path, manifest: &Path, root_pkg: &str) -> Result<Closure,
     while let Some(dir) = queue.pop_front() {
         if seen.contains_key(&dir) {
             continue;
-        }
-        if !known.contains_key(&dir) {
-            // A path crate outside the workspace (an `exclude`d vendored crate): its own manifest.
-            let (_, packages) = metadata(cargo, &dir.join("Cargo.toml"))?;
-            for package in packages {
-                known.entry(package.dir.clone()).or_insert(package);
-            }
         }
         let package = known
             .get(&dir)

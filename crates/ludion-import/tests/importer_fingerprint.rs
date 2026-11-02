@@ -53,7 +53,7 @@ fn the_fingerprint_moves_with_the_closure_and_only_with_it() {
         &root,
         "vendor/d",
         "d",
-        // Like the vendored rapier3d, an excluded crate is its own (empty) workspace.
+        // Like the vendored rapier3d, an excluded path crate outside the workspace members.
         "[dependencies]\ne = { path = \"../e\" }\n[workspace]\n",
     );
     krate(&root, "vendor/e", "e", "[workspace]\n");
