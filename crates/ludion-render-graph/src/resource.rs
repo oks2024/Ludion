@@ -133,6 +133,9 @@ pub enum TextureFormat {
     R32Float,
     /// 32-bit float RGBA, unfilterable: read with `textureLoad`; a compute pass's exact-f32 output.
     Rgba32Float,
+    /// 16-bit float, two channels, blendable on the WebGPU floor — the transparent layer target
+    /// (weighted distance and coverage).
+    Rg16Float,
     /// 32-bit float depth — the scene pass's depth attachment, and (once a pass samples it) a shadow
     /// map. A depth format is never a color attachment and never read back for presentation; it is
     /// attached with [`TextureUsage::RenderAttachment`] and, when a later pass samples it,
@@ -148,6 +151,7 @@ impl TextureFormat {
             TextureFormat::Rgba16Float => 8,
             TextureFormat::R32Float => 4,
             TextureFormat::Rgba32Float => 16,
+            TextureFormat::Rg16Float => 4,
             TextureFormat::Depth32Float => 4,
         }
     }
@@ -159,6 +163,7 @@ impl TextureFormat {
             TextureFormat::Rgba16Float => "rgba16float",
             TextureFormat::R32Float => "r32float",
             TextureFormat::Rgba32Float => "rgba32float",
+            TextureFormat::Rg16Float => "rg16float",
             TextureFormat::Depth32Float => "depth32_float",
         }
     }
@@ -170,6 +175,7 @@ impl TextureFormat {
             TextureFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
             TextureFormat::R32Float => wgpu::TextureFormat::R32Float,
             TextureFormat::Rgba32Float => wgpu::TextureFormat::Rgba32Float,
+            TextureFormat::Rg16Float => wgpu::TextureFormat::Rg16Float,
             TextureFormat::Depth32Float => wgpu::TextureFormat::Depth32Float,
         }
     }
@@ -268,6 +274,18 @@ impl TextureDesc {
             depth_slices: None,
             mip_levels: 1,
             format: TextureFormat::Rgba16Float,
+            usages: vec![TextureUsage::RenderAttachment, TextureUsage::TextureBinding],
+        }
+    }
+
+    /// A two-channel 16-bit float color target that is also sampleable downstream — the transparent
+    /// layer (see [`TextureFormat::Rg16Float`]).
+    pub fn layer_color(width: u32, height: u32) -> Self {
+        TextureDesc {
+            extent: Extent2d { width, height },
+            depth_slices: None,
+            mip_levels: 1,
+            format: TextureFormat::Rg16Float,
             usages: vec![TextureUsage::RenderAttachment, TextureUsage::TextureBinding],
         }
     }

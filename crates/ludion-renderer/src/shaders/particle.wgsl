@@ -96,3 +96,46 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let alpha = select(weight, 0.0, in.params.z > 0.5);
     return vec4<f32>(in.color.rgb * weight, alpha);
 }
+
+// The transparent layer's twin of the vertex stage (`snippets/transparent_layer.wgsl`): the same
+// quad, plus the world position the distance is measured at. No lighting: the layer carries only
+// distance and coverage.
+struct DepthOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) local: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) @interpolate(flat) params: vec4<f32>,
+    @location(3) world: vec3<f32>,
+};
+
+@vertex
+fn vs_depth(in: VsIn, @builtin(vertex_index) vi: u32) -> DepthOut {
+    let corner = CORNERS[vi] * QUAD_PAD;
+    let world = in.center + corner.x * in.params.x * in.right + corner.y * in.params.x * in.up;
+
+    var out: DepthOut;
+    out.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    out.local = corner * 2.0;
+    out.color = in.color;
+    out.params = in.params;
+    out.world = world;
+    return out;
+}
+
+// The twin of `fs_main`: the same coverage, reduced to the weight the colour pass blends with. An
+// additive instance claims its brightest channel, clamped to 1, as the sprite pass does.
+@fragment
+fn fs_depth(in: DepthOut) -> @location(0) vec4<f32> {
+    let d = length(in.local);
+    let aa = max(fwidth(d), 1e-6);
+    let hard = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, d);
+    let rim = exp(-SOFT_FALLOFF);
+    let soft = clamp((exp(-SOFT_FALLOFF * d * d) - rim) / (1.0 - rim), 0.0, 1.0);
+    let coverage = mix(hard, soft, clamp(in.params.y, 0.0, 1.0));
+    var weight = clamp(in.color.a, 0.0, 1.0) * coverage;
+    if (in.params.z > 0.5) {
+        let rgb = in.color.rgb * weight;
+        weight = weight * min(1.0, max(rgb.r, max(rgb.g, rgb.b)));
+    }
+    return transparent_layer(in.world, weight);
+}

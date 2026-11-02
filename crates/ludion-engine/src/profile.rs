@@ -1204,11 +1204,12 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// `probe_relight` only for a scene with probes, `local_shadow` (and `local_shadow_debug`) only for a scene with a shadowed spot or
 /// point light, `drop_shadow_occlusion` only for a scene with a drop shadow, `projector` for a drop
 /// shadow or a `multiply`/`add` decal, `decals_lit` only for an `alpha` or `coat` decal, `decal_receivers`
-/// only for a decal that lists receiver meshes).
+/// only for a decal that lists receiver meshes, `transparent_depth` only for a fogged scene with a
+/// sprite, particle or world text).
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 45] = [
+const KNOWN_PASS_NAMES: [&str; 46] = [
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::LOCAL_SHADOW,
     ludion_renderer::graph::pass::PREPASS,
@@ -1218,6 +1219,7 @@ const KNOWN_PASS_NAMES: [&str; 45] = [
     ludion_renderer::graph::pass::SCENE,
     ludion_renderer::graph::pass::REFLECTIONS,
     ludion_renderer::graph::pass::TRANSPARENTS,
+    ludion_renderer::graph::pass::TRANSPARENT_DEPTH,
     ludion_renderer::graph::pass::HIZ_SEED,
     ludion_renderer::graph::pass::HIZ_REDUCE,
     ludion_renderer::graph::pass::SSR_COLOR_SEED,
@@ -3669,6 +3671,8 @@ gpu_frame_max_ms = 9.5
             decals: true,
             lit_decals: true,
             decal_receivers: true,
+            transparent_cover: true,
+            fog: true,
             aa: ludion_renderer::AntiAliasing::Off,
         };
         // A debug view replaces the AA, so the SMAA passes are only producible with every view off.

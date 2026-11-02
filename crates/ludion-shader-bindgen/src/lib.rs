@@ -164,12 +164,16 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
         "sprite.wgsl",
         &[
             "camera.wgsl",
+            "transparent_layer.wgsl",
             "cluster_grid.wgsl",
             "lights.wgsl",
             "billboard_light.wgsl",
         ],
     ),
-    ("text.wgsl", &["camera.wgsl", "glyph.wgsl"]),
+    (
+        "text.wgsl",
+        &["camera.wgsl", "transparent_layer.wgsl", "glyph.wgsl"],
+    ),
     ("ui_text.wgsl", &["glyph.wgsl"]),
     ("blit.wgsl", &["fullscreen_vs.wgsl"]),
     ("ibl.wgsl", &["dfg.wgsl"]),
@@ -226,6 +230,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
         "particle.wgsl",
         &[
             "camera.wgsl",
+            "transparent_layer.wgsl",
             "cluster_grid.wgsl",
             "lights.wgsl",
             "billboard_light.wgsl",

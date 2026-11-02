@@ -873,6 +873,14 @@ impl Renderer {
             .unwrap_or_else(|| panic!("{} has no split pipeline twin", id.label()))
     }
 
+    /// The transparent layer twin of a sprite, particle or text pipeline.
+    fn transparent_depth_pipeline(&self, id: ShaderId) -> &wgpu::RenderPipeline {
+        self.pipelines[id as usize]
+            .transparent_depth
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} has no transparent layer twin", id.label()))
+    }
+
     /// A hash of the shader code a probe capture runs: every registry shader as composed now (so a
     /// reload moves it), plus the three compute shaders outside the registry. Registry-wide rather
     /// than a capture subset: an extra shader only costs a recapture, a missing one is a stale cube.
@@ -3398,6 +3406,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::LOCAL_SHADOW_DEBUG => self.record_local_shadow_debug(pass),
             pass::PROBE_FACE => self.record_probe_face(pass),
             pass::TRANSPARENTS => self.record_transparents(pass),
+            pass::TRANSPARENT_DEPTH => self.record_transparent_depth(pass),
             // The bright-pass threshold (`PostProcess.bloom_threshold`; default 1.0 reproduces the
             // old shader literal).
             pass::BLOOM_THRESHOLD => {
@@ -4863,6 +4872,66 @@ impl FrameRecorder<'_> {
         // Text.
         for text in &self.text_draws {
             rp.set_pipeline(self.r.pipeline(ShaderId::Text));
+            rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
+            rp.set_bind_group(ATLAS_TEX_GROUP, &text.tex_bg, &[]);
+            rp.set_vertex_buffer(0, text.verts.slice(..));
+            rp.draw(0..text.count, 0..1);
+        }
+    }
+
+    /// The transparent layer: the sprites, particles and text of `transparents` redrawn in the same
+    /// order with the same depth compare into the layer target, cleared to zero. No sky, no markers:
+    /// the opaque depth already places those.
+    fn record_transparent_depth(&self, pass: &mut RecordedPass<'_>) {
+        let depth_view = pass
+            .depth
+            .expect("the transparent layer pass declares a depth attachment");
+        let target = pass.colors()[0].view;
+
+        let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("transparent_depth"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            // Hand-attached, as in `record_scene`; otherwise `--dump-timings` loses the pass.
+            timestamp_writes: pass.timestamp_writes(),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        rp.set_pipeline(self.r.transparent_depth_pipeline(ShaderId::Sprite));
+        rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
+        rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
+        for draw in &self.sprite_draws {
+            rp.set_bind_group(SPRITE_TEX_GROUP, &draw.tex_bg, &[]);
+            rp.set_vertex_buffer(0, draw.instances.slice(..));
+            rp.draw(0..6, 0..draw.count);
+        }
+
+        if let Some(particles) = &self.particle_draw {
+            rp.set_pipeline(self.r.transparent_depth_pipeline(ShaderId::Particle));
+            rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
+            rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
+            rp.set_vertex_buffer(0, particles.instances.slice(..));
+            rp.draw(0..6, 0..particles.count);
+        }
+
+        for text in &self.text_draws {
+            rp.set_pipeline(self.r.transparent_depth_pipeline(ShaderId::Text));
             rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
             rp.set_bind_group(ATLAS_TEX_GROUP, &text.tex_bg, &[]);
             rp.set_vertex_buffer(0, text.verts.slice(..));
@@ -6488,6 +6557,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/sprite.wgsl"),
         snippets: &[
             Snippet::Camera,
+            Snippet::TransparentLayer,
             Snippet::ClusterGrid,
             Snippet::Lights,
             Snippet::BillboardLight,
@@ -6506,6 +6576,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         // once per centre in the vertex stage; an unlit instance never reads the light set.
         snippets: &[
             Snippet::Camera,
+            Snippet::TransparentLayer,
             Snippet::ClusterGrid,
             Snippet::Lights,
             Snippet::BillboardLight,
@@ -6516,7 +6587,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::Text,
         file_name: "text.wgsl",
         body: include_str!("shaders/text.wgsl"),
-        snippets: &[Snippet::Camera, Snippet::Glyph],
+        snippets: &[Snippet::Camera, Snippet::TransparentLayer, Snippet::Glyph],
         layouts: &[Some(LayoutId::Camera), Some(LayoutId::Atlas)],
     },
     ShaderDesc {
@@ -6949,6 +7020,9 @@ enum Snippet {
     /// over the per-pixel vector to the eye, binding-free (mesh, decal_lit, sky, reflections,
     /// ssr_blend, ssr_trace).
     ViewRay,
+    /// `transparent_layer`, the value a layer fragment writes into the `Rg16Float` transparent layer
+    /// (sprite, particle, text); needs the `Camera` snippet ahead of it.
+    TransparentLayer,
 }
 
 impl Snippet {
@@ -6981,6 +7055,7 @@ impl Snippet {
             Snippet::Decal => "decal.wgsl",
             Snippet::BillboardLight => "billboard_light.wgsl",
             Snippet::ViewRay => "view_ray.wgsl",
+            Snippet::TransparentLayer => "transparent_layer.wgsl",
         }
     }
 
@@ -7012,6 +7087,9 @@ impl Snippet {
             Snippet::Decal => include_str!("shaders/snippets/decal.wgsl"),
             Snippet::BillboardLight => include_str!("shaders/snippets/billboard_light.wgsl"),
             Snippet::ViewRay => include_str!("shaders/snippets/view_ray.wgsl"),
+            Snippet::TransparentLayer => {
+                include_str!("shaders/snippets/transparent_layer.wgsl")
+            }
         }
     }
 
@@ -7044,6 +7122,7 @@ impl Snippet {
             Snippet::Decal,
             Snippet::BillboardLight,
             Snippet::ViewRay,
+            Snippet::TransparentLayer,
         ]
         .into_iter()
         .find(|s| s.file_name() == name)
@@ -7351,6 +7430,9 @@ struct ShaderPipelines {
     /// The composite's `Rgba16Float` twin, which writes the SMAA input in place of the LDR output
     /// (see [`ShaderPipelines::for_target`]).
     hdr: Option<wgpu::RenderPipeline>,
+    /// The sprite, particle and text shaders' twin that draws into the `Rg16Float` transparent layer
+    /// (entries `fs_depth`, and `vs_depth` where the vertex stage differs).
+    transparent_depth: Option<wgpu::RenderPipeline>,
 }
 
 impl ShaderPipelines {
@@ -7408,6 +7490,7 @@ fn build_pipeline(
             decal: None,
             lit: None,
             hdr: None,
+            transparent_depth: None,
         }
     };
     let main = match id {
@@ -7486,6 +7569,7 @@ fn build_pipeline(
                 decal: None,
                 lit: None,
                 hdr: None,
+                transparent_depth: None,
             };
         }
         ShaderId::SsrBlend => build_reflections_pipeline(device, label, src, &layout),
@@ -7513,6 +7597,7 @@ fn build_pipeline(
                 decal: None,
                 lit: Some(lit),
                 hdr: None,
+                transparent_depth: None,
             };
         }
         ShaderId::Projector => {
@@ -7527,6 +7612,7 @@ fn build_pipeline(
                 ),
                 lit: None,
                 hdr: None,
+                transparent_depth: None,
             };
         }
     };
@@ -7543,6 +7629,54 @@ fn build_pipeline(
         decal: None,
         lit: None,
         hdr,
+        transparent_depth: match id {
+            ShaderId::Sprite => Some(build_layer_pipeline(
+                device,
+                label,
+                src,
+                &layout,
+                LayerDraw {
+                    vertex_entry: "vs_main",
+                    buffer: wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<SpriteInstanceRaw>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &SPRITE_INSTANCE_ATTRS,
+                    },
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                },
+            )),
+            ShaderId::Particle => Some(build_layer_pipeline(
+                device,
+                label,
+                src,
+                &layout,
+                LayerDraw {
+                    vertex_entry: "vs_depth",
+                    buffer: wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<ParticleInstanceRaw>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &PARTICLE_INSTANCE_ATTRS,
+                    },
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                },
+            )),
+            ShaderId::Text => Some(build_layer_pipeline(
+                device,
+                label,
+                src,
+                &layout,
+                LayerDraw {
+                    vertex_entry: "vs_depth",
+                    buffer: wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<TextVertexRaw>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &TEXT_VERTEX_ATTRS,
+                    },
+                    depth_compare: wgpu::CompareFunction::Always,
+                },
+            )),
+            _ => None,
+        },
     }
 }
 
@@ -8228,6 +8362,51 @@ fn build_text_pipeline(
         }),
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: Some(depth_state(false, wgpu::CompareFunction::Always)),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// What differs between the sprite, particle and text twins that draw into the transparent layer.
+struct LayerDraw<'a> {
+    vertex_entry: &'static str,
+    buffer: wgpu::VertexBufferLayout<'a>,
+    /// The kind's own depth compare, so the layer is covered exactly where the colour was.
+    depth_compare: wgpu::CompareFunction,
+}
+
+/// The twin of a transparent kind's pipeline that writes the `Rg16Float` transparent layer: the same
+/// module and layout, entry `fs_depth`, premultiplied blending on both channels, red and green only.
+fn build_layer_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    src: &str,
+    layout: &wgpu::PipelineLayout,
+    draw: LayerDraw<'_>,
+) -> wgpu::RenderPipeline {
+    let shader = module(device, label, src);
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some(draw.vertex_entry),
+            buffers: &[Some(draw.buffer)],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_depth"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rg16Float,
+                blend: Some(premultiplied_blend()),
+                write_mask: wgpu::ColorWrites::RED | wgpu::ColorWrites::GREEN,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(depth_state(false, draw.depth_compare)),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -20140,6 +20319,270 @@ mod tests {
             })
             .collect();
         (tw, th, texels)
+    }
+
+    /// The transparent layer of `scene`, read back from a harness graph that makes it an output:
+    /// each texel as `[distance × coverage, coverage]`.
+    fn layer_texels(renderer: &Renderer, scene: &RenderScene, size: FrameSize) -> Vec<[f32; 2]> {
+        let (graph, layer) = crate::graph::build_transparent_depth_graph(size);
+        let recorder = renderer.prepare_frame(scene, size, None).unwrap();
+        let copy = renderer
+            .gpu
+            .device()
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("transparent layer copy"),
+                size: wgpu::Extent3d {
+                    width: size.render.0,
+                    height: size.render.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rg16Float,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+        renderer
+            .gpu
+            .execute_into(
+                &schedule(&graph).expect("the layer graph schedules"),
+                &recorder,
+                &[(layer, copy.as_image_copy())],
+            )
+            .expect("the layer renders");
+        let bytes = read_texels(renderer, &copy, 4, wgpu::TextureAspect::All);
+        assert!(renderer.gpu.take_fault().is_none(), "the layer faulted");
+        bytes
+            .chunks_exact(4)
+            .map(|texel| {
+                std::array::from_fn(|c| {
+                    crate::gi_bake::f16_to_f32(u16::from_le_bytes([texel[c * 2], texel[c * 2 + 1]]))
+                })
+            })
+            .collect()
+    }
+
+    fn layer_sprite(center: Vec3, color: [f32; 4], additive: bool) -> crate::scene::SpriteInstance {
+        crate::scene::SpriteInstance {
+            center,
+            right: Vec3::new(4.0, 0.0, 0.0),
+            up: Vec3::new(0.0, 4.0, 0.0),
+            color,
+            texture: None,
+            uv: crate::scene::SpriteInstance::FULL_UV,
+            lit: false,
+            layer: 0,
+            additive,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            uv_repeat: crate::scene::SpriteInstance::NO_TILING,
+            uv_offset: [0.0; 2],
+        }
+    }
+
+    /// A world text run covering `[-2, 2]²` at depth `z`, on the embedded face.
+    fn layer_text(z: f32) -> crate::scene::TextRun {
+        let face = ludion_font::FontFace::embedded();
+        crate::scene::TextRun {
+            position: Vec3::new(-2.0, 2.0, z),
+            size: 4.0,
+            color: [1.0; 4],
+            text: "A".to_string(),
+            quads: ludion_font::layout(face, "A", 4.0, 0.0).quads(
+                [-2.0, 2.0],
+                4.0,
+                ludion_font::YAxis::Up,
+            ),
+            extent: [4.0, 4.0],
+            font: None,
+        }
+    }
+
+    /// The layer texel at the frame's centre, over the sky, with the frame's other texels untouched.
+    fn centre_layer(texels: &[[f32; 2]], size: FrameSize) -> [f32; 2] {
+        texels[((size.render.1 / 2) * size.render.0 + size.render.0 / 2) as usize]
+    }
+
+    /// The layer target holds weighted distance in R and coverage in G, at measured distances: an
+    /// opaque sprite reads its own distance at full coverage, a soft one half coverage at the same
+    /// distance, two stacked ones the blend-weighted mean, and a black additive quad claims nothing.
+    /// A particle and a text run each read coverage, a sprite behind an opaque wall reads none (the
+    /// depth test holds) and world text behind it does (`Always`, as the colour pass draws it).
+    /// Skips with no GPU.
+    #[test]
+    fn needs_gpu_the_layer_target_holds_distance_and_coverage() {
+        let Some(renderer) = skip_or_renderer("the_layer_target_holds_distance_and_coverage")
+        else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = RenderScene::empty((w, h));
+        scene.camera = origin_camera(w, h);
+        scene.post = Some(exact_post());
+        let read = |scene: &RenderScene| centre_layer(&layer_texels(&renderer, scene, size), size);
+        let close = |got: f32, want: f32, what: &str| {
+            assert!(
+                (got - want).abs() <= want.abs() * 0.004 + 1e-3,
+                "{what}: got {got}, want {want}"
+            );
+        };
+
+        let bare = read(&scene);
+        assert_eq!(bare, [0.0, 0.0], "an empty frame clears the layer");
+
+        scene.sprites = vec![layer_sprite(Vec3::new(0.0, 0.0, -7.0), [1.0; 4], false)];
+        let [r, g] = read(&scene);
+        close(g, 1.0, "opaque coverage");
+        close(r / g, 7.0, "opaque distance");
+
+        scene.sprites = vec![layer_sprite(
+            Vec3::new(0.0, 0.0, -7.0),
+            [1.0, 1.0, 1.0, 0.5],
+            false,
+        )];
+        let [r, g] = read(&scene);
+        close(g, 0.5, "soft coverage");
+        close(r / g, 7.0, "soft distance");
+
+        scene.sprites = vec![
+            layer_sprite(Vec3::new(0.0, 0.0, -15.0), [1.0; 4], false),
+            layer_sprite(Vec3::new(0.0, 0.0, -5.0), [1.0, 1.0, 1.0, 0.5], false),
+        ];
+        let [r, g] = read(&scene);
+        close(g, 1.0, "stacked coverage");
+        close(r, 0.5 * 5.0 + 0.5 * 15.0, "stacked weighted distance");
+
+        scene.sprites = vec![layer_sprite(
+            Vec3::new(0.0, 0.0, -7.0),
+            [0.0, 0.0, 0.0, 1.0],
+            true,
+        )];
+        assert_eq!(
+            read(&scene),
+            [0.0, 0.0],
+            "a black additive quad claims nothing"
+        );
+
+        scene.sprites.clear();
+        scene.particles = vec![particle(Vec3::new(0.0, 0.0, -6.0), 3.0, [1.0; 4], 0.0)];
+        let [r, g] = read(&scene);
+        assert!(g > 0.5, "a particle covers the centre: {g}");
+        close(r / g, 6.0, "particle distance");
+
+        scene.particles.clear();
+        scene.texts = vec![layer_text(-6.0)];
+        let covered = layer_texels(&renderer, &scene, size)
+            .iter()
+            .filter(|texel| texel[1] > 0.0)
+            .count();
+        assert!(covered > 0, "a text run covers some texels");
+
+        // A wall in front of everything: depth-tested kinds vanish behind it, text does not.
+        scene.meshes = vec![cube(
+            Vec3::new(0.0, 0.0, -3.0),
+            Vec3::new(8.0, 8.0, 0.5),
+            [0.5, 0.5, 0.5, 1.0],
+        )];
+        let behind_text = layer_texels(&renderer, &scene, size)
+            .iter()
+            .filter(|texel| texel[1] > 0.0)
+            .count();
+        assert!(behind_text > 0, "text behind a wall still reads coverage");
+        scene.texts.clear();
+        scene.sprites = vec![layer_sprite(Vec3::new(0.0, 0.0, -7.0), [1.0; 4], false)];
+        assert_eq!(
+            read(&scene),
+            [0.0, 0.0],
+            "a sprite behind a wall reads none"
+        );
+    }
+
+    /// Under an orthographic camera the layer measures along the view direction, not along the
+    /// per-pixel ray: two sprites at one view depth and far apart read the same mean distance.
+    /// Skips with no GPU.
+    #[test]
+    fn needs_gpu_an_orthographic_layer_measures_along_the_view() {
+        let Some(renderer) = skip_or_renderer("an_orthographic_layer_measures_along_the_view")
+        else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut scene = RenderScene::empty((w, h));
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0), Vec3::Y),
+            projection: Mat4::orthographic_rh(-5.0, 5.0, -5.0, 5.0, 0.1, 1000.0),
+            position: Vec3::ZERO,
+        };
+        scene.post = Some(exact_post());
+        let small = |x: f32| {
+            let mut sprite = layer_sprite(Vec3::new(x, 0.0, -10.0), [1.0; 4], false);
+            sprite.right = Vec3::new(1.0, 0.0, 0.0);
+            sprite.up = Vec3::new(0.0, 1.0, 0.0);
+            sprite
+        };
+        scene.sprites = vec![small(-3.0), small(3.0)];
+        let texels = layer_texels(&renderer, &scene, size);
+        let mut means = Vec::new();
+        for x in [-3.0, 3.0] {
+            let (px, py) = project(&scene.camera, Vec3::new(x, 0.0, -10.0), w, h);
+            let [r, g] = texels[(py * w + px) as usize];
+            assert!(g > 0.99, "the sprite at x = {x} covers its centre: {g}");
+            means.push(r / g);
+        }
+        for mean in &means {
+            assert!(
+                (mean - 10.0).abs() < 0.04,
+                "ortho distance along the view: {means:?}"
+            );
+        }
+    }
+
+    /// A frame after a transparent is byte-identical to one that never had it: the layer's transient
+    /// set coming and going leaves no trace in the picture. Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_frame_after_a_transparent_is_byte_identical_to_one_that_never_had_it() {
+        let Some(renderer) = skip_or_renderer("a_frame_after_a_transparent_is_byte_identical")
+        else {
+            return;
+        };
+        let Some(fresh) = skip_or_renderer("a_frame_after_a_transparent_is_byte_identical") else {
+            return;
+        };
+        let (w, h) = (64u32, 64u32);
+        let size = FrameSize::native(w, h);
+        let mut bare = RenderScene::empty((w, h));
+        bare.camera = origin_camera(w, h);
+        bare.post = Some(PostData {
+            fog_density: 0.05,
+            ..exact_post()
+        });
+        bare.meshes = vec![cube(
+            Vec3::new(0.0, 0.0, -9.0),
+            Vec3::splat(6.0),
+            [0.5, 0.5, 0.5, 1.0],
+        )];
+        let mut with_sprite = bare.clone();
+        with_sprite.sprites = vec![layer_sprite(
+            Vec3::new(0.0, 0.0, -5.0),
+            [1.0, 0.5, 0.2, 0.7],
+            false,
+        )];
+        assert!(PostChain::for_scene(&with_sprite).transparent_depth_scheduled());
+        assert!(!PostChain::for_scene(&bare).transparent_depth_scheduled());
+
+        let first = renderer.render(&bare, size).expect("first frame");
+        let flipped = renderer.render(&with_sprite, size).expect("sprite frame");
+        let third = renderer.render(&bare, size).expect("third frame");
+        let never = fresh.render(&bare, size).expect("fresh frame");
+        assert_ne!(first.rgba, flipped.rgba, "the sprite is visible");
+        assert_eq!(third.rgba, first.rgba, "the third frame matches the first");
+        assert_eq!(
+            third.rgba, never.rgba,
+            "the third frame matches a fresh renderer's"
+        );
     }
 
     /// The gallery's mirror floor at 1080p: a back wall, a sphere and a cube, all rough so their own

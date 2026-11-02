@@ -392,3 +392,37 @@ fn a_lit_particle_scene_dumps_the_same_graph_as_an_unlit_one() {
         "a lit emitter must not change the pass list"
     );
 }
+
+/// A fogged scene with a sprite schedules `transparent_depth` right after `transparents`, with its
+/// `rg16float` target declared; the same scene without the sprite, and the fog-free gallery scene
+/// with sprites, keep the layer-free graph.
+#[test]
+fn a_fogged_sprite_scene_dumps_the_transparent_layer() {
+    let dump = |path: PathBuf| {
+        ludion_engine::dump_scene_graph_json(
+            &path,
+            FrameSize::native(64, 64),
+            &QualitySetting::full(),
+            AntiAliasing::Off,
+        )
+        .expect("the scene validates and schedules")
+    };
+    let fogged = dump(fixture("fog-sprite.yaml"));
+    let passes = scheduled_passes(&fogged);
+    let position = |name: &str| passes.iter().position(|pass| pass == name).unwrap();
+    assert_eq!(
+        position("transparent_depth"),
+        position("transparents") + 1,
+        "the layer is redrawn right after the transparents",
+    );
+    assert!(position("transparent_depth") < position("composite"));
+    assert!(fogged.contains("rg16float"), "the target is declared");
+
+    for plain in [
+        dump(gallery("sprites.yaml")),
+        dump(gallery("post-full.yaml")),
+    ] {
+        assert!(!scheduled_passes(&plain).contains(&"transparent_depth".to_string()));
+        assert!(!plain.contains("rg16float"));
+    }
+}

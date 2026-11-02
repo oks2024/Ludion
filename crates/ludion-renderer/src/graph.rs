@@ -239,6 +239,12 @@ pub mod pass {
     /// Everything drawn after the reflections: the sky, ground markers, sprites, particles and
     /// text, depth-tested against the opaque depth and writing none. No mesh is transparent.
     pub const TRANSPARENTS: &str = "transparents";
+    /// The transparent layer: sprites, particles and world text redrawn right after
+    /// [`TRANSPARENTS`] into an `Rg16Float` target holding weighted view distance and coverage,
+    /// so a later reader can place a transparent's own distance where `scene_depth` only has the
+    /// opaque one. Present only when the scene has fog and a transparent
+    /// ([`PostChain::transparent_depth_scheduled`](super::PostChain::transparent_depth_scheduled)).
+    pub const TRANSPARENT_DEPTH: &str = "transparent_depth";
     /// Bright-pass threshold into the half-res bloom chain: it writes the pyramid's level 0.
     pub const BLOOM_THRESHOLD: &str = "bloom_threshold";
     /// The pyramid's progressive downsamples. **Index `i` is the pass that writes level `i + 1`,
@@ -734,6 +740,11 @@ pub struct PostChain {
     /// passes read. Only ever set with [`decals`](PostChain::decals) or
     /// [`lit_decals`](PostChain::lit_decals). Content too, so `masked` keeps it.
     pub decal_receivers: bool,
+    /// The scene carries a sprite, a particle or a world text run: content, so `masked` keeps it.
+    /// With [`fog`](PostChain::fog) it schedules [`pass::TRANSPARENT_DEPTH`].
+    pub transparent_cover: bool,
+    /// The scene's medium has a density (`fog_density > 0`). Content too, so `masked` keeps it.
+    pub fog: bool,
 }
 
 impl PostChain {
@@ -816,6 +827,10 @@ impl PostChain {
                 .iter()
                 .any(|d| matches!(d.blend, DecalBlend::Alpha | DecalBlend::Coat)),
             decal_receivers: !crate::projector::receiver_union(&scene.decals).is_empty(),
+            transparent_cover: !scene.sprites.is_empty()
+                || !scene.particles.is_empty()
+                || !scene.texts.is_empty(),
+            fog: scene.post.is_some_and(|post| post.fog_density > 0.0),
             aa: AntiAliasing::Off,
         }
     }
@@ -829,6 +844,13 @@ impl PostChain {
             && !self.probe_view
             && !self.local_shadow_view
             && !self.sun_cascade_view
+    }
+
+    /// Whether this frame runs the `transparent_depth` pass: a transparent is drawn, the medium has a
+    /// density, and no debug view stands in for the finished picture. The one predicate the graph and
+    /// the recorder share.
+    pub fn transparent_depth_scheduled(self) -> bool {
+        self.transparent_cover && self.fog && self.view().is_none()
     }
 
     /// Whether the resample is the last output pass: the frame is resampled and no debug view stands in
@@ -1099,6 +1121,14 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // `Plan/shadow-mapping.md` decision 6). A square sampled depth texture: written depth-only by
     // the `shadow` pass, sampled by the scene pass.
     let shadow_map = shadow_map_desc(&chain).map(|desc| graph.transient("shadow_map", desc));
+    // The transparent layer (only when a transparent is drawn under fog, so every other frame's
+    // resource list is exactly the layer-free graph's).
+    let transparent_layer = chain.transparent_depth_scheduled().then(|| {
+        graph.transient(
+            pass::TRANSPARENT_DEPTH,
+            TextureDesc::layer_color(render_w, render_h),
+        )
+    });
     // The ambient-occlusion chain (only when the scene enables it, so an AO-free scene's resource list
     // is exactly the pre-SSAO graph's — the same inversion the shadow map rests on).
     let ao = chain.ssao.then(|| AoTargets {
@@ -1397,6 +1427,15 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         vec![scene],
         scene_depth,
     );
+    if let Some(target) = transparent_layer {
+        graph.add_external_pass_with_depth(
+            pass::TRANSPARENT_DEPTH,
+            pass::TRANSPARENT_DEPTH,
+            vec![],
+            vec![target],
+            scene_depth,
+        );
+    }
     graph.add_external_pass(
         pass::BLOOM_THRESHOLD,
         pass::BLOOM_THRESHOLD,
@@ -1709,6 +1748,47 @@ pub(crate) fn build_ssr_trace_graph(size: FrameSize) -> (RenderGraph, ResourceId
     (graph, ssr.trace)
 }
 
+/// The transparent layer as a minimal graph whose target is an **output** — it survives to readback,
+/// where a transient could be aliased away and has no `COPY_SRC`. The `scene` pass has no reads, as
+/// the recorder's has on a sunless, AO-free frame.
+#[cfg(test)]
+pub(crate) fn build_transparent_depth_graph(size: FrameSize) -> (RenderGraph, ResourceId) {
+    let (render_w, render_h) = size.render;
+    let mut graph = RenderGraph::new();
+    let scene = graph.transient("scene", TextureDesc::hdr_color(render_w, render_h));
+    let scene_depth = graph.transient(
+        "scene_depth",
+        TextureDesc::sampled_depth(render_w, render_h),
+    );
+    let scene_normal = graph.transient("scene_normal", TextureDesc::hdr_color(render_w, render_h));
+    let scene_specular = graph.transient("scene_specular", TextureDesc::color(render_w, render_h));
+    let mut desc = TextureDesc::layer_color(render_w, render_h);
+    desc.usages.push(ludion_render_graph::TextureUsage::CopySrc);
+    let layer = graph.output(pass::TRANSPARENT_DEPTH, desc);
+    graph.add_external_pass_with_depth(
+        pass::SCENE,
+        pass::SCENE,
+        vec![],
+        vec![scene, scene_normal, scene_specular],
+        scene_depth,
+    );
+    graph.add_external_pass_with_depth(
+        pass::TRANSPARENTS,
+        pass::TRANSPARENTS,
+        vec![],
+        vec![scene],
+        scene_depth,
+    );
+    graph.add_external_pass_with_depth(
+        pass::TRANSPARENT_DEPTH,
+        pass::TRANSPARENT_DEPTH,
+        vec![],
+        vec![layer],
+        scene_depth,
+    );
+    (graph, layer)
+}
+
 /// One reflection-probe cube face: the opaque scene lit as an ordinary frame (shadow, GI inject,
 /// scene, reflections, transparents), then `probe_face` writes the linear HDR result with sky
 /// visibility in alpha to the output. `chain` is the derived face scene's, which schedules no AO,
@@ -1792,6 +1872,7 @@ pub(crate) fn build_probe_capture_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ludion_core::math::glam;
 
     /// The extent gate: 1..=8192 px on every output and render axis, and the message names both
     /// extents so a bad `--scale` reads as the product it is.
@@ -1993,6 +2074,9 @@ mod tests {
                 decals: bits & 1 != 0,
                 lit_decals: bits & 1 != 0,
                 decal_receivers: bits & 1 != 0,
+                // Content too: no quality switch removes a transparent or the medium.
+                transparent_cover: bits & 1 != 0,
+                fog: bits & 1 != 0,
                 // A client setting: no quality preset masks it, so it varies with `ui` and survives.
                 aa: if bits & 1 != 0 {
                     AntiAliasing::Smaa
@@ -4732,6 +4816,199 @@ mod tests {
             extents(ssaa(960, 540)),
             "the shaft chain is a fraction of the output extent at any scale",
         );
+    }
+
+    // --- The transparent layer ----------------------------------------------------------------
+
+    fn layer_chain() -> PostChain {
+        PostChain {
+            transparent_cover: true,
+            fog: true,
+            ..PostChain::default()
+        }
+    }
+
+    fn a_sprite() -> crate::scene::SpriteInstance {
+        crate::scene::SpriteInstance {
+            center: glam::Vec3::ZERO,
+            right: glam::Vec3::X,
+            up: glam::Vec3::Y,
+            color: [1.0; 4],
+            texture: None,
+            uv: crate::scene::SpriteInstance::FULL_UV,
+            lit: false,
+            layer: 0,
+            additive: false,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            uv_repeat: crate::scene::SpriteInstance::NO_TILING,
+            uv_offset: [0.0; 2],
+        }
+    }
+
+    fn a_particle() -> crate::scene::ParticleInstance {
+        crate::scene::ParticleInstance {
+            center: glam::Vec3::ZERO,
+            right: glam::Vec3::X,
+            up: glam::Vec3::Y,
+            size: 1.0,
+            color: [1.0; 4],
+            softness: 0.0,
+            additive: false,
+            lit: false,
+        }
+    }
+
+    fn a_text_run() -> crate::scene::TextRun {
+        crate::scene::TextRun {
+            position: glam::Vec3::ZERO,
+            size: 1.0,
+            color: [1.0; 4],
+            text: "A".to_string(),
+            quads: Vec::new(),
+            extent: [1.0, 1.0],
+            font: None,
+        }
+    }
+
+    fn foggy_scene() -> RenderScene {
+        let mut scene = RenderScene::empty((64, 64));
+        scene.post = Some(crate::scene::PostData {
+            fog_density: 0.02,
+            ..crate::scene::PostData::default()
+        });
+        scene
+    }
+
+    /// The chain asks for the layer only for fog **and** a transparent of any of the three kinds, and
+    /// a sprite, a particle or a text run alone each count.
+    #[test]
+    fn for_scene_reads_the_transparent_layer_gate() {
+        let bare = foggy_scene();
+        assert!(PostChain::for_scene(&bare).fog);
+        assert!(!PostChain::for_scene(&bare).transparent_cover);
+        assert!(!PostChain::for_scene(&bare).transparent_depth_scheduled());
+
+        let mut sprite = foggy_scene();
+        sprite.sprites = vec![a_sprite()];
+        let mut particle = foggy_scene();
+        particle.particles = vec![a_particle()];
+        let mut text = foggy_scene();
+        text.texts = vec![a_text_run()];
+        for scene in [&sprite, &particle, &text] {
+            let chain = PostChain::for_scene(scene);
+            assert!(chain.transparent_cover && chain.fog);
+            assert!(chain.transparent_depth_scheduled());
+        }
+
+        let mut dry = RenderScene::empty((64, 64));
+        dry.sprites = vec![a_sprite()];
+        assert!(!PostChain::for_scene(&dry).fog);
+        assert!(!PostChain::for_scene(&dry).transparent_depth_scheduled());
+        dry.post = Some(crate::scene::PostData::default());
+        assert!(
+            !PostChain::for_scene(&dry).fog,
+            "a PostProcess with no density is no medium"
+        );
+    }
+
+    /// A machine's mask never removes content: both flags survive `masked`.
+    #[test]
+    fn masking_keeps_the_transparent_layer_flags() {
+        let masked = layer_chain().masked(&Quality::default(), &QualityParams::FULL);
+        assert!(masked.transparent_cover && masked.fog);
+    }
+
+    /// A debug view stands in for the finished picture, so it drops the layer.
+    #[test]
+    fn a_debug_view_drops_the_transparent_layer() {
+        let viewing = PostChain {
+            probe_view: true,
+            ..layer_chain()
+        };
+        assert!(!viewing.transparent_depth_scheduled());
+        let (graph, _) = build_frame_graph(FrameSize::native(64, 64), viewing);
+        assert!(!pass_names(&graph).contains(&pass::TRANSPARENT_DEPTH));
+        assert!(!resource_names(&graph).contains(&pass::TRANSPARENT_DEPTH));
+    }
+
+    /// Fog without a transparent, or a transparent without fog, schedules neither the pass nor its
+    /// target: the graph is exactly the layer-free one.
+    #[test]
+    fn the_transparent_layer_needs_both_halves() {
+        let baseline = build_frame_graph(FrameSize::native(64, 64), PostChain::default()).0;
+        for chain in [
+            PostChain {
+                fog: true,
+                ..PostChain::default()
+            },
+            PostChain {
+                transparent_cover: true,
+                ..PostChain::default()
+            },
+        ] {
+            let (graph, _) = build_frame_graph(FrameSize::native(64, 64), chain);
+            assert_eq!(pass_names(&graph), pass_names(&baseline));
+            assert_eq!(resource_names(&graph), resource_names(&baseline));
+        }
+    }
+
+    /// With both halves the pass and the `Rg16Float` target exist at the render extent, the pass
+    /// draws after `transparents` over the opaque depth and before `composite`, and `composite`
+    /// reads exactly what it did without the layer.
+    #[test]
+    fn the_transparent_layer_pass_follows_the_transparents() {
+        let size = FrameSize::scaled(64, 64, crate::RenderScale::new(2.0).unwrap());
+        let (without, _) = build_frame_graph(size, PostChain::default());
+        let (graph, _) = build_frame_graph(size, layer_chain());
+        let layer = graph
+            .resources()
+            .iter()
+            .find(|r| r.name == pass::TRANSPARENT_DEPTH)
+            .expect("the target is declared");
+        assert_eq!(layer.desc.format.as_str(), "rg16float");
+        assert_eq!(
+            (layer.desc.extent.width, layer.desc.extent.height),
+            size.render
+        );
+
+        let find = |name: &str| graph.passes().iter().find(|p| p.name == name).unwrap();
+        let pass = find(pass::TRANSPARENT_DEPTH);
+        assert_eq!(pass.color_targets().len(), 1);
+        assert_eq!(pass.reads().len(), 0);
+        assert_eq!(
+            graph.resources()[pass.depth_target().unwrap().index()].name,
+            "scene_depth"
+        );
+
+        let scheduled = schedule(&graph).unwrap();
+        let order = scheduled.order_names();
+        let at = |name: &str| order.iter().position(|&n| n == name).unwrap();
+        assert!(at(pass::TRANSPARENTS) < at(pass::TRANSPARENT_DEPTH));
+        assert!(at(pass::TRANSPARENT_DEPTH) < at(pass::COMPOSITE));
+
+        let composite_reads = |graph: &RenderGraph| {
+            graph
+                .passes()
+                .iter()
+                .find(|p| p.name == pass::COMPOSITE)
+                .unwrap()
+                .reads()
+                .iter()
+                .map(|r| graph.resources()[r.index()].name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(composite_reads(&graph), composite_reads(&without));
+    }
+
+    /// The dump names the pass and its format, which is how an agent sees the layer is scheduled.
+    #[test]
+    fn dump_frame_graph_json_names_the_transparent_layer() {
+        let json = dump_frame_graph_json(FrameSize::native(64, 64), layer_chain()).unwrap();
+        assert!(json.contains("\"transparent_depth\""));
+        assert!(json.contains("rg16float"));
+        let plain = dump_frame_graph_json(FrameSize::native(64, 64), PostChain::default()).unwrap();
+        assert!(!plain.contains("transparent_depth") && !plain.contains("rg16float"));
     }
 
     // --- Depth of field (Plan/post-process-pipeline.md) ------------------------------------

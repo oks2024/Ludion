@@ -24,3 +24,34 @@ fn vs_main(in: VsIn) -> VsOut {
     out.sdf = in.sdf;
     return out;
 }
+
+// The transparent layer's twin of the vertex stage (`snippets/transparent_layer.wgsl`), with the
+// world position the distance is measured at.
+struct DepthOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) sdf: f32,
+    @location(3) world: vec3<f32>,
+};
+
+@vertex
+fn vs_depth(in: VsIn) -> DepthOut {
+    var out: DepthOut;
+    out.clip = camera.view_proj * vec4<f32>(in.position, 1.0);
+    out.uv = in.uv;
+    out.color = in.color;
+    out.sdf = in.sdf;
+    out.world = in.position;
+    return out;
+}
+
+// The glyph coverage `glyph.wgsl`'s `fs_main` computes, kept here so that shared stage stays whole.
+@fragment
+fn fs_depth(in: DepthOut) -> @location(0) vec4<f32> {
+    let a = textureSample(atlas_tex, atlas_sampler, in.uv).a;
+    let w = max(fwidth(a), 1e-4) * 0.7;
+    let sdf_cov = smoothstep(0.5 - w, 0.5 + w, a);
+    let coverage = select(a, sdf_cov, in.sdf > 0.5);
+    return transparent_layer(in.world, in.color.a * coverage);
+}

@@ -3997,6 +3997,15 @@ pub const MESH_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (19, wgpu::VertexFormat::Uint32x4),
 ];
 
+/// `particle.wgsl`'s `vs_depth` `@location` inputs, in location order.
+pub const PARTICLE_VS_DEPTH_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
+    (0, wgpu::VertexFormat::Float32x3),
+    (1, wgpu::VertexFormat::Float32x3),
+    (2, wgpu::VertexFormat::Float32x3),
+    (3, wgpu::VertexFormat::Float32x4),
+    (4, wgpu::VertexFormat::Float32x4),
+];
+
 /// `particle.wgsl`'s `vs_main` `@location` inputs, in location order.
 pub const PARTICLE_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (0, wgpu::VertexFormat::Float32x3),
@@ -4076,6 +4085,14 @@ pub const SPRITE_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (5, wgpu::VertexFormat::Uint32),
     (6, wgpu::VertexFormat::Float32x4),
     (7, wgpu::VertexFormat::Float32x4),
+];
+
+/// `text.wgsl`'s `vs_depth` `@location` inputs, in location order.
+pub const TEXT_VS_DEPTH_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
+    (0, wgpu::VertexFormat::Float32x3),
+    (1, wgpu::VertexFormat::Float32x2),
+    (2, wgpu::VertexFormat::Float32x4),
+    (3, wgpu::VertexFormat::Float32),
 ];
 
 /// `text.wgsl`'s `vs_main` `@location` inputs, in location order.
