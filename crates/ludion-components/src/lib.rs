@@ -3173,9 +3173,15 @@ impl SemanticValidate for Camera {
 }
 
 impl SemanticValidate for Text {
-    /// `color` is an HDR colour (`L1263`).
+    /// `color` is an HDR colour (`L1263`); `size`, the world height of one line, is a strictly
+    /// positive, finite number (`L1118`, pointer `/size`). An absent `size` (default `1.0`) adds
+    /// nothing.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
-        value_color_diagnostics("Text", value, "color")
+        let mut out = value_color_diagnostics("Text", value, "color");
+        if let Some(size) = value.get("size").and_then(as_stored_f32) {
+            require_positive_finite_ui_size(size, "/size", &mut out);
+        }
+        out
     }
 }
 
@@ -4178,20 +4184,21 @@ impl SemanticValidate for UiList {
 }
 
 /// Pushes an `L1118` when `value` is not a strictly positive, finite number (zero, negative, or
-/// non-finite) — shared by `UiRect.size` (checked per axis), `UiText.size` and `UiList.size`.
+/// non-finite) — shared by `UiRect.size` (checked per axis), `UiText.size`, `UiList.size` and
+/// `Text.size`.
 fn require_positive_finite_ui_size(value: f64, pointer: &str, out: &mut Vec<Diagnostic>) {
     if !ludion_core::number::positive_f32(value) {
         out.push(ui_element_non_positive_size(value, pointer));
     }
 }
 
-/// `L1118` — a UI element's size is not strictly positive and finite.
+/// `L1118` — a UI element's or `Text`'s size is not strictly positive and finite.
 fn ui_element_non_positive_size(value: f64, pointer: &str) -> Diagnostic {
     Diagnostic::new(
         code::UI_ELEMENT_NON_POSITIVE_SIZE,
         format!(
-            "UI element size {value} is not valid; a `UiRect` size axis, a `UiText` size, or a \
-             `UiList` size must be a strictly positive, finite number as an f32 (at least ~1.4e-45)"
+            "size {value} is not valid; a `UiRect` size axis, a `UiText` size, a `UiList` size or \
+             a `Text` size must be a strictly positive, finite number as an f32 (at least ~1.4e-45)"
         ),
     )
     .with_path(pointer.to_string())
@@ -7393,6 +7400,19 @@ mod tests {
             UiRect::validate_semantics(&serde_json::json!({ "size": [10.0, 20.0] })).is_empty()
         );
         assert!(UiRect::validate_semantics(&serde_json::json!({})).is_empty());
+    }
+
+    /// `Text.size` is the world height of one line: zero and negative are `L1118` at `/size`.
+    #[test]
+    fn text_size_must_be_positive() {
+        for bad in [0.0, -1.0] {
+            let out = Text::validate_semantics(&serde_json::json!({ "size": bad }));
+            assert_eq!(out.len(), 1, "expected one diagnostic for {bad}");
+            assert_eq!(out[0].code.as_str(), "L1118");
+            assert_eq!(out[0].path.as_deref(), Some("/size"));
+        }
+        assert!(Text::validate_semantics(&serde_json::json!({})).is_empty());
+        assert!(Text::validate_semantics(&serde_json::json!({ "size": 1.0 })).is_empty());
     }
 
     /// A finite `f64` past `f32` range is `inf` in the field it deserializes into, so a validator

@@ -44,6 +44,13 @@
 //! prints it once, and `ludion_stop` then returns 1.
 //!
 //! Only UIKit is named as a surface kind: every other shell uses the Rust API.
+//!
+//! Threads: the forwarders take `&` and may run concurrently from any thread (UIKit's main thread,
+//! the display link). `ludion_stop` consumes the handle, so the host guarantees no call is in
+//! flight or follows it, and the `UIView*` given to `start` must outlive the engine. A Rust panic
+//! inside a forwarder aborts the process (`extern "C"`).
+
+#![deny(clippy::undocumented_unsafe_blocks)]
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::PathBuf;
@@ -94,6 +101,13 @@ pub struct LudionEmbed {
     /// [`ludion_stop`] reports the failure.
     faulted: AtomicBool,
 }
+
+// The host calls the forwarders from several threads through `&`; a non-`Sync` field would break
+// here.
+const _: fn() = || {
+    fn is_sync<T: Sync>() {}
+    is_sync::<LudionEmbed>();
+};
 
 /// One touch control to draw, laid out for C.
 #[repr(C)]
@@ -233,7 +247,9 @@ unsafe fn try_start(
     let params = unsafe { params.as_ref() }.ok_or_else(|| invalid("`params` is null"))?;
     // SAFETY: the caller guarantees the strings are NUL-terminated.
     let content = unsafe { path_arg(params.content_root, "content_root") }?;
+    // SAFETY: as above.
     let save = unsafe { path_arg(params.save_root, "save_root") }?;
+    // SAFETY: as above.
     let quality = unsafe { optional_str_arg(params.quality, "quality") }?;
     let surface = match params.surface_kind {
         LUDION_SURFACE_NONE => None,
@@ -350,6 +366,7 @@ pub unsafe extern "C" fn ludion_pad_button(
     button: u32,
     down: bool,
 ) -> bool {
+    // SAFETY: the caller guarantees the handle is null or a live `start` result.
     let Some(engine) = (unsafe { embedded(handle) }) else {
         return false;
     };
@@ -374,6 +391,7 @@ pub unsafe extern "C" fn ludion_pad_button(
 /// `handle` must be null or a live handle from [`start`] that [`ludion_stop`] has not consumed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ludion_pad_axis(handle: *mut LudionEmbed, axis: u32, value: f32) -> bool {
+    // SAFETY: the caller guarantees the handle is null or a live `start` result.
     let Some(engine) = (unsafe { embedded(handle) }) else {
         return false;
     };
@@ -400,6 +418,7 @@ pub unsafe extern "C" fn ludion_resize(
     safe_width: u32,
     safe_height: u32,
 ) {
+    // SAFETY: the caller guarantees the handle is null or a live `start` result.
     if let Some(engine) = unsafe { embedded(handle) } {
         engine.resize(
             width,
@@ -416,6 +435,7 @@ pub unsafe extern "C" fn ludion_resize(
 /// `handle` must be null or a live handle from [`start`] that [`ludion_stop`] has not consumed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ludion_suspend(handle: *mut LudionEmbed) -> bool {
+    // SAFETY: the caller guarantees the handle is null or a live `start` result.
     let Some(engine) = (unsafe { embedded(handle) }) else {
         return false;
     };
@@ -429,6 +449,7 @@ pub unsafe extern "C" fn ludion_suspend(handle: *mut LudionEmbed) -> bool {
 /// `handle` must be null or a live handle from [`start`] that [`ludion_stop`] has not consumed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ludion_resume(handle: *mut LudionEmbed) -> bool {
+    // SAFETY: the caller guarantees the handle is null or a live `start` result.
     let Some(engine) = (unsafe { embedded(handle) }) else {
         return false;
     };
@@ -489,6 +510,7 @@ pub unsafe extern "C" fn ludion_touch(
     x: f32,
     y: f32,
 ) -> i32 {
+    // SAFETY: the caller guarantees the handle is null or a live `start` result.
     let Some(engine) = (unsafe { embedded(handle) }) else {
         return LUDION_TOUCH_REFUSED;
     };
@@ -589,6 +611,7 @@ pub unsafe extern "C" fn ludion_stop(handle: *mut LudionEmbed) -> i32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::undocumented_unsafe_blocks)]
 mod tests {
     use super::*;
     use crate::embed::test_game::{builder, content_root};

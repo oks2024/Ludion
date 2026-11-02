@@ -80,6 +80,10 @@ impl CharsetRange {
     }
 }
 
+/// The most characters a charset may resolve to. Kerning shapes every ordered pair, so bake time
+/// grows with the square of the charset.
+pub const MAX_CHARSET_CHARS: usize = 4096;
+
 /// The characters a bake covers: named ranges plus loose characters.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct FontCharset {
@@ -87,6 +91,22 @@ pub struct FontCharset {
     pub ranges: Vec<CharsetRange>,
     /// Extra characters, as authored.
     pub chars: String,
+}
+
+impl FontCharset {
+    /// The characters this charset covers: sorted and deduplicated.
+    pub fn resolve(&self) -> Vec<char> {
+        let mut out: Vec<char> = Vec::new();
+        for range in &self.ranges {
+            for &(lo, hi) in range.intervals() {
+                out.extend((lo..=hi).filter_map(char::from_u32));
+            }
+        }
+        out.extend(self.chars.chars());
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
 }
 
 /// A parsed `kind: font-source` document.
@@ -461,6 +481,15 @@ pub(crate) fn validate(doc: &FontSourceDocument) -> Vec<Diagnostic> {
             "the charset resolves to no characters".to_string(),
             "add `ranges:` (e.g. `- ascii`) and/or a non-empty `chars:`",
         ));
+    } else {
+        let count = doc.charset.resolve().len();
+        if count > MAX_CHARSET_CHARS {
+            out.push(diag(
+                "/charset",
+                format!("the charset resolves to {count} characters; the most a bake takes is {MAX_CHARSET_CHARS}"),
+                "bake only the characters the game draws; kerning shapes every ordered pair, so bake time grows with the square of the charset",
+            ));
+        }
     }
     out
 }

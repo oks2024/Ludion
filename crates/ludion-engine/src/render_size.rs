@@ -51,10 +51,10 @@ pub const RENDER_SIZE_ENV: &str = "LUDION_RENDER_SIZE";
 /// A bound rather than a taste: the readback ring holds three staging buffers of `width * height * 4`
 /// bytes plus the frame graph's whole physical cache, so an unbounded extent turns a typo into an
 /// allocation failure several layers below the place that could explain it.
-pub const MAX_WIDTH: u32 = 7680;
+pub const MAX_WIDTH: u32 = ludion_protocol::frame::MAX_FRAME_WIDTH;
 
 /// The tallest extent a host may ask for: 8K's height. See [`MAX_WIDTH`] for why there is a ceiling.
-pub const MAX_HEIGHT: u32 = 4320;
+pub const MAX_HEIGHT: u32 = ludion_protocol::frame::MAX_FRAME_HEIGHT;
 
 /// Resolves a host process's render extent once at startup.
 ///

@@ -163,7 +163,9 @@ pub use expand::{
     ExpandedInstance, ExpandedScene, identical, merge_partial, mixed_root_diagnostic, partial_diff,
 };
 pub use font::{FONT_FORMAT_VERSION, FontAtlas, FontDocument, FontGlyph, FontMode, FontNotdef};
-pub use font_source::{CharsetRange, FONT_SOURCE_FORMAT_VERSION, FontCharset, FontSourceDocument};
+pub use font_source::{
+    CharsetRange, FONT_SOURCE_FORMAT_VERSION, FontCharset, FontSourceDocument, MAX_CHARSET_CHARS,
+};
 pub use fonts::{FONTS_FORMAT_VERSION, FontsDocument};
 pub use generation::{
     GENERATION_DEFAULT_COUNT, GENERATION_FORMAT_VERSION, GENERATION_MAX_COUNT, GenerationDocument,

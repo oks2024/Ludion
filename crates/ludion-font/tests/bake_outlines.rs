@@ -4,7 +4,7 @@
 
 use std::sync::OnceLock;
 
-use ludion_font::bake::{FaceOutlines, read_face, resolve_charset};
+use ludion_font::bake::{FaceOutlines, MAX_GLYPH_SEGMENTS, read_face};
 use ludion_scene::{CharsetRange, FontCharset};
 
 fn face_bytes(name: &str) -> Vec<u8> {
@@ -13,10 +13,11 @@ fn face_bytes(name: &str) -> Vec<u8> {
 }
 
 fn charset() -> Vec<char> {
-    resolve_charset(&FontCharset {
+    FontCharset {
         ranges: vec![CharsetRange::Ascii],
         chars: "\u{0E01}".to_string(),
-    })
+    }
+    .resolve()
 }
 
 fn inter() -> &'static FaceOutlines {
@@ -121,13 +122,49 @@ fn charset_resolves_sorted_and_deduped() {
         ranges: vec![CharsetRange::Ascii],
         chars: String::new(),
     };
-    assert_eq!(resolve_charset(&ascii).len(), 95);
+    assert_eq!(ascii.resolve().len(), 95);
     let merged = FontCharset {
         ranges: vec![CharsetRange::Ascii, CharsetRange::Ascii],
         chars: "zA\u{2026}\u{2026}".to_string(),
     };
-    let chars = resolve_charset(&merged);
+    let chars = merged.resolve();
     assert_eq!(chars.len(), 96);
     assert!(chars.windows(2).all(|w| w[0] < w[1]));
     assert_eq!(chars.last(), Some(&'\u{2026}'));
+}
+
+#[test]
+fn committed_faces_stay_well_under_the_segment_cap() {
+    let inter_chars = FontCharset {
+        ranges: vec![
+            CharsetRange::Ascii,
+            CharsetRange::Latin1,
+            CharsetRange::GeneralPunctuation,
+        ],
+        chars: "×—…‘’“”".to_string(),
+    }
+    .resolve();
+    let ascii = FontCharset {
+        ranges: vec![CharsetRange::Ascii],
+        chars: String::new(),
+    }
+    .resolve();
+    for (name, chars) in [
+        ("Inter-Regular.ttf", inter_chars),
+        ("Silkscreen-Regular.ttf", ascii),
+    ] {
+        let face = read_face(&face_bytes(name), &chars).expect("committed face");
+        let max = face
+            .glyphs
+            .iter()
+            .map(|(_, g)| g)
+            .chain([&face.notdef])
+            .map(|g| g.contours.iter().map(Vec::len).sum::<usize>())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max * 4 <= MAX_GLYPH_SEGMENTS,
+            "{name}: {max} points leaves under 4x headroom"
+        );
+    }
 }

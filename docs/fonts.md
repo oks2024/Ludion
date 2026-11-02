@@ -57,14 +57,15 @@ with no `font` keeps drawing with the embedded 8×8 face, so adding the table mo
 
 ## Rules
 
-- **`size` is the line height** (canvas units for UI, world units for `Text`), whatever the face; width
-  follows the face's proportional advances. A character the face lacks draws the face's `.notdef`
+- **`size` is the line height** (canvas units for UI, world units for `Text`), whatever the face, and must be
+  positive (`L1118`); width follows the face's proportional advances. A character the face lacks draws the face's `.notdef`
   glyph (a box; the embedded 8×8 face draws it blank) — it never crashes. The embedded face covers
   A–Z (lowercase folds to uppercase), 0–9, space and `! " # % ' ( ) * + , - . / : ; < = > ? @ [ \ ] _ ~`.
 - **Line breaks.** `\n`, `\r\n` and a lone `\r` break lines in every text path, a tab lays out as a
   space, and a `UiList` line folds its breaks to spaces.
 - **Charset is baked**: only `ranges` + `chars` get a glyph. Text outside it is `L1256` (a
   `check-scene` warning, for table faces only); add the characters to `charset.chars` and re-bake.
+  A charset holds at most 4096 characters (`L1251`).
 - **sdf vs bitmap.** `sdf` stays smooth at any size. `bitmap` is for pixel faces and is crisp only at
   integer multiples of the source pixel: set `line_height` so one source pixel is a whole number of
   font units (Silkscreen: `em_px: 8`, `line_height: 1250` → 10 source pixels per line → crisp at
@@ -84,8 +85,8 @@ with no `font` keeps drawing with the embedded 8×8 face, so adding the table mo
 
 | Code | Meaning |
 |---|---|
-| `L1251` | `font-source` malformed (`em_px` range, `spread_px` vs mode, bad charset range, non-positive `line_height`) |
-| `L1252` | the `.ttf` cannot be read or baked |
+| `L1251` | `font-source` malformed (`em_px` range, `spread_px` vs mode, bad charset range, non-positive `line_height`, a charset over 4096 characters) |
+| `L1252` | the `.ttf` cannot be read or baked (a glyph flattening past 16384 segments is refused) |
 | `L1253` | `fonts.yaml` malformed |
 | `L1254` | a `font` name is not in the table (a `check-scene` error; runtime reports once per name) |
 | `L1255` | a listed face fails to load, or a reload is refused while recording |

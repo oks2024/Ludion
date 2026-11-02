@@ -14,12 +14,12 @@ mod outline;
 mod pack;
 mod sdf;
 
+pub use outline::MAX_GLYPH_SEGMENTS;
+
 use ludion_assets::Image;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
-use ludion_scene::{
-    FontAtlas, FontCharset, FontDocument, FontGlyph, FontMode, FontNotdef, FontSourceDocument,
-};
+use ludion_scene::{FontAtlas, FontDocument, FontGlyph, FontMode, FontNotdef, FontSourceDocument};
 use skrifa::instance::{LocationRef, Size};
 use skrifa::raw::{FileRef, TableProvider};
 use skrifa::{FontRef, GlyphId, MetadataProvider};
@@ -56,20 +56,6 @@ pub struct FaceOutlines {
     pub missing: Vec<char>,
 }
 
-/// Resolves a charset to its characters: sorted and deduplicated.
-pub fn resolve_charset(charset: &FontCharset) -> Vec<char> {
-    let mut out: Vec<char> = Vec::new();
-    for range in &charset.ranges {
-        for &(lo, hi) in range.intervals() {
-            out.extend((lo..=hi).filter_map(char::from_u32));
-        }
-    }
-    out.extend(charset.chars.chars());
-    out.sort_unstable();
-    out.dedup();
-    out
-}
-
 fn file_diag(message: impl Into<String>) -> Vec<Diagnostic> {
     vec![Diagnostic::new(code::FONT_FILE, message).with_help("pass a single .ttf/.otf face")]
 }
@@ -79,11 +65,12 @@ fn round_i32(v: f32) -> i32 {
 }
 
 /// Reads `bytes` as a single face and extracts metrics, outlines and kerning for `chars`
-/// (sorted, deduplicated — see [`resolve_charset`]).
+/// (sorted, deduplicated — see [`ludion_scene::FontCharset::resolve`]).
 ///
 /// # Errors
 /// `L1252` when the bytes are not a single TrueType/OpenType face, have no usable `cmap`, or hold a
-/// glyph outline that cannot be read. Never panics on malformed input.
+/// glyph outline that cannot be read or that flattens past [`MAX_GLYPH_SEGMENTS`]. Never panics on
+/// malformed input.
 pub fn read_face(bytes: &[u8], chars: &[char]) -> Result<FaceOutlines, Vec<Diagnostic>> {
     let font = match FileRef::new(bytes) {
         Ok(FileRef::Font(font)) => font,
@@ -94,10 +81,14 @@ pub fn read_face(bytes: &[u8], chars: &[char]) -> Result<FaceOutlines, Vec<Diagn
         }
         Err(e) => return Err(file_diag(format!("the file is not a font face: {e}"))),
     };
-    read_font(&font, chars)
+    read_font(&font, chars, MAX_GLYPH_SEGMENTS)
 }
 
-fn read_font(font: &FontRef<'_>, chars: &[char]) -> Result<FaceOutlines, Vec<Diagnostic>> {
+fn read_font(
+    font: &FontRef<'_>,
+    chars: &[char],
+    limit: usize,
+) -> Result<FaceOutlines, Vec<Diagnostic>> {
     let charmap = font.charmap();
     if charmap.mappings().next().is_none() {
         return Err(file_diag("the face has no usable `cmap` table"));
@@ -108,13 +99,31 @@ fn read_font(font: &FontRef<'_>, chars: &[char]) -> Result<FaceOutlines, Vec<Dia
     }
     let glyph_metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
     let outlines = font.outline_glyphs();
-    let read_glyph = |gid: GlyphId| -> Result<GlyphOutline, Vec<Diagnostic>> {
+    let read_glyph = |gid: GlyphId, ch: Option<char>| -> Result<GlyphOutline, Vec<Diagnostic>> {
         let advance = glyph_metrics.advance_width(gid).map_or(0, round_i32);
-        let contours = outline::extract(&outlines, gid).map_err(|e| {
-            file_diag(format!(
+        let contours = outline::extract(&outlines, gid, limit).map_err(|e| match e {
+            outline::ExtractError::Unreadable(e) => file_diag(format!(
                 "glyph {} has an unreadable outline: {e}",
                 gid.to_u32()
-            ))
+            )),
+            outline::ExtractError::TooComplex => {
+                let who = match ch {
+                    Some(c) => format!("{} (U+{:04X} {c:?})", gid.to_u32(), c as u32),
+                    None => format!("{} (.notdef)", gid.to_u32()),
+                };
+                vec![
+                    Diagnostic::new(
+                        code::FONT_FILE,
+                        format!(
+                            "glyph {who} flattens to more than {limit} segments, the most a bake draws"
+                        ),
+                    )
+                    .with_path(if ch.is_some() { "/charset" } else { "/file" })
+                    .with_help(
+                        "remove the character from `charset`, or use a face with simpler outlines",
+                    ),
+                ]
+            }
         })?;
         Ok(GlyphOutline {
             advance,
@@ -128,14 +137,14 @@ fn read_font(font: &FontRef<'_>, chars: &[char]) -> Result<FaceOutlines, Vec<Dia
         .map_err(|e| file_diag(format!("the face has no usable `maxp` table: {e}")))?
         .num_glyphs()
         .into();
-    let notdef = read_glyph(GlyphId::NOTDEF)?;
+    let notdef = read_glyph(GlyphId::NOTDEF, None)?;
     let mut glyphs = Vec::new();
     let mut missing = Vec::new();
     let mut mapped: Vec<(char, GlyphId)> = Vec::new();
     for &ch in chars {
         match charmap.map(ch) {
             Some(gid) if outline::is_real_glyph(gid, glyph_count) => {
-                glyphs.push((ch, read_glyph(gid)?));
+                glyphs.push((ch, read_glyph(gid, Some(ch))?));
                 mapped.push((ch, gid));
             }
             _ => missing.push(ch),
@@ -176,15 +185,15 @@ pub struct FontBake {
 /// every machine.
 ///
 /// # Errors
-/// `L1252` for an unreadable face, `L1251` when a glyph or the atlas would exceed 4096 on a side
-/// or the charset has nothing to draw.
+/// `L1252` for an unreadable face or a glyph past [`MAX_GLYPH_SEGMENTS`], `L1251` when a glyph or the
+/// atlas would exceed 4096 on a side or the charset has nothing to draw.
 pub fn bake(
     source: &FontSourceDocument,
     font_bytes: &[u8],
     generated_from: &str,
     stem: &str,
 ) -> Result<FontBake, Vec<Diagnostic>> {
-    let chars = resolve_charset(&source.charset);
+    let chars = source.charset.resolve();
     let face = read_face(font_bytes, &chars)?;
     bake_outlines(source, &face, generated_from, stem)
 }
@@ -374,7 +383,7 @@ fn bake_outlines<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ludion_scene::CharsetRange;
+    use ludion_scene::{CharsetRange, FontCharset};
 
     fn blank() -> GlyphOutline {
         GlyphOutline {
@@ -382,6 +391,39 @@ mod tests {
             bounds: None,
             contours: Vec::new(),
         }
+    }
+
+    fn inter() -> Vec<u8> {
+        std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/gallery/fonts/Inter-Regular.ttf"
+        ))
+        .expect("a committed test face")
+    }
+
+    #[test]
+    fn a_glyph_past_the_segment_limit_is_an_l1252_naming_it() {
+        let bytes = inter();
+        let font = FontRef::new(&bytes).expect("Inter");
+        let full = read_font(&font, &['@'], MAX_GLYPH_SEGMENTS).expect("under the cap");
+        let points = |g: &GlyphOutline| g.contours.iter().map(Vec::len).sum::<usize>();
+        let limit = points(&full.glyphs[0].1) - 1;
+        assert!(points(&full.notdef) <= limit, "only `@` is over the limit");
+        let errs = read_font(&font, &['@'], limit).expect_err("over the limit");
+        assert_eq!(errs[0].code, code::FONT_FILE);
+        assert_eq!(errs[0].path.as_deref(), Some("/charset"));
+        assert!(errs[0].message.contains("U+0040"));
+        assert!(errs[0].message.contains(&limit.to_string()));
+        assert!(read_font(&font, &['@'], MAX_GLYPH_SEGMENTS).is_ok());
+    }
+
+    #[test]
+    fn a_notdef_past_the_segment_limit_points_at_the_file() {
+        let bytes = inter();
+        let font = FontRef::new(&bytes).expect("Inter");
+        let errs = read_font(&font, &[], 3).expect_err("over the limit");
+        assert_eq!(errs[0].path.as_deref(), Some("/file"));
+        assert!(errs[0].message.contains(".notdef"));
     }
 
     #[test]

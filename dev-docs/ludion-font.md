@@ -81,9 +81,10 @@ pixels); only `ludion-cli` enables it, the engine never parses a font. Failures 
   the widest rect and `isqrt(area)`, left-to-right shelves (the shared `ludion_assets::shelf::place`);
   over 4096 a side is `L1251`. 4096 is a deliberate, stricter bound than the loader's
   `MAX_PNG_SIDE`, asserted `<=` it at compile time.
-- Every glyph's texel box is sized and packed before any pixel is drawn, so raster work is bounded
-  by the 4096² atlas: a box over 4096 a side (or unrepresentable) is `L1251` at `/em_px`, and a
-  charset with nothing to ink is `L1251` at `/charset`.
+- Every glyph's texel box is sized and packed before any pixel is drawn. Texel work is bounded by
+  the 4096² atlas (a box over 4096 a side, or unrepresentable, is `L1251` at `/em_px`; a charset
+  with nothing to ink is `L1251` at `/charset`), per-glyph work by `MAX_GLYPH_SEGMENTS` flattened
+  points (`L1252`), and kerning by `MAX_CHARSET_CHARS` characters (`L1251` at `/charset`).
 - SDF distance counts only boundary segments: an edge inside another same-wound contour (overlapping
   composites like `Ç`, `Ø`, `Ð`) has distance 0 but is not the outline and would draw a seam. The
   sign is still the full nonzero winding.

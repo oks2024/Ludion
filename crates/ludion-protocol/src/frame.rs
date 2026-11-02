@@ -35,6 +35,13 @@ pub const FRAME_MAGIC: [u8; 4] = *b"LFR1";
 /// The fixed size of a [`FrameHeader`] on the wire, in bytes.
 pub const FRAME_HEADER_LEN: usize = 36;
 
+/// The widest frame a host renders: 8K's width. The decoder refuses a header past it before any
+/// allocation.
+pub const MAX_FRAME_WIDTH: u32 = 7680;
+
+/// The tallest frame a host renders: 8K's height.
+pub const MAX_FRAME_HEIGHT: u32 = 4320;
+
 /// Flags-byte bit 0: the frame's global illumination was *held* rather than rebuilt for the world it
 /// depicts (see [`FrameHeader::gi_stale`]).
 ///

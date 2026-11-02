@@ -1090,7 +1090,7 @@ fn run_font_source(mut reporter: Reporter, source: &str) -> ExitCode {
         Err(diagnostics) => return reporter.fail(diagnostics),
     };
     let name = doc.name.as_deref().filter(|name| !name.is_empty());
-    let chars = ludion_font::bake::resolve_charset(&doc.charset).len();
+    let chars = doc.charset.resolve().len();
     let fields = serde_json::json!({
         "name": name,
         "mode": doc.mode.keyword(),

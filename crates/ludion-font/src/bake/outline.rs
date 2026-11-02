@@ -10,13 +10,47 @@ const QUAD_STEPS: u32 = 8;
 /// Segments per cubic curve.
 const CUBIC_STEPS: u32 = 12;
 
-#[derive(Default)]
+/// The most flattened points one glyph may draw. SDF cost is texels × segments plus segments², so
+/// an unbounded outline would hang the bake.
+pub const MAX_GLYPH_SEGMENTS: usize = 16_384;
+
+/// Why [`extract`] gave no contours.
+pub(super) enum ExtractError {
+    /// The outline could not be read; carries the reader's message.
+    Unreadable(String),
+    /// The flattened outline passed the point limit.
+    TooComplex,
+}
+
 struct Flattener {
     contours: Vec<Vec<[f32; 2]>>,
     current: Vec<[f32; 2]>,
+    limit: usize,
+    points: usize,
+    over: bool,
 }
 
 impl Flattener {
+    fn new(limit: usize) -> Self {
+        Flattener {
+            contours: Vec::new(),
+            current: Vec::new(),
+            limit,
+            points: 0,
+            over: false,
+        }
+    }
+
+    /// Counts the point; at the limit it stops growing, since a pen cannot abort the draw.
+    fn push(&mut self, p: [f32; 2]) {
+        if self.points >= self.limit {
+            self.over = true;
+            return;
+        }
+        self.points += 1;
+        self.current.push(p);
+    }
+
     fn last(&self) -> [f32; 2] {
         self.current.last().copied().unwrap_or([0.0, 0.0])
     }
@@ -35,11 +69,11 @@ impl Flattener {
 impl OutlinePen for Flattener {
     fn move_to(&mut self, x: f32, y: f32) {
         self.finish();
-        self.current.push([x, y]);
+        self.push([x, y]);
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        self.current.push([x, y]);
+        self.push([x, y]);
     }
 
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
@@ -48,10 +82,9 @@ impl OutlinePen for Flattener {
             let t = i as f32 / QUAD_STEPS as f32;
             let u = 1.0 - t;
             let (a, b, c) = (u * u, 2.0 * u * t, t * t);
-            self.current
-                .push([a * x0 + b * cx + c * x, a * y0 + b * cy + c * y]);
+            self.push([a * x0 + b * cx + c * x, a * y0 + b * cy + c * y]);
         }
-        self.current.push([x, y]);
+        self.push([x, y]);
     }
 
     fn curve_to(&mut self, c0x: f32, c0y: f32, c1x: f32, c1y: f32, x: f32, y: f32) {
@@ -60,12 +93,12 @@ impl OutlinePen for Flattener {
             let t = i as f32 / CUBIC_STEPS as f32;
             let u = 1.0 - t;
             let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-            self.current.push([
+            self.push([
                 a * x0 + b * c0x + c * c1x + d * x,
                 a * y0 + b * c0y + c * c1y + d * y,
             ]);
         }
-        self.current.push([x, y]);
+        self.push([x, y]);
     }
 
     fn close(&mut self) {
@@ -74,21 +107,25 @@ impl OutlinePen for Flattener {
 }
 
 /// Draws glyph `gid` unscaled and unhinted into closed polylines in font units. A glyph with no
-/// outline (a space) yields no contours.
+/// outline (a space) yields no contours; one past `limit` flattened points is `TooComplex`.
 pub(super) fn extract(
     outlines: &OutlineGlyphCollection<'_>,
     gid: GlyphId,
-) -> Result<Vec<Vec<[f32; 2]>>, String> {
+    limit: usize,
+) -> Result<Vec<Vec<[f32; 2]>>, ExtractError> {
     let Some(glyph) = outlines.get(gid) else {
         return Ok(Vec::new());
     };
-    let mut pen = Flattener::default();
+    let mut pen = Flattener::new(limit);
     glyph
         .draw(
             DrawSettings::unhinted(Size::unscaled(), LocationRef::default()),
             &mut pen,
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ExtractError::Unreadable(e.to_string()))?;
+    if pen.over {
+        return Err(ExtractError::TooComplex);
+    }
     pen.finish();
     Ok(pen.contours)
 }

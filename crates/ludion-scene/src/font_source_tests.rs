@@ -60,6 +60,24 @@ fn emit_sorts_and_dedupes_ranges() {
 }
 
 #[test]
+fn charset_is_capped_at_max_charset_chars() {
+    let with = |n: usize| {
+        let chars: String = (0x4E00u32..).filter_map(char::from_u32).take(n).collect();
+        BITMAP.replace(
+            "  ranges:\n    - ascii\n",
+            &format!("  chars: \"{chars}\"\n"),
+        )
+    };
+    let at_cap = parse(&with(MAX_CHARSET_CHARS)).expect("parses");
+    assert!(validate(&at_cap).is_empty());
+    let over = parse(&with(MAX_CHARSET_CHARS + 1)).expect("parses");
+    let diagnostics = validate(&over);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].path.as_deref(), Some("/charset"));
+    assert!(diagnostics[0].message.contains("4097"));
+}
+
+#[test]
 fn spread_is_required_for_sdf() {
     let d = first(&SDF.replace("spread_px: 6\n", ""));
     assert_eq!(d.path.as_deref(), Some("/spread_px"));

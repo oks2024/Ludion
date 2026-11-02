@@ -503,12 +503,12 @@ pub mod code {
     /// diagnostics.)
     pub const MODEL_SHEET_INPUT: DiagnosticCode = DiagnosticCode::new("L1117");
 
-    /// `L1118` — a `UiRect`, `UiText`, or `UiList` component's size is not a strictly positive,
-    /// finite number — it is zero, negative, or non-finite. For `UiRect` this is either axis of
-    /// `size`; for `UiText` and `UiList` it is `size` (the glyph cell height). Raised by the
-    /// components' semantic validators (invoked by scene validation and `component.set`); the JSON
-    /// Pointer names the offending field (`/size/0`, `/size/1` for `UiRect`; `/size` for `UiText`
-    /// and `UiList`).
+    /// `L1118` — a `UiRect`, `UiText`, `UiList` or `Text` component's size is not a strictly
+    /// positive, finite number — it is zero, negative, or non-finite. For `UiRect` this is either
+    /// axis of `size`; for `UiText` and `UiList` it is `size` (the glyph cell height); for `Text`
+    /// it is `size` (the world height of one line). Raised by the components' semantic validators
+    /// (invoked by scene validation and `component.set`); the JSON Pointer names the offending
+    /// field (`/size/0`, `/size/1` for `UiRect`; `/size` for the others).
     pub const UI_ELEMENT_NON_POSITIVE_SIZE: DiagnosticCode = DiagnosticCode::new("L1118");
 
     /// `L1119` — a game data-doc's envelope is malformed: the `format` key is missing or is not
@@ -1000,8 +1000,9 @@ pub mod code {
     pub const MESH_EDIT_PICK_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L1175");
 
     /// `L1176` — an edit cannot apply to the source it names: the source mesh has no `uvs`, a target
-    /// map cannot be created for want of a `size`, or the derived directory holds files the derive
-    /// did not write. Raised by the mesh-edit derive.
+    /// map cannot be created for want of a `size`, the derived directory holds files the derive
+    /// did not write, or the source's UVs or map extent cannot be rasterised. Raised by the
+    /// mesh-edit derive.
     pub const MESH_EDIT_INAPPLICABLE: DiagnosticCode = DiagnosticCode::new("L1176");
 
     /// `L1177` — an op painted nothing: its region covers no texel of the source's surface. Names
@@ -1765,7 +1766,8 @@ pub mod code {
     pub const PROTOCOL_UNSUPPORTED_VERSION: DiagnosticCode = DiagnosticCode::new("L3003");
 
     /// `L3004` — a binary frame-streaming message is malformed: too short, wrong magic, an unknown
-    /// pixel format, or a payload length that disagrees with the bytes. Raised by `ludion-protocol`.
+    /// pixel format, a payload length that disagrees with the bytes, or dimensions past the
+    /// largest extent a host renders. Raised by `ludion-protocol`.
     pub const PROTOCOL_MALFORMED_FRAME: DiagnosticCode = DiagnosticCode::new("L3004");
 
     /// `L3005` — an `input.inject` command carried an `event` value that does not deserialize into a
@@ -4653,10 +4655,10 @@ A `kind: font-source` document — the authored input of a font bake — does no
 It covers: a missing or wrong-typed key (`file`, `mode`, `em_px` and `charset` are required), an
 unrecognized key with a nearest-match suggestion, an `em_px` outside `1..=256`, a `spread_px` on a
 bitmap face or missing on an SDF one (or larger than `em_px`), a `charset` range keyword that is not
-`ascii`, `latin-1` or `general-punctuation`, a `charset` that resolves to no character, a
-`line_height` outside `1..=65535` font units or one that leaves the ascender at or below zero
-(raised by the bake), an atlas over 4096 on a side, and a `name` that is not a plain file stem (it
-names the baked `<name>.font.yaml` and `<name>.png`, so it holds no separator).
+`ascii`, `latin-1` or `general-punctuation`, a `charset` that resolves to no character or to more
+than 4096 (kerning shapes every ordered pair), a `line_height` outside `1..=65535` font units or one
+that leaves the ascender at or below zero (raised by the bake), an atlas over 4096 on a side, and a
+`name` that is not a plain file stem (it names the baked `<name>.font.yaml` and `<name>.png`, so it holds no separator).
 
 The JSON Pointer names the exact position: `/em_px`, `/charset/ranges/1`.
 
@@ -4670,10 +4672,12 @@ Fix: follow the pointer and the help line.",
 The font file named by a `kind: font-source` document could not be read as a face.
 
 It is raised when the file is missing or unreadable, is not a TrueType/OpenType face, is a font
-collection (`.ttc`), is truncated or corrupt, or has no usable `cmap` table to map characters to
-glyphs.
+collection (`.ttc`), is truncated or corrupt, has no usable `cmap` table to map characters to
+glyphs, or has a glyph that flattens past the segment limit (16384).
 
-Fix: point `file` at a single `.ttf` or `.otf` face. Split a collection into its faces first.",
+Fix: point `file` at a single `.ttf` or `.otf` face. Split a collection into its faces first. For a
+glyph past the segment limit, drop the character from `charset` or use a face with simpler
+outlines.",
     },
     CodeEntry {
         code: code::FONTS_TABLE_STRUCTURE,
@@ -4921,21 +4925,21 @@ format's own diagnostics instead, unchanged.",
     CodeEntry {
         code: code::UI_ELEMENT_NON_POSITIVE_SIZE,
         severity: Severity::Error,
-        title: "UI element size is not positive and finite",
+        title: "text or UI element size is not positive and finite",
         explanation: "\
-A `UiRect`, `UiText`, or `UiList` component's size is not a strictly positive, finite number.
+A `UiRect`, `UiText`, `UiList` or `Text` component's size is not a strictly positive, finite number.
 
 `UiRect.size` is a `[width, height]` pair in canvas units; `UiText.size` and `UiList.size` are the
-glyph cell height in canvas units. Every one of those numbers must be strictly greater than zero and
-finite. A zero, negative, or non-finite size has no meaningful extent — it would collapse the element
+glyph cell height in canvas units; `Text.size` is the world height of one line. Every one of those
+numbers must be strictly greater than zero and finite. A zero, negative, or non-finite size has no meaningful extent — it would collapse the element
 to nothing, or feed a NaN/infinity into the anchor-resolution math. This invariant lives in the
 component's semantic validator rather than its schema, the same split the `Collider` validator
 (`L1116`) uses.
 
 The JSON Pointer names the offending value: `/size/0` or `/size/1` for a `UiRect` axis, `/size` for a
-`UiText` or a `UiList`. Fix: give the element a strictly positive, finite size. (`offset`, `order`,
-an empty `UiText.text` and an empty `UiList.items` are all legal and unvalidated — only the size
-axes are checked.)",
+`UiText`, a `UiList` or a `Text`. Fix: give the element a strictly positive, finite size.
+(`offset`, `order`, an empty `UiText.text` and an empty `UiList.items` are all legal and
+unvalidated — only the size axes are checked.)",
     },
     CodeEntry {
         code: code::DOC_ENVELOPE_INVALID,
@@ -5839,7 +5843,13 @@ This code covers:
   - a derived directory holding files the derive did not write. The derive owns every byte under
     `out`, so a stray file there is either a hand edit of generated content or the wrong directory;
   - a derived directory holding the tree of another edit (its `generated_from:` names a different
-    document). One edit owns one `out`; two sharing it would overwrite each other's maps.
+    document). One edit owns one `out`; two sharing it would overwrite each other's maps;
+  - a source whose triangles overlap so heavily in UV space that rasterising or bridging its seams
+    would exceed the derive's work ceiling (`MAX_RASTER_WORK`). Re-unwrap the source so its islands
+    do not stack, or lower the map `size`;
+  - a UV outside the `[0, 1]` square;
+  - a map extent of 0, or above `MAX_EXTENT` (4096) texels a side;
+  - position, UV and index lists that disagree in length, or an index past the vertices.
 
 The message names the source, the map, and the exact path when a file is the problem.
 
@@ -8603,7 +8613,7 @@ header — the magic `LFR1`, a format byte, the subscription id, the frame index
 payload length — followed by exactly that many encoded pixel bytes. This diagnostic means the bytes
 are shorter than a header, do not begin with the magic, name a pixel format the reader does not know
 (the valid formats are QOI, LZ4_RGBA and RAW_RGBA), or carry a payload length that disagrees with
-the bytes that follow.
+the bytes that follow, or declare a width or height past the largest extent a host renders.
 
 Fix: this indicates a framing bug or a corrupted/misrouted message, not user input — the sender and
 receiver disagree on the frame layout. Ensure both use this protocol version's frame encoding.",

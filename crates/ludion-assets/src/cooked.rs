@@ -393,7 +393,9 @@ pub fn read_ktx2(
             bytes.get(offset as usize..(offset as usize).checked_add(length as usize)?)
         })
         .and_then(srgb_mean_entry)
-        .ok_or_else(|| Ktx2Error::Parse("no base-colour mean entry".to_string()))?;
+        .ok_or_else(|| {
+            Ktx2Error::Parse("no valid base-colour mean entry (four values in 0..=1)".to_string())
+        })?;
     let mut image = CompressedImage {
         format: target.format(),
         srgb: color_space == ColorSpace::Srgb,
@@ -643,7 +645,8 @@ pub fn read_probe_cube(bytes: &[u8], face: u32, level_count: u32) -> Result<Prob
     })
 }
 
-/// The mean value of the key/value block `kvd`, if its first entry is [`SRGB_MEAN_KEY`]'s.
+/// The mean value of the key/value block `kvd`, if its first entry is [`SRGB_MEAN_KEY`]'s and all
+/// four components are in `0..=1` (a NaN or out-of-range mean is refused).
 fn srgb_mean_entry(kvd: &[u8]) -> Option<[f32; 4]> {
     let length = u32::from_le_bytes(kvd.get(..4)?.try_into().ok()?) as usize;
     let entry = kvd.get(4..4usize.checked_add(length)?)?;
@@ -651,9 +654,10 @@ fn srgb_mean_entry(kvd: &[u8]) -> Option<[f32; 4]> {
     if value.len() != 16 {
         return None;
     }
-    Some(std::array::from_fn(|i| {
+    let mean: [f32; 4] = std::array::from_fn(|i| {
         f32::from_le_bytes(value[i * 4..i * 4 + 4].try_into().expect("4 bytes"))
-    }))
+    });
+    mean.iter().all(|c| (0.0..=1.0).contains(c)).then_some(mean)
 }
 
 /// The irradiance value of the key/value block `kvd`, if its first entry is the probe's.
@@ -673,6 +677,29 @@ fn probe_irradiance(kvd: &[u8]) -> Option<[[f32; 3]; 6]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mean_block(mean: [f32; 4]) -> Vec<u8> {
+        let mut entry = SRGB_MEAN_KEY.to_vec();
+        for c in mean {
+            entry.extend_from_slice(&c.to_le_bytes());
+        }
+        let mut block = u32::try_from(entry.len())
+            .expect("small")
+            .to_le_bytes()
+            .to_vec();
+        block.extend(entry);
+        block
+    }
+
+    #[test]
+    fn a_mean_outside_zero_to_one_is_refused_and_white_passes() {
+        for bad in [f32::NAN, f32::INFINITY, 1.5, -0.1] {
+            assert_eq!(srgb_mean_entry(&mean_block([0.5, 0.5, 0.5, bad])), None);
+        }
+        assert_eq!(srgb_mean_entry(&mean_block([1.0; 4])), Some([1.0; 4]));
+        let white = crate::srgb_mean(&[255; 4]);
+        assert_eq!(srgb_mean_entry(&mean_block(white)), Some(white));
+    }
 
     const BASE: CookSettings = CookSettings {
         target: CookTarget::Desktop,

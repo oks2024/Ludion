@@ -13,7 +13,7 @@
 use ludion_client::ReceivedFrame;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
-use ludion_protocol::frame::FrameFormat;
+use ludion_protocol::frame::{FrameFormat, MAX_FRAME_HEIGHT, MAX_FRAME_WIDTH};
 
 /// A decoded frame ready to upload: its pixel dimensions and packed RGBA8 bytes (`width * height * 4`,
 /// row-major, top row first).
@@ -30,11 +30,21 @@ pub struct DecodedFrame {
 /// Decodes a received frame's payload into RGBA8.
 ///
 /// # Errors
-/// `L3004` if the payload the header's format names is malformed: a QOI stream the `qoi` decoder
-/// rejects, an LZ4 block that fails to decompress or decompresses to a length other than
+/// `L3004` if the header declares a width or height past [`MAX_FRAME_WIDTH`] × [`MAX_FRAME_HEIGHT`]
+/// (refused before anything is allocated), or if the payload the header's format names is
+/// malformed: a QOI stream the `qoi` decoder rejects, an LZ4 block that fails to decompress or decompresses to a length other than
 /// `width * height * 4`, or a raw payload whose length is not exactly that. The code matches the one
 /// `ludion-client` already uses for malformed/unknown frame content.
 pub(crate) fn decode_frame(frame: ReceivedFrame) -> Result<DecodedFrame, Diagnostic> {
+    let (width, height) = (frame.header.width, frame.header.height);
+    if width > MAX_FRAME_WIDTH || height > MAX_FRAME_HEIGHT {
+        return Err(Diagnostic::new(
+            code::PROTOCOL_MALFORMED_FRAME,
+            format!(
+                "the frame header declares {width}x{height}, past the largest extent a host renders ({MAX_FRAME_WIDTH}x{MAX_FRAME_HEIGHT})"
+            ),
+        ));
+    }
     match frame.header.format {
         FrameFormat::Qoi => decode_qoi(&frame.payload),
         FrameFormat::Lz4Rgba => decode_lz4(&frame.payload, frame.header.width, frame.header.height),
@@ -142,6 +152,24 @@ mod tests {
             },
             payload,
         }
+    }
+
+    #[test]
+    fn dimensions_past_the_frame_ceiling_are_refused_before_allocating() {
+        for (w, h) in [
+            (65_535, 65_535),
+            (u32::MAX, u32::MAX),
+            (MAX_FRAME_WIDTH + 1, 1),
+        ] {
+            for format in [FrameFormat::Lz4Rgba, FrameFormat::RawRgba] {
+                let err = decode_frame(received(format, vec![0; 8], w, h)).expect_err("too large");
+                assert_eq!(err.code, code::PROTOCOL_MALFORMED_FRAME);
+                assert!(err.message.contains(&format!("{w}x{h}")));
+            }
+        }
+        let at_ceiling = received(FrameFormat::RawRgba, vec![0; 8], MAX_FRAME_WIDTH, 1);
+        let err = decode_frame(at_ceiling).expect_err("payload is short");
+        assert!(err.message.contains("require"), "the ceiling itself passes");
     }
 
     #[test]
