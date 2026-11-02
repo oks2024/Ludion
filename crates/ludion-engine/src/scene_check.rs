@@ -421,6 +421,51 @@ pub fn scene_camera_rig_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// Every `L1333`/`L1334` a checked scene's camera offsets report: a `CameraOffset` on a sim entity
+/// (never applied) and a second one on presentation entities (only the first is applied; the pointer
+/// is at the second, the message names both). The field rules (`L1332`) are the component's own
+/// validator.
+pub fn scene_camera_offset_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut first: Option<usize> = None;
+    for (index, entity) in scene.entities.iter().enumerate() {
+        if !entity
+            .components
+            .iter()
+            .any(|(name, _)| name == "CameraOffset")
+        {
+            continue;
+        }
+        let at = format!("/entities/{index}/components/CameraOffset");
+        if !entity.presentation {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::CAMERA_OFFSET_ON_SIM_ENTITY,
+                    "this `CameraOffset` is on a sim entity, so it is hashed and never applied",
+                )
+                .with_path(at)
+                .with_help("mark the entity `presentation: true`"),
+            );
+            continue;
+        }
+        match first {
+            None => first = Some(index),
+            Some(earlier) => diagnostics.push(
+                Diagnostic::new(
+                    code::CAMERA_OFFSET_DUPLICATE,
+                    format!(
+                        "entities {earlier} and {index} both carry a `CameraOffset`; only the \
+                         first is applied"
+                    ),
+                )
+                .with_path(at)
+                .with_help("keep one offset entity"),
+            ),
+        }
+    }
+    diagnostics
+}
+
 /// `L1313` (a warning) for each `DirectionalLight` that sets `cascades` beside a `shadow_extent`
 /// other than the default: a cascaded sun fits its frustums to the camera, so the extent is unused.
 pub fn scene_sun_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
@@ -832,6 +877,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_physics_diagnostics(scene));
     diagnostics.extend(scene_motor_diagnostics(scene));
     diagnostics.extend(scene_camera_rig_diagnostics(scene));
+    diagnostics.extend(scene_camera_offset_diagnostics(scene));
     diagnostics.extend(scene_sun_diagnostics(scene));
     diagnostics.extend(scene_local_light_diagnostics(scene));
     diagnostics.extend(scene_lens_and_sun_disc_diagnostics(scene));
@@ -1457,6 +1503,62 @@ entities:
             found[0].path.as_deref(),
             Some("/entities/0/components/Parent")
         );
+    }
+
+    #[test]
+    fn a_camera_offset_on_a_presentation_entity_is_clean() {
+        let scene = rig_scene(
+            "  - name: intro
+    presentation: true
+    components:
+      CameraOffset:
+        translation:
+          - 0.0
+          - 0.0
+          - 4.0
+",
+        );
+        assert!(scene_camera_offset_diagnostics(&scene).is_empty());
+    }
+
+    #[test]
+    fn a_camera_offset_on_a_sim_entity_is_l1333() {
+        let scene = rig_scene(
+            "  - name: hero
+    components:
+      CameraOffset: {}
+",
+        );
+        let found = scene_camera_offset_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::CAMERA_OFFSET_ON_SIM_ENTITY);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/CameraOffset")
+        );
+    }
+
+    #[test]
+    fn a_second_camera_offset_is_l1334_naming_both_entities() {
+        let scene = rig_scene(
+            "  - name: a
+    presentation: true
+    components:
+      CameraOffset: {}
+  - name: b
+    presentation: true
+    components:
+      CameraOffset: {}
+",
+        );
+        let found = scene_camera_offset_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::CAMERA_OFFSET_DUPLICATE);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/1/components/CameraOffset")
+        );
+        assert!(found[0].message.contains("0 and 1"), "{}", found[0].message);
     }
 
     #[test]

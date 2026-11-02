@@ -8,8 +8,8 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::{SimTime, TickRate};
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
-    Engine, Mesh, Name, NoInterpolate, QualityParams, Transform, Visibility, advance_volleys,
-    extract_at, play_patterns, teleport_character,
+    CameraOffset, Engine, Mesh, Name, NoInterpolate, QualityParams, Transform, Visibility,
+    advance_volleys, extract_at, play_patterns, teleport_character,
 };
 use ludion_protocol::{Command, ResponseBody};
 use ludion_renderer::{BlendData, RenderScene, blend};
@@ -469,4 +469,260 @@ fn a_bullet_blends_to_the_midpoint_of_its_two_ticks() {
             next.0.sprites[j as usize].center
         );
     }
+}
+
+// ---- the presentation camera offset ----
+
+const OFFSET_SCENE: &str = "format: 1
+seed: 3
+entities:
+  - name: cam
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera: {}
+  - name: box
+    components:
+      Transform: {}
+      Mesh:
+        shape: cube
+";
+
+type PresentationSystems<'a> = &'a [(&'static str, fn(&mut World, &SystemCtx))];
+
+/// The camera's z and fov delta a tick sets, so every tick's composed pose differs.
+fn offset_for(frame: u64) -> CameraOffset {
+    CameraOffset {
+        translation: [0.0, 0.0, 2.0 * frame as f32],
+        fov_delta: -(frame as f32),
+        ..CameraOffset::default()
+    }
+}
+
+fn drive(world: &mut World, ctx: &SystemCtx) {
+    let existing = world.presentation_entities().next();
+    let id = existing.unwrap_or_else(|| world.spawn_presentation());
+    world.insert(id, offset_for(ctx.frame.as_u64())).unwrap();
+}
+
+/// Drives the offset until frame 2, then despawns it.
+fn drive_then_despawn(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() >= 2 {
+        let gone: Vec<EntityId> = world.presentation_entities().collect();
+        for id in gone {
+            world.despawn(id).unwrap();
+        }
+    } else {
+        drive(world, ctx);
+    }
+}
+
+/// Drives the offset, and on frame 1 marks the offset entity `NoInterpolate`.
+fn drive_and_mark_offset(world: &mut World, ctx: &SystemCtx) {
+    drive(world, ctx);
+    if ctx.frame.as_u64() == 1 {
+        let id = world.presentation_entities().next().unwrap();
+        world.insert(id, NoInterpolate).unwrap();
+    }
+}
+
+/// Marks the camera `NoInterpolate` on frame 1 (the cut a `snap_rig` makes).
+fn cut_camera(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == 1 {
+        let cam = named(world, "cam");
+        world.insert(cam, NoInterpolate).unwrap();
+    }
+}
+
+fn offset_engine(scene: &str, systems: Systems, presentation: PresentationSystems) -> Engine {
+    let mut builder = Engine::builder();
+    for &(name, system) in systems {
+        builder = builder.system(name, system);
+    }
+    for &(name, system) in presentation {
+        builder = builder.presentation_system(name, system);
+    }
+    let mut engine = builder.build().expect("the game builds");
+    engine.load_inline_scene(scene).expect("the scene loads");
+    engine
+}
+
+fn eye(scene: &RenderScene) -> [f32; 3] {
+    scene.camera.position.to_array()
+}
+
+fn y_scale(scene: &RenderScene) -> f32 {
+    scene.camera.projection.y_axis.y
+}
+
+/// A changing offset blends to the midpoint of the two composed poses and projections, and
+/// `alpha 1` is exactly `next`.
+#[test]
+fn a_changing_offset_blends_between_its_two_composed_cameras() {
+    let mut engine = offset_engine(OFFSET_SCENE, &[], &[("drive", drive)]);
+    let prev = tick(&mut engine);
+    let next = tick(&mut engine);
+    let mid = blend(&prev.0, &prev.1, &next.0, &next.1, 0.5);
+    assert!(eye(&next.0)[2] > eye(&prev.0)[2], "the offset pulled back");
+    let expected = (eye(&prev.0)[2] + eye(&next.0)[2]) / 2.0;
+    assert!((eye(&mid)[2] - expected).abs() < 1e-4, "{:?}", eye(&mid));
+    let expected_fov = {
+        let fov = |scene: &RenderScene| 2.0 * ludion_core::math::atan(1.0 / y_scale(scene));
+        (fov(&prev.0) + fov(&next.0)) / 2.0
+    };
+    assert!((y_scale(&mid) - 1.0 / ludion_core::math::tan(expected_fov / 2.0)).abs() < 1e-4);
+    assert_eq!(blend(&prev.0, &prev.1, &next.0, &next.1, 1.0), next.0);
+    let model = next.1.camera.expect("the camera blends").model;
+    let view = next.0.camera.view;
+    assert!(
+        (ludion_core::math::mat4_inverse(model) - view)
+            .to_cols_array()
+            .iter()
+            .all(|v| v.abs() < 1e-4),
+        "the blend camera inverts the drawn view"
+    );
+}
+
+/// An offset that is gone on the next tick slides over that tick, and ends on the rig.
+#[test]
+fn an_offset_despawned_slides_to_the_rig() {
+    let mut engine = offset_engine(OFFSET_SCENE, &[], &[("drive", drive_then_despawn)]);
+    let mut ticks = Vec::new();
+    for _ in 0..4 {
+        ticks.push(tick(&mut engine));
+    }
+    let (with, without) = (&ticks[1], &ticks[2]);
+    assert!(eye(&with.0)[2] > 10.5, "the offset was in force");
+    assert!((eye(&without.0)[2] - 10.0).abs() < 1e-5, "and is gone");
+    let mid = blend(&with.0, &with.1, &without.0, &without.1, 0.5);
+    let expected = (eye(&with.0)[2] + 10.0) / 2.0;
+    assert!((eye(&mid)[2] - expected).abs() < 1e-4, "{:?}", eye(&mid));
+    assert!(without.1.snaps.is_empty());
+}
+
+/// A cut camera with an offset on: `blend` takes `next`, whose camera still holds the offset.
+#[test]
+fn a_cut_camera_keeps_the_offset() {
+    let mut engine = offset_engine(OFFSET_SCENE, &[("cut", cut_camera)], &[("drive", drive)]);
+    let mut cut = None;
+    let mut previous = tick(&mut engine);
+    for _ in 0..3 {
+        let next = tick(&mut engine);
+        let key = next.1.camera.as_ref().map(|camera| camera.key);
+        if key.is_some_and(|key| next.1.snaps.contains(&key)) {
+            cut = Some((previous.clone(), next.clone()));
+        }
+        previous = next;
+    }
+    let (prev, next) = cut.expect("one tick cut the camera");
+    assert_eq!(blend(&prev.0, &prev.1, &next.0, &next.1, 0.5), next.0);
+    assert!(eye(&next.0)[2] > 10.0, "the offset is in the cut camera");
+}
+
+/// `NoInterpolate` on the offset entity cuts the camera for that tick only, and the marker is gone
+/// the tick after.
+#[test]
+fn a_marked_offset_entity_cuts_the_camera_for_one_tick() {
+    let mut engine = offset_engine(OFFSET_SCENE, &[], &[("drive", drive_and_mark_offset)]);
+    let mut cuts = Vec::new();
+    let mut previous = tick(&mut engine);
+    for _ in 0..4 {
+        let next = tick(&mut engine);
+        let key = next.1.camera.as_ref().map(|camera| camera.key).unwrap();
+        cuts.push(next.1.snaps.contains(&key));
+        if cuts.last() == Some(&true) {
+            assert_eq!(
+                blend(&previous.0, &previous.1, &next.0, &next.1, 0.5),
+                next.0
+            );
+        }
+        previous = next;
+    }
+    assert_eq!(cuts.iter().filter(|&&cut| cut).count(), 1, "{cuts:?}");
+    let marker_left = engine
+        .world()
+        .presentation_entities()
+        .any(|id| engine.world().has::<NoInterpolate>(id));
+    assert!(!marker_left, "the cut was cleared");
+}
+
+/// A pixel-snapped orthographic camera does not blend; its view holds the offset.
+#[test]
+fn a_pixel_snapped_camera_does_not_blend_and_holds_the_offset() {
+    let root = std::env::temp_dir().join(format!("ludion-offset-snap-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("art")).unwrap();
+    let rgba = vec![200u8; 8 * 8 * 4];
+    std::fs::write(
+        root.join("art/fixture.png"),
+        ludion_assets::encode_png(8, 8, &rgba).unwrap(),
+    )
+    .unwrap();
+    let mut regions = std::collections::BTreeMap::new();
+    regions.insert(
+        "mid".to_string(),
+        ludion_scene::AtlasRegion {
+            rect: [0, 0, 4, 4],
+            pivot: [2.0, 2.0],
+        },
+    );
+    let atlas = ludion_scene::AtlasDocument {
+        generated_from: "fixture.atlas-source.yaml".to_string(),
+        pixels_per_unit: 4.0,
+        color_map: "fixture.png".to_string(),
+        filter: ludion_scene::AtlasFilter::Nearest,
+        regions,
+        flipbooks: Vec::new(),
+    };
+    std::fs::write(
+        root.join("art/fixture.atlas.yaml"),
+        ludion_scene::emit_atlas(&atlas),
+    )
+    .unwrap();
+    let scene = "format: 1
+seed: 1
+entities:
+  - name: cam
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 8.0
+          pixel_snap: true
+  - name: sprite
+    components:
+      Transform: {}
+      Sprite:
+        atlas: art/fixture.atlas.yaml
+        frame: mid
+";
+    let run = |presentation: PresentationSystems| {
+        let mut builder = Engine::builder().project_root(&root);
+        for &(name, system) in presentation {
+            builder = builder.presentation_system(name, system);
+        }
+        let mut engine = builder.build().unwrap();
+        engine.load_inline_scene(scene).unwrap();
+        tick(&mut engine);
+        tick(&mut engine)
+    };
+    let (plain, _) = run(&[]);
+    let (offset, data) = run(&[("drive", drive)]);
+    assert!(data.camera.is_none(), "a snapped camera takes no blend");
+    assert_ne!(
+        offset.camera.view, plain.camera.view,
+        "the view holds the offset"
+    );
+    assert_eq!(
+        offset.camera.projection, plain.camera.projection,
+        "ortho ignores fov_delta"
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }

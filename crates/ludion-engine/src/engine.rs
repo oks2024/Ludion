@@ -6663,4 +6663,41 @@ entities:
         assert_eq!(after[2].model, fresh[2].model);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// The ear stays on the rig: a presentation `CameraOffset` never moves the audio listener.
+    #[test]
+    fn a_camera_offset_leaves_the_audio_listener_on_the_rig() {
+        let mut world = World::new();
+        let camera = world.spawn();
+        world
+            .insert(
+                camera,
+                crate::components::Transform {
+                    translation: [1.0, 2.0, 3.0],
+                    rotation: [0.0, 30.0, 0.0],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        world
+            .insert(camera, crate::components::Camera::default())
+            .unwrap();
+        let rig = audio_listener(&mut world).expect("a camera listens");
+        let intro = world.spawn_presentation();
+        world
+            .insert(
+                intro,
+                crate::components::CameraOffset {
+                    translation: [5.0, 5.0, 5.0],
+                    rotation_deg: [10.0, 20.0, 30.0],
+                    fov_delta: -10.0,
+                },
+            )
+            .unwrap();
+        let with = audio_listener(&mut world).expect("still listens");
+        assert_eq!(
+            (with.position, with.right, with.up),
+            (rig.position, rig.right, rig.up)
+        );
+    }
 }

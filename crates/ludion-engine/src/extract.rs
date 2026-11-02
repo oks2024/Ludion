@@ -8,6 +8,9 @@
 //!
 //! Camera rule: exactly one [`Camera`] is expected. Zero → a documented default framing
 //! ([`RenderCamera::default_framing`]). More than one → an `L2101` error naming the extra camera.
+//! The drawn camera is the rig's pose with the presentation [`CameraOffset`] composed on
+//! (`compose_camera`, read by both `build_camera` and the blend's camera), so a scene without one
+//! extracts the rig's pose unchanged.
 
 use std::any::TypeId;
 use std::borrow::Cow;
@@ -42,7 +45,7 @@ use crate::assembly_mesh::AssemblyData;
 use crate::asset_cache::{AssetCache, AssetRefs, SourceFiles};
 use crate::character::CharacterData;
 use crate::components::{
-    Animation, Camera, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalMap,
+    Animation, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
     GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, ParentJoint, ParticleEmitter,
     PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, SkinBone, SpotLight, Sprite,
@@ -684,6 +687,7 @@ fn extract_inner(
         .chain(world.presentation_entities())
         .collect();
     let mut camera = resolve_camera(world, &ids, viewport, view).map_err(|d| vec![d])?;
+    crate::camera_offset::report(world, &ids, degraded);
     let fonts = font_library(world, project_root);
 
     // One walk, one sizing computation: `place` produces every renderable's world geometry, and both
@@ -1372,6 +1376,7 @@ fn extract_inner(
             blend,
             world,
             &mut poses,
+            &ids,
             viewport,
             camera_key,
             BlendKeys {
@@ -1432,6 +1437,7 @@ fn fill_blend(
     blend: &mut BlendData,
     world: &World,
     poses: &mut WorldAffines,
+    ids: &[EntityId],
     viewport: (u32, u32),
     camera_key: Option<EntityId>,
     keys: BlendKeys,
@@ -1493,14 +1499,28 @@ fn fill_blend(
             .chain(instance_owners)
             .chain(camera_key),
     );
+    let offset = camera_key.and_then(|_| crate::camera_offset::active_entity(world, ids));
+    // A `NoInterpolate` on the offset entity cuts the camera for the tick, as one on the camera does.
+    if let (Some(key), Some((entity, _))) = (camera_key, offset)
+        && !crate::interpolation::snap_set(world, std::iter::once(entity)).is_empty()
+        && let Err(at) = blend.snaps.binary_search(&key)
+    {
+        blend.snaps.insert(at, key);
+    }
     blend.camera = camera_key.map(|key| {
         let cam = get::<Camera>(world, key).copied().unwrap_or_default();
         let (near, far) = cam.depth_range();
         let pose = render_pose(world, poses, key);
+        let (rotation, translation, projection) = compose_camera(
+            pose.quat(),
+            Vec3::from(pose.translation()),
+            &cam,
+            offset.as_ref().map(|(_, offset)| offset),
+        );
         CameraBlend {
             key,
-            model: Mat4::from_rotation_translation(pose.quat(), Vec3::from(pose.translation())),
-            fov_y_deg: match cam.projection {
+            model: Mat4::from_rotation_translation(rotation, translation),
+            fov_y_deg: match projection {
                 Projection::Perspective { fov_y_deg } => Some(fov_y_deg),
                 Projection::Orthographic { .. } => None,
             },
@@ -3870,7 +3890,7 @@ fn resolve_camera(
     match (view, scene) {
         (Some(pose), scene) => Ok(crate::render_view::camera(world, scene, pose, viewport)),
         (None, None) => Ok(RenderCamera::default_framing(viewport)),
-        (None, Some(id)) => Ok(build_camera(world, id, viewport)),
+        (None, Some(id)) => Ok(build_camera(world, ids, id, viewport)),
     }
 }
 
@@ -3922,17 +3942,50 @@ fn snap_view_height(height: f32, viewport_h: u32, ppu: f32) -> f32 {
     vh / (px_per_texel * ppu)
 }
 
-/// Builds the view + projection matrices for the camera entity `id`.
-pub(crate) fn build_camera(world: &World, id: EntityId, viewport: (u32, u32)) -> RenderCamera {
+/// The rendered camera pose and projection: the rig's `rotation` and `translation` with the active
+/// presentation offset composed on, and `cam`'s projection with its `fov_delta`. The one place the
+/// offset meets the camera — `build_camera` and the blend's camera both read it, so the drawn frame
+/// and the interpolated one cannot disagree. `None` returns its inputs untouched.
+fn compose_camera(
+    rotation: Quat,
+    translation: Vec3,
+    cam: &Camera,
+    offset: Option<&CameraOffset>,
+) -> (Quat, Vec3, Projection) {
+    let Some(offset) = offset else {
+        return (rotation, translation, cam.projection);
+    };
+    let (translation, rotation) = offset.pose(translation.to_array(), rotation.to_array());
+    (
+        Quat::from_array(rotation),
+        Vec3::from(translation),
+        offset.projection(cam.projection),
+    )
+}
+
+/// Builds the view + projection matrices for the camera entity `id`, with the active presentation
+/// offset among `ids` composed onto the rig's pose.
+pub(crate) fn build_camera(
+    world: &World,
+    ids: &[EntityId],
+    id: EntityId,
+    viewport: (u32, u32),
+) -> RenderCamera {
     let cam = get::<Camera>(world, id).copied().unwrap_or_default();
     let (near, far) = cam.depth_range();
     let pose = render_pose(world, &mut WorldAffines::new(), id);
-    let translation = Vec3::from(pose.translation());
-    let model = Mat4::from_rotation_translation(pose.quat(), translation);
+    let offset = crate::camera_offset::active(world, ids);
+    let (rotation, translation, cam_projection) = compose_camera(
+        pose.quat(),
+        Vec3::from(pose.translation()),
+        &cam,
+        offset.as_ref(),
+    );
+    let model = Mat4::from_rotation_translation(rotation, translation);
     #[allow(clippy::disallowed_methods)] // render-side: GPU matrix, never reaches a hash
     let view = model.inverse();
     let aspect = aspect_ratio(viewport);
-    let projection = match cam.projection {
+    let projection = match cam_projection {
         Projection::Perspective { fov_y_deg } => {
             Mat4::perspective_rh(fov_y_deg.to_radians(), aspect, near, far)
         }
@@ -5732,7 +5785,7 @@ mod tests {
                         },
                     )
                     .unwrap();
-                let camera = build_camera(&world, id, (320, 180));
+                let camera = build_camera(&world, &[id], id, (320, 180));
                 assert!(
                     finite(&camera),
                     "{label} {projection:?}: {:?}",
@@ -7603,7 +7656,7 @@ mod tests {
 
             let ids: Vec<_> = world.entities().collect();
             let camera = single_camera(&world, &ids).unwrap().unwrap();
-            let camera = build_camera(&world, camera, (320, 180));
+            let camera = build_camera(&world, &ids, camera, (320, 180));
             let placed = place_uncached(
                 &world,
                 &ids,

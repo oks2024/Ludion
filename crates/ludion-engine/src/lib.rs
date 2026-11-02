@@ -39,6 +39,7 @@ mod base64;
 pub mod bisect;
 mod bounds;
 pub mod builder;
+mod camera_offset;
 mod camera_rig;
 mod character;
 mod collapse;
@@ -127,7 +128,7 @@ pub use character::{
     load as load_character,
 };
 pub use components::{
-    Anchor, Animation, AudioEmitter, Camera, ClipAnchor, Decal, DecalBlend, DecalMap,
+    Anchor, Animation, AudioEmitter, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, EmitShape, Environment, Fade, GiDynamic,
     GiVolume, GroundMarker, GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, Name,
     PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter, PointLight,
@@ -224,10 +225,10 @@ pub use replay::{
 pub use residue_store::ResidueStore;
 pub use scene_check::{
     expand_scene, font_table_faults, prefab_singleton_diagnostics, scene_atlas_diagnostics,
-    scene_audio_diagnostics, scene_camera_rig_diagnostics, scene_engine_diagnostics,
-    scene_font_diagnostics, scene_hierarchy_body_diagnostics, scene_layer_diagnostics,
-    scene_local_light_diagnostics, scene_motor_diagnostics, scene_physics_diagnostics,
-    scene_sensor_diagnostics, scene_sun_diagnostics,
+    scene_audio_diagnostics, scene_camera_offset_diagnostics, scene_camera_rig_diagnostics,
+    scene_engine_diagnostics, scene_font_diagnostics, scene_hierarchy_body_diagnostics,
+    scene_layer_diagnostics, scene_local_light_diagnostics, scene_motor_diagnostics,
+    scene_physics_diagnostics, scene_sensor_diagnostics, scene_sun_diagnostics,
 };
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
 pub use shutdown::Shutdown;

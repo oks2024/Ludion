@@ -249,6 +249,39 @@
       }
     }
   },
+  "CameraOffset": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "CameraOffset",
+    "description": "A presentation-side offset of the rendered camera: the frame is drawn from the rig's pose moved\nby `translation` and `rotation_deg` (camera-local, like shake) with `fov_delta` added to a\nperspective field of view. It lives on a **presentation entity** (`presentation: true`, or\n`spawn_presentation`), so it is never hashed and the sim, the rig, the audio listener and the\n`camera` debug draw keep the rig's pose. A boot intro pulls in by easing `translation[2]` from\npositive to 0. All fields default to 0 and are omitted from text at 0, and `CameraOffset: {}` is\nthe identity.\n\n`translation` is `[x right, y up, z back]` in the camera's own frame; `rotation_deg` is\nEuler-XYZ degrees, applied after the rig's rotation. `fov_delta` is ignored by an orthographic\ncamera. The lowest-id offset on a presentation entity wins (`L1334` for the rest); on a sim\nentity it is never applied (`L1333`); a non-finite field is refused in a scene and ignores the\nwhole offset at runtime (`L1332`). Without a camera it does nothing.\n\n```yaml\npresentation: true\ncomponents:\n  CameraOffset:\n    translation: [0.0, 0.0, 4.0]\n    fov_delta: -10.0\n```",
+    "type": "object",
+    "properties": {
+      "translation": {
+        "description": "Camera-local shift `[x right, y up, z back]` in world units (default `[0, 0, 0]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "rotation_deg": {
+        "description": "Camera-local rotation as Euler XYZ degrees, composed after the rig's rotation (default\n`[0, 0, 0]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "fov_delta": {
+        "description": "Degrees added to a perspective camera's `fov_y_deg`, clamped to 1 to 179 (default `0`).",
+        "type": "number",
+        "format": "float"
+      }
+    }
+  },
   "CameraRig": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "CameraRig",

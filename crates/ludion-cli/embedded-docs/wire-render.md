@@ -73,7 +73,7 @@ one before the override was ever set.
 
 **It moves the stream, not every query.** `render.screenshot` and `render.bounds` each take an
 optional `camera` per call: `"scene"` (default) always answers through the world's own `Camera`, and
-`"view"` looks through the override in force, falling back to the scene's camera when none is set.
+`"view"` looks through the override in force, falling back to the scene's camera when none is set. A presentation `CameraOffset` moves the scene camera's `render.bounds` rects with the image; the override is not offset (`ludion docs camera`).
 Existing agent calls, tests and CLI paths keep the game's own framing while a human flies the viewport:
 
 ```jsonc

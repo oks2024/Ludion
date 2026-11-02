@@ -725,4 +725,140 @@ mod tests {
         assert_eq!(ga[0].to_bits(), gb[0].to_bits());
         assert_eq!(ga[1].to_bits(), gb[1].to_bits());
     }
+
+    /// `world_to_pixel` is a pure function of the pose it is handed: the rig's components give the
+    /// no-offset answer, and `CameraOffset::applied_to` gives the pixel the drawn frame shows.
+    #[test]
+    fn world_to_pixel_follows_the_offset_only_through_applied_to() {
+        use crate::prelude::World;
+        use ludion_engine::{Camera, CameraOffset, Transform};
+
+        let viewport = (320, 180);
+        let mut engine = ludion_engine::Engine::new().with_render_size(viewport.0, viewport.1);
+        let world: &mut World = engine.world_mut();
+        let camera = world.spawn();
+        let rig = Transform {
+            translation: [1.0, 2.0, 10.0],
+            rotation: [-5.0, 12.0, 0.0],
+            ..Transform::default()
+        };
+        world.insert(camera, rig).unwrap();
+        world.insert(camera, Camera::default()).unwrap();
+        let offset = CameraOffset {
+            translation: [0.5, -0.25, 4.0],
+            rotation_deg: [0.0, 7.0, 0.0],
+            fov_delta: -10.0,
+        };
+        let intro = world.spawn_presentation();
+        world.insert(intro, offset).unwrap();
+
+        let drawn = engine.extract_present_scene().expect("extracts").0.camera;
+        let point = [0.5, 0.25, 0.0];
+        let through_extract = {
+            let clip = drawn.projection * drawn.view * Vec3::from_array(point).extend(1.0);
+            let ndc = clip.truncate() / clip.w;
+            [
+                (ndc.x * 0.5 + 0.5) * viewport.0 as f32,
+                (1.0 - (ndc.y * 0.5 + 0.5)) * viewport.1 as f32,
+            ]
+        };
+        let project = |transform: &ludion_engine::Transform, camera: &Camera| {
+            let ludion_engine::Projection::Perspective { fov_y_deg } = camera.projection else {
+                unreachable!("the camera is perspective")
+            };
+            world_to_pixel(
+                transform.translation,
+                transform.rotation,
+                Projection::Perspective { fov_y_deg },
+                camera.near,
+                camera.far,
+                point,
+                viewport,
+            )
+            .expect("in front of the camera")
+        };
+
+        let by_rig = project(&rig, &Camera::default());
+        let (moved, moved_camera) = offset.applied_to(&rig, &Camera::default());
+        let by_offset = project(&moved, &moved_camera);
+        assert!(
+            (by_rig[0] - by_offset[0]).abs() > 1.0,
+            "the offset moves the pixel: {by_rig:?} vs {by_offset:?}"
+        );
+        for axis in 0..2 {
+            assert!(
+                (by_offset[axis] - through_extract[axis]).abs() < 0.05,
+                "applied_to matches extract: {by_offset:?} vs {through_extract:?}"
+            );
+        }
+    }
+
+    /// `camera_ray` built from the camera's own components ignores a presentation offset, so a
+    /// pick ray is the same with or without one; only `applied_to`'s pose gives the drawn ray.
+    #[test]
+    fn camera_ray_ignores_the_offset_unless_applied() {
+        use crate::prelude::World;
+        use ludion_engine::{Camera, CameraOffset, Transform};
+
+        let viewport = (320, 180);
+        let rig = Transform {
+            translation: [1.0, 2.0, 10.0],
+            rotation: [-5.0, 12.0, 0.0],
+            ..Transform::default()
+        };
+        let build = |offset: Option<CameraOffset>| {
+            let mut engine = ludion_engine::Engine::new().with_render_size(viewport.0, viewport.1);
+            let world: &mut World = engine.world_mut();
+            let camera = world.spawn();
+            world.insert(camera, rig).unwrap();
+            world.insert(camera, Camera::default()).unwrap();
+            if let Some(offset) = offset {
+                let intro = world.spawn_presentation();
+                world.insert(intro, offset).unwrap();
+            }
+            engine.extract_present_scene().expect("extracts");
+            (engine, camera)
+        };
+        let offset = CameraOffset {
+            translation: [0.5, -0.25, 4.0],
+            rotation_deg: [0.0, 7.0, 0.0],
+            fov_delta: -10.0,
+        };
+        let pixel = [100.0, 60.0];
+        let ray_of = |transform: &Transform, camera: &Camera| {
+            let ludion_engine::Projection::Perspective { fov_y_deg } = camera.projection else {
+                unreachable!("the camera is perspective")
+            };
+            camera_ray(
+                transform.translation,
+                transform.rotation,
+                Projection::Perspective { fov_y_deg },
+                camera.near,
+                camera.far,
+                pixel,
+                viewport,
+            )
+            .expect("a well-formed camera")
+        };
+        let read = |engine: &ludion_engine::Engine, camera| {
+            let world = engine.world();
+            (
+                *world.get::<Transform>(camera).unwrap().unwrap(),
+                *world.get::<Camera>(camera).unwrap().unwrap(),
+            )
+        };
+
+        let (with, with_cam) = build(Some(offset));
+        let (without, without_cam) = build(None);
+        let (t, c) = read(&with, with_cam);
+        let (t0, c0) = read(&without, without_cam);
+        let (ray, plain) = (ray_of(&t, &c), ray_of(&t0, &c0));
+        assert_eq!(ray.origin, plain.origin);
+        assert_eq!(ray.dir, plain.dir);
+
+        let (moved, moved_camera) = offset.applied_to(&t, &c);
+        let applied = ray_of(&moved, &moved_camera);
+        assert_ne!(applied.origin, plain.origin);
+        assert_ne!(applied.dir, plain.dir);
+    }
 }

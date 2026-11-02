@@ -13,10 +13,10 @@ use std::collections::BTreeMap;
 
 use ludion_ecs::World;
 use ludion_engine::{
-    Camera, Engine, Mesh, MeshGrid, MeshSource, PointLight, Projection, Sprite, Text,
+    Camera, CameraOffset, Engine, Mesh, MeshGrid, MeshSource, PointLight, Projection, Sprite, Text,
     TileAppearance, Tilemap, Transform, dispatch,
 };
-use ludion_protocol::command::RenderBoundsParams;
+use ludion_protocol::command::{CameraChoice, RenderBoundsParams, RenderViewParams, ViewPose};
 use ludion_protocol::response::{EntityBounds, ScreenRect, WorldAabb};
 use ludion_protocol::{Command, ResponseBody};
 
@@ -814,4 +814,86 @@ fn an_un_sized_atlas_sprite_is_bounded_by_its_region() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A 2×1 sprite at the origin under the exact-math camera, plus a presentation `CameraOffset` that
+/// shifts the camera 1 m right, in a fresh engine. Returns the engine and the sprite.
+fn offset_world(offset: bool) -> (Engine, ludion_core::ids::EntityId) {
+    let mut engine = engine();
+    let world = engine.world_mut();
+    add_camera(world);
+    let sprite = world.spawn();
+    world.insert(sprite, Transform::default()).unwrap();
+    world
+        .insert(
+            sprite,
+            Sprite {
+                size: Some([2.0, 1.0]),
+                ..Sprite::default()
+            },
+        )
+        .unwrap();
+    if offset {
+        let intro = world.spawn_presentation();
+        world
+            .insert(
+                intro,
+                CameraOffset {
+                    translation: [1.0, 0.0, 0.0],
+                    ..CameraOffset::default()
+                },
+            )
+            .unwrap();
+    }
+    (engine, sprite)
+}
+
+fn sprite_rect(engine: &mut Engine, camera: CameraChoice) -> ScreenRect {
+    match dispatch(engine, Command::RenderBounds(RenderBoundsParams { camera }))
+        .expect("render.bounds should succeed")
+        .body
+    {
+        ResponseBody::RenderBounds { entities, .. } => entities[0].screen_rect.unwrap(),
+        other => panic!("expected RenderBounds, got {other:?}"),
+    }
+}
+
+/// T5: the scene camera's bounds project through the offset (the rect the image draws); the
+/// `render.view` override's do not; the hash is unchanged.
+#[test]
+fn bounds_project_through_the_offset_but_not_through_the_view_override() {
+    let (mut plain, _) = offset_world(false);
+    let (mut moved, _) = offset_world(true);
+    let before = plain.world_hash().unwrap();
+    assert_eq!(
+        moved.world_hash().unwrap(),
+        before,
+        "a presentation entity is not hashed"
+    );
+
+    let base = sprite_rect(&mut plain, CameraChoice::Scene);
+    let shifted = sprite_rect(&mut moved, CameraChoice::Scene);
+    assert_eq!(base.x, 64.0);
+    assert_eq!(shifted.x, 0.0, "the camera moved 1 m right: 64 px left");
+    assert_eq!((shifted.w, shifted.h), (base.w, base.h));
+
+    let pose = ViewPose {
+        translation: [0.0, 0.0, 10.0],
+        rotation: [0.0, 0.0, 0.0],
+        fov_y_deg: None,
+    };
+    for engine in [&mut plain, &mut moved] {
+        dispatch(
+            engine,
+            Command::RenderView(RenderViewParams {
+                pose: Some(Some(pose)),
+            }),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        sprite_rect(&mut moved, CameraChoice::View),
+        sprite_rect(&mut plain, CameraChoice::View)
+    );
+    assert_eq!(moved.world_hash().unwrap(), before);
 }

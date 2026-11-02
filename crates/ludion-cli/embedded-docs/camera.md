@@ -1,10 +1,10 @@
 ---
-description: CameraRig — a sim-side camera that rides a kind: path rail after a target, blends, snaps, shakes
+description: CameraRig (sim path-rail camera, blends, shake) and CameraOffset (presentation-side offset)
 ---
 
 # Camera rigs
 
-**Scope:** the `CameraRig` component on a scene's camera entity: the `track` mode (the camera rides a `kind: path` rail after a target), timed blends between configurations, `snap_rig`, trauma shake, `camera_relative` for a stick, the `camera` debug draw and `L1304`–`L1309`. The path document is `ludion docs path`; the gameplay clock is `ludion docs game-clock`; the character the camera follows is `ludion docs motor`.
+**Scope:** the `CameraRig` component on a scene's camera entity: the `track` mode (the camera rides a `kind: path` rail after a target), timed blends between configurations, `snap_rig`, trauma shake, `camera_relative` for a stick, the `camera` debug draw, `L1304`–`L1309`, and the presentation `CameraOffset` (`L1332`–`L1334`). The path document is `ludion docs path`; the gameplay clock is `ludion docs game-clock`; the character the camera follows is `ludion docs motor`.
 
 A rig is **sim**: it writes the camera's `Transform` (and the perspective `fov_y_deg`) from a system, so the pose is hashed, replayed and safe to unproject through. That is why a `CameraRig` camera is not presentation (`ludion docs presentation`).
 
@@ -113,6 +113,33 @@ On `L1304`–`L1307` and `L1309` the rig **holds its pose**; on `L1308` the lowe
 | L1307 | the entity has no `Camera` |
 | L1308 | more than one `CameraRig`; only the lowest entity id runs |
 | L1309 | the camera entity has a `Parent` (the rig writes a world-space pose) |
+| L1332 | a `CameraOffset` field is non-finite |
+| L1333 | a `CameraOffset` on a sim entity (never applied) |
+| L1334 | more than one presentation `CameraOffset`; the lowest id applies |
+| L1335 | `fov_delta` takes a perspective fov outside 1–179° (warning, once) |
+
+## Presentation offset
+
+`CameraOffset` moves the **rendered** camera from a presentation entity (`presentation: true`, or `spawn_presentation`), so a boot intro can pull in without touching `WorldHash`. It is never hashed or applied to the rig; shake stays `add_trauma`.
+
+```yaml
+- name: intro
+  presentation: true
+  components:
+    CameraOffset:
+      translation: [0.0, 0.0, 4.0]   # camera-local: +x right, +y up, +z back
+      rotation_deg: [0.0, 0.0, 0.0]  # Euler XYZ degrees, composed after the rig's rotation
+      fov_delta: -10.0               # degrees added to a perspective fov_y_deg
+```
+
+- **Frame:** `t' = t + R * translation`, `R' = R * euler_xyz(rotation_deg)`; a pull-in starts at `+z` and eases to 0. Every field defaults to 0 and is omitted at 0; `CameraOffset: {}` is the identity.
+- **`fov_delta`:** the result is clamped to 1–179° (`L1335` warning, once). An orthographic camera ignores it; translation and rotation still apply.
+- **Which one applies:** the lowest-id offset on a presentation entity; the rest are `L1334`. One on a sim entity is never applied (`L1333`; `check-scene` and `scene.check` refuse it, and a scene that loads anyway ignores it). A non-finite field is refused in a scene; at runtime the whole offset is ignored and the rig's pose is drawn (`L1332`). With no `Camera` it does nothing; its own `Transform`, `Parent` and `Visibility` are ignored.
+- **What sees it:** the frame (screenshot, stream, window, `ludion render`), billboards, culling, shadows, sky, fog, SSR, sort order, present interpolation and `render.bounds` of the scene camera. **What does not:** the rig and the camera `Transform`, `WorldHash`, `camera_relative`, the audio listener, the `camera` debug draw, `camera_ray` and `world_to_pixel` (pure functions of the pose you pass), the `render.view` override and `render.bounds` with `camera: "view"`. Depth of field's `focus_distance` is authored from the rendered eye and does not track the offset.
+- **Screen UI anchored with `world_to_pixel`** follows the rig unless the game opts in: pass `offset.applied_to(&transform, &camera)` for the pose the frame is drawn from.
+- **Interpolation:** the offset is composed before the present blend, so a changing offset blends smoothly and a snapped tick keeps it. An offset that appears or vanishes between ticks slides over that tick. To pop, put `NoInterpolate` on the offset entity (zero the offset rather than despawn it).
+
+Runnable: `crates/ludion/examples/camera_offset.rs`.
 
 ## Gotchas
 

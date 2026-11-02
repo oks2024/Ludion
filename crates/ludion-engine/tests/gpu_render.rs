@@ -1505,3 +1505,94 @@ fn needs_gpu_a_hidden_tree_renders_exactly_like_a_despawned_one() {
         "the same tree, shown, must draw and cast"
     );
 }
+
+/// A cube under a sun, seen by a camera at `eye` with a `fov`; `extra` appends entities.
+fn camera_offset_scene(eye: [f32; 3], fov: f32, extra: &str) -> String {
+    format!(
+        "format: 1
+seed: 3
+entities:
+  - name: cam
+    components:
+      Transform:
+        translation:
+          - {:?}
+          - {:?}
+          - {:?}
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: {fov:?}
+  - name: sun
+    components:
+      DirectionalLight:
+        direction:
+          - -0.4
+          - -1.0
+          - -0.6
+  - name: crate
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape: cube
+{extra}",
+        eye[0], eye[1], eye[2]
+    )
+}
+
+/// **CameraOffset acceptance.** A scene whose presentation offset pulls the camera in renders the
+/// same bytes as the scene with the camera moved by hand, and a different frame than the unoffset
+/// one.
+#[test]
+fn needs_gpu_a_camera_offset_renders_like_a_hand_moved_camera() {
+    let dir =
+        std::env::temp_dir().join(format!("ludion-camera-offset-proof-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let render = |name: &str, document: String| {
+        let path = dir.join(name);
+        std::fs::write(&path, document).unwrap();
+        render_scene(&path, FrameSize::native(240, 135), false)
+    };
+    let offset = "  - name: intro
+    presentation: true
+    components:
+      CameraOffset:
+        translation:
+          - 0.5
+          - 0.25
+          - -3.0
+        fov_delta: -10.0
+";
+    let plain = match render("plain.yaml", camera_offset_scene([0.0, 1.0, 8.0], 60.0, "")) {
+        Ok(outcome) => outcome,
+        Err(errors) if no_adapter(&errors) => {
+            eprintln!("[camera-offset] SKIPPED: no GPU adapter available");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        Err(errors) => panic!("[camera-offset] render failed: {errors:?}"),
+    };
+    let with_offset = render(
+        "offset.yaml",
+        camera_offset_scene([0.0, 1.0, 8.0], 60.0, offset),
+    )
+    .unwrap();
+    let moved = render(
+        "moved.yaml",
+        camera_offset_scene([0.5, 1.25, 5.0], 50.0, ""),
+    )
+    .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        with_offset.image, moved.image,
+        "the offset frame is the hand-moved frame"
+    );
+    assert_ne!(
+        with_offset.image, plain.image,
+        "and the offset moved the view"
+    );
+}

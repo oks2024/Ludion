@@ -51,7 +51,7 @@ Crossing the boundary is `L0028`, in every direction:
 
 - Every crossing is logged once per system/op/component even if the `Result` is discarded (`let _ = world.get_mut(..)`); `ludion_testkit::assert_no_boundary_crossings(engine.world())` fails a test on any.
 - Randomness: `DeterministicRng::derived(seed, frame, entity)`, never the master `DeterministicRng`.
-- **Stays sim:** a camera the sim unprojects through (the external game's grab, a twin-stick game's aim; a `CameraRig` camera is sim, `ludion docs camera`) and anything with a `Collider`. Making it presentation turns every sim read of it into `L0028`.
+- **Stays sim:** a camera the sim unprojects through (the external game's grab, a twin-stick game's aim; a `CameraRig` camera is sim, `ludion docs camera`) and anything with a `Collider`. Making it presentation turns every sim read of it into `L0028`. The camera stays sim; the presentation half is a rendered-only `CameraOffset` on a presentation entity (`ludion docs camera`).
 - A sim entity's entity-reference field (`Parent`, `Joint` ends) may not name a presentation entity: `L1036` in a scene, `L1018` at `scene.save`. A presentation entity may name a sim one (a popup parented to the ball).
 - Snapshot/replay: presentation state is snapshotted and restored, replayed, and never verified. Keyframe checks and `bisect` compare sim state only, so changing presentation code never invalidates a recording.
 
@@ -104,9 +104,9 @@ entities:
 
 A window draws from a presenter thread at the display's refresh rate; the sim never waits on it. By default each tick's image is drawn once and repeated. `Engine::builder().present_interpolation(true)` instead draws every refresh blended between the last two ticks (the window lags up to one tick). Render-only: the sim, `WorldHash`, replays, screenshot, stream and goldens never blend.
 
-- **Blends:** the pose of meshes, sprites, lights, text, ground markers, drop-shadow anchors, decals, and the camera's pose and field of view; particles (position, size, colour) and volley bullets (position), matched across ticks by a stable per-instance key. Births and deaths still appear at a tick.
+- **Blends:** the pose of meshes, sprites, lights, text, ground markers, drop-shadow anchors, decals, and the camera's pose and field of view (the rig's pose with a `CameraOffset` composed on, blended after the composition); particles (position, size, colour) and volley bullets (position), matched across ticks by a stable per-instance key. Births and deaths still appear at a tick. The camera blend lerps the two composed poses, so between ticks it is not exactly the rig's pose times the offset; the tick endpoints are exact.
 - **Takes the newer tick:** fade, visibility, materials, UI, animation (clips and skinned poses stay stepped). Billboards (sprites, particles, text) face the newer tick's camera while the camera itself blends.
-- **Snaps:** a spawn, `teleport_character`, `snap_rig`, a scene load, switch or restore, and a re-based or skipped tick.
+- **Snaps:** a spawn, `teleport_character`, `snap_rig`, a scene load, switch or restore, and a re-based or skipped tick. `NoInterpolate` on the `CameraOffset` entity cuts the camera for that tick.
 - **A hand-written teleport** (writing `Transform` far from last tick) slides unless you `world.insert(id, NoInterpolate)` in the tick that writes it. Children follow; the marker lasts one tick and is never hashed.
 
 ## Gotchas

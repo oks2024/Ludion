@@ -82,7 +82,7 @@ pub(crate) fn compute(
         .collect();
     let camera = match (view, single_camera(world, &ids)?) {
         (Some(pose), scene) => crate::render_view::camera(world, scene, pose, render_size),
-        (None, Some(id)) => build_camera(world, id, render_size),
+        (None, Some(id)) => build_camera(world, &ids, id, render_size),
         (None, None) => return Err(no_camera()),
     };
 

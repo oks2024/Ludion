@@ -23,7 +23,9 @@ use ludion_core::audio::AudioCategory;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
-use ludion_core::math::{euler_xyz_degrees_to_quat, quat_to_euler_xyz_degrees};
+use ludion_core::math::{
+    euler_xyz_degrees_to_quat, quat_mul, quat_rotate, quat_to_euler_xyz_degrees,
+};
 use ludion_core::number::engine_number;
 use ludion_core::text::single_char;
 use ludion_core::time::FrameIndex;
@@ -3192,6 +3194,209 @@ impl SemanticValidate for Camera {
     }
 }
 
+/// A presentation-side offset of the rendered camera: the frame is drawn from the rig's pose moved
+/// by `translation` and `rotation_deg` (camera-local, like shake) with `fov_delta` added to a
+/// perspective field of view. It lives on a **presentation entity** (`presentation: true`, or
+/// `spawn_presentation`), so it is never hashed and the sim, the rig, the audio listener and the
+/// `camera` debug draw keep the rig's pose. A boot intro pulls in by easing `translation[2]` from
+/// positive to 0. All fields default to 0 and are omitted from text at 0, and `CameraOffset: {}` is
+/// the identity.
+///
+/// `translation` is `[x right, y up, z back]` in the camera's own frame; `rotation_deg` is
+/// Euler-XYZ degrees, applied after the rig's rotation. `fov_delta` is ignored by an orthographic
+/// camera. The lowest-id offset on a presentation entity wins (`L1334` for the rest); on a sim
+/// entity it is never applied (`L1333`); a non-finite field is refused in a scene and ignores the
+/// whole offset at runtime (`L1332`). Without a camera it does nothing.
+///
+/// ```yaml
+/// presentation: true
+/// components:
+///   CameraOffset:
+///     translation: [0.0, 0.0, 4.0]
+///     fov_delta: -10.0
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Default)]
+pub struct CameraOffset {
+    /// Camera-local shift `[x right, y up, z back]` in world units (default `[0, 0, 0]`).
+    #[serde(default, skip_serializing_if = "is_zero3")]
+    pub translation: [f32; 3],
+    /// Camera-local rotation as Euler XYZ degrees, composed after the rig's rotation (default
+    /// `[0, 0, 0]`).
+    #[serde(default, skip_serializing_if = "is_zero3")]
+    pub rotation_deg: [f32; 3],
+    /// Degrees added to a perspective camera's `fov_y_deg`, clamped to 1 to 179 (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub fov_delta: f32,
+}
+
+impl CameraOffset {
+    /// The perspective field of view, in degrees, a result is clamped into.
+    pub const FOV_RANGE: (f32, f32) = (1.0, 179.0);
+
+    /// Whether every field is 0, so applying the offset changes nothing.
+    ///
+    /// ```
+    /// use ludion_components::CameraOffset;
+    ///
+    /// assert!(CameraOffset::default().is_identity());
+    /// assert!(!CameraOffset { fov_delta: 5.0, ..CameraOffset::default() }.is_identity());
+    /// ```
+    #[allow(clippy::float_cmp)]
+    pub fn is_identity(&self) -> bool {
+        is_zero3(&self.translation) && is_zero3(&self.rotation_deg) && self.fov_delta == 0.0
+    }
+
+    /// Whether every field is finite.
+    ///
+    /// ```
+    /// use ludion_components::CameraOffset;
+    ///
+    /// assert!(CameraOffset::default().is_finite());
+    /// assert!(!CameraOffset { fov_delta: f32::NAN, ..CameraOffset::default() }.is_finite());
+    /// ```
+    pub fn is_finite(&self) -> bool {
+        self.translation
+            .iter()
+            .chain(&self.rotation_deg)
+            .chain(std::iter::once(&self.fov_delta))
+            .all(|value| value.is_finite())
+    }
+
+    /// The camera pose (`translation`, rotation quaternion `[x, y, z, w]`) with the offset applied:
+    /// the translation is rotated by the rig's rotation, the rotation composes after it.
+    ///
+    /// ```
+    /// use ludion_components::CameraOffset;
+    ///
+    /// let offset = CameraOffset { translation: [0.0, 0.0, 2.0], ..CameraOffset::default() };
+    /// let (translation, rotation) = offset.pose([1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0]);
+    /// assert_eq!(translation, [1.0, 2.0, 5.0]);
+    /// assert_eq!(rotation, [0.0, 0.0, 0.0, 1.0]);
+    /// ```
+    pub fn pose(&self, translation: [f32; 3], rotation: [f32; 4]) -> ([f32; 3], [f32; 4]) {
+        let shift = quat_rotate(rotation, self.translation);
+        (
+            [0, 1, 2].map(|i| translation[i] + shift[i]),
+            quat_mul(rotation, euler_xyz_degrees_to_quat(self.rotation_deg)),
+        )
+    }
+
+    /// The projection with `fov_delta` added to a perspective field of view, clamped to
+    /// [`CameraOffset::FOV_RANGE`]. A zero delta and an orthographic projection come back unchanged.
+    ///
+    /// ```
+    /// use ludion_components::{CameraOffset, Projection};
+    ///
+    /// let offset = CameraOffset { fov_delta: -10.0, ..CameraOffset::default() };
+    /// let narrowed = offset.projection(Projection::Perspective { fov_y_deg: 60.0 });
+    /// assert_eq!(narrowed, Projection::Perspective { fov_y_deg: 50.0 });
+    /// let ortho = Projection::Orthographic { height: 8.0, pixel_snap: false };
+    /// assert_eq!(offset.projection(ortho), ortho);
+    /// ```
+    #[allow(clippy::float_cmp)]
+    pub fn projection(&self, projection: Projection) -> Projection {
+        match projection {
+            Projection::Perspective { fov_y_deg } if self.fov_delta != 0.0 => {
+                Projection::Perspective {
+                    fov_y_deg: (fov_y_deg + self.fov_delta)
+                        .clamp(Self::FOV_RANGE.0, Self::FOV_RANGE.1),
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// Whether `fov_delta` would take `projection` outside [`CameraOffset::FOV_RANGE`], so
+    /// [`CameraOffset::projection`] clamps it.
+    ///
+    /// ```
+    /// use ludion_components::{CameraOffset, Projection};
+    ///
+    /// let offset = CameraOffset { fov_delta: 150.0, ..CameraOffset::default() };
+    /// assert!(offset.clamps_fov(&Projection::Perspective { fov_y_deg: 60.0 }));
+    /// assert!(!offset.clamps_fov(&Projection::Orthographic { height: 8.0, pixel_snap: false }));
+    /// ```
+    #[allow(clippy::float_cmp)]
+    pub fn clamps_fov(&self, projection: &Projection) -> bool {
+        match projection {
+            Projection::Perspective { fov_y_deg } if self.fov_delta != 0.0 => {
+                let sum = fov_y_deg + self.fov_delta;
+                sum < Self::FOV_RANGE.0 || sum > Self::FOV_RANGE.1
+            }
+            _ => false,
+        }
+    }
+
+    /// The rendered camera for a rig pose: a game anchoring screen UI with `world_to_pixel` passes
+    /// these to follow the drawn frame instead of the rig. `scale`, `near` and `far` are kept.
+    ///
+    /// ```
+    /// use ludion_components::{Camera, CameraOffset, Transform};
+    ///
+    /// let offset = CameraOffset { translation: [0.0, 0.0, 2.0], ..CameraOffset::default() };
+    /// let (transform, camera) = offset.applied_to(&Transform::default(), &Camera::default());
+    /// assert_eq!(transform.translation, [0.0, 0.0, 2.0]);
+    /// assert_eq!(camera, Camera::default());
+    /// ```
+    pub fn applied_to(&self, transform: &Transform, camera: &Camera) -> (Transform, Camera) {
+        let (translation, rotation) = self.pose(
+            transform.translation,
+            euler_xyz_degrees_to_quat(transform.rotation),
+        );
+        (
+            Transform {
+                translation,
+                rotation: quat_to_euler_xyz_degrees(rotation),
+                scale: transform.scale,
+            },
+            Camera {
+                projection: self.projection(camera.projection),
+                ..*camera
+            },
+        )
+    }
+}
+
+impl SemanticValidate for CameraOffset {
+    /// Rejects a field that is not finite once stored as `f32` (`L1332`, pointer `/translation/{i}`,
+    /// `/rotation_deg/{i}` or `/fov_delta`). A wrong shape is the schema's job.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        for field in ["translation", "rotation_deg"] {
+            let Some(items) = value.get(field).and_then(Value::as_array) else {
+                continue;
+            };
+            for (index, item) in items.iter().enumerate() {
+                if as_stored_f32(item).is_some_and(|number| !number.is_finite()) {
+                    out.push(camera_offset_diagnostic(&format!("/{field}/{index}")));
+                }
+            }
+        }
+        if value
+            .get("fov_delta")
+            .and_then(as_stored_f32)
+            .is_some_and(|number| !number.is_finite())
+        {
+            out.push(camera_offset_diagnostic("/fov_delta"));
+        }
+        out
+    }
+}
+
+fn camera_offset_diagnostic(pointer: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::CAMERA_OFFSET_INVALID,
+        format!("the `CameraOffset` field `{pointer}` is not a finite number"),
+    )
+    .with_path(pointer.to_string())
+    .with_help("write finite numbers; `ludion explain L1332`")
+}
+
+#[allow(clippy::float_cmp)]
+fn is_zero3(value: &[f32; 3]) -> bool {
+    *value == [0.0; 3]
+}
+
 impl SemanticValidate for Text {
     /// `color` is an HDR colour (`L1263`); `size`, the world height of one line, is a strictly
     /// positive, finite number (`L1118`, pointer `/size`). An absent `size` (default `1.0`) adds
@@ -5352,6 +5557,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register::<Visibility>("Visibility")
         .expect("unique");
+    // The presentation camera offset, appended after `Visibility`; validated for non-finite fields.
+    registry
+        .register_validated::<CameraOffset>("CameraOffset")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -5783,12 +5992,13 @@ mod tests {
                 "Decal",
                 "ParentJoint",
                 "Visibility",
+                "CameraOffset",
             ]
         );
         assert_eq!(
             registry.len(),
-            44,
-            "appending Visibility grows the registry by exactly one"
+            45,
+            "appending CameraOffset grows the registry by exactly one"
         );
     }
 
@@ -7032,6 +7242,31 @@ mod tests {
         assert!(refusals("Camera", "        near: 0.1\n        far: 1000.0\n").is_empty());
     }
 
+    /// A `CameraOffset` field that narrows to a non-finite `f32` is `L1332` at its pointer; finite
+    /// values and the identity are clean.
+    #[test]
+    fn a_non_finite_camera_offset_field_is_l1332_at_its_pointer() {
+        let found = CameraOffset::validate_semantics(&serde_json::json!({
+            "translation": [0.0, 1.0e300, 0.0],
+            "rotation_deg": [0.0, 0.0, -1.0e300],
+            "fov_delta": 1.0e300,
+        }));
+        let pointers: Vec<_> = found
+            .iter()
+            .map(|d| (d.code, d.path.clone().unwrap_or_default()))
+            .collect();
+        assert_eq!(
+            pointers,
+            vec![
+                (code::CAMERA_OFFSET_INVALID, "/translation/1".to_string()),
+                (code::CAMERA_OFFSET_INVALID, "/rotation_deg/2".to_string()),
+                (code::CAMERA_OFFSET_INVALID, "/fov_delta".to_string()),
+            ]
+        );
+        let finite = serde_json::json!({ "translation": [1.0, 2.0, 3.0], "fov_delta": -5.0 });
+        assert!(CameraOffset::validate_semantics(&finite).is_empty());
+    }
+
     /// A component authored with nothing but its defaults is never refused by the colour rules.
     #[test]
     fn default_colours_validate_clean() {
@@ -7045,6 +7280,7 @@ mod tests {
         }
         clean::<PointLight>("PointLight");
         clean::<SpotLight>("SpotLight");
+        clean::<CameraOffset>("CameraOffset");
         clean::<ReflectionProbe>("ReflectionProbe");
         clean::<ludion_physics::CharacterMotor>("CharacterMotor");
         clean::<ludion_physics::SurfaceVelocity>("SurfaceVelocity");

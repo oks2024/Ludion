@@ -14,8 +14,8 @@ use ludion_core::time::GameClock;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
-    CameraRig, DebugCategories, Egress, EgressChannels, Engine, Name, RigMode, Transform,
-    add_trauma, snap_rig,
+    Camera, CameraOffset, CameraRig, DebugCategories, Egress, EgressChannels, Engine, Name,
+    RigMode, Transform, add_trauma, snap_rig,
 };
 use ludion_protocol::command::{
     EngineRestoreParams, SimStepParams, StreamSubscribeParams, SubscribeMode,
@@ -958,4 +958,173 @@ fn a_rig_with_no_target_is_inert_and_reports_nothing() {
             .is_none_or(|d| !d.code.as_str().starts_with("L13"))),
         "{lines:?}"
     );
+}
+
+// ---- the presentation camera offset ----
+
+/// Spawns the offset entity on the first tick and animates it every tick after.
+fn drive_offset(world: &mut World, ctx: &SystemCtx) {
+    let existing = world.presentation_entities().next();
+    let id = existing.unwrap_or_else(|| world.spawn_presentation());
+    let t = ctx.frame.as_u64() as f32;
+    let offset = CameraOffset {
+        translation: [0.01 * t, 0.0, 3.0 - 0.02 * t],
+        rotation_deg: [0.0, 0.5 * t, 0.0],
+        fov_delta: -0.05 * t,
+    };
+    world.insert(id, offset).unwrap();
+}
+
+/// A sim system reading the presentation offset entity: the crossing is `L0028`.
+fn peek_offset(world: &mut World, _: &SystemCtx) {
+    let _ = world.get::<CameraOffset>(EntityId::new(ludion_ecs::PRESENTATION_BASE, 0));
+}
+
+fn offset_engine(tag: &str, offset: bool, peek: bool) -> Engine {
+    let (files, scene) = track_scene();
+    let mut builder = Engine::builder().project_root(fixture_root(tag, &files));
+    if peek {
+        builder = builder.system("peek_offset", peek_offset);
+    }
+    if offset {
+        builder = builder.presentation_system("drive_offset", drive_offset);
+    }
+    let mut engine = builder.build().expect("the game builds");
+    engine.load_inline_scene(&scene).expect("the scene loads");
+    engine
+}
+
+fn camera_of(engine: &Engine) -> Camera {
+    let world = engine.world();
+    *world.get::<Camera>(named(world, "cam")).unwrap().unwrap()
+}
+
+/// T1: the offset moves nothing the sim owns. Over 120 ticks of a moving rig the world hash, the
+/// camera `Transform` and `Camera`, and the rig's yaw equal the run without it; the offset survives
+/// `engine.restore` without moving the hash.
+#[test]
+fn an_animated_offset_moves_no_hash_transform_camera_or_rig() {
+    let mut plain = offset_engine("offset-plain", false, false);
+    let mut moved = offset_engine("offset-moved", true, false);
+    for tick in 0..120 {
+        plain.advance_live();
+        moved.advance_live();
+        assert_eq!(
+            moved.world_hash().unwrap(),
+            plain.world_hash().unwrap(),
+            "hash at tick {tick}"
+        );
+        assert_eq!(eye_of(&moved), eye_of(&plain), "eye at tick {tick}");
+        assert_eq!(
+            camera_of(&moved),
+            camera_of(&plain),
+            "camera at tick {tick}"
+        );
+        assert_eq!(
+            rig_of(&moved).yaw_deg(),
+            rig_of(&plain).yaw_deg(),
+            "yaw at tick {tick}"
+        );
+    }
+    assert!(moved.world().presentation_entities().next().is_some());
+    ludion_testkit::assert_no_boundary_crossings(moved.world());
+
+    let snapshot = match moved.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let hash = moved.world_hash().unwrap();
+    let mut resumed = offset_engine("offset-resumed", true, false);
+    resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
+    let id = resumed
+        .world()
+        .presentation_entities()
+        .next()
+        .expect("survives");
+    assert!(
+        !resumed
+            .world()
+            .get::<CameraOffset>(id)
+            .unwrap()
+            .unwrap()
+            .is_identity()
+    );
+    assert_eq!(resumed.world_hash().unwrap(), hash);
+}
+
+/// A `snap_rig` cut keeps the offset: the camera is marked a snap, the blend returns the newer
+/// tick's camera whole, and that camera differs from the same tick's without the offset.
+#[test]
+fn a_snap_rig_cut_keeps_the_offset() {
+    let build_with = |tag: &str, offset: bool| {
+        let (files, scene) = track_scene();
+        let mut builder = Engine::builder()
+            .project_root(fixture_root(tag, &files))
+            .system("edit", edit_then_snap);
+        if offset {
+            builder = builder.presentation_system("drive_offset", drive_offset);
+        }
+        let mut engine = builder.build().expect("the game builds");
+        engine.load_inline_scene(&scene).expect("the scene loads");
+        engine
+    };
+    let mut moved = build_with("offset-snap-moved", true);
+    let mut plain = build_with("offset-snap-plain", false);
+    advance(&mut moved, SNAP_AT as usize);
+    advance(&mut plain, SNAP_AT as usize);
+    let (prev, prev_data) = moved.extract_present_scene().unwrap();
+    moved.advance_live();
+    plain.advance_live();
+    let (next, next_data) = moved.extract_present_scene().unwrap();
+    let cam = named(moved.world(), "cam");
+    assert!(next_data.snaps.contains(&cam), "snap_rig cuts the camera");
+    assert_eq!(
+        ludion_renderer::blend(&prev, &prev_data, &next, &next_data, 0.5).camera,
+        next.camera,
+        "the cut shows the newer tick's camera"
+    );
+    let (without, _) = plain.extract_present_scene().unwrap();
+    assert_ne!(
+        next.camera, without.camera,
+        "the offset is kept through the cut"
+    );
+}
+
+/// A sim system reading the offset entity is an `L0028` crossing.
+#[test]
+fn a_sim_read_of_the_offset_entity_is_l0028() {
+    let mut engine = offset_engine("offset-peek", true, true);
+    advance(&mut engine, 3);
+    let crossings = engine
+        .world()
+        .resource::<ludion_engine::Diagnostics>()
+        .map(|d| {
+            d.reported(ludion_core::codes::code::PRESENTATION_BOUNDARY)
+                .count()
+        })
+        .unwrap_or(0);
+    assert!(
+        crossings > 0 || !engine.world().pending_boundary_crossings().is_empty(),
+        "the sim read crossed the boundary"
+    );
+}
+
+/// The `camera` debug category draws the rig's own pose: an offset leaves every segment as it was.
+#[test]
+fn the_camera_debug_category_ignores_the_offset() {
+    let lines = |tag: &str, offset: bool| {
+        let mut engine = offset_engine(tag, offset, false);
+        engine.set_debug_draw(DebugCategories::parse("camera"));
+        let mut out = Vec::new();
+        for _ in 0..30 {
+            engine.advance_live();
+            out.push(engine.extract_present_scene().unwrap().0.debug_lines);
+        }
+        out
+    };
+    let plain = lines("offset-draw-plain", false);
+    assert!(plain.iter().any(|tick| !tick.is_empty()), "the rig drew");
+    assert_eq!(lines("offset-draw-moved", true), plain);
 }

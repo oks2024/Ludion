@@ -1593,6 +1593,21 @@ pub mod code {
     /// specular highlight disagree.
     pub const SUN_DISC_SIZE_MISMATCH: DiagnosticCode = DiagnosticCode::new("L1331");
 
+    /// `L1332` — a `CameraOffset` field is non-finite (a scene is refused, a runtime offset is
+    /// ignored).
+    pub const CAMERA_OFFSET_INVALID: DiagnosticCode = DiagnosticCode::new("L1332");
+
+    /// `L1333` — a `CameraOffset` is on a sim entity, so it is hashed and never applied.
+    pub const CAMERA_OFFSET_ON_SIM_ENTITY: DiagnosticCode = DiagnosticCode::new("L1333");
+
+    /// `L1334` — more than one `CameraOffset` on presentation entities; the lowest id is applied
+    /// and the rest are ignored.
+    pub const CAMERA_OFFSET_DUPLICATE: DiagnosticCode = DiagnosticCode::new("L1334");
+
+    /// `L1335` — a `CameraOffset.fov_delta` would take a perspective camera's field of view outside
+    /// 1 to 179 degrees; the result is clamped.
+    pub const CAMERA_OFFSET_FOV_CLAMPED: DiagnosticCode = DiagnosticCode::new("L1335");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7906,6 +7921,50 @@ disc in the sky and the specular highlight on glossy surfaces differ in size.
 Fix: set `sun_disc_size` to twice `angular_radius`, or drop one of the two.",
     },
     CodeEntry {
+        code: code::CAMERA_OFFSET_INVALID,
+        severity: Severity::Error,
+        title: "camera offset field is not finite",
+        explanation: "\
+A `CameraOffset` (pointer `/entities/{i}/components/CameraOffset/{field}`) has a `translation`,
+`rotation_deg` or `fov_delta` that is NaN or infinite. A scene with one is refused; at runtime the
+whole offset is ignored and the rig's pose is drawn.
+
+Fix: write finite numbers.",
+    },
+    CodeEntry {
+        code: code::CAMERA_OFFSET_ON_SIM_ENTITY,
+        severity: Severity::Error,
+        title: "camera offset on a sim entity",
+        explanation: "\
+A `CameraOffset` is on a sim entity (pointer `/entities/{i}/components/CameraOffset`). A sim
+entity's components are hashed, and the offset exists to move the rendered camera without moving
+`WorldHash`, so it is never applied there. `ludion check-scene` and `scene.check` refuse it; a scene
+that loads anyway, or a runtime insert, is ignored and reported once.
+
+Fix: put the `CameraOffset` on a presentation entity (`presentation: true` in a scene,
+`spawn_presentation` in code).",
+    },
+    CodeEntry {
+        code: code::CAMERA_OFFSET_FOV_CLAMPED,
+        severity: Severity::Warning,
+        title: "camera offset field of view was clamped",
+        explanation: "A `CameraOffset.fov_delta` takes a perspective camera's vertical field of view outside 1 to 179
+degrees, so the drawn field of view is clamped to that range. Reported once; the frame still draws.
+
+Fix: keep `Camera.fov_y_deg + fov_delta` within 1 to 179, for instance by clamping the tween.",
+    },
+    CodeEntry {
+        code: code::CAMERA_OFFSET_DUPLICATE,
+        severity: Severity::Error,
+        title: "more than one camera offset",
+        explanation: "\
+More than one presentation entity carries a `CameraOffset`. A scene has one camera, so one offset:
+only the one on the lowest entity id is applied and the rest are ignored, so the frame still
+draws. `ludion check-scene` names the extra entity.
+
+Fix: keep one offset entity and drive it from your presentation systems.",
+    },
+    CodeEntry {
         code: code::CONTENT_PATH_OUTSIDE_ROOT,
         severity: Severity::Error,
         title: "a content or payload path leaves the content root",
@@ -10776,6 +10835,10 @@ mod tests {
         code::LOCAL_LIGHT_SHADOW_FADE_UNUSED,
         code::CAMERA_DOF_FOCUS_ZERO,
         code::SUN_DISC_SIZE_MISMATCH,
+        code::CAMERA_OFFSET_INVALID,
+        code::CAMERA_OFFSET_ON_SIM_ENTITY,
+        code::CAMERA_OFFSET_DUPLICATE,
+        code::CAMERA_OFFSET_FOV_CLAMPED,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -11040,6 +11103,7 @@ mod tests {
             code::LOCAL_LIGHT_SHADOW_FADE_UNUSED,
             code::CAMERA_DOF_FOCUS_ZERO,
             code::SUN_DISC_SIZE_MISMATCH,
+            code::CAMERA_OFFSET_FOV_CLAMPED,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

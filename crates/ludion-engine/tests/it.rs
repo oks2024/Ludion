@@ -13,6 +13,7 @@ mod audio;
 mod bisect;
 mod bounds;
 mod builder;
+mod camera_offset;
 mod camera_rig;
 mod character;
 mod character_animation;
