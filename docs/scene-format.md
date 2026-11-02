@@ -136,6 +136,7 @@ These `cargo run -p ludion-cli -- …` lines work in the engine checkout; from a
 - Indentation is spaces; a tab is an `L1001` syntax error, often reported at a confusing position.
 - Component names are case-sensitive registry keys; `transform` is not `Transform` (you will get `L1013` with the suggestion).
 - Entity `name` is carried by the reserved `Name` component (author it through `name:`, never a `components:` block): protocols still reference entities by id, but renaming an entity changes the `WorldHash`.
+- `check-scene` opens every mesh, voxel, sculpt, assembly, character, collider-mesh, mesh-texture and decal-map file a scene (or a prefab it instances) names, and reports a missing or bad one as `L1101` at the entity naming it; a `MeshGrid` glyph no row uses is not opened.
 - **`ludion check-scene` is built-in-only** — the CLI links no game code, so every scene naming one of
   your components fails it with `L1013`. Check those from your own binary, which has the registry:
   `cargo run -- --scene scenes/main.yaml --check-scene` validates and exits, and

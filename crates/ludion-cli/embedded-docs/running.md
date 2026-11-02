@@ -72,7 +72,7 @@ within 5 s is reported as `L4022` and the host exits non-zero. Peers attach to t
   whole difference). `--check-scene` parses and validates `--scene`, printing each diagnostic
   rustc-style and then `<path>: OK (N entities, M components)` or `<path>: N errors found` (errors
   only: a warning prints and never fails), and exits 0 or 1 — no GPU, no window, nothing
-  instantiated. `--render-out` writes one frame of the same scene to that PNG at
+  instantiated; it opens every mesh, voxel, sculpt, assembly, character, collider-mesh, mesh-texture and decal-map file the scene names (`L1101`). `--render-out` writes one frame of the same scene to that PNG at
   **`--width`/`--height`** (default: the builder's render size), after **`--frames <N>`** ticks of
   **your game's own schedule** — `N` game ticks, systems and all, so the frame can be
   an early wave or a boss phase rather than the scene at rest. `--quality` applies, and no adapter

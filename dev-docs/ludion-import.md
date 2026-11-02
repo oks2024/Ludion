@@ -137,9 +137,7 @@ cargo run -p ludion-cli -- explain L1202      # and L1201, L1203, L1206
   prefab's parts by glTF node index in a skinned document.
 - **A multi-primitive mesh silently changes entity count.** One glTF node with an N-primitive mesh
   becomes 1 (the node's own entity, no `Mesh`) + N child entities — "one node in, one entity out" breaks counts on `import.prefab.entities.len()`.
-- **`check-scene` does not read a mesh document's textures.** It validates the document itself
-  (structure, `L1111`'s texture rules: `uvs` present, `tangents` present for a normal map, a
-  non-empty `path`) but never opens the referenced PNGs — that happens only at load, in
-  `ludion-engine`'s `mesh_asset::load` (`L1101`/`L1102`). A path that validates but points nowhere
-  passes `check-scene` and fails only when the scene is actually rendered.
+- **`check-scene` opens a mesh document's textures only to check them.** `mesh_check.rs` confirms each
+  referenced PNG exists and its header parses within 8192 (`check_png_header`, `L1101`/`L1102`); the
+  pixels decode only at load, in `mesh_asset::load`, so a PNG truncated after its header passes.
 - **`IMPORTER_FINGERPRINT`** (`build.rs`, `build/fingerprint.rs`) hashes the dependency closure derived from `cargo metadata`; `ludion sync` re-imports when it moves. Never list the closure by hand.

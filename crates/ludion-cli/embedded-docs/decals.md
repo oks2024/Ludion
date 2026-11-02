@@ -37,7 +37,7 @@ analytic marker is `ludion docs ground-telegraphs`; the map block is `ludion doc
 
 Maps: `base_color_texture` (sRGB; RGB × `color`, A is coverage), `normal_texture` and
 `metallic_roughness_texture` (`alpha` and `coat` only), each the map block of `ludion docs materials`.
-A missing or unreadable file is `L1101`/`L1102` at the map path. Normal-map convention: red = box +X,
+A missing or unreadable file is `L1101`/`L1102` at the map path, which `check-scene` reports. Normal-map convention: red = box +X,
 green = image up = box −Z.
 
 ## Rules

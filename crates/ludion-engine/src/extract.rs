@@ -4913,7 +4913,7 @@ pub(crate) fn mesh_error(
 /// is a plausible typo. Goes through [`ludion_core::suggest::nearest`] — the one nearest-match
 /// helper every other diagnostic in the engine uses — so a transposed letter (`lantren` for
 /// `lantern`) suggests here exactly as it does for a misspelled component or field name.
-fn suggest_asset(project_root: AssetRoot<'_>, rel: &str) -> Option<String> {
+pub(crate) fn suggest_asset(project_root: AssetRoot<'_>, rel: &str) -> Option<String> {
     let joined = project_root.dir().join(rel);
     let dir = joined.parent()?;
     let target = joined.file_name()?.to_string_lossy().to_string();

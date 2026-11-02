@@ -52,7 +52,7 @@ description: The MeshGrid component: a glyph grid of oriented mesh cells for gro
 | `L1020` | a row glyph has no legend entry, or a legend key is not one glyph or is a space |
 | `L1243` | `orient` differs in row count or width from `rows`, or holds a glyph outside `0`-`7`/space (`/orient`, `/orient/<n>`) |
 | `L1244` | a legend entry has a `character` shape (`/legend/<glyph>`) |
-| `L1101` | a legend asset fails to load; the pointer is `/entities/<n>/components/MeshGrid/legend/<glyph>/shape/...`, reported once per glyph |
+| `L1101` | a legend asset fails to load; the pointer is `/entities/<n>/components/MeshGrid/legend/<glyph>/shape/...`, reported once per glyph; `check-scene` raises it for a glyph a row uses |
 
 `component.set` runs the same checks and rejects a bad grid before any world change.
 

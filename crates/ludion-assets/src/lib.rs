@@ -336,42 +336,58 @@ fn read_capped(reader: impl std::io::Read, cap: u64) -> std::io::Result<Option<V
     Ok((bytes.len() as u64 <= cap).then_some(bytes))
 }
 
-/// Opens `path` and reads it whole with the [`MAX_ASSET_BYTES`] bound; `label` names it in errors.
-fn read_bounded(path: &Path, label: &str) -> Result<AssetBytes, Diagnostic> {
-    let io_error = |why: String| {
-        Diagnostic::new(
-            code::ASSET_FILE_IO,
-            format!(
-                "could not read asset `{label}` (at `{}`): {why}",
-                path.display()
-            ),
-        )
-        .with_help("check the path is correct and names a file that exists relative to the project")
-    };
+/// The `L1101` every read of `path` raises, `label` naming it.
+fn io_error(path: &Path, label: &str, why: String) -> Diagnostic {
+    Diagnostic::new(
+        code::ASSET_FILE_IO,
+        format!(
+            "could not read asset `{label}` (at `{}`): {why}",
+            path.display()
+        ),
+    )
+    .with_help("check the path is correct and names a file that exists relative to the project")
+}
+
+/// Opens the regular file at `path`; `label` names it in errors.
+fn open_regular(path: &Path, label: &str) -> Result<std::fs::File, Diagnostic> {
     // Windows refuses to open a directory ("access denied") before the regular-file check can say so.
     let file = std::fs::File::open(path).map_err(|error| {
-        io_error(if path.is_dir() {
-            "not a regular file".to_string()
-        } else {
-            error.to_string()
-        })
+        io_error(
+            path,
+            label,
+            if path.is_dir() {
+                "not a regular file".to_string()
+            } else {
+                error.to_string()
+            },
+        )
     })?;
     let metadata = file
         .metadata()
-        .map_err(|error| io_error(error.to_string()))?;
+        .map_err(|error| io_error(path, label, error.to_string()))?;
     if !metadata.is_file() {
-        return Err(io_error("not a regular file".to_string()));
+        return Err(io_error(path, label, "not a regular file".to_string()));
     }
+    Ok(file)
+}
+
+/// Opens `path` and reads it whole with the [`MAX_ASSET_BYTES`] bound; `label` names it in errors.
+fn read_bounded(path: &Path, label: &str) -> Result<AssetBytes, Diagnostic> {
+    let file = open_regular(path, label)?;
     match read_capped(file, MAX_ASSET_BYTES) {
         Ok(Some(bytes)) => {
             let hash = content_hash(&bytes);
             Ok(AssetBytes { bytes, hash })
         }
-        Ok(None) => Err(io_error(format!(
-            "larger than the {} MiB asset limit",
-            MAX_ASSET_BYTES / (1024 * 1024)
-        ))),
-        Err(error) => Err(io_error(error.to_string())),
+        Ok(None) => Err(io_error(
+            path,
+            label,
+            format!(
+                "larger than the {} MiB asset limit",
+                MAX_ASSET_BYTES / (1024 * 1024)
+            ),
+        )),
+        Err(error) => Err(io_error(path, label, error.to_string())),
     }
 }
 
@@ -412,6 +428,53 @@ pub fn load_png(root: AssetRoot<'_>, relative: &str) -> Result<Image, Diagnostic
 /// writes a PNG checks its extent against this.
 pub const MAX_PNG_SIDE: u32 = 8192;
 
+/// `L1102` when a PNG header declares a side over [`MAX_PNG_SIDE`].
+fn check_png_side(declared: &png::Info<'_>, label: &str) -> Result<(), Diagnostic> {
+    if declared.width > MAX_PNG_SIDE || declared.height > MAX_PNG_SIDE {
+        return Err(png_error(
+            label,
+            format!(
+                "{}x{} pixels: a side is over {MAX_PNG_SIDE}, the largest texture the engine's device takes",
+                declared.width, declared.height
+            ),
+        )
+        .with_help("downscale the image or split it into tiles of at most 8192x8192 pixels"));
+    }
+    Ok(())
+}
+
+/// Checks the PNG at `root`/`relative` without decoding a pixel: the file opens, its header parses
+/// and declares no side over 8192. The loader's refusals for a missing or unreadable file and for a
+/// bad or oversized header, at the cost of one header read. A file truncated after its header passes;
+/// only [`load_png`] sees that.
+///
+/// # Errors
+/// - `L1321` if `relative` is absolute, prefixed or (on a confined root) climbs out of it.
+/// - `L1101` if the file cannot be opened.
+/// - `L1102` if the header is not a PNG's, or declares a side over 8192.
+///
+/// # Example
+/// ```
+/// use ludion_assets::{check_png_header, AssetRoot};
+///
+/// let root = std::env::temp_dir().join(format!("ludion-png-header-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(&root).unwrap();
+/// std::fs::write(root.join("a.png"), ludion_assets::encode_png(1, 1, &[0, 0, 0, 255]).unwrap()).unwrap();
+/// assert!(check_png_header(AssetRoot::content(&root), "a.png").is_ok());
+/// assert_eq!(
+///     check_png_header(AssetRoot::content(&root), "b.png").unwrap_err().code.as_str(),
+///     "L1101"
+/// );
+/// # std::fs::remove_dir_all(&root).ok();
+/// ```
+pub fn check_png_header(root: AssetRoot<'_>, relative: &str) -> Result<(), Diagnostic> {
+    let file = open_regular(&resolve(root, relative)?, relative)?;
+    let reader = png::Decoder::new(std::io::BufReader::new(file))
+        .read_info()
+        .map_err(|error| png_error(relative, format!("not a readable PNG: {error}")))?;
+    check_png_side(reader.info(), relative)
+}
+
 /// Decodes PNG `bytes` (named `label` for diagnostics) into `(width, height, rgba8)`.
 ///
 /// Split out from [`load_png`] so it can be unit-tested on in-memory bytes without touching disk.
@@ -429,17 +492,7 @@ pub fn decode_png(bytes: &[u8], label: &str) -> Result<(u32, u32, Vec<u8>), Diag
     let mut reader = decoder
         .read_info()
         .map_err(|error| png_error(label, format!("not a readable PNG: {error}")))?;
-    let declared = reader.info();
-    if declared.width > MAX_PNG_SIDE || declared.height > MAX_PNG_SIDE {
-        return Err(png_error(
-            label,
-            format!(
-                "{}x{} pixels: a side is over {MAX_PNG_SIDE}, the largest texture the engine's device takes",
-                declared.width, declared.height
-            ),
-        )
-        .with_help("downscale the image or split it into tiles of at most 8192x8192 pixels"));
-    }
+    check_png_side(reader.info(), label)?;
     let mut buffer = vec![0u8; reader.output_buffer_size().unwrap_or(0)];
     let info = reader
         .next_frame(&mut buffer)
@@ -915,6 +968,44 @@ mod tests {
             let error = load_bytes(root, path).unwrap_err();
             assert_eq!(error.code, code::CONTENT_PATH_OUTSIDE_ROOT, "{path}");
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn png_header_check_matches_the_loaders_refusals() {
+        let dir = std::env::temp_dir().join(format!("ludion-png-header-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = AssetRoot::content(&dir);
+        let good = encode_png(2, 2, &[255u8; 16]).unwrap();
+        std::fs::write(dir.join("good.png"), &good).unwrap();
+        std::fs::write(dir.join("junk.png"), b"not a png").unwrap();
+        std::fs::write(
+            dir.join("wide.png"),
+            encode_png(8193, 1, &vec![0u8; 8193 * 4]).unwrap(),
+        )
+        .unwrap();
+        // Everything after the header is gone: the header check cannot see it.
+        std::fs::write(dir.join("cut.png"), &good[..41]).unwrap();
+        assert!(check_png_header(root, "good.png").is_ok());
+        assert!(check_png_header(root, "cut.png").is_ok());
+        assert_eq!(
+            check_png_header(root, "missing.png").unwrap_err().code,
+            code::ASSET_FILE_IO
+        );
+        assert_eq!(
+            check_png_header(root, "junk.png")
+                .unwrap_err()
+                .code
+                .as_str(),
+            "L1102"
+        );
+        assert_eq!(
+            check_png_header(root, "wide.png")
+                .unwrap_err()
+                .code
+                .as_str(),
+            "L1102"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

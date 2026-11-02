@@ -279,9 +279,8 @@ and this arc's keys coexist with it (`origin` after `name`; this arc's keys afte
 - **Fact worth keeping:** the mesh pipeline now uses 16 fragment-sampled textures (1 shadow + 10
   env/GI + 5 material) — exactly WebGPU's guaranteed minimum — and five bind groups; the device
   requests `adapter.limits()`, fine on both pinned GPUs, a downlevel adapter would refuse the pipeline.
-- **`check-scene` validates a texture reference's shape but never opens the PNG** — a missing file
-  surfaces at load (`mesh_asset::load`), not from the checker. Recorded in `dev-docs/ludion-import.md`;
-  a `check-scene` read of mesh textures is a small follow-up if the sitting wants it.
+- **`check-scene` checks a mesh's texture files** (existence and PNG header) through the mesh-asset pass
+  (`mesh_check.rs`, Clockout 0033); pixels still decode only at load.
 
 ### Owed
 

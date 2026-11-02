@@ -96,7 +96,7 @@ document for level geometry, with the solver's internal-edge fix so a capsule sl
 without catching. `path` is content-root relative, the same as `Mesh.shape: { asset }`. It is
 `static` or `kinematic` only: on a `rigid` body it is `L1211` (pointer `/body`; use `convex` or
 `compound`, no hull is generated). A blank `path`, a missing or invalid document, or a mesh the
-solver refuses is `L1212`. By convention the collision mesh is a simplified copy exported from the
+solver refuses is `L1212`; `check-scene` reports a missing document earlier, as `L1101`. By convention the collision mesh is a simplified copy exported from the
 level's bpy script; the render mesh works for a greybox. A mesh is not a query shape and not a
 compound part. The document is read when a scene loads, a snapshot restores or the scene switches,
 not by `asset.reload` (a collider changing mid-run would break replays): edit the file, then

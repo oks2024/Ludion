@@ -48,8 +48,7 @@ is `ludion devdocs ludion-renderer`; the tick-to-pixels path for a *live* subscr
 quaternions, resolves loose scene textures (sprites, UI) via `ludion_assets::load_png` — failures
 *collected* as `L1101`/`L1102` with JSON Pointers and a nearest-filename suggestion — and emits a
 `RenderScene` holding no ECS references and no paths. An asset mesh's own texture maps are a separate
-seam: they resolve through `mesh_asset::load` (`ludion devdocs ludion-import`'s Gotchas has the
-`check-scene` caveat), collecting the same `L1101`/`L1102` codes at each map's own JSON Pointer
+seam: they resolve through `mesh_asset::load` (`check-scene` checks them in `mesh_check.rs`), collecting the same `L1101`/`L1102` codes at each map's own JSON Pointer
 (`/base_color_texture`, …) rather than this seam's. Every component derives `Serialize + Deserialize + JsonSchema` with per-field
 defaults, so partial YAML instantiates cleanly and `check-scene` gets a schema per component.
 

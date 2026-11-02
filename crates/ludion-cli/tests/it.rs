@@ -9,6 +9,7 @@
 
 mod bake_probes;
 mod check_scene;
+mod check_scene_asset_paths;
 mod check_scene_character;
 mod check_scene_fonts;
 mod check_scene_json;

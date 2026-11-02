@@ -691,7 +691,7 @@ pub fn scene_audio_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagno
 }
 
 /// Every engine pass over an expanded scene, in one list: atlas, font, collider layer, parented
-/// body, physics, preload, skin bone, audio and reflection probe diagnostics, errors and warnings together
+/// body, physics, preload, skin bone, mesh asset, audio and reflection probe diagnostics, errors and warnings together
 /// (`severity` tells them apart). `ludion check-scene`, a game's `--check-scene` and `scene.check` all run exactly
 /// this, so no client answers "is this scene valid" differently.
 ///
@@ -721,14 +721,25 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_camera_rig_diagnostics(scene));
     diagnostics.extend(scene_sun_diagnostics(scene));
     diagnostics.extend(scene_preload_diagnostics(project_root, scene));
-    diagnostics.extend(crate::skin_bone::scene_skin_bone_diagnostics(
+    // The mesh-asset pass reports a missing skinned mesh at its entity; the skin-bone and
+    // parent-joint passes read the same files and push the reader's bare diagnostic, dropped here.
+    let meshes = crate::mesh_check::scene_mesh_asset_diagnostics(project_root, scene);
+    let mut joints = crate::skin_bone::scene_skin_bone_diagnostics(
         ludion_assets::AssetRoot::content(project_root),
         scene,
-    ));
-    diagnostics.extend(crate::parent_joint::scene_parent_joint_diagnostics(
+    );
+    joints.extend(crate::parent_joint::scene_parent_joint_diagnostics(
         project_root,
         scene,
     ));
+    joints.retain(|bare| {
+        bare.path.is_some()
+            || !meshes
+                .iter()
+                .any(|d| d.code == bare.code && d.message.ends_with(&bare.message))
+    });
+    diagnostics.extend(joints);
+    diagnostics.extend(meshes);
     diagnostics.extend(scene_audio_diagnostics(project_root, scene));
     diagnostics.extend(crate::probe_check::scene_probe_diagnostics(scene));
     diagnostics

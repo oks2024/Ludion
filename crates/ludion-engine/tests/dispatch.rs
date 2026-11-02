@@ -892,6 +892,43 @@ fn parent_index_remaps_across_a_destroy_and_survives_reload() {
 /// The four `Parent` structural checks in `check-scene`: out-of-range index, nonzero generation,
 /// self-parent (each `L1017` with the pointer at the offending value), and a valid reference.
 #[test]
+fn scene_check_reports_a_missing_mesh_document() {
+    let root = temp_project();
+    let mut engine = Engine::with_project_root(&root);
+    std::fs::write(
+        root.join("rock.yaml"),
+        "format: 1
+entities:
+  - name: rock
+    components:
+      Mesh:
+        shape:
+          asset: gone.mesh.yaml
+",
+    )
+    .unwrap();
+    match ok(
+        &mut engine,
+        Command::SceneCheck(SceneCheckParams {
+            path: "rock.yaml".into(),
+        }),
+    ) {
+        ResponseBody::SceneChecked { valid, diagnostics } => {
+            assert!(!valid, "{diagnostics:?}");
+            let d = diagnostics
+                .iter()
+                .find(|d| d.code.as_str() == "L1101")
+                .expect("expected L1101");
+            assert_eq!(
+                d.path.as_deref(),
+                Some("/entities/0/components/Mesh/shape/asset")
+            );
+        }
+        other => panic!("expected SceneChecked, got {other:?}"),
+    }
+}
+
+#[test]
 fn check_scene_validates_parent_references() {
     let root = temp_project();
 

@@ -64,6 +64,7 @@ pub mod live;
 mod load_observer;
 pub mod manifest;
 mod mesh_asset;
+mod mesh_check;
 pub mod model_sheet;
 mod motor;
 mod parent_joint;
@@ -164,6 +165,7 @@ pub use ludion_scene::{
     PathDocument, PathFrame, PathInterpolation, PathMetric, PathSampler, check_path,
 };
 pub use ludion_sim::WorldHash;
+pub use mesh_check::scene_mesh_asset_diagnostics;
 pub use model_sheet::{
     ClipCrossfade, ClipOutcome, CrossfadeSpec, DEFAULT_CROSSFADE_PHASES, MAX_LINEUP_MODELS,
     MAX_STRIP_PHASES, MIN_STRIP_PHASES, ModelCamera, ModelChannel, ModelSheetRequest, ModelSweep,

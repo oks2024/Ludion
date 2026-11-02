@@ -3661,7 +3661,8 @@ diagnostic means the file at that resolved path
 does not exist, is a directory, or could not be opened for reading. The message includes the
 operating system's reason, and — when the diagnostic comes from extracting a scene — a JSON Pointer
 naming the exact component field, plus a suggestion of the nearest filename that does exist in the
-assets directory (a likely fix for a typo).
+assets directory (a likely fix for a typo). `check-scene` reports it for a scene's mesh, voxel, sculpt, assembly,
+character, collider-mesh, mesh-texture and decal-map files before any render.
 
 Fix: correct the path so it names an existing file relative to the scene, or add the missing asset.
 Paths are case-sensitive on some platforms, so check the spelling and extension.",

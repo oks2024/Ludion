@@ -213,7 +213,7 @@ fn from_directory(from: &str) -> PathBuf {
 
 /// `Path::starts_with` compares case-sensitively, but the derived trees live on filesystems that
 /// do not.
-fn starts_with_ignore_case(path: &Path, prefix: &Path) -> bool {
+pub(crate) fn starts_with_ignore_case(path: &Path, prefix: &Path) -> bool {
     let mut path = path.components();
     prefix.components().all(|part| {
         path.next()

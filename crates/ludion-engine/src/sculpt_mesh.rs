@@ -39,15 +39,11 @@ pub(crate) fn load(
     load_with_sources(root, rel).map(|(data, _)| data)
 }
 
-/// [`load`], additionally reporting **every file it read** — the sculpt document first, then each
-/// distinct `shape: voxel` / `shape: mesh` part document, as `root`-relative paths, each with the
-/// content hash of the bytes it decoded. That list is the
-/// sculpt's reload dependency set ([`crate::asset_cache`]), and those files' hashes are folded into
-/// [`MeshData::hash`], so an edited part re-keys the GPU mesh even when the sculpt is untouched.
-pub(crate) fn load_with_sources(
+/// Reads and validates the sculpt document at `root`/`rel`, returning it with its bytes' content hash.
+pub(crate) fn read_document(
     root: ludion_assets::AssetRoot<'_>,
     rel: &str,
-) -> Result<(MeshData, SourceFiles), Vec<Diagnostic>> {
+) -> Result<(SculptDocument, u64), Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
     let source = std::str::from_utf8(&bytes.bytes).map_err(|_| {
         vec![
@@ -59,11 +55,24 @@ pub(crate) fn load_with_sources(
         ]
     })?;
     let doc = ludion_scene::check_sculpt(source)?;
+    Ok((doc, bytes.hash))
+}
+
+/// [`load`], additionally reporting **every file it read** — the sculpt document first, then each
+/// distinct `shape: voxel` / `shape: mesh` part document, as `root`-relative paths, each with the
+/// content hash of the bytes it decoded. That list is the
+/// sculpt's reload dependency set ([`crate::asset_cache`]), and those files' hashes are folded into
+/// [`MeshData::hash`], so an edited part re-keys the GPU mesh even when the sculpt is untouched.
+pub(crate) fn load_with_sources(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+) -> Result<(MeshData, SourceFiles), Vec<Diagnostic>> {
+    let (doc, doc_hash) = read_document(root, rel)?;
     let (sources, files) = read_sculpt_sources_with_files(root, rel, &doc)?;
     let mesh = ludion_sculpt::mesh_with(&doc, &sources).map_err(|diagnostic| vec![diagnostic])?;
     let part_hashes: Vec<u64> = files.iter().map(|(_, hash)| *hash).collect();
-    let hash = fold_source_hashes(bytes.hash, &part_hashes);
-    let read = std::iter::once((rel.to_string(), bytes.hash))
+    let hash = fold_source_hashes(doc_hash, &part_hashes);
+    let read = std::iter::once((rel.to_string(), doc_hash))
         .chain(files)
         .collect();
     Ok((mesh_data(mesh, hash), read))

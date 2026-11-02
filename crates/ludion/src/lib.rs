@@ -1276,7 +1276,7 @@ fn fail_on_errors(source: &Path, diagnostics: &[Diagnostic]) -> Option<ExitCode>
 ///
 /// Everything the CLI's check runs runs here, and everything the wire's `scene.check` runs:
 /// [`ludion_engine::scene_engine_diagnostics`] is the one list of engine passes (atlas, font,
-/// collider layer, parented body, physics, skin bone, reflection probe and audio), run over the expanded scene after
+/// collider layer, parented body, physics, skin bone, mesh asset, reflection probe and audio), run over the expanded scene after
 /// the font table's own faults, so the three clients cannot answer differently about the same scene.
 #[cfg(feature = "wire")]
 fn run_check_scene(builder: EngineBuilder, scene: &Path) -> ExitCode {
@@ -2934,6 +2934,36 @@ entities:
         )
         .unwrap();
         assert_eq!(run_check_scene(game(), &scene), ExitCode::FAILURE);
+    }
+
+    /// A `Mesh` whose document is not on disk draws nothing: `--check-scene` runs the mesh-asset pass,
+    /// and passes once the file exists.
+    #[test]
+    fn a_missing_mesh_fails_check_scene_until_the_file_exists() {
+        let dir = fixture("mesh");
+        let scene = dir.join("scene.yaml");
+        std::fs::write(
+            &scene,
+            "format: 1
+entities:
+  - name: rock
+    components:
+      Mesh:
+        shape:
+                       asset: rock.mesh.yaml
+",
+        )
+        .unwrap();
+        assert_eq!(run_check_scene(game(), &scene), ExitCode::FAILURE);
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../ludion-cli/tests/fixtures/good_mesh.mesh.yaml"
+            ),
+            dir.join("rock.mesh.yaml"),
+        )
+        .unwrap();
+        assert_eq!(run_check_scene(game(), &scene), ExitCode::SUCCESS);
     }
 
     /// `L1209` (an atlas sprite crossfading) is a lint: `--check-scene` prints it and still passes.
