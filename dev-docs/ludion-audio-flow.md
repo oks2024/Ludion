@@ -33,11 +33,13 @@ fresh sync undone by the departing entity's stop.
 `AudioSink::spawn` hands a session to an idle `ludion-audio` playback thread (or spawns one) running
 `run`: `Playback::start` opens the default output and builds a stream on its native config
 (`F32`/`I16`/`U16`; else `L5001`); `serve` loops `recv_timeout` into `Playback::wake`. The callback queue
-is bounded (`COMMAND_CAPACITY`, `try_send`); a full queue, a cpal error, a rendered stream silent for
-`STALL_AFTER` or none rendering within `START_WITHIN` drops the stream (`L5002`), and `wake` reopens it
-with backoff (reset after `HEALTHY_AFTER` of rendering), replaying `declared` and resuming the music;
-before the first render one-shots past `PRESTART_ONE_SHOTS` are dropped; while lost, messages are
-routed and dropped. `Router::route` turns one
+is bounded (`COMMAND_CAPACITY`, `try_send`), and a full queue signals nothing: the callback drains it
+on every render. State commands that find it full wait in `Router::backlog`, flushed in order first
+on each wake; one-shots above `ONE_SHOT_HIGH_WATER` are shed at any time. A cpal error, a gone
+callback, a rendered stream silent for `STALL_AFTER` or none rendering within `START_WITHIN` drops
+the stream (`L5002`, clearing the backlog), and `wake` reopens it with backoff (reset after
+`HEALTHY_AFTER` of rendering), replaying `declared` and resuming the music; while lost, messages are
+routed and their commands dropped. `Router::route` turns one
 message into at most one `VoiceCommand`: a sound resolves its buffer from a
 `HashMap<String, Decoded>` cache (`resolve`: stamped, failures cached) — first use decodes via `load_wav` and
 `to_device_buffer` (music's linear `Converter`) — and
@@ -55,5 +57,7 @@ When the engine's sender is dropped, `serve` returns and `run` drops the stream.
 the idle pool and drops the session's `done` sender. Dropping the `AudioSink` only detaches, so a host's
 teardown never waits on the device; `AudioSink::wait` is the blocking end that waits on `done`.
 
-The **silent path** (`drain_silently`) drains every event to disconnect without touching a device;
-its `SilentCheck` runs `check_message` once per file version and prints the device path's warning.
+The **lost-from-start path**: when the first open fails, `Playback::start` reports `L5001` and begins
+lost, on `ASSUMED_FORMAT`, with the same router. `wake` retries on the usual backoff; messages in the
+meantime update `declared` and the music feed (and warn of broken references through the router),
+and the first stream to open gets them by `replay`. The recovery note says `after L5001`.

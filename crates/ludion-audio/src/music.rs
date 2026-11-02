@@ -109,8 +109,10 @@ impl Track {
             Ok(Some(packet)) => {
                 let mut samples = packet.samples;
                 let channels = self.channels().max(1);
-                // A page's granule is where the stream truly ends; the encoder's tail padding past
-                // it is trimmed so a loop wraps with nothing inserted.
+                // Lewton trims the end-of-stream packet itself once it knows a previous granule.
+                // This clamp covers a one-page stream, where it does not. Mid-stream the granule
+                // tracks the decoded position, so nothing is cut here. A start-trimmed stream loses
+                // its excess from the tail of its first page, not its head.
                 if let Some(end) = self.reader.get_last_absgp() {
                     let room = end.saturating_sub(self.frames) as usize;
                     samples.truncate(samples.len().min(room * channels));

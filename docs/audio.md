@@ -39,13 +39,17 @@ fn ball_edge_sound(world: &mut World, _ctx: &SystemCtx) {
   sound rewritten under a running host is picked up by its first message half a second later (a static
   emitter: at its next sync). Keep clips small; convert other formats first.
 - **Paths** resolve against the content root (the scene's directory), exactly like `Sprite.texture`.
-- **No device is fine.** On a headless/CI machine the sink warns once (`L5001`) and runs silent; the
-  events still drain, so nothing blocks and tests stay green. The silent sink still warns
+- **No device is fine.** On a headless/CI machine the sink warns once (`L5001`) and plays silent; the
+  events still route, so nothing blocks and tests stay green. It keeps retrying the open, so a
+  device that appears later is picked up with the declared loops and music, and it still warns
   (`L1101`/`L1104`/`L5003`) once per broken file, so a typo shows on a headless run. Audio never
   gates determinism. A device lost mid-run (`L5002`: unplugged, switched or stalled) reopens on the
   current default, retrying with backoff up to every 5 s; loops and music fade back in, and one-shots
-  fired meanwhile are dropped, as are those fired before a slow device starts once they pass half
-  the queue. One warning when it goes, one note when it returns; nothing else moves.
+  fired meanwhile are dropped. A burst of one-shots in one tick beyond half the sink's queue sheds
+  the excess one-shots and never touches the stream. One warning when it goes, one note when it
+  returns; nothing else moves.
+- **A non-finite gain plays at 0.** A NaN or infinite gain (a `hp / max_hp` with `max_hp` 0) is
+  queued as `0.0` with one `L5005` warning per sound, so it never poisons the mix.
 - **Verify it in text, no goldens.** The stream is a pure function of the sim — a replay regenerates
   it exactly, and the `WorldHash` is unaffected (the queue is a resource). Assert on the frame-stamped
   log in a headless test:

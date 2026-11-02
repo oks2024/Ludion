@@ -2149,17 +2149,17 @@ pub mod code {
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
     /// `L5001` — no audio output device is available, so the playback sink cannot open a stream.
-    /// This is a **warning**, never a failure: the sink stays silent and still drains every audio
-    /// event, so a headless or device-less environment (CI) runs green. Raised by `ludion-audio`.
+    /// This is a **warning**, never a failure: the sink plays silent and keeps retrying the open, so
+    /// a headless or device-less environment (CI) runs green and a device that appears later is
+    /// picked up. Raised by `ludion-audio`.
     pub const AUDIO_DEVICE_UNAVAILABLE: DiagnosticCode = DiagnosticCode::new("L5001");
 
-    /// `L5002` — an output stream that had opened was lost while playing (an error, a stall, or a
-    /// command queue the callback stopped draining, or no first callback within 5 s). Like
-    /// [`AUDIO_DEVICE_UNAVAILABLE`] this is a **warning**: the sink drops the stream, keeps draining
-    /// every audio event so nothing upstream blocks, and reopens the default output with backoff,
-    /// which starts over once a stream has played for 5 s. Before the first callback, one-shots past
-    /// half the queue are dropped, so a slow start does not fill it. Raised by `ludion-audio`, once
-    /// per loss.
+    /// `L5002` — an output stream that had opened was lost while playing (an error, a stall, a
+    /// gone callback, or no first callback within 5 s). Like [`AUDIO_DEVICE_UNAVAILABLE`] this is a
+    /// **warning**: the sink drops the stream, keeps routing every audio event so nothing upstream
+    /// blocks, and reopens the default output with backoff, which starts over once a stream has
+    /// played for 5 s. One-shots above half the queue are dropped at any time, so a burst never
+    /// reads as a lost device. Raised by `ludion-audio`, once per loss.
     pub const AUDIO_STREAM_FAILED: DiagnosticCode = DiagnosticCode::new("L5002");
 
     /// `L5003` — a music track could not be streamed: the file is missing or unreadable, is not Ogg
@@ -2173,6 +2173,11 @@ pub mod code {
     /// manifest is refused, unlike the playback warnings of L5001–L5003. Raised by
     /// `ludion_engine::manifest`.
     pub const AUDIO_VOICE_CAPS_INVALID: DiagnosticCode = DiagnosticCode::new("L5004");
+
+    /// `L5005` — a game asked for an audio gain that is NaN or infinite (a one-shot, a loop sync or
+    /// the music). A **warning**: the queue plays that sound at gain 0 instead, so one bad volume
+    /// never poisons the mix. Raised by `ludion-engine`, once per sound per session.
+    pub const AUDIO_GAIN_NON_FINITE: DiagnosticCode = DiagnosticCode::new("L5005");
 }
 
 /// One row of the diagnostic-code table: the code, its severity, a short title, and a long-form
@@ -10161,15 +10166,16 @@ captures.",
         severity: Severity::Warning,
         title: "no audio output device available",
         explanation: "\
-The audio playback sink could not open an output device, so it runs silent.
+The audio playback sink could not open an output device, so it plays silent.
 
 Sound is a peripheral concern of the engine, never a determinism-bearing one: audio events are a
 pure function of the simulation, logged and verifiable in-process, and playback happens on a
 separate thread outside every determinism gate. So a machine with no audio device — a CI runner, a
 headless server, a container — is not an error. The sink reports this once as a warning, then keeps
-draining every audio event, still checking each distinct sound and track once (`L1101`/`L1104`/
-`L5003`) and discarding the event, so the run proceeds exactly as it would with sound, just
-inaudibly. Nothing fails, and no test gates on it.
+routing every audio event, warning of each broken sound and track as playback would (`L1101`/
+`L1104`/`L5003`), so the run proceeds exactly as it would with sound, just inaudibly. It keeps
+retrying the open with backoff, so a device that appears later is picked up with the declared
+loops and the music. Nothing fails, and no test gates on it.
 
 Fix: nothing is required — the warning is informational. If you *expected* to hear sound on a
 desktop session, check that an output device is connected and selected as the system default, and
@@ -10189,10 +10195,10 @@ usually means the device went away underneath the process — unplugged, switche
 reconfigured to another sample rate, or grabbed by another application in exclusive mode.
 
 A stream counts as lost when cpal reports an error, when a stream that had been rendering stops
-calling back for 500 ms, when a stream never calls back within 5 s of starting, or when its bounded
-command queue fills because the callback stopped draining it. Before the first callback, one-shots
-past half the queue are dropped, so a slow start does not fill it. The sink reports this once, drops
-the stream, keeps draining audio events so nothing upstream ever blocks, and retries the system
+calling back for 500 ms, when a stream never calls back within 5 s of starting, or when its
+callback is gone. One-shots above half the command queue are dropped at any time, so a burst never
+reads as a lost stream. The sink reports this once, drops the stream, keeps routing audio events so
+nothing upstream ever blocks, and retries the system
 default output with backoff (250 ms, doubling, up to 5 s, never giving up; the wait starts over
 once a stream has played for 5 s). The declared loops and the music come back on the new stream,
 fading in; one-shots fired meanwhile are dropped. A line notes the reopen.
@@ -10239,6 +10245,24 @@ Fix: write the table with integers in range, e.g.
     [audio]
     voices_per_sound = 6
     voices_total = 96",
+    },
+    CodeEntry {
+        code: code::AUDIO_GAIN_NON_FINITE,
+        severity: Severity::Warning,
+        title: "an audio gain is not a finite number",
+        explanation: "A game queued a sound, a loop or the music with a gain that is NaN or infinite, so it plays at gain 0.
+
+A non-finite gain would poison everything the mixer sums it with: one NaN voice makes the whole
+output NaN until it retires, and a looping voice never retires. The audio queue therefore replaces
+the gain with 0 before the message leaves the engine. A loop stays declared at 0, so its next valid
+gain slews it back in, and nothing else in the message stream changes. A negative finite gain is
+left alone: it does not poison a mix. This is a warning
+for the same reason as the rest of L5xxx: audio sits outside every determinism gate. It is reported
+once per sound per session.
+
+Fix: look for a division by zero in a computed volume, such as `hp / max_hp` with `max_hp` 0, or a
+distance falloff that divides by a zero radius, and clamp or guard it before it reaches the audio
+verb.",
     },
 ];
 
@@ -10726,6 +10750,7 @@ mod tests {
         code::AUDIO_STREAM_FAILED,
         code::MUSIC_TRACK_UNPLAYABLE,
         code::AUDIO_VOICE_CAPS_INVALID,
+        code::AUDIO_GAIN_NON_FINITE,
     ];
 
     #[test]
@@ -10887,6 +10912,7 @@ mod tests {
             code::AUDIO_DEVICE_UNAVAILABLE,
             code::AUDIO_STREAM_FAILED,
             code::MUSIC_TRACK_UNPLAYABLE,
+            code::AUDIO_GAIN_NON_FINITE,
         ];
         let registered: Vec<DiagnosticCode> = CODES
             .iter()

@@ -33,6 +33,8 @@ use ludion_core::time::FrameIndex;
 #[derive(Default, Debug)]
 pub struct AudioQueue {
     pending: Vec<Queued>,
+    /// Sounds queued with a NaN or infinite gain since the last drain, played at gain 0 (`L5005`).
+    non_finite: Vec<String>,
 }
 
 /// One pending queue entry: a message ready to send, or a positional one-shot the engine resolves
@@ -49,7 +51,8 @@ pub(crate) enum Queued {
 
 impl AudioQueue {
     /// Queues an [`AudioEvent`] to play once. Drained at the end of the current tick.
-    pub fn push(&mut self, event: AudioEvent) {
+    pub fn push(&mut self, mut event: AudioEvent) {
+        event.gain = self.finite_gain(&event.sound, event.gain);
         self.pending
             .push(Queued::Message(AudioMessage::OneShot(event)));
     }
@@ -72,7 +75,8 @@ impl AudioQueue {
     /// no camera, nothing is sent or logged (and it is not retried); otherwise it is an ordinary
     /// one-shot at the attenuated gain. [`play_at`](Self::play_at) is the `Sfx` convenience; this is
     /// the way to place an ambient one-shot.
-    pub fn push_at(&mut self, event: AudioEvent, position: [f32; 3], range: f32) {
+    pub fn push_at(&mut self, mut event: AudioEvent, position: [f32; 3], range: f32) {
+        event.gain = self.finite_gain(&event.sound, event.gain);
         self.pending.push(Queued::At {
             event,
             position,
@@ -115,6 +119,7 @@ impl AudioQueue {
     /// ```
     pub fn loop_start(&mut self, sound: impl Into<String>, gain: f32) {
         let sound = sound.into();
+        let gain = self.finite_gain(&sound, gain);
         self.pending.push(Queued::Message(AudioMessage::LoopSync {
             id: LoopId::Sound(sound.clone()),
             sound,
@@ -168,12 +173,25 @@ impl AudioQueue {
     }
 
     fn push_music(&mut self, track: String, gain: f32, looping: bool, fade_frames: u32) {
+        let gain = self.finite_gain(&track, gain);
         self.pending.push(Queued::Message(AudioMessage::MusicPlay {
             track,
             gain,
             looping,
             fade_frames,
         }));
+    }
+
+    /// `gain`, or `0.0` after recording `sound` when it is NaN or infinite. A zero keeps the message
+    /// meaningful: a dropped sync would leave a running loop at its last gain and a new loop
+    /// undeclared, while at `0.0` the loop stays declared and the next valid gain slews back. A
+    /// negative finite gain is left alone: it does not poison a mix.
+    fn finite_gain(&mut self, sound: &str, gain: f32) -> f32 {
+        if gain.is_finite() {
+            return gain;
+        }
+        self.non_finite.push(sound.to_string());
+        0.0
     }
 
     /// Whether no messages are currently queued.
@@ -184,6 +202,12 @@ impl AudioQueue {
     /// Removes and returns every queued entry, leaving the queue empty (the engine's drain path).
     pub(crate) fn take(&mut self) -> Vec<Queued> {
         std::mem::take(&mut self.pending)
+    }
+
+    /// Removes and returns the sounds queued with a non-finite gain since the last call (the
+    /// engine's drain path reports each once).
+    pub(crate) fn take_non_finite(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.non_finite)
     }
 }
 
@@ -287,6 +311,43 @@ impl AudioLogEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gain every queued message carries, in order.
+    fn queued_gains(queue: &mut AudioQueue) -> Vec<f32> {
+        queue
+            .take()
+            .into_iter()
+            .map(|item| match item {
+                Queued::Message(AudioMessage::OneShot(event)) => event.gain,
+                Queued::Message(AudioMessage::LoopSync { gain, .. }) => gain,
+                Queued::Message(AudioMessage::MusicPlay { gain, .. }) => gain,
+                Queued::At { event, .. } => event.gain,
+                other => panic!("no gain: {other:?}"),
+            })
+            .collect()
+    }
+
+    /// A NaN or infinite gain is queued as 0 by every verb and recorded; a finite one is untouched.
+    #[test]
+    fn a_non_finite_gain_is_queued_as_zero_and_recorded() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut queue = AudioQueue::default();
+            queue.play("a.wav", bad);
+            queue.play_at("b.wav", bad, [0.0; 3], 5.0);
+            queue.loop_start("c.wav", bad);
+            queue.loop_set_gain("d.wav", bad);
+            queue.music_play("e.ogg", bad, 0);
+            queue.music_play_once("f.ogg", bad, 0);
+            assert_eq!(queue.take_non_finite().len(), 6);
+            assert_eq!(queued_gains(&mut queue), [0.0; 6]);
+        }
+        let mut queue = AudioQueue::default();
+        queue.play("a.wav", 0.25);
+        queue.loop_start("c.wav", -0.5);
+        queue.music_play("e.ogg", 7.0, 0);
+        assert_eq!(queued_gains(&mut queue), [0.25, -0.5, 7.0]);
+        assert!(queue.take_non_finite().is_empty());
+    }
 
     /// `play` is the sound-effect verb: what it queues rides the `Sfx` bus, whatever the sink's
     /// per-category master gains are.

@@ -1857,10 +1857,20 @@ impl Engine {
     /// A positional one-shot ([`AudioQueue::play_at`]) is resolved here against the listener and
     /// logged as a plain one-shot at its attenuated gain, or dropped when inaudible or with no camera.
     fn drain_audio(&mut self, frame: FrameIndex) {
-        let queued = match self.driver.world_mut().resource_mut::<AudioQueue>() {
-            Some(queue) if !queue.is_empty() => queue.take(),
+        let (queued, non_finite) = match self.driver.world_mut().resource_mut::<AudioQueue>() {
+            Some(queue) if !queue.is_empty() => (queue.take(), queue.take_non_finite()),
             _ => return,
         };
+        if !non_finite.is_empty()
+            && let Some(sink) = self.driver.world_mut().resource_mut::<crate::Diagnostics>()
+        {
+            for sound in non_finite {
+                let message = format!(
+                    "`{sound}` was queued with a gain that is NaN or infinite; it plays at gain 0"
+                );
+                sink.report(code::AUDIO_GAIN_NON_FINITE, sound, message);
+            }
+        }
         let listener = queued
             .iter()
             .any(|item| matches!(item, Queued::At { .. }))
@@ -6343,6 +6353,28 @@ entities:
             Some(format!("s{extra}.wav")).as_deref(),
             "the earliest surviving entry is the (extra+1)-th pushed; the rest were evicted oldest-first"
         );
+    }
+
+    /// A non-finite gain is queued at 0, so the loop stays declared, and is reported once per sound.
+    #[test]
+    fn a_non_finite_audio_gain_plays_at_zero_and_warns_once() {
+        let mut engine = Engine::new();
+        engine
+            .load_inline_scene("format: 1\nentities: []\n")
+            .unwrap();
+        for _ in 0..2 {
+            engine
+                .world_mut()
+                .resource_mut::<AudioQueue>()
+                .unwrap()
+                .loop_start("x.wav", f32::NAN);
+            engine.advance_live();
+        }
+        let gains: Vec<_> = engine.audio_log().iter().filter_map(|e| e.gain()).collect();
+        assert_eq!(gains, [0.0, 0.0]);
+        let diagnostics = engine.world().resource::<crate::Diagnostics>().unwrap();
+        let reported: Vec<_> = diagnostics.reported(code::AUDIO_GAIN_NON_FINITE).collect();
+        assert_eq!(reported, ["x.wav"]);
     }
 
     /// A sink that accepts writes until its shared switch is flipped, then fails every one.

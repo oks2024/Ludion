@@ -16,12 +16,12 @@
 //! stops it. The engine keeps no mirror of that table — it declares, the sink remembers.
 //!
 //! **No device is not a failure.** On a headless or device-less machine (CI, a container) the sink
-//! reports [`L5001`](ludion_core::codes::code::AUDIO_DEVICE_UNAVAILABLE) once as a warning and runs
-//! *silent*: it still drains every event so nothing upstream ever blocks, and the run stays green.
-//! The silent sink still checks each distinct sound and track once per file version and warns as
-//! playback would (`L1101` / `L1104` / `L5003`), so a broken reference shows on a headless run. A
-//! device lost mid-run ([`L5002`](ludion_core::codes::code::AUDIO_STREAM_FAILED)) is reopened with
-//! backoff and the declared loops and the music resume.
+//! reports [`L5001`](ludion_core::codes::code::AUDIO_DEVICE_UNAVAILABLE) once as a warning and plays
+//! *silent*: it still routes every event, so nothing upstream ever blocks and the run stays green.
+//! It keeps retrying the open with backoff, so a device that appears later is picked up, with the
+//! declared loops and the music, and it warns of broken references as playback would
+//! (`L1101` / `L1104` / `L5003`). A device lost mid-run
+//! ([`L5002`](ludion_core::codes::code::AUDIO_STREAM_FAILED)) is reopened the same way.
 //!
 //! **Music streams.** An Ogg Vorbis track (`AudioMessage::MusicPlay`) is decoded on the sink thread
 //! into a bounded ring of device-format chunks that the callback drains — never decoded up front,
@@ -46,7 +46,7 @@
 
 mod music;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -54,7 +54,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use ludion_assets::{AudioPcm, load_wav};
 use ludion_core::audio::{AudioCategory, AudioEvent, AudioMessage, LoopId};
 // The mixdown the sink applies. It lives in the shared core because the game authors it on the
@@ -147,14 +147,14 @@ fn idle_threads(pool: &'static Pool) -> MutexGuard<'static, Vec<Sender<Session>>
 
 impl AudioSink {
     /// Starts a sink session on an idle playback thread, or a new one. It opens the default output
-    /// device (or, absent one, goes silent), then drains `events` for the life of the channel,
-    /// resolving each sound under `content_root` and mixing it down through `gains` — the game's
+    /// device (or, absent one, plays silent and keeps retrying), then routes `events` for the life
+    /// of the channel, resolving each sound under `content_root` and mixing it down through `gains` — the game's
     /// authored bus balance, which a host reads off the engine ([`CategoryGains::default`] leaves the
     /// authored gains untouched) and bounding its voices by `caps` ([`VoiceCaps::default`] is the
     /// engine's policy). `seconds_per_tick` is the sim's tick length, which times music
     /// fades (given in ticks).
     ///
-    /// Never fails: a device-less environment yields a silent sink, not an error.
+    /// Never fails: a device-less environment yields a silent, retrying sink, not an error.
     pub fn spawn(
         events: Receiver<AudioMessage>,
         content_root: PathBuf,
@@ -381,7 +381,9 @@ enum VoiceCommand {
     MusicStop { fade_out: usize },
 }
 
-/// The sink thread body: open a device and play, or go silent — either way, drain every message.
+/// The sink thread body: play through `output`, reopening it whenever it is lost, and route every
+/// message until the channel disconnects. A device that is absent at launch is retried like a lost
+/// one.
 fn run<O: Output>(
     output: O,
     events: Receiver<AudioMessage>,
@@ -390,28 +392,24 @@ fn run<O: Output>(
     caps: VoiceCaps,
     seconds_per_tick: f64,
 ) {
-    let started = Playback::start(
+    // Dropping the playback at the end stops the device.
+    let mut playback = Playback::start(
         output,
-        content_root.clone(),
+        content_root,
         gains,
         caps,
         seconds_per_tick,
         Instant::now(),
     );
-    match started {
-        // Dropping the playback at the end stops the device.
-        Ok(mut playback) => serve(&events, &mut playback),
-        Err(diagnostic) => {
-            eprintln!("{diagnostic}");
-            drain_silently(&events, &content_root);
-        }
-    }
+    serve(&events, &mut playback);
 }
 
-/// The most commands the callback's queue holds. A stream that stops draining fills it, which is
-/// how the sink notices; the bound also caps the memory a stalled device can pin. It is far past one
-/// callback period's traffic. A bounded queue's receiver never frees a block, so the callback
-/// deallocates nothing here.
+/// The most commands the callback's queue holds. A full queue signals nothing: the callback drains
+/// the whole queue on every render, so a burst beyond it waits in [`Router`]'s backlog (state
+/// commands) or is shed (one-shots, past [`ONE_SHOT_HIGH_WATER`]). The backlog is bounded in time,
+/// since it exists only until the stall verdict ([`STALL_AFTER`], or [`START_WITHIN`] before the
+/// first render), and the bound caps the memory a stalled device can pin. A bounded queue's
+/// receiver never frees a block, so the callback deallocates nothing here.
 const COMMAND_CAPACITY: usize = 1024;
 
 /// How long a stream that has rendered may go without rendering again before it counts as lost.
@@ -426,10 +424,11 @@ const START_WITHIN: Duration = Duration::from_secs(5);
 /// warning and one note per wait, not per flap.
 const HEALTHY_AFTER: Duration = RETRY_MAX;
 
-/// The most one-shots a stream that has not rendered yet may hold queued: half the queue. Played
-/// when the device finally starts they would be stale, and the other half stays free for the state
-/// commands (loops, music) that must arrive.
-const PRESTART_ONE_SHOTS: usize = COMMAND_CAPACITY / 2;
+/// The most queued commands at which a one-shot is still sent: half the queue. Past it a one-shot
+/// could not be heard anyway (the callback admits at most `limits.total` arrivals and collapses
+/// same-sound copies), and the rest of the queue stays free for the state commands (loops, music)
+/// that must arrive.
+const ONE_SHOT_HIGH_WATER: usize = COMMAND_CAPACITY / 2;
 
 /// The wait before the first reopen attempt after a loss: long enough for a device that is
 /// switching to settle, short enough that a blip is barely heard.
@@ -445,6 +444,12 @@ struct DeviceFormat {
     rate: u32,
     channels: u16,
 }
+
+/// The format a session that never opened a device prepares for, until a stream opens at its own.
+const ASSUMED_FORMAT: DeviceFormat = DeviceFormat {
+    rate: 48_000,
+    channels: 2,
+};
 
 /// What a stream's callbacks tell the sink thread. The render callback bumps a counter and the
 /// error callback records the first error; the sink thread only reads.
@@ -592,16 +597,15 @@ struct Playback<O: Output> {
     /// Whether the last stream was reported as playing: a loss reports `L5002` only then, and a
     /// reopened stream's first render reports once.
     reported_playing: bool,
+    /// The code the output has been down since, named by the note that reports its recovery.
+    down_since: &'static str,
     /// Lines for the host to print.
     reports: Vec<String>,
 }
 
 impl<O: Output> Playback<O> {
-    /// Opens the device and starts playing.
-    ///
-    /// # Errors
-    /// [`L5001`](code::AUDIO_DEVICE_UNAVAILABLE) when the session cannot start; the caller runs
-    /// silent without retrying.
+    /// Opens the device and starts playing. When it cannot, the session starts lost: `L5001` is
+    /// reported, the router still tracks every message, and the reopen path retries with backoff.
     fn start(
         mut output: O,
         content_root: PathBuf,
@@ -609,30 +613,55 @@ impl<O: Output> Playback<O> {
         caps: VoiceCaps,
         seconds_per_tick: f64,
         now: Instant,
-    ) -> Result<Self, Diagnostic> {
-        let Connected {
-            live,
-            format,
-            music,
-        } = connect(&mut output, gains, caps, now)?;
-        Ok(Playback {
-            output,
-            router: Router::new(
-                content_root,
-                format.rate,
-                format.channels,
-                seconds_per_tick,
-                caps.total,
+    ) -> Self {
+        match connect(&mut output, gains, caps, now) {
+            Ok(Connected {
+                live,
+                format,
                 music,
-            ),
-            gains,
-            caps,
-            live: Some(live),
-            retry_at: now,
-            delay: RETRY_FIRST,
-            reported_playing: true,
-            reports: Vec::new(),
-        })
+            }) => Playback {
+                output,
+                router: Router::new(
+                    content_root,
+                    format.rate,
+                    format.channels,
+                    seconds_per_tick,
+                    caps.total,
+                    music,
+                ),
+                gains,
+                caps,
+                live: Some(live),
+                retry_at: now,
+                delay: RETRY_FIRST,
+                reported_playing: true,
+                down_since: "L5002",
+                reports: Vec::new(),
+            },
+            Err(diagnostic) => {
+                // `route` never sends on this ring, and `retarget` swaps in the reopened stream's.
+                let (music, _) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
+                Playback {
+                    output,
+                    router: Router::new(
+                        content_root,
+                        ASSUMED_FORMAT.rate,
+                        ASSUMED_FORMAT.channels,
+                        seconds_per_tick,
+                        caps.total,
+                        music,
+                    ),
+                    gains,
+                    caps,
+                    live: None,
+                    retry_at: now + RETRY_FIRST,
+                    delay: RETRY_FIRST * 2,
+                    reported_playing: false,
+                    down_since: "L5001",
+                    reports: vec![diagnostic.to_string()],
+                }
+            }
+        }
     }
 
     /// One wake of the sink thread: judge the stream's health, reopen it when lost and due, then
@@ -651,8 +680,8 @@ impl<O: Output> Playback<O> {
                     if !self.reported_playing {
                         self.reported_playing = true;
                         self.reports.push(format!(
-                            "note: the audio output reopened after L5002 ({} Hz, {} ch); loops and music resumed",
-                            self.router.out_rate, self.router.out_channels
+                            "note: the audio output reopened after {} ({} Hz, {} ch); loops and music resumed",
+                            self.down_since, self.router.out_rate, self.router.out_channels
                         ));
                     }
                     if now.saturating_duration_since(since) >= HEALTHY_AFTER {
@@ -686,21 +715,19 @@ impl<O: Output> Playback<O> {
                     let replayed = self.router.replay(&live.commands);
                     self.live = Some(live);
                     if !replayed {
-                        self.lose(&format!("{COMMAND_CAPACITY} commands queued unread"), now);
+                        self.lose("the stream's callback is gone", now);
                     }
                 }
             }
         }
         if let Some(live) = &self.live {
-            // Before its first render a stream holds only so many one-shots; the rest would play
-            // stale, and the room is for the state commands.
+            // One-shots above the high-water mark are shed; the room is for the state commands.
             let message = message.filter(|message| {
-                live.renders > 0
-                    || !matches!(message, AudioMessage::OneShot(_))
-                    || live.commands.len() < PRESTART_ONE_SHOTS
+                !matches!(message, AudioMessage::OneShot(_))
+                    || live.commands.len() < ONE_SHOT_HIGH_WATER
             });
             if !self.router.step(message, &live.commands) {
-                self.lose(&format!("{COMMAND_CAPACITY} commands queued unread"), now);
+                self.lose("the stream's callback is gone", now);
             }
         } else if let Some(message) = message {
             // Lost: state messages still update the router, and any command is dropped.
@@ -711,7 +738,10 @@ impl<O: Output> Playback<O> {
     /// Drops the stream, reports `L5002` if it had been reported as playing, and schedules a reopen.
     fn lose(&mut self, cause: &str, now: Instant) {
         self.live = None;
+        // The replay into the next stream covers the declared state; stale commands must not reach it.
+        self.router.backlog.clear();
         if self.reported_playing {
+            self.down_since = "L5002";
             self.reports.push(stream_failed(cause).to_string());
             self.reported_playing = false;
         }
@@ -728,7 +758,7 @@ impl<O: Output> Playback<O> {
     fn wait(&self, now: Instant) -> Duration {
         if self.live.is_none() {
             self.retry_at.saturating_duration_since(now)
-        } else if self.router.feed.is_feeding() {
+        } else if self.router.feed.is_feeding() || !self.router.backlog.is_empty() {
             MUSIC_REFILL
         } else {
             STALL_AFTER
@@ -763,6 +793,11 @@ struct Router {
     /// drops the last reference to one. Pruned on every step, once no voice holds a buffer.
     superseded: Vec<Arc<Vec<f32>>>,
     feed: MusicFeed,
+    /// State commands waiting for room in a full queue, in order. A render makes room; only a
+    /// stalled stream keeps them until the stall verdict.
+    backlog: VecDeque<VoiceCommand>,
+    /// How many declared loops the callback holds a voice for.
+    playing: usize,
 }
 
 /// A declared loop's last sync.
@@ -826,12 +861,42 @@ impl Router {
             next_seq: 0,
             superseded: Vec::new(),
             feed,
+            backlog: VecDeque::new(),
+            playing: 0,
         }
     }
 
-    /// How many declared loops the callback holds a voice for.
-    fn playing_loops(&self) -> usize {
-        self.declared.values().filter(|d| d.playing).count()
+    /// Sends `command` behind any backlog, or queues it there when the queue is full. False only
+    /// when the callback is gone.
+    fn forward(&mut self, commands: &Sender<VoiceCommand>, command: VoiceCommand) -> bool {
+        if !self.backlog.is_empty() {
+            self.backlog.push_back(command);
+            return true;
+        }
+        match commands.try_send(command) {
+            Ok(()) => true,
+            Err(TrySendError::Full(command)) => {
+                self.backlog.push_back(command);
+                true
+            }
+            Err(TrySendError::Disconnected(_)) => false,
+        }
+    }
+
+    /// Moves the backlog into the queue, oldest first, until it is full. False only when the
+    /// callback is gone.
+    fn flush_backlog(&mut self, commands: &Sender<VoiceCommand>) -> bool {
+        while let Some(command) = self.backlog.pop_front() {
+            match commands.try_send(command) {
+                Ok(()) => {}
+                Err(TrySendError::Full(command)) => {
+                    self.backlog.push_front(command);
+                    return true;
+                }
+                Err(TrySendError::Disconnected(_)) => return false,
+            }
+        }
+        true
     }
 
     /// A voice for the declared loop `key`, rising over `fade_in` frames; `None` when its sound
@@ -856,9 +921,13 @@ impl Router {
     }
 
     /// Starts the waiting loops, oldest declaration first, while the total has room; each fades in,
-    /// since the game did not ask for this start. False when the queue refused a command.
+    /// since the game did not ask for this start. False only when the callback is gone.
     fn start_waiting(&mut self, commands: &Sender<VoiceCommand>) -> bool {
-        let mut free = self.voice_total.saturating_sub(self.playing_loops());
+        debug_assert_eq!(
+            self.playing,
+            self.declared.values().filter(|d| d.playing).count()
+        );
+        let mut free = self.voice_total.saturating_sub(self.playing);
         if free == 0 {
             return true;
         }
@@ -877,14 +946,12 @@ impl Router {
             let Some(voice) = self.declared_voice(id, fade_in) else {
                 continue;
             };
-            if commands
-                .try_send(VoiceCommand::LoopSync { id, voice })
-                .is_err()
-            {
+            if !self.forward(commands, VoiceCommand::LoopSync { id, voice }) {
                 return false;
             }
             if let Some(declared) = self.declared.get_mut(&id) {
                 declared.playing = true;
+                self.playing += 1;
             }
             free -= 1;
         }
@@ -950,22 +1017,28 @@ impl Router {
                         playing,
                     },
                 );
-                if !playing && self.playing_loops() >= self.voice_total {
+                if !playing && self.playing >= self.voice_total {
                     return None;
                 }
                 let voice = self.declared_voice(key, 0)?;
-                if let Some(declared) = self.declared.get_mut(&key) {
+                if let Some(declared) = self.declared.get_mut(&key)
+                    && !declared.playing
+                {
                     declared.playing = true;
+                    self.playing += 1;
                 }
                 VoiceCommand::LoopSync { id: key, voice }
             }
             AudioMessage::LoopStop { id } => {
                 let key = self.key(id);
-                self.declared.remove(&key);
+                if self.declared.remove(&key).is_some_and(|d| d.playing) {
+                    self.playing -= 1;
+                }
                 VoiceCommand::LoopStop(key)
             }
             AudioMessage::StopAllLoops => {
                 self.declared.clear();
+                self.playing = 0;
                 self.feed.stop(0);
                 VoiceCommand::StopAllLoops
             }
@@ -983,15 +1056,19 @@ impl Router {
     /// One wake of the sink thread: forward `message`'s command, then top the music ring up. The
     /// refill comes after the send so a decode never delays a one-shot, and runs on every wake so a
     /// message that routes to nothing cannot starve the ring. A loop stop that was sent also starts
-    /// the waiting loops it made room for. False when the queue refused a command (full, or its
-    /// callback gone): the stream is lost, and the refill is skipped.
+    /// the waiting loops it made room for. A command the full queue cannot take waits in the backlog,
+    /// flushed first on the next wake. False only when the callback is gone: the stream is lost, and
+    /// the refill is skipped.
     fn step(&mut self, message: Option<AudioMessage>, commands: &Sender<VoiceCommand>) -> bool {
         self.superseded
             .retain(|buffer| Arc::strong_count(buffer) > 1);
+        if !self.flush_backlog(commands) {
+            return false;
+        }
         if let Some(message) = message {
             let is_stop = matches!(message, AudioMessage::LoopStop { .. });
             if let Some(command) = self.route(message) {
-                if commands.try_send(command).is_err() {
+                if !self.forward(commands, command) {
                     return false;
                 }
                 if is_stop && !self.start_waiting(commands) {
@@ -1022,15 +1099,15 @@ impl Router {
     }
 
     /// Sends the declared loops (the oldest, when more than the total are declared) and the music
-    /// into a freshly opened stream's queue, then fills its ring. False when the queue refused a
-    /// command.
+    /// into a freshly opened stream's queue, then fills its ring. False only when the callback is gone.
     fn replay(&mut self, commands: &Sender<VoiceCommand>) -> bool {
         for declared in self.declared.values_mut() {
             declared.playing = false;
         }
+        self.playing = 0;
         let mut sent = self.start_waiting(commands);
         if let Some(resume) = self.feed.resume(ramp_frames(self.out_rate)) {
-            sent &= commands.try_send(resume).is_ok();
+            sent &= self.forward(commands, resume);
         }
         self.feed.refill();
         sent
@@ -1041,15 +1118,15 @@ impl Router {
 /// feeds, a stall is to be judged), and hand each to `playback`, until the channel disconnects.
 fn serve<O: Output>(events: &Receiver<AudioMessage>, playback: &mut Playback<O>) {
     loop {
+        for report in playback.reports.drain(..) {
+            eprintln!("{report}");
+        }
         let message = match events.recv_timeout(playback.wait(Instant::now())) {
             Ok(message) => Some(message),
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => break,
         };
         playback.wake(message, Instant::now());
-        for report in playback.reports.drain(..) {
-            eprintln!("{report}");
-        }
     }
 }
 
@@ -1150,13 +1227,13 @@ fn skipped(diagnostic: Diagnostic, sound: &str) -> Diagnostic {
     ))
 }
 
-/// Whether the sink could play `message`: the one rule the silent sink and the testkit share.
+/// Whether the sink could play `message`: the one rule the sink and the testkit share.
 ///
 /// A [`OneShot`](AudioMessage::OneShot) or [`LoopSync`](AudioMessage::LoopSync) must decode as a WAV
 /// under `content_root` (`L1101` unreadable, `L1104` undecodable); a
 /// [`MusicPlay`](AudioMessage::MusicPlay) must open as Ogg Vorbis (`L5003`, header-level: a failure
 /// mid-stream shows only on a device). Every other message is `Ok`. The file is read on every call;
-/// the sink's own checks memoize by file version.
+/// the sink's own cache memoizes by file version.
 ///
 /// ```
 /// use std::path::Path;
@@ -1186,59 +1263,6 @@ pub fn check_message(content_root: &Path, message: &AudioMessage) -> Result<(), 
 fn stamp_of(path: &Path) -> Stamp {
     let metadata = std::fs::metadata(path).ok()?;
     Some((metadata.len(), metadata.modified().ok()))
-}
-
-/// What the silent sink keeps instead of a decode cache: each name's stamp at its last check.
-struct SilentCheck {
-    content_root: PathBuf,
-    /// How long a stamp is trusted before it is read again.
-    recheck: Duration,
-    sounds: HashMap<String, Stamped>,
-    tracks: HashMap<String, Stamped>,
-}
-
-impl SilentCheck {
-    fn new(content_root: PathBuf) -> SilentCheck {
-        SilentCheck {
-            content_root,
-            recheck: STAMP_RECHECK,
-            sounds: HashMap::new(),
-            tracks: HashMap::new(),
-        }
-    }
-
-    /// The warning the device path would print for `message`, once per file version; `None` otherwise.
-    fn check(&mut self, message: &AudioMessage) -> Option<Diagnostic> {
-        let (seen, name, is_sound) = match message {
-            AudioMessage::OneShot(AudioEvent { sound, .. })
-            | AudioMessage::LoopSync { sound, .. } => (&mut self.sounds, sound, true),
-            AudioMessage::MusicPlay { track, .. } => (&mut self.tracks, track, false),
-            _ => return None,
-        };
-        if let Some(stamped) = seen.get_mut(name)
-            && stamped.is_current(&self.content_root, name, self.recheck)
-        {
-            return None;
-        }
-        seen.insert(name.clone(), Stamped::read(&self.content_root.join(name)));
-        let diagnostic = check_message(&self.content_root, message).err()?;
-        Some(if is_sound {
-            skipped(diagnostic, name)
-        } else {
-            diagnostic
-        })
-    }
-}
-
-/// Receives every message until the channel disconnects, warning of each broken reference as
-/// playback would — the silent-sink path.
-fn drain_silently(events: &Receiver<AudioMessage>, content_root: &Path) {
-    let mut check = SilentCheck::new(content_root.to_path_buf());
-    while let Ok(message) = events.recv() {
-        if let Some(diagnostic) = check.check(&message) {
-            eprintln!("{diagnostic}");
-        }
-    }
 }
 
 /// Opens the default output device and its default config.
@@ -1326,6 +1350,8 @@ impl Mixer {
                 }
             }
             VoiceCommand::StopAllLoops => {
+                // The table drains in per-process order, so which fading voice survives a full
+                // `voices` varies between runs.
                 let room = 2 * self.limits.total;
                 for (_, voice) in self.loops.drain() {
                     retire(&mut self.voices, room, self.ramp_frames, voice);
@@ -1471,7 +1497,7 @@ impl Mixer {
             );
             self.music.mix_into(&mut self.scratch, self.gains.music);
             for (slot, &mixed) in block.iter_mut().zip(self.scratch.iter()) {
-                *slot = T::from_sample(soft_limit(mixed).clamp(-1.0, 1.0));
+                *slot = T::from_sample(device_sample(mixed));
             }
         }
     }
@@ -1548,6 +1574,15 @@ fn soft_limit(sample: f32) -> f32 {
     (LIMITER_KNEE + headroom * (over / (1.0 + over))).copysign(sample)
 }
 
+/// The sample the device gets for a summed `mixed`: [`soft_limit`], clamped to `[-1, 1]`. Anything
+/// the curve cannot map (NaN, an infinity, a sum past `f32` range) is silent: silence is the safe
+/// failure. It covers what the command queue cannot: a finite gain
+/// that overflows the sum, and a non-finite [`CategoryGains`] master.
+fn device_sample(mixed: f32) -> f32 {
+    let limited = soft_limit(mixed).clamp(-1.0, 1.0);
+    if limited.is_nan() { 0.0 } else { limited }
+}
+
 /// Adds `voice` to the voices arriving in this callback, collapsing same-sound copies and dropping
 /// what no longer fits in `limit` — the sink's anti-stacking guarantee.
 ///
@@ -1575,8 +1610,11 @@ fn collapse_simultaneous(arriving: &mut Vec<Voice>, voice: Voice, limit: usize) 
 /// ran out of samples or finished fading out. A loop in the table is never dropped here — only a
 /// stop removes one.
 ///
-/// Summing is commutative, so the table's iteration order is not observable in the output. A bus's
-/// master gain is resolved once per voice per callback, so it costs one multiply per sample.
+/// The loop table's iteration order varies per process, so with three or more loops the sum can
+/// differ in its last bits between runs; audio is outside every gate. The table is a `HashMap`
+/// because the callback may neither allocate nor free, which a `BTreeMap` would. A sample-exact test
+/// uses at most two loops. A bus's master gain is resolved once per voice per callback, so it costs
+/// one multiply per sample.
 fn mix_into(
     voices: &mut Vec<Voice>,
     loops: &mut HashMap<LoopKey, Voice>,
@@ -1627,9 +1665,9 @@ fn to_device_buffer(pcm: &AudioPcm, out_rate: u32, out_channels: u16) -> Vec<f32
 fn device_unavailable(detail: &str) -> Diagnostic {
     Diagnostic::new(
         code::AUDIO_DEVICE_UNAVAILABLE,
-        format!("no audio output available ({detail}); running silent"),
+        format!("no audio output available ({detail}); playing silent until one appears"),
     )
-    .with_help("this is expected on a headless/CI machine — audio never gates a run; connect an output device to hear sound")
+    .with_help("this is expected on a headless/CI machine — audio never gates a run; the sink keeps retrying, so connect an output device and no restart is needed")
 }
 
 /// Builds the [`L5002`](code::AUDIO_STREAM_FAILED) warning diagnostic.
@@ -1684,84 +1722,30 @@ mod tests {
         }
     }
 
-    #[test]
-    fn silent_drain_consumes_every_message_then_ends() {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        for i in 0..5 {
-            tx.send(AudioMessage::OneShot(AudioEvent::new(
-                format!("s{i}.wav"),
-                1.0,
-            )))
-            .unwrap();
-        }
-        tx.send(AudioMessage::StopAllLoops).unwrap();
-        drop(tx); // disconnect so the drain terminates
-        drain_silently(&rx, &scratch_root("silent-drain")); // returns rather than hanging
-    }
-
-    fn code_of(diagnostic: Option<Diagnostic>) -> Option<String> {
-        diagnostic.map(|d| d.code.as_str().to_string())
+    fn code_of(result: Result<(), Diagnostic>) -> Option<String> {
+        result.err().map(|d| d.code.as_str().to_string())
     }
 
     #[test]
-    fn the_silent_sink_warns_once_per_version_of_a_broken_sound() {
-        let root = scratch_root("silent-sound");
-        let mut check = SilentCheck::new(root.clone());
-        check.recheck = Duration::ZERO;
-
-        let warning = check
-            .check(&one_shot_message("missing.wav", 1.0, AudioCategory::Sfx))
-            .expect("a missing sound warns");
-        assert_eq!(warning.code.as_str(), "L1101");
-        assert!(
-            warning
-                .to_string()
-                .contains("audio playback skipped `missing.wav`"),
-            "{warning}"
-        );
-        assert!(
-            check
-                .check(&one_shot_message("missing.wav", 1.0, AudioCategory::Sfx))
-                .is_none()
-        );
-        assert!(check.check(&loop_sync("missing.wav", 1.0)).is_none());
-
-        std::fs::write(root.join("bad.wav"), b"not a wav").unwrap();
-        let bad = one_shot_message("bad.wav", 1.0, AudioCategory::Sfx);
-        assert_eq!(code_of(check.check(&bad)).as_deref(), Some("L1104"));
-        std::fs::write(root.join("bad.wav"), wav_bytes(&[1, 2, 3])).unwrap();
-        assert!(check.check(&bad).is_none(), "a fixed file is silent");
-        std::fs::write(root.join("bad.wav"), b"still not a wav, longer").unwrap();
-        assert_eq!(code_of(check.check(&bad)).as_deref(), Some("L1104"));
-
-        // Inside the recheck window a rewrite is not seen yet.
-        check.recheck = Duration::from_secs(3600);
-        std::fs::write(
-            root.join("bad.wav"),
-            b"a third, different, longer broken file",
-        )
-        .unwrap();
-        assert!(check.check(&bad).is_none());
-    }
-
-    #[test]
-    fn the_silent_sink_checks_music_tracks() {
-        let root = scratch_root("silent-music");
-        let mut check = SilentCheck::new(root.clone());
+    fn check_message_decides_by_message_kind() {
+        let root = scratch_root("check-music");
         assert_eq!(
-            code_of(check.check(&music_play("missing.ogg"))).as_deref(),
+            code_of(check_message(&root, &music_play("missing.ogg"))).as_deref(),
             Some("L5003")
         );
         std::fs::copy(tone(), root.join("tone.ogg")).unwrap();
-        assert!(check.check(&music_play("tone.ogg")).is_none());
+        assert_eq!(code_of(check_message(&root, &music_play("tone.ogg"))), None);
         // The message kind decides, not the extension: an Ogg played as a one-shot is no WAV.
         let as_sound = one_shot_message("tone.ogg", 1.0, AudioCategory::Sfx);
-        assert_eq!(code_of(check.check(&as_sound)).as_deref(), Some("L1104"));
+        assert_eq!(
+            code_of(check_message(&root, &as_sound)).as_deref(),
+            Some("L1104")
+        );
     }
 
     #[test]
     fn stop_messages_check_nothing() {
-        let mut check = SilentCheck::new(scratch_root("silent-stops"));
+        let root = scratch_root("check-stops");
         let stops = [
             AudioMessage::LoopStop {
                 id: LoopId::Sound("missing.wav".to_string()),
@@ -1770,7 +1754,7 @@ mod tests {
             AudioMessage::MusicStop { fade_frames: 0 },
         ];
         for message in &stops {
-            assert!(check.check(message).is_none(), "{message:?}");
+            assert!(check_message(&root, message).is_ok(), "{message:?}");
         }
     }
 
@@ -2093,6 +2077,34 @@ mod tests {
 
     fn bed() -> LoopKey {
         LoopKey::Sound(0)
+    }
+
+    #[test]
+    fn device_sample_is_finite_and_in_range_for_any_input() {
+        assert_eq!(device_sample(f32::NAN), 0.0);
+        assert_eq!(device_sample(f32::INFINITY), 0.0);
+        assert_eq!(device_sample(f32::NEG_INFINITY), 0.0);
+        assert_eq!(device_sample(f32::MAX), 0.0);
+        assert_eq!(device_sample(0.5), 0.5);
+        assert_eq!(device_sample(-0.25), -0.25);
+        assert!(device_sample(2.0) < 1.0 && device_sample(2.0) > LIMITER_KNEE);
+    }
+
+    #[test]
+    fn a_voice_gain_that_is_not_sane_never_reaches_the_device() {
+        for gain in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX] {
+            let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+            mixer.apply(one_shot_command(&constant(0.5, 64), gain));
+            mixer.apply(loop_command(bed(), &constant(0.5, 64), gain));
+            for _ in 0..3 {
+                for sample in render(&mut mixer, 16) {
+                    assert!(
+                        sample.is_finite() && (-1.0..=1.0).contains(&sample),
+                        "gain {gain}: {sample}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -2784,8 +2796,7 @@ mod tests {
             VoiceCaps::default(),
             1.0 / 60.0,
             t0,
-        )
-        .expect("the first open succeeds");
+        );
         (playback, mixers, t0)
     }
 
@@ -2827,27 +2838,186 @@ mod tests {
             .count()
     }
 
-    #[test]
-    fn a_stream_that_stops_draining_holds_at_most_the_bound() {
-        let root = scratch_root("stall-bound");
+    /// The `n`th message of an alternating sync/stop run on one loop: syncs at even `n`.
+    fn sync_or_stop(n: usize) -> AudioMessage {
+        let bed = LoopId::Sound("bed.wav".to_string());
+        if n.is_multiple_of(2) {
+            loop_message(bed, "bed.wav", 0.5)
+        } else {
+            AudioMessage::LoopStop { id: bed }
+        }
+    }
+
+    /// A playback whose first stream has rendered once, and that stream's mixer, with `bed.wav` and
+    /// `hit.wav` under its root.
+    fn rendered_playback(name: &str) -> (Playback<FakeOutput>, Receiver<Mixer>, Mixer, Instant) {
+        let root = scratch_root(name);
         std::fs::write(root.join("hit.wav"), wav_bytes(&[16384])).unwrap();
+        std::fs::write(root.join("bed.wav"), wav_bytes(&[8192, 16384])).unwrap();
         let (mut playback, mixers, t0) = playback(root, vec![Some(STEREO_44K)]);
         let mut held = mixers.try_recv().unwrap();
         render_once(&mut held);
         playback.wake(None, t0);
+        (playback, mixers, held, t0)
+    }
+
+    #[test]
+    fn a_one_shot_burst_sheds_one_shots_and_keeps_the_stream() {
+        let (mut playback, _mixers, held, t0) = rendered_playback("burst");
         for _ in 0..2 * COMMAND_CAPACITY {
             playback.wake(
                 Some(one_shot_message("hit.wav", 1.0, AudioCategory::Sfx)),
                 t0,
             );
         }
-        assert_eq!(held.commands.len(), COMMAND_CAPACITY);
-        assert!(
-            playback.live.is_none(),
-            "a full queue after a render is a lost stream"
-        );
+        assert_eq!(held.commands.len(), ONE_SHOT_HIGH_WATER);
+        assert!(playback.live.is_some());
+        assert!(playback.reports.is_empty());
+
+        // With no further render the stall verdict still comes, once.
+        playback.wake(None, t0 + STALL_AFTER);
+        assert!(playback.live.is_none());
         assert_eq!(l5002_count(&playback), 1);
         assert_eq!(playback.reports.len(), 1);
+        assert!(playback.reports[0].contains("no callback"));
+    }
+
+    #[test]
+    fn state_commands_past_the_queue_wait_in_the_backlog_in_order() {
+        let (mut playback, _mixers, held, t0) = rendered_playback("backlog");
+        for n in 0..2 * COMMAND_CAPACITY {
+            playback.wake(Some(sync_or_stop(n)), t0);
+        }
+        assert_eq!(held.commands.len(), COMMAND_CAPACITY);
+        assert_eq!(playback.router.backlog.len(), COMMAND_CAPACITY);
+        assert!(playback.live.is_some());
+        assert!(playback.reports.is_empty());
+
+        let mut delivered = queued(&held);
+        while !playback.router.backlog.is_empty() {
+            playback.wake(None, t0);
+            delivered.extend(queued(&held));
+        }
+        assert_eq!(delivered.len(), 2 * COMMAND_CAPACITY);
+        for (n, command) in delivered.iter().enumerate() {
+            if n.is_multiple_of(2) {
+                assert!(matches!(command, VoiceCommand::LoopSync { .. }), "{n}");
+            } else {
+                assert!(matches!(command, VoiceCommand::LoopStop(_)), "{n}");
+            }
+        }
+        assert!(playback.live.is_some());
+    }
+
+    #[test]
+    fn a_stall_with_a_backlog_drops_it_and_the_replay_covers_the_state() {
+        let (mut playback, mixers, held, t0) = rendered_playback("backlog-stall");
+        for n in 0..=2 * COMMAND_CAPACITY {
+            playback.wake(Some(sync_or_stop(n)), t0);
+        }
+        assert!(!playback.router.backlog.is_empty());
+        let mut now = t0 + STALL_AFTER;
+        playback.wake(None, now);
+        assert!(playback.live.is_none());
+        assert!(playback.router.backlog.is_empty());
+        drop(held);
+
+        now += playback.wait(now);
+        playback.wake(None, now);
+        let reopened = mixers.try_recv().expect("the reopen started a stream");
+        let commands = queued(&reopened);
+        assert_eq!(commands.len(), 1, "only the replay: {}", commands.len());
+        assert!(matches!(commands[0], VoiceCommand::LoopSync { .. }));
+    }
+
+    #[test]
+    fn a_dropped_callback_is_a_lost_stream() {
+        let (mut playback, _mixers, held, t0) = rendered_playback("callback-gone");
+        drop(held);
+        assert!(playback.live.is_some());
+        playback.wake(Some(sync_or_stop(0)), t0);
+        assert!(playback.live.is_none());
+        assert_eq!(l5002_count(&playback), 1);
+        assert!(playback.reports[0].contains("callback is gone"));
+    }
+
+    #[test]
+    fn a_stream_that_opens_after_a_failed_start_but_never_renders_recovers_as_l5001() {
+        let root = scratch_root("failed-start-stall");
+        let (mut playback, mixers, t0) = playback(root, vec![None, Some(STEREO_44K)]);
+        let mut now = t0 + playback.wait(t0);
+        playback.wake(None, now);
+        let _stuck = mixers.try_recv().expect("the second open started a stream");
+        assert!(playback.live.is_some());
+
+        now += START_WITHIN;
+        playback.wake(None, now);
+        assert!(playback.live.is_none(), "no first callback: lost");
+        assert_eq!(l5002_count(&playback), 0, "L5002 was never reported");
+
+        now += playback.wait(now);
+        playback.wake(None, now);
+        let mut mixer = mixers.try_recv().expect("the reopen started a stream");
+        render_once(&mut mixer);
+        playback.wake(None, now + ms(1));
+        assert_eq!(l5002_count(&playback), 0);
+        assert!(
+            playback
+                .reports
+                .last()
+                .is_some_and(|line| line.starts_with("note: the audio output reopened after L5001")),
+            "{:?}",
+            playback.reports
+        );
+    }
+
+    #[test]
+    fn a_session_that_starts_without_a_device_keeps_state_and_retries() {
+        let root = scratch_root("failed-start");
+        std::fs::write(root.join("bed.wav"), wav_bytes(&[8192, 16384])).unwrap();
+        std::fs::copy(tone(), root.join("tone.ogg")).unwrap();
+        let (mut playback, mixers, t0) = playback(root, vec![None, None, Some(STEREO_44K)]);
+        assert!(playback.live.is_none());
+        assert_eq!(playback.reports.len(), 1);
+        assert!(playback.reports[0].contains("L5001"));
+        assert_eq!(l5002_count(&playback), 0);
+
+        let bed = LoopId::Sound("bed.wav".to_string());
+        playback.wake(Some(loop_message(bed, "bed.wav", 0.5)), t0);
+        playback.wake(Some(music_play("tone.ogg")), t0);
+        playback.wake(
+            Some(one_shot_message("missing.wav", 1.0, AudioCategory::Sfx)),
+            t0,
+        );
+        assert_eq!(playback.output.attempts, 1, "the first retry is not due");
+
+        let mut now = t0;
+        for expected in [2, 3] {
+            now += playback.wait(now);
+            playback.wake(None, now);
+            assert_eq!(playback.output.attempts, expected);
+        }
+        let mut mixer = mixers.try_recv().expect("the third open started a stream");
+        let commands = queued(&mixer);
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, VoiceCommand::LoopSync { .. }))
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, VoiceCommand::MusicStart { .. }))
+        );
+
+        render_once(&mut mixer);
+        playback.wake(None, now + ms(1));
+        assert_eq!(l5002_count(&playback), 0);
+        assert!(
+            playback.reports[1].starts_with("note: the audio output reopened after L5001"),
+            "{:?}",
+            playback.reports
+        );
     }
 
     #[test]
@@ -3328,8 +3498,7 @@ mod tests {
     #[test]
     fn the_sinks_caches_default_to_the_stamp_recheck_window() {
         let root = scratch_root("default-window");
-        assert_eq!(rig(root.clone()).router.recheck, STAMP_RECHECK);
-        assert_eq!(SilentCheck::new(root).recheck, STAMP_RECHECK);
+        assert_eq!(rig(root).router.recheck, STAMP_RECHECK);
     }
 
     /// Loop names are interned on the sink thread: the callback's key is `Copy`, one number per name,
@@ -3390,7 +3559,7 @@ mod tests {
     #[test]
     fn spawn_never_fails_and_ends_when_the_sender_drops() {
         static POOL: Pool = Mutex::new(Vec::new());
-        // The playing path, then the silent path.
+        // The playing path, then the retrying one.
         for opens in [vec![Some(STEREO_44K)], vec![None]] {
             let (tx, rx) = crossbeam_channel::unbounded::<AudioMessage>();
             let (sink, _mixers) = fake_sink(&POOL, rx, opens);

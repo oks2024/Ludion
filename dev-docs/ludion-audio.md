@@ -7,7 +7,7 @@ description: The cpal playback sink — engine AudioMessages become sound, out-o
 [`AudioMessage`]s into sound on the default output device. This is the *one* crate that ever touches
 an audio device — the sim side (the `AudioQueue` resource and the frame-stamped `audio_log`) lives
 in `ludion-engine`/`ludion-core`; this doc covers only the sink itself: device handling,
-decoding/caching, the mixer, and the silent-without-a-device contract. It does not cover WAV
+decoding/caching, the mixer, and the keep-retrying-without-a-device contract. It does not cover WAV
 decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (the facade's
 `wire_audio` in `crates/ludion/src/host.rs` calls `Engine::set_audio_sender` + `AudioSink::spawn`).
 
@@ -19,8 +19,12 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   (`to_device_buffer`), `check_message` (shared with the testkit's `SoundTap`), tests.
 - `crates/ludion-audio/src/music.rs` — streamed Ogg Vorbis music (`lewton`): `MusicFeed` (sink thread:
   decoder, linear resampler, loop reopen, the failure table) filling a bounded ring of `MusicChunk`s,
-  and `MusicPlayer` (callback: generation check, gain ramp, sum). `Track::next_packet` clamps the
-  final packet to the last page's granule (gapless loops); `is_feeding` includes staged samples so a
+  and `MusicPlayer` (callback: generation check, gain ramp, sum). `Track::next_packet`'s granule clamp
+  covers a one-page stream only (lewton trims the end-of-stream packet itself once it has a previous
+  granule; mid-stream the granule tracks the decoded position, so nothing is cut). The Vorbis
+  start-trim is closed, not fixed: a start-trimmed stream loses its excess from the tail of its first
+  page, because a proper fix must buffer the first page and neither lewton nor this code exposes
+  "this is the last page"; `is_feeding` includes staged samples so a
   once track's tail drains; `Converter::retarget` rebuilds on a reopened track's changed format.
 - `crates/ludion-core/src/audio.rs` — the shared types this crate receives: `AudioEvent` (sound path
   + gain + category, `AudioEvent::new` defaulting to `Sfx`), `AudioMessage` (one-shot / loop sync /
@@ -48,9 +52,10 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   audio outside every determinism gate.
 - **No device is not a failure.** On a headless/CI/device-less machine, `open_output` reports
   [`L5001`](../crates/ludion-core/src/codes.rs) (`AUDIO_DEVICE_UNAVAILABLE`) once as a `warning[L5001]` and
-  the sink goes *silent*: it drains every event, so nothing blocks and the run stays green. A stream
-  lost mid-run is reported once at `L5002` and reopened with backoff. A broken sound
-  reference warns once and is skipped.
+  the session starts lost and plays *silent*: `Router` still tracks every message (a loop declared
+  while down is replayed when a stream opens), so nothing blocks and the run stays green. The open is
+  retried with the same backoff as a stream lost mid-run (reported once at `L5002`), and the
+  recovery note names the code it recovers from. A broken sound reference warns once and is skipped.
 - **`AudioEvent`/`AudioMessage` live in `ludion-core`, not in this crate or `ludion-engine`.** Both
   the emitter (the engine, never gaining a playback dependency) and the sink (this crate, a lean leaf)
   need the types, and neither may depend on the other — so they sit in the shared core both depend on.
@@ -72,7 +77,11 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   stamped with the file's `(len, mtime)` (`stamp_of`, re-read at most every `STAMP_RECHECK`, 500 ms), so
   a WAV regenerated under a running host is re-decoded on its next message after that; a failed decode
   is cached exactly like a success, so a bad `sound` costs one open per file version, not one per
-  `LoopSync`. Metadata is fair game here: the sink thread is outside every determinism gate.
+  `LoopSync`. Metadata is fair game here: the sink thread is outside every determinism gate. A miss
+  decodes on the sink thread, so messages behind it wait; that is first use and rewrites only, and
+  it stays (a prefetch would need a scene-to-sound walk). The cache lives for the session, bounded
+  by the project's distinct sounds, and is dropped on a device format change; there is no eviction
+  until a memory profile asks for it.
 - **The mixer soft-limits before it clamps.** `soft_limit` passes anything at or under
   `LIMITER_KNEE` (0.8) untouched and bends everything above it onto full scale along a continuous,
   monotone curve. `collapse_simultaneous` bounds *identical* stacking; this bounds the cross-voice sum
@@ -114,7 +123,7 @@ No golden covers audio — the frame-stamped `audio_log` is the replay-checkable
   is an access violation (`0xc0000005`) on a second host. Never go back to a thread per sink; a finished session parks its thread in `IDLE`.
 - **Sink-lifecycle tests never open a device.** They run on `AudioSink::start_on` with a `FakeOutput` and their own pool; only the `#[ignore]`d `real_device` test opens one.
 - **The sink is its own thread.** `AudioSink::spawn` never fails (an OS spawn failure is the only panic
-  path); device failures degrade to the silent path, never an `Err` for the host.
+  path); a device failure starts the session lost and retrying, never an `Err` for the host.
 - **This crate depends on `ludion-assets`, not the other way around**, and neither depends on
   `ludion-engine` — only a host wires the engine's sender to this crate's receiver. There is no
   engine-side playback API by design.
