@@ -287,6 +287,42 @@ effects:
 }
 
 #[test]
+fn a_shadow_offset_past_the_i32_range_casts_nothing() {
+    let image = one("format: 1
+kind: sprite
+size:
+  - 3
+  - 3
+palette:
+  A:
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+frames:
+  idle:
+    rows:
+      - \"AA.\"
+      - \"AA.\"
+      - \"...\"
+effects:
+  - op: shadow
+    offset:
+      - 2147483647
+      - 0
+    color:
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.5
+");
+    assert_eq!(image.get(0, 0), [1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(image.get(2, 0), [0.0; 4], "no shadow from the huge offset");
+    assert_eq!(image.get(2, 1), [0.0; 4]);
+}
+
+#[test]
 fn a_shadow_lands_only_where_the_frame_is_transparent() {
     let image = one("format: 1
 kind: sprite

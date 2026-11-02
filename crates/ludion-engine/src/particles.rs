@@ -25,7 +25,7 @@ use std::ops::Range;
 
 use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat4, Quat, Vec3};
-use ludion_core::math::{cos, exp, powf, sin, sqrt};
+use ludion_core::math::{cos, exp_m1 as expm1, powf, sin, sqrt};
 use ludion_core::rng::DeterministicRng;
 use ludion_core::time::{FrameIndex, SimTime};
 use ludion_renderer::ParticleInstance;
@@ -198,8 +198,8 @@ impl Segment {
                 let t = if t > 0.0 { t } else { return Vec3::ZERO };
                 let acceleration = Vec3::new(0.0, -gravity, 0.0);
                 if drag > 0.0 && drag.is_finite() {
-                    let terminal = acceleration / drag;
-                    terminal * t + (velocity - terminal) * ((1.0 - exp(-drag * t)) / drag)
+                    let (drift, fall) = drag_integrals(drag, t);
+                    velocity * drift + acceleration * fall
                 } else {
                     velocity * t + acceleration * (0.5 * t * t)
                 }
@@ -228,8 +228,17 @@ impl Segment {
                 if rate.abs() < TURN_MIN_RATE {
                     return heading * (speed * t);
                 }
-                let radius = speed / rate;
                 let angle = rate * t;
+                if angle.abs() < TURN_SERIES_LIMIT {
+                    // sin(a)/a and (1 − cos a)/a as series: `1 − cos a` cancels to nothing at small `a`.
+                    let a2 = angle * angle;
+                    let along = 1.0 - a2 / 6.0 * (1.0 - a2 / 20.0 * (1.0 - a2 / 42.0));
+                    let side =
+                        angle / 2.0 * (1.0 - a2 / 12.0 * (1.0 - a2 / 30.0 * (1.0 - a2 / 56.0)));
+                    return heading * (speed * t * along)
+                        + normal.cross(heading) * (speed * t * side);
+                }
+                let radius = speed / rate;
                 heading * (radius * sin(angle))
                     + normal.cross(heading) * (radius * (1.0 - cos(angle)))
             }
@@ -237,9 +246,39 @@ impl Segment {
     }
 }
 
+/// Below this `drag · t` the drag integrals use their Taylor series: `(t − E)/k` subtracts two
+/// nearly equal numbers, losing about `ε / (k·t)` of its value to `f32` rounding.
+const DRAG_SERIES_LIMIT: f32 = 0.5;
+
+/// `(E, (t − E)/k)` with `E = (1 − e^(−k·t))/k`: the distance a unit velocity drifts and the
+/// distance a unit acceleration falls in `t` seconds under drag `k`. As `k → 0` they meet
+/// `t` and `t²/2`, the drag-free form, continuously.
+fn drag_integrals(k: f32, t: f32) -> (f32, f32) {
+    let x = k * t;
+    if x < DRAG_SERIES_LIMIT {
+        // E = t·Σ (−x)ⁿ/(n+1)!, (t − E)/k = t²·Σ (−x)ⁿ/(n+2)!; the tail past n = 8 is below 1e-9.
+        let (mut drift, mut fall) = (0.0_f32, 0.0_f32);
+        let mut term = 1.0_f32; // (−x)ⁿ / n!
+        for n in 0..9 {
+            let n = n as f32;
+            drift += term / (n + 1.0);
+            fall += term / ((n + 1.0) * (n + 2.0));
+            term *= -x / (n + 1.0);
+        }
+        (t * drift, t * t * fall)
+    } else {
+        let drift = -expm1(-x) / k;
+        (drift, (t - drift) / k)
+    }
+}
+
 /// Below this turn rate (radians per second) the arc's radius stops being representable and the
 /// phase is a straight line — the guard that keeps `speed / rate` finite.
 const TURN_MIN_RATE: f32 = 1e-6;
+
+/// Below this swept angle (radians) the arc uses the small-angle series, which `f32` keeps exact
+/// where `1 − cos(angle)` would round to zero or noise. The series tail past this is below 1e-9.
+const TURN_SERIES_LIMIT: f32 = 0.25;
 
 /// A trajectory: an origin plus up to [`MOTION_MAX_SEGMENTS`] phases walked in order.
 ///
@@ -383,7 +422,7 @@ pub fn live_window(emitter: &ParticleEmitter, now: SimTime) -> (Range<i64>, u32)
 fn unclamped_burst_window(emitter: &ParticleEmitter, now: SimTime) -> (Range<i64>, u32) {
     let ticks = ticks_since(now, emitter.started);
     let hz = f64::from(now.rate().hz());
-    let life_max = f64::from(emitter.life[1].max(0.0));
+    let life_max = f64::from(emitter.life[0].max(emitter.life[1]).max(0.0));
 
     let burst = if ticks >= 0.0 && ticks < life_max * hz {
         emitter.burst
@@ -998,6 +1037,97 @@ mod tests {
             got.z
         );
         assert!(got.y.abs() < 1e-6, "the motion never leaves its plane");
+    }
+
+    /// Reference `Ballistic` offset along one axis in f64 from the textbook form.
+    fn drag_reference(v: f64, a: f64, k: f64, t: f64) -> f64 {
+        let e = -math64::exp_m1(-k * t) / k;
+        v * e + a * (t - e) / k
+    }
+
+    /// Small drag must not turn the gravity term into cancellation noise.
+    #[test]
+    fn small_drag_ballistics_tracks_the_f64_reference() {
+        for k in [1e-1_f32, 1e-3, 1e-4, 1e-8] {
+            let motion = Motion::ballistic(Vec3::ZERO, Vec3::new(3.0, 5.0, 0.0), 9.8, k);
+            for step in 1..=100 {
+                let t = step as f32 * 0.1;
+                let p = motion.position_at(t);
+                let wx = drag_reference(3.0, 0.0, f64::from(k), f64::from(t));
+                let wy = drag_reference(5.0, -9.8, f64::from(k), f64::from(t));
+                assert!(
+                    (f64::from(p.x) - wx).abs() < 1e-3,
+                    "k={k} t={t}: x {} vs {wx}",
+                    p.x
+                );
+                assert!(
+                    (f64::from(p.y) - wy).abs() < 1e-3,
+                    "k={k} t={t}: y {} vs {wy}",
+                    p.y
+                );
+            }
+        }
+    }
+
+    /// Consecutive frames never jitter: steps in y stay monotone in their change.
+    #[test]
+    fn small_drag_ballistics_is_smooth_frame_to_frame() {
+        for k in [1e-3_f32, 1e-4, 1e-8] {
+            let motion = Motion::ballistic(Vec3::ZERO, Vec3::new(0.0, 5.0, 0.0), 9.8, k);
+            let mut prev_step = f32::INFINITY;
+            let mut last = motion.position_at(0.0).y;
+            for frame in 1..=600 {
+                let y = motion.position_at(frame as f32 / 60.0).y;
+                let step = y - last;
+                // Gravity pulls the per-frame step down by a constant; allow rounding noise only.
+                assert!(
+                    step <= prev_step + 1e-4,
+                    "k={k} frame {frame}: step {step} after {prev_step}"
+                );
+                prev_step = step;
+                last = y;
+            }
+        }
+    }
+
+    /// A Rust-built emitter with `life` reversed lives as long as its larger bound.
+    #[test]
+    fn an_inverted_life_uses_the_larger_bound() {
+        let mut a = endless();
+        a.life = [2.0, 0.5];
+        let mut b = endless();
+        b.life = [0.5, 2.0];
+        assert_eq!(live_window(&a, at(600)), live_window(&b, at(600)));
+    }
+
+    /// A turn just above the straight-line guard stays on the f64 arc.
+    #[test]
+    fn a_tiny_turn_rate_tracks_the_f64_arc() {
+        for rate in [TURN_MIN_RATE * 2.0, 1e-4, 1e-3, 1e-2, 0.1] {
+            let turn = Segment::Turn {
+                heading: Vec3::X,
+                normal: Vec3::Y,
+                speed: 5.0,
+                rate,
+                duration: 10.0,
+            };
+            for t in [0.5_f32, 2.0, 10.0] {
+                let p = turn.offset_at(t);
+                let (r, a) = (5.0_f64 / f64::from(rate), f64::from(rate) * f64::from(t));
+                let wx = r * math64::sin(a);
+                let side = r * (1.0 - math64::cos(a));
+                assert!(
+                    (f64::from(p.x) - wx).abs() < 1e-3,
+                    "rate {rate} t {t}: x {} vs {wx}",
+                    p.x
+                );
+                assert!(
+                    (f64::from(-p.z) - side).abs() < 1e-3,
+                    "rate {rate} t {t}: side {} vs {side}",
+                    -p.z
+                );
+            }
+        }
     }
 
     fn endless() -> ParticleEmitter {

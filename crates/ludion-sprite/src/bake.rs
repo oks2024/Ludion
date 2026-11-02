@@ -776,8 +776,13 @@ fn shadow(image: &mut FrameImage, mask: &[bool], offset: [i32; 2], color: [f64; 
         .filter(|(_, on)| **on)
         .map(|(i, _)| i)
     {
-        let x = (index as i32) % width + offset[0];
-        let y = (index as i32) / width + offset[1];
+        // An offset past the i32 range lands off the frame, not in an overflow.
+        let (Some(x), Some(y)) = (
+            ((index as i32) % width).checked_add(offset[0]),
+            ((index as i32) / width).checked_add(offset[1]),
+        ) else {
+            continue;
+        };
         if let Some(destination) = image.index(x, y)
             && before.texels[destination][3] == 0.0
         {
