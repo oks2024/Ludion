@@ -43,6 +43,8 @@ struct Fake {
     stamps: Stamps,
     poses: Poses,
     present_for: Duration,
+    /// When set, `present` blocks on it until its sender is dropped, instead of sleeping.
+    gate: Option<crossbeam_channel::Receiver<()>>,
 }
 
 impl PresentBackend for Fake {
@@ -61,7 +63,12 @@ impl PresentBackend for Fake {
         Ok(())
     }
     fn present(&mut self) -> Result<PresentOutcome, Diagnostic> {
-        thread::sleep(self.present_for);
+        match &self.gate {
+            Some(gate) => {
+                let _ = gate.recv();
+            }
+            None => thread::sleep(self.present_for),
+        }
         self.presents.fetch_add(1, Ordering::Relaxed);
         Ok(PresentOutcome::Presented)
     }
@@ -90,6 +97,28 @@ fn engine(present_for: Option<Duration>) -> (Engine, Counts) {
         SCENE,
         present_for.map(|d| (d, false)),
     )
+}
+
+/// An engine over [`SCENE`] whose display holds every present until the returned sender is dropped.
+fn gated() -> (Engine, Counts, crossbeam_channel::Sender<()>) {
+    let (release, gate) = crossbeam_channel::bounded(0);
+    let mut engine = Engine::builder().build().unwrap();
+    engine.load_inline_scene(SCENE).unwrap();
+    let counts = Counts {
+        renders: Arc::default(),
+        presents: Arc::default(),
+        stamps: Arc::default(),
+        poses: Arc::default(),
+    };
+    engine.attach_present_backend(Box::new(Fake {
+        renders: Arc::clone(&counts.renders),
+        presents: Arc::clone(&counts.presents),
+        stamps: Arc::clone(&counts.stamps),
+        poses: Arc::clone(&counts.poses),
+        present_for: Duration::ZERO,
+        gate: Some(gate),
+    }));
+    (engine, counts, release)
 }
 
 /// An engine over [`CUBE_SCENE`] with the marching system; `interpolate` is the builder flag.
@@ -121,6 +150,7 @@ fn attach(
             stamps: Arc::clone(&counts.stamps),
             poses: Arc::clone(&counts.poses),
             present_for,
+            gate: None,
         }));
     }
     (engine, counts)
@@ -188,33 +218,26 @@ fn until(what: &str, mut done: impl FnMut() -> bool) {
 
 #[test]
 fn a_slow_display_never_slows_the_tick() {
-    let (mut engine, counts) = engine(Some(Duration::from_millis(50)));
+    let (mut engine, counts, release) = gated();
     let ticks = Arc::new(AtomicU64::new(0));
     engine.set_tick_observer(Ticks(Arc::clone(&ticks)));
     let live = run(engine);
-    thread::sleep(Duration::from_millis(1200));
+    let count = |n: &Arc<AtomicU64>| n.load(Ordering::Relaxed);
+    until("the presenter holds its first present", || {
+        count(&counts.renders) >= 1
+    });
+    let before = count(&ticks);
+    until("the sim ticks past a held display", || {
+        count(&ticks) >= before + 30
+    });
+    // A display held open for good is the slowest one there is: the sim advancing while no present
+    // has returned, and the presenter stuck on its first render, shows the tick is not coupled to it.
+    let (renders, presents) = (count(&counts.renders), count(&counts.presents));
+    drop(release);
+    until("the display resumes", || count(&counts.presents) >= 1);
     live.stop();
-    let ticks = ticks.load(Ordering::Relaxed);
-    let presents = counts.presents.load(Ordering::Relaxed);
-    let renders = counts.renders.load(Ordering::Relaxed);
-    // A sim coupled to the 20 Hz display would reach ~24 ticks in 1.2 s, about one per present;
-    // the floor and the ratio sit between that and the nominal 72, so a loaded box still passes.
-    assert!(
-        ticks >= 36,
-        "the sim kept its pace: {ticks} ticks, {presents} presents, {renders} renders"
-    );
-    assert!(
-        presents <= 30,
-        "the display ran at its own rate: {ticks} ticks, {presents} presents, {renders} renders"
-    );
-    assert!(
-        renders <= presents + 1,
-        "{ticks} ticks, {renders} renders, {presents} presents"
-    );
-    assert!(
-        ticks as f64 > 2.0 * presents as f64,
-        "{ticks} ticks, {presents} presents, {renders} renders"
-    );
+    assert_eq!(renders, 1, "the presenter rendered once while held");
+    assert_eq!(presents, 0, "no present returned while held");
 }
 
 #[test]
@@ -224,7 +247,7 @@ fn a_presenter_leaves_the_world_hash_unchanged() {
         let seen = Arc::new(Mutex::new(BTreeMap::new()));
         engine.set_tick_observer(Hashes(Arc::clone(&seen)));
         let live = run(engine);
-        thread::sleep(Duration::from_millis(600));
+        until("30 recorded frames", || seen.lock().unwrap().len() >= 30);
         live.stop();
         Arc::try_unwrap(seen).unwrap().into_inner().unwrap()
     };
@@ -279,12 +302,12 @@ fn offsets(counts: &Counts) -> Vec<f32> {
         .collect()
 }
 
-fn ticks_in_a_second_of(engine: Engine) -> u64 {
+/// Runs `engine` until it has made `n` ticks, and returns the count at stop.
+fn run_for_ticks(mut engine: Engine, n: u64) -> u64 {
     let ticks = Arc::new(AtomicU64::new(0));
-    let mut engine = engine;
     engine.set_tick_observer(Ticks(Arc::clone(&ticks)));
     let live = run(engine);
-    thread::sleep(Duration::from_millis(1200));
+    until("the sim ticks", || ticks.load(Ordering::Relaxed) >= n);
     live.stop();
     ticks.load(Ordering::Relaxed)
 }
@@ -292,8 +315,7 @@ fn ticks_in_a_second_of(engine: Engine) -> u64 {
 #[test]
 fn interpolation_draws_between_ticks() {
     let (engine, counts) = marching(Some(Duration::from_millis(4)), true);
-    let ticks = ticks_in_a_second_of(engine);
-    assert!(ticks >= 36, "the sim kept its pace: {ticks} ticks");
+    let ticks = run_for_ticks(engine, 72);
     let offsets = offsets(&counts);
     let hi = offsets.iter().fold(f32::MIN, |hi, o| hi.max(*o));
     // A render blends from the last pose the presenter saw, which is at most as many ticks back as
@@ -334,7 +356,7 @@ fn interpolation_draws_between_ticks() {
 #[test]
 fn without_interpolation_every_render_is_a_whole_tick_pose() {
     let (engine, counts) = marching(Some(Duration::from_millis(4)), false);
-    let _ = ticks_in_a_second_of(engine);
+    let _ = run_for_ticks(engine, 72);
     let offsets = offsets(&counts);
     assert!(!offsets.is_empty());
     assert!(
@@ -356,7 +378,7 @@ fn interpolation_leaves_the_world_hash_unchanged() {
         let seen = Arc::new(Mutex::new(BTreeMap::new()));
         engine.set_tick_observer(Hashes(Arc::clone(&seen)));
         let live = run(engine);
-        thread::sleep(Duration::from_millis(600));
+        until("30 recorded frames", || seen.lock().unwrap().len() >= 30);
         live.stop();
         Arc::try_unwrap(seen).unwrap().into_inner().unwrap()
     };
