@@ -93,7 +93,7 @@ The engine drains each tick's `AudioMessage`s onto an unbounded `crossbeam_chann
 
 ## Verify
 ```
-cargo test -p ludion-audio             # router + mixer without a device, mixer math, L5001
+cargo test -p ludion-audio             # router + mixer + sink lifecycle without a device, mixer math, L5001; the one real-device test is #[ignore]d: -- --ignored real_device
 cargo test -p ludion-engine audio      # AudioQueue/AudioLogEntry, the drain-at-frame-boundary path
 cargo test -p hello-paddle --test audio  # end-to-end: a game's audio through a live engine
 cargo run -p ludion-cli -- explain L5001
@@ -112,6 +112,7 @@ No golden covers audio — the frame-stamped `audio_log` is the replay-checkable
   process-global `OnceLock`, inside the COM apartment of the first thread that looked up a device. A
   thread exit runs `CoUninitialize` and leaves that cache dangling, so the next host's device lookup
   is an access violation (`0xc0000005`) on a second host. Never go back to a thread per sink; a finished session parks its thread in `IDLE`.
+- **Sink-lifecycle tests never open a device.** They run on `AudioSink::start_on` with a `FakeOutput` and their own pool; only the `#[ignore]`d `real_device` test opens one.
 - **The sink is its own thread.** `AudioSink::spawn` never fails (an OS spawn failure is the only panic
   path); device failures degrade to the silent path, never an `Err` for the host.
 - **This crate depends on `ludion-assets`, not the other way around**, and neither depends on

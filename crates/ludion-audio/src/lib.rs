@@ -130,20 +130,19 @@ pub struct AudioSink {
 
 /// One sink's work, handed to a pooled playback thread.
 struct Session {
-    events: Receiver<AudioMessage>,
-    content_root: PathBuf,
-    gains: CategoryGains,
-    caps: VoiceCaps,
-    seconds_per_tick: f64,
+    body: Box<dyn FnOnce() + Send>,
     /// Dropped when the session ends, which is what [`AudioSink::wait_timeout`] waits on.
     done: Sender<()>,
 }
 
 /// Idle playback threads, each waiting on its own session channel.
-static IDLE: Mutex<Vec<Sender<Session>>> = Mutex::new(Vec::new());
+type Pool = Mutex<Vec<Sender<Session>>>;
 
-fn idle_threads() -> MutexGuard<'static, Vec<Sender<Session>>> {
-    IDLE.lock().unwrap_or_else(PoisonError::into_inner)
+/// The process's pool.
+static IDLE: Pool = Mutex::new(Vec::new());
+
+fn idle_threads(pool: &'static Pool) -> MutexGuard<'static, Vec<Sender<Session>>> {
+    pool.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl AudioSink {
@@ -163,18 +162,31 @@ impl AudioSink {
         caps: VoiceCaps,
         seconds_per_tick: f64,
     ) -> AudioSink {
+        AudioSink::start_on(
+            &IDLE,
+            Box::new(move || {
+                run(
+                    CpalOutput { device: None },
+                    events,
+                    content_root,
+                    gains,
+                    caps,
+                    seconds_per_tick,
+                );
+            }),
+        )
+    }
+
+    /// Runs `body` as one session on an idle thread of `pool`, or a new one.
+    fn start_on(pool: &'static Pool, body: Box<dyn FnOnce() + Send>) -> AudioSink {
         let (done_tx, done) = crossbeam_channel::bounded(0);
         let mut session = Session {
-            events,
-            content_root,
-            gains,
-            caps,
-            seconds_per_tick,
+            body,
             done: done_tx,
         };
         loop {
-            let Some(thread) = idle_threads().pop() else {
-                spawn_playback_thread(session);
+            let Some(thread) = idle_threads(pool).pop() else {
+                spawn_playback_thread(pool, session);
                 break;
             };
             match thread.send(session) {
@@ -197,23 +209,17 @@ impl AudioSink {
     }
 }
 
-fn spawn_playback_thread(first: Session) {
+fn spawn_playback_thread(pool: &'static Pool, first: Session) {
     let (sessions_tx, sessions) = crossbeam_channel::unbounded::<Session>();
     std::thread::Builder::new()
         .name("ludion-audio".to_string())
         .spawn(move || {
             let mut next = Some(first);
             while let Some(session) = next.take().or_else(|| sessions.recv().ok()) {
-                run(
-                    session.events,
-                    session.content_root,
-                    session.gains,
-                    session.caps,
-                    session.seconds_per_tick,
-                );
+                (session.body)();
                 // Idle before the sink hears the end, so a restart after `wait_timeout` reuses this thread (one started
                 // before the old session ends takes a new pooled thread).
-                idle_threads().push(sessions_tx.clone());
+                idle_threads(pool).push(sessions_tx.clone());
                 drop(session.done);
             }
         })
@@ -376,14 +382,14 @@ enum VoiceCommand {
 }
 
 /// The sink thread body: open a device and play, or go silent — either way, drain every message.
-fn run(
+fn run<O: Output>(
+    output: O,
     events: Receiver<AudioMessage>,
     content_root: PathBuf,
     gains: CategoryGains,
     caps: VoiceCaps,
     seconds_per_tick: f64,
 ) {
-    let output = CpalOutput { device: None };
     let started = Playback::start(
         output,
         content_root.clone(),
@@ -2753,7 +2759,7 @@ mod tests {
         }
 
         fn start(&mut self, mixer: Mixer) -> Result<(), Diagnostic> {
-            self.started.send(mixer).unwrap();
+            let _ = self.started.send(mixer);
             Ok(())
         }
     }
@@ -3349,54 +3355,71 @@ mod tests {
         assert_ne!(first, other);
     }
 
-    /// Held by every test that starts a sink: they share the process's idle pool.
-    static POOL: Mutex<()> = Mutex::new(());
+    /// A session over a `FakeOutput` on `pool`, and the mixers it starts.
+    ///
+    /// Sink-lifecycle tests never open a real device: the first open in a process costs a scan of
+    /// `target/debug/deps`. Each runs on its own pool.
+    fn fake_sink(
+        pool: &'static Pool,
+        events: Receiver<AudioMessage>,
+        opens: Vec<Option<DeviceFormat>>,
+    ) -> (AudioSink, Receiver<Mixer>) {
+        let (started, mixers) = crossbeam_channel::unbounded();
+        let output = FakeOutput {
+            opens,
+            next: 0,
+            attempts: 0,
+            started,
+        };
+        let sink = AudioSink::start_on(
+            pool,
+            Box::new(move || {
+                run(
+                    output,
+                    events,
+                    std::env::temp_dir(),
+                    CategoryGains::default(),
+                    VoiceCaps::default(),
+                    1.0 / 60.0,
+                );
+            }),
+        );
+        (sink, mixers)
+    }
 
     #[test]
     fn spawn_never_fails_and_ends_when_the_sender_drops() {
-        let _pool = POOL.lock().unwrap_or_else(PoisonError::into_inner);
-        let (tx, rx) = crossbeam_channel::unbounded::<AudioMessage>();
-        let sink = AudioSink::spawn(
-            rx,
-            std::env::temp_dir(),
-            CategoryGains::default(),
-            VoiceCaps::default(),
-            1.0 / 60.0,
-        );
-        drop(tx); // disconnect; the thread must notice and exit
-        // completes rather than hanging
-        assert!(
-            sink.wait_timeout(Duration::from_secs(10)),
-            "the session ends once its sender drops"
-        );
+        static POOL: Pool = Mutex::new(Vec::new());
+        // The playing path, then the silent path.
+        for opens in [vec![Some(STEREO_44K)], vec![None]] {
+            let (tx, rx) = crossbeam_channel::unbounded::<AudioMessage>();
+            let (sink, _mixers) = fake_sink(&POOL, rx, opens);
+            drop(tx); // disconnect; the thread must notice and exit
+            assert!(
+                sink.wait_timeout(Duration::from_secs(10)),
+                "the session ends once its sender drops"
+            );
+        }
     }
 
     #[test]
     fn a_sink_wait_times_out_while_its_sender_lives() {
-        let _pool = POOL.lock().unwrap_or_else(PoisonError::into_inner);
+        static POOL: Pool = Mutex::new(Vec::new());
         let (tx, rx) = crossbeam_channel::unbounded::<AudioMessage>();
-        let sink = AudioSink::spawn(
-            rx,
-            std::env::temp_dir(),
-            CategoryGains::default(),
-            VoiceCaps::default(),
-            1.0 / 60.0,
-        );
+        let (sink, _mixers) = fake_sink(&POOL, rx, vec![Some(STEREO_44K)]);
         assert!(!sink.wait_timeout(Duration::from_millis(50)));
         drop(tx); // the session then ends on its own
+        let (tx, rx) = crossbeam_channel::unbounded::<AudioMessage>();
+        let (sink, _mixers) = fake_sink(&POOL, rx, vec![Some(STEREO_44K)]);
+        drop(tx);
+        assert!(sink.wait_timeout(Duration::from_secs(10)));
     }
 
     #[test]
     fn dropping_a_sink_never_waits_for_its_session() {
-        let _pool = POOL.lock().unwrap_or_else(PoisonError::into_inner);
+        static POOL: Pool = Mutex::new(Vec::new());
         let (tx, rx) = crossbeam_channel::unbounded::<AudioMessage>();
-        let sink = AudioSink::spawn(
-            rx,
-            std::env::temp_dir(),
-            CategoryGains::default(),
-            VoiceCaps::default(),
-            1.0 / 60.0,
-        );
+        let (sink, _mixers) = fake_sink(&POOL, rx, vec![Some(STEREO_44K)]);
         let (dropped_tx, dropped) = crossbeam_channel::bounded::<()>(1);
         // `tx` stays alive, so the session cannot end: a waiting drop would hang here.
         std::thread::spawn(move || {
@@ -3409,25 +3432,66 @@ mod tests {
 
     #[test]
     fn a_finished_session_leaves_its_thread_idle_for_the_next_sink() {
-        let _pool = POOL.lock().unwrap_or_else(PoisonError::into_inner);
+        static POOL: Pool = Mutex::new(Vec::new());
+        let (ids_tx, ids) = crossbeam_channel::unbounded::<std::thread::ThreadId>();
         for _ in 0..3 {
             let (tx, rx) = crossbeam_channel::unbounded::<AudioMessage>();
-            let sink = AudioSink::spawn(
-                rx,
-                std::env::temp_dir(),
-                CategoryGains::default(),
-                VoiceCaps::default(),
-                1.0 / 60.0,
+            let (started, _mixers) = crossbeam_channel::unbounded();
+            let output = FakeOutput {
+                opens: vec![Some(STEREO_44K)],
+                next: 0,
+                attempts: 0,
+                started,
+            };
+            let ids_tx = ids_tx.clone();
+            let sink = AudioSink::start_on(
+                &POOL,
+                Box::new(move || {
+                    ids_tx.send(std::thread::current().id()).unwrap();
+                    run(
+                        output,
+                        rx,
+                        std::env::temp_dir(),
+                        CategoryGains::default(),
+                        VoiceCaps::default(),
+                        1.0 / 60.0,
+                    );
+                }),
             );
             drop(tx);
             assert!(
                 sink.wait_timeout(Duration::from_secs(10)),
                 "the session ends once its sender drops"
             );
-            assert!(
-                !idle_threads().is_empty(),
-                "the thread that opened the device outlives its session"
+            assert_eq!(
+                idle_threads(&POOL).len(),
+                1,
+                "the finished session's thread is idle"
             );
         }
+        let ids: Vec<_> = ids.try_iter().collect();
+        assert_eq!(ids.len(), 3);
+        assert!(
+            ids.iter().all(|id| *id == ids[0]),
+            "one thread served all three"
+        );
+    }
+
+    #[test]
+    #[ignore = "opens the real audio device: cargo test -p ludion-audio --lib -- --ignored real_device"]
+    fn a_real_device_session_opens_or_goes_silent_and_ends() {
+        let (tx, rx) = crossbeam_channel::unbounded::<AudioMessage>();
+        let sink = AudioSink::spawn(
+            rx,
+            std::env::temp_dir(),
+            CategoryGains::default(),
+            VoiceCaps::default(),
+            1.0 / 60.0,
+        );
+        drop(tx);
+        assert!(
+            sink.wait_timeout(Duration::from_secs(120)),
+            "the session ends once its sender drops"
+        );
     }
 }
