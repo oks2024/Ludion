@@ -86,6 +86,7 @@ import { acquireLock, pruneScopeTemps } from './check-lock.mjs';
 import { classify, loadWorkspace, testSelection } from './check-scope.mjs';
 import { writeFileAtomic } from './atomic-write.mjs';
 import { killTree, spawnTool } from './kill-tree.mjs';
+import { pruneDeps } from './deps-prune.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // A scoped run keeps its logs and scratch per process, so concurrent scoped runs and a default run
@@ -96,15 +97,26 @@ const LOG_DIR = SCOPED ? path.join(SCOPE_ROOT, String(process.pid)) : path.join(
 const HISTORY = path.join(REPO_ROOT, 'target', 'check-history.jsonl');
 const LOCK = path.join(REPO_ROOT, 'target', 'check.lock');
 // Cargo never prunes stale artifacts, and macOS's default unpacked split-debuginfo leaves a loose `.o`
-// per codegen unit in `target/debug/deps`. Past ~100k entries CoreAudio's per-boot directory scan
-// slows every audio boot (dev-docs/test-box-failures.md). A warning only.
+// per codegen unit in `target/*/deps`. Past ~100k entries CoreAudio's per-boot directory scan slows every
+// audio boot (dev-docs/test-box-failures.md). Past the threshold a run deletes the `.o` files older than
+// an hour (scripts/deps-prune.mjs); `cargo sweep` and `cargo clean` remain the manual tools.
 const DEPS_WARN_FILES = Number(process.env.LUDION_DEPS_WARN_FILES ?? 60000);
-function warnIfDepsBloated() {
-  const deps = path.join(REPO_ROOT, 'target', 'debug', 'deps');
-  if (!existsSync(deps)) return;
-  const count = readdirSync(deps).length;
-  if (count > DEPS_WARN_FILES) {
-    console.log(`${YELLOW}check: target/debug/deps holds ${count} files (warn past ${DEPS_WARN_FILES}) — macOS audio boots slow down. Run \`cargo sweep --time 7\` or \`cargo clean\`.${RST}`);
+function pruneBloatedDeps() {
+  const target = path.join(REPO_ROOT, 'target');
+  let profiles;
+  try {
+    profiles = readdirSync(target);
+  } catch {
+    return;
+  }
+  for (const profile of profiles) {
+    const deps = path.join(target, profile, 'deps');
+    const result = pruneDeps(deps, { threshold: DEPS_WARN_FILES });
+    if (!result || result.before <= DEPS_WARN_FILES) continue;
+    console.log(`${DIM}check: pruned ${result.removed} stale objects from target/${profile}/deps (${result.before} -> ${result.after} entries)${RST}`);
+    if (result.after > DEPS_WARN_FILES) {
+      console.log(`${YELLOW}check: target/${profile}/deps still holds ${result.after} entries (limit ${DEPS_WARN_FILES}) after pruning — macOS audio boots slow down. Run \`cargo sweep --time 7\` or \`cargo clean\`.${RST}`);
+    }
   }
 }
 
@@ -395,7 +407,7 @@ const vigilNodeStep = { name: 'vigil-node', cmd: 'node', args: ['--test', 'games
 const vigilLabStep = { name: 'vigil-lab', cmd: 'node', args: ['games/vigil/art/town/lib/labcheck.mjs'], log: 'vigil-lab.log' };
 // The commit wrapper's own tests: pure Node plus git over scratch repositories and a fake `lore`.
 // Mirrors ci.yml's `commit wrapper tests`.
-const commitWrapperStep = { name: 'commit-wrapper', cmd: 'node', args: ['--test', 'scripts/commit.test.mjs', 'scripts/mirror-lib.test.mjs', 'scripts/public-tree.test.mjs'], log: 'commit-wrapper.log' };
+const commitWrapperStep = { name: 'commit-wrapper', cmd: 'node', args: ['--test', 'scripts/commit.test.mjs', 'scripts/mirror-lib.test.mjs', 'scripts/public-tree.test.mjs', 'scripts/deps-prune.test.mjs'], log: 'commit-wrapper.log' };
 // The public-tree lane (scripts/public-tree.mjs): the git-visible export — no vigil, no private
 // paths — must build and pass the `no-gpu` tests and the frontend gates on its own. `--full` only:
 // it builds a second workspace. Not in ci.yml: hosted CI checks out the public repository, which
@@ -992,7 +1004,7 @@ async function main() {
     console.log(`${DIM}scope: ${scope.paths.join(' ')}${values.deps ? ' (with dependents)' : ''}${scope.packages.length ? ` → ${scope.packages.join(', ')}` : ''}${scope.docs ? ' + docs tests' : ''}${RST}`);
     console.log(`${YELLOW}check: a scoped run is the inner loop, not a commit gate — the default suite still runs before the commit lands.${RST}`);
   }
-  if (runRust) warnIfDepsBloated();
+  if (runRust) pruneBloatedDeps();
   const start = process.hrtime.bigint();
 
   if (values.fix) await applyFixes();

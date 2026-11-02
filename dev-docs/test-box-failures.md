@@ -39,11 +39,14 @@ be performed on a file with a user-mapped section open"* when another process ho
   (about 10 us per entry), once per process; later opens in the same process take about 50 ms. Measured at
   about 4 s with ~366k files, and nextest's parallel processes each pay it. It slows
   the host's first sound and the device open, and an `Embedded::stop` during it spends up to
-  `AUDIO_STOP_GRACE` waiting, but cannot fail on it. Sweep or clean the target tree (`cargo sweep --time 7`, or `cargo clean` on a tree already
-  past ~100k files). Cargo never prunes stale objects, and macOS's default
+  `AUDIO_STOP_GRACE` waiting, but cannot fail on it. Sweep or clean the target tree by hand (`cargo sweep --time 7`, or `cargo clean` on a tree already
+  past ~100k files) when the prune is not enough. Cargo never prunes stale objects, and macOS's default
   `split-debuginfo = "unpacked"` leaves a loose `.o` per codegen unit there. `split-debuginfo = "packed"`
-  would stop that but triples the incremental rebuild (dsymutil), so it is not set; `check.mjs` warns
-  instead when the directory passes `LUDION_DEPS_WARN_FILES` (default 60000). `ludion-audio`'s own
+  would stop that but triples the incremental rebuild (dsymutil), so it is not set; instead `check.mjs`
+  prunes past `LUDION_DEPS_WARN_FILES` (default 60000): it deletes the `*.o` in each `target/*/deps` that
+  are older than an hour by the newer of mtime and ctime (incremental rustc hard-links reused objects in,
+  keeping the old mtime), prints one line, and warns only if the directory is still over. A pruned object
+  can cost an older binary its line numbers in backtraces; relinking restores them. `ludion-audio`'s own
   sink-lifecycle tests run on a fake output and so never pay it.
 - **A GPU test that ABORTs with `0xc0000409` (os error 1282) and prints nothing** is usually the NVIDIA
   driver killing the process after a TDR, not a Rust panic. Confirm in the Application event log:

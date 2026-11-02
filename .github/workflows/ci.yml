@@ -225,7 +225,7 @@ jobs:
       # an offline mirror commit is carried, contributions are refused and round-trip through
       # `--import`; the public-tree export's tests ride along. Mirrors scripts/check.mjs `commit-wrapper`.
       - name: commit wrapper tests
-        run: node --test scripts/commit.test.mjs scripts/mirror-lib.test.mjs scripts/public-tree.test.mjs
+        run: node --test scripts/commit.test.mjs scripts/mirror-lib.test.mjs scripts/public-tree.test.mjs scripts/deps-prune.test.mjs
 
       # The physics pin ritual's helpers (scripts/physics-pin-ritual.test.mjs): the nextest failure-line
       # parser and the leftover-version scan, pure Node. Mirrors scripts/check.mjs `pin-ritual`.
