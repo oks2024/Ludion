@@ -3127,8 +3127,7 @@ struct ParticleDraw {
 }
 
 /// The draw order of `sprites` under `view`: `layer` first (a higher layer draws in front), then
-/// farthest (most negative view z) first within a layer, ties broken by scene order. Depth is
-/// measured at `sort_anchor` when a sprite has one, else at its `center`.
+/// farthest (most negative view z) first within a layer, ties broken by scene order.
 ///
 /// [`particle_order`] explains why the depth comparison is `total_cmp`. Each view depth is computed
 /// once, into the sort key, rather than twice per comparison.
@@ -3136,13 +3135,7 @@ fn sprite_order(view: &Mat4, sprites: &[SpriteInstance]) -> Vec<usize> {
     let mut keyed: Vec<(i16, f32, usize)> = sprites
         .iter()
         .enumerate()
-        .map(|(i, s)| {
-            (
-                s.layer,
-                view_depth(view, s.sort_anchor.unwrap_or(s.center)),
-                i,
-            )
-        })
+        .map(|(i, s)| (s.layer, view_depth(view, s.center), i))
         .collect();
     // The index makes every key distinct, so an unstable sort gives exactly the stable result.
     keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
@@ -10279,7 +10272,6 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: crate::scene::SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
-            sort_anchor: None,
         }];
         // Behind the camera, so it is never drawn, yet between the sun and the sprite.
         scene.meshes = vec![cube(
@@ -20690,7 +20682,6 @@ mod tests {
                 flash_color: [1.0; 3],
                 uv_repeat: crate::scene::SpriteInstance::NO_TILING,
                 uv_offset: [0.0; 2],
-                sort_anchor: None,
             }];
             let base = PostData {
                 dither: false,
@@ -21306,7 +21297,6 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: crate::scene::SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
-            sort_anchor: None,
         }];
 
         let unlit = renderer.render(&scene, size).expect("unlit sprite render");
@@ -21501,7 +21491,6 @@ mod tests {
                 flash_color: [1.0; 3],
                 uv_repeat: crate::scene::SpriteInstance::NO_TILING,
                 uv_offset: [0.0; 2],
-                sort_anchor: None,
             }];
 
             let unlit = renderer
@@ -21704,7 +21693,6 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: crate::scene::SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
-            sort_anchor: None,
         }];
         let unlit = renderer.render(&scene, size).expect("spot-free sprite");
 
@@ -22017,7 +22005,6 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
-            sort_anchor: None,
         }
     }
 
@@ -22097,39 +22084,6 @@ mod tests {
 
         let sprites: Vec<SpriteInstance> = centers.iter().map(|&c| sprite_at(c, 0)).collect();
         assert_eq!(sprite_order(&view, &sprites), vec![1, 2, 0]);
-    }
-
-    /// Under a 45° pitched camera a tall feet-pivot sprite one unit behind a short one has its
-    /// quad centre nearer the eye than the short sprite's, so a centre key would paint it over the
-    /// sprite standing ahead of it. Sorting on the anchor (the feet) keeps the true order.
-    #[test]
-    fn a_tall_feet_pivot_sprite_sorts_on_its_anchor_not_its_centre() {
-        // Camera looks down-and-forward at 45°; the tree stands at z = -1, the character at z = 0.
-        let eye = Vec3::new(0.0, 6.0, 6.0);
-        let view = Mat4::look_at_rh(eye, Vec3::new(0.0, 0.0, 0.0), Vec3::Y);
-        let standing = |feet: Vec3, height: f32| {
-            let mut s = sprite_at(feet + Vec3::Y * (height * 0.5), 0);
-            s.up = Vec3::Y * height;
-            s.sort_anchor = Some(feet);
-            s
-        };
-        let tree = standing(Vec3::new(0.0, 0.0, -1.0), 4.0);
-        let character = standing(Vec3::new(0.0, 0.0, 0.0), 1.5);
-
-        let centre_keyed = |s: &SpriteInstance| SpriteInstance {
-            sort_anchor: None,
-            ..*s
-        };
-        assert_eq!(
-            sprite_order(&view, &[centre_keyed(&tree), centre_keyed(&character)]),
-            vec![1, 0],
-            "the centre key draws the tree last, over the character in front of it"
-        );
-        assert_eq!(
-            sprite_order(&view, &[tree, character]),
-            vec![0, 1],
-            "the anchor key draws the farther tree first"
-        );
     }
 
     /// The additive flag is a real second blend mode on the one pipeline: (a) the same disc with the
@@ -22278,7 +22232,6 @@ mod tests {
                 flash_color: [1.0; 3],
                 uv_repeat: crate::scene::SpriteInstance::NO_TILING,
                 uv_offset: [0.0; 2],
-                sort_anchor: None,
             }];
             let sprite = renderer.render(&scene, size).expect("sprite render");
             scene.sprites.clear();

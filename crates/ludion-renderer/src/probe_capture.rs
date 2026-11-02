@@ -240,23 +240,25 @@ impl Renderer {
         for (rank, &slot) in by_rank.iter().enumerate() {
             rank_of[slot] = rank as u32;
         }
-        Ok((0..count)
-            .map(|slot| ProbeReadback {
-                entity: scene.probes[slot].entity,
-                slot: slot as u32,
-                rank: rank_of[slot],
-                key: keys[slot],
-                face_size: cubes.face_size,
-                captured: captured
-                    .get(slot)
-                    .and_then(|bytes| bytes.as_deref())
-                    .map(f16_texels),
-                levels: probe_store::read_slot(self.gpu(), &cubes.texture, slot as u32)
-                    .iter()
-                    .map(|level| f16_texels(level))
-                    .collect(),
+        (0..count)
+            .map(|slot| {
+                Ok(ProbeReadback {
+                    entity: scene.probes[slot].entity,
+                    slot: slot as u32,
+                    rank: rank_of[slot],
+                    key: keys[slot],
+                    face_size: cubes.face_size,
+                    captured: captured
+                        .get(slot)
+                        .and_then(|bytes| bytes.as_deref())
+                        .map(f16_texels),
+                    levels: probe_store::read_slot(self.gpu(), &cubes.texture, slot as u32)?
+                        .iter()
+                        .map(|level| f16_texels(level))
+                        .collect(),
+                })
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -449,11 +451,11 @@ impl Probes {
                     }
                 }
                 if retain {
-                    let faces = probe_store::read_slot(gpu, &source, 0).swap_remove(0);
+                    let faces = probe_store::read_slot(gpu, &source, 0)?.swap_remove(0);
                     self.captured.borrow_mut().push(Some(faces));
                 }
                 r.ibl().prefilter_probe(gpu, &source, &array, slot);
-                let sees_emissive = probe_store::read_slot(gpu, &emissive_source, 0)[0]
+                let sees_emissive = probe_store::read_slot(gpu, &emissive_source, 0)?[0]
                     .iter()
                     .any(|&b| b != 0);
                 if sees_emissive {
@@ -462,13 +464,24 @@ impl Probes {
                         .prefilter_probe(gpu, &emissive_source, &target, slot);
                     emissive_array = Some(target);
                 }
+                // The prefilter has no error return of its own: a validation fault it raised is
+                // pending here, and must not reach the resident cache or the store.
+                if let Some(fault) = gpu.take_fault() {
+                    return Err(fault);
+                }
                 emissive_slots.push(sees_emissive);
                 if let Some((dir, key)) = entry {
-                    let levels = probe_store::read_slot(gpu, &array, slot);
+                    let levels = probe_store::read_slot(gpu, &array, slot)?;
                     let emissive = emissive_array
                         .as_ref()
                         .filter(|_| sees_emissive)
-                        .map(|target| probe_store::read_slot(gpu, target, slot));
+                        .map(|target| probe_store::read_slot(gpu, target, slot))
+                        .transpose()?;
+                    // The emissive prefilter and these readbacks may have faulted since the check
+                    // above; nothing bad reaches the content-addressed store.
+                    if let Some(fault) = gpu.take_fault() {
+                        return Err(fault);
+                    }
                     probe_store::write_entry(
                         dir,
                         key,
@@ -792,6 +805,25 @@ pub(crate) mod tests {
             r.probes.cubes().is_none(),
             "a failed capture caches nothing"
         );
+    }
+
+    /// `prefilter_probe` has no error return: a slot past the array is a validation fault the
+    /// caller must find through the readback or `take_fault` before storing anything. Neither path
+    /// panics, and the fault surfaces as `L2010`.
+    #[test]
+    fn needs_gpu_a_faulting_prefilter_surfaces_before_any_store() {
+        let Some(r) = renderer_or_skip("probe prefilter fault") else {
+            return;
+        };
+        let face_size = r.ibl_specular_size();
+        let source = ibl::source_cube(r.gpu().device(), face_size);
+        let array = ibl::probe_array(r.gpu().device(), face_size, 1);
+        r.ibl().prefilter_probe(r.gpu(), &source, &array, 3);
+        let fault = probe_store::read_slot(r.gpu(), &array, 0)
+            .err()
+            .or_else(|| r.gpu().take_fault())
+            .expect("the out-of-range slot is reported, not swallowed");
+        assert_eq!(fault.code.as_str(), "L2010", "{fault:?}");
     }
 
     #[test]

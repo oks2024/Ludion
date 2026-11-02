@@ -2850,21 +2850,6 @@ fn only_sprite_at(world: &World, tick: u64) -> ludion_renderer::SpriteInstance {
     scene.sprites[0]
 }
 
-/// A non-billboard sprite sorts on the entity translation; a billboard keeps sorting on its centre.
-#[test]
-fn a_flat_sprite_sorts_on_its_anchor_and_a_billboard_on_its_centre() {
-    let flat = only_sprite_at(&scroll_world(Sprite::default()), 0);
-    assert_eq!(flat.sort_anchor, Some(Vec3::ZERO));
-    let board = only_sprite_at(
-        &scroll_world(Sprite {
-            billboard: true,
-            ..Sprite::default()
-        }),
-        0,
-    );
-    assert_eq!(board.sort_anchor, None);
-}
-
 /// The default quad neither tiles nor scrolls, so it stays on the shader's clamping path.
 #[test]
 fn a_default_sprite_carries_no_tiling_and_no_offset() {

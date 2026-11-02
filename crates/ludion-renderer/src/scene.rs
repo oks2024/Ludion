@@ -152,11 +152,6 @@ pub struct SpriteInstance {
     /// `ludion-engine`'s extract evaluates the sprite's scroll rate against sim time, so the
     /// renderer never reads a clock.
     pub uv_offset: [f32; 2],
-    /// The point the draw order measures view depth at, when it is not [`center`](SpriteInstance::center):
-    /// a non-billboard sprite sorts on its anchor (the entity translation), so a tall feet-pivot
-    /// quad whose centre sits high does not paint over a shorter sprite standing in front of it.
-    /// `None` sorts on `center`.
-    pub sort_anchor: Option<Vec3>,
 }
 
 impl SpriteInstance {

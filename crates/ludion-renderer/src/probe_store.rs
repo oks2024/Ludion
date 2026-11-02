@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use ludion_assets::content_hash;
 use ludion_assets::cooked::{ProbeCube, cooked_file_name, read_probe_cube, write_probe_cube};
+use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::Vec3;
 use ludion_render_graph::Gpu;
 
@@ -203,7 +204,15 @@ pub(crate) fn write_entry(
 
 /// One slot's six layers of every mip as raw `Rgba16Float` bytes: per mip, the faces back to back
 /// with tight rows (the layout of a stored entry).
-pub(crate) fn read_slot(gpu: &Gpu, array: &wgpu::Texture, slot: u32) -> Vec<Vec<u8>> {
+///
+/// # Errors
+/// A GPU fault (`L2010` / `L2011`), or `L2005`-class failure to poll or map the readback: a fault
+/// the device reported is the cause and wins.
+pub(crate) fn read_slot(
+    gpu: &Gpu,
+    array: &wgpu::Texture,
+    slot: u32,
+) -> Result<Vec<Vec<u8>>, Diagnostic> {
     let device = gpu.device();
     (0..array.mip_level_count())
         .map(|mip| {
@@ -239,18 +248,35 @@ pub(crate) fn read_slot(gpu: &Gpu, array: &wgpu::Texture, slot: u32) -> Vec<Vec<
             buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
                 let _ = tx.send(r);
             });
-            device
-                .poll(wgpu::PollType::wait_indefinitely())
-                .expect("the device polls");
-            rx.recv().unwrap().expect("the buffer maps");
-            let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
+            let poll = device.poll(wgpu::PollType::wait_indefinitely());
+            let mapped = match poll {
+                Ok(_) => rx
+                    .recv()
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r.map_err(|e| e.to_string()))
+                    .and_then(|()| {
+                        buffer
+                            .slice(..)
+                            .get_mapped_range()
+                            .map_err(|e| e.to_string())
+                    }),
+                Err(e) => Err(e.to_string()),
+            };
+            let mapped = mapped.map_err(|reason| {
+                gpu.take_fault().unwrap_or_else(|| {
+                    Diagnostic::new(
+                        ludion_core::codes::code::RENDER_GPU_ERROR,
+                        format!("the probe slot readback failed: {reason}"),
+                    )
+                })
+            })?;
             let mut out = Vec::with_capacity((tight * edge * 6) as usize);
             for rows in mapped.chunks_exact(row as usize) {
                 out.extend_from_slice(&rows[..tight as usize]);
             }
             drop(mapped);
             buffer.unmap();
-            out
+            Ok(out)
         })
         .collect()
 }
@@ -528,7 +554,6 @@ mod tests {
                     flash_color: [1.0; 3],
                     uv_repeat: SpriteInstance::NO_TILING,
                     uv_offset: [0.0; 2],
-                    sort_anchor: None,
                 })
             }),
             ("the sun disc", |f| {

@@ -105,6 +105,25 @@ pub(crate) fn repair_degenerate_tangents(normals: &[f64], tangents: &mut [f64]) 
     }
 }
 
+/// Replaces every authored normal whose length is near zero (the mesh validator refuses those)
+/// with the vertex's faceted normal, or +z for a vertex on no triangle. Other normals are untouched
+/// bit for bit. `indices` must be in range of `positions`.
+pub(crate) fn repair_degenerate_normals(positions: &[f64], indices: &[u32], normals: &mut [f64]) {
+    let degenerate = |n: &[f64]| {
+        n.iter().all(|c| c.is_finite())
+            && n.iter().map(|c| c * c).sum::<f64>() < DEGENERATE_VECTOR_LENGTH_SQUARED
+    };
+    if !normals.chunks_exact(3).any(degenerate) {
+        return;
+    }
+    let faceted = faceted_normals(positions, indices);
+    for (n, f) in normals.chunks_exact_mut(3).zip(faceted.chunks_exact(3)) {
+        if degenerate(n) {
+            n.copy_from_slice(f);
+        }
+    }
+}
+
 /// Per-vertex faceted normals (3/vertex) from flat positions and a triangle index list: the
 /// area-weighted sum of the incident face normals, normalized (a vertex on no triangle, or whose
 /// faces cancel, gets +z, so the committed mesh never carries a zero-length normal).

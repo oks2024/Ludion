@@ -17,7 +17,7 @@ fn shade_two_sided(world_pos: vec3<f32>, n: vec3<f32>, frag_pos: vec2<f32>) -> v
         let range = max(light.position.w, 1e-3);
         let atten = clamp(1.0 - dist / range, 0.0, 1.0);
         // Two-sided: a flat sprite lights the same from either face.
-        let l = normalize(to_light);
+        let l = select(vec3<f32>(0.0), normalize(to_light), dist > 0.0);
         let ndl = abs(dot(normal, l));
         acc = acc + light.color.rgb * spot_factor(light, l) * ndl * atten * atten;
     }

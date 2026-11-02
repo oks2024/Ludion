@@ -1439,7 +1439,7 @@ pub(crate) fn validate(doc: &MeshDocument) -> Vec<Diagnostic> {
                 normals,
                 "normals",
                 "a normal",
-                "drop `normals` and let the loader compute faceted ones",
+                "re-import the model (the importer replaces a zero normal with a faceted one); for a hand-written mesh, drop `normals` and the loader computes faceted ones",
                 &mut diagnostics,
             );
         }
@@ -1503,7 +1503,7 @@ pub(crate) fn validate(doc: &MeshDocument) -> Vec<Diagnostic> {
                 &xyz,
                 "tangents",
                 "a tangent",
-                "drop `TANGENT` and let the importer regenerate it",
+                "re-import the model (the importer repairs a zero tangent); for a hand-written mesh, drop `tangents` or give each a non-zero vector",
                 &mut diagnostics,
             );
         }

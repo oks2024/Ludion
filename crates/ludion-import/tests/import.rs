@@ -705,6 +705,35 @@ fn an_unreferenced_image_is_not_written() {
     assert!(import.warnings.is_empty());
 }
 
+// --- Authored normals -----------------------------------------------------------------------------
+
+/// A one-triangle glTF in the XZ plane (faceted normal `-y`) whose NORMAL accessor is `(0,0,1)`,
+/// zero, `(0,0,1)`.
+#[test]
+fn a_zero_length_authored_normal_takes_the_faceted_normal_and_the_rest_stay_bit_identical() {
+    let mut bytes = Vec::new();
+    for value in [0.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    for value in [0.0_f32, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    let b64 = base64::encode(&bytes);
+    let json = format!(
+        r#"{{"asset":{{"version":"2.0"}},"nodes":[{{"name":"tri","mesh":0}}],"meshes":[{{"name":"tri-mesh","primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1}}}}]}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0.0,0.0,0.0],"max":[1.0,0.0,1.0]}},{{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36}},{{"buffer":0,"byteOffset":36,"byteLength":36}}],"buffers":[{{"byteLength":72,"uri":"data:application/octet-stream;base64,{b64}"}}]}}"#
+    );
+    let import = import_clean(&json);
+    let doc = only_mesh(&import);
+    assert_eq!(
+        doc.normals.as_deref(),
+        Some([0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0].as_slice())
+    );
+    assert!(
+        ludion_scene::validate_mesh(doc).is_empty(),
+        "the importer writes nothing the validator refuses"
+    );
+}
+
 // --- Tangents (`Plan/textured-pbr.md` G1) ---------------------------------------------------------
 
 #[test]
