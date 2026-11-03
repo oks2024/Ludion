@@ -77,11 +77,27 @@ existing `asset.reload` command instead of an engine rebuild:
   every post pass), composed against the current source of the other parts.
   Measured edit→pixels latency over the wire is single-digit-to-low-tens of ms — see
   `crates/ludion-server/tests/shader_reload.rs`.
+- **What reloads.** The reload key is the file's path inside the shader dir, `/`-joined (`mesh.wgsl`,
+  `snippets/camera.wgsl`); only a file inside `ludion_renderer::SHADER_SOURCE_DIR` can stand in for
+  an engine shader, whether the path is absolute or project-root-relative (`L1321` otherwise), and
+  `snippets/mesh.wgsl` or a root-level `camera.wgsl` is not one (`L2009`). Beyond the pipelines:
+
+  | Reloaded file | Result |
+  |---|---|
+  | `blit.wgsl`, `snippets/fullscreen_vs.wgsl` | pipelines, plus the mip-chain blit (`MipGen`); textures already uploaded keep their mips |
+  | `ibl.wgsl`, `snippets/dfg.wgsl`, `snippets/sky_gradient.wgsl` | pipelines, plus a new `Ibl`: LUT re-dispatched, sky cubes dropped and re-prefiltered next frame |
+  | `gi_bake`, `gi_inject`, `probe_relight`, `snippets/gi_rays`, `snippets/math` | **refused, `L2009`**, nothing applied: compiled once per renderer, rebuild and restart |
+  | any other body or snippet | its pipelines |
+
+  The refusal is derived from `ComputeShader::snippets()`: a snippet any non-`Ibl` compute shader
+  composes is refused. A reload is applied everywhere its source is compiled or not at all, so no
+  frame mixes two versions of a shared snippet.
 - **Dev-flagged, bad edit (parse/validation failure, or a recreated pipeline incompatible with the
   existing bind group layouts — a binding-shape change):** a structured `L2009` naming the reason,
   and **the last good pipeline stays live** — a bad edit never kills the session, it just doesn't
-  take. A snippet reload is **transactional**: if any dependent fails, *all* dependents keep their
-  last-good pipeline, so there is no half-applied snippet edit.
+  take. A snippet reload is **transactional**: if any dependent fails (the IBL and mip blit
+  included), *all* dependents keep their last-good pipeline, so there is no half-applied snippet
+  edit.
 - Reloaded shader state is render-side only: no sim state, no `WorldHash` interaction, nothing for
   snapshot/restore to carry.
 

@@ -68,6 +68,7 @@ mod projector;
 mod quality;
 mod render;
 mod scene;
+mod shader_reload;
 mod ssr_pyramid;
 mod ssr_trace;
 mod sun_cascade;
@@ -105,7 +106,7 @@ pub use projector::{
     decal_stats, footprint_bound, occlusion_atlas, occlusion_bias, occlusion_view,
 };
 pub use quality::{MAX_SUN_CASCADES, Quality, QualityParams};
-pub use render::{GpuUploads, Renderer, SHADER_SOURCE_DIR, is_renderer_shader};
+pub use render::{GpuUploads, Renderer, SHADER_SOURCE_DIR};
 pub use scene::{
     CookedMap, DEFAULT_AMBIENT, DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment, DecalBlend,
     DecalInstance, DecalMaps, DecalReceivers, DropShadowInstance, EnvironmentData, FontDraw,
@@ -115,6 +116,7 @@ pub use scene::{
     SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap,
     TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
 };
+pub use shader_reload::{check_shader_reload, is_renderer_shader};
 pub use sun_cascade::{
     SUN_CASCADE_BIAS_TEXEL, SUN_CASCADE_LAMBDA, SUN_CASCADE_MIN_TILE, SunCascade, SunCascadeStat,
     SunCascadeStats, SunCascades, fit_sun_cascades, sun_atlas_grid, sun_atlas_tile,

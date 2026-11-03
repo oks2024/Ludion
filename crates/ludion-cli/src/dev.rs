@@ -1079,9 +1079,10 @@ fn reload_shaders_over_wire(url: &str, paths: &[String]) {
                 "dev shader reloaded {name} in {} ms",
                 watch.elapsed_ms()
             )),
-            // A rejected reload (bad WGSL, or a binding-shape change) — the child kept its last good
-            // pipeline (`L2009`), so report and carry on. A disabled host would be `L2008`, but `dev`
-            // launches its children with `--dev-shaders`, so that never happens here.
+            // A rejected reload (bad WGSL, a binding-shape change, or a file the renderer compiles
+            // once) — the child kept its last good pipeline (`L2009`), so report and carry on. A
+            // disabled host would be `L2008`, but `dev` launches its children with `--dev-shaders`,
+            // so that never happens here.
             Err(diagnostic) => eprintln!("{diagnostic}"),
         }
     }

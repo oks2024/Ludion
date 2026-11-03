@@ -12,7 +12,6 @@ use std::collections::{HashMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
 use ludion_assets::cooked::{CompressedFormat, CompressedImage, CookTarget};
-use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::{Mat3, Mat4, Vec3};
 use ludion_core::time::FrameIndex;
@@ -46,6 +45,9 @@ use crate::scene::{
     DebugSegment, DecalMaps, DropShadowInstance, FontDraw, GroundMarkerInstance, MapImage,
     MeshData, MeshInstance, MeshShape, MeshTexture, MeshTextures, ParticleInstance, PostData,
     RenderScene, SpriteInstance, TextureImage, TextureWrap, TonemapOperator, UiInstance,
+};
+use crate::shader_reload::{
+    ReloadTarget, build_ibl, build_mipgen, classify, pipeline_incompatible, validate_wgsl,
 };
 use crate::smaa_lut;
 use crate::sun_cascade::{
@@ -441,7 +443,8 @@ pub struct Renderer {
     mesh_texture_cache: RefCell<HashMap<MeshTextureKey, GpuTexture>>,
     /// Cumulative cache-miss uploads of the three caches above ([`Renderer::uploads`]).
     uploads: Cell<GpuUploads>,
-    /// The blit chain that fills a freshly uploaded material map's mip levels (`mipgen.rs`).
+    /// The blit chain that fills a freshly uploaded material map's mip levels (`mipgen.rs`); a dev
+    /// reload of `blit.wgsl` rebuilds it.
     mipgen: MipGen,
     /// One sampler per glTF wrap mode, all trilinear at [`MATERIAL_ANISOTROPY`]; a material group takes
     /// the one its maps authored. Three fixed samplers rather than one per material, because the wrap
@@ -462,9 +465,12 @@ pub struct Renderer {
     /// their pixels stay exactly the compiled-in shaders'.
     shader_body_overrides: HashMap<ShaderId, String>,
     snippet_overrides: HashMap<Snippet, String>,
-    /// Image-based lighting: the prefilter compute pipelines, the once-computed BRDF LUT, the 1×1
-    /// fallback cube, and the content-hash-keyed prefilter cache. Consulted once per frame in
-    /// [`Renderer::prepare_frame`] to resolve the mesh pass's group-3 env inputs.
+    /// The reloaded `ibl.wgsl` body, which [`Renderer::compose_ibl`] reads like the overlays above.
+    ibl_body_override: Option<String>,
+    /// Image-based lighting: the prefilter compute pipelines, the BRDF LUT, the 1×1 fallback cube,
+    /// and the content-hash-keyed prefilter cache. A dev reload of `ibl.wgsl` replaces it whole.
+    /// Consulted once per frame in [`Renderer::prepare_frame`] to resolve the mesh pass's group-3
+    /// env inputs.
     ibl: Ibl,
     /// The reflection probes' captures: resolved at the top of [`Renderer::prepare_frame`], bound by
     /// nothing yet.
@@ -669,6 +675,7 @@ impl Renderer {
             default_material_bg,
             shader_body_overrides: HashMap::new(),
             snippet_overrides: HashMap::new(),
+            ibl_body_override: None,
             ibl,
             probes: Probes::new(),
             capture_code_key: Cell::new(None),
@@ -687,78 +694,108 @@ impl Renderer {
         })
     }
 
-    /// Dev-only shader hot reload (`Plan/shader-bindgen.md` decisions 10–11, 16): recreate the
-    /// pipeline(s) that `path` feeds from `source`. `path`'s file name selects either a shader **body**
-    /// (one dependent pipeline) or a shared **snippet** (every pipeline that composes it, rebuilt
-    /// transactionally). The reload is rejected — with the previous pipeline(s) left live, never a
-    /// crash — if the WGSL fails naga validation or a recreated pipeline is incompatible with the
-    /// fixed, size-pinned bind group layouts (a binding-shape change); a snippet reload that fails on
-    /// any dependent leaves **all** dependents on their last-good pipeline (no half-applied edit). On
-    /// success the pipeline(s) swap in; returns the reloaded source's content hash (for the
-    /// `asset.reloaded` event).
+    /// Dev-only shader hot reload (`Plan/shader-bindgen.md` decisions 10–11, 16): rebuild everything
+    /// `key` is compiled into from `source`. `key` is the file's path inside the shader directory
+    /// (`mesh.wgsl`, `snippets/camera.wgsl`; see [`crate::check_shader_reload`] for what is
+    /// reloadable). A shader **body** rebuilds its pipeline; a shared **snippet** every pipeline that
+    /// composes it; `blit.wgsl` and its snippets also the mip-chain blit, and `ibl.wgsl` and its
+    /// snippets the IBL (LUT recomputed, sky cubes re-prefiltered next frame). The whole reload is
+    /// transactional: if the WGSL fails naga validation, or any rebuilt pipeline is rejected, nothing
+    /// is applied. On success returns the reloaded source's content hash (for the `asset.reloaded`
+    /// event).
     ///
     /// A host reaches this solely under its dev flag — the shipping/test/golden/`ludion render`
     /// paths never call it, so their pixels stay exactly the compiled-in shaders'. Render-side only:
     /// nothing here touches sim state, the `WorldHash`, or a snapshot.
     ///
     /// # Errors
-    /// `L2009` if `path` is not a renderer shader, if the WGSL fails to parse/validate, or if the new
-    /// pipeline is layout-incompatible.
-    pub fn reload_shader(&mut self, path: &str, source: String) -> Result<u64, Diagnostic> {
-        if let Some(id) = ShaderId::from_path(path) {
-            self.reload_body(id, source)
-        } else if let Some(snippet) = Snippet::from_path(path) {
-            self.reload_snippet(snippet, source)
-        } else {
-            Err(Diagnostic::new(
-                code::SHADER_RELOAD_INVALID,
-                format!(
-                    "`{path}` is not a renderer shader or snippet, so it cannot be hot-reloaded"
-                ),
-            ))
+    /// `L2009` if `key` is not a reloadable shader, if the WGSL fails to parse/validate, or if a
+    /// rebuilt pipeline is rejected.
+    pub fn reload_shader(&mut self, key: &str, source: String) -> Result<u64, Diagnostic> {
+        match classify(key)? {
+            ReloadTarget::Body(id) => self.reload_body(id, source),
+            ReloadTarget::Snippet(snippet) => self.reload_snippet(snippet, source),
+            ReloadTarget::IblBody => self.reload_ibl_body(source),
         }
     }
 
     /// Reloads one shader *body* (`Plan/shader-bindgen.md`): recompose it against the current
-    /// snippet overlays, validate + rebuild its single dependent pipeline, and commit only if both
-    /// succeed (else keep the last good pipeline and drop the new body). Returns the reloaded body's
-    /// content hash.
+    /// snippet overlays, validate + rebuild its single dependent pipeline (and the mip blit, for
+    /// `blit.wgsl`), and commit only if all succeed. Returns the reloaded body's content hash.
     fn reload_body(&mut self, id: ShaderId, source: String) -> Result<u64, Diagnostic> {
         let composed = self.compose(id, Some(&source));
         let rebuilt = self.validate_and_build(id, &composed)?;
+        let mipgen = self.rebuilt_mipgen(id, &composed)?;
         let hash = ludion_assets::content_hash(source.as_bytes());
         self.shader_body_overrides.insert(id, source);
         self.set_pipeline(id, rebuilt);
-        self.capture_code_key.set(None);
+        self.commit_helpers(None, mipgen);
         Ok(hash)
     }
 
     /// Reloads one shared *snippet* (`Plan/shader-bindgen.md` decision 16): a snippet edit changes the
-    /// composed source of **every** dependent pipeline, so all of them are recomposed, validated, and
-    /// rebuilt — **transactionally**. Each rebuild goes into a temporary; on the first validation or
-    /// pipeline-incompatibility failure the whole reload aborts with the last-good pipelines untouched
-    /// and the snippet overlay unchanged (no half-applied edit). Only when every dependent rebuilds
-    /// cleanly are they all swapped in and the overlay committed. Returns the reloaded snippet's hash.
+    /// composed source of **every** dependent, so all of them are recomposed, validated, and rebuilt —
+    /// **transactionally**. Each rebuild goes into a temporary; on the first failure the whole reload
+    /// aborts with everything live untouched and the snippet overlay unchanged (no half-applied
+    /// edit). Only when every dependent rebuilds cleanly are they all swapped in and the overlay
+    /// committed. Returns the reloaded snippet's hash.
     fn reload_snippet(&mut self, snippet: Snippet, source: String) -> Result<u64, Diagnostic> {
-        // Build every dependent into a temporary first — nothing is committed until all succeed.
         let mut rebuilt: Vec<(ShaderId, ShaderPipelines)> = Vec::new();
+        let mut mipgen = None;
         for id in ShaderId::all() {
             if !id.snippets().contains(&snippet) {
                 continue;
             }
             // Compose this dependent with the *candidate* snippet source (and current body overlays).
             let composed = self.compose_with_snippet(id, snippet, &source);
-            let pipeline = self.validate_and_build(id, &composed)?;
-            rebuilt.push((id, pipeline));
+            rebuilt.push((id, self.validate_and_build(id, &composed)?));
+            mipgen = mipgen.or(self.rebuilt_mipgen(id, &composed)?);
         }
+        let ibl = if ComputeShader::Ibl.snippets().contains(&snippet) {
+            let composed = self.compose_ibl(None, Some((snippet, &source)));
+            Some(build_ibl(&self.gpu, &composed)?)
+        } else {
+            None
+        };
 
         let hash = ludion_assets::content_hash(source.as_bytes());
         self.snippet_overrides.insert(snippet, source);
         for (id, pipeline) in rebuilt {
             self.set_pipeline(id, pipeline);
         }
-        self.capture_code_key.set(None);
+        self.commit_helpers(ibl, mipgen);
         Ok(hash)
+    }
+
+    /// Reloads the `ibl.wgsl` body: a new [`Ibl`] (pipelines, LUT) or nothing changes.
+    fn reload_ibl_body(&mut self, source: String) -> Result<u64, Diagnostic> {
+        let composed = self.compose_ibl(Some(&source), None);
+        let ibl = build_ibl(&self.gpu, &composed)?;
+        let hash = ludion_assets::content_hash(source.as_bytes());
+        self.ibl_body_override = Some(source);
+        self.commit_helpers(Some(ibl), None);
+        Ok(hash)
+    }
+
+    /// The mip blit rebuilt from `composed` when `id` is `blit.wgsl`, the one shader it shares.
+    fn rebuilt_mipgen(&self, id: ShaderId, composed: &str) -> Result<Option<MipGen>, Diagnostic> {
+        if id != ShaderId::Blit {
+            return Ok(None);
+        }
+        let layout = self.layouts.get(LayoutId::Src);
+        build_mipgen(&self.gpu, layout, composed).map(Some)
+    }
+
+    /// Installs the helpers a successful reload rebuilt and drops the memo of the shader code a probe
+    /// capture keys on.
+    fn commit_helpers(&mut self, ibl: Option<Ibl>, mipgen: Option<MipGen>) {
+        if let Some(ibl) = ibl {
+            self.ibl = ibl;
+        }
+        if let Some(mipgen) = mipgen {
+            self.mipgen = mipgen;
+        }
+        self.capture_code_key.set(None);
     }
 
     /// Validates `composed` with naga, then builds `id`'s pipeline under a wgpu validation error scope,
@@ -771,7 +808,7 @@ impl Renderer {
     ) -> Result<ShaderPipelines, Diagnostic> {
         // 1. naga validation first — the exact front-end + validator `create_shader_module` runs — so a
         //    syntax/type error becomes a readable diagnostic and never reaches wgpu.
-        validate_wgsl(id, composed)?;
+        validate_wgsl(id.file_name(), composed)?;
         // 2. Rebuild under a wgpu validation error scope. A WGSL that parses but changes a binding shape
         //    passes naga yet fails pipeline creation against the size-pinned BGLs; the scope catches
         //    that instead of the default uncaptured-error panic, so the caller keeps the last good
@@ -780,7 +817,7 @@ impl Renderer {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let rebuilt = build_pipeline(device, id, composed, &self.layouts);
         if let Some(error) = pollster::block_on(scope.pop()) {
-            return Err(pipeline_incompatible(id, error));
+            return Err(pipeline_incompatible(id.file_name(), error));
         }
         Ok(rebuilt)
     }
@@ -804,8 +841,37 @@ impl Renderer {
         body_override: Option<&str>,
         snippet_override: Option<(Snippet, &str)>,
     ) -> String {
-        let mut parts: Vec<&str> = Vec::with_capacity(id.snippets().len() + 1);
-        for &snippet in id.snippets() {
+        let body = body_override.unwrap_or_else(|| {
+            self.shader_body_overrides
+                .get(&id)
+                .map_or_else(|| id.body_source(), String::as_str)
+        });
+        self.join_overlaid(id.snippets(), body, snippet_override)
+    }
+
+    /// The composed `ibl.wgsl`, as [`compose_parts`](Renderer::compose_parts) composes a render
+    /// shader: the live overlays, with `body_override` or `snippet_override` standing in for a
+    /// candidate edit.
+    fn compose_ibl(
+        &self,
+        body_override: Option<&str>,
+        snippet_override: Option<(Snippet, &str)>,
+    ) -> String {
+        let body = body_override
+            .or(self.ibl_body_override.as_deref())
+            .unwrap_or_else(|| ComputeShader::Ibl.body_source());
+        self.join_overlaid(ComputeShader::Ibl.snippets(), body, snippet_override)
+    }
+
+    /// `snippets` (a forced candidate, else the overlay, else the builtin) then `body`, joined by `\n`.
+    fn join_overlaid(
+        &self,
+        snippets: &[Snippet],
+        body: &str,
+        snippet_override: Option<(Snippet, &str)>,
+    ) -> String {
+        let mut parts: Vec<&str> = Vec::with_capacity(snippets.len() + 1);
+        for &snippet in snippets {
             let src = match snippet_override {
                 Some((forced, source)) if forced == snippet => source,
                 _ => self
@@ -815,11 +881,6 @@ impl Renderer {
             };
             parts.push(src);
         }
-        let body = body_override.unwrap_or_else(|| {
-            self.shader_body_overrides
-                .get(&id)
-                .map_or_else(|| id.body_source(), String::as_str)
-        });
         parts.push(body);
         parts.join("\n")
     }
@@ -883,8 +944,9 @@ impl Renderer {
     }
 
     /// A hash of the shader code a probe capture runs: every registry shader as composed now (so a
-    /// reload moves it), plus the compute shaders outside the registry, composed. Registry-wide rather
-    /// than a capture subset: an extra shader only costs a recapture, a missing one is a stale cube.
+    /// reload moves it), plus the compute shaders outside the registry, composed (the IBL as
+    /// reloaded). Registry-wide rather than a capture subset: an extra shader only costs a
+    /// recapture, a missing one is a stale cube.
     pub(crate) fn capture_code_key(&self) -> u64 {
         if let Some(key) = self.capture_code_key.get() {
             return key;
@@ -900,7 +962,11 @@ impl Renderer {
             part(id.file_name(), &self.compose(id, None));
         }
         for shader in ComputeShader::ALL {
-            part(shader.file_name(), &shader.composed());
+            let composed = match shader {
+                ComputeShader::Ibl => self.compose_ibl(None, None),
+                _ => shader.composed(),
+            };
+            part(shader.file_name(), &composed);
         }
         let key = ludion_assets::content_hash(&bytes);
         self.capture_code_key.set(Some(key));
@@ -1394,6 +1460,12 @@ impl Renderer {
     /// The image-based-lighting pipelines, which prefilter probe captures too.
     pub(crate) fn ibl(&self) -> &Ibl {
         &self.ibl
+    }
+
+    /// The mip-chain blit.
+    #[cfg(test)]
+    pub(crate) fn mipgen(&self) -> &MipGen {
+        &self.mipgen
     }
 
     /// The edge of a probe face and of the sky's specular cube (`QualityParams::ibl_specular_size`).
@@ -6419,7 +6491,7 @@ fn skin_bind_group(
 /// The discriminant indexes [`SHADERS`] and `Renderer::pipelines`, so a variant and its registry row
 /// must stay in the same order (`shader_registry_rows_are_indexed_by_their_id`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum ShaderId {
+pub(crate) enum ShaderId {
     Mesh,
     Shadow,
     ShadowCutout,
@@ -6953,17 +7025,17 @@ impl ShaderId {
 
     /// Every reloadable renderer shader, in registry order (snippet-reload dependents, path lookup,
     /// the composition drift test).
-    fn all() -> impl Iterator<Item = ShaderId> {
+    pub(crate) fn all() -> impl Iterator<Item = ShaderId> {
         SHADERS.iter().map(|desc| desc.id)
     }
 
     /// This shader's `.wgsl` file name.
-    fn file_name(self) -> &'static str {
+    pub(crate) fn file_name(self) -> &'static str {
         self.desc().file_name
     }
 
     /// The shared snippets composed ahead of this shader's body, in declared order.
-    fn snippets(self) -> &'static [Snippet] {
+    pub(crate) fn snippets(self) -> &'static [Snippet] {
         self.desc().snippets
     }
 
@@ -6976,13 +7048,6 @@ impl ShaderId {
     /// the extension.
     fn label(self) -> &'static str {
         self.file_name().trim_end_matches(".wgsl")
-    }
-
-    /// Maps a reload path (absolute or relative) to the renderer shader it names, by file name, or
-    /// `None` if no renderer shader is called that.
-    fn from_path(path: &str) -> Option<ShaderId> {
-        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
-        ShaderId::all().find(|id| id.file_name() == name)
     }
 }
 
@@ -7086,9 +7151,43 @@ pub(crate) enum Snippet {
 }
 
 impl Snippet {
-    /// The snippet's file name under `shaders/snippets/` — the reload key, matched by a path's final
-    /// component like [`ShaderId::from_path`].
-    fn file_name(self) -> &'static str {
+    /// Every snippet.
+    pub(crate) const ALL: [Snippet; 31] = [
+        Snippet::Camera,
+        Snippet::ClusterGrid,
+        Snippet::Probes,
+        Snippet::Lights,
+        Snippet::FullscreenVs,
+        Snippet::Bayer,
+        Snippet::Medium,
+        Snippet::SkyGradient,
+        Snippet::GiRays,
+        Snippet::Skin,
+        Snippet::Hdr,
+        Snippet::Lobe,
+        Snippet::Dfg,
+        Snippet::SpecularIbl,
+        Snippet::GiProbe,
+        Snippet::MeshShading,
+        Snippet::MeshMaterial,
+        Snippet::Footprint,
+        Snippet::Ssr,
+        Snippet::Srgb,
+        Snippet::OutputEncode,
+        Snippet::Glyph,
+        Snippet::RoundedBox,
+        Snippet::Decal,
+        Snippet::BillboardLight,
+        Snippet::ViewRay,
+        Snippet::TransparentLayer,
+        Snippet::Quad,
+        Snippet::Math,
+        Snippet::SoftFalloff,
+        Snippet::WorldFromDepth,
+    ];
+
+    /// The snippet's file name under `shaders/snippets/`; its reload key is `snippets/<file name>`.
+    pub(crate) fn file_name(self) -> &'static str {
         match self {
             Snippet::Camera => "camera.wgsl",
             Snippet::ClusterGrid => "cluster_grid.wgsl",
@@ -7162,47 +7261,6 @@ impl Snippet {
             Snippet::WorldFromDepth => include_str!("shaders/snippets/world_from_depth.wgsl"),
         }
     }
-
-    /// Maps a reload path to the snippet it names, by file name, or `None`.
-    fn from_path(path: &str) -> Option<Snippet> {
-        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
-        // `GiRays` is absent on purpose: no `ShaderId` composes it, so a reload would report
-        // success and change nothing.
-        [
-            Snippet::Camera,
-            Snippet::ClusterGrid,
-            Snippet::Probes,
-            Snippet::Lights,
-            Snippet::FullscreenVs,
-            Snippet::Bayer,
-            Snippet::Medium,
-            Snippet::SkyGradient,
-            Snippet::Skin,
-            Snippet::Hdr,
-            Snippet::Lobe,
-            Snippet::Dfg,
-            Snippet::SpecularIbl,
-            Snippet::GiProbe,
-            Snippet::MeshShading,
-            Snippet::MeshMaterial,
-            Snippet::Footprint,
-            Snippet::Ssr,
-            Snippet::Srgb,
-            Snippet::OutputEncode,
-            Snippet::Glyph,
-            Snippet::RoundedBox,
-            Snippet::Decal,
-            Snippet::BillboardLight,
-            Snippet::ViewRay,
-            Snippet::TransparentLayer,
-            Snippet::Math,
-            Snippet::Quad,
-            Snippet::SoftFalloff,
-            Snippet::WorldFromDepth,
-        ]
-        .into_iter()
-        .find(|s| s.file_name() == name)
-    }
 }
 
 /// The compiled-in composed source for `id`'s pipeline — its shared snippets (builtins) then its body,
@@ -7220,15 +7278,9 @@ pub(crate) fn compose_builtin(snippets: &[Snippet], body: &str) -> String {
     parts.join("\n")
 }
 
-/// Where `ludion dev`'s WGSL fast path watches; an absolute reload path must lie under it.
+/// The default shader directory: where `ludion dev`'s WGSL fast path watches, and the only place a
+/// reload path may name a file unless the host chose another (`Engine::enable_shader_reload_from`).
 pub const SHADER_SOURCE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/shaders");
-
-/// Whether `path` names a reloadable renderer shader or shared snippet (matched by file name) — the
-/// membership test the engine's `asset.reload` handler uses to route a `.wgsl` to the shader path
-/// instead of the texture/mesh/doc paths, and to raise `L2008` when the host has no dev flag.
-pub fn is_renderer_shader(path: &str) -> bool {
-    ShaderId::from_path(path).is_some() || Snippet::from_path(path).is_some()
-}
 
 /// One bind group layout per unified WGSL name-set (Plan/shader-bindgen.md decision 13) — *not* one
 /// per shader: `mesh` binds five of these and `ui_rect` two. The discriminant indexes [`LAYOUTS`] and
@@ -7760,56 +7812,6 @@ fn build_pipeline(
             _ => None,
         },
     }
-}
-
-/// Validates reloaded WGSL with naga — the exact front-end and validator wgpu runs at
-/// `create_shader_module` — so a parse/type error becomes a readable `L2009` and never reaches the
-/// GPU (keep-last-good: the caller returns before touching the live pipeline).
-fn validate_wgsl(id: ShaderId, source: &str) -> Result<(), Diagnostic> {
-    let module = naga::front::wgsl::parse_str(source).map_err(|e| {
-        Diagnostic::new(
-            code::SHADER_RELOAD_INVALID,
-            format!(
-                "{}: reloaded WGSL failed to parse — the previous shader stays live\n{}",
-                id.file_name(),
-                e.emit_to_string(source),
-            ),
-        )
-    })?;
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::default(),
-        naga::valid::Capabilities::default(),
-    )
-    .validate(&module)
-    .map_err(|e| {
-        Diagnostic::new(
-            code::SHADER_RELOAD_INVALID,
-            format!(
-                "{}: reloaded WGSL failed validation — the previous shader stays live\n{}",
-                id.file_name(),
-                e.emit_to_string(source),
-            ),
-        )
-    })?;
-    Ok(())
-}
-
-/// The `L2009` for a reloaded shader that parsed and validated but whose recreated pipeline is
-/// incompatible with the fixed, size-pinned bind group layouts (a binding-shape change). The wgpu
-/// error scope caught it, so the previous pipeline is untouched.
-fn pipeline_incompatible(id: ShaderId, error: wgpu::Error) -> Diagnostic {
-    Diagnostic::new(
-        code::SHADER_RELOAD_INVALID,
-        format!(
-            "{}: the reloaded shader's pipeline is incompatible with the existing bind group \
-             layouts (a binding-shape change) — the previous shader stays live\n{error}",
-            id.file_name(),
-        ),
-    )
-    .with_help(
-        "a hot-reloaded shader may change only its body, not its interface: keep uniform/struct \
-         sizes and @group/@binding slots as they were, or rebuild the engine to change them",
-    )
 }
 
 fn alpha_blend() -> wgpu::BlendState {
@@ -9381,16 +9383,9 @@ mod tests {
     }
 
     /// Every renderer shader that composes snippets keeps a body that references them (guards against a
-    /// snippet extraction that left a dangling declaration behind), and the snippet path round-trips.
+    /// snippet extraction that left a dangling declaration behind).
     #[test]
-    fn snippet_paths_round_trip_and_bodies_are_snippet_free() {
-        assert_eq!(Snippet::from_path("a/b/camera.wgsl"), Some(Snippet::Camera));
-        assert_eq!(
-            Snippet::from_path("fullscreen_vs.wgsl"),
-            Some(Snippet::FullscreenVs)
-        );
-        assert_eq!(Snippet::from_path("mesh.wgsl"), None);
-        assert_eq!(Snippet::from_path("glyph.wgsl"), Some(Snippet::Glyph));
+    fn bodies_are_snippet_free() {
         for id in [ShaderId::Text, ShaderId::UiText] {
             let body = id.body_source();
             assert!(!body.contains("fn fs_main"));

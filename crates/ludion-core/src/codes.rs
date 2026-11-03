@@ -1682,8 +1682,9 @@ pub mod code {
 
     /// `L2009` — a dev-flagged shader reload was rejected: the new WGSL failed naga validation, or the
     /// recreated pipeline is incompatible with the existing bind group layouts (a binding-shape
-    /// change). Raised by `ludion-renderer`. The last good pipeline stays live — a bad edit never
-    /// kills the session; the message carries the naga/wgpu reason.
+    /// change), or the shader compiles once and needs an engine rebuild. Raised by `ludion-renderer`.
+    /// The last good pipeline stays live — a bad edit never kills the session; the message carries
+    /// the naga/wgpu reason.
     pub const SHADER_RELOAD_INVALID: DiagnosticCode = DiagnosticCode::new("L2009");
 
     /// `L2010` — the GPU rejected work the renderer issued (a wgpu validation, out-of-memory or

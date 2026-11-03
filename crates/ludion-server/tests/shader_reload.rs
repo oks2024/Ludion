@@ -19,6 +19,11 @@
 //! reaches the pixels, and a broken snippet edit is refused with `L2009` while all dependents keep
 //! their last-good pipeline.
 //!
+//! Only a file inside the engine's shader directory stands in for an engine shader, so the tests that
+//! edit one copy the directory into the temp project (`shader_tree`) and point the host at the copy
+//! (`enable_shader_reload_from`); the real directory is only ever read. Files the renderer compiles
+//! once (the GI bakes, the probe relight) are refused whole with `L2009`.
+//!
 //! Follows the Phase 7/10 reload-suite conventions: bind port 0, tear down at scope end, block on
 //! replies rather than sleep, and gracefully skip the GPU-dependent assertions when the host has no
 //! adapter.
@@ -80,6 +85,25 @@ fn renderer_shaders() -> PathBuf {
         .join("shaders")
 }
 
+/// Copies the engine's shader directory to `root/shaders` (snippets included) and returns it.
+fn shader_tree(root: &Path) -> PathBuf {
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+    let tree = root.join("shaders");
+    copy(&renderer_shaders(), &tree);
+    tree
+}
+
 /// A fresh, empty temp project directory unique to `label` and this process.
 fn temp_project(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -101,10 +125,11 @@ fn serve(engine: Engine) -> Server {
 #[test]
 fn needs_gpu_dev_host_reloads_a_shader_and_keeps_last_good_on_a_bad_edit() {
     let root = temp_project("dev");
+    let tree = shader_tree(&root);
 
     let mut engine = Engine::with_project_root(&root).with_render_size(256, 256);
     engine.load_inline_scene(LIT_SCENE).unwrap();
-    engine.enable_shader_reload(); // the dev flag
+    engine.enable_shader_reload_from(&tree); // the dev flag
     ludion_engine::dispatch(&mut engine, Command::SimPause).unwrap();
     let server = serve(engine);
     let mut client = ludion_client::Client::connect(&server.url()).unwrap();
@@ -125,8 +150,8 @@ fn needs_gpu_dev_host_reloads_a_shader_and_keeps_last_good_on_a_bad_edit() {
     let hash_before = client.sim_hash().unwrap();
 
     // A valid edit that visibly changes every pixel: tint the final composite output pure red. The
-    // reload path reads the shader from the given (scratch) path, so write the modified copy there.
-    let original = std::fs::read_to_string(renderer_shaders().join("composite.wgsl")).unwrap();
+    // reload path reads the shader from the given path, so write the modified copy into the tree.
+    let original = std::fs::read_to_string(tree.join("composite.wgsl")).unwrap();
     let tinted = original.replace(
         "return vec4<f32>(color, 1.0);",
         "return vec4<f32>(color.r, 0.0, 0.0, 1.0);",
@@ -135,7 +160,7 @@ fn needs_gpu_dev_host_reloads_a_shader_and_keeps_last_good_on_a_bad_edit() {
         tinted, original,
         "the tint edit must actually change the shader source"
     );
-    let scratch_name = "composite.wgsl";
+    let scratch_name = "shaders/composite.wgsl";
     let scratch = root.join(scratch_name);
     std::fs::write(&scratch, &tinted).unwrap();
 
@@ -231,10 +256,11 @@ fn needs_gpu_dev_host_reloads_a_shader_and_keeps_last_good_on_a_bad_edit() {
 #[test]
 fn needs_gpu_dev_host_reloads_a_snippet_and_rebuilds_all_dependents() {
     let root = temp_project("snippet");
+    let tree = shader_tree(&root);
 
     let mut engine = Engine::with_project_root(&root).with_render_size(256, 256);
     engine.load_inline_scene(LIT_SCENE).unwrap();
-    engine.enable_shader_reload();
+    engine.enable_shader_reload_from(&tree);
     ludion_engine::dispatch(&mut engine, Command::SimPause).unwrap();
     let server = serve(engine);
     let mut client = ludion_client::Client::connect(&server.url()).unwrap();
@@ -251,11 +277,9 @@ fn needs_gpu_dev_host_reloads_a_snippet_and_rebuilds_all_dependents() {
     };
     let hash_before = client.sim_hash().unwrap();
 
-    // The snippet lives under `shaders/snippets/`; the reload key is its file name, so the edited copy
-    // is written to a scratch file *named* `fullscreen_vs.wgsl` and that path is reloaded.
-    let snippet_path = renderer_shaders()
-        .join("snippets")
-        .join("fullscreen_vs.wgsl");
+    // The snippet lives under `shaders/snippets/`; its reload key is `snippets/fullscreen_vs.wgsl`,
+    // so the edit is written into the copy of the tree and that path is reloaded.
+    let snippet_path = tree.join("snippets").join("fullscreen_vs.wgsl");
     let original = std::fs::read_to_string(&snippet_path).unwrap();
     // A valid, binding-preserving edit: mirror the sampled UV in X. Every fullscreen pass then samples
     // the horizontally-flipped source, so the composite output (the final image) is visibly mirrored.
@@ -267,7 +291,7 @@ fn needs_gpu_dev_host_reloads_a_snippet_and_rebuilds_all_dependents() {
         mirrored, original,
         "the UV-mirror edit must change the snippet"
     );
-    let scratch_name = "fullscreen_vs.wgsl";
+    let scratch_name = "shaders/snippets/fullscreen_vs.wgsl";
     let scratch = root.join(scratch_name);
     std::fs::write(&scratch, &mirrored).unwrap();
 
@@ -375,9 +399,160 @@ fn an_absolute_shader_path_outside_both_roots_is_refused() {
             .expect_err("a shader path outside the roots must be refused");
         // A read of the stray file would have been L2009 (invalid WGSL), never L1321.
         assert_eq!(err.code.as_str(), "L1321", "{err}");
+        assert!(
+            err.help.is_some(),
+            "every L1321 here says where shaders live: {err}"
+        );
     }
 
     server.shutdown_clean();
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&outside);
+}
+
+/// A project file named like an engine shader is not that shader: only a file inside the engine's
+/// shader directory stands in for one. A relative path is joined to the project root, so
+/// `<root>/composite.wgsl` is refused with `L1321` before any read. No GPU needed.
+#[test]
+fn a_project_file_named_like_an_engine_shader_is_refused() {
+    let root = temp_project("lookalike");
+    std::fs::write(root.join("composite.wgsl"), "this is not valid wgsl {{{").unwrap();
+
+    let mut engine = Engine::with_project_root(&root).with_render_size(64, 64);
+    engine.load_inline_scene(LIT_SCENE).unwrap();
+    engine.enable_shader_reload();
+    let server = serve(engine);
+    let mut client = ludion_client::Client::connect(&server.url()).unwrap();
+
+    let err = client
+        .call(Command::AssetReload(AssetReloadParams {
+            path: Some("composite.wgsl".into()),
+        }))
+        .expect_err("a project file is not an engine shader");
+    assert_eq!(err.code.as_str(), "L1321", "{err}");
+
+    server.shutdown_clean();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The shaders the renderer compiles once are refused whole with `L2009` and a rebuild message, with
+/// nothing applied. No GPU needed: the refusal precedes the file read.
+#[test]
+fn compile_once_shaders_are_refused_with_a_rebuild_message() {
+    let root = temp_project("compile-once");
+    let tree = shader_tree(&root);
+
+    let mut engine = Engine::with_project_root(&root).with_render_size(64, 64);
+    engine.load_inline_scene(LIT_SCENE).unwrap();
+    engine.enable_shader_reload_from(&tree);
+    let server = serve(engine);
+    let mut client = ludion_client::Client::connect(&server.url()).unwrap();
+
+    for path in [
+        "shaders/gi_bake.wgsl",
+        "shaders/gi_inject.wgsl",
+        "shaders/probe_relight.wgsl",
+        "shaders/snippets/gi_rays.wgsl",
+        "shaders/snippets/math.wgsl",
+    ] {
+        let err = client
+            .call(Command::AssetReload(AssetReloadParams {
+                path: Some(path.into()),
+            }))
+            .expect_err(path);
+        assert_eq!(err.code.as_str(), "L2009", "{path}: {err}");
+        assert!(
+            err.message.to_lowercase().contains("rebuild"),
+            "{path}: {err}"
+        );
+    }
+
+    server.shutdown_clean();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Without the dev flag a compute shader is a renderer shader too: `L2008`, not a silent success.
+#[test]
+fn a_non_dev_host_refuses_a_compute_shader_with_l2008() {
+    let root = temp_project("nondev-compute");
+
+    let mut engine = Engine::with_project_root(&root).with_render_size(64, 64);
+    engine.load_inline_scene(LIT_SCENE).unwrap();
+    let server = serve(engine);
+    let mut client = ludion_client::Client::connect(&server.url()).unwrap();
+
+    let err = client
+        .call(Command::AssetReload(AssetReloadParams {
+            path: Some("crates/ludion-renderer/src/shaders/ibl.wgsl".into()),
+        }))
+        .expect_err("a compute shader reload on a non-dev host must be refused");
+    assert_eq!(err.code.as_str(), "L2008", "{err}");
+
+    server.shutdown_clean();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Inside the shader directory is not enough: the file's path there must be an engine shader's. A
+/// root-level `camera.wgsl` and `snippets/mesh.wgsl` are neither. No GPU needed.
+#[test]
+fn a_stray_file_inside_the_dir_is_not_an_engine_shader() {
+    let root = temp_project("stray");
+    let tree = shader_tree(&root);
+    std::fs::write(tree.join("camera.wgsl"), "// stray").unwrap();
+    std::fs::write(tree.join("snippets").join("mesh.wgsl"), "// stray").unwrap();
+
+    let mut engine = Engine::with_project_root(&root).with_render_size(64, 64);
+    engine.load_inline_scene(LIT_SCENE).unwrap();
+    engine.enable_shader_reload_from(&tree);
+    let server = serve(engine);
+    let mut client = ludion_client::Client::connect(&server.url()).unwrap();
+
+    for path in ["shaders/camera.wgsl", "shaders/snippets/mesh.wgsl"] {
+        let err = client
+            .call(Command::AssetReload(AssetReloadParams {
+                path: Some(path.into()),
+            }))
+            .expect_err(path);
+        assert_eq!(err.code.as_str(), "L2009", "{path}: {err}");
+    }
+
+    server.shutdown_clean();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A host enabled with the compiled-in directory reloads a real shader by its absolute path. The file
+/// is only read; the render after it is the same shader, so the frame is unchanged.
+#[test]
+fn needs_gpu_the_compiled_in_dir_reloads_a_real_shader() {
+    let root = temp_project("real-dir");
+
+    let mut engine = Engine::with_project_root(&root).with_render_size(128, 128);
+    engine.load_inline_scene(LIT_SCENE).unwrap();
+    engine.enable_shader_reload();
+    ludion_engine::dispatch(&mut engine, Command::SimPause).unwrap();
+    let server = serve(engine);
+    let mut client = ludion_client::Client::connect(&server.url()).unwrap();
+
+    let baseline = match client.screenshot(Some(128), Some(128)) {
+        Ok(shot) => shot.data,
+        Err(diag) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&diag)) => {
+            eprintln!("SKIPPED the_compiled_in_dir_reloads_a_real_shader: no GPU adapter");
+            return;
+        }
+        Err(diag) => panic!("baseline screenshot failed: {diag}"),
+    };
+    let real = renderer_shaders().join("composite.wgsl");
+    client
+        .call(Command::AssetReload(AssetReloadParams {
+            path: Some(real.to_string_lossy().into_owned()),
+        }))
+        .expect("the compiled-in directory's own shader reloads");
+    assert_eq!(
+        client.screenshot(Some(128), Some(128)).unwrap().data,
+        baseline,
+        "reloading a shader with its own source leaves the frame unchanged"
+    );
+
+    server.shutdown_clean();
+    let _ = std::fs::remove_dir_all(&root);
 }

@@ -1,7 +1,8 @@
 //! The compute shaders built outside [`ShaderId`](crate::render::ShaderId): which snippets each
 //! composes ahead of its body. `render.rs`'s `compose_builtin` is the one join, shared with the
-//! render shaders. `capture_code_key` hashes the
-//! same composed strings the pipelines compile. The bindgen registry
+//! render shaders. `capture_code_key` hashes the same composed strings the pipelines compile.
+//! Compute pipelines are built once per renderer; the dev hot reload replaces only the `Ibl`
+//! (`shader_reload.rs`) and refuses the others. The bindgen registry
 //! (`ludion_shader_bindgen::COMPOSITIONS`) holds the second mapping — the renderer cannot depend on
 //! bindgen outside tests — and `compute_composition_matches_bindgen_registry` compares the two.
 
@@ -44,7 +45,8 @@ impl ComputeShader {
         }
     }
 
-    fn body_source(self) -> &'static str {
+    /// The compiled-in body, minus the snippets.
+    pub(crate) fn body_source(self) -> &'static str {
         match self {
             ComputeShader::GiBake => include_str!("shaders/gi_bake.wgsl"),
             ComputeShader::GiInject => include_str!("shaders/gi_inject.wgsl"),

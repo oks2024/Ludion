@@ -13,8 +13,9 @@
 //! target format and mesh maps arrive in both ([`super::render`]'s colour-space split). An sRGB target
 //! decodes on sample and re-encodes on store, so the averaging happens in linear light either way.
 //!
-//! A dev shader reload of `blit.wgsl` rebuilds the overlay pass's pipeline, not these two: they are
-//! compiled once from the built-in source, like the compute helpers in `ibl.rs` and `gi_bake.rs`.
+//! A dev shader reload of `blit.wgsl` (or a snippet it composes) rebuilds these two pipelines along
+//! with the overlay pass's, so later mip chains use the edit; levels already generated keep what they
+//! were given.
 
 use ludion_render_graph::Gpu;
 
@@ -162,6 +163,7 @@ impl MipGen {
 #[cfg(test)]
 mod tests {
     use super::mip_level_count;
+    use crate::Renderer;
 
     /// The chain runs down to 1×1 on the longer axis, so a non-square texture keeps halving after its
     /// short axis has bottomed out (wgpu clamps each level's extent at 1).
@@ -174,5 +176,97 @@ mod tests {
         assert_eq!(mip_level_count(3, 1), 2);
         // A degenerate zero extent still reports one level rather than none.
         assert_eq!(mip_level_count(0, 0), 1);
+    }
+
+    /// A reloaded `blit.wgsl` reaches later mip chains: the chain's level 1 is what the new fragment
+    /// returns.
+    #[test]
+    fn needs_gpu_a_blit_reload_reaches_later_mip_chains() {
+        let mut r = match Renderer::new() {
+            Ok(r) => r,
+            Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
+                eprintln!("SKIPPED the blit reload mip test: no GPU adapter");
+                return;
+            }
+            Err(d) => panic!("renderer init failed: {d:?}"),
+        };
+        let blit = include_str!("shaders/blit.wgsl");
+        let edited = blit.replace(
+            "return textureSample(src_tex, src_sampler, in.uv);",
+            "return vec4<f32>(0.0, 1.0, 0.0, 1.0);",
+        );
+        assert_ne!(edited, blit);
+        r.reload_shader("blit.wgsl", edited)
+            .expect("the edit reloads");
+
+        let gpu = r.gpu();
+        let device = gpu.device();
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("mip reload test"),
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mip_level_count(4, 4),
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        r.mipgen().generate(gpu, &texture, false);
+
+        // Level 1 is 2×2; a row pads to the copy alignment.
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mip reload readback"),
+            size: 256 * 2,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 1,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256),
+                    rows_per_image: Some(2),
+                },
+            },
+            wgpu::Extent3d {
+                width: 2,
+                height: 2,
+                depth_or_array_layers: 1,
+            },
+        );
+        gpu.queue().submit(Some(encoder.finish()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the device polls");
+        rx.recv().unwrap().expect("the buffer maps");
+        let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
+        for row in 0..2 {
+            for px in 0..2 {
+                let at = row * 256 + px * 4;
+                assert_eq!(
+                    mapped[at..at + 4],
+                    [0, 255, 0, 255],
+                    "level 1 texel ({px}, {row}) is not the reloaded fragment's constant"
+                );
+            }
+        }
     }
 }

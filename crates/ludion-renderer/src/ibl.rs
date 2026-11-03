@@ -4,9 +4,10 @@
 //! At environment load/change the [`Ibl`] runs three compute passes — a diffuse **irradiance** cube,
 //! a roughness-mipped **specular** cube, and the split-sum **BRDF LUT** — from deterministic text
 //! inputs (the sky colors). The BRDF LUT is environment-independent, so it is computed once in
-//! [`Ibl::new`]; the two cubes are content-hash-cached (the mesh/texture-cache precedent), so a live
-//! edit re-prefilters only when the sky colors actually change. Determinism gates on same-input ⇒
-//! identical bytes on a pinned GPU (fixed sample counts, pure Hammersley, no RNG).
+//! [`Ibl::new`] (and again when a dev shader reload replaces the `Ibl`); the two cubes are
+//! content-hash-cached (the mesh/texture-cache precedent), so a live edit re-prefilters only when
+//! the sky colors actually change. Determinism gates on same-input ⇒ identical bytes on a pinned
+//! GPU (fixed sample counts, pure Hammersley, no RNG).
 //!
 //! A scene with no `Environment` binds 1×1 fallback cubes and the flag off, so the mesh shader takes
 //! the exact historical flat-ambient path — byte-identical to before.
@@ -51,15 +52,15 @@ struct Cached {
     specular_texture: wgpu::Texture,
 }
 
-/// The IBL prefilter: compute pipelines, the once-computed BRDF LUT, the 1×1 fallback cube, and the
-/// single-entry content-hash cache.
+/// The IBL prefilter: compute pipelines, the BRDF LUT (computed at construction), the 1×1 fallback
+/// cube, and the single-entry content-hash cache.
 pub(crate) struct Ibl {
     irradiance_pipeline: wgpu::ComputePipeline,
     prefilter_pipeline: wgpu::ComputePipeline,
     /// The probe path: the same lobe over a captured, mipped source cube.
     prefilter_cube_pipeline: wgpu::ComputePipeline,
     downsample_pipeline: wgpu::ComputePipeline,
-    /// The environment-independent split-sum LUT (2D), computed once.
+    /// The environment-independent split-sum LUT (2D), computed at construction.
     brdf_view: wgpu::TextureView,
     /// The texture behind `brdf_view`, kept so tests can read the LUT back.
     #[allow(dead_code, reason = "read by the tests")]
@@ -70,12 +71,26 @@ pub(crate) struct Ibl {
 }
 
 impl Ibl {
-    /// Builds the compute pipelines and computes the BRDF LUT and the fallback cube.
+    /// Builds the compute pipelines from the compiled-in source and computes the BRDF LUT and the
+    /// fallback cube.
     pub(crate) fn new(gpu: &Gpu) -> Ibl {
+        Ibl::from_source(gpu, &ComputeShader::Ibl.composed())
+            .expect("the compiled-in ibl.wgsl builds")
+    }
+
+    /// [`new`](Ibl::new) from `composed` source (the dev shader reload's candidate). The pipelines
+    /// build under one error scope, popped before the LUT dispatch because that reads the pipelines'
+    /// auto layouts; the dispatch runs under a second.
+    ///
+    /// # Errors
+    /// The first wgpu validation error: an entry point the source lacks, or a binding shape the
+    /// pipelines reject.
+    pub(crate) fn from_source(gpu: &Gpu, composed: &str) -> Result<Ibl, wgpu::Error> {
         let device = gpu.device();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ibl"),
-            source: wgpu::ShaderSource::Wgsl(ComputeShader::Ibl.composed().into()),
+            source: wgpu::ShaderSource::Wgsl(composed.into()),
         });
         let pipeline = |entry: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -92,11 +107,18 @@ impl Ibl {
         let prefilter_cube_pipeline = pipeline("prefilter_cube");
         let downsample_pipeline = pipeline("downsample");
         let brdf_pipeline = pipeline("brdf");
+        if let Some(error) = pollster::block_on(scope.pop()) {
+            return Err(error);
+        }
 
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let (brdf_view, brdf_texture) = compute_brdf(gpu, &brdf_pipeline);
+        if let Some(error) = pollster::block_on(scope.pop()) {
+            return Err(error);
+        }
         let fallback_cube = fallback_cube(device);
 
-        Ibl {
+        Ok(Ibl {
             irradiance_pipeline,
             prefilter_pipeline,
             prefilter_cube_pipeline,
@@ -105,7 +127,7 @@ impl Ibl {
             brdf_texture,
             fallback_cube,
             cache: RefCell::new(None),
-        }
+        })
     }
 
     /// Resolves the IBL inputs for `env`. `None` ⇒ the fallback cubes and the flag off (the mesh
@@ -1407,5 +1429,93 @@ pub(crate) mod tests {
                 "mip {mip}: median {median}, worst {worst} vs the sky cube"
             );
         }
+    }
+
+    use crate::probe_capture::tests::renderer_or_skip;
+
+    fn lut(r: &crate::Renderer) -> Vec<Vec<f32>> {
+        read_rgba16_mips(r.gpu(), &r.ibl().brdf_texture)
+    }
+
+    fn dfg() -> String {
+        crate::render::Snippet::Dfg.builtin_source().to_owned()
+    }
+
+    /// The LUT integrates `visibility_smith`, so a `dfg.wgsl` edit must reach it: the `Ibl` is rebuilt
+    /// and the LUT redispatched, not left from the compiled-in source.
+    #[test]
+    fn needs_gpu_a_dfg_reload_recomputes_the_lut() {
+        let Some(mut r) = renderer_or_skip("the dfg reload LUT test") else {
+            return;
+        };
+        let before = lut(&r);
+        let edited = dfg().replace(
+            "return 0.5 / max(v + l, 1e-5);",
+            "return 0.25 / max(v + l, 1e-5);",
+        );
+        assert_ne!(edited, dfg());
+        r.reload_shader("snippets/dfg.wgsl", edited)
+            .expect("the edit reloads");
+        assert_ne!(lut(&r), before, "the LUT was not recomputed from the edit");
+    }
+
+    /// `radical_inverse_vdc` lives only in `ibl.wgsl`, so a `dfg.wgsl` edit declaring it composes in
+    /// every render shader but redeclares it in the IBL. The whole reload is refused: the LUT, and
+    /// the shader code every capture keys on, stay as they were.
+    #[test]
+    fn needs_gpu_an_edit_ibl_cannot_compile_refuses_the_whole_reload() {
+        let Some(mut r) = renderer_or_skip("the refused dfg reload test") else {
+            return;
+        };
+        let (lut_before, key_before) = (lut(&r), r.capture_code_key());
+        let edited = format!(
+            "{}\nfn radical_inverse_vdc(bits: u32) -> f32 {{ return 0.0; }}\n",
+            dfg()
+        );
+        let err = r
+            .reload_shader("snippets/dfg.wgsl", edited)
+            .expect_err("the IBL cannot compile this");
+        assert_eq!(err.code.as_str(), "L2009", "{err}");
+        assert_eq!(lut(&r), lut_before);
+        assert_eq!(
+            r.capture_code_key(),
+            key_before,
+            "a render shader took the edit"
+        );
+    }
+
+    /// `sky_gradient.wgsl` feeds the sky cubes, so a reload drops the cached prefilter and the next
+    /// resolve computes it again from the edit.
+    #[test]
+    fn needs_gpu_a_sky_gradient_reload_drops_the_cubes() {
+        let Some(mut r) = renderer_or_skip("the sky gradient reload test") else {
+            return;
+        };
+        let env = test_env();
+        r.ibl().resolve(r.gpu(), Some(&env), 128);
+        assert!(r.ibl().cache.borrow().is_some());
+        let gradient = crate::render::Snippet::SkyGradient.builtin_source();
+        r.reload_shader(
+            "snippets/sky_gradient.wgsl",
+            format!("{gradient}\n// edited\n"),
+        )
+        .expect("the edit reloads");
+        assert!(
+            r.ibl().cache.borrow().is_none(),
+            "the old cubes survived the reload"
+        );
+    }
+
+    /// A probe capture keys on the shader code it ran; an `ibl.wgsl` edit moves the key.
+    #[test]
+    fn needs_gpu_an_ibl_body_reload_moves_the_capture_key() {
+        let Some(mut r) = renderer_or_skip("the ibl body reload key test") else {
+            return;
+        };
+        let before = r.capture_code_key();
+        let body = crate::compute_shader::ComputeShader::Ibl.body_source();
+        r.reload_shader("ibl.wgsl", format!("{body}\n// edited\n"))
+            .expect("the edit reloads");
+        assert_ne!(r.capture_code_key(), before);
     }
 }

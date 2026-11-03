@@ -365,13 +365,13 @@ pub struct Engine {
     renderer: Option<Renderer>,
     /// Shader sources reloaded this session, oldest first, for a renderer built later.
     shader_reloads: Vec<(String, String)>,
-    /// Whether a host has enabled dev-only shader hot reload ([`enable_shader_reload`](Engine::enable_shader_reload)).
-    /// Default `false`: an `asset.reload` naming a renderer `.wgsl` is an `L2008` structured error, and
+    /// The shader directory a host has enabled dev-only shader hot reload for ([`enable_shader_reload`](Engine::enable_shader_reload)).
+    /// Default `None`: an `asset.reload` naming a renderer `.wgsl` is an `L2008` structured error, and
     /// no shader is ever read from disk — every shipping/test/golden/`ludion render` path uses the
     /// compiled-in shaders. Only an explicitly dev-flagged host (`serve --dev-shaders`, a game run with
     /// `--dev-shaders`, `ludion dev`) turns it on, confining the pipeline-recreation risk to dev hosts.
     /// Render-side switch, never sim state: it is not hashed and not part of a snapshot.
-    shader_reload: bool,
+    shader_reload_dir: Option<PathBuf>,
     /// The per-tick watch ([`set_tick_observer`](Engine::set_tick_observer)). Host state, never
     /// hashed or snapshotted; `Send` because the engine moves into the live sim thread.
     tick_observer: Option<Box<dyn TickObserver>>,
@@ -771,7 +771,7 @@ impl Engine {
             gi_stale: false,
             renderer: None,
             shader_reloads: Vec::new(),
-            shader_reload: false,
+            shader_reload_dir: None,
             tick_observer: None,
             stream_ring: None,
             presenter: None,
@@ -4178,32 +4178,41 @@ impl Engine {
 
     /// Enables dev-only shader hot reload for this host: an `asset.reload` naming a renderer `.wgsl`
     /// recreates its module + dependent pipeline instead of returning the not-enabled `L2008` error.
-    /// A host switch, not a protocol command — set before the engine moves onto the sim thread. Never
-    /// sim state (not hashed, not snapshotted); the shipping path is unaffected until a reload lands.
+    /// Only a file inside the renderer's shader source dir ([`ludion_renderer::SHADER_SOURCE_DIR`])
+    /// can stand in for an engine shader. A host switch, not a protocol command — set before the
+    /// engine moves onto the sim thread. Never sim state (not hashed, not snapshotted); the shipping
+    /// path is unaffected until a reload lands.
     pub fn enable_shader_reload(&mut self) {
-        self.shader_reload = true;
+        self.enable_shader_reload_from(ludion_renderer::SHADER_SOURCE_DIR);
+    }
+
+    /// [`enable_shader_reload`](Engine::enable_shader_reload) with `dir` as the shader directory — a
+    /// copy of the engine's, so a test can edit shaders without touching the checkout.
+    pub fn enable_shader_reload_from(&mut self, dir: impl Into<PathBuf>) {
+        self.shader_reload_dir = Some(dir.into());
     }
 
     /// Whether dev-only shader hot reload is enabled (see [`enable_shader_reload`](Engine::enable_shader_reload)).
     pub fn shader_reload_enabled(&self) -> bool {
-        self.shader_reload
+        self.shader_reload_dir.is_some()
     }
 
     /// Reloads a renderer shader from disk into the live renderer (the dev-only `asset.reload` shader
-    /// branch). Reads `path` — relative to the project root and confined to it, or absolute and inside
-    /// the renderer's shader source dir ([`ludion_renderer::SHADER_SOURCE_DIR`]) — hands the source to the
-    /// renderer for naga validation + dependent-pipeline recreation, and returns the reloaded source's
-    /// content hash for the `asset.reloaded` event. Render-side only — no world state, no `WorldHash`,
-    /// nothing a snapshot carries.
+    /// branch). Reads `path` — absolute, or relative to the project root, either way inside the shader
+    /// dir — hands the source to the renderer under its path within that dir (`mesh.wgsl`,
+    /// `snippets/camera.wgsl`) for naga validation + dependent-pipeline recreation, and returns the
+    /// reloaded source's content hash for the `asset.reloaded` event. Render-side only — no world
+    /// state, no `WorldHash`, nothing a snapshot carries.
     ///
     /// # Errors
-    /// `L1321` if a relative path leaves the project root or an absolute path lies outside the shader
-    /// source dir (nothing is read);
+    /// `L1321` if the path lies outside the shader dir, or the dir is not on this machine (nothing is
+    /// read);
     /// `L1101` if the file cannot be read;
-    /// `L2009` if the WGSL fails validation or the recreated pipeline is layout-incompatible (the last
-    /// good pipeline stays live).
+    /// `L2009` if the file is no reloadable shader, the WGSL fails validation, or the recreated
+    /// pipeline is layout-incompatible (the last good pipeline stays live).
     pub(crate) fn reload_shader(&mut self, path: &str) -> Result<u64, Diagnostic> {
-        let full = self.shader_path(path)?;
+        let (full, key) = self.shader_path(path)?;
+        ludion_renderer::check_shader_reload(&key)?;
         let source = std::fs::read_to_string(&full).map_err(|error| {
             Diagnostic::new(
                 code::ASSET_FILE_IO,
@@ -4211,51 +4220,74 @@ impl Engine {
             )
         })?;
         if let Some(presenter) = self.presenter.as_ref() {
-            presenter.reload_shader(path, source.clone());
+            presenter.reload_shader(&key, source.clone());
         }
         // No sim-side renderer yet: nothing to reload, and building one just for this would cost a
         // device. It is kept, and the renderer built later compiles from it.
         let Some(renderer) = self.renderer.as_mut() else {
             let hash = ludion_assets::content_hash(source.as_bytes());
-            self.shader_reloads.retain(|(p, _)| p != path);
-            self.shader_reloads.push((path.to_owned(), source));
+            self.shader_reloads.retain(|(p, _)| *p != key);
+            self.shader_reloads.push((key, source));
             return Ok(hash);
         };
-        let hash = renderer.reload_shader(path, source.clone())?;
-        self.shader_reloads.retain(|(p, _)| p != path);
-        self.shader_reloads.push((path.to_owned(), source));
+        let hash = renderer.reload_shader(&key, source.clone())?;
+        self.shader_reloads.retain(|(p, _)| *p != key);
+        self.shader_reloads.push((key, source));
         Ok(hash)
     }
 
-    /// Resolves a shader reload path: root-relative through the content-root rule, or absolute
-    /// only inside the renderer's shader source dir.
-    fn shader_path(&self, path: &str) -> Result<PathBuf, Diagnostic> {
+    /// Resolves a shader reload path to the file and its key within the shader dir: absolute, or
+    /// relative to the project root, and either way a file inside the dir `enable_shader_reload*`
+    /// named. The key is the dir-relative path joined with `/`.
+    fn shader_path(&self, path: &str) -> Result<(PathBuf, String), Diagnostic> {
+        let dir = self
+            .shader_reload_dir
+            .as_deref()
+            .expect("shader reload is enabled before a reload is routed here");
         let refuse = |why: &str| {
             Diagnostic::new(
                 code::CONTENT_PATH_OUTSIDE_ROOT,
                 format!("shader path `{path}` {why}"),
             )
-            .with_help(
-                "reload a shader by its project-root-relative path, or by an absolute path inside the renderer's shader source directory",
-            )
+            .with_help(format!(
+                "reload a shader by a path inside the renderer's shader directory `{}`, absolute \
+                 or relative to the project root",
+                dir.display()
+            ))
         };
-        if !Path::new(path).is_absolute() {
+        let full = if Path::new(path).is_absolute() {
+            PathBuf::from(path)
+        } else {
             if let Some(refusal) = ludion_core::paths::content_refusal(path) {
                 return Err(refuse(refusal.describe()));
             }
-            return Ok(self.project_root.join(path));
-        }
-        let inside = std::fs::canonicalize(path)
-            .ok()
-            .zip(std::fs::canonicalize(ludion_renderer::SHADER_SOURCE_DIR).ok())
-            .is_some_and(|(file, dir)| file.starts_with(dir));
-        if inside {
-            Ok(PathBuf::from(path))
-        } else {
-            Err(refuse(
-                "lies outside the renderer's shader source directory",
+            self.project_root.join(path)
+        };
+        let canonical_dir = std::fs::canonicalize(dir).map_err(|_| {
+            refuse(&format!(
+                "cannot be reloaded: this binary was built at `{}`, which is not on this machine; \
+                 shaders are compiled in",
+                dir.display()
             ))
-        }
+        })?;
+        let canonical = std::fs::canonicalize(&full).map_err(|error| {
+            Diagnostic::new(
+                code::ASSET_FILE_IO,
+                format!("could not read shader `{}`: {error}", full.display()),
+            )
+        })?;
+        let relative = canonical.strip_prefix(&canonical_dir).map_err(|_| {
+            refuse(&format!(
+                "lies outside the renderer's shader directory `{}`",
+                canonical_dir.display()
+            ))
+        })?;
+        let key = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        Ok((full, key))
     }
 
     /// Brings the asset cache to the world after a rebuild: keeps what the new world names and drops
