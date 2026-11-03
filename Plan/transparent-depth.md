@@ -1,8 +1,7 @@
 # Plan: Transparent depth — sprites, particles and text at their own distance
 
-> Status: **mechanized; human look owed** (`Plan/owed.md`). The macOS goldens for `fog-sprites`,
-> `fog-sprites-ortho`, `dof-sprites` and `shafts-sprites` are blessed on the M4; their Windows twins
-> and the Windows byte proof are owed.
+> Status: **mechanized; human look owed** (`Plan/owed.md`). The goldens for `fog-sprites`,
+> `fog-sprites-ortho`, `dof-sprites` and `shafts-sprites` are blessed on both pinned machines.
 
 ## Trigger
 
@@ -82,12 +81,21 @@ figure is smeared, and `gpu_frame_ms` is the gate.
 
 ## A fragility
 
-Byte identity for opaque frames depends on how the shaders are spelled, on Metal: a `select` around
-`length` in `fog_factor`, and reading the layer above the march setup in `shafts.wgsl`, each moved
-goldens by 1 LSB, so the code uses early returns and a fixed statement order. `layered_march`
-duplicates the plain loop, and the `fs_depth` entries duplicate their `fs_main`, on purpose, for the
-same reason. Removing any of them must rerun a byte comparison (`LUDION_GOLDEN_ACTUALS`,
-`ludion devdocs testkit-golden`).
+Byte identity for opaque frames depends on how the shaders are spelled, and on every GPU compiler
+tried, not only Metal. On Metal, a `select` around `length` in `fog_factor`, and reading the layer
+above the march setup in `shafts.wgsl`, each moved goldens by 1 LSB, so the code uses early returns
+and a fixed statement order. `layered_march` duplicates the plain loop, and the `fs_depth` entries
+duplicate their `fs_main`, on purpose, for the same reason. Removing any of them must rerun a byte
+comparison (`LUDION_GOLDEN_ACTUALS`, `ludion devdocs testkit-golden`).
+
+The care does not reach the RTX 3090. r2072 moved three pixels of `night-street` by 1 level there,
+under both Vulkan and Dx12, on a scene that never enters `layered_march`: that branch's own
+`world_from_depth(source_uv, 1.0)` is what moves them. The same call with depth 0.5 leaves the frame
+identical, and making the branch return a constant does too, so the move comes from compilation and
+not from a computed value. The driver's exact transformation was not observed. Spelling cannot pin
+this: any edit to `fs_main` can move any scene with shafts, so a byte move here is judged and
+re-blessed. Passing `ray` into `layered_march` restored the old bytes on this box, but it was not
+tried on Metal, in the orthographic shaft tests, or on the reference game, and was not taken.
 
 ## Status
 
@@ -99,4 +107,5 @@ same reason. Removing any of them must rerun a byte comparison (`LUDION_GOLDEN_A
 - Docs: `ludion docs atmosphere`, `post-processing`, `particles`, `components-ui`; `ludion devdocs
   renderer-passes`.
 - macOS goldens blessed for `fog-sprites`, `fog-sprites-ortho`, `dof-sprites`, `shafts-sprites`.
-  Mechanized; the human look and the Windows half are in `Plan/owed.md`.
+- Windows: the same four first-blessed on the RTX 3090, and `night-street` re-blessed for the three
+  pixels above. Mechanized; the human look and the Windows cost are in `Plan/owed.md`.
