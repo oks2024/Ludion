@@ -25,6 +25,8 @@
 //!
 //! On an adapter without `TIMESTAMP_QUERY` the ring allocates no query sets at all and reports the
 //! same degradation `dump_timings_json` does: every pass present by name with `gpu_time_ms: None`.
+//! A graph with more passes than a slot holds ([`PassTimingRing::MAX_PASSES`]) files the same
+//! named, untimed sample, so an over-cap graph is visible rather than silent.
 //! Timing never returns an error — losing a sample must never cost a frame.
 //!
 //! Each collected sample also carries the frame span ([`FrameTiming`]), under the proofs in
@@ -34,16 +36,14 @@ use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use crate::execute::Gpu;
-use crate::timings::{FrameTiming, PassTiming, frame_span_ms};
-
-/// Bytes one resolved timestamp query occupies.
-const QUERY_BYTES: u64 = 8;
+use crate::timings::{FrameTiming, PassQueries, PassTiming, QUERY_BYTES, frame_span_ms};
 
 /// A persistent 3-deep ring of timestamp query sets for non-blocking per-pass GPU timing.
 ///
 /// Created once per [`Gpu`] ([`Gpu::new_pass_timing_ring`]) and reused across frames — unlike the
 /// image ring it is independent of the render size, and a graph may change shape between frames as
-/// long as it stays within [`MAX_PASSES`](PassTimingRing::MAX_PASSES). `S` is a caller-chosen stamp
+/// long as it stays within [`MAX_PASSES`](PassTimingRing::MAX_PASSES); a larger one is named and
+/// untimed. `S` is a caller-chosen stamp
 /// (a [`FrameIndex`](ludion_core::time::FrameIndex) for the live loop) carried through each pending
 /// sample so a late-arriving measurement is filed against the frame it describes.
 ///
@@ -52,7 +52,7 @@ const QUERY_BYTES: u64 = 8;
 pub struct PassTimingRing<S> {
     /// One query set + resolve + map buffer per in-flight frame. **Empty** when the adapter has no
     /// `TIMESTAMP_QUERY` — that emptiness is the degraded mode, not a separate flag.
-    slots: Vec<Slot>,
+    slots: Vec<PassQueries>,
     /// Filed samples, oldest first.
     pending: VecDeque<Pending<S>>,
     /// The slot the next timed frame writes (round-robin), free whenever the ring is not full.
@@ -63,21 +63,13 @@ pub struct PassTimingRing<S> {
     span_proved: bool,
 }
 
-/// One frame's GPU-side timing storage: the query set the passes write, the buffer the queries
-/// resolve into, and the mappable buffer the CPU reads.
-struct Slot {
-    queries: wgpu::QuerySet,
-    resolve: wgpu::Buffer,
-    map: wgpu::Buffer,
-}
-
 /// A filed sample awaiting collection.
 struct Pending<S> {
     stamp: S,
     /// Pass names in scheduled order, captured when the frame was recorded — a later frame may
     /// schedule a different graph, so the names cannot be re-derived at collection time.
     names: Vec<String>,
-    /// The in-flight readback, or `None` for a degraded sample (ready the moment it is filed).
+    /// The in-flight readback, or `None` for an untimed sample (ready the moment it is filed).
     mapped: Option<MappedSlot>,
 }
 
@@ -94,10 +86,10 @@ struct MappedSlot {
 pub(crate) enum FramePlan {
     /// Write `queries` timestamps into `slot` and resolve them.
     Timed { slot: usize, queries: u32 },
-    /// File a sample with no timings — the adapter has no `TIMESTAMP_QUERY`.
-    Degraded,
-    /// Time nothing and file nothing: the ring is full, or the graph has more passes than a query
-    /// set holds.
+    /// File a sample that names its passes and times none: the adapter has no `TIMESTAMP_QUERY`, or
+    /// the graph has more passes than a slot holds.
+    Untimed,
+    /// Time nothing and file nothing: the ring is full (or there is no ring).
     Skip,
 }
 
@@ -107,35 +99,14 @@ impl<S> PassTimingRing<S> {
     pub const DEPTH: usize = 3;
 
     /// Maximum passes one frame can time. Each pass costs a begin/end pair, so a slot's query set
-    /// holds `MAX_PASSES * 2` queries; a graph above this goes untimed rather than reporting a
-    /// truncated frame.
-    pub const MAX_PASSES: usize = 32;
-
-    /// Queries one slot's set holds.
-    const QUERY_COUNT: u32 = (Self::MAX_PASSES * 2) as u32;
+    /// holds `MAX_PASSES * 2` queries; a graph above this files a sample that names its passes and
+    /// times none, rather than reporting a truncated frame. The fullest graph at 8192 schedules
+    /// about 75 passes.
+    pub const MAX_PASSES: usize = 128;
 
     fn new(device: &wgpu::Device, period_ns: f32, span_proved: bool) -> PassTimingRing<S> {
-        let size = u64::from(Self::QUERY_COUNT) * QUERY_BYTES;
         let slots = (0..Self::DEPTH)
-            .map(|_| Slot {
-                queries: device.create_query_set(&wgpu::QuerySetDescriptor {
-                    label: Some("ludion-render-graph pass timing"),
-                    ty: wgpu::QueryType::Timestamp,
-                    count: Self::QUERY_COUNT,
-                }),
-                resolve: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("ludion-render-graph pass timing resolve"),
-                    size,
-                    usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-                    mapped_at_creation: false,
-                }),
-                map: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("ludion-render-graph pass timing readback"),
-                    size,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
-            })
+            .map(|_| PassQueries::new(device, Self::MAX_PASSES))
             .collect();
         PassTimingRing {
             slots,
@@ -229,10 +200,10 @@ impl<S> PassTimingRing<S> {
 
     /// Decides how the next frame is timed, given how many passes it schedules.
     pub(crate) fn plan_frame(&self, pass_count: usize) -> FramePlan {
-        if self.pending.len() >= Self::DEPTH || pass_count > Self::MAX_PASSES {
+        if self.pending.len() >= Self::DEPTH {
             FramePlan::Skip
-        } else if self.slots.is_empty() {
-            FramePlan::Degraded
+        } else if self.slots.is_empty() || pass_count > Self::MAX_PASSES {
+            FramePlan::Untimed
         } else {
             FramePlan::Timed {
                 slot: self.next_slot,
@@ -266,7 +237,7 @@ impl<S> PassTimingRing<S> {
     }
 
     /// Files the frame as pending. Called **after** the frame is submitted; `done` fires when its
-    /// GPU work finishes and is `None` only for a degraded sample.
+    /// GPU work finishes and is `None` only for an untimed sample.
     pub(crate) fn file(
         &mut self,
         plan: FramePlan,
@@ -276,7 +247,7 @@ impl<S> PassTimingRing<S> {
     ) {
         let mapped = match plan {
             FramePlan::Skip => return,
-            FramePlan::Degraded => None,
+            FramePlan::Untimed => None,
             FramePlan::Timed { slot, queries } => {
                 self.next_slot = (slot + 1) % Self::DEPTH;
                 Some(MappedSlot {
@@ -409,7 +380,7 @@ mod tests {
         assert!(ring.timestamp_period_ns().is_none());
 
         let plan = ring.plan_frame(4);
-        assert!(matches!(plan, FramePlan::Degraded));
+        assert!(matches!(plan, FramePlan::Untimed));
         ring.file(plan, names(4), 7, None);
 
         let (stamp, timing) = ring
@@ -430,26 +401,38 @@ mod tests {
         let mut ring: PassTimingRing<u64> = PassTimingRing::degraded();
         for stamp in 0..PassTimingRing::<u64>::DEPTH as u64 {
             let plan = ring.plan_frame(2);
-            assert!(matches!(plan, FramePlan::Degraded));
+            assert!(matches!(plan, FramePlan::Untimed));
             ring.file(plan, names(2), stamp, None);
         }
         assert!(matches!(ring.plan_frame(2), FramePlan::Skip));
 
         assert_eq!(ring.take_ready().map(|(stamp, _)| stamp), Some(0));
-        assert!(matches!(ring.plan_frame(2), FramePlan::Degraded));
+        assert!(matches!(ring.plan_frame(2), FramePlan::Untimed));
     }
 
-    /// A graph with more passes than a query set holds goes untimed rather than truncated.
+    /// A graph with more passes than a slot holds is named and untimed, not dropped and not
+    /// truncated; only a full ring skips it.
     #[test]
-    fn oversize_graph_is_skipped() {
-        let ring: PassTimingRing<u64> = PassTimingRing::degraded();
-        assert!(matches!(
-            ring.plan_frame(PassTimingRing::<u64>::MAX_PASSES),
-            FramePlan::Degraded
-        ));
-        assert!(matches!(
-            ring.plan_frame(PassTimingRing::<u64>::MAX_PASSES + 1),
-            FramePlan::Skip
-        ));
+    fn oversize_graph_is_named_untimed() {
+        let max = PassTimingRing::<u64>::MAX_PASSES;
+        let mut ring: PassTimingRing<u64> = PassTimingRing::degraded();
+        assert!(matches!(ring.plan_frame(max), FramePlan::Untimed));
+        let plan = ring.plan_frame(max + 1);
+        assert!(matches!(plan, FramePlan::Untimed));
+
+        ring.file(plan, names(max + 1), 3, None);
+        let (stamp, timing) = ring
+            .take_ready()
+            .expect("an untimed sample is ready at once");
+        assert_eq!(stamp, 3);
+        assert_eq!(timing.passes.len(), max + 1);
+        assert!(timing.passes.iter().all(|p| p.gpu_time_ms.is_none()));
+        assert_eq!(timing.passes[max].name, format!("pass{max}"));
+
+        for stamp in 0..PassTimingRing::<u64>::DEPTH as u64 {
+            let plan = ring.plan_frame(2);
+            ring.file(plan, names(2), stamp, None);
+        }
+        assert!(matches!(ring.plan_frame(max + 1), FramePlan::Skip));
     }
 }

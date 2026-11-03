@@ -63,6 +63,44 @@ pub struct FrameTiming {
     pub frame_gpu_time_ms: Option<f64>,
 }
 
+/// Bytes one resolved timestamp query occupies.
+pub(crate) const QUERY_BYTES: u64 = 8;
+
+/// The GPU storage one timed frame needs: the query set its passes write, the buffer the queries
+/// resolve into, and the mappable buffer the CPU reads. The one sizing rule for the blocking dump
+/// and the live ring: two queries per pass, [`QUERY_BYTES`] per query.
+pub(crate) struct PassQueries {
+    pub(crate) queries: wgpu::QuerySet,
+    pub(crate) resolve: wgpu::Buffer,
+    pub(crate) map: wgpu::Buffer,
+}
+
+impl PassQueries {
+    pub(crate) fn new(device: &wgpu::Device, pass_count: usize) -> PassQueries {
+        let count = (pass_count * 2) as u32;
+        let size = u64::from(count) * QUERY_BYTES;
+        PassQueries {
+            queries: device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("ludion-render-graph pass timing"),
+                ty: wgpu::QueryType::Timestamp,
+                count,
+            }),
+            resolve: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("ludion-render-graph pass timing resolve"),
+                size,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            map: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("ludion-render-graph pass timing readback"),
+                size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+        }
+    }
+}
+
 /// Whether `backend` is one where the timestamps of a single submission share one timeline.
 pub(crate) fn backend_proves_one_timeline(backend: wgpu::Backend) -> bool {
     matches!(
@@ -184,23 +222,11 @@ impl Gpu {
         let pass_count = schedule.order_names().len();
         let query_count = (pass_count * 2) as u32;
 
-        let query_set = self.device.create_query_set(&wgpu::QuerySetDescriptor {
-            label: Some("ludion-render-graph timings"),
-            ty: wgpu::QueryType::Timestamp,
-            count: query_count,
-        });
-        let resolve_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ludion-render-graph timing resolve"),
-            size: u64::from(query_count) * 8,
-            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let map_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ludion-render-graph timing readback"),
-            size: u64::from(query_count) * 8,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let PassQueries {
+            queries: query_set,
+            resolve: resolve_buffer,
+            map: map_buffer,
+        } = PassQueries::new(&self.device, pass_count);
 
         let frame = self.allocate_physicals(schedule);
         // Reference `output` so a caller can't misroute the target; the timing run renders the same
@@ -241,7 +267,7 @@ impl Gpu {
             0,
             &map_buffer,
             0,
-            u64::from(query_count) * 8,
+            u64::from(query_count) * QUERY_BYTES,
         );
         self.queue.submit([resolve.finish()]);
 
@@ -269,7 +295,7 @@ impl Gpu {
                 timing_failure(format!("could not access mapped bytes: {error}"))
             })?;
             let stamps: Vec<u64> = mapped
-                .chunks_exact(8)
+                .chunks_exact(QUERY_BYTES as usize)
                 .map(|c| u64::from_le_bytes(c.try_into().expect("chunks_exact(8) yields 8 bytes")))
                 .collect();
             let millis: Vec<f64> = (0..pass_count)

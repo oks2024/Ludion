@@ -6,7 +6,7 @@
 //! byte-identical pixels.
 
 use ludion_render_graph::{
-    Extent2d, FrameTiming, Gpu, PassRecorder, PassTiming, PassTimingRing, RecordedPass,
+    Extent2d, FrameTiming, Gpu, PassKind, PassRecorder, PassTiming, PassTimingRing, RecordedPass,
     RenderGraph, ResourceId, Schedule, TextureDesc, build_graph, schedule,
 };
 
@@ -256,6 +256,90 @@ fn needs_gpu_pass_timing_ring_yields_one_set_per_frame() {
         timing.timestamp_period_ns().is_some(),
         "the timestamp period is present exactly when timing is",
     );
+}
+
+/// A linear graph of `passes` passes: a gradient, then vignettes each reading its predecessor.
+fn linear_graph(passes: usize) -> (RenderGraph, ResourceId) {
+    let mut graph = RenderGraph::new();
+    let mut previous = graph.transient("t0", TextureDesc::color(32, 32));
+    graph.add_pass("p0", PassKind::Gradient, previous);
+    for i in 1..passes - 1 {
+        let next = graph.transient(format!("t{i}"), TextureDesc::color(32, 32));
+        graph.add_pass(
+            format!("p{i}"),
+            PassKind::Vignette { source: previous },
+            next,
+        );
+        previous = next;
+    }
+    let output = graph.output("final", TextureDesc::present_target(32, 32));
+    graph.add_pass(
+        format!("p{}", passes - 1),
+        PassKind::Vignette { source: previous },
+        output,
+    );
+    (graph, output)
+}
+
+/// A graph above the old 32-pass cap is timed pass by pass on a timestamp-capable adapter; one above
+/// `MAX_PASSES` is named with no measurements and its image still renders.
+#[test]
+fn needs_gpu_pass_timing_ring_times_a_graph_above_the_old_cap() {
+    let Some(gpu) = gpu_or_skip("pass_timing_ring_times_a_graph_above_the_old_cap") else {
+        return;
+    };
+    let max = PassTimingRing::<usize>::MAX_PASSES;
+
+    let (graph, output) = linear_graph(40);
+    let scheduled = schedule(&graph).unwrap();
+    let mut timing: PassTimingRing<usize> = gpu.new_pass_timing_ring();
+    let collected = timed_frames(&gpu, &scheduled, output, &mut timing, 3);
+    assert_eq!(collected.len(), 3);
+    for (stamp, passes) in &collected {
+        assert_eq!(passes.len(), 40, "frame {stamp} names every pass");
+        if timing.timestamps_supported() {
+            assert!(
+                passes.iter().all(|p| p.gpu_time_ms.is_some()),
+                "frame {stamp}: a graph above 32 passes is timed on a capable adapter",
+            );
+        }
+    }
+
+    let (graph, output) = linear_graph(max + 1);
+    let scheduled = schedule(&graph).unwrap();
+    let mut timing: PassTimingRing<usize> = gpu.new_pass_timing_ring();
+    let mut images = gpu.new_stream_readback(&scheduled, output);
+    let mut rendered = Vec::new();
+    for frame in 0..3 {
+        rendered.extend(
+            gpu.render_streamed(
+                &scheduled,
+                output,
+                &ClearEachPass,
+                &mut images,
+                frame,
+                Some(&mut timing),
+            )
+            .unwrap(),
+        );
+    }
+    gpu.device()
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+    while let Some(image) = images.try_collect(&gpu).unwrap() {
+        rendered.push(image);
+    }
+    let mut samples = Vec::new();
+    drain_timings(&gpu, &mut timing, &mut samples);
+    assert_eq!(samples.len(), 3, "an oversize graph still files a sample");
+    for (_, sample) in &samples {
+        assert_eq!(sample.passes.len(), max + 1);
+        assert!(sample.passes.iter().all(|p| p.gpu_time_ms.is_none()));
+        assert!(sample.frame_gpu_time_ms.is_none());
+    }
+    assert!(!rendered.is_empty(), "the oversize frames still render");
+    let blue = [0, 0, 255, 255];
+    assert!(rendered[0].1.rgba.chunks_exact(4).all(|px| px == blue));
 }
 
 /// A full ring skips the frame's timing rather than blocking for a slot — and recovers as soon as a

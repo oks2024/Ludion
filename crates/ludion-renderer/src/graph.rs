@@ -4019,6 +4019,40 @@ mod tests {
         r.desc.format.as_str().to_owned()
     }
 
+    /// The live pass-timing ring holds `MAX_PASSES`: the fullest graph at the largest extent (every
+    /// non-debug-view feature on) must fit, or the profiler would name its passes and time none.
+    #[test]
+    fn the_fullest_graph_fits_the_timing_ring() {
+        let fullest = PostChain {
+            ui: true,
+            shadow_map: Some(4096),
+            sun_cascades: Some(4),
+            ssao: true,
+            shafts: true,
+            dof: true,
+            gi_inject: Some([16, 16, 16]),
+            debug_lines: true,
+            ssr: Some(1.0),
+            aa: AntiAliasing::Smaa,
+            probe_relight: true,
+            drop_shadow_atlas: Some(1024),
+            local_shadow_atlas: Some(2048),
+            decals: true,
+            lit_decals: true,
+            decal_receivers: true,
+            transparent_cover: true,
+            fog: true,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(8192, 8192), fullest);
+        let passes = graph.passes().len();
+        assert!(passes > 32, "the test went hollow: {passes} passes");
+        assert!(
+            passes <= ludion_render_graph::PassTimingRing::<u64>::MAX_PASSES,
+            "the fullest graph schedules {passes} passes; raise PassTimingRing::MAX_PASSES",
+        );
+    }
+
     /// Under a resample the `ldr` seam is half-float, so the output dither the resample applies has
     /// bits below 8 to land on; at native it stays 8-bit, and `ldr_resolved` always does.
     #[test]

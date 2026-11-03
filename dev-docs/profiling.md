@@ -76,8 +76,9 @@ layer measures is `frame-streaming`; the determinism guarantees the profiler mus
   allocation, no observer attached. Server-side it is one relaxed atomic load. A change that makes
   the disarmed path pay for the armed path's convenience is a defect.
 - **A profiler must never stall what it measures.** `PassTimingRing` *skips* a frame's measurement
-  when the ring is full rather than blocking on a readback: a dropped measurement is invisible, a
-  stalled render loop corrupts every number in the report. Same reason the transport rings are
+  only when the ring is full, rather than blocking on a readback: a dropped measurement is
+  invisible, a stalled render loop corrupts every number in the report. (A graph over
+  `MAX_PASSES` is not skipped; its passes are named and untimed.) Same reason the transport rings are
   capped and evict rather than grow. They hold one entry per frame (last write wins) and cover a
   full capture, so the transport medians describe the same span as the sim and GPU sections.
 - **One report shape.** Offline and live both produce `ProfileReport`; a window converts into one
@@ -157,6 +158,7 @@ four labelled lanes and no overlap warnings.
 
 ## Gotchas
 
+- **A pass with a `null` median while `timestamps_supported` is true means the graph exceeded `PassTimingRing::MAX_PASSES`:** its passes are named and untimed.
 - **Windowed present left the sim thread.** A window is drawn by the presenter thread on its own renderer; the profile report and `--dump-timings` measure the sim-side renderer (the stream's), never the window's.
 - **Debug-build numbers are not comparable to a release budget.** QOI encode in particular is an
   order of magnitude slower unoptimized (see `frame-streaming`). Profile in `--release`, on the
