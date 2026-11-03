@@ -78,7 +78,12 @@ snapshot too (the blob's last-but-one field) and a body rebuilt during a hit-sto
 until the next real step, restored or not. `blast_hits` resets every tick and is not hashed; it rides
 the snapshot too (adding these fields changed the format, so the `physics-stress` and `ragdoll`
 replays' keyframes are re-recorded, their per-frame hashes unchanged). `to_bytes` refuses with an `Encode`
-error while calls are still queued: the queue is not in the blob, so encoding one would drop it. A
+error while calls are still queued: the queue is not in the blob, so encoding one would drop it.
+The blob opens with a tag (`LPB1`, `PHYSICS_BLOB_VERSION`, the rapier pin's version string): any
+field change in `SnapshotOwned` or a type it holds bumps the version, and `from_bytes` refuses a
+blob of another version or pin (`Decode`, `L3033`). An untagged blob (every keyframe recorded
+before the tag) still decodes while `ACCEPT_UNTAGGED_BLOB` is on. The version rides the replay
+content hash; the pin does not. A
 game edit is detected by comparing a component against **the exact bits the component read back
 after the mirror last wrote it** (a lossy pose type, `Transform`'s Euler degrees, reports different
 bits than the solver held) — never a prediction — so a difference is an edit by definition and an

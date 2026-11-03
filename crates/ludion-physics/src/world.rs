@@ -297,6 +297,17 @@ struct ContactWindow {
 /// f32 sums of small scales (20 steps of 0.05).
 const IMPULSE_WINDOW: f32 = 1.0 - 1e-4;
 
+/// First bytes of a tagged physics blob. An untagged blob starts with an arena length, which cannot
+/// spell this.
+const PHYSICS_BLOB_MAGIC: [u8; 4] = *b"LPB1";
+
+/// The layout version of a tagged blob's body (the field set of [`SnapshotOwned`]). A blob written
+/// at another version is refused rather than decoded positionally into the wrong shape.
+pub const PHYSICS_BLOB_VERSION: u32 = 1;
+
+/// Whether a blob without the tag still decodes (every keyframe recorded before the tag existed).
+const ACCEPT_UNTAGGED_BLOB: bool = true;
+
 /// The snapshot as written. Borrowed, because the solver state is not `Clone`.
 #[derive(Serialize)]
 struct SnapshotRef<'a> {
@@ -319,7 +330,8 @@ struct SnapshotRef<'a> {
 }
 
 /// The snapshot as read — the same fields in the same order, so the two encode identically. The
-/// encoding is positional: any field change is a blob-format event.
+/// encoding is positional: **any field change here, or in a type it holds, bumps
+/// [`PHYSICS_BLOB_VERSION`].**
 #[derive(Deserialize)]
 struct SnapshotOwned {
     rapier: RapierWorld,
@@ -1184,8 +1196,9 @@ impl PhysicsWorld {
     /// than a structured value because the narrow phase's 128-bit solver masks do not fit in a JSON
     /// number; wrapping these bytes for a text document (base64) is the caller's job.
     ///
-    /// A bincode major bump changes the encoding, so it is a snapshot-format event rather than an
-    /// ordinary dependency update. The last step's contact events and touching set ride in the
+    /// The blob opens with a tag: the magic `LPB1`, [`PHYSICS_BLOB_VERSION`] (`u32` LE) and the
+    /// solver pin's version string (`u16` LE length, then bytes). A bincode major bump changes the
+    /// encoding, so it is a snapshot-format event rather than an ordinary dependency update. The last step's contact events and touching set ride in the
     /// blob too, since tick `N + 1` reads what tick `N`'s step produced; so do the blast hits, the
     /// colliders a frozen step left out of the next blast, and the last step's timestep. The sensor
     /// overlap baseline, the last step's sensor events and the not-yet-judged despawns ride too.
@@ -1211,7 +1224,15 @@ impl PhysicsWorld {
                     .to_string(),
             ));
         }
-        bincode::serialize(&SnapshotRef {
+        let pin = rapier3d::VERSION.as_bytes();
+        let pin_len = u16::try_from(pin.len())
+            .map_err(|_| PhysicsError::Encode("the solver pin name is too long".to_string()))?;
+        let mut bytes = Vec::with_capacity(10 + pin.len());
+        bytes.extend_from_slice(&PHYSICS_BLOB_MAGIC);
+        bytes.extend_from_slice(&PHYSICS_BLOB_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&pin_len.to_le_bytes());
+        bytes.extend_from_slice(pin);
+        let body = bincode::serialize(&SnapshotRef {
             rapier: &self.rapier,
             table: &self.table,
             plane: self.plane.map(PlaneCode::from),
@@ -1229,7 +1250,9 @@ impl PhysicsWorld {
             last_write_frame: self.last_write_frame,
             last_write_held: self.last_write_held,
         })
-        .map_err(|why| PhysicsError::Encode(why.to_string()))
+        .map_err(|why| PhysicsError::Encode(why.to_string()))?;
+        bytes.extend_from_slice(&body);
+        Ok(bytes)
     }
 
     /// Rebuilds a world from [`to_bytes`](PhysicsWorld::to_bytes), stepping at `tick_rate`.
@@ -1238,12 +1261,34 @@ impl PhysicsWorld {
     /// membership and the contact graph all ride in the bytes, and the entity→row map is rebuilt by
     /// walking the restored table in its own order, never by walking a solver set. The timestep is
     /// taken from `tick_rate`, not from the bytes, so a session restores at the rate it runs at.
+    ///
+    /// # Errors
+    /// [`PhysicsError::Decode`] for a truncated or trailing-byte blob, or one tagged with another
+    /// blob version or solver pin.
     pub fn from_bytes(bytes: &[u8], tick_rate: TickRate) -> Result<Self, PhysicsError> {
+        Self::decode(bytes, tick_rate, ACCEPT_UNTAGGED_BLOB)
+    }
+
+    /// [`from_bytes`](PhysicsWorld::from_bytes) with the untagged-blob switch explicit.
+    fn decode(
+        bytes: &[u8],
+        tick_rate: TickRate,
+        accept_untagged: bool,
+    ) -> Result<Self, PhysicsError> {
+        let body = match bytes.strip_prefix(&PHYSICS_BLOB_MAGIC) {
+            Some(rest) => check_blob_tag(rest)?,
+            None if accept_untagged => bytes,
+            None => {
+                return Err(PhysicsError::Decode(
+                    "the blob carries no version tag".to_string(),
+                ));
+            }
+        };
         // `bincode::deserialize` is this chain plus `allow_trailing_bytes`; a blob with a tail is corrupt.
         let snapshot: SnapshotOwned = bincode::DefaultOptions::new()
             .with_fixint_encoding()
             .reject_trailing_bytes()
-            .deserialize(bytes)
+            .deserialize(body)
             .map_err(|why| PhysicsError::Decode(why.to_string()))?;
         let mut world = PhysicsWorld {
             rapier: snapshot.rapier,
@@ -2795,6 +2840,34 @@ fn entity_bits(entity: EntityId) -> u128 {
     u128::from(entity.index()) | (u128::from(entity.generation()) << 32)
 }
 
+/// Validates a tagged blob's version and solver pin (the bytes after the magic) and returns the
+/// body that follows them.
+fn check_blob_tag(rest: &[u8]) -> Result<&[u8], PhysicsError> {
+    let truncated = || PhysicsError::Decode("the blob's version tag is truncated".to_string());
+    let (version, rest) = rest.split_first_chunk::<4>().ok_or_else(truncated)?;
+    let (pin_len, rest) = rest.split_first_chunk::<2>().ok_or_else(truncated)?;
+    let version = u32::from_le_bytes(*version);
+    if version != PHYSICS_BLOB_VERSION {
+        return Err(PhysicsError::Decode(format!(
+            "the blob is layout version {version}, but this build reads version \
+             {PHYSICS_BLOB_VERSION}"
+        )));
+    }
+    let pin_len = usize::from(u16::from_le_bytes(*pin_len));
+    if rest.len() < pin_len {
+        return Err(truncated());
+    }
+    let (pin, body) = rest.split_at(pin_len);
+    if pin != rapier3d::VERSION.as_bytes() {
+        return Err(PhysicsError::Decode(format!(
+            "the blob was written by solver pin {}, but this build is pinned to {}",
+            String::from_utf8_lossy(pin),
+            rapier3d::VERSION
+        )));
+    }
+    Ok(body)
+}
+
 /// The inverse of [`entity_bits`].
 pub(crate) fn entity_from_bits(bits: u128) -> EntityId {
     EntityId::new(bits as u32, (bits >> 32) as u32)
@@ -2806,6 +2879,67 @@ mod tests {
 
     use super::*;
     use crate::systems::{DEFAULT_SOLVER_ITERATIONS, DEFAULT_STABILIZATION_ITERATIONS};
+
+    fn tagged_blob() -> Vec<u8> {
+        PhysicsWorld::new(TickRate::DEFAULT).to_bytes().unwrap()
+    }
+
+    fn pin_offset() -> usize {
+        10
+    }
+
+    #[test]
+    fn a_blob_is_tagged_and_round_trips() {
+        let bytes = tagged_blob();
+        assert_eq!(&bytes[..4], b"LPB1");
+        let world = PhysicsWorld::from_bytes(&bytes, TickRate::DEFAULT).unwrap();
+        assert_eq!(world.to_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_blob_of_another_version_is_refused_naming_both() {
+        let mut bytes = tagged_blob();
+        bytes[4..8].copy_from_slice(&(PHYSICS_BLOB_VERSION + 1).to_le_bytes());
+        let Err(PhysicsError::Decode(why)) = PhysicsWorld::from_bytes(&bytes, TickRate::DEFAULT)
+        else {
+            panic!("a wrong blob version must be refused");
+        };
+        assert!(why.contains(&format!("version {}", PHYSICS_BLOB_VERSION + 1)));
+        assert!(why.contains(&format!("version {PHYSICS_BLOB_VERSION}")));
+    }
+
+    #[test]
+    fn a_blob_of_another_pin_is_refused_naming_both() {
+        let mut bytes = tagged_blob();
+        let at = pin_offset();
+        bytes[at] = b'9';
+        let Err(PhysicsError::Decode(why)) = PhysicsWorld::from_bytes(&bytes, TickRate::DEFAULT)
+        else {
+            panic!("a wrong solver pin must be refused");
+        };
+        assert!(why.contains(rapier3d::VERSION));
+        assert!(why.contains(&String::from_utf8(bytes[at..at + 6].to_vec()).unwrap()));
+    }
+
+    #[test]
+    fn a_tagged_blob_is_refused_when_truncated_inside_the_tag() {
+        let bytes = tagged_blob();
+        assert!(matches!(
+            PhysicsWorld::from_bytes(&bytes[..6], TickRate::DEFAULT),
+            Err(PhysicsError::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn an_untagged_blob_decodes_only_while_accepted() {
+        let bytes = tagged_blob();
+        let untagged = &bytes[pin_offset() + rapier3d::VERSION.len()..];
+        assert!(PhysicsWorld::decode(untagged, TickRate::DEFAULT, true).is_ok());
+        assert!(matches!(
+            PhysicsWorld::decode(untagged, TickRate::DEFAULT, false),
+            Err(PhysicsError::Decode(_))
+        ));
+    }
 
     #[test]
     fn a_blob_with_trailing_bytes_is_refused() {

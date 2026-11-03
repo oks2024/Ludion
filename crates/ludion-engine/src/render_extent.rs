@@ -17,9 +17,10 @@ use crate::engine::DEFAULT_RENDER_SIZE;
 /// `LUDION_RENDER_SIZE` at startup, a client's `render.size` mid-session), so a system always reads
 /// the live number rather than a guess.
 ///
-/// **Never hashed, never serialized.** Like [`Diagnostics`](crate::Diagnostics) it is engine-owned
-/// world state outside the component registry, so it reaches neither `WorldHash` nor a snapshot; a
-/// game that never reads it hashes identically at every extent.
+/// **Never hashed.** Like [`Diagnostics`](crate::Diagnostics) it is engine-owned world state
+/// outside the component registry, so it never reaches `WorldHash`; a game that never reads it
+/// hashes identically at every extent. The snapshot document carries the extent beside the world
+/// (`render_extent`), and a restore applies it.
 ///
 /// **It is sim input, so a recording carries it:** the header holds the extent at arm time and an
 /// applied `render.size` is a record, so a session recorded at extent E is replayed at E. Two

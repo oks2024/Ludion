@@ -522,12 +522,13 @@ entities:
             "frame",
             "run_state",
             "speed",
+            "render_extent",
             "seed",
             "scene",
             "rng",
             "entities",
         ],
-        "no field was perturbed or added by E7 (no `profile`, `scene_name`, or transition key)"
+        "no field was perturbed or added by E7 beyond the render extent (no `profile`, `scene_name`, or transition key)"
     );
     // The additive `doc_reloads` field (finding 2.1) obeys the same presence rule as `allocator` and
     // `profile`: this engine registers no doc kind and performs no reload, so an empty log is skipped

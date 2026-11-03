@@ -5677,6 +5677,9 @@ pub(crate) struct RestoredWorld {
     /// Whether the snapshot was taken on the boundary a scene restart landed at: installed onto the
     /// restored `SceneSwitch`, so the next tick sees the same fact the live session did.
     pub arrived_by_restart: bool,
+    /// The snapshot's validated render extent, or `None` for a snapshot predating the field, which
+    /// leaves the host's extent alone. Applied without the render-scale check: it is sim input.
+    pub render_extent: Option<(u32, u32)>,
 }
 
 /// A top-level prefab instance's root and the placement its scene entry gave it.
@@ -5730,6 +5733,7 @@ pub(crate) enum Rebuild {
         pending_input: ludion_sim::InputScript,
         profile: Option<String>,
         arrived_by_restart: bool,
+        render_extent: Option<(u32, u32)>,
     },
     /// A scene switch: the same session, a new district. A `restart` rebuilds the current scene and
     /// stays in its prefab epoch.
@@ -5770,6 +5774,7 @@ impl Engine {
                 pending_input: restored.pending_input,
                 profile: restored.profile,
                 arrived_by_restart: restored.arrived_by_restart,
+                render_extent: restored.render_extent,
             },
         });
         Ok(())
@@ -5793,6 +5798,14 @@ impl Engine {
             prefab_placements,
             mut kind,
         } = prepared;
+        // Before `install_render_extent` mirrors the size onto the fresh world.
+        if let Rebuild::Restore {
+            render_extent: Some(size),
+            ..
+        } = &kind
+        {
+            self.render_size = *size;
+        }
         // Observations from the departing world accumulate across the reset; the fresh one is re-armed
         // at the end.
         self.drain_query_recording();

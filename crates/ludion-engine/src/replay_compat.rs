@@ -34,12 +34,15 @@ pub fn replay_content_hash() -> WireHash {
     *HASH.get_or_init(|| schema::canonical_hash(&schema::strip_prose(content_schema())))
 }
 
-/// The unhashed document [`replay_content_hash`] covers.
+/// The unhashed document [`replay_content_hash`] covers. The rapier pin stays out on purpose: the
+/// pin ritual runs the replay gates across a pin move as its verdict, so the pin bites only when a
+/// physics blob is decoded.
 fn content_schema() -> serde_json::Value {
     json!({
         "record": schema::replay_record_schema(),
         "input_event": schema::schema_of::<InputEvent>(),
         "snapshot": crate::snapshot::snapshot_schema(),
+        "physics_blob": ludion_physics::PHYSICS_BLOB_VERSION,
     })
 }
 
@@ -215,6 +218,14 @@ mod tests {
         assert!(
             text.contains("\"applied\""),
             "DocReloadDoc.applied must be covered"
+        );
+        assert!(
+            text.contains("\"render_extent\""),
+            "the keyframe render extent must be covered"
+        );
+        assert_eq!(
+            document["physics_blob"],
+            ludion_physics::PHYSICS_BLOB_VERSION
         );
         assert!(document["input_event"].to_string().contains("\"Left\""));
     }

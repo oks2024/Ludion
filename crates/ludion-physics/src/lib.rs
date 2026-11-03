@@ -202,6 +202,6 @@ pub use systems::{
 pub use time_scale::MIN_TIME_SCALE;
 pub use wireframe::{WireBody, feature_edges};
 pub use world::{
-    DEFAULT_GRAVITY, MotorMismatch, PhysicsError, PhysicsWorld, ShapeKind, ShapeRejection,
-    StepBreakdown,
+    DEFAULT_GRAVITY, MotorMismatch, PHYSICS_BLOB_VERSION, PhysicsError, PhysicsWorld, ShapeKind,
+    ShapeRejection, StepBreakdown,
 };

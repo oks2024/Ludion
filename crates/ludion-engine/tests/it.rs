@@ -92,6 +92,7 @@ mod record_extent_and_scene;
 mod recording_ceiling;
 mod reflection_parity;
 mod registry_serialized_default;
+mod render_extent_snapshot;
 mod render_view;
 mod replay_with;
 mod scene_paths;

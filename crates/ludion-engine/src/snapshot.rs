@@ -29,6 +29,10 @@
 //! an older snapshot without it restores with the pre-fix clean-disk rebuild. Invisible to the world
 //! hash (the `DocStore` it feeds is a resource).
 //!
+//! The **render extent** rides along (the `render_extent` field): it is sim input, so a restore, and
+//! a replay seek landing on a keyframe, runs at the extent the capture had, bypassing the host's
+//! render-scale check. An older snapshot without it leaves the host's extent alone.
+//!
 //! The **rigid-body solver state** rides the same precedent (the `physics` field), with one
 //! difference: it is opaque text — base64 of a binary codec — because a structured JSON value cannot
 //! hold every field the solver keeps, and `serde_json` would write raw bytes as an array of numbers.
@@ -88,7 +92,8 @@ use ludion_core::ids::EntityId;
 use ludion_core::rng::DeterministicRng;
 use ludion_core::time::{FrameIndex, GameClock};
 use ludion_physics::PhysicsWorld;
-use ludion_protocol::replay::SceneRef;
+use ludion_protocol::command::RenderSizeParams;
+use ludion_protocol::replay::{ReplayExtent, SceneRef};
 use ludion_protocol::restore::{RestoreEntry, RestoreReport};
 use ludion_scene::{SceneLayer, ScenePhysics, ScenePhysicsSpace, validate_physics};
 use ludion_sim::{DriverRestore, InputScript, InputState, RunState, Speed};
@@ -118,6 +123,11 @@ struct SnapshotDoc {
     run_state: RunState,
     /// The wall-clock pacing factor at snapshot time.
     speed: f64,
+    /// The render extent at snapshot time. Sim input (a game reads it as `RenderExtent`), so a
+    /// restore, and a replay seek landing on a keyframe, runs at the extent the capture had. Optional
+    /// and additive: a snapshot without it leaves the host's extent alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    render_extent: Option<ReplayExtent>,
     /// The seed the world was instantiated with.
     seed: u64,
     /// The scene reference (path or inline), when one is loaded.
@@ -438,6 +448,10 @@ pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
         frame: engine.frame().as_u64(),
         run_state: engine.run_state(),
         speed: engine.speed().factor(),
+        render_extent: Some({
+            let (width, height) = engine.render_size();
+            ReplayExtent { width, height }
+        }),
         seed: engine.seed(),
         scene: engine.scene_ref().cloned(),
         scene_name: engine.scene_name().map(str::to_string),
@@ -721,6 +735,28 @@ pub(crate) fn restore_into(
         )
     })?;
 
+    let render_extent = doc
+        .render_extent
+        .map(|extent| {
+            crate::commands::render::requested_extent(&RenderSizeParams {
+                width: Some(extent.width),
+                height: Some(extent.height),
+            })
+            .map(|checked| checked.unwrap_or_default())
+            .map_err(|diagnostic| {
+                Diagnostic::new(
+                    code::PROTOCOL_SNAPSHOT_INVALID,
+                    format!(
+                        "snapshot render extent {}x{} is not a valid extent: {}",
+                        extent.width, extent.height, diagnostic.message
+                    ),
+                )
+                .with_path("/render_extent")
+                .with_help("re-take the snapshot from a real session")
+            })
+        })
+        .transpose()?;
+
     if doc.frame > MAX_RESTORE_FRAME {
         return Err(Diagnostic::new(
             code::PROTOCOL_SNAPSHOT_INVALID,
@@ -964,6 +1000,7 @@ pub(crate) fn restore_into(
             input: doc.input,
             pending_input: doc.pending_input,
             arrived_by_restart: doc.arrived_by_restart,
+            render_extent,
         })
         .map_err(crate::commands::collapse)?;
 

@@ -177,6 +177,37 @@ fn a_replay_runs_at_the_extent_it_was_recorded_at() {
 }
 
 #[test]
+fn a_seek_to_a_keyframe_after_a_resize_lands_on_the_resized_extent() {
+    let dir = fresh_dir("seek-extent");
+    let mut engine = game(&dir).build().unwrap();
+    engine.load_inline_scene(HUB).unwrap();
+    let sink = SharedSink::default();
+    engine.set_recording(sink.clone()).unwrap();
+    drive_hashes(&mut engine, vec![step(), resize(640, 360), step()]).unwrap();
+    // Stopping writes the closing keyframe, taken after the resize.
+    engine.stop_recording().unwrap();
+
+    let bytes = sink.bytes();
+    let reader = ReplayReader::new(&bytes).unwrap();
+    let seek = reader.seek(engine.frame()).unwrap();
+    let (_, snapshot) = seek.keyframe.expect("the closing keyframe");
+
+    // A fresh engine at the default extent: only the keyframe can put it at 640x360.
+    let mut fresh = game(&dir).build().unwrap();
+    assert_ne!(fresh.render_size(), (640, 360));
+    fresh
+        .execute(Command::EngineRestore(
+            ludion_protocol::command::EngineRestoreParams { snapshot },
+        ))
+        .unwrap();
+    assert_eq!(fresh.render_size(), (640, 360));
+    assert_eq!(
+        fresh.world().resource::<RenderExtent>().unwrap().size(),
+        (640, 360)
+    );
+}
+
+#[test]
 fn a_replayed_scene_load_never_reads_the_file() {
     let dir = fresh_dir("scene-load");
     let mut engine = game(&dir).build().unwrap();

@@ -133,7 +133,9 @@ pub(crate) fn apply_recorded(
 /// The `L3025`-checked extent a `render.size` names: `None` for the read form. Both axes are
 /// validated before either is applied, so a refused request leaves the extent exactly as it was
 /// rather than half-moved.
-fn requested_extent(params: &RenderSizeParams) -> Result<Option<(u32, u32)>, Diagnostic> {
+pub(crate) fn requested_extent(
+    params: &RenderSizeParams,
+) -> Result<Option<(u32, u32)>, Diagnostic> {
     match (params.width, params.height) {
         (Some(width), Some(height)) => {
             let help = size_help();
