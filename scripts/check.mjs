@@ -18,6 +18,7 @@
 //                    doctests, the derived-import sync, the drift gates, the check-docs smoke, mobile,
 //                    vigil's own workspace — fmt, clippy, nextest, doctests, run from games/vigil/ —
 //                    the editor host, fuzz fmt + clippy) and the editor frontend (oxlint, tsc, vitest, schema-drift),
+//                    (the test lanes build first, so the deps prune runs between build and execution),
 //                    then the quiet `fps-gate` tail: the 1080p delivery fps gates, alone on the box
 //   --rust-only      the Rust gates only — fastest for Rust-only edits
 //   --frontend-only  the editor frontend gates only
@@ -97,11 +98,13 @@ const LOG_DIR = SCOPED ? path.join(SCOPE_ROOT, String(process.pid)) : path.join(
 const HISTORY = path.join(REPO_ROOT, 'target', 'check-history.jsonl');
 const LOCK = path.join(REPO_ROOT, 'target', 'check.lock');
 // Cargo never prunes stale artifacts, and macOS's default unpacked split-debuginfo leaves a loose `.o`
-// per codegen unit in `target/*/deps`. Past ~100k entries CoreAudio's per-boot directory scan slows every
-// audio boot (dev-docs/test-box-failures.md). Past the threshold a run deletes the `.o` files older than
-// an hour (scripts/deps-prune.mjs); `cargo sweep` and `cargo clean` remain the manual tools.
-const DEPS_WARN_FILES = Number(process.env.LUDION_DEPS_WARN_FILES ?? 60000);
-function pruneBloatedDeps() {
+// per codegen unit in `target/*/deps`, every 1000 entries cost each GPU process ~2 ms at device lookup
+// (dev-docs/test-box-failures.md). Past the threshold, before a test execution, a run holds cargo's lock
+// and deletes every `.o` no executable names (scripts/deps-prune.mjs); `cargo clean` remains the manual tool.
+const DEPS_WARN_FILES = Number(process.env.LUDION_DEPS_WARN_FILES ?? 40000);
+const depsEntries = {};
+async function pruneBloatedDeps(label) {
+  if (process.platform !== 'darwin') return;
   const target = path.join(REPO_ROOT, 'target');
   let profiles;
   try {
@@ -111,11 +114,17 @@ function pruneBloatedDeps() {
   }
   for (const profile of profiles) {
     const deps = path.join(target, profile, 'deps');
-    const result = pruneDeps(deps, { threshold: DEPS_WARN_FILES });
-    if (!result || result.before <= DEPS_WARN_FILES) continue;
-    console.log(`${DIM}check: pruned ${result.removed} stale objects from target/${profile}/deps (${result.before} -> ${result.after} entries)${RST}`);
+    const result = await pruneDeps(deps, { threshold: DEPS_WARN_FILES });
+    if (!result) continue;
+    if (profile === 'debug') depsEntries[label] = { entries: result.after, busy: result.busy };
+    if (result.before <= DEPS_WARN_FILES) continue;
+    if (result.busy) {
+      console.log(`${YELLOW}check: cargo's lock on target/${profile} stayed busy, so target/${profile}/deps was not pruned (${result.before} entries) and the tests run slow.${RST}`);
+      continue;
+    }
+    console.log(`${DIM}check: pruned ${result.removed} unreferenced objects from target/${profile}/deps (${result.before} -> ${result.after} entries)${RST}`);
     if (result.after > DEPS_WARN_FILES) {
-      console.log(`${YELLOW}check: target/${profile}/deps still holds ${result.after} entries (limit ${DEPS_WARN_FILES}) after pruning — macOS audio boots slow down. Run \`cargo sweep --time 7\` or \`cargo clean\`.${RST}`);
+      console.log(`${YELLOW}check: target/${profile}/deps still holds ${result.after} entries (limit ${DEPS_WARN_FILES}) after pruning — macOS device lookups slow down. Run \`cargo clean\`.${RST}`);
     }
   }
 }
@@ -461,6 +470,9 @@ const vigilTestStep = (shape) => ({
     : { cmd: 'cargo', args: ['test', '--workspace', '--no-fail-fast'], env: { LUDION_REQUIRE_GPU: '1', ...referenceGpuEnv() } }),
 });
 const vigilDoctestStep = { name: 'vigil-doctest', cmd: 'cargo', args: ['test', '--workspace', '--doc', '--no-fail-fast'], cwd: VIGIL, log: 'vigil-doctest.log' };
+// The build alone, so the deps prune runs between build and execution (`pruneBloatedDeps`).
+const testBuildStep = (useNextest) => ({ name: 'test-build', cmd: 'cargo', args: useNextest ? ['nextest', 'run', '--no-run', ...TEST_SELECT] : ['test', '--no-run', ...TEST_SELECT], log: 'test-build.log' });
+const vigilTestBuildStep = (useNextest) => ({ name: 'vigil-test-build', cmd: 'cargo', args: useNextest ? ['nextest', 'run', '--no-run', '--workspace'] : ['test', '--no-run', '--workspace'], cwd: VIGIL, log: 'vigil-test-build.log' });
 const doctestStep = { name: 'doctest', cmd: 'cargo', args: ['test', ...DOC_SELECT, '--doc', FAIL_FLAG], log: 'doctest.log' };
 // Without nextest a docs scope runs its whole packages: wider than the nextest filter, never narrower.
 const cargoTestStep = (fps) => ({ name: 'test', cmd: 'cargo', args: ['test', ...TEST_SELECT, ...(FAIL_FAST ? [] : ['--no-fail-fast']), ...(fps.prefix ? ['--', '--skip', fps.prefix] : [])], log: 'test.log', env: { LUDION_REQUIRE_GPU: '1', ...referenceGpuEnv() } });
@@ -706,27 +718,35 @@ async function binLane(copied, syncDone) {
 
 // A compile failure in clippy makes the test build a redundant recompile-failure; a test failure
 // leaves doctest and mobile independent, so they still run.
-const VIGIL_CARGO_STEPS = ['vigil-clippy', 'vigil-test', 'vigil-doctest'];
+const VIGIL_CARGO_STEPS = ['vigil-clippy', 'vigil-test-build', 'vigil-test', 'vigil-doctest'];
 const failFastSkips = (red, names) => names.map((n) => (hasVigil || !VIGIL_CARGO_STEPS.includes(n) ? skipped(n, `${red} failed (--fail-fast)`) : vigilAbsent(n)));
 async function cargoChain(syncDone) {
   const root = inScope('clippy');
   const clippy = root ? await runStep(clippyStep) : outOfScope('clippy');
-  if (!clippy.ok) return [clippy, await syncDone, ...['test', 'doctest', ...VIGIL_CARGO_STEPS, 'mobile'].map((n) => (hasVigil || !VIGIL_CARGO_STEPS.includes(n) ? skipped(n, 'clippy failed') : vigilAbsent(n)))];
+  if (!clippy.ok) return [clippy, await syncDone, ...['test-build', 'test', 'doctest', ...VIGIL_CARGO_STEPS, 'mobile'].map((n) => (hasVigil || !VIGIL_CARGO_STEPS.includes(n) ? skipped(n, 'clippy failed') : vigilAbsent(n)))];
   const useNextest = await hasNextest();
   const synced = await syncDone;
   if (noGpu && !useNextest) {
     const missing = verdict('test', 'test.log', false, '--no-gpu runs the nextest `no-gpu` profile: install cargo-nextest (`cargo install cargo-nextest --locked`)');
-    return [clippy, synced, missing, skipped('doctest', 'no cargo-nextest'), ...VIGIL_CARGO_STEPS.map((n) => (hasVigil ? skipped(n, 'no cargo-nextest') : vigilAbsent(n))), await runStep(mobileStep())];
+    return [clippy, synced, skipped('test-build', 'no cargo-nextest'), missing, skipped('doctest', 'no cargo-nextest'), ...VIGIL_CARGO_STEPS.map((n) => (hasVigil ? skipped(n, 'no cargo-nextest') : vigilAbsent(n))), await runStep(mobileStep())];
   }
   const out = [clippy, synced];
   if (root) {
-    const test = await runStep(noGpu ? noGpuStep : useNextest ? nextestStep(fpsGate) : cargoTestStep(fpsGate));
+    const build = await runStep(testBuildStep(useNextest));
+    out.push(build);
+    let test;
+    if (build.ok) {
+      await pruneBloatedDeps('test');
+      test = await runStep(noGpu ? noGpuStep : useNextest ? nextestStep(fpsGate) : cargoTestStep(fpsGate));
+    } else {
+      test = skipped('test', 'test-build failed');
+    }
     out.push(test);
-    if (FAIL_FAST && !test.ok) return [...out, ...failFastSkips('test', ['doctest', ...VIGIL_CARGO_STEPS, 'mobile'])];
+    if (FAIL_FAST && (!build.ok || !test.ok)) return [...out, ...failFastSkips(build.ok ? 'test' : 'test-build', ['doctest', ...VIGIL_CARGO_STEPS, 'mobile'])];
     out.push(!useNextest ? skipped('doctest', 'ran inside cargo test (no cargo-nextest)') : inScope('doctest') ? await runStep(doctestStep) : skipped('doctest', 'no library in scope'));
     if (FAIL_FAST && !out.at(-1).ok) return [...out, ...failFastSkips('doctest', [...VIGIL_CARGO_STEPS, 'mobile'])];
   } else {
-    out.push(outOfScope('test'), outOfScope('doctest'));
+    out.push(outOfScope('test-build'), outOfScope('test'), outOfScope('doctest'));
   }
   const vigil = inScope('vigil') ? await vigilChain(useNextest) : VIGIL_CARGO_STEPS.map(outOfScope);
   out.push(...vigil);
@@ -741,9 +761,16 @@ async function cargoChain(syncDone) {
 async function vigilChain(useNextest) {
   if (!hasVigil) return VIGIL_CARGO_STEPS.map(vigilAbsent);
   const clippy = await runStep(vigilClippyStep);
-  if (!clippy.ok) return [clippy, skipped('vigil-test', 'vigil-clippy failed'), skipped('vigil-doctest', 'vigil-clippy failed')];
-  const test = await runStep(vigilTestStep(noGpu ? 'no-gpu' : useNextest ? 'nextest' : 'cargo'));
-  return [clippy, test, useNextest ? await runStep(vigilDoctestStep) : skipped('vigil-doctest', 'ran inside cargo test (no cargo-nextest)')];
+  if (!clippy.ok) return [clippy, skipped('vigil-test-build', 'vigil-clippy failed'), skipped('vigil-test', 'vigil-clippy failed'), skipped('vigil-doctest', 'vigil-clippy failed')];
+  const build = await runStep(vigilTestBuildStep(useNextest));
+  let test;
+  if (build.ok) {
+    await pruneBloatedDeps('vigil-test');
+    test = await runStep(vigilTestStep(noGpu ? 'no-gpu' : useNextest ? 'nextest' : 'cargo'));
+  } else {
+    test = skipped('vigil-test', 'vigil-test-build failed');
+  }
+  return [clippy, build, test, useNextest ? await runStep(vigilDoctestStep) : skipped('vigil-doctest', 'ran inside cargo test (no cargo-nextest)')];
 }
 
 // The editor's Tauri host: its detached workspace has its own `target/`, so it takes a DIFFERENT
@@ -852,7 +879,7 @@ function recordHistory(results, totalMs, ok) {
   const steps = Object.fromEntries(results.filter((r) => !r.skipped).map((r) => [r.name, Math.round(r.ms)]));
   try {
     mkdirSync(path.dirname(HISTORY), { recursive: true });
-    appendFileSync(HISTORY, JSON.stringify({ at: new Date().toISOString(), mode, ok, totalMs: Math.round(totalMs), steps, ...(scope ? { note: scope.paths.join(' ') } : {}) }) + '\n');
+    appendFileSync(HISTORY, JSON.stringify({ at: new Date().toISOString(), mode, ok, totalMs: Math.round(totalMs), steps, ...(Object.keys(depsEntries).length ? { depsEntries } : {}), ...(scope ? { note: scope.paths.join(' ') } : {}) }) + '\n');
   } catch { /* history is a convenience; never fail a run over it */ }
 }
 
@@ -874,7 +901,7 @@ function printHistory() {
 }
 
 // ── reporting ───────────────────────────────────────────────────────────────
-const ORDER = ['privacy', 'size', 'claude-md', 'ecs-budget', 'lists-in-step', 'diagnostic-prints', 'atomic-writes', 'schedule-comments', 'physics-features', 'fmt', 'vigil-fmt', 'voxel-kit', 'vigil-node', 'vigil-lab', 'commit-wrapper', 'pin-ritual', 'shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'vigil-textures', 'check-docs', 'clippy', 'test', 'doctest', 'vigil-clippy', 'vigil-test', 'vigil-doctest', 'mobile', 'tauri-fmt', 'tauri-clippy', 'tauri-test', 'fuzz-fmt', 'fuzz-clippy', 'gate-scripts', 'npm-deps', 'oxlint', 'tsc', 'vitest', 'schema-drift', 'schema-drift-test', 'fps-gate', 'denylist', 'package', 'doc', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak'];
+const ORDER = ['privacy', 'size', 'claude-md', 'ecs-budget', 'lists-in-step', 'diagnostic-prints', 'atomic-writes', 'schedule-comments', 'physics-features', 'fmt', 'vigil-fmt', 'voxel-kit', 'vigil-node', 'vigil-lab', 'commit-wrapper', 'pin-ritual', 'shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'vigil-textures', 'check-docs', 'clippy', 'test-build', 'test', 'doctest', 'vigil-clippy', 'vigil-test-build', 'vigil-test', 'vigil-doctest', 'mobile', 'tauri-fmt', 'tauri-clippy', 'tauri-test', 'fuzz-fmt', 'fuzz-clippy', 'gate-scripts', 'npm-deps', 'oxlint', 'tsc', 'vitest', 'schema-drift', 'schema-drift-test', 'fps-gate', 'denylist', 'package', 'doc', 'thread-identity', 'vigil-thread-identity', 'probe', 'public-tree', 'soak'];
 const YELLOW = '\x1b[33m'; const GREEN = '\x1b[32m'; const RED = '\x1b[31m'; const DIM = '\x1b[2m'; const BOLD = '\x1b[1m'; const RST = '\x1b[0m';
 
 function line(r) {
@@ -1004,7 +1031,6 @@ async function main() {
     console.log(`${DIM}scope: ${scope.paths.join(' ')}${values.deps ? ' (with dependents)' : ''}${scope.packages.length ? ` → ${scope.packages.join(', ')}` : ''}${scope.docs ? ' + docs tests' : ''}${RST}`);
     console.log(`${YELLOW}check: a scoped run is the inner loop, not a commit gate — the default suite still runs before the commit lands.${RST}`);
   }
-  if (runRust) pruneBloatedDeps();
   const start = process.hrtime.bigint();
 
   if (values.fix) await applyFixes();
@@ -1019,7 +1045,7 @@ async function main() {
     const vigilLane = (step) => (hasVigil ? single(step) : Promise.resolve([vigilAbsent(step.name)]));
     const gate = (step, lane = single) => (inScope(step.name) ? lane(step) : Promise.resolve([outOfScope(step.name)]));
     lanes.push(gate(fmtStep), gate(vigilFmtStep, vigilLane), gate(voxelKitStep), gate(vigilNodeStep, vigilLane), gate(vigilLabStep, vigilLane), gate(commitWrapperStep), gate(gateScriptsStep), gate(pinRitualStep), gate(physicsFeaturesStep));
-    lanes.push(inScope('heavy') ? heavyLane() : Promise.resolve(['shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'vigil-textures', 'check-docs', 'clippy', 'test', 'doctest', ...VIGIL_CARGO_STEPS, 'mobile'].map(outOfScope)));
+    lanes.push(inScope('heavy') ? heavyLane() : Promise.resolve(['shader-drift', 'bins', 'import-sync', ...DRIFT_GATES, 'vigil-textures', 'check-docs', 'clippy', 'test-build', 'test', 'doctest', ...VIGIL_CARGO_STEPS, 'mobile'].map(outOfScope)));
     lanes.push(inScope('tauri') ? tauriLane() : Promise.resolve(['tauri-fmt', 'tauri-clippy', 'tauri-test'].map(outOfScope)));
     // detached workspace, own target/ and lock
     lanes.push(inScope('fuzz') ? runChainAll([fuzzFmtStep, fuzzClippyStep]) : Promise.resolve(['fuzz-fmt', 'fuzz-clippy'].map(outOfScope)));
@@ -1046,6 +1072,7 @@ async function main() {
       const args = (await hasNextest())
         ? ['nextest', 'run', ...(scope ? ['-p', fpsGate.crate] : ['--workspace']), '--no-fail-fast', '-E', fpsGate.expr]
         : ['test', ...(scope ? ['-p', fpsGate.crate] : ['--workspace']), '--test', fpsGate.binary, '--', fpsGate.prefix, '--test-threads=1'];
+      await pruneBloatedDeps('fps-gate');
       results.push(await runStep({ name: 'fps-gate', cmd: 'cargo', args, log: 'fps-gate.log', env: { LUDION_REQUIRE_GPU: '1' } }));
     }
   }

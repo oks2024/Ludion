@@ -41,14 +41,20 @@ be performed on a file with a user-mapped section open"* when another process ho
   the host's first sound and the device open, and an `Embedded::stop` during it spends up to
   `AUDIO_STOP_GRACE` waiting, but cannot fail on it. The renderer's first device lookup pays the
   same scan (`request_adapter` -> `MTLCopyAllDevices` -> bundle lookup), and under load it can cross
-  a wire client's timeouts as `L3009` on GPU tests. Sweep or clean the target tree by hand (`cargo sweep --time 7`, or `cargo clean` on a tree already
-  past ~100k files) when the prune is not enough. Cargo never prunes stale objects, and macOS's default
-  `split-debuginfo = "unpacked"` leaves a loose `.o` per codegen unit there. `split-debuginfo = "packed"`
-  would stop that but triples the incremental rebuild (dsymutil), so it is not set; instead `check.mjs`
-  prunes past `LUDION_DEPS_WARN_FILES` (default 60000): it deletes the `*.o` in each `target/*/deps` that
-  are older than an hour by the newer of mtime and ctime (incremental rustc hard-links reused objects in,
-  keeping the old mtime), prints one line, and warns only if the directory is still over. A pruned object
-  can cost an older binary its line numbers in backtraces; relinking restores them. `ludion-audio`'s own
+  a wire client's timeouts as `L3009` on GPU tests. The lookup grows linearly, about 2 ms per 1000
+  entries per process (0 entries 6 ms, 120k entries 249 ms; measured with `MTLCopyAllDevices`).
+  Names pile up because rustc names its objects with a new suffix on every run and hard-links reused
+  ones under the new name, so many names share one inode and no age tells live from dead. Cargo never
+  prunes them, and macOS's default `split-debuginfo = "unpacked"` leaves a loose `.o` per codegen unit
+  there. `split-debuginfo = "packed"` would stop that but triples the incremental rebuild (dsymutil),
+  so it is not set. Instead, before each test execution (`check.mjs` builds first with `test-build` and
+  `vigil-test-build`, then prunes, then runs; `fps-gate` prunes too), a directory past
+  `LUDION_DEPS_WARN_FILES` (default 40000) is pruned under cargo's own lock on `target/<profile>`
+  (`.cargo-lock`, so no rustc runs meanwhile): `nm -ap` over every executable and dylib in `deps` lists
+  the objects they name (OSO entries), and every other `.o` is deleted. No line numbers are lost for a
+  binary in `deps`, because its own objects stay; one copied out of `deps` can lose them after a relink.
+  If the lock stays busy the prune does nothing and warns, so the run is slow but correct. It prints one
+  line per pruned profile. `cargo clean` remains the manual tool. `ludion-audio`'s own
   sink-lifecycle tests run on a fake output and so never pay it.
 - **A GPU test that ABORTs with `0xc0000409` (os error 1282) and prints nothing** is usually the NVIDIA
   driver killing the process after a TDR, not a Rust panic. Confirm in the Application event log:
