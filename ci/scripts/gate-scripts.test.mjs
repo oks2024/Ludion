@@ -20,6 +20,7 @@ import { findScriptWrites, findWrites, runGate as atomicGate } from './atomic-wr
 import { writeFileAtomic } from '../../scripts/atomic-write.mjs';
 import { findPrefixedPrints, scanFiles } from './diagnostic-prints.mjs';
 import { findScheduleText, scanFiles as scheduleFiles, unallowedHits, ALLOWLIST as SCHEDULE_ALLOWLIST } from './schedule-comments.mjs';
+import { BEGIN as CG_BEGIN, END as CG_END, checkCrateGraph, renderEdges, spliceEdges } from '../../scripts/crate-graph-edges.mjs';
 import { countCodeLines } from '../../scripts/ecs-budget.mjs';
 import { measure as measureTargets, plan as planTargetClean } from './target-guard.mjs';
 
@@ -801,4 +802,51 @@ test('the target guard measures target/ per entry and the other trees whole', ()
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ── crate-graph edge listing (scripts/crate-graph-edges.mjs) ─────────────────
+
+const cgDep = (name, extra = {}) => ({ name, kind: null, optional: false, features: [], target: null, ...extra });
+const cgPkg = (name, dependencies, features = {}) => ({ name, dependencies, features, manifest_path: `/r/crates/${name}/Cargo.toml` });
+const cgMeta = () => ({
+  packages: [
+    cgPkg('ludion-app', [cgDep('ludion-mid', { optional: true }), cgDep('ludion-assets', { features: ['watch'] }), cgDep('serde', { features: ['derive'] }), cgDep('ludion-kit', { kind: 'dev' })], { wire: ['dep:ludion-mid'] }),
+    cgPkg('ludion-mid', [cgDep('ludion-gpu')]),
+    cgPkg('ludion-gpu', [cgDep('wgpu')]),
+    cgPkg('ludion-assets', [cgDep('notify', { optional: true })], { watch: ['dep:notify'] }),
+    cgPkg('ludion-kit', [cgDep('ludion-gpu', { kind: 'dev' })]),
+  ],
+});
+
+test('crate-graph: renderEdges shows optional, feature, dev rows and drops third-party features', () => {
+  const out = renderEdges(cgMeta());
+  assert.match(out, /^ludion-app +→ assets\{watch\}, mid\(wire\) +\[serde\]$/m);
+  assert.match(out, /^ {4}dev: kit$/m);
+  assert.doesNotMatch(out, /derive/);
+  assert.match(out, /^assets\/watch +← app$/m);
+  assert.match(out, /^notify +← assets\(watch\)$/m);
+});
+
+test('crate-graph: renderEdges does not depend on package order', () => {
+  const m = cgMeta();
+  const reversed = { packages: [...m.packages].reverse() };
+  assert.equal(renderEdges(reversed), renderEdges(m));
+});
+
+test('crate-graph: no-wgpu row follows normal edges only', () => {
+  const line = renderEdges(cgMeta()).split('\n').find((l) => l.startsWith('no wgpu in the tree: '));
+  assert.equal(line, 'no wgpu in the tree: assets, kit');
+});
+
+test('crate-graph: spliceEdges round-trips, is idempotent, and throws on a missing marker', () => {
+  const doc = `head\n${CG_BEGIN}\nstale\n${CG_END}\ntail\n`;
+  const once = spliceEdges(doc, '```\nnew\n```');
+  assert.equal(once, `head\n${CG_BEGIN}\n\`\`\`\nnew\n\`\`\`\n${CG_END}\ntail\n`);
+  assert.equal(spliceEdges(once, '```\nnew\n```'), once);
+  assert.throws(() => spliceEdges('no markers', 'x'), /crate-graph/);
+  assert.throws(() => spliceEdges(`${CG_BEGIN}\nx\n`, 'x'), /end generated/);
+});
+
+test('crate-graph: the real tree is in step', () => {
+  assert.deepEqual(checkCrateGraph(ROOT).errors, []);
 });

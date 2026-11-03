@@ -41,8 +41,8 @@
 //                    part of `--full`: that lane's tail is already the CI budget, and this one scales
 //                    with the run length, not with the workspace
 //   --fix            re-mirror docs/ into ludion-cli/embedded-docs/ + regenerate shader_gen.rs
-//                    + the clippy.toml denylists + `cargo fmt` (write) + `oxlint --fix` first, then
-//                    the (check-only) gates
+//                    + the clippy.toml denylists + the crate-graph edge listing + `cargo fmt` (write)
+//                    + `oxlint --fix` first, then the (check-only) gates
 //   --history        print the per-step timings of recent runs (target/check-history.jsonl) and exit
 //   --scope <paths>  a coder's inner loop over the gates the named paths reach (scripts/check-scope.mjs):
 //                    the cheap node gates always; clippy, nextest and doctests over the paths' own
@@ -853,6 +853,7 @@ async function applyFixes() {
   if (runRust) steps.push({ name: 'shader-gen', cmd: 'cargo', args: ['run', '-q', '-p', 'ludion-shader-bindgen'], log: 'fix-shader-gen.log' });
   // The clippy.toml denylists are generated; regenerate them before the Rust lane lints against them.
   if (runRust) steps.push({ name: 'clippy-denylist', cmd: 'node', args: ['scripts/clippy-denylist.mjs', '--write'], log: 'fix-clippy-denylist.log' });
+  if (runRust) steps.push({ name: 'crate-graph-edges', cmd: 'node', args: ['scripts/crate-graph-edges.mjs', '--write'], log: 'fix-crate-graph-edges.log' });
   if (runRust) steps.push({ name: 'fmt-fix', cmd: 'cargo', args: ['fmt', '--all'], log: 'fix-fmt.log' });
   // The detached editor-host and vigil workspaces are invisible to the `--all` above.
   if (runRust && hasVigil) steps.push({ name: 'vigil-fmt-fix', cmd: 'cargo', args: ['fmt', '--all'], cwd: VIGIL, log: 'fix-vigil-fmt.log' });

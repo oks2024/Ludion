@@ -69,12 +69,6 @@ jobs:
       - name: ECS budget
         run: node scripts/ecs-budget.mjs
 
-      # The lists that must agree: nextest's `gpu` override and `no-gpu` filter (both the `needs_gpu_`
-      # name), the tests that put a device on the card, and `ludion.h` vs `ffi.rs`. Mirrors
-      # scripts/check.mjs `lists-in-step`.
-      - name: lists in step
-        run: node scripts/lists-in-step.mjs
-
       # No hand-written `error:` / `warning:` print outside the two usage helpers: a runtime failure
       # is a coded `Diagnostic` printed through `Display`. Mirrors scripts/check.mjs
       # `diagnostic-prints`.
@@ -104,6 +98,13 @@ jobs:
       # no compiling. Mirrors scripts/check.mjs `physics-features`.
       - name: physics features
         run: node scripts/physics-features.mjs
+
+      # The lists that must agree: nextest's `gpu` override and `no-gpu` filter (both the `needs_gpu_`
+      # name), the tests that put a device on the card, `ludion.h` vs `ffi.rs`, and the manifests vs
+      # the generated edge listing in dev-docs. Needs the toolchain for `cargo metadata` (no
+      # compiling), hence its place after `physics features`. Mirrors scripts/check.mjs `lists-in-step`.
+      - name: lists in step
+        run: node scripts/lists-in-step.mjs
 
       # Two cargo workspaces live in this repo: the engine (root `crates/*` + `games/*`) and the
       # editor's Tauri host, which detaches itself with an empty `[workspace]`. Cache both, or the

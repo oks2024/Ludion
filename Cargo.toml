@@ -27,9 +27,10 @@ crossbeam-channel = "0.5"
 # 2-worker multi-thread runtime; `net` for the TCP listener, `sync` for the shutdown watch, and
 # `rt-multi-thread` + `macros` + `time` for the accept loop and its `select!`s.
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time"] }
-# Cross-platform Ctrl-C / console-control-event handling. Only `ludion-cli`'s `serve` subcommand
-# uses it, to block until interrupted and then shut the wire host down cleanly (so an armed
-# recording flushes instead of a killed process corrupting the `.lrp`).
+# Cross-platform Ctrl-C / console-control-event handling. Only the `ludion` facade uses it
+# (`ctrl_c_fan_out` in `crates/ludion/src/host.rs`; `ludion-cli` reaches it through that), to block
+# until interrupted and then shut the wire host down cleanly (so an armed recording flushes instead
+# of a killed process corrupting the `.lrp`).
 ctrlc = "3"
 # WebSocket transport. `ludion-server` uses the tokio-async binding (it re-exports `tungstenite`,
 # so the server needs no direct tungstenite dep); `ludion-client` uses the sync `tungstenite` for a
@@ -67,15 +68,16 @@ lz4_flex = { version = "0.14", default-features = false, features = [
     "safe-decode",
     "checked-decode",
 ] }
+# Base64 decoding for glTF `data:` URIs (buffers/images embedded in a `.gltf`) in `ludion-import`,
+# and for the snapshot's physics blob in `ludion-engine` (encoded and decoded there). We resolve
+# buffer/image sources by hand rather than enabling `gltf`'s `import` feature, which drags in the
+# whole `image` crate (JPEG decoder included) that decision 3 rules out (our `png` decodes; JPEG is
+# L1202). Held to gltf's own 0.13 line so one base64 build is shared. Only the safe slice API is
+# used — no `unsafe`.
+base64 = "0.13"
 # Zero-copy, safe casting of plain-old-data structs to `&[u8]` for GPU vertex/instance/uniform
 # uploads. Only `ludion-renderer` uses it, and only through the safe `#[derive(Pod, Zeroable)]`
 # APIs — no `unsafe` at the call sites.
-# Base64 decoding for glTF `data:` URIs (buffers/images embedded in a `.gltf`). Only
-# `ludion-import` uses it — we resolve buffer/image sources by hand rather than enabling `gltf`'s
-# `import` feature, which drags in the whole `image` crate (JPEG decoder included) that decision 3
-# rules out (our `png` decodes; JPEG is L1202). Held to gltf's own 0.13 line so one base64 build is
-# shared. Only the safe slice API (`Engine::decode`) is used — no `unsafe`.
-base64 = "0.13"
 bytemuck = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 # `libm`: glam's own trig (Quat::from_rotation_*, slerp, Vec2::from_angle) otherwise calls the platform libm, which differs across OSes.
@@ -98,8 +100,9 @@ wgpu = "30"
 # Native windowing for the out-of-process windowed viewer (`ludion-window`, Phase 6 Wave 5). Held
 # to the 0.30 line because its `raw-window-handle` (0.6) is the one wgpu 30 speaks — a surface can
 # only be created from a window whose handle version matches the GPU backend's. Only `ludion-window`
-# uses it, and only on the main thread (winit's hard requirement). Default features pull in the
-# per-OS backend (Win32 / AppKit / X11+Wayland) the window needs.
+# and the `ludion` facade (behind `window`, in `present.rs`) use it, and only on the main thread
+# (winit's hard requirement). Default features pull in the per-OS backend (Win32 / AppKit /
+# X11+Wayland) the window needs.
 winit = "0.30"
 # Cross-platform gamepad polling (XInput/DInput on Windows, IOKit on macOS, evdev on Linux) for
 # out-of-sim gamepad capture (`ludion-window`, Phase 13 Wave 4). Only `ludion-window` uses it and
@@ -150,13 +153,13 @@ serde_path_to_error = "0.1"
 # `default-features = false` drops rustls and gzip — a ComfyUI server is reached over plain `http://`
 # on a LAN or loopback address, so no TLS backend is compiled in (the `tungstenite` posture).
 ureq = { version = "3", default-features = false }
-# TOML parsing for the two host-side settings files. Budget files (per-system / per-pass /
+# TOML parsing for host-side settings files. Budget files (per-system / per-pass /
 # frame-total millisecond ceilings) are parsed by `ludion-cli`'s `profile --check` and
 # `ludion-engine`'s `load_budget` (the in-process profile mode `ludion::run --profile-check` drives);
 # quality override files (a preset base plus per-effect toggles) by `ludion-engine`'s
-# `resolve_startup_quality`. Both are per-machine host settings, never content. The project manifest
-# (`ludion.toml`) is checked with lightweight string matching, not a full parse, so those two are the
-# only TOML deserialization targets.
+# `resolve_startup_quality`. Both are per-machine host settings, never content. `ludion-engine` also
+# parses `ludion.toml` (`manifest.rs`); `ludion-cli` parses image-stats thresholds and texture rules
+# and reads the manifest in `dev.rs`.
 toml = "0.8"
 # Pure-Rust XXH3 — the world-hash function. `xxh3` is the only feature we use; the algorithm is
 # stable and portable, so the same world bytes hash identically on every platform.

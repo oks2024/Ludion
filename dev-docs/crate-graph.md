@@ -18,7 +18,7 @@ the strict/permissive clippy split that rides on this graph is in `determinism`.
 - `crates/ludion-assets/` — CPU-only asset loading (PNG, WAV) + content hashes + the debounced filesystem watcher + the cooked-texture key and KTX2 reader (`cooked`). GPU-free.
 - `crates/ludion-cook/` — the texture cook's encoders (BC7, ASTC 4×4, CPU mips, KTX2 writer). Only `ludion-cli` links it; the engine never carries an encoder. Depends on core + assets.
 - `crates/ludion-texgen/` — procedural textures: parses a `kind: texture` recipe and evaluates it on the CPU into the PBR map set as PNG bytes, bit-exact across architectures. Only `ludion-cli` links it. Depends on core + scene.
-- `crates/ludion-sprite/` — offline sprite baking: `kind: sprite` grids + the seven CPU effects → pixels, the deterministic atlas packer, PNG → sprite-document import. Depends on core + scene + assets; GPU-free, does no IO.
+- `crates/ludion-sprite/` — sprite baking: `kind: sprite` grids + the seven CPU effects → pixels, the deterministic atlas packer, PNG → sprite-document import. `ludion-engine` links it (it bakes `kind: sprite` documents, `sprite_sheet.rs`, and reuses `srgb_decode`), as does `ludion-cli`. Depends on core + scene + assets; GPU-free, does no IO.
 - `crates/ludion-font/` — font faces: `FontFace` (glyph, advance, kerning lookups over a `kind: font` document) and the embedded 8×8 face. Depends on core + scene; pure, no IO, ships PNG bytes without decoding.
 - `crates/ludion-components/` — the registered components, `builtin_registry()`, and the scene validators over them (`validators.rs`). Depends on core + ecs + scene + spatial + physics + camera + sim; sim-side, no renderer, assets or protocol. `ludion-engine::components` re-exports it.
 - `crates/ludion-camera/` — camera rigs: the `CameraRig` component and the pure per-tick pipeline that poses a camera (path track, springs, look-ahead, vertical anchor, timed blends, seeded trauma shake). Depends on core + ecs + scene; sim-side, GPU-free.
@@ -29,6 +29,7 @@ the strict/permissive clippy split that rides on this graph is in `determinism`.
 - `crates/ludion-import/` — glTF → canonical text (scene + mesh documents + re-encoded textures). CPU-only. Depends on core + scene + assets + components (the built-in registry and validators its written prefab is checked against) and owns the `import_gltf` tree writer and the importer fingerprint (`build.rs`).
 - `crates/ludion-sim/` — tick loop, input scripts, run-state, `WorldHash`.
 - `crates/ludion-spatial/` — deterministic 2D ground-plane collision: the `Collider` builtin component, a per-frame spatial hash (`SpatialIndex`/`spatial::rebuild`), and pinned-order overlap/raycast/k-nearest queries. Sim-side, GPU-free.
+- `crates/ludion-physics/` — deterministic rigid-body dynamics: a pinned rapier3d world behind the `Collider`/`Velocity` author surface, and the only crate that names a rapier or nalgebra type. Depends on core + ecs + spatial; sim-side, GPU-free.
 - `crates/ludion-protocol/` — wire types: envelope, `Command` surface, replay format, schema hash.
 - `crates/ludion-render-graph/` — headless wgpu frame graph, dump-graph/timings JSON.
 - `crates/ludion-renderer/` — the render pipeline over the frame graph, offscreen target.
@@ -41,7 +42,7 @@ the strict/permissive clippy split that rides on this graph is in `determinism`.
 - `crates/ludion-testkit/` — golden harness: SSIM, diff reports, bless flow, sim assertions.
 - `crates/ludion/` — the game-facing facade: `prelude` + `ludion::run`/`launch`; depends on engine **and** server **and** window (the server behind its default `wire` feature, the in-process `--window` host behind its default `window` feature).
 - `crates/ludion-cli/` — the `ludion` bin (leaf).
-- `games/hello-paddle/` — the example game (bin + lib): one custom component + system, mixed scene, four test kinds. `games/breakout`, `games/sokoban`, and `games/shmup-stress` are the other workspace games (`games/vigil`, the private reference game, is a detached workspace present only in the Lore tree); every game depends on the `ludion` facade only.
+- `games/hello-paddle/` — the example game (bin + lib): one custom component + system, mixed scene, four test kinds. `games/breakout/`, `games/character-course/`, `games/sokoban/`, and `games/shmup-stress/` are the other workspace games (`games/vigil/`, the private reference game, is a detached workspace present only in the Lore tree); every game depends on the `ludion` facade only.
 - `editor/protocol/` — TS protocol types generated from the JSON Schema (not a crate; checked by the schema-drift CI job).
 - `examples/gallery/` — scene files + committed goldens driven by `ludion test` / testkit.
 
@@ -54,7 +55,7 @@ The four boundary rules (each prevents a specific cycle — never relax them):
    `ludion-core` — no ecs, no scene, no engine.
 2. **`ludion-ecs` never knows YAML exists.** The registry stores erased serde fns; scene→ecs is
    one-directional. `ludion-ecs`'s manifest has no YAML dependency; `saphyr-parser` appears only
-   in `ludion-scene`.
+   in `ludion-scene` and `ludion-testkit` (`spelling.rs`, a test-support reader); `ludion-ecs` never.
 3. **`ludion-assets` never sees a wgpu type.** CPU bytes + content hashes only; the renderer owns
    GPU upload. A wgpu type here would drag wgpu into the sim-side tree and destroy compile times
    for content work.
@@ -78,7 +79,7 @@ Supporting rules:
 
 ## Edges
 
-The per-crate dependency edges from each `Cargo.toml`, the `wire`/`window`/`watch` feature shapes, where wgpu, tokio, winit, gilrs and notify are confined, and where shared logic goes: `ludion devdocs crate-graph-edges`.
+The generated listing of the per-crate dependency edges from each `Cargo.toml`, the `wire`/`window`/`watch` feature shapes, where wgpu, tokio, winit, gilrs and notify are confined, and where shared logic goes: `ludion devdocs crate-graph-edges`.
 
 ## Verify
 
@@ -102,15 +103,18 @@ runs live in `ci/scripts/`. `.github/workflows/ci.yml` is the public definition 
   Rules first, and remember that a new crate needs a `clippy.toml`: classify it in `CRATES` in
   `scripts/clippy-denylist.mjs`, add a header comment, then run
   `node scripts/clippy-denylist.mjs --write` (see `determinism` — clippy config does not inherit
-  from the workspace root, and `lists-in-step.mjs` fails on an unclassified crate).
-- `ludion-cli` deliberately does **not** depend on `ludion-renderer` or `ludion-render-graph`;
-  it reaches rendering through `ludion-engine` re-exports (`render_scene`,
-  `dump_scene_graph_json`). Keep new render-touching CLI features on that path.
+  from the workspace root, and `lists-in-step.mjs` fails on an unclassified crate). A manifest
+  change also regenerates the edge listing: `node scripts/crate-graph-edges.mjs --write`.
+- `ludion-cli` deliberately does **not** depend on `ludion-renderer` or `ludion-render-graph` at runtime
+  (its `dev:` edge on the renderer is in the edge listing); it reaches rendering through
+  `ludion-engine` re-exports (`render_scene`, `dump_scene_graph_json`). Keep new render-touching CLI
+  features on that path.
 - `ludion-testkit` depends on `ludion-engine` (to render scenes), so testkit is *not* usable
   from the crates below engine; sim-level assertions (`sim_assert`) live in testkit but only
   need `ludion-sim` types — don't move testkit down the graph to "fix" that.
-- `examples/gallery/` is not a workspace member (only `crates/*` are); its scenes are exercised
-  through `ludion-testkit`'s gallery test and `ludion test --dir examples/gallery`.
+- `examples/gallery/` is not a workspace member (members are `crates/*` and
+  `games/*`); its scenes are exercised through `ludion-testkit`'s gallery test and
+  `ludion test --dir examples/gallery`.
 - The **`ludion-engine → ludion-spatial`** edge runs one way only. `builtin_registry()`
   (in `ludion-components`, which `ludion-engine` re-exports) names `Collider` to register it, so `ludion-components` depends on `ludion-spatial`; the
   reverse is forbidden (it would drag the renderer/wgpu into a content-speed crate). Because

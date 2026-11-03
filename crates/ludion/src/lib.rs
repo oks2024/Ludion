@@ -85,12 +85,14 @@
 //!   `--replay-verify`), and `ludion-server` (tokio) in the tree. Off, the embedding core hosts the
 //!   same engine with no listener.
 //! - **`window`** — the game's own window, with the engine presenting its rendered frame into it
-//!   in process: winit, wgpu and `ludion-window`'s device-event builders in the tree. `run --window`
+//!   in process: winit and `ludion-window`'s device-event builders in the tree. `run --window`
 //!   opens it beside the listener, and [`launch`] opens it as the player window. Without `wire` it
 //!   is the desktop player shape: no listener, no argv shell. Off, `--window` is refused with `L0018`.
 //!
-//! The asset watcher (`notify`) rides neither: it is `ludion-assets`' opt-in `watch` feature, enabled
-//! only by `ludion-server` and `ludion-cli`, so the feature-less tree carries none of the four.
+//! The asset watcher (`notify`) rides `wire`: it is `ludion-assets`' opt-in `watch` feature, enabled
+//! by `ludion-server`, `ludion-cli` and the facade's `wire`. So the feature-less tree carries none of
+//! the four gated stacks (winit, gilrs, notify, tokio). wgpu is always in the tree: the embedding
+//! core renders.
 
 pub mod embed;
 // The one module in the workspace that holds `unsafe`: the C ABI a native host links against.
