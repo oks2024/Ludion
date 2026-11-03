@@ -44,7 +44,8 @@ fn face_camera(position: Vec3, face: u32) -> RenderCamera {
 
 /// `scene` seen from one probe face: the lit world only. The overlay content, the screen-space
 /// effects and the sun disc (the IBL excludes it, so a probe does too) are dropped; the tables the
-/// caches key on stay, so the capture hits every cache the main frame filled.
+/// caches key on stay, and the capture resolves them without evicting, so it neither misses what the
+/// main frame holds nor takes it away.
 pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> RenderScene {
     let mut out = scene.clone();
     out.camera = face_camera(position, face);
@@ -975,6 +976,85 @@ pub(crate) mod tests {
         scene.probes[0].position.x += 1.0;
         resolve(&r, &scene);
         assert_eq!(r.probe_resolve().resolve, 2, "a moved probe");
+    }
+
+    /// A probe recapture reads the frozen world, which names neither the sprite texture nor the decal
+    /// map the live scene holds; it must leave both resident, so the next main frame uploads nothing.
+    #[test]
+    fn needs_gpu_a_recapture_uploads_nothing_the_main_frame_holds() {
+        use crate::scene::{
+            DecalBlend, DecalInstance, DecalMaps, DecalReceivers, MapImage, MeshTexture,
+            SpriteInstance, TextureImage, TextureWrap,
+        };
+        use std::sync::Arc;
+        let Some(r) = renderer_or_skip("the recapture's caches") else {
+            return;
+        };
+        let image = |hash: u64| {
+            Arc::new(TextureImage {
+                width: 1,
+                height: 1,
+                rgba: vec![200, 100, 50, 255],
+                hash,
+                filter_linear: false,
+                premultiplied_on_load: false,
+                mean: [1.0; 4],
+            })
+        };
+        let mut scene = lit_scene();
+        scene.probe_world = Some(ProbeWorld::new(scene.clone()));
+        scene.textures = vec![image(0x5E1)];
+        scene.sprites = vec![SpriteInstance {
+            center: Vec3::new(0.0, 1.0, -4.0),
+            right: Vec3::new(2.0, 0.0, 0.0),
+            up: Vec3::new(0.0, 2.0, 0.0),
+            color: [1.0; 4],
+            texture: Some(0),
+            uv: SpriteInstance::FULL_UV,
+            lit: false,
+            layer: 0,
+            additive: false,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            uv_repeat: SpriteInstance::NO_TILING,
+            uv_offset: [0.0; 2],
+        }];
+        let box_to_world = Mat4::from_scale(Vec3::splat(4.0));
+        scene.decals = vec![DecalInstance {
+            box_to_world,
+            world_to_box: box_to_world.inverse(),
+            blend: DecalBlend::Alpha,
+            color: [1.0; 4],
+            opacity: 1.0,
+            roughness: None,
+            metallic: 0.0,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            angle_fade: [60.0, 80.0],
+            layer: 0,
+            maps: DecalMaps {
+                base_color: Some(MeshTexture {
+                    image: MapImage::Source(image(0xDECA)),
+                    wrap: TextureWrap::Clamp,
+                }),
+                ..DecalMaps::default()
+            },
+            receivers: DecalReceivers::Exclude(Vec::new()),
+        }];
+        let size = crate::FrameSize::native(64, 64);
+
+        r.render(&scene, size).unwrap();
+        let held = r.uploads();
+        assert!(held.textures >= 1 && held.mesh_maps >= 1, "{held:?}");
+        assert_eq!(r.probe_resolve().resolve, 1);
+
+        scene.probes[0].position.x += 1.0;
+        r.render(&scene, size).unwrap();
+        assert_eq!(r.probe_resolve().resolve, 2, "the probe was not recaptured");
+        assert_eq!(
+            r.uploads(),
+            held,
+            "a recapture evicted what the main frame holds"
+        );
     }
 
     #[test]

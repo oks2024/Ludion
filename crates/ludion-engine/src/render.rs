@@ -635,6 +635,23 @@ indices:
     }
 
     #[test]
+    fn needs_gpu_a_steady_frame_uploads_nothing() {
+        let dir = reupload_project("steady");
+        let mut engine = Engine::with_project_root(&dir);
+        engine
+            .load_inline_scene(&reupload_scene(&["a", "s"], "sp_a"))
+            .unwrap();
+        let Some(first) = render_delta(&mut engine, GpuUploads::default()) else {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        };
+        let steady = render_delta(&mut engine, first).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(steady, GpuUploads::default(), "a held reference re-uploads");
+    }
+
+    #[test]
     fn needs_gpu_a_switch_uploads_only_its_own_assets() {
         let dir = reupload_project("switch");
         let mut engine = Engine::with_project_root(&dir);

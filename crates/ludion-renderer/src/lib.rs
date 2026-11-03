@@ -43,6 +43,7 @@
 //! ```
 
 mod blend;
+mod cache_eviction;
 mod cluster;
 mod compressed;
 mod compute_shader;

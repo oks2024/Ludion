@@ -1817,22 +1817,39 @@ fn extract_drop_shadows(
     poses: &mut WorldAffines,
     mesh_owners: &[EntityId],
 ) -> (Vec<DropShadowInstance>, Vec<EntityId>) {
-    let mut children = None;
+    // Built on the first shadow: the child map, and each owner's mesh indices (ascending).
+    let mut tree = None;
+    // Shadows under one root share its caster set, so its exclusion list is built once.
+    let mut by_root: BTreeMap<EntityId, Vec<u32>> = BTreeMap::new();
     ids.iter()
         .filter(|&&id| !visibility.hidden(id))
         .filter_map(|&id| {
             let shadow = get::<DropShadow>(world, id)?;
             let pose = render_pose(world, poses, id);
             let root = crate::hierarchy::hierarchy_root(world, id);
-            let children = children.get_or_insert_with(|| ludion_ecs::ChildMap::build(world));
-            let mut casters: BTreeSet<EntityId> = children.descendants(root).into_iter().collect();
-            casters.insert(root);
-            let exclude = mesh_owners
-                .iter()
-                .enumerate()
-                .filter(|(_, owner)| casters.contains(owner))
-                .map(|(index, _)| index as u32)
-                .collect();
+            let exclude = by_root
+                .entry(root)
+                .or_insert_with(|| {
+                    let (children, by_owner) = tree.get_or_insert_with(|| {
+                        let mut by_owner: BTreeMap<EntityId, Vec<u32>> = BTreeMap::new();
+                        for (index, &owner) in mesh_owners.iter().enumerate() {
+                            by_owner.entry(owner).or_default().push(index as u32);
+                        }
+                        (ludion_ecs::ChildMap::build(world), by_owner)
+                    });
+                    let mut casters: BTreeSet<EntityId> =
+                        children.descendants(root).into_iter().collect();
+                    casters.insert(root);
+                    let mut exclude: Vec<u32> = casters
+                        .iter()
+                        .filter_map(|caster| by_owner.get(caster))
+                        .flatten()
+                        .copied()
+                        .collect();
+                    exclude.sort_unstable();
+                    exclude
+                })
+                .clone();
             let along_x = pose.quat() * Vec3::X;
             Some((
                 DropShadowInstance {

@@ -3343,6 +3343,38 @@ fn a_drop_shadow_excludes_its_casters_hierarchy_but_not_other_meshes() {
     assert_eq!(scene.drop_shadows[1].exclude, [3]);
 }
 
+/// Two shadows under one root share its caster set, a mesh created between the tree's meshes stays
+/// out of it, and each list is ascending in mesh order whatever order the tree was spawned in.
+#[test]
+fn drop_shadows_sharing_a_root_exclude_the_same_ascending_tree() {
+    let mut world = World::new();
+    let root = shadow_entity(&mut world, None, Transform::default(), true); // mesh 0
+    shadow_entity(&mut world, None, Transform::default(), true); // mesh 1
+    let left = shadow_entity(&mut world, Some(root), Transform::default(), true); // mesh 2
+    let stranger = shadow_entity(&mut world, None, Transform::default(), true); // mesh 3
+    let right = shadow_entity(&mut world, Some(left), Transform::default(), true); // mesh 4
+    let first = shadow_entity(&mut world, Some(right), Transform::default(), false);
+    let second = shadow_entity(&mut world, Some(left), Transform::default(), false);
+    let alone = shadow_entity(&mut world, Some(stranger), Transform::default(), false);
+    for id in [first, second, alone] {
+        world.insert(id, DropShadow::default()).unwrap();
+    }
+
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
+    assert_eq!(scene.meshes.len(), 5);
+    let lists: Vec<&[u32]> = scene
+        .drop_shadows
+        .iter()
+        .map(|shadow| shadow.exclude.as_slice())
+        .collect();
+    assert_eq!(lists, [&[0, 2, 4][..], &[0, 2, 4], &[3]]);
+}
+
 // --- Clockout 0012: Decal through extract ---
 
 fn decal_entity(

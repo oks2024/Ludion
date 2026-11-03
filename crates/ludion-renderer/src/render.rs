@@ -21,6 +21,7 @@ use ludion_render_graph::{
     StreamReadback, schedule,
 };
 
+use crate::cache_eviction::CacheEviction;
 use crate::compressed::{self, CompressedUploadError};
 use crate::compute_shader::ComputeShader;
 use crate::cull::{Aabb, cull, instance_bounds, local_bounds, visible_ranges};
@@ -423,11 +424,12 @@ pub struct Renderer {
     white: GpuTexture,
     atlas: GpuTexture,
     /// Uploaded scene textures, keyed on `(`[`TextureImage::hash`]`, `[`TextureImage::premultiplied_on_load`]`)`
-    /// — upload on a miss, reuse on a hit, so a live stream re-uploads a texture only when its bytes
-    /// actually change. The flag is in the key because one PNG read as a loose texture (premultiplied)
+    /// — upload on a miss, reuse on a hit. The flag is in the key because one PNG read as a loose texture (premultiplied)
     /// and as an atlas colour map (stored bytes) shares a hash but not its pixels.
-    /// Entries not referenced by the frame being prepared are evicted, so the cache can never hold more
-    /// than one frame's working set and a scene change cannot leak textures. `RefCell` because the
+    /// A main frame evicts the entries it does not reference, so the cache holds one frame's working
+    /// set and a scene change cannot leak textures. An entry referenced every frame is not re-uploaded
+    /// unless its bytes change; one a main frame does not reference is evicted and re-uploads when it
+    /// returns. A probe capture adds entries but evicts none. `RefCell` because the
     /// render entry points are `&self` (the engine holds the renderer behind a shared borrow) yet the
     /// cache is mutated per frame; the renderer is sim-thread-owned, so the borrow is never contended.
     texture_cache: RefCell<HashMap<(u64, bool), GpuTexture>>,
@@ -1491,7 +1493,7 @@ impl Renderer {
         let chain = PostChain::for_scene(face_scene).masked(&self.quality, &self.quality_params);
         let (graph, output, emissive) = build_probe_capture_graph(face_size, chain);
         let schedule = schedule(&graph).expect("the probe capture graph schedules");
-        let recorder = self.prepare_frame(face_scene, size, None)?;
+        let recorder = self.prepare_frame_with(face_scene, size, None, CacheEviction::Keep)?;
         self.gpu.execute_into(
             &schedule,
             &recorder,
@@ -1568,7 +1570,20 @@ impl Renderer {
         &self,
         scene: &RenderScene,
         size: FrameSize,
+        observer: Option<&mut dyn FrameObserver>,
+    ) -> Result<FrameRecorder<'_>, Diagnostic> {
+        self.prepare_frame_with(scene, size, observer, CacheEviction::Evict)
+    }
+
+    /// [`prepare_frame`](Self::prepare_frame) with the cache policy named: a probe capture passes
+    /// [`CacheEviction::Keep`] so its derived scene, which leaves out decals and reads a frozen
+    /// world, cannot evict what the main frame holds.
+    fn prepare_frame_with(
+        &self,
+        scene: &RenderScene,
+        size: FrameSize,
         mut observer: Option<&mut dyn FrameObserver>,
+        eviction: CacheEviction,
     ) -> Result<FrameRecorder<'_>, Diagnostic> {
         let device = self.gpu.device();
         self.probes.resolve(self, scene, &mut observer)?;
@@ -1664,16 +1679,16 @@ impl Renderer {
         // miss, reuse the cached GPU texture on a hit (see [`Renderer::texture_cache`]).
         let (textures, mesh_assets, resolved_env, sky_bg) =
             self.observed_phase(&mut observer, FramePhase::Upload, || {
-                let textures = self.resolve_textures(scene);
+                let textures = self.resolve_textures(scene, eviction);
 
                 // The material maps those meshes bind, resolved (and mip-generated) before the
                 // meshes themselves, because a mesh's upload builds the group-4 bind group that
                 // reads them.
-                self.resolve_mesh_textures(scene);
+                self.resolve_mesh_textures(scene, eviction);
 
                 // Resolve each unique asset mesh through the content-hash cache (same policy as
                 // textures), then group instances by asset index for indexed instanced draws.
-                let mesh_assets = self.resolve_mesh_assets(scene);
+                let mesh_assets = self.resolve_mesh_assets(scene, eviction);
 
                 // IBL environment (mesh group 3): prefilter (cache-keyed) when a scene has an
                 // `Environment`, else the 1×1 fallback cubes + flag off. The group's bind group is
@@ -1991,14 +2006,18 @@ impl Renderer {
     /// Resolves the scene's asset meshes to GPU buffers through the content-hash cache, returning one
     /// [`MeshAssetGpu`] per `scene.mesh_assets` entry (indexed by [`MeshShape::Asset`]).
     ///
-    /// Identical policy to [`Renderer::resolve_textures`]: first evict every cache entry not
-    /// referenced by this frame, then upload each referenced mesh on a miss and reuse the cached
+    /// Identical policy to [`Renderer::resolve_textures`]: a main frame first evicts every cache
+    /// entry it does not reference, then uploads each referenced mesh on a miss and reuse the cached
     /// buffers on a hit. Cloning a [`MeshAssetGpu`] clones wgpu's ref-counted buffer handles, not the
     /// bytes, so a hit does no GPU work — the "same asset referenced twice ⇒ one upload" guarantee.
-    fn resolve_mesh_assets(&self, scene: &RenderScene) -> Vec<MeshAssetGpu> {
+    fn resolve_mesh_assets(
+        &self,
+        scene: &RenderScene,
+        eviction: CacheEviction,
+    ) -> Vec<MeshAssetGpu> {
         let mut cache = self.mesh_asset_cache.borrow_mut();
         let referenced: HashSet<u64> = scene.mesh_assets.iter().map(|m| m.hash).collect();
-        cache.retain(|hash, _| referenced.contains(hash));
+        eviction.retain(&mut cache, |hash| referenced.contains(hash));
         scene
             .mesh_assets
             .iter()
@@ -2020,13 +2039,13 @@ impl Renderer {
     }
 
     /// Uploads every material map the scene's asset meshes reference through the
-    /// `(content hash, sRGB, encoding)` cache — [`Renderer::resolve_textures`]'s policy exactly: evict what this
-    /// frame does not reference, upload the rest on a miss. Fills the cache rather than returning
+    /// `(content hash, sRGB, encoding)` cache — [`Renderer::resolve_textures`]'s policy exactly: a main frame evicts what it
+    /// does not reference, upload the rest on a miss. Fills the cache rather than returning
     /// anything: what reads it is [`Renderer::material_bind_group`], per *mesh*, not per scene index.
     ///
     /// Each upload gets a full mip chain (`mipgen.rs`), because a textured surface at distance is the
     /// normal case for a mesh map and minification without mips aliases.
-    fn resolve_mesh_textures(&self, scene: &RenderScene) {
+    fn resolve_mesh_textures(&self, scene: &RenderScene, eviction: CacheEviction) {
         let mut cache = self.mesh_texture_cache.borrow_mut();
         let maps = || {
             let material = scene
@@ -2040,7 +2059,7 @@ impl Renderer {
         let referenced: HashSet<MeshTextureKey> = maps()
             .filter_map(|(map, srgb, cutoff)| map.map(|map| mesh_texture_key(map, srgb, cutoff)))
             .collect();
-        cache.retain(|key, _| referenced.contains(key));
+        eviction.retain(&mut cache, |key| referenced.contains(key));
         for (map, srgb, cutoff) in maps() {
             let Some(map) = map else {
                 continue;
@@ -2202,14 +2221,14 @@ impl Renderer {
     /// texture on a miss and reuses the cached handle on a hit. Cloning a [`GpuTexture`] clones wgpu's
     /// reference-counted handles, not the pixels, so a hit does no GPU work. Byte-identical to a fresh
     /// upload: the cached texture holds exactly the same bytes, format, and sampling.
-    fn resolve_textures(&self, scene: &RenderScene) -> Vec<GpuTexture> {
+    fn resolve_textures(&self, scene: &RenderScene, eviction: CacheEviction) -> Vec<GpuTexture> {
         let mut cache = self.texture_cache.borrow_mut();
         let referenced: HashSet<(u64, bool)> = scene
             .textures
             .iter()
             .map(|t| (t.hash, t.premultiplied_on_load))
             .collect();
-        cache.retain(|key, _| referenced.contains(key));
+        eviction.retain(&mut cache, |key| referenced.contains(key));
         scene
             .textures
             .iter()
@@ -2328,12 +2347,16 @@ impl Renderer {
     ) -> Vec<SpriteDraw> {
         let order = sprite_order(&scene.camera.view, &scene.sprites);
 
-        let mut draws = Vec::new();
+        // One buffer for the frame; each batch is a byte range of it. A bind group depends on the
+        // texture alone, so batches that alternate between textures share their groups.
+        let mut raws: Vec<SpriteInstanceRaw> = Vec::with_capacity(order.len());
+        let mut batches = Vec::new();
+        let mut groups: Vec<(Option<usize>, wgpu::BindGroup)> = Vec::new();
         let mut i = 0;
         while i < order.len() {
             let layer = scene.sprites[order[i]].layer;
             let tex = scene.sprites[order[i]].texture;
-            let mut batch = Vec::new();
+            let first = raws.len();
             while i < order.len()
                 && scene.sprites[order[i]].layer == layer
                 && scene.sprites[order[i]].texture == tex
@@ -2351,7 +2374,7 @@ impl Renderer {
                 if s.uv_repeat != SpriteInstance::NO_TILING || s.uv_offset != [0.0, 0.0] {
                     flags |= shader_gen::FLAG_WRAP;
                 }
-                batch.push(SpriteInstanceRaw {
+                raws.push(SpriteInstanceRaw {
                     center: s.center.to_array(),
                     right: s.right.to_array(),
                     up: s.up.to_array(),
@@ -2373,28 +2396,47 @@ impl Renderer {
                 });
                 i += 1;
             }
-            let buffer = init_buffer(
-                device,
-                wgpu::BufferUsages::VERTEX,
-                bytemuck::cast_slice(&batch),
-            );
-            let (view, linear) = match tex {
-                Some(idx) => (&textures[idx].view, scene.textures[idx].filter_linear),
-                None => (&self.white.view, false),
-            };
-            let sampler = if linear {
-                &self.linear_sampler
-            } else {
-                &self.nearest_sampler
-            };
-            let tex_bg = self.texture_bind_group(device, LayoutId::SpriteTex, view, sampler);
-            draws.push(SpriteDraw {
-                tex_bg,
-                instances: buffer,
-                count: batch.len() as u32,
-            });
+            batches.push((tex, first..raws.len()));
         }
-        draws
+        if raws.is_empty() {
+            return Vec::new();
+        }
+        let buffer = init_buffer(
+            device,
+            wgpu::BufferUsages::VERTEX,
+            bytemuck::cast_slice(&raws),
+        );
+        let stride = size_of::<SpriteInstanceRaw>() as wgpu::BufferAddress;
+        batches
+            .into_iter()
+            .map(|(tex, range)| {
+                let tex_bg = match groups.iter().find(|(key, _)| *key == tex) {
+                    Some((_, group)) => group.clone(),
+                    None => {
+                        let (view, linear) = match tex {
+                            Some(idx) => (&textures[idx].view, scene.textures[idx].filter_linear),
+                            None => (&self.white.view, false),
+                        };
+                        let sampler = if linear {
+                            &self.linear_sampler
+                        } else {
+                            &self.nearest_sampler
+                        };
+                        let group =
+                            self.texture_bind_group(device, LayoutId::SpriteTex, view, sampler);
+                        groups.push((tex, group.clone()));
+                        group
+                    }
+                };
+                SpriteDraw {
+                    tex_bg,
+                    instances: buffer.clone(),
+                    range: range.start as wgpu::BufferAddress * stride
+                        ..range.end as wgpu::BufferAddress * stride,
+                    count: (range.end - range.start) as u32,
+                }
+            })
+            .collect()
     }
 
     /// Builds the single instance buffer of ground markers, or `None` when the scene authors none.
@@ -3140,7 +3182,9 @@ impl MeshAssetDraw {
 
 struct SpriteDraw {
     tex_bg: wgpu::BindGroup,
+    /// The frame's one sprite buffer; this batch is `range` of it.
     instances: wgpu::Buffer,
+    range: std::ops::Range<wgpu::BufferAddress>,
     count: u32,
 }
 
@@ -4955,7 +4999,7 @@ impl FrameRecorder<'_> {
         rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
         for draw in &self.sprite_draws {
             rp.set_bind_group(SPRITE_TEX_GROUP, &draw.tex_bg, &[]);
-            rp.set_vertex_buffer(0, draw.instances.slice(..));
+            rp.set_vertex_buffer(0, draw.instances.slice(draw.range.clone()));
             rp.draw(0..6, 0..draw.count);
         }
 
@@ -5020,7 +5064,7 @@ impl FrameRecorder<'_> {
         rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
         for draw in &self.sprite_draws {
             rp.set_bind_group(SPRITE_TEX_GROUP, &draw.tex_bg, &[]);
-            rp.set_vertex_buffer(0, draw.instances.slice(..));
+            rp.set_vertex_buffer(0, draw.instances.slice(draw.range.clone()));
             rp.draw(0..6, 0..draw.count);
         }
 
@@ -9838,7 +9882,12 @@ mod tests {
             image([200, 100, 50, 128], false),
         ];
 
-        assert_eq!(renderer.resolve_textures(&scene).len(), 2);
+        assert_eq!(
+            renderer
+                .resolve_textures(&scene, CacheEviction::Evict)
+                .len(),
+            2
+        );
         assert_eq!(
             renderer.texture_cache.borrow().len(),
             2,
