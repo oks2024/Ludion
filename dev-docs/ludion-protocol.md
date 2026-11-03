@@ -76,7 +76,7 @@ at the moment of destruction, in registry order, `Name` included like any other 
 `entity.spawn` with that map respawns it under a fresh id). `entity.spawn` and `component.set` check
 every component value before touching the world — its JSON Schema first (`L1014`, a component-relative
 pointer and nearest-field suggestion, the checker the scene path runs), then its semantic validator;
-a self-joined `Joint` is `L1183` there too, not a wire-only escape hatch. They also check the entity references a value holds: a `Parent` takes the `entity.reparent` rules (`L0002`, `L1221`, `L1222`, `L1224`, `L1225`, `L1260`), any other marked field refuses naming its own carrier where the schema forbids it (`L1017`) and a sim carrier naming a presentation id (`L1036`); a dead non-`Parent` reference is allowed (`scene.save`'s `L1018` catches it). `L0006` remains only for what
+a self-joined `Joint` is `L1183` there too, not a wire-only escape hatch. They also check the entity references a value holds: a `Parent` takes the `entity.reparent` rules (`L0002`, `L1221`, `L1222`, `L1224`, `L1225`, `L1260`), any other marked field refuses naming its own carrier where the schema forbids it (`L1017`) and a sim carrier naming a presentation id (`L1036`; `entity.spawn` accepts a dead one); a dead non-`Parent` reference is allowed (`scene.save`'s `L1018` catches it). `L0006` remains only for what
 serde rejects that the schema allows. `component.remove` shares
 `component.get`'s exact error semantics: `L0004` unregistered name, `L0002` dead entity, `L3006` a
 live entity that simply doesn't carry the component. Errors are `ludion-core` `Diagnostic`s serialized

@@ -52,7 +52,7 @@ Crossing the boundary is `L0028`, in every direction:
 - Every crossing is logged once per system/op/component even if the `Result` is discarded (`let _ = world.get_mut(..)`); `ludion_testkit::assert_no_boundary_crossings(engine.world())` fails a test on any.
 - Randomness: `DeterministicRng::derived(seed, frame, entity)`, never the master `DeterministicRng`.
 - **Stays sim:** a camera the sim unprojects through (the external game's grab, a twin-stick game's aim; a `CameraRig` camera is sim, `ludion docs camera`) and anything with a `Collider`. Making it presentation turns every sim read of it into `L0028`. The camera stays sim; the presentation half is a rendered-only `CameraOffset` on a presentation entity (`ludion docs camera`).
-- A sim entity's entity-reference field (`Parent`, `Joint` ends) may not name a presentation entity: `L1036` in a scene, `L1018` at `scene.save`. A presentation entity may name a sim one (a popup parented to the ball).
+- A sim entity's entity-reference field (`Parent`, `Joint` ends) may not name a presentation entity: `L1036` in a scene (on the wire, `entity.spawn` accepts a dead presentation id), `L1018` at `scene.save`. A presentation entity may name a sim one (a popup parented to the ball).
 - Snapshot/replay: presentation state is snapshotted and restored, replayed, and never verified. Keyframe checks and `bisect` compare sim state only, so changing presentation code never invalidates a recording.
 
 ## Set dressing

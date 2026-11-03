@@ -366,6 +366,11 @@ pub fn check_component(
 /// unparseable reference is not reported (`scene.save`'s `L1018` catches a dangling one). Pointers
 /// are relative to the component, like [`check_component`]'s.
 ///
+/// `is_alive` tells a live entity from a dead one. On an `entity.spawn` (`carrier: None`) a dead
+/// presentation-range id is accepted: a respawn of a deleted presentation entity arrives as a sim
+/// entity carrying its own dead id, which its client repairs next, and a dead id names nothing the
+/// sim would read. A live one is still `L1036`.
+///
 /// # Example
 /// ```
 /// use ludion_core::ids::EntityId;
@@ -383,7 +388,7 @@ pub fn check_component(
 /// registry.register::<Leash>("Leash").unwrap();
 /// let me = EntityId::new(5, 0);
 /// let value = serde_json::json!({ "holder": { "index": 5, "generation": 0 } });
-/// let diagnostics = ludion_scene::check_component_refs("Leash", &value, &registry, Some(me));
+/// let diagnostics = ludion_scene::check_component_refs("Leash", &value, &registry, Some(me), &|_| true);
 /// assert_eq!(diagnostics[0].code.as_str(), "L1017");
 /// assert_eq!(diagnostics[0].path.as_deref(), Some("/holder/index"));
 /// ```
@@ -392,8 +397,9 @@ pub fn check_component_refs(
     value: &serde_json::Value,
     registry: &Registry,
     carrier: Option<ludion_core::ids::EntityId>,
+    is_alive: &dyn Fn(ludion_core::ids::EntityId) -> bool,
 ) -> Vec<Diagnostic> {
-    validate::check_component_refs(name, value, registry, carrier)
+    validate::check_component_refs(name, value, registry, carrier, is_alive)
 }
 
 /// Finds the cycles in the scene's tree links (`Parent`), each once, starting at its lowest

@@ -3529,6 +3529,94 @@ fn a_sim_carrier_naming_a_presentation_entity_is_l1036_on_both_commands() {
     );
 }
 
+fn instance_of(root: EntityId, part: &str) -> Value {
+    json!({ "source": "prefabs/gate.yaml", "part": part, "root": id_json(root) })
+}
+
+fn destroy(engine: &mut Engine, entity: EntityId) {
+    ok(
+        engine,
+        Command::EntityDestroy(EntityDestroyParams { entity }),
+    );
+}
+
+fn spawned(engine: &mut Engine, components: &[(&str, Value)]) -> EntityId {
+    match ok(engine, spawn_command(components)) {
+        ResponseBody::Spawned { entity } => entity,
+        other => panic!("expected Spawned, got {other:?}"),
+    }
+}
+
+#[test]
+fn redo_of_a_placed_presentation_prefab_respawns_with_its_own_dead_id_and_repairs_it() {
+    let (mut engine, _, _, popup, _) = reference_world();
+    destroy(&mut engine, popup);
+    let root = spawned(
+        &mut engine,
+        &[("PrefabInstance", instance_of(popup, "root"))],
+    );
+    ok(
+        &mut engine,
+        set_command(root, "PrefabInstance", instance_of(root, "root")),
+    );
+}
+
+#[test]
+fn undo_of_a_deleted_presentation_prefab_respawns_every_part_with_remapped_references() {
+    let (mut engine, _, _, popup, popup2) = reference_world();
+    destroy(&mut engine, popup2);
+    destroy(&mut engine, popup);
+    let root = spawned(
+        &mut engine,
+        &[("PrefabInstance", instance_of(popup, "root"))],
+    );
+    let second = spawned(
+        &mut engine,
+        &[
+            ("PrefabInstance", instance_of(root, "arm")),
+            ("Parent", id_json(root)),
+        ],
+    );
+    ok(
+        &mut engine,
+        set_command(root, "PrefabInstance", instance_of(root, "root")),
+    );
+    assert_eq!(
+        component_value(&mut engine, second, "Parent"),
+        id_json(root)
+    );
+}
+
+#[test]
+fn a_live_presentation_parent_on_spawn_stays_l1225_and_a_dead_ref_on_a_sim_set_stays_l1036() {
+    let (mut engine, a, _, popup, popup2) = reference_world();
+    // Undo of deleting one presentation child respawns it under a live presentation parent. On the
+    // wire that is an ordinary bad spawn, so it cannot be tolerated without admitting those too.
+    assert_refused(
+        &mut engine,
+        spawn_command(&[("Parent", id_json(popup))]),
+        "L1225",
+        "/index",
+    );
+    let aimed =
+        |target: EntityId| json!({ "pattern": "", "started": 0, "target": id_json(target) });
+    assert_refused(
+        &mut engine,
+        spawn_command(&[("PatternPlayer", aimed(popup))]),
+        "L1036",
+        "/target/index",
+    );
+    destroy(&mut engine, popup2);
+    assert_set_refused(
+        &mut engine,
+        a,
+        "PatternPlayer",
+        aimed(popup2),
+        "L1036",
+        "/target/index",
+    );
+}
+
 #[test]
 fn a_dead_non_parent_reference_is_accepted_on_both_commands() {
     let (mut engine, a, _, _, _) = reference_world();

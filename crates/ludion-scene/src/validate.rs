@@ -339,6 +339,7 @@ pub(crate) fn check_component_refs(
     value: &Value,
     registry: &Registry,
     carrier: Option<EntityId>,
+    is_alive: &dyn Fn(EntityId) -> bool,
 ) -> Vec<Diagnostic> {
     let Some(info) = registry.get(name) else {
         return Vec::new();
@@ -356,7 +357,8 @@ pub(crate) fn check_component_refs(
                 field.suffix.trim_start_matches('/'),
                 &pointer,
             ));
-        } else if is_presentation(target) && carrier.is_none_or(|carrier| !is_presentation(carrier))
+        } else if is_presentation(target)
+            && carrier.map_or_else(|| is_alive(target), |carrier| !is_presentation(carrier))
         {
             let carrier_label =
                 carrier.map_or_else(|| "being spawned".to_string(), |c| c.to_string());

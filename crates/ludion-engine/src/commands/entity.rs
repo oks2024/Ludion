@@ -12,7 +12,7 @@
 //! cross-field invariants (e.g. a self-joined `Joint`, `L1183`). They also check the entity references
 //! a value holds: a `Parent` takes the `entity.reparent` rules, and any other marked field refuses
 //! naming its own carrier where the schema forbids it (`L1017`) and a sim carrier naming a
-//! presentation entity (`L1036`). A reference to a dead entity is allowed except on `Parent`, which
+//! presentation entity (`L1036`; on `entity.spawn` only a live one). A reference to a dead entity is allowed except on `Parent`, which
 //! is `L0002`: an editor's undo respawns with stale ids and repairs them afterwards, and
 //! `scene.save` (`L1018`) still refuses what stays dangling.
 
@@ -47,7 +47,8 @@ use crate::hierarchy::ParentCandidate;
 /// The new entity has no id yet, so a reference to itself cannot be detected: a client that predicts
 /// the next id can write a self reference on a non-`Parent` field here, and `scene.save` refuses it
 /// (`L1018`). A predicted `Parent` is dead at check time and is `L0002`. The entity is always a sim
-/// entity, so a reference to a presentation entity is `L1036`; a `Parent` and a rigid `Collider` in
+/// entity, so a reference to a live presentation entity is `L1036` (a dead one is accepted: an undo
+/// respawn carries its own old id and repairs it next); a `Parent` and a rigid `Collider` in
 /// the same spawn is `L1221`.
 pub(crate) fn spawn(
     engine: &mut Engine,
@@ -130,9 +131,10 @@ fn check_refs(
         ParentCandidate::Live(id) => Some(id),
         ParentCandidate::Unspawned { .. } => None,
     };
-    if let Some(diagnostic) = ludion_scene::check_component_refs(name, value, registry, carrier)
-        .into_iter()
-        .next()
+    if let Some(diagnostic) =
+        ludion_scene::check_component_refs(name, value, registry, carrier, &|id| world.is_alive(id))
+            .into_iter()
+            .next()
     {
         return Err(diagnostic);
     }
