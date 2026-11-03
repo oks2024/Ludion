@@ -2474,14 +2474,22 @@ mod tests {
         );
     }
 
+    /// A loopback address that binds now and is free again on return. The range sits below every
+    /// OS's ephemeral range, so nothing can claim the port between the drop and the caller's check.
+    fn free_non_ephemeral_port() -> String {
+        for port in 21000..22000u16 {
+            let addr = format!("127.0.0.1:{port}");
+            if TcpListener::bind(&addr).is_ok() {
+                return addr;
+            }
+        }
+        panic!("no loopback port in 21000..22000 could be bound");
+    }
+
     /// A port nobody holds is taken as-is: no wire call, no wait, no surprise for the common start.
     #[test]
     fn reclaiming_a_free_port_is_a_no_op() {
-        // A port the OS just handed out and we handed straight back: free, and named.
-        let free = {
-            let probe = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-            probe.local_addr().unwrap().to_string()
-        };
+        let free = free_non_ephemeral_port();
         assert!(port_is_free(&free));
         assert_eq!(
             reclaim_port_within(&free, Duration::from_millis(50), Duration::from_millis(50)),
