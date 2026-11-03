@@ -60,7 +60,9 @@ surfaces verbatim).
   so the adapter can be registered before `ludion serve` is up. The first `tools/call` connects; each
   later call first probes the held connection, and reconnects only if it is already closed (nothing
   written yet, so safe). A call that fails — even with `L3009` — is returned to the model, never
-  retried (the command may have run); the dead client is dropped so the next call reconnects.
+  retried (the command may have run); the dead client is dropped so the next call reconnects. Every
+  call is bounded by `CALL_TIMEOUT` (130 s, above the server's 120 s `L3023` bound so that arrives
+  first); expiry is `L3054` (the command may still run) and drops the connection too.
 - **`render_screenshot` is the imaging path.** Its base64 PNG becomes an MCP **image** content block
   (`type: "image"`, `mimeType: "image/png"`) plus a short text block naming the dimensions — the
   agent's eyes. Subscription tools (`stream_subscribe`/`stream_unsubscribe`) are exposed for parity but
@@ -74,13 +76,18 @@ surfaces verbatim).
 `main` parses `--url`, logs a startup line to stderr, and hands `stdin.lock()`/`stdout.lock()` to
 `McpServer::run`, which reads one JSON-RPC message per line. `handle_line` parses the line and
 dispatches: `initialize` returns `{protocolVersion, capabilities: {tools: {}}, serverInfo}` (echoing
-the client's offered version if it is one this build supports, else `"2025-03-26"`);
-`notifications/initialized` and any other notification are ignored (no response); `ping` returns `{}`;
+the client's offered version if it is one this build supports, else `"2025-06-18"`, the newest,
+which has no batching);
+`notifications/initialized` and any other well-formed notification are ignored (no response); a line
+that cannot be parsed (invalid JSON, a batch array, non-UTF-8, over the size cap) is always answered
+with an error carrying `"id": null`; `ping` returns `{}`;
 `tools/list` returns every tool's `{name, description, inputSchema}`; `tools/call` runs the tool.
 
 `tools/call` looks the tool up by name (unknown → JSON-RPC `-32602`). For a protocol tool it builds
 the `Command` value from the stored method plus the caller's `arguments`, deserializes it (a shape
-mismatch is an `isError` tool result the model can correct, not a protocol failure), and sends it
+mismatch is an `isError` tool result the model can correct, not a protocol failure; `arguments:
+null` is read as absent, and arguments to a no-argument tool are refused before anything is sent),
+and sends it
 through `Session::call`. On success, `render.screenshot` becomes an image + text block and every other
 `ResponseBody` becomes pretty-printed JSON in a text block. On an engine `Diagnostic`, an `isError`
 tool result carries `diagnostic.to_string()`. The synthetic `ludion_status` tool reconnects if needed
@@ -90,7 +97,7 @@ frames and WorldHash from a `sim.hash` probe.
 `Session` owns the lazy `Option<Client>`. `ensure_connected` calls `Client::connect` (which performs
 the handshake and the connect-time schema-drift check) on first use; `call` probes with
 `Client::check_open` and reconnects before sending if the connection is closed. A call that fails
-with `PROTOCOL_ENGINE_UNAVAILABLE` (`L3009`) is returned and the client dropped — one `Client::call`
+with `PROTOCOL_ENGINE_UNAVAILABLE` (`L3009`) or `PROTOCOL_CALL_TIMED_OUT` (`L3054`) is returned and the client dropped — one `Client::call`
 per `Session::call`, so a command is never sent twice.
 
 ## Verify

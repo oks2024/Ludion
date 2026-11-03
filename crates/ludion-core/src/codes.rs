@@ -1854,8 +1854,8 @@ pub mod code {
 
     /// `L3009` — the engine could not answer: the server is unreachable, is shutting down, or its
     /// sim thread has stopped. Raised by `ludion-server` when the command queue or its reply channel
-    /// has disconnected, and by `ludion-client` when it cannot reach the server or the connection
-    /// drops mid-request.
+    /// has disconnected, and by `ludion-client` when it cannot reach the server, the handshake
+    /// stalls, or the connection drops mid-request. A client call timeout is `L3054`.
     pub const PROTOCOL_ENGINE_UNAVAILABLE: DiagnosticCode = DiagnosticCode::new("L3009");
 
     /// `L3010` — a replay session file is not well-formed (wrong magic, an unsupported format
@@ -2088,6 +2088,10 @@ pub mod code {
     /// behind. The switch still happened. A warning. Raised by `ludion-engine`'s residue capture
     /// and application.
     pub const RESIDUE_REF_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L3053");
+
+    /// `L3054` — a client's own per-call timeout elapsed before the reply arrived. The command may
+    /// still run on the host. Raised by `ludion-client`.
+    pub const PROTOCOL_CALL_TIMED_OUT: DiagnosticCode = DiagnosticCode::new("L3054");
 
     // --- L4xxx: sim (raised by `ludion-sim`) ---
 
@@ -8995,6 +8999,9 @@ shutting down (or has already shut down) while a request was in flight; on the c
 could not be reached at all, or the connection dropped mid-request. It is never caused by anything
 in the request itself; the same request against a running, reachable server is dispatched normally.
 
+A call that merely waited too long is not this code: a client whose per-call timeout elapsed raises
+L3054, because the connection is still up and the command may still run.
+
 Fix: ensure the server is running and reachable at the address you connected to, then reconnect. If
 the server crashed rather than shut down cleanly, inspect its logs — a panic on the sim thread would
 end it and surface here for any request that raced the teardown.",
@@ -10614,6 +10621,27 @@ Fix: look for a division by zero in a computed volume, such as `hp / max_hp` wit
 distance falloff that divides by a zero radius, and clamp or guard it before it reaches the audio
 verb.",
     },
+    CodeEntry {
+        code: code::PROTOCOL_CALL_TIMED_OUT,
+        severity: Severity::Error,
+        title: "a call timed out waiting for its reply",
+        explanation: "\
+A client's per-call timeout elapsed before the host answered. The connection was alive when the
+client gave up, so this is not L3009: the host may be busy, wedged, or stopped without closing the
+socket.
+
+The command may still run. The client stopped waiting; it did not cancel anything on the host. Never
+resend a mutating command blindly — it can apply twice. A timed-out connection still occupies a
+server pipeline slot, so a long-lived caller should drop it and reconnect.
+
+The server answers its own, more precise L3023 when the sim thread takes a request and never replies
+within its bound; an adapter's timeout sits above that bound so L3023 arrives first. This code means
+no answer of any kind came back.
+
+Fix: check that the host process is running and not stopped; read back the state (for example
+`sim.hash`) before deciding whether to retry; raise the timeout only for a command that is expected
+to run long.",
+    },
 ];
 
 /// Codes that once existed and are gone from [`CODES`], each with why. A retired code is never
@@ -11085,6 +11113,7 @@ mod tests {
         code::PROTOCOL_MALFORMED_REPLY,
         code::REPLAY_TORN_TAIL,
         code::RESIDUE_REF_UNRESOLVED,
+        code::PROTOCOL_CALL_TIMED_OUT,
         // --- L4xxx: sim ---
         code::INVALID_SIM_SPEED,
         code::INPUT_SCRIPT_IO,

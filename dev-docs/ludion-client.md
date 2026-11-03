@@ -54,6 +54,10 @@ consumer of.
   arrives while `call` is reading for its own response is queued (`events`/`frames` internal
   `VecDeque`s), never dropped — so subscription traffic racing a call is picked up later by
   `next_event`/`next_frame`, not lost.
+- **A timed-out subscribe unsubscribes itself** when its reply lands (`abandoned_subscribes`,
+  `stray_reply`): the sub it minted is closed locally and `stream.unsubscribe` is sent without
+  waiting. A closed sub's traffic is never handed back (`Inbox::closed`) — frames ride a lower-priority
+  lane than replies, so one can land after the unsubscribe `Ack`.
 - **`next_event`/`next_frame` drain their queue first**, and only then set a socket read timeout and
   block on the wire. The previous read timeout is always restored on the way out — success *or*
   error (`restore_read_timeout`) — so a `call` issued right after a timed-out `next_event`/
@@ -64,7 +68,9 @@ consumer of.
   wants pixels decodes the payload itself, matching `header.format` to a decoder.
 - **Errors are `Diagnostic`s, engine errors verbatim.** A `WireResult::Error` is returned as the
   engine's own diagnostic, untouched. The client adds only transport-shaped codes: `L3009`
-  (`PROTOCOL_ENGINE_UNAVAILABLE`) for connect failure / lost connection / server close, `L3051`
+  (`PROTOCOL_ENGINE_UNAVAILABLE`) for connect failure / handshake stall / lost connection / server
+  close, `L3054` (`PROTOCOL_CALL_TIMED_OUT`) when a per-call timeout elapses (the command may still
+  run; never resend blindly), `L3051`
   (`PROTOCOL_MALFORMED_REPLY`) for unparseable server messages (`L3001` stays our own request), `L3044` for a reply body of the wrong
   kind, `L3045` for a message over `ludion_protocol::MAX_MESSAGE_BYTES` (256 MiB, the one ceiling
   both ends set on the socket — sent: refused unsent; received: mapped from tungstenite's capacity

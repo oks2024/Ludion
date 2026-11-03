@@ -35,7 +35,7 @@ seen the line is never missed. These details make the loop safe to leave running
 - **A watcher batch with no source change since the last build is ignored** (`src_fingerprint`:
   file count, newest mtime, total size), so one save arriving as two batches never rebuilds twice.
 - **Every wire call has a timeout** (`SNAPSHOT_CALL_TIMEOUT` 10 s, `SHUTDOWN_CALL_TIMEOUT` 2 s,
-  `SHADER_RELOAD_CALL_TIMEOUT` 30 s; expiry is `L3009`). `Client::connect`'s handshake is bounded
+  `SHADER_RELOAD_CALL_TIMEOUT` 30 s; expiry is `L3054`). `Client::connect`'s handshake is bounded
   too (`HANDSHAKE_TIMEOUT`, 10 s).
 - **A snapshot that fails never keeps the old child.** `snapshot_failure` splits an exited child
   from a live one that did not deliver (a wedged sim, a refusal, the `L3003` skew); both stop the

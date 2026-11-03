@@ -18,7 +18,7 @@ use ludion_protocol::{Command, ResponseBody};
 const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// The version offered when the client asks for one we do not recognise (task-specified default).
-const DEFAULT_PROTOCOL_VERSION: &str = "2025-03-26";
+const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// The longest input line accepted; the wire's own message cap.
 const MAX_LINE_BYTES: usize = ludion_protocol::MAX_MESSAGE_BYTES;
@@ -84,6 +84,7 @@ fn read_line_capped(
 pub(crate) struct McpServer {
     session: Session,
     tools: Vec<ToolSpec>,
+    max_line_bytes: usize,
 }
 
 impl McpServer {
@@ -93,13 +94,15 @@ impl McpServer {
         McpServer {
             session: Session::new(url),
             tools: catalog(),
+            max_line_bytes: MAX_LINE_BYTES,
         }
     }
 
     /// Runs the read-dispatch-write loop until `reader` reaches EOF.
     ///
-    /// A line over [`MAX_LINE_BYTES`] and a line that is not UTF-8 are each logged and skipped
-    /// without a response (no request id is recoverable from either); the adapter keeps running.
+    /// A line over [`MAX_LINE_BYTES`] and a line that is not UTF-8 are each answered with a
+    /// `PARSE_ERROR` carrying a null id (none is recoverable from either), and the adapter keeps
+    /// running.
     ///
     /// # Errors
     /// Only a hard I/O failure reading from `reader` or writing to `writer` (a closed stdout) stops
@@ -111,10 +114,12 @@ impl McpServer {
     ) -> std::io::Result<()> {
         let mut buf = Vec::new();
         loop {
-            match read_line_capped(&mut reader, &mut buf, MAX_LINE_BYTES)? {
+            match read_line_capped(&mut reader, &mut buf, self.max_line_bytes)? {
                 LineRead::Eof => return Ok(()),
                 LineRead::TooLong => {
-                    log(&format!("skipped a line over {MAX_LINE_BYTES} bytes"));
+                    let message = format!("message is longer than {} bytes", self.max_line_bytes);
+                    log(&message);
+                    write_response(&mut writer, &parse_failure(message))?;
                     continue;
                 }
                 LineRead::Line => {}
@@ -122,7 +127,9 @@ impl McpServer {
             let line = match std::str::from_utf8(&buf) {
                 Ok(line) => line,
                 Err(error) => {
-                    log(&format!("skipped a line that is not UTF-8: {error}"));
+                    let message = format!("message is not valid UTF-8: {error}");
+                    log(&message);
+                    write_response(&mut writer, &parse_failure(message))?;
                     continue;
                 }
             };
@@ -130,11 +137,7 @@ impl McpServer {
                 continue;
             }
             if let Some(response) = self.handle_line(line) {
-                let text = serde_json::to_string(&response)
-                    .expect("a response value always serializes to JSON");
-                writer.write_all(text.as_bytes())?;
-                writer.write_all(b"\n")?;
-                writer.flush()?;
+                write_response(&mut writer, &response)?;
             }
         }
     }
@@ -145,10 +148,8 @@ impl McpServer {
             Ok(incoming) => incoming,
             Err(err) => {
                 log(&format!("parse error: {}", err.message));
-                // A notification (or unparseable line) gets no response.
-                return err
-                    .id
-                    .map(|id| jsonrpc::failure(Some(id), err.code, err.message));
+                // A line that cannot be parsed is always answered, with a null id when none is known.
+                return Some(jsonrpc::failure(err.id, err.code, err.message));
             }
         };
 
@@ -219,10 +220,10 @@ impl McpServer {
                 )
             })?
             .to_string();
-        let arguments = params
-            .get("arguments")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
+        let arguments = match params.get("arguments") {
+            None | Some(Value::Null) => json!({}),
+            Some(arguments) => arguments.clone(),
+        };
 
         let tool = self
             .tools
@@ -260,6 +261,17 @@ impl McpServer {
         let command_value = if has_params {
             json!({ "method": method, "params": arguments })
         } else {
+            if arguments
+                .as_object()
+                .is_none_or(|object| !object.is_empty())
+            {
+                log(&format!(
+                    "tools/call {name} -> arguments for a no-argument tool"
+                ));
+                return tool_error(format!(
+                    "tool `{name}` takes no arguments; call it with none (or `{{}}`)"
+                ));
+            }
             json!({ "method": method })
         };
         let command: Command = match serde_json::from_value(command_value) {
@@ -307,6 +319,19 @@ impl McpServer {
             )),
         }
     }
+}
+
+/// Writes one response line and flushes it.
+fn write_response(writer: &mut impl Write, response: &Value) -> std::io::Result<()> {
+    let text = serde_json::to_string(response).expect("a response value always serializes to JSON");
+    writer.write_all(text.as_bytes())?;
+    writer.write_all(b"\n")?;
+    writer.flush()
+}
+
+/// A `PARSE_ERROR` response with a null id, for a line no id can be read from.
+fn parse_failure(message: String) -> Value {
+    jsonrpc::failure(None, error_code::PARSE_ERROR, message)
 }
 
 /// Turns a successful [`ResponseBody`] into tool content.
@@ -409,10 +434,80 @@ mod tests {
     }
 
     #[test]
-    fn a_non_utf8_line_is_skipped_and_the_loop_keeps_running() {
+    fn a_non_utf8_line_is_answered_with_a_null_id_and_the_loop_keeps_running() {
         let out = drive_bytes(b"\xff\xfe\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n");
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["id"], Value::Null);
+        assert_eq!(out[0]["error"]["code"], json!(error_code::PARSE_ERROR));
+        assert_eq!(out[1]["id"], json!(1));
+    }
+
+    #[test]
+    fn invalid_json_is_answered_with_a_null_id() {
+        let out = drive(&["{not json", r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["id"], Value::Null);
+        assert_eq!(out[0]["error"]["code"], json!(error_code::PARSE_ERROR));
+        assert_eq!(out[1]["id"], json!(2));
+    }
+
+    #[test]
+    fn a_batch_is_refused_as_an_invalid_request() {
+        let out = drive(&[r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#]);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0]["id"], json!(1));
+        assert_eq!(out[0]["id"], Value::Null);
+        assert_eq!(out[0]["error"]["code"], json!(error_code::INVALID_REQUEST));
+        assert!(
+            out[0]["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("batches")
+        );
+    }
+
+    #[test]
+    fn an_over_cap_line_is_answered_and_the_loop_keeps_running() {
+        let mut input = vec![b'x'; 65];
+        input.extend_from_slice(b"\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n");
+        let mut output = Vec::new();
+        let mut server = McpServer::new("ws://127.0.0.1:9411".to_string());
+        server.max_line_bytes = 64;
+        server.run(Cursor::new(input), &mut output).unwrap();
+        let out: Vec<Value> = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["id"], Value::Null);
+        assert_eq!(out[0]["error"]["code"], json!(error_code::PARSE_ERROR));
+        assert_eq!(out[1]["id"], json!(1));
+    }
+
+    fn tool_call(name: &str, arguments: &str) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{name}","arguments":{arguments}}}}}"#
+        )
+    }
+
+    #[test]
+    fn a_no_argument_tool_refuses_arguments_without_touching_the_engine() {
+        let out = drive(&[&tool_call("sim_hash", r#"{"x":1}"#)]);
+        assert_eq!(out[0]["result"]["isError"], json!(true));
+        let text = out[0]["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("sim_hash") && text.contains("no arguments"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn null_arguments_are_read_as_absent() {
+        let out = drive(&[&tool_call("sim_step", "null")]);
+        assert_eq!(out[0]["result"]["isError"], json!(true));
+        let text = out[0]["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains("invalid type: null"), "{text}");
+        assert!(text.contains("missing field"), "{text}");
     }
 
     #[test]
@@ -463,7 +558,7 @@ mod tests {
         let out = drive(&[
             r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}"#,
         ]);
-        assert_eq!(out[0]["result"]["protocolVersion"], json!("2025-03-26"));
+        assert_eq!(out[0]["result"]["protocolVersion"], json!("2025-06-18"));
     }
 
     #[test]

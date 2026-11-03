@@ -99,9 +99,9 @@ pub fn run(
 /// docs), and nothing else here needs them.
 ///
 /// # Errors
-/// Prints the connection or capture diagnostic (e.g. `L3003` schema drift, `L3009` connect/timeout
-/// failure, `L4012` an out-of-range `frames`, `L4013` a capture already in flight, `L4023` a paused
-/// or too slow sim whose window cannot close) and exits non-zero.
+/// Prints the connection or capture diagnostic (e.g. `L3003` schema drift, `L3009` connect failure,
+/// `L3054` call timeout, `L4012` an out-of-range `frames`, `L4013` a capture already in flight,
+/// `L4023` a paused or too slow sim whose window cannot close) and exits non-zero.
 pub fn run_attach(
     url: &str,
     frames: u64,
@@ -148,7 +148,7 @@ pub fn run_attach(
 /// The call timeout for an attach capture: the longest wall-clock window the host accepts
 /// ([`MAX_CAPTURE_WALL_SECONDS`]) plus a flat allowance for connect/handshake overhead and a busy
 /// host. An accepted capture closes within that bound at the host's own speed and tick rate, so the
-/// timeout fires only on a genuinely wedged sim (`Client::call`'s own `L3009`).
+/// timeout fires only on a genuinely wedged sim (`Client::call`'s own `L3054`).
 fn capture_timeout() -> Duration {
     Duration::from_secs_f64(MAX_CAPTURE_WALL_SECONDS + 30.0)
 }

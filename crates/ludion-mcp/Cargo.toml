@@ -23,7 +23,7 @@ ludion-client = { path = "../ludion-client", version = "0.1.0" }
 # `ludion-client` does not re-export these, so the dependency is direct and necessary.
 ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
 # `Diagnostic` (rendered verbatim, L#### code and all, into `isError` tool results) and the L3009
-# `PROTOCOL_ENGINE_UNAVAILABLE` code the reconnect path keys on.
+# `PROTOCOL_ENGINE_UNAVAILABLE` / L3054 `PROTOCOL_CALL_TIMED_OUT` codes the drop-the-client path keys on.
 ludion-core = { path = "../ludion-core", version = "0.1.0" }
 serde_json.workspace = true
 

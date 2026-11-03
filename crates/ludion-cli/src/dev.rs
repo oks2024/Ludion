@@ -84,7 +84,7 @@
 //!   gone); dev is starting a fresh, unrestored child from the just-built exe. Followed by that child's
 //!   own `listening on ws://…` line — never by a `restored` line, since there was nothing to restore.
 //! - `dev reload snapshot failed (<code>: <cause>); restarting fresh, session state lost` — the
-//!   running child is alive but did not deliver its snapshot (a wedged sim times out as `L3009`, a
+//!   running child is alive but did not deliver its snapshot (a wedged sim times out as `L3054`, a
 //!   schema skew is `L3003`); dev stops it and starts a fresh child, as above.
 //! - `dev reload restored frame=<N> in <ms> ms` — the reload completed; `<ms>` is the
 //!   source-change-detected → restored wall time. Wall clock is legitimate here: dev is the CLI
@@ -1434,7 +1434,7 @@ fn report_launch_failed(diagnostic: &Diagnostic, build_ms: u128, kept: Option<&P
 enum SnapshotFailure {
     /// The child has already exited on its own (a crash): there is no state left to snapshot.
     ChildExited,
-    /// The child is alive but did not deliver — a sim that never returns (`L3009` on the call
+    /// The child is alive but did not deliver — a sim that never returns (`L3054` on the call
     /// timeout), a schema skew (`L3003`), any refusal. Keeping it would mean the edit never runs.
     ChildAlive,
 }

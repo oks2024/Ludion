@@ -6,21 +6,32 @@
 //! restart is invisible to the model. A command is never re-sent: a call that fails is returned, and
 //! the dead client is dropped so the *next* call reconnects.
 
+use std::time::Duration;
+
 use ludion_client::{CallOk, Client};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_protocol::Command;
 
+/// Above the server's 120 s sim-reply bound, so that its more precise `L3023` arrives first; this
+/// only fires when the host stops answering altogether.
+const CALL_TIMEOUT: Duration = Duration::from_secs(130);
+
 /// A lazily-connected wire session to one `ludion serve` endpoint.
 pub(crate) struct Session {
     url: String,
     client: Option<Client>,
+    call_timeout: Duration,
 }
 
 impl Session {
     /// A session that will connect to `url` on first use.
     pub(crate) fn new(url: String) -> Self {
-        Session { url, client: None }
+        Session {
+            url,
+            client: None,
+            call_timeout: CALL_TIMEOUT,
+        }
     }
 
     /// The endpoint URL this session targets.
@@ -36,8 +47,9 @@ impl Session {
     /// may have run.
     ///
     /// # Errors
-    /// The engine's own [`Diagnostic`] (rendered verbatim into the tool result), or `L3009` if the
-    /// engine is unreachable or the connection was lost during the call.
+    /// The engine's own [`Diagnostic`] (rendered verbatim into the tool result), `L3009` if the
+    /// engine is unreachable or the connection was lost during the call, or `L3054` if no reply came
+    /// within the call timeout (the command may still run).
     pub(crate) fn call(&mut self, command: Command) -> Result<CallOk, Diagnostic> {
         if let Some(client) = self.client.as_mut()
             && client.check_open().is_err()
@@ -50,8 +62,12 @@ impl Session {
             .as_mut()
             .expect("ensure_connected left a client")
             .call(command);
+        // A timed-out connection still holds a server pipeline slot, so it is not reused.
         if let Err(diagnostic) = &result
-            && diagnostic.code == code::PROTOCOL_ENGINE_UNAVAILABLE
+            && matches!(
+                diagnostic.code,
+                code::PROTOCOL_ENGINE_UNAVAILABLE | code::PROTOCOL_CALL_TIMED_OUT
+            )
         {
             self.client = None;
         }
@@ -65,7 +81,7 @@ impl Session {
     /// protocol-version drift.
     fn ensure_connected(&mut self) -> Result<(), Diagnostic> {
         if self.client.is_none() {
-            self.client = Some(Client::connect(&self.url)?);
+            self.client = Some(Client::connect(&self.url)?.with_call_timeout(self.call_timeout));
         }
         Ok(())
     }
@@ -170,6 +186,43 @@ mod tests {
             requests.load(Ordering::SeqCst),
             1,
             "the command was re-sent"
+        );
+    }
+
+    /// A stub that handshakes every connection, counts each request read, and never replies.
+    fn spawn_silent_counting_server(requests: Arc<AtomicUsize>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub listener");
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming() {
+                let mut socket = handshake(stream.expect("accept"));
+                if let Ok(Message::Text(_)) = socket.read() {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                }
+                held.push(socket);
+            }
+        });
+        format!("ws://{addr}")
+    }
+
+    /// A silent host gives `L3054`, the command is read once, and the next call reconnects.
+    #[test]
+    fn a_call_timeout_drops_the_connection_and_the_next_call_reconnects() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let url = spawn_silent_counting_server(requests.clone());
+        let mut session = Session::new(url);
+        session.call_timeout = Duration::from_millis(200);
+        let error = session.call(Command::SimHash).expect_err("no reply comes");
+        assert_eq!(error.code, code::PROTOCOL_CALL_TIMED_OUT);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert!(session.client.is_none(), "a timed-out client is dropped");
+        let error = session.call(Command::SimHash).expect_err("still silent");
+        assert_eq!(error.code, code::PROTOCOL_CALL_TIMED_OUT);
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            2,
+            "the second call reconnected"
         );
     }
 

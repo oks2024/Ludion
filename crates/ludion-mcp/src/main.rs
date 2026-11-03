@@ -23,8 +23,9 @@
 //! # Connection lifecycle
 //!
 //! The adapter connects **lazily** — startup and `tools/list` need no engine, so it can be
-//! registered before `ludion serve` is up. The first `tools/call` connects; a call that loses the
-//! connection reconnects once and retries before failing. Engine errors come back as tool results
+//! registered before `ludion serve` is up. The first `tools/call` connects; a call probes the
+//! connection before sending and reconnects a closed one; a call that fails mid-flight is returned,
+//! never re-sent. Engine errors come back as tool results
 //! with `isError: true`, rendered verbatim (their `L####` code included); JSON-RPC errors are
 //! reserved for malformed MCP requests and unknown tools.
 //!

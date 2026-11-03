@@ -29,7 +29,7 @@
 //! by default a call blocks forever — the sim is single-threaded and dispatch is synchronous, so an
 //! infinite-looping game system would otherwise hang every connected client (editor, MCP adapter,
 //! window) with no diagnostic, unable even to process a wire `engine.shutdown`. An **opt-in** per-client
-//! call timeout ([`with_call_timeout`](Client::with_call_timeout)) bounds the wait and surfaces `L3009`
+//! call timeout ([`with_call_timeout`](Client::with_call_timeout)) bounds the wait and surfaces `L3054`
 //! on expiry; omit it and behavior is exactly as before (block forever). It is a transport-side guard,
 //! not a sim-side watchdog — the engine keeps running; only this client stops waiting.
 //!
@@ -43,7 +43,8 @@
 //! empty, block on the socket up to a timeout) to consume that traffic. The queues are bounded:
 //! frames are latest-wins per subscription (a newer frame replaces the queued one), and events keep
 //! at most [`MAX_BUFFERED_EVENTS`], dropping the oldest and counting it in
-//! [`Client::dropped_events`].
+//! [`Client::dropped_events`]. Traffic for a subscription this client has unsubscribed is never
+//! handed back, even if it was in flight when the unsubscribe was acknowledged.
 //!
 //! # Example
 //! ```no_run
@@ -63,7 +64,7 @@
 //! # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
 //! ```
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -139,12 +140,15 @@ pub struct Client {
     /// [`next_frame`](Client::next_frame).
     inbox: Inbox,
     /// The optional per-call timeout. `None` (the default) blocks forever, exactly as before; `Some`
-    /// bounds every [`call`](Client::call)'s wait for its reply and returns `L3009` on expiry. Set via
+    /// bounds every [`call`](Client::call)'s wait for its reply and returns `L3054` on expiry. Set via
     /// [`with_call_timeout`](Client::with_call_timeout).
     call_timeout: Option<Duration>,
     /// Set when the transport reported an over-limit inbound message: the stream is mid-frame and the
     /// socket shut down, so every later call fails `L3009` before writing anything.
     lost: AtomicBool,
+    /// Ids of `stream.subscribe` calls that timed out. If the host answers one late, the sub it
+    /// minted is unsubscribed (see [`stray_reply`](Client::stray_reply)) instead of leaking.
+    abandoned_subscribes: Vec<u64>,
 }
 
 impl Client {
@@ -297,17 +301,18 @@ impl Client {
             inbox: Inbox::default(),
             call_timeout: None,
             lost,
+            abandoned_subscribes: Vec::new(),
         })
     }
 
     /// Sets a per-call timeout for every subsequent [`call`](Client::call), returning `self` so it can
     /// be chained after [`connect`](Client::connect).
     ///
-    /// With a timeout set, a call that does not receive its reply within `timeout` fails with `L3009`
-    /// (the engine unavailable / timed-out diagnostic) instead of blocking forever — the guard against a
-    /// wedged single-threaded sim hanging the client. Without it (the default) a call blocks
-    /// indefinitely, so no existing caller changes behavior. The timeout bounds the wait for *this
-    /// client's* reply; it does not stop the engine.
+    /// With a timeout set, a call that does not receive its reply within `timeout` fails with `L3054`
+    /// instead of blocking forever — the guard against a wedged single-threaded sim hanging the
+    /// client. **The command may still run**; never resend one blindly. Without a timeout (the
+    /// default) a call blocks indefinitely, so no existing caller changes behavior. The timeout
+    /// bounds the wait for *this client's* reply; it does not stop the engine.
     ///
     /// # Example
     /// ```no_run
@@ -315,7 +320,7 @@ impl Client {
     /// use ludion_client::Client;
     ///
     /// let mut client = Client::connect("ws://127.0.0.1:4321")?.with_call_timeout(Duration::from_secs(5));
-    /// // A call now fails with L3009 rather than hanging if the engine stops answering.
+    /// // A call now fails with L3054 rather than hanging if the engine stops answering.
     /// let _ = client.sim_hash();
     /// # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
     /// ```
@@ -355,8 +360,9 @@ impl Client {
     ///
     /// # Errors
     /// - The command's own diagnostic if the engine reported one.
-    /// - `L3009` if the connection is lost while sending or waiting, or if a per-call timeout is set
-    ///   (see [`with_call_timeout`](Client::with_call_timeout)) and the reply does not arrive in time.
+    /// - `L3009` if the connection is lost while sending or waiting.
+    /// - `L3054` if a per-call timeout is set (see [`with_call_timeout`](Client::with_call_timeout))
+    ///   and the reply does not arrive in time; the command may still run.
     /// - `L3051` if the server's response is not well-formed; `L3004` if a binary message that
     ///   arrived while waiting is not a well-formed frame.
     pub fn call(&mut self, command: Command) -> Result<CallOk, Diagnostic> {
@@ -364,15 +370,58 @@ impl Client {
         let id = self.next_id;
         self.next_id += 1;
 
+        let is_subscribe = matches!(command, Command::StreamSubscribe(_));
+        let unsubscribed = match &command {
+            Command::StreamUnsubscribe(params) => Some(params.sub),
+            _ => None,
+        };
+
         send_text(
             &mut self.socket,
             &self.lost,
             serde_json::to_string(&Request::new(id, command)).map_err(serialize_err)?,
         )?;
 
-        match self.call_timeout {
+        let result = match self.call_timeout {
             None => self.await_response_blocking(id),
             Some(timeout) => self.await_response_within(id, timeout),
+        };
+        match (&result, unsubscribed) {
+            (Err(error), _) if is_subscribe && error.code == code::PROTOCOL_CALL_TIMED_OUT => {
+                self.abandoned_subscribes.push(id);
+            }
+            (Ok(_), Some(sub)) => self.inbox.close(sub),
+            _ => {}
+        }
+        result
+    }
+
+    /// Handles a response that is not the one being waited for. The late answer to a timed-out
+    /// subscribe minted a sub nobody holds: close it locally and ask the host to drop it, without
+    /// waiting for the reply (that `Ack` is itself a stray and falls through here). A send failure
+    /// is ignored — a lost connection takes its subs with it.
+    fn stray_reply(&mut self, response: Response) {
+        let Some(at) = self
+            .abandoned_subscribes
+            .iter()
+            .position(|id| *id == response.id.as_u64())
+        else {
+            return;
+        };
+        self.abandoned_subscribes.swap_remove(at);
+        let WireResult::Ok {
+            ok: ResponseBody::Subscribed { sub },
+            ..
+        } = response.result
+        else {
+            return;
+        };
+        self.inbox.close(sub);
+        let id = self.next_id;
+        self.next_id += 1;
+        let command = Command::StreamUnsubscribe(StreamUnsubscribeParams { sub });
+        if let Ok(text) = serde_json::to_string(&Request::new(id, command)) {
+            let _ = send_text(&mut self.socket, &self.lost, text);
         }
     }
 
@@ -387,6 +436,7 @@ impl Client {
                     TextMessage::Event(event) => self.inbox.push_event(event),
                     TextMessage::Response(response) => {
                         if response.id.as_u64() != id {
+                            self.stray_reply(response);
                             continue;
                         }
                         return response_to_result(response);
@@ -399,7 +449,7 @@ impl Client {
     }
 
     /// The bounded counterpart of [`await_response_blocking`](Client::await_response_blocking): waits at
-    /// most `timeout` for the response with `id`, then fails with `L3009`. Interleaved event/frame
+    /// most `timeout` for the response with `id`, then fails with `L3054`. Interleaved event/frame
     /// traffic is buffered exactly the same way. The socket's previous read timeout is saved and restored
     /// (even on error), so a later untimed `call`/`next_*` still blocks as configured.
     fn await_response_within(&mut self, id: u64, timeout: Duration) -> Result<CallOk, Diagnostic> {
@@ -417,7 +467,8 @@ impl Client {
                     Ok(TextMessage::Event(event)) => self.inbox.push_event(event),
                     Ok(TextMessage::Response(response)) => {
                         if response.id.as_u64() != id {
-                            continue; // not ours; keep waiting within the deadline
+                            self.stray_reply(response); // not ours; keep waiting
+                            continue;
                         }
                         break response_to_result(response);
                     }
@@ -454,6 +505,8 @@ impl Client {
     /// println!("subscribed as {sub:?}");
     /// # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
     /// ```
+    ///
+    /// A subscribe that times out (`L3054`) unsubscribes itself when its late reply is read.
     ///
     /// # Errors
     /// The engine's diagnostic (e.g. `L3046` for an out-of-range `max_fps`), or a
@@ -597,11 +650,10 @@ impl Client {
     fn drain_ready(&mut self) -> Result<(), Diagnostic> {
         loop {
             match self.socket.read() {
-                Ok(Message::Text(text)) => {
-                    if let TextMessage::Event(event) = classify_text(&text)? {
-                        self.inbox.push_event(event);
-                    }
-                }
+                Ok(Message::Text(text)) => match classify_text(&text)? {
+                    TextMessage::Event(event) => self.inbox.push_event(event),
+                    TextMessage::Response(response) => self.stray_reply(response),
+                },
                 Ok(Message::Binary(bytes)) => self.inbox.push_frame(decode_frame(bytes)?),
                 Ok(Message::Close(_)) => return Err(closed()),
                 Ok(_) => continue, // ping / pong
@@ -641,8 +693,9 @@ impl Client {
             };
             match message {
                 Message::Text(text) => match classify_text(&text) {
+                    Ok(TextMessage::Event(event)) if self.inbox.is_closed(event.sub) => {}
                     Ok(TextMessage::Event(event)) => break Ok(Some(event)),
-                    Ok(TextMessage::Response(_)) => continue, // stray reply; no call in flight
+                    Ok(TextMessage::Response(response)) => self.stray_reply(response),
                     Err(error) => break Err(error),
                 },
                 Message::Binary(bytes) => match decode_frame(bytes) {
@@ -669,12 +722,13 @@ impl Client {
             };
             match message {
                 Message::Binary(bytes) => match decode_frame(bytes) {
+                    Ok(frame) if self.inbox.is_closed(frame.header.sub) => {}
                     Ok(frame) => break Ok(Some(frame)),
                     Err(error) => break Err(error),
                 },
                 Message::Text(text) => match classify_text(&text) {
                     Ok(TextMessage::Event(event)) => self.inbox.push_event(event),
-                    Ok(TextMessage::Response(_)) => {} // stray reply; no call in flight
+                    Ok(TextMessage::Response(response)) => self.stray_reply(response),
                     Err(error) => break Err(error),
                 },
                 _ => unreachable!("read_message_within only ever returns Text or Binary"),
@@ -855,15 +909,15 @@ fn response_to_result(response: Response) -> Result<CallOk, Diagnostic> {
     }
 }
 
-/// Builds the `L3009` diagnostic for a call whose per-call timeout elapsed before the reply arrived.
+/// Builds the `L3054` diagnostic for a call whose per-call timeout elapsed before the reply arrived.
 fn call_timed_out(timeout: Duration) -> Diagnostic {
     Diagnostic::new(
-        code::PROTOCOL_ENGINE_UNAVAILABLE,
+        code::PROTOCOL_CALL_TIMED_OUT,
         format!("the engine did not reply within the {timeout:?} call timeout"),
     )
     .with_help(
-        "the sim thread may be wedged (e.g. an infinite-looping game system); the engine is \
-         single-threaded, so no reply can arrive until it makes progress",
+        "the command may still run, so do not resend it blindly; check the host is running and \
+         read the state back first (the sim thread may be wedged, e.g. an infinite-looping system)",
     )
 }
 
@@ -993,10 +1047,27 @@ struct Inbox {
     events: VecDeque<EventMessage>,
     frames: VecDeque<ReceivedFrame>,
     dropped_events: u64,
+    /// Subscriptions that were unsubscribed: a frame can outlive its unsubscribe `Ack` (frames ride a
+    /// lower-priority lane than replies), so their traffic is refused, not just purged once.
+    closed: BTreeSet<u64>,
 }
 
 impl Inbox {
+    fn is_closed(&self, sub: SubId) -> bool {
+        self.closed.contains(&sub.as_u64())
+    }
+
+    /// Records `sub` as closed and drops what is already queued for it.
+    fn close(&mut self, sub: SubId) {
+        self.closed.insert(sub.as_u64());
+        self.events.retain(|event| event.sub != sub);
+        self.frames.retain(|frame| frame.header.sub != sub);
+    }
+
     fn push_event(&mut self, event: EventMessage) {
+        if self.is_closed(event.sub) {
+            return;
+        }
         if self.events.len() >= MAX_BUFFERED_EVENTS {
             self.events.pop_front();
             self.dropped_events += 1;
@@ -1005,6 +1076,9 @@ impl Inbox {
     }
 
     fn push_frame(&mut self, frame: ReceivedFrame) {
+        if self.is_closed(frame.header.sub) {
+            return;
+        }
         self.frames
             .retain(|queued| queued.header.sub != frame.header.sub);
         self.frames.push_back(frame);
@@ -1185,6 +1259,24 @@ mod tests {
             (SubId::new(1), 13)
         );
         assert!(inbox.pop_frame().is_none());
+    }
+
+    #[test]
+    fn close_purges_both_queues_and_refuses_later_traffic_for_that_sub_only() {
+        let mut inbox = Inbox::default();
+        inbox.push_frame(frame(1, 10));
+        inbox.push_frame(frame(2, 11));
+        inbox.push_event(event(1)); // sub 1
+        inbox.close(SubId::new(1));
+        assert!(inbox.pop_event().is_none());
+        inbox.push_frame(frame(1, 12));
+        inbox.push_event(event(2));
+        assert!(inbox.pop_event().is_none());
+        let kept = inbox.pop_frame().unwrap();
+        assert_eq!(kept.header.sub, SubId::new(2));
+        assert!(inbox.pop_frame().is_none());
+        inbox.push_frame(frame(2, 13));
+        assert!(inbox.pop_frame().is_some());
     }
 
     #[test]

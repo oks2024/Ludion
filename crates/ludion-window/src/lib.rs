@@ -458,9 +458,9 @@ impl StreamSink for WindowStreamSink {
 /// thread owns the fatal path and the title flag, so input is always best-effort and never ends the
 /// loop). Injections that arrive during the blink are dropped, which is correct: the sim is down.
 ///
-/// Each call is bounded by [`INPUT_CALL_TIMEOUT`]: a sim that stops answering surfaces `L3009`, which
-/// drops the client like a lost socket, so this thread never parks behind a wedged sim and can be
-/// joined.
+/// Each call is bounded by [`INPUT_CALL_TIMEOUT`]: a sim that stops answering surfaces `L3054`,
+/// which drops the client like a lost socket (`L3009`), so this thread never parks behind a wedged
+/// sim and can be joined.
 fn spawn_input_thread(url: String, input_rx: Receiver<serde_json::Value>) -> JoinHandle<()> {
     std::thread::spawn(move || {
         // Best-effort initial connect; if it fails, the first events drop until a later one reconnects.
@@ -475,9 +475,13 @@ fn spawn_input_thread(url: String, input_rx: Receiver<serde_json::Value>) -> Joi
             };
             let command = Command::InputInject(InputInjectParams { frame: None, event });
             if let Err(diagnostic) = active.call(command)
-                && diagnostic.code == code::PROTOCOL_ENGINE_UNAVAILABLE
+                && matches!(
+                    diagnostic.code,
+                    code::PROTOCOL_ENGINE_UNAVAILABLE | code::PROTOCOL_CALL_TIMED_OUT
+                )
             {
-                // Connection lost: drop the client so the next event reconnects. Never fatal here.
+                // Connection lost or timed out: drop the client so the next event reconnects.
+                // Never fatal here.
                 client = None;
             }
         }

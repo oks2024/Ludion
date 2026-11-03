@@ -34,10 +34,10 @@ pub(crate) struct Incoming {
     pub(crate) params: Value,
 }
 
-/// A framing-level failure that still needs a response written (only when `id` is present).
+/// A framing-level failure; it is always answered (a null id when `id` is `None`).
 #[derive(Debug)]
 pub(crate) struct RpcError {
-    /// The id to echo, or `None` if the offending message was a notification / unparseable.
+    /// The id to echo, or `None` when none is known; the response then carries `"id": null`.
     pub(crate) id: Option<Value>,
     /// A JSON-RPC error code from [`error_code`].
     pub(crate) code: i64,
@@ -58,6 +58,13 @@ pub(crate) fn parse(line: &str) -> Result<Incoming, RpcError> {
         message: format!("message is not valid JSON: {e}"),
     })?;
 
+    if value.is_array() {
+        return Err(RpcError {
+            id: None,
+            code: error_code::INVALID_REQUEST,
+            message: "JSON-RPC batches are not supported".to_string(),
+        });
+    }
     let obj = value.as_object().ok_or_else(|| RpcError {
         id: None,
         code: error_code::INVALID_REQUEST,

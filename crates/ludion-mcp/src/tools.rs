@@ -261,6 +261,34 @@ mod tests {
         }
     }
 
+    /// `has_params` must track the schema: a variant whose `params` is optional would be an `anyOf`
+    /// the catalog reads as having none, silently losing the caller's arguments.
+    #[test]
+    fn has_params_matches_the_schema_properties_and_required() {
+        let schema = ludion_protocol::schema::protocol_schema();
+        let variants = schema["command"]["oneOf"].as_array().expect("oneOf");
+        let tools = catalog();
+        for variant in variants {
+            let method = variant["properties"]["method"]["const"].as_str().unwrap();
+            if EXCLUDED_METHODS.contains(&method) {
+                continue;
+            }
+            let in_properties = variant["properties"].get("params").is_some();
+            let required = variant["required"]
+                .as_array()
+                .is_some_and(|names| names.iter().any(|name| name == "params"));
+            let tool = tools.iter().find(|t| t.name == sanitize(method)).unwrap();
+            let ToolAction::Protocol { has_params, .. } = &tool.action else {
+                panic!("{method} mapped to the status action");
+            };
+            assert_eq!(
+                *has_params, in_properties,
+                "{method}: has_params vs properties"
+            );
+            assert_eq!(*has_params, required, "{method}: has_params vs required");
+        }
+    }
+
     #[test]
     fn excluded_methods_have_no_tool() {
         let tools = catalog();
