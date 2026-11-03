@@ -1,6 +1,13 @@
-# Fixture: the scene `src/probe_bake_pin_tests.rs` captures one probe of. Every capture input a
-# Rust-side change could move is present: sky, a sun, a point and a spot light, a GI volume, an
-# emissive surface and a diffuse one. It has no skinned or voxel-only geometry and no textured map.
+# Fixture: the scene `src/probe_bake_pin_tests.rs` captures one probe of, built so one term dominates
+# each cube face and a small change in it moves that face's statistics past the pin's tolerance.
+# The probe sits at (0, 2, 0) in a room open above. The floor (-Y) is lit by the sun, whose direction has
+# no x component, so the side walls get none. The +X wall is lit by a point light, the -X wall by a
+# spot light, the -Z wall is emissive, and the +Z wall is back-facing to the sun and left to the GI
+# volume's bounce and sky visibility. +Y is open sky, which a capture stores as zero. The point light
+# carries `GiDynamic` so the capture runs the injection path, though a 2% change there stays inside
+# the tolerance. The scene has
+# no skinned or voxel-only geometry, no textured map, and no distinct check of the emissive layer's
+# prefilter.
 format: 1
 name: "probe-bake-pin - one probe in a lit room"
 entities:
@@ -40,50 +47,55 @@ entities:
           - 0
       DirectionalLight:
         direction:
-          - 0.3
-          - -0.8
-          - -0.5
-        intensity: 1.0
+          - 0
+          - -0.9
+          - -0.4
+        intensity: 2.0
   - name: point
     components:
       Transform:
         translation:
-          - 3
+          - 1.7
           - 2
-          - 1
+          - 0
       PointLight:
-        intensity: 6.0
-        range: 10.0
+        intensity: 14.0
+        range: 2.0
+      GiDynamic: {}
   - name: spot
     components:
       Transform:
         translation:
-          - -3
-          - 5
+          - -1
+          - 2
           - 0
       SpotLight:
         intensity: 8.0
-        range: 10.0
+        range: 4.0
         direction:
-          - 0
           - -1
           - 0
-        inner_angle: 20.0
-        outer_angle: 35.0
+          - 0
+        inner_angle: 35.0
+        outer_angle: 50.0
   - name: gi
     components:
       GiVolume:
         cell_size: 0.5
         probe_spacing: 1.0
-        sky_visibility: 0.8
-        bounce: 0.6
+        sky_visibility: 1.0
+        bounce: 1.5
   - name: floor
     components:
       Transform:
+        translation:
+          - 0
+          - 0
+          - 0
         scale:
-          - 10
+          - 6
           - 1
-          - 10
+          - 6
       Mesh:
         shape: cube
         color:
@@ -91,16 +103,52 @@ entities:
           - 0.7
           - 0.7
           - 1.0
-  - name: wall
+  - name: wall-x-pos
+    components:
+      Transform:
+        translation:
+          - 3
+          - 2
+          - 0
+        scale:
+          - 1
+          - 3
+          - 6
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.8
+          - 0.8
+          - 1.0
+  - name: wall-x-neg
+    components:
+      Transform:
+        translation:
+          - -3
+          - 2
+          - 0
+        scale:
+          - 1
+          - 3
+          - 6
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.8
+          - 0.8
+          - 1.0
+  - name: wall-z-neg
     components:
       Transform:
         translation:
           - 0
           - 2
-          - -4
+          - -3
         scale:
-          - 8
-          - 4
+          - 6
+          - 3
           - 1
       Mesh:
         shape: cube
@@ -110,6 +158,24 @@ entities:
           - 0.2
           - 1.0
         emissive: 0.5
+  - name: wall-z-pos
+    components:
+      Transform:
+        translation:
+          - 0
+          - 2
+          - 3
+        scale:
+          - 6
+          - 3
+          - 1
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.8
+          - 0.8
+          - 1.0
   - name: probe
     components:
       Transform:

@@ -5,9 +5,13 @@
 //! signature (per mip and face: mean RGB and luminance standard deviation; the baked irradiance;
 //! face size and mip count), compared within a tolerance against `fixtures/probe-bake-pin.json`,
 //! which holds one `{version, signature}` entry per OS. A numeric signature rather than raw bytes, so
-//! a driver update on a pinned box does not redden it. It cannot see a change only a feature the
-//! fixture lacks reaches (skinned or voxel-only geometry, a textured map), nor one inside the
-//! tolerance. Blessing is refused when the signature moved but the version did not.
+//! a driver update on a pinned box does not redden it. One term dominates each cube face of the
+//! fixture (sun, point, spot, emissive, GI bounce and sky visibility), so a 2% change in any of them
+//! clears the tolerance; a term sharing a face would hide under the others' statistics. It cannot see
+//! a change only a feature the fixture lacks reaches (skinned or voxel-only geometry, a textured map),
+//! the emissive layer's prefilter, the GI dynamic injection (a 2% change there stays inside the
+//! tolerance), nor any other change inside the tolerance. Blessing is refused when the signature
+//! moved but the version did not.
 //!
 //! Needs the pinned reference adapter and skips (printing why) anywhere else, or on an OS with no
 //! entry yet.
