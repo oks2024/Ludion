@@ -23,6 +23,7 @@ export const DOCS_TESTS = [
   ['ludion-cli', 'it', 'explain'],
   ['ludion-cli', 'new'],
   ['ludion-scene', 'kind_precheck'],
+  ['ludion-protocol', 'strict_sweep'],
 ];
 
 // The root workspace's members, read from `cargo metadata` (no build, no build lock), and the root

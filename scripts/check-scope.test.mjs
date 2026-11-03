@@ -55,23 +55,23 @@ test('game assets select the drift gates', () => {
   assert.equal(classify(['games/breakout/src/main.rs'], WS).drift, false);
 });
 
-const DOCS_FILTER = '(binary_id(=ludion-cli::it) & test(/^docs::/)) | (binary_id(=ludion-cli::it) & test(/^explain::/)) | binary_id(=ludion-cli::new) | binary_id(=ludion-scene::kind_precheck)';
+const DOCS_FILTER = '(binary_id(=ludion-cli::it) & test(/^docs::/)) | (binary_id(=ludion-cli::it) & test(/^explain::/)) | binary_id(=ludion-cli::new) | binary_id(=ludion-protocol::strict_sweep) | binary_id(=ludion-scene::kind_precheck)';
 
 test('docs/ and its embedded mirror build ludion-cli and run only the docs-reading tests', () => {
   for (const p of ['docs/scenes.md', 'crates/ludion-cli/embedded-docs/x.md']) {
     const s = classify([p], WS);
     assert.deepEqual(s.packages, [], p);
     assert.equal(s.docs, true, p);
-    assert.deepEqual(testSelection(s), { clippy: ['ludion-cli'], test: ['ludion-cli', 'ludion-scene'], filter: DOCS_FILTER }, p);
+    assert.deepEqual(testSelection(s), { clippy: ['ludion-cli'], test: ['ludion-cli', 'ludion-protocol', 'ludion-scene'], filter: DOCS_FILTER }, p);
   }
 });
 
 test('a whole package keeps its tests in the docs filter; both whole packages need none', () => {
   const cli = testSelection(classify(['docs/scenes.md', 'crates/ludion-cli/src/main.rs'], WS));
-  assert.equal(cli.filter, 'package(=ludion-cli) | binary_id(=ludion-scene::kind_precheck)');
-  const both = testSelection(classify(['docs/scenes.md', 'crates/ludion-cli/src/main.rs', 'crates/ludion-scene/src/lib.rs'], WS));
+  assert.equal(cli.filter, 'package(=ludion-cli) | binary_id(=ludion-protocol::strict_sweep) | binary_id(=ludion-scene::kind_precheck)');
+  const both = testSelection(classify(['docs/scenes.md', 'crates/ludion-cli/src/main.rs', 'crates/ludion-scene/src/lib.rs', 'crates/ludion-protocol/src/lib.rs'], WS));
   assert.equal(both.filter, null);
-  assert.deepEqual(both.test, ['ludion-cli', 'ludion-scene']);
+  assert.deepEqual(both.test, ['ludion-cli', 'ludion-protocol', 'ludion-scene']);
 });
 
 test('without a docs path the selection is the packages and no filter', () => {

@@ -20,6 +20,7 @@ import { isTextEditingTarget } from '../viewer/keymap';
 import { readEditorFile } from '../terminal/pty';
 import { ScenePicker } from './ScenePicker';
 import { generatorOf, saveGate, type GeneratorState } from './sceneList';
+import { isSaveConflict, saveFindings } from './saveResult';
 import { isTauri } from './tauri';
 
 interface SessionStripProps {
@@ -35,9 +36,9 @@ interface SessionStripProps {
   readonly dirty: boolean;
   readonly savePath: string;
   readonly onSaved: () => void;
-  /** Fired synchronously before `scene.save` so App recognizes the resulting `scene.changed` as ours;
-   *  returns a cancel fn to call if the save is rejected. */
-  readonly onSaveStarted: () => () => void;
+  /** Fired synchronously with the `scene.save` request id, before it is sent, so App recognizes the
+   *  resulting `scene.changed` as ours; returns a cancel fn to call if the save is rejected. */
+  readonly onSaveStarted: (requestId: number) => () => void;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
   readonly onUndo: () => void;
@@ -115,20 +116,50 @@ export function SessionStrip({
 
   const { canSave, title: saveTitle } = saveGate(savePath, generator);
 
-  const handleSave = useCallback(async (): Promise<void> => {
-    if (!canSave) {
-      return;
-    }
-    const cancelExpectation = onSaveStarted();
+  // A refused save (the file changed on disk since this session loaded or saved it) waits here for
+  // the human's choice; nothing was written.
+  const [conflict, setConflict] = useState(false);
+  useEffect(() => setConflict(false), [savePath]);
+
+  const handleSave = useCallback(
+    async (force = false): Promise<void> => {
+      if (!canSave) {
+        return;
+      }
+      let cancel = (): void => {};
+      try {
+        const { body } = await client.callFull(
+          { method: 'scene.save', params: { path: savePath, ...(force ? { force: true } : {}) } },
+          (id) => {
+            cancel = onSaveStarted(id);
+          },
+        );
+        setConflict(false);
+        onError(saveFindings(body));
+        onSaved();
+      } catch (err) {
+        cancel();
+        const view = toDiagnostic(err);
+        if (isSaveConflict(view)) {
+          onError(null);
+          setConflict(true);
+        } else {
+          onError(view);
+        }
+      }
+    },
+    [client, canSave, savePath, onSaved, onSaveStarted, onError],
+  );
+
+  const handleReload = useCallback(async (): Promise<void> => {
     try {
-      await client.call({ method: 'scene.save', params: { path: savePath } });
+      await client.call({ method: 'scene.load', params: { path: savePath } });
+      setConflict(false);
       onError(null);
-      onSaved();
     } catch (err) {
-      cancelExpectation();
       onError(toDiagnostic(err));
     }
-  }, [client, canSave, savePath, onSaved, onSaveStarted, onError]);
+  }, [client, savePath, onError]);
 
   // Ctrl+S saves (any mode, whenever a path is known) — never while a text field is focused, so the
   // browser's own save-page shortcut is only overridden when the editor is the intended target.
@@ -149,56 +180,72 @@ export function SessionStrip({
 
   const schemaShort = hello.schema_hash.slice(0, 7);
 
+  // A fragment: the banner is a sibling row of the 42px bar in `.app`'s column, not inside it.
   return (
-    <div className="sessionbar">
-      <div className="segmented" role="group" aria-label="Editor mode">
+    <>
+      <div className="sessionbar">
+        <div className="segmented" role="group" aria-label="Editor mode">
+          <button
+            type="button"
+            className={mode === 'edit' ? 'active' : undefined}
+            onClick={() => void handleModeChange('edit')}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className={mode === 'play' ? 'active' : undefined}
+            onClick={() => void handleModeChange('play')}
+          >
+            Play
+          </button>
+        </div>
+
         <button
           type="button"
-          className={mode === 'edit' ? 'active' : undefined}
-          onClick={() => void handleModeChange('edit')}
+          className="btn"
+          disabled={!canSave}
+          title={saveTitle}
+          onClick={() => void handleSave()}
         >
-          Edit
+          {dirty && <span className="dirty-dot" title="unsaved changes" />}
+          <span className="label">Save</span>
+          <span className="kc">Ctrl+S</span>
         </button>
-        <button
-          type="button"
-          className={mode === 'play' ? 'active' : undefined}
-          onClick={() => void handleModeChange('play')}
-        >
-          Play
+
+        <ScenePicker client={client} sceneRoot={sceneRoot} dirty={dirty} savePath={savePath} onError={onError} />
+
+        <div className="btn-group" role="group" aria-label="History">
+          <button type="button" className="btn" title="Undo" disabled={mode !== 'edit' || !canUndo} onClick={onUndo}>
+            <span className="label">Undo</span>
+            <span className="kc">Ctrl+Z</span>
+          </button>
+          <button type="button" className="btn" title="Redo" disabled={mode !== 'edit' || !canRedo} onClick={onRedo}>
+            <span className="label">Redo</span>
+            <span className="kc">Ctrl+Y</span>
+          </button>
+        </div>
+
+        <button type="button" className="conn-chip" title="Disconnect from the engine" onClick={onDisconnect}>
+          <span className="conn-dot" />
+          <span className="num">{url}</span>
+          <span className="sep">·</span>schema <span className="num">{schemaShort}</span>
+          <span className="sep">·</span>connected
         </button>
       </div>
-
-      <button
-        type="button"
-        className="btn"
-        disabled={!canSave}
-        title={saveTitle}
-        onClick={() => void handleSave()}
-      >
-        {dirty && <span className="dirty-dot" title="unsaved changes" />}
-        <span className="label">Save</span>
-        <span className="kc">Ctrl+S</span>
-      </button>
-
-      <ScenePicker client={client} sceneRoot={sceneRoot} dirty={dirty} savePath={savePath} onError={onError} />
-
-      <div className="btn-group" role="group" aria-label="History">
-        <button type="button" className="btn" title="Undo" disabled={mode !== 'edit' || !canUndo} onClick={onUndo}>
-          <span className="label">Undo</span>
-          <span className="kc">Ctrl+Z</span>
-        </button>
-        <button type="button" className="btn" title="Redo" disabled={mode !== 'edit' || !canRedo} onClick={onRedo}>
-          <span className="label">Redo</span>
-          <span className="kc">Ctrl+Y</span>
-        </button>
-      </div>
-
-      <button type="button" className="conn-chip" title="Disconnect from the engine" onClick={onDisconnect}>
-        <span className="conn-dot" />
-        <span className="num">{url}</span>
-        <span className="sep">·</span>schema <span className="num">{schemaShort}</span>
-        <span className="sep">·</span>connected
-      </button>
-    </div>
+      {conflict && (
+        <div className="code-banner" role="alert">
+          <span className="code-banner-text">
+            This scene changed on disk since this session loaded or saved it. Nothing was written. Choose.
+          </span>
+          <button type="button" className="icon-btn" onClick={() => void handleReload()}>
+            Reload
+          </button>
+          <button type="button" className="icon-btn" onClick={() => void handleSave(true)}>
+            Keep mine
+          </button>
+        </div>
+      )}
+    </>
   );
 }

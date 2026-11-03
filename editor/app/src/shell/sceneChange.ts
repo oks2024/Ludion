@@ -1,18 +1,50 @@
-// The `scene.changed` event's decision, extracted from `App.tsx`'s handler so the foreign-vs-own
+// The `scene.changed` event's decision, extracted from `App.tsx`'s handler so the own-vs-foreign
 // distinction the scene picker depends on (`Plan/editor-open-project.md` decision 7) is testable
-// without a client or a subscription. Pure: `own` is `expectOwnSaveRef.current` at the moment the
-// event arrives, already read and cleared by the caller.
+// without a client or a subscription. Pure.
 
-/** Was this our own save? (Set synchronously before we issued `scene.save`.) If so, the stack still
- *  describes valid live entities -- just clear dirty. A FOREIGN change (another client loaded or
- *  saved, or a picker load, which never arms the flag) may have invalidated our ids, so drop the
- *  history and selection with it. */
+/** The slice of the `scene.changed` payload this decision reads. Declared locally so the tree
+ *  compiles against generated types that predate `kind` and `request_id`. */
+export interface SceneChangeWire {
+  readonly path?: string | null;
+  readonly kind?: string;
+  readonly request_id?: number | null;
+}
+
+export interface SceneChangeOutcome {
+  /** Drop the undo stack, selection and pointer: the world was replaced, so entity ids may be stale. */
+  readonly resetEditState: boolean;
+  /** The served world now equals what is on disk (or was replaced), so the dirty mark goes. */
+  readonly clearDirty: boolean;
+  /** The new Save path; null leaves it unchanged, `''` clears it. */
+  readonly savePath: string | null;
+  /** The matched id in `ownSaves`, to delete from it. */
+  readonly ownSaveId: number | null;
+}
+
+/** A save the world survives: only a `save` event leaves entity ids valid. Our own save (its
+ *  request id was registered before it was sent) clears dirty; a foreign save of the served path
+ *  does too, since the file now holds the live world. A foreign save elsewhere changes nothing here. */
 export function sceneChangeOutcome(
-  own: boolean,
-  path: string | null | undefined,
-): { resetEditState: boolean; savePath: string | null } {
-  return {
-    resetEditState: !own,
-    savePath: path !== null && path !== undefined ? path : null,
-  };
+  data: SceneChangeWire,
+  ownSaves: ReadonlySet<number>,
+  currentSavePath: string,
+): SceneChangeOutcome {
+  const path = data.path ?? null;
+  if (data.kind === 'save') {
+    const id = data.request_id ?? null;
+    if (id !== null && ownSaves.has(id)) {
+      return { resetEditState: false, clearDirty: true, savePath: path, ownSaveId: id };
+    }
+    if (path !== null && path === currentSavePath) {
+      return { resetEditState: false, clearDirty: true, savePath: null, ownSaveId: null };
+    }
+    if (currentSavePath === '' && path !== null) {
+      return { resetEditState: false, clearDirty: false, savePath: path, ownSaveId: null };
+    }
+    return { resetEditState: false, clearDirty: false, savePath: null, ownSaveId: null };
+  }
+  // The save path follows the world; a switch with no path cleared it so Ctrl+S cannot write the
+  // old file over the new scene.
+  const savePath = path ?? (data.kind === 'switch' ? '' : null);
+  return { resetEditState: true, clearDirty: true, savePath, ownSaveId: null };
 }

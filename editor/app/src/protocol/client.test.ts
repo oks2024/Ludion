@@ -200,6 +200,19 @@ describe('ProtocolClient.callFull', () => {
     ws.reply({ id, ok: { kind: 'ack' }, frame: 50 });
     await expect(call).resolves.toMatchObject({ frame: 50, gameFrame: null });
   });
+
+  it('reports the request id before the request is sent', async () => {
+    const { client, ws } = await connected();
+    const sentBefore = ws.sent.length;
+    let seen: { id: number; sent: number } | null = null;
+    const call = client.callFull({ method: 'sim.hash' } as Command, (id) => {
+      seen = { id, sent: ws.sent.length };
+    });
+    const { id } = JSON.parse(ws.sent[sentBefore]) as { id: number };
+    expect(seen).toEqual({ id, sent: sentBefore });
+    ws.reply({ id, ok: { kind: 'ack' }, frame: 1 });
+    await call;
+  });
 });
 
 describe('ProtocolClient listeners', () => {

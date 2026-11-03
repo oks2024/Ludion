@@ -40,7 +40,7 @@ import { RECENT_PROJECTS_KEY, parseRecents, pushRecent } from './shell/recents';
 import { switchProject } from './shell/projectSwitch';
 import { GAME_SLOT, onStageStatus, stageStart, stageStatus, stageStop, type StagePhase, type StageStatus } from './shell/host';
 import { autoAttachUrl, dropsSession, gameCard, gameOpts, type ConnectionState, type GameAction } from './shell/gameSession';
-import { sceneChangeOutcome } from './shell/sceneChange';
+import { sceneChangeOutcome, type SceneChangeWire } from './shell/sceneChange';
 import { StageSlotCard } from './editor/voxel/StageSlotCard';
 import { join } from './editor/voxel/stage';
 import { editorPaths, projectInfo, writeEditorContext, type ProjectInfo } from './terminal/pty';
@@ -406,10 +406,11 @@ export default function App() {
   // (e.g. a missing texture, L1101), which otherwise leaves the viewport silently stuck at "waiting
   // for frames…". Surfacing it as a banner makes the stall self-explaining. Latest-wins, dismissible.
   const [logDiagnostic, setLogDiagnostic] = useState<DiagnosticView | null>(null);
-  // Set synchronously just before *our own* `scene.save`, so the resulting `scene.changed` event is
-  // recognized as ours (clear dirty, keep the stack) rather than a foreign load/save (which invalidates
-  // entity ids, so the stack and selection are dropped). See the `scene.changed` effect below.
-  const expectOwnSaveRef = useRef(false);
+  // Request ids of *our own* in-flight `scene.save`s, registered before each is sent, so the resulting
+  // `scene.changed` is recognized as ours (clear dirty, keep the stack). See the effect below.
+  const ownSaveIdsRef = useRef(new Set<number>());
+  // Mirrors `savePath` for the `scene.changed` handler, whose effect deps are `[client]`.
+  const savePathRef = useRef('');
 
   // Gates every dial: Disconnect, a project switch and the unmount invalidate it, so a handshake
   // that finishes afterwards is closed, never promoted.
@@ -530,7 +531,7 @@ export default function App() {
   useEffect(() => {
     historyRef.current.clear();
     bumpHistory();
-    expectOwnSaveRef.current = false;
+    ownSaveIdsRef.current.clear();
     contextComponentNamesRef.current = null;
     historyRef.current.setEntityRefs(null);
   }, [client]);
@@ -667,21 +668,25 @@ export default function App() {
       if (!sub.accepts(event.sub)) {
         return;
       }
-      // Was this our own save? (Set synchronously before we issued `scene.save`.) A picker load never
-      // arms the flag, so it takes this same foreign path by construction. See `sceneChangeOutcome`.
-      const own = expectOwnSaveRef.current;
-      expectOwnSaveRef.current = false;
-      const outcome = sceneChangeOutcome(own, event.data.path);
+      // Another client may reuse one of our request ids; the collision is harmless because no save
+      // resets edit state. See `sceneChangeOutcome`.
+      const outcome = sceneChangeOutcome(event.data as SceneChangeWire, ownSaveIdsRef.current, savePathRef.current);
+      if (outcome.ownSaveId !== null) {
+        ownSaveIdsRef.current.delete(outcome.ownSaveId);
+      }
       if (outcome.resetEditState) {
         historyRef.current.clear();
         bumpHistory();
         setSelection(null);
-        // A foreign load/save may invalidate the world the marker referenced; drop it with the selection.
+        // A replaced world may invalidate what the marker referenced; drop it with the selection.
         setPointer(null);
         setUndoError(null);
       }
-      setDirty(false);
+      if (outcome.clearDirty) {
+        setDirty(false);
+      }
       if (outcome.savePath !== null) {
+        savePathRef.current = outcome.savePath;
         setSavePath(outcome.savePath);
       }
     });
@@ -902,12 +907,12 @@ export default function App() {
     [mode, handleEditGroup],
   );
 
-  // Armed synchronously before our own `scene.save` so the resulting `scene.changed` is recognized as
-  // ours. Returns a cancel fn the save path calls if the command is rejected (no event will arrive).
-  const handleSaveStarted = useCallback((): (() => void) => {
-    expectOwnSaveRef.current = true;
+  // Registers our own `scene.save` request id before it is sent so the resulting `scene.changed` is
+  // recognized as ours. Returns a cancel fn the save path calls if the command is rejected.
+  const handleSaveStarted = useCallback((requestId: number): (() => void) => {
+    ownSaveIdsRef.current.add(requestId);
     return () => {
-      expectOwnSaveRef.current = false;
+      ownSaveIdsRef.current.delete(requestId);
     };
   }, []);
 

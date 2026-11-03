@@ -242,7 +242,7 @@ export class ProtocolClient {
    * frame matters (e.g. reporting the frame a `sim.hash` was taken at); most callers want the terser
    * `call`.
    */
-  callFull(command: Command): Promise<FullResponse> {
+  callFull(command: Command, onRequestId?: (id: number) => void): Promise<FullResponse> {
     const ws = this.ws;
     if (ws === null || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new ProtocolClientError('call() on a client that is not connected'));
@@ -251,6 +251,8 @@ export class ProtocolClient {
     const request = { v: PROTOCOL_VERSION, id, ...command } as Request;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
+      // Synchronously before the send, so the id is known before any event it causes can arrive.
+      onRequestId?.(id);
       ws.send(stringifyWire(request));
     });
   }
