@@ -81,8 +81,8 @@ replays' keyframes are re-recorded, their per-frame hashes unchanged). `to_bytes
 error while calls are still queued: the queue is not in the blob, so encoding one would drop it.
 The blob opens with a tag (`LPB1`, `PHYSICS_BLOB_VERSION`, the rapier pin's version string): any
 field change in `SnapshotOwned` or a type it holds bumps the version, and `from_bytes` refuses a
-blob of another version or pin (`Decode`, `L3033`). An untagged blob (every keyframe recorded
-before the tag) still decodes while `ACCEPT_UNTAGGED_BLOB` is on. The version rides the replay
+blob of another version or pin (`Decode`, `L3033`). An untagged blob (a keyframe recorded
+before the tag) is refused (`Decode`). The version rides the replay
 content hash; the pin does not. A
 game edit is detected by comparing a component against **the exact bits the component read back
 after the mirror last wrote it** (a lossy pose type, `Transform`'s Euler degrees, reports different

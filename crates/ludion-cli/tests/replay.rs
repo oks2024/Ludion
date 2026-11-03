@@ -253,3 +253,21 @@ fn record_replaces_the_target_and_leaves_no_staging_file() {
         String::from_utf8_lossy(&replay.stderr)
     );
 }
+
+/// A replay recorded before the content hash existed refuses with a readable `L3010` that says it
+/// is a format drift, not a determinism failure.
+#[test]
+fn a_replay_that_predates_the_content_hash_is_refused() {
+    let old = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../ludion-protocol/tests/fixtures/vigil-stress.lrp");
+    let output = run_ludion(&["replay", old.to_str().unwrap()]);
+    assert!(!output.status.success(), "an old replay must be refused");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for needle in [
+        "error[L3010]",
+        "predates the replay content hash",
+        "not a determinism failure",
+    ] {
+        assert!(stderr.contains(needle), "missing {needle:?} in: {stderr}");
+    }
+}

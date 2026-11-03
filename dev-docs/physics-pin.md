@@ -76,7 +76,7 @@ on MOVED re-records the five committed traces and re-runs the gates (PASS: nothi
 blessed). The replay tests then pass — they re-derive from scene, seed and inputs and compare hashes to the
 trace, never bytes to the `.lrp` — but `examples/gallery/physics-stress.lrp` and
 `examples/gallery/ragdoll.lrp` still hold the old pin's physics blob in their keyframes and are stale until
-step 5 re-records them (the run lists them). A blob names its pin (`rapier3d::VERSION`), so a stale keyframe blob is refused at decode (`L3033`) once untagged blobs are no longer accepted; the pin stays out of the replay content hash so the gates can run across the move.
+step 5 re-records them (the run lists them). A blob names its pin (`rapier3d::VERSION`), so a stale keyframe blob is refused at decode (`L3033`); the pin stays out of the replay content hash so the gates can run across the move.
 Carry the candidate pin and traces to the second machine and run the script there with no flags — green is
 the cross-arch check. Only then step 5.
 

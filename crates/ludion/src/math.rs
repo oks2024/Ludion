@@ -153,7 +153,6 @@ pub struct Ray {
 /// .unwrap();
 /// assert!(ray.dir[1] < 0.0); // pointing at the ground
 /// ```
-#[allow(clippy::disallowed_methods)] // Mat4::inverse's dot4 order differs SSE2 vs NEON; mat4_inverse would change committed replay bits, so it must ride a replay re-record
 pub fn camera_ray(
     cam_translation: [f32; 3],
     cam_rotation_deg: [f32; 3],
@@ -172,7 +171,7 @@ pub fn camera_ray(
         far,
         viewport,
     )?;
-    let inv = view_proj.inverse();
+    let inv = math::mat4_inverse(view_proj);
     if !inv.is_finite() {
         return None;
     }
@@ -287,7 +286,6 @@ pub fn ray_ground_plane(ray: &Ray) -> Option<[f32; 2]> {
 
 /// Builds the view·projection matrix, or `None` on a degenerate viewport/projection. Shared by
 /// [`camera_ray`] and its round-trip parity test — the one place the deterministic camera is assembled.
-#[allow(clippy::disallowed_methods)] // Mat4::inverse's dot4 order differs SSE2 vs NEON; mat4_inverse would change committed replay bits, so it must ride a replay re-record
 fn view_proj_matrix(
     cam_translation: [f32; 3],
     cam_rotation_deg: [f32; 3],
@@ -304,7 +302,7 @@ fn view_proj_matrix(
 
     let quat = Quat::from_array(euler_xyz_degrees_to_quat(cam_rotation_deg));
     let model = Mat4::from_rotation_translation(quat, Vec3::from_array(cam_translation));
-    let view = model.inverse();
+    let view = math::mat4_inverse(model);
     let proj = build_projection(projection, aspect, near, far)?;
 
     let view_proj = proj * view;

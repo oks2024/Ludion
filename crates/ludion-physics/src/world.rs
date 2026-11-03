@@ -305,9 +305,6 @@ const PHYSICS_BLOB_MAGIC: [u8; 4] = *b"LPB1";
 /// at another version is refused rather than decoded positionally into the wrong shape.
 pub const PHYSICS_BLOB_VERSION: u32 = 1;
 
-/// Whether a blob without the tag still decodes (every keyframe recorded before the tag existed).
-const ACCEPT_UNTAGGED_BLOB: bool = true;
-
 /// The snapshot as written. Borrowed, because the solver state is not `Clone`.
 #[derive(Serialize)]
 struct SnapshotRef<'a> {
@@ -1263,27 +1260,15 @@ impl PhysicsWorld {
     /// taken from `tick_rate`, not from the bytes, so a session restores at the rate it runs at.
     ///
     /// # Errors
-    /// [`PhysicsError::Decode`] for a truncated or trailing-byte blob, or one tagged with another
-    /// blob version or solver pin.
+    /// [`PhysicsError::Decode`] for a truncated or trailing-byte blob, one tagged with another
+    /// blob version or solver pin, or one with no tag at all (it predates the version tag).
     pub fn from_bytes(bytes: &[u8], tick_rate: TickRate) -> Result<Self, PhysicsError> {
-        Self::decode(bytes, tick_rate, ACCEPT_UNTAGGED_BLOB)
-    }
-
-    /// [`from_bytes`](PhysicsWorld::from_bytes) with the untagged-blob switch explicit.
-    fn decode(
-        bytes: &[u8],
-        tick_rate: TickRate,
-        accept_untagged: bool,
-    ) -> Result<Self, PhysicsError> {
-        let body = match bytes.strip_prefix(&PHYSICS_BLOB_MAGIC) {
-            Some(rest) => check_blob_tag(rest)?,
-            None if accept_untagged => bytes,
-            None => {
-                return Err(PhysicsError::Decode(
-                    "the blob carries no version tag".to_string(),
-                ));
-            }
+        let Some(rest) = bytes.strip_prefix(&PHYSICS_BLOB_MAGIC) else {
+            return Err(PhysicsError::Decode(
+                "the blob carries no version tag: it predates the version tag".to_string(),
+            ));
         };
+        let body = check_blob_tag(rest)?;
         // `bincode::deserialize` is this chain plus `allow_trailing_bytes`; a blob with a tail is corrupt.
         let snapshot: SnapshotOwned = bincode::DefaultOptions::new()
             .with_fixint_encoding()
@@ -2931,14 +2916,14 @@ mod tests {
     }
 
     #[test]
-    fn an_untagged_blob_decodes_only_while_accepted() {
+    fn an_untagged_blob_is_refused() {
         let bytes = tagged_blob();
         let untagged = &bytes[pin_offset() + rapier3d::VERSION.len()..];
-        assert!(PhysicsWorld::decode(untagged, TickRate::DEFAULT, true).is_ok());
-        assert!(matches!(
-            PhysicsWorld::decode(untagged, TickRate::DEFAULT, false),
-            Err(PhysicsError::Decode(_))
-        ));
+        let Err(PhysicsError::Decode(why)) = PhysicsWorld::from_bytes(untagged, TickRate::DEFAULT)
+        else {
+            panic!("an untagged blob must be refused");
+        };
+        assert!(why.contains("predates the version tag"), "{why}");
     }
 
     #[test]

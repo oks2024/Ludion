@@ -19,9 +19,9 @@ use std::path::Path;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::FrameIndex;
+use ludion_protocol::Command;
 use ludion_protocol::command::{InputInjectParams, RenderSizeParams, SimStepParams};
 use ludion_protocol::replay::{ReplayHeader, ReplayReader, ReplayRecord, SceneRef};
-use ludion_protocol::{Command, WireHash};
 use ludion_sim::WorldHash;
 use serde_json::Value;
 
@@ -297,8 +297,8 @@ fn run_actions(
 ///
 /// # Errors
 /// - `L3010`/`L3011` if the replay bytes are malformed (from [`ReplayReader`]).
-/// - `L3010` if the replay was written by an incompatible protocol version (and, once the gate is
-///   armed, a changed schema or replay content hash).
+/// - `L3010` if the replay was written by an incompatible protocol version, or carries a changed
+///   schema hash, a changed or absent replay content hash.
 /// - `L3013` if the header names a scene by path that cannot be loaded under `project_root`.
 /// - Any scene-load or dispatch diagnostic encountered while replaying.
 pub fn replay_hashes(
@@ -328,18 +328,7 @@ pub fn replay_hashes_with(
     project_root: impl AsRef<Path>,
 ) -> Result<Vec<(FrameIndex, WorldHash)>, Diagnostic> {
     let (mut engine, actions) = prepare_replay(builder, bytes, project_root, Keyframes::Skip)?;
-    let trace = drive_actions(&mut engine, actions)?;
-    // Dumps each replayed trace for a before/after comparison across a format migration.
-    if let Some(dir) = std::env::var_os("LUDION_REPLAY_TRACE_DIR") {
-        let name = format!("{}-{}.trace", bytes.len(), WireHash::of_bytes(bytes));
-        let body: String = trace
-            .iter()
-            .map(|(f, h)| format!("{} {h}\n", f.as_u64()))
-            .collect();
-        let path = Path::new(&dir).join(name);
-        ludion_core::atomic::write_atomic(&path, body).expect("trace dump");
-    }
-    Ok(trace)
+    drive_actions(&mut engine, actions)
 }
 
 /// Drives a recorded session against a *game* engine, calling `on_frame` at every settled frame, and

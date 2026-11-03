@@ -98,8 +98,7 @@ different hashes: `schema::replay_schema_hash()` (the same schema with `descript
 and `replay_content_hash` (`ludion_engine::replay_content_hash()`: the record schema, the input events
 and the snapshot document, prose stripped). So a doc-only edit re-pins the wire snapshot but never
 the `.lrp` corpus; a new param, command, response field or snapshot field moves the replay hashes and
-re-records. The refusal (`L3010`) is built but unarmed (`REPLAY_GATE_ARMED`): until it is armed only
-`protocol_version` is enforced.
+re-records. A stale hash, an absent content hash or another `protocol_version` refuses with `L3010`.
 
 ## Verify
 
@@ -127,7 +126,7 @@ skipped) fails CI rather than shipping a lie.
   and the constant disagreeing — caught by the snapshot test, never shipped.
 - **Replay recordings are hash-stamped, so they re-record last** whenever a schema (not only prose)
   moved. A doc-comment edit does not touch them. A session `.lrp` that predates the current hashes is
-  refused once the gate is armed; a header with no content hash is reported as old-format, not as a
+  refused; a header with no content hash is reported as old-format, not as a
   determinism failure.
 - **A v2 is not a bigger additive rev.** Renames/removals/semantic changes do not go through this
   checklist — they bump `PROTOCOL_VERSION`, and that is a deliberate project decision, not a routine

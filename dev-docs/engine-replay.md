@@ -47,9 +47,8 @@ once at stop (unless nothing was recorded since the last keyframe or the session
 panic), as seek targets for `ReplayReader::seek`. The closing keyframe is why `verify_replay_keyframes`
 checks a session's end, not only its last interval boundary.
 
-**Replay.** `replay_hashes(bytes, project_root)` rejects a mismatched protocol version (always) and, once
-`REPLAY_GATE_ARMED` is set in `replay_compat.rs`, an absent or stale replay content hash or
-description-stripped schema hash (all `L3010`; `compatibility` is the gate), loads the header's scene into a fresh engine, reseeds,
+**Replay.** `replay_hashes(bytes, project_root)` rejects a mismatched protocol version, an absent or stale replay content hash and a stale
+description-stripped schema hash (all `L3010`; `compatibility` in `replay_compat.rs` is the gate), loads the header's scene into a fresh engine, reseeds,
 reconstructs the command list from the delta records (keyframes kept as inert actions — a linear replay
 replays, it does not seek), and feeds it to `drive_actions`, after installing the scene-switch text map (always, even empty, so a replay never reads a switch target off disk), which decomposes each `sim.step` into single ticks so
 the returned `(FrameIndex, WorldHash)` trace samples every tick boundary. Live session and replay run

@@ -5,8 +5,8 @@
 //! prose stripped, so a doc-comment edit never invalidates a recording but a new field does. The
 //! header also carries the description-stripped wire hash ([`schema::replay_schema_hash`]).
 //!
-//! The gate is built but unarmed ([`REPLAY_GATE_ARMED`]): only `protocol_version` is enforced until
-//! the corpus carries content hashes.
+//! The gate refuses a replay whose protocol version, content hash or wire schema hash differs from
+//! this engine's, or whose header carries no content hash, all as `L3010`.
 
 use std::sync::OnceLock;
 
@@ -16,10 +16,6 @@ use ludion_protocol::replay::ReplayHeader;
 use ludion_protocol::{PROTOCOL_VERSION, WireHash, schema};
 use ludion_sim::InputEvent;
 use serde_json::json;
-
-/// Whether a stale schema or content hash refuses a replay. While `false`, only a
-/// `protocol_version` mismatch does.
-const REPLAY_GATE_ARMED: bool = false;
 
 /// The hash of everything a replay holds: record schema, input event schema and snapshot document
 /// schema, prose stripped. Cached: the schemas are fixed for the process.
@@ -48,19 +44,13 @@ fn content_schema() -> serde_json::Value {
 
 /// Rejects a replay this engine cannot trust to reproduce: see [`compatibility`].
 pub(crate) fn check_compatible(header: &ReplayHeader) -> Result<(), Diagnostic> {
-    compatibility(
-        header,
-        REPLAY_GATE_ARMED,
-        schema::replay_schema_hash(),
-        replay_content_hash(),
-    )
+    compatibility(header, schema::replay_schema_hash(), replay_content_hash())
 }
 
-/// The gate. A `protocol_version` mismatch always refuses. When `armed`, an absent content hash, a
-/// content-hash mismatch or a schema-hash mismatch refuse too, all as `L3010`.
+/// The gate. A `protocol_version` mismatch, an absent content hash, a content-hash mismatch or a
+/// schema-hash mismatch refuses, all as `L3010`.
 fn compatibility(
     header: &ReplayHeader,
-    armed: bool,
     schema_hash: WireHash,
     content_hash: WireHash,
 ) -> Result<(), Diagnostic> {
@@ -76,9 +66,6 @@ fn compatibility(
             ),
         )
         .with_help(RERECORD));
-    }
-    if !armed {
-        return Ok(());
     }
     let Some(recorded) = header.replay_content_hash else {
         return Err(Diagnostic::new(
@@ -138,53 +125,31 @@ mod tests {
         }
     }
 
-    fn check(h: &ReplayHeader, armed: bool) -> Result<(), Diagnostic> {
-        compatibility(
-            h,
-            armed,
-            schema::replay_schema_hash(),
-            replay_content_hash(),
-        )
+    fn check(h: &ReplayHeader) -> Result<(), Diagnostic> {
+        compatibility(h, schema::replay_schema_hash(), replay_content_hash())
     }
 
     #[test]
-    fn matching_header_passes_armed() {
-        assert!(check(&header(), true).is_ok());
+    fn matching_header_passes() {
+        assert!(check(&header()).is_ok());
     }
 
     #[test]
-    fn protocol_mismatch_refuses_even_unarmed() {
+    fn protocol_mismatch_refuses() {
         let h = ReplayHeader {
             protocol_version: PROTOCOL_VERSION + 1,
             ..header()
         };
-        for armed in [false, true] {
-            assert_eq!(check(&h, armed).unwrap_err().code, code::REPLAY_FORMAT);
-        }
+        assert_eq!(check(&h).unwrap_err().code, code::REPLAY_FORMAT);
     }
 
     #[test]
-    fn unarmed_accepts_stale_hashes_and_absent_content_hash() {
-        let h = ReplayHeader {
-            schema_hash: WireHash::from_u64(1),
-            replay_content_hash: Some(WireHash::from_u64(2)),
-            ..header()
-        };
-        assert!(check(&h, false).is_ok());
-        let h = ReplayHeader {
-            replay_content_hash: None,
-            ..header()
-        };
-        assert!(check(&h, false).is_ok());
-    }
-
-    #[test]
-    fn armed_refuses_each_arm_with_its_own_message() {
+    fn each_arm_refuses_with_its_own_message() {
         let absent = ReplayHeader {
             replay_content_hash: None,
             ..header()
         };
-        let message = check(&absent, true).unwrap_err().message;
+        let message = check(&absent).unwrap_err().message;
         assert!(
             message.contains("predates the replay content hash"),
             "{message}"
@@ -195,7 +160,7 @@ mod tests {
             replay_content_hash: Some(WireHash::from_u64(2)),
             ..header()
         };
-        let message = check(&content, true).unwrap_err().message;
+        let message = check(&content).unwrap_err().message;
         assert!(
             message.contains("content hash")
                 && message.contains(&replay_content_hash().to_string())
@@ -205,7 +170,7 @@ mod tests {
             schema_hash: WireHash::from_u64(1),
             ..header()
         };
-        let message = check(&wire, true).unwrap_err().message;
+        let message = check(&wire).unwrap_err().message;
         assert!(
             message.contains("wire schema") && message.contains(&WireHash::from_u64(1).to_string())
         );
@@ -239,14 +204,14 @@ mod tests {
     }
 
     #[test]
-    fn old_format_fixture_gets_the_old_format_message_once_armed() {
+    fn old_format_fixture_gets_the_old_format_message() {
         let bytes = std::fs::read(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../ludion-protocol/tests/fixtures/vigil-stress.lrp"
         ))
         .expect("the committed old-header fixture");
         let reader = ReplayReader::new(&bytes).expect("the fixture decodes");
-        let error = check(reader.header(), true).unwrap_err();
+        let error = check(reader.header()).unwrap_err();
         assert!(
             error.message.contains("predates the replay content hash"),
             "{}",

@@ -152,14 +152,14 @@ fn header() -> ReplayHeader {
         format_version: REPLAY_FORMAT_VERSION,
         engine_version: "0.0.0".into(),
         protocol_version: PROTOCOL_VERSION,
-        schema_hash: schema::schema_hash(),
+        schema_hash: schema::replay_schema_hash(),
         scene: SceneRef::Inline {
             document: SCENE.into(),
         },
         seed: 1,
         profile: None,
         render_extent: None,
-        replay_content_hash: None,
+        replay_content_hash: Some(ludion_engine::replay_content_hash()),
     }
 }
 
