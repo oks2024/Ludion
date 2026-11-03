@@ -1,0 +1,245 @@
+//! Replay compatibility: the content hash a replay header records, and the gate that compares it.
+//!
+//! A replay holds three schemas beyond the wire: its record shape (every [`Command`] it embeds), the
+//! input events, and the keyframe snapshot document. [`replay_content_hash`] covers all three, with
+//! prose stripped, so a doc-comment edit never invalidates a recording but a new field does. The
+//! header also carries the description-stripped wire hash ([`schema::replay_schema_hash`]).
+//!
+//! The gate is built but unarmed ([`REPLAY_GATE_ARMED`]): only `protocol_version` is enforced until
+//! the corpus carries content hashes.
+
+use std::sync::OnceLock;
+
+use ludion_core::codes::code;
+use ludion_core::diagnostics::Diagnostic;
+use ludion_protocol::replay::ReplayHeader;
+use ludion_protocol::{PROTOCOL_VERSION, WireHash, schema};
+use ludion_sim::InputEvent;
+use serde_json::json;
+
+/// Whether a stale schema or content hash refuses a replay. While `false`, only a
+/// `protocol_version` mismatch does.
+const REPLAY_GATE_ARMED: bool = false;
+
+/// The hash of everything a replay holds: record schema, input event schema and snapshot document
+/// schema, prose stripped. Cached: the schemas are fixed for the process.
+///
+/// # Example
+/// ```
+/// let hash = ludion_engine::replay_content_hash();
+/// assert_eq!(hash, ludion_engine::replay_content_hash());
+/// ```
+pub fn replay_content_hash() -> WireHash {
+    static HASH: OnceLock<WireHash> = OnceLock::new();
+    *HASH.get_or_init(|| schema::canonical_hash(&schema::strip_prose(content_schema())))
+}
+
+/// The unhashed document [`replay_content_hash`] covers.
+fn content_schema() -> serde_json::Value {
+    json!({
+        "record": schema::replay_record_schema(),
+        "input_event": schema::schema_of::<InputEvent>(),
+        "snapshot": crate::snapshot::snapshot_schema(),
+    })
+}
+
+/// Rejects a replay this engine cannot trust to reproduce: see [`compatibility`].
+pub(crate) fn check_compatible(header: &ReplayHeader) -> Result<(), Diagnostic> {
+    compatibility(
+        header,
+        REPLAY_GATE_ARMED,
+        schema::replay_schema_hash(),
+        replay_content_hash(),
+    )
+}
+
+/// The gate. A `protocol_version` mismatch always refuses. When `armed`, an absent content hash, a
+/// content-hash mismatch or a schema-hash mismatch refuse too, all as `L3010`.
+fn compatibility(
+    header: &ReplayHeader,
+    armed: bool,
+    schema_hash: WireHash,
+    content_hash: WireHash,
+) -> Result<(), Diagnostic> {
+    const RERECORD: &str = "re-record the session with this engine build: run the owning test \
+                            with LUDION_BLESS=1, or record again with --record";
+    if header.protocol_version != PROTOCOL_VERSION {
+        return Err(Diagnostic::new(
+            code::REPLAY_FORMAT,
+            format!(
+                "replay was recorded against protocol version {}, but this engine speaks \
+                 version {PROTOCOL_VERSION}",
+                header.protocol_version
+            ),
+        )
+        .with_help(RERECORD));
+    }
+    if !armed {
+        return Ok(());
+    }
+    let Some(recorded) = header.replay_content_hash else {
+        return Err(Diagnostic::new(
+            code::REPLAY_FORMAT,
+            format!(
+                "replay (engine {}) predates the replay content hash, so this engine cannot tell \
+                 whether its records and snapshots still decode as recorded; this is not a \
+                 determinism failure",
+                header.engine_version
+            ),
+        )
+        .with_help(RERECORD));
+    };
+    if recorded != content_hash {
+        return Err(Diagnostic::new(
+            code::REPLAY_FORMAT,
+            format!(
+                "replay content hash {recorded} differs from this engine's {content_hash}: the \
+                 record schema, the input events or the snapshot document changed since \
+                 recording (engine {})",
+                header.engine_version
+            ),
+        )
+        .with_help(RERECORD));
+    }
+    if header.schema_hash != schema_hash {
+        return Err(Diagnostic::new(
+            code::REPLAY_FORMAT,
+            format!(
+                "replay was recorded against wire schema {}, but this engine speaks {schema_hash}",
+                header.schema_hash
+            ),
+        )
+        .with_help(RERECORD));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ludion_protocol::replay::{ReplayReader, SceneRef};
+
+    fn header() -> ReplayHeader {
+        ReplayHeader {
+            format_version: ludion_protocol::replay::REPLAY_FORMAT_VERSION,
+            engine_version: "0.0.0".into(),
+            protocol_version: PROTOCOL_VERSION,
+            schema_hash: schema::replay_schema_hash(),
+            scene: SceneRef::Inline {
+                document: String::new(),
+            },
+            seed: 1,
+            profile: None,
+            render_extent: None,
+            replay_content_hash: Some(replay_content_hash()),
+        }
+    }
+
+    fn check(h: &ReplayHeader, armed: bool) -> Result<(), Diagnostic> {
+        compatibility(
+            h,
+            armed,
+            schema::replay_schema_hash(),
+            replay_content_hash(),
+        )
+    }
+
+    #[test]
+    fn matching_header_passes_armed() {
+        assert!(check(&header(), true).is_ok());
+    }
+
+    #[test]
+    fn protocol_mismatch_refuses_even_unarmed() {
+        let h = ReplayHeader {
+            protocol_version: PROTOCOL_VERSION + 1,
+            ..header()
+        };
+        for armed in [false, true] {
+            assert_eq!(check(&h, armed).unwrap_err().code, code::REPLAY_FORMAT);
+        }
+    }
+
+    #[test]
+    fn unarmed_accepts_stale_hashes_and_absent_content_hash() {
+        let h = ReplayHeader {
+            schema_hash: WireHash::from_u64(1),
+            replay_content_hash: Some(WireHash::from_u64(2)),
+            ..header()
+        };
+        assert!(check(&h, false).is_ok());
+        let h = ReplayHeader {
+            replay_content_hash: None,
+            ..header()
+        };
+        assert!(check(&h, false).is_ok());
+    }
+
+    #[test]
+    fn armed_refuses_each_arm_with_its_own_message() {
+        let absent = ReplayHeader {
+            replay_content_hash: None,
+            ..header()
+        };
+        let message = check(&absent, true).unwrap_err().message;
+        assert!(
+            message.contains("predates the replay content hash"),
+            "{message}"
+        );
+        assert!(message.contains("0.0.0") && message.contains("not a determinism failure"));
+
+        let content = ReplayHeader {
+            replay_content_hash: Some(WireHash::from_u64(2)),
+            ..header()
+        };
+        let message = check(&content, true).unwrap_err().message;
+        assert!(
+            message.contains("content hash")
+                && message.contains(&replay_content_hash().to_string())
+        );
+
+        let wire = ReplayHeader {
+            schema_hash: WireHash::from_u64(1),
+            ..header()
+        };
+        let message = check(&wire, true).unwrap_err().message;
+        assert!(
+            message.contains("wire schema") && message.contains(&WireHash::from_u64(1).to_string())
+        );
+    }
+
+    #[test]
+    fn content_covers_snapshot_applied_and_input_events() {
+        let document = content_schema();
+        let text = document["snapshot"].to_string();
+        assert!(
+            text.contains("\"applied\""),
+            "DocReloadDoc.applied must be covered"
+        );
+        assert!(document["input_event"].to_string().contains("\"Left\""));
+    }
+
+    #[test]
+    fn a_fresh_recording_carries_the_stripped_hash_and_content_hash() {
+        let engine = crate::Engine::new();
+        let header = engine.replay_header();
+        assert_eq!(header.schema_hash, schema::replay_schema_hash());
+        assert_eq!(header.replay_content_hash, Some(replay_content_hash()));
+    }
+
+    #[test]
+    fn old_format_fixture_gets_the_old_format_message_once_armed() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ludion-protocol/tests/fixtures/vigil-stress.lrp"
+        ))
+        .expect("the committed old-header fixture");
+        let reader = ReplayReader::new(&bytes).expect("the fixture decodes");
+        let error = check(reader.header(), true).unwrap_err();
+        assert!(
+            error.message.contains("predates the replay content hash"),
+            "{}",
+            error.message
+        );
+    }
+}

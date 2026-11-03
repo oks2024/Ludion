@@ -15,14 +15,12 @@ ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
 # Lets `WorldHash` drive its canonical encoder over a registry component directly, instead of
 # materializing (and dropping) a `serde_json::Value` tree per component per frame.
 erased-serde.workspace = true
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 xxhash-rust.workspace = true
 
 [dev-dependencies]
-# The determinism suite defines its own components, which must derive the same
-# trait bundle a real game component would.
-schemars.workspace = true
 # Phase 13 (E2 input) Wave 2's round-trip test proves the bit-exact f32 encoding
 # (crates/ludion-sim/src/input.rs's `f32_bits`/`f32x2_bits`) through the *real* replay path
 # (InputEvent -> Value -> ReplayWriter -> ReplayReader -> InputEvent). `ludion-protocol` must

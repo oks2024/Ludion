@@ -14,6 +14,7 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The most entity slots a world can hold — an engine limit, enforced by `EntityAllocator::alloc`
@@ -89,7 +90,7 @@ struct Slot {
 /// is not observable world state, per the determinism contract.
 ///
 /// [`World::restore_entities`]: crate::World::restore_entities
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AllocatorState {
     /// Generation of each slot, indexed by slot; length is the total slot count (including trailing
     /// free slots that the live set would otherwise drop).

@@ -8,6 +8,7 @@
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Whether the driver may perform ticks.
@@ -24,7 +25,7 @@ use serde::{Deserialize, Serialize};
 /// let json = serde_json::to_value(&s).unwrap();
 /// assert_eq!(json, serde_json::json!({"state": "stepping", "remaining": 3}));
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum RunState {
     /// Tick freely (a live scheduler paces ticks by wall clock × [`Speed`]; headless callers tick

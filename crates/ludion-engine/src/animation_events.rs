@@ -68,6 +68,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::{FrameIndex, SimTime};
 use ludion_ecs::{SystemCtx, World};
 use ludion_scene::AnimationEvent;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{Animation, Mesh, MeshSource, Sprite};
@@ -187,7 +188,7 @@ impl AnimationLibrary {
 /// Where the last [`animation_events`] walk stopped, per playing clip, so the next walk resumes
 /// exactly there (module docs, "Where a walk starts"). A world resource, never hashed; it rides a
 /// snapshot so a restore resumes the same walk.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct AnimationWalk {
     /// The gameplay tick the walk ran at.
     pub tick: u64,
@@ -196,7 +197,7 @@ pub(crate) struct AnimationWalk {
 }
 
 /// One clip [`AnimationWalk`] reached: `t` is the binding-scaled clip time the walk ended at.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct WalkedClip {
     pub entity: EntityId,
     pub clip: String,

@@ -33,6 +33,7 @@ fn header() -> ReplayHeader {
         seed: 1,
         profile: None,
         render_extent: None,
+        replay_content_hash: None,
     }
 }
 

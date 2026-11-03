@@ -17,6 +17,7 @@ use ludion_core::collections::StableSet;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math;
 use ludion_core::time::FrameIndex;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A key on the keyboard, as an abstract, layout-independent name.
@@ -31,7 +32,9 @@ use serde::{Deserialize, Serialize};
 /// use ludion_sim::Key;
 /// assert_eq!(serde_json::to_string(&Key::Left).unwrap(), "\"Left\"");
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize, JsonSchema,
+)]
 pub enum Key {
     /// The `A` key.
     A,
@@ -130,7 +133,9 @@ pub enum Key {
 /// A mouse button, as an abstract name. The serde form is `snake_case`
 /// (`"left"`, `"right"`, `"middle"`) — deliberately distinct from [`Key`]'s bare-variant-name form,
 /// since these are new surface with no shipped-format compatibility to preserve.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum MouseButton {
     /// The primary (usually left) button.
@@ -144,7 +149,9 @@ pub enum MouseButton {
 /// A gamepad button, as an abstract, layout-independent name (the SDL/standard face, shoulder,
 /// d-pad, stick-click, start/select set). Face buttons are named by position (`South`/`East`/
 /// `West`/`North`), not by any one controller brand's letter, since the mapping is layout-agnostic.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum GamepadButton {
     /// The bottom face button (Xbox `A`, PlayStation ✕).
@@ -237,7 +244,9 @@ fn invalid_input(message: String) -> Diagnostic {
 
 /// A gamepad analog axis, as an abstract name. Each [`InputEvent::GamepadAxis`] names one of
 /// these and carries its new level value — one generic event rather than six per-axis variants.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum GamepadAxis {
     /// The left stick's horizontal axis, in `[-1, 1]`.
@@ -312,7 +321,7 @@ mod f32x2_bits {
 /// let json = serde_json::to_value(&event).unwrap();
 /// assert_eq!(json, serde_json::json!({"kind": "key_down", "key": "W"}));
 /// ```
-#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InputEvent {
     /// A key transitioned (or was reasserted) down.
@@ -329,6 +338,7 @@ pub enum InputEvent {
     MouseMove {
         /// The new position.
         #[serde(rename = "position_bits", with = "f32x2_bits")]
+        #[schemars(with = "[u32; 2]")]
         position: [f32; 2],
     },
     /// A mouse button transitioned (or was reasserted) down.
@@ -346,6 +356,7 @@ pub enum InputEvent {
     MouseWheel {
         /// The wheel delta to accumulate.
         #[serde(rename = "delta_bits", with = "f32x2_bits")]
+        #[schemars(with = "[u32; 2]")]
         delta: [f32; 2],
     },
     /// A gamepad analog axis was set to a new level value.
@@ -354,6 +365,7 @@ pub enum InputEvent {
         axis: GamepadAxis,
         /// The new value.
         #[serde(rename = "value_bits", with = "f32_bits")]
+        #[schemars(with = "u32")]
         value: f32,
     },
     /// A gamepad button transitioned (or was reasserted) down. A trigger button sets that
@@ -370,7 +382,7 @@ pub enum InputEvent {
 }
 
 /// One scripted input: an [`InputEvent`] addressed to the [`FrameIndex`] at which it applies.
-#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ScriptedInput {
     /// The frame at whose tick boundary the event applies (before that frame's systems run).
     pub frame: FrameIndex,
@@ -402,8 +414,9 @@ pub struct ScriptedInput {
 /// let back: InputScript = serde_json::from_str(&json).unwrap();
 /// assert_eq!(script, back);
 /// ```
-#[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(from = "Vec<ScriptedInput>", into = "Vec<ScriptedInput>")]
+#[schemars(with = "Vec<ScriptedInput>")]
 pub struct InputScript {
     events: Vec<ScriptedInput>,
 }
@@ -472,15 +485,20 @@ impl From<InputScript> for Vec<ScriptedInput> {
 /// one-frame edges. [`wheel`](MouseState::wheel) accumulates every [`InputEvent::MouseWheel`]
 /// delta applied this frame and resets to zero on the next [`InputState::begin_tick`] — it reads
 /// like an edge (this frame's motion only), not a level.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct MouseState {
     #[serde(with = "f32x2_bits")]
+    #[schemars(with = "[u32; 2]")]
     position: [f32; 2],
+    #[schemars(with = "Vec<MouseButton>")]
     held: StableSet<MouseButton>,
+    #[schemars(with = "Vec<MouseButton>")]
     pressed: StableSet<MouseButton>,
+    #[schemars(with = "Vec<MouseButton>")]
     released: StableSet<MouseButton>,
     #[serde(with = "f32x2_bits")]
+    #[schemars(with = "[u32; 2]")]
     wheel: [f32; 2],
 }
 
@@ -540,19 +558,26 @@ impl MouseState {
 /// set by [`InputEvent::GamepadAxis`]); buttons follow the same held/pressed/released edge rules
 /// as keys. Each trigger also drives a button ([`GamepadButton::LeftTrigger`] /
 /// [`GamepadButton::RightTrigger`]), held while its level is at or past [`TRIGGER_THRESHOLD`].
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct GamepadState {
     #[serde(with = "f32x2_bits")]
+    #[schemars(with = "[u32; 2]")]
     left_stick: [f32; 2],
     #[serde(with = "f32x2_bits")]
+    #[schemars(with = "[u32; 2]")]
     right_stick: [f32; 2],
     #[serde(with = "f32_bits")]
+    #[schemars(with = "u32")]
     left_trigger: f32,
     #[serde(with = "f32_bits")]
+    #[schemars(with = "u32")]
     right_trigger: f32,
+    #[schemars(with = "Vec<GamepadButton>")]
     held: StableSet<GamepadButton>,
+    #[schemars(with = "Vec<GamepadButton>")]
     pressed: StableSet<GamepadButton>,
+    #[schemars(with = "Vec<GamepadButton>")]
     released: StableSet<GamepadButton>,
 }
 
@@ -726,11 +751,14 @@ pub struct Action {
 /// assert!(input.is_held(Key::Space));
 /// assert!(!input.was_pressed(Key::Space));
 /// ```
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct InputState {
+    #[schemars(with = "Vec<Key>")]
     held: StableSet<Key>,
+    #[schemars(with = "Vec<Key>")]
     pressed: StableSet<Key>,
+    #[schemars(with = "Vec<Key>")]
     released: StableSet<Key>,
     mouse: MouseState,
     gamepad: GamepadState,

@@ -83,18 +83,23 @@ replay re-record is last for a reason**:
    snapshot into `protocol.d.ts` and the schema hash the editor compares at connect
    (`editor/app/src/protocol/schemaHash.ts`); CI byte-compares each regenerated file against the
    committed one.
-5. **Re-record the `run.lrp` replays last.** A replay's `ReplayHeader` pins the `schema_hash` **at
-   record time**, so any committed session recording must be re-recorded *after* the hash is final —
-   do it first and it bakes in the old hash and the drift gate fails.
+5. **Re-record the `run.lrp` replays last.** A replay's `ReplayHeader` pins two hashes **at record
+   time** (see "Two hashes" below), so any committed session recording must be re-recorded *after*
+   they are final — do it first and it bakes in the old hashes and the replay gate refuses it.
 
 This is one reviewed, atomic commit touching all five surfaces together (`command.rs`,
 `protocol_schema.snapshot.json`, `schema_snapshot.rs`, `protocol.d.ts`, `games/*/run.lrp`) — verified
 against the two Phase 6 additive revs, which each changed exactly that set.
 
-**Comment edits move the hash too.** Doc comments on wire types become schemars `description` strings
-in the exported schema, so an edit to a `///` comment on a `Command` variant or a param field — with
-no code change at all — still fails the snapshot test until you re-bless. This is working as intended:
-the hash covers everything a generated client can see, prose included.
+**Two hashes.** `schema::schema_hash()` (handshake, `engine.describe`, the editor's `schemaHash.ts`,
+the snapshot test) covers everything a generated client sees, prose included: a `///` edit on a
+`Command` variant or param still fails the snapshot test until you re-bless. A replay header records
+different hashes: `schema::replay_schema_hash()` (the same schema with `description`/`title` stripped)
+and `replay_content_hash` (`ludion_engine::replay_content_hash()`: the record schema, the input events
+and the snapshot document, prose stripped). So a doc-only edit re-pins the wire snapshot but never
+the `.lrp` corpus; a new param, command, response field or snapshot field moves the replay hashes and
+re-records. The refusal (`L3010`) is built but unarmed (`REPLAY_GATE_ARMED`): until it is armed only
+`protocol_version` is enforced.
 
 ## Verify
 
@@ -120,9 +125,10 @@ skipped) fails CI rather than shipping a lie.
 - **The re-bless is a two-file commit** (`protocol_schema.snapshot.json` + the hand-edited
   `EXPECTED_SCHEMA_HASH`); the bless writes only the first. Forgetting the hand-edit leaves the snapshot
   and the constant disagreeing — caught by the snapshot test, never shipped.
-- **Replay recordings are hash-stamped, so they re-record last, every time** — including when the only
-  change was a doc comment. If a session `.lrp` predates the current hash, its header pins the stale
-  value and the drift gate flags it.
+- **Replay recordings are hash-stamped, so they re-record last** whenever a schema (not only prose)
+  moved. A doc-comment edit does not touch them. A session `.lrp` that predates the current hashes is
+  refused once the gate is armed; a header with no content hash is reported as old-format, not as a
+  determinism failure.
 - **A v2 is not a bigger additive rev.** Renames/removals/semantic changes do not go through this
   checklist — they bump `PROTOCOL_VERSION`, and that is a deliberate project decision, not a routine
   re-bless.

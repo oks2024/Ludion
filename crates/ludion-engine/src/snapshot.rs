@@ -93,6 +93,7 @@ use ludion_protocol::restore::{RestoreEntry, RestoreReport};
 use ludion_scene::{SceneLayer, ScenePhysics, ScenePhysicsSpace, validate_physics};
 use ludion_sim::{DriverRestore, InputScript, InputState, RunState, Speed};
 use ludion_spatial::SpatialIndex;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -105,7 +106,7 @@ use crate::path_follow::{FollowerMotionEntry, FollowerMotions};
 const SNAPSHOT_FORMAT: u32 = 1;
 
 /// The full engine snapshot document (serde shape of the `snapshot` payload).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 struct SnapshotDoc {
     /// Format version marker ([`SNAPSHOT_FORMAT`]).
     format: u32,
@@ -253,13 +254,14 @@ struct SnapshotDoc {
     /// Top-level fields this build does not define, kept only so a restore can report them. Never
     /// written: capture leaves it empty, so the document stays byte-identical.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(skip)]
     unknown: BTreeMap<String, Value>,
 }
 
 /// The snapshot's `scene_physics` field: the serde shape of a loaded scene's `physics:` block
 /// ([`ScenePhysics`]), which carries no serde derive of its own (`ludion-scene` boundary rule —
 /// see the crate docs).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 struct ScenePhysicsDoc {
     space: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,7 +277,7 @@ struct ScenePhysicsDoc {
 }
 
 /// One `physics.layers` entry in the snapshot's `scene_physics` field.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 struct SceneLayerDoc {
     name: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -339,7 +341,7 @@ impl TryFrom<ScenePhysicsDoc> for ScenePhysics {
 /// times it was reloaded. `applied` is omitted when 1, so a session with no repeated reload
 /// serializes as it always did; an older snapshot may repeat a document, which the read folds
 /// (summed counts, last text).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 struct DocReloadDoc {
     kind: String,
     key: String,
@@ -358,7 +360,7 @@ fn is_one(n: &u64) -> bool {
 
 /// One scene's residue carried in a snapshot: the scene's `name:` key and the records captured the
 /// last time the session left it — the serde shape of one entry in the session's residue map.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 struct SceneResidueDoc {
     scene: String,
     /// The frame the session last left this scene on — the eviction key
@@ -380,7 +382,7 @@ fn is_frame_zero(frame: &u64) -> bool {
 /// One captured entity inside a [`SceneResidueDoc`]: its `Name` (the identity a return matches on) or
 /// none for an anonymous record, and its component bag as `(registered name, value)` minus `Name` —
 /// the same pair [`crate::transition`]'s `ResidueRecord` holds.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 struct ResidueRecordDoc {
     /// Absent for an anonymous record, so those serialize lean.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -407,7 +409,7 @@ fn is_false(flag: &bool) -> bool {
 }
 
 /// One live entity in a snapshot: its identity and its components (registry order).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 struct EntityDoc {
     /// The entity's storage slot index.
     index: u32,
@@ -415,6 +417,11 @@ struct EntityDoc {
     generation: u32,
     /// Component name → value, in registration order (`preserve_order` keeps insertion order).
     components: Map<String, Value>,
+}
+
+/// The JSON Schema of the snapshot document, which a replay header's content hash covers.
+pub(crate) fn snapshot_schema() -> Value {
+    ludion_protocol::schema::schema_of::<SnapshotDoc>()
 }
 
 /// Captures the engine's full state as a snapshot document.

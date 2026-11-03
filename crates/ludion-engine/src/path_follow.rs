@@ -32,6 +32,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::{euler_xyz_degrees_to_quat, quat_mul};
 use ludion_ecs::{Parent, Schedule, SystemCtx, World};
 use ludion_scene::{PathFrame, PathSampler};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -112,7 +113,7 @@ pub struct FollowerMotion {
 pub(crate) struct FollowerMotions(BTreeMap<EntityId, FollowerMotion>);
 
 /// One follower's carried [`FollowerMotion`], as a snapshot holds it.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct FollowerMotionEntry {
     entity: EntityId,
     s: f32,

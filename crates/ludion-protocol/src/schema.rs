@@ -77,8 +77,76 @@ pub fn schema_hash() -> WireHash {
     WireHash::of_bytes(schema_document().as_bytes())
 }
 
+/// Removes the prose keywords `description` and `title` from a JSON Schema value, recursively.
+///
+/// Only schema keywords go: under `properties`, `$defs`, `definitions`, `patternProperties` and
+/// `dependentSchemas` the keys are *names* (a parameter called `description` survives), and the
+/// instance data under `default`, `examples`, `const` and `enum` is never touched.
+pub fn strip_prose(value: Value) -> Value {
+    const NAME_MAPS: [&str; 5] = [
+        "properties",
+        "$defs",
+        "definitions",
+        "patternProperties",
+        "dependentSchemas",
+    ];
+    const DATA: [&str; 4] = ["default", "examples", "const", "enum"];
+    match value {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .filter(|(k, _)| k != "description" && k != "title")
+                .map(|(k, v)| {
+                    let v = if DATA.contains(&k.as_str()) {
+                        v
+                    } else if NAME_MAPS.contains(&k.as_str()) {
+                        match v {
+                            Value::Object(names) => Value::Object(
+                                names
+                                    .into_iter()
+                                    .map(|(n, s)| (n, strip_prose(s)))
+                                    .collect(),
+                            ),
+                            other => other,
+                        }
+                    } else {
+                        strip_prose(v)
+                    };
+                    (k, v)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(strip_prose).collect()),
+        other => other,
+    }
+}
+
+/// The XXH3-64 of a value's canonical (key-sorted, compact) JSON bytes.
+pub fn canonical_hash(value: &Value) -> WireHash {
+    let bytes =
+        serde_json::to_vec(&canonicalize(value.clone())).expect("a JSON value always serializes");
+    WireHash::of_bytes(&bytes)
+}
+
+/// The hash of the [`protocol_schema`] with its prose stripped: a doc-comment edit does not move it,
+/// a new field, command or response shape does. What a replay header records (`schema_hash`).
+///
+/// # Example
+/// ```
+/// let a = ludion_protocol::schema::replay_schema_hash();
+/// assert_eq!(a, ludion_protocol::schema::replay_schema_hash());
+/// ```
+pub fn replay_schema_hash() -> WireHash {
+    canonical_hash(&strip_prose(protocol_schema()))
+}
+
+/// The canonical JSON Schema of a [`ReplayRecord`](crate::replay::ReplayRecord), the wire half of a
+/// replay's content.
+pub fn replay_record_schema() -> Value {
+    canonicalize(schema_of::<crate::replay::ReplayRecord>())
+}
+
 /// The JSON Schema of `T` as a value.
-fn schema_of<T: JsonSchema>() -> Value {
+pub fn schema_of<T: JsonSchema>() -> Value {
     serde_json::to_value(schemars::schema_for!(T))
         .expect("a schemars JSON Schema always serializes to a JSON value")
 }
@@ -148,5 +216,42 @@ mod tests {
         ] {
             assert!(schema.get(section).is_some(), "missing section {section}");
         }
+    }
+
+    #[test]
+    fn strip_prose_keeps_names_and_data() {
+        let schema = serde_json::json!({
+            "title": "T", "description": "doc",
+            "properties": {
+                "description": {"description": "a param named description", "type": "string"},
+                "title": {"type": "string", "default": {"description": "kept"}}
+            }
+        });
+        let stripped = strip_prose(schema);
+        assert_eq!(
+            stripped,
+            serde_json::json!({
+                "properties": {
+                    "description": {"type": "string"},
+                    "title": {"type": "string", "default": {"description": "kept"}}
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn doc_only_difference_hashes_equal_and_new_property_differs() {
+        let a = serde_json::json!({"properties": {"x": {"type": "u32", "description": "one"}}});
+        let b = serde_json::json!({"properties": {"x": {"type": "u32", "description": "two"}}});
+        let c = serde_json::json!({"properties": {"x": {"type": "u32"}, "y": {"type": "u32"}}});
+        let h = |v: &Value| canonical_hash(&strip_prose(v.clone()));
+        assert_eq!(h(&a), h(&b));
+        assert_ne!(h(&a), h(&c));
+    }
+
+    #[test]
+    fn full_hash_still_sees_descriptions() {
+        assert!(schema_document().contains("\"description\""));
+        assert_eq!(replay_schema_hash(), replay_schema_hash());
     }
 }

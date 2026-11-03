@@ -10,6 +10,7 @@
 //! (architecture doc §2). Wall-clock time never appears in the sim; time reaches systems as
 //! [`FrameIndex`] / [`SimTime`] parameters.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The fixed simulation tick rate, in hertz.
@@ -85,7 +86,9 @@ impl Default for TickRate {
 /// assert_eq!(f.as_u64(), 0);
 /// assert_eq!(f.next().as_u64(), 1);
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize, JsonSchema,
+)]
 pub struct FrameIndex(pub u64);
 
 impl FrameIndex {
@@ -187,7 +190,7 @@ impl SimTime {
 /// assert!(!clock.advance());
 /// assert_eq!(clock.game_frame(FrameIndex::new(11)), FrameIndex::new(10));
 /// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct GameClock {
     /// Frames already folded out of gameplay time.
     #[serde(default)]

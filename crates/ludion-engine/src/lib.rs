@@ -91,6 +91,7 @@ mod render_settings;
 mod render_size;
 mod render_view;
 mod replay;
+mod replay_compat;
 mod residue_store;
 mod scene_check;
 mod scene_physics;
@@ -224,6 +225,7 @@ pub use replay::{
     ReplayFramesOutcome, ReplayFramesRequest, drive_hashes, replay_hashes, replay_hashes_with,
     replay_render_frames, replay_with,
 };
+pub use replay_compat::replay_content_hash;
 pub use residue_store::ResidueStore;
 pub use scene_check::{
     expand_scene, font_table_faults, prefab_singleton_diagnostics, scene_atlas_diagnostics,

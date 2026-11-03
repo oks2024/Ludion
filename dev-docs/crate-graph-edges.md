@@ -13,7 +13,7 @@ rules are `ludion devdocs crate-graph`; the clippy split that rides on this grap
 Actual in-workspace edges, from each member's `Cargo.toml` (arrow = depends on):
 
 ```
-ludion-core          → (none)                          [glam, libm, serde]
+ludion-core          → (none)                          [glam, libm, schemars, serde]
 ludion-ecs           → core                            [schemars, serde, serde_json]
 ludion-scene         → core, ecs                       [ryu, saphyr-parser, schemars, serde, serde_json]
 ludion-assets        → core                            [png, xxhash-rust, ktx2; watch†: notify, crossbeam-channel]
@@ -22,7 +22,7 @@ ludion-texgen        → core, scene                     [png, serde_json]
 ludion-font          → core, scene                     []
 ludion-camera        → core, ecs, scene                [schemars, serde, serde_json]
 ludion-components    → core, ecs, scene, spatial, physics, camera, sim  [schemars, serde, serde_json]
-ludion-sim           → core, ecs                       [serde, serde_json, xxhash-rust]
+ludion-sim           → core, ecs                       [schemars, serde, serde_json, xxhash-rust]
 ludion-spatial       → core, ecs                       [schemars, serde, serde_json]
 ludion-protocol      → core                            [schemars, serde, serde_json, xxhash-rust, zstd]
 ludion-render-graph  → core                            [wgpu, pollster, png, serde_json]

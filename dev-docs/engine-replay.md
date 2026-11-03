@@ -13,8 +13,8 @@ driver, the snapshot document, keyframes, and divergence bisection. The `Engine`
 
 ## Dataflow
 
-**Arming.** `set_recording(sink)` writes the `ReplayHeader` — scene ref, seed, versions, schema hash,
-the profile-at-start — plus an initial keyframe. Arm it right *after* loading the scene, before the
+**Arming.** `set_recording(sink)` writes the `ReplayHeader` — scene ref, seed, versions, the description-stripped
+schema hash, the replay content hash, the profile-at-start — plus an initial keyframe. Arm it right *after* loading the scene, before the
 first tick: it is refused with `L3047` at a frame other than 0 or with no scene loaded, since the header
 would not describe the state the recording starts from. The scene ref is the scene **text, inline**
 (`scene.load` stores `SceneRef::Inline`, never the path it read), which is what makes a recording
@@ -47,8 +47,9 @@ once at stop (unless nothing was recorded since the last keyframe or the session
 panic), as seek targets for `ReplayReader::seek`. The closing keyframe is why `verify_replay_keyframes`
 checks a session's end, not only its last interval boundary.
 
-**Replay.** `replay_hashes(bytes, project_root)` rejects a mismatched protocol version or schema hash
-(the `L3010` family, like the handshake), loads the header's scene into a fresh engine, reseeds,
+**Replay.** `replay_hashes(bytes, project_root)` rejects a mismatched protocol version (always) and, once
+`REPLAY_GATE_ARMED` is set in `replay_compat.rs`, an absent or stale replay content hash or
+description-stripped schema hash (all `L3010`; `compatibility` is the gate), loads the header's scene into a fresh engine, reseeds,
 reconstructs the command list from the delta records (keyframes kept as inert actions — a linear replay
 replays, it does not seek), and feeds it to `drive_actions`, after installing the scene-switch text map (always, even empty, so a replay never reads a switch target off disk), which decomposes each `sim.step` into single ticks so
 the returned `(FrameIndex, WorldHash)` trace samples every tick boundary. Live session and replay run

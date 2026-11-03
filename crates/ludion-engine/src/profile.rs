@@ -4128,6 +4128,7 @@ gpu_frame_max_ms = 9.5
             seed: 7,
             profile: None,
             render_extent: None,
+            replay_content_hash: None,
         };
         let mut writer = ReplayWriter::new(Vec::new(), &header).unwrap();
         let huge = Command::SimStep(SimStepParams {

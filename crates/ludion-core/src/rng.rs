@@ -20,6 +20,7 @@
 //! the value a caller gets is independent of what else drew this tick. [`WorldSeed`] is the world
 //! resource carrying the first argument.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 
@@ -121,7 +122,7 @@ pub struct WorldSeed(pub u64);
 /// let f = rng.next_f32();
 /// assert!((0.0..1.0).contains(&f));
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct DeterministicRng {
     state: u64,
     increment: u64,

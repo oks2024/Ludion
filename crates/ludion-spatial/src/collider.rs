@@ -515,7 +515,7 @@ impl From<BodyWire> for Body {
 #[derive(JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
-enum BodySchema {
+pub(crate) enum BodySchema {
     Static,
     Kinematic,
     /// Accepted for backward compatibility only; the canonical writer never emits it.

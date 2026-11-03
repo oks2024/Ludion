@@ -1858,9 +1858,9 @@ pub mod code {
     /// drops mid-request.
     pub const PROTOCOL_ENGINE_UNAVAILABLE: DiagnosticCode = DiagnosticCode::new("L3009");
 
-    /// `L3010` — a replay session file is not well-formed: wrong magic, an unsupported format
-    /// version, a truncated record, or a record body that is not valid JSON. Raised by
-    /// `ludion-protocol`.
+    /// `L3010` — a replay session file is not well-formed (wrong magic, an unsupported format
+    /// version, a truncated record, a record body that is not valid JSON), or was recorded against
+    /// an incompatible protocol version. Raised by `ludion-protocol` and `ludion-engine`.
     pub const REPLAY_FORMAT: DiagnosticCode = DiagnosticCode::new("L3010");
 
     /// `L3011` — a replay session's zstd frame could not be decompressed (the file is corrupt or was
@@ -9012,9 +9012,15 @@ covers the structural failures: the wrong magic, a format version this engine do
 truncated inside a header or record, an unknown record kind, or a header/record body that is not
 valid JSON once decompressed. (A zstd frame that fails to *inflate* is reported separately as L3011.)
 
-Fix: re-record the session with a compatible engine build. A version mismatch means the replay was
-written by a different engine version; replay formats, like the protocol, evolve by explicit,
-breaking version bumps.",
+The same code refuses a replay recorded against a different protocol version. Its header also
+records a description-stripped wire schema hash and a replay content hash (the record schema, the
+input events and the snapshot document); doc-comment edits move neither, a new field or command
+moves them. A header without a content hash predates it — that is a format age, not a determinism
+failure.
+
+Fix: re-record the session with a compatible engine build (`LUDION_BLESS=1` on the owning test, or
+`--record`). A version mismatch means the replay was written by a different engine version; replay
+formats, like the protocol, evolve by explicit, breaking version bumps.",
     },
     CodeEntry {
         code: code::REPLAY_COMPRESSION,

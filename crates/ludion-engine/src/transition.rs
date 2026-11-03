@@ -79,6 +79,7 @@ use ludion_core::time::FrameIndex;
 use ludion_ecs::{ChildMap, Parent, Registry, is_presentation};
 use ludion_protocol::replay::SceneRef;
 use ludion_sim::{DriverRestore, SimDriver};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -214,7 +215,7 @@ pub(crate) struct ResidueRecord {
 }
 
 /// One entity reference of a [`ResidueRecord`]'s bag, recorded by its target's identity.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct ResidueRef {
     /// The registered name of the component holding the reference.
     pub(crate) component: String,
@@ -225,7 +226,7 @@ pub(crate) struct ResidueRef {
 }
 
 /// The identity a captured entity reference is resolved by on return.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ResidueTarget {
     /// The record at this index of the scene's records.

@@ -240,6 +240,7 @@ fn a_legacy_command_scene_load_still_replays_from_disk() {
         seed: 5,
         profile: None,
         render_extent: None,
+        replay_content_hash: None,
     };
     let mut bytes = Vec::new();
     let mut writer = ReplayWriter::new(&mut bytes, &header).unwrap();
@@ -271,6 +272,7 @@ fn a_hostile_header_extent_is_refused_by_render_size() {
             width: 0,
             height: 540,
         }),
+        replay_content_hash: None,
     };
     let mut bytes = Vec::new();
     ReplayWriter::new(&mut bytes, &header)
@@ -302,6 +304,7 @@ fn a_failing_scene_load_record_names_its_frame_and_path() {
         seed: 5,
         profile: None,
         render_extent: None,
+        replay_content_hash: None,
     };
     let mut bytes = Vec::new();
     let mut writer = ReplayWriter::new(&mut bytes, &header).unwrap();

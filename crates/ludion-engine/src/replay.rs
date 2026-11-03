@@ -21,7 +21,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::FrameIndex;
 use ludion_protocol::command::{InputInjectParams, RenderSizeParams, SimStepParams};
 use ludion_protocol::replay::{ReplayHeader, ReplayReader, ReplayRecord, SceneRef};
-use ludion_protocol::{Command, PROTOCOL_VERSION, schema};
+use ludion_protocol::{Command, WireHash};
 use ludion_sim::WorldHash;
 use serde_json::Value;
 
@@ -297,7 +297,8 @@ fn run_actions(
 ///
 /// # Errors
 /// - `L3010`/`L3011` if the replay bytes are malformed (from [`ReplayReader`]).
-/// - `L3010` if the replay was written by an incompatible protocol version or schema.
+/// - `L3010` if the replay was written by an incompatible protocol version (and, once the gate is
+///   armed, a changed schema or replay content hash).
 /// - `L3013` if the header names a scene by path that cannot be loaded under `project_root`.
 /// - Any scene-load or dispatch diagnostic encountered while replaying.
 pub fn replay_hashes(
@@ -327,7 +328,18 @@ pub fn replay_hashes_with(
     project_root: impl AsRef<Path>,
 ) -> Result<Vec<(FrameIndex, WorldHash)>, Diagnostic> {
     let (mut engine, actions) = prepare_replay(builder, bytes, project_root, Keyframes::Skip)?;
-    drive_actions(&mut engine, actions)
+    let trace = drive_actions(&mut engine, actions)?;
+    // Dumps each replayed trace for a before/after comparison across a format migration.
+    if let Some(dir) = std::env::var_os("LUDION_REPLAY_TRACE_DIR") {
+        let name = format!("{}-{}.trace", bytes.len(), WireHash::of_bytes(bytes));
+        let body: String = trace
+            .iter()
+            .map(|(f, h)| format!("{} {h}\n", f.as_u64()))
+            .collect();
+        let path = Path::new(&dir).join(name);
+        ludion_core::atomic::write_atomic(&path, body).expect("trace dump");
+    }
+    Ok(trace)
 }
 
 /// Drives a recorded session against a *game* engine, calling `on_frame` at every settled frame, and
@@ -742,7 +754,7 @@ pub(crate) fn prepare_replay(
     keyframes: Keyframes,
 ) -> Result<(Engine, Vec<ReplayAction>), Diagnostic> {
     let reader = ReplayReader::new(bytes)?;
-    check_compatible(reader.header())?;
+    crate::replay_compat::check_compatible(reader.header())?;
 
     // Reconstruct the action list from the delta records; `Keep` also yields keyframe actions, the
     // verifier's alignment marker.
@@ -1001,27 +1013,6 @@ fn load_header_scene(engine: &mut Engine, header: &ReplayHeader) -> Result<(), D
             Ok(())
         }
     }
-}
-
-/// Rejects a replay from an incompatible protocol version or schema (drift detection, like the
-/// handshake's schema hash).
-fn check_compatible(header: &ReplayHeader) -> Result<(), Diagnostic> {
-    if header.protocol_version != PROTOCOL_VERSION || header.schema_hash != schema::schema_hash() {
-        return Err(Diagnostic::new(
-            code::REPLAY_FORMAT,
-            format!(
-                "replay was recorded against protocol version {} / schema {}, but this engine \
-                 speaks version {PROTOCOL_VERSION} / schema {}",
-                header.protocol_version,
-                header.schema_hash,
-                schema::schema_hash()
-            ),
-        )
-        .with_help(
-            "re-record the session with this engine build; replay formats are version-locked",
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -4976,12 +4976,12 @@ impl Engine {
     }
 
     /// The replay header describing the current session's starting conditions.
-    fn replay_header(&self) -> ReplayHeader {
+    pub(crate) fn replay_header(&self) -> ReplayHeader {
         ReplayHeader {
             format_version: REPLAY_FORMAT_VERSION,
             engine_version: ENGINE_VERSION.to_string(),
             protocol_version: PROTOCOL_VERSION,
-            schema_hash: schema::schema_hash(),
+            schema_hash: schema::replay_schema_hash(),
             scene: self.scene.clone().unwrap_or(SceneRef::Inline {
                 document: String::new(),
             }),
@@ -4991,6 +4991,7 @@ impl Engine {
                 width: self.render_size.0,
                 height: self.render_size.1,
             }),
+            replay_content_hash: Some(crate::replay_compat::replay_content_hash()),
         }
     }
 
@@ -6194,6 +6195,7 @@ entities: []
             seed: 0,
             profile: None,
             render_extent: None,
+            replay_content_hash: None,
         };
         let error = ludion_protocol::replay::ReplayWriter::new(&mut sink, &header)
             .err()

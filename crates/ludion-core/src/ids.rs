@@ -10,6 +10,7 @@
 //! means it can travel through the wire protocol, scenes, and snapshots without dragging ECS
 //! internals along.
 
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 
 /// A generational entity handle: a slot index plus the generation that owned it.
@@ -35,6 +36,24 @@ pub struct EntityId {
     pub index: u32,
     /// How many times this slot has been (re)allocated; distinguishes recycled slots.
     pub generation: u32,
+}
+
+/// The generated schema is the serde form, `{ "index": u32, "generation": u32 }`.
+impl JsonSchema for EntityId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "EntityId".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        /// Mirrors the derived serde shape of [`EntityId`].
+        #[derive(JsonSchema)]
+        #[allow(dead_code)]
+        struct EntityIdShape {
+            index: u32,
+            generation: u32,
+        }
+        EntityIdShape::json_schema(generator)
+    }
 }
 
 impl EntityId {

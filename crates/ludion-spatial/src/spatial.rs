@@ -53,9 +53,10 @@ use std::slice;
 use ludion_core::collections::StableMap;
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Component, Parent, SystemCtx, World};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::collider::{Body, Collider, Shape};
+use crate::collider::{Body, BodySchema, Collider, Shape};
 use crate::{GroundPosition, ParentPose, Plane};
 
 /// The uniform grid's cell size, in world units.
@@ -87,7 +88,7 @@ const OVERSIZE_REACH: f32 = CELL_SIZE;
 /// `#[non_exhaustive]` (the freeze convention for library-built, consumer-read result
 /// types): only [`rebuild`] constructs entries, downstream code reads fields — so a future added
 /// field is a non-breaking change.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct Entry {
     /// The collider's entity.
@@ -99,6 +100,7 @@ pub struct Entry {
     /// other variant).
     pub shape: Shape,
     /// Static or kinematic (never [`Body::Rigid`] — [`rebuild`] skips it).
+    #[schemars(with = "BodySchema")]
     pub body: Body,
 }
 

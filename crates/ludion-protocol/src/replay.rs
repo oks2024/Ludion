@@ -116,11 +116,12 @@ pub enum SceneRef {
 ///     format_version: REPLAY_FORMAT_VERSION,
 ///     engine_version: "0.0.0".into(),
 ///     protocol_version: PROTOCOL_VERSION,
-///     schema_hash: schema::schema_hash(),
+///     schema_hash: schema::replay_schema_hash(),
 ///     scene: SceneRef::Path { path: "level.yaml".into() },
 ///     seed: 7,
 ///     profile: None,
 ///     render_extent: None,
+///     replay_content_hash: None,
 /// };
 /// assert_eq!(header.seed, 7);
 /// ```
@@ -132,7 +133,8 @@ pub struct ReplayHeader {
     pub engine_version: String,
     /// The protocol version in force during recording.
     pub protocol_version: u32,
-    /// The schema hash at record time; a replayer compares it to its own to detect drift.
+    /// The description-stripped schema hash at record time ([`schema::replay_schema_hash`]); a
+    /// replayer compares it to its own to detect drift. Doc-comment edits do not move it.
     pub schema_hash: WireHash,
     /// Where the initial world comes from.
     pub scene: SceneRef,
@@ -154,6 +156,11 @@ pub struct ReplayHeader {
     /// `profile`.
     #[serde(default)]
     pub render_extent: Option<ReplayExtent>,
+    /// The hash of everything a replay holds: the record schema, the input event and the snapshot
+    /// document. `None` is a `.lrp` from before the field. **Additive within
+    /// [`REPLAY_FORMAT_VERSION`] `1`, no bump**, the same posture as `profile`.
+    #[serde(default)]
+    pub replay_content_hash: Option<WireHash>,
 }
 
 /// A render extent in pixels, as recorded in a [`ReplayHeader`].
@@ -299,11 +306,12 @@ impl ReplayRecord {
 ///     format_version: REPLAY_FORMAT_VERSION,
 ///     engine_version: "0.0.0".into(),
 ///     protocol_version: PROTOCOL_VERSION,
-///     schema_hash: schema::schema_hash(),
+///     schema_hash: schema::replay_schema_hash(),
 ///     scene: SceneRef::Path { path: "level.yaml".into() },
 ///     seed: 7,
 ///     profile: None,
 ///     render_extent: None,
+///     replay_content_hash: None,
 /// };
 ///
 /// let mut buffer = Vec::new();
@@ -1233,6 +1241,7 @@ mod tests {
             seed: 7,
             profile: None,
             render_extent: None,
+            replay_content_hash: None,
         }
     }
 
