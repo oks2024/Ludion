@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 
+use ludion_core::ids::EntityId;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde_json::{Value, json};
 
@@ -123,6 +124,36 @@ pub struct EntityRefField {
     pub optional: bool,
     /// The field is a tree link (`Parent`): a scene rejects a cycle through it (`L1035`).
     pub hierarchy: bool,
+}
+
+impl EntityRefField {
+    /// The entity this field names in `value` (the component's own JSON value), or `None` when the
+    /// field is absent, `null` or not an `{index, generation}` id.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::ids::EntityId;
+    /// use ludion_ecs::EntityRefField;
+    /// use serde_json::json;
+    ///
+    /// let field = EntityRefField {
+    ///     suffix: "/holder".to_string(),
+    ///     allow_self: false,
+    ///     optional: false,
+    ///     hierarchy: false,
+    /// };
+    /// let value = json!({"holder": {"index": 3, "generation": 0}});
+    /// assert_eq!(field.target(&value), Some(EntityId::new(3, 0)));
+    /// assert_eq!(field.target(&json!({"holder": null})), None);
+    /// ```
+    pub fn target(&self, value: &Value) -> Option<EntityId> {
+        let at = if self.suffix.is_empty() {
+            value
+        } else {
+            value.pointer(&self.suffix)?
+        };
+        serde_json::from_value(at.clone()).ok()
+    }
 }
 
 /// Finds every marked entity-reference field in a component's JSON Schema, sorted by suffix.
@@ -373,6 +404,24 @@ mod tests {
                 field("/right", true, true),
                 field("/target", false, true)
             ]
+        );
+    }
+
+    #[test]
+    fn target_reads_the_suffix_and_ignores_absent_null_or_malformed() {
+        let id = json!({"index": 4, "generation": 1});
+        let root = field("", false, false);
+        let nested = field("/holder", false, true);
+        assert_eq!(root.target(&id), Some(EntityId::new(4, 1)));
+        assert_eq!(
+            nested.target(&json!({"holder": id})),
+            Some(EntityId::new(4, 1))
+        );
+        assert_eq!(nested.target(&json!({})), None);
+        assert_eq!(nested.target(&json!({"holder": null})), None);
+        assert_eq!(
+            nested.target(&json!({"holder": {"index": 4_294_967_296u64, "generation": 0}})),
+            None
         );
     }
 

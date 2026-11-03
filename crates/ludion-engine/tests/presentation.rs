@@ -516,13 +516,8 @@ fn saving_a_sim_parent_on_a_presentation_entity_is_l1018() {
         presentation_ids(&engine)[0],
     );
     engine
-        .execute(Command::ComponentSet(
-            ludion_protocol::command::ComponentSetParams {
-                entity: b,
-                component: "Parent".to_string(),
-                value: serde_json::json!({ "index": popup.index(), "generation": popup.generation() }),
-            },
-        ))
+        .world_mut()
+        .insert(b, ludion_ecs::Parent(popup))
         .unwrap();
     let error = engine.scene_text().unwrap_err();
     assert_eq!(error.code.as_str(), "L1018");

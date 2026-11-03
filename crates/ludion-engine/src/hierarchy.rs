@@ -501,96 +501,7 @@ pub fn reparent(
         world.get::<Parent>(child)?;
     }
     if let Some(parent) = parent {
-        if !world.is_alive(parent) {
-            world.get::<Parent>(parent)?;
-        }
-        let mut walked = vec![parent];
-        while let Some(&up) = walked.last() {
-            if up == child {
-                return Err(Diagnostic::new(
-                    code::HIERARCHY_REPARENT_CYCLE,
-                    format!("reparenting {child} under {parent} would make it its own ancestor"),
-                )
-                .with_help("pick a parent outside the entity's own subtree"));
-            }
-            let Some(Parent(next)) = parent_of(world, up) else {
-                break;
-            };
-            // The walk stops where `chain` cuts one: an ancestor link to a dead entity, or to a
-            // presentation entity above a sim one, is not counted.
-            if is_invalid_parent(world, up, next) {
-                break;
-            }
-            if walked.contains(&next) {
-                return Err(Diagnostic::new(
-                    code::HIERARCHY_REPARENT_CYCLE,
-                    format!("{parent}'s ancestry already loops through {next}"),
-                )
-                .with_help(
-                    "break the existing loop first: reparent one of its members with `parent: None`",
-                ));
-            }
-            walked.push(next);
-        }
-        if walked.len() > MAX_HIERARCHY_DEPTH {
-            return Err(Diagnostic::new(
-                code::HIERARCHY_REPARENT_TOO_DEEP,
-                format!(
-                    "reparenting {child} under {parent} would give it {} ancestors, more than \
-                     {MAX_HIERARCHY_DEPTH}",
-                    walked.len()
-                ),
-            )
-            .with_help("pick a shallower parent"));
-        }
-        // Phase-free: a presentation descendant counts against the cap like a sim one.
-        let height = if world.has_children(child) {
-            subtree_height(&ChildMap::build_full(world), child)
-        } else {
-            0
-        };
-        if walked.len() + height > MAX_HIERARCHY_DEPTH {
-            return Err(Diagnostic::new(
-                code::HIERARCHY_REPARENT_TOO_DEEP,
-                format!(
-                    "reparenting {child} under {parent} would give its deepest descendant {} \
-                     ancestors, more than {MAX_HIERARCHY_DEPTH}",
-                    walked.len() + height
-                ),
-            )
-            .with_help("pick a shallower parent, or reparent the deep descendants first"));
-        }
-        if is_presentation(parent) && !is_presentation(child) {
-            return Err(Diagnostic::new(
-                code::HIERARCHY_REPARENT_PRESENTATION,
-                format!("{child} is a sim entity and {parent} is a presentation entity"),
-            )
-            .with_help("parent the entity under another sim entity, or under nothing"));
-        }
-        if let Ok(Some(collider)) = world.get::<Collider>(child)
-            && ludion_physics::claims(collider)
-        {
-            let refusal = match collider.body {
-                Body::Rigid(_) => Some((
-                    code::HIERARCHY_RIGID_BODY,
-                    "a rigid body",
-                    "un-parent it, or join it to the parent with a `Joint`",
-                )),
-                Body::Static(_) => Some((
-                    code::HIERARCHY_STATIC_COLLIDER,
-                    "a static solver collider",
-                    "make it `body: kinematic`, or un-parent it",
-                )),
-                Body::Kinematic(_) => None,
-            };
-            if let Some((diagnostic, kind, help)) = refusal {
-                return Err(Diagnostic::new(
-                    diagnostic,
-                    format!("{child} is {kind} and would get no physics body under {parent}"),
-                )
-                .with_help(help));
-            }
-        }
+        check_parent(world, ParentCandidate::Live(child), parent)?;
     }
 
     let new_local = match (keep, local(world, child)) {
@@ -623,6 +534,126 @@ pub fn reparent(
     }
     if let Some(transform) = new_local {
         world.insert(child, transform)?;
+    }
+    Ok(())
+}
+
+/// The entity a [`check_parent`] call vets a `Parent` for.
+#[derive(Clone, Copy)]
+pub(crate) enum ParentCandidate<'a> {
+    /// An entity in the world.
+    Live(EntityId),
+    /// An `entity.spawn` not applied yet: a sim entity with no id and no descendants.
+    Unspawned { collider: Option<&'a Collider> },
+}
+
+/// The refusals shared by `reparent`, `component.set Parent` and `entity.spawn`, read-only: a dead
+/// parent (`L0002`), a cycle (`L1224`), a chain too deep (`L1260`), a sim child under a presentation
+/// parent (`L1225`), a rigid or static solver-claimed body under a parent (`L1221`/`L1222`).
+pub(crate) fn check_parent(
+    world: &World,
+    child: ParentCandidate<'_>,
+    parent: EntityId,
+) -> Result<(), Diagnostic> {
+    let (id, collider, sim_child) = match child {
+        ParentCandidate::Live(id) => (
+            Some(id),
+            world.get::<Collider>(id).ok().flatten(),
+            !is_presentation(id),
+        ),
+        ParentCandidate::Unspawned { collider } => (None, collider, true),
+    };
+    let label = id.map_or_else(|| "the spawned entity".to_string(), |id| id.to_string());
+    if !world.is_alive(parent) {
+        world.get::<Parent>(parent)?;
+    }
+    let mut walked = vec![parent];
+    while let Some(&up) = walked.last() {
+        if Some(up) == id {
+            return Err(Diagnostic::new(
+                code::HIERARCHY_REPARENT_CYCLE,
+                format!("reparenting {label} under {parent} would make it its own ancestor"),
+            )
+            .with_help("pick a parent outside the entity's own subtree"));
+        }
+        let Some(Parent(next)) = parent_of(world, up) else {
+            break;
+        };
+        // The walk stops where `chain` cuts one: an ancestor link to a dead entity, or to a
+        // presentation entity above a sim one, is not counted.
+        if is_invalid_parent(world, up, next) {
+            break;
+        }
+        if walked.contains(&next) {
+            return Err(Diagnostic::new(
+                code::HIERARCHY_REPARENT_CYCLE,
+                format!("{parent}'s ancestry already loops through {next}"),
+            )
+            .with_help(
+                "break the existing loop first: reparent one of its members with `parent: None`",
+            ));
+        }
+        walked.push(next);
+    }
+    if walked.len() > MAX_HIERARCHY_DEPTH {
+        return Err(Diagnostic::new(
+            code::HIERARCHY_REPARENT_TOO_DEEP,
+            format!(
+                "reparenting {label} under {parent} would give it {} ancestors, more than \
+                 {MAX_HIERARCHY_DEPTH}",
+                walked.len()
+            ),
+        )
+        .with_help("pick a shallower parent"));
+    }
+    // Phase-free: a presentation descendant counts against the cap like a sim one.
+    let height = match id {
+        Some(child) if world.has_children(child) => {
+            subtree_height(&ChildMap::build_full(world), child)
+        }
+        _ => 0,
+    };
+    if walked.len() + height > MAX_HIERARCHY_DEPTH {
+        return Err(Diagnostic::new(
+            code::HIERARCHY_REPARENT_TOO_DEEP,
+            format!(
+                "reparenting {label} under {parent} would give its deepest descendant {} \
+                 ancestors, more than {MAX_HIERARCHY_DEPTH}",
+                walked.len() + height
+            ),
+        )
+        .with_help("pick a shallower parent, or reparent the deep descendants first"));
+    }
+    if is_presentation(parent) && sim_child {
+        return Err(Diagnostic::new(
+            code::HIERARCHY_REPARENT_PRESENTATION,
+            format!("{label} is a sim entity and {parent} is a presentation entity"),
+        )
+        .with_help("parent the entity under another sim entity, or under nothing"));
+    }
+    if let Some(collider) = collider
+        && ludion_physics::claims(collider)
+    {
+        let refusal = match collider.body {
+            Body::Rigid(_) => Some((
+                code::HIERARCHY_RIGID_BODY,
+                "a rigid body",
+                "un-parent it, or join it to the parent with a `Joint`",
+            )),
+            Body::Static(_) => Some((
+                code::HIERARCHY_STATIC_COLLIDER,
+                "a static solver collider",
+                "make it `body: kinematic`, or un-parent it",
+            )),
+            Body::Kinematic(_) => None,
+        };
+        if let Some((diagnostic, kind, help)) = refusal {
+            return Err(Diagnostic::new(
+                diagnostic,
+                format!("{label} is {kind} and would get no physics body under {parent}"),
+            )
+            .with_help(help));
+        }
     }
     Ok(())
 }

@@ -9,7 +9,12 @@
 //! constructs itself: component-absent (`L3006`) and the `entity.spawn` name/`Name` conflict
 //! (`L3014`). `entity.spawn` and `component.set` both check each value's schema, then its semantic
 //! validator, before touching the world — the wire has no back door around a component's schema or
-//! cross-field invariants (e.g. a self-joined `Joint`, `L1183`).
+//! cross-field invariants (e.g. a self-joined `Joint`, `L1183`). They also check the entity references
+//! a value holds: a `Parent` takes the `entity.reparent` rules, and any other marked field refuses
+//! naming its own carrier where the schema forbids it (`L1017`) and a sim carrier naming a
+//! presentation entity (`L1036`). A reference to a dead entity is allowed except on `Parent`, which
+//! is `L0002`: an editor's undo respawns with stale ids and repairs them afterwards, and
+//! `scene.save` (`L1018`) still refuses what stays dangling.
 
 use std::collections::BTreeMap;
 
@@ -23,8 +28,10 @@ use ludion_protocol::command::{
     EntityReparentParams, EntitySpawnParams, QueryEntitiesParams, ReparentKeep,
 };
 use ludion_protocol::response::{DestroyedEntity, EntityMatch, WorldTransform};
+use ludion_spatial::Collider;
 
 use crate::engine::Engine;
+use crate::hierarchy::ParentCandidate;
 
 /// `entity.spawn` — create an entity carrying the given components (all-or-nothing: a failure
 /// mutates nothing, not even the entity allocator).
@@ -36,6 +43,12 @@ use crate::engine::Engine;
 /// back door around it — and then deserialized into a scratch world, so an unknown component (`L0004`)
 /// or a value serde rejects that the schema allows (`L0006`) is reported before the real world is
 /// touched.
+///
+/// The new entity has no id yet, so a reference to itself cannot be detected: a client that predicts
+/// the next id can write a self reference on a non-`Parent` field here, and `scene.save` refuses it
+/// (`L1018`). A predicted `Parent` is dead at check time and is `L0002`. The entity is always a sim
+/// entity, so a reference to a presentation entity is `L1036`; a `Parent` and a rigid `Collider` in
+/// the same spawn is `L1221`.
 pub(crate) fn spawn(
     engine: &mut Engine,
     params: EntitySpawnParams,
@@ -53,6 +66,16 @@ pub(crate) fn spawn(
     let at = probe.spawn();
     for (name, value) in &params.components {
         registry.deserialize_insert(name, value, &mut probe, at)?;
+    }
+    for (name, value) in &params.components {
+        let collider = probe.get::<Collider>(at).ok().flatten();
+        check_refs(
+            registry,
+            world,
+            name,
+            value,
+            ParentCandidate::Unspawned { collider },
+        )?;
     }
     let entity = world.spawn();
     for (name, value) in &params.components {
@@ -91,6 +114,38 @@ fn check_value(
         Some(diagnostic) => Err(diagnostic),
         None => Ok(()),
     }
+}
+
+/// The entity-reference checks of one wire value, after its schema and serialization are clean:
+/// the non-tree fields through `ludion_scene::check_component_refs`, then each `Parent`-shaped field
+/// through the reparent rules. Pointers are relative to the component.
+fn check_refs(
+    registry: &Registry,
+    world: &World,
+    name: &str,
+    value: &serde_json::Value,
+    candidate: ParentCandidate<'_>,
+) -> Result<(), Diagnostic> {
+    let carrier = match candidate {
+        ParentCandidate::Live(id) => Some(id),
+        ParentCandidate::Unspawned { .. } => None,
+    };
+    if let Some(diagnostic) = ludion_scene::check_component_refs(name, value, registry, carrier)
+        .into_iter()
+        .next()
+    {
+        return Err(diagnostic);
+    }
+    let Some(info) = registry.get(name) else {
+        return Ok(());
+    };
+    for field in info.entity_refs().iter().filter(|field| field.hierarchy) {
+        if let Some(parent) = field.target(value) {
+            crate::hierarchy::check_parent(world, candidate, parent)
+                .map_err(|diagnostic| diagnostic.with_path(format!("{}/index", field.suffix)))?;
+        }
+    }
+    Ok(())
 }
 
 /// Builds the `L3014` diagnostic for an `entity.spawn` that named the entity both ways at once.
@@ -184,6 +239,13 @@ pub(crate) fn set(
     let (registry, world) = engine.parts_mut();
     check_value(registry, &params.component, &params.value)?;
     let previous = registry.serialize(&params.component, world, params.entity)?;
+    check_refs(
+        registry,
+        world,
+        &params.component,
+        &params.value,
+        ParentCandidate::Live(params.entity),
+    )?;
     registry.deserialize_insert(&params.component, &params.value, world, params.entity)?;
     Ok(ResponseBody::ComponentSet { previous })
 }

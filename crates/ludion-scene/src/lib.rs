@@ -357,6 +357,45 @@ pub fn check_component(
     validate::check_component(name, value, registry)
 }
 
+/// Checks the entity references inside one component value that arrives outside a scene
+/// (`component.set`, `entity.spawn`), by id rather than document position: `L1017` for a field that
+/// forbids naming its carrier and does, `L1036` for a sim carrier naming a presentation entity.
+///
+/// `carrier` is the entity being written, or `None` for an `entity.spawn` (not yet alive, and sim).
+/// Tree links (`Parent`) are not checked here: their rules need the world. A dead or
+/// unparseable reference is not reported (`scene.save`'s `L1018` catches a dangling one). Pointers
+/// are relative to the component, like [`check_component`]'s.
+///
+/// # Example
+/// ```
+/// use ludion_core::ids::EntityId;
+/// use ludion_ecs::{EntityRefSchema, Registry};
+/// use schemars::JsonSchema;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// struct Leash {
+///     #[schemars(with = "EntityRefSchema")]
+///     holder: EntityId,
+/// }
+///
+/// let mut registry = Registry::new();
+/// registry.register::<Leash>("Leash").unwrap();
+/// let me = EntityId::new(5, 0);
+/// let value = serde_json::json!({ "holder": { "index": 5, "generation": 0 } });
+/// let diagnostics = ludion_scene::check_component_refs("Leash", &value, &registry, Some(me));
+/// assert_eq!(diagnostics[0].code.as_str(), "L1017");
+/// assert_eq!(diagnostics[0].path.as_deref(), Some("/holder/index"));
+/// ```
+pub fn check_component_refs(
+    name: &str,
+    value: &serde_json::Value,
+    registry: &Registry,
+    carrier: Option<ludion_core::ids::EntityId>,
+) -> Vec<Diagnostic> {
+    validate::check_component_refs(name, value, registry, carrier)
+}
+
 /// Finds the cycles in the scene's tree links (`Parent`), each once, starting at its lowest
 /// member's document position — the same walk that gives [`validate`] its `L1035`.
 ///

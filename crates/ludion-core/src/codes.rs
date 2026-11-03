@@ -276,9 +276,10 @@ pub mod code {
     /// or `Joint`'s `a`/`b`) that is structurally invalid: its `index` is not a valid document
     /// position (out of range), its `generation` is nonzero, or the reference names an entity that
     /// must not name itself (`Parent` always; `Joint`'s `a`/`b` only when `a == b`). Raised by
-    /// `ludion-scene` (the JSON Pointer names the offending value). Inside a map fragment the
-    /// references are local to the fragment and rebased on composition; the pointer is
-    /// `/fragments/<i>`.
+    /// `ludion-scene` (the JSON Pointer names the offending value). Also raised on the wire by
+    /// `component.set` and `entity.spawn` for a self reference the field forbids, by id rather than
+    /// document position. Inside a map fragment the references are local to the fragment and rebased
+    /// on composition; the pointer is `/fragments/<i>`.
     pub const SCENE_INVALID_ENTITY_REF: DiagnosticCode = DiagnosticCode::new("L1017");
 
     /// `L1018` — a `scene.save` refused because a live entity's component carries an entity
@@ -401,7 +402,8 @@ pub mod code {
 
     /// `L1036` — a sim entity's entity-reference field names a presentation entity
     /// (`presentation: true`), which would let the sim hash a presentation id. Raised by
-    /// `ludion-scene`'s validation.
+    /// `ludion-scene`'s validation, and on the wire by `component.set` and `entity.spawn` (the id is
+    /// named, not a document position).
     pub const SCENE_PRESENTATION_REF: DiagnosticCode = DiagnosticCode::new("L1036");
 
     /// `L1037` — a scene or doc file starts with a YAML directive other than `%YAML 1.2` (`%YAML
@@ -1255,11 +1257,13 @@ pub mod code {
     pub const HIERARCHY_TOO_DEEP: DiagnosticCode = DiagnosticCode::new("L1220");
 
     /// `L1221` — a rigid body sits under a `Parent`; it gets no physics body. Raised by
-    /// `check-scene` and once per entity at runtime.
+    /// `check-scene` and once per entity at runtime; `entity.reparent`, `component.set Parent` and
+    /// `entity.spawn` refuse to create it.
     pub const HIERARCHY_RIGID_BODY: DiagnosticCode = DiagnosticCode::new("L1221");
 
     /// `L1222` — a static solver collider sits under a `Parent`; it gets no physics body. Raised by
-    /// `check-scene` and once per entity at runtime.
+    /// `check-scene` and once per entity at runtime; `entity.reparent`, `component.set Parent` and
+    /// `entity.spawn` refuse to create it.
     pub const HIERARCHY_STATIC_COLLIDER: DiagnosticCode = DiagnosticCode::new("L1222");
 
     /// `L1223` — a kinematic body under a sheared parent chain; the solver gets the lossy pose.
@@ -1267,15 +1271,16 @@ pub mod code {
     pub const HIERARCHY_KINEMATIC_SHEAR: DiagnosticCode = DiagnosticCode::new("L1223");
 
     /// `L1224` — a reparent would make an entity its own ancestor (the new parent is the entity or
-    /// one of its descendants). Refused by `entity.reparent`; nothing changes.
+    /// one of its descendants). Refused by `entity.reparent` and `component.set Parent`, and by
+    /// `entity.spawn` when the named parent's ancestry already loops; nothing changes.
     pub const HIERARCHY_REPARENT_CYCLE: DiagnosticCode = DiagnosticCode::new("L1224");
 
     /// `L1225` — a reparent would put a sim entity under a presentation entity. Refused by
-    /// `entity.reparent`; nothing changes.
+    /// `entity.reparent`, `component.set Parent` and `entity.spawn`; nothing changes.
     pub const HIERARCHY_REPARENT_PRESENTATION: DiagnosticCode = DiagnosticCode::new("L1225");
 
     /// `L1260` — a reparent would give an entity more than `MAX_HIERARCHY_DEPTH` (64) ancestors.
-    /// Refused by `entity.reparent`; nothing changes.
+    /// Refused by `entity.reparent`, `component.set Parent` and `entity.spawn`; nothing changes.
     pub const HIERARCHY_REPARENT_TOO_DEEP: DiagnosticCode = DiagnosticCode::new("L1260");
 
     /// `L1226` — a `kind: prefab` document is malformed at the top level: empty, bad `format` or
@@ -3196,7 +3201,8 @@ Such a reference names another entity by that entity's **document position** —
 the scene's `entities` sequence — written as `{index: <position>, generation: 0}`. The engine
 instantiates a scene by spawning one entity per document entry, in order, into a fresh world, so a
 document position always maps to a live entity and `generation` is always 0. A reference is rejected
-here when it cannot refer to a real entity that way:
+here when it cannot refer to a real entity that way (`component.set` and `entity.spawn` raise the
+self-reference case on the wire too, by entity id):
 
   - `index` is out of range: there is no entity at that document position (it must be less than the
     number of entities in the scene);
@@ -3545,8 +3551,8 @@ on something the replay does not verify. The other directions are fine: a presen
 reference a sim entity or another presentation entity (a popup parented to the unit it floats over).
 
 The diagnostic names the carrier and the target by document position (and `name`, when set) and
-points at the reference's `index`. `scene.save` refuses to write a world with the same reference, with
-`L1018`.
+points at the reference's `index`. `component.set` and `entity.spawn` raise it too, naming the carrier
+and target by id. `scene.save` refuses to write a world with the same reference, with `L1018`.
 
 A prefab instance carries one implicit reference: every part's `PrefabInstance.root` names the
 instance's first part. A prefab (or an instance, after `removed:`) whose first part is presentation
@@ -6827,7 +6833,8 @@ Fix: flatten the hierarchy so no chain exceeds 64 levels.",
         title: "a rigid body under a Parent",
         explanation: "A `Collider` with `body: rigid` sits on an entity that has a `Parent`. A rigid body's pose belongs to
 the solver, which writes it back to `Transform` as a world pose; a parent would compose that world
-pose a second time. The entity gets no physics body until the `Parent` is removed.
+pose a second time. The entity gets no physics body until the `Parent` is removed. `entity.reparent`,
+`component.set Parent` and `entity.spawn` refuse to create it.
 
 Fix: un-parent the entity, or join it to the other entity with a `Joint` instead.",
     },
@@ -6838,7 +6845,8 @@ Fix: un-parent the entity, or join it to the other entity with a `Joint` instead
         explanation: "A `Collider` with `body: static` that the physics solver claims (a `box`, `sphere`, `capsule` or
 other 3D shape) sits on an entity that has a `Parent`. A static body has no velocity, so a parent that
 moves would teleport it through whatever it touches. The entity gets no physics body until the
-`Parent` is removed or the body is made kinematic.
+`Parent` is removed or the body is made kinematic. `entity.reparent`, `component.set Parent` and
+`entity.spawn` refuse to create it.
 
 2D-tier colliders — an in-plane `circle` or `aabb` that is static or kinematic, which the solver does
 not claim — are allowed under a parent and resolve their world positions.
@@ -6860,8 +6868,9 @@ body.",
         code: code::HIERARCHY_REPARENT_CYCLE,
         severity: Severity::Error,
         title: "a reparent would make an entity its own ancestor",
-        explanation: "`entity.reparent` named a new parent that is the entity itself or one of its descendants, which
-would close a loop in the `Parent` chain. The call is refused and nothing changes.
+        explanation: "`entity.reparent` or `component.set Parent` named a new parent that is the entity itself or one
+of its descendants, which would close a loop in the `Parent` chain. `entity.spawn` raises it when the
+named parent's ancestry already loops. The call is refused and nothing changes.
 
 Fix: pick a parent outside the entity's own subtree, or un-parent the descendant first.",
     },
@@ -6869,8 +6878,9 @@ Fix: pick a parent outside the entity's own subtree, or un-parent the descendant
         code: code::HIERARCHY_REPARENT_PRESENTATION,
         severity: Severity::Error,
         title: "a sim entity cannot be reparented under a presentation entity",
-        explanation: "`entity.reparent` named a presentation entity as the parent of a sim entity. Presentation state is
-never an ancestor of the simulation, so the call is refused and nothing changes.
+        explanation: "`entity.reparent`, `component.set Parent` or `entity.spawn` named a presentation entity as the
+parent of a sim entity. Presentation state is never an ancestor of the simulation, so the call is refused
+and nothing changes.
 
 Fix: parent the entity under another sim entity, or reparent it under nothing.",
     },
@@ -6878,9 +6888,9 @@ Fix: parent the entity under another sim entity, or reparent it under nothing.",
         code: code::HIERARCHY_REPARENT_TOO_DEEP,
         severity: Severity::Error,
         title: "a reparent would make a Parent chain deeper than 64",
-        explanation: "`entity.reparent` named a new parent that would give the entity more than 64 ancestors. World
-transforms are composed along the whole chain on every read, so the depth is capped. The call is
-refused and nothing changes.
+        explanation: "`entity.reparent`, `component.set Parent` or `entity.spawn` named a new parent that would give
+the entity more than 64 ancestors. World transforms are composed along the whole chain on every read, so
+the depth is capped. The call is refused and nothing changes.
 
 Fix: pick a shallower parent, or flatten the chain so no entity has more than 64 ancestors.",
     },

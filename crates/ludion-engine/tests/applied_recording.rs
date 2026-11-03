@@ -370,3 +370,36 @@ fn a_lockstep_panic_on_the_keyframe_boundary_writes_no_keyframe() {
         records.last()
     );
 }
+
+/// A spawn naming a dead `Parent`: refused by the wire's reference checks (`L0002`).
+fn spawn_dead_parent() -> Command {
+    spawn(&[("Parent", json!({ "index": 99, "generation": 0 }))])
+}
+
+#[test]
+fn a_refused_reference_check_leaves_no_record() {
+    let sink = SharedSink::default();
+    let mut engine = engine();
+    engine.set_recording(sink.clone()).unwrap();
+    let error = engine
+        .execute(spawn_dead_parent())
+        .expect_err("a dead Parent is refused");
+    assert_eq!(error.code.as_str(), "L0002");
+    engine.stop_recording().unwrap();
+
+    let bytes = sink.bytes();
+    let records = ReplayReader::new(&bytes).unwrap().records().unwrap();
+    assert!(
+        !records
+            .iter()
+            .any(|record| matches!(record, ReplayRecord::Command { .. })),
+        "a refused command is not recorded"
+    );
+}
+
+#[test]
+fn a_replayed_command_the_reference_checks_refuse_stops_the_replay_with_its_code() {
+    let error = drive_hashes(&mut engine(), vec![step(1), spawn_dead_parent()])
+        .expect_err("the refused command stops the drive");
+    assert_eq!(error.code.as_str(), "L0002");
+}

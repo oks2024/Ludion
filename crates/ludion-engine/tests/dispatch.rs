@@ -119,7 +119,8 @@ fn spawn_child(engine: &mut Engine, name: &str, parent: EntityId) -> EntityId {
 }
 
 /// Spawns a named `name` entity whose `Parent` names a destroyed ghost, returning `(child, ghost)`:
-/// `entity.destroy` cascades, so a dangling parent can only be written by hand.
+/// `entity.destroy` cascades, so a dangling parent can only be written by hand — through the world,
+/// since the wire refuses a dead `Parent` (`L0002`).
 fn spawn_dangling_child(engine: &mut Engine, name: &str) -> (EntityId, EntityId) {
     let child = spawn_named(engine, name);
     let ghost = spawn_named(engine, "ghost");
@@ -127,15 +128,17 @@ fn spawn_dangling_child(engine: &mut Engine, name: &str) -> (EntityId, EntityId)
         engine,
         Command::EntityDestroy(EntityDestroyParams { entity: ghost }),
     );
-    ok(
-        engine,
-        Command::ComponentSet(ComponentSetParams {
-            entity: child,
-            component: "Parent".into(),
-            value: json!({ "index": ghost.index, "generation": ghost.generation }),
-        }),
-    );
+    force_parent(engine, child, ghost);
     (child, ghost)
+}
+
+/// Writes `Parent(parent)` on `child` through the world, past the wire's reparent rules, to build
+/// the bad worlds `scene.save` must refuse.
+fn force_parent(engine: &mut Engine, child: EntityId, parent: EntityId) {
+    engine
+        .world_mut()
+        .insert(child, ludion_ecs::Parent(parent))
+        .unwrap();
 }
 
 /// Spawns a named entity carrying `Joint` naming `a` and `b`, kind `fixed`.
@@ -1185,14 +1188,7 @@ entities: []
 
     let a = spawn_named(&mut engine, "a");
     let b = spawn_child(&mut engine, "b", a);
-    ok(
-        &mut engine,
-        Command::ComponentSet(ComponentSetParams {
-            entity: a,
-            component: "Parent".into(),
-            value: json!({ "index": b.index, "generation": b.generation }),
-        }),
-    );
+    force_parent(&mut engine, a, b);
 
     let error = save_err(&mut engine);
     assert_eq!(
@@ -1208,6 +1204,18 @@ entities: []
              or `component.remove` it to make that entity a root"
         )
     );
+}
+
+/// Points `entity`'s `PatternPlayer.target` at `entity` itself, through the world: the wire refuses it.
+fn force_pattern_self_target(engine: &mut Engine, entity: EntityId) {
+    let mut player = engine
+        .world()
+        .get::<ludion_engine::PatternPlayer>(entity)
+        .unwrap()
+        .unwrap()
+        .clone();
+    player.target = Some(entity);
+    engine.world_mut().insert(entity, player).unwrap();
 }
 
 /// Points `entity`'s `component` at `entity` itself, through `component.set`.
@@ -1259,7 +1267,7 @@ fn a_pattern_player_targeting_its_carrier_is_l1018_on_save() {
         "PatternPlayer",
         json!({ "pattern": "", "started": 0, "target": null }),
     );
-    set_self_reference(&mut engine, player, "PatternPlayer", Some("target"));
+    force_pattern_self_target(&mut engine, player);
 
     let message = save_err_message(&mut engine);
     assert!(message.contains("`target` pointing at itself"), "{message}");
@@ -1276,7 +1284,7 @@ fn a_parent_naming_its_carrier_is_l1018_on_save() {
         .unwrap();
     let other = spawn_named(&mut engine, "other");
     let child = spawn_child(&mut engine, "child", other);
-    set_self_reference(&mut engine, child, "Parent", None);
+    force_parent(&mut engine, child, child);
 
     let message = save_err_message(&mut engine);
     assert!(
@@ -3109,7 +3117,7 @@ fn l1018_wording_is_pinned() {
     let mut engine = fresh();
     let other = spawn_named(&mut engine, "other");
     let child = spawn_child(&mut engine, "child", other);
-    set_self_reference(&mut engine, child, "Parent", None);
+    force_parent(&mut engine, child, child);
     assert_eq!(
         save_err(&mut engine).help.as_deref(),
         Some(
@@ -3167,4 +3175,289 @@ fn a_required_reference_missing_from_the_serialized_value_is_l0007_on_save() {
     .expect_err("the save should be refused");
     assert_eq!(error.code.as_str(), "L0007");
     assert!(error.message.contains("`Skipped`"), "{}", error.message);
+}
+
+// --- Wire entity-reference checks ----------------------------------------------------------------
+
+/// Two sim entities (`a` 0, `b` 1) and two presentation entities (`popup`, `popup2`).
+fn reference_world() -> (Engine, EntityId, EntityId, EntityId, EntityId) {
+    let mut engine = Engine::new();
+    engine
+        .load_inline_scene(
+            "format: 1
+entities:
+  - name: a
+    components:
+      Transform: {}
+  - name: b
+    components:
+      Transform: {}
+  - name: popup
+    presentation: true
+    components:
+      Transform: {}
+  - name: popup2
+    presentation: true
+    components:
+      Transform: {}
+",
+        )
+        .unwrap();
+    let sim: Vec<EntityId> = engine.world().entities().collect();
+    let presentation: Vec<EntityId> = engine.world().presentation_entities().collect();
+    (engine, sim[0], sim[1], presentation[0], presentation[1])
+}
+
+fn id_json(id: EntityId) -> Value {
+    json!({ "index": id.index, "generation": id.generation })
+}
+
+fn set_command(entity: EntityId, component: &str, value: Value) -> Command {
+    Command::ComponentSet(ComponentSetParams {
+        entity,
+        component: component.into(),
+        value,
+    })
+}
+
+fn spawn_command(components: &[(&str, Value)]) -> Command {
+    Command::EntitySpawn(EntitySpawnParams {
+        name: None,
+        components: components
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.clone()))
+            .collect(),
+    })
+}
+
+/// Everything a refused command must leave alone: the entity count and both allocators.
+fn world_shape(engine: &Engine) -> (usize, usize, Value) {
+    let world = engine.world();
+    (
+        world.entities().count(),
+        world.presentation_entities().count(),
+        json!([
+            format!("{:?}", world.allocator_state()),
+            format!("{:?}", world.presentation_allocator_state()),
+        ]),
+    )
+}
+
+/// Dispatches `command`, expecting the refusal `code` at `path`, and that the world shape holds.
+fn assert_refused(engine: &mut Engine, command: Command, code: &str, path: &str) {
+    let before = world_shape(engine);
+    let error = dispatch(engine, command).expect_err("the command should be refused");
+    assert_eq!(error.code.as_str(), code, "{}", error.message);
+    assert_eq!(error.path.as_deref(), Some(path), "{}", error.message);
+    assert_eq!(world_shape(engine), before, "a refusal changes nothing");
+}
+
+/// Dispatches a `component.set` expecting a refusal, and that the component keeps its value.
+fn assert_set_refused(
+    engine: &mut Engine,
+    entity: EntityId,
+    component: &str,
+    value: Value,
+    code: &str,
+    path: &str,
+) {
+    let before = engine
+        .world()
+        .get::<ludion_ecs::Parent>(entity)
+        .unwrap()
+        .cloned();
+    let before_value = component_value_opt(engine, entity, component);
+    assert_refused(engine, set_command(entity, component, value), code, path);
+    assert_eq!(component_value_opt(engine, entity, component), before_value);
+    assert_eq!(
+        engine
+            .world()
+            .get::<ludion_ecs::Parent>(entity)
+            .unwrap()
+            .cloned(),
+        before
+    );
+}
+
+fn component_value_opt(engine: &Engine, entity: EntityId, component: &str) -> Option<Value> {
+    engine
+        .registry()
+        .serialize(component, engine.world(), entity)
+        .unwrap()
+}
+
+const RIGID_BOX: fn() -> Value =
+    || json!({ "shape": { "box": { "half_extents": [0.5, 0.5, 0.5] } }, "body": { "rigid": {} } });
+const STATIC_BOX: fn() -> Value =
+    || json!({ "shape": { "box": { "half_extents": [0.5, 0.5, 0.5] } }, "body": { "static": {} } });
+
+#[test]
+fn component_set_parent_takes_the_reparent_rules() {
+    let (mut engine, a, b, popup, _) = reference_world();
+
+    // Self and cycle: `L1224`.
+    assert_set_refused(&mut engine, a, "Parent", id_json(a), "L1224", "/index");
+    force_parent(&mut engine, b, a);
+    assert_set_refused(&mut engine, a, "Parent", id_json(b), "L1224", "/index");
+
+    // A sim entity under a presentation entity: `L1225`.
+    assert_set_refused(&mut engine, a, "Parent", id_json(popup), "L1225", "/index");
+
+    // A dead parent: `L0002`.
+    let ghost = spawn_named(&mut engine, "ghost");
+    ok(
+        &mut engine,
+        Command::EntityDestroy(EntityDestroyParams { entity: ghost }),
+    );
+    assert_set_refused(&mut engine, a, "Parent", id_json(ghost), "L0002", "/index");
+
+    // A rigid body and a static solver collider under a parent: `L1221` / `L1222`.
+    let rigid = spawn_with(&mut engine, "rigid", "Collider", RIGID_BOX());
+    assert_set_refused(&mut engine, rigid, "Parent", id_json(a), "L1221", "/index");
+    let wall = spawn_with(&mut engine, "wall", "Collider", STATIC_BOX());
+    assert_set_refused(&mut engine, wall, "Parent", id_json(a), "L1222", "/index");
+
+    // Too deep: a chain of 64 ancestors takes no further child.
+    let mut tip = spawn_named(&mut engine, "chain0");
+    for i in 1..=64 {
+        let next = spawn_named(&mut engine, &format!("chain{i}"));
+        force_parent(&mut engine, next, tip);
+        tip = next;
+    }
+    let leaf = spawn_named(&mut engine, "leaf");
+    assert_set_refused(&mut engine, leaf, "Parent", id_json(tip), "L1260", "/index");
+}
+
+#[test]
+fn a_valid_component_set_parent_replies_with_previous_and_keeps_transform_bits() {
+    let (mut engine, a, b, _, _) = reference_world();
+    ok(
+        &mut engine,
+        set_command(b, "Transform", json!({ "translation": [3.0, 0.0, 0.0] })),
+    );
+    let transform = component_value(&mut engine, b, "Transform");
+    match ok(&mut engine, set_command(b, "Parent", id_json(a))) {
+        ResponseBody::ComponentSet { previous } => assert_eq!(previous, None),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(component_value(&mut engine, b, "Parent"), id_json(a));
+    assert_eq!(
+        component_value(&mut engine, b, "Transform"),
+        transform,
+        "a raw Parent write keeps the local bits"
+    );
+    match ok(&mut engine, set_command(b, "Parent", id_json(a))) {
+        ResponseBody::ComponentSet { previous } => assert_eq!(previous, Some(id_json(a))),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn entity_spawn_parent_takes_the_reparent_rules() {
+    let (mut engine, a, _, popup, _) = reference_world();
+
+    assert_refused(
+        &mut engine,
+        spawn_command(&[("Parent", id_json(a)), ("Collider", RIGID_BOX())]),
+        "L1221",
+        "/index",
+    );
+    assert_refused(
+        &mut engine,
+        spawn_command(&[("Parent", id_json(a)), ("Collider", STATIC_BOX())]),
+        "L1222",
+        "/index",
+    );
+    assert_refused(
+        &mut engine,
+        spawn_command(&[("Parent", id_json(popup))]),
+        "L1225",
+        "/index",
+    );
+    let ghost = spawn_named(&mut engine, "ghost");
+    ok(
+        &mut engine,
+        Command::EntityDestroy(EntityDestroyParams { entity: ghost }),
+    );
+    assert_refused(
+        &mut engine,
+        spawn_command(&[("Parent", id_json(ghost))]),
+        "L0002",
+        "/index",
+    );
+
+    let child = spawn_child(&mut engine, "child", a);
+    assert_eq!(component_value(&mut engine, child, "Parent"), id_json(a));
+}
+
+#[test]
+fn a_non_parent_reference_naming_its_carrier_is_refused_only_where_the_schema_forbids_it() {
+    let (mut engine, a, _, _, _) = reference_world();
+    let player = json!({ "pattern": "", "started": 0, "target": id_json(a) });
+    assert_set_refused(
+        &mut engine,
+        a,
+        "PatternPlayer",
+        player,
+        "L1017",
+        "/target/index",
+    );
+
+    // `Volley.source` allows naming its carrier.
+    ok(
+        &mut engine,
+        set_command(a, "Volley", json!({ "source": id_json(a) })),
+    );
+}
+
+#[test]
+fn a_sim_carrier_naming_a_presentation_entity_is_l1036_on_both_commands() {
+    let (mut engine, a, _, popup, popup2) = reference_world();
+    let aimed =
+        |target: EntityId| json!({ "pattern": "", "started": 0, "target": id_json(target) });
+    assert_set_refused(
+        &mut engine,
+        a,
+        "PatternPlayer",
+        aimed(popup),
+        "L1036",
+        "/target/index",
+    );
+    assert_refused(
+        &mut engine,
+        spawn_command(&[("PatternPlayer", aimed(popup))]),
+        "L1036",
+        "/target/index",
+    );
+    let message = dispatch(
+        &mut engine,
+        spawn_command(&[("PatternPlayer", aimed(popup))]),
+    )
+    .unwrap_err()
+    .message;
+    assert_eq!(
+        message,
+        format!(
+            "`PatternPlayer`'s `target` on sim entity being spawned names presentation entity {popup}; the sim would hash a presentation id"
+        )
+    );
+
+    // A presentation carrier may name a presentation entity.
+    ok(
+        &mut engine,
+        set_command(popup, "PatternPlayer", aimed(popup2)),
+    );
+}
+
+#[test]
+fn a_dead_non_parent_reference_is_accepted_on_both_commands() {
+    let (mut engine, a, _, _, _) = reference_world();
+    let ghost = spawn_named(&mut engine, "ghost");
+    ok(
+        &mut engine,
+        Command::EntityDestroy(EntityDestroyParams { entity: ghost }),
+    );
+    let aimed = json!({ "pattern": "", "started": 0, "target": id_json(ghost) });
+    ok(&mut engine, set_command(a, "PatternPlayer", aimed.clone()));
+    spawn_one(&mut engine, "PatternPlayer", aimed);
 }

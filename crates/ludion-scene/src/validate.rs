@@ -18,8 +18,9 @@
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::{Diagnostic, DiagnosticCode, value_phrase};
+use ludion_core::ids::EntityId;
 use ludion_core::suggest;
-use ludion_ecs::{ComponentInfo, Registry};
+use ludion_ecs::{ComponentInfo, Registry, is_presentation};
 use serde_json::Value;
 
 use crate::schema::SchemaCursor;
@@ -331,6 +332,44 @@ pub(crate) fn cycle_diagnostic(scene: &Scene, cycle: &HierarchyCycle) -> Diagnos
     ))
 }
 
+/// Checks one component value arriving outside a scene for the reference rules a document position
+/// would otherwise carry; see [`crate::check_component_refs`].
+pub(crate) fn check_component_refs(
+    name: &str,
+    value: &Value,
+    registry: &Registry,
+    carrier: Option<EntityId>,
+) -> Vec<Diagnostic> {
+    let Some(info) = registry.get(name) else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    for field in info.entity_refs().iter().filter(|field| !field.hierarchy) {
+        let Some(target) = field.target(value) else {
+            continue;
+        };
+        let noun = ref_noun(name, &field.suffix);
+        let pointer = field.suffix.clone();
+        if !field.allow_self && Some(target) == carrier {
+            diagnostics.push(self_ref_diagnostic(
+                &noun,
+                field.suffix.trim_start_matches('/'),
+                &pointer,
+            ));
+        } else if is_presentation(target) && carrier.is_none_or(|carrier| !is_presentation(carrier))
+        {
+            let carrier_label =
+                carrier.map_or_else(|| "being spawned".to_string(), |c| c.to_string());
+            diagnostics.push(presentation_ref_diagnostic(
+                &noun,
+                (&carrier_label, &target.to_string()),
+                &pointer,
+            ));
+        }
+    }
+    diagnostics
+}
+
 /// Structural entity-reference checks beyond JSON Schema: `index` names a real entity (in range,
 /// and not itself unless `allow_self`), and `generation` is 0. Each field is checked only when it
 /// is integer-shaped — a wrong-typed field is already reported against the schema as `L1014`, so
@@ -357,11 +396,7 @@ fn check_entity_ref(
     let field_name = suffix.trim_start_matches('/');
     // `Parent`'s wording (`field_name` empty) stays byte-identical to before this generalized; a
     // named field (`Joint`'s `a`/`b`) gets analogous wording naming it.
-    let noun = if field_name.is_empty() {
-        format!("`{component}`")
-    } else {
-        format!("`{component}`'s `{field_name}`")
-    };
+    let noun = ref_noun(component, suffix);
     if let Some(index) = object.get("index").and_then(Value::as_u64) {
         let index = index as usize;
         if index >= entity_count {
@@ -384,23 +419,14 @@ fn check_entity_ref(
                 }),
             );
         } else if !allow_self && index == entity_index {
-            diagnostics.push(
-                Diagnostic::new(
-                    code::SCENE_INVALID_ENTITY_REF,
-                    format!("{noun} index refers to the entity itself"),
-                )
-                .with_path(format!("{field_pointer}/index"))
-                .with_help(if field_name.is_empty() {
-                    "an entity cannot be its own parent; point `index` at another entity".to_string()
-                } else {
-                    format!("`{field_name}` cannot name the entity itself here; point it at another entity")
-                }),
-            );
+            diagnostics.push(self_ref_diagnostic(&noun, field_name, &field_pointer));
         } else if !scene.entities[entity_index].presentation && scene.entities[index].presentation {
             diagnostics.push(presentation_ref_diagnostic(
-                scene,
-                (entity_index, index),
                 &noun,
+                (
+                    &position_label(scene, entity_index),
+                    &position_label(scene, index),
+                ),
                 &field_pointer,
             ));
         }
@@ -423,23 +449,50 @@ fn check_entity_ref(
     }
 }
 
-/// `L1036`: sim entity `carrier` holds a reference to presentation entity `target`.
-fn presentation_ref_diagnostic(
-    scene: &Scene,
-    (carrier, target): (usize, usize),
-    noun: &str,
-    field_pointer: &str,
-) -> Diagnostic {
-    let label = |position: usize| match &scene.entities[position].name {
+/// How a diagnostic names a reference field: the component, plus the field when it is not the
+/// component's value itself (`Parent`).
+pub(crate) fn ref_noun(component: &str, suffix: &str) -> String {
+    let field_name = suffix.trim_start_matches('/');
+    if field_name.is_empty() {
+        format!("`{component}`")
+    } else {
+        format!("`{component}`'s `{field_name}`")
+    }
+}
+
+/// `L1017`: a reference field that forbids naming its own carrier does so. `field_name` is empty for
+/// a component that is itself the reference (`Parent`).
+pub(crate) fn self_ref_diagnostic(noun: &str, field_name: &str, field_pointer: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::SCENE_INVALID_ENTITY_REF,
+        format!("{noun} index refers to the entity itself"),
+    )
+    .with_path(format!("{field_pointer}/index"))
+    .with_help(if field_name.is_empty() {
+        "an entity cannot be its own parent; point `index` at another entity".to_string()
+    } else {
+        format!("`{field_name}` cannot name the entity itself here; point it at another entity")
+    })
+}
+
+fn position_label(scene: &Scene, position: usize) -> String {
+    match &scene.entities[position].name {
         Some(name) => format!("{position} (`{name}`)"),
         None => position.to_string(),
-    };
+    }
+}
+
+/// `L1036`: sim entity `carrier` holds a reference to presentation entity `target`; the labels
+/// are how the caller names each (a document position in a scene, an id on the wire).
+pub(crate) fn presentation_ref_diagnostic(
+    noun: &str,
+    (carrier, target): (&str, &str),
+    field_pointer: &str,
+) -> Diagnostic {
     Diagnostic::new(
         code::SCENE_PRESENTATION_REF,
         format!(
-            "{noun} on sim entity {} names presentation entity {}; the sim would hash a presentation id",
-            label(carrier),
-            label(target)
+            "{noun} on sim entity {carrier} names presentation entity {target}; the sim would hash a presentation id"
         ),
     )
     .with_path(format!("{field_pointer}/index"))
@@ -478,21 +531,18 @@ pub(crate) fn presentation_refs(scene: &Scene, registry: &Registry) -> Vec<Diagn
                 if !scene.entities[target].presentation {
                     continue;
                 }
-                let field_name = field.suffix.trim_start_matches('/');
-                let noun = if field_name.is_empty() {
-                    format!("`{name}`")
-                } else {
-                    format!("`{name}`'s `{field_name}`")
-                };
+                let noun = ref_noun(name, &field.suffix);
                 let pointer = format!(
                     "/entities/{carrier}/components/{}{}",
                     pointer_token(name),
                     field.suffix
                 );
                 found.push(presentation_ref_diagnostic(
-                    scene,
-                    (carrier, target),
                     &noun,
+                    (
+                        &position_label(scene, carrier),
+                        &position_label(scene, target),
+                    ),
                     &pointer,
                 ));
             }
