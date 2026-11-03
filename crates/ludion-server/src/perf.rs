@@ -148,6 +148,15 @@ impl ProfileHub {
         self.profile_for(frames, true)
     }
 
+    /// The transport section for the ticks a window covers, columns aligned to them.
+    ///
+    /// A window's `frames` are the index each tick ran as; the image that tick produced is delivered
+    /// under [`delivered_frame`] of it, which is where the transport rings file it.
+    pub(crate) fn profile_for_ticks(&self, ticks: &[u64]) -> Option<TransportProfile> {
+        let delivered: Vec<u64> = ticks.iter().map(|tick| delivered_frame(*tick)).collect();
+        self.profile_for_frames(&delivered)
+    }
+
     /// The transport section for the frames sampled after `after_frame`, medians only.
     ///
     /// The shape a `profile.capture` reply takes when it did not ask for per-frame columns: there is
@@ -222,7 +231,7 @@ impl ProfileArm {
         };
         report.transport = match &report.samples {
             // The capture asked for columns, so its exact frames are known: align to them.
-            Some(samples) => self.hub.profile_for_frames(&samples.frames),
+            Some(samples) => self.hub.profile_for_ticks(&samples.frames),
             None => self
                 .hub
                 .profile_after(self.after_frame, report.measured_frames),
@@ -244,15 +253,21 @@ impl Drop for ProfileArm {
     }
 }
 
+/// The index a tick's image is delivered under: the engine's frame *after* the tick, which is what a
+/// frame header carries. A window's `frames` are the index the tick ran as, one earlier.
+fn delivered_frame(tick_frame: u64) -> u64 {
+    tick_frame + 1
+}
+
 /// Fills a `profile` window event's `transport` section, before the event is serialized.
 ///
-/// Any other event passes through untouched. The window carries its own per-frame column of frame
-/// indices, so the transport columns align to it exactly — a frame the window covers but nobody was
-/// delivered reads as `null`, the same convention the GPU columns use for a frame the timing ring
-/// skipped.
+/// Any other event passes through untouched. The window carries its own per-frame column of tick
+/// indices, so the transport columns align to it exactly, each tick read at its delivered index
+/// (the tick's plus one) — a tick the window covers but nobody was delivered an image for reads as
+/// `null`, the same convention the GPU columns use for a frame the timing ring skipped.
 pub(crate) fn fill_window_event(hub: &ProfileHub, message: &mut EventMessage) {
     if let Event::ProfileWindow(window) = &mut message.event {
-        window.transport = hub.profile_for_frames(&window.samples.frames);
+        window.transport = hub.profile_for_ticks(&window.samples.frames);
     }
 }
 
@@ -419,7 +434,8 @@ mod tests {
     fn a_window_gets_columns_aligned_to_its_frames() {
         let hub = ProfileHub::new();
         let _arm = hub.arm();
-        for (index, encode) in [(10, 4.0), (11, 6.0), (13, 8.0)] {
+        // Images are recorded under the delivered index: the tick's own plus one.
+        for (index, encode) in [(11, 4.0), (12, 6.0), (14, 8.0)] {
             hub.record_encode(frame(index), ms(encode));
             hub.record_send(frame(index), ms(1.0));
         }
@@ -442,6 +458,22 @@ mod tests {
             "a frame nobody was delivered reads as null, not zero"
         );
         assert_eq!(transport.encode_ms[3], Some(8.0));
+    }
+
+    /// A record at a tick's own index describes the previous tick's image, so it must not fill the
+    /// tick's slot.
+    #[test]
+    fn a_record_at_the_ticks_own_index_does_not_fill_its_slot() {
+        let hub = ProfileHub::new();
+        let _arm = hub.arm();
+        hub.record_encode(frame(10), ms(4.0));
+
+        let mut message = window(vec![10]);
+        fill_window_event(&hub, &mut message);
+        let Event::ProfileWindow(filled) = &message.event else {
+            panic!("the event kind must survive injection");
+        };
+        assert!(filled.transport.is_none());
     }
 
     /// A window whose frames were never delivered gets no section at all — absent, not zeroed.

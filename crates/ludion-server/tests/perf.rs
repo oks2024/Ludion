@@ -14,7 +14,7 @@ use std::time::Duration;
 use ludion_client::{CallOk, Client};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_engine::Engine;
-use ludion_protocol::command::SimSetSpeedParams;
+use ludion_protocol::command::{SimSetSpeedParams, SimStepParams};
 use ludion_protocol::frame::FrameFormat;
 use ludion_protocol::perf::{ProfileCaptureParams, TransportProfile};
 use ludion_protocol::{Channel, Command, Event, ResponseBody, SubscribeMode};
@@ -421,4 +421,47 @@ fn needs_gpu_a_capture_reply_carries_the_transport_section() {
     );
 
     client.unsubscribe(frames).expect("unsubscribe succeeds");
+}
+
+/// **A delivered image carries the frame after its tick.** Transport columns are filed under a
+/// tick's index plus one (`delivered_frame`), so the relation they lean on is pinned here: a single
+/// stepped tick on a paused sim is delivered under exactly the engine's frame after that tick.
+#[test]
+fn needs_gpu_a_delivered_image_carries_the_frame_after_its_tick() {
+    let server = serve();
+    let mut client = Client::connect(&server.url()).expect("handshake succeeds");
+    if !gpu_available(&mut client) {
+        eprintln!("skipped: no GPU adapter, so no frame is delivered");
+        return;
+    }
+    client.set_call_timeout(Some(Duration::from_secs(30)));
+    client
+        .subscribe(Channel::Frames, SubscribeMode::default(), FrameFormat::Qoi)
+        .expect("the frames channel accepts a subscription");
+    client.call(Command::SimPause).expect("pauses");
+
+    let stepped = client
+        .call(Command::SimStep(SimStepParams {
+            ticks: 1,
+            hash: false,
+        }))
+        .expect("the step runs");
+    let after = stepped
+        .frame
+        .expect("a step reply carries the engine's frame")
+        .as_u64();
+
+    let mut seen = None;
+    while seen.is_none_or(|frame| frame < after) {
+        let received = client
+            .next_frame(WINDOW_TIMEOUT)
+            .expect("frames read back")
+            .unwrap_or_else(|| panic!("no image reached frame {after} within {WINDOW_TIMEOUT:?}"));
+        seen = Some(received.header.frame.as_u64());
+    }
+    assert_eq!(
+        seen,
+        Some(after),
+        "the image of a tick is delivered under the frame after it"
+    );
 }

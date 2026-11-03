@@ -107,6 +107,8 @@ There is no `readback_ms`: the pipelined `StreamReadback` ring left no blocking 
 bracket, and what submission costs shows up in the engine-side `submit` span. The editor's
 Performance view can subscribe to `frames` (its own preview) to populate this section; the
 encode/send it measures is that viewer's own delivery cost, not one the game pays when unwatched.
+Transport columns are filed under the tick that produced the delivered image (the delivered index
+minus one).
 
 **The GPU frame span.** `gpu.frame_median_ms` / `frame_tail` come from stamps the per-pass timing already
 resolves, no new query: the hull (max − min of written stamps) of one frame's begin/end stamps

@@ -10,10 +10,11 @@
 //! [`perf_live`](crate::perf_live) — same report shape ([`ludion_protocol::perf`], re-exported here),
 //! measured over the frames a running engine is already producing.
 //!
-//! # The one wall-clock site
+//! # Wall-clock sites
 //!
-//! This module is the *only* place in `ludion-engine` that reads the wall clock. Like
-//! [`live`](crate::live)'s tick scheduler, the measurement is pure **observation**: the
+//! This module is one of `ludion-engine`'s three sanctioned wall-clock sites, with
+//! [`live`](crate::live)'s tick scheduler and [`perf_live`](crate::perf_live)'s `Span`. Like the
+//! tick scheduler, the measurement is pure **observation**: the
 //! [`ScheduleObserver`] it attaches cannot mutate sim state, so a
 //! profiled run's [`WorldHash`](Engine::world_hash) is bit-identical to an unprofiled one (asserted
 //! by the `observer_does_not_change_world_hash` test below). The crate's clippy denylist bans
@@ -361,10 +362,12 @@ impl LoadObserver for LoadClock {
 
     // Sanctioned wall-clock site (see the module docs).
     #[allow(clippy::disallowed_methods)]
-    fn end(&mut self, _phase: LoadPhase) {
-        let Some((phase, start, child)) = self.stack.pop() else {
+    fn end(&mut self, phase: LoadPhase) {
+        let Some((begun, start, child)) = self.stack.pop() else {
             return;
         };
+        debug_assert_eq!(begun, phase, "load spans must nest");
+        let phase = begun;
         let now = Instant::now();
         let elapsed = now.duration_since(start);
         let exclusive = elapsed.saturating_sub(child);
@@ -530,14 +533,33 @@ fn profile_sim(engine: &mut Engine, frames: u64, warmup: u64) -> (SimProfile, Pr
 /// that adds `path_follow` or physics) cannot shift one system's samples onto another. A schedule
 /// refuses a duplicate system name (`L4018`), so a name appears at most once per frame.
 #[derive(Default)]
-struct SystemColumns {
-    names: Vec<&'static str>,
-    /// `(frame, duration)` samples, one list per name.
-    samples: Vec<Vec<(u64, Duration)>>,
+pub(crate) struct SystemColumns {
+    pub(crate) names: Vec<&'static str>,
+    /// `(key, duration)` samples, one list per name, keys ascending.
+    pub(crate) samples: Vec<Vec<(u64, Duration)>>,
 }
 
 impl SystemColumns {
-    fn push(&mut self, frame: u64, observed: &[(&'static str, Duration)]) {
+    /// The dense matrix over `keys` (ascending): one row per name, `0.0` where that system did not
+    /// run at a key. A system's own column holds only the keys it ran at, so medians and tails read
+    /// that column; the raw [`ProfileSamples`] matrix is dense (a perfetto reader treats a missing
+    /// entry the same way).
+    pub(crate) fn dense_ms(&self, keys: &[u64]) -> Vec<Vec<f64>> {
+        self.samples
+            .iter()
+            .map(|column| {
+                keys.iter()
+                    .map(|key| {
+                        column
+                            .binary_search_by_key(key, |(k, _)| *k)
+                            .map_or(0.0, |at| duration_ms(column[at].1))
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    pub(crate) fn push(&mut self, frame: u64, observed: &[(&'static str, Duration)]) {
         for (name, duration) in observed {
             let column = match self.names.iter().position(|known| known == name) {
                 Some(column) => column,
@@ -562,26 +584,11 @@ fn reduce_sim(
     mut frame_totals: Vec<Duration>,
     frame_indices: Vec<u64>,
 ) -> (SimProfile, ProfileSamples) {
+    let system_ms = systems.dense_ms(&frame_indices);
     let SystemColumns {
         names,
         samples: columns,
     } = systems;
-    // A system's own column holds only the frames it ran in, so its median and tail read that column;
-    // the raw `ProfileSamples` matrix is dense over `frame_indices`, with `0.0` where a system did not
-    // run that frame (a perfetto reader treats a missing entry the same way).
-    let system_ms: Vec<Vec<f64>> = columns
-        .iter()
-        .map(|column| {
-            frame_indices
-                .iter()
-                .map(|frame| {
-                    column
-                        .binary_search_by_key(frame, |(f, _)| *f)
-                        .map_or(0.0, |at| duration_ms(column[at].1))
-                })
-                .collect()
-        })
-        .collect();
     // Captured in measured order before the median passes below sort each column in place
     // (`median_ms` sorts its slice) — the raw columns need frame order, the medians don't.
     let sequential_ms: Vec<Vec<f64>> = per_sequential
@@ -1037,13 +1044,17 @@ fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfi
             spans.push(span);
             span_positions.push(position);
         }
-        if names.is_empty() {
-            names = raw.passes.iter().map(|p| p.name.clone()).collect();
-            per_pass = vec![Vec::new(); names.len()];
-        }
-        for (i, pass) in raw.passes.iter().enumerate() {
-            if let (Some(samples), Some(ms)) = (per_pass.get_mut(i), pass.gpu_time_ms) {
-                samples.push(ms);
+        for pass in &raw.passes {
+            let column = match names.iter().position(|known| *known == pass.name) {
+                Some(column) => column,
+                None => {
+                    names.push(pass.name.clone());
+                    per_pass.push(Vec::new());
+                    names.len() - 1
+                }
+            };
+            if let Some(ms) = pass.gpu_time_ms {
+                per_pass[column].push(ms);
             }
         }
     }

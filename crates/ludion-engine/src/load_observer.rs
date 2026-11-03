@@ -4,7 +4,7 @@
 //! boundaries and at each decode or cache hit. The trait has no clock — time is the implementor's
 //! to read, and the only implementor that reads one is [`profile::LoadClock`](crate::profile), the
 //! sanctioned wall-clock site. Same split as `ScheduleObserver` (ludion-ecs) and `TimingObserver`:
-//! the per-crate determinism denylist bans clock reads outside `profile.rs`, and the profiling
+//! the per-crate determinism denylist bans clock reads outside the sanctioned sites, and the profiling
 //! devdoc's rule is that observation never mutates — an attached observer cannot change the world or
 //! its hash.
 

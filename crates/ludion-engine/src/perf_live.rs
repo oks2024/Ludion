@@ -43,7 +43,7 @@ use ludion_core::time::FrameIndex;
 use ludion_ecs::ScheduleObserver;
 use ludion_renderer::{PassTimingRing, Renderer};
 
-use crate::profile::{PassTiming, SystemTiming, TimingObserver, median_f64, tail};
+use crate::profile::{PassTiming, SystemColumns, SystemTiming, TimingObserver, median_f64, tail};
 
 /// Frames in one rolling [`ProfileWindowData`] — 60, so a window is one second of medians at the default
 /// 60 Hz tick rate and a stream of them reads as ~1 Hz.
@@ -62,7 +62,7 @@ pub const LIVE_SEQUENTIAL_NAMES: [&str; 2] = ["extract", "submit"];
 ///
 /// A window cannot simply wait for completeness. The ring is [`PassTimingRing::DEPTH`] frames deep,
 /// so a sample that will *ever* arrive arrives within that many collections — but a frame the ring
-/// skipped (a full ring, an oversize graph) or never saw (a tick the host did not render) produces
+/// skipped (a full ring) or never saw (a tick the host did not render) produces
 /// no sample at all, and waiting on it would wedge the window forever. One frame past the ring depth
 /// is therefore the entire wait, and a window closes with whatever GPU data reached it.
 const GPU_GRACE_FRAMES: usize = PassTimingRing::<FrameIndex>::DEPTH + 1;
@@ -107,9 +107,9 @@ impl Span {
 pub struct FrameSample {
     /// The frame the tick ran as (the index captured *before* the driver advanced it).
     pub frame: FrameIndex,
-    /// Per-system wall time in milliseconds, in schedule order (names in
-    /// [`ProfileSamples::system_names`], captured once for the window).
-    pub systems: Vec<f64>,
+    /// Per-system wall time in schedule order, each under its own name: a window reduces these by
+    /// name, so a schedule rebuilt mid-window cannot shift one system's samples onto another.
+    pub systems: Vec<(&'static str, Duration)>,
     /// The whole tick's wall time in milliseconds — the observed schedule run plus per-frame
     /// overhead, and never any of [`LIVE_SEQUENTIAL_NAMES`].
     pub frame_total_ms: f64,
@@ -150,9 +150,6 @@ pub struct LivePerf {
     ring: Option<PassTimingRing<FrameIndex>>,
     /// The per-system timing seam, reused across ticks.
     observer: TimingObserver,
-    /// System names in schedule order, captured from the observed frames — the schedule is stable,
-    /// so one copy serves every window.
-    system_names: Vec<String>,
     /// Windows currently accepting or awaiting samples: at most one open rolling window, at most one
     /// full-but-waiting rolling window (see [`GPU_GRACE_FRAMES`], which is far below
     /// [`PROFILE_WINDOW_FRAMES`]), and at most one capture.
@@ -175,7 +172,6 @@ impl LivePerf {
         LivePerf {
             ring: None,
             observer: TimingObserver::default(),
-            system_names: Vec::new(),
             builders: Vec::new(),
             windows: VecDeque::new(),
             capture_ready: None,
@@ -240,23 +236,9 @@ impl LivePerf {
     /// Closes the tick opened by [`begin_frame`](LivePerf::begin_frame), filing its sim half as a
     /// new [`FrameSample`].
     pub(crate) fn end_frame(&mut self, frame: FrameIndex, frame_total_ms: f64) {
-        if self.system_names.len() != self.observer.frame.len() {
-            self.system_names = self
-                .observer
-                .frame
-                .iter()
-                .map(|(name, _)| (*name).to_string())
-                .collect();
-        }
-        let systems = self
-            .observer
-            .frame
-            .iter()
-            .map(|(_, elapsed)| millis(*elapsed))
-            .collect();
         self.push_sample(FrameSample {
             frame,
-            systems,
+            systems: self.observer.frame.clone(),
             frame_total_ms,
             extract_ms: None,
             submit_ms: None,
@@ -368,7 +350,7 @@ impl LivePerf {
             }
             let builder = self.builders.remove(index);
             let capture = builder.capture;
-            let window = builder.close(&self.system_names, self.timestamps_supported());
+            let window = builder.close(self.timestamps_supported());
             if capture {
                 self.capture_ready = Some(window);
             } else {
@@ -421,16 +403,31 @@ impl WindowBuilder {
     }
 
     /// Reduces the window's samples to medians plus their columnar form.
-    fn close(self, system_names: &[String], timestamps_supported: bool) -> ProfileWindowData {
+    ///
+    /// System and pass columns are keyed by name, in first-appearance order, so a schedule or graph
+    /// that changes mid-window leaves every column full-length and every sample under its own name.
+    /// System columns key by sample position, not frame index: a `scene.load` restarts the frame
+    /// counter, so frame indices are not ascending across one.
+    fn close(self, timestamps_supported: bool) -> ProfileWindowData {
         let frames = self.samples.len();
-        let pass_names: Vec<String> = self
-            .samples
+        let mut system_columns = SystemColumns::default();
+        let mut pass_names: Vec<String> = Vec::new();
+        for (position, sample) in self.samples.iter().enumerate() {
+            system_columns.push(position as u64, &sample.systems);
+            for (name, _) in sample.passes.iter().flatten() {
+                if !pass_names.contains(name) {
+                    pass_names.push(name.clone());
+                }
+            }
+        }
+        let positions: Vec<u64> = (0..frames as u64).collect();
+        let system_ms = system_columns.dense_ms(&positions);
+        let system_names: Vec<String> = system_columns
+            .names
             .iter()
-            .find_map(|sample| sample.passes.as_ref())
-            .map(|passes| passes.iter().map(|(name, _)| name.clone()).collect())
-            .unwrap_or_default();
+            .map(|name| (*name).to_string())
+            .collect();
 
-        let mut system_ms: Vec<Vec<f64>> = vec![Vec::with_capacity(frames); system_names.len()];
         let mut pass_ms: Vec<Vec<Option<f64>>> = vec![Vec::with_capacity(frames); pass_names.len()];
         let mut frame_indices = Vec::with_capacity(frames);
         let mut frame_total_ms = Vec::with_capacity(frames);
@@ -446,19 +443,16 @@ impl WindowBuilder {
             frame_total_ms.push(sample.frame_total_ms);
             extract_ms.push(sample.extract_ms);
             submit_ms.push(sample.submit_ms);
-            for (column, value) in system_ms.iter_mut().zip(&sample.systems) {
-                column.push(*value);
-            }
-            // Defensive, like the offline driver's: a stable schedule and a stable graph report the
-            // same names every frame, but a shorter row must not shift the columns.
-            for (index, column) in pass_ms.iter_mut().enumerate() {
-                column.push(
-                    sample
-                        .passes
-                        .as_ref()
-                        .and_then(|passes| passes.get(index))
-                        .and_then(|(_, ms)| *ms),
-                );
+            // A stable graph reports the same names in the same order every frame, so the column's own
+            // position is the cheap first guess; a changed graph falls back to a search by name.
+            for (index, (name, column)) in pass_names.iter().zip(&mut pass_ms).enumerate() {
+                column.push(sample.passes.as_ref().and_then(|passes| {
+                    passes
+                        .get(index)
+                        .filter(|(n, _)| n == name)
+                        .or_else(|| passes.iter().find(|(n, _)| n == name))
+                        .and_then(|(_, ms)| *ms)
+                }));
             }
             if sample.passes.is_some() {
                 sampled_frames += 1;
@@ -469,13 +463,17 @@ impl WindowBuilder {
             }
         }
 
-        let systems = system_names
+        let systems = system_columns
+            .names
             .iter()
-            .zip(&system_ms)
-            .map(|(name, column)| SystemTiming {
-                name: name.clone(),
-                median_ms: median_f64(&mut column.clone()),
-                tail: None,
+            .zip(&system_columns.samples)
+            .map(|(name, column)| {
+                let mut own: Vec<f64> = column.iter().map(|(_, d)| millis(*d)).collect();
+                SystemTiming {
+                    name: (*name).to_string(),
+                    median_ms: median_f64(&mut own),
+                    tail: None,
+                }
             })
             .collect();
         let sequential = LIVE_SEQUENTIAL_NAMES
@@ -517,7 +515,7 @@ impl WindowBuilder {
             },
             samples: ProfileSamples {
                 frames: frame_indices,
-                system_names: system_names.to_vec(),
+                system_names,
                 system_ms,
                 frame_total_ms,
                 extract_ms,
@@ -586,7 +584,7 @@ mod tests {
     fn sample(frame: u64) -> FrameSample {
         FrameSample {
             frame: FrameIndex::new(frame),
-            systems: vec![0.5],
+            systems: vec![("bump", Duration::from_micros(500))],
             frame_total_ms: 1.0,
             extract_ms: None,
             submit_ms: None,
@@ -672,6 +670,31 @@ mod tests {
     }
 
     #[test]
+    fn an_armed_windows_frames_start_at_the_index_before_the_first_tick() {
+        // The transport columns key a tick at its index plus one, which relies on a window listing the
+        // index each tick ran as — the frame counter *before* the tick advanced it.
+        let mut engine = loaded(counter_engine());
+        for _ in 0..3 {
+            engine.advance_live();
+        }
+        let first = engine.frame().as_u64();
+        assert!(first > 0, "the run starts mid-session, not at frame 0");
+        engine.perf_arm();
+        for _ in 0..=PROFILE_WINDOW_FRAMES {
+            engine.advance_live();
+        }
+        let windows = engine.perf_take_windows();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].samples.frames[0], first);
+        assert_eq!(windows[0].first_frame, first);
+        assert_eq!(
+            windows[0].samples.frames[1],
+            first + 1,
+            "each tick is listed under the index it ran as"
+        );
+    }
+
+    #[test]
     fn a_disarmed_engine_never_profiles() {
         let mut engine = loaded(counter_engine());
         assert!(!engine.perf_armed());
@@ -696,7 +719,6 @@ mod tests {
     #[test]
     fn a_window_closes_over_exactly_its_own_frames() {
         let mut perf = LivePerf::new();
-        perf.system_names = vec!["bump".to_string()];
         let next_frame = drive(&mut perf, 0, PROFILE_WINDOW_FRAMES as u64);
         assert!(
             perf.take_windows().is_empty(),
@@ -735,7 +757,6 @@ mod tests {
     #[test]
     fn gpu_samples_are_filed_by_their_own_stamp() {
         let mut perf = LivePerf::new();
-        perf.system_names = vec!["bump".to_string()];
         // Three frames ticked and rendered, then their timings arrive out of the frames that
         // collected them — frame 0's render carried stamp 1, and so on.
         drive(&mut perf, 0, 3);
@@ -780,7 +801,6 @@ mod tests {
     #[test]
     fn a_missing_gpu_sample_does_not_wedge_the_window() {
         let mut perf = LivePerf::new();
-        perf.system_names = vec!["bump".to_string()];
         let mut next_frame = drive(&mut perf, 0, PROFILE_WINDOW_FRAMES as u64);
         // Every frame was rendered but only one timing sample ever comes back — the ring skipped
         // the rest. The window must age out and close anyway.
@@ -808,7 +828,6 @@ mod tests {
     #[test]
     fn a_complete_window_closes_without_waiting_out_the_grace() {
         let mut perf = LivePerf::new();
-        perf.system_names = vec!["bump".to_string()];
         let next_frame = drive(&mut perf, 0, PROFILE_WINDOW_FRAMES as u64);
         for frame in 0..PROFILE_WINDOW_FRAMES as u64 {
             perf.file_gpu(
@@ -826,7 +845,6 @@ mod tests {
     #[test]
     fn the_frame_span_is_a_median_and_tail_over_the_frames_that_had_one() {
         let mut perf = LivePerf::new();
-        perf.system_names = vec!["bump".to_string()];
         let next_frame = drive(&mut perf, 0, PROFILE_WINDOW_FRAMES as u64);
         let pass = || vec![("scene".to_string(), Some(1.0))];
         // Frames 0, 1 and 2 carry spans; frame 3 is sampled with no provable span and adds nothing.
@@ -853,7 +871,6 @@ mod tests {
     #[test]
     fn a_window_without_spans_has_no_frame_time() {
         let mut perf = LivePerf::new();
-        perf.system_names = vec!["bump".to_string()];
         let next_frame = drive(&mut perf, 0, PROFILE_WINDOW_FRAMES as u64);
         perf.file_gpu(
             FrameIndex::new(1),
@@ -874,7 +891,6 @@ mod tests {
     #[test]
     fn a_capture_answers_its_own_frame_count() {
         let mut perf = LivePerf::new();
-        perf.system_names = vec!["bump".to_string()];
         assert!(!perf.capture_in_flight());
         assert!(perf.begin_capture(10));
         assert!(perf.capture_in_flight());
@@ -900,7 +916,6 @@ mod tests {
     #[test]
     fn an_undrained_stream_stops_growing() {
         let mut perf = LivePerf::new();
-        perf.system_names = vec!["bump".to_string()];
         drive(
             &mut perf,
             0,
@@ -913,12 +928,119 @@ mod tests {
         );
     }
 
+    /// A window closed straight from hand-built rows, bypassing the tick path.
+    fn closed(samples: Vec<FrameSample>) -> ProfileWindowData {
+        let mut builder = WindowBuilder::new(samples.len(), true);
+        builder.samples = samples;
+        builder.close(false)
+    }
+
+    fn ran(frame: u64, systems: &[(&'static str, u64)]) -> FrameSample {
+        FrameSample {
+            systems: systems
+                .iter()
+                .map(|(name, micros)| (*name, Duration::from_micros(*micros)))
+                .collect(),
+            ..sample(frame)
+        }
+    }
+
+    fn column<'a>(window: &'a ProfileWindowData, name: &str) -> &'a [f64] {
+        let at = window
+            .samples
+            .system_names
+            .iter()
+            .position(|n| n == name)
+            .unwrap_or_else(|| panic!("no system `{name}`"));
+        &window.samples.system_ms[at]
+    }
+
+    #[test]
+    fn a_schedule_change_mid_window_keeps_each_systems_samples() {
+        let window = closed(vec![
+            ran(0, &[("a", 1000), ("b", 2000)]),
+            ran(1, &[("a", 1000), ("b", 2000)]),
+            ran(2, &[("a", 1000), ("c", 3000), ("b", 2000)]),
+            ran(3, &[("a", 1000), ("c", 3000), ("b", 2000)]),
+        ]);
+        assert_eq!(window.samples.system_names, ["a", "b", "c"]);
+        assert_eq!(column(&window, "a"), [1.0; 4]);
+        assert_eq!(column(&window, "b"), [2.0; 4]);
+        assert_eq!(column(&window, "c"), [0.0, 0.0, 3.0, 3.0]);
+        let medians: Vec<(&str, f64)> = window
+            .systems
+            .iter()
+            .map(|s| (s.name.as_str(), s.median_ms))
+            .collect();
+        assert_eq!(medians, [("a", 1.0), ("b", 2.0), ("c", 3.0)]);
+    }
+
+    #[test]
+    fn a_short_tick_keeps_every_column_full() {
+        let window = closed(vec![
+            ran(0, &[("a", 1000), ("b", 2000)]),
+            ran(1, &[("a", 1000)]),
+            ran(2, &[("a", 1000), ("b", 2000)]),
+            ran(3, &[("a", 1000)]),
+        ]);
+        assert_eq!(window.samples.system_names, ["a", "b"]);
+        assert_eq!(column(&window, "a"), [1.0; 4]);
+        assert_eq!(column(&window, "b"), [2.0, 0.0, 2.0, 0.0]);
+        for system_ms in &window.samples.system_ms {
+            assert_eq!(system_ms.len(), window.samples.frames.len());
+        }
+        assert_eq!(window.samples.frames.len(), 4);
+    }
+
+    #[test]
+    fn a_frame_counter_reset_does_not_lose_samples() {
+        // A `scene.load` restarts the frame counter mid-window.
+        let window = closed(vec![
+            ran(100, &[("a", 1000)]),
+            ran(101, &[("a", 2000)]),
+            ran(0, &[("a", 3000)]),
+            ran(1, &[("a", 4000)]),
+        ]);
+        assert_eq!(window.samples.frames, [100, 101, 0, 1]);
+        assert_eq!(column(&window, "a"), [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn a_graph_change_mid_window_keeps_each_passs_samples() {
+        let with_passes = |frame, passes: &[(&str, f64)]| FrameSample {
+            passes: Some(
+                passes
+                    .iter()
+                    .map(|(name, ms)| ((*name).to_string(), Some(*ms)))
+                    .collect(),
+            ),
+            render_stamp: Some(FrameIndex::new(frame + 1)),
+            ..sample(frame)
+        };
+        let window = closed(vec![
+            with_passes(0, &[("scene", 1.0), ("post", 2.0)]),
+            with_passes(1, &[("scene", 1.0), ("post", 2.0)]),
+            with_passes(2, &[("scene", 1.0), ("bloom", 3.0), ("post", 2.0)]),
+            sample(3),
+        ]);
+        assert_eq!(window.samples.pass_names, ["scene", "post", "bloom"]);
+        assert_eq!(
+            window.samples.pass_ms[0],
+            [Some(1.0), Some(1.0), Some(1.0), None]
+        );
+        assert_eq!(
+            window.samples.pass_ms[1],
+            [Some(2.0), Some(2.0), Some(2.0), None]
+        );
+        assert_eq!(window.samples.pass_ms[2], [None, None, Some(3.0), None]);
+        assert_eq!(window.gpu.passes[2].median_ms, Some(3.0));
+    }
+
     #[test]
     fn window_shape_is_stable() {
         // The window serializes to a fixed field structure (numbers are not asserted — they are
         // wall-clock measurements). Constructed through the builder so the shape is the real one.
         let mut perf = LivePerf::new();
-        perf.system_names = vec!["bump".to_string()];
         drive(&mut perf, 0, 4);
         perf.file_gpu(
             FrameIndex::new(1),
@@ -927,7 +1049,7 @@ mod tests {
         );
         let mut builder = perf.builders.remove(0);
         builder.target = 4;
-        let window = builder.close(&perf.system_names, true);
+        let window = builder.close(true);
 
         let value = serde_json::to_value(&window).unwrap();
         for key in [
