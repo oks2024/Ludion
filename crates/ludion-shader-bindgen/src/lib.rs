@@ -183,6 +183,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "dfg.wgsl",
             "gi_probe.wgsl",
             "view_ray.wgsl",
+            "math.wgsl",
             "mesh_shading.wgsl",
             "mesh_material.wgsl",
         ],
@@ -195,6 +196,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "cluster_grid.wgsl",
             "lights.wgsl",
             "billboard_light.wgsl",
+            "quad.wgsl",
         ],
     ),
     (
@@ -203,9 +205,9 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ),
     ("ui_text.wgsl", &["glyph.wgsl"]),
     ("blit.wgsl", &["fullscreen_vs.wgsl"]),
-    ("ibl.wgsl", &["dfg.wgsl", "sky_gradient.wgsl"]),
-    ("gi_bake.wgsl", &["gi_rays.wgsl"]),
-    ("gi_inject.wgsl", &["gi_rays.wgsl"]),
+    ("ibl.wgsl", &["math.wgsl", "dfg.wgsl", "sky_gradient.wgsl"]),
+    ("gi_bake.wgsl", &["math.wgsl", "gi_rays.wgsl"]),
+    ("gi_inject.wgsl", &["math.wgsl", "gi_rays.wgsl"]),
     ("bloom_down.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("bloom_up.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("box_blur.wgsl", &["fullscreen_vs.wgsl"]),
@@ -234,6 +236,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "dfg.wgsl",
             "gi_probe.wgsl",
             "view_ray.wgsl",
+            "math.wgsl",
             "mesh_shading.wgsl",
             "decal.wgsl",
         ],
@@ -248,8 +251,14 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
         ],
     ),
     ("dof.wgsl", &["fullscreen_vs.wgsl"]),
-    ("dof_coc.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
-    ("ground_marker.wgsl", &["camera.wgsl", "rounded_box.wgsl"]),
+    (
+        "dof_coc.wgsl",
+        &["fullscreen_vs.wgsl", "hdr.wgsl", "world_from_depth.wgsl"],
+    ),
+    (
+        "ground_marker.wgsl",
+        &["camera.wgsl", "rounded_box.wgsl", "quad.wgsl"],
+    ),
     ("hiz_reduce.wgsl", &["fullscreen_vs.wgsl", "footprint.wgsl"]),
     ("hiz_seed.wgsl", &["fullscreen_vs.wgsl", "footprint.wgsl"]),
     (
@@ -264,6 +273,8 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "cluster_grid.wgsl",
             "lights.wgsl",
             "billboard_light.wgsl",
+            "quad.wgsl",
+            "soft_falloff.wgsl",
         ],
     ),
     (
@@ -299,7 +310,15 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
         ],
     ),
     ("probe_face.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
-    ("projector.wgsl", &["rounded_box.wgsl", "decal.wgsl"]),
+    (
+        "projector.wgsl",
+        &[
+            "rounded_box.wgsl",
+            "decal.wgsl",
+            "soft_falloff.wgsl",
+            "world_from_depth.wgsl",
+        ],
+    ),
     (
         "resolve.wgsl",
         &[
@@ -327,7 +346,15 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ),
     ("smaa_edges.wgsl", &["fullscreen_vs.wgsl", "srgb.wgsl"]),
     ("smaa_weights.wgsl", &["fullscreen_vs.wgsl"]),
-    ("ssao.wgsl", &["fullscreen_vs.wgsl", "bayer.wgsl"]),
+    (
+        "ssao.wgsl",
+        &[
+            "fullscreen_vs.wgsl",
+            "bayer.wgsl",
+            "math.wgsl",
+            "world_from_depth.wgsl",
+        ],
+    ),
     (
         "ssr_blend.wgsl",
         &[

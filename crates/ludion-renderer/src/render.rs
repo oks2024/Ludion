@@ -6511,6 +6511,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Dfg,
             Snippet::GiProbe,
             Snippet::ViewRay,
+            Snippet::Math,
             Snippet::MeshShading,
             Snippet::MeshMaterial,
         ],
@@ -6578,7 +6579,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/ground_marker.wgsl"),
         // The camera to project the flat quad with, and nothing else: markers are unlit, so the
         // clustered light set they would otherwise compose has nothing to contribute.
-        snippets: &[Snippet::Camera, Snippet::RoundedBox],
+        snippets: &[Snippet::Camera, Snippet::RoundedBox, Snippet::Quad],
         layouts: &[Some(LayoutId::Camera)],
     },
     ShaderDesc {
@@ -6591,6 +6592,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::ClusterGrid,
             Snippet::Lights,
             Snippet::BillboardLight,
+            Snippet::Quad,
         ],
         layouts: &[
             Some(LayoutId::Camera),
@@ -6610,6 +6612,8 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::ClusterGrid,
             Snippet::Lights,
             Snippet::BillboardLight,
+            Snippet::Quad,
+            Snippet::SoftFalloff,
         ],
         layouts: &[Some(LayoutId::Camera), Some(LayoutId::Lights)],
     },
@@ -6625,7 +6629,12 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         file_name: "ssao.wgsl",
         body: include_str!("shaders/ssao.wgsl"),
         // `bayer.wgsl` supplies the estimator's per-pixel rotation, whose period `ssao_blur` cancels.
-        snippets: &[Snippet::FullscreenVs, Snippet::Bayer],
+        snippets: &[
+            Snippet::FullscreenVs,
+            Snippet::Bayer,
+            Snippet::Math,
+            Snippet::WorldFromDepth,
+        ],
         layouts: &[Some(LayoutId::Ssao)],
     },
     ShaderDesc {
@@ -6641,7 +6650,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::DofCoc,
         file_name: "dof_coc.wgsl",
         body: include_str!("shaders/dof_coc.wgsl"),
-        snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
+        snippets: &[Snippet::FullscreenVs, Snippet::Hdr, Snippet::WorldFromDepth],
         layouts: &[Some(LayoutId::DofCoc)],
     },
     ShaderDesc {
@@ -6845,7 +6854,12 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         id: ShaderId::Projector,
         file_name: "projector.wgsl",
         body: include_str!("shaders/projector.wgsl"),
-        snippets: &[Snippet::RoundedBox, Snippet::Decal],
+        snippets: &[
+            Snippet::RoundedBox,
+            Snippet::Decal,
+            Snippet::SoftFalloff,
+            Snippet::WorldFromDepth,
+        ],
         layouts: &[Some(LayoutId::Projector), Some(LayoutId::ProjectorMap)],
     },
     ShaderDesc {
@@ -6891,6 +6905,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Dfg,
             Snippet::GiProbe,
             Snippet::ViewRay,
+            Snippet::Math,
             Snippet::MeshShading,
             Snippet::Decal,
         ],
@@ -7057,6 +7072,17 @@ pub(crate) enum Snippet {
     /// `transparent_layer`, the value a layer fragment writes into the `Rg16Float` transparent layer
     /// (sprite, particle, text); needs the `Camera` snippet ahead of it.
     TransparentLayer,
+    /// `PI` and `TAU`, binding-free (mesh, decal_lit, the `ibl.wgsl`, `gi_bake.wgsl` and `gi_inject.wgsl`
+    /// computes, ssao).
+    Math,
+    /// `CORNERS` and `QUAD_PAD`, the quad every billboard-like pass draws, binding-free
+    /// (ground_marker, particle, sprite).
+    Quad,
+    /// `SOFT_FALLOFF`, the soft-edge gaussian exponent, binding-free (particle, projector).
+    SoftFalloff,
+    /// `world_from_depth`, a pixel's world position from its stored device depth and the pass's
+    /// `inv_view_proj`, binding-free (ssao, projector, dof_coc).
+    WorldFromDepth,
 }
 
 impl Snippet {
@@ -7091,6 +7117,10 @@ impl Snippet {
             Snippet::BillboardLight => "billboard_light.wgsl",
             Snippet::ViewRay => "view_ray.wgsl",
             Snippet::TransparentLayer => "transparent_layer.wgsl",
+            Snippet::Quad => "quad.wgsl",
+            Snippet::Math => "math.wgsl",
+            Snippet::SoftFalloff => "soft_falloff.wgsl",
+            Snippet::WorldFromDepth => "world_from_depth.wgsl",
         }
     }
 
@@ -7126,6 +7156,10 @@ impl Snippet {
             Snippet::TransparentLayer => {
                 include_str!("shaders/snippets/transparent_layer.wgsl")
             }
+            Snippet::Quad => include_str!("shaders/snippets/quad.wgsl"),
+            Snippet::Math => include_str!("shaders/snippets/math.wgsl"),
+            Snippet::SoftFalloff => include_str!("shaders/snippets/soft_falloff.wgsl"),
+            Snippet::WorldFromDepth => include_str!("shaders/snippets/world_from_depth.wgsl"),
         }
     }
 
@@ -7161,6 +7195,10 @@ impl Snippet {
             Snippet::BillboardLight,
             Snippet::ViewRay,
             Snippet::TransparentLayer,
+            Snippet::Math,
+            Snippet::Quad,
+            Snippet::SoftFalloff,
+            Snippet::WorldFromDepth,
         ]
         .into_iter()
         .find(|s| s.file_name() == name)

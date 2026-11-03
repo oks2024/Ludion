@@ -86,16 +86,6 @@ struct DofCoc {
 // build, but a degenerate matrix could reconstruct one, and the division must stay finite.
 const DOF_MIN_DISTANCE: f32 = 1e-3;
 
-// The world-space position of the pixel at `uv` whose stored device depth is `depth`. wgpu's clip
-// space is xy in [-1, 1] with +y up and z in [0, 1] near→far; `uv.y` runs top-down (the fullscreen
-// triangle flips it), which is the one sign to get right. The same reconstruction the composite's
-// fog, the SSAO estimator and the shaft march use.
-fn coc_world_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
-    let ndc = vec3<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
-    let world = coc_params.inv_view_proj * vec4<f32>(ndc, 1.0);
-    return world.xyz / world.w;
-}
-
 // The distance a world point is from the lens: out from the eye, or along the view under an
 // orthographic camera (the same measure the transparent layer's `t` uses). An early return, not a
 // `select`: the perspective arithmetic must stay the one it always was.
@@ -141,7 +131,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             covered = covered || layer.g > 0.0;
             let uv = (texel + vec2<f32>(0.5)) / dims;
             let depth = textureLoad(coc_depth, vec2<i32>(texel), 0);
-            let back = coc_view_distance(coc_world_from_depth(uv, depth));
+            let back = coc_view_distance(world_from_depth(uv, depth, coc_params.inv_view_proj));
             var distance = back;
             var coc = dof_circle_of_confusion(back);
             if (layer.g > 0.0) {
@@ -182,6 +172,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // One bilinear tap, which at the native 2:1 ratio lands exactly between four source texels and so
     // *is* their box average — the bright pass's trick, for the same reason.
     let color = hdr_safe(textureSampleLevel(coc_scene, coc_samp, in.uv, 0.0).rgb);
-    let world = coc_world_from_depth(nearest_uv, nearest);
+    let world = world_from_depth(nearest_uv, nearest, coc_params.inv_view_proj);
     return vec4<f32>(color, dof_circle_of_confusion(coc_view_distance(world)));
 }

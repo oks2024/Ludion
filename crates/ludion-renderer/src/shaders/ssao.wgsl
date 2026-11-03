@@ -69,8 +69,6 @@ struct Ssao {
 @group(0) @binding(2) var ssao_samp: sampler;
 @group(0) @binding(3) var<uniform> ssao: Ssao;
 
-const TAU: f32 = 6.28318530717959;
-
 // Roberts' generalized golden-ratio (R2) 2D low-discrepancy sequence: `frac(i * a)` with `a` the
 // reciprocals of the plastic number's powers. Chosen over Hammersley because it needs no bit
 // reversal and is well distributed at *any* prefix length, so lowering `ssao.samples` keeps the same
@@ -92,16 +90,6 @@ fn cosine_hemisphere(u: vec2<f32>) -> vec3<f32> {
     return vec3<f32>(cos(phi) * sin_theta, sin(phi) * sin_theta, cos_theta);
 }
 
-// The world-space position of the pixel at `uv` whose stored device depth is `depth`. wgpu's clip
-// space is xy in [-1, 1] with +y up and z in [0, 1] near→far; `uv.y` runs top-down (the fullscreen
-// triangle flips it), which is the one sign to get right. Same reconstruction the composite's fog
-// uses.
-fn world_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
-    let ndc = vec3<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
-    let world = ssao.inv_view_proj * vec4<f32>(ndc, 1.0);
-    return world.xyz / world.w;
-}
-
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // This pass runs at a fraction of the *output* extent while the prepass ran at the *render*
@@ -117,7 +105,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     let source_uv = (texel + vec2<f32>(0.5)) / dims;
     let n = normalize(textureSampleLevel(ssao_normal, ssao_samp, source_uv, 0.0).xyz);
-    let p = world_from_depth(source_uv, depth);
+    let p = world_from_depth(source_uv, depth, ssao.inv_view_proj);
     let p_dist = length(p - ssao.cam_pos);
 
     // A per-pixel rotation of the tangent frame about the normal, so neighbouring pixels sample
@@ -155,7 +143,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         if (sdepth >= 1.0) {
             continue;
         }
-        let q = world_from_depth((stexel + vec2<f32>(0.5)) / dims, sdepth);
+        let q = world_from_depth((stexel + vec2<f32>(0.5)) / dims, sdepth, ssao.inv_view_proj);
         let q_dist = length(q - ssao.cam_pos);
         if (q_dist < length(s - ssao.cam_pos) - ssao.bias) {
             // Range check: an occluder far outside the hemisphere is a different object seen past an

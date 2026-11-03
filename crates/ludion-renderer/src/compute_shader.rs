@@ -38,8 +38,8 @@ impl ComputeShader {
     /// The snippets composed ahead of the body, in order.
     pub(crate) fn snippets(self) -> &'static [Snippet] {
         match self {
-            ComputeShader::Ibl => &[Snippet::Dfg, Snippet::SkyGradient],
-            ComputeShader::GiBake | ComputeShader::GiInject => &[Snippet::GiRays],
+            ComputeShader::Ibl => &[Snippet::Math, Snippet::Dfg, Snippet::SkyGradient],
+            ComputeShader::GiBake | ComputeShader::GiInject => &[Snippet::Math, Snippet::GiRays],
             ComputeShader::ProbeRelight => &[],
         }
     }
@@ -102,5 +102,27 @@ mod tests {
     fn compute_shader_names_match_the_bindgen_list() {
         let names: Vec<&str> = ComputeShader::ALL.iter().map(|s| s.file_name()).collect();
         assert_eq!(names, ludion_shader_bindgen::COMPUTE_SHADERS);
+    }
+
+    /// `shafts` and `composite` keep their own `world_from_depth`: it moves pixels through
+    /// compilation alone (`Plan/transparent-depth.md`, A fragility). Their bodies stay the
+    /// snippet's, with only the uniform's name spelled in.
+    #[test]
+    fn kept_world_from_depth_copies_match_the_snippet() {
+        let snippet = include_str!("shaders/snippets/world_from_depth.wgsl");
+        let body_start = snippet.find("{\n").expect("snippet function body") + 2;
+        let body = &snippet[body_start..snippet.rfind("}\n").expect("snippet function end")];
+        for (uniform, source) in [
+            ("shafts", include_str!("shaders/shafts.wgsl")),
+            ("composite", include_str!("shaders/composite.wgsl")),
+        ] {
+            let expected = body.replace("inv_view_proj", &format!("{uniform}.inv_view_proj"));
+            assert!(
+                source.contains(&expected),
+                "{uniform}.wgsl's world_from_depth no longer matches snippets/world_from_depth.wgsl \
+                 statement for statement; the copy is kept out of the snippet on purpose \
+                 (Plan/transparent-depth.md, A fragility), so edit both together"
+            );
+        }
     }
 }

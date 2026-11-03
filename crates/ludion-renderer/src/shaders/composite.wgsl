@@ -278,6 +278,7 @@ const LUMA_709: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 // glam's `perspective_rh`/`orthographic_rh` build and the convention the scene pass's 1.0 depth clear
 // asserts. `uv.y` runs top-down (the fullscreen triangle flips it), which is the one sign to get
 // right.
+// Kept out of world_from_depth.wgsl: this function moves 3090 pixels through compilation alone (Plan/transparent-depth.md, A fragility).
 fn world_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
     let ndc = vec3<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
     let world = composite.inv_view_proj * vec4<f32>(ndc, 1.0);

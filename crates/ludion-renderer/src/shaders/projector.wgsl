@@ -71,8 +71,6 @@ struct ProjectorParams {
 @group(1) @binding(1) var proj_map_samp: sampler;
 
 const NO_OCCLUSION: u32 = 0xFFFFFFFFu;
-// The particle pass's soft-edge gaussian: `exp(-SOFT_FALLOFF)` is the value at the rim.
-const SOFT_FALLOFF: f32 = 4.0;
 // How far a side's extrapolated depth may miss the centre, as a share of the one-tap depth step,
 // before that axis counts as crossing a discontinuity on both sides.
 const EXTRAPOLATION_SLACK: f32 = 0.03;
@@ -96,14 +94,6 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     out.clip = proj_params.view_proj * vec4<f32>(world, 1.0);
     out.instance = ii;
     return out;
-}
-
-// The world-space position of the fragment at `uv` whose stored device depth is `depth`
-// (`composite.wgsl`'s convention: `uv.y` runs top-down).
-fn world_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
-    let ndc = vec3<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
-    let world = proj_params.inv_view_proj * vec4<f32>(ndc, 1.0);
-    return world.xyz / world.w;
 }
 
 // The geometric world normal of the surface at `pixel`, rebuilt from the depth buffer: per screen
@@ -147,7 +137,7 @@ fn geometric_normal(
         let other = select(lo, hi, forward);
         let d_other = select(d_lo, d_hi, forward);
         trusted = trusted && min(e_lo, e_hi) <= EXTRAPOLATION_SLACK * abs(d_other - depth) + 1e-6;
-        let w_other = world_from_depth((vec2<f32>(other) + 0.5) / dims, d_other);
+        let w_other = world_from_depth((vec2<f32>(other) + 0.5) / dims, d_other, proj_params.inv_view_proj);
         delta[axis] = select(world - w_other, w_other - world, forward);
     }
     // Screen x then y (y runs down), so the cross points away from the surface for a front face.
@@ -217,7 +207,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let p = projectors[in.instance];
     let pixel = vec2<i32>(frag.xy);
     let depth = textureLoad(proj_depth, pixel, 0);
-    let world = world_from_depth(frag.xy / vec2<f32>(textureDimensions(proj_depth)), depth);
+    let world = world_from_depth(
+        frag.xy / vec2<f32>(textureDimensions(proj_depth)),
+        depth,
+        proj_params.inv_view_proj,
+    );
     let normal = textureLoad(proj_normal, pixel, 0).xyz;
 
     // Every stage runs for every pixel and the rejections only zero the result, so the footprint's
@@ -286,7 +280,11 @@ fn fs_decal(in: DecalVsOut) -> @location(0) vec4<f32> {
     let d = proj_decals[in.decal];
     let pixel = vec2<i32>(frag.xy);
     let depth = textureLoad(proj_depth, pixel, 0);
-    let world = world_from_depth(frag.xy / vec2<f32>(textureDimensions(proj_depth)), depth);
+    let world = world_from_depth(
+        frag.xy / vec2<f32>(textureDimensions(proj_depth)),
+        depth,
+        proj_params.inv_view_proj,
+    );
     let normal = textureLoad(proj_normal, pixel, 0).xyz;
     let local = (d.world_to_box * vec4<f32>(world, 1.0)).xyz;
     let uv = mix(d.uv_rect.xy, d.uv_rect.zw, vec2<f32>(local.x + 0.5, local.z + 0.5));

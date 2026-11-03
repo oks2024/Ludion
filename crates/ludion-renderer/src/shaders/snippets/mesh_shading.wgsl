@@ -1,6 +1,6 @@
 // The mesh shading, groups 2–3, shared by every shader that lights a surface like a mesh: the sun and
 // local-light shadows (@group 2), the IBL / AO / GI environment (@group 3), the Cook-Torrance lobes and
-// `shade`. Composed after the camera, lights, dfg, gi_probe and view_ray snippets.
+// `shade`. Composed after the camera, lights, dfg, gi_probe and view_ray snippets; needs `math.wgsl` ahead of it.
 
 // The directional "sun" — a mesh-only @group(2) (Plan/shadow-mapping.md decision 3), so the shared
 // camera/lights layouts and the sprite/text shaders are untouched. `sun.color` is premultiplied and
@@ -137,8 +137,6 @@ struct EnvParams {
 // at `bounce: 0.0`, or a machine with the effect off — binds a 1×1×1 fallback and carries a zero
 // flag in `gi_bounce.y`, so `gi_dynamic` is never called.
 @group(3) @binding(10) var gi_dyn_tex: texture_3d<f32>;
-
-const PI: f32 = 3.14159265358979;
 
 // GGX/Trowbridge-Reitz normal distribution with alpha = roughness^2.
 fn distribution_ggx(ndh: f32, alpha: f32) -> f32 {

@@ -54,12 +54,6 @@ struct VsOut {
     @location(8) @interpolate(flat) uv_tile: vec4<f32>,
 };
 
-// The six corners of a quad (two triangles) in [-0.5, 0.5], with matching UVs.
-const CORNERS = array<vec2<f32>, 6>(
-    vec2<f32>(-0.5, -0.5), vec2<f32>(0.5, -0.5), vec2<f32>(0.5, 0.5),
-    vec2<f32>(-0.5, -0.5), vec2<f32>(0.5, 0.5), vec2<f32>(-0.5, 0.5),
-);
-
 @vertex
 fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
     let corner = CORNERS[vi];

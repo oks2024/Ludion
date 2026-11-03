@@ -9,8 +9,6 @@
 // The sun/moon disc is deliberately absent here — the IBL integrates the smooth gradient alone, so
 // the analytic `DirectionalLight` (and the sky background's disc) are never double-counted.
 
-const PI: f32 = 3.14159265358979;
-
 struct SkyColors {
     zenith: vec4<f32>,
     horizon: vec4<f32>,

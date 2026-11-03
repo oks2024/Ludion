@@ -34,17 +34,6 @@ struct VsOut {
     @location(2) @interpolate(flat) shape: vec4<f32>,
 };
 
-// The six corners of a quad (two triangles) in [-0.5, 0.5], the sprite pass's convention.
-const CORNERS = array<vec2<f32>, 6>(
-    vec2<f32>(-0.5, -0.5), vec2<f32>(0.5, -0.5), vec2<f32>(0.5, 0.5),
-    vec2<f32>(-0.5, -0.5), vec2<f32>(0.5, 0.5), vec2<f32>(-0.5, 0.5),
-);
-
-// The quad is drawn slightly larger than the marker so the `fwidth` fringe has room to fall off
-// instead of being clipped at the footprint's own edge. A ratio rather than an absolute margin: the
-// extra band is then the same fraction of any marker, and the extra fragments are fully transparent.
-const QUAD_PAD: f32 = 1.05;
-
 @vertex
 fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
     let model = mat4x4<f32>(in.model_0, in.model_1, in.model_2, in.model_3);

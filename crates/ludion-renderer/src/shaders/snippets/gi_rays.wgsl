@@ -1,7 +1,7 @@
 // The GI bake's ray set and its geometry helpers, shared by `gi_bake.wgsl` (which traces the rays) and
 // `gi_inject.wgsl` (which replays the hits it cached). Binding-free: each caller passes the uniform
 // fields it reads. The injection reproduces the bake's boundary normal and bin lookup exactly, so the
-// two halves of one bounce term cannot disagree about either.
+// two halves of one bounce term cannot disagree about either. Needs `math.wgsl` ahead of it.
 
 // Where the world-space light bin sits and how big its cells are — `gi_bin.rs`'s `GiBinParams`.
 // The dims travel in the uniform rather than as constants so `gi_bin.rs`'s `BIN_DIMS` is the only
@@ -17,7 +17,6 @@ struct GiBinParams {
 
 // The reciprocal golden ratio, the spherical Fibonacci sequence's azimuth increment in turns.
 const GOLDEN_RATIO_INVERSE: f32 = 0.6180339887498949;
-const TAU: f32 = 6.283185307179586;
 
 // Ray `i` of the `rays`-ray spherical Fibonacci set: evenly spaced in cos(elevation), advanced by the
 // golden angle in azimuth. `fract` on the turn count keeps the azimuth exact in f32 however long the
