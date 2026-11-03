@@ -161,7 +161,7 @@ describe('destroyEntity', () => {
 });
 
 describe('duplicateEntity — presentation ids', () => {
-  const flagOf = (command: Command): unknown => (paramsOf(command) as { presentation?: unknown }).presentation;
+  const flagOf = (command: Command): unknown => (command.method === 'entity.spawn' ? command.params.presentation : undefined);
   async function duplicate(id: EntityId): Promise<Command> {
     const calls: Command[] = [];
     const call = mockCall(calls, {

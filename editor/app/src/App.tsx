@@ -40,7 +40,7 @@ import { RECENT_PROJECTS_KEY, parseRecents, pushRecent } from './shell/recents';
 import { switchProject } from './shell/projectSwitch';
 import { GAME_SLOT, onStageStatus, stageStart, stageStatus, stageStop, type StagePhase, type StageStatus } from './shell/host';
 import { autoAttachUrl, dropsSession, gameCard, gameOpts, type ConnectionState, type GameAction } from './shell/gameSession';
-import { sceneChangeOutcome, type SceneChangeWire } from './shell/sceneChange';
+import { sceneChangeOutcome } from './shell/sceneChange';
 import { StageSlotCard } from './editor/voxel/StageSlotCard';
 import { join } from './editor/voxel/stage';
 import { editorPaths, projectInfo, writeEditorContext, type ProjectInfo } from './terminal/pty';
@@ -670,7 +670,7 @@ export default function App() {
       }
       // Another client may reuse one of our request ids; the collision is harmless because no save
       // resets edit state. See `sceneChangeOutcome`.
-      const outcome = sceneChangeOutcome(event.data as SceneChangeWire, ownSaveIdsRef.current, savePathRef.current);
+      const outcome = sceneChangeOutcome(event.data, ownSaveIdsRef.current, savePathRef.current);
       if (outcome.ownSaveId !== null) {
         ownSaveIdsRef.current.delete(outcome.ownSaveId);
       }

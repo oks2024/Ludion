@@ -546,11 +546,11 @@ mod tests {
                 ticks: 1,
                 hash: false,
             }));
-        let polls = 400;
-        for _ in 0..polls {
-            if server.sim_shutdown.activity() == Activity::Tick {
-                break;
-            }
+        // Bounded by a deadline, not a poll count: a loaded box can starve the sim thread for seconds.
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while server.sim_shutdown.activity() != Activity::Tick
+            && std::time::Instant::now() < deadline
+        {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(

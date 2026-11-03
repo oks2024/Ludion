@@ -822,7 +822,7 @@ describe('presentation entities respawn flagged', () => {
   const P = (n: number, generation = 0): EntityId => E(PRESENTATION_BASE + n, generation);
   const ref = (e: EntityId) => ({ index: e.index, generation: e.generation });
   /** The flag as sent, read through a weak cast so this compiles under protocol types that predate it. */
-  const flagOf = (cmd: Command): unknown => (paramsOf(cmd) as { presentation?: unknown }).presentation;
+  const flagOf = (cmd: Command): unknown => (cmd.method === 'entity.spawn' ? cmd.params.presentation : undefined);
   /** A caller that answers each spawn with the next presentation-range id (or a sim id for sim spawns). */
   function engineLike(): { call: CallFn; calls: Command[] } {
     let next = 100;

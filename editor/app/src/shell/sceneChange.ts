@@ -2,13 +2,7 @@
 // distinction the scene picker depends on (`Plan/editor-open-project.md` decision 7) is testable
 // without a client or a subscription. Pure.
 
-/** The slice of the `scene.changed` payload this decision reads. Declared locally so the tree
- *  compiles against generated types that predate `kind` and `request_id`. */
-export interface SceneChangeWire {
-  readonly path?: string | null;
-  readonly kind?: string;
-  readonly request_id?: number | null;
-}
+import type { SceneChangedData } from '@ludion/protocol';
 
 export interface SceneChangeOutcome {
   /** Drop the undo stack, selection and pointer: the world was replaced, so entity ids may be stale. */
@@ -25,7 +19,7 @@ export interface SceneChangeOutcome {
  *  request id was registered before it was sent) clears dirty; a foreign save of the served path
  *  does too, since the file now holds the live world. A foreign save elsewhere changes nothing here. */
 export function sceneChangeOutcome(
-  data: SceneChangeWire,
+  data: SceneChangedData,
   ownSaves: ReadonlySet<number>,
   currentSavePath: string,
 ): SceneChangeOutcome {

@@ -146,8 +146,7 @@ export const PRESENTATION_BASE = 16777216;
 
 /**
  * An `entity.spawn` that recreates `old` with `components`: presentation entities come back from the
- * presentation range, sim ones as sim. The flag is spread in only when set, so the command stays valid
- * under protocol types that predate the field.
+ * presentation range, sim ones as sim. The flag is omitted when false.
  */
 export function respawnCommand(old: EntityId, components: Record<string, unknown>): Command {
   return {

@@ -39,8 +39,8 @@ describe('sceneChangeOutcome', () => {
     });
   });
 
-  it('an event with no kind is a replaced world', () => {
-    expect(sceneChangeOutcome({ path: 'main.yaml' }, none, '')).toEqual({
+  it('a load is a replaced world', () => {
+    expect(sceneChangeOutcome({ kind: 'load', path: 'main.yaml' }, none, '')).toEqual({
       resetEditState: true,
       clearDirty: true,
       savePath: 'main.yaml',

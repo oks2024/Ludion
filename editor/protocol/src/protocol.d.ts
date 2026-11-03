@@ -309,6 +309,10 @@ export type EventMessage1 =
  */
 export type SeveritySchema = 'error' | 'warning';
 /**
+ * A request correlation id, chosen by the client and echoed in the matching [`Response`].
+ */
+export type RequestId = number;
+/**
  * The request envelope: a protocol version, a correlation id, and one flattened [`Command`].
  *
  * # Example
@@ -325,7 +329,7 @@ export type SeveritySchema = 'error' | 'warning';
  */
 export type Request = {
   /**
-   * The client-chosen correlation id, echoed in the response.
+   * A request correlation id, chosen by the client and echoed in the matching [`Response`].
    */
   id: number;
   /**
@@ -534,7 +538,7 @@ export type Request1 =
  */
 export type Response = Response1 & {
   /**
-   * The correlation id of the request this answers.
+   * A request correlation id, chosen by the client and echoed in the matching [`Response`].
    */
   id: number;
   [k: string]: unknown;
@@ -568,6 +572,10 @@ export type Response1 =
             [k: string]: unknown;
           }
         | {
+            /**
+             * What `scene.check` reports over the written text; the file was written regardless.
+             */
+            diagnostics?: WireErrorSchema[];
             kind: 'scene_saved';
             /**
              * The path the canonical YAML was written to.
@@ -741,7 +749,7 @@ export type Response1 =
              */
             data: string;
             /**
-             * The image encoding — always `"png"` in M1.
+             * The image encoding, always "png".
              */
             format: string;
             /**
@@ -1018,6 +1026,10 @@ export type ResponseBody =
       [k: string]: unknown;
     }
   | {
+      /**
+       * What `scene.check` reports over the written text; the file was written regardless.
+       */
+      diagnostics?: WireErrorSchema[];
       kind: 'scene_saved';
       /**
        * The path the canonical YAML was written to.
@@ -1191,7 +1203,7 @@ export type ResponseBody =
        */
       data: string;
       /**
-       * The image encoding — always `"png"` in M1.
+       * The image encoding, always "png".
        */
       format: string;
       /**
@@ -1379,17 +1391,20 @@ export interface SceneLoadParams {
    * Path to the scene file, resolved by the engine relative to its project root.
    */
   path: string;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `scene.save`.
  */
 export interface SceneSaveParams {
   /**
+   * Skip only the check that the destination still holds the text this session loaded or last
+   * saved there; the generated-scene and wrong-kind refusals still apply.
+   */
+  force?: boolean;
+  /**
    * Destination path; the engine writes canonical YAML there.
    */
   path: string;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `scene.check`.
@@ -1399,7 +1414,6 @@ export interface SceneCheckParams {
    * Path to the scene file to validate.
    */
   path: string;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `entity.spawn`.
@@ -1414,13 +1428,14 @@ export interface SceneCheckParams {
  *
  * let mut components = BTreeMap::new();
  * components.insert("Transform".to_string(), serde_json::json!({ "position": [0.0, 1.0, 0.0] }));
- * let params = EntitySpawnParams { name: Some("player".into()), components };
+ * let params = EntitySpawnParams { name: Some("player".into()), components, presentation: false };
  * assert_eq!(params.components.len(), 1);
  * ```
  */
 export interface EntitySpawnParams {
   /**
-   * The entity's components, keyed by registry name; values are validated at dispatch.
+   * The entity's components, keyed by registry name; each value is validated at dispatch against
+   * the component's schema, its semantic validator and the entity-reference checks.
    */
   components?: {
     [k: string]: unknown;
@@ -1429,14 +1444,17 @@ export interface EntitySpawnParams {
    * Optional human-facing name for the entity (for logs / the inspector).
    */
   name?: string | null;
-  [k: string]: unknown;
+  /**
+   * Spawn from the presentation id range: the entity is drawn and never hashed. A sim spawn
+   * (the default) may not name a presentation entity.
+   */
+  presentation?: boolean;
 }
 /**
  * Parameters for `entity.destroy`.
  */
 export interface EntityDestroyParams {
   entity: EntityIdSchema;
-  [k: string]: unknown;
 }
 /**
  * The entity to despawn.
@@ -1472,7 +1490,6 @@ export interface EntityReparentParams {
    * The new parent, or `null` to detach the entity into a root.
    */
   parent?: EntityIdSchema2 | null;
-  [k: string]: unknown;
 }
 /**
  * The entity to move.
@@ -1524,7 +1541,6 @@ export interface PrefabSpawnParams {
    * A pose baked onto every root part of the prefab; omitted, the parts keep their authored pose.
    */
   transform?: Placement | null;
-  [k: string]: unknown;
 }
 /**
  * A pose baked onto every root part of a spawned prefab. Field defaults equal a `Transform`'s.
@@ -1558,7 +1574,6 @@ export interface Placement {
    * @maxItems 3
    */
   translation?: [number, number, number];
-  [k: string]: unknown;
 }
 /**
  * Parameters for `prefab.create`.
@@ -1585,7 +1600,6 @@ export interface PrefabCreateParams {
    * The file to write, relative to the content root; overwritten if it exists.
    */
   path: string;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `prefab.apply`.
@@ -1605,7 +1619,6 @@ export interface PrefabApplyParams {
    * Narrows the apply to these part paths; omitted, every edited part is written.
    */
   parts?: string[] | null;
-  [k: string]: unknown;
 }
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
@@ -1638,7 +1651,6 @@ export interface PrefabRevertParams {
    * `Transform` and `Parent` are never reverted, and removed parts are not re-spawned.
    */
   pointer?: string | null;
-  [k: string]: unknown;
 }
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
@@ -1662,7 +1674,6 @@ export interface EntityIdSchema4 {
  */
 export interface PrefabUnpackParams {
   instance: EntityIdSchema5;
-  [k: string]: unknown;
 }
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
@@ -1689,7 +1700,6 @@ export interface PrefabOverridesParams {
    * instance.
    */
   instances?: EntityIdSchema2[] | null;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `component.set`.
@@ -1701,12 +1711,12 @@ export interface ComponentSetParams {
   component: string;
   entity: EntityIdSchema6;
   /**
-   * The component's JSON value, validated against its schema at dispatch.
+   * The component's JSON value, validated at dispatch against the component's schema, its
+   * semantic validator and the entity-reference checks.
    */
   value: {
     [k: string]: unknown;
   };
-  [k: string]: unknown;
 }
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
@@ -1725,7 +1735,6 @@ export interface ComponentGetParams {
    */
   component: string;
   entity: EntityIdSchema7;
-  [k: string]: unknown;
 }
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
@@ -1744,7 +1753,6 @@ export interface ComponentRemoveParams {
    */
   component: string;
   entity: EntityIdSchema8;
-  [k: string]: unknown;
 }
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
@@ -1782,7 +1790,6 @@ export interface QueryEntitiesParams {
    * with no `Transform` has none.
    */
   world?: boolean;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `sim.step`.
@@ -1793,23 +1800,22 @@ export interface SimStepParams {
    */
   hash?: boolean;
   /**
-   * Number of ticks to run before pausing.
+   * Number of ticks to run before pausing; at most 216000 (`L3057` above it), 0 runs none.
    */
   ticks: number;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `sim.set_speed`.
  *
- * The factor is validated at dispatch (`L4001` if it is not finite and greater than zero); the
+ * The factor is validated at dispatch (`L4001` unless it is finite and within `[1/64, 64]`); the
  * protocol layer carries it as a plain `f64` and does not depend on `ludion-sim`'s `Speed`.
  */
 export interface SimSetSpeedParams {
   /**
-   * Wall-clock pacing factor: `1.0` real time, `2.0` double speed, `0.5` half speed.
+   * Wall-clock pacing factor: `1.0` real time, `2.0` double speed, `0.5` half speed. `L4001`
+   * unless finite and within `[1/64, 64]`.
    */
   speed: number;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `input.inject`.
@@ -1828,7 +1834,6 @@ export interface InputInjectParams {
    * The frame at whose tick boundary the event applies; omit to apply at the next tick.
    */
   frame?: number | null;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `render.screenshot`.
@@ -1848,7 +1853,6 @@ export interface RenderScreenshotParams {
    * Optional output width in pixels.
    */
   width?: number | null;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `render.bounds`.
@@ -1861,7 +1865,6 @@ export interface RenderBoundsParams {
    * Which camera to project the screen rects through; omit for the scene's own.
    */
   camera?: 'scene' | 'view';
-  [k: string]: unknown;
 }
 /**
  * Parameters for `render.gi_rebake`.
@@ -1902,7 +1905,6 @@ export interface RenderGiRebakeParams {
    * makes that the new held baseline. A no-op at [`GiRebakeMode::Auto`], where nothing is held.
    */
   rebake?: boolean;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `render.size`.
@@ -1954,7 +1956,6 @@ export interface RenderSizeParams {
    * The new extent's width in pixels; omit (with `height`) to leave the extent as it is.
    */
   width?: number | null;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `render.view`.
@@ -2007,7 +2008,6 @@ export interface RenderViewParams {
    * The pose to fly to, an explicit `null` to clear the override, or absent to read it.
    */
   pose?: ViewPose | null;
-  [k: string]: unknown;
 }
 /**
  * A free camera pose for `render.view`: where the view camera stands, where it looks, and how wide
@@ -2048,7 +2048,6 @@ export interface ViewPose {
    * @maxItems 3
    */
   translation: [number, number, number];
-  [k: string]: unknown;
 }
 /**
  * Parameters for `render.debug`.
@@ -2099,7 +2098,6 @@ export interface RenderDebugParams {
    * The debug view to show, an explicit `null` to clear it, or absent to keep it.
    */
   view?: RenderDebugView | null;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `stream.subscribe`.
@@ -2144,9 +2142,7 @@ export interface StreamSubscribeParams {
      */
     max_fps?: number | null;
     mode: 'latest_wins';
-    [k: string]: unknown;
   };
-  [k: string]: unknown;
 }
 /**
  * Parameters for `stream.unsubscribe`.
@@ -2156,7 +2152,6 @@ export interface StreamUnsubscribeParams {
    * The subscription to close (the `sub` id returned by `stream.subscribe`).
    */
   sub: number;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `asset.reload`.
@@ -2166,7 +2161,6 @@ export interface AssetReloadParams {
    * A single asset path to reload; omit to reload every changed asset.
    */
   path?: string | null;
-  [k: string]: unknown;
 }
 /**
  * Parameters for `engine.restore`.
@@ -2181,7 +2175,6 @@ export interface EngineRestoreParams {
   snapshot: {
     [k: string]: unknown;
   };
-  [k: string]: unknown;
 }
 /**
  * Parameters for `profile.capture`.
@@ -2202,7 +2195,6 @@ export interface ProfileCaptureParams {
    * times the payload — ask for them when a timeline or a trace export is the point.
    */
   include_samples?: boolean;
-  [k: string]: unknown;
 }
 /**
  * The payload of a `log` event.
@@ -2256,10 +2248,19 @@ export interface SimEventsData {
  */
 export interface SceneChangedData {
   /**
-   * The content-root-relative scene path of a `scene.load` or `scene.save`; absent for an
-   * `engine.restore` or a game-driven scene switch.
+   * What happened.
+   */
+  kind: 'load' | 'save' | 'restore' | 'switch';
+  /**
+   * The content-root-relative scene path of the scene concerned; absent for an `engine.restore`,
+   * or a restart with no known path.
    */
   path?: string | null;
+  /**
+   * The `id` of the request that caused the change, chosen by the issuing connection, so another
+   * client may use the same number; absent for a game-driven change or an in-process command.
+   */
+  request_id?: RequestId | null;
   [k: string]: unknown;
 }
 /**

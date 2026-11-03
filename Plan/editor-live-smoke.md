@@ -238,3 +238,26 @@ With vigil playing a random-shape volley, select the live `Volley` in the inspec
 With a project whose collider mesh file is renamed:
 - Boot it from the game stage: the failure card reads "The game failed to start" with `L1212` and its `L1101` in the detail, not a blank stage.
 - In a live session, pick that scene in the scene picker: the `DiagnosticBanner` shows the `L1212` with an expandable related `L1101`, and the prior scene stays loaded and running.
+
+## Scene save conflict and `scene.changed` identity (code audit A-03)
+Serve a hand scene in the editor (`node scripts/editor.mjs <project>`), Level Designer view:
+- [ ] Move an entity, press Ctrl+S: saves, no banner, dirty clears, Ctrl+Z still undoes the move.
+- [ ] Edit the same YAML in a text editor and save it, move an entity, press Ctrl+S: the banner appears, the file still holds the external edit, undo still works.
+- [ ] **Keep mine:** the file now holds the live world, the banner clears. Ctrl+S again saves with no banner.
+- [ ] Repeat the conflict, then **Reload:** the external edit is in the world, undo and selection are cleared, the banner is gone.
+- [ ] From a second client, `scene.save` to the served path: undo survives and dirty clears.
+- [ ] From a second client, `scene.save` to another path: undo survives, dirty is unchanged, the Save path does not change.
+- [ ] From a second client, `scene.load` another scene: undo and selection clear, the Save path follows it.
+- [ ] In a game that switches scene, trigger a switch while connected: the Save path shows the new scene, and Ctrl+S writes that file, never the old one.
+- [ ] `ludion dev` restart with `--restore`: the Save path is kept after reconnecting if it was shown.
+- [ ] Save a world with a checker warning (a rigid body under a `Parent`): the file is written and the diagnostic shows in the banner row.
+
+## Presentation undo and redo (code audit A-04)
+`node scripts/editor.mjs games/vigil`, Level Designer view. Read `sim.hash` from a second client; it must not move in the first four.
+- [ ] Place `town/cath-bay`, Ctrl+Z, Ctrl+Y: back, ids in the presentation range.
+- [ ] Delete a placed one by its root, Ctrl+Z: every part back under its parent. Ctrl+Y deletes again.
+- [ ] Delete one presentation child, Ctrl+Z: no L1225 banner, back under its live parent. Ctrl+Y, Ctrl+Z: same.
+- [ ] Duplicate a presentation part: copy in the presentation range. Ctrl+Z removes it.
+- [ ] Mixed prefab (sim `Collider` root, presentation visual): delete the root, Ctrl+Z: each its own kind.
+- [ ] Delete a parented sim subtree, Ctrl+Z, Ctrl+Y: still works.
+- [ ] Ctrl+S: the saved YAML has `presentation: true` on the restored parts.

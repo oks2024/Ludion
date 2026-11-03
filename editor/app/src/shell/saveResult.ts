@@ -1,7 +1,7 @@
 // Reading a `scene.save` outcome: the conflict refusal and the checker findings a successful save
 // carries. Pure, so the SessionStrip's branches are testable without React.
 
-import type { ResponseBody, WireErrorSchema } from '@ludion/protocol';
+import type { ResponseBody } from '@ludion/protocol';
 import { fromWire, type DiagnosticView } from '../viewer/diagnostic';
 
 /** The engine's refusal when the destination differs from what this session last loaded or saved. */
@@ -11,16 +11,10 @@ export function isSaveConflict(view: DiagnosticView): boolean {
   return view.code === SCENE_SAVE_CONFLICT_CODE;
 }
 
-/** The `saved` body's findings, declared locally so the tree compiles against types that predate
- *  the field. */
-interface SaveBodyWithFindings {
-  readonly diagnostics?: readonly (WireErrorSchema & { readonly severity?: string })[] | null;
-}
-
 /** The one finding to show after a successful save: an error over a warning, with the count in the
  *  message when there are several. Null when the save was clean. */
 export function saveFindings(body: ResponseBody): DiagnosticView | null {
-  const list = (body as SaveBodyWithFindings).diagnostics ?? [];
+  const list = body.kind === 'scene_saved' ? (body.diagnostics ?? []) : [];
   if (list.length === 0) {
     return null;
   }

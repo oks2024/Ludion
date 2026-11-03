@@ -13,6 +13,7 @@ import { gizmoParentQuery } from '../editor/gizmo/scene';
 import { instanceCommand } from '../editor/prefab-actions';
 import { reparentCommand } from '../editor/hierarchy';
 import { beginCompare, endCompare } from '../editor/compare';
+import { PRESENTATION_BASE, respawnCommand } from '../editor/undo';
 import { destroyEntity, duplicateEntity } from '../editor/entity-ops';
 import { keyEdgeToInject, HeldKeys } from '../viewer/keymap';
 import { mouseButtonInject, mouseMoveInject } from '../viewer/mousemap';
@@ -79,6 +80,13 @@ describe('strayKeys', () => {
     expect(
       strayKeys({ method: 'render.view', params: { pose: { translation: [0, 0, 0], rotation: [0, 0, 0], fovv: 1 } } } as unknown as Command),
     ).toEqual(['/params/pose/fovv']);
+  });
+});
+
+describe('presentation respawn', () => {
+  it('the flagged and unflagged entity.spawn', () => {
+    expect(strayKeys(respawnCommand({ index: PRESENTATION_BASE, generation: 0 }, {}))).toEqual([]);
+    expect(strayKeys(respawnCommand(E1, {}))).toEqual([]);
   });
 });
 
