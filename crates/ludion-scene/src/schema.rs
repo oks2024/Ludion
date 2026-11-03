@@ -65,6 +65,27 @@ impl<'a> SchemaCursor<'a> {
         node
     }
 
+    /// The nodes on the `$ref` chain of [`resolved`](Self::resolved) that hold a `$ref`: where
+    /// keywords written beside a reference (a `schemars` range on a newtype field) live.
+    pub fn ref_siblings(self) -> Vec<&'a Value> {
+        let mut siblings = Vec::new();
+        let mut node = self.node;
+        for _ in 0..MAX_DEPTH {
+            let Some(reference) = node.get("$ref").and_then(Value::as_str) else {
+                break;
+            };
+            siblings.push(node);
+            let Some(target) = reference
+                .strip_prefix('#')
+                .and_then(|pointer| self.root.pointer(pointer))
+            else {
+                break;
+            };
+            node = target;
+        }
+        siblings
+    }
+
     /// The declared property names in schema (= struct declaration) order, if this subschema
     /// describes an object with `properties` (its own first, then each `allOf` part's).
     pub fn property_order(self) -> Option<Vec<&'a str>> {

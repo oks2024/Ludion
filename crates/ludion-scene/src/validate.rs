@@ -666,27 +666,17 @@ impl Checker<'_> {
             return; // deeper checks against the wrong type would only add noise
         }
 
-        if let Some(allowed) = schema.get("enum").and_then(Value::as_array)
-            && !allowed.contains(value)
-        {
-            diagnostics.push(
-                self.mismatch(
-                    pointer,
-                    format!("{} is not one of the allowed values", value_phrase(value)),
-                )
-                .with_help(format!("allowed values are: {}", value_list(allowed))),
-            );
+        if !self.check_enum_const(value, schema, pointer, diagnostics) {
             return;
         }
-        if let Some(expected) = schema.get("const")
-            && expected != value
-        {
-            diagnostics.push(self.mismatch(
-                pointer,
-                format!("the only allowed value here is {}", compact(expected)),
-            ));
-            return;
+        let before_siblings = diagnostics.len();
+        for sibling in cursor.ref_siblings() {
+            if !self.check_enum_const(value, sibling, pointer, diagnostics) {
+                return;
+            }
+            self.check_bounds(value, sibling, schema, pointer, diagnostics);
         }
+        let before_siblings_clean = diagnostics.len() == before_siblings;
 
         if let Some(all_of) = schema.get("allOf").and_then(Value::as_array) {
             for sub in all_of {
@@ -699,13 +689,51 @@ impl Checker<'_> {
             }
         }
 
-        self.check_number(value, schema, pointer, diagnostics);
+        let before_bounds = diagnostics.len();
+        self.check_bounds(value, schema, schema, pointer, diagnostics);
+        // A bound already refused the value, so the format check would say it twice.
+        if diagnostics.len() == before_bounds && before_siblings_clean {
+            self.check_format(value, schema, pointer, diagnostics);
+        }
         if let Some(object) = value.as_object() {
             self.check_object(object, cursor, schema, pointer, report_unknown, diagnostics);
         }
         if let Some(array) = value.as_array() {
             self.check_array(array, cursor, schema, pointer, diagnostics);
         }
+    }
+
+    /// The `enum` and `const` keywords of `node`; `false` when one failed (deeper checks would
+    /// only add noise).
+    fn check_enum_const(
+        &self,
+        value: &Value,
+        node: &Value,
+        pointer: &str,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> bool {
+        if let Some(allowed) = node.get("enum").and_then(Value::as_array)
+            && !allowed.contains(value)
+        {
+            diagnostics.push(
+                self.mismatch(
+                    pointer,
+                    format!("{} is not one of the allowed values", value_phrase(value)),
+                )
+                .with_help(format!("allowed values are: {}", value_list(allowed))),
+            );
+            return false;
+        }
+        if let Some(expected) = node.get("const")
+            && expected != value
+        {
+            diagnostics.push(self.mismatch(
+                pointer,
+                format!("the only allowed value here is {}", compact(expected)),
+            ));
+            return false;
+        }
+        true
     }
 
     /// `oneOf` / `anyOf`: accept if any alternative fully matches; otherwise report against the
@@ -744,10 +772,13 @@ impl Checker<'_> {
         diagnostics.push(diagnostic);
     }
 
-    fn check_number(
+    /// The numeric-bound keywords of `bounds`; `format_node` says whether the value is judged as
+    /// an `f32` (a sibling bound has no `format` of its own, its `$ref` target does).
+    fn check_bounds(
         &self,
         value: &Value,
-        schema: &Value,
+        bounds_node: &Value,
+        format_node: &Value,
         pointer: &str,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
@@ -762,13 +793,12 @@ impl Checker<'_> {
         ];
         // An `f32` field stores the narrowed value, so the bounds judge that: `1e-46` is `0` there,
         // not strictly positive. A value that overflows stays raw; the format check refuses it.
-        let single = schema.get("format").and_then(Value::as_str) == Some("float")
+        let single = format_node.get("format").and_then(Value::as_str) == Some("float")
             && ludion_core::number::fits_f32(number);
         let narrow = |v: f64| if single { f64::from(v as f32) } else { v };
         let stored = narrow(number);
-        let before = diagnostics.len();
         for (keyword, phrase, ok) in bounds {
-            if let Some(bound) = schema.get(keyword).and_then(Value::as_f64)
+            if let Some(bound) = bounds_node.get(keyword).and_then(Value::as_f64)
                 && !ok(stored, narrow(bound))
             {
                 let note = if stored == number {
@@ -782,9 +812,18 @@ impl Checker<'_> {
                 ));
             }
         }
-        // A bound the schema already states (`minimum: 0` on an unsigned type) has said it once.
-        if diagnostics.len() == before
-            && let Some(format) = schema.get("format").and_then(Value::as_str)
+    }
+
+    /// The `format` check of `schema`.
+    fn check_format(
+        &self,
+        value: &Value,
+        schema: &Value,
+        pointer: &str,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(number) = value.as_f64() else { return };
+        if let Some(format) = schema.get("format").and_then(Value::as_str)
             && let Some(message) = format_violation(value, number, format)
         {
             diagnostics.push(self.mismatch(pointer, message));
@@ -1446,6 +1485,44 @@ mod tests {
                 check_scene_asset_paths(&skin_scene(path), &registry).is_empty(),
                 "{path}"
             );
+        }
+    }
+
+    /// A literal schema: `schemars` emits no sibling for a range on a `$ref`ed field, so only a
+    /// hand-written schema carries one.
+    #[test]
+    fn a_bound_or_enum_beside_a_ref_is_l1014() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "n": { "$ref": "#/$defs/Num", "minimum": 1.0 },
+                "k": { "$ref": "#/$defs/Str", "enum": ["a", "b"] },
+                "f": { "$ref": "#/$defs/Float", "maximum": 2.0 },
+            },
+            "$defs": {
+                "Num": { "type": "integer" },
+                "Str": { "type": "string" },
+                "Float": { "type": "number", "format": "float" },
+            },
+        });
+        let checker = Checker {
+            subject: Subject::Component("Literal"),
+        };
+        let check = |value: serde_json::Value| {
+            let mut diagnostics = Vec::new();
+            checker.check(&value, SchemaCursor::new(&schema), "", &mut diagnostics);
+            diagnostics
+        };
+        assert!(check(serde_json::json!({ "n": 1, "k": "a", "f": 2.0 })).is_empty());
+        for (value, pointer) in [
+            (serde_json::json!({ "n": 0 }), "/n"),
+            (serde_json::json!({ "k": "c" }), "/k"),
+            (serde_json::json!({ "f": 2.5 }), "/f"),
+        ] {
+            let diagnostics = check(value);
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert_eq!(diagnostics[0].code.as_str(), "L1014");
+            assert_eq!(diagnostics[0].path.as_deref(), Some(pointer));
         }
     }
 }

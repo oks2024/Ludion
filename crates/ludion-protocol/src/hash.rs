@@ -51,10 +51,10 @@ impl WireHash {
         self.0
     }
 
-    /// Parses the canonical 16-hex-digit form (as produced by [`Display`](fmt::Display)), returning
-    /// `None` for anything else.
+    /// Parses the canonical 16 lowercase hex digits (as produced by [`Display`](fmt::Display), and
+    /// as the published schema's pattern requires), returning `None` for anything else.
     pub fn parse(text: &str) -> Option<WireHash> {
-        if text.len() != 16 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if text.len() != 16 || !text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
             return None;
         }
         u64::from_str_radix(text, 16).ok().map(WireHash)
@@ -84,7 +84,9 @@ impl<'de> Deserialize<'de> for WireHash {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
         WireHash::parse(&s).ok_or_else(|| {
-            serde::de::Error::custom(format!("invalid wire hash '{s}', expected 16 hex digits"))
+            serde::de::Error::custom(format!(
+                "invalid wire hash '{s}', expected 16 lowercase hex digits"
+            ))
         })
     }
 }
@@ -126,9 +128,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_is_lenient_about_case_but_display_is_lowercase() {
-        // Parsing accepts uppercase hex (matching `WorldHash`), but the canonical Display is lowercase.
-        let h = WireHash::parse("0123456789ABCDEF").unwrap();
+    fn parse_refuses_uppercase_and_display_round_trips() {
+        assert!(WireHash::parse("0123456789ABCDEF").is_none());
+        let h = WireHash::parse("0123456789abcdef").unwrap();
         assert_eq!(h.to_string(), "0123456789abcdef");
     }
 
