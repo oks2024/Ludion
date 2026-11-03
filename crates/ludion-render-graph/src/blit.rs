@@ -12,32 +12,8 @@ use ludion_core::letterbox::Viewport;
 
 use crate::execute::{Gpu, MAX_TEXTURE_DIMENSION_2D};
 
-/// WGSL for the blit: a fullscreen triangle whose UVs sample the frame texture upright (UV origin
-/// top-left maps to the frame's top row, the orientation readback also packs).
-const BLIT_WGSL: &str = r#"
-struct VsOut {
-    @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
-
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
-    var out: VsOut;
-    let x = f32((vi << 1u) & 2u);
-    let y = f32(vi & 2u);
-    out.uv = vec2<f32>(x, y);
-    out.pos = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
-    return out;
-}
-
-@group(0) @binding(0) var frame_tex: texture_2d<f32>;
-@group(0) @binding(1) var frame_sampler: sampler;
-
-@fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSample(frame_tex, frame_sampler, in.uv);
-}
-"#;
+/// WGSL for the blit (`shaders/window_blit.wgsl`).
+const BLIT_WGSL: &str = include_str!("shaders/window_blit.wgsl");
 
 /// The surface format, per-frame view format and alpha mode a window surface is configured with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -39,10 +39,14 @@ and step modes WGSL does not express — only the `@location`→format mapping i
 is why those become assertions, not generated structs. Textured PBR fired this trigger: `MeshVertex`
 grew `uv` and `tangent` lanes (six lanes, locations 0–5, instance lanes following at 6–17) and stayed
 hand-written, exactly as before; the `*_VS_MAIN_INPUTS` assertions caught the widened layout at the
-four writer sites rather than any structural change to this crate. `ludion-render-graph`'s two BGLs
-(`gradient`/`vignette`'s `src` layout) are reflected and drift-gated but **not** generated into
-`shader_gen.rs`: `ludion-render-graph` sits below `ludion-renderer` in the crate graph and cannot
+four writer sites rather than any structural change to this crate. `ludion-render-graph`'s three
+shaders (`gradient`, `vignette`, `window_blit`) and their `src` BGL are reflected and drift-gated but
+**not** generated into `shader_gen.rs`: `ludion-render-graph` sits below `ludion-renderer` in the crate graph and cannot
 consume the renderer's generated file, and forking a second generated file would duplicate the
 shared `src` BGL against the unification rule in `ludion devdocs ludion-shader-bindgen` (Wave 4 amendment); `execute.rs`'s hand-written
-BGL for that crate stays hand-written. Pipeline/render-pass structure is out of scope entirely —
+BGL for that crate stays hand-written, and so does `Blit::new`'s for `window_blit.wgsl` (its binding
+names match `vignette.wgsl`'s, so the unified `src` group is checked against its shape). The GPU test
+`needs_gpu_the_shared_blit_shows_the_frame_bytes_unchanged` builds `Blit::new` and draws through it, so
+a disagreement between the WGSL and the hand BGL fails there; only the window surface itself is checked
+by running a window. Pipeline/render-pass structure is out of scope entirely —
 the frame graph owns pass structure; this crate stops at structs, bindings, and BGLs.

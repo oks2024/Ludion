@@ -118,12 +118,37 @@ pub const UNFILTERABLE_TEXTURES: &[&str] = &[
     "lit_receivers",
 ];
 
+/// Every [`UNFILTERABLE_TEXTURES`] entry must name a reflected `texture_2d<f32>` binding. Reflection
+/// itself cannot enforce it (its unit tests reflect tiny units that bind none of the names), so the
+/// generator calls this on the real shader set: a renamed binding would otherwise turn filterable
+/// without a sound.
+pub fn check_unfilterable(reflection: &Reflection) -> Result<(), ReflectError> {
+    check_unfilterable_names(reflection, UNFILTERABLE_TEXTURES)
+}
+
+fn check_unfilterable_names(reflection: &Reflection, names: &[&str]) -> Result<(), ReflectError> {
+    for &name in names {
+        let is_float_texture = matches!(
+            reflection.binding_named(name).map(|b| &b.kind),
+            Some(BindingKind::Texture {
+                sample: TextureSample::Float { .. },
+                ..
+            })
+        );
+        if !is_float_texture {
+            return Err(ReflectError::UnfilterableNotFound { name: name.into() });
+        }
+    }
+    Ok(())
+}
+
 /// The render graph's reflected shaders (files under `crates/ludion-render-graph/src/shaders/`).
-pub const RENDER_GRAPH_SHADERS: &[&str] = &["gradient.wgsl", "vignette.wgsl"];
+pub const RENDER_GRAPH_SHADERS: &[&str] = &["gradient.wgsl", "vignette.wgsl", "window_blit.wgsl"];
 
 /// The renderer shaders built outside `ShaderId`, with auto-derived layouts (`layout: None`); the
 /// renderer's `shader_ids_cover_the_bindgen_list` test keeps this and `ShaderId::all()` disjoint and
-/// together equal to [`RENDERER_SHADERS`].
+/// together equal to [`RENDERER_SHADERS`]. The renderer's `ComputeShader::ALL` lists the same names in
+/// the same order, which a renderer test pins.
 pub const COMPUTE_SHADERS: &[&str] = &[
     "gi_bake.wgsl",
     "gi_inject.wgsl",
@@ -137,12 +162,14 @@ pub const COMPUTE_SHADERS: &[&str] = &[
 /// what `Renderer` composes and `create_shader_module` sees.
 ///
 /// **This is the bindgen half of the mapping; the renderer declares the same mapping at compile time
-/// (`ShaderId::snippets` / the `Snippet` enum in `ludion-renderer`'s `render.rs`).** The two cannot be
+/// (`ShaderId::snippets` / the `Snippet` enum in `ludion-renderer`'s `render.rs`, and
+/// `ComputeShader::snippets` for the compute shaders).** The two cannot be
 /// physically merged — the renderer needs compile-time `include_str!` composition and must not depend
 /// on this crate, and this crate must not drag wgpu in by depending on the renderer. A drift between
-/// the two is caught by a renderer test (`renderer_composition_matches_bindgen_registry`) that
-/// byte-compares both compositions for every shader, so a mismatch fails CI loudly. Shaders absent
-/// here (render-graph's `gradient`/`vignette`, `ui_rect`) compose no snippets.
+/// the two is caught by renderer tests (`renderer_composition_matches_bindgen_registry` and
+/// `compute_composition_matches_bindgen_registry`) that byte-compare both compositions for every
+/// shader, so a mismatch fails CI loudly. Shaders absent
+/// here (render-graph's `gradient`/`vignette`/`window_blit`, `ui_rect`) compose no snippets.
 pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     (
         "mesh.wgsl",
@@ -176,7 +203,9 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ),
     ("ui_text.wgsl", &["glyph.wgsl"]),
     ("blit.wgsl", &["fullscreen_vs.wgsl"]),
-    ("ibl.wgsl", &["dfg.wgsl"]),
+    ("ibl.wgsl", &["dfg.wgsl", "sky_gradient.wgsl"]),
+    ("gi_bake.wgsl", &["gi_rays.wgsl"]),
+    ("gi_inject.wgsl", &["gi_rays.wgsl"]),
     ("bloom_down.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("bloom_up.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("box_blur.wgsl", &["fullscreen_vs.wgsl"]),
@@ -396,6 +425,52 @@ mod tests {
 
     fn reflect_one(source: &str) -> Reflection {
         reflect(&[ShaderUnit::new("test.wgsl", source)]).expect("reflection should succeed")
+    }
+
+    #[test]
+    fn three_row_matrices_and_vec3_arrays_spell_four_lanes() {
+        let r = reflect_one(
+            r#"
+            struct M { m: mat3x3<f32>, v: array<vec3<f32>, 2> };
+            @group(0) @binding(0) var<uniform> u: M;
+            @fragment fn fs() -> @location(0) vec4<f32> {
+                return vec4<f32>(u.m[0] + u.v[1], 1.0);
+            }
+            "#,
+        );
+        let s = r.struct_named("M").unwrap();
+        assert_eq!(s.fields[0].size, 48);
+        assert_eq!(s.fields[1].size, 32);
+        let out = emit(&r);
+        assert!(out.contains("pub m: [[f32; 4]; 3],"), "{out}");
+        assert!(out.contains("pub v: [[f32; 4]; 2],"), "{out}");
+    }
+
+    #[test]
+    fn unfilterable_names_must_be_reflected_float_textures() {
+        let r = reflect_one(
+            r#"
+            @group(0) @binding(0) var hiz: texture_2d<f32>;
+            @group(0) @binding(1) var depth: texture_depth_2d;
+            struct B { x: vec4<f32> };
+            @group(0) @binding(2) var<uniform> buf: B;
+            @fragment fn fs() -> @location(0) vec4<f32> {
+                return textureLoad(hiz, vec2<i32>(0), 0) + buf.x
+                    + vec4<f32>(textureLoad(depth, vec2<i32>(0), 0));
+            }
+            "#,
+        );
+        assert_eq!(check_unfilterable_names(&r, &["hiz"]), Ok(()));
+        for absent in ["gone", "depth", "buf"] {
+            let err = check_unfilterable_names(&r, &["hiz", absent]).unwrap_err();
+            assert_eq!(
+                err,
+                ReflectError::UnfilterableNotFound {
+                    name: absent.into()
+                }
+            );
+            assert!(err.to_string().contains(&format!("`{absent}`")), "{err}");
+        }
     }
 
     #[test]

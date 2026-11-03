@@ -43,6 +43,8 @@ pub enum ReflectError {
         unit_b: String,
         detail: String,
     },
+    /// An [`UNFILTERABLE_TEXTURES`](crate::UNFILTERABLE_TEXTURES) entry names no reflected float texture.
+    UnfilterableNotFound { name: String },
 }
 
 impl fmt::Display for ReflectError {
@@ -96,6 +98,12 @@ impl fmt::Display for ReflectError {
             } => write!(
                 f,
                 "const `{name}` has different values in `{unit_a}` and `{unit_b}`: {detail}"
+            ),
+            ReflectError::UnfilterableNotFound { name } => write!(
+                f,
+                "`UNFILTERABLE_TEXTURES` lists `{name}`, but no reflected shader binds a float texture \
+                 by that name. Rename the entry with its binding, or delete it. Otherwise the renamed \
+                 binding silently becomes filterable."
             ),
         }
     }

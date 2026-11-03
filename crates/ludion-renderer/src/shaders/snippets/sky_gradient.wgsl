@@ -1,7 +1,8 @@
 // The `Environment`'s authored sky radiance as a closed-form function of direction. Shared by the
-// pass that *draws* the sky (`sky.wgsl`) and the pass that *in-scatters* it — `composite.wgsl`'s
+// pass that *draws* the sky (`sky.wgsl`), the pass that *in-scatters* it — `composite.wgsl`'s
 // ambient haze term (Plan/volumetric-medium.md) — so the haze and the background it meets at the
-// horizon cannot disagree about what colour the sky is.
+// horizon cannot disagree about what colour the sky is, and the compute bake that integrates it into
+// the diffuse and specular IBL cubes (`ibl.wgsl`).
 //
 // This is closed form only because the engine's sky is procedural by decision and will never be an
 // image asset: three authored colours and a direction, evaluated exactly, for less arithmetic than a

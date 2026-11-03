@@ -35,11 +35,12 @@ compiles against: `crates/ludion-renderer/src/shader_gen.rs`. Covers the model/e
 - `crates/ludion-shader-bindgen/src/lib.rs` — besides the reflect/emit API, the [`COMPOSITIONS`]
   registry (`&[(shader, &[snippet])]`) + `snippets_for(name)`: the bindgen half of the shared-snippet
   mapping (decision 16). The renderer mirrors the same mapping at compile time (the `SHADERS`
-  registry rows / the `Snippet` enum in `render.rs`); the two cannot be physically merged (the renderer needs
+  registry rows / the `Snippet` enum in `render.rs`, and `ComputeShader` in `compute_shader.rs` for the
+  compute shaders); the two cannot be physically merged (the renderer needs
   compile-time `include_str!` composition and must not depend on this crate; this crate must not drag
   wgpu in by depending on the renderer), so a renderer test
-  (`renderer_composition_matches_bindgen_registry`) byte-compares both compositions per shader and
-  fails loudly on any drift.
+  (`renderer_composition_matches_bindgen_registry`, and `compute_composition_matches_bindgen_registry`
+  for `ComputeShader`) byte-compares both compositions per shader and fails loudly on any drift.
 - The lib also owns the shader list — `RENDERER_SHADERS` (`crates/ludion-renderer/src/shaders/`),
   `RENDER_GRAPH_SHADERS` (`crates/ludion-render-graph/src/shaders/`), both sorted, and
   `COMPUTE_SHADERS` (the renderer shaders built outside `ShaderId` with auto-derived layouts) — and
@@ -133,5 +134,7 @@ cargo test -p ludion-renderer                    # exercises the generated struc
 - **Sampler filterability and dynamic offsets are not derivable from WGSL text.** The emitter
   defaults to filterable-float textures / filtering samplers. A non-filterable float texture (an
   `R32Float` source read with `textureLoad`) is listed by its WGSL global name in
-  `UNFILTERABLE_TEXTURES` (`lib.rs`, today `hiz_src`); binding names are workspace-unique, so the
-  name is the key. Add a name there, don't infer it.
+  `UNFILTERABLE_TEXTURES` (`lib.rs`); binding names are workspace-unique, so the name is the key.
+  Add a name there, don't infer it. `check_unfilterable` (called by the bin right after `reflect`, so
+  `--check` fails) requires every listed name to be a reflected float texture: a renamed binding fails
+  the gate instead of silently becoming filterable.

@@ -77,6 +77,7 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_render_graph::{Gpu, engine_limits};
 
+use crate::compute_shader::ComputeShader;
 use crate::gi_bin::{BinBuild, build_bin};
 use crate::scene::{GiData, MAX_GI_TEXTURE_AXIS, PointLightData, SunData, WorldVoxelGrid};
 use crate::shader_gen::{self, GiBakeParams, Light};
@@ -310,9 +311,7 @@ impl GiBake {
         let device = gpu.device();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gi bake"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "shaders/gi_bake.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(ComputeShader::GiBake.composed().into()),
         });
         // The auto-derived layout is what makes the occupancy binding legal: wgpu infers a sampled
         // float texture's `filterable` from whether the entry point pairs it with a sampler, and the
@@ -634,7 +633,9 @@ impl GiBake {
         let bind_for = |params_buf: &wgpu::Buffer| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("gi bake"),
-                layout: &self.pipeline.get_bind_group_layout(0),
+                layout: &self
+                    .pipeline
+                    .get_bind_group_layout(shader_gen::BAKE_PARAMS_GROUP),
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: shader_gen::BAKE_PARAMS_BINDING,
@@ -712,7 +713,7 @@ impl GiBake {
                     timestamp_writes: None,
                 });
                 pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &bind, &[]);
+                pass.set_bind_group(shader_gen::BAKE_PARAMS_GROUP, &bind, &[]);
                 pass.dispatch_workgroups(
                     cx.div_ceil(WORKGROUP[0]),
                     cy.div_ceil(WORKGROUP[1]),
@@ -1415,7 +1416,7 @@ mod tests {
         );
     }
 
-    /// `gi_bake.wgsl`'s `ray_direction` restated on the CPU: 64 spherical Fibonacci directions,
+    /// `gi_rays.wgsl`'s `ray_direction` mirrored on the CPU: 64 spherical Fibonacci directions,
     /// evenly spaced in `cos(elevation)` and advanced by the golden angle in azimuth. It exists so a
     /// test can state an expected visibility as *the fraction of the sphere a probe can reach*
     /// rather than as a recorded number. Every ray's `|cos(phi)|` is above 0.004, hundreds of times

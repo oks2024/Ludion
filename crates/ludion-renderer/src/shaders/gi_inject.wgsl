@@ -36,17 +36,6 @@
 // uniform PODs, binding indices and workgroup size into `shader_gen.rs`. Its resources carry an
 // `inject_` prefix because bindgen unifies resources by name across all shaders.
 
-// `gi_bin.rs`'s `GiBinParams`, the same struct `gi_bake.wgsl` embeds: the dims travel in the uniform
-// rather than as constants here so `BIN_DIMS` is the only place the grid's shape is written down.
-struct GiBinParams {
-    // xyz = the bin box's world minimum corner (the voxel grid's origin), w = pad.
-    origin: vec4<f32>,
-    // xyz = 1 / bin cell size, w = pad. The reciprocal, so neither side divides.
-    inv_cell: vec4<f32>,
-    // xyz = bin cells per axis, w = pad.
-    dims: vec4<u32>,
-};
-
 struct GiInjectParams {
     // xyz = the voxel grid's world-space origin, w = its cell size in world units. The grid's extent
     // comes from `textureDimensions(inject_albedo)`, exactly as the bake takes it from its occupancy input.
@@ -61,10 +50,11 @@ struct GiInjectParams {
     rays: vec4<u32>,
 };
 
-// `snippets/lights.wgsl`'s `Light`, restated here because this shader composes no snippets: xyz =
-// world position, w = range; rgb = color * intensity (premultiplied), w = 0; axis = (0, 0, 0, -2),
-// the point-light encoding (spots never reach GI). Bindgen unifies it with that snippet's `Light`,
-// so the two layouts cannot drift.
+// `snippets/lights.wgsl`'s `Light`, declared here because `lights.wgsl` also declares its group 1
+// bindings, so it cannot be composed into this shader: xyz = world position, w = range;
+// rgb = color * intensity (premultiplied), w = 0; axis = (0, 0, 0, -2), the point-light encoding
+// (spots never reach GI). Bindgen unifies it with that snippet's `Light`, so the two layouts cannot
+// drift.
 struct Light {
     position: vec4<f32>,
     color: vec4<f32>,
@@ -97,9 +87,6 @@ struct Light {
 // HIT_RAYS must equal this. It is a constant on both sides because it sizes the cache buffer, unlike
 // the ray count above it, which is a quality axis.
 const HIT_RAYS: u32 = 16u;
-// The reciprocal golden ratio, the spherical Fibonacci sequence's azimuth increment in turns.
-const GOLDEN_RATIO_INVERSE: f32 = 0.6180339887498949;
-const TAU: f32 = 6.283185307179586;
 
 // The packed hit word's layout, mirroring `gi_bake.wgsl`'s: flat cell index in bits 0..24, face code
 // in 25..27. Codes 0..5 are the six axis faces (0 = -X, 1 = +X, 2 = -Y, 3 = +Y, 4 = -Z, 5 = +Z).
@@ -110,29 +97,6 @@ const HIT_FACE_BOUNDARY: u32 = 6u;
 // Face code 7: the ray escaped the grid, and contributes nothing.
 const HIT_FACE_ESCAPED: u32 = 7u;
 
-// Ray `i` of the spherical Fibonacci set — `gi_bake.wgsl`'s `ray_direction`, restated so the
-// boundary-face normal below is the one that march used. `i` is a ray index, not a cache slot: the
-// caller multiplies by the stride.
-//
-// The count is the *denominator*, never a loop bound here: this pass replays the bake's hits rather
-// than tracing its own, and the ray set is re-derived at every count (the elevation divides by it),
-// so dividing by anything but the count the bake actually traced reconstructs a direction the march
-// never took. `inject_params.rays.x` is that count, carried from the bake's own resolved volumes.
-fn ray_direction(i: u32) -> vec3<f32> {
-    let y = 1.0 - 2.0 * (f32(i) + 0.5) / f32(inject_params.rays.x);
-    let r = sqrt(max(0.0, 1.0 - y * y));
-    let phi = TAU * fract(f32(i) * GOLDEN_RATIO_INVERSE);
-    return vec3<f32>(r * cos(phi), y, r * sin(phi));
-}
-
-// `d` with every component pushed off exact zero, keeping its sign — the bake's own nudge, carried
-// here for the same reason the ray set is: the boundary normal it produced was `-normalize(nonzero(dir))`,
-// and reproducing it exactly costs three instructions.
-fn nonzero(d: vec3<f32>) -> vec3<f32> {
-    let m = max(abs(d), vec3<f32>(1e-8));
-    return select(m, -m, d < vec3<f32>(0.0));
-}
-
 // The surface normal at a replayed hit: the axis face the ray crossed to enter the cell, or — for
 // the boundary case the DDA reached by no step — the negated ray direction, recomputed from the slot
 // index `k` through the same `k * stride` mapping the bake wrote it under, where the stride is
@@ -141,7 +105,8 @@ fn nonzero(d: vec3<f32>) -> vec3<f32> {
 // show up as a silently wrong normal rather than a compile error.
 fn hit_normal(face: u32, k: u32) -> vec3<f32> {
     if (face == HIT_FACE_BOUNDARY) {
-        return -normalize(nonzero(ray_direction(k * (inject_params.rays.x / HIT_RAYS))));
+        let stride = inject_params.rays.x / HIT_RAYS;
+        return -normalize(nonzero(ray_direction(k * stride, inject_params.rays.x)));
     }
     let axis = face >> 1u;
     // The low bit is "the normal points along +axis": code 0 is -X, code 1 is +X, and so on.
@@ -164,22 +129,6 @@ fn unpack_cell(word: u32, extent: vec3<u32>) -> vec3<i32> {
     );
 }
 
-// The world-space centre of `cell` — the point both the bin lookup and the light arithmetic evaluate
-// at, exactly as the bake's `direct_at` does.
-fn cell_center(cell: vec3<i32>) -> vec3<f32> {
-    return inject_params.grid.xyz + (vec3<f32>(cell) + vec3<f32>(0.5)) * inject_params.grid.w;
-}
-
-// The bin cell a world position falls in — `gi_bin.rs`'s `axis_index`/`cell_index` mirrored operation
-// for operation, and `gi_bake.wgsl`'s `bin_cell_of` verbatim: subtract the origin, multiply by the
-// stored reciprocal, floor, clamp in float, and only then truncate.
-fn bin_cell_of(p: vec3<f32>) -> u32 {
-    let dims = vec3<f32>(inject_params.bin.dims.xyz);
-    let f = floor((p - inject_params.bin.origin.xyz) * inject_params.bin.inv_cell.xyz);
-    let c = vec3<u32>(clamp(f, vec3<f32>(0.0), dims - vec3<f32>(1.0)));
-    return (c.z * inject_params.bin.dims.y + c.y) * inject_params.bin.dims.x + c.x;
-}
-
 // Direct light the marked lights deposit on `cell`'s `n`-facing surface, times that surface's albedo.
 //
 // The per-light arithmetic is `gi_bake.wgsl`'s `direct_at`, verbatim — premultiplied colour, the
@@ -193,11 +142,11 @@ fn bin_cell_of(p: vec3<f32>) -> u32 {
 // No shadow rays and no sun: the sun is always static, and a point light's occlusion at this scale
 // is what the cached hit already answered.
 fn outgoing_at(cell: vec3<i32>, n: vec3<f32>) -> vec3<f32> {
-    let world = cell_center(cell);
+    let world = cell_center(cell, inject_params.grid);
     let a = textureLoad(inject_albedo, cell, 0).rgb;
     var acc = vec3<f32>(0.0);
 
-    let slice = inject_bin_table[bin_cell_of(world)];
+    let slice = inject_bin_table[bin_cell_of(world, inject_params.bin)];
     for (var i = 0u; i < slice.y; i = i + 1u) {
         let light = inject_light_list[inject_bin_indices[slice.x + i]];
         let to_light = light.position.xyz - world;

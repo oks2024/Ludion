@@ -491,6 +491,8 @@ fn rust_scalar(kind: ScalarKind) -> &'static str {
 
 /// The Rust POD spelling of a reflected type. Vectors/matrices become fixed arrays whose byte size
 /// matches the WGSL layout — the baked size/offset asserts catch any mismatch at compile time.
+/// A three-row matrix column and a three-component array element each occupy 16 bytes in WGSL, so
+/// they spell four lanes: the fourth is WGSL's padding.
 fn rust_type(ty: &TypeRef) -> String {
     match ty {
         TypeRef::Scalar(k) | TypeRef::Atomic(k) => rust_scalar(*k).to_string(),
@@ -501,11 +503,20 @@ fn rust_type(ty: &TypeRef) -> String {
             columns,
             rows,
             scalar,
-        } => format!("[[{}; {}]; {}]", rust_scalar(*scalar), rows, columns),
+        } => {
+            let lanes = if *rows == 3 { 4 } else { *rows };
+            format!("[[{}; {}]; {}]", rust_scalar(*scalar), lanes, columns)
+        }
         TypeRef::Array { element, count, .. } => {
             let n = count
                 .expect("reflection rejects a runtime-sized struct member before it reaches emit");
-            format!("[{}; {}]", rust_type(element), n)
+            match element.as_ref() {
+                TypeRef::Vector {
+                    components: 3,
+                    scalar,
+                } => format!("[[{}; 4]; {}]", rust_scalar(*scalar), n),
+                element => format!("[{}; {}]", rust_type(element), n),
+            }
         }
         TypeRef::Struct(name) => name.clone(),
     }

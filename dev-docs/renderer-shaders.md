@@ -34,6 +34,12 @@ consts, `create_*_bgl` functions, `*_VS_MAIN_INPUTS` — are **generated**, not 
   (`ludion devdocs renderer-medium`); `glyph.wgsl` holds the atlas bindings and the coverage fragment
   that the world-space and UI text passes share; `view_ray.wgsl` picks an orthographic camera's single view direction over the per-pixel vector to the eye (mesh, decal_lit, sky, reflections, SSR). Editing a snippet is a real change: regenerate and re-check
   like any WGSL edit, and a snippet edit that alters a layout makes the drift gate fail.
+- **Compute shaders compose through `ComputeShader`** (`compute_shader.rs`): the pipeline builders and
+  `capture_code_key` both take `ComputeShader::X.composed()`, and
+  `compute_composition_matches_bindgen_registry` compares it with the bindgen registry. `gi_rays.wgsl`
+  holds the GI bake's ray set and bin/cell helpers, shared by `gi_bake` and `gi_inject`; it has no
+  `ShaderId` dependent, so it is not hot-reloadable. `ibl.wgsl` composes `dfg.wgsl` and
+  `sky_gradient.wgsl`.
 - **The snippet mapping lives in two mirrored places** — the `SHADERS` registry rows in `render.rs`
   (what the GPU compiles) and `ludion_shader_bindgen::COMPOSITIONS` (what the drift gate reflects).
   A renderer test (`renderer_composition_matches_bindgen_registry`) byte-compares the two, so a

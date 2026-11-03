@@ -9,6 +9,7 @@ use ludion_core::math::glam::Vec3;
 use ludion_render_graph::Gpu;
 use wgpu::util::DeviceExt;
 
+use crate::compute_shader::ComputeShader;
 use crate::gi_bake::ResolvedGi;
 use crate::ibl::ResolvedEnv;
 use crate::probe::MAX_PROBES;
@@ -36,9 +37,7 @@ impl ProbeRelight {
         let device = gpu.device();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("probe relight"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "shaders/probe_relight.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(ComputeShader::ProbeRelight.composed().into()),
         });
         // Auto-derived layout, as `GiBake::new`: the volumes are sampled filterable.
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

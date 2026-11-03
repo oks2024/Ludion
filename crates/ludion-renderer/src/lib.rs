@@ -45,6 +45,7 @@
 mod blend;
 mod cluster;
 mod compressed;
+mod compute_shader;
 mod cull;
 mod debug_view;
 mod frame_observer;

@@ -33,18 +33,6 @@
 // shader-bindgen reflects its uniform PODs, binding indices and workgroup size into `shader_gen.rs`.
 // Its resources carry a `bake_` prefix because bindgen unifies resources by name across all shaders.
 
-// Where the world-space light bin sits and how big its cells are — `gi_bin.rs`'s `GiBinParams`,
-// which is also what the injection pass binds. The dims travel in the uniform rather than as
-// constants here so `gi_bin.rs`'s `BIN_DIMS` is the only place the grid's shape is written down.
-struct GiBinParams {
-    // xyz = the bin box's world minimum corner (the voxel grid's origin), w = pad.
-    origin: vec4<f32>,
-    // xyz = 1 / bin cell size, w = pad. The reciprocal, so neither side divides.
-    inv_cell: vec4<f32>,
-    // xyz = bin cells per axis, w = pad.
-    dims: vec4<u32>,
-};
-
 // x/y/z = the voxel grid's world-space origin, w = its cell size in world units.
 // The occupancy texture's own dimensions give the extent, so it is not carried here.
 struct GiBakeParams {
@@ -67,10 +55,11 @@ struct GiBakeParams {
     bin: GiBinParams,
 };
 
-// `snippets/lights.wgsl`'s `Light`, restated here because this shader composes no snippets: xyz =
-// world position, w = range; rgb = color * intensity (premultiplied), w = 0; axis = (0, 0, 0, -2),
-// the point-light encoding (spots never reach GI). Bindgen unifies it with that snippet's `Light`,
-// so the two layouts cannot drift.
+// `snippets/lights.wgsl`'s `Light`, declared here because `lights.wgsl` also declares its group 1
+// bindings, so it cannot be composed into this shader: xyz = world position, w = range;
+// rgb = color * intensity (premultiplied), w = 0; axis = (0, 0, 0, -2), the point-light encoding
+// (spots never reach GI). Bindgen unifies it with that snippet's `Light`, so the two layouts cannot
+// drift.
 struct Light {
     position: vec4<f32>,
     color: vec4<f32>,
@@ -104,9 +93,6 @@ struct Light {
 // `bake_params.flags.x` is 1 (it rides the bounce discriminant); a 4-byte dummy is bound otherwise.
 @group(0) @binding(10) var<storage, read_write> bake_hit_cache: array<u32>;
 
-// The reciprocal golden ratio, the spherical Fibonacci sequence's azimuth increment in turns.
-const GOLDEN_RATIO_INVERSE: f32 = 0.6180339887498949;
-const TAU: f32 = 6.283185307179586;
 // Half the shell radius the probe-in-solid push-out searches: the 3^3 neighbourhood, then the 5^3.
 const PUSH_OUT_RADIUS: i32 = 2;
 
@@ -151,29 +137,6 @@ struct Hit {
     normal: vec3<f32>,
     face: u32,
 };
-
-// Ray `i` of the spherical Fibonacci set: evenly spaced in cos(elevation), advanced by the golden
-// angle in azimuth. `fract` on the turn count keeps the azimuth exact in f32 however long the
-// sequence runs.
-//
-// The elevation divides by the ray count, so the set is *re-derived* at every count rather than
-// truncated — ray `i` of a 32-ray set is nowhere near ray `i` of the 64-ray one. Each count is a
-// complete, well-formed sphere on its own terms, which is what makes the count a quality axis; it is
-// also why `gi_inject.wgsl` must divide by the count this march actually traced.
-fn ray_direction(i: u32) -> vec3<f32> {
-    let y = 1.0 - 2.0 * (f32(i) + 0.5) / f32(bake_params.flags.y);
-    let r = sqrt(max(0.0, 1.0 - y * y));
-    let phi = TAU * fract(f32(i) * GOLDEN_RATIO_INVERSE);
-    return vec3<f32>(r * cos(phi), y, r * sin(phi));
-}
-
-// `d` with every component pushed off exact zero, keeping its sign. The DDA divides by each
-// component, and an axis-aligned ray would otherwise produce an infinity that turns into a NaN the
-// moment the origin also sits on that axis's slab.
-fn nonzero(d: vec3<f32>) -> vec3<f32> {
-    let m = max(abs(d), vec3<f32>(1e-8));
-    return select(m, -m, d < vec3<f32>(0.0));
-}
 
 fn is_occupied(cell: vec3<i32>) -> bool {
     // `g` is the occupancy channel; `r` is emissive, which sky visibility does not read.
@@ -264,17 +227,6 @@ fn trace_hit(start: vec3<f32>, dir: vec3<f32>, extent: vec3<i32>) -> Hit {
     return out;
 }
 
-// The bin cell a world position falls in — `gi_bin.rs`'s `axis_index`/`cell_index` mirrored
-// operation for operation: subtract the origin, multiply by the stored reciprocal, floor, clamp in
-// float, and only then truncate. A divergence here is a hole no test of either side alone can see;
-// the binned-vs-degenerate bake oracle is what catches it.
-fn bin_cell_of(p: vec3<f32>) -> u32 {
-    let dims = vec3<f32>(bake_params.bin.dims.xyz);
-    let f = floor((p - bake_params.bin.origin.xyz) * bake_params.bin.inv_cell.xyz);
-    let c = vec3<u32>(clamp(f, vec3<f32>(0.0), dims - vec3<f32>(1.0)));
-    return (c.z * bake_params.bin.dims.y + c.y) * bake_params.bin.dims.x + c.x;
-}
-
 // One `(probe, k)` entry of the hit cache: the flat cell index in bits 0..24, the face code in
 // 25..27. An escaped ray packs to `HIT_FACE_ESCAPED << HIT_FACE_SHIFT` with a zero cell.
 fn pack_hit(h: Hit, extent: vec3<i32>) -> u32 {
@@ -285,11 +237,6 @@ fn pack_hit(h: Hit, extent: vec3<i32>) -> u32 {
     let e = vec3<u32>(extent);
     let flat = c.x + e.x * (c.y + e.y * c.z);
     return (h.face << HIT_FACE_SHIFT) | flat;
-}
-
-// The world-space centre of `cell`.
-fn cell_center(cell: vec3<i32>) -> vec3<f32> {
-    return bake_params.grid.xyz + (vec3<f32>(cell) + vec3<f32>(0.5)) * bake_params.grid.w;
 }
 
 // Whether the sun reaches `cell`'s `n`-facing surface: one more DDA, from one cell off that face
@@ -325,10 +272,10 @@ fn sun_shadow(cell: vec3<i32>, n: vec3<f32>, extent: vec3<i32>) -> f32 {
 // from an accumulator that is itself a sum of non-negatives leaves every partial sum bit-identical.
 // The survivors keep their relative order, because each bin list ascends by construction.
 fn direct_at(cell: vec3<i32>, n: vec3<f32>, extent: vec3<i32>) -> vec3<f32> {
-    let world = cell_center(cell);
+    let world = cell_center(cell, bake_params.grid);
     var acc = vec3<f32>(0.0);
 
-    let slice = bake_bin_table[bin_cell_of(world)];
+    let slice = bake_bin_table[bin_cell_of(world, bake_params.bin)];
     for (var i = 0u; i < slice.y; i = i + 1u) {
         let light = bake_light_list[bake_bin_indices[slice.x + i]];
         let to_light = light.position.xyz - world;
@@ -460,7 +407,7 @@ fn bake(@builtin(global_invocation_id) dispatch_id: vec3<u32>) {
     var b1g = vec3<f32>(0.0);
     var b1b = vec3<f32>(0.0);
     for (var i = 0u; i < bake_params.flags.y; i = i + 1u) {
-        let dir = ray_direction(i);
+        let dir = ray_direction(i, bake_params.flags.y);
         let h = trace_hit(start, dir, extent);
         let v = select(1.0, 0.0, h.hit);
         sh0 = sh0 + v;

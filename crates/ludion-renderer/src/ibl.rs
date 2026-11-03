@@ -15,6 +15,7 @@ use std::cell::RefCell;
 
 use ludion_render_graph::Gpu;
 
+use crate::compute_shader::ComputeShader;
 use crate::lobe;
 use crate::scene::EnvironmentData;
 use crate::shader_gen::{self, PrefilterParams, SkyColors};
@@ -74,11 +75,7 @@ impl Ibl {
         let device = gpu.device();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ibl"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(concat!(
-                include_str!("shaders/snippets/dfg.wgsl"),
-                "\n",
-                include_str!("shaders/ibl.wgsl")
-            ))),
+            source: wgpu::ShaderSource::Wgsl(ComputeShader::Ibl.composed().into()),
         });
         let pipeline = |entry: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -193,7 +190,9 @@ impl Ibl {
             // layout expects both those slots.
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("ibl irradiance"),
-                layout: &self.irradiance_pipeline.get_bind_group_layout(0),
+                layout: &self
+                    .irradiance_pipeline
+                    .get_bind_group_layout(shader_gen::COLORS_GROUP),
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: shader_gen::COLORS_BINDING,
@@ -210,7 +209,7 @@ impl Ibl {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.irradiance_pipeline);
-            pass.set_bind_group(0, &bind, &[]);
+            pass.set_bind_group(shader_gen::COLORS_GROUP, &bind, &[]);
             let [wx, wy, _] = shader_gen::IBL_IRRADIANCE_WORKGROUP_SIZE;
             pass.dispatch_workgroups(
                 IRRADIANCE_SIZE.div_ceil(wx),
@@ -230,7 +229,9 @@ impl Ibl {
             |_, out_view, params_buf| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("ibl prefilter"),
-                    layout: &self.prefilter_pipeline.get_bind_group_layout(0),
+                    layout: &self
+                        .prefilter_pipeline
+                        .get_bind_group_layout(shader_gen::PREFILTER_PARAMS_GROUP),
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: shader_gen::COLORS_BINDING,
@@ -284,7 +285,7 @@ impl Ibl {
                 timestamp_writes: None,
             });
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &bind, &[]);
+            pass.set_bind_group(shader_gen::PREFILTER_PARAMS_GROUP, &bind, &[]);
             let [wx, wy, _] = shader_gen::IBL_PREFILTER_WORKGROUP_SIZE;
             pass.dispatch_workgroups(size.div_ceil(wx), size.div_ceil(wy), 6);
         }
@@ -321,7 +322,9 @@ impl Ibl {
             let dst_view = storage_array_view(source, mip, 0);
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("ibl downsample"),
-                layout: &self.downsample_pipeline.get_bind_group_layout(0),
+                layout: &self
+                    .downsample_pipeline
+                    .get_bind_group_layout(shader_gen::DOWNSAMPLE_SRC_GROUP),
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: shader_gen::DOWNSAMPLE_SRC_BINDING,
@@ -339,7 +342,7 @@ impl Ibl {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.downsample_pipeline);
-            pass.set_bind_group(0, &bind, &[]);
+            pass.set_bind_group(shader_gen::DOWNSAMPLE_SRC_GROUP, &bind, &[]);
             let [wx, wy, _] = shader_gen::IBL_DOWNSAMPLE_WORKGROUP_SIZE;
             pass.dispatch_workgroups(size.div_ceil(wx), size.div_ceil(wy), 6);
         }
@@ -362,7 +365,9 @@ impl Ibl {
             |_, out_view, params_buf| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("ibl prefilter cube"),
-                    layout: &self.prefilter_cube_pipeline.get_bind_group_layout(0),
+                    layout: &self
+                        .prefilter_cube_pipeline
+                        .get_bind_group_layout(shader_gen::PREFILTER_PARAMS_GROUP),
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: shader_gen::PREFILTER_PARAMS_BINDING,
@@ -562,7 +567,7 @@ fn compute_brdf(gpu: &Gpu, pipeline: &wgpu::ComputePipeline) -> (wgpu::TextureVi
     });
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("ibl brdf"),
-        layout: &pipeline.get_bind_group_layout(0),
+        layout: &pipeline.get_bind_group_layout(shader_gen::BRDF_OUT_GROUP),
         entries: &[wgpu::BindGroupEntry {
             binding: shader_gen::BRDF_OUT_BINDING,
             resource: wgpu::BindingResource::TextureView(&storage_view),
@@ -577,7 +582,7 @@ fn compute_brdf(gpu: &Gpu, pipeline: &wgpu::ComputePipeline) -> (wgpu::TextureVi
             timestamp_writes: None,
         });
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &bind, &[]);
+        pass.set_bind_group(shader_gen::BRDF_OUT_GROUP, &bind, &[]);
         let [wx, wy, _] = shader_gen::IBL_BRDF_WORKGROUP_SIZE;
         pass.dispatch_workgroups(BRDF_SIZE.div_ceil(wx), BRDF_SIZE.div_ceil(wy), 1);
     }
@@ -861,7 +866,7 @@ pub(crate) mod tests {
         [d[0] / len, d[1] / len, d[2] / len]
     }
 
-    /// Rust twin of `ibl.wgsl`'s `sky_gradient`.
+    /// Rust twin of `sky_gradient.wgsl`.
     pub(crate) fn sky_gradient(env: &EnvironmentData, dir: [f32; 3]) -> [f32; 3] {
         let t = dir[1];
         let (far, k) = if t >= 0.0 {

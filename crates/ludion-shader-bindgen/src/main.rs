@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use ludion_shader_bindgen::{emit, load_units, reflect};
+use ludion_shader_bindgen::{check_unfilterable, emit, load_units, reflect};
 
 const OUTPUT: &str = "crates/ludion-renderer/src/shader_gen.rs";
 
@@ -37,6 +37,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let Err(e) = check_unfilterable(&reflection) {
+        eprintln!("shader-bindgen: {e}");
+        return ExitCode::FAILURE;
+    }
     let generated = emit(&reflection);
 
     let out_path = workspace.join(OUTPUT);

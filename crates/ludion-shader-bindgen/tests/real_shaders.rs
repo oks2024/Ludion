@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use ludion_shader_bindgen::{
     BindingKind, BufferSpace, COMPUTE_SHADERS, RENDER_GRAPH_SHADERS, RENDERER_SHADERS, ShaderStage,
-    StorageAccess, StorageFormat, TextureDim, load_units, reflect,
+    StorageAccess, StorageFormat, TextureDim, check_unfilterable, load_units, reflect,
 };
 
 fn workspace() -> PathBuf {
@@ -60,6 +60,7 @@ fn shader_lists_match_the_shader_dirs() {
 #[test]
 fn all_repo_shaders_reflect_and_unify() {
     let reflection = reflect(&units()).expect("every repo shader should reflect without error");
+    check_unfilterable(&reflection).expect("every unfilterable name is a reflected float texture");
 
     // Camera is copy-pasted across mesh/sprite/text — it must unify into exactly one struct.
     assert_eq!(
@@ -142,7 +143,7 @@ fn all_repo_shaders_reflect_and_unify() {
     assert_eq!(mesh_vs.inputs[19].location, 19);
 
     // Bind group unification (decision 13): the `{src_tex, src_sampler}` group unifies across
-    // blit/vignette into ONE layout, while threshold's `{src_tex, src_sampler, bloom}` (the
+    // blit/vignette/window_blit into ONE layout, while threshold's `{src_tex, src_sampler, bloom}` (the
     // Environment/IBL bloom-threshold uniform) is a *different* name-set and reflects as a separate
     // layout — the shape falls out of the key, no conflict. `sprite_tex`/`sprite_sampler` (group 2)
     // stays distinct from the atlas set despite being structurally identical, because the key is the
@@ -151,7 +152,11 @@ fn all_repo_shaders_reflect_and_unify() {
     assert_eq!(shared.group, 0);
     assert_eq!(
         shared.units,
-        vec!["blit.wgsl".to_string(), "vignette.wgsl".to_string()]
+        vec![
+            "blit.wgsl".to_string(),
+            "vignette.wgsl".to_string(),
+            "window_blit.wgsl".to_string()
+        ]
     );
     assert!(
         reflection

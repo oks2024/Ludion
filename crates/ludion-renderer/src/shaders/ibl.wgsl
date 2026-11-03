@@ -32,16 +32,6 @@ struct PrefilterParams {
 @group(0) @binding(7) var downsample_src: texture_2d_array<f32>;
 @group(0) @binding(8) var downsample_dst: texture_storage_2d_array<rgba16float, write>;
 
-// The authored gradient, byte-for-byte the same easing as `sky.wgsl`'s `sky_gradient` (they cannot
-// share a module — one is composed for a render pipeline, this drives compute — so both encode it).
-fn sky_gradient(dir: vec3<f32>) -> vec3<f32> {
-    let t = dir.y;
-    if (t >= 0.0) {
-        return mix(colors.horizon.rgb, colors.zenith.rgb, pow(clamp(t, 0.0, 1.0), 0.5));
-    }
-    return mix(colors.horizon.rgb, colors.ground.rgb, pow(clamp(-t, 0.0, 1.0), 0.5));
-}
-
 // Cube-face direction for face `face` (0..5 = +X,-X,+Y,-Y,+Z,-Z) at face-local `uv` in [-1, 1] — the
 // standard wgpu cube convention (matches `TextureViewDimension::Cube` sampling).
 fn face_dir(face: u32, uv: vec2<f32>) -> vec3<f32> {
@@ -107,7 +97,7 @@ fn irradiance(@builtin(global_invocation_id) gid: vec3<u32>) {
         let cos_t = sqrt(1.0 - xi.y);
         let sin_t = sqrt(xi.y);
         let local = vec3<f32>(cos(phi) * sin_t, sin(phi) * sin_t, cos_t);
-        acc = acc + sky_gradient(tb * local);
+        acc = acc + sky_gradient(tb * local, colors.zenith.rgb, colors.horizon.rgb, colors.ground.rgb);
     }
     acc = acc / f32(IRR_SAMPLES);
     textureStore(irradiance_out, vec2<i32>(gid.xy), i32(gid.z), vec4<f32>(acc, 1.0));
@@ -131,7 +121,7 @@ fn prefilter(@builtin(global_invocation_id) gid: vec3<u32>) {
         let l = normalize(2.0 * dot(v, h) * h - v);
         let ndl = dot(n, l);
         if (ndl > 0.0) {
-            color = color + sky_gradient(l) * ndl;
+            color = color + sky_gradient(l, colors.zenith.rgb, colors.horizon.rgb, colors.ground.rgb) * ndl;
             total = total + ndl;
         }
     }

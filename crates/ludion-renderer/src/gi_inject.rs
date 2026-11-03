@@ -33,6 +33,7 @@ use bytemuck::Zeroable;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_render_graph::Gpu;
 
+use crate::compute_shader::ComputeShader;
 use crate::gi_bake::{
     HIT_FACE_BOUNDARY, HIT_FACE_ESCAPED, HIT_FACE_SHIFT, premultiplied, read_probe_texture,
 };
@@ -150,9 +151,7 @@ impl GiInject {
         let device = gpu.device();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gi inject"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "shaders/gi_inject.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(ComputeShader::GiInject.composed().into()),
         });
         // The auto-derived layout is what makes the albedo binding legal: wgpu infers a sampled float
         // texture's `filterable` from whether the entry point pairs it with a sampler, and this
@@ -278,7 +277,9 @@ impl GiInject {
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("gi inject"),
-            layout: &self.pipeline.get_bind_group_layout(0),
+            layout: &self
+                .pipeline
+                .get_bind_group_layout(shader_gen::INJECT_PARAMS_GROUP),
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: shader_gen::INJECT_PARAMS_BINDING,
@@ -321,7 +322,7 @@ impl GiInject {
     ) {
         let [cx, cy, cz] = frame.count;
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, bind_group, &[]);
+        pass.set_bind_group(shader_gen::INJECT_PARAMS_GROUP, bind_group, &[]);
         pass.dispatch_workgroups(
             cx.div_ceil(WORKGROUP[0]),
             cy.div_ceil(WORKGROUP[1]),
@@ -967,7 +968,7 @@ mod tests {
     /// nothing.
     #[test]
     fn the_replayed_ray_set_spans_the_sphere() {
-        // `gi_inject.wgsl`'s `ray_direction`, restated — the same formula over the same slot→ray
+        // `gi_rays.wgsl`'s `ray_direction`, mirrored — the same formula over the same slot→ray
         // mapping, so this measures the shader's own directions rather than a paraphrase of them.
         // At full quality, which is the count the fixtures bake at; the stride is derived from it
         // exactly as both shaders derive theirs.
@@ -1060,6 +1061,10 @@ mod tests {
         for (file, source) in [
             ("gi_bake.wgsl", include_str!("shaders/gi_bake.wgsl")),
             ("gi_inject.wgsl", include_str!("shaders/gi_inject.wgsl")),
+            (
+                "gi_rays.wgsl",
+                include_str!("shaders/snippets/gi_rays.wgsl"),
+            ),
         ] {
             for name in ["RAYS", "CACHE_STRIDE"] {
                 assert!(

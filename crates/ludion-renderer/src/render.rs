@@ -23,6 +23,7 @@ use ludion_render_graph::{
 };
 
 use crate::compressed::{self, CompressedUploadError};
+use crate::compute_shader::ComputeShader;
 use crate::cull::{Aabb, cull, instance_bounds, local_bounds, visible_ranges};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
@@ -882,7 +883,7 @@ impl Renderer {
     }
 
     /// A hash of the shader code a probe capture runs: every registry shader as composed now (so a
-    /// reload moves it), plus the three compute shaders outside the registry. Registry-wide rather
+    /// reload moves it), plus the compute shaders outside the registry, composed. Registry-wide rather
     /// than a capture subset: an extra shader only costs a recapture, a missing one is a stale cube.
     pub(crate) fn capture_code_key(&self) -> u64 {
         if let Some(key) = self.capture_code_key.get() {
@@ -898,13 +899,9 @@ impl Renderer {
         for id in ShaderId::all() {
             part(id.file_name(), &self.compose(id, None));
         }
-        part("ibl.wgsl", include_str!("shaders/ibl.wgsl"));
-        part("gi_bake.wgsl", include_str!("shaders/gi_bake.wgsl"));
-        part("gi_inject.wgsl", include_str!("shaders/gi_inject.wgsl"));
-        part(
-            "probe_relight.wgsl",
-            include_str!("shaders/probe_relight.wgsl"),
-        );
+        for shader in ComputeShader::ALL {
+            part(shader.file_name(), &shader.composed());
+        }
         let key = ludion_assets::content_hash(&bytes);
         self.capture_code_key.set(Some(key));
         key
@@ -6979,7 +6976,7 @@ impl ShaderId {
 /// shader to its snippets is [`ShaderId::snippets`]; a snippet edit hot-reloads every dependent
 /// pipeline (`Renderer::reload_snippet`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Snippet {
+pub(crate) enum Snippet {
     /// `Camera` uniform struct + its `@group(0)` binding (mesh, sprite, particle, text, ground
     /// marker).
     Camera,
@@ -6989,6 +6986,9 @@ enum Snippet {
     /// `ShadeProbe`, `probe_weight`, `probe_lookup`, `probe_ratio` and `probe_relit`, binding-free
     /// (reflections; the twins of `probe.rs`).
     Probes,
+    /// The GI bake's ray set and geometry helpers (`GiBinParams`, `ray_direction`, `nonzero`,
+    /// `cell_center`, `bin_cell_of`), binding-free (the bake and the injection compute shaders).
+    GiRays,
     /// The clustered-forward light set: the grid consts, the `Light`/`LightHeader` structs, all four
     /// `@group(1)` bindings and the `cluster_slice` lookup (mesh, sprite, particle).
     Lights,
@@ -7001,7 +7001,7 @@ enum Snippet {
     /// distance and world height (the composite's analytic haze, the light-shaft march).
     Medium,
     /// The `Environment`'s authored sky radiance as a function of direction (the sky background, the
-    /// composite's sky-coupled ambient in-scatter).
+    /// composite's sky-coupled ambient in-scatter, the IBL bake's cube and diffuse sky).
     SkyGradient,
     /// The GPU bone palette's `@group(0) @binding(1)` storage buffer and the `skin_matrix` blend
     /// function (mesh, prepass, shadow — Plan/skeletal-animation.md).
@@ -7072,6 +7072,7 @@ impl Snippet {
             Snippet::Bayer => "bayer.wgsl",
             Snippet::Medium => "medium.wgsl",
             Snippet::SkyGradient => "sky_gradient.wgsl",
+            Snippet::GiRays => "gi_rays.wgsl",
             Snippet::Skin => "skin.wgsl",
             Snippet::Hdr => "hdr.wgsl",
             Snippet::Lobe => "lobe.wgsl",
@@ -7094,7 +7095,7 @@ impl Snippet {
     }
 
     /// The compiled-in snippet source (`include_str!`).
-    fn builtin_source(self) -> &'static str {
+    pub(crate) fn builtin_source(self) -> &'static str {
         match self {
             Snippet::Camera => include_str!("shaders/snippets/camera.wgsl"),
             Snippet::ClusterGrid => include_str!("shaders/snippets/cluster_grid.wgsl"),
@@ -7104,6 +7105,7 @@ impl Snippet {
             Snippet::Bayer => include_str!("shaders/snippets/bayer.wgsl"),
             Snippet::Medium => include_str!("shaders/snippets/medium.wgsl"),
             Snippet::SkyGradient => include_str!("shaders/snippets/sky_gradient.wgsl"),
+            Snippet::GiRays => include_str!("shaders/snippets/gi_rays.wgsl"),
             Snippet::Skin => include_str!("shaders/snippets/skin.wgsl"),
             Snippet::Hdr => include_str!("shaders/snippets/hdr.wgsl"),
             Snippet::Lobe => include_str!("shaders/snippets/lobe.wgsl"),
@@ -7130,6 +7132,8 @@ impl Snippet {
     /// Maps a reload path to the snippet it names, by file name, or `None`.
     fn from_path(path: &str) -> Option<Snippet> {
         let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        // `GiRays` is absent on purpose: no `ShaderId` composes it, so a reload would report
+        // success and change nothing.
         [
             Snippet::Camera,
             Snippet::ClusterGrid,
@@ -7167,8 +7171,14 @@ impl Snippet {
 /// joined by `\n`. The no-overlay case of [`Renderer::compose`], used to build every pipeline in
 /// [`Renderer::new`] before any reload.
 fn builtin_composed(id: ShaderId) -> String {
-    let mut parts: Vec<&str> = id.snippets().iter().map(|s| s.builtin_source()).collect();
-    parts.push(id.body_source());
+    compose_builtin(id.snippets(), id.body_source())
+}
+
+/// The one join of a shader's composition: the snippets' compiled-in sources then `body`, joined by
+/// `\n`. Render and compute shaders both compose through it.
+pub(crate) fn compose_builtin(snippets: &[Snippet], body: &str) -> String {
+    let mut parts: Vec<&str> = snippets.iter().map(|s| s.builtin_source()).collect();
+    parts.push(body);
     parts.join("\n")
 }
 
@@ -8998,25 +9008,9 @@ mod tests {
     /// so a drift fails loudly (and `shader_gen.rs` is generated from exactly what the GPU sees).
     #[test]
     fn renderer_composition_matches_bindgen_registry() {
-        let shaders_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("shaders");
         for id in ShaderId::all() {
             let renderer_side = builtin_composed(id);
-
-            let snippet_names = ludion_shader_bindgen::snippets_for(id.file_name());
-            let mut parts: Vec<String> = snippet_names
-                .iter()
-                .map(|name| {
-                    std::fs::read_to_string(shaders_dir.join("snippets").join(name))
-                        .unwrap_or_else(|e| panic!("read snippet {name}: {e}"))
-                })
-                .collect();
-            parts.push(
-                std::fs::read_to_string(shaders_dir.join(id.file_name()))
-                    .unwrap_or_else(|e| panic!("read body {}: {e}", id.file_name())),
-            );
-            let bindgen_side = parts.join("\n");
+            let bindgen_side = crate::compute_shader::registry_composed(id.file_name());
 
             assert_eq!(
                 renderer_side,
