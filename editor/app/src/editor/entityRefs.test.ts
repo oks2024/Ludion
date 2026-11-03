@@ -105,6 +105,14 @@ describe('remapRefsAt', () => {
     expect(remapRefsAt(value, ['/target', '/other', '/missing'], from, to)).toBe(value);
   });
 
+  it('escapes keys holding / or ~ and remaps through them', () => {
+    const schema = { properties: { 'a/b': { ...MARK }, 'c~d': { ...MARK } } };
+    const suffixes = entityRefSuffixes(schema);
+    expect(suffixes).toEqual(['/a~1b', '/c~0d']);
+    const value = { 'a/b': ref(from), 'c~d': ref(from) };
+    expect(remapRefsAt(value, suffixes, from, to)).toEqual({ 'a/b': ref(to), 'c~d': ref(to) });
+  });
+
   it('leaves arrays and non-objects alone', () => {
     const value = { list: [ref(from)] };
     expect(remapRefsAt(value, ['/list'], from, to)).toBe(value);

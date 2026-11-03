@@ -2,8 +2,8 @@
 //
 // Mirrors `entity_ref_fields` in `crates/ludion-ecs/src/entity_ref.rs`: the engine marks every
 // entity-ref field with the `x-entity-ref` schema keyword, and `engine.describe` serves each
-// component's schema, so the editor needs no list of component names. Arrays are not walked, the
-// same documented gap as the engine's.
+// component's schema, so the editor needs no list of component names. The engine refuses a marked
+// reference inside a list, map or tuple at registration (L1392), so none reaches this walk.
 
 import type { CallFn, EntityId } from './undo';
 
@@ -19,12 +19,20 @@ function isObject(value: unknown): value is Json {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function escapeSegment(key: string): string {
+  return key.replaceAll('~', '~0').replaceAll('/', '~1');
+}
+
+function unescapeSegment(raw: string): string {
+  return raw.replaceAll('~1', '/').replaceAll('~0', '~');
+}
+
 /** Resolves a `#/…` JSON Pointer against `root`, decoding `~1` and `~0`. */
 function resolvePointer(root: unknown, ref: string): unknown {
   let node: unknown = root;
   for (const raw of ref.replace(/^#/, '').split('/').slice(1)) {
     if (!isObject(node) && !Array.isArray(node)) return undefined;
-    const key = raw.replaceAll('~1', '/').replaceAll('~0', '~');
+    const key = unescapeSegment(raw);
     node = (node as Record<string, unknown>)[key];
   }
   return node;
@@ -41,7 +49,7 @@ function walk(root: unknown, node: unknown, suffix: string, depth: number, found
   }
   if (isObject(node.properties)) {
     for (const [key, property] of Object.entries(node.properties)) {
-      walk(root, property, `${suffix}/${key}`, depth + 1, found);
+      walk(root, property, `${suffix}/${escapeSegment(key)}`, depth + 1, found);
     }
   }
   for (const combinator of ['anyOf', 'oneOf', 'allOf']) {
@@ -93,7 +101,7 @@ function remapAt(value: unknown, keys: readonly string[], from: EntityId, to: En
 export function remapRefsAt(value: unknown, suffixes: readonly string[], from: EntityId, to: EntityId): unknown {
   let out = value;
   for (const suffix of suffixes) {
-    out = remapAt(out, suffix.split('/').slice(1), from, to);
+    out = remapAt(out, suffix.split('/').slice(1).map(unescapeSegment), from, to);
   }
   return out;
 }
