@@ -310,6 +310,7 @@ impl Registry {
     ///
     /// # Errors
     /// `L0005` if `name` is already taken, or if `T` is already registered (under any name).
+    /// `L1392` if a marked entity reference sits inside a list or map of `T`.
     pub fn register<T: Component>(&mut self, name: &str) -> Result<(), Diagnostic> {
         self.register_with::<T>(name, false, no_semantic_validation)
     }
@@ -320,6 +321,7 @@ impl Registry {
     ///
     /// # Errors
     /// `L0005` if `name` is already taken, or if `T` is already registered (under any name).
+    /// `L1392` if a marked entity reference sits inside a list or map of `T`.
     pub fn register_validated<T: Component + SemanticValidate>(
         &mut self,
         name: &str,
@@ -334,6 +336,7 @@ impl Registry {
     ///
     /// # Errors
     /// `L0005` if `name` is already taken, or if `T` is already registered (under any name).
+    /// `L1392` if a marked entity reference sits inside a list or map of `T`.
     pub fn register_reserved<T: Component>(&mut self, name: &str) -> Result<(), Diagnostic> {
         self.register_with::<T>(name, true, no_semantic_validation)
     }
@@ -353,6 +356,9 @@ impl Registry {
         }
         let schema = serde_json::to_value(schemars::schema_for!(T))
             .expect("a schemars JSON Schema always serializes to a JSON value");
+        if let Some(suffix) = crate::entity_refs_in_collections(&schema).first() {
+            return Err(entity_ref_in_collection(name, suffix));
+        }
         let entity_refs = crate::entity_ref_fields(&schema);
         let asset_paths = crate::asset_path_fields(&schema);
         let index = self.entries.len();
@@ -559,6 +565,17 @@ fn duplicate_name(name: &str) -> Diagnostic {
         format!("a component is already registered under the name `{name}`"),
     )
     .with_help("choose a unique component name; each name maps to exactly one component")
+}
+
+fn entity_ref_in_collection(name: &str, suffix: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::ENTITY_REF_IN_COLLECTION,
+        format!("component `{name}` marks an entity reference inside a list or map, at `{suffix}`"),
+    )
+    .with_help(
+        "a list or map of entity references is not supported: hold each reference in its own \
+         field, or derive the collection from a query",
+    )
 }
 
 fn duplicate_type(new_name: &str, existing_name: &str) -> Diagnostic {

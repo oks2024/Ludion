@@ -9345,86 +9345,25 @@ entities:
         );
     }
 
-    /// Collects the JSON Pointer suffixes at which `schema` (resolved against `root`) holds an
-    /// entity reference — a subschema whose `properties` are exactly `{index, generation}`. An array
-    /// of references is recorded with a `/*` step so it fails the marker comparison loudly.
-    fn entity_ref_suffixes(
-        root: &serde_json::Value,
-        schema: &serde_json::Value,
-        suffix: &str,
-        depth: usize,
-        found: &mut std::collections::BTreeSet<String>,
-    ) {
-        use serde_json::Value;
-        if depth > 12 {
-            return;
-        }
-        if let Some(target) = schema.get("$ref").and_then(Value::as_str) {
-            let path = target.trim_start_matches('#');
-            if let Some(resolved) = root.pointer(path) {
-                entity_ref_suffixes(root, resolved, suffix, depth + 1, found);
-            }
-        }
-        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
-            let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
-            keys.sort_unstable();
-            if keys == ["generation", "index"] {
-                found.insert(suffix.to_string());
-            } else {
-                for (key, property) in properties {
-                    let at = format!("{suffix}/{key}");
-                    entity_ref_suffixes(root, property, &at, depth + 1, found);
-                }
-            }
-        }
-        for combinator in ["anyOf", "oneOf", "allOf"] {
-            for branch in schema
-                .get(combinator)
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                entity_ref_suffixes(root, branch, suffix, depth + 1, found);
-            }
-        }
-        if let Some(items) = schema.get("items") {
-            entity_ref_suffixes(root, items, &format!("{suffix}/*"), depth + 1, found);
-        }
-    }
-
-    /// Every entity-reference field of every registered component carries the
-    /// `ludion_ecs::EntityRef[Self]Schema` marker, so `scene.save`'s remap and `scene.check`'s
-    /// range check cannot silently miss a new one; the four built-in fields keep their semantics.
+    /// The four built-in entity-reference fields keep their semantics; that every such field is
+    /// marked at all is `assert_entity_refs_marked`'s job (`ludion-testkit`).
     #[test]
-    fn every_entity_reference_field_is_marked() {
+    fn builtin_entity_references_keep_their_semantics() {
         let registry = builtin_registry();
-        for info in registry.iter() {
-            let mut found = std::collections::BTreeSet::new();
-            entity_ref_suffixes(info.schema(), info.schema(), "", 0, &mut found);
-            let marked: std::collections::BTreeSet<String> = info
-                .entity_refs()
-                .iter()
-                .map(|field| field.suffix.clone())
-                .collect();
-            assert_eq!(
-                found,
-                marked,
-                "component `{}` holds entity references at {found:?} but only {marked:?} are \
-                 marked — mark the field with ludion_ecs::EntityRef[Self]Schema",
-                info.name()
-            );
-        }
         for (component, expected) in [
-            ("Parent", vec![("", false, false)]),
-            ("Joint", vec![("/a", true, false), ("/b", true, false)]),
-            ("PatternPlayer", vec![("/target", false, true)]),
-            ("Volley", vec![("/source", true, true)]),
+            ("Parent", vec![("", false, false, false)]),
+            (
+                "Joint",
+                vec![("/a", true, false, false), ("/b", true, false, false)],
+            ),
+            ("PatternPlayer", vec![("/target", false, true, true)]),
+            ("Volley", vec![("/source", true, true, true)]),
         ] {
             let info = registry.get(component).expect("registered");
-            let fields: Vec<(&str, bool, bool)> = info
+            let fields: Vec<(&str, bool, bool, bool)> = info
                 .entity_refs()
                 .iter()
-                .map(|f| (f.suffix.as_str(), f.allow_self, f.optional))
+                .map(|f| (f.suffix.as_str(), f.allow_self, f.optional, f.nullable))
                 .collect();
             assert_eq!(
                 fields, expected,

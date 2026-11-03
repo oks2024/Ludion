@@ -3177,6 +3177,86 @@ fn a_required_reference_missing_from_the_serialized_value_is_l0007_on_save() {
     assert!(error.message.contains("`Skipped`"), "{}", error.message);
 }
 
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Copy)]
+struct Inner {
+    #[schemars(with = "ludion_ecs::EntityRefSchema")]
+    holder: EntityId,
+}
+
+/// A reference that is optional only through an enclosing `Option<struct>`: `null` is not valid at
+/// the field itself.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Copy)]
+struct Wrapped {
+    inner: Option<Inner>,
+}
+
+/// An `Option<EntityId>` field: `null` is valid there.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Copy)]
+struct Hold {
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    holder: Option<EntityId>,
+}
+
+/// Only a nullable reference is written `null` when its target is gone; one that is optional through
+/// an enclosing `Option<struct>` refuses with `L1018`, as writing `null` there would not reload.
+#[test]
+fn a_dangling_reference_saves_null_only_where_the_field_is_nullable() {
+    let root = temp_project();
+    let mut engine = Engine::builder()
+        .components(|r| {
+            r.register::<Wrapped>("Wrapped")?;
+            r.register::<Hold>("Hold")
+        })
+        .project_root(&root)
+        .build()
+        .unwrap();
+    engine
+        .load_inline_scene("format: 1\nentities: []\n")
+        .unwrap();
+    let wrapped = &engine.registry().get("Wrapped").unwrap().entity_refs()[0];
+    assert!(wrapped.optional && !wrapped.nullable);
+    let hold = &engine.registry().get("Hold").unwrap().entity_refs()[0];
+    assert!(hold.optional && hold.nullable);
+
+    let gone = spawn_named(&mut engine, "gone");
+    let reference = json!({ "index": gone.index, "generation": gone.generation });
+    let wrapped = spawn_with(
+        &mut engine,
+        "wrapped",
+        "Wrapped",
+        json!({ "inner": { "holder": reference } }),
+    );
+    ok(
+        &mut engine,
+        Command::EntityDestroy(EntityDestroyParams { entity: gone }),
+    );
+    assert_eq!(save_err(&mut engine).code.as_str(), "L1018");
+
+    ok(
+        &mut engine,
+        Command::EntityDestroy(EntityDestroyParams { entity: wrapped }),
+    );
+    let other = spawn_named(&mut engine, "other");
+    spawn_with(
+        &mut engine,
+        "hold",
+        "Hold",
+        json!({ "holder": { "index": other.index, "generation": other.generation } }),
+    );
+    ok(
+        &mut engine,
+        Command::EntityDestroy(EntityDestroyParams { entity: other }),
+    );
+    ok(
+        &mut engine,
+        Command::SceneSave(SceneSaveParams {
+            path: "out.yaml".into(),
+        }),
+    );
+    let saved = std::fs::read_to_string(root.join("out.yaml")).expect("saved");
+    assert!(saved.contains("holder: null"), "{saved}");
+}
+
 // --- Wire entity-reference checks ----------------------------------------------------------------
 
 /// Two sim entities (`a` 0, `b` 1) and two presentation entities (`popup`, `popup2`).

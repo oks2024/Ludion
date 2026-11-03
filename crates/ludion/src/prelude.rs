@@ -145,6 +145,10 @@
 //!   `log` channel and stderr, once per `(code, key)` per session, at the severity's level — so a
 //!   check that runs every tick prints one line, and `key` (a doc name, a scene name) keeps two
 //!   offenders distinct.
+//! - **Marking a field** — [`EntityRefSchema`] / [`EntityRefSelfSchema`] and [`AssetPathSchema`]:
+//!   `#[schemars(with = "EntityRefSchema")]` on an [`EntityId`] field (or `Option<…>` of it) makes
+//!   scene load range-check it and `scene.save` remap it; `with = "AssetPathSchema"` on a `String`
+//!   makes it a content-root path. A list or map of references is refused (`L1392`).
 //! - **Wire surface** — [`Command`] and the [`command`] params module, for driving an engine
 //!   directly in tests.
 //!
@@ -182,7 +186,8 @@ pub use ludion_engine::{
 pub use ludion_engine::ui::UiNav;
 
 pub use ludion_ecs::{
-    Component, Parent, Phase, Registry, Schedule, SemanticValidate, SystemCtx, World,
+    AssetPathSchema, Component, EntityRefSchema, EntityRefSelfSchema, Parent, Phase, Registry,
+    Schedule, SemanticValidate, SystemCtx, World,
 };
 
 pub use ludion_sim::{

@@ -671,6 +671,48 @@ fn parent_is_the_only_hierarchy_entity_ref() {
     assert!(!leash[0].hierarchy);
 }
 
+#[test]
+fn a_marked_entity_reference_in_a_list_map_or_tuple_is_refused_at_registration() {
+    use std::collections::BTreeMap;
+
+    use ludion_ecs::EntityRefSchema;
+
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct Pack {
+        #[schemars(with = "Vec<EntityRefSchema>")]
+        members: Vec<EntityId>,
+    }
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct Named {
+        #[schemars(with = "BTreeMap<String, EntityRefSchema>")]
+        by_name: BTreeMap<String, EntityId>,
+    }
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct Pair {
+        #[schemars(with = "(EntityRefSchema, EntityRefSchema)")]
+        both: (EntityId, EntityId),
+    }
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct Fine {
+        #[schemars(with = "EntityRefSchema")]
+        holder: EntityId,
+    }
+
+    let mut registry = Registry::new();
+    for (name, result, suffix) in [
+        ("Pack", registry.register::<Pack>("Pack"), "/members/*"),
+        ("Named", registry.register::<Named>("Named"), "/by_name/*"),
+        ("Pair", registry.register::<Pair>("Pair"), "/both/0"),
+    ] {
+        let error = result.expect_err("a collection of references is refused");
+        assert_eq!(error.code, code::ENTITY_REF_IN_COLLECTION, "{name}");
+        assert!(error.message.contains(suffix), "{name}: {}", error.message);
+        assert!(registry.get(name).is_none(), "{name} was not registered");
+    }
+    registry.register::<Fine>("Fine").unwrap();
+    assert_eq!(registry.get("Fine").unwrap().entity_refs().len(), 1);
+}
+
 // --- Restore validation ----------------------------------------------------------------------
 
 fn allocator_state(generations: &[u32], free: &[u32]) -> ludion_ecs::AllocatorState {

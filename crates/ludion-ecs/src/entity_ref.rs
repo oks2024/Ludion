@@ -17,14 +17,17 @@ use ludion_core::ids::EntityId;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde_json::{Value, json};
 
+use crate::asset_path::pointer_segment;
+
 /// The schema keyword an entity-reference field carries: `{"allow_self": bool}`, plus
 /// `"hierarchy": true` on a tree link.
 pub const ENTITY_REF_KEYWORD: &str = "x-entity-ref";
 
 /// Schema proxy for an [`EntityId`](ludion_core::ids::EntityId) field that must **not** name the
-/// entity carrying the component. Never constructed: use it as
-/// `#[schemars(with = "ludion_ecs::EntityRefSchema")]`, or `with = "Option<ludion_ecs::EntityRefSchema>"`
-/// for an optional field.
+/// entity carrying the component. Never constructed: a game writes
+/// `#[schemars(with = "EntityRefSchema")]` (the name is in `ludion::prelude`), or
+/// `with = "Option<EntityRefSchema>"` for an optional field. A list or map of references is refused
+/// at registration (`L1392`): hold each reference in its own field.
 ///
 /// # Example
 /// ```
@@ -119,9 +122,13 @@ pub struct EntityRefField {
     pub suffix: String,
     /// Whether the reference may name the entity that carries the component.
     pub allow_self: bool,
-    /// An `Option<EntityId>` field: absent or `null` is no reference, and `scene.save` writes a
-    /// dangling one as `null` instead of refusing.
+    /// The field may be absent (a missing key, an `Option`, an optional enclosing struct, or one
+    /// variant of several): absent is no reference.
     pub optional: bool,
+    /// `null` is a valid value at the field's own position (`Option<EntityId>`): `scene.save` and a
+    /// scene carry write a dangling one as `null` instead of refusing or dropping it. A field that
+    /// is only optional through an enclosing `Option<struct>` is not nullable.
+    pub nullable: bool,
     /// The field is a tree link (`Parent`): a scene rejects a cycle through it (`L1035`).
     pub hierarchy: bool,
 }
@@ -140,6 +147,7 @@ impl EntityRefField {
     ///     suffix: "/holder".to_string(),
     ///     allow_self: false,
     ///     optional: false,
+    ///     nullable: false,
     ///     hierarchy: false,
     /// };
     /// let value = json!({"holder": {"index": 3, "generation": 0}});
@@ -164,70 +172,230 @@ impl EntityRefField {
 /// in one variant of several (`anyOf`/`oneOf` with more than one non-null branch): it is then
 /// present only with its variant. A suffix found more than once (the same field in several
 /// variants) is merged into one entry, refusing self-reference unless every occurrence allows it.
-/// Stops at a marked node. Arrays are not walked: a marked field inside one is not found, so a
-/// component holding a list of references is a documented gap, not a silent one (the engine's
-/// guard test compares this walk against the `{index, generation}` shape).
+/// Stops at a marked node. `items`, `additionalProperties` and `prefixItems` are walked only to
+/// find a marked field inside a list, map or tuple, which [`entity_refs_in_collections`] reports
+/// and this function leaves out (the registry refuses such a component).
+///
+/// `nullable` is set only when `null` is valid at the field's own position; it resets on every
+/// step into `properties`, so a required field of an `Option<struct>` is optional but not nullable.
+///
+/// # Example
+/// ```
+/// use ludion_ecs::{EntityRefSchema, entity_ref_fields};
+/// use schemars::{JsonSchema, schema_for};
+///
+/// #[derive(JsonSchema)]
+/// struct Leash {
+///     #[schemars(with = "Option<EntityRefSchema>")]
+///     holder: Option<u32>,
+/// }
+///
+/// let schema = serde_json::to_value(schema_for!(Leash)).unwrap();
+/// let fields = entity_ref_fields(&schema);
+/// assert_eq!(fields[0].suffix, "/holder");
+/// assert!(fields[0].optional && fields[0].nullable);
+/// ```
 pub fn entity_ref_fields(schema: &Value) -> Vec<EntityRefField> {
-    let mut found = Vec::new();
-    walk(schema, schema, "", false, 0, &mut found);
-    found.sort_by(|a, b| a.suffix.cmp(&b.suffix));
-    found.dedup_by(|later, kept| {
+    let mut found = Found::default();
+    walk(schema, schema, At::ROOT, 0, &mut found);
+    let mut fields = found.fields;
+    fields.sort_by(|a, b| a.suffix.cmp(&b.suffix));
+    fields.dedup_by(|later, kept| {
         let same = later.suffix == kept.suffix;
         if same {
             kept.allow_self &= later.allow_self;
             kept.optional |= later.optional;
+            kept.nullable &= later.nullable;
             kept.hierarchy |= later.hierarchy;
         }
         same
     });
-    found
+    fields
 }
 
-fn walk(
+/// The sorted suffixes of marked entity references that sit inside a list, a map or a tuple
+/// (`/*` for a list's elements or a map's values, `/<i>` for a tuple's). The registry refuses a
+/// component with any (`L1392`).
+///
+/// # Example
+/// ```
+/// use std::collections::BTreeMap;
+/// use ludion_ecs::{EntityRefSchema, entity_refs_in_collections};
+/// use schemars::{JsonSchema, schema_for};
+///
+/// #[derive(JsonSchema)]
+/// struct Pack {
+///     #[schemars(with = "BTreeMap<String, EntityRefSchema>")]
+///     members: u32,
+/// }
+///
+/// let schema = serde_json::to_value(schema_for!(Pack)).unwrap();
+/// assert_eq!(entity_refs_in_collections(&schema), ["/members/*"]);
+/// ```
+pub fn entity_refs_in_collections(schema: &Value) -> Vec<String> {
+    let mut found = Found::default();
+    walk(schema, schema, At::ROOT, 0, &mut found);
+    found.in_collections.sort();
+    found.in_collections.dedup();
+    found.in_collections
+}
+
+/// The sorted suffixes at which `schema` holds something shaped like an entity reference — an
+/// object whose properties are exactly `index` and `generation` — marked or not. A list or map of
+/// them is recorded with a `/*` step and a tuple with `/<i>`, so a proxy hand-written under a
+/// collection shows up. `assert_entity_refs_marked` in `ludion-testkit` compares this against
+/// [`ComponentInfo::entity_refs`](crate::ComponentInfo::entity_refs).
+///
+/// # Example
+/// ```
+/// use ludion_ecs::entity_ref_shapes;
+/// use serde_json::json;
+///
+/// let schema = json!({
+///     "type": "object",
+///     "properties": {
+///         "holder": {"type": "object", "properties": {
+///             "index": {"type": "integer"}, "generation": {"type": "integer"}}},
+///         "hp": {"type": "integer"}
+///     }
+/// });
+/// assert_eq!(entity_ref_shapes(&schema), ["/holder"]);
+/// ```
+pub fn entity_ref_shapes(schema: &Value) -> Vec<String> {
+    let mut found = std::collections::BTreeSet::new();
+    shapes(schema, schema, "", 0, &mut found);
+    found.into_iter().collect()
+}
+
+fn shapes(
     root: &Value,
     node: &Value,
     suffix: &str,
-    optional: bool,
     depth: usize,
-    found: &mut Vec<EntityRefField>,
+    found: &mut std::collections::BTreeSet<String>,
 ) {
     if depth > 12 {
         return;
     }
-    let optional = optional || is_nullable(node);
-    if let Some(marker) = node.get(ENTITY_REF_KEYWORD) {
-        found.push(EntityRefField {
-            suffix: suffix.to_string(),
-            allow_self: marker
-                .get("allow_self")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            optional,
-            hierarchy: marker
-                .get("hierarchy")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        });
+    if let Some(resolved) = resolve(root, node) {
+        shapes(root, resolved, suffix, depth + 1, found);
+    }
+    if let Some(properties) = node.get("properties").and_then(Value::as_object) {
+        let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        if keys == ["generation", "index"] {
+            found.insert(suffix.to_string());
+        } else {
+            for (key, property) in properties {
+                let at = format!("{suffix}/{}", pointer_segment(key));
+                shapes(root, property, &at, depth + 1, found);
+            }
+        }
+    }
+    for combinator in ["anyOf", "oneOf", "allOf"] {
+        for branch in node
+            .get(combinator)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            shapes(root, branch, suffix, depth + 1, found);
+        }
+    }
+    for each in ["items", "additionalProperties"] {
+        if let Some(inner) = node.get(each).filter(|inner| inner.is_object()) {
+            shapes(root, inner, &format!("{suffix}/*"), depth + 1, found);
+        }
+    }
+    for (index, entry) in prefix_items(node).iter().enumerate() {
+        shapes(root, entry, &format!("{suffix}/{index}"), depth + 1, found);
+    }
+}
+
+fn resolve<'a>(root: &'a Value, node: &Value) -> Option<&'a Value> {
+    let target = node.get("$ref").and_then(Value::as_str)?;
+    root.pointer(target.trim_start_matches('#'))
+}
+
+fn prefix_items(node: &Value) -> &[Value] {
+    node.get("prefixItems")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
+}
+
+#[derive(Default)]
+struct Found {
+    fields: Vec<EntityRefField>,
+    in_collections: Vec<String>,
+}
+
+/// The walk's position: where it stands and what it has passed on the way down.
+#[derive(Clone, Copy)]
+struct At<'a> {
+    suffix: &'a str,
+    /// The field may be absent.
+    optional: bool,
+    /// `null` is valid at the field's own position.
+    nullable: bool,
+    /// Below a list, map or tuple.
+    in_collection: bool,
+}
+
+impl At<'static> {
+    const ROOT: Self = Self {
+        suffix: "",
+        optional: false,
+        nullable: false,
+        in_collection: false,
+    };
+}
+
+fn walk(root: &Value, node: &Value, at: At<'_>, depth: usize, found: &mut Found) {
+    if depth > 12 {
         return;
     }
-    if let Some(target) = node.get("$ref").and_then(Value::as_str)
-        && let Some(resolved) = root.pointer(target.trim_start_matches('#'))
-    {
-        walk(root, resolved, suffix, optional, depth + 1, found);
+    let optional = at.optional || is_nullable(node);
+    let nullable = at.nullable || is_nullable(node);
+    if let Some(marker) = node.get(ENTITY_REF_KEYWORD) {
+        if at.in_collection {
+            found.in_collections.push(at.suffix.to_string());
+        } else {
+            found.fields.push(EntityRefField {
+                suffix: at.suffix.to_string(),
+                allow_self: marker
+                    .get("allow_self")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                optional,
+                nullable,
+                hierarchy: marker
+                    .get("hierarchy")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            });
+        }
+        return;
+    }
+    let here = At {
+        optional,
+        nullable,
+        ..at
+    };
+    if let Some(resolved) = resolve(root, node) {
+        walk(root, resolved, here, depth + 1, found);
     }
     if let Some(properties) = node.get("properties").and_then(Value::as_object) {
         let required = node.get("required").and_then(Value::as_array);
         for (key, property) in properties {
             let is_required = required.is_some_and(|names| names.iter().any(|n| n == key));
-            let at = format!("{suffix}/{key}");
-            walk(
-                root,
-                property,
-                &at,
-                optional || !is_required,
-                depth + 1,
-                found,
-            );
+            let child = format!("{}/{}", at.suffix, pointer_segment(key));
+            let step = At {
+                suffix: &child,
+                optional: optional || !is_required,
+                nullable: false,
+                in_collection: at.in_collection,
+            };
+            walk(root, property, step, depth + 1, found);
         }
     }
     for combinator in ["anyOf", "oneOf", "allOf"] {
@@ -237,9 +405,35 @@ fn walk(
             .map_or(&[][..], Vec::as_slice);
         let non_null = branches.iter().filter(|b| !is_null_branch(b)).count();
         let variants = combinator != "allOf" && non_null > 1;
+        let step = At {
+            optional: optional || variants,
+            ..here
+        };
         for branch in branches {
-            walk(root, branch, suffix, optional || variants, depth + 1, found);
+            walk(root, branch, step, depth + 1, found);
         }
+    }
+    for each in ["items", "additionalProperties"] {
+        if let Some(inner) = node.get(each).filter(|inner| inner.is_object()) {
+            let child = format!("{}/*", at.suffix);
+            let step = At {
+                suffix: &child,
+                optional: true,
+                nullable: false,
+                in_collection: true,
+            };
+            walk(root, inner, step, depth + 1, found);
+        }
+    }
+    for (index, entry) in prefix_items(node).iter().enumerate() {
+        let child = format!("{}/{index}", at.suffix);
+        let step = At {
+            suffix: &child,
+            optional: true,
+            nullable: false,
+            in_collection: true,
+        };
+        walk(root, entry, step, depth + 1, found);
     }
 }
 
@@ -286,7 +480,15 @@ mod tests {
             suffix: suffix.to_string(),
             allow_self,
             optional,
+            nullable: false,
             hierarchy: false,
+        }
+    }
+
+    fn nullable(suffix: &str, allow_self: bool) -> EntityRefField {
+        EntityRefField {
+            nullable: true,
+            ..field(suffix, allow_self, true)
         }
     }
 
@@ -344,7 +546,7 @@ mod tests {
         });
         assert_eq!(
             entity_ref_fields(&schema),
-            [field("/any", false, true), field("/ty", true, true)]
+            [nullable("/any", false), nullable("/ty", true)]
         );
     }
 
@@ -379,6 +581,98 @@ mod tests {
                 field("/outer/holder", false, true)
             ]
         );
+    }
+
+    #[test]
+    fn a_required_ref_inside_an_option_struct_is_optional_but_not_nullable() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "inner": {"anyOf": [{"$ref": "#/$defs/Inner"}, {"type": "null"}]},
+                "both": {"type": "object", "properties": {
+                    "holder": {"anyOf": [marker(false), {"type": "null"}]}
+                }, "required": ["holder"]}
+            },
+            "required": ["inner", "both"],
+            "$defs": {
+                "Inner": {"type": "object", "properties": {"holder": marker(false)}, "required": ["holder"]}
+            }
+        });
+        assert_eq!(
+            entity_ref_fields(&schema),
+            [
+                nullable("/both/holder", false),
+                field("/inner/holder", false, true)
+            ]
+        );
+    }
+
+    #[test]
+    fn variant_fields_are_optional_but_not_nullable() {
+        let schema = json!({
+            "oneOf": [
+                {"type": "object", "properties": {"a": marker(false)}, "required": ["a"]},
+                {"type": "object", "properties": {"b": marker(false)}, "required": ["b"]}
+            ]
+        });
+        assert_eq!(
+            entity_ref_fields(&schema),
+            [field("/a", false, true), field("/b", false, true)]
+        );
+    }
+
+    #[test]
+    fn marked_refs_in_collections_are_reported_not_found() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "list": {"type": "array", "items": marker(false)},
+                "map": {"type": "object", "additionalProperties": marker(false)},
+                "pair": {"type": "array", "prefixItems": [marker(false), {"type": "integer"}]},
+                "one": marker(false)
+            },
+            "required": ["list", "map", "pair", "one"]
+        });
+        assert_eq!(entity_ref_fields(&schema), [field("/one", false, false)]);
+        assert_eq!(
+            entity_refs_in_collections(&schema),
+            ["/list/*", "/map/*", "/pair/0"]
+        );
+    }
+
+    #[test]
+    fn shapes_find_unmarked_proxies_everywhere() {
+        let bare = json!({
+            "type": "object",
+            "properties": {"index": {"type": "integer"}, "generation": {"type": "integer"}}
+        });
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "a/b": bare,
+                "list": {"type": "array", "items": bare},
+                "map": {"type": "object", "additionalProperties": bare},
+                "pair": {"type": "array", "prefixItems": [{"type": "integer"}, bare]},
+                "opt": {"anyOf": [bare, {"type": "null"}]}
+            }
+        });
+        assert_eq!(
+            entity_ref_shapes(&schema),
+            ["/a~1b", "/list/*", "/map/*", "/opt", "/pair/1"]
+        );
+    }
+
+    #[test]
+    fn a_key_with_a_slash_is_one_pointer_segment() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"a/b": marker(false)},
+            "required": ["a/b"]
+        });
+        let fields = entity_ref_fields(&schema);
+        assert_eq!(fields, [field("/a~1b", false, false)]);
+        let value = json!({"a/b": {"index": 2, "generation": 0}});
+        assert_eq!(fields[0].target(&value), Some(EntityId::new(2, 0)));
     }
 
     #[test]

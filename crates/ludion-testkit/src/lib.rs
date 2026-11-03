@@ -82,7 +82,7 @@ pub mod suite;
 
 pub use boundary::assert_no_boundary_crossings;
 pub use determinism::assert_deterministic;
-pub use drift::assert_components_drift_safe;
+pub use drift::{assert_components_drift_safe, assert_entity_refs_marked};
 pub use driver::{GameplayDriver, inject, loaded_engine, step};
 pub use golden::{
     GoldenOutcome, GoldenTest, MACOS_REFERENCE_ADAPTER, WINDOWS_REFERENCE_ADAPTER, bless_requested,

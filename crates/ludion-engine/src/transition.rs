@@ -963,12 +963,12 @@ fn apply_residue(
                     })?,
                     None => {
                         unresolved.push(format!("{label} `{component}`{}", reference.suffix));
-                        let optional = registry.get(&component).is_some_and(|info| {
+                        let nullable = registry.get(&component).is_some_and(|info| {
                             info.entity_refs()
                                 .iter()
-                                .any(|f| f.suffix == reference.suffix && f.optional)
+                                .any(|f| f.suffix == reference.suffix && f.nullable)
                         });
-                        if !optional {
+                        if !nullable {
                             dropped = true;
                             break;
                         }
@@ -1184,8 +1184,8 @@ struct DeferredComponent {
 /// Rewrites the entity references in `value`, `owner`'s serialized `info` component, against a
 /// `resolve` that maps a referenced entity to a `T` (an index into the carry list, a residue
 /// identity). A reference `resolve` answers is returned as `(suffix, T)` to be written once the
-/// final ids exist. One it cannot answer is cleared when its field is optional (noted in
-/// `unresolved`); when it is required the whole component is dropped (noted too) and `None` is
+/// final ids exist. One it cannot answer is cleared when its field is nullable (noted in
+/// `unresolved`); when it is not nullable the whole component is dropped (noted too) and `None` is
 /// returned.
 fn remap_refs<T>(
     info: &ludion_ecs::ComponentInfo,
@@ -1205,7 +1205,7 @@ fn remap_refs<T>(
             continue;
         }
         let item = format!("{owner} `{}`{} → {target}", info.name(), field.suffix);
-        if !field.optional {
+        if !field.nullable {
             unresolved.push(item);
             return None;
         }
@@ -1438,4 +1438,76 @@ fn anchor_missing(scene_path: &str, anchor: &str) -> Diagnostic {
          point, or fix the anchor name in the switch request; the switch was rejected and the sim \
          continues in the current district",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use ludion_core::ids::EntityId;
+    use ludion_ecs::{EntityRefSchema, Registry};
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+    use serde_json::json;
+
+    use super::*;
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Hold {
+        #[schemars(with = "Option<EntityRefSchema>")]
+        holder: Option<EntityId>,
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Inner {
+        #[schemars(with = "EntityRefSchema")]
+        holder: EntityId,
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Wrapped {
+        inner: Option<Inner>,
+    }
+
+    fn registry() -> Registry {
+        let mut registry = Registry::new();
+        registry.register::<Hold>("Hold").unwrap();
+        registry.register::<Wrapped>("Wrapped").unwrap();
+        registry
+    }
+
+    fn id() -> serde_json::Value {
+        json!({ "index": 4, "generation": 0 })
+    }
+
+    /// A nullable field with an unresolved target is cleared and the component kept; a field that is
+    /// optional only through an enclosing `Option<struct>` cannot hold `null`, so the component goes.
+    #[test]
+    fn an_unresolved_reference_clears_only_a_nullable_field() {
+        let registry = registry();
+        let owner = EntityId::new(0, 0);
+
+        let mut value = json!({ "holder": id() });
+        let mut unresolved = Vec::new();
+        let kept = remap_refs::<u32>(
+            registry.get("Hold").unwrap(),
+            &mut value,
+            owner,
+            |_| None,
+            &mut unresolved,
+        );
+        assert_eq!(kept, Some(Vec::new()));
+        assert_eq!(value, json!({ "holder": null }));
+        assert_eq!(unresolved.len(), 1);
+
+        let mut value = json!({ "inner": { "holder": id() } });
+        let mut unresolved = Vec::new();
+        let kept = remap_refs::<u32>(
+            registry.get("Wrapped").unwrap(),
+            &mut value,
+            owner,
+            |_| None,
+            &mut unresolved,
+        );
+        assert_eq!(kept, None);
+        assert_eq!(unresolved.len(), 1);
+    }
 }

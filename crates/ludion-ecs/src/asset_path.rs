@@ -18,8 +18,8 @@ use serde_json::Value;
 pub const ASSET_PATH_KEYWORD: &str = "x-asset-path";
 
 /// Schema proxy for a `String` field holding a content-root asset path. Never constructed: use it as
-/// `#[schemars(with = "ludion_ecs::AssetPathSchema")]`, or `with = "Option<ludion_ecs::AssetPathSchema>"`
-/// for an optional field.
+/// `#[schemars(with = "AssetPathSchema")]` (the name is in `ludion::prelude`), or
+/// `with = "Option<AssetPathSchema>"` for an optional field.
 ///
 /// # Example
 /// ```
@@ -96,7 +96,18 @@ fn walk(root: &Value, node: &Value, suffix: &str, depth: usize, found: &mut Vec<
     }
     if let Some(properties) = node.get("properties").and_then(Value::as_object) {
         for (key, property) in properties {
-            walk(root, property, &format!("{suffix}/{key}"), depth + 1, found);
+            let segment = if key == "*" {
+                "~2".to_string()
+            } else {
+                pointer_segment(key)
+            };
+            walk(
+                root,
+                property,
+                &format!("{suffix}/{segment}"),
+                depth + 1,
+                found,
+            );
         }
     }
     for combinator in ["anyOf", "oneOf", "allOf"] {
@@ -119,8 +130,9 @@ fn walk(root: &Value, node: &Value, suffix: &str, depth: usize, found: &mut Vec<
 /// escaped with `~0`/`~1`), for in-place rewriting.
 ///
 /// `patterns` come from [`asset_path_fields`]. A `*` segment visits every key of an object (in map
-/// order) or every element of an array. A missing key or a non-string leaf is skipped silently: a
-/// partial override value holds only some fields.
+/// order) or every element of an array; a literal property named `*` is written `~2` in a pattern
+/// (a pattern-only escape), and `~0`/`~1` stand for `~` and `/` as in a JSON Pointer. A missing key
+/// or a non-string leaf is skipped silently: a partial override value holds only some fields.
 pub fn for_each_asset_path(
     patterns: &[String],
     value: &mut Value,
@@ -168,16 +180,27 @@ fn visit(
             }
             _ => {}
         }
-    } else if let Some(child) = value.get_mut(*segment) {
-        push_escaped(pointer, segment);
-        visit(rest, child, pointer, f);
-        pointer.truncate(keep);
+    } else {
+        let key = segment
+            .replace("~2", "*")
+            .replace("~1", "/")
+            .replace("~0", "~");
+        if let Some(child) = value.get_mut(key.as_str()) {
+            push_escaped(pointer, &key);
+            visit(rest, child, pointer, f);
+            pointer.truncate(keep);
+        }
     }
+}
+
+/// One JSON Pointer reference token for `key`: `~` is `~0`, `/` is `~1`.
+pub(crate) fn pointer_segment(key: &str) -> String {
+    key.replace('~', "~0").replace('/', "~1")
 }
 
 fn push_escaped(pointer: &mut String, key: &str) {
     pointer.push('/');
-    pointer.push_str(&key.replace('~', "~0").replace('/', "~1"));
+    pointer.push_str(&pointer_segment(key));
 }
 
 #[cfg(test)]
@@ -292,6 +315,29 @@ mod tests {
         let seen = collect(&["/m/*"], &mut value);
         assert_eq!(seen[0].0, "/m/a~1b");
         assert_eq!(seen[1].0, "/m/c~0d");
+    }
+
+    #[test]
+    fn a_renamed_key_with_a_slash_or_a_star_is_visited_once_at_its_pointer() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"a/b": marked(), "*": marked(), "c~d": marked()}
+        });
+        let patterns = asset_path_fields(&schema);
+        assert_eq!(patterns, ["/a~1b", "/c~0d", "/~2"]);
+        let mut value = json!({"a/b": "p", "*": "q", "c~d": "r"});
+        let mut seen = Vec::new();
+        for_each_asset_path(&patterns, &mut value, &mut |pointer, path| {
+            seen.push((pointer.to_string(), path.clone()));
+        });
+        assert_eq!(
+            seen,
+            [
+                ("/a~1b".to_string(), "p".to_string()),
+                ("/c~0d".to_string(), "r".to_string()),
+                ("/*".to_string(), "q".to_string()),
+            ]
+        );
     }
 
     #[test]

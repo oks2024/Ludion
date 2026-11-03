@@ -102,6 +102,31 @@ entity reference has no safe empty value, so weakening it to a default would sil
 link to a real entity rather than fail loudly; that is worse than the problem this discipline
 prevents.)
 
+## Holding an entity reference or an asset path
+
+A field that names another entity, or a file under the content root, needs a marker the engine can
+see. Both are in `ludion::prelude`:
+
+```rust
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct Leash {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<EntityRefSchema>")]
+    holder: Option<EntityId>,
+    #[schemars(with = "AssetPathSchema")]
+    #[serde(default)]
+    rope: String,
+}
+```
+
+`EntityRefSchema` is a reference that must not name its own carrier, `EntityRefSelfSchema` one that
+may. Write `Option<…>` for an optional one. A marked entity reference gets the range check at scene
+load (`L1017`), the dangling check and remap at `scene.save` (`L1018`), and the remap when entities
+carry across a scene switch; a marked asset path gets the content-root confinement. A list, map or
+tuple of references is refused at registration with `L1392`: hold each in its own field.
+`ludion new` scaffolds a second test beside the drift one, `assert_entity_refs_marked`, which panics
+naming any field shaped like an entity id that is left unmarked.
+
 ## Next
 
 - `ludion docs components-ui` — `UiRect`/`UiText`/`UiList`/`Text`: the screen-space and world-text components.

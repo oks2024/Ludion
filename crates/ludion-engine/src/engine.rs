@@ -5072,10 +5072,12 @@ impl Drop for Engine {
 /// ([`ComponentInfo::entity_refs`]) from a live [`EntityId`] to the scene shape
 /// (`{index: <document position>, generation: 0}`). A component with no entity-reference fields
 /// (the common case) is returned unchanged. An *optional* field that is absent or `null` stays so,
-/// and one whose target is not in the save set is written as `null`.
+/// and a *nullable* one (`Option<EntityId>`) whose target is not in the save set is written as
+/// `null`; an optional field that cannot hold `null` (a required field of an `Option<struct>`)
+/// refuses a dangling target like a required one.
 ///
 /// # Errors
-/// `L1018` if a required reference's target is not in the save set, or a reference the field
+/// `L1018` if a non-nullable reference's target is not in the save set, or a reference the field
 /// forbids from naming its carrier does (never silently nulled — that would lose the data).
 /// `L0007` if the component's serialized value omits a required reference field.
 pub(crate) fn remap_entity_refs(
@@ -5137,7 +5139,7 @@ pub(crate) fn remap_entity_refs(
         }
         let remapped = match position.get(&target) {
             Some(&pos) => serde_json::json!({ "index": pos, "generation": 0 }),
-            None if field.optional => Value::Null,
+            None if field.nullable => Value::Null,
             None => {
                 return Err(reference_fault(
                     world,

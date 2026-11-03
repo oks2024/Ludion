@@ -1621,6 +1621,10 @@ pub mod code {
     /// submit was interrupted before any job was accepted. Raised by `ludion-gen`.
     pub const GENERATION_JOBS_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1391");
 
+    /// `L1392` — a component registration marks an entity reference inside a list or map, which the
+    /// range check, the save remap and the carry remap cannot address. Raised by `ludion-ecs`.
+    pub const ENTITY_REF_IN_COLLECTION: DiagnosticCode = DiagnosticCode::new("L1392");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -7998,6 +8002,23 @@ Fix: point `--url` at the server that took the run; otherwise delete the run fol
 recipe again with `ludion gen run <recipe>`.",
     },
     CodeEntry {
+        code: code::ENTITY_REF_IN_COLLECTION,
+        severity: Severity::Error,
+        title: "a marked entity reference inside a list or map",
+        explanation: "\
+A component registration marks an entity-reference field (`EntityRefSchema`) that sits inside a
+list, a map or a tuple.
+
+An entity reference is addressed by one JSON Pointer into the component's own value. The range
+check at scene load, the dangling-reference check and remap at `scene.save`, and the remap when
+entities carry across a scene switch all read that pointer, so none of them can follow a reference
+into a collection of unknown length. The registry refuses the component rather than let such a
+field go unchecked.
+
+Fix: hold each reference in its own named field, or derive the collection from a query at run time
+instead of storing it.",
+    },
+    CodeEntry {
         code: code::CAMERA_OFFSET_DUPLICATE,
         severity: Severity::Error,
         title: "more than one camera offset",
@@ -10885,6 +10906,7 @@ mod tests {
         code::CAMERA_OFFSET_FOV_CLAMPED,
         code::PREFAB_EMPTY,
         code::GENERATION_JOBS_UNKNOWN,
+        code::ENTITY_REF_IN_COLLECTION,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

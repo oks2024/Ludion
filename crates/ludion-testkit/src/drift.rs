@@ -133,6 +133,83 @@ pub fn assert_components_drift_safe(registry: &Registry) {
     }
 }
 
+/// Asserts that every entity-reference field of every component in `registry` carries the
+/// `EntityRefSchema` / `EntityRefSelfSchema` marker (both are in `ludion::prelude`).
+///
+/// An `EntityId` field borrows a proxy schema through `#[schemars(with = …)]`; one that is left as
+/// a plain `{index, generation}` struct (or sits in a list or map) is invisible to `scene.check`'s
+/// range check and to `scene.save`'s remap, and nothing else reports it. This compares each
+/// component's `{index, generation}` shapes ([`ludion_ecs::entity_ref_shapes`]) with the fields the
+/// registry derived from the marker ([`ComponentInfo::entity_refs`](ludion_ecs::ComponentInfo::entity_refs)).
+///
+/// # Example
+///
+/// ```
+/// use ludion_engine::builtin_registry;
+/// use ludion_testkit::assert_entity_refs_marked;
+///
+/// assert_entity_refs_marked(&builtin_registry());
+/// ```
+///
+/// A hand-written reference shape panics, naming the component and the suffix to mark:
+///
+/// ```should_panic
+/// use ludion_ecs::Registry;
+/// use ludion_testkit::assert_entity_refs_marked;
+/// use schemars::JsonSchema;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// struct Id {
+///     index: u32,
+///     generation: u32,
+/// }
+///
+/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// struct Leash {
+///     holder: Id, // not `#[schemars(with = "EntityRefSchema")]`
+/// }
+///
+/// let mut registry = Registry::new();
+/// registry.register::<Leash>("Leash").unwrap();
+/// assert_entity_refs_marked(&registry); // panics: `Leash` holds an unmarked reference at `/holder`
+/// ```
+///
+/// # Panics
+/// If any component holds an entity-reference shape its registry entry does not mark. The message
+/// names each component and the unmarked suffixes, and states the fix.
+pub fn assert_entity_refs_marked(registry: &Registry) {
+    let mut failures: Vec<String> = Vec::new();
+    for info in registry.iter() {
+        let marked: std::collections::BTreeSet<&str> = info
+            .entity_refs()
+            .iter()
+            .map(|field| field.suffix.as_str())
+            .collect();
+        let unmarked: Vec<String> = ludion_ecs::entity_ref_shapes(info.schema())
+            .into_iter()
+            .filter(|suffix| !marked.contains(suffix.as_str()))
+            .collect();
+        if !unmarked.is_empty() {
+            failures.push(format!(
+                "  - `{}` holds an entity reference at {} that is not marked",
+                info.name(),
+                unmarked.join(", ")
+            ));
+        }
+    }
+    if !failures.is_empty() {
+        panic!(
+            "these components hold entity references the engine cannot see, so scene.check's range \
+             check and scene.save's remap skip them:\n{}\n\nfix: mark each field with \
+             `#[schemars(with = \"EntityRefSchema\")]` (or `EntityRefSelfSchema`, or \
+             `Option<…>` of either), both in `ludion::prelude`. A list, map or tuple of references \
+             is not supported: hold each in its own field.",
+            failures.join("\n")
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +247,69 @@ mod tests {
     #[test]
     fn builtin_registry_is_drift_safe() {
         assert_components_drift_safe(&ludion_engine::builtin_registry());
+    }
+
+    #[test]
+    fn builtin_registry_marks_every_entity_reference() {
+        assert_entity_refs_marked(&ludion_engine::builtin_registry());
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Id {
+        index: u32,
+        generation: u32,
+    }
+
+    fn unmarked_panics<T: ludion_ecs::Component>() -> String {
+        let mut registry = Registry::new();
+        registry.register::<T>("Holder").unwrap();
+        let caught = std::panic::catch_unwind(|| assert_entity_refs_marked(&registry))
+            .expect_err("an unmarked reference must panic");
+        caught
+            .downcast_ref::<String>()
+            .cloned()
+            .expect("a formatted message")
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct InField {
+        holder: Id,
+    }
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct InVec {
+        holders: Vec<Id>,
+    }
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct InMap {
+        holders: std::collections::BTreeMap<String, Id>,
+    }
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct InTuple {
+        pair: (u32, Id),
+    }
+
+    #[test]
+    fn an_unmarked_proxy_panics_in_a_field_a_list_a_map_and_a_tuple() {
+        assert!(
+            unmarked_panics::<InField>().contains("`Holder` holds an entity reference at /holder")
+        );
+        assert!(unmarked_panics::<InVec>().contains("/holders/*"));
+        assert!(unmarked_panics::<InMap>().contains("/holders/*"));
+        assert!(unmarked_panics::<InTuple>().contains("/pair/1"));
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Marked {
+        #[schemars(with = "ludion_ecs::EntityRefSchema")]
+        holder: ludion_core::ids::EntityId,
+        #[schemars(with = "Option<ludion_ecs::EntityRefSelfSchema>")]
+        maybe: Option<ludion_core::ids::EntityId>,
+    }
+
+    #[test]
+    fn marked_fields_pass() {
+        let mut registry = Registry::new();
+        registry.register::<Marked>("Marked").unwrap();
+        assert_entity_refs_marked(&registry);
     }
 }
