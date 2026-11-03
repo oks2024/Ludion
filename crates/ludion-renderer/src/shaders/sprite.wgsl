@@ -109,7 +109,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
 // The transparent layer's twin of `fs_main` (`snippets/transparent_layer.wgsl`): the same UV and
 // texel, reduced to the weight the colour pass blends with. An additive texel outputs no alpha, so
-// its claim is its brightest channel, clamped to 1: a black texel leaves the background alone.
+// its claim is the brightest channel of the colour it adds, lit and flashed, clamped to 1: a black
+// texel leaves the background alone.
 @fragment
 fn fs_depth(in: VsOut) -> @location(0) vec4<f32> {
     var uv = in.uv;
@@ -118,10 +119,16 @@ fn fs_depth(in: VsOut) -> @location(0) vec4<f32> {
         uv = in.rect.xy + local * (in.rect.zw - in.rect.xy);
     }
     let texel = textureSample(sprite_tex, sprite_sampler, uv);
-    let rgb = texel.rgb * in.color.rgb * in.color.a;
-    var weight = texel.a * in.color.a;
+    let alpha = texel.a * in.color.a;
+    var weight = alpha;
     if ((in.flags & FLAG_ADDITIVE) != 0u) {
-        weight = weight * min(1.0, max(rgb.r, max(rgb.g, rgb.b)));
+        // The colour `fs_main` adds: lit, then flashed.
+        var rgb = texel.rgb * in.color.rgb * in.color.a;
+        if ((in.flags & FLAG_LIT) != 0u) {
+            rgb = rgb * shade_two_sided(in.world_pos, in.normal, in.clip.xy);
+        }
+        rgb = mix(rgb, in.flash.rgb * alpha, clamp(in.flash.a, 0.0, 1.0));
+        weight = alpha * min(1.0, max(rgb.r, max(rgb.g, rgb.b)));
     }
     return transparent_layer(in.world_pos, weight);
 }

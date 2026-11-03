@@ -27,7 +27,8 @@ orthographic camera.
    `transparents`, in the same order and with the same depth compare, into an `Rg16Float` target of
    `(t·w, w)`. `t` is the distance along the view ray (the depth along the view under an orthographic
    camera) and `w` is the weight the colour pass blended with. An additive texel claims
-   `coverage · min(1, max(rgb))`. Readers take the mean distance `R/G` and the coverage `G`:
+   `coverage · min(1, max(rgb))`, where `rgb` is the colour the colour pass adds, lit and with its
+   flash. Readers take the mean distance `R/G` and the coverage `G`:
    - fog: `mix(F_background, F(t̄), G)`;
    - circle of confusion: `mix(coc(d_b), coc(t̄), G)`;
    - shafts: samples past `t̄` count for `1-G`, and the march stops at `t̄` at full coverage.
@@ -94,6 +95,7 @@ same reason. Removing any of them must rerun a byte comparison (`LUDION_GOLDEN_A
 - r2070: fog reads it, and fog under an orthographic camera measures along the view.
 - r2071: the circle of confusion reads it.
 - r2072: shafts read it.
+- After r2073: a lit or flashing additive claims from the colour it adds, not its unlit brightness.
 - Docs: `ludion docs atmosphere`, `post-processing`, `particles`, `components-ui`; `ludion devdocs
   renderer-passes`.
 - macOS goldens blessed for `fog-sprites`, `fog-sprites-ortho`, `dof-sprites`, `shafts-sprites`.

@@ -159,7 +159,8 @@ const GPU_BODY_EXEMPT = new Map([
 // `needs_gpu_` files with no marker of their own, with the real reason.
 const GPU_FILE_EXEMPT = new Map([
   ['crates/ludion-engine/tests/local_shadow_fade.rs', 'profile_scene puts the device up inside the library call'],
-  ['crates/ludion-renderer/src/render/tests/shaft_layer.rs', 'skip_or_renderer in render.rs puts the device up'],
+  ['crates/ludion-renderer/src/render/tests/lit_additive.rs', 'skip_or_renderer in render.rs puts the device up'],
+  ['crates/ludion-renderer/src/render/tests/shaft_layer.rs','skip_or_renderer in render.rs puts the device up'],
 ]);
 
 const normalize = (s) => s.replace(/\s+/g, ' ').trim();

@@ -1204,8 +1204,8 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// `probe_relight` only for a scene with probes, `local_shadow` (and `local_shadow_debug`) only for a scene with a shadowed spot or
 /// point light, `drop_shadow_occlusion` only for a scene with a drop shadow, `projector` for a drop
 /// shadow or a `multiply`/`add` decal, `decals_lit` only for an `alpha` or `coat` decal, `decal_receivers`
-/// only for a decal that lists receiver meshes, `transparent_depth` only for a fogged scene with a
-/// sprite, particle or world text).
+/// only for a decal that lists receiver meshes, `transparent_depth` only for a scene with a
+/// sprite, particle or world text under fog or depth of field).
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.

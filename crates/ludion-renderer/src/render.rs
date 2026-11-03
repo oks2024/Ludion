@@ -8987,6 +8987,7 @@ mod tests {
     use super::*;
     use crate::scene::{MeshInstance, RenderScene};
 
+    mod lit_additive;
     mod shaft_layer;
 
     /// The decision-16 mapping-drift guard: the string this crate composes and compiles for every

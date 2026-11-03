@@ -62,7 +62,7 @@ fn shaft_expected(reach: f32, ray: Vec3) -> f32 {
     (1.0 - (-SHAFT_SIGMA * reach).exp()) * shaft_phase(ray) * SHAFT_GAIN
 }
 
-fn srgb8_to_linear(byte: u8) -> f32 {
+pub(super) fn srgb8_to_linear(byte: u8) -> f32 {
     let c = f32::from(byte) / 255.0;
     if c <= 0.04045 {
         c / 12.92

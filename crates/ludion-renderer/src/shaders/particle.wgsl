@@ -98,8 +98,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 
 // The transparent layer's twin of the vertex stage (`snippets/transparent_layer.wgsl`): the same
-// quad, plus the world position the distance is measured at. No lighting: the layer carries only
-// distance and coverage.
+// quad, plus the world position the distance is measured at. Only a lit additive is shaded: its
+// claim comes from the colour it adds.
 struct DepthOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) local: vec2<f32>,
@@ -116,7 +116,15 @@ fn vs_depth(in: VsIn, @builtin(vertex_index) vi: u32) -> DepthOut {
     var out: DepthOut;
     out.clip = camera.view_proj * vec4<f32>(world, 1.0);
     out.local = corner * 2.0;
-    out.color = in.color;
+    var color = in.color;
+    if (in.params.w > 0.5 && in.params.z > 0.5) {
+        // A lit additive claims from the colour it adds, shaded exactly as `vs_main` does.
+        let c = camera.view_proj * vec4<f32>(in.center, 1.0);
+        let ndc = c.xy / max(abs(c.w), 1e-4);
+        let frag = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) / lights.grid.xy;
+        color = vec4<f32>(in.color.rgb * shade_two_sided(in.center, cross(in.right, in.up), frag), in.color.a);
+    }
+    out.color = color;
     out.params = in.params;
     out.world = world;
     return out;
