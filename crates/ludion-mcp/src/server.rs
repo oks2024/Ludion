@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use crate::jsonrpc::{self, error_code};
 use crate::session::{Session, Status};
 use crate::tools::{ToolAction, ToolSpec, catalog};
-use ludion_protocol::{Command, ResponseBody};
+use ludion_protocol::ResponseBody;
 
 /// MCP protocol versions this adapter understands. The newest is offered by default; a client's
 /// offered version is echoed back when it is one of these.
@@ -255,11 +255,10 @@ impl McpServer {
         has_params: bool,
         arguments: Value,
     ) -> Value {
-        // The `Command` enum is adjacently tagged (`{method, params}`), so it deserializes straight
-        // from the tool name's method plus the caller's arguments — no 25-arm match. Unit variants
-        // must omit `params` entirely.
-        let command_value = if has_params {
-            json!({ "method": method, "params": arguments })
+        // Unit methods take no `params`; every other method's arguments must match its params
+        // exactly (a stray field is refused with the field named).
+        let params = if has_params {
+            Some(arguments)
         } else {
             if arguments
                 .as_object()
@@ -272,17 +271,17 @@ impl McpServer {
                     "tool `{name}` takes no arguments; call it with none (or `{{}}`)"
                 ));
             }
-            json!({ "method": method })
+            None
         };
-        let command: Command = match serde_json::from_value(command_value) {
+        let command = match ludion_protocol::envelope::command_from_parts(method, params) {
             Ok(command) => command,
-            Err(e) => {
+            Err(diagnostic) => {
                 // A well-formed MCP call with arguments that don't fit the tool schema: an in-band
                 // tool error the model can correct, not a JSON-RPC protocol failure.
-                log(&format!("tools/call {name} -> bad arguments: {e}"));
+                log(&format!("tools/call {name} -> bad arguments: {diagnostic}"));
                 return tool_error(format!(
-                    "arguments do not match tool `{name}`: {e}\n\nsee the tool's inputSchema for \
-                     the expected shape"
+                    "arguments do not match tool `{name}`: {diagnostic}\n\nsee the tool's inputSchema \
+                     for the expected shape"
                 ));
             }
         };
@@ -497,6 +496,18 @@ mod tests {
         let text = out[0]["result"]["content"][0]["text"].as_str().unwrap();
         assert!(
             text.contains("sim_hash") && text.contains("no arguments"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_stray_argument_is_an_in_band_error_naming_the_field() {
+        // No engine is reachable here, so a call that got past decoding would say "not connected".
+        let out = drive(&[&tool_call("sim_step", r#"{"ticks":1,"hsh":true}"#)]);
+        assert_eq!(out[0]["result"]["isError"], json!(true));
+        let text = out[0]["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("hsh") && text.contains("`hash`") && text.contains("/params/hsh"),
             "{text}"
         );
     }

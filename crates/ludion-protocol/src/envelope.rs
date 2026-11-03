@@ -139,7 +139,7 @@ impl Request {
     /// Parses a request from an already-decoded JSON value (same diagnostics as [`from_json`]).
     ///
     /// [`from_json`]: Request::from_json
-    pub fn from_value(value: Value) -> Result<Request, Diagnostic> {
+    pub fn from_value(mut value: Value) -> Result<Request, Diagnostic> {
         let obj = value
             .as_object()
             .ok_or_else(|| malformed("request envelope must be a JSON object"))?;
@@ -181,10 +181,107 @@ impl Request {
             }
         }
 
-        serde_json::from_value::<Request>(value).map_err(|e| {
-            malformed(format!("`params` do not match method `{method}`: {e}")).with_path("/params")
+        // Any key outside the envelope is refused here: the flattened `command` cannot carry
+        // `deny_unknown_fields`, so this is the strictness the derive cannot give.
+        const KEYS: [&str; 4] = ["v", "id", "method", "params"];
+        if let Some(key) = obj.keys().find(|k| !KEYS.contains(&k.as_str())) {
+            let mut diag = malformed(format!("request envelope has an unknown key `{key}`"))
+                .with_path(format!("/{}", escape_pointer(key)));
+            if let Some(near) = ludion_core::suggest::nearest(key, KEYS) {
+                diag = diag.with_help(format!(
+                    "did you mean `{near}`? the envelope keys are `v`, `id`, `method`, `params`"
+                ));
+            }
+            return Err(diag);
+        }
+
+        let id = obj.get("id").and_then(Value::as_u64).unwrap_or_default();
+        let params = value
+            .as_object_mut()
+            .and_then(|object| object.remove("params"));
+        Ok(Request {
+            v: PROTOCOL_VERSION,
+            id: RequestId::new(id),
+            command: command_from_parts(&method, params)?,
         })
     }
+}
+
+/// Decodes one [`Command`] from its method name and its `params` value (absent for a parameterless
+/// method), refusing unknown or mistyped fields with an `L3001` that carries the JSON Pointer.
+///
+/// # Errors
+/// `L3001` — the params do not match the method; `path` names the offending field.
+///
+/// # Example
+/// ```
+/// use ludion_protocol::envelope::command_from_parts;
+///
+/// let ok = command_from_parts("sim.step", Some(serde_json::json!({"ticks": 3}))).unwrap();
+/// assert_eq!(ok.method(), "sim.step");
+/// let err = command_from_parts("sim.step", Some(serde_json::json!({"tiks": 3}))).unwrap_err();
+/// assert_eq!(err.path.as_deref(), Some("/params/tiks"));
+/// ```
+pub fn command_from_parts(method: &str, params: Option<Value>) -> Result<Command, Diagnostic> {
+    // `method` goes first: an adjacently tagged enum buffers a `content` seen before its tag, and a
+    // buffered decode loses the path.
+    let mut obj = serde_json::Map::new();
+    obj.insert("method".into(), Value::String(method.to_string()));
+    if let Some(params) = params {
+        obj.insert("params".into(), params);
+    }
+    serde_path_to_error::deserialize::<_, Command>(Value::Object(obj))
+        .map_err(|e| params_mismatch(method, &e))
+}
+
+/// Builds the `L3001` for a params decode that failed, with the path serde reached.
+fn params_mismatch(
+    method: &str,
+    err: &serde_path_to_error::Error<serde_json::Error>,
+) -> Diagnostic {
+    use serde_path_to_error::Segment;
+    let inner = err.inner().to_string();
+    let mut path = String::new();
+    for seg in err.path().iter() {
+        match seg {
+            Segment::Map { key } => {
+                path.push('/');
+                path.push_str(&escape_pointer(key));
+            }
+            Segment::Seq { index } => {
+                path.push('/');
+                path.push_str(&index.to_string());
+            }
+            Segment::Enum { .. } | Segment::Unknown => {}
+        }
+    }
+    if !path.starts_with("/params") {
+        path = "/params".to_string();
+    }
+    // serde's unknown-field message lists the backticked names: the stray first, then the candidates.
+    let mut help = String::from(
+        "each method's params are described by `engine.describe` (the envelope itself is `v`, \
+         `id`, `method`, `params`)",
+    );
+    if inner.starts_with("unknown field") {
+        let mut names = inner.split('`').skip(1).step_by(2);
+        if let Some(stray) = names.next()
+            && let Some(near) = ludion_core::suggest::nearest(stray, names)
+        {
+            help = format!("did you mean `{near}`? {help}");
+        }
+    }
+    Diagnostic::new(
+        code::PROTOCOL_MALFORMED_ENVELOPE,
+        format!("`params` do not match method `{method}`: {inner}"),
+    )
+    .with_path(path)
+    .with_help(help)
+}
+
+/// Escapes one JSON Pointer reference token (RFC 6901).
+fn escape_pointer(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
 }
 
 /// The outcome half of a [`Response`]: either an `ok` payload (with the applied `frame`) or an
@@ -501,5 +598,74 @@ mod tests {
                 hash: false
             })
         );
+    }
+
+    fn refused(text: &str) -> Diagnostic {
+        let diag = Request::from_json(text).unwrap_err();
+        assert_eq!(diag.code, code::PROTOCOL_MALFORMED_ENVELOPE, "{diag:?}");
+        diag
+    }
+
+    #[test]
+    fn stray_param_field_names_field_method_and_suggestion() {
+        let diag = refused(r#"{"v":1,"id":1,"method":"sim.step","params":{"ticks":1,"hsh":true}}"#);
+        assert!(diag.message.contains("hsh") && diag.message.contains("sim.step"));
+        assert_eq!(diag.path.as_deref(), Some("/params/hsh"));
+        assert!(diag.help.as_deref().unwrap().contains("`hash`"));
+    }
+
+    #[test]
+    fn mistyped_param_path_points_at_the_field() {
+        let diag = refused(r#"{"v":1,"id":1,"method":"sim.step","params":{"ticks":"lots"}}"#);
+        assert_eq!(diag.path.as_deref(), Some("/params/ticks"));
+    }
+
+    #[test]
+    fn nested_stray_path_goes_deep() {
+        let diag = refused(
+            r#"{"v":1,"id":1,"method":"render.view","params":{"pose":{"translation":[0,0,0],"rotation":[0,0,0],"fovv":1}}}"#,
+        );
+        assert_eq!(diag.path.as_deref(), Some("/params/pose/fovv"));
+    }
+
+    #[test]
+    fn subscribe_mode_stray_is_refused() {
+        let diag = refused(
+            r#"{"v":1,"id":1,"method":"stream.subscribe","params":{"channel":"frames","mode":{"mode":"latest_wins","maxfps":1},"format":"QOI"}}"#,
+        );
+        assert!(diag.message.contains("maxfps"), "{}", diag.message);
+    }
+
+    #[test]
+    fn envelope_stray_key_is_refused_with_suggestion() {
+        let diag = refused(r#"{"v":1,"id":1,"method":"sim.pause","parms":{}}"#);
+        assert_eq!(diag.path.as_deref(), Some("/parms"));
+        assert!(diag.help.as_deref().unwrap().contains("`params`"));
+    }
+
+    #[test]
+    fn render_bounds_accepts_absent_params_and_refuses_a_stray() {
+        for text in [
+            r#"{"v":1,"id":1,"method":"render.bounds"}"#,
+            r#"{"v":1,"id":1,"method":"render.bounds","params":{}}"#,
+        ] {
+            assert_eq!(
+                Request::from_json(text).unwrap().command,
+                Command::RenderBounds(Default::default())
+            );
+        }
+        let diag = refused(r#"{"v":1,"id":1,"method":"render.bounds","params":{"cam":"view"}}"#);
+        assert_eq!(diag.path.as_deref(), Some("/params/cam"));
+    }
+
+    #[test]
+    fn parameterless_method_parses_without_params() {
+        assert!(Request::from_json(r#"{"v":1,"id":1,"method":"sim.pause"}"#).is_ok());
+    }
+
+    #[test]
+    fn params_before_method_still_gives_the_deep_path() {
+        let diag = refused(r#"{"v":1,"id":1,"params":{"ticks":1,"hsh":true},"method":"sim.step"}"#);
+        assert_eq!(diag.path.as_deref(), Some("/params/hsh"));
     }
 }

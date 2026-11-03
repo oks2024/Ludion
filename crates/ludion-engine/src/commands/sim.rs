@@ -6,7 +6,9 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_protocol::WireHash;
-use ludion_protocol::command::{InputInjectParams, SimSetSpeedParams, SimStepParams};
+use ludion_protocol::command::{
+    InputInjectParams, MAX_STEP_TICKS, SimSetSpeedParams, SimStepParams,
+};
 use ludion_protocol::{Command, ResponseBody};
 use ludion_sim::{InputEvent, Speed};
 
@@ -24,7 +26,8 @@ pub(crate) fn resume(engine: &mut Engine) -> Result<ResponseBody, Diagnostic> {
     Ok(ResponseBody::Ack)
 }
 
-/// `sim.step` — run exactly `ticks` ticks then pause; optionally return the resulting `WorldHash`.
+/// `sim.step` — run exactly `ticks` ticks (at most [`MAX_STEP_TICKS`], else `L3057`) then pause;
+/// optionally return the resulting `WorldHash`.
 ///
 /// A system that panics during the step stops it short and auto-pauses the sim, so this answers with
 /// that `L4007` rather than an Ack that would claim the requested ticks all ran (the sim's own
@@ -32,6 +35,20 @@ pub(crate) fn resume(engine: &mut Engine) -> Result<ResponseBody, Diagnostic> {
 /// step did advance the world, so the record holds the ticks that ran, the panicking tick included.
 /// A hash that cannot be computed after the ticks ran is recorded the same way.
 pub(crate) fn step(engine: &mut Engine, params: SimStepParams) -> Result<ResponseBody, Diagnostic> {
+    if params.ticks > MAX_STEP_TICKS {
+        return Err(Diagnostic::new(
+            code::SIM_STEP_TOO_LONG,
+            format!(
+                "sim.step asked for {} ticks; the most one step may run is {MAX_STEP_TICKS}",
+                params.ticks
+            ),
+        )
+        .with_path("/params/ticks")
+        .with_help(
+            "step in smaller batches; the command runs synchronously on the sim thread, so one \
+             very long step blocks every other client",
+        ));
+    }
     let ran = engine.step_ticks(params.ticks);
     if let Some(panic) = engine.take_system_panic() {
         engine.note_applied_before_error(Command::SimStep(SimStepParams {

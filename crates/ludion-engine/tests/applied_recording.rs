@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use ludion_core::time::FrameIndex;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{Engine, EngineBuilder, drive_hashes, replay_hashes_with};
-use ludion_protocol::command::{EntitySpawnParams, SimStepParams};
+use ludion_protocol::command::{EntitySpawnParams, MAX_STEP_TICKS, SimStepParams};
 use ludion_protocol::replay::{
     REPLAY_FORMAT_VERSION, ReplayHeader, ReplayReader, ReplayRecord, ReplayWriter, SceneRef,
 };
@@ -206,6 +206,34 @@ fn a_failed_spawn_while_recording_replays_bit_identically() {
     engine.execute(step(1)).unwrap();
     engine.stop_recording().unwrap();
     assert_replays_to_live(&mut engine, &sink);
+}
+
+#[test]
+fn an_over_long_step_is_refused_unrecorded_and_the_frame_stays() {
+    let sink = SharedSink::default();
+    let mut engine = calm_engine();
+    engine.set_recording(sink.clone()).unwrap();
+    engine.execute(step(1)).unwrap();
+    let before = engine.frame();
+
+    let refused = engine
+        .execute(step(MAX_STEP_TICKS + 1))
+        .expect_err("one tick past the limit");
+    assert_eq!(refused.code.as_str(), "L3057");
+    assert_eq!(refused.path.as_deref(), Some("/params/ticks"));
+    assert_eq!(engine.frame(), before, "a refused step runs nothing");
+
+    engine.execute(step(0)).unwrap();
+    engine.stop_recording().unwrap();
+    let bytes = sink.bytes();
+    let steps = ReplayReader::new(&bytes)
+        .unwrap()
+        .records()
+        .unwrap()
+        .iter()
+        .filter(|record| matches!(record, ReplayRecord::Command { .. }))
+        .count();
+    assert_eq!(steps, 2, "only the accepted steps are recorded");
 }
 
 #[test]

@@ -142,6 +142,8 @@ erased-serde = "0.4"
 # `float_roundtrip` is load-bearing too: without it a parse may land one ULP off, which moves
 # `WorldHash` for an `f64` in hashed state (`ClipAnchor.elapsed`) that crossed JSON text.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+# Locates a failed params decode by JSON path (`ludion-protocol` only: the wire error names the field).
+serde_path_to_error = "0.1"
 # Synchronous HTTP client, used only by `ludion-gen` to drive an already-running ComfyUI server
 # (`Plan/comfy-generation.md` decision 19). Chosen because it is blocking: the generation verbs are
 # CLI batch producers, and the workspace must not acquire an async runtime outside `ludion-server`.

@@ -941,7 +941,7 @@ fn decode_record(
         KIND_COMMAND => ReplayRecord::Command {
             frame: raw.frame,
             command: serde_json::from_slice(&body)
-                .map_err(|e| format_err(format!("replay command record is not valid JSON: {e}")))?,
+                .map_err(|e| format_err(format!("replay command record does not decode: {e}")))?,
         },
         KIND_INPUT => ReplayRecord::Input {
             frame: raw.frame,

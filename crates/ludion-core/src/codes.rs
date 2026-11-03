@@ -2102,6 +2102,10 @@ pub mod code {
     /// `ludion-server`.
     pub const SERVER_EVENTS_DROPPED: DiagnosticCode = DiagnosticCode::new("L3056");
 
+    /// `L3057` — a `sim.step` asked for more ticks than one command may run: the step is
+    /// synchronous on the sim thread. Raised by `ludion-engine`.
+    pub const SIM_STEP_TOO_LONG: DiagnosticCode = DiagnosticCode::new("L3057");
+
     // --- L4xxx: sim (raised by `ludion-sim`) ---
 
     /// `L4001` — a simulation speed factor was not a finite number in `[1/64, 64]`. Raised by
@@ -8842,8 +8846,9 @@ Every request is a JSON object of the form:
 response; `method` is one of the defined dotted names (see L3002); `params` is the method's argument
 object — omitted entirely for parameterless methods. This diagnostic covers the structural failures:
 the payload is not a JSON object, the `v` or `method` field is missing, or the `params` object does
-not match the named method's shape (a wrong field type, a missing required field). The message
-includes the underlying parse error, and the JSON Pointer — when present — names the offending part.
+not match the named method's shape (a wrong field type, a missing required field). Unknown fields
+and unknown envelope keys are refused too, never ignored. The message includes the underlying parse
+error, and the JSON Pointer — when present — names the offending part.
 
 Fix: correct the envelope to the shape above. If the failure is inside `params`, compare it against
 the method's schema in the exported protocol schema (or `engine.describe`).",
@@ -10682,6 +10687,20 @@ were lost, so the tail is not silent. It is sent once the queue has room again.
 Fix: read the connection continuously, or subscribe with a narrower channel. A client that must see
 every event should treat a `seq` gap, or this notice, as a reason to read the state back.",
     },
+    CodeEntry {
+        code: code::SIM_STEP_TOO_LONG,
+        severity: Severity::Error,
+        title: "sim.step asks for too many ticks",
+        explanation: "\
+A `sim.step` named a tick count above the limit of 216,000 (one hour at the default 60 Hz).
+
+The command runs synchronously on the sim thread, so a very large count holds every other client
+and the host's frame loop hostage until it finishes; past the transport's reply timeout the wait
+is indistinguishable from a wedged sim thread. The request is refused before anything runs: the
+frame does not move and nothing is recorded.
+
+Fix: step in smaller batches. `ticks: 0` stays valid.",
+    },
 ];
 
 /// Codes that once existed and are gone from [`CODES`], each with why. A retired code is never
@@ -11156,6 +11175,7 @@ mod tests {
         code::PROTOCOL_CALL_TIMED_OUT,
         code::SERVER_CONNECTION_LIMIT,
         code::SERVER_EVENTS_DROPPED,
+        code::SIM_STEP_TOO_LONG,
         // --- L4xxx: sim ---
         code::INVALID_SIM_SPEED,
         code::INPUT_SCRIPT_IO,

@@ -254,4 +254,32 @@ mod tests {
         assert!(schema_document().contains("\"description\""));
         assert_eq!(replay_schema_hash(), replay_schema_hash());
     }
+
+    #[test]
+    fn every_params_type_denies_unknown_fields() {
+        let schema = schema_of::<Command>();
+        let defs = schema["$defs"]
+            .as_object()
+            .expect("command schema has $defs");
+        let strict = |def: &Value| def["additionalProperties"] == Value::Bool(false);
+        let mut checked = 0;
+        for (name, def) in defs {
+            if name == "SubscribeMode" {
+                let members = def["oneOf"].as_array().expect("SubscribeMode is a oneOf");
+                assert!(
+                    members.iter().all(strict),
+                    "SubscribeMode member accepts unknown fields"
+                );
+            } else if name.ends_with("Params") || name == "Placement" || name == "ViewPose" {
+                assert!(
+                    strict(def),
+                    "{name} must carry #[serde(deny_unknown_fields)]"
+                );
+            } else {
+                continue;
+            }
+            checked += 1;
+        }
+        assert!(checked >= 33, "expected every params type, saw {checked}");
+    }
 }

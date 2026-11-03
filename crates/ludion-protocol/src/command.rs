@@ -405,6 +405,7 @@ impl Command {
 
 /// Parameters for `scene.load`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SceneLoadParams {
     /// Path to the scene file, resolved by the engine relative to its project root.
     pub path: String,
@@ -412,6 +413,7 @@ pub struct SceneLoadParams {
 
 /// Parameters for `scene.save`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SceneSaveParams {
     /// Destination path; the engine writes canonical YAML there.
     pub path: String,
@@ -419,6 +421,7 @@ pub struct SceneSaveParams {
 
 /// Parameters for `scene.check`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SceneCheckParams {
     /// Path to the scene file to validate.
     pub path: String,
@@ -440,17 +443,20 @@ pub struct SceneCheckParams {
 /// assert_eq!(params.components.len(), 1);
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EntitySpawnParams {
     /// Optional human-facing name for the entity (for logs / the inspector).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// The entity's components, keyed by registry name; values are validated at dispatch.
+    /// The entity's components, keyed by registry name; each value is validated at dispatch against
+    /// the component's schema, its semantic validator and the entity-reference checks.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub components: BTreeMap<String, Value>,
 }
 
 /// Parameters for `entity.destroy`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EntityDestroyParams {
     /// The entity to despawn.
     #[schemars(with = "crate::schema_proxy::EntityIdSchema")]
@@ -489,6 +495,7 @@ pub enum ReparentKeep {
 /// assert_eq!(serde_json::to_value(&params).unwrap()["keep"], "world");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EntityReparentParams {
     /// The entity to move.
     #[schemars(with = "crate::schema_proxy::EntityIdSchema")]
@@ -513,6 +520,7 @@ fn one3() -> [f32; 3] {
 /// assert_eq!(placement.scale, [1.0, 1.0, 1.0]);
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Placement {
     /// World-space translation.
     #[serde(default)]
@@ -540,6 +548,7 @@ pub struct Placement {
 /// assert_eq!(serde_json::to_value(&params).unwrap()["name"], "a");
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PrefabSpawnParams {
     /// The prefab file, relative to the content root.
     pub path: String,
@@ -569,6 +578,7 @@ pub struct PrefabSpawnParams {
 /// assert_eq!(serde_json::to_value(&params).unwrap()["path"], "prefabs/lamp.prefab.yaml");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PrefabCreateParams {
     /// The prefab's parts: the first is the root, the rest follow in order. Each needs a unique
     /// `Name` without `/`, and a reference between them must stay inside the set.
@@ -589,6 +599,7 @@ pub struct PrefabCreateParams {
 /// assert!(serde_json::to_value(&params).unwrap().get("parts").is_none());
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PrefabApplyParams {
     /// Any part of the spawned instance.
     #[schemars(with = "crate::schema_proxy::EntityIdSchema")]
@@ -612,6 +623,7 @@ pub struct PrefabApplyParams {
 /// assert_eq!(serde_json::to_value(&params).unwrap()["pointer"], "/bulb/Transform");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PrefabRevertParams {
     /// Any part of the spawned instance.
     #[schemars(with = "crate::schema_proxy::EntityIdSchema")]
@@ -634,6 +646,7 @@ pub struct PrefabRevertParams {
 /// assert_eq!(serde_json::to_value(&params).unwrap()["instance"]["index"], 1);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PrefabUnpackParams {
     /// Any part of the spawned instance.
     #[schemars(with = "crate::schema_proxy::EntityIdSchema")]
@@ -650,6 +663,7 @@ pub struct PrefabUnpackParams {
 /// assert!(serde_json::to_value(&params).unwrap().get("instances").is_none());
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PrefabOverridesParams {
     /// Entities naming the instances to read, each by any of its parts; omitted, every live
     /// instance.
@@ -660,18 +674,21 @@ pub struct PrefabOverridesParams {
 
 /// Parameters for `component.set`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ComponentSetParams {
     /// The target entity.
     #[schemars(with = "crate::schema_proxy::EntityIdSchema")]
     pub entity: EntityId,
     /// The registry name of the component to insert or overwrite.
     pub component: String,
-    /// The component's JSON value, validated against its schema at dispatch.
+    /// The component's JSON value, validated at dispatch against the component's schema, its
+    /// semantic validator and the entity-reference checks.
     pub value: Value,
 }
 
 /// Parameters for `component.get`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ComponentGetParams {
     /// The target entity.
     #[schemars(with = "crate::schema_proxy::EntityIdSchema")]
@@ -682,6 +699,7 @@ pub struct ComponentGetParams {
 
 /// Parameters for `component.remove`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ComponentRemoveParams {
     /// The target entity.
     #[schemars(with = "crate::schema_proxy::EntityIdSchema")]
@@ -696,6 +714,7 @@ pub struct ComponentRemoveParams {
 /// components whose values are returned for each match (empty `include` returns just the ids).
 /// `entities` restricts the matches to those ids.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct QueryEntitiesParams {
     /// Registry names an entity must all carry to match (empty = every live entity).
     #[serde(default)]
@@ -716,10 +735,15 @@ pub struct QueryEntitiesParams {
     pub entities: Option<Vec<EntityId>>,
 }
 
+/// The most ticks one `sim.step` may run: one hour at the default 60 Hz. The command runs
+/// synchronously on the sim thread, so a larger count is refused with `L3057`.
+pub const MAX_STEP_TICKS: u64 = 216_000;
+
 /// Parameters for `sim.step`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SimStepParams {
-    /// Number of ticks to run before pausing.
+    /// Number of ticks to run before pausing; at most 216000 (`L3057` above it), 0 runs none.
     pub ticks: u64,
     /// Whether to compute and return the `WorldHash` of the resulting state.
     #[serde(default)]
@@ -728,11 +752,13 @@ pub struct SimStepParams {
 
 /// Parameters for `sim.set_speed`.
 ///
-/// The factor is validated at dispatch (`L4001` if it is not finite and greater than zero); the
+/// The factor is validated at dispatch (`L4001` unless it is finite and within `[1/64, 64]`); the
 /// protocol layer carries it as a plain `f64` and does not depend on `ludion-sim`'s `Speed`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SimSetSpeedParams {
-    /// Wall-clock pacing factor: `1.0` real time, `2.0` double speed, `0.5` half speed.
+    /// Wall-clock pacing factor: `1.0` real time, `2.0` double speed, `0.5` half speed. `L4001`
+    /// unless finite and within `[1/64, 64]`.
     pub speed: f64,
 }
 
@@ -741,6 +767,7 @@ pub struct SimSetSpeedParams {
 /// `event` is a `ludion-sim` input-event value (`{"kind": "key_down", "key": "W"}`) carried as an
 /// opaque [`serde_json::Value`] — the protocol layer does not name the sim's `InputEvent` type.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct InputInjectParams {
     /// The frame at whose tick boundary the event applies; omit to apply at the next tick.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -754,6 +781,7 @@ pub struct InputInjectParams {
 ///
 /// Omitted dimensions use the engine's configured render resolution.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RenderScreenshotParams {
     /// Optional output width in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -819,6 +847,7 @@ pub enum GiRebakeMode {
 /// assert_eq!(RenderGiRebakeParams::default(), serde_json::from_str("{}").unwrap());
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RenderGiRebakeParams {
     /// The lever's new setting; omit to leave it exactly as it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -869,6 +898,7 @@ pub struct RenderGiRebakeParams {
 /// assert_eq!(RenderSizeParams::default(), serde_json::from_str("{}").unwrap());
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RenderSizeParams {
     /// The new extent's width in pixels; omit (with `height`) to leave the extent as it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -932,6 +962,7 @@ impl CameraChoice {
 /// );
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ViewPose {
     /// World-space position of the view camera.
     pub translation: [f32; 3],
@@ -987,6 +1018,7 @@ pub struct ViewPose {
 /// assert_eq!(RenderViewParams::default().pose, None);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RenderViewParams {
     /// The pose to fly to, an explicit `null` to clear the override, or absent to read it.
     #[serde(
@@ -1037,6 +1069,7 @@ pub struct RenderViewParams {
 /// assert_eq!(cleared.view, Some(None));
 /// ```
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RenderDebugParams {
     /// The categories to enable (`[]` for none, `"all"` for every one), or absent to read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1088,6 +1121,7 @@ where
 /// One optional field, so the wire form a client sent before it existed — a `render.bounds` envelope
 /// with no `params` at all — still parses and still means the scene camera.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RenderBoundsParams {
     /// Which camera to project the screen rects through; omit for the scene's own.
     #[serde(default, skip_serializing_if = "CameraChoice::is_scene")]
@@ -1108,6 +1142,7 @@ impl<'de> Deserialize<'de> for RenderBoundsParams {
     {
         /// The map form, exactly as a derived `Deserialize` would read it.
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct Fields {
             #[serde(default)]
             camera: CameraChoice,
@@ -1143,6 +1178,7 @@ impl<'de> Deserialize<'de> for RenderBoundsParams {
 /// );
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StreamSubscribeParams {
     /// Which channel to subscribe to.
     pub channel: Channel,
@@ -1156,6 +1192,7 @@ pub struct StreamSubscribeParams {
 
 /// Parameters for `stream.unsubscribe`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StreamUnsubscribeParams {
     /// The subscription to close (the `sub` id returned by `stream.subscribe`).
     pub sub: SubId,
@@ -1163,6 +1200,7 @@ pub struct StreamUnsubscribeParams {
 
 /// Parameters for `asset.reload`.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AssetReloadParams {
     /// A single asset path to reload; omit to reload every changed asset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1174,6 +1212,7 @@ pub struct AssetReloadParams {
 /// `snapshot` is an opaque snapshot document produced by `engine.snapshot`; the protocol carries it
 /// as a [`serde_json::Value`] and the engine interprets it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EngineRestoreParams {
     /// The snapshot document to restore from.
     pub snapshot: Value,
@@ -1222,6 +1261,7 @@ pub enum Channel {
 /// The wire form is internally tagged by `mode`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum SubscribeMode {
     /// Lossy latest-wins delivery, with an optional frame-rate cap.
     LatestWins {

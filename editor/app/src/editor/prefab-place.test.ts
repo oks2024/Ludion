@@ -11,7 +11,7 @@ const CORE_REFS = new Map([
 const E = (index: number, generation = 0): EntityId => ({ index, generation });
 const k = (e: EntityId): string => `${e.index}:${e.generation}`;
 const methodOf = (c: Command): string => (c as { method: string }).method;
-const paramsOf = (c: Command): Record<string, unknown> => (c as { params: Record<string, unknown> }).params;
+const paramsOf = (c: Command): Record<string, unknown> => (c as unknown as { params: Record<string, unknown> }).params;
 
 describe('names', () => {
   it('strips folders and the double extension', () => {

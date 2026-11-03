@@ -76,6 +76,11 @@ the full component and method surface in one call — plus a `documents` object,
 `{"<kind>": <JSON Schema>}` for every registered data-doc kind (`ludion docs data-docs`), the same
 schema the host validates a `kind:` file against.
 
+A request is strict: an unknown field in `params` (or an unknown envelope key) is refused with `L3001`,
+its `path` naming the field (`/params/hsh`) and its `help` suggesting the nearest valid one, rather
+than being ignored. `sim.step` runs synchronously, so `ticks` above 216000 (an hour at 60 Hz) is
+refused with `L3057`; step in smaller batches.
+
 Events (frame streams, `scene.changed`, `log`) arrive as unsolicited
 `{"event": …, "sub": …, "seq": …, "data": …}` messages once you `stream.subscribe`; a request-only
 probe never sees them. A `log` event's `data` is `{"level", "message"}`; when the line reports an

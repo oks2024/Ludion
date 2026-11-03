@@ -2173,9 +2173,8 @@ pub struct PostProcess {
     /// be averaged straight back out by the supersampling resolve at `--scale 2` — raising the quality
     /// setting would change the look, which this engine treats as a bug rather than a trade.
     ///
-    /// The floor is inclusive only because a JSON Schema `range` has no exclusive minimum to spell:
-    /// the shader clamps the cell to one render pixel, so `0.0` means "the finest grain there is"
-    /// rather than an error.
+    /// The floor is inclusive by choice; the shader clamps the cell to one pixel of the target the
+    /// grain is applied at, so `0.0` means the finest grain there is.
     #[serde(default = "grain_size_default")]
     #[schemars(range(min = 0.0, max = 1.0))]
     #[schemars(extend("x-ui-range" = [0.0, 0.01]))]

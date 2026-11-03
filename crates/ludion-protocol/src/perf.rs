@@ -66,6 +66,7 @@ pub const MAX_CAPTURE_WALL_SECONDS: f64 = 60.0;
 /// and answers with a [`ProfileReport`] once that window has closed. The rolling
 /// [`ProfileWindowData`] stream, if anyone is subscribed, keeps flowing underneath it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileCaptureParams {
     /// How many live frames to measure. Must be at least 1 and at most
     /// [`MAX_CAPTURE_FRAMES`] (`L4012`).

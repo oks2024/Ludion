@@ -183,7 +183,7 @@ pub enum ResponseBody {
         width: u32,
         /// Image height in pixels.
         height: u32,
-        /// The image encoding — always `"png"` in M1.
+        /// The image encoding, always "png".
         format: String,
         /// The image bytes as standard (RFC 4648) base64 of the PNG. The command path favours a
         /// self-contained JSON payload over the binary frame channel; agents decode this directly.

@@ -4093,7 +4093,7 @@
         "default": 0.0
       },
       "grain_size": {
-        "description": "Film emulation: the grain cell's side as a **fraction of the frame's height**, validated\n`[0, 1]` (default `0.002` — about two pixels at 1080p, and inert while `grain` is zero).\n\nA fraction of the frame and never a pixel count, because grain authored per render pixel would\nbe averaged straight back out by the supersampling resolve at `--scale 2` — raising the quality\nsetting would change the look, which this engine treats as a bug rather than a trade.\n\nThe floor is inclusive only because a JSON Schema `range` has no exclusive minimum to spell:\nthe shader clamps the cell to one render pixel, so `0.0` means \"the finest grain there is\"\nrather than an error.",
+        "description": "Film emulation: the grain cell's side as a **fraction of the frame's height**, validated\n`[0, 1]` (default `0.002` — about two pixels at 1080p, and inert while `grain` is zero).\n\nA fraction of the frame and never a pixel count, because grain authored per render pixel would\nbe averaged straight back out by the supersampling resolve at `--scale 2` — raising the quality\nsetting would change the look, which this engine treats as a bug rather than a trade.\n\nThe floor is inclusive by choice; the shader clamps the cell to one pixel of the target the\ngrain is applied at, so `0.0` means the finest grain there is.",
         "type": "number",
         "format": "float",
         "minimum": 0.0,

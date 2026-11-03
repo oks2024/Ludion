@@ -366,6 +366,15 @@ fn malformed_requests_get_structured_errors() {
         error_code_for(&url, r#"{"v":2,"id":6,"method":"sim.pause"}"#),
         "L3003"
     );
+
+    // A misspelled params field is refused, never ignored → L3001.
+    assert_eq!(
+        error_code_for(
+            &url,
+            r#"{"v":1,"id":7,"method":"sim.step","params":{"ticks":1,"hsh":true}}"#
+        ),
+        "L3001"
+    );
 }
 
 /// **The null-id convention.** An unparseable request (no recoverable id) is answered with id 0; a

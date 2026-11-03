@@ -803,8 +803,8 @@ impl Client {
         }
     }
 
-    /// `sim.step` — run exactly `ticks` ticks then pause, optionally returning the resulting
-    /// `WorldHash` (present iff `hash`).
+    /// `sim.step` — run exactly `ticks` ticks (at most `MAX_STEP_TICKS`, else `L3057`) then pause,
+    /// optionally returning the resulting `WorldHash` (present iff `hash`).
     ///
     /// # Errors
     /// The engine's diagnostic, or a transport error (see [`call`](Client::call)).

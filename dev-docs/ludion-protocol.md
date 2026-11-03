@@ -134,6 +134,9 @@ regenerated `protocol.d.ts` against the committed one. The regeneration goes to 
   `Diagnostic` without the proxy following is a silent schema lie until those tests catch it.
 - `WireHash` parses uppercase hex leniently (matching `WorldHash`) but always displays/serializes
   lowercase; `WireHash::parse` rejects anything that isn't exactly 16 hex digits.
-- `sim.set_speed` carries a plain `f64`; validation (finite, > 0 → `L4001`) happens at dispatch,
+- Params are strict (`deny_unknown_fields`; a `schema.rs` guard test checks every `*Params`), decoded
+  by `envelope::command_from_parts` so `L3001` carries the field path; `sim.step` is capped at
+  `MAX_STEP_TICKS` (`L3057`).
+- `sim.set_speed` carries a plain `f64`; validation (finite, within `[1/64, 64]` → `L4001`) happens at dispatch,
   not here. Same pattern for `input.inject`'s `event` (`L3005` at dispatch) and `engine.restore`'s
   `snapshot` (`L3008`): the protocol layer never interprets them.

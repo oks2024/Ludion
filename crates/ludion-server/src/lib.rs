@@ -531,24 +531,32 @@ mod tests {
 
     #[test]
     fn a_wedged_sim_step_does_not_hang_teardown() {
-        let mut server = Server::bind(Engine::new(), "127.0.0.1:0").unwrap();
+        // A system that never returns in test time wedges the sim inside one step.
+        let mut engine = Engine::builder()
+            .system("wedge", |_, _| std::thread::sleep(Duration::from_secs(600)))
+            .build()
+            .unwrap();
+        engine
+            .load_inline_scene("format: 1\nentities: []\n")
+            .unwrap();
+        let mut server = Server::bind(engine, "127.0.0.1:0").unwrap();
         server
             .command_sink()
             .submit(Command::SimStep(SimStepParams {
-                ticks: u64::MAX,
+                ticks: 1,
                 hash: false,
             }));
         let polls = 400;
         for _ in 0..polls {
-            if server.sim_shutdown.activity() == Activity::Command("sim.step") {
+            if server.sim_shutdown.activity() == Activity::Tick {
                 break;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(
             server.sim_shutdown.activity(),
-            Activity::Command("sim.step"),
-            "the sim never reached the step"
+            Activity::Tick,
+            "the sim never reached the tick"
         );
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
@@ -562,6 +570,6 @@ mod tests {
             .expect("teardown hung on a wedged sim thread")
             .expect("a wedged sim is reported");
         assert_eq!(stuck.code.as_str(), "L4022");
-        assert!(stuck.message.contains("sim.step"), "{}", stuck.message);
+        assert!(stuck.message.contains("sim tick"), "{}", stuck.message);
     }
 }

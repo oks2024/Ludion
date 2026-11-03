@@ -19,7 +19,7 @@ const E = (index: number, generation = 0): EntityId => ({ index, generation });
 const snap = (...pairs: [EntityId, Record<string, unknown>][]): ComponentSnapshot =>
   new Map(pairs.map(([e, c]) => [`${e.index}:${e.generation}`, c]));
 const methodOf = (c: Command): string => (c as { method: string }).method;
-const paramsOf = (c: Command): Record<string, unknown> => (c as { params: Record<string, unknown> }).params;
+const paramsOf = (c: Command): Record<string, unknown> => (c as unknown as { params: Record<string, unknown> }).params;
 const link = (part: string) => ({ source: 'a.prefab.yaml', part, root: E(1) });
 
 describe('instanceCommand', () => {
