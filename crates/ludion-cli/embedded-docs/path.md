@@ -127,7 +127,7 @@ writing the pose.
   follower spawned at runtime moves like an authored one.
 - A path that cannot be read or fails validation raises `L1215` once per offender (a prefab part, a named entity, or an unnamed entity's slot); the entity stays put.
 - A `speed` or `phase` that is not a finite `f32` (NaN, infinite, or past `f32` range) is `L1269` at `/speed` or `/phase`; built in Rust, the follower is held where it is and `L1269` is raised once per offender.
-- Each path file is read the first time a follower or lane names it, and the library is emptied at every load, restore and district switch; it is never hashed or snapshotted.
+- Each path file is read the first time a follower or lane names it, or at the rebuild for a lane already placed (`s` set); the library is emptied at every load, restore and district switch; it is never hashed or snapshotted.
 
 ## Gotchas
 

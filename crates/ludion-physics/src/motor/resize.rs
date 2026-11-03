@@ -203,10 +203,12 @@ pub fn fits_character<P: PhysicsPose>(
 /// prop is pushed on the way, and nothing is swept.
 ///
 /// A plain `Transform` write is a move, not a teleport: it drives the capsule and pushes props on
-/// the way. This clears the grounded state, the ground and the platform (no carry next tick), and
-/// restores the authored height when the motor was crouched and the authored height fits at the
-/// new spot; otherwise the crouch stays and the next move's `report.height` says so. The pose
-/// alone is written when the world has no physics yet.
+/// the way, and it keeps the grounded record, so a rider whose support moved that tick is carried
+/// about the old pivot once; reposition a rider with this. This clears the grounded state, the
+/// ground and the platform (no carry next tick), and restores the authored height when the motor
+/// was crouched and the authored height fits at the new spot; otherwise the crouch stays and the
+/// next move's `report.height` says so. The pose alone is written when the world has no physics
+/// yet.
 ///
 /// Call it from a system registered **before** [`install`](crate::install)'s; a snapshot does not
 /// carry a queued teleport.

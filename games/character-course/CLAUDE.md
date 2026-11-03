@@ -16,7 +16,7 @@ A greybox obstacle course for the character motor and the reference run/jump/cro
   `course.glb` is its committed export, `scenes/meshes/*` the import of that glb. Never hand-edit
   any of them.
 - `tests/route.rs` (the scripted route as a numeric trace, run twice), `tests/replay.rs` (`run.lrp`),
-  `tests/camera.rs` (the rig per tick: blends, the snap, the shake, `camera_relative`), `tests/golden.rs` (`goldens/<os>/main.png`, the whole course at rest; `behind.png`, the rig settled behind the hero), `tests/content_drift.rs`,
+  `tests/camera.rs` (the rig per tick: blends, the snap, the shake, `camera_relative`), `tests/hold.rs` (the controller freezes under a clock hold), `tests/golden.rs` (`goldens/<os>/main.png`, the whole course at rest; `behind.png`, the rig settled behind the hero), `tests/content_drift.rs`,
   `tests/drift.rs`; `tests/common/mod.rs` holds the one route script they share.
 
 ## The loop

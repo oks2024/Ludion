@@ -98,8 +98,12 @@ fn step(world: &mut World, ctx: &SystemCtx) {
     });
 }
 
+fn fixture_root_dir(tag: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("ludion-lane-{tag}-{}", std::process::id()))
+}
+
 fn fixture_root(tag: &str, files: &[(&str, String)]) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ludion-lane-{tag}-{}", std::process::id()));
+    let dir = fixture_root_dir(tag);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a temp content root");
     for (name, text) in files {
@@ -930,6 +934,49 @@ fn lane_frame_reads_an_authored_place_before_any_move() {
     let world = engine.world();
     let frame = lane_frame(world, hero(world)).expect("an authored lane has a frame");
     assert_eq!(frame.s, 1.0);
+}
+
+#[test]
+fn lane_frame_survives_a_deleted_path_file_after_a_load() {
+    let tag = "cached-load";
+    let engine = engine_for(
+        tag,
+        &[("lane.path.yaml", straight(10.0))],
+        &scene(&format!(
+            "{}{}",
+            floor(),
+            hero_entity(
+                [1.0, 0.0, 0.0],
+                &lane_block(
+                    "lane.path.yaml",
+                    "        engaged: true\n        s: 1.0\n        blend: 1.0\n"
+                )
+            )
+        )),
+        level(),
+    );
+    std::fs::remove_file(fixture_root_dir(tag).join("lane.path.yaml")).unwrap();
+    let world = engine.world();
+    assert!(lane_frame(world, hero(world)).is_some());
+}
+
+#[test]
+fn lane_frame_survives_a_deleted_path_file_after_a_restore() {
+    let mut before = restorable_bend("cached-restore-a");
+    for _ in 0..10 {
+        before.advance_live();
+    }
+    let snapshot = match before.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let mut resumed = restorable_bend("cached-restore-b");
+    resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
+    std::fs::remove_file(fixture_root_dir("cached-restore-b").join("lane.path.yaml")).unwrap();
+    let world = resumed.world();
+    assert!(lane_frame(world, hero(world)).is_some());
 }
 
 // ---- 12: debug draw and trace ----

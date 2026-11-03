@@ -185,10 +185,11 @@ pub struct AnimationTrack {
     pub scale: Vec<Keyframe>,
 }
 
-/// A named instant within a clip, delivered by playback when its time passes.
+/// A named instant within a clip, delivered by the `animation_events` system when its time passes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimationEvent {
-    /// Time in seconds, within `[0, duration]` of the owning clip.
+    /// Time in seconds, within `[0, duration]` of the owning clip, below `duration` on a looping
+    /// clip.
     pub t: f64,
     /// The event name a game reacts to. Non-empty on a `validate`-clean document.
     pub name: String,

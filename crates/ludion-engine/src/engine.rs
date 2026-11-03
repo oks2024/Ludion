@@ -2493,13 +2493,14 @@ impl Engine {
         self.driver.world_mut().insert_resource(library);
     }
 
-    /// Installs an empty [`PathLibrary`](crate::path_follow::PathLibrary) over the project root after
-    /// every world (re)build, the [`install_animation_library`](Engine::install_animation_library)
-    /// mold: paths are read afresh from committed content, never hashed, and `asset.reload` never
-    /// touches it.
+    /// Installs a [`PathLibrary`](crate::path_follow::PathLibrary) over the project root after every
+    /// world (re)build, the [`install_animation_library`](Engine::install_animation_library) mold,
+    /// holding only the paths of lanes the world already places: paths are read afresh from committed
+    /// content, never hashed, and `asset.reload` never touches it.
     pub(crate) fn install_path_library(&mut self) {
         let library = crate::path_follow::PathLibrary::new(self.project_root.clone());
         self.driver.world_mut().insert_resource(library);
+        crate::lane::cache_placed_paths(self.driver.world_mut());
     }
 
     /// Installs the [`FontLibrary`](crate::FontLibrary) loaded from the project root after every

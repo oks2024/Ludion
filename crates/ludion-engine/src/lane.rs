@@ -563,8 +563,9 @@ fn settle(
 /// The lane frame of `entity` as the last `move_character` left it, for a game system that reads
 /// the lane before it moves (a stick turned into [`lane_relative`] input). `None` without a
 /// `LaneConstraint`, with no path, before the lane has found its place (`s` is `null`), when the
-/// lane is fully off. A path no move has loaded yet is read uncached, so the answer depends only on
-/// the world and the project's files, never on what ran before.
+/// lane is fully off. A path no rebuild or move has cached (a raw write of `path` that keeps `s`) is
+/// read uncached, so the answer depends only on the world and the project's files, never on what
+/// ran before.
 ///
 /// # Example
 /// ```
@@ -588,6 +589,25 @@ pub fn lane_frame(world: &World, entity: EntityId) -> Option<LaneFrame> {
         lane.offset,
         smoothstep(lane.blend),
     ))
+}
+
+/// Loads the path of every lane already placed (`s` set), so `lane_frame` on a loaded or restored
+/// world reads it from the library instead of from disk each tick. A failure stays cached for the
+/// first move to report.
+pub(crate) fn cache_placed_paths(world: &mut World) {
+    let mut paths: Vec<String> = world
+        .query_ids::<(&LaneConstraint,)>()
+        .filter(|(_, (lane,))| lane.s.is_some() && !lane.path.is_empty())
+        .map(|(_, (lane,))| lane.path.clone())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    let Some(library) = world.resource_mut::<PathLibrary>() else {
+        return;
+    };
+    for path in paths {
+        let _ = library.sampler(&path);
+    }
 }
 
 /// Reports `L1302` once per [`LaneConstraint`] entity that has no `CharacterMotor`.

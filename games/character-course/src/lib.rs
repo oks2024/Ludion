@@ -284,7 +284,7 @@ pub fn controller(world: &mut World, ctx: &SystemCtx) {
     } else if jump_released && state.velocity_y > 0.0 {
         state.velocity_y *= runner.jump_cut;
     }
-    state.velocity_y -= runner.gravity * ctx.dt;
+    state.velocity_y -= runner.gravity * ctx.game_dt;
 
     // The free direction blended toward the lane's by the lane's weight.
     let free = camera_relative_yaw(stick, yaw);
@@ -297,9 +297,9 @@ pub fn controller(world: &mut World, ctx: &SystemCtx) {
         None => free,
     };
     let displacement = [
-        direction[0] * runner.run_speed * ctx.dt,
-        state.velocity_y * ctx.dt,
-        direction[2] * runner.run_speed * ctx.dt,
+        direction[0] * runner.run_speed * ctx.game_dt,
+        state.velocity_y * ctx.game_dt,
+        direction[2] * runner.run_speed * ctx.game_dt,
     ];
     let mut respawn = false;
     let mut grounded_after = grounded;
