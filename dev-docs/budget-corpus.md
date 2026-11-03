@@ -8,6 +8,9 @@ description: Catalogue of budgets/ files: calibration scene, gated keys and meas
 
 ## Layout
 
+The `*-particles-stress`, `*-physics-stress`, `*-shmup-stress` and `*-sprite-stress` families and
+vigil's E6 pair carry `threads = 8`; the rest state no worker count.
+
 - `budgets/pinned-rtx3090.toml` / `budgets/pinned-apple-m4.toml` — the engine's own tripwire,
   calibrated on `examples/gallery/lights.yaml` (no `PostProcess`, so it renders the shipped
   defaults), checked with `ludion profile --check`.

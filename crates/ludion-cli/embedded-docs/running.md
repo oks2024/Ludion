@@ -38,7 +38,7 @@ within 5 s is reported as `L4022` and the host exits non-zero. Peers attach to t
   measured frames **with your game's own systems running**, prints one `ProfileReport` JSON (median
   per-system sim time, per-pass GPU time, and the sim frame total), and exits. This is the in-process
   twin of `ludion profile` — the CLI links no game code, so only this path can time *your* systems by
-  name. Add **`--profile-check <BUDGET.toml>`** to gate on a budget (an optional `frame_total_ms`, a
+  name. Add **`--profile-check <BUDGET.toml>`** to gate on a budget (an optional `threads` worker count, refused on mismatch with `L4020`; an optional `frame_total_ms`, a
   `[systems]` table, and a `[passes]` table of millisecond ceilings, plus `load_total_ms` for the
   scene-load wall time; `frame_total_max_ms` and a `[systems_max]` table gate the worst frame
   instead of the median; `gpu_frame_ms` and `gpu_frame_max_ms` gate the GPU frame the same way): any

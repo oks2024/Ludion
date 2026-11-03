@@ -39,6 +39,8 @@
 #
 # **Decision 9's second trigger (a stateless vertex-shader evaluation) is reached:** the parallel
 # reading, 1.13 ms, still passes the 1 ms line the plan set. Recorded here, not acted on.
+# Sim worker count of the measurements below; a report at another count is refused (L4020).
+threads = 8
 extract_ms = 2.5   # 1.129 measured (median of four, 8 threads)
 
 # The particle pass itself: ~22,000 sorted, alpha-and-additive quads at 1080p — fill-bound on the

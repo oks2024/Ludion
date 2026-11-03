@@ -44,6 +44,8 @@
 
 # The frame total: the CLI driver links no game systems, so this is the physics triple plus loop
 # overhead — a tripwire on the whole tick, not a 60 fps deadline. Median 1.2861; ceiling ~2x.
+# Sim worker count of the measurements below; a report at another count is refused (L4020).
+threads = 8
 frame_total_ms = 2.60
 
 # The ECS→rapier push: writes each rigid entity's Velocity into the solver ahead of the step.

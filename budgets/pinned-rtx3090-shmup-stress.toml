@@ -54,6 +54,8 @@
 # The exit line: a 60 fps frame. **A fixed target, not 2x a median** — the sprite budget's posture and
 # vigil's E6 `frame_total_ms`. This is the sim schedule alone (0.1185 measured, most of it the hit
 # query); `extract_ms` is gated separately below, and the GPU frame adds ~0.1 ms on top.
+# Sim worker count of the measurements below; a report at another count is refused (L4020).
+threads = 8
 frame_total_ms = 16.6
 
 # The line this file exists for. Every live bullet is evaluated from its closed form at extract on

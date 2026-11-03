@@ -1139,6 +1139,10 @@ pub(crate) fn median_f64(samples: &mut [f64]) -> f64 {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Budget {
+    /// The sim worker count the ceilings were calibrated at; a report measured at another count is
+    /// refused by the facade's check (`L4020`). [`check_budget`] does not read it.
+    #[serde(default)]
+    pub threads: Option<usize>,
     /// Ceiling on the median sim-frame total, in milliseconds.
     #[serde(default)]
     pub frame_total_ms: Option<f64>,
@@ -3221,6 +3225,14 @@ entities:
         assert!(files.len() >= 10, "found only {files:?} — wrong root?");
         for path in files {
             let budget = load_budget(&path).unwrap_or_else(|d| panic!("{}: {d}", path.display()));
+            let text = std::fs::read_to_string(&path).expect("readable budget file");
+            if text.lines().any(|line| line.trim().starts_with("threads")) {
+                assert!(
+                    budget.threads.is_some(),
+                    "{}: `threads` is read as a system or pass name; the key must sit above the first table",
+                    path.display()
+                );
+            }
             // Every producible name measured at zero: only an unknown key can produce a diagnostic.
             let mut report = loaded_report(0.0);
             report.gpu.passes = KNOWN_PASS_NAMES

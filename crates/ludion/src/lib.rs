@@ -1602,6 +1602,8 @@ pub fn profile_report_json(report: &ludion_engine::ProfileReport) -> String {
 /// descriptor, so it covers an `--attach` capture of someone else's host exactly as it covers a local
 /// run. A report carrying no descriptor at all predates the field and is compared as before. An
 /// anti-aliased capture is refused for the same reason: it pays passes the budget never measured.
+/// A budget carrying a `threads` key refuses a report measured at another sim worker count the same
+/// way; a report with no count predates the field and is compared as before.
 #[cfg(feature = "wire")]
 pub fn check_budget_report(report: &ludion_engine::ProfileReport, budget_path: &Path) -> ExitCode {
     let full = ludion_engine::QualitySetting::FULL_LABEL;
@@ -1627,6 +1629,12 @@ pub fn check_budget_report(report: &ludion_engine::ProfileReport, budget_path: &
             return ExitCode::FAILURE;
         }
     };
+    if let (Some(calibrated), Some(measured)) = (budget.threads, report.sim.threads)
+        && measured != calibrated
+    {
+        eprintln!("{}", threads_refusal(measured, calibrated, budget_path));
+        return ExitCode::FAILURE;
+    }
     let over = ludion_engine::check_budget(report, &budget);
     if over.is_empty() {
         eprintln!("{}: all timings within budget", budget_path.display());
@@ -1677,6 +1685,24 @@ fn anti_aliasing_refusal(mode: &str, budget: &Path) -> Diagnostic {
         "a budget is calibrated with anti-aliasing off — re-measure with `--aa off` to \
          compare",
     )
+}
+
+/// The `L4020` refusal to compare a report measured with `measured` sim workers against `budget`,
+/// calibrated at `calibrated`.
+#[cfg(feature = "wire")]
+fn threads_refusal(measured: usize, calibrated: usize, budget: &Path) -> Diagnostic {
+    Diagnostic::new(
+        code::BUDGET_QUALITY_MISMATCH,
+        format!(
+            "this measurement was taken with {measured} sim threads, so it cannot be checked \
+             against `{}`, calibrated at {calibrated}",
+            budget.display(),
+        ),
+    )
+    .with_help(format!(
+        "CPU ceilings only hold at the calibrated worker count — re-measure with \
+         `--threads {calibrated}` to compare",
+    ))
 }
 
 /// Runs `--bake-probes`: loads `scene` through the game's builder, bakes its reflection probes at
@@ -2510,7 +2536,7 @@ mod budget_quality_tests {
     //! The one gate that stands between a reduced-quality measurement and a budget calibrated on
     //! the full one. It lives in `check_budget_report` rather than in either caller, so `ludion
     //! profile --check`, `ludion profile --attach --check`, and a game's own `--profile-check` are
-    //! covered by the same six lines.
+    //! covered by the same lines. The sim worker count a budget names is gated the same way.
 
     use super::*;
     use ludion_engine::{AntiAliasing, ProfileReport, QualitySetting, SimProfile};
@@ -2566,6 +2592,63 @@ mod budget_quality_tests {
         )
         .expect("the scratch budget is writable");
         path
+    }
+
+    /// A scratch budget that names the worker count it was calibrated at.
+    fn budget_with_threads(name: &str, threads: usize) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "ludion-budget-threads-{}-{name}.toml",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            format!("threads = {threads}\nframe_total_ms = 16.6\n"),
+        )
+        .expect("the scratch budget is writable");
+        path
+    }
+
+    fn report_with_threads(threads: Option<usize>) -> ProfileReport {
+        let mut report = report_at(Some("full"), AntiAliasing::Off);
+        report.sim.threads = threads;
+        report
+    }
+
+    /// A report at another worker count than the budget's key is refused; a matching or absent
+    /// count compares, and a keyless budget compares at any count.
+    #[test]
+    fn a_thread_count_mismatch_is_refused_rather_than_compared() {
+        let keyed = budget_with_threads("keyed", 8);
+        assert_eq!(
+            check_budget_report(&report_with_threads(Some(1)), &keyed),
+            ExitCode::FAILURE,
+        );
+        assert_eq!(
+            check_budget_report(&report_with_threads(Some(8)), &keyed),
+            ExitCode::SUCCESS,
+        );
+        assert_eq!(
+            check_budget_report(&report_with_threads(None), &keyed),
+            ExitCode::SUCCESS,
+        );
+        let _ = std::fs::remove_file(&keyed);
+        let keyless = budget("threads-keyless");
+        assert_eq!(
+            check_budget_report(&report_with_threads(Some(1)), &keyless),
+            ExitCode::SUCCESS,
+        );
+        let _ = std::fs::remove_file(&keyless);
+    }
+
+    #[test]
+    fn the_threads_refusal_is_coded_and_names_both_counts() {
+        let diagnostic = threads_refusal(1, 8, Path::new("budgets/x.toml"));
+        assert_eq!(diagnostic.code, code::BUDGET_QUALITY_MISMATCH);
+        let rendered = diagnostic.to_string();
+        assert!(rendered.starts_with("error[L4020]: "), "{rendered}");
+        assert!(rendered.contains("1 sim threads"), "{rendered}");
+        assert!(rendered.contains("calibrated at 8"), "{rendered}");
+        assert!(rendered.contains("x.toml"), "{rendered}");
     }
 
     /// Every setting that is not `full` is refused rather than compared — including the ones whose

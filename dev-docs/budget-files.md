@@ -43,6 +43,11 @@ The per-file catalogue (one entry per calibration scene and per-OS twin, with me
 
 ## Rules
 
+- **`threads`: the calibration's worker count.** An optional top-level key; a report measured at
+  another sim worker count is refused with `L4020`, and a report with no count (it predates the
+  field) is compared as before. It must sit above the first `[table]` — below one it parses as a
+  system or pass named `threads` and arms nothing (a corpus test pins this). It is stated only where
+  a measurement records the count; re-measuring a keyless CPU-bearing file adds it.
 - **The engine-level calibration rule:** every ceiling is set to roughly twice the median measured
   over 120 frames in `--release`, so a failure means a real, reproducible regression rather than
   machine noise (stated in every `budgets/pinned-*.toml` header, e.g. `pinned-apple-m4.toml` lines

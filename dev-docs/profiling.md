@@ -169,7 +169,7 @@ four labelled lanes and no overlap warnings.
   ran on, and it varies per machine by design (`LUDION_THREADS`, a host's `--threads`, else the
   machine's capped available parallelism). Two reports are comparable only at equal `threads` — pass
   `--threads N` explicitly whenever a measurement is going to be compared with another, and read the
-  field before believing a regression. It is `null` only in a report predating the field. Results
+  field before believing a regression (a budget with a `threads` key refuses a mismatch, `L4020`). It is `null` only in a report predating the field. Results
   themselves never depend on it: the sim is bit-identical at any count (see `determinism`).
 - **`send_ms` is sink-write time.** It includes a non-reading client's backpressure and excludes
   kernel-to-client delivery. Text messages are not timed at all.

@@ -42,6 +42,8 @@
 # The exit line: a 60 fps frame. **A fixed target, not 2x a median** — the same posture as
 # vigil's E6 `frame_total_ms`. This is the sim schedule alone (0.1238 measured); `extract_ms` below
 # is the other half of the per-frame CPU cost and is gated separately.
+# Sim worker count of the measurements below; a report at another count is refused (L4020).
+threads = 8
 frame_total_ms = 16.6
 
 # The line this file exists for. Every sprite is placed, sorted and packed at extract on the sim

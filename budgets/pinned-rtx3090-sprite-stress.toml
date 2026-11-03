@@ -57,6 +57,8 @@
 # the other half of the per-frame CPU cost and is gated separately, and the GPU frame — `scene` plus
 # the bloom chain and `composite` — adds ~0.12 ms on top. All three together stand at ~1.9 ms, so
 # this line has an order of magnitude of headroom and exists to catch the day it does not.
+# Sim worker count of the measurements below; a report at another count is refused (L4020).
+threads = 8
 frame_total_ms = 16.6
 
 # The line this file exists for. Every sprite is placed, sorted and packed at extract on the sim
