@@ -1380,7 +1380,7 @@ fn relaunch_and_restore(ctx: &Relaunch<'_>, kept: &mut bool) -> Result<GameChild
 /// Deletes the kept snapshot once it has been restored, so a later `ludion dev` start does not resume
 /// a state the designer has since moved past. A file that cannot be deleted is warned about, not fatal.
 fn discard_kept_snapshot(path: &Path) {
-    // The scene-session sidecar goes with it; an orphan is harmless (its frame no longer matches).
+    // The scene-session sidecar goes with it; an orphan is harmless unless a later snapshot has the same frame and scene.
     let _ = std::fs::remove_file(path.with_file_name(SCENE_SESSION_FILE));
     match std::fs::remove_file(path) {
         Ok(()) => {}

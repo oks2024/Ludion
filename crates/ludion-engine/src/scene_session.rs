@@ -2,7 +2,7 @@
 //!
 //! The child writes it when it answers `engine.snapshot`, because that is when the world is
 //! captured: the frame, the scene path and the conflict bases then describe one moment. The next
-//! `--restore` boot adopts it only if its frame equals the restored frame.
+//! `--restore` boot adopts it only if its frame and its scene hash both equal the restored engine's.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 pub(crate) struct SceneSessionDoc {
     pub(crate) frame: u64,
+    /// `WireHash` (string form) of the scene reference the snapshot holds: a frame alone cannot tell
+    /// two worlds apart.
+    pub(crate) scene_hash: String,
     pub(crate) path: Option<String>,
     /// Absolute key path → the text the session last loaded or saved there.
     pub(crate) bases: BTreeMap<String, String>,

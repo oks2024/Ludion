@@ -3376,6 +3376,7 @@ impl Engine {
         };
         let doc = crate::scene_session::SceneSessionDoc {
             frame: self.frame().as_u64(),
+            scene_hash: self.scene_identity(),
             path: self.current_scene_path.clone(),
             bases: self
                 .scene_bases
@@ -3383,17 +3384,24 @@ impl Engine {
                 .filter_map(|(key, text)| Some((key.to_str()?.to_string(), text.clone())))
                 .collect(),
         };
-        // A failed write leaves the old file, whose frame will not match: the next boot falls back
-        // to unset and says so, while failing `engine.snapshot` would cost the designer's state.
+        // A failed write leaves the old file, which may still match by frame and scene (then it
+        // describes the same world) or not (the next boot falls back to unset and says so); failing
+        // `engine.snapshot` would cost the designer's state.
         let _ = doc.write(file);
+    }
+
+    /// The `WireHash` string of the scene reference `engine.snapshot` captures (`self.scene`).
+    fn scene_identity(&self) -> String {
+        let bytes = serde_json::to_vec(&self.scene).unwrap_or_default();
+        ludion_protocol::hash::WireHash::of_bytes(&bytes).to_string()
     }
 
     /// Adopts the scene session a previous process wrote beside its snapshot: the scene path a
     /// restart names and `scene.save`'s conflict bases. Taken only when the file's frame equals this
-    /// engine's (restored) frame; otherwise path and bases stay as they were.
+    /// engine's (restored) frame and scene; otherwise path and bases stay as they were.
     ///
     /// # Errors
-    /// `L0033` when the file is missing, malformed or from another frame.
+    /// `L0033` when the file is missing, malformed, or from another frame or scene.
     pub fn adopt_scene_session(&mut self, file: &Path) -> Result<(), Diagnostic> {
         let degraded =
             |why: String| {
@@ -3412,6 +3420,13 @@ impl Engine {
             return Err(degraded(format!(
                 "it was written at frame {}, the restored world is at frame {frame}",
                 doc.frame
+            )));
+        }
+        let scene_hash = self.scene_identity();
+        if doc.scene_hash != scene_hash {
+            return Err(degraded(format!(
+                "it was written for scene {}, the restored world holds scene {scene_hash}",
+                doc.scene_hash
             )));
         }
         self.current_scene_path = doc.path;

@@ -605,6 +605,29 @@ entities:
     }
 
     #[test]
+    fn a_session_written_for_another_scene_at_the_same_frame_is_refused() {
+        let dir = fresh_dir("session-other-scene");
+        std::fs::write(dir.join("a.yaml"), SCENE).unwrap();
+        std::fs::write(dir.join("b.yaml"), NEXT).unwrap();
+        let mut a = first_engine(&dir, idle);
+        scene_load(&mut a, "a.yaml");
+        let snapshot_a = snapshot_of(&mut a);
+        // Another engine overwrites the sidecar: same frame, different scene.
+        let mut b = first_engine(&dir, idle);
+        scene_load(&mut b, "b.yaml");
+        snapshot_of(&mut b);
+        assert_eq!(a.frame(), b.frame());
+
+        let mut restored = restored_engine(&dir, snapshot_a);
+        let refused = adopt(&mut restored, &dir).expect_err("the sidecar is b's");
+        assert_eq!(refused.code.as_str(), "L0033");
+        assert!(refused.message.contains("scene"), "{}", refused.message);
+        let changed = next_scene_changed(&mut restored);
+        assert_eq!(changed.path, None);
+        assert!(conflict(scene_save(&mut restored, "b.yaml", false)));
+    }
+
+    #[test]
     fn a_restore_and_an_inline_load_forget_the_scene_path() {
         let dir = fresh_dir("path-forgotten");
         let mut other = first_engine(&dir, idle);

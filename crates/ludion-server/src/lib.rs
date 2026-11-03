@@ -503,7 +503,6 @@ fn startup_error(message: impl Into<String>) -> Diagnostic {
 mod tests {
     use super::*;
     use ludion_engine::live::Activity;
-    use ludion_protocol::command::SimStepParams;
 
     #[test]
     fn a_busy_port_fails_the_bind_before_the_sim_ever_runs() {
@@ -531,33 +530,32 @@ mod tests {
 
     #[test]
     fn a_wedged_sim_step_does_not_hang_teardown() {
-        // A system that never returns in test time wedges the sim inside one step.
+        // A system that never returns in test time wedges the sim inside a live tick. The system
+        // reports its own entry, so the wait is on a condition the sim sets, not on a sampled phase:
+        // a `sim.step` command would run under `Activity::Command` instead of `Tick`.
+        let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = entered.clone();
         let mut engine = Engine::builder()
-            .system("wedge", |_, _| std::thread::sleep(Duration::from_secs(600)))
+            .system("wedge", move |_, _| {
+                flag.store(true, Ordering::Release);
+                std::thread::sleep(Duration::from_secs(600));
+            })
             .build()
             .unwrap();
         engine
             .load_inline_scene("format: 1\nentities: []\n")
             .unwrap();
         let mut server = Server::bind(engine, "127.0.0.1:0").unwrap();
-        server
-            .command_sink()
-            .submit(Command::SimStep(SimStepParams {
-                ticks: 1,
-                hash: false,
-            }));
         // Bounded by a deadline, not a poll count: a loaded box can starve the sim thread for seconds.
         let deadline = std::time::Instant::now() + Duration::from_secs(60);
-        while server.sim_shutdown.activity() != Activity::Tick
-            && std::time::Instant::now() < deadline
-        {
+        while !entered.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert_eq!(
-            server.sim_shutdown.activity(),
-            Activity::Tick,
-            "the sim never reached the tick"
+        assert!(
+            entered.load(Ordering::Acquire),
+            "the sim never entered the system"
         );
+        assert_eq!(server.sim_shutdown.activity(), Activity::Tick);
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
