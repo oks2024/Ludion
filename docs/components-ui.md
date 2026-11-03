@@ -16,7 +16,7 @@ are `ludion docs screen-ui` and `ludion docs ui-list`.
 | `UiList` | `anchor`/`offset`/`title`/`items: [{text, enabled}]` (empty — draws nothing)/`selected: u32`/`max_visible: u32` (`0` = unlimited — windows the drawn items around `selected`)/`size: f32` (`24.0`, `L1118`)/`line_spacing`/`padding: f32` (`0.0`/`16.0`, `>=0`)/`color`/`selected_color`/`disabled_color`/`background: [f32;4]`/`font: Option<String>` (as `UiText`)/`order: i32`/`visible: bool` (`true`) — the selectable-menu list; screen-space only. See `ludion docs ui-list` |
 | `Text` | `text: String` (`""`), `size: f32` (`1.0`), `color: [f32;4]` (white; RGB `>=0`, alpha `0..=1`: `L1263`), `font: Option<String>` (as `UiText`) |
 
-**World `Text` draws on top of the scene with no depth test, in scene order** — a wall in front of a label does not hide it, and two overlapping labels stack by entity order, not by distance.
+**World `Text` draws on top of the scene with no depth test, in scene order** — a wall in front of a label does not hide it, and two overlapping labels stack by entity order, not by distance. Fog, beams and DoF use the label's own distance, so a label seen through a wall is fogged as far as it actually is.
 
 ## Next
 

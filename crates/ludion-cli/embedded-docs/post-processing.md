@@ -132,7 +132,8 @@ anisotropy.
   system on a presentation entity's `PostProcess` (unhashed, `ludion docs presentation`; the scene must
   have no sim `PostProcess`, which would win). Either way it is a function of world state, never of the
   camera's history, which an engine-side autofocus would make the image.
-  `ludion render --look-at` sets it to the framing distance.
+  `ludion render --look-at` sets it to the framing distance. A sprite, particle or world text uses its
+  own distance for the circle of confusion, so focusing on a character sprite keeps it sharp.
 - **`vignette`** / **`vignette_radius`** — corner darkening strength `[0, 1]` (default `0.0` — off,
   and the gate) and the normalized screen radius it starts at `[0, 1]` (default `0.5`). The geometry
   is a function of normalized screen position alone, so it is elliptical and resolution-independent.

@@ -125,7 +125,8 @@ one-line row form.
   over every sprite — including a background emitter behind a foreground sprite, which no `layer`
   or depth can reorder. A scene with no
   `ParticleEmitter` (or one drawing nothing) issues no particle draw at all — byte-identical to the
-  pre-particle pipeline.
+  pre-particle pipeline. Fog, beams and DoF still use each particle's own distance, and an additive
+  particle claims in proportion to its brightness (`ludion docs atmosphere`).
 - **Particles are unlit unless `lit: true`.** Unlit, the authored colour is the look. Lit, a
   particle's colour is its albedo (`start_color`/`end_color`, lerped) times the light reaching its
   centre, evaluated once per particle with exactly the lit sprite's terms: the scene's flat ambient

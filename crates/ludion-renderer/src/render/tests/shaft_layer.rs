@@ -438,8 +438,8 @@ fn needs_gpu_a_black_additive_texel_stops_no_beams() {
 /// A pixel the layer does not reach keeps the plain march: past the blur's footprint and two more
 /// pixels, a frame with a small sprite equals one without. Skips with no GPU.
 #[test]
-fn needs_gpu_an_uncovered_pixel_keeps_todays_march() {
-    let Some(renderer) = skip_or_renderer("an_uncovered_pixel_keeps_todays_march") else {
+fn needs_gpu_an_uncovered_pixel_keeps_the_plain_march() {
+    let Some(renderer) = skip_or_renderer("an_uncovered_pixel_keeps_the_plain_march") else {
         return;
     };
     let size = shaft_px_size();

@@ -54,6 +54,11 @@ L = T(d)·surface  +  ∫₀ᵈ σ_s·T(t)·[ L_ambient + p(θ)·V(t)·L_sun ] d
   sky(view_ray), fog_sky)`. At `fog_sky: 0` the haze is one authored slab; at `1.0` it is the
   `Environment` sky along that ray, blue toward the zenith and warm in the horizon band.
 
+- **Sprites, particles and world text take fog and beams at their own distance,** not the wall or sky
+  behind them: a character in front of a far hill is fogged as far as it stands, and one crossing the
+  horizon has no seam. Depth of field does the same (`ludion docs post-processing`). The mechanism and
+  its error terms are in `Plan/transparent-depth.md`.
+
 **The haze does not apply where nothing was drawn.** A background pixel is at the far plane, which is
 infinitely distant, so the extinction would replace it outright and flatten an authored sky into a
 slab of fog colour. Those pixels are skipped by the ambient term (the beams still cross them, having
@@ -87,6 +92,13 @@ haze *is* the sky along that ray and the two agree by construction.
   zero and the medium is the flat `fog_color` slab — a scene may author `fog_sky` with no
   `Environment` and render byte-identically to one that omits it. `Environment.ibl_intensity`
   deliberately does not scale the term either: that knob grades how much the sky lights *surfaces*.
+
+- **Soft and stacked transparents are approximated.** A half-covered texel's transmitted colour is
+  slightly off, and layers stacked on one pixel share one mean distance.
+- **A bright additive texel can show a small fog hole.** The background under it takes the texel's
+  fog, so over a fogged wall a bright ember reads as a faint disc.
+- **Orthographic cameras run the medium along the view,** not along a fanning ray, so fog and beams
+  hold their depth across the frame.
 
 ## The tuning loop
 
