@@ -407,8 +407,7 @@ pub mod code {
     /// `L1036` — a sim entity's entity-reference field names a presentation entity
     /// (`presentation: true`), which would let the sim hash a presentation id. Raised by
     /// `ludion-scene`'s validation, and on the wire by `component.set` and `entity.spawn` (the id is
-    /// named, not a document position); `entity.spawn` accepts a dead one (an undo respawn repairs
-    /// it next).
+    /// named, not a document position).
     pub const SCENE_PRESENTATION_REF: DiagnosticCode = DiagnosticCode::new("L1036");
 
     /// `L1037` — a scene or doc file starts with a YAML directive other than `%YAML 1.2` (`%YAML

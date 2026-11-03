@@ -489,6 +489,7 @@ mod tests {
             record_kind(&Command::EntitySpawn(EntitySpawnParams {
                 name: None,
                 components: Default::default(),
+                presentation: false,
             })),
             Some(RecordKind::Command),
         );

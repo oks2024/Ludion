@@ -543,8 +543,11 @@ pub fn reparent(
 pub(crate) enum ParentCandidate<'a> {
     /// An entity in the world.
     Live(EntityId),
-    /// An `entity.spawn` not applied yet: a sim entity with no id and no descendants.
-    Unspawned { collider: Option<&'a Collider> },
+    /// An `entity.spawn` not applied yet: no id, no descendants, sim unless flagged `presentation`.
+    Unspawned {
+        collider: Option<&'a Collider>,
+        presentation: bool,
+    },
 }
 
 /// The refusals shared by `reparent`, `component.set Parent` and `entity.spawn`, read-only: a dead
@@ -561,7 +564,10 @@ pub(crate) fn check_parent(
             world.get::<Collider>(id).ok().flatten(),
             !is_presentation(id),
         ),
-        ParentCandidate::Unspawned { collider } => (None, collider, true),
+        ParentCandidate::Unspawned {
+            collider,
+            presentation,
+        } => (None, collider, !presentation),
     };
     let label = id.map_or_else(|| "the spawned entity".to_string(), |id| id.to_string());
     if !world.is_alive(parent) {

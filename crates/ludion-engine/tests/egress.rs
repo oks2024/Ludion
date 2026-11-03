@@ -710,6 +710,7 @@ fn needs_gpu_the_stream_extent_follows_the_render_size_setter_without_moving_the
             session.send(Command::EntitySpawn(EntitySpawnParams {
                 name: None,
                 components,
+                presentation: false,
             }));
             hashes.push(session.hash());
             // Every drained command marks the world dirty, so each one owes a frames subscriber a
@@ -780,6 +781,7 @@ fn egress_attachment_does_not_perturb_the_world_hash_sequence() {
             session.send(Command::EntitySpawn(EntitySpawnParams {
                 name: None,
                 components,
+                presentation: false,
             }));
             hashes.push(session.hash());
             session.send(Command::SimStep(SimStepParams {

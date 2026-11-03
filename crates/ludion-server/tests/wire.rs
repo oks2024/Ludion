@@ -40,6 +40,7 @@ fn spawn_transform(x: f64, y: f64, z: f64) -> Command {
     Command::EntitySpawn(EntitySpawnParams {
         name: None,
         components,
+        presentation: false,
     })
 }
 

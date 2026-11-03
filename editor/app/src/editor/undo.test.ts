@@ -8,9 +8,13 @@ import {
   UndoHistory,
   executeRedo,
   executeUndo,
+  PRESENTATION_BASE,
   inverseCommand,
   redoCommand,
+  respawnCommand,
 } from './undo';
+import { mutationToEntries } from './mutations';
+import { spawnEntries } from './prefab-place';
 
 const CORE_REFS = new Map([
   ['Parent', ['']],
@@ -809,5 +813,125 @@ describe('UndoHistory cap', () => {
     expect(h.canRedo).toBe(true);
     h.pushUndo(h.popRedo()!);
     expect(h.canUndo).toBe(true);
+  });
+});
+
+// --- presentation entities respawn from the presentation range -----------------------------------
+
+describe('presentation entities respawn flagged', () => {
+  const P = (n: number, generation = 0): EntityId => E(PRESENTATION_BASE + n, generation);
+  const ref = (e: EntityId) => ({ index: e.index, generation: e.generation });
+  /** The flag as sent, read through a weak cast so this compiles under protocol types that predate it. */
+  const flagOf = (cmd: Command): unknown => (paramsOf(cmd) as { presentation?: unknown }).presentation;
+  /** A caller that answers each spawn with the next presentation-range id (or a sim id for sim spawns). */
+  function engineLike(): { call: CallFn; calls: Command[] } {
+    let next = 100;
+    return recordingCaller((cmd) => {
+      if (methodOf(cmd) !== 'entity.spawn') return ACK;
+      const id = flagOf(cmd) === true ? P(next++) : E(next++, 0);
+      return spawned(id);
+    });
+  }
+
+  it('flags exactly the ids at or above the base', () => {
+    expect(flagOf(respawnCommand(E(PRESENTATION_BASE - 1, 0), {}))).toBeUndefined();
+    expect('presentation' in paramsOf(respawnCommand(E(3, 0), {}))).toBe(false);
+    expect(flagOf(respawnCommand(E(PRESENTATION_BASE, 0), {}))).toBe(true);
+  });
+
+  it('flags the redo of a placed presentation prefab, parent first, and repairs each PrefabInstance.root', async () => {
+    const root = P(1);
+    const arm = P(2);
+    const link = (part: string) => ({ source: 'a.prefab.yaml', part, root: ref(root) });
+    const byKey = new Map<string, Record<string, unknown>>([
+      [`${arm.index}:${arm.generation}`, { Parent: ref(root), PrefabInstance: link('arm') }],
+      [`${root.index}:${root.generation}`, { PrefabInstance: link('root') }],
+    ]);
+    const h = new UndoHistory();
+    h.setEntityRefs(CORE_REFS);
+    h.pushGroup(spawnEntries(byKey, [arm, root]));
+    const { call, calls } = engineLike();
+    await executeUndo(h, call); // destroys both
+    calls.length = 0;
+    await executeRedo(h, call); // respawns both
+    const spawns = calls.filter((c) => methodOf(c) === 'entity.spawn');
+    expect(spawns.map(flagOf)).toEqual([true, true]);
+    expect((paramsOf(spawns[0]!).components as Record<string, unknown>).Parent).toBeUndefined();
+    const freshRoot = P(100);
+    expect((paramsOf(spawns[1]!).components as { Parent: EntityId }).Parent).toEqual(ref(freshRoot));
+    // The child spawns after the root, so its stored root ref was already remapped; only the root
+    // (which spawned holding its own dead id) needs a repair.
+    expect((paramsOf(spawns[1]!).components as { PrefabInstance: { root: EntityId } }).PrefabInstance.root).toEqual(
+      ref(freshRoot),
+    );
+    const repairs = calls.filter((c) => methodOf(c) === 'component.set' && paramsOf(c).component === 'PrefabInstance');
+    expect(repairs).toHaveLength(1);
+    expect(paramsOf(repairs[0]!).entity).toEqual(freshRoot);
+    expect((paramsOf(repairs[0]!).value as { root: EntityId }).root).toEqual(ref(freshRoot));
+  });
+
+  it('flags every part, parents first, when undoing the delete of a placed prefab', async () => {
+    const root = P(1);
+    const arm = P(2);
+    const entries = mutationToEntries({
+      command: { method: 'entity.destroy', params: { entity: root } } as Command,
+      body: {
+        kind: 'entity_destroyed',
+        components: { Name: 'root' },
+        descendants: [{ entity: arm, components: { Name: 'arm', Parent: ref(root) } }],
+      } as unknown as ResponseBody,
+    });
+    const h = new UndoHistory();
+    h.setEntityRefs(CORE_REFS);
+    h.pushGroup(entries);
+    const { call, calls } = engineLike();
+    const result = await executeUndo(h, call);
+    expect(result).toMatchObject({ ok: true });
+    const spawns = calls.filter((c) => methodOf(c) === 'entity.spawn');
+    expect(spawns.map(flagOf)).toEqual([true, true]);
+    expect((paramsOf(spawns[0]!).components as Record<string, unknown>).Name).toBe('root');
+    const child = paramsOf(spawns[1]!).components as { Parent: EntityId };
+    expect(child.Parent.index).toBeGreaterThanOrEqual(PRESENTATION_BASE); // remapped to the fresh root
+    expect(child.Parent).not.toEqual(ref(root));
+  });
+
+  it('flags the undo of deleting one child, under its live parent, and stays flagged on later cycles', async () => {
+    const parent = P(1);
+    const child = P(2);
+    const h = new UndoHistory();
+    h.setEntityRefs(CORE_REFS);
+    h.push({ kind: 'destroy', entity: child, components: { Name: 'c', Parent: ref(parent) } });
+    const { call, calls } = engineLike();
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await executeUndo(h, call);
+      await executeRedo(h, call);
+    }
+    const spawns = calls.filter((c) => methodOf(c) === 'entity.spawn');
+    expect(spawns).toHaveLength(2);
+    for (const spawn of spawns) {
+      expect(flagOf(spawn)).toBe(true);
+      expect((paramsOf(spawn).components as { Parent: EntityId }).Parent).toEqual(ref(parent));
+    }
+  });
+
+  it('flags only the presentation member of a mixed group', async () => {
+    const h = new UndoHistory();
+    h.setEntityRefs(CORE_REFS);
+    h.pushGroup([
+      { kind: 'destroy', entity: P(2), components: { Name: 'visual' } },
+      { kind: 'destroy', entity: E(4, 0), components: { Name: 'body' } },
+    ]);
+    const { call, calls } = engineLike();
+    await executeUndo(h, call);
+    const spawns = calls.filter((c) => methodOf(c) === 'entity.spawn');
+    expect(spawns.map((c) => (paramsOf(c).components as { Name: string }).Name)).toEqual(['body', 'visual']);
+    expect(spawns.map(flagOf)).toEqual([undefined, true]);
+  });
+
+  it('inverse and redo of destroy/spawn entries flag by the entry id', () => {
+    const entry: UndoEntry = { kind: 'destroy', entity: P(1), components: {} };
+    expect(flagOf(inverseCommand(entry))).toBe(true);
+    expect(flagOf(redoCommand({ kind: 'spawn', entity: P(1), components: {} }))).toBe(true);
+    expect('presentation' in paramsOf(inverseCommand({ kind: 'destroy', entity: E(1, 0), components: {} }))).toBe(false);
   });
 });

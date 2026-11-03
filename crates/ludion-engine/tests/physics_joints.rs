@@ -123,6 +123,7 @@ fn joint_carrier(a: u32, b: u32, kind: Value) -> EntitySpawnParams {
     EntitySpawnParams {
         name: None,
         components,
+        presentation: false,
     }
 }
 
@@ -233,6 +234,7 @@ fn entity_spawn_rejects_a_semantically_invalid_component_and_spawns_nothing() {
         Command::EntitySpawn(EntitySpawnParams {
             name: None,
             components: joint_components,
+            presentation: false,
         }),
     )
     .expect_err("a self-joined Joint must be rejected");
@@ -257,6 +259,7 @@ fn entity_spawn_rejects_a_semantically_invalid_component_and_spawns_nothing() {
         Command::EntitySpawn(EntitySpawnParams {
             name: None,
             components: tilemap_components,
+            presentation: false,
         }),
     )
     .expect_err("a ragged Tilemap must be rejected");

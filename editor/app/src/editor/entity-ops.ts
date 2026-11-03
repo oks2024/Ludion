@@ -15,7 +15,7 @@
 
 import type { Command, ResponseBody } from '@ludion/protocol';
 import type { MutationRecord } from './mutations';
-import type { CallFn, EntityId } from './undo';
+import { type CallFn, type EntityId, respawnCommand } from './undo';
 
 /**
  * The outcome of one entity op.
@@ -121,7 +121,7 @@ export async function duplicateEntity(selection: EntityId, call: CallFn): Promis
     if (components === null) {
       return { records: [], error: new Error(`entity ${entityKey(selection)} not found`) };
     }
-    const command: Command = { method: 'entity.spawn', params: { components } };
+    const command = respawnCommand(selection, components);
     return await spawnArchetype(command, call);
   } catch (error) {
     return { records: [], error };

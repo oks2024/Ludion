@@ -141,6 +141,21 @@ function remapGroup(group: UndoEntry[], refs: EntityRefIndex, from: EntityId, to
   return group.map((e) => remapEntry(e, refs, from, to));
 }
 
+/** The first id of the engine's presentation range (`ludion_ecs::PRESENTATION_BASE`). */
+export const PRESENTATION_BASE = 16777216;
+
+/**
+ * An `entity.spawn` that recreates `old` with `components`: presentation entities come back from the
+ * presentation range, sim ones as sim. The flag is spread in only when set, so the command stays valid
+ * under protocol types that predate the field.
+ */
+export function respawnCommand(old: EntityId, components: Record<string, unknown>): Command {
+  return {
+    method: 'entity.spawn',
+    params: { components, ...(old.index >= PRESENTATION_BASE ? { presentation: true } : {}) },
+  };
+}
+
 /**
  * The single protocol command that undoes `entry`.
  *
@@ -161,10 +176,7 @@ export function inverseCommand(entry: UndoEntry): Command {
     case 'remove':
       return componentSet(entry.entity, entry.component, entry.before as object);
     case 'destroy':
-      return {
-        method: 'entity.spawn',
-        params: { components: entry.components },
-      };
+      return respawnCommand(entry.entity, entry.components);
     case 'spawn':
       return {
         method: 'entity.destroy',
@@ -202,10 +214,7 @@ export function redoCommand(entry: UndoEntry): Command {
         params: { entity: entry.entity },
       };
     case 'spawn':
-      return {
-        method: 'entity.spawn',
-        params: { components: entry.components },
-      };
+      return respawnCommand(entry.entity, entry.components);
     case 'reparent':
       return {
         method: 'entity.reparent',

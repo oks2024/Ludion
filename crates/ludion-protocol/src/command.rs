@@ -443,7 +443,7 @@ pub struct SceneCheckParams {
 ///
 /// let mut components = BTreeMap::new();
 /// components.insert("Transform".to_string(), serde_json::json!({ "position": [0.0, 1.0, 0.0] }));
-/// let params = EntitySpawnParams { name: Some("player".into()), components };
+/// let params = EntitySpawnParams { name: Some("player".into()), components, presentation: false };
 /// assert_eq!(params.components.len(), 1);
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -456,6 +456,10 @@ pub struct EntitySpawnParams {
     /// the component's schema, its semantic validator and the entity-reference checks.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub components: BTreeMap<String, Value>,
+    /// Spawn from the presentation id range: the entity is drawn and never hashed. A sim spawn
+    /// (the default) may not name a presentation entity.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub presentation: bool,
 }
 
 /// Parameters for `entity.destroy`.
@@ -1307,6 +1311,28 @@ mod tests {
     }
 
     #[test]
+    fn spawn_presentation_flag_is_omitted_when_false_and_round_trips() {
+        let sim = EntitySpawnParams {
+            name: None,
+            components: BTreeMap::new(),
+            presentation: false,
+        };
+        assert_eq!(serde_json::to_value(&sim).unwrap(), serde_json::json!({}));
+        let absent: EntitySpawnParams = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!absent.presentation);
+        let flagged = EntitySpawnParams {
+            presentation: true,
+            ..sim
+        };
+        let value = serde_json::to_value(&flagged).unwrap();
+        assert_eq!(value, serde_json::json!({ "presentation": true }));
+        assert_eq!(
+            serde_json::from_value::<EntitySpawnParams>(value).unwrap(),
+            flagged
+        );
+    }
+
+    #[test]
     fn the_method_surface_is_the_size_it_is_declared_to_be() {
         // A tripwire, not a fact worth asserting for its own sake: the surface is deliberately small
         // and every addition is a protocol rev, so growing it should require editing this number and
@@ -1332,6 +1358,7 @@ mod tests {
             Command::EntitySpawn(EntitySpawnParams {
                 name: None,
                 components: BTreeMap::new(),
+                presentation: false,
             }),
             Command::EntityDestroy(EntityDestroyParams { entity }),
             Command::EntityReparent(EntityReparentParams {

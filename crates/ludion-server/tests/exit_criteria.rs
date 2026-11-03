@@ -96,6 +96,7 @@ fn spawn_cube() -> Command {
     Command::EntitySpawn(EntitySpawnParams {
         name: None,
         components,
+        presentation: false,
     })
 }
 

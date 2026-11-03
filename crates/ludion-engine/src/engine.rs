@@ -22,7 +22,7 @@
 //! let mut components = BTreeMap::new();
 //! components.insert("Transform".to_string(), serde_json::json!({ "translation": [1.0, 2.0, 3.0] }));
 //! let dispatched = engine
-//!     .execute(Command::EntitySpawn(EntitySpawnParams { name: None, components }))
+//!     .execute(Command::EntitySpawn(EntitySpawnParams { name: None, components, presentation: false }))
 //!     .unwrap();
 //! assert_eq!(engine.world().entity_count(), 1);
 //! assert_eq!(dispatched.frame.as_u64(), 0);
@@ -6717,6 +6717,7 @@ entities:
                 ludion_protocol::command::EntitySpawnParams {
                     name: Some("late".into()),
                     components: Default::default(),
+                    presentation: false,
                 },
             ))
             .expect("a record-write failure never turns an applied command into an error");

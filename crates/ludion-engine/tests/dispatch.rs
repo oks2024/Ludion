@@ -78,6 +78,7 @@ fn spawn_one(engine: &mut Engine, component: &str, value: Value) -> EntityId {
         Command::EntitySpawn(EntitySpawnParams {
             name: None,
             components,
+            presentation: false,
         }),
     ) {
         ResponseBody::Spawned { entity } => entity,
@@ -92,6 +93,7 @@ fn spawn_named(engine: &mut Engine, name: &str) -> EntityId {
         Command::EntitySpawn(EntitySpawnParams {
             name: Some(name.to_string()),
             components: BTreeMap::new(),
+            presentation: false,
         }),
     ) {
         ResponseBody::Spawned { entity } => entity,
@@ -111,6 +113,7 @@ fn spawn_child(engine: &mut Engine, name: &str, parent: EntityId) -> EntityId {
         Command::EntitySpawn(EntitySpawnParams {
             name: Some(name.to_string()),
             components,
+            presentation: false,
         }),
     ) {
         ResponseBody::Spawned { entity } => entity,
@@ -157,6 +160,7 @@ fn spawn_joint(engine: &mut Engine, name: &str, a: EntityId, b: EntityId) -> Ent
         Command::EntitySpawn(EntitySpawnParams {
             name: Some(name.to_string()),
             components,
+            presentation: false,
         }),
     ) {
         ResponseBody::Spawned { entity } => entity,
@@ -173,6 +177,7 @@ fn spawn_with(engine: &mut Engine, name: &str, component: &str, value: Value) ->
         Command::EntitySpawn(EntitySpawnParams {
             name: Some(name.to_string()),
             components,
+            presentation: false,
         }),
     ) {
         ResponseBody::Spawned { entity } => entity,
@@ -464,6 +469,7 @@ fn spawn_with_name_and_name_component_is_l3014() {
             Command::EntitySpawn(EntitySpawnParams {
                 name: Some("hero".into()),
                 components,
+                presentation: false,
             }),
         ),
         "L3014",
@@ -483,6 +489,7 @@ fn a_non_relative_asset_path_is_refused_on_spawn_and_component_set() {
             Command::EntitySpawn(EntitySpawnParams {
                 name: None,
                 components,
+                presentation: false,
             }),
         ),
         "L1321",
@@ -591,6 +598,7 @@ fn spawn_at(engine: &mut Engine, name: &str, x: f32, parent: Option<EntityId>) -
         Command::EntitySpawn(EntitySpawnParams {
             name: Some(name.to_string()),
             components,
+            presentation: false,
         }),
     ) {
         ResponseBody::Spawned { entity } => entity,
@@ -764,6 +772,7 @@ fn destroy_returns_the_subtree_parent_first_and_the_undo_rebuilds_it() {
         Command::EntitySpawn(EntitySpawnParams {
             name: None,
             components,
+            presentation: false,
         }),
     ) {
         ResponseBody::Spawned { entity } => entity,
@@ -1802,6 +1811,7 @@ fn spawn_unknown_component_is_l0004_and_bad_value_is_l0006() {
             Command::EntitySpawn(EntitySpawnParams {
                 name: None,
                 components: unknown,
+                presentation: false,
             }),
         ),
         "L0004",
@@ -1823,6 +1833,7 @@ fn spawn_unknown_component_is_l0004_and_bad_value_is_l0006() {
             Command::EntitySpawn(EntitySpawnParams {
                 name: None,
                 components: bad,
+                presentation: false,
             }),
         ),
         "L1014",
@@ -1907,6 +1918,7 @@ fn entity_spawn_with_a_typo_d_field_is_l1014_and_touches_nothing() {
         Command::EntitySpawn(EntitySpawnParams {
             name: None,
             components: bad,
+            presentation: false,
         }),
     )
     .expect_err("a typo'd field must be rejected");
@@ -3144,6 +3156,7 @@ fn replay_reproduces_the_world_hash_sequence() {
         Command::EntitySpawn(EntitySpawnParams {
             name: None,
             components: spawn_components,
+            presentation: false,
         }),
         Command::SimStep(SimStepParams {
             ticks: 1,
@@ -3199,6 +3212,7 @@ fn a_recorded_reparent_replays_to_the_same_hash_sequence() {
         Command::EntitySpawn(EntitySpawnParams {
             name: None,
             components,
+            presentation: false,
         })
     };
     let (first, second) = (EntityId::new(0, 0), EntityId::new(1, 0));
@@ -3472,6 +3486,7 @@ fn spawn_command(components: &[(&str, Value)]) -> Command {
             .iter()
             .map(|(name, value)| (name.to_string(), value.clone()))
             .collect(),
+        presentation: false,
     })
 }
 
@@ -3712,11 +3727,66 @@ fn spawned(engine: &mut Engine, components: &[(&str, Value)]) -> EntityId {
     }
 }
 
+fn presentation_spawn(components: &[(&str, Value)]) -> Command {
+    match spawn_command(components) {
+        Command::EntitySpawn(params) => Command::EntitySpawn(EntitySpawnParams {
+            presentation: true,
+            ..params
+        }),
+        _ => unreachable!("spawn_command builds an entity.spawn"),
+    }
+}
+
+fn spawned_presentation(engine: &mut Engine, components: &[(&str, Value)]) -> EntityId {
+    match ok(engine, presentation_spawn(components)) {
+        ResponseBody::Spawned { entity } => entity,
+        other => panic!("expected Spawned, got {other:?}"),
+    }
+}
+
 #[test]
-fn redo_of_a_placed_presentation_prefab_respawns_with_its_own_dead_id_and_repairs_it() {
+fn a_presentation_spawn_is_never_hashed_and_saves_as_presentation() {
+    let root = temp_project();
+    let mut engine = Engine::with_project_root(&root);
+    engine
+        .load_inline_scene("format: 1\nseed: 7\nentities: []\n")
+        .unwrap();
+    let before = sim_hash(&mut engine);
+    let entity = spawned_presentation(&mut engine, &[("Transform", json!({}))]);
+    assert!(ludion_ecs::is_presentation(entity));
+    assert_eq!(engine.world().entities().count(), 0);
+    assert_eq!(engine.world().presentation_entities().count(), 1);
+    assert_eq!(
+        sim_hash(&mut engine),
+        before,
+        "a presentation spawn is never hashed"
+    );
+
+    spawned(&mut engine, &[("Transform", json!({}))]);
+    assert_ne!(sim_hash(&mut engine), before, "a sim spawn moves the hash");
+
+    ok(&mut engine, save_cmd("out.yaml", false));
+    let saved = std::fs::read_to_string(root.join("out.yaml")).expect("saved");
+    assert!(saved.contains("presentation: true"), "{saved}");
+}
+
+#[test]
+fn presentation_range_in_the_editor_undo_matches_the_engine() {
+    let undo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../editor/app/src/editor/undo.ts");
+    let text = std::fs::read_to_string(&undo).expect("editor undo.ts");
+    let pinned = format!("PRESENTATION_BASE = {};", ludion_ecs::PRESENTATION_BASE);
+    assert!(
+        text.contains(&pinned),
+        "editor/app/src/editor/undo.ts must declare `{pinned}`"
+    );
+}
+
+#[test]
+fn redo_of_a_placed_presentation_prefab_respawns_flagged_and_repairs_its_own_dead_id() {
     let (mut engine, _, _, popup, _) = reference_world();
     destroy(&mut engine, popup);
-    let root = spawned(
+    let root = spawned_presentation(
         &mut engine,
         &[("PrefabInstance", instance_of(popup, "root"))],
     );
@@ -3724,18 +3794,19 @@ fn redo_of_a_placed_presentation_prefab_respawns_with_its_own_dead_id_and_repair
         &mut engine,
         set_command(root, "PrefabInstance", instance_of(root, "root")),
     );
+    assert!(ludion_ecs::is_presentation(root));
 }
 
 #[test]
-fn undo_of_a_deleted_presentation_prefab_respawns_every_part_with_remapped_references() {
+fn undo_of_a_deleted_presentation_prefab_respawns_every_part_flagged_with_remapped_references() {
     let (mut engine, _, _, popup, popup2) = reference_world();
     destroy(&mut engine, popup2);
     destroy(&mut engine, popup);
-    let root = spawned(
+    let root = spawned_presentation(
         &mut engine,
         &[("PrefabInstance", instance_of(popup, "root"))],
     );
-    let second = spawned(
+    let second = spawned_presentation(
         &mut engine,
         &[
             ("PrefabInstance", instance_of(root, "arm")),
@@ -3746,6 +3817,7 @@ fn undo_of_a_deleted_presentation_prefab_respawns_every_part_with_remapped_refer
         &mut engine,
         set_command(root, "PrefabInstance", instance_of(root, "root")),
     );
+    assert!(ludion_ecs::is_presentation(root) && ludion_ecs::is_presentation(second));
     assert_eq!(
         component_value(&mut engine, second, "Parent"),
         id_json(root)
@@ -3753,18 +3825,91 @@ fn undo_of_a_deleted_presentation_prefab_respawns_every_part_with_remapped_refer
 }
 
 #[test]
-fn a_live_presentation_parent_on_spawn_stays_l1225_and_a_dead_ref_on_a_sim_set_stays_l1036() {
+fn undo_of_one_deleted_presentation_child_respawns_under_its_live_presentation_parent() {
+    let (mut engine, _, _, popup, _) = reference_world();
+    let child = spawned_presentation(
+        &mut engine,
+        &[("Transform", json!({})), ("Parent", id_json(popup))],
+    );
+    let ResponseBody::EntityDestroyed { components, .. } = ok(
+        &mut engine,
+        Command::EntityDestroy(EntityDestroyParams { entity: child }),
+    ) else {
+        panic!("entity.destroy answers EntityDestroyed");
+    };
+    let respawn: Vec<(String, Value)> = components.into_iter().collect();
+    let borrowed: Vec<(&str, Value)> = respawn
+        .iter()
+        .map(|(n, v)| (n.as_str(), v.clone()))
+        .collect();
+    let again = spawned_presentation(&mut engine, &borrowed);
+    assert!(engine.world().is_alive(popup));
+    assert!(ludion_ecs::is_presentation(again));
+    assert_eq!(
+        component_value(&mut engine, again, "Parent"),
+        id_json(popup)
+    );
+}
+
+#[test]
+fn a_mixed_group_respawns_each_member_as_its_own_kind() {
+    let (mut engine, _, _, _, _) = reference_world();
+    let sim_root = spawned(&mut engine, &[("Transform", json!({}))]);
+    let visual = spawned_presentation(
+        &mut engine,
+        &[("Transform", json!({})), ("Parent", id_json(sim_root))],
+    );
+    let ResponseBody::EntityDestroyed {
+        components,
+        descendants,
+    } = ok(
+        &mut engine,
+        Command::EntityDestroy(EntityDestroyParams { entity: sim_root }),
+    )
+    else {
+        panic!("entity.destroy answers EntityDestroyed");
+    };
+    assert_eq!(descendants.len(), 1);
+    assert_eq!(descendants[0].entity, visual);
+
+    let root_parts: Vec<(String, Value)> = components.into_iter().collect();
+    let borrowed: Vec<(&str, Value)> = root_parts
+        .iter()
+        .map(|(n, v)| (n.as_str(), v.clone()))
+        .collect();
+    let new_root = spawned(&mut engine, &borrowed);
+    let mut child_parts: Vec<(String, Value)> =
+        descendants[0].components.clone().into_iter().collect();
+    for (name, value) in &mut child_parts {
+        if name == "Parent" {
+            *value = id_json(new_root);
+        }
+    }
+    let borrowed: Vec<(&str, Value)> = child_parts
+        .iter()
+        .map(|(n, v)| (n.as_str(), v.clone()))
+        .collect();
+    let new_visual = spawned_presentation(&mut engine, &borrowed);
+
+    assert!(!ludion_ecs::is_presentation(new_root));
+    assert!(ludion_ecs::is_presentation(new_visual));
+    assert_eq!(
+        component_value(&mut engine, new_visual, "Parent"),
+        id_json(new_root)
+    );
+}
+
+#[test]
+fn a_sim_spawn_or_set_naming_a_presentation_entity_stays_refused() {
     let (mut engine, a, _, popup, popup2) = reference_world();
-    // Undo of deleting one presentation child respawns it under a live presentation parent. On the
-    // wire that is an ordinary bad spawn, so it cannot be tolerated without admitting those too.
+    let aimed =
+        |target: EntityId| json!({ "pattern": "", "started": 0, "target": id_json(target) });
     assert_refused(
         &mut engine,
         spawn_command(&[("Parent", id_json(popup))]),
         "L1225",
         "/index",
     );
-    let aimed =
-        |target: EntityId| json!({ "pattern": "", "started": 0, "target": id_json(target) });
     assert_refused(
         &mut engine,
         spawn_command(&[("PatternPlayer", aimed(popup))]),
@@ -3772,6 +3917,12 @@ fn a_live_presentation_parent_on_spawn_stays_l1225_and_a_dead_ref_on_a_sim_set_s
         "/target/index",
     );
     destroy(&mut engine, popup2);
+    assert_refused(
+        &mut engine,
+        spawn_command(&[("PatternPlayer", aimed(popup2))]),
+        "L1036",
+        "/target/index",
+    );
     assert_set_refused(
         &mut engine,
         a,
@@ -3780,6 +3931,26 @@ fn a_live_presentation_parent_on_spawn_stays_l1225_and_a_dead_ref_on_a_sim_set_s
         "L1036",
         "/target/index",
     );
+}
+
+#[test]
+fn a_flagged_spawn_still_refuses_a_dead_parent_and_an_unregistered_component() {
+    let (mut engine, _, _, popup, _) = reference_world();
+    destroy(&mut engine, popup);
+    assert_refused(
+        &mut engine,
+        presentation_spawn(&[("Parent", id_json(popup))]),
+        "L0002",
+        "/index",
+    );
+    let before = world_shape(&engine);
+    let error = dispatch(
+        &mut engine,
+        presentation_spawn(&[("NoSuchThing", json!({}))]),
+    )
+    .expect_err("an unregistered component is refused");
+    assert_eq!(error.code.as_str(), "L0004", "{}", error.message);
+    assert_eq!(world_shape(&engine), before);
 }
 
 #[test]

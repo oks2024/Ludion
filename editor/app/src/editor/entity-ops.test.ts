@@ -159,3 +159,28 @@ describe('destroyEntity', () => {
     expect(result.records).toEqual([]);
   });
 });
+
+describe('duplicateEntity — presentation ids', () => {
+  const flagOf = (command: Command): unknown => (paramsOf(command) as { presentation?: unknown }).presentation;
+  async function duplicate(id: EntityId): Promise<Command> {
+    const calls: Command[] = [];
+    const call = mockCall(calls, {
+      'engine.describe': describeBody,
+      'query.entities': {
+        kind: 'query_result',
+        entities: [{ entity: id, components: { Transform: {} } }],
+      } as unknown as ResponseBody,
+      'entity.spawn': { kind: 'spawned', entity: E(7, 0) } as ResponseBody,
+    });
+    const result = await duplicateEntity(id, call);
+    return result.records[0]!.command;
+  }
+
+  it('sends the flag for a presentation id', async () => {
+    expect(flagOf(await duplicate(E(16777216, 0)))).toBe(true);
+  });
+
+  it('sends no flag for a sim id', async () => {
+    expect('presentation' in paramsOf(await duplicate(E(3, 0)))).toBe(false);
+  });
+});

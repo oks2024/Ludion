@@ -361,15 +361,12 @@ pub fn check_component(
 /// (`component.set`, `entity.spawn`), by id rather than document position: `L1017` for a field that
 /// forbids naming its carrier and does, `L1036` for a sim carrier naming a presentation entity.
 ///
-/// `carrier` is the entity being written, or `None` for an `entity.spawn` (not yet alive, and sim).
+/// `carrier` is the entity being written, or `None` for an `entity.spawn` (not yet alive).
+/// `presentation_carrier` says whether the carrier is a presentation entity (for a spawn, whether
+/// it is flagged `presentation`): only a presentation carrier may name a presentation entity.
 /// Tree links (`Parent`) are not checked here: their rules need the world. A dead or
 /// unparseable reference is not reported (`scene.save`'s `L1018` catches a dangling one). Pointers
 /// are relative to the component, like [`check_component`]'s.
-///
-/// `is_alive` tells a live entity from a dead one. On an `entity.spawn` (`carrier: None`) a dead
-/// presentation-range id is accepted: a respawn of a deleted presentation entity arrives as a sim
-/// entity carrying its own dead id, which its client repairs next, and a dead id names nothing the
-/// sim would read. A live one is still `L1036`.
 ///
 /// # Example
 /// ```
@@ -388,7 +385,7 @@ pub fn check_component(
 /// registry.register::<Leash>("Leash").unwrap();
 /// let me = EntityId::new(5, 0);
 /// let value = serde_json::json!({ "holder": { "index": 5, "generation": 0 } });
-/// let diagnostics = ludion_scene::check_component_refs("Leash", &value, &registry, Some(me), &|_| true);
+/// let diagnostics = ludion_scene::check_component_refs("Leash", &value, &registry, Some(me), false);
 /// assert_eq!(diagnostics[0].code.as_str(), "L1017");
 /// assert_eq!(diagnostics[0].path.as_deref(), Some("/holder/index"));
 /// ```
@@ -397,9 +394,9 @@ pub fn check_component_refs(
     value: &serde_json::Value,
     registry: &Registry,
     carrier: Option<ludion_core::ids::EntityId>,
-    is_alive: &dyn Fn(ludion_core::ids::EntityId) -> bool,
+    presentation_carrier: bool,
 ) -> Vec<Diagnostic> {
-    validate::check_component_refs(name, value, registry, carrier, is_alive)
+    validate::check_component_refs(name, value, registry, carrier, presentation_carrier)
 }
 
 /// Finds the cycles in the scene's tree links (`Parent`), each once, starting at its lowest

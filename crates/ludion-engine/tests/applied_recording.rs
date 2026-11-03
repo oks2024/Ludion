@@ -116,6 +116,7 @@ fn spawn(components: &[(&str, serde_json::Value)]) -> Command {
             .iter()
             .map(|(name, value)| (name.to_string(), value.clone()))
             .collect::<BTreeMap<_, _>>(),
+        presentation: false,
     })
 }
 
@@ -205,6 +206,49 @@ fn a_failed_spawn_while_recording_replays_bit_identically() {
 
     engine.execute(step(1)).unwrap();
     engine.stop_recording().unwrap();
+    assert_replays_to_live(&mut engine, &sink);
+}
+
+#[test]
+fn a_presentation_spawn_while_recording_keeps_its_flag_and_replays_bit_identically() {
+    let sink = SharedSink::default();
+    let mut engine = engine();
+    engine.set_recording(sink.clone()).unwrap();
+    engine.execute(step(1)).unwrap();
+    let Command::EntitySpawn(params) = spawn(&[("Health", json!({ "hp": 5 }))]) else {
+        unreachable!("spawn builds an entity.spawn");
+    };
+    engine
+        .execute(Command::EntitySpawn(EntitySpawnParams {
+            presentation: true,
+            ..params.clone()
+        }))
+        .unwrap();
+    engine.execute(Command::EntitySpawn(params)).unwrap();
+    engine.execute(step(1)).unwrap();
+    engine.stop_recording().unwrap();
+
+    let bytes = sink.bytes();
+    let spawns: Vec<serde_json::Value> = ReplayReader::new(&bytes)
+        .unwrap()
+        .records()
+        .unwrap()
+        .into_iter()
+        .filter_map(|record| match record {
+            ReplayRecord::Command {
+                command: command @ Command::EntitySpawn(_),
+                ..
+            } => Some(serde_json::to_value(command).unwrap()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(spawns.len(), 2);
+    assert_eq!(spawns[0]["params"]["presentation"], json!(true));
+    assert!(
+        spawns[1]["params"].get("presentation").is_none(),
+        "a sim spawn records no flag: {}",
+        spawns[1]
+    );
     assert_replays_to_live(&mut engine, &sink);
 }
 

@@ -82,6 +82,7 @@ fn palette_spawn() -> Command {
     Command::EntitySpawn(EntitySpawnParams {
         name: Some("palette-sprite".to_string()),
         components,
+        presentation: false,
     })
 }
 
@@ -321,6 +322,7 @@ fn scripted_designer_session_meets_the_phase_6_exit_criteria() {
     let respawn_cmd = Command::EntitySpawn(EntitySpawnParams {
         name: None,
         components: destroyed_components.clone(),
+        presentation: false,
     });
     let respawned = match client.call(respawn_cmd.clone()).unwrap().body {
         ResponseBody::Spawned { entity } => entity,

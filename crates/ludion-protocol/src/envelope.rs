@@ -465,6 +465,7 @@ mod tests {
             Command::EntitySpawn(EntitySpawnParams {
                 name: None,
                 components: Default::default(),
+                presentation: false,
             }),
         );
         let value = serde_json::to_value(&request).unwrap();

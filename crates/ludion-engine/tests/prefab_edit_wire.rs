@@ -150,6 +150,7 @@ fn plain(engine: &mut Engine, name: &str, extra: &[(&str, serde_json::Value)]) -
     let command = Command::EntitySpawn(EntitySpawnParams {
         name: Some(name.to_owned()),
         components,
+        presentation: false,
     });
     match engine.execute(command).unwrap().body {
         ResponseBody::Spawned { entity } => entity,
