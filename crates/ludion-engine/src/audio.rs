@@ -23,6 +23,7 @@
 
 pub use ludion_core::audio::{AudioCategory, AudioEvent, AudioMessage, CategoryGains, LoopId};
 use ludion_core::time::FrameIndex;
+use ludion_ecs::World;
 
 /// An ECS resource: the per-tick queue of [`AudioMessage`]s a game system pushes into.
 ///
@@ -212,6 +213,29 @@ impl AudioQueue {
     /// engine's drain path reports each once).
     pub(crate) fn take_non_finite(&mut self) -> Vec<String> {
         std::mem::take(&mut self.non_finite)
+    }
+}
+
+/// Queues a plain one-shot `sound` at `gain` on `world`'s [`AudioQueue`]: the one call for an
+/// effect that needs no position and no loop. A positional or looping sound stays on
+/// [`AudioQueue`] directly.
+///
+/// A no-op on a world with no queue. An engine installs the queue on every world it builds, so only
+/// a bare `World` in a test can lack one, and a missing sound is not worth a sim panic.
+///
+/// ```
+/// use ludion_ecs::World;
+/// use ludion_engine::{AudioQueue, play_sound};
+///
+/// let mut world = World::new();
+/// world.insert_resource(AudioQueue::default());
+/// play_sound(&mut world, "sounds/blip.wav", 0.5);
+/// // A bare world with no queue is a quiet no-op.
+/// play_sound(&mut World::new(), "sounds/blip.wav", 0.5);
+/// ```
+pub fn play_sound(world: &mut World, sound: impl Into<String>, gain: f32) {
+    if let Some(queue) = world.resource_mut::<AudioQueue>() {
+        queue.play(sound, gain);
     }
 }
 

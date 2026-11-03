@@ -132,6 +132,8 @@
 //!   the full off-lane colour) of the `lane` debug-draw category (`ludion docs lane`).
 //! - **Audio** — [`AudioQueue`] (the resource a system pushes into) and [`AudioEvent`] (a sound
 //!   path and a gain). Draining and playback are the engine's job; a system only pushes.
+//!   [`play_sound`] queues a plain one-shot in one call; positional and loop calls stay on
+//!   [`AudioQueue`].
 //!   [`AudioEmitter`] (with [`AudioCategory`]) is the declarative half: a looping sound placed in
 //!   the world, kept in sync with the listener's distance by the engine, so a discoverable bell or
 //!   chant needs no system at all. [`CategoryGains`] is the mixdown half — the master gain each
@@ -202,9 +204,10 @@ pub use ludion_engine::{
     bullet_is_alive, bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade,
     debug_draw, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
     move_character, move_character_with, path_follow, path_follower_motion, play_patterns,
-    posed_joint_world, probe_character_ground, reparent, report_diagnostic, report_full_diagnostic,
-    resize_character, revert_prefab, set_clip_speed, snap_rig, spawn_prefab, switch_to_ragdoll,
-    teleport_character, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
+    play_sound, posed_joint_world, probe_character_ground, reparent, report_diagnostic,
+    report_full_diagnostic, resize_character, revert_prefab, set_clip_speed, snap_rig,
+    spawn_prefab, switch_to_ragdoll, teleport_character, unpack_prefab, validate_pattern_docs,
+    volley_hits, world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;

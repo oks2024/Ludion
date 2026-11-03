@@ -68,10 +68,7 @@ pub fn move_paddle(world: &mut World, ctx: &SystemCtx) {
         }
     }
     if crossed_edge {
-        world
-            .resource_mut::<AudioQueue>()
-            .expect("the engine installs the AudioQueue resource on every world")
-            .play(BOUNCE_SOUND, 1.0);
+        play_sound(world, BOUNCE_SOUND, 1.0);
     }
 }
 

@@ -115,7 +115,7 @@ pub use assembly_mesh::{
 };
 pub use audio::{
     AudioCategory, AudioDistance, AudioEvent, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
-    CategoryGains, LoopId,
+    CategoryGains, LoopId, play_sound,
 };
 pub use bisect::{
     BisectReport, ComponentDiff, DriveDone, EntityDiff, KeyframeDivergence, KeyframeDriftReport,

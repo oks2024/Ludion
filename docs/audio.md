@@ -9,14 +9,14 @@ description: Sound as frame-stamped events: the AudioQueue, WAV rules, and verif
 Sound is **events as data**, never synthesis in your system. A system pushes an `AudioEvent` (a WAV
 path + a linear gain) into the `AudioQueue` resource; the engine drains the queue at each frame
 boundary, plays it through the host's sink, and records it in a frame-stamped log. Both `AudioQueue`
-and `AudioEvent` are in the prelude.
+and `AudioEvent` are in the prelude, with `play_sound(world, path, gain)`: **a plain one-shot goes through `play_sound`; positional and loop calls stay on `AudioQueue`.**
 
 ```rust
 use ludion::prelude::*;
 
 /// Play a blip when the ball crosses the arena's right edge — a pure observation of the motion,
-/// emitted once. `resource_mut::<AudioQueue>()` needs its own borrow, so collect the crossing in the
-/// query and push after it ends.
+/// emitted once. `play_sound` needs `&mut World`, so collect the crossing in the query and call it
+/// after the query ends.
 fn ball_edge_sound(world: &mut World, _ctx: &SystemCtx) {
     let mut crossed = false;
     for (transform,) in world.query::<(&Transform,)>() {
@@ -25,10 +25,7 @@ fn ball_edge_sound(world: &mut World, _ctx: &SystemCtx) {
         }
     }
     if crossed {
-        world
-            .resource_mut::<AudioQueue>()
-            .expect("the engine installs AudioQueue on every world")
-            .play("sounds/blip.wav", 1.0); // path is relative to the scene's directory
+        play_sound(world, "sounds/blip.wav", 1.0); // path is relative to the scene's directory
     }
 }
 ```
