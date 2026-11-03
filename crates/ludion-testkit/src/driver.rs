@@ -57,12 +57,7 @@ pub fn loaded_engine(builder: EngineBuilder, scene: &str) -> Engine {
 /// assert_eq!(engine.frame().as_u64(), 3);
 /// ```
 pub fn step(engine: &mut Engine, ticks: u64) {
-    engine
-        .execute(Command::SimStep(command::SimStepParams {
-            ticks,
-            hash: false,
-        }))
-        .expect("sim steps");
+    ludion_engine::step_in_batches(engine, ticks).expect("sim steps");
 }
 
 /// Injects `event` into `engine` for the next tick (`frame: None`).

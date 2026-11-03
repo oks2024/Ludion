@@ -26,6 +26,39 @@ pub(crate) fn resume(engine: &mut Engine) -> Result<ResponseBody, Diagnostic> {
     Ok(ResponseBody::Ack)
 }
 
+/// Steps `engine` exactly `ticks` fixed ticks through `sim.step`, in batches no longer than
+/// [`MAX_STEP_TICKS`], then leaves it paused. Always issues at least one step, so `0` still pauses.
+///
+/// # Errors
+/// The first batch's failure (a system panic, `L4007`, stops the run there).
+///
+/// # Example
+/// ```
+/// use ludion_engine::EngineBuilder;
+///
+/// let mut engine = ludion_testkit::loaded_engine(EngineBuilder::new(), "format: 1\nentities: []\n");
+/// ludion_engine::step_in_batches(&mut engine, 5).unwrap();
+/// assert_eq!(engine.frame().as_u64(), 5);
+/// ```
+pub fn step_in_batches(engine: &mut Engine, ticks: u64) -> Result<(), Diagnostic> {
+    step_batched(engine, ticks, MAX_STEP_TICKS)
+}
+
+fn step_batched(engine: &mut Engine, ticks: u64, batch: u64) -> Result<(), Diagnostic> {
+    let mut remaining = ticks;
+    loop {
+        let now = remaining.min(batch);
+        engine.execute(Command::SimStep(SimStepParams {
+            ticks: now,
+            hash: false,
+        }))?;
+        remaining -= now;
+        if remaining == 0 {
+            return Ok(());
+        }
+    }
+}
+
 /// `sim.step` — run exactly `ticks` ticks (at most [`MAX_STEP_TICKS`], else `L3057`) then pause;
 /// optionally return the resulting `WorldHash`.
 ///
@@ -125,4 +158,103 @@ pub(crate) fn inject(
             )
         })?;
     Ok(ResponseBody::Ack)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{step, step_batched};
+    use crate::Engine;
+    use crate::components::Transform;
+    use ludion_core::time::FrameIndex;
+    use ludion_ecs::{SystemCtx, World};
+    use ludion_protocol::Command;
+    use ludion_protocol::command::{InputInjectParams, SimStepParams};
+    use ludion_sim::{InputState, Key};
+    use serde_json::json;
+
+    const SCENE: &str = "\
+format: 1
+entities:
+  - name: walker
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+";
+
+    /// Moves every entity one unit a tick, and ten more while `W` is held.
+    fn walk(world: &mut World, _ctx: &SystemCtx) {
+        let boost = world
+            .resource::<InputState>()
+            .is_some_and(|input| input.is_held(Key::W));
+        let ids: Vec<_> = world.entities().collect();
+        for id in ids {
+            if let Ok(Some(transform)) = world.get_mut::<Transform>(id) {
+                transform.translation[0] += if boost { 11.0 } else { 1.0 };
+            }
+        }
+    }
+
+    fn walked(ticks: u64, batch: u64) -> (u64, u64) {
+        let mut engine = Engine::builder()
+            .system("walk", walk)
+            .build()
+            .expect("the test engine builds");
+        engine.load_inline_scene(SCENE).expect("the scene loads");
+        engine
+            .execute(Command::InputInject(InputInjectParams {
+                frame: Some(FrameIndex::new(20)),
+                event: json!({ "kind": "key_down", "key": "W" }),
+            }))
+            .expect("the key is injected");
+        step_batched(&mut engine, ticks, batch).expect("the steps run");
+        (
+            engine.frame().as_u64(),
+            engine.world_hash().expect("hashes").as_u64(),
+        )
+    }
+
+    #[test]
+    fn batches_reach_the_same_world_as_one_step() {
+        let one = walked(50, 50);
+        assert_eq!(one.0, 50);
+        assert_eq!(
+            walked(50, 7),
+            one,
+            "the key lands on frame 20, past the first batch"
+        );
+    }
+
+    #[test]
+    fn zero_ticks_still_issue_a_step() {
+        let mut engine = Engine::builder().build().expect("the test engine builds");
+        engine
+            .load_inline_scene("format: 1\nentities: []\n")
+            .unwrap();
+        step_batched(&mut engine, 0, 7).expect("a zero step is fine");
+        assert_eq!(engine.frame().as_u64(), 0);
+    }
+
+    #[test]
+    fn a_step_past_the_limit_is_refused_and_batching_reaches_it() {
+        let mut engine = Engine::builder().build().expect("the test engine builds");
+        engine
+            .load_inline_scene("format: 1\nentities: []\n")
+            .unwrap();
+        let over = ludion_protocol::command::MAX_STEP_TICKS + 1;
+        assert!(
+            step(
+                &mut engine,
+                SimStepParams {
+                    ticks: over,
+                    hash: false
+                }
+            )
+            .is_err()
+        );
+        super::step_in_batches(&mut engine, over).expect("batches stay under the limit");
+        assert_eq!(engine.frame().as_u64(), over);
+    }
 }

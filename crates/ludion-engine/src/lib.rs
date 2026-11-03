@@ -95,6 +95,7 @@ mod replay_compat;
 mod residue_store;
 mod scene_check;
 mod scene_physics;
+mod scene_session;
 mod sculpt_mesh;
 mod shutdown;
 mod skin_bone;
@@ -128,6 +129,7 @@ pub use character::{
     CharacterClipData, CharacterData, ClipContact, JointHeight, contact_heights,
     load as load_character,
 };
+pub use commands::sim::step_in_batches;
 pub use components::{
     Anchor, Animation, AudioEmitter, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, EmitShape, Environment, Fade, GiDynamic,

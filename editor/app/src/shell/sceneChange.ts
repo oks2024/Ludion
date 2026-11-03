@@ -16,17 +16,18 @@ export interface SceneChangeOutcome {
 }
 
 /** A save the world survives: only a `save` event leaves entity ids valid. Our own save (its
- *  request id was registered before it was sent) clears dirty; a foreign save of the served path
- *  does too, since the file now holds the live world. A foreign save elsewhere changes nothing here. */
+ *  request id was registered with the path it sent, before it was sent; `scene.save` echoes that
+ *  path verbatim) clears dirty; a foreign save of the served path does too, since the file now holds
+ *  the live world. A foreign save elsewhere changes nothing here, even if it reuses one of our ids. */
 export function sceneChangeOutcome(
   data: SceneChangedData,
-  ownSaves: ReadonlySet<number>,
+  ownSaves: ReadonlyMap<number, string>,
   currentSavePath: string,
 ): SceneChangeOutcome {
   const path = data.path ?? null;
   if (data.kind === 'save') {
     const id = data.request_id ?? null;
-    if (id !== null && ownSaves.has(id)) {
+    if (path !== null && id !== null && ownSaves.get(id) === path) {
       return { resetEditState: false, clearDirty: true, savePath: path, ownSaveId: id };
     }
     if (path !== null && path === currentSavePath) {
@@ -37,8 +38,8 @@ export function sceneChangeOutcome(
     }
     return { resetEditState: false, clearDirty: false, savePath: null, ownSaveId: null };
   }
-  // The save path follows the world; a switch with no path cleared it so Ctrl+S cannot write the
-  // old file over the new scene.
-  const savePath = path ?? (data.kind === 'switch' ? '' : null);
+  // The save path follows the world; a switch or restore with no path clears it so Ctrl+S cannot
+  // write the old file over a world that no longer comes from it. Only a pathless load keeps it.
+  const savePath = path ?? (data.kind === 'load' ? null : '');
   return { resetEditState: true, clearDirty: true, savePath, ownSaveId: null };
 }

@@ -291,7 +291,7 @@ enum Command {
         /// Optional JSON input script: an array of frame-addressed key events.
         #[arg(long)]
         script: Option<PathBuf>,
-        /// How many fixed ticks to run before hashing (at most 216000: one `sim.step`, `L3057` above).
+        /// How many fixed ticks to run before hashing.
         #[arg(long, default_value_t = 600)]
         frames: u64,
         /// Record the session to this replay file (`ludion replay` re-drives it).

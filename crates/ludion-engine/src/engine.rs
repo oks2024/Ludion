@@ -246,12 +246,16 @@ pub struct Engine {
     /// programmatically-built world or a scene that declared no name.
     scene_name: Option<String>,
     project_root: PathBuf,
-    /// The text this session last loaded or saved at each resolved scene path: `scene.save`'s
-    /// conflict base. Outside the world, the snapshot and `WorldHash`.
+    /// The text this session last loaded or saved at each scene path (keyed by `base_key`):
+    /// `scene.save`'s conflict base. Outside the world, the snapshot and `WorldHash`; a dev restart
+    /// carries it in the scene-session sidecar.
     scene_bases: BTreeMap<PathBuf, String>,
     /// The project-root-relative path the current world was loaded or switched from; `None` before
-    /// the first load, switch or restored boot. What a restart's `scene.changed` names.
+    /// the first load or switch, and after `engine.restore` or `load_inline_scene` (the world no
+    /// longer comes from a file). What a restart's `scene.changed` names.
     current_scene_path: Option<String>,
+    /// Where `engine.snapshot` writes the scene-session sidecar; `None` writes none.
+    scene_session_file: Option<PathBuf>,
     /// The wire request id of the command being executed, set by the live loop around each command.
     current_request: Option<RequestId>,
     /// The directory the profile resolves under; `None` = the project root. Set by
@@ -751,6 +755,7 @@ impl Engine {
             project_root,
             scene_bases: BTreeMap::new(),
             current_scene_path: None,
+            scene_session_file: None,
             current_request: None,
             save_root: None,
             category_gains: CategoryGains::default(),
@@ -869,9 +874,10 @@ impl Engine {
     /// engine moves onto the sim thread (`--render-size`, else `LUDION_RENDER_SIZE`, resolved by
     /// [`resolve_startup_render_size`](crate::resolve_startup_render_size)).
     ///
-    /// The extent never enters a `WorldHash` or a snapshot, but it is sim *input* (a game reads it as
-    /// [`RenderExtent`](crate::RenderExtent)): a recording's header carries the extent at arm time, and
-    /// an applied `render.size` is recorded, so a replay runs at the extent it was recorded at. Unlike
+    /// The extent never enters a `WorldHash`, but it is sim *input* (a game reads it as
+    /// [`RenderExtent`](crate::RenderExtent)): a snapshot carries it in its own `render_extent` field,
+    /// a recording's header carries it at arm time, and an applied `render.size` is recorded, so a
+    /// replay runs at the extent it was recorded at. Unlike
     /// [`set_render_scale`](Engine::set_render_scale) — which draws at `render_size × scale` and
     /// resamples *back* to it — this moves the number of bytes a stream actually delivers, which is
     /// the whole reason it exists. It is mirrored onto the live world as the
@@ -888,9 +894,9 @@ impl Engine {
     /// Points the live frame stream at `pose`, or returns it to the scene's own `Camera` with `None`.
     ///
     /// The `render.view` lever (`crate::render_view`). Host render state like
-    /// [`render_size`](Engine::render_size): it never enters a `WorldHash` or a snapshot, and unlike
-    /// the extent (which a recording carries) it is never recorded, so a session flown to a rooftop
-    /// simulates and records identically to one that never moved — and clearing it renders
+    /// [`render_size`](Engine::render_size): the view pose never enters a `WorldHash`, a snapshot or
+    /// a recording (while a recording and a snapshot both carry the extent), so a session flown to a
+    /// rooftop simulates and records identically to one that never moved — and clearing it renders
     /// byte-identically to before it was ever set.
     ///
     /// It moves the *stream*. [`render_png`](Engine::render_png) and `render.bounds` choose their
@@ -2257,8 +2263,7 @@ impl Engine {
         };
         if outcome.is_ok() {
             if recording {
-                self.scene_bases
-                    .insert(self.project_root.join(&scene_path), target_text);
+                self.set_scene_base(self.project_root.join(&scene_path), target_text);
             }
             self.current_scene_path = Some(scene_path.clone());
         }
@@ -2495,7 +2500,8 @@ impl Engine {
     /// [`RenderExtent`](crate::RenderExtent) resource, so a game system can map a cursor pixel back
     /// into the world without naming an extent of its own. Called after every world (re)build (the
     /// [`install_audio_queue`](Engine::install_audio_queue) mold) and from every writer of the
-    /// field. Excluded from the world hash and from snapshots.
+    /// field. Excluded from the world hash; a snapshot carries the extent in its own
+    /// `render_extent` field.
     fn install_render_extent(&mut self) {
         let (width, height) = self.render_size;
         self.driver
@@ -3357,23 +3363,74 @@ impl Engine {
         &self.project_root
     }
 
-    /// Notes that a restored boot's world came from the scene file `relative` (project-root
-    /// relative): a later restart names it, and the text now on disk becomes `scene.save`'s conflict
-    /// base. A read failure leaves the base as it was; the path is noted regardless.
-    pub fn note_restored_scene_file(&mut self, relative: &str) {
-        self.current_scene_path = Some(relative.to_string());
-        let resolved = self.project_root.join(relative);
-        if let Ok(text) = std::fs::read_to_string(&resolved) {
-            self.scene_bases.insert(resolved, text);
+    /// Sets where `engine.snapshot` writes the scene-session sidecar (see
+    /// [`adopt_scene_session`](Self::adopt_scene_session)); `None` writes none.
+    pub fn set_scene_session_file(&mut self, file: Option<PathBuf>) {
+        self.scene_session_file = file;
+    }
+
+    /// Writes the scene-session sidecar: the frame, scene path and conflict bases as of now.
+    pub(crate) fn write_scene_session(&self) {
+        let Some(file) = &self.scene_session_file else {
+            return;
+        };
+        let doc = crate::scene_session::SceneSessionDoc {
+            frame: self.frame().as_u64(),
+            path: self.current_scene_path.clone(),
+            bases: self
+                .scene_bases
+                .iter()
+                .filter_map(|(key, text)| Some((key.to_str()?.to_string(), text.clone())))
+                .collect(),
+        };
+        // A failed write leaves the old file, whose frame will not match: the next boot falls back
+        // to unset and says so, while failing `engine.snapshot` would cost the designer's state.
+        let _ = doc.write(file);
+    }
+
+    /// Adopts the scene session a previous process wrote beside its snapshot: the scene path a
+    /// restart names and `scene.save`'s conflict bases. Taken only when the file's frame equals this
+    /// engine's (restored) frame; otherwise path and bases stay as they were.
+    ///
+    /// # Errors
+    /// `L0033` when the file is missing, malformed or from another frame.
+    pub fn adopt_scene_session(&mut self, file: &Path) -> Result<(), Diagnostic> {
+        let degraded =
+            |why: String| {
+                Diagnostic::new(
+                code::DEV_DEGRADED,
+                format!("could not adopt the scene session {}: {why}", file.display()),
+            )
+            .with_help(
+                "the first `scene.save` over an existing file will ask for confirmation (`L3058`); \
+                 `scene.load` it or pass `force: true`",
+            )
+            };
+        let doc = crate::scene_session::SceneSessionDoc::read(file).map_err(&degraded)?;
+        let frame = self.frame().as_u64();
+        if doc.frame != frame {
+            return Err(degraded(format!(
+                "it was written at frame {}, the restored world is at frame {frame}",
+                doc.frame
+            )));
         }
+        self.current_scene_path = doc.path;
+        self.scene_bases = doc
+            .bases
+            .into_iter()
+            .map(|(key, text)| (PathBuf::from(key), text))
+            .collect();
+        Ok(())
     }
 
     pub(crate) fn scene_base(&self, resolved: &Path) -> Option<&str> {
-        self.scene_bases.get(resolved).map(String::as_str)
+        self.scene_bases
+            .get(&base_key(resolved))
+            .map(String::as_str)
     }
 
     pub(crate) fn set_scene_base(&mut self, resolved: PathBuf, text: String) {
-        self.scene_bases.insert(resolved, text);
+        self.scene_bases.insert(base_key(&resolved), text);
     }
 
     pub(crate) fn set_current_scene_path(&mut self, path: Option<String>) {
@@ -3622,7 +3679,9 @@ impl Engine {
     /// # Errors
     /// Every parse/validation/instantiation diagnostic the scene produced.
     pub fn load_inline_scene(&mut self, document: &str) -> Result<u32, Vec<Diagnostic>> {
-        self.load_scene_document(document.to_string())
+        let count = self.load_scene_document(document.to_string())?;
+        self.current_scene_path = None;
+        Ok(count)
     }
 
     /// Core scene load: check → instantiate → replace world, reseed the RNG from the scene seed
@@ -5437,6 +5496,13 @@ fn reference_fault(
         )
     };
     Diagnostic::new(ludion_core::codes::code::SCENE_SAVE_DANGLING_REF, message).with_help(help)
+}
+
+/// The key `scene_bases` files a scene path under: the canonical path, so two spellings of one
+/// file (case, `..`, symlinks) share a base. A path that does not exist keeps its own spelling —
+/// `scene.save` looks a base up only for an existing destination and inserts after the write.
+fn base_key(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Maps a replay-writing I/O error to an output-I/O diagnostic; a record the reader would refuse

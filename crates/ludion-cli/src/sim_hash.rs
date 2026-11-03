@@ -33,7 +33,7 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_engine::Engine;
 use ludion_protocol::Command;
-use ludion_protocol::command::{InputInjectParams, SimStepParams};
+use ludion_protocol::command::InputInjectParams;
 use ludion_sim::{InputScript, WorldHash};
 
 use crate::check_scene;
@@ -130,11 +130,7 @@ fn drive(engine: &mut Engine, input: &InputScript, frames: u64) -> Result<WorldH
         }
     }
 
-    let stepped = engine.execute(Command::SimStep(SimStepParams {
-        ticks: frames,
-        hash: false,
-    }));
-    if let Err(diagnostic) = stepped {
+    if let Err(diagnostic) = ludion_engine::step_in_batches(engine, frames) {
         eprintln!("{diagnostic}");
         return Err(ExitCode::FAILURE);
     }

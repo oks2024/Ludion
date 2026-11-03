@@ -2,8 +2,10 @@
 //!
 //! A replay holds three schemas beyond the wire: its record shape (every [`Command`] it embeds), the
 //! input events, and the keyframe snapshot document. [`replay_content_hash`] covers all three, with
-//! prose stripped, so a doc-comment edit never invalidates a recording but a new field does. The
-//! header also carries the description-stripped wire hash ([`schema::replay_schema_hash`]).
+//! prose stripped, so editing a doc comment never invalidates a recording but a new field does. One
+//! exception: a *first* doc comment on a unit variant of a string enum moves its schema from `enum`
+//! to `oneOf`, which is a shape change and re-records. The header also carries the
+//! description-stripped wire hash ([`schema::replay_schema_hash`]).
 //!
 //! The gate refuses a replay whose protocol version, content hash or wire schema hash differs from
 //! this engine's, or whose header carries no content hash, all as `L3010`.

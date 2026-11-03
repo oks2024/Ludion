@@ -68,6 +68,9 @@ pub struct StartOptions {
     /// restore fails. A recording cannot arm on a restored world (`L3047`), so this and `record`
     /// together are refused. Honored for a game source only.
     pub restore: Option<PathBuf>,
+    /// The scene-session sidecar `ludion dev` names: `engine.snapshot` writes it, and a `restore`
+    /// boot adopts it when its frame matches. Honored for a game source only.
+    pub dev_session: Option<PathBuf>,
     /// The host's `--fullscreen` flag: a window host opens borderless fullscreen. Ignored with no
     /// window.
     pub fullscreen: bool,
@@ -854,6 +857,7 @@ fn run_boot(boot: Boot) -> bool {
                 builder,
                 &scene,
                 options.restore.as_deref(),
+                options.dev_session.as_deref(),
                 quality,
                 options.live_textures(),
                 options.live_probes(),
@@ -1193,6 +1197,7 @@ mod tests {
             builder(),
             &content.join("scenes/main.yaml"),
             None,
+            None,
             QualitySetting::full(),
             StartOptions::default().live_textures(),
             StartOptions::default().live_probes(),
@@ -1219,6 +1224,7 @@ mod tests {
             builder(),
             &content.join("scenes/main.yaml"),
             None,
+            None,
             QualitySetting::full(),
             StartOptions::default().live_textures(),
             StartOptions::default().live_probes(),
@@ -1238,6 +1244,7 @@ mod tests {
             let mut engine = crate::prepare_game_engine(
                 builder().anti_aliasing(AntiAliasing::Smaa),
                 &content.join("scenes/main.yaml"),
+                None,
                 None,
                 QualitySetting::full(),
                 options.live_textures(),
@@ -1718,6 +1725,65 @@ mod tests {
         let restored = host_with(&content, Some(file));
         assert_eq!(step_hash(&restored, 4), continued);
         assert_eq!(restored.stop(), ExitCode::SUCCESS);
+    }
+
+    /// A `--restore` boot with the dev-session sidecar adopts `scene.save`'s conflict bases; without
+    /// it (or with a file from another frame) the first save over an existing file asks.
+    #[test]
+    fn a_restore_boot_adopts_the_dev_session_when_its_frame_matches() {
+        use ludion_protocol::command::SceneSaveParams;
+
+        let content = content_root("restore-session");
+        let scene = content.join("scenes/main.yaml");
+        // Bytes the canonical writer would not reproduce, so a save is only safe against a base.
+        let hand = format!("# hand note\n{}", std::fs::read_to_string(&scene).unwrap());
+        std::fs::write(&scene, &hand).unwrap();
+        let session = content.join("session.json");
+        let boot = |restore: Option<&Path>, session: Option<&Path>| {
+            crate::prepare_game_engine(
+                builder(),
+                &scene,
+                restore,
+                session,
+                QualitySetting::full(),
+                StartOptions::default().live_textures(),
+                StartOptions::default().live_probes(),
+                None,
+            )
+            .unwrap_or_else(|_| panic!("the engine boots"))
+        };
+        let save = |engine: &mut ludion_engine::Engine| {
+            engine.execute(Command::SceneSave(SceneSaveParams {
+                path: "main.yaml".into(),
+                force: false,
+            }))
+        };
+
+        let mut first = boot(None, Some(&session));
+        first
+            .execute(Command::SceneLoad(
+                ludion_protocol::command::SceneLoadParams {
+                    path: "main.yaml".into(),
+                },
+            ))
+            .expect("the scene loads");
+        let ResponseBody::Snapshot { snapshot } = first
+            .execute(Command::EngineSnapshot)
+            .expect("the snapshot is taken")
+            .body
+        else {
+            panic!("engine.snapshot replies Snapshot");
+        };
+        let file = content.join("snapshot.json");
+        std::fs::write(&file, serde_json::to_string(&snapshot).unwrap()).unwrap();
+
+        let mut adopted = boot(Some(&file), Some(&session));
+        save(&mut adopted).expect("the adopted base is the text on disk");
+        std::fs::write(&scene, &hand).unwrap();
+
+        let mut plain = boot(Some(&file), None);
+        let refused = save(&mut plain).expect_err("no sidecar, no base");
+        assert_eq!(refused.code, code::SCENE_SAVE_CONFLICT);
     }
 
     /// `restore` with `record` is refused before any file is touched: the recording the caller

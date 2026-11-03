@@ -96,9 +96,10 @@ the snapshot test) covers everything a generated client sees, prose included: a 
 `Command` variant or param still fails the snapshot test until you re-bless. A replay header records
 different hashes: `schema::replay_schema_hash()` (the same schema with `description`/`title` stripped)
 and `replay_content_hash` (`ludion_engine::replay_content_hash()`: the record schema, the input events
-and the snapshot document, prose stripped). So a doc-only edit re-pins the wire snapshot but never
-the `.lrp` corpus; a new param, command, response field or snapshot field moves the replay hashes and
-re-records. A stale hash, an absent content hash or another `protocol_version` refuses with `L3010`.
+and the snapshot document, prose stripped). So editing existing prose re-pins the wire snapshot but
+never the `.lrp` corpus; a *first* doc comment on a unit variant of a string enum moves its schema
+from `enum` to `oneOf`, which does re-record; a new param, command, response field or snapshot
+field moves the replay hashes and re-records. A stale hash, an absent content hash or another `protocol_version` refuses with `L3010`.
 
 ## Verify
 
@@ -125,7 +126,8 @@ skipped) fails CI rather than shipping a lie.
   `EXPECTED_SCHEMA_HASH`); the bless writes only the first. Forgetting the hand-edit leaves the snapshot
   and the constant disagreeing — caught by the snapshot test, never shipped.
 - **Replay recordings are hash-stamped, so they re-record last** whenever a schema (not only prose)
-  moved. A doc-comment edit does not touch them. A session `.lrp` that predates the current hashes is
+  moved. Editing a doc comment does not touch them (except a first doc comment on a unit variant of a
+  string enum, which changes the schema's shape). A session `.lrp` that predates the current hashes is
   refused; a header with no content hash is reported as old-format, not as a
   determinism failure.
 - **A v2 is not a bigger additive rev.** Renames/removals/semantic changes do not go through this

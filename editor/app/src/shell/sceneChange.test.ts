@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { pickScene } from './sceneList';
 import { sceneChangeOutcome } from './sceneChange';
 
-const none: ReadonlySet<number> = new Set();
+const none: ReadonlyMap<number, string> = new Map();
 
 describe('sceneChangeOutcome', () => {
   it('switch with no path resets and clears the Save path', () => {
@@ -30,12 +30,15 @@ describe('sceneChangeOutcome', () => {
     });
   });
 
-  it('load and restore with no path keep the Save path', () => {
+  it('a load with no path keeps the Save path', () => {
     expect(sceneChangeOutcome({ kind: 'load' }, none, 'a.yaml')).toMatchObject({ resetEditState: true, savePath: null });
+  });
+
+  it('a restore with no path clears the Save path', () => {
     expect(sceneChangeOutcome({ kind: 'restore', path: null }, none, 'a.yaml')).toMatchObject({
       resetEditState: true,
       clearDirty: true,
-      savePath: null,
+      savePath: '',
     });
   });
 
@@ -49,7 +52,7 @@ describe('sceneChangeOutcome', () => {
   });
 
   it('own save keeps edit state, clears dirty, adopts the path and names its id', () => {
-    expect(sceneChangeOutcome({ kind: 'save', path: 'a.yaml', request_id: 7 }, new Set([7]), 'a.yaml')).toEqual({
+    expect(sceneChangeOutcome({ kind: 'save', path: 'a.yaml', request_id: 7 }, new Map([[7, 'a.yaml']]), 'a.yaml')).toEqual({
       resetEditState: false,
       clearDirty: true,
       savePath: 'a.yaml',
@@ -58,7 +61,7 @@ describe('sceneChangeOutcome', () => {
   });
 
   it('foreign save of the served path clears dirty and keeps edit state', () => {
-    expect(sceneChangeOutcome({ kind: 'save', path: 'a.yaml', request_id: 9 }, new Set([7]), 'a.yaml')).toEqual({
+    expect(sceneChangeOutcome({ kind: 'save', path: 'a.yaml', request_id: 9 }, new Map([[7, 'a.yaml']]), 'a.yaml')).toEqual({
       resetEditState: false,
       clearDirty: true,
       savePath: null,
@@ -84,8 +87,23 @@ describe('sceneChangeOutcome', () => {
     });
   });
 
+  it('a foreign save with our id and another path changes nothing and leaves the id pending', () => {
+    const pending = new Map([[5, 'a.yaml']]);
+    expect(sceneChangeOutcome({ kind: 'save', path: 'other.yaml', request_id: 5 }, pending, 'a.yaml')).toEqual({
+      resetEditState: false,
+      clearDirty: false,
+      savePath: null,
+      ownSaveId: null,
+    });
+    expect(pending.has(5)).toBe(true);
+    expect(sceneChangeOutcome({ kind: 'save', path: 'a.yaml', request_id: 5 }, pending, 'a.yaml')).toMatchObject({
+      clearDirty: true,
+      ownSaveId: 5,
+    });
+  });
+
   it('a foreign load with an own id pending resets and leaves the id; the real save then matches', () => {
-    const pending = new Set([5]);
+    const pending = new Map([[5, 'b.yaml']]);
     const load = sceneChangeOutcome({ kind: 'load', path: 'b.yaml' }, pending, 'a.yaml');
     expect(load).toMatchObject({ resetEditState: true, ownSaveId: null });
     expect(pending.has(5)).toBe(true);

@@ -408,7 +408,7 @@ export default function App() {
   const [logDiagnostic, setLogDiagnostic] = useState<DiagnosticView | null>(null);
   // Request ids of *our own* in-flight `scene.save`s, registered before each is sent, so the resulting
   // `scene.changed` is recognized as ours (clear dirty, keep the stack). See the effect below.
-  const ownSaveIdsRef = useRef(new Set<number>());
+  const ownSaveIdsRef = useRef(new Map<number, string>());
   // Mirrors `savePath` for the `scene.changed` handler, whose effect deps are `[client]`.
   const savePathRef = useRef('');
 
@@ -668,8 +668,8 @@ export default function App() {
       if (!sub.accepts(event.sub)) {
         return;
       }
-      // Another client may reuse one of our request ids; the collision is harmless because no save
-      // resets edit state. See `sceneChangeOutcome`.
+      // Another client may reuse one of our request ids, so an own save matches by id and the path
+      // it sent. See `sceneChangeOutcome`.
       const outcome = sceneChangeOutcome(event.data, ownSaveIdsRef.current, savePathRef.current);
       if (outcome.ownSaveId !== null) {
         ownSaveIdsRef.current.delete(outcome.ownSaveId);
@@ -909,8 +909,8 @@ export default function App() {
 
   // Registers our own `scene.save` request id before it is sent so the resulting `scene.changed` is
   // recognized as ours. Returns a cancel fn the save path calls if the command is rejected.
-  const handleSaveStarted = useCallback((requestId: number): (() => void) => {
-    ownSaveIdsRef.current.add(requestId);
+  const handleSaveStarted = useCallback((requestId: number, path: string): (() => void) => {
+    ownSaveIdsRef.current.set(requestId, path);
     return () => {
       ownSaveIdsRef.current.delete(requestId);
     };

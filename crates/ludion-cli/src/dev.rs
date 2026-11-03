@@ -31,6 +31,9 @@
 //!    The snapshot file `<project>/.ludion/dev-snapshot.json` exists exactly while a snapshot is
 //!    kept: written before the old child stops, deleted once a restore succeeds. A fresh `ludion dev`
 //!    start that finds it resumes it, restoring through the same path a reload does.
+//!    Beside it, `dev-scene-session.json` holds the scene path and `scene.save` conflict bases the
+//!    child wrote at that snapshot; they live outside the snapshot because they are not world state
+//!    (never hashed), and the restored child adopts them only if the frame matches.
 //! 4. **Independently, if the game has a `scenes/` directory it is watched too** (same
 //!    `ludion_assets::watch`, same debounce) — but a scenes change never rebuilds and never restores.
 //!    The running world is deliberately preserved (only a *code* reload calls `engine.restore`), so a
@@ -148,7 +151,7 @@
 //! ## What reaches the child, and what does not
 //!
 //! A child's argv is exactly `--addr`, `--scene`, `--restore`, `--dev-shaders`, `--probes rebake`,
-//! `--aa <mode>` and `--supervised` (see `try_launch_once`) — the things dev itself decides; `--supervised` is what makes the child
+//! `--aa <mode>`, `--supervised` and `--dev-session <sidecar>` (see `try_launch_once`) — the things dev itself decides; `--supervised` is what makes the child
 //! exit when dev's end of its stdin closes. Nothing else on `ludion dev`'s own
 //! command line is forwarded, deliberately: dev supervises a game binary whose flags are the game's
 //! (`ludion::run`'s `RunArgs`), not this CLI's, and translating between the two would make dev a
@@ -1377,6 +1380,8 @@ fn relaunch_and_restore(ctx: &Relaunch<'_>, kept: &mut bool) -> Result<GameChild
 /// Deletes the kept snapshot once it has been restored, so a later `ludion dev` start does not resume
 /// a state the designer has since moved past. A file that cannot be deleted is warned about, not fatal.
 fn discard_kept_snapshot(path: &Path) {
+    // The scene-session sidecar goes with it; an orphan is harmless (its frame no longer matches).
+    let _ = std::fs::remove_file(path.with_file_name(SCENE_SESSION_FILE));
     match std::fs::remove_file(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1901,6 +1906,8 @@ fn try_launch_once(
         .arg(addr)
         // The child exits when dev's end of this pipe closes — however dev dies (see `GameChild`).
         .arg("--supervised")
+        .arg("--dev-session")
+        .arg(scene_session_path(project))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2194,6 +2201,14 @@ fn prepare_for_reload(snapshot: &mut Value) {
 /// next successful launch, and left in place after a failed restore.
 fn kept_snapshot_path(project: &Path) -> PathBuf {
     project.join(".ludion").join("dev-snapshot.json")
+}
+
+/// The scene-session sidecar's file name, beside the kept snapshot.
+const SCENE_SESSION_FILE: &str = "dev-scene-session.json";
+
+/// The sidecar the child writes with every `engine.snapshot` and a restored child adopts.
+fn scene_session_path(project: &Path) -> PathBuf {
+    project.join(".ludion").join(SCENE_SESSION_FILE)
 }
 
 /// Keeps the reload's snapshot at `path` (pretty-printed, atomically) so a failed restore can be

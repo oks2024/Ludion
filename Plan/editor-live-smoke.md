@@ -250,6 +250,8 @@ Serve a hand scene in the editor (`node scripts/editor.mjs <project>`), Level De
 - [ ] From a second client, `scene.load` another scene: undo and selection clear, the Save path follows it.
 - [ ] In a game that switches scene, trigger a switch while connected: the Save path shows the new scene, and Ctrl+S writes that file, never the old one.
 - [ ] `ludion dev` restart with `--restore`: the Save path is kept after reconnecting if it was shown.
+- [ ] After a `ludion dev` restart, Ctrl+S saves with no banner.
+- [ ] Hand-edit the scene file, restart `ludion dev`, press Ctrl+S: the banner appears and the file keeps the hand edit.
 - [ ] Save a world with a checker warning (a rigid body under a `Parent`): the file is written and the diagnostic shows in the banner row.
 
 ## Presentation undo and redo (code audit A-04)

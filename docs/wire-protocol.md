@@ -40,8 +40,9 @@ or `..` path is `L3040`. `scene.save` refuses a world or destination bearing `ge
 map and regenerate) and a destination that is a `kind:` document (`L3059`). It also refuses a
 destination whose text differs from what this session loaded or last saved there (`L3058`: `scene.load`
 it, or pass `force: true`, which skips only that check), and returns the checker's findings over what
-it wrote in `diagnostics`; they never block the write. `scene.check` runs everything `ludion check-scene` does, and returns warnings
-beside `valid: true`.
+it wrote in `diagnostics`; they never block the write. `engine.restore` forgets the current scene path,
+so a later restart's `scene.changed` names none. `scene.check` runs everything `ludion check-scene`
+does, and returns warnings beside `valid: true`.
 
 **2. Request / response envelope.** After the handshake, every call is a `Request` and every reply a
 `Response`, correlated by a client-chosen `id`:

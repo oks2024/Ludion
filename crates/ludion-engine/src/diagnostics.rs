@@ -439,19 +439,202 @@ entities:
         );
     }
 
-    #[test]
-    fn a_restart_after_a_restored_boot_names_the_scene_file() {
-        let dir = fresh_dir("restored-boot");
+    fn scene_load(engine: &mut Engine, path: &str) {
+        engine
+            .execute(Command::SceneLoad(
+                ludion_protocol::command::SceneLoadParams {
+                    path: path.to_string(),
+                },
+            ))
+            .expect("the scene loads");
+        engine.take_events();
+    }
+
+    fn scene_save(engine: &mut Engine, path: &str, force: bool) -> Result<(), Diagnostic> {
+        engine
+            .execute(Command::SceneSave(
+                ludion_protocol::command::SceneSaveParams {
+                    path: path.to_string(),
+                    force,
+                },
+            ))
+            .map(|_| ())
+    }
+
+    fn conflict(result: Result<(), Diagnostic>) -> bool {
+        result.is_err_and(|diagnostic| diagnostic.code.as_str() == "L3058")
+    }
+
+    /// A first engine that writes its scene session to `dir/session.json` when `engine.snapshot` runs.
+    fn first_engine(dir: &Path, system: fn(&mut World, &SystemCtx)) -> Engine {
         let mut engine = Engine::builder()
-            .system("restart_every_third", restart_every_third)
-            .project_root(&*dir)
+            .system("first", system)
+            .project_root(dir)
             .build()
             .expect("the test engine builds");
-        engine.load_inline_scene(SCENE).expect("the scene loads");
-        engine.note_restored_scene_file("next.yaml");
+        engine.set_scene_session_file(Some(dir.join("session.json")));
+        engine
+    }
+
+    fn snapshot_of(engine: &mut Engine) -> Value {
+        match engine.execute(Command::EngineSnapshot).unwrap().body {
+            ResponseBody::Snapshot { snapshot } => snapshot,
+            other => panic!("expected a snapshot, got {other:?}"),
+        }
+    }
+
+    /// What a `--restore` boot does: a fresh engine restores `snapshot`, then adopts the session file.
+    fn restored_engine(dir: &Path, snapshot: Value) -> Engine {
+        let mut engine = Engine::builder()
+            .system("restart_every_third", restart_every_third)
+            .project_root(dir)
+            .build()
+            .expect("the test engine builds");
+        engine
+            .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+            .expect("the snapshot restores");
         engine.take_events();
-        let changed = next_scene_changed(&mut engine);
+        engine
+    }
+
+    fn adopt(engine: &mut Engine, dir: &Path) -> Result<(), Diagnostic> {
+        engine.adopt_scene_session(&dir.join("session.json"))
+    }
+
+    fn idle(_world: &mut World, _ctx: &SystemCtx) {}
+
+    #[test]
+    fn a_restored_boot_adopts_the_session_path_and_bases() {
+        let dir = fresh_dir("session-adopt");
+        let hand = format!("# hand note\n{NEXT}");
+        std::fs::write(dir.join("next.yaml"), &hand).unwrap();
+        let mut first = first_engine(&dir, idle);
+        scene_load(&mut first, "next.yaml");
+        let snapshot = snapshot_of(&mut first);
+        // The file changes by hand after the snapshot: the session never saw this text.
+        let edited = format!("# edited\n{NEXT}");
+        std::fs::write(dir.join("next.yaml"), &edited).unwrap();
+
+        let mut second = restored_engine(&dir, snapshot);
+        adopt(&mut second, &dir).expect("the frames match");
+        assert!(conflict(scene_save(&mut second, "next.yaml", false)));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("next.yaml")).unwrap(),
+            edited
+        );
+        let changed = next_scene_changed(&mut second);
         assert_eq!(changed.path.as_deref(), Some("next.yaml"));
+
+        // Without the hand edit the adopted base matches the disk and the save goes through.
+        std::fs::write(dir.join("next.yaml"), &hand).unwrap();
+        scene_save(&mut second, "next.yaml", false).expect("the base is the text on disk");
+    }
+
+    #[test]
+    fn a_restored_boot_adopts_a_switched_scene_and_keeps_the_old_one_guarded() {
+        let dir = fresh_dir("session-switch");
+        std::fs::write(dir.join("town.yaml"), SCENE).unwrap();
+        let mut first = first_engine(&dir, switch_on_frame_2);
+        scene_load(&mut first, "town.yaml");
+        for _ in 0..4 {
+            first.advance_live();
+        }
+        first.take_events();
+        let snapshot = snapshot_of(&mut first);
+        std::fs::write(dir.join("town.yaml"), format!("# edited\n{SCENE}")).unwrap();
+
+        let mut second = restored_engine(&dir, snapshot);
+        adopt(&mut second, &dir).expect("the frames match");
+        let changed = next_scene_changed(&mut second);
+        assert_eq!(changed.path.as_deref(), Some("next.yaml"));
+        scene_save(&mut second, "next.yaml", false).expect("the switch noted the base");
+        assert!(conflict(scene_save(&mut second, "town.yaml", false)));
+    }
+
+    #[test]
+    fn a_save_updates_the_base_a_restored_boot_adopts() {
+        let dir = fresh_dir("session-saved");
+        let mut first = first_engine(&dir, idle);
+        scene_load(&mut first, "next.yaml");
+        first
+            .execute(Command::EntityDestroy(
+                ludion_protocol::command::EntityDestroyParams {
+                    entity: EntityId::new(0, 0),
+                },
+            ))
+            .expect("the entity is destroyed");
+        scene_save(&mut first, "next.yaml", false).expect("the save passes");
+        let saved = std::fs::read_to_string(dir.join("next.yaml")).unwrap();
+        let snapshot = snapshot_of(&mut first);
+        // The restored world is the destroyed one, so only the adopted base lets this pass.
+        let mut second = restored_engine(&dir, snapshot);
+        std::fs::write(dir.join("next.yaml"), NEXT).unwrap();
+        second.take_events();
+        assert!(
+            conflict(scene_save(&mut second, "next.yaml", false)),
+            "the file on disk is not the saved text"
+        );
+        std::fs::write(dir.join("next.yaml"), &saved).unwrap();
+        adopt(&mut second, &dir).expect("the frames match");
+        scene_save(&mut second, "next.yaml", false).expect("the adopted base is the saved text");
+    }
+
+    #[test]
+    fn a_session_that_does_not_match_leaves_the_path_unset_and_the_save_guarded() {
+        let dir = fresh_dir("session-mismatch");
+        let hand = format!("# hand note\n{NEXT}");
+        std::fs::write(dir.join("next.yaml"), &hand).unwrap();
+        let mut first = first_engine(&dir, idle);
+        scene_load(&mut first, "next.yaml");
+        let snapshot = snapshot_of(&mut first);
+
+        let mut stale = restored_engine(&dir, snapshot.clone());
+        stale.advance_live();
+        let refused = adopt(&mut stale, &dir).expect_err("the frame moved");
+        assert_eq!(refused.code.as_str(), "L0033");
+        assert!(conflict(scene_save(&mut stale, "next.yaml", false)));
+        scene_save(&mut stale, "next.yaml", true).expect("force skips the check");
+
+        let mut missing = restored_engine(&dir, snapshot);
+        let refused = missing
+            .adopt_scene_session(&dir.join("absent.json"))
+            .expect_err("no file");
+        assert_eq!(refused.code.as_str(), "L0033");
+        let changed = next_scene_changed(&mut missing);
+        assert_eq!(changed.path, None);
+    }
+
+    #[test]
+    fn a_restore_and_an_inline_load_forget_the_scene_path() {
+        let dir = fresh_dir("path-forgotten");
+        let mut other = first_engine(&dir, idle);
+        other.load_inline_scene(SCENE).expect("the scene loads");
+        let snapshot = snapshot_of(&mut other);
+
+        let mut restored = restored_engine(&dir, snapshot.clone());
+        scene_load(&mut restored, "next.yaml");
+        restored
+            .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+            .expect("the snapshot restores");
+        restored.take_events();
+        assert_eq!(next_scene_changed(&mut restored).path, None);
+
+        scene_load(&mut restored, "next.yaml");
+        restored.load_inline_scene(SCENE).expect("the scene loads");
+        restored.take_events();
+        assert_eq!(next_scene_changed(&mut restored).path, None);
+    }
+
+    #[test]
+    fn two_spellings_of_one_file_share_a_save_base() {
+        let dir = fresh_dir("base-key");
+        std::fs::write(dir.join("Town.yaml"), format!("# hand note\n{SCENE}")).unwrap();
+        if !dir.join("town.yaml").exists() {
+            return; // a case-sensitive file system: the two spellings are two files
+        }
+        let mut engine = first_engine(&dir, idle);
+        scene_load(&mut engine, "Town.yaml");
+        scene_save(&mut engine, "town.yaml", false).expect("one file, one base");
     }
 
     fn fresh_dir(name: &str) -> ScratchDir {

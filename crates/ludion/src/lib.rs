@@ -170,6 +170,11 @@ pub(crate) struct RunArgs {
         conflicts_with_all = ["record", "check_scene", "render_out", "profile", "trace", "check_docs", "replay_frames", "replay_verify", "profile_replay"]
     )]
     restore: Option<PathBuf>,
+    /// Where `engine.snapshot` writes the scene-session sidecar (`ludion dev` names it), and which a
+    /// `--restore` boot adopts when its frame equals the restored frame: the scene path a restart
+    /// names and `scene.save`'s conflict bases survive the restart.
+    #[arg(long, value_name = "FILE", requires = "supervised")]
+    dev_session: Option<PathBuf>,
     /// Open the game's own window, presenting each rendered frame into it in process while the
     /// server runs; closing it (or Ctrl-C) stops the host the same as headless. Needs the crate's
     /// default `window` feature; a build without it refuses the flag (`L0018`).
@@ -526,6 +531,7 @@ pub fn run(builder: EngineBuilder) -> ExitCode {
         paused: args.paused,
         record: args.record,
         restore: args.restore,
+        dev_session: args.dev_session,
         fullscreen: args.fullscreen,
         listen: Some(args.addr),
         scene: Some(scene),
@@ -581,6 +587,7 @@ impl RunArgs {
             render_out: self.render_out.as_ref().map(save),
             record: self.record.as_ref().map(save),
             restore: self.restore.as_ref().map(content),
+            dev_session: self.dev_session.as_ref().map(content),
             ..self.clone()
         }
     }
@@ -850,10 +857,13 @@ fn launch_headless(
 /// persistence on, reports what the boot load found, and applies this machine's render settings. Both
 /// [`run`] and [`launch`] go through it, so the two can never differ on what a hosted engine is. On
 /// failure it prints the diagnostic to stderr itself and returns the code the caller returns.
+// Each argument is one host setting `run` and `launch` both pass through.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_game_engine(
     builder: EngineBuilder,
     scene: &Path,
     restore: Option<&Path>,
+    dev_session: Option<&Path>,
     quality: ludion_engine::QualitySetting,
     textures: TextureSource,
     probes: ProbeSource,
@@ -866,7 +876,9 @@ pub(crate) fn prepare_game_engine(
     // profile. `--record` inherits persistence — it takes this same path.
     let engine = match restore {
         None => builder.persist_profile().load_scene_file(scene),
-        Some(snapshot) => boot_from_snapshot(builder.persist_profile(), scene, snapshot),
+        Some(snapshot) => {
+            boot_from_snapshot(builder.persist_profile(), scene, snapshot, dev_session)
+        }
     };
     let mut engine = match engine {
         Ok(engine) => engine,
@@ -881,6 +893,7 @@ pub(crate) fn prepare_game_engine(
     // *and* surfaces save drift.
     report_profile_migration(&engine);
     report_boot_warnings(&engine);
+    engine.set_scene_session_file(dev_session.map(Path::to_path_buf));
 
     // A host switch, applied before the engine moves onto the sim thread: an attached client sees
     // this machine's quality through `engine.describe` and can never negotiate it.
@@ -907,11 +920,14 @@ pub(crate) fn prepare_game_engine(
 /// The `--restore` boot: roots the engine where `--scene` would, executes `engine.restore` with the
 /// snapshot file instead of loading the scene, and prints the outcome line before anything binds. A
 /// restore that fails (unreadable file, not JSON, refused snapshot) is reported and the scene loads
-/// into the same engine, so the host still comes up with a fresh world.
+/// into the same engine, so the host still comes up with a fresh world. A successful restore adopts
+/// the `dev_session` sidecar when its frame matches; otherwise the scene path and `scene.save`'s
+/// conflict bases stay unset, so the first save over an existing file asks (`L3058`).
 fn boot_from_snapshot(
     builder: EngineBuilder,
     scene: &Path,
     snapshot_path: &Path,
+    dev_session: Option<&Path>,
 ) -> Result<ludion_engine::Engine, Diagnostic> {
     let resolved = std::path::absolute(scene).unwrap_or_else(|_| scene.to_path_buf());
     let root = resolved
@@ -942,9 +958,10 @@ fn boot_from_snapshot(
         engine.execute(ludion_protocol::Command::SceneLoad(
             ludion_protocol::command::SceneLoadParams { path: file_name },
         ))?;
-    } else {
-        // The restored world came from this file, so the first `scene.save` over it is no conflict.
-        engine.note_restored_scene_file(&file_name);
+    } else if let Some(file) = dev_session
+        && let Err(diagnostic) = engine.adopt_scene_session(file)
+    {
+        eprintln!("{diagnostic}");
     }
     Ok(engine)
 }
@@ -2386,6 +2403,12 @@ mod host_diagnostic_tests {
             ];
             assert!(RunArgs::try_parse_from(args).is_err(), "{other:?}");
         }
+    }
+
+    #[test]
+    fn dev_session_needs_supervised() {
+        assert!(RunArgs::try_parse_from(["game", "--dev-session", "x"]).is_err());
+        assert!(RunArgs::try_parse_from(["game", "--supervised", "--dev-session", "x"]).is_ok());
     }
 
     #[test]

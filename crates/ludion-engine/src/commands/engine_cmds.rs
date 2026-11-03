@@ -18,9 +18,9 @@ pub(crate) fn describe(engine: &mut Engine) -> Result<ResponseBody, Diagnostic> 
 /// `engine.snapshot` — the serialized engine state (world + RNG + frame + scene/seed), which restore
 /// can reconstruct exactly.
 pub(crate) fn snapshot(engine: &mut Engine) -> Result<ResponseBody, Diagnostic> {
-    Ok(ResponseBody::Snapshot {
-        snapshot: crate::snapshot::capture(engine)?,
-    })
+    let snapshot = crate::snapshot::capture(engine)?;
+    engine.write_scene_session();
+    Ok(ResponseBody::Snapshot { snapshot })
 }
 
 /// `engine.restore` — restore engine state from a snapshot document, migrating over any
@@ -32,6 +32,8 @@ pub(crate) fn restore(
     params: EngineRestoreParams,
 ) -> Result<ResponseBody, Diagnostic> {
     let report = engine.restore_from_value(&params.snapshot)?;
+    // The restored world is not the file's: a later restart names no path.
+    engine.set_current_scene_path(None);
     // The world was replaced — notify `scene.changed` subscribers (dropped if none are open).
     engine.push_event(Event::SceneChanged(SceneChangedData {
         kind: SceneChangeKind::Restore,

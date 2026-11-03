@@ -38,7 +38,7 @@ interface SessionStripProps {
   readonly onSaved: () => void;
   /** Fired synchronously with the `scene.save` request id, before it is sent, so App recognizes the
    *  resulting `scene.changed` as ours; returns a cancel fn to call if the save is rejected. */
-  readonly onSaveStarted: (requestId: number) => () => void;
+  readonly onSaveStarted: (requestId: number, path: string) => () => void;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
   readonly onUndo: () => void;
@@ -131,7 +131,7 @@ export function SessionStrip({
         const { body } = await client.callFull(
           { method: 'scene.save', params: { path: savePath, ...(force ? { force: true } : {}) } },
           (id) => {
-            cancel = onSaveStarted(id);
+            cancel = onSaveStarted(id, savePath);
           },
         );
         setConflict(false);
