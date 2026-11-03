@@ -210,14 +210,13 @@ pub(crate) struct RunArgs {
     /// `cargo run -p <game> -- --check-docs` (Phase 15 / E4, `Plan/phase-15-data-docs.md` decision 7).
     #[arg(long, conflicts_with_all = ["profile", "trace"])]
     check_docs: bool,
-    /// Instead of hosting, validate `--scene` against **this game's** component registry — the
-    /// built-ins plus everything the builder registers — and exit: every diagnostic rustc-style on
-    /// stderr, then a one-line summary. This is the `check-scene` a real game scene can use; the
+    /// Instead of hosting, validate `--scene` (else the builder's default scene) against **this
+    /// game's** component registry — the built-ins plus everything the builder registers — and
+    /// exit: every diagnostic rustc-style on stderr, then a one-line summary. This is the `check-scene` a real game scene can use; the
     /// CLI's is built-in-only and rejects every game component with `L1013`. No server, no window,
     /// no GPU.
     #[arg(
         long,
-        requires = "scene",
         conflicts_with_all = ["addr", "window", "profile", "trace", "check_docs", "replay_frames", "replay_verify", "render_out"]
     )]
     check_scene: bool,
@@ -625,6 +624,13 @@ pub(crate) fn run_short_circuit(
     // takes its size from this box.
     if let Err(invalid) = ludion_engine::resolve_startup_render_size(args.render_size.as_deref()) {
         eprintln!("{invalid}");
+        return Ok(ExitCode::FAILURE);
+    }
+
+    // The builder's default scene must agree with the manifest the export and the editor read, even
+    // when `--scene` names another.
+    if let Err(mismatch) = host::check_default_scene(builder.default_scene_hint(), &roots.content) {
+        eprintln!("{mismatch}");
         return Ok(ExitCode::FAILURE);
     }
 
@@ -2886,6 +2892,25 @@ entities:
             run_check_scene(EngineBuilder::new(), &scene),
             ExitCode::FAILURE
         );
+    }
+
+    /// A bare `--check-scene` checks the builder's own default scene, and a builder with none is
+    /// `L0019` rather than a clap error.
+    #[test]
+    fn a_bare_check_scene_uses_the_builders_default_scene() {
+        let dir = fixture("bare");
+        std::fs::write(dir.join("scene.yaml"), SCENE).unwrap();
+        let roots = LaunchRoots {
+            content: dir.clone(),
+            save: dir.clone(),
+        };
+        let args = RunArgs::try_parse_from(["game", "--check-scene"]).unwrap();
+        let ran = |builder| run_short_circuit(builder, &args, &roots).ok();
+        assert_eq!(
+            ran(game().default_scene("scene.yaml")),
+            Some(ExitCode::SUCCESS)
+        );
+        assert_eq!(ran(game()), Some(ExitCode::FAILURE));
     }
 
     /// A malformed scene exits non-zero through the same path.

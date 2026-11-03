@@ -1,8 +1,9 @@
 # Ludion project manifest.
 #
-# The settled project manifest: this project's identity and its default scene. `ludion export` reads
-# it (the default scene's directory is the exported content; `[ios]` names the app). See
-# LUDION-GUIDE.md.
+# The project manifest, read by `ludion export`, `ludion sync`, `ludion dev` and every game host.
+# `default_scene` must name the same file as `.default_scene(...)` in `game()` (`L0038`). Tables:
+# `[ios]` (the app's identity), `[[import]]` (glTF trees `ludion sync` derives), `[cook]` (texture
+# cooking) and `[audio]` (voice caps). See `ludion docs export` and LUDION-GUIDE.md.
 
 name = "{{name}}"
 default_scene = "scenes/main.yaml"

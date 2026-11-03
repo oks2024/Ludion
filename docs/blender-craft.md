@@ -39,8 +39,8 @@ A project that commits its glTF exports declares them in `ludion.toml`: `[[impor
 the kits whose files and the importer are unchanged. Freshness compares each source file's size
 and modification time (ns) with the record first and reads content only on a mismatch, so an edit
 that keeps the size and restores the old mtime reads as fresh; deleting the `to` tree
-forces a full import. The `to` tree is ignored by version control and
-never hand-edited; `scripts/check.mjs` and CI run the sync before the tests. A `to` holding files the
+forces a full import. The `to` tree is derived: add its root to `.gitignore`, and
+never hand-edit it; `scripts/check.mjs` and CI run the sync before the tests. A `to` holding files the
 sync did not write is refused (`L1245`), as is a symbolic link or junction under a source directory, or two stems that differ only in case. A
 `to` inside a `from` directory (the glob's part before its first `*`) is refused (`L0023`): the sync
 would rewrite files the next one hashes.

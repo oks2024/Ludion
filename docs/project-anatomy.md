@@ -23,7 +23,8 @@ description: What ludion new scaffolds: each file's job, the content root, and w
 | `tests/golden.rs` | A golden-image test (bless-or-skip until you commit `goldens/<os>/main.png`). |
 | `tests/drift.rs` | Asserts every component in the registry survives snapshot migration (`ludion docs components`). |
 | `clippy.toml` | The sim-side determinism denylist your game code inherits. |
-| `ludion.toml` | The project manifest: `name`, `default_scene`, the optional `[audio]` voice caps, and the `[ios] bundle_id` `ludion export` reads (`ludion docs export`). |
+| `ludion.toml` | The project manifest: `name`, `default_scene` (equal to `game()`'s, `L0038`), the optional `[[import]]`, `[cook]` and `[audio]` tables, and the `[ios] bundle_id` `ludion export` reads (`ludion docs export`). |
+| `.gitignore` | `target/`, `.ludion/`, `generation/runs/` and `scenes/save/` (the player's profile). Add every `[[import]] to` root: `ludion sync` derives those trees and nothing else ignores them. |
 | `Cargo.toml` | A **standalone** crate (empty `[workspace]`); `ludion` is a path dep on the engine. The `wire` (the listener) and `window` (the `--window` in-process window) features are declared here and default on — the dev shape; `ludion export` builds with `--no-default-features` and starts through the lib's `ludion_game_start`. |
 
 ## Getting the ludion CLI

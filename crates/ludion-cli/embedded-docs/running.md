@@ -77,7 +77,7 @@ within 5 s is reported as `L4022` and the host exits non-zero. Peers attach to t
 - **`--check-scene`** and **`--render-out <PNG>`** host nothing either: they are `ludion check-scene`
   and `ludion render --scene` run against **your** registry instead of the built-in one, so a scene
   naming your components answers instead of failing `L1013` (the CLI links no game code — that is the
-  whole difference). `--check-scene` parses and validates `--scene`, printing each diagnostic
+  whole difference). `--check-scene` parses and validates `--scene` (else the builder's default scene), printing each diagnostic
   rustc-style and then `<path>: OK (N entities, M components)` or `<path>: N errors found` (errors
   only: a warning prints and never fails), and exits 0 or 1 — no GPU, no window, nothing
   instantiated; it opens every mesh, voxel, sculpt, assembly, character, collider-mesh, mesh-texture and decal-map file the scene names (`L1101`). `--render-out` writes one frame of the same scene to that PNG at

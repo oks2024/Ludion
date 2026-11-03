@@ -820,8 +820,10 @@ impl EngineBuilder {
         self
     }
 
-    /// Records the scene `ludion::run` loads when its `--scene` argument is omitted. Purely a
-    /// hosting hint — the engine core never consults it; only `ludion::run` does.
+    /// Records the scene a host loads when no scene is named: `ludion::run` without `--scene`, and
+    /// `ludion::launch` or the C ABI, which have no command line. Purely a hosting hint — the engine
+    /// core never consults it. A host refuses (`L0038`) a hint that differs from the `default_scene`
+    /// in the content root's `ludion.toml`, which `ludion export` and the editor read.
     #[must_use]
     pub fn default_scene(mut self, path: impl Into<PathBuf>) -> Self {
         self.default_scene = Some(path.into());

@@ -233,6 +233,7 @@ fn export(target: IosTarget, out: &Path, project: &Path, options: &Options) -> R
         extra_targets: vec![ludion_assets::cooked::CookTarget::Ios],
     };
     crate::sync::ensure_fresh(&project, &cook).map_err(Failure::Diagnostics)?;
+    check_boot_scene(&project)?;
 
     let archive = build_staticlib(&project, target, debug)?;
     let shipped = write_export(
@@ -535,7 +536,7 @@ fn check_probe_entries(
 
 /// Bakes every probe of the bundle's scenes into the bundle's store through the game binary
 /// (`--bake-probes`, at the quality the device resolves) and checks the entries landed. A project
-/// without probes builds nothing.
+/// without probes bakes nothing.
 fn bake_bundle_probes(
     project: &Path,
     manifest: &Manifest,
@@ -619,8 +620,35 @@ fn parse_bake_report(stdout: &str) -> Option<(bool, ProbeBakeReport, String)> {
     ))
 }
 
-/// Builds the project's host binary (default features: `--bake-probes` lives behind `wire`) and
-/// returns its path. Debug is enough: the bake is GPU work.
+/// Runs the game's own `--check-scene` with no `--scene`, from the project directory: the builder's
+/// default scene is compiled Rust, so the host binary is the only reader of it. A scene that differs
+/// from the manifest's (`L0038`), is missing or does not validate is refused here, on the desktop,
+/// instead of as a black screen on the device. GPU-free.
+fn check_boot_scene(project: &Path) -> Result<(), Diagnostic> {
+    let bin = build_host_bin(project)?;
+    let status = Command::new(&bin)
+        .arg("--check-scene")
+        .current_dir(project)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|err| {
+            export_failed(
+                format!("could not run `{}`: {err}", bin.display()),
+                "the host binary built but did not start",
+            )
+        })?;
+    if status.success() {
+        return Ok(());
+    }
+    Err(export_failed(
+        "the game's default scene did not pass its own check",
+        "its diagnostic is above: fix it and rerun",
+    ))
+}
+
+/// Builds the project's host binary (default features: `--bake-probes` and `--check-scene` live
+/// behind `wire`) and returns its path. Debug is enough: neither run needs a fast build.
 fn build_host_bin(project: &Path) -> Result<PathBuf, Diagnostic> {
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .args(["build", "--manifest-path"])
@@ -638,7 +666,8 @@ fn build_host_bin(project: &Path) -> Result<PathBuf, Diagnostic> {
     if !output.status.success() {
         return Err(export_failed(
             format!(
-                "the host binary build, needed to bake reflection probes, failed ({})",
+                "the host binary build, needed to check the default scene and bake reflection probes, \
+                 failed ({})",
                 output.status
             ),
             "cargo printed its own errors above; fix the game's build and rerun",
@@ -647,7 +676,8 @@ fn build_host_bin(project: &Path) -> Result<PathBuf, Diagnostic> {
     executable_from_messages(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
         export_failed(
             "cargo reported no executable for the game",
-            "the game needs a `[[bin]]` target to bake its probes",
+            "the game needs a `[[bin]]` target: export runs it to check the default scene and bake \
+             its probes",
         )
     })
 }

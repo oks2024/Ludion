@@ -166,6 +166,7 @@ fn new_scaffolds_the_expected_files() {
         "Cargo.toml",
         "clippy.toml",
         "ludion.toml",
+        ".gitignore",
         "CLAUDE.md",
         "LUDION-GUIDE.md",
         "src/main.rs",
@@ -184,6 +185,13 @@ fn new_scaffolds_the_expected_files() {
         assert!(proj.join(rel).is_file(), "missing generated file: {rel}");
     }
     assert!(proj.join("goldens").is_dir(), "missing goldens/ directory");
+
+    // The lockfile stays committed: the ignore file holds the build output and the per-machine
+    // stores, never `Cargo.lock`.
+    let ignore = read(".gitignore");
+    assert!(ignore.lines().any(|line| line == "/target"), "{ignore}");
+    assert!(ignore.lines().any(|line| line == ".ludion/"), "{ignore}");
+    assert!(!ignore.lines().any(|line| line == "Cargo.lock"), "{ignore}");
 
     // The three stage scenes (not `main.yaml` — its `Player` is not in the built-in registry) check
     // clean against the built-in component registry.
@@ -541,6 +549,45 @@ fn generated_project_passes_cargo_test() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+
+    // A generated project's builder and manifest name one default scene, and the host refuses a
+    // manifest that moves (`L0038`). Placed before the GPU-dependent half below, which may skip.
+    let check_scene = || {
+        let mut cmd = Command::new(env!("CARGO"));
+        cmd.args(["run", "--quiet"])
+            .current_dir(&project)
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .env_remove(ludion_core::require_gpu::FORBID_GPU_ENV);
+        if release {
+            cmd.arg("--release");
+        }
+        cmd.args(["--", "--check-scene"])
+            .output()
+            .expect("run `cargo run -- --check-scene` in the generated project")
+    };
+    let checked = check_scene();
+    assert!(
+        checked.status.success(),
+        "generated project `--check-scene` failed\n{}{}",
+        String::from_utf8_lossy(&checked.stdout),
+        String::from_utf8_lossy(&checked.stderr),
+    );
+    let manifest_path = project.join("ludion.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains("default_scene = \"scenes/main.yaml\""));
+    fs::write(
+        &manifest_path,
+        manifest.replace("scenes/main.yaml", "scenes/model-stage.yaml"),
+    )
+    .unwrap();
+    let moved = check_scene();
+    assert!(
+        !moved.status.success() && String::from_utf8_lossy(&moved.stderr).contains("L0038"),
+        "a manifest that names another scene must be refused with L0038\n{}{}",
+        String::from_utf8_lossy(&moved.stdout),
+        String::from_utf8_lossy(&moved.stderr),
+    );
+    fs::write(&manifest_path, manifest).unwrap();
 
     // The out-of-box golden loop: `LUDION_BLESS=1 cargo test` blesses through the game's own test
     // (the CLI's `ludion test --bless` cannot — directory suites are built-in-registry only), then a

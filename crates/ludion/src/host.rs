@@ -337,6 +337,41 @@ pub(crate) fn voice_caps(
     }
 }
 
+/// The builder's default scene against the manifest at the content root, which `ludion export` and
+/// the editor read instead. That exact directory, never a walk: an ancestor's manifest governs some
+/// other project. No hint or no manifest there has nothing to compare.
+///
+/// # Errors
+/// `L0038` when the two name different files; `L0023` when the manifest does not load.
+pub(crate) fn check_default_scene(
+    hint: Option<&std::path::Path>,
+    content: &std::path::Path,
+) -> Result<(), ludion_core::diagnostics::Diagnostic> {
+    let Some(hint) = hint else { return Ok(()) };
+    if !content.join("ludion.toml").is_file() {
+        return Ok(());
+    }
+    let manifest = ludion_engine::manifest::load(content)?;
+    let builder = ludion_core::paths::normalize(&hint.to_string_lossy());
+    let declared = manifest.default_scene.to_string_lossy();
+    if builder == declared {
+        return Ok(());
+    }
+    Err(ludion_core::diagnostics::Diagnostic::new(
+        ludion_core::codes::code::DEFAULT_SCENE_MISMATCH,
+        format!(
+            "the builder's default scene `{builder}` differs from `default_scene = \"{declared}\"` \
+             in `{}`",
+            content.join("ludion.toml").display()
+        ),
+    )
+    .with_help(
+        "make `.default_scene(...)` in `game()` and `default_scene` in `ludion.toml` name the same \
+         file"
+            .to_string(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,5 +441,52 @@ voices_total = 0
         let caps = voice_caps(&dir.join("scenes")).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(caps, ludion_audio::VoiceCaps::default());
+    }
+
+    fn gate(
+        name: &str,
+        manifest: Option<&str>,
+        hint: Option<&str>,
+    ) -> Result<(), ludion_core::diagnostics::Diagnostic> {
+        let dir = project(name, manifest);
+        let result = check_default_scene(hint.map(std::path::Path::new), &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    #[test]
+    fn a_default_scene_equal_to_the_manifests_passes() {
+        assert!(gate("eq", Some(HEAD), Some("scenes/main.yaml")).is_ok());
+        assert!(gate("dot", Some(HEAD), Some("./scenes/main.yaml")).is_ok());
+    }
+
+    #[test]
+    fn a_different_default_scene_is_refused_naming_both() {
+        let err = gate("diff", Some(HEAD), Some("scenes/other.yaml")).unwrap_err();
+        assert_eq!(err.code.as_str(), "L0038");
+        assert!(err.message.contains("scenes/other.yaml"), "{}", err.message);
+        assert!(err.message.contains("scenes/main.yaml"), "{}", err.message);
+    }
+
+    #[test]
+    fn nothing_to_compare_passes() {
+        assert!(gate("nohint", Some(HEAD), None).is_ok());
+        assert!(gate("noman", None, Some("scenes/main.yaml")).is_ok());
+    }
+
+    #[test]
+    fn a_manifest_in_a_parent_of_the_content_root_does_not_govern() {
+        let parent = project("parent", Some(HEAD));
+        let content = parent.join("inner");
+        std::fs::create_dir_all(&content).unwrap();
+        let result = check_default_scene(Some(std::path::Path::new("scenes/other.yaml")), &content);
+        let _ = std::fs::remove_dir_all(&parent);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn a_malformed_manifest_at_the_root_is_l0023() {
+        let err = gate("bad-manifest", Some("not = ["), Some("scenes/main.yaml")).unwrap_err();
+        assert_eq!(err.code.as_str(), "L0023");
     }
 }

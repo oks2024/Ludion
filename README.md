@@ -62,6 +62,30 @@ cargo run -p ludion-cli -- docs getting-started  # print one
 out-of-process protocol client) is described in [`editor/app/README.md`](editor/app/README.md),
 which lists its prerequisites.
 
+## Start your own game
+
+Install the CLI from this checkout, then scaffold a project outside it (a project may not live
+under `crates/` or `games/`):
+
+```
+cargo install --path crates/ludion-cli --locked
+cd ..
+ludion new my-game
+cd my-game
+cp <this checkout>/rust-toolchain.toml <this checkout>/Cargo.lock .
+cargo test
+cargo run -- --window
+```
+
+- The project's engine dependencies are path dependencies on this checkout, so keep it where it
+  is. Nothing is on crates.io yet, and a CLI installed without a checkout behind it writes
+  dependencies that cannot resolve.
+- A checkout's `rust-toolchain.toml` does not reach a project outside it: copy it.
+- Components derive through the game's own `serde` (`derive`) and `schemars` 1, which the scaffold
+  lists because the facade does not re-export them.
+- Copy `Cargo.lock` before the first build, so the project starts from the dependency versions the
+  engine proved, and commit it: `ludion docs verify-loop`.
+
 ## Verifying changes
 
 `node scripts/check.mjs` runs every local gate in parallel and prints a compact pass/fail summary;

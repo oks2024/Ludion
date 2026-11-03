@@ -335,10 +335,12 @@ impl Embedded {
     ///
     /// # Errors
     /// `L0014`/`L0016`/`L0017` for a malformed `LUDION_THREADS` / `LUDION_QUALITY` /
-    /// `LUDION_RENDER_SIZE`, `L0019` for a builder with no default scene, and `L3047` for `restore`
-    /// together with `record` — all before anything is built. A failure *after* this returns (a bad
-    /// scene, no GPU adapter, a taken port) prints its diagnostic to stderr and ends the host:
-    /// [`ended`](Self::ended) disconnects and [`stop`](Self::stop) reports failure.
+    /// `LUDION_RENDER_SIZE`, `L0019` for a builder with no default scene, `L0038` for a default
+    /// scene that differs from the content root's `ludion.toml` (`L0023` when that does not load),
+    /// and `L3047` for `restore` together with `record` — all before anything is built. A failure
+    /// *after* this returns (a bad scene, no GPU adapter, a taken port) prints its diagnostic to
+    /// stderr and ends the host: [`ended`](Self::ended) disconnects and [`stop`](Self::stop)
+    /// reports failure.
     pub fn start(
         builder: EngineBuilder,
         roots: LaunchRoots,
@@ -401,6 +403,7 @@ impl Embedded {
                 // The builder's own extent applies at build.
                 let render_size = explicit_size.or(derived.map(|(_, extent)| extent));
 
+                crate::host::check_default_scene(builder.default_scene_hint(), &roots.content)?;
                 // The named scene, else the builder's own default, resolved against the content root:
                 // a builder with neither cannot be hosted.
                 let scene = match options
@@ -1464,6 +1467,22 @@ mod tests {
         .err()
         .expect("nothing to host");
         assert_eq!(diagnostic.code, code::NO_DEFAULT_SCENE);
+    }
+
+    /// The device's boot path: a default scene the content root's manifest does not name is refused
+    /// before anything is built.
+    #[test]
+    fn a_default_scene_the_manifest_does_not_name_is_refused() {
+        let content = content_root("mismatch");
+        std::fs::write(
+            content.join("ludion.toml"),
+            "name = \"g\"\ndefault_scene = \"scenes/other.yaml\"\n",
+        )
+        .unwrap();
+        let diagnostic = Embedded::start(builder(), roots(&content), None, StartOptions::default())
+            .err()
+            .expect("the manifest names another scene");
+        assert_eq!(diagnostic.code, code::DEFAULT_SCENE_MISMATCH);
     }
 
     /// The core injects through the same event shape the desktop window's builders produce: the

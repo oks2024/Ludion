@@ -58,6 +58,11 @@ const TEMPLATES: &[TemplateFile] = &[
         rel_path: "ludion.toml",
         body: include_str!("../templates/ludion.toml"),
     },
+    // Stored without the dot: a real `templates/.gitignore` would apply to the template tree itself.
+    TemplateFile {
+        rel_path: ".gitignore",
+        body: include_str!("../templates/gitignore"),
+    },
     TemplateFile {
         rel_path: "CLAUDE.md",
         body: include_str!("../templates/CLAUDE.md"),

@@ -32,6 +32,12 @@ component fields (see `tests/gameplay.rs`). `ludion_engine::drive_hashes` remain
 trace. Cross-process, the same idea is `ludion sim-hash --scene … --frames N` (run it twice:
 identical output). Concept: `ludion devdocs ludion-sim`.
 
+**Your project's lockfile.** A project has its own `Cargo.lock`; Ludion's does not apply to a
+dependent, whether the engine is a path or a git dependency. A patch release in `glam`, `libm` or
+`wgpu` can then move hashes or pixels for your game alone, and no engine gate sees it. Copy the
+engine's `Cargo.lock` into the project before the first build to start from the versions the engine
+proved, commit yours, and after updating it re-verify hashes and goldens.
+
 **Golden images.** A golden test renders the scene and compares it to a committed PNG via tiled SSIM.
 The generated `tests/golden.rs` is green out of the box: until the first golden is committed it prints
 how to bless one and passes; after that a missing golden is `L2201`, and every present one compares

@@ -67,7 +67,7 @@ pub struct ImportSection {
     /// A project-relative glob of `.gltf` files; `*` matches within one path segment. Each match
     /// `<dir>/<stem>.gltf` imports into `<to>/<stem>/`.
     pub from: String,
-    /// The derived root, project-relative. Ignored by version control, never hand-edited.
+    /// The derived root, project-relative. Add it to the project's ignore file; never hand-edited.
     pub to: PathBuf,
     /// Halve every cooked map of this table until neither side exceeds this many texels; absent
     /// keeps the source size. Part of the cooked map's key.
@@ -182,6 +182,12 @@ fn validate_cook(manifest: &Manifest) -> Result<(), String> {
         return Err(format!(
             "`[cook] targets` names `{bad}`: the valid targets are `desktop` and `ios`"
         ));
+    }
+    if cook.targets.is_empty() {
+        return Err(
+            "`[cook] targets = []` would cook nothing: name `desktop` or `ios`, drop the key for `[\"desktop\"]`, or set `textures = false` to skip the cook"
+                .to_string(),
+        );
     }
     if cook.meshes {
         return Err(
@@ -535,6 +541,9 @@ mod tests {
         let err = parse(&format!("{base}[cook]\ntargets = [\"web\"]\n")).unwrap_err();
         assert_eq!(err.code, MANIFEST_INVALID);
         assert!(err.message.contains("web") && err.message.contains("ios"));
+        let err = parse(&format!("{base}[cook]\ntargets = []\n")).unwrap_err();
+        assert_eq!(err.code, MANIFEST_INVALID);
+        assert!(err.message.contains("cook nothing"), "{}", err.message);
         let err = parse(&format!("{base}[cook]\nmeshes = true\n")).unwrap_err();
         assert_eq!(err.code, MANIFEST_INVALID);
         assert!(err.message.contains("meshes"), "{}", err.message);

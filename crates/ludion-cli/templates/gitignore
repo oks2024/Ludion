@@ -1,0 +1,6 @@
+# Build output and per-machine stores. Keep Cargo.lock committed (`ludion docs verify-loop`).
+/target
+.ludion/
+/generation/runs/
+/scenes/save/
+# Add every `[[import]] to` root from ludion.toml: `ludion sync` derives those trees.

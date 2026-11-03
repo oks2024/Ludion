@@ -10,7 +10,8 @@ and `ludion sim-hash` / `WorldHash` as the verification primitives. The hash's b
 and the tick loop are `ludion devdocs ludion-sim`; which crates are sim-side vs host-side is
 `ludion devdocs crate-graph`; perceptual image verification is `ludion devdocs ludion-testkit`. The
 per-subsystem "recorded vs regenerated" contracts live with their mechanisms
-(`ludion devdocs engine-replay`, `ludion devdocs engine-content-kinds`).
+(`ludion devdocs engine-replay`, `ludion devdocs engine-content-kinds`). A dependent game's own
+`Cargo.lock` is not covered by these gates: `ludion docs verify-loop`.
 
 ## Layout
 

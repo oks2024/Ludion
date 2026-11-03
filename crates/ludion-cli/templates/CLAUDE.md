@@ -27,7 +27,9 @@ than with this project — `L0009` says so.
 - `tests/drift.rs` — asserts every component in the registry survives snapshot migration (see
   "Keep components drift-safe" — `ludion docs components --section "Keep components drift-safe"`).
 - `clippy.toml` — the sim-side determinism denylist your game code inherits.
-- `ludion.toml` — the project manifest (name + default scene).
+- `ludion.toml` — the project manifest: name, default scene (equal to `game()`'s `.default_scene`,
+  `L0038`), `[ios]`, `[[import]]`, `[cook]`, `[audio]`; `ludion docs export`.
+- `.gitignore` — `target/` and the per-machine stores; add every `[[import]] to` root.
 
 ## The loop
 

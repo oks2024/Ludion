@@ -202,6 +202,10 @@ pub mod code {
     /// `L0037` — `LUDION_FULLSCREEN` is neither `1` nor `0`. Raised by the window hosts.
     pub const FULLSCREEN_SETTING_INVALID: DiagnosticCode = DiagnosticCode::new("L0037");
 
+    /// `L0038` — the engine builder's default scene and the project manifest's `default_scene` name
+    /// different files. Raised by the game hosts and by `ludion export`.
+    pub const DEFAULT_SCENE_MISMATCH: DiagnosticCode = DiagnosticCode::new("L0038");
+
     // --- L1xxx: scene / assets (raised by `ludion-scene`, `ludion-assets`) ---
 
     /// `L1001` — a scene file is not well-formed YAML at all (unbalanced structure, bad
@@ -2925,6 +2929,24 @@ simulation, the `WorldHash` or a snapshot. A host's `--fullscreen` flag beats th
 and is not validated against it, so it works even on a machine whose variable is malformed.
 
 Fix: set the variable to `1` or `0`, or unset it.",
+    },
+    CodeEntry {
+        code: code::DEFAULT_SCENE_MISMATCH,
+        severity: Severity::Error,
+        title: "the builder's default scene and the manifest's `default_scene` differ",
+        explanation: "\
+A game names its default scene in two places that different readers use. The engine builder's
+`.default_scene(...)` in `game()` is read by the game itself: a desktop run and the iOS boot. The
+`default_scene` in the content root's `ludion.toml` is read by `ludion export` and the editor. When
+the two name different files, the game opens one scene while the export and the editor assume
+another, and the mismatch would otherwise surface only on a device.
+
+The host compares them at boot, and `ludion export` runs the same check before the iOS build. The
+manifest is looked up at the content root exactly, never in an ancestor directory, and a builder with
+no default scene or a content root with no `ludion.toml` has nothing to compare. The check applies
+even when `--scene` is passed.
+
+Fix: make `.default_scene(...)` in `game()` and `default_scene` in `ludion.toml` name the same file.",
     },
     CodeEntry {
         code: code::PRESENTATION_BOUNDARY,
@@ -10694,6 +10716,7 @@ mod tests {
         code::NEW_NAME_INVALID,
         code::GUIDE_STALE,
         code::FULLSCREEN_SETTING_INVALID,
+        code::DEFAULT_SCENE_MISMATCH,
         // --- L1xxx: scene / assets ---
         code::SCENE_YAML_SYNTAX,
         code::SCENE_YAML_ANCHOR,
