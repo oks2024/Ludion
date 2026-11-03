@@ -88,6 +88,9 @@ pub struct EgressChannels {
 pub struct EgressFrame {
     /// The sim frame index this image was rendered from.
     pub frame: FrameIndex,
+    /// The frame-index run `frame` belongs to ([`Engine::frame_timeline`](crate::Engine::frame_timeline)
+    /// at emission); a load or restore starts a new one.
+    pub timeline: u64,
     /// Image width in pixels.
     pub width: u32,
     /// Image height in pixels.
@@ -113,6 +116,8 @@ pub struct EgressFrame {
 pub struct EgressEvent {
     /// The complete, addressed event envelope (`event` + `data`, `sub`, `seq`, `frame`).
     pub message: EventMessage,
+    /// The frame-index run the event's `frame` belongs to ([`Engine::frame_timeline`](crate::Engine::frame_timeline)).
+    pub timeline: u64,
 }
 
 /// The subscription [`Channel`] an [`Event`] is delivered on.

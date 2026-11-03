@@ -951,3 +951,34 @@ fn a_prefab_refused_before_a_restart_stays_refused_after_it() {
         trace
     );
 }
+
+#[test]
+fn a_load_and_a_restore_start_a_new_frame_timeline_and_a_restart_does_not() {
+    let dir = fresh_dir("timeline");
+    std::fs::write(dir.join("again.yaml"), NEXT).unwrap();
+    let mut engine = booted(&dir, restarter::<4, NEVER, NEVER, false>);
+    let start = engine.frame_timeline();
+
+    let snapshot = match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected Snapshot, got {other:?}"),
+    };
+    until_restarted(&mut engine, None);
+    assert_eq!(
+        engine.frame_timeline(),
+        start,
+        "a restart keeps its frame, so it keeps its run"
+    );
+
+    engine
+        .execute(Command::SceneLoad(SceneLoadParams {
+            path: "again.yaml".into(),
+        }))
+        .unwrap();
+    assert_eq!(engine.frame_timeline(), start + 1, "a load starts a run");
+
+    engine
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
+    assert_eq!(engine.frame_timeline(), start + 2, "a restore starts a run");
+}

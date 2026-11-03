@@ -66,7 +66,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver as CrossbeamReceiver;
 use ludion_core::time::FrameIndex;
-use ludion_engine::egress::{Egress, EgressFrame};
+use ludion_engine::egress::{Egress, EgressEvent, EgressFrame};
 use ludion_protocol::command::{Channel, SubscribeMode};
 use ludion_protocol::event::{Event, LogEvent, LogLevel};
 use ludion_protocol::frame::{FrameFormat, FrameHeader};
@@ -74,7 +74,7 @@ use ludion_protocol::{EventMessage, MAX_MESSAGE_BYTES, SubId};
 use tokio::sync::{mpsc, watch};
 
 use crate::connection::{PIPELINE_DEPTH, message_too_large};
-use crate::perf::{self, ProfileHub};
+use crate::perf::{self, DeliveredFrame, ProfileHub};
 
 /// One encoded rendered frame queued on a connection's binary lane by its writer task.
 pub(crate) struct BinaryFrame {
@@ -82,6 +82,8 @@ pub(crate) struct BinaryFrame {
     /// already carries it; this is what lets the writer file its send span under the right
     /// frame ([`ProfileHub`](crate::perf::ProfileHub)).
     pub(crate) frame: FrameIndex,
+    /// The frame-index run `frame` belongs to; likewise not on the wire.
+    pub(crate) timeline: u64,
     /// The encoded message (LFR1 header + payload).
     pub(crate) bytes: Vec<u8>,
 }
@@ -129,6 +131,8 @@ pub(crate) fn outbound_channel() -> (
 pub(crate) struct SharedFrame {
     /// The sim frame index this image was rendered from.
     frame: FrameIndex,
+    /// The frame-index run `frame` belongs to.
+    timeline: u64,
     /// Image width in pixels.
     width: u32,
     /// Image height in pixels.
@@ -259,14 +263,14 @@ impl Drop for SubscribeInFlight {
 pub(crate) fn run_egress_pump(
     frame_rx: CrossbeamReceiver<Egress>,
     event_rx: CrossbeamReceiver<Egress>,
-    events: mpsc::UnboundedSender<EventMessage>,
+    events: mpsc::UnboundedSender<EgressEvent>,
     frames: watch::Sender<Option<Arc<EgressFrame>>>,
 ) {
     loop {
         crossbeam_channel::select! {
             recv(event_rx) -> msg => match msg {
                 Ok(Egress::Event(event)) => {
-                    if events.send(event.message).is_err() {
+                    if events.send(event).is_err() {
                         break; // the event router is gone; nothing left to hand off to
                     }
                 }
@@ -290,12 +294,12 @@ pub(crate) fn run_egress_pump(
 /// reordered (a drop only ever happens downstream, at a full outbound queue, where it stays a visible
 /// `seq` gap per architecture §6). Ends when the pump drops its sender.
 pub(crate) async fn event_router(
-    mut events: mpsc::UnboundedReceiver<EventMessage>,
+    mut events: mpsc::UnboundedReceiver<EgressEvent>,
     registry: Registry,
     hub: Arc<ProfileHub>,
 ) {
-    while let Some(message) = events.recv().await {
-        route_event(&registry, &hub, message);
+    while let Some(event) = events.recv().await {
+        route_event(&registry, &hub, event.message, event.timeline);
     }
 }
 
@@ -331,9 +335,14 @@ pub(crate) async fn frame_router(
 /// event for a sub that is not registered *yet* — a subscribe is in flight — waits in the registry's
 /// buffer and is flushed, in order, by [`register`]; with no subscribe in flight it is for a closed sub
 /// and is dropped. A message over the wire ceiling is replaced by an `L3045` log in its slot.
-pub(crate) fn route_event(registry: &Registry, hub: &ProfileHub, mut message: EventMessage) {
+pub(crate) fn route_event(
+    registry: &Registry,
+    hub: &ProfileHub,
+    mut message: EventMessage,
+    timeline: u64,
+) {
     let sub = message.sub.as_u64();
-    perf::fill_window_event(hub, &mut message);
+    perf::fill_window_event(hub, &mut message, timeline);
     let text = event_text(&message, MAX_MESSAGE_BYTES);
     let mut state = registry.lock().expect("registry mutex poisoned");
     if let Some(SubState::Events(outbound)) = state.subs.get(&sub) {
@@ -401,7 +410,10 @@ async fn route_frame(
     subs: Vec<SubId>,
     replay: bool,
 ) {
-    let index = frame.frame;
+    let index = DeliveredFrame {
+        timeline: frame.timeline,
+        frame: frame.frame,
+    };
     let width = frame.width;
     let height = frame.height;
     let gi_stale = frame.gi_stale;
@@ -463,7 +475,8 @@ async fn route_frame(
     };
     let build = |format: FrameFormat, payload: FramePayload| {
         Arc::new(SharedFrame {
-            frame: index,
+            frame: index.frame,
+            timeline: index.timeline,
             width,
             height,
             format,
@@ -569,6 +582,7 @@ async fn frame_forwarder(
         };
         let message = BinaryFrame {
             frame: shared.frame,
+            timeline: shared.timeline,
             bytes: header.encode(shared.payload.as_bytes()),
         };
         if outbound.frames.send(message).await.is_err() {
@@ -653,6 +667,7 @@ mod tests {
     fn shared(index: u64) -> Arc<SharedFrame> {
         Arc::new(SharedFrame {
             frame: FrameIndex::new(index),
+            timeline: 0,
             width: 2,
             height: 1,
             format: FrameFormat::Qoi,
@@ -682,6 +697,7 @@ mod tests {
     fn frame(index: u64) -> EgressFrame {
         EgressFrame {
             frame: FrameIndex::new(index),
+            timeline: 0,
             width: 2,
             height: 1,
             rgba: vec![0; 8],
@@ -692,6 +708,7 @@ mod tests {
 
     fn event(seq: u64) -> EgressEvent {
         EgressEvent {
+            timeline: 0,
             message: EventMessage {
                 event: Event::Log(LogEvent {
                     level: LogLevel::Info,
@@ -796,11 +813,11 @@ mod tests {
     fn unclaimed_egress_does_not_accumulate() {
         let registry = new_registry();
         let hub = ProfileHub::new();
-        route_event(&registry, &hub, event(0).message);
+        route_event(&registry, &hub, event(0).message, 0);
         assert!(registry.lock().unwrap().unclaimed_events.is_empty());
 
         let in_flight = subscribe_in_flight(&registry);
-        route_event(&registry, &hub, event(1).message);
+        route_event(&registry, &hub, event(1).message, 0);
         assert_eq!(registry.lock().unwrap().unclaimed_events.len(), 1);
         drop(in_flight);
         assert!(registry.lock().unwrap().unclaimed_events.is_empty());
@@ -873,7 +890,7 @@ mod tests {
     fn pump_coalesces_frames_but_never_events() {
         let (frame_egress_tx, frame_egress_rx) = crossbeam_channel::unbounded::<Egress>();
         let (event_egress_tx, event_egress_rx) = crossbeam_channel::unbounded::<Egress>();
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<EventMessage>();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<EgressEvent>();
         let (frame_tx, frame_rx) = watch::channel::<Option<Arc<EgressFrame>>>(None);
         let pump = std::thread::spawn(move || {
             run_egress_pump(frame_egress_rx, event_egress_rx, event_tx, frame_tx)
@@ -896,7 +913,11 @@ mod tests {
 
         for i in 0..3 {
             let message = event_rx.try_recv().expect("every event arrives");
-            assert_eq!(message.seq, Seq::new(i), "events arrive in send order");
+            assert_eq!(
+                message.message.seq,
+                Seq::new(i),
+                "events arrive in send order"
+            );
         }
         assert!(
             event_rx.try_recv().is_err(),

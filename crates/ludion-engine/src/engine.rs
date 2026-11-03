@@ -378,6 +378,8 @@ pub struct Engine {
     /// The live frame stream's persistent 3-deep readback ring (lazily created, recreated on a render
     /// size change, discarded when no `frames` subscriber remains). `None` outside an active stream.
     stream_ring: Option<StreamReadback<FrameIndex>>,
+    /// See [`frame_timeline`](Self::frame_timeline).
+    frame_timeline: u64,
     /// The thread that renders and presents into this host's window
     /// ([`attach_surface`](Engine::attach_surface)), or `None` for a headless host — every CLI render,
     /// golden, test and served session. Host state exactly as [`renderer`](Engine::renderer) is: not
@@ -774,6 +776,7 @@ impl Engine {
             shader_reload_dir: None,
             tick_observer: None,
             stream_ring: None,
+            frame_timeline: 0,
             presenter: None,
             surface_gpu: None,
             present_epoch: 0,
@@ -1445,6 +1448,13 @@ impl Engine {
     /// The next frame to be simulated — the value stamped on every response.
     pub fn frame(&self) -> FrameIndex {
         self.driver.frame()
+    }
+
+    /// Which frame-index run a frame belongs to. A `scene.load` or `engine.restore` starts a new
+    /// one, because the index can move backwards; a scene switch keeps its frame and so its run.
+    /// Host state: never hashed, snapshotted or recorded.
+    pub fn frame_timeline(&self) -> u64 {
+        self.frame_timeline
     }
 
     /// The gameplay frame at the same boundary as [`frame`](Self::frame): the next tick's
@@ -3895,7 +3905,8 @@ impl Engine {
 
     /// Discards the live stream ring and any in-flight readbacks (dropping the wgpu buffers unmaps
     /// them cleanly). Called when the last `frames` subscriber goes away, so no readback is ever
-    /// collected for zero subscribers.
+    /// collected for zero subscribers, and when a load or restore starts a new frame timeline, so
+    /// no pre-commit readback is stamped with a post-commit run.
     pub(crate) fn discard_stream_ring(&mut self) {
         self.stream_ring = None;
     }
@@ -5815,6 +5826,10 @@ impl Engine {
             Rebuild::Switch { .. } => driver.carry_input_from(&mut self.driver),
         }
         self.driver = driver;
+        if matches!(kind, Rebuild::Load { .. } | Rebuild::Restore { .. }) {
+            self.frame_timeline += 1;
+            self.discard_stream_ring();
+        }
         // A rebuild can move the frame backwards; the next keyframe is one interval after the
         // rebuilt frame, not after the old boundary.
         let frame = self.driver.frame();

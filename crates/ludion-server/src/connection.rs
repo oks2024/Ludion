@@ -76,7 +76,7 @@ use tokio_tungstenite::tungstenite::handshake::server::{
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 use crate::delivery::{self, BinaryFrame, OutboundSink, Registry, SubscribeInFlight};
-use crate::perf::{ProfileArm, ProfileHub};
+use crate::perf::{DeliveredFrame, ProfileArm, ProfileHub};
 
 /// A live-connection counter guard: increments on construction, decrements on drop. Held by each
 /// connection task so [`Server`](crate::Server) teardown can wait for in-flight connection work to
@@ -551,10 +551,14 @@ async fn write_frame(
     hub: &ProfileHub,
     frame: BinaryFrame,
 ) -> bool {
-    let timed = hub.armed().then(|| (frame.frame, Instant::now()));
+    let stamp = DeliveredFrame {
+        timeline: frame.timeline,
+        frame: frame.frame,
+    };
+    let timed = hub.armed().then(|| (stamp, Instant::now()));
     let sent = sink.send(Message::binary(frame.bytes)).await;
-    if let Some((frame, started)) = timed {
-        hub.record_send(frame, started.elapsed());
+    if let Some((stamp, started)) = timed {
+        hub.record_send(stamp, started.elapsed());
     }
     sent.is_ok()
 }
@@ -2077,7 +2081,7 @@ mod tests {
         answer_subscribed(&held[1], 7);
         let hub = ProfileHub::new();
         for seq in 0..3 {
-            delivery::route_event(&wire.registry, &hub, log_event(7, seq));
+            delivery::route_event(&wire.registry, &hub, log_event(7, seq), 0);
         }
 
         for seq in 0..3 {

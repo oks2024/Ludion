@@ -28,6 +28,13 @@
 //! When disarmed, recording costs exactly one relaxed atomic load: no lock, no allocation, no clock
 //! read.
 //!
+//! # Timelines
+//!
+//! A `scene.load` or `engine.restore` restarts the frame index, and encode and send finish out of
+//! order, so an index alone could pair a pre-load sample with a post-load frame. Every sample
+//! carries the engine's frame timeline; the hub adopts the newest, clears its rings when it moves,
+//! and refuses samples of an older one. A window spanning a load reads `null` before the restart.
+//!
 //! # Locking rule
 //!
 //! **The hub's mutex is never held across an `.await`.** Every method below takes it, does a bounded
@@ -68,9 +75,35 @@ pub(crate) struct ProfileHub {
     samples: Mutex<Samples>,
 }
 
+impl Samples {
+    /// Adopts `timeline` when it is newer (clearing both rings) and says whether a sample of it
+    /// belongs: `false` for a run the hub has already moved past.
+    fn admit(&mut self, timeline: u64) -> bool {
+        if timeline > self.timeline {
+            self.timeline = timeline;
+            self.encode.clear();
+            self.send.clear();
+        }
+        timeline == self.timeline
+    }
+}
+
+/// A delivered frame's identity: the engine's frame-index run and the index within it.
+///
+/// Both ride every sample because the index alone repeats across a `scene.load` or
+/// `engine.restore`; the timeline says which run an index belongs to.
+#[derive(Clone, Copy)]
+pub(crate) struct DeliveredFrame {
+    pub(crate) timeline: u64,
+    pub(crate) frame: FrameIndex,
+}
+
 /// The two per-frame rings (one entry per frame), oldest-evicted at [`RING_CAPACITY`].
 #[derive(Default)]
 struct Samples {
+    /// The newest frame-index run any sample or window has named. Samples of an older run are
+    /// refused and a newer one clears the rings, because a load restarts the index.
+    timeline: u64,
     /// `(frame, encode ms)` in record order — one entry per frame, whatever its subscribers' formats
     /// cost together.
     encode: VecDeque<(u64, f64)>,
@@ -88,12 +121,12 @@ struct Samples {
 /// the connection state this lives in.
 pub(crate) struct ProfileArm {
     hub: Arc<ProfileHub>,
-    /// The newest frame the hub had already sampled when this guard armed.
+    /// The `(timeline, newest frame)` the hub had already sampled when this guard armed.
     ///
     /// A capture whose reply carries no per-frame columns has no frame list to align to, so its
     /// transport section is taken over everything sampled *after* this mark — the frames delivered
     /// while the capture was in flight. `None` when the hub was empty (nothing to exclude).
-    after_frame: Option<u64>,
+    after_frame: Option<(u64, u64)>,
 }
 
 impl ProfileHub {
@@ -113,7 +146,8 @@ impl ProfileHub {
     /// Registers one party's interest, arming the hub until the returned guard drops.
     pub(crate) fn arm(self: &Arc<Self>) -> ProfileArm {
         // Read the high-water mark first: `after_frame` must not include a frame this very arming
-        // is about to let through.
+        // is about to let through. Timeline and newest frame come under one lock, so the pair is
+        // one moment.
         let after_frame = self.newest_sampled_frame();
         self.interest.fetch_add(1, Ordering::AcqRel);
         ProfileArm {
@@ -123,38 +157,56 @@ impl ProfileHub {
     }
 
     /// Records one frame's encode span. A no-op while disarmed.
-    pub(crate) fn record_encode(&self, frame: FrameIndex, elapsed: Duration) {
+    pub(crate) fn record_encode(&self, stamp: DeliveredFrame, elapsed: Duration) {
         if !self.armed() {
             return;
         }
         let mut samples = self.lock();
-        push(&mut samples.encode, frame.as_u64(), millis(elapsed));
+        if !samples.admit(stamp.timeline) {
+            return;
+        }
+        push(&mut samples.encode, stamp.frame.as_u64(), millis(elapsed));
     }
 
     /// Records one frame's sink-write span. A no-op while disarmed.
-    pub(crate) fn record_send(&self, frame: FrameIndex, elapsed: Duration) {
+    pub(crate) fn record_send(&self, stamp: DeliveredFrame, elapsed: Duration) {
         if !self.armed() {
             return;
         }
         let mut samples = self.lock();
-        push(&mut samples.send, frame.as_u64(), millis(elapsed));
+        if !samples.admit(stamp.timeline) {
+            return;
+        }
+        push(&mut samples.send, stamp.frame.as_u64(), millis(elapsed));
+    }
+
+    /// Notes that frames of `timeline` exist: a newer one than the rings hold forgets them.
+    pub(crate) fn observe_timeline(&self, timeline: u64) {
+        self.lock().admit(timeline);
     }
 
     /// The transport section for an explicit list of frames, with per-frame columns aligned to it.
     ///
     /// `None` when none of those frames was delivered — the "absent" the wire type documents, not a
     /// section full of zeroes.
+    #[cfg(test)]
     pub(crate) fn profile_for_frames(&self, frames: &[u64]) -> Option<TransportProfile> {
-        self.profile_for(frames, true)
+        self.profile_for(frames, true, 0)
     }
 
     /// The transport section for the ticks a window covers, columns aligned to them.
     ///
     /// A window's `frames` are the index each tick ran as; the image that tick produced is delivered
-    /// under [`delivered_frame`] of it, which is where the transport rings file it.
+    /// under [`delivered_frame`] of it, which is where the transport rings file it. A tick at or
+    /// before the one preceding it in the list is where the frame index restarted: that tick is
+    /// live, and everything before it belongs to a run the rings no longer hold and reads `null`.
     pub(crate) fn profile_for_ticks(&self, ticks: &[u64]) -> Option<TransportProfile> {
+        let first_live = ticks
+            .windows(2)
+            .rposition(|pair| pair[1] <= pair[0])
+            .map_or(0, |at| at + 1);
         let delivered: Vec<u64> = ticks.iter().map(|tick| delivered_frame(*tick)).collect();
-        self.profile_for_frames(&delivered)
+        self.profile_for(&delivered, true, first_live)
     }
 
     /// The transport section for the frames sampled after `after_frame`, medians only.
@@ -166,11 +218,15 @@ impl ProfileHub {
     /// would make the section describe more frames than the capture measured.
     pub(crate) fn profile_after(
         &self,
-        after_frame: Option<u64>,
+        after_frame: Option<(u64, u64)>,
         limit: u64,
     ) -> Option<TransportProfile> {
         let frames = {
             let samples = self.lock();
+            // A mark from an earlier run excludes nothing: every frame now held is newer than it.
+            let after_frame = after_frame
+                .filter(|&(timeline, _)| timeline == samples.timeline)
+                .map(|(_, frame)| frame);
             let mut frames: Vec<u64> = samples
                 .encode
                 .iter()
@@ -181,11 +237,18 @@ impl ProfileHub {
             frames.dedup();
             frames.split_off(frames.len().saturating_sub(limit as usize))
         };
-        self.profile_for(&frames, false)
+        self.profile_for(&frames, false, 0)
     }
 
     /// The transport section over `frames`, optionally carrying the raw per-frame columns.
-    fn profile_for(&self, frames: &[u64], columns: bool) -> Option<TransportProfile> {
+    ///
+    /// Frames before `first_live` read `null` whatever the rings hold.
+    fn profile_for(
+        &self,
+        frames: &[u64],
+        columns: bool,
+        first_live: usize,
+    ) -> Option<TransportProfile> {
         let (encode, send) = {
             let samples = self.lock();
             // One entry per frame: a frame delivered to several subscribers is timed once per
@@ -197,17 +260,24 @@ impl ProfileHub {
         let column = |by_frame: &HashMap<u64, f64>| -> Vec<Option<f64>> {
             frames
                 .iter()
-                .map(|frame| by_frame.get(frame).copied())
+                .enumerate()
+                .map(|(at, frame)| {
+                    (at >= first_live)
+                        .then(|| by_frame.get(frame).copied())
+                        .flatten()
+                })
                 .collect()
         };
         build(column(&encode), column(&send), columns)
     }
 
     /// The newest frame either ring holds a sample for.
-    fn newest_sampled_frame(&self) -> Option<u64> {
+    fn newest_sampled_frame(&self) -> Option<(u64, u64)> {
         let samples = self.lock();
         let newest = |ring: &VecDeque<(u64, f64)>| ring.iter().map(|&(frame, _)| frame).max();
-        newest(&samples.encode).max(newest(&samples.send))
+        newest(&samples.encode)
+            .max(newest(&samples.send))
+            .map(|frame| (samples.timeline, frame))
     }
 
     /// The one place the rings are locked, so the "never across an `.await`" rule has one seam to
@@ -265,8 +335,9 @@ fn delivered_frame(tick_frame: u64) -> u64 {
 /// indices, so the transport columns align to it exactly, each tick read at its delivered index
 /// (the tick's plus one) — a tick the window covers but nobody was delivered an image for reads as
 /// `null`, the same convention the GPU columns use for a frame the timing ring skipped.
-pub(crate) fn fill_window_event(hub: &ProfileHub, message: &mut EventMessage) {
+pub(crate) fn fill_window_event(hub: &ProfileHub, message: &mut EventMessage, timeline: u64) {
     if let Event::ProfileWindow(window) = &mut message.event {
+        hub.observe_timeline(timeline);
         window.transport = hub.profile_for_ticks(&window.samples.frames);
     }
 }
@@ -346,8 +417,15 @@ mod tests {
     };
     use ludion_protocol::{Seq, SubId};
 
-    fn frame(index: u64) -> FrameIndex {
-        FrameIndex::new(index)
+    fn frame(index: u64) -> DeliveredFrame {
+        at(0, index)
+    }
+
+    fn at(timeline: u64, index: u64) -> DeliveredFrame {
+        DeliveredFrame {
+            timeline,
+            frame: FrameIndex::new(index),
+        }
     }
 
     fn ms(value: f64) -> Duration {
@@ -441,7 +519,7 @@ mod tests {
         }
 
         let mut message = window(vec![10, 11, 12, 13]);
-        fill_window_event(&hub, &mut message);
+        fill_window_event(&hub, &mut message, 0);
         let Event::ProfileWindow(filled) = &message.event else {
             panic!("the event kind must survive injection");
         };
@@ -469,7 +547,7 @@ mod tests {
         hub.record_encode(frame(10), ms(4.0));
 
         let mut message = window(vec![10]);
-        fill_window_event(&hub, &mut message);
+        fill_window_event(&hub, &mut message, 0);
         let Event::ProfileWindow(filled) = &message.event else {
             panic!("the event kind must survive injection");
         };
@@ -484,7 +562,7 @@ mod tests {
         hub.record_encode(frame(99), ms(4.0));
 
         let mut message = window(vec![10, 11]);
-        fill_window_event(&hub, &mut message);
+        fill_window_event(&hub, &mut message, 0);
         let Event::ProfileWindow(filled) = &message.event else {
             panic!("the event kind must survive injection");
         };
@@ -557,6 +635,100 @@ mod tests {
             .expect("the first measured frame is still in the ring");
         assert_eq!(first.encode_ms, vec![Some(1.0)]);
         assert_eq!(first.send_ms, vec![Some(0.7)], "worst subscriber per frame");
+    }
+
+    /// A frame index repeats after a load; the post-load frame must not merge into the old entry.
+    #[test]
+    fn a_post_load_frame_does_not_merge_with_the_old_entry() {
+        let hub = ProfileHub::new();
+        let _arm = hub.arm();
+        hub.record_encode(at(0, 1), ms(100.0));
+        hub.record_encode(at(1, 1), ms(4.0));
+
+        let transport = hub.profile_for_frames(&[1]).expect("frame 1 was timed");
+        assert_eq!(transport.encode_ms, vec![Some(4.0)]);
+    }
+
+    /// An encode and a send land out of order: a send of the old run finishing after the new run's
+    /// first encode must not enter the rings.
+    #[test]
+    fn a_pre_load_send_landing_after_the_restart_is_dropped() {
+        let hub = ProfileHub::new();
+        let _arm = hub.arm();
+        hub.record_encode(at(1, 1), ms(4.0));
+        hub.record_send(at(0, 30), ms(9.0));
+        hub.record_send(at(0, 1), ms(9.0));
+
+        let transport = hub
+            .profile_for_frames(&[1, 30])
+            .expect("frame 1 was encoded");
+        assert_eq!(transport.send_ms, vec![None, None]);
+    }
+
+    /// A medians-only capture armed before a load measures the frames after it, in either order of
+    /// arming against the first post-load record.
+    #[test]
+    fn a_capture_armed_before_a_load_measures_the_frames_after_it() {
+        let hub = ProfileHub::new();
+        let _subscription = hub.arm();
+        for index in 1..=30 {
+            hub.record_encode(at(0, index), ms(1.0));
+        }
+        let capture = hub.arm();
+        for index in 1..=3 {
+            hub.record_encode(at(1, index), ms(2.0));
+        }
+        let transport = hub
+            .profile_after(capture.after_frame, 10)
+            .expect("the post-load frames were timed");
+        assert_eq!(transport.sampled_frames, 3);
+        assert_eq!(transport.encode_median_ms, 2.0);
+
+        // The load was already observed when the capture armed.
+        hub.observe_timeline(2);
+        let late = hub.arm();
+        for index in 1..=3 {
+            hub.record_encode(at(2, index), ms(3.0));
+        }
+        let transport = hub
+            .profile_after(late.after_frame, 10)
+            .expect("the later run's frames were timed");
+        assert_eq!(transport.sampled_frames, 3);
+        assert_eq!(transport.encode_median_ms, 3.0);
+    }
+
+    /// A window that names a newer timeline than the rings hold forgets the old rings, whose indices
+    /// would otherwise collide with the window's ticks.
+    #[test]
+    fn a_window_at_a_new_timeline_drops_the_old_rings() {
+        let hub = ProfileHub::new();
+        let _arm = hub.arm();
+        for index in 11..=14 {
+            hub.record_encode(at(0, index), ms(5.0));
+        }
+        let mut message = window(vec![10, 11, 12, 13]);
+        fill_window_event(&hub, &mut message, 1);
+        let Event::ProfileWindow(filled) = &message.event else {
+            panic!("the event kind must survive injection");
+        };
+        assert!(filled.transport.is_none());
+    }
+
+    /// A window that spans a load reads null for the ticks before the restart: their indices belong
+    /// to the previous run, whose values the rings no longer hold.
+    #[test]
+    fn a_window_spanning_a_load_reads_null_before_the_restart() {
+        let hub = ProfileHub::new();
+        let _arm = hub.arm();
+        hub.record_encode(at(0, 59), ms(50.0));
+        hub.record_encode(at(0, 60), ms(50.0));
+        hub.record_encode(at(1, 1), ms(4.0));
+        hub.record_encode(at(1, 2), ms(6.0));
+
+        let transport = hub
+            .profile_for_ticks(&[58, 59, 0, 1])
+            .expect("the post-load ticks were timed");
+        assert_eq!(transport.encode_ms, vec![None, None, Some(4.0), Some(6.0)]);
     }
 
     /// The ring is capped: a long-armed host evicts the oldest sample instead of growing.

@@ -79,8 +79,11 @@ layer measures is `frame-streaming`; the determinism guarantees the profiler mus
   only when the ring is full, rather than blocking on a readback: a dropped measurement is
   invisible, a stalled render loop corrupts every number in the report. (A graph over
   `MAX_PASSES` is not skipped; its passes are named and untimed.) Same reason the transport rings are
-  capped and evict rather than grow. They hold one entry per frame (last write wins) and cover a
-  full capture, so the transport medians describe the same span as the sim and GPU sections.
+  capped and evict rather than grow. They hold one entry per frame (the largest sample wins) and cover a
+  full capture, so the transport medians describe the same span as the sim and GPU sections. Every
+  sample also carries the engine's frame timeline (`Engine::frame_timeline`, bumped by `scene.load`
+  and `engine.restore`, not by a scene switch): a newer timeline clears the rings and an older
+  one's samples are refused, since a load restarts the frame index.
 - **One report shape.** Offline and live both produce `ProfileReport`; a window converts into one
   via `ProfileWindowData::into_report`. A budget file, a chart, and a trace exporter never learn
   which side produced their input. Adding a number means adding it to `ludion_protocol::perf`, not

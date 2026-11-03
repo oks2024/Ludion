@@ -380,6 +380,50 @@ fn needs_gpu_frames_subscription_streams_rendered_frames_and_stops_when_idle() {
     );
 }
 
+/// A load discards the stream ring yet still delivers a frame to a frames subscriber, stamped with
+/// the new timeline; the load's fresh driver runs, so the index is not asserted.
+#[test]
+fn needs_gpu_a_scene_load_still_delivers_a_frame_on_the_new_timeline() {
+    if !gpu_available() {
+        eprintln!("[frames] SKIPPED: no GPU adapter available");
+        return;
+    }
+    let root = temp_project();
+    let scene = write_scene(&root, "again.yaml");
+    let mut engine = Engine::with_project_root(&root).with_render_size(160, 90);
+    engine
+        .load_inline_scene("format: 1\nentities: []\n")
+        .unwrap();
+    let session = Session::start(engine, true);
+    session.send(Command::SimPause);
+    session.subscribe(Channel::Frames);
+
+    let next_frame = || loop {
+        match session
+            .recv_any(Duration::from_secs(10))
+            .expect("a frame arrives in time")
+        {
+            Egress::Frame(frame) => break frame,
+            Egress::Event(_) => continue,
+        }
+    };
+    let first = next_frame();
+
+    session.send(Command::SceneLoad(
+        ludion_protocol::command::SceneLoadParams { path: scene },
+    ));
+    // Frames of the old run may still be in flight; the first one off the old timeline is the check.
+    let after = (0..1_000)
+        .map(|_| next_frame())
+        .find(|frame| frame.timeline != first.timeline)
+        .expect("a frame of a new timeline arrives");
+    assert_eq!(
+        after.timeline,
+        first.timeline + 1,
+        "the load's image is a new run"
+    );
+}
+
 // --- A render failure during streaming is loud (no GPU: extract fails before the adapter) --------
 
 /// A render failure that is *not* a missing GPU must surface on the `log` channel, exactly once per

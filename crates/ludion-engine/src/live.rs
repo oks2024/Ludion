@@ -877,7 +877,10 @@ fn emit_egress(
                         seq,
                         frame: Some(frame),
                     };
-                    let _ = channels.events.send(Egress::Event(EgressEvent { message }));
+                    let _ = channels.events.send(Egress::Event(EgressEvent {
+                        message,
+                        timeline: engine.frame_timeline(),
+                    }));
                 }
             }
         }
@@ -960,6 +963,7 @@ fn emit_egress(
         }
         let message = Egress::Frame(EgressFrame {
             frame: stamp,
+            timeline: engine.frame_timeline(),
             width: image.width,
             height: image.height,
             rgba: image.rgba,

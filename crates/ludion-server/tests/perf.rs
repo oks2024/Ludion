@@ -14,7 +14,7 @@ use std::time::Duration;
 use ludion_client::{CallOk, Client};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_engine::Engine;
-use ludion_protocol::command::{SimSetSpeedParams, SimStepParams};
+use ludion_protocol::command::{SceneLoadParams, SimSetSpeedParams, SimStepParams};
 use ludion_protocol::frame::FrameFormat;
 use ludion_protocol::perf::{ProfileCaptureParams, TransportProfile};
 use ludion_protocol::{Channel, Command, Event, ResponseBody, SubscribeMode};
@@ -463,5 +463,57 @@ fn needs_gpu_a_delivered_image_carries_the_frame_after_its_tick() {
         seen,
         Some(after),
         "the image of a tick is delivered under the frame after it"
+    );
+}
+
+/// **A load restarts the frame index, not the capture.** The rings still hold the previous run's
+/// frames, whose indices pass the new capture's length; the capture's transport section must come
+/// from the frames delivered after the load.
+#[test]
+fn needs_gpu_a_capture_after_a_scene_load_keeps_its_transport() {
+    let root = std::env::temp_dir().join(format!("ludion-perf-load-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("the content root is created");
+    std::fs::write(root.join("again.yaml"), SCENE).expect("the scene is written");
+    let mut engine: Engine = Engine::builder()
+        .render_size(64, 64)
+        .system(SYSTEM, |_world, _ctx| {})
+        .project_root(&root)
+        .build()
+        .expect("the engine builds");
+    engine.load_inline_scene(SCENE).expect("the scene loads");
+    let server = ludion_server::Server::bind(engine, "127.0.0.1:0").expect("server binds");
+    let mut client = client(&server);
+    if !gpu_available(&mut client) {
+        eprintln!("skipped: no GPU adapter, so no frame is delivered and there is no transport");
+        return;
+    }
+    client.set_call_timeout(Some(Duration::from_secs(30)));
+    client
+        .subscribe(Channel::Frames, SubscribeMode::default(), FrameFormat::Qoi)
+        .expect("the frames channel accepts a subscription");
+    client
+        .subscribe(Channel::Profile, SubscribeMode::default(), FrameFormat::Qoi)
+        .expect("the profile channel accepts a subscription");
+    // One window puts the rings' high-water mark past the capture's length.
+    let window = next_window(&mut client);
+    assert!(window.last_frame > 30, "the rings must pass the capture");
+
+    client
+        .call(Command::SceneLoad(SceneLoadParams {
+            path: "again.yaml".into(),
+        }))
+        .expect("the scene loads over the wire");
+
+    // The load's fresh driver resets the speed, so this runs at engine pace; 30 frames leave the
+    // readback lag and async encode room under load while staying below the window's frames.
+    let ok = capture(&mut client, 30).expect("the capture is accepted and answered");
+    let ResponseBody::ProfileReport { report } = ok.body else {
+        panic!("profile.capture must answer with a profile_report body");
+    };
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(
+        report.transport.is_some(),
+        "a capture after a load measures the frames delivered after it"
     );
 }

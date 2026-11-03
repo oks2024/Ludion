@@ -105,7 +105,7 @@ use ludion_engine::live::{
 use ludion_engine::{ENGINE_VERSION, Engine};
 use ludion_protocol::command::AssetReloadParams;
 use ludion_protocol::handshake::ServerHello;
-use ludion_protocol::{Command, EventMessage, PROTOCOL_VERSION, schema};
+use ludion_protocol::{Command, PROTOCOL_VERSION, schema};
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 use tokio::sync::watch;
@@ -232,7 +232,8 @@ impl Server {
         // (latest-wins: a frame the router hasn't picked up is superseded, never queued). The pump does
         // no encoding — it must recv again immediately, since the engine drops frames while the frame
         // slot is full.
-        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<EventMessage>();
+        let (event_tx, event_rx) =
+            tokio::sync::mpsc::unbounded_channel::<ludion_engine::egress::EgressEvent>();
         let (frame_tx, frame_rx) = watch::channel::<Option<Arc<EgressFrame>>>(None);
         let egress_pump = std::thread::Builder::new()
             .name("ludion-egress-pump".into())
