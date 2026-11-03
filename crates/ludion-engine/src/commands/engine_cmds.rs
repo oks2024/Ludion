@@ -3,7 +3,7 @@
 use ludion_core::diagnostics::Diagnostic;
 use ludion_protocol::ResponseBody;
 use ludion_protocol::command::EngineRestoreParams;
-use ludion_protocol::event::{Event, SceneChangedData};
+use ludion_protocol::event::{Event, SceneChangeKind, SceneChangedData};
 
 use crate::engine::Engine;
 
@@ -33,7 +33,11 @@ pub(crate) fn restore(
 ) -> Result<ResponseBody, Diagnostic> {
     let report = engine.restore_from_value(&params.snapshot)?;
     // The world was replaced — notify `scene.changed` subscribers (dropped if none are open).
-    engine.push_event(Event::SceneChanged(SceneChangedData { path: None }));
+    engine.push_event(Event::SceneChanged(SceneChangedData {
+        kind: SceneChangeKind::Restore,
+        path: None,
+        request_id: engine.current_request(),
+    }));
     Ok(ResponseBody::Restored { report })
 }
 

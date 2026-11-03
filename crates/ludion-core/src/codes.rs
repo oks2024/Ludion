@@ -1365,7 +1365,7 @@ pub mod code {
     /// no seed input takes the run's seed, so every candidate is the same job.
     pub const GENERATION_IDENTICAL_CANDIDATES: DiagnosticCode = DiagnosticCode::new("L1266");
     /// `L1267` — `scene.save` refused: the scene bears `generated_from:`, so it is write-only
-    /// output of `ludion generate-map`.
+    /// output of `ludion generate-map`; the destination file bearing it is refused the same way.
     pub const SCENE_SAVE_GENERATED: DiagnosticCode = DiagnosticCode::new("L1267");
     /// `L1268` — a voxel view request (`ludion check-scene --slice`/`--column` on a voxel model)
     /// names a `y`, `x` or `z` outside the model's size; raised by `ludion-scene`'s `render_slice`
@@ -2105,6 +2105,14 @@ pub mod code {
     /// `L3057` — a `sim.step` asked for more ticks than one command may run: the step is
     /// synchronous on the sim thread. Raised by `ludion-engine`.
     pub const SIM_STEP_TOO_LONG: DiagnosticCode = DiagnosticCode::new("L3057");
+
+    /// `L3058` — `scene.save` refused: the destination differs from the text this session loaded or
+    /// last saved there (or the session never saw it). Raised by `ludion-engine`.
+    pub const SCENE_SAVE_CONFLICT: DiagnosticCode = DiagnosticCode::new("L3058");
+
+    /// `L3059` — `scene.save` refused: the destination is a `kind:` document (a prefab, mesh and so
+    /// on), not a scene. Raised by `ludion-engine`.
+    pub const SCENE_SAVE_WRONG_KIND: DiagnosticCode = DiagnosticCode::new("L3059");
 
     // --- L4xxx: sim (raised by `ludion-sim`) ---
 
@@ -7222,7 +7230,8 @@ node, or run with `--count 1`.",
         explanation: "\
 A scene bearing `generated_from:` is write-only output of `ludion generate-map`. `scene.save`
 refuses it, so no client overwrites it or writes a copy the drift gate would flag. The editor
-disables Save for the same reason.
+disables Save for the same reason. The same refusal covers a destination file that bears
+`generated_from:`, whatever the world holds.
 
 Fix: edit the map source, kit or fragment named by `generated_from` and regenerate with
 `ludion generate-map <generator>`.",
@@ -10701,6 +10710,29 @@ frame does not move and nothing is recorded.
 
 Fix: step in smaller batches. `ticks: 0` stays valid.",
     },
+    CodeEntry {
+        code: code::SCENE_SAVE_CONFLICT,
+        severity: Severity::Error,
+        title: "scene file changed since this session saw it",
+        explanation: "\
+`scene.save` found a file at the destination whose text differs from what this session last loaded
+or saved there, or that this session never loaded. Writing would overwrite text the session never
+saw, so nothing was written. The message says which case it is.
+
+Fix: `scene.load` the destination to see it (its text becomes the session's base), or pass
+`force: true` to overwrite it knowingly. `force` skips only this check.",
+    },
+    CodeEntry {
+        code: code::SCENE_SAVE_WRONG_KIND,
+        severity: Severity::Error,
+        title: "scene destination is not a scene",
+        explanation: "\
+`scene.save` found a `kind:` document (a prefab, mesh, sculpt and so on) at the destination.
+Saving the world there would replace that asset with a scene, so nothing was written, even with
+`force`.
+
+Fix: pick another destination. To change a prefab from the world, use `prefab.apply`.",
+    },
 ];
 
 /// Codes that once existed and are gone from [`CODES`], each with why. A retired code is never
@@ -11176,6 +11208,8 @@ mod tests {
         code::SERVER_CONNECTION_LIMIT,
         code::SERVER_EVENTS_DROPPED,
         code::SIM_STEP_TOO_LONG,
+        code::SCENE_SAVE_CONFLICT,
+        code::SCENE_SAVE_WRONG_KIND,
         // --- L4xxx: sim ---
         code::INVALID_SIM_SPEED,
         code::INPUT_SCRIPT_IO,

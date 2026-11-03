@@ -253,6 +253,66 @@ fn scene_changed_events_deliver_then_stop_after_unsubscribe() {
     server.shutdown_clean();
 }
 
+/// **`scene.changed` names its cause.** A `scene.save` over the wire emits `kind: "save"` and the
+/// `request_id` of the save; `force` decodes, and a misspelling of it is refused `L3001`.
+#[test]
+fn a_wire_save_names_its_kind_and_request_id() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("delivery_save_cause");
+    std::fs::create_dir_all(&dir).unwrap();
+    let _ = std::fs::remove_file(dir.join("out.yaml"));
+
+    let mut engine = Engine::with_project_root(&dir);
+    engine.load_inline_scene(BASE_SCENE).unwrap();
+    let server = serve(engine);
+    let mut socket = raw_connect(&server.url());
+    let sub = subscribe(
+        &mut socket,
+        10,
+        "scene.changed",
+        json!({ "mode": "latest_wins" }),
+    );
+
+    send_request(&mut socket, 41, "scene.save", json!({ "path": "out.yaml" }));
+    // The reply and the event may arrive in either order.
+    let (mut event, mut replied) = (None, false);
+    while event.is_none() || !replied {
+        let msg = read_json(&mut socket, Duration::from_secs(5)).expect("a reply or an event");
+        if msg.get("event").is_some() && msg["sub"].as_u64() == Some(sub) {
+            event = Some(msg);
+        } else if msg.get("id").and_then(Value::as_u64) == Some(41) {
+            replied = true;
+        }
+    }
+    let event = event.unwrap();
+    assert_eq!(event["data"]["kind"], json!("save"));
+    assert_eq!(event["data"]["request_id"], json!(41));
+    assert_eq!(event["data"]["path"], json!("out.yaml"));
+
+    send_request(
+        &mut socket,
+        42,
+        "scene.save",
+        json!({ "path": "out.yaml", "force": true }),
+    );
+    assert_eq!(
+        await_reply(&mut socket, 42)["ok"]["kind"],
+        json!("scene_saved")
+    );
+
+    send_request(
+        &mut socket,
+        43,
+        "scene.save",
+        json!({ "path": "out.yaml", "forse": true }),
+    );
+    assert_eq!(
+        await_reply(&mut socket, 43)["error"]["code"],
+        json!("L3001")
+    );
+
+    server.shutdown_clean();
+}
+
 /// **Subscription ownership.** A connection can close only the subscriptions it opened: another
 /// socket's `stream.unsubscribe` of the same id is refused `L3007`, and the owner keeps receiving.
 #[test]

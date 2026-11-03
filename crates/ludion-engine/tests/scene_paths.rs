@@ -74,7 +74,10 @@ fn save_refuses_paths_outside_the_root_and_writes_nothing() {
     for path in escaping_paths(&outside) {
         let error = dispatch(
             &mut engine,
-            Command::SceneSave(SceneSaveParams { path: path.clone() }),
+            Command::SceneSave(SceneSaveParams {
+                path: path.clone(),
+                force: false,
+            }),
         )
         .expect_err("an escaping path must be refused");
         assert_eq!(error.code.to_string(), "L3040", "{path:?}");
@@ -119,6 +122,7 @@ fn save_refuses_a_generated_scene_and_writes_nothing() {
         &mut engine,
         Command::SceneSave(SceneSaveParams {
             path: "town.yaml".to_string(),
+            force: false,
         }),
     )
     .expect_err("a generated scene must not save");
@@ -162,7 +166,10 @@ fn a_relative_path_below_the_root_saves_checks_and_loads_back() {
     let path = "sub/dir/x.yaml".to_string();
     dispatch(
         &mut engine,
-        Command::SceneSave(SceneSaveParams { path: path.clone() }),
+        Command::SceneSave(SceneSaveParams {
+            path: path.clone(),
+            force: false,
+        }),
     )
     .expect("a relative save succeeds");
     assert!(root.join("sub/dir/x.yaml").is_file());

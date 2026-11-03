@@ -36,8 +36,11 @@ allowed to change is the protocol-evolution policy: `ludion devdocs protocol-evo
 A browser page served from another origin is refused at the upgrade with HTTP 403 and `L3039`; native
 clients (CLI, MCP, Node, your own probe) send no `Origin` header and connect as above. `scene.load`,
 `scene.save` and `scene.check` take a path relative to the content root; an absolute, drive-prefixed
-or `..` path is `L3040`. `scene.save` refuses a scene bearing `generated_from:` (`L1267`; edit the
-map and regenerate). `scene.check` runs everything `ludion check-scene` does, and returns warnings
+or `..` path is `L3040`. `scene.save` refuses a world or destination bearing `generated_from:` (`L1267`; edit the
+map and regenerate) and a destination that is a `kind:` document (`L3059`). It also refuses a
+destination whose text differs from what this session loaded or last saved there (`L3058`: `scene.load`
+it, or pass `force: true`, which skips only that check), and returns the checker's findings over what
+it wrote in `diagnostics`; they never block the write. `scene.check` runs everything `ludion check-scene` does, and returns warnings
 beside `valid: true`.
 
 **2. Request / response envelope.** After the handshake, every call is a `Request` and every reply a
@@ -80,6 +83,10 @@ A request is strict: an unknown field in `params` (or an unknown envelope key) i
 its `path` naming the field (`/params/hsh`) and its `help` suggesting the nearest valid one, rather
 than being ignored. `sim.step` runs synchronously, so `ticks` above 216000 (an hour at 60 Hz) is
 refused with `L3057`; step in smaller batches.
+
+A `scene.changed` event's `data` has `kind` (`load`, `save`, `restore`, `switch`), the `path` when
+known, and `request_id`, the `id` of the request that caused it. Ids are chosen per connection, so
+another client's request may share the number; it is absent for a game-driven switch.
 
 Events (frame streams, `scene.changed`, `log`) arrive as unsolicited
 `{"event": …, "sub": …, "seq": …, "data": …}` messages once you `stream.subscribe`; a request-only

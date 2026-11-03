@@ -61,7 +61,7 @@ use ludion_core::time::FrameIndex;
 use ludion_ecs::panic_payload_text;
 use ludion_protocol::event::{Event, LogEvent};
 use ludion_protocol::perf::MAX_CAPTURE_WALL_SECONDS;
-use ludion_protocol::{Channel, Command, EventMessage, ResponseBody};
+use ludion_protocol::{Channel, Command, EventMessage, RequestId, ResponseBody};
 use ludion_sim::{RunState, Speed};
 
 use ludion_renderer::TickStamp;
@@ -93,6 +93,9 @@ pub struct StampedCommand {
     pub command: Command,
     /// The one-shot sender the sim thread replies on (a non-blocking, capacity-1 send).
     pub reply: ReplySender,
+    /// The wire request id this command answers, if it came over a connection; the sim thread
+    /// exposes it to the handler so an event it emits can name its cause.
+    pub request: Option<RequestId>,
 }
 
 impl StampedCommand {
@@ -111,7 +114,32 @@ impl StampedCommand {
     pub fn new(command: Command) -> (StampedCommand, ReplyReceiver) {
         // Capacity 1: the sim thread's single reply always fits, so its send never blocks.
         let (reply, receiver) = crossbeam_channel::bounded(1);
-        (StampedCommand { command, reply }, receiver)
+        (
+            StampedCommand {
+                command,
+                reply,
+                request: None,
+            },
+            receiver,
+        )
+    }
+
+    /// Like [`new`](StampedCommand::new), but records the wire request `id` the command answers, so
+    /// the events it causes carry it.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::live::StampedCommand;
+    /// use ludion_protocol::{Command, RequestId};
+    ///
+    /// let (stamped, reply) = StampedCommand::for_request(Command::SimHash, RequestId::new(7));
+    /// assert_eq!(stamped.request, Some(RequestId::new(7)));
+    /// drop(reply);
+    /// ```
+    pub fn for_request(command: Command, id: RequestId) -> (StampedCommand, ReplyReceiver) {
+        let (mut stamped, receiver) = StampedCommand::new(command);
+        stamped.request = Some(id);
+        (stamped, receiver)
     }
 }
 
@@ -540,10 +568,12 @@ fn reply(
     // `AssertUnwindSafe` is a real claim: a handler may have half-applied its edit before it
     // panicked. It is sound because `command_panicked` pauses the sim, so no tick runs on the
     // wreckage, and the world is left as the panic left it — that shape is the evidence.
+    engine.set_current_request(stamped.request);
     let result = match panic::catch_unwind(AssertUnwindSafe(|| engine.execute(stamped.command))) {
         Ok(result) => result,
         Err(payload) => Err(engine.command_panicked(method, &panic_payload_text(payload.as_ref()))),
     };
+    engine.set_current_request(None);
     activity.store(ACTIVITY_IDLE, Ordering::Relaxed);
     if let (Some(include_samples), Ok(_)) = (capture, &result) {
         return Some(PendingCapture {

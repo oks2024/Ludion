@@ -17,7 +17,7 @@ the sync SDK in `ludion-client`. Boundary rules are in `crate-graph`; L-codes in
 - `crates/ludion-protocol/src/envelope.rs` — `Request`, `Response`/`WireResult`, `EventMessage`, `RequestId`/`SubId`/`Seq`; `Request::from_json`/`from_value` with `L3001`–`L3003` diagnostics.
 - `crates/ludion-protocol/src/command.rs` — the exhaustive `Command` enum (38 methods), per-method param structs, `Command::METHODS`, `Channel`, `SubscribeMode`.
 - `crates/ludion-protocol/src/response.rs` — `ResponseBody` (tagged by `kind`), `EntityMatch`.
-- `crates/ludion-protocol/src/event.rs` — `Event` payloads for the non-frame channels (`log`, `sim.events`, `scene.changed`, `asset.reloaded`, `profile`).
+- `crates/ludion-protocol/src/event.rs` — `Event` payloads for the non-frame channels (`log`, `sim.events`, `scene.changed` — `kind` plus the causing `request_id`, set from `StampedCommand::for_request`, `asset.reloaded`, `profile`).
 - `crates/ludion-protocol/src/perf.rs` — the performance-report types both producers fill: `ProfileReport` (`sim`/`gpu`/`transport`/optional `samples`), `ProfileWindowData` (+ `into_report`), `ProfileSamples`, `ProfileCaptureParams`. Measured in three other crates, shaped here because they only ever reach a client through the wire — see the `profiling` topic.
 - `crates/ludion-protocol/src/handshake.rs` — `Hello` / `ServerHello` (announces `schema_hash`).
 - `crates/ludion-protocol/src/frame.rs` — binary frame-stream message: `LFR1` magic, 36-byte little-endian `FrameHeader`, `FrameFormat` (QOI / LZ4_RGBA / RAW_RGBA), a flags byte (bit 0 = `gi_stale`), `encode`/`decode` (`L3004`).

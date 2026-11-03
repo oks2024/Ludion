@@ -260,6 +260,7 @@ fn scene_save_keeps_the_preload_list() {
     match engine
         .execute(Command::SceneSave(SceneSaveParams {
             path: "out.yaml".into(),
+            force: false,
         }))
         .unwrap()
         .body

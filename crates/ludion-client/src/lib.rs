@@ -1234,7 +1234,7 @@ mod tests {
     fn event(seq: u64) -> EventMessage {
         serde_json::from_value(serde_json::json!({
             "event": "scene.changed",
-            "data": {},
+            "data": { "kind": "load" },
             "sub": 1,
             "seq": seq,
         }))

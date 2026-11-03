@@ -1163,6 +1163,7 @@ fn assert_load_save_roundtrip(scene_path: &Path, scratch_name: &str) {
         &mut engine,
         Command::SceneSave(SceneSaveParams {
             path: "out.yaml".into(),
+            force: false,
         }),
     )
     .expect("scene.save succeeds");

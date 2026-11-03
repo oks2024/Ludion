@@ -19,7 +19,7 @@ use ludion_protocol::command::{
     EngineRestoreParams, EntitySpawnParams, SceneLoadParams, SimStepParams, StreamSubscribeParams,
     SubscribeMode,
 };
-use ludion_protocol::event::{Event, LogLevel};
+use ludion_protocol::event::{Event, LogLevel, SceneChangeKind};
 use ludion_protocol::frame::FrameFormat;
 use ludion_protocol::{Channel, Command, ResponseBody, SubId, WireHash};
 use serde_json::json;
@@ -158,7 +158,11 @@ fn scene_load_delivers_scene_changed_events_with_per_sub_seq() {
             assert_eq!(event.message.seq.as_u64(), 0);
             assert!(event.message.frame.is_some());
             match event.message.event {
-                Event::SceneChanged(data) => assert_eq!(data.path.as_deref(), Some("level.yaml")),
+                Event::SceneChanged(data) => {
+                    assert_eq!(data.kind, SceneChangeKind::Load);
+                    assert_eq!(data.path.as_deref(), Some("level.yaml"));
+                    assert_eq!(data.request_id, None, "`StampedCommand::new` carries no id");
+                }
                 other => panic!("expected SceneChanged, got {other:?}"),
             }
         }
@@ -220,7 +224,44 @@ entities: []
         .expect("a scene.changed event arrives")
     {
         Egress::Event(event) => match event.message.event {
-            Event::SceneChanged(data) => assert_eq!(data.path, None),
+            Event::SceneChanged(data) => {
+                assert_eq!(data.kind, SceneChangeKind::Restore);
+                assert_eq!(data.path, None);
+            }
+            other => panic!("expected SceneChanged, got {other:?}"),
+        },
+        Egress::Frame(_) => panic!("expected an event, got a frame"),
+    }
+}
+
+#[test]
+fn a_save_event_names_its_kind_path_and_request_id() {
+    let root = temp_project();
+    let session = Session::start(Engine::with_project_root(&root), true);
+    let _sub = session.subscribe(Channel::SceneChanged);
+
+    let (stamped, reply) = StampedCommand::for_request(
+        Command::SceneSave(ludion_protocol::command::SceneSaveParams {
+            path: "out.yaml".to_string(),
+            force: false,
+        }),
+        ludion_protocol::RequestId::new(41),
+    );
+    session.intake.send(stamped).unwrap();
+    reply
+        .recv_timeout(Duration::from_secs(5))
+        .expect("sim thread replied in time")
+        .expect("the save succeeds");
+    match session
+        .recv_any(Duration::from_secs(5))
+        .expect("a scene.changed event arrives")
+    {
+        Egress::Event(event) => match event.message.event {
+            Event::SceneChanged(data) => {
+                assert_eq!(data.kind, SceneChangeKind::Save);
+                assert_eq!(data.path.as_deref(), Some("out.yaml"));
+                assert_eq!(data.request_id, Some(ludion_protocol::RequestId::new(41)));
+            }
             other => panic!("expected SceneChanged, got {other:?}"),
         },
         Egress::Frame(_) => panic!("expected an event, got a frame"),

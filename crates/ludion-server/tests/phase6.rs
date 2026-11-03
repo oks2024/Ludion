@@ -368,6 +368,7 @@ fn scripted_designer_session_meets_the_phase_6_exit_criteria() {
     match client
         .call(Command::SceneSave(SceneSaveParams {
             path: "phase6_edited.yaml".to_string(),
+            force: false,
         }))
         .unwrap()
         .body

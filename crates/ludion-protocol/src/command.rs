@@ -417,6 +417,10 @@ pub struct SceneLoadParams {
 pub struct SceneSaveParams {
     /// Destination path; the engine writes canonical YAML there.
     pub path: String,
+    /// Skip only the check that the destination still holds the text this session loaded or last
+    /// saved there; the generated-scene and wrong-kind refusals still apply.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
 }
 
 /// Parameters for `scene.check`.
@@ -1320,6 +1324,7 @@ mod tests {
             }),
             Command::SceneSave(SceneSaveParams {
                 path: "a.yaml".into(),
+                force: false,
             }),
             Command::SceneCheck(SceneCheckParams {
                 path: "a.yaml".into(),

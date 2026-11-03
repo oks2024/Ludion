@@ -887,7 +887,7 @@ fn accept_request(text: &str, shared: &ConnShared) -> Pending {
         .then(|| delivery::subscribe_in_flight(&shared.registry));
     let method = request.command.method();
 
-    let (stamped, reply_rx) = StampedCommand::new(request.command);
+    let (stamped, reply_rx) = StampedCommand::for_request(request.command, request.id);
     if shared.intake.send(stamped).is_err() {
         return Pending::Ready(Response::error(id, engine_unavailable()));
     }

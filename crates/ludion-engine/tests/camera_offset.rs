@@ -157,6 +157,7 @@ fn a_scene_round_trips_the_offset_with_defaults_omitted() {
         &mut engine,
         Command::SceneSave(ludion_protocol::command::SceneSaveParams {
             path: "out.yaml".into(),
+            force: false,
         }),
     )
     .unwrap();

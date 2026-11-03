@@ -186,6 +186,7 @@ fn save_and_reload(engine: &mut Engine, root: &std::path::Path) -> Engine {
         engine,
         Command::SceneSave(SceneSaveParams {
             path: "out.yaml".into(),
+            force: false,
         }),
     );
     let saved = std::fs::read_to_string(root.join("out.yaml")).unwrap();
@@ -283,6 +284,7 @@ fn scene_load_check_save() {
         &mut engine,
         Command::SceneSave(SceneSaveParams {
             path: "out.yaml".into(),
+            force: false,
         }),
     );
     let saved = std::fs::read_to_string(root.join("out.yaml")).unwrap();
@@ -326,6 +328,7 @@ fn scene_round_trips_byte_identically() {
         &mut e1,
         Command::SceneSave(SceneSaveParams {
             path: "canon.yaml".into(),
+            force: false,
         }),
     );
     let canonical = std::fs::read_to_string(root.join("canon.yaml")).unwrap();
@@ -350,6 +353,7 @@ fn scene_round_trips_byte_identically() {
         &mut e2,
         Command::SceneSave(SceneSaveParams {
             path: "canon2.yaml".into(),
+            force: false,
         }),
     );
     let canonical2 = std::fs::read_to_string(root.join("canon2.yaml")).unwrap();
@@ -562,6 +566,7 @@ fn destroy_cascades_and_a_dangling_parent_save_is_l1018() {
             &mut engine,
             Command::SceneSave(SceneSaveParams {
                 path: "out.yaml".into(),
+                force: false,
             }),
         ),
         "L1018",
@@ -851,6 +856,7 @@ fn parent_index_remaps_across_a_destroy_and_survives_reload() {
         &mut engine,
         Command::SceneSave(SceneSaveParams {
             path: "out.yaml".into(),
+            force: false,
         }),
     );
     let saved = std::fs::read_to_string(root.join("out.yaml")).unwrap();
@@ -1015,6 +1021,7 @@ fn joint_refs_remap_across_a_destroy_and_survive_reload() {
         &mut engine,
         Command::SceneSave(SceneSaveParams {
             path: "out.yaml".into(),
+            force: false,
         }),
     );
     let saved = std::fs::read_to_string(root.join("out.yaml")).unwrap();
@@ -1166,6 +1173,7 @@ fn a_joint_naming_a_despawned_entity_is_l1018_on_save() {
             &mut engine,
             Command::SceneSave(SceneSaveParams {
                 path: "out.yaml".into(),
+                force: false,
             }),
         ),
         "L1018",
@@ -1241,6 +1249,7 @@ fn save_err(engine: &mut Engine) -> Diagnostic {
         engine,
         Command::SceneSave(SceneSaveParams {
             path: "out.yaml".into(),
+            force: false,
         }),
     )
     .expect_err("the save should be refused");
@@ -1330,6 +1339,159 @@ fn scene_load_missing_file_is_l1015() {
     );
 }
 
+// --- scene.save: conflict base, destination guards, findings -------------------------------------
+
+const EMPTY_SCENE: &str = "format: 1\nseed: 7\nentities: []\n";
+
+fn save_cmd(path: &str, force: bool) -> Command {
+    Command::SceneSave(SceneSaveParams {
+        path: path.into(),
+        force,
+    })
+}
+
+fn load_cmd(path: &str) -> Command {
+    Command::SceneLoad(SceneLoadParams { path: path.into() })
+}
+
+/// A root with `a.yaml` on disk and an engine that loaded it.
+fn loaded_root() -> (PathBuf, Engine) {
+    let root = temp_project();
+    std::fs::write(root.join("a.yaml"), EMPTY_SCENE).unwrap();
+    let mut engine = Engine::with_project_root(&root);
+    ok(&mut engine, load_cmd("a.yaml"));
+    (root, engine)
+}
+
+#[test]
+fn scene_save_refuses_a_file_changed_since_load_and_force_overrides() {
+    let (root, mut engine) = loaded_root();
+    // A hand edit the engine never saw (a comment keeps the scene valid but not byte-equal).
+    let edited = format!("# hand edit\n{EMPTY_SCENE}");
+    std::fs::write(root.join("a.yaml"), &edited).unwrap();
+    assert_eq!(err_code(&mut engine, save_cmd("a.yaml", false)), "L3058");
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.yaml")).unwrap(),
+        edited
+    );
+
+    ok(&mut engine, save_cmd("a.yaml", true));
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.yaml")).unwrap(),
+        EMPTY_SCENE
+    );
+    ok(&mut engine, save_cmd("a.yaml", false));
+}
+
+#[test]
+fn scene_save_after_load_and_save_passes_repeatedly() {
+    let (root, mut engine) = loaded_root();
+    std::fs::write(root.join("a.yaml"), format!("# note\n{EMPTY_SCENE}")).unwrap();
+    ok(&mut engine, load_cmd("a.yaml"));
+    ok(&mut engine, save_cmd("a.yaml", false));
+    ok(&mut engine, save_cmd("a.yaml", false));
+}
+
+#[test]
+fn scene_save_over_a_file_never_loaded_is_a_conflict() {
+    let root = temp_project();
+    let theirs = "format: 1\nseed: 9\nentities: []\n";
+    std::fs::write(root.join("other.yaml"), theirs).unwrap();
+    let mut engine = Engine::with_project_root(&root);
+    engine.load_inline_scene(EMPTY_SCENE).unwrap();
+    assert_eq!(
+        err_code(&mut engine, save_cmd("other.yaml", false)),
+        "L3058"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("other.yaml")).unwrap(),
+        theirs
+    );
+}
+
+#[test]
+fn scene_save_over_identical_bytes_or_a_missing_file_passes() {
+    let root = temp_project();
+    std::fs::write(root.join("same.yaml"), EMPTY_SCENE).unwrap();
+    let mut engine = Engine::with_project_root(&root);
+    engine.load_inline_scene(EMPTY_SCENE).unwrap();
+    ok(&mut engine, save_cmd("same.yaml", false));
+    ok(&mut engine, save_cmd("fresh.yaml", false));
+    let (root, mut engine) = loaded_root();
+    std::fs::remove_file(root.join("a.yaml")).unwrap();
+    ok(&mut engine, save_cmd("a.yaml", false));
+}
+
+#[test]
+fn scene_save_refuses_a_generated_destination_even_with_force() {
+    let root = temp_project();
+    std::fs::write(
+        root.join("gen.yaml"),
+        "format: 1\ngenerated_from: maps/x.map.yaml\nentities: []\n",
+    )
+    .unwrap();
+    let mut engine = Engine::with_project_root(&root);
+    engine.load_inline_scene(EMPTY_SCENE).unwrap();
+    for force in [false, true] {
+        assert_eq!(err_code(&mut engine, save_cmd("gen.yaml", force)), "L1267");
+    }
+    assert!(
+        std::fs::read_to_string(root.join("gen.yaml"))
+            .unwrap()
+            .contains("generated_from")
+    );
+}
+
+#[test]
+fn scene_save_refuses_a_kind_document_destination_even_with_force() {
+    let root = temp_project();
+    let prefab = "format: 1\nkind: prefab\nname: p\nentities: []\n";
+    std::fs::write(root.join("p.yaml"), prefab).unwrap();
+    let mut engine = Engine::with_project_root(&root);
+    engine.load_inline_scene(EMPTY_SCENE).unwrap();
+    for force in [false, true] {
+        let error = dispatch(&mut engine, save_cmd("p.yaml", force)).unwrap_err();
+        assert_eq!(error.code.as_str(), "L3059");
+        assert!(error.help.unwrap().contains("prefab.apply"));
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.join("p.yaml")).unwrap(),
+        prefab
+    );
+}
+
+#[test]
+fn scene_save_writes_and_reports_what_the_checker_finds() {
+    let root = temp_project();
+    let mut engine = Engine::with_project_root(&root);
+    engine.load_inline_scene(EMPTY_SCENE).unwrap();
+    let parent = spawn_named(&mut engine, "parent");
+    let rigid = spawn_with(&mut engine, "rigid", "Collider", RIGID_BOX());
+    force_parent(&mut engine, rigid, parent);
+    match ok(&mut engine, save_cmd("flagged.yaml", false)) {
+        ResponseBody::SceneSaved { diagnostics, .. } => assert!(
+            diagnostics.iter().any(|d| d.code.as_str() == "L1221"),
+            "findings: {diagnostics:?}"
+        ),
+        other => panic!("expected SceneSaved, got {other:?}"),
+    }
+    assert!(root.join("flagged.yaml").exists());
+}
+
+#[test]
+fn a_failed_scene_load_leaves_the_save_base_alone() {
+    let (root, mut engine) = loaded_root();
+    let broken = "format: 1\nentities: [ {{{ \n";
+    std::fs::write(root.join("a.yaml"), broken).unwrap();
+    dispatch(&mut engine, load_cmd("a.yaml")).unwrap_err();
+    // The base is still the text the session loaded: the broken file is a conflict, not a match.
+    assert_eq!(err_code(&mut engine, save_cmd("a.yaml", false)), "L3058");
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.yaml")).unwrap(),
+        broken
+    );
+}
+
 #[test]
 fn scene_save_onto_a_directory_is_output_io() {
     let root = temp_project();
@@ -1348,6 +1510,7 @@ entities: []
             &mut engine,
             Command::SceneSave(SceneSaveParams {
                 path: "out.yaml".into(),
+                force: false,
             }),
         ),
         "L1038",
@@ -3170,6 +3333,7 @@ fn a_required_reference_missing_from_the_serialized_value_is_l0007_on_save() {
         &mut engine,
         Command::SceneSave(SceneSaveParams {
             path: "out.yaml".into(),
+            force: false,
         }),
     )
     .expect_err("the save should be refused");
@@ -3251,6 +3415,7 @@ fn a_dangling_reference_saves_null_only_where_the_field_is_nullable() {
         &mut engine,
         Command::SceneSave(SceneSaveParams {
             path: "out.yaml".into(),
+            force: false,
         }),
     );
     let saved = std::fs::read_to_string(root.join("out.yaml")).expect("saved");

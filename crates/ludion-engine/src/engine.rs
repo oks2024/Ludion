@@ -43,13 +43,13 @@ use ludion_core::time::{FrameIndex, GameClock, TickRate};
 use ludion_ecs::{ComponentInfo, QueryElemShape, QueryObservations, Registry, Schedule, World};
 use ludion_protocol::command::ViewPose;
 use ludion_protocol::envelope::Seq;
-use ludion_protocol::event::{Event, LogEvent, SceneChangedData};
+use ludion_protocol::event::{Event, LogEvent, SceneChangeKind, SceneChangedData};
 use ludion_protocol::profile::ProfileMigration;
 use ludion_protocol::replay::{
     REPLAY_FORMAT_VERSION, ReplayExtent, ReplayHeader, ReplayWriter, SceneRef,
 };
 use ludion_protocol::response::EntityBounds;
-use ludion_protocol::{Channel, PROTOCOL_VERSION, SubId, schema};
+use ludion_protocol::{Channel, PROTOCOL_VERSION, RequestId, SubId, schema};
 use ludion_renderer::{
     AntiAliasing, BlendData, FrameSinks, FrameSize, Gpu, PresentBackend, PresentPacket,
     PresentSettings, PresentSize, PresentTarget, Presenter, PresenterNote, ProbeResolve,
@@ -246,6 +246,14 @@ pub struct Engine {
     /// programmatically-built world or a scene that declared no name.
     scene_name: Option<String>,
     project_root: PathBuf,
+    /// The text this session last loaded or saved at each resolved scene path: `scene.save`'s
+    /// conflict base. Outside the world, the snapshot and `WorldHash`.
+    scene_bases: BTreeMap<PathBuf, String>,
+    /// The project-root-relative path the current world was loaded or switched from; `None` before
+    /// the first load, switch or restored boot. What a restart's `scene.changed` names.
+    current_scene_path: Option<String>,
+    /// The wire request id of the command being executed, set by the live loop around each command.
+    current_request: Option<RequestId>,
     /// The directory the profile resolves under; `None` = the project root. Set by
     /// [`EngineBuilder::save_root`](crate::EngineBuilder::save_root) — the seam a shipped build (a
     /// read-only content root) points at a separate writable directory. Unlike `project_root`, this
@@ -741,6 +749,9 @@ impl Engine {
             authored: std::sync::OnceLock::new(),
             scene_name: None,
             project_root,
+            scene_bases: BTreeMap::new(),
+            current_scene_path: None,
+            current_request: None,
             save_root: None,
             category_gains: CategoryGains::default(),
             audio_distance: AudioDistance::default(),
@@ -2244,7 +2255,14 @@ impl Engine {
         } else {
             None
         };
-        self.finish_transition(outcome, record_error);
+        if outcome.is_ok() {
+            if recording {
+                self.scene_bases
+                    .insert(self.project_root.join(&scene_path), target_text);
+            }
+            self.current_scene_path = Some(scene_path.clone());
+        }
+        self.finish_transition(outcome, record_error, Some(scene_path));
     }
 
     /// Performs a requested restart: rebuilds the current scene from the text the session holds,
@@ -2256,19 +2274,26 @@ impl Engine {
             return;
         };
         let outcome = crate::transition::perform_restart(self, carry, &text);
-        self.finish_transition(outcome, None);
+        let path = self.current_scene_path.clone();
+        self.finish_transition(outcome, None, path);
     }
 
     /// The tail both transitions share: the world was replaced, so `scene.changed` subscribers hear
-    /// of it, then the outcome lands on the error channel. No path on the event: a switch's path is
-    /// project-root relative and a `scene.load`'s content-root relative, and a restart has none.
+    /// of it, then the outcome lands on the error channel. The event names `path`, which joins onto
+    /// `project_root` like a `scene.load`'s; a switch path may hold `..` (`content_refusal`), which
+    /// `scene.save` refuses with `L3040`.
     fn finish_transition(
         &mut self,
         outcome: Result<Option<Diagnostic>, Diagnostic>,
         record_error: Option<Diagnostic>,
+        path: Option<String>,
     ) {
         if outcome.is_ok() {
-            self.push_event(Event::SceneChanged(SceneChangedData { path: None }));
+            self.push_event(Event::SceneChanged(SceneChangedData {
+                kind: SceneChangeKind::Switch,
+                path,
+                request_id: None,
+            }));
         }
         let outcome = match outcome {
             Err(diagnostic) => Some(diagnostic),
@@ -3330,6 +3355,37 @@ impl Engine {
     /// The project root that scene and asset paths resolve against.
     pub fn project_root(&self) -> &Path {
         &self.project_root
+    }
+
+    /// Notes that a restored boot's world came from the scene file `relative` (project-root
+    /// relative): a later restart names it, and the text now on disk becomes `scene.save`'s conflict
+    /// base. A read failure leaves the base as it was; the path is noted regardless.
+    pub fn note_restored_scene_file(&mut self, relative: &str) {
+        self.current_scene_path = Some(relative.to_string());
+        let resolved = self.project_root.join(relative);
+        if let Ok(text) = std::fs::read_to_string(&resolved) {
+            self.scene_bases.insert(resolved, text);
+        }
+    }
+
+    pub(crate) fn scene_base(&self, resolved: &Path) -> Option<&str> {
+        self.scene_bases.get(resolved).map(String::as_str)
+    }
+
+    pub(crate) fn set_scene_base(&mut self, resolved: PathBuf, text: String) {
+        self.scene_bases.insert(resolved, text);
+    }
+
+    pub(crate) fn set_current_scene_path(&mut self, path: Option<String>) {
+        self.current_scene_path = path;
+    }
+
+    pub(crate) fn set_current_request(&mut self, request: Option<RequestId>) {
+        self.current_request = request;
+    }
+
+    pub(crate) fn current_request(&self) -> Option<RequestId> {
+        self.current_request
     }
 
     /// The directory the player profile loads from and saves to: the builder's `save_root`, else the
@@ -7225,6 +7281,7 @@ entities:
             .execute(ludion_protocol::Command::SceneSave(
                 ludion_protocol::command::SceneSaveParams {
                     path: "saved.yaml".to_string(),
+                    force: false,
                 },
             ))
             .unwrap();

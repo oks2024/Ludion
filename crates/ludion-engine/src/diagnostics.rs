@@ -362,6 +362,98 @@ entities:
         }
     }
 
+    /// Asks for a restart on every third frame.
+    fn restart_every_third(world: &mut World, ctx: &SystemCtx) {
+        if ctx.frame.as_u64() % 3 == 2
+            && let Some(switch) = world.resource_mut::<SceneSwitch>()
+        {
+            switch.restart(Vec::<EntityId>::new());
+        }
+    }
+
+    /// Advances until a `scene.changed` arrives and returns it.
+    fn next_scene_changed(engine: &mut Engine) -> ludion_protocol::event::SceneChangedData {
+        for _ in 0..10 {
+            engine.advance_live();
+            for event in engine.take_events() {
+                if let Event::SceneChanged(data) = event {
+                    return data;
+                }
+            }
+        }
+        panic!("no scene.changed within 10 frames");
+    }
+
+    #[test]
+    fn a_restart_names_the_scene_it_rebuilt_when_it_knows_one() {
+        let dir = fresh_dir("restart-event");
+        let mut engine = Engine::builder()
+            .system("restart_every_third", restart_every_third)
+            .project_root(&*dir)
+            .build()
+            .expect("the test engine builds");
+        engine.load_inline_scene(SCENE).expect("the scene loads");
+        engine.take_events();
+        let inline = next_scene_changed(&mut engine);
+        assert_eq!(inline.kind, ludion_protocol::event::SceneChangeKind::Switch);
+        assert_eq!(inline.path, None, "an inline scene has no path");
+
+        engine
+            .execute(ludion_protocol::Command::SceneLoad(
+                ludion_protocol::command::SceneLoadParams {
+                    path: "next.yaml".to_string(),
+                },
+            ))
+            .expect("the scene loads");
+        engine.take_events();
+        let loaded = next_scene_changed(&mut engine);
+        assert_eq!(loaded.path.as_deref(), Some("next.yaml"));
+    }
+
+    #[test]
+    fn a_live_switch_leaves_the_target_as_the_save_base() {
+        let dir = fresh_dir("switch-base");
+        // Hand-written bytes the canonical writer would not reproduce.
+        let hand = format!("# hand note\n{NEXT}");
+        std::fs::write(dir.join("next.yaml"), &hand).unwrap();
+        let mut engine = Engine::builder()
+            .system("switch_on_frame_2", switch_on_frame_2)
+            .project_root(&*dir)
+            .build()
+            .expect("the test engine builds");
+        engine.load_inline_scene(SCENE).expect("the scene loads");
+        for _ in 0..4 {
+            engine.advance_live();
+        }
+        engine
+            .execute(ludion_protocol::Command::SceneSave(
+                ludion_protocol::command::SceneSaveParams {
+                    path: "next.yaml".to_string(),
+                    force: false,
+                },
+            ))
+            .expect("the switch noted the base, so the save is no conflict");
+        assert_ne!(
+            std::fs::read_to_string(dir.join("next.yaml")).unwrap(),
+            hand
+        );
+    }
+
+    #[test]
+    fn a_restart_after_a_restored_boot_names_the_scene_file() {
+        let dir = fresh_dir("restored-boot");
+        let mut engine = Engine::builder()
+            .system("restart_every_third", restart_every_third)
+            .project_root(&*dir)
+            .build()
+            .expect("the test engine builds");
+        engine.load_inline_scene(SCENE).expect("the scene loads");
+        engine.note_restored_scene_file("next.yaml");
+        engine.take_events();
+        let changed = next_scene_changed(&mut engine);
+        assert_eq!(changed.path.as_deref(), Some("next.yaml"));
+    }
+
     fn fresh_dir(name: &str) -> ScratchDir {
         let dir =
             std::env::temp_dir().join(format!("ludion-diagnostics-{}-{name}", std::process::id()));
@@ -515,7 +607,7 @@ entities:
     }
 
     #[test]
-    fn a_scene_switch_pushes_a_pathless_scene_changed() {
+    fn a_scene_switch_pushes_a_scene_changed_naming_its_target() {
         let dir = fresh_dir("switch-event");
         let mut engine = Engine::builder()
             .system("switch_on_frame_2", switch_on_frame_2)
@@ -537,7 +629,12 @@ entities:
             })
             .collect();
         assert_eq!(changed.len(), 1, "one switch, one event: {changed:?}");
-        assert_eq!(changed[0].path, None);
+        assert_eq!(
+            changed[0].kind,
+            ludion_protocol::event::SceneChangeKind::Switch
+        );
+        assert_eq!(changed[0].path.as_deref(), Some("next.yaml"));
+        assert_eq!(changed[0].request_id, None);
     }
 
     const FAULTY_PREFAB: &str = "\

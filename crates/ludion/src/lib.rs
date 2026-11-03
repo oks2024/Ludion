@@ -933,16 +933,18 @@ fn boot_from_snapshot(
     });
     println!("{}", boot_restore_line(&outcome));
     let _ = std::io::Write::flush(&mut std::io::stdout());
+    let file_name = resolved
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
     if let Err(diagnostic) = outcome {
         eprintln!("{diagnostic}");
         engine.execute(ludion_protocol::Command::SceneLoad(
-            ludion_protocol::command::SceneLoadParams {
-                path: resolved
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            },
+            ludion_protocol::command::SceneLoadParams { path: file_name },
         ))?;
+    } else {
+        // The restored world came from this file, so the first `scene.save` over it is no conflict.
+        engine.note_restored_scene_file(&file_name);
     }
     Ok(engine)
 }

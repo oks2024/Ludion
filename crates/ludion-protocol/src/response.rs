@@ -56,6 +56,10 @@ pub enum ResponseBody {
     SceneSaved {
         /// The path the canonical YAML was written to.
         path: String,
+        /// What `scene.check` reports over the written text; the file was written regardless.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[schemars(with = "Vec<crate::schema_proxy::WireErrorSchema>")]
+        diagnostics: Vec<ludion_core::diagnostics::Diagnostic>,
     },
     /// Result of `scene.check`.
     SceneChecked {

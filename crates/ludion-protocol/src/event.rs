@@ -124,13 +124,33 @@ pub struct SimEventsData {
     pub events: Vec<Value>,
 }
 
+/// What caused a `scene.changed` event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneChangeKind {
+    /// A `scene.load` replaced the world.
+    Load,
+    /// A `scene.save` wrote the scene file.
+    Save,
+    /// An `engine.restore` replaced the world.
+    Restore,
+    /// A game-driven scene switch or restart.
+    Switch,
+}
+
 /// The payload of a `scene.changed` event.
-#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SceneChangedData {
-    /// The content-root-relative scene path of a `scene.load` or `scene.save`; absent for an
-    /// `engine.restore` or a game-driven scene switch.
+    /// What happened.
+    pub kind: SceneChangeKind,
+    /// The content-root-relative scene path of the scene concerned; absent for an `engine.restore`,
+    /// or a restart with no known path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// The `id` of the request that caused the change, chosen by the issuing connection, so another
+    /// client may use the same number; absent for a game-driven change or an in-process command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<crate::RequestId>,
 }
 
 /// The payload of an `asset.reloaded` event.
@@ -223,10 +243,14 @@ mod tests {
 
     #[test]
     fn scene_changed_omits_absent_path() {
-        let event = Event::SceneChanged(SceneChangedData { path: None });
+        let event = Event::SceneChanged(SceneChangedData {
+            kind: SceneChangeKind::Restore,
+            path: None,
+            request_id: None,
+        });
         assert_eq!(
             serde_json::to_value(&event).unwrap(),
-            serde_json::json!({ "event": "scene.changed", "data": {} }),
+            serde_json::json!({ "event": "scene.changed", "data": { "kind": "restore" } }),
         );
     }
 }
