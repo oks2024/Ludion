@@ -40,6 +40,10 @@
 //             by `scripts/crate-graph-edges.mjs`; the block must match the manifests byte for byte
 //             (`--write` regenerates), and every workspace package needs a Layout line in
 //             `dev-docs/crate-graph.md`. Needs the toolchain for `cargo metadata`.
+//   manifests  no member crate writes a dependency version of its own (`foo.workspace = true` or a
+//             path; `games/vigil` is a detached workspace and is skipped), and a game's plain
+//             `[dependencies]` (and the `ludion new` template's) name no `ludion-*` crate, only the
+//             `ludion` facade; `scripts/manifest-rules.mjs` holds both.
 //
 // Every violation is reported, not just the first.
 //
@@ -52,6 +56,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { CRATES, checkClippyLists, workspaceDirs } from './clippy-denylist.mjs';
 import { checkCrateGraph } from './crate-graph-edges.mjs';
+import { checkManifests } from './manifest-rules.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NEXTEST = path.join(REPO_ROOT, '.config/nextest.toml');
@@ -572,14 +577,15 @@ if (vigilPresent) {
 const header = checkHeader();
 const clippy = checkClippyLists(REPO_ROOT, workspaceDirs(REPO_ROOT));
 const crateGraph = checkCrateGraph(REPO_ROOT);
+const manifests = checkManifests(REPO_ROOT, workspaceDirs(REPO_ROOT));
 const requireGpu = checkRequireGpu();
 const bless = checkBless();
 const crateAllow = checkCrateAllows();
 const proptest = checkProptest();
-const errors = [...workspace.orphans, ...nextest.errors, ...requireGpu.errors, ...bless.errors, ...crateAllow.errors, ...proptest.errors, ...header.errors, ...clippy.errors, ...crateGraph.errors];
+const errors = [...workspace.orphans, ...nextest.errors, ...requireGpu.errors, ...bless.errors, ...crateAllow.errors, ...proptest.errors, ...header.errors, ...clippy.errors, ...crateGraph.errors, ...manifests.errors];
 
 if (errors.length === 0) {
-  console.log(`lists-in-step: OK (nextest ${nextest.count} tests scanned, c-header ${header.count} items, clippy ${clippy.count} files, crate-graph ${crateGraph.count} packages, require-gpu ${requireGpu.count} files, bless ${bless.count} files, crate-allow ${crateAllow.count} files, proptest ${proptest.count} blocks)`);
+  console.log(`lists-in-step: OK (nextest ${nextest.count} tests scanned, c-header ${header.count} items, clippy ${clippy.count} files, crate-graph ${crateGraph.count} packages, manifests ${manifests.count} files, require-gpu ${requireGpu.count} files, bless ${bless.count} files, crate-allow ${crateAllow.count} files, proptest ${proptest.count} blocks)`);
   process.exit(0);
 }
 console.error(`lists-in-step: ${errors.length} list(s) out of step`);

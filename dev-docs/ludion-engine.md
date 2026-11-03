@@ -40,7 +40,6 @@ hash, the `frame` LFR1 format) is `ludion devdocs ludion-protocol`; the WS host 
 - `crates/ludion-engine/src/hierarchy.rs` — `world_transform`/`world_affine` (the derived world pose, never stored), `reparent` and `Keep`, the `L1218`–`L1225` faults and the `L1260` reparent refusal, the `hierarchy` debug-draw lines.
 - `crates/ludion-engine/src/particles.rs` — the particle motion kernel (`Motion`, closed-form `position_at`) and the analytic `ParticleEmitter` evaluator (`evaluate`); pure functions of `(component, Transform, SimTime)`, no world/resource/clock reads, read fresh by `extract.rs` every frame.
 - `crates/ludion-engine/src/manifest.rs` — the `ludion.toml` reader (`load`, `find`, `Manifest::voice_caps`, `L0023`/`L5004`); read by `export`, `sync` and every game host.
-- `crates/ludion-engine/src/base64.rs` — a tiny RFC 4648 encoder for the `render.screenshot` payload, so `ludion-protocol` needs no base64 dep.
 - `crates/ludion-engine/src/live.rs`, `crates/ludion-engine/src/egress.rs`, `crates/ludion-engine/src/diagnostics.rs` — `ludion devdocs engine-live-loop`.
 - `crates/ludion-components/src/lib.rs` — `ludion devdocs engine-components`.
 - `crates/ludion-engine/src/render_extent.rs`, `crates/ludion-engine/src/render_size.rs`, `crates/ludion-engine/src/render_view.rs` — `ludion devdocs engine-present`.

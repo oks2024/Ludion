@@ -35,7 +35,6 @@ mod animation_events;
 mod assembly_mesh;
 mod asset_cache;
 pub mod audio;
-mod base64;
 pub mod bisect;
 mod bounds;
 pub mod builder;

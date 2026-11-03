@@ -346,7 +346,7 @@ jobs:
       - name: cargo nextest run (thread-identity gate)
         run: cargo nextest run --profile no-gpu -E 'binary(thread_identity)' --run-ignored ignored-only
 
-  # Dependency licenses and RustSec advisories over the root workspace and the editor's Tauri host
+  # Dependency licenses, RustSec advisories, duplicate-version bans and registry sources over the root workspace and the editor's Tauri host
   # (decision 10 of the private publication plan, `Plan-Private/`); deny.toml holds the allowlist
   # and the reasoned advisory ignores. Mirrors scripts/check.mjs `deny` (`--full`).
   deny:
@@ -364,10 +364,10 @@ jobs:
           tool: cargo-deny
 
       - name: cargo deny
-        run: cargo deny check advisories licenses
+        run: cargo deny check advisories licenses bans sources
 
       - name: cargo deny (editor host)
-        run: cargo deny --manifest-path editor/app/src-tauri/Cargo.toml --config deny.toml check advisories licenses
+        run: cargo deny --manifest-path editor/app/src-tauri/Cargo.toml --config deny.toml check advisories licenses bans sources
 
   denylist-canary:
     name: denylist-canary (${{ matrix.os }})

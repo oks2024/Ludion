@@ -22,9 +22,6 @@ ludion = { path = "../../crates/ludion" }
 # The component derives are the game's own dependencies — the facade does not re-export them.
 serde = { workspace = true }
 schemars = { workspace = true }
-# `ludion_core::math` for portable transcendentals (the emitter ring's sin/cos) and the sim-side
-# determinism this crate holds itself to.
-ludion-core = { path = "../../crates/ludion-core" }
 
 [dev-dependencies]
 # `drive_hashes` for the two-run determinism half of the census gate.

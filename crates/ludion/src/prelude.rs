@@ -61,7 +61,7 @@
 //!   [`MouseState`]/[`GamepadState`] (reached via `input.mouse()`/`input.gamepad()`) and their
 //!   name enums [`MouseButton`], [`GamepadButton`], [`GamepadAxis`]; the const-constructible key-or-button
 //!   binding [`Action`] and the standard radial stick deadzone [`STICK_DEADZONE`] and the trigger press level [`TRIGGER_THRESHOLD`]; [`SimTime`], [`FrameIndex`],
-//!   [`TickRate`]. [`GameClock`] is the gameplay half of that time: the resource a game calls
+//!   [`TickRate`]; [`DeterministicRng`] and [`WorldSeed`] are the seeded randomness a system draws from. [`GameClock`] is the gameplay half of that time: the resource a game calls
 //!   `hold()` on every frame it is frozen (`world.resource_mut::<GameClock>().unwrap().hold()`), so
 //!   that `ctx.game_time` / `ctx.game_frame` — what every closed-form evaluator reads, from a
 //!   pattern timeline to a particle emitter — stand still while the sim keeps ticking. Held nothing
@@ -243,6 +243,7 @@ pub use ludion_core::codes::code;
 pub use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
 pub use ludion_core::ids::EntityId;
 pub use ludion_core::par;
+pub use ludion_core::rng::{DeterministicRng, WorldSeed};
 pub use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
 pub use ludion_sim::WorldHash;
 

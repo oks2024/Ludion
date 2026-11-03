@@ -1,8 +1,8 @@
-# cargo-deny: dependency licenses and RustSec advisories, for the root workspace and the editor's
+# cargo-deny: dependency licenses, RustSec advisories, duplicate-version bans and registry sources, for the root workspace and the editor's
 # Tauri host (a separate cargo workspace):
 #
-#   cargo deny check advisories licenses
-#   cargo deny --manifest-path editor/app/src-tauri/Cargo.toml --config deny.toml check advisories licenses
+#   cargo deny check advisories licenses bans sources
+#   cargo deny --manifest-path editor/app/src-tauri/Cargo.toml --config deny.toml check advisories licenses bans sources
 #
 # Run by `node scripts/check.mjs --full` and ci.yml's `deny` job, never the default lane. One-time
 # install per machine: `cargo install cargo-deny --locked`. `fuzz/` is outside the gate: its
@@ -44,3 +44,22 @@ ignore = [
     { id = "RUSTSEC-2025-0098", reason = "unic-* unmaintained: Tauri host only, via urlpattern in tauri-utils" },
     { id = "RUSTSEC-2025-0100", reason = "unic-* unmaintained: Tauri host only, via urlpattern in tauri-utils" },
 ]
+
+[bans]
+# Duplicate versions are reported, not denied: most come from one dependency lagging another, and
+# only the families below are understood and accepted. A new duplicate shows up as a warning.
+multiple-versions = "warn"
+# One config serves both workspaces: a skip for a version only the other workspace carries is unused.
+skip = [
+    { crate = "glam@0.33.8", reason = "nalgebra 0.35 and glamx via the vendored rapier carry glam 0.33 beside our 0.30 (the lock also lists 0.31 and 0.32, behind nalgebra features nothing enables)" },
+    { crate = "base64@0.23.1", reason = "ureq 3 (the ComfyUI client in ludion-gen) carries base64 0.23; ours stays on gltf's 0.13 line" },
+    { crate = "objc2@0.5.2", reason = "winit 0.30 carries the objc2 0.5 stack on macOS and iOS beside the 0.6 stack of the audio and window crates" },
+    { crate = "ndk@0.8.0", reason = "cpal 0.15 and oboe carry ndk 0.8 beside winit's ndk 0.9 on Android" },
+    { crate = "bitflags@1.3.2", reason = "winit 0.30, core-graphics and cpal's coreaudio-rs still carry bitflags 1" },
+]
+
+[sources]
+# Every dependency comes from crates.io or a path (the vendored rapier and parry); a git or
+# alternate-registry source is a decision, not a drift.
+unknown-git = "deny"
+unknown-registry = "deny"

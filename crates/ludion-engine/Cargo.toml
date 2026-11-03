@@ -34,8 +34,8 @@ ludion-camera = { path = "../ludion-camera", version = "0.1.0" }
 ludion-components = { path = "../ludion-components", version = "0.1.0" }
 ludion-renderer = { path = "../ludion-renderer", version = "0.1.0" }
 ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
-# The snapshot's physics blob: `base64` of the solver's bincode bytes, because `serde_json` writes a
-# `Vec<u8>` as an array of numbers.
+# The snapshot's physics blob (`base64` of the solver's bincode bytes, because `serde_json` writes a
+# `Vec<u8>` as an array of numbers) and the `render.screenshot` PNG payload.
 base64.workspace = true
 crossbeam-channel.workspace = true
 schemars.workspace = true

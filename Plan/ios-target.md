@@ -139,6 +139,11 @@ fatal; `ludion_core::par` is plain `std::thread`; arm64 WorldHash identity is al
    are the facade's. One core, three shells: the native host, `present.rs` as its winit client (so
    every desktop `--window` run exercises the phone's path), and `launch` as the core with no surface.
    **No winit on iOS.**
+   **`ludion::ffi` is the one port-shaped module without a cargo feature.** It compiles on every
+   desktop build, despite the rule that ports land behind features, because its UIKit part is
+   plain-data handle types (about 5 lines) and nothing links UIKit on desktop. A feature would cost a
+   forwarding feature and a cfg on `ludion_game_start` in every game, break `ludion export` on
+   projects without it, and change `mobile-check`'s coverage of the `start` paths.
 7. **Screen** (amended 2026-09-23). Landscape only. Render 720 px high at the **safe area's aspect,
    never narrower than 16:9**, and the present fits the frame into the safe rect: the notch edges go
    black, a tablet gets bars top and bottom. The one engine change is the present geometry taking a

@@ -7,6 +7,8 @@
 // own marker (TEMPLATE_MARKER): a user project has no script to name.
 //
 //   sim         types + clock + threads + math + glam: crates and games whose code runs inside a tick.
+//   game        the sim lists, spelled through the `ludion` facade (`ludion::math`, `ludion::collections`):
+//               games and the `ludion new` template, which depend on the facade and not on `ludion-core`.
 //   strict      types + clock + math + glam: crates on the deterministic path that own a thread seam
 //               (`dev-docs/determinism.md`), so `std::thread` stays allowed.
 //   render      clock only: the renderer, which keeps glam trig and std maps but owns one wall-clock
@@ -103,6 +105,7 @@ const GROUPS = {
 
 const TIERS = {
   sim: ['types', 'clock', 'threads', 'math', 'glam'],
+  game: ['types', 'clock', 'threads', 'math', 'glam'],
   strict: ['types', 'clock', 'math', 'glam'],
   render: ['clock'],
   permissive: [],
@@ -115,7 +118,7 @@ export const CRATES = {
   'crates/ludion-audio': 'permissive',
   'crates/ludion-camera': 'sim',
   'crates/ludion-cli': 'strict',
-  'crates/ludion-cli/templates': 'sim',
+  'crates/ludion-cli/templates': 'game',
   'crates/ludion-client': 'permissive',
   'crates/ludion-components': 'sim',
   'crates/ludion-cook': 'strict',
@@ -141,12 +144,12 @@ export const CRATES = {
   'crates/ludion-texgen': 'sim',
   'crates/ludion-testkit': 'permissive',
   'crates/ludion-window': 'permissive',
-  'games/breakout': 'sim',
-  'games/character-course': 'sim',
-  'games/hello-paddle': 'sim',
-  'games/shmup-stress': 'sim',
-  'games/sokoban': 'sim',
-  'games/vigil': 'sim',
+  'games/breakout': 'game',
+  'games/character-course': 'game',
+  'games/hello-paddle': 'game',
+  'games/shmup-stress': 'game',
+  'games/sokoban': 'game',
+  'games/vigil': 'game',
 };
 
 const entry = (e) => `    { path = "${e.path}", reason = "${e.reason}" },`;
@@ -158,8 +161,15 @@ export function render(tier) {
     const { key, entries } = GROUPS[name];
     byKey.set(key, [...(byKey.get(key) ?? []), ...entries]);
   }
-  return `${[...byKey].map(([key, entries]) => `${key} = [\n${entries.map(entry).join('\n')}\n]`).join('\n\n')}\n`;
+  const text = `${[...byKey].map(([key, entries]) => `${key} = [\n${entries.map(entry).join('\n')}\n]`).join('\n\n')}\n`;
+  return tier === 'game' ? forFacade(text) : text;
 }
+
+// A game names the engine through the `ludion` facade, so the replacement hints do too.
+const forFacade = (text) => text
+  .replaceAll('ludion_core::math::rotation does', "ludion::math's quaternion helpers do")
+  .replaceAll('ludion_core::par', 'ludion::prelude::par')
+  .replaceAll('ludion_core::', 'ludion::');
 
 const clippyPath = (root, dir) => path.join(root, dir, 'clippy.toml');
 const readLf = (p) => readFileSync(p, 'utf8');
@@ -192,7 +202,7 @@ export function workspaceDirs(root) {
 export function checkClippyLists(root, workspaceDirs) {
   const errors = [];
   for (const dir of workspaceDirs) {
-    if (!(dir in CRATES)) errors.push(`clippy: ${dir} is a workspace member with no tier — add it to CRATES in scripts/clippy-denylist.mjs (sim, strict or permissive), then ${FIX}`);
+    if (!(dir in CRATES)) errors.push(`clippy: ${dir} is a workspace member with no tier — add it to CRATES in scripts/clippy-denylist.mjs (sim, game, strict, render or permissive), then ${FIX}`);
   }
   for (const [dir, tier] of Object.entries(CRATES)) {
     const file = clippyPath(root, dir);

@@ -201,7 +201,6 @@ pub fn run(name: &str) -> ExitCode {
             .replace("{{ludion_dep}}", &deps.ludion)
             .replace("{{ludion_testkit_dep}}", &deps.ludion_testkit)
             .replace("{{ludion_engine_dep}}", &deps.ludion_engine)
-            .replace("{{ludion_core_dep}}", &deps.ludion_core)
             .replace("{{engine_root}}", &engine_root_literal)
             .replace("{{name}}", name)
     };
@@ -381,7 +380,6 @@ struct EngineDeps {
     ludion: String,
     ludion_testkit: String,
     ludion_engine: String,
-    ludion_core: String,
 }
 
 /// Chooses path deps (checkout flow) vs version deps (installed flow) for the generated project.
@@ -405,7 +403,6 @@ fn engine_dependencies(engine_root: &Path) -> EngineDeps {
         ludion: crate_spec("ludion", ", default-features = false"),
         ludion_testkit: crate_spec("ludion-testkit", ""),
         ludion_engine: crate_spec("ludion-engine", ""),
-        ludion_core: crate_spec("ludion-core", ""),
     }
 }
 
@@ -607,7 +604,6 @@ mod tests {
                 "schemars",
                 "ludion-testkit",
                 "ludion-engine",
-                "ludion-core",
                 "serde_json"
             ]
         );
@@ -637,7 +633,6 @@ mod tests {
             "serde-json",
             "schemars",
             "ludion-engine",
-            "ludion_core",
             "con",
             "NUL",
             "com1",

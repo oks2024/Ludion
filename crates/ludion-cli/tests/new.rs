@@ -327,7 +327,6 @@ fn new_installed_mode_emits_version_deps_without_absolute_paths() {
         format!("ludion = {{ version = \"{version}\", default-features = false }}"),
         format!("ludion-testkit = {{ version = \"{version}\" }}"),
         format!("ludion-engine = {{ version = \"{version}\" }}"),
-        format!("ludion-core = {{ version = \"{version}\" }}"),
     ] {
         assert!(
             cargo.contains(&line),

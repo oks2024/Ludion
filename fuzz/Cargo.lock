@@ -721,7 +721,6 @@ dependencies = [
  "ludion-core",
  "png",
  "serde",
- "serde_json",
  "xxhash-rust",
 ]
 

@@ -21,6 +21,8 @@ import { writeFileAtomic } from '../../scripts/atomic-write.mjs';
 import { findPrefixedPrints, scanFiles } from './diagnostic-prints.mjs';
 import { findScheduleText, scanFiles as scheduleFiles, unallowedHits, ALLOWLIST as SCHEDULE_ALLOWLIST } from './schedule-comments.mjs';
 import { BEGIN as CG_BEGIN, END as CG_END, checkCrateGraph, renderEdges, spliceEdges } from '../../scripts/crate-graph-edges.mjs';
+import { render as renderDenylist } from '../../scripts/clippy-denylist.mjs';
+import { bareVersions, checkManifests, nonFacadeDeps } from '../../scripts/manifest-rules.mjs';
 import { countCodeLines } from '../../scripts/ecs-budget.mjs';
 import { measure as measureTargets, plan as planTargetClean } from './target-guard.mjs';
 
@@ -849,4 +851,62 @@ test('crate-graph: spliceEdges round-trips, is idempotent, and throws on a missi
 
 test('crate-graph: the real tree is in step', () => {
   assert.deepEqual(checkCrateGraph(ROOT).errors, []);
+});
+
+// ── manifest rules (scripts/manifest-rules.mjs) ──────────────────────────────
+
+test('manifests: bareVersions flags a bare string, inline table, target entry and table form', () => {
+  const text = [
+    '[dependencies]',
+    'a = "1"',
+    'b = { version = "2", features = ["x"] }',
+    "[target.'cfg(windows)'.dependencies]",
+    'c = "3"',
+    '[dev-dependencies.d]',
+    'version = "4"',
+    'features = ["y"]',
+  ].join('\n');
+  assert.deepEqual(bareVersions(text), ['a', 'b', 'c', 'd']);
+});
+
+test('manifests: bareVersions passes workspace, path and multi-line path entries', () => {
+  const text = [
+    '[package]',
+    'version = "0.1.0"',
+    '[dependencies]',
+    'a.workspace = true',
+    'b = { workspace = true, optional = true }',
+    'c = { path = "../c", version = "0.1.0" }',
+    'd = { path = "../d", default-features = false, features = [',
+    '    "x",',
+    '    "y",',
+    '] }',
+    '[[bin]]',
+    'name = "z"',
+    'path = "src/main.rs"',
+  ].join('\n');
+  assert.deepEqual(bareVersions(text), []);
+});
+
+test('manifests: nonFacadeDeps flags an engine crate in [dependencies] only', () => {
+  const text = [
+    '[dependencies]',
+    'ludion = { path = "../../crates/ludion" }',
+    'ludion-core = { path = "../../crates/ludion-core" }',
+    '[dev-dependencies]',
+    'ludion-testkit = { path = "../../crates/ludion-testkit" }',
+  ].join('\n');
+  assert.deepEqual(nonFacadeDeps(text), ['ludion-core']);
+  assert.deepEqual(nonFacadeDeps('[dependencies]\nludion = {{ludion_dep}}\n'), []);
+});
+
+test('manifests: the real tree passes', () => {
+  assert.deepEqual(checkManifests(ROOT).errors, []);
+});
+
+test('clippy: the game tier bans what the sim tier bans, spelled through the facade', () => {
+  const game = renderDenylist('game');
+  assert.doesNotMatch(game, /ludion_core/);
+  const paths = (text) => [...text.matchAll(/path = "([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(paths(game), paths(renderDenylist('sim')));
 });

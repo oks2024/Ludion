@@ -1,5 +1,5 @@
 //! The facade names what a game needs without a second dependency: `WorldHash` (the type
-//! `replay_hashes` returns) and the Euler/quaternion pair.
+//! `replay_hashes` returns), the Euler/quaternion pair, the seeded RNG and the deterministic collections.
 
 use ludion::math::{euler_xyz_degrees_to_quat, quat_to_euler_xyz_degrees};
 use ludion::prelude::WorldHash;
@@ -17,4 +17,23 @@ fn euler_helpers_round_trip_through_the_facade() {
     for (a, b) in back.iter().zip([30.0, 20.0, 10.0]) {
         assert!((a - b).abs() < 1e-3, "{back:?}");
     }
+}
+
+#[test]
+fn rng_types_are_nameable_through_the_prelude() {
+    use ludion::prelude::{DeterministicRng, WorldSeed};
+
+    let mut rng = DeterministicRng::new(WorldSeed(7).0);
+    let _ = rng.next_u64();
+}
+
+#[test]
+fn deterministic_collections_are_nameable_through_the_facade() {
+    use ludion::collections::{StableMap, StableSet};
+
+    let mut map: StableMap<u32, u32> = StableMap::default();
+    map.insert(1, 2);
+    let mut set: StableSet<u32> = StableSet::default();
+    set.insert(1);
+    assert_eq!((map.len(), set.len()), (1, 1));
 }

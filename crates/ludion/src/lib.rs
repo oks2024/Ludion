@@ -108,8 +108,10 @@ pub mod touch;
 mod usage;
 
 pub use host::ctrl_c_fan_out;
+// The deterministic map and set a game uses in place of the std hashed collections.
 #[cfg(feature = "wire")]
 pub use host::{HostOptions, host_scene};
+pub use ludion_core::collections;
 
 #[cfg(feature = "wire")]
 use std::collections::BTreeMap;

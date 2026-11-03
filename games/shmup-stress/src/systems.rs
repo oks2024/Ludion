@@ -12,7 +12,7 @@ use ludion::prelude::*;
 use crate::*;
 
 /// The full turn, in radians — the ring's angular span. A constant, not a transcendental, so it does
-/// not go through [`ludion_core::math`].
+/// not go through [`ludion::math`].
 const TAU: f32 = std::f32::consts::TAU;
 
 /// The [`Arena`] singleton, if the scene authored one. Every system below early-outs without it, so
@@ -39,7 +39,7 @@ fn bullet_art(world: &World) -> Option<BulletArt> {
 /// Order is pinned twice over: the emitters are collected in world row order *before* anything is
 /// spawned (a spawn mid-iteration would both fight the query borrow and make the id sequence depend
 /// on the iterator's internals), and each ring is then laid down in ascending index. Trigonometry
-/// goes through [`ludion_core::math`] — the sim-side rule, and here also the reason two machines
+/// goes through [`ludion::math`] — the sim-side rule, and here also the reason two machines
 /// agree on the same `WorldHash`.
 pub fn emit_bullets(world: &mut World, ctx: &SystemCtx) {
     let Some(arena) = arena(world) else {
@@ -78,8 +78,8 @@ pub fn emit_bullets(world: &mut World, ctx: &SystemCtx) {
         for i in 0..emitter.count {
             let angle = emitter.spin * volley + step * i as f32;
             let velocity = [
-                emitter.speed * ludion_core::math::cos(angle),
-                emitter.speed * ludion_core::math::sin(angle),
+                emitter.speed * ludion::math::cos(angle),
+                emitter.speed * ludion::math::sin(angle),
             ];
             let sprite = bullet_sprite(art.as_ref(), color, ordinal, emitter.count, i);
             spawn_bullet(world, &arena, origin, velocity, emitter.life, sprite);

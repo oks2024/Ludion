@@ -17,4 +17,4 @@ ludion-assets = { path = "../ludion-assets", version = "0.1.0" }
 ludion-core = { path = "../ludion-core", version = "0.1.0" }
 
 [dev-dependencies]
-texture2ddecoder = "0.1"
+texture2ddecoder.workspace = true

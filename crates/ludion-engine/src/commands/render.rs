@@ -49,7 +49,7 @@ pub(crate) fn screenshot(
         width,
         height,
         format: "png".to_string(),
-        data: crate::base64::encode(&png),
+        data: base64::encode(&png),
         // Read after the render, so it describes the image in this very reply.
         stale: engine.gi_stale(),
     })
@@ -330,6 +330,18 @@ mod tests {
     use ludion_protocol::command::ViewPose;
 
     use super::*;
+
+    #[test]
+    fn screenshot_encoding_is_standard_base64() {
+        // The RFC 4648 `foobar` progression exercises all three padding cases.
+        assert_eq!(base64::encode(b""), "");
+        assert_eq!(base64::encode(b"f"), "Zg==");
+        assert_eq!(base64::encode(b"fo"), "Zm8=");
+        assert_eq!(base64::encode(b"foo"), "Zm9v");
+        assert_eq!(base64::encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64::encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64::encode(b"foobar"), "Zm9vYmFy");
+    }
 
     fn engine() -> Engine {
         let mut engine = Engine::new();

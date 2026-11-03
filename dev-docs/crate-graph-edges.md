@@ -30,7 +30,8 @@ ludion                 → assets{watch}(wire), audio, core, ecs, engine, physic
       render-graph, scene, server(wire), sim, spatial, window(window)  [clap(wire),
       crossbeam-channel, ctrlc, schemars, serde, serde_json, wgpu, winit(window)]
 ludion-assets          → core  [crossbeam-channel(watch), ktx2, notify(watch), png, serde,
-      serde_json, xxhash-rust]
+      xxhash-rust]
+    dev: (none)  [serde_json]
 ludion-audio           → assets, core  [cpal, crossbeam-channel, lewton]
 ludion-camera          → core, ecs, scene  [schemars, serde, serde_json]
 ludion-cli             → ludion, assets{watch}, client, cook, core, ecs, engine, font{bake}, gen,
@@ -87,7 +88,7 @@ ludion-texgen          → core, scene  [png, serde_json]
     dev: assets
 ludion-window          → client, core, protocol, render-graph  [crossbeam-channel, gilrs, lz4_flex,
       pollster, qoi, serde_json, wgpu, winit]
-shmup-stress           → ludion, core  [schemars, serde]
+shmup-stress           → ludion  [schemars, serde]
     dev: engine, testkit  [serde_json]
 sokoban                → ludion  [schemars, serde]
     dev: core, engine, testkit  [serde_json]

@@ -46,8 +46,6 @@ schemars = "1"
 ludion-testkit = {{ludion_testkit_dep}}
 # Engine types for tests that name them.
 ludion-engine = {{ludion_engine_dep}}
-# Core types (`Diagnostic`, the RNG) for tests that assert on them.
-ludion-core = {{ludion_core_dep}}
 serde_json = "1"
 
 # Dev builds keep your game unoptimized (fast compiles, full debuggability) but build the engine

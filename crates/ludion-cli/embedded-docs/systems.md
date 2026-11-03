@@ -44,8 +44,8 @@ calls `hold()` (`ludion docs game-clock`).
 
 **Randomness — the one seeded RNG.** The sim inserts a single `DeterministicRng` resource, seeded
 from the scene's `seed`. Read it with `world.resource_mut::<DeterministicRng>()` (`next_u32`,
-`next_f32`, `gen_range_u32`, …). Never `thread_rng` — it is nondeterministic. The RNG type is not in
-the prelude: add `ludion-core` to `[dependencies]` and `use ludion_core::rng::DeterministicRng;`.
+`next_f32`, `gen_range_u32`, …). Never `thread_rng` — it is nondeterministic. `DeterministicRng` and
+`WorldSeed` come with `use ludion::prelude::*;`.
 
 **Reporting a diagnostic from a system.** When a system notices something wrong — a data-doc naming
 a model that is not there, a marker outside the map — report it; never `eprintln!`. The engine drains
@@ -73,12 +73,12 @@ denylists; your `clippy.toml` bans the containers, the clock, ad-hoc threads and
 methods (build failures under `cargo clippy -- -D warnings`). The rest is on you:
 
 - **No `std::HashMap`/`HashSet`** — nondeterministic iteration order. Use
-  `ludion_core::collections::{StableMap, StableSet}`.
+  `ludion::collections::{StableMap, StableSet}`.
 - **No wall clock** — time is `ctx.dt`/`ctx.frame`/`ctx.time` only.
 - **No `thread_rng`** — the seeded `DeterministicRng` resource is the only randomness.
-- **Transcendentals through `ludion_core::math`** — plain `f32` arithmetic (and `glam`) is
+- **Transcendentals through `ludion::math`** — plain `f32` arithmetic (and `glam`) is
   deterministic, and so is `sqrt` (IEEE, correctly rounded), but `sin`/`cos`/`exp`/`powf`/… differ
-  between Windows and macOS C libraries. Call `ludion_core::math::sin(x)`, not `x.sin()`, on the sim
+  between Windows and macOS C libraries. Call `ludion::math::sin(x)`, not `x.sin()`, on the sim
   path; the game's `clippy.toml` rejects the inherent methods and names the replacement.
 
 Full rationale: `ludion devdocs determinism`.
@@ -92,7 +92,7 @@ Full rationale: `ludion devdocs determinism`.
   when the tick rebuilds it before anything reads it. **A resource read before its writer in the tick
   is cross-frame state and does not survive a restore** — keep such state in a component.
 - **`f32` math is deterministic here** for plain arithmetic (glam included) because the engine never
-  auto-contracts FMA — but transcendentals are not portable; route them through `ludion_core::math`
+  auto-contracts FMA — but transcendentals are not portable; route them through `ludion::math`
   (pure-Rust libm). See the determinism rules above.
 - **Entity iteration order is deterministic** (ascending slot index), independent of spawn order — so
   a system that iterates `entities()` or a `query()` sees a fixed order every run.

@@ -69,11 +69,11 @@ lz4_flex = { version = "0.14", default-features = false, features = [
     "checked-decode",
 ] }
 # Base64 decoding for glTF `data:` URIs (buffers/images embedded in a `.gltf`) in `ludion-import`,
-# and for the snapshot's physics blob in `ludion-engine` (encoded and decoded there). We resolve
-# buffer/image sources by hand rather than enabling `gltf`'s `import` feature, which drags in the
-# whole `image` crate (JPEG decoder included) that decision 3 rules out (our `png` decodes; JPEG is
-# L1202). Held to gltf's own 0.13 line so one base64 build is shared. Only the safe slice API is
-# used — no `unsafe`.
+# and for the snapshot's physics blob and the `render.screenshot` PNG payload in `ludion-engine`
+# (encoded and decoded there). We resolve buffer/image sources by hand rather than enabling
+# `gltf`'s `import` feature, which drags in the whole `image` crate (JPEG decoder included) that
+# decision 3 rules out (our `png` decodes; JPEG is L1202). Held to gltf's own 0.13 line so one
+# base64 build is shared. Only the safe slice API is used — no `unsafe`.
 base64 = "0.13"
 # Zero-copy, safe casting of plain-old-data structs to `&[u8]` for GPU vertex/instance/uniform
 # uploads. Only `ludion-renderer` uses it, and only through the safe `#[derive(Pod, Zeroable)]`
@@ -177,6 +177,11 @@ intel_tex_2 = "=0.5.0"
 # it; pinned with `=` for the same reason as `intel_tex_2`. Default features: no rayon, a cook call
 # stays on its calling thread.
 ctt-astcenc = "=0.6.0"
+# glTF 2.0 parser for `ludion-import`. `default-features = false` drops the `import` feature (and
+# the `image` crate it pulls in); buffers and images are resolved by hand.
+gltf = { version = "1", default-features = false, features = ["utils", "names", "extras", "KHR_lights_punctual", "KHR_materials_emissive_strength"] }
+# Software BCn/ASTC decoders, for `ludion-cook`'s round-trip tests only.
+texture2ddecoder = "0.1"
 # KTX2 container: `ludion-assets` reads cooked maps, `ludion-cook` writes them (header, level index
 # and DFD helpers). Parser only, no transcoder.
 ktx2 = "0.5"

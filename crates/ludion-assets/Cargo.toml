@@ -23,5 +23,7 @@ ludion-core = { path = "../ludion-core", version = "0.1.0" }
 notify = { workspace = true, optional = true }
 png.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 xxhash-rust.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

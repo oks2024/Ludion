@@ -28,7 +28,7 @@
 //                    token, a stray build artifact or a regrown CLAUDE.md slips through)
 //   --no-gpu         the hosted `no-gpu` nextest profile (what CI runs on a runner without a GPU), no
 //                    fps gates; needs cargo-nextest, refused with --full or --soak
-//   --full           default suite + cargo-deny (licenses, advisories) + the determinism denylist
+//   --full           default suite + cargo-deny (licenses, advisories, bans, sources) + the determinism denylist
 //                    canary (scratch crates under target/) + crates.io packaging (`cargo package`)
 //                    + a workspace doc build + the 1/2/8-thread hash-identity gate over the named
 //                    replay corpus (games/breakout/run.lrp at the root, games/vigil/{run,stress}.lrp
@@ -557,15 +557,15 @@ const vitestStep = { name: 'vitest', cmd: 'npx', args: ['vitest', 'run'], cwd: '
 
 const canaryStep = { name: 'denylist', cmd: 'node', args: ['ci/scripts/denylist-canary.mjs'], log: 'denylist.log' };
 
-// Dependency licenses and RustSec advisories over both cargo workspaces (decision 10 of the private
+// Dependency licenses, RustSec advisories, duplicate-version bans and registry sources over both cargo workspaces (decision 10 of the private
 // publication plan, `Plan-Private/`); deny.toml holds the allowlist and the reasoned ignores. Mirrors
 // ci.yml's `deny` job.
 const denySteps = [
-  { name: 'deny', cmd: 'cargo', args: ['deny', 'check', 'advisories', 'licenses'], log: 'deny.log' },
+  { name: 'deny', cmd: 'cargo', args: ['deny', 'check', 'advisories', 'licenses', 'bans', 'sources'], log: 'deny.log' },
   {
     name: 'deny-tauri',
     cmd: 'cargo',
-    args: ['deny', '--manifest-path', 'editor/app/src-tauri/Cargo.toml', '--config', 'deny.toml', 'check', 'advisories', 'licenses'],
+    args: ['deny', '--manifest-path', 'editor/app/src-tauri/Cargo.toml', '--config', 'deny.toml', 'check', 'advisories', 'licenses', 'bans', 'sources'],
     log: 'deny-tauri.log',
   },
 ];

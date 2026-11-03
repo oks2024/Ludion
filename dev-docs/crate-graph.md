@@ -42,7 +42,7 @@ the strict/permissive clippy split that rides on this graph is in `determinism`.
 - `crates/ludion-testkit/` — golden harness: SSIM, diff reports, bless flow, sim assertions.
 - `crates/ludion/` — the game-facing facade: `prelude` + `ludion::run`/`launch`; depends on engine **and** server **and** window (the server behind its default `wire` feature, the in-process `--window` host behind its default `window` feature).
 - `crates/ludion-cli/` — the `ludion` bin (leaf).
-- `games/hello-paddle/` — the example game (bin + lib): one custom component + system, mixed scene, four test kinds. `games/breakout/`, `games/character-course/`, `games/sokoban/`, and `games/shmup-stress/` are the other workspace games (`games/vigil/`, the private reference game, is a detached workspace present only in the Lore tree); every game depends on the `ludion` facade only.
+- `games/hello-paddle/` — the example game (bin + lib): one custom component + system, mixed scene, four test kinds. `games/breakout/`, `games/character-course/`, `games/sokoban/`, and `games/shmup-stress/` are the other workspace games (`games/vigil/`, the private reference game, is a detached workspace present only in the Lore tree); a game's `[dependencies]` name only the `ludion` facade plus its own third-party crates; test harness crates (`ludion-testkit`, `ludion-engine`, `ludion-core`, …) are `[dev-dependencies]`, because tests reach below the facade and never ship in a game's tree. `scripts/manifest-rules.mjs` holds it.
 - `editor/protocol/` — TS protocol types generated from the JSON Schema (not a crate; checked by the schema-drift CI job).
 - `examples/gallery/` — scene files + committed goldens driven by `ludion test` / testkit.
 
@@ -75,7 +75,7 @@ Supporting rules:
 - **Bins may depend on both sides of any boundary** — leaves are allowed to be fat
   (`ludion-cli` does).
 - Third-party versions are pinned once in `[workspace.dependencies]`; crates opt in with
-  `dep.workspace = true`. Don't declare a bare version in a member crate.
+  `dep.workspace = true`. Don't declare a bare version in a member crate; `scripts/manifest-rules.mjs` (in `lists-in-step`) fails one.
 
 ## Edges
 
