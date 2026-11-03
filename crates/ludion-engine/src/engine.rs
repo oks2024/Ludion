@@ -2037,7 +2037,7 @@ impl Engine {
     /// if a game system called [`Profile::save`](crate::Profile::save) since the last drain, clear the
     /// flag, push a frame-stamped [`ProfileSaveEntry`] into the
     /// [`profile_save_log`](Engine::profile_save_log), and — only when a host has enabled persistence —
-    /// render the profile to canonical text and write it atomically to the resolved save path.
+    /// render the profile to canonical text and write it crash-durably to the resolved save path.
     ///
     /// Like the audio drain, the log is a pure function of the sim, so a replay regenerates the
     /// identical stream and it is never recorded. The disk write is out-of-sim and gated: a
@@ -2045,7 +2045,8 @@ impl Engine {
     /// developer's real save. A write failure is a non-fatal `L1122` stored on the engine
     /// ([`profile_save_error`](Engine::profile_save_error)) and printed on the `log` channel and
     /// stderr, so a save that silently stops persisting is visible; it never panics or stops the sim, the
-    /// previous on-disk save stays intact, and the next save request retries.
+    /// whole save stays on disk, and the next save request retries (a `scene.load` before that retry
+    /// reverts to the disk copy and loses the unsaved value).
     fn drain_profile(&mut self, frame: FrameIndex) {
         let Some(kind) = self.profile_kind.as_ref() else {
             return;
@@ -2066,7 +2067,7 @@ impl Engine {
             return;
         };
         let path = self.save_root().join(&self.profile_rel_path);
-        match ludion_core::atomic::write_atomic(&path, &text) {
+        match ludion_core::atomic::write_durable(&path, &text) {
             Ok(()) => self.session.profile_save_error = None,
             Err(error) => {
                 let diagnostic = Diagnostic::new(
@@ -2077,9 +2078,10 @@ impl Engine {
                     ),
                 )
                 .with_help(
-                    "the save is staged to a hidden `.tmp` sibling and renamed into place, so the \
-                     previous save on disk is intact and the next `profile.save()` retries; \
-                     check the save location is writable",
+                    "a whole save stays on disk (the new bytes are synced to a hidden `.tmp` sibling \
+                     before they replace it), and the next `profile.save()` retries; a `scene.load` \
+                     before that retry starts a fresh session from that file, so the unsaved value \
+                     is lost; check the save location is writable",
                 );
                 // Both sinks, once per failed save — a save is an explicit game request, so there is
                 // no per-frame flood to latch against (the `drain_diagnostics` pair).
@@ -2844,6 +2846,14 @@ impl Engine {
         self.doc_kinds.iter().any(|dk| dk.kind == kind)
     }
 
+    /// Removes the temps of saves that earlier processes died inside. Boot only, and only in a host
+    /// that persists: a replay or a test never touches the save directory.
+    pub(crate) fn sweep_profile_debris(&self) {
+        if self.profile_kind.is_some() && self.profile_persistence && !self.profile_off_disk {
+            crate::player_profile::sweep_temps(&self.save_root().join(&self.profile_rel_path));
+        }
+    }
+
     /// (Re)installs the [`Profile<P>`](crate::Profile) resource by loading `save/profile.yaml` (or the
     /// configured relative path) from the save root, leniently migrating it, and storing the report
     /// on the engine. Called after every world (re)build — the [`install_docs`](Engine::install_docs)
@@ -3253,8 +3263,9 @@ impl Engine {
     /// succeeded or none was attempted (the [`profile_migration`](Engine::profile_migration) mold for
     /// the save side).
     ///
-    /// A save write is atomic and non-fatal: a failure never stops the sim, the previous on-disk save
-    /// stays intact, and the next [`Profile::save`](crate::Profile::save) retries. A host prints this
+    /// A save write is crash-durable and non-fatal: a failure never stops the sim, a whole save
+    /// stays on disk, and the next [`Profile::save`](crate::Profile::save) retries (a `scene.load`
+    /// first reverts to the disk copy). A host prints this
     /// warning; a test asserts on it. Cleared on a successful write and at every world reset.
     pub fn profile_save_error(&self) -> Option<&Diagnostic> {
         self.session.profile_save_error.as_ref()

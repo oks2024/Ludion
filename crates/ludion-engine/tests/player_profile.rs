@@ -692,6 +692,129 @@ fn a_save_io_failure_surfaces_l1122_without_stopping_the_sim() {
     assert_eq!(engine.profile_save_log().len(), 2);
 }
 
+/// A pid no live writer of this process owns, for debris an earlier process left.
+fn other_pid() -> u32 {
+    std::process::id() + 1
+}
+
+fn boot_for_sweep(dir: &Path, persist: bool) {
+    let mut builder = Engine::builder().profile::<SaveV1>().project_root(dir);
+    if persist {
+        builder = builder.persist_profile();
+    }
+    builder.build().expect("boots");
+}
+
+#[test]
+fn a_persisting_boot_sweeps_foreign_temps_only() {
+    let dir = fresh_dir("sweep-persist");
+    let other = other_pid();
+    let own = format!(".profile.yaml.{}.0.tmp", std::process::id());
+    let kept = [
+        ("save/profile.yaml", UNLOCKED_V1.to_string()),
+        (&format!("save/{own}"), "own".to_string()),
+        ("save/profile.yaml.bak.abc", "bak".to_string()),
+        (
+            &format!("save/.notes.yaml.{other}.0.tmp"),
+            "notes".to_string(),
+        ),
+    ];
+    for (rel, text) in &kept {
+        write(&dir, rel, text);
+    }
+    let foreign = format!("save/.profile.yaml.{other}.0.tmp");
+    write(&dir, &foreign, "debris");
+
+    boot_for_sweep(&dir, true);
+
+    assert!(!dir.join(&foreign).exists(), "the foreign temp is swept");
+    for (rel, text) in &kept {
+        assert_eq!(
+            &std::fs::read_to_string(dir.join(rel)).unwrap(),
+            text,
+            "{rel}"
+        );
+    }
+}
+
+#[test]
+fn a_non_persisting_boot_leaves_temp_debris_alone() {
+    let dir = fresh_dir("sweep-off");
+    write(&dir, "save/profile.yaml", UNLOCKED_V1);
+    let foreign = format!("save/.profile.yaml.{}.0.tmp", other_pid());
+    write(&dir, &foreign, "debris");
+
+    boot_for_sweep(&dir, false);
+
+    assert!(dir.join(&foreign).exists());
+}
+
+#[test]
+fn the_sweep_follows_a_custom_profile_path() {
+    let dir = fresh_dir("sweep-custom");
+    let foreign = format!("slots/.one.yaml.{}.0.tmp", other_pid());
+    write(&dir, &foreign, "debris");
+
+    Engine::builder()
+        .profile::<SaveV1>()
+        .profile_path("slots/one.yaml")
+        .project_root(&dir)
+        .persist_profile()
+        .build()
+        .expect("boots");
+
+    assert!(!dir.join(&foreign).exists());
+}
+
+#[test]
+fn a_load_after_a_failed_save_reverts_to_the_disk_copy() {
+    let dir = fresh_dir("load-after-fail");
+    write(
+        &dir,
+        "blocked/profile.yaml",
+        "format: 1\nkind: profile\nunlocked_crossbow: false\nruns: 5\n",
+    );
+    let mut engine = Engine::builder()
+        .profile::<SaveV1>()
+        .profile_path("blocked/profile.yaml")
+        .system("save_fixed", save_fixed)
+        .project_root(&dir)
+        .persist_profile()
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(EMPTY_SCENE).unwrap();
+
+    let away = dir.join("blocked-away");
+    std::fs::rename(dir.join("blocked"), &away).unwrap();
+    std::fs::write(dir.join("blocked"), "not a directory").unwrap();
+    engine.advance_live();
+    assert_eq!(engine.profile_save_error().unwrap().code.as_str(), "L1122");
+    assert_eq!(
+        engine
+            .world()
+            .resource::<Profile<SaveV1>>()
+            .unwrap()
+            .get()
+            .runs,
+        42
+    );
+
+    std::fs::remove_file(dir.join("blocked")).unwrap();
+    std::fs::rename(&away, dir.join("blocked")).unwrap();
+    engine.load_inline_scene(EMPTY_SCENE).unwrap();
+
+    assert_eq!(
+        engine
+            .world()
+            .resource::<Profile<SaveV1>>()
+            .unwrap()
+            .get()
+            .runs,
+        5
+    );
+    assert!(engine.profile_save_error().is_none());
+}
+
 #[test]
 fn two_identical_runs_produce_identical_save_streams() {
     let dir = fresh_dir("save-determinism");

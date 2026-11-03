@@ -80,7 +80,10 @@ fn game() -> EngineBuilder {
 Read the profile with `world.resource::<Profile<SaveState>>()` and its `.get()`, mutate it with
 `world.resource_mut::<…>()` and `.get_mut()`. Mutating alone does **not** persist — call
 `profile.save()` to request a write; the engine drains the request at the frame boundary (like an audio
-event). Several `save()` calls in one frame collapse into one write. The runnable version of this
+event). Several `save()` calls in one frame collapse into one write. A save is crash-durable, so a
+power loss leaves a whole save; it costs a disk flush on that frame, so save at milestones rather
+than every frame. A failed save (`L1122`) keeps the value in memory until the next `save()`; a
+`scene.load` discards it, a scene switch does not. The runnable version of this
 pattern — two runs on one save directory, the second booting on what the first wrote — is
 `crates/ludion/examples/player_profile.rs` (`cargo run -p ludion --example player_profile`).
 

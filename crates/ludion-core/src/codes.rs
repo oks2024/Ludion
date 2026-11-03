@@ -542,10 +542,10 @@ pub mod code {
     pub const PROFILE_LOAD_FAILED: DiagnosticCode = DiagnosticCode::new("L1121");
 
     /// `L1122` — a saved player profile could not be written to disk at a frame boundary. The engine
-    /// stages the canonical text to a hidden `.tmp` sibling and renames it over `save/profile.yaml`, so
-    /// the write either fully succeeds or leaves the previous save intact — this diagnostic means that
-    /// staged write or rename failed (a missing/unwritable save directory, a permissions error, a full
-    /// disk). A **warning**, never a hard failure — the sim keeps running and the next `profile.save()`
+    /// stages the canonical text to a hidden `.tmp` sibling, syncs it to disk and renames it over
+    /// `save/profile.yaml`, so a whole save stays on disk — this diagnostic means that staged write,
+    /// rename or directory sync failed (a missing/unwritable save directory, a permissions error, a
+    /// full disk). A **warning**, never a hard failure — the sim keeps running and the next `profile.save()`
     /// retries. Raised by the engine's frame-boundary profile save drain.
     pub const PROFILE_SAVE_FAILED: DiagnosticCode = DiagnosticCode::new("L1122");
 
@@ -5262,22 +5262,25 @@ To recover the old values, open the `profile.yaml.bak.<hash>` sibling and reconc
 A saved player profile (`save/profile.yaml`, the persistent save state a game registers with
 `profile::<P>`) could not be written to disk when a game system requested a save at a frame boundary.
 
-The write is atomic: the engine renders the profile to canonical text, stages it to a hidden `.tmp`
-sibling in the same directory, and renames the temp over the destination (`fs::rename` replaces
-atomically on both Windows and POSIX). Either step can fail:
+The write is crash-durable: the engine renders the profile to canonical text, stages it to a hidden
+`.tmp` sibling in the same directory and syncs it to disk, renames the temp over the destination
+(`fs::rename` replaces atomically on both Windows and POSIX), then syncs the directory. Any step can
+fail:
 
   - the save directory does not exist and could not be created (an ancestor is a file, not a
     directory);
   - the directory or file is not writable (a permissions error, a read-only volume);
   - the disk is full, or the underlying filesystem rejected the write or rename.
 
-This is a **warning**, never a hard failure — the simulation keeps running, the previous save on disk
-is left completely intact (the failure lands on the temp, never on the real file), and the next
-`profile.save()` retries the write. The message names the target path and the underlying IO error.
+This is a **warning**, never a hard failure — the simulation keeps running, a whole save stays on
+disk (the failure lands on the temp, never on the real file; a directory sync can fail after the
+rename, in which case the new save is the whole one on disk), and the next `profile.save()` retries
+the write. The message names the target path and the underlying IO error.
 
 Fix: make sure the save location (`save/` beside the scene by default) is writable, and
-that the volume has free space. Nothing in the running game is lost — the in-memory profile is
-unchanged and will be written on the next successful save.",
+that the volume has free space. The in-memory profile is unchanged and will be written on the next
+successful save, but a `scene.load` first starts a fresh session from the file on disk and discards
+it. A scene switch carries it.",
     },
     CodeEntry {
         code: code::DIRECTIONAL_LIGHT_INVALID_FRUSTUM,

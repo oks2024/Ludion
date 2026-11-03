@@ -40,6 +40,24 @@ const PROFILE_FORMAT: u64 = 1;
 /// [`EngineBuilder::profile_path`](crate::EngineBuilder::profile_path).
 const DEFAULT_PROFILE_PATH: &str = "save/profile.yaml";
 
+/// Removes the temps of other processes' interrupted saves beside `path`; not recursive. A failure
+/// only leaves debris, so it reports nothing.
+pub(crate) fn sweep_temps(path: &Path) {
+    let (Some(file_name), Some(parent)) = (path.file_name(), path.parent()) else {
+        return;
+    };
+    let file_name = file_name.to_string_lossy();
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if ludion_core::atomic::is_foreign_temp_name_for(&name.to_string_lossy(), &file_name) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// The default profile path (`save/profile.yaml`) as a [`PathBuf`], for the builder to fall back on.
 pub(crate) fn default_profile_rel_path() -> PathBuf {
     PathBuf::from(DEFAULT_PROFILE_PATH)
@@ -56,7 +74,7 @@ pub(crate) fn default_profile_rel_path() -> PathBuf {
 ///
 /// The `dirty` flag is the save request: a system that changes the profile and wants it persisted
 /// calls [`save`](Profile::save); the engine drains the flag at the frame boundary and (when
-/// persistence is enabled) writes the file atomically.
+/// persistence is enabled) writes the file crash-durably.
 ///
 /// # Example
 /// ```

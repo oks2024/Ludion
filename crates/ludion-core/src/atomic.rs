@@ -6,6 +6,7 @@
 //! target may hold the old bytes, the new bytes, or an empty or partial file (the rename can reach
 //! disk before the data). A writer that emits several files puts the document or record that names
 //! the others last, so a kill never leaves a document naming files that do not exist.
+//! [`write_durable`] is the crash-durable variant, for a file whose loss costs a player's progress.
 //! [`copy_atomic`] does the same for a file copy, and [`create_new_atomic`] is the no-clobber
 //! variant that refuses an existing target.
 //!
@@ -22,7 +23,7 @@
 //! ```
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -61,6 +62,12 @@ pub fn is_temp_name_for(name: &str, owned: &str) -> bool {
         })
 }
 
+/// Whether `name` is a [`temp_sibling`] of `owned` written by another process, so a sweep of crash
+/// debris cannot take a live writer's temp in this one.
+pub fn is_foreign_temp_name_for(name: &str, owned: &str) -> bool {
+    is_temp_name_for(name, owned) && !name.starts_with(&format!(".{owned}.{}.", std::process::id()))
+}
+
 /// Writes `bytes` to `path` through a [`temp_sibling`] and a rename, creating missing parent
 /// directories. On failure the temp is removed and `path` is untouched.
 pub fn write_atomic(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
@@ -80,6 +87,70 @@ pub fn write_atomic(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
         return Err(error);
     }
     Ok(())
+}
+
+/// [`write_atomic`] that survives a power loss or OS crash: the temp's data reaches the disk before
+/// the rename, and the rename before the return, so `path` holds the whole old bytes or the whole
+/// new bytes, never a prefix. Far slower than `write_atomic`; meant for a file whose loss costs a
+/// player's progress. A directory that had to be created is synced up to its first existing ancestor.
+///
+/// ```
+/// use ludion_core::atomic::write_durable;
+///
+/// let dir = std::env::temp_dir().join(format!("ludion-durable-doc-{}", std::process::id()));
+/// let target = dir.join("out.yaml");
+/// write_durable(&target, "a: 1\n").unwrap();
+/// assert_eq!(std::fs::read_to_string(&target).unwrap(), "a: 1\n");
+/// std::fs::remove_dir_all(&dir).unwrap();
+/// ```
+pub fn write_durable(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let existing = parent
+        .ancestors()
+        .find(|dir| dir.is_dir())
+        .map(Path::to_path_buf);
+    fs::create_dir_all(parent)?;
+    let temp = temp_sibling(path);
+    let staged = write_synced(&temp, bytes.as_ref()).and_then(|()| fs::rename(&temp, path));
+    if let Err(error) = staged {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    for dir in parent.ancestors() {
+        sync_dir(if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        })?;
+        if existing.as_deref() == Some(dir) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn write_synced(temp: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = fs::File::create(temp)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    // Windows refuses a directory handle, and some filesystems refuse the fsync; neither is a failure.
+    match fs::File::open(dir).and_then(|handle| handle.sync_all()) {
+        Err(error) if dir_sync_unavailable(error.kind()) => Ok(()),
+        other => other,
+    }
+}
+
+fn dir_sync_unavailable(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::PermissionDenied | io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+    )
 }
 
 /// Publishes `bytes` at `path` only if `path` is absent: a [`temp_sibling`] is written whole, then
@@ -330,6 +401,86 @@ mod tests {
         assert_eq!(fs::read_to_string(&target).unwrap(), "first");
         assert_eq!(entries(&dir.join("sub")), 1);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_durable_creates_parents_replaces_and_leaves_no_temp() {
+        let dir = scratch("durable-ok");
+        let target = dir.join("sub/deep/a.txt");
+        write_durable(&target, "first").unwrap();
+        write_durable(&target, "second").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "second");
+        assert_eq!(entries(&dir.join("sub/deep")), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_durable_leaves_hard_links_alone() {
+        let dir = scratch("durable-hardlink");
+        let (target, alias) = (dir.join("t.txt"), dir.join("alias.txt"));
+        fs::write(&target, "old").unwrap();
+        fs::hard_link(&target, &alias).unwrap();
+        write_durable(&target, "new").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+        assert_eq!(fs::read_to_string(&alias).unwrap(), "old");
+        assert_eq!(entries(&dir), 2);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_durable_failed_rename_keeps_nothing() {
+        let dir = scratch("durable-fail");
+        let target = dir.join("t");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep"), "k").unwrap();
+        assert!(write_durable(&target, "x").is_err());
+        assert_eq!(entries(&dir), 1);
+        assert_eq!(entries(&target), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_durable_parent_that_is_a_file_errs() {
+        let dir = scratch("durable-parentfile");
+        fs::write(dir.join("f"), "x").unwrap();
+        assert!(write_durable(&dir.join("f/a.txt"), "x").is_err());
+        assert_eq!(entries(&dir), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_durable_bare_relative_name_syncs_the_current_directory() {
+        sync_dir(Path::new(".")).unwrap();
+    }
+
+    #[test]
+    fn sync_dir_reports_a_missing_directory() {
+        let dir = scratch("durable-missing");
+        let error = sync_dir(&dir.join("absent")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn dir_sync_unavailable_names_only_the_refusals() {
+        use io::ErrorKind::*;
+        for kind in [PermissionDenied, InvalidInput, Unsupported] {
+            assert!(dir_sync_unavailable(kind), "{kind:?}");
+        }
+        for kind in [NotFound, Other] {
+            assert!(!dir_sync_unavailable(kind), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn foreign_temp_names_spare_this_process() {
+        let own = temp_sibling(Path::new("d/profile.yaml"));
+        let own = own.file_name().unwrap().to_str().unwrap();
+        assert!(!is_foreign_temp_name_for(own, "profile.yaml"));
+        let other = format!(".profile.yaml.{}.0.tmp", std::process::id() + 1);
+        assert!(is_foreign_temp_name_for(&other, "profile.yaml"));
+        let unrelated = format!(".other.yaml.{}.0.tmp", std::process::id() + 1);
+        assert!(!is_foreign_temp_name_for(&unrelated, "profile.yaml"));
     }
 
     #[test]

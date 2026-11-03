@@ -941,6 +941,7 @@ impl EngineBuilder {
         // a registered validation pass reports as an error — fails the build here (the collapsed
         // diagnostic carries every one as `related`).
         engine.install_docs().map_err(crate::commands::collapse)?;
+        engine.sweep_profile_debris();
         // Load the registered profile into the same initial world (or default it). Never fails the
         // build — an unloadable save is backed up and defaulted, reported via `profile_migration`.
         engine.install_profile();
