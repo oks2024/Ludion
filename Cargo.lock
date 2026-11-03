@@ -1958,6 +1958,7 @@ dependencies = [
  "png",
  "qoi",
  "serde_json",
+ "socket2",
  "tokio",
  "tokio-tungstenite",
  "tungstenite",

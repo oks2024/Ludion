@@ -24,6 +24,7 @@ futures-util.workspace = true
 serde_json.workspace = true
 qoi.workspace = true
 lz4_flex.workspace = true
+socket2.workspace = true
 
 [dev-dependencies]
 # Path-only, no `version`: see `ludion-client`'s dev-dependency comment for why a test-only

@@ -9,20 +9,23 @@
 //!   then it reads again. It never waits for a sim reply, so a client may pipeline — reply age is
 //!   bounded by the live loop's pass rate rather than growing with every request already sent (the
 //!   sim drains every pending command at each pass boundary). At most [`PIPELINE_DEPTH`] requests are
-//!   in flight; past that the push waits, the reader stops reading, and the client feels TCP
-//!   backpressure — bounded by construction, never a buffer that grows without end;
+//!   in flight, and their text is held to [`AcceptPolicy::request_budget`] bytes; past either the
+//!   reader stops reading and the client feels TCP backpressure — bounded by construction, never a
+//!   buffer that grows without end;
 //! - the **reply pump** ([`reply_pump`]) pops those entries strictly FIFO and answers them in that
 //!   order: it awaits each one-shot reply on the tokio blocking pool (so a runtime worker is never
 //!   parked on the sim thread) under a bound that keeps a wedged sim thread from parking that pool
 //!   thread for good, and queues the [`Response`] on the outbound sink. It awaits one entry at a time,
-//!   so the pump itself holds at most one blocking-pool thread. A `stream.subscribe` is the exception
-//!   to "the pump awaits the reply": the sim answers it at its command drain and starts emitting for
+//!   so the pump itself holds at most one blocking-pool thread, and the connection cap
+//!   ([`AcceptPolicy::max_connections`]) bounds how many pumps exist. A `stream.subscribe` is the
+//!   exception to "the pump awaits the reply": the sim answers it at its command drain and starts emitting for
 //!   the new sub in the same pass, so the reader hands it to its own task ([`spawn_resolution`]),
 //!   which registers the sub in the shared [`Registry`] the moment the reply lands (the registry's
 //!   in-flight buffer covers the rest of the race — see [`delivery`]) and passes the finished
 //!   [`Response`] to the pump through a one-shot in the request's slot, so replies still leave in
-//!   request order. Each in-flight subscribe holds one blocking-pool thread of its own, bounded by
-//!   [`PIPELINE_DEPTH`]. The pump removes a sub when its `stream.unsubscribe` reply passes; and
+//!   request order. A subscribe's wait polls the reply from an async task rather than parking a
+//!   blocking-pool thread: it is rare, and the sim answers it at a pass boundary. The pump removes a
+//!   sub when its `stream.unsubscribe` reply passes; and
 //! - the **writer** ([`writer_task`]) solely owns the WebSocket sink, draining the connection's *two*
 //!   outbound lanes — text (request replies and events) and binary (rendered frames) — with the text
 //!   lane taking priority, so a reply overtakes queued frames instead of waiting out the megabytes
@@ -49,7 +52,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{RecvTimeoutError, Sender};
+use crossbeam_channel::{RecvTimeoutError, Sender, TryRecvError};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use ludion_core::codes::code;
@@ -64,8 +67,9 @@ use ludion_protocol::{
     WireResult,
 };
 use serde_json::Value;
+use socket2::{SockRef, TcpKeepalive};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::accept_hdr_async_with_config;
 use tokio_tungstenite::tungstenite::Message;
@@ -122,6 +126,10 @@ impl Accept for TcpListener {
 pub(crate) struct AcceptPolicy {
     backoff: Duration,
     failure_limit: u32,
+    /// Connections served at once; one past it is answered `L3055` at its handshake and closed.
+    max_connections: usize,
+    /// Bytes of accepted-but-unanswered request text one connection may hold.
+    request_budget: usize,
 }
 
 impl AcceptPolicy {
@@ -133,9 +141,18 @@ impl AcceptPolicy {
     /// spinning a core. `failure_limit` is therefore only reached after roughly six seconds of *every*
     /// accept failing — far past any burst of dropped clients, and past the descriptor pressure a
     /// closing connection relieves on its own.
+    ///
+    /// `max_connections` is 64: each connection's pump holds at most one blocking-pool thread, so
+    /// the pool's 512 threads can never be exhausted by connections alone, and a local tool set
+    /// (editor, adapter, harness, a few viewers) sits far below it. `request_budget` is
+    /// [`MAX_MESSAGE_BYTES`] on purpose: a snapshot `engine.snapshot` can send must stay restorable
+    /// through `engine.restore`, so one maximum-size request must always fit. It is a byte budget
+    /// over [`PIPELINE_DEPTH`] requests, not a lower message ceiling.
     pub(crate) const DEFAULT: AcceptPolicy = AcceptPolicy {
         backoff: Duration::from_millis(100),
         failure_limit: 64,
+        max_connections: 64,
+        request_budget: MAX_MESSAGE_BYTES,
     };
 }
 
@@ -196,7 +213,10 @@ async fn accept_loop_with<L: Accept>(
                 Ok(stream) => {
                     failures = 0;
                     reported = None;
+                    let refusal = (active.load(Ordering::SeqCst) >= policy.max_connections)
+                        .then(|| connection_limit(policy.max_connections));
                     let guard = ConnectionGuard::new(active.clone());
+                    let request_budget = policy.request_budget;
                     let (intake, hello, registry, hub, shutdown) = (
                         intake.clone(),
                         hello.clone(),
@@ -205,7 +225,17 @@ async fn accept_loop_with<L: Accept>(
                         shutdown.clone(),
                     );
                     tokio::spawn(async move {
-                        handle_connection(stream, intake, hello, registry, hub, shutdown).await;
+                        handle_connection(
+                            stream,
+                            intake,
+                            hello,
+                            registry,
+                            hub,
+                            refusal,
+                            request_budget,
+                            shutdown,
+                        )
+                        .await;
                         drop(guard); // decrement only once the connection has fully drained + closed
                     });
                 }
@@ -242,14 +272,21 @@ async fn accept_loop_with<L: Accept>(
 
 /// One connection: spawn its writer, perform the handshake, then read requests continuously into the
 /// bounded pipeline its [`reply_pump`] answers from, until close or shutdown.
+///
+/// `refusal` is set when the server is at its cap: the handshake is answered with it instead of a
+/// hello. `request_budget` bounds the request text the connection may hold unanswered.
+#[allow(clippy::too_many_arguments)] // one owned seam per collaborator; a bag struct would hide them
 async fn handle_connection(
     stream: TcpStream,
     intake: Sender<StampedCommand>,
     hello: ServerHello,
     registry: Registry,
     hub: Arc<ProfileHub>,
+    refusal: Option<Diagnostic>,
+    request_budget: usize,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    arm_keepalive(&stream);
     // One deadline for the upgrade and the `Hello` read: a socket that never gets that far is dropped.
     let deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
     let upgrade = accept_hdr_async_with_config(stream, check_origin, Some(websocket_config()));
@@ -275,7 +312,8 @@ async fn handle_connection(
             return;
         }
     };
-    match parse_hello(&first) {
+    // A connection over the cap is answered with its refusal in place of the hello check.
+    match refusal.map_or_else(|| parse_hello(&first), Err) {
         Ok(_client) => {
             // `serde_json::to_string` keeps its `Serialize` bound internal, so this crate needs no
             // direct `serde` dependency; the `"{}"` fallback is a defensive floor, never reached for
@@ -300,7 +338,8 @@ async fn handle_connection(
     // --- Request loop. --------------------------------------------------------------------------
     // The pump takes the connection's last outbound sender with it, so the writer sees the queue
     // close exactly when the pump has finished answering — not when the reader stops reading.
-    let (pending_tx, pending_rx) = mpsc::channel::<Pending>(PIPELINE_DEPTH);
+    let (pending_tx, pending_rx) = mpsc::channel::<Accepted>(PIPELINE_DEPTH);
+    let budget = Arc::new(Semaphore::new(request_budget));
     let shared = ConnShared {
         intake: intake.clone(),
         registry: registry.clone(),
@@ -317,7 +356,13 @@ async fn handle_connection(
         shutdown.clone(),
     ));
     while let Some(text) = read_text(&mut stream, &mut shutdown).await {
-        let accepted = match accept_request(&text, &shared) {
+        // Before the text is parsed, so the parsed expansion is covered too. Clamped to the budget so
+        // a message larger than it waits for an empty queue instead of for permits that cannot exist.
+        let want = u32::try_from(text.len().min(request_budget)).unwrap_or(u32::MAX);
+        let Ok(bytes) = budget.clone().acquire_many_owned(want).await else {
+            break; // the semaphore is never closed; defensive
+        };
+        let pending = match accept_request(&text, &shared) {
             // A subscribe resolves on its own task so its sub registers the moment the sim answers,
             // not when the pump gets to its slot; the slot still takes the reply in order.
             Pending::Reply(mut entry) => match entry.subscribe.take() {
@@ -328,9 +373,10 @@ async fn handle_connection(
             },
             other => other,
         };
-        // The only place the reader waits: with `PIPELINE_DEPTH` requests already in flight it stops
-        // reading, and the client is held by TCP instead of the server buffering without end.
-        if pending_tx.send(accepted).await.is_err() {
+        // With `PIPELINE_DEPTH` requests already in flight this push waits, as the byte-budget acquire
+        // above does; either way the reader stops reading and TCP holds the client instead of the
+        // server buffering without end.
+        if pending_tx.send(Accepted { pending, bytes }).await.is_err() {
             break; // the pump has ended; nothing would answer what we read next
         }
     }
@@ -341,6 +387,17 @@ async fn handle_connection(
     // Closing the queue is the pump's cue to drain what is left and close the lanes.
     drop(pending_tx);
     let _ = pump.await;
+}
+
+/// Turns on kernel TCP keepalive: an idle peer that vanished without a FIN ends in about a minute.
+///
+/// Not WebSocket pings: `ludion-client` is synchronous and answers a ping only while it is reading, so
+/// an idle adapter would look dead. Best effort — a socket that refuses the option is still served.
+fn arm_keepalive(stream: &TcpStream) {
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(15))
+        .with_interval(Duration::from_secs(5));
+    let _ = SockRef::from(stream).set_tcp_keepalive(&keepalive);
 }
 
 /// What a connection's request tasks share: the one command queue, the delivery registry, the
@@ -371,6 +428,13 @@ struct ConnSubs {
 /// frame's worth of input never stalls, shallow enough that what one connection can pin is a handful
 /// of small pending values.
 pub(crate) const PIPELINE_DEPTH: usize = 64;
+
+/// A queued request and the share of the connection's byte budget its text holds; the pump keeps the
+/// permit until the reply is queued.
+struct Accepted {
+    pending: Pending,
+    bytes: OwnedSemaphorePermit,
+}
 
 /// One accepted request, queued in socket order for the reply pump to answer.
 enum Pending {
@@ -419,14 +483,18 @@ struct PendingReply {
 /// reader drops the queue's sender this drains what is left, then runs [`finish`]; the subs were
 /// already released by the reader.
 async fn reply_pump(
-    mut pending: mpsc::Receiver<Pending>,
+    mut pending: mpsc::Receiver<Accepted>,
     registry: Registry,
     subs: Arc<Mutex<ConnSubs>>,
     outbound: OutboundSink,
     writer: tokio::task::JoinHandle<()>,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    while let Some(entry) = pending.recv().await {
+    while let Some(Accepted {
+        pending: entry,
+        bytes: _permit,
+    }) = pending.recv().await
+    {
         let (response, observed) = match entry {
             Pending::Ready(response) => (response, Observed::Other),
             Pending::Resolving { id, rx } => (
@@ -442,6 +510,7 @@ async fn reply_pump(
                     &mut shutdown,
                     entry.enqueued_at,
                     SIM_REPLY_TIMEOUT,
+                    ReplyWait::Blocking,
                 )
                 .await
                 .response;
@@ -597,8 +666,8 @@ struct OwnedSub {
 /// The sim answers a subscribe at its command drain and starts emitting for the new sub in the same
 /// pass, so waiting for the pump to reach the reply would lose that traffic to any request ahead of it.
 /// The task registers the sub the moment the reply lands, then hands the finished [`Response`] to the
-/// pump through the returned slot — replies still leave strictly in request order. Each in-flight
-/// subscribe holds one blocking-pool thread of its own while it waits, bounded by [`PIPELINE_DEPTH`].
+/// pump through the returned slot — replies still leave strictly in request order. The wait polls
+/// ([`ReplyWait::Polled`]), so an in-flight subscribe holds no blocking-pool thread.
 fn spawn_resolution(
     entry: PendingReply,
     in_flight: SubscribeInFlight,
@@ -617,12 +686,13 @@ fn spawn_resolution(
             &mut shutdown,
             entry.enqueued_at,
             budget,
+            ReplyWait::Polled,
         )
         .await;
         open_subscription(&shared, in_flight, &entry.observed, &response);
         if let Some(late) = late {
             let (intake, shutdown) = (shared.intake.clone(), shutdown.clone());
-            tokio::task::spawn_blocking(move || reap_late_subscribe(&late, &intake, &shutdown));
+            tokio::spawn(reap_late_subscribe(late, intake, shutdown));
         }
         let _ = tx.send(response);
     });
@@ -633,24 +703,35 @@ fn spawn_resolution(
 ///
 /// The sim thread still runs the subscribe when it gets there, so a sub appears that the client was
 /// told never opened and will never close; left alone it would render for nobody for the engine's
-/// lifetime. Ends on any other reply, a gone sim thread, or teardown.
-fn reap_late_subscribe(
-    late: &ReplyReceiver,
-    intake: &Sender<StampedCommand>,
-    shutdown: &watch::Receiver<bool>,
+/// lifetime. Polls the reply every [`REAP_POLL`] on an async task, never a pool thread. Ends on any
+/// other reply, a gone sim thread, or teardown.
+async fn reap_late_subscribe(
+    late: ReplyReceiver,
+    intake: Sender<StampedCommand>,
+    shutdown: watch::Receiver<bool>,
 ) {
     loop {
-        match late.recv_timeout(SIM_REPLY_TIMEOUT) {
+        match late.try_recv() {
             Ok(Ok(Dispatched {
                 body: ResponseBody::Subscribed { sub },
                 ..
-            })) => return queue_unsubscribe(intake, sub),
-            Ok(_) | Err(RecvTimeoutError::Disconnected) => return,
-            Err(RecvTimeoutError::Timeout) if *shutdown.borrow() => return,
-            Err(RecvTimeoutError::Timeout) => {}
+            })) => return queue_unsubscribe(&intake, sub),
+            Ok(_) | Err(TryRecvError::Disconnected) => return,
+            Err(TryRecvError::Empty) => {}
         }
+        if *shutdown.borrow() {
+            return;
+        }
+        tokio::time::sleep(REAP_POLL).await;
     }
 }
+
+/// How often a late subscribe's reply is looked for. Nothing waits on it, so it is coarse.
+const REAP_POLL: Duration = Duration::from_millis(250);
+
+/// How often a subscribe's reply is looked for while its resolution waits. A subscribe is rare and
+/// the sim answers it at a pass boundary, so 5 ms costs nothing and adds no visible latency.
+const SUBSCRIBE_POLL: Duration = Duration::from_millis(5);
 
 /// Registers the sub a successful subscribe reply minted with the connection's outbound sink, and
 /// records it as owned. Any other reply leaves the registry untouched (`in_flight` drops). A subscribe
@@ -841,17 +922,16 @@ async fn await_reply(
     shutdown: &mut watch::Receiver<bool>,
     enqueued_at: Instant,
     budget: Duration,
+    mode: ReplyWait,
 ) -> Awaited {
     let wait = budget.saturating_sub(enqueued_at.elapsed());
     if *shutdown.borrow() {
-        let handle = tokio::task::spawn_blocking(move || {
-            reply_rx.recv_timeout(wait.min(SHUTDOWN_REPLY_GRACE))
-        });
+        let handle = wait_reply(reply_rx, wait.min(SHUTDOWN_REPLY_GRACE), mode);
         let response = match handle.await {
-            Ok(Ok(Ok(dispatched))) => {
+            Ok((Ok(Ok(dispatched)), _)) => {
                 Response::ok_at(id, dispatched.body, dispatched.frame, dispatched.game_frame)
             }
-            Ok(Ok(Err(diag))) => Response::error(id, diag),
+            Ok((Ok(Err(diag)), _)) => Response::error(id, diag),
             // No reply within the grace, a gone sim thread, or a cancelled wait: all the same answer.
             _ => Response::error(id, engine_unavailable()),
         };
@@ -860,11 +940,7 @@ async fn await_reply(
             late: None,
         };
     }
-    let mut handle = tokio::task::spawn_blocking(move || {
-        let got = reply_rx.recv_timeout(wait);
-        let late = matches!(got, Err(RecvTimeoutError::Timeout)).then_some(reply_rx);
-        (got, late)
-    });
+    let mut handle = wait_reply(reply_rx, wait, mode);
     loop {
         tokio::select! {
             joined = &mut handle => return awaited(joined, id, method, budget),
@@ -881,6 +957,48 @@ async fn await_reply(
                 };
             }
         }
+    }
+}
+
+/// How [`await_reply`] waits for the sim thread's reply.
+#[derive(Clone, Copy)]
+enum ReplyWait {
+    /// Parks a blocking-pool thread on the channel: the reply is seen the instant it lands. The pump's
+    /// mode, where reply latency matters.
+    Blocking,
+    /// Polls from an async task every [`SUBSCRIBE_POLL`]: no pool thread is held. A subscribe's mode.
+    Polled,
+}
+
+/// Starts the wait for `reply_rx` for at most `wait`; a timeout hands the receiver back.
+fn wait_reply(
+    reply_rx: ReplyReceiver,
+    wait: Duration,
+    mode: ReplyWait,
+) -> tokio::task::JoinHandle<Waited> {
+    match mode {
+        ReplyWait::Blocking => tokio::task::spawn_blocking(move || {
+            let got = reply_rx.recv_timeout(wait);
+            let late = matches!(got, Err(RecvTimeoutError::Timeout)).then_some(reply_rx);
+            (got, late)
+        }),
+        ReplyWait::Polled => tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + wait;
+            loop {
+                match reply_rx.try_recv() {
+                    Ok(result) => return (Ok(result), None),
+                    Err(TryRecvError::Disconnected) => {
+                        return (Err(RecvTimeoutError::Disconnected), None);
+                    }
+                    Err(TryRecvError::Empty) => {}
+                }
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    return (Err(RecvTimeoutError::Timeout), Some(reply_rx));
+                }
+                tokio::time::sleep(remaining.min(SUBSCRIBE_POLL)).await;
+            }
+        }),
     }
 }
 
@@ -1101,6 +1219,18 @@ fn engine_unavailable() -> Diagnostic {
         "the engine is not answering; its sim thread has stopped",
     )
     .with_help("the server is shutting down or has stopped — reconnect once it is running again")
+}
+
+/// The `L3055` diagnostic for a connection refused at the server's cap.
+fn connection_limit(max: usize) -> Diagnostic {
+    Diagnostic::new(
+        code::SERVER_CONNECTION_LIMIT,
+        format!("the server already serves its maximum of {max} connections; this one was refused"),
+    )
+    .with_help(
+        "close a client that is no longer needed and reconnect; run `ludion explain L3055` for \
+         the full walkthrough",
+    )
 }
 
 /// The `L3007` diagnostic for an unsubscribe of a sub this connection did not open.
@@ -1390,6 +1520,7 @@ mod tests {
         let policy = AcceptPolicy {
             backoff: Duration::from_millis(1),
             failure_limit: 5,
+            ..AcceptPolicy::DEFAULT
         };
 
         accept_loop_with(
@@ -1422,6 +1553,7 @@ mod tests {
         let policy = AcceptPolicy {
             backoff: Duration::from_secs(600),
             failure_limit: u32::MAX,
+            ..AcceptPolicy::DEFAULT
         };
 
         let loop_task = tokio::spawn(accept_loop_with(
@@ -1466,6 +1598,7 @@ mod tests {
             &mut shutdown_rx,
             Instant::now(),
             Duration::from_millis(50),
+            ReplyWait::Blocking,
         )
         .await
         .response;
@@ -1490,6 +1623,7 @@ mod tests {
             &mut shutdown_rx,
             Instant::now(),
             Duration::from_secs(60),
+            ReplyWait::Blocking,
         )
         .await
         .response;
@@ -1521,6 +1655,7 @@ mod tests {
             &mut shutdown_rx,
             Instant::now(),
             Duration::from_secs(60),
+            ReplyWait::Blocking,
         )
         .await
         .response;
@@ -1544,6 +1679,7 @@ mod tests {
             &mut shutdown_rx,
             Instant::now(),
             Duration::from_secs(600),
+            ReplyWait::Blocking,
         )
         .await
         .response;
@@ -1791,6 +1927,7 @@ mod tests {
 
     /// A handshaken connection to a live accept loop whose sim side is held by the test.
     struct Wire {
+        addr: std::net::SocketAddr,
         client: ClientSocket,
         intake: crossbeam_channel::Receiver<StampedCommand>,
         /// The registry the loop delivers through, for tests that play the egress side.
@@ -1801,6 +1938,11 @@ mod tests {
 
     /// Binds a loop on a free port, connects a client, and completes the handshake.
     async fn wire() -> Wire {
+        wire_with(AcceptPolicy::DEFAULT).await
+    }
+
+    /// [`wire`] under a chosen policy.
+    async fn wire_with(policy: AcceptPolicy) -> Wire {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a free loopback port");
@@ -1816,7 +1958,7 @@ mod tests {
             ProfileHub::new(),
             Arc::new(AtomicUsize::new(0)),
             shutdown_rx,
-            AcceptPolicy::DEFAULT,
+            policy,
         ));
 
         let (mut client, _response) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
@@ -1836,6 +1978,7 @@ mod tests {
             "expected a ServerHello, got {reply}"
         );
         Wire {
+            addr,
             client,
             intake: intake_rx,
             registry,
@@ -2021,6 +2164,98 @@ mod tests {
 
         held.extend(resumed);
         drop(held);
+    }
+
+    /// A server at its connection cap answers the next client's hello with `L3055` and closes it,
+    /// while the connection already served keeps answering.
+    #[tokio::test]
+    async fn a_connection_over_the_cap_is_refused_with_l3055() {
+        let mut first = wire_with(AcceptPolicy {
+            max_connections: 1,
+            ..AcceptPolicy::DEFAULT
+        })
+        .await;
+        let (mut second, _response) =
+            tokio_tungstenite::connect_async(format!("ws://{}", first.addr))
+                .await
+                .expect("the upgrade itself succeeds");
+        second
+            .send(Message::text(
+                r#"{"protocol_version":1,"client":"second","features":[]}"#.to_string(),
+            ))
+            .await
+            .expect("the hello sends");
+        let refusal = text_within(&mut second, Duration::from_secs(5))
+            .await
+            .expect("the refusal is answered");
+        let value: Value = serde_json::from_str(&refusal).expect("a JSON response");
+        assert_eq!(value["error"]["code"], "L3055", "{refusal}");
+
+        first.client.send(request(1)).await.expect("id 1 sends");
+        let held = take_commands(&first.intake, 1, Duration::from_secs(5)).await;
+        assert_eq!(held.len(), 1, "the first client is still served");
+        answer(&held[0]);
+        let text = text_within(&mut first.client, Duration::from_secs(5))
+            .await
+            .expect("the first client still gets replies");
+        assert!(text.contains(r#""id":1"#), "{text}");
+    }
+
+    /// The byte budget holds the reader back once the unanswered requests' text fills it, and answers
+    /// freeing bytes let it read on.
+    #[tokio::test]
+    async fn the_request_budget_holds_the_reader_until_replies_free_bytes() {
+        let Message::Text(sample) = request(1) else {
+            unreachable!("a request is text");
+        };
+        let mut wire = wire_with(AcceptPolicy {
+            request_budget: sample.as_str().len() * 3,
+            ..AcceptPolicy::DEFAULT
+        })
+        .await;
+        for id in 1..=6 {
+            wire.client
+                .send(request(id))
+                .await
+                .expect("the burst sends");
+        }
+
+        let held = drain_settled(&wire.intake, Duration::from_millis(200)).await;
+        assert_eq!(
+            held.len(),
+            3,
+            "only the requests that fit the budget are taken"
+        );
+
+        for stamped in &held {
+            answer(stamped);
+        }
+        let rest = take_commands(&wire.intake, 3, Duration::from_secs(5)).await;
+        assert_eq!(
+            rest.len(),
+            3,
+            "answered replies free the budget for the rest"
+        );
+        for stamped in &rest {
+            answer(stamped);
+        }
+        for id in 1..=6 {
+            let text = text_within(&mut wire.client, Duration::from_secs(5))
+                .await
+                .expect("every request is answered");
+            assert!(text.contains(&format!(r#""id":{id}"#)), "{text}");
+        }
+    }
+
+    /// Keepalive is on for an armed socket.
+    #[tokio::test]
+    async fn arm_keepalive_turns_the_option_on() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let addr = listener.local_addr().expect("an address");
+        let _client = TcpStream::connect(addr).await.expect("connects");
+        let (stream, _peer) = listener.accept().await.expect("accepts");
+        arm_keepalive(&stream);
+        assert!(SockRef::from(&stream).keepalive().expect("readable"));
     }
 
     /// The subscribe request for `channel` as wire text.

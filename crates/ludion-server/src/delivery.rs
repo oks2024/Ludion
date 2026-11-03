@@ -65,12 +65,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver as CrossbeamReceiver;
+use ludion_core::codes::code;
+use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::FrameIndex;
 use ludion_engine::egress::{Egress, EgressEvent, EgressFrame};
 use ludion_protocol::command::{Channel, SubscribeMode};
 use ludion_protocol::event::{Event, LogEvent, LogLevel};
 use ludion_protocol::frame::{FrameFormat, FrameHeader};
-use ludion_protocol::{EventMessage, MAX_MESSAGE_BYTES, SubId};
+use ludion_protocol::{EventMessage, MAX_MESSAGE_BYTES, Seq, SubId};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
 
 use crate::connection::{PIPELINE_DEPTH, message_too_large};
@@ -196,7 +199,22 @@ pub(crate) struct RegistryState {
     unclaimed_events: HashMap<u64, VecDeque<String>>,
     /// The latest frame addressed to a sub no one has registered, while a subscribe was in flight.
     unclaimed_frames: HashMap<u64, Arc<EgressFrame>>,
+    /// Subs whose last routed event was dropped at a full text lane, so no later event exists to show
+    /// the gap; [`notice_dropped_tail`] clears the entry by sending the notice.
+    dropped_tails: HashMap<u64, DroppedTail>,
 }
+
+/// What a sub's trailing run of dropped events amounts to.
+struct DroppedTail {
+    /// How many events the run dropped.
+    count: u64,
+    /// The last dropped event's `seq` and `frame`, which the notice takes over.
+    seq: Seq,
+    frame: Option<FrameIndex>,
+}
+
+/// How often a pending tail drop retries its notice. Nothing is waiting on it, so it is coarse.
+const TAIL_NOTICE_POLL: Duration = Duration::from_millis(100);
 
 impl RegistryState {
     /// One in-flight subscribe is over; the last one out drops whatever nobody claimed.
@@ -335,6 +353,10 @@ pub(crate) async fn frame_router(
 /// event for a sub that is not registered *yet* — a subscribe is in flight — waits in the registry's
 /// buffer and is flushed, in order, by [`register`]; with no subscribe in flight it is for a closed sub
 /// and is dropped. A message over the wire ceiling is replaced by an `L3045` log in its slot.
+///
+/// A drop at the *tail* — no later event follows to show the gap — would be invisible, so a full lane
+/// leaves a marker and [`notice_dropped_tail`] sends an `L3056` log in the last dropped `seq` once the
+/// lane has room. A later event that is delivered first shows the gap itself and clears the marker.
 pub(crate) fn route_event(
     registry: &Registry,
     hub: &ProfileHub,
@@ -342,17 +364,99 @@ pub(crate) fn route_event(
     timeline: u64,
 ) {
     let sub = message.sub.as_u64();
+    let (seq, frame) = (message.seq, message.frame);
     perf::fill_window_event(hub, &mut message, timeline);
     let text = event_text(&message, MAX_MESSAGE_BYTES);
-    let mut state = registry.lock().expect("registry mutex poisoned");
+    let mut guard = registry.lock().expect("registry mutex poisoned");
+    let state = &mut *guard;
     if let Some(SubState::Events(outbound)) = state.subs.get(&sub) {
-        let _ = outbound.text.try_send(text);
+        match outbound.text.try_send(text) {
+            Ok(()) => {
+                state.dropped_tails.remove(&sub);
+            }
+            Err(TrySendError::Full(_)) => {
+                let tail = state.dropped_tails.entry(sub);
+                let fresh = matches!(tail, std::collections::hash_map::Entry::Vacant(_));
+                let tail = tail.or_insert(DroppedTail {
+                    count: 0,
+                    seq,
+                    frame,
+                });
+                tail.count += 1;
+                tail.seq = seq;
+                tail.frame = frame;
+                if fresh {
+                    tokio::spawn(notice_dropped_tail(registry.clone(), sub));
+                }
+            }
+            Err(TrySendError::Closed(_)) => {}
+        }
     } else if !state.subs.contains_key(&sub) && state.in_flight > 0 {
         let queue = state.unclaimed_events.entry(sub).or_default();
         if queue.len() < TEXT_CAPACITY {
             queue.push_back(text);
         }
     }
+}
+
+/// Sends the `L3056` notice for a sub's dropped tail as soon as its text lane has room.
+///
+/// Polls under the registry lock and reads the sink from the registry each time — never a held clone,
+/// which would keep the lane open past the connection's teardown. Ends when the notice is queued, the
+/// marker is gone (a later event was delivered) or the sub is (unregistered). Under the lock it cannot
+/// interleave with [`route_event`], so the notice never lands after a newer event.
+async fn notice_dropped_tail(registry: Registry, sub: u64) {
+    loop {
+        tokio::time::sleep(TAIL_NOTICE_POLL).await;
+        let mut guard = registry.lock().expect("registry mutex poisoned");
+        let state = &mut *guard;
+        let Some(SubState::Events(outbound)) = state.subs.get(&sub) else {
+            state.dropped_tails.remove(&sub);
+            return;
+        };
+        let Some(tail) = state.dropped_tails.get(&sub) else {
+            return;
+        };
+        match outbound
+            .text
+            .try_send(tail_notice_text(SubId::new(sub), tail))
+        {
+            Ok(()) | Err(TrySendError::Closed(_)) => {
+                state.dropped_tails.remove(&sub);
+                return;
+            }
+            Err(TrySendError::Full(_)) => {}
+        }
+    }
+}
+
+/// The warning log that stands in the last dropped event's slot, so `seq` stays monotonic.
+fn tail_notice_text(sub: SubId, tail: &DroppedTail) -> String {
+    let diagnostic = Diagnostic::new(
+        code::SERVER_EVENTS_DROPPED,
+        format!(
+            "{} event(s) for subscription {} were dropped at a full connection queue; the last had \
+             seq {}",
+            tail.count,
+            sub.as_u64(),
+            tail.seq.as_u64()
+        ),
+    )
+    .with_help(
+        "read the connection continuously, or read the state back; run `ludion explain L3056` for \
+         the full walkthrough",
+    );
+    let notice = EventMessage {
+        event: Event::Log(LogEvent {
+            level: LogLevel::Warn,
+            message: diagnostic.to_string(),
+            diagnostic: Some(diagnostic),
+        }),
+        sub,
+        seq: tail.seq,
+        frame: tail.frame,
+    };
+    serde_json::to_string(&notice).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Serializes `message`, or — when the text is over `limit` bytes — a `log` error carrying `L3045` with
@@ -650,11 +754,9 @@ pub(crate) fn register(
 /// Unregisters a subscription: the router stops delivering to it and (for `frames`) dropping the slot
 /// sender ends its forwarder task. Idempotent — unregistering an unknown id is a no-op.
 pub(crate) fn unregister(registry: &Registry, sub: SubId) {
-    registry
-        .lock()
-        .expect("registry mutex poisoned")
-        .subs
-        .remove(&sub.as_u64());
+    let mut state = registry.lock().expect("registry mutex poisoned");
+    state.subs.remove(&sub.as_u64());
+    state.dropped_tails.remove(&sub.as_u64());
 }
 
 #[cfg(test)]
@@ -844,6 +946,88 @@ mod tests {
             event_text(&message, usize::MAX),
             serde_json::to_string(&message).unwrap()
         );
+    }
+
+    /// Registers an events sub over a one-slot text lane and fills it, so the next event drops.
+    fn full_lane(registry: &Registry, sub: u64) -> mpsc::Receiver<String> {
+        let (text, text_rx) = mpsc::channel(1);
+        let (frames, _frames_rx) = mpsc::channel(1);
+        let outbound = OutboundSink { text, frames };
+        outbound.text.try_send("filler".to_string()).unwrap();
+        registry
+            .lock()
+            .unwrap()
+            .subs
+            .insert(sub, SubState::Events(outbound));
+        text_rx
+    }
+
+    fn sub_event(sub: u64, seq: u64) -> EventMessage {
+        EventMessage {
+            sub: SubId::new(sub),
+            ..event(seq).message
+        }
+    }
+
+    /// A tail drop leaves no later event to show the gap, so the notice carries the last dropped seq.
+    #[tokio::test]
+    async fn a_dropped_tail_gets_a_notice_in_the_last_dropped_seq() {
+        let registry = new_registry();
+        let hub = ProfileHub::new();
+        let mut rx = full_lane(&registry, 3);
+        route_event(&registry, &hub, sub_event(3, 1), 0);
+        route_event(&registry, &hub, sub_event(3, 2), 0);
+        assert_eq!(rx.recv().await.as_deref(), Some("filler"));
+
+        let text = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the notice arrives once the lane has room")
+            .expect("a message");
+        let back: EventMessage = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.seq, Seq::new(2));
+        assert_eq!(back.sub, SubId::new(3));
+        let Event::Log(log) = back.event else {
+            panic!("expected a log, got {text}");
+        };
+        assert_eq!(log.level, LogLevel::Warn);
+        assert_eq!(
+            log.diagnostic.expect("a diagnostic").code.to_string(),
+            "L3056"
+        );
+        assert!(log.message.contains("2 event(s)"), "{}", log.message);
+        assert!(registry.lock().unwrap().dropped_tails.is_empty());
+    }
+
+    /// A delivered event after the drop shows the gap itself, so no notice follows.
+    #[tokio::test]
+    async fn a_later_delivered_event_suppresses_the_notice() {
+        let registry = new_registry();
+        let hub = ProfileHub::new();
+        let mut rx = full_lane(&registry, 3);
+        route_event(&registry, &hub, sub_event(3, 1), 0);
+        assert_eq!(rx.recv().await.as_deref(), Some("filler"));
+        route_event(&registry, &hub, sub_event(3, 2), 0);
+        assert!(registry.lock().unwrap().dropped_tails.is_empty());
+
+        let text = rx.recv().await.expect("the delivered event");
+        let back: EventMessage = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.seq, Seq::new(2));
+        tokio::time::sleep(TAIL_NOTICE_POLL * 3).await;
+        assert!(rx.try_recv().is_err(), "no notice follows");
+    }
+
+    /// Unregistering the sub ends the poll without sending anything.
+    #[tokio::test]
+    async fn unregistering_ends_the_tail_notice() {
+        let registry = new_registry();
+        let hub = ProfileHub::new();
+        let mut rx = full_lane(&registry, 3);
+        route_event(&registry, &hub, sub_event(3, 1), 0);
+        unregister(&registry, SubId::new(3));
+        assert!(registry.lock().unwrap().dropped_tails.is_empty());
+        assert_eq!(rx.recv().await.as_deref(), Some("filler"));
+        tokio::time::sleep(TAIL_NOTICE_POLL * 3).await;
+        assert!(rx.try_recv().is_err(), "nothing is sent for a gone sub");
     }
 
     /// A rate no `Duration` can hold must not panic the forwarder: it forwards, uncapped.

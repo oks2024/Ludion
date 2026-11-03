@@ -2093,6 +2093,15 @@ pub mod code {
     /// still run on the host. Raised by `ludion-client`.
     pub const PROTOCOL_CALL_TIMED_OUT: DiagnosticCode = DiagnosticCode::new("L3054");
 
+    /// `L3055` — the server refused a connection because it was already at its connection cap. The
+    /// refusal is the handshake's error reply. Raised by `ludion-server`.
+    pub const SERVER_CONNECTION_LIMIT: DiagnosticCode = DiagnosticCode::new("L3055");
+
+    /// `L3056` — a connection's text lane was full, so one or more events for a subscription were
+    /// dropped; the notice takes the last dropped event's `seq`. A warning. Raised by
+    /// `ludion-server`.
+    pub const SERVER_EVENTS_DROPPED: DiagnosticCode = DiagnosticCode::new("L3056");
+
     // --- L4xxx: sim (raised by `ludion-sim`) ---
 
     /// `L4001` — a simulation speed factor was not a finite number in `[1/64, 64]`. Raised by
@@ -10642,6 +10651,37 @@ Fix: check that the host process is running and not stopped; read back the state
 `sim.hash`) before deciding whether to retry; raise the timeout only for a command that is expected
 to run long.",
     },
+    CodeEntry {
+        code: code::SERVER_CONNECTION_LIMIT,
+        severity: Severity::Error,
+        title: "the server is at its connection limit",
+        explanation: "\
+The server refused this connection because it already serves its maximum number of clients.
+
+The refusal arrives as the error reply to the handshake, after which the server closes the socket.
+Connections that are already open are unaffected. The cap exists so a runaway local peer cannot
+exhaust the server's threads.
+
+Fix: close a client that is no longer needed (a stale adapter, a forgotten harness) and reconnect.
+If the clients are all live, a host serving more than the cap at once is outside what this server is
+built for.",
+    },
+    CodeEntry {
+        code: code::SERVER_EVENTS_DROPPED,
+        severity: Severity::Warning,
+        title: "events were dropped on a full connection",
+        explanation: "\
+A subscription's events were dropped because the connection's outbound queue was full: the client
+stopped reading, or reads slower than the engine emits.
+
+Each event carries a `seq` that the engine advances whether or not the event is delivered, so a drop
+is normally visible as a gap. When the dropped events are the last ones the subscription emits, no
+later event exists to show the gap; this log takes the last dropped event's `seq` and names how many
+were lost, so the tail is not silent. It is sent once the queue has room again.
+
+Fix: read the connection continuously, or subscribe with a narrower channel. A client that must see
+every event should treat a `seq` gap, or this notice, as a reason to read the state back.",
+    },
 ];
 
 /// Codes that once existed and are gone from [`CODES`], each with why. A retired code is never
@@ -11114,6 +11154,8 @@ mod tests {
         code::REPLAY_TORN_TAIL,
         code::RESIDUE_REF_UNRESOLVED,
         code::PROTOCOL_CALL_TIMED_OUT,
+        code::SERVER_CONNECTION_LIMIT,
+        code::SERVER_EVENTS_DROPPED,
         // --- L4xxx: sim ---
         code::INVALID_SIM_SPEED,
         code::INPUT_SCRIPT_IO,
@@ -11314,6 +11356,7 @@ mod tests {
             code::AUDIO_STREAM_FAILED,
             code::MUSIC_TRACK_UNPLAYABLE,
             code::AUDIO_GAIN_NON_FINITE,
+            code::SERVER_EVENTS_DROPPED,
         ];
         let registered: Vec<DiagnosticCode> = CODES
             .iter()

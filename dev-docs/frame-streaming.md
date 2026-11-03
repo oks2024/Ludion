@@ -55,6 +55,9 @@ No files of its own — this doc is pure cross-reference. The path, in order:
 - **A drop is always visible, never silent.** Events carry a `Seq` assigned inside the engine
   *before* the message leaves the sim thread; a downstream drop (full outbound queue, vanished
   registry entry) still consumes that `seq`, so the next event a client actually sees has a gap.
+  A *tail* drop at a full text lane has no next event, so it gets a notice: an `L3056` `Log` in the
+  last dropped `seq` (so `seq` stays monotonic), sent once the lane has room. A `Log` can therefore
+  appear on any event sub.
   Frames carry a `FrameIndex` the same way — non-consecutive frame indices tell a consumer frames
   were skipped, which is expected for a latest-wins video-like stream, not a bug to chase.
 - **Rendering for delivery never perturbs the sim.** It is a pure read of the world — never mutates
@@ -155,5 +158,6 @@ TS-side tests: `ludion devdocs frame-streaming-viewer`.
   superseded frame in the forwarder's `watch` slot costs no header work, only the one shared
   per-format encode already paid for by the router.
 - Events and frames share nothing at the coalescing level: an event dropped under backpressure is
-  gone (visible only as a `seq` gap); a frame "dropped" under latest-wins was never lost so much as
-  superseded — there is no `seq` gap to look for on the frame side, only a `frame_index` gap.
+  gone (visible as a `seq` gap, or as the `L3056` notice when it was the tail); a frame "dropped"
+  under latest-wins was never lost so much as superseded — there is no `seq` gap to look for on the
+  frame side, only a `frame_index` gap.

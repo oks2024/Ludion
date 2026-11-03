@@ -79,10 +79,23 @@ never back), `diagnostics` (the `L3xxx` codes this crate speaks).
   answering entries concurrently, breaks a guarantee every client has. The pump awaits one entry at a
   time; a `stream.subscribe` is the one request resolved elsewhere (next bullet), and its slot just
   takes the finished `Response`, so replies still *leave* in request order.
+- **Hostile-peer bounds, all in `connection.rs`.** `AcceptPolicy::max_connections` (64) refuses the
+  next client's handshake with `L3055`; each pump holds at most one blocking-pool thread, so the
+  pool cannot be exhausted. `request_budget` is a per-connection byte semaphore taken *before*
+  `accept_request` and held by the queued `Accepted` until its reply is queued; it defaults to
+  `MAX_MESSAGE_BYTES` so one maximum request (a restorable snapshot) always fits — it is not a lower
+  message ceiling. `arm_keepalive` sets kernel TCP keepalive (15 s idle, 5 s interval) on every
+  socket: an idle half-open peer ends in about a minute. **Not WebSocket pings** — `ludion-client` is
+  synchronous and answers a ping only while reading, so an idle adapter would look dead. A peer with
+  unacknowledged frames still ends at the OS retransmit timeout, and there is no writer send timeout
+  (a client paused while reading is legal under latest-wins).
+- **A subscribe's wait takes no pool thread.** `await_reply` takes a `ReplyWait`: the pump's
+  `Blocking` parks one pool thread; a subscribe's resolution uses `Polled` (5 ms async polling), and
+  a late subscribe is reaped by an async task (`reap_late_subscribe`, 250 ms poll).
 - **`ludion-client` is the peer, not a dependency.** It appears only in dev-dependencies, so the
   integration tests drive the server exactly the way the editor or CLI will — over the wire.
 - Startup failures (bad address, runtime, bind) and a stopped sim thread are all `L3009`
-  (`PROTOCOL_ENGINE_UNAVAILABLE`), structured with a help line.
+  (`PROTOCOL_ENGINE_UNAVAILABLE`), structured with a help line; a connection over the cap is `L3055`.
 
 ## How it works
 

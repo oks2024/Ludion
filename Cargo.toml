@@ -36,6 +36,9 @@ ctrlc = "3"
 # blocking SDK. Default features only — the `handshake` feature gives plain `ws://` connect with no
 # TLS backend pulled in (M1 is localhost only).
 tokio-tungstenite = "0.24"
+# Kernel TCP keepalive on each accepted server socket (`ludion-server`), so a peer that vanished
+# without a FIN does not hold a connection forever; tokio exposes no keepalive interval.
+socket2 = "0.6"
 tungstenite = "0.24"
 # `StreamExt`/`SinkExt` for splitting a WS connection into a read stream and a write sink in the
 # server's per-connection task. Only `ludion-server` uses it.
