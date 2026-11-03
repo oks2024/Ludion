@@ -72,7 +72,7 @@ clips:
   outgoing clip, which pops.
 - `from` **persists after the fade ends**, so a stateless driver can read where a clip was entered
   from (the cycle below picks the next clip after `run` from it).
-- To change speed mid-clip call `set_speed(&mut animation, speed, ctx.game_time)`: clip time stays
+- To change speed mid-clip call `set_clip_speed(&mut animation, speed, ctx.game_time)`: clip time stays
   continuous for the pose and for events. It moves the incoming side only; a fading-out clip keeps the
   rate it had. Write `speed` directly only together with a new `started`.
 - A sprite flipbook cannot crossfade: `L1209`.
@@ -84,7 +84,7 @@ clips:
 - The grid is global: the pose is evaluated at the last tick that is a multiple of `N`, so every entity
   with the same `hold` changes pose on the same ticks, whenever its clip started.
 - The incoming clock, the outgoing clock and the crossfade weight step together, so a fade is stepped too.
-- Visual-only: `AnimationEvents` and the ragdoll pose keep the exact tick, and `set_speed` between two
+- Visual-only: `AnimationEvents` and the ragdoll pose keep the exact tick, and `set_clip_speed` between two
   steps changes the pose only from the next step, even when called every tick (the grid does not drift).
 - A clip switched between steps shows its first pose at once; start clips on the grid or crossfade.
 - Review a stepped strip with `ludion render --model <x>.character.yaml --crossfade run:idle:0.5 --strip 8 --hold 5`: each phase snaps to the grid, so neighbouring phases repeat a pose, and the output name gains `-hold5`.

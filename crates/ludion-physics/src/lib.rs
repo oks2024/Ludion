@@ -205,18 +205,3 @@ pub use world::{
     DEFAULT_GRAVITY, MotorMismatch, PhysicsError, PhysicsWorld, ShapeKind, ShapeRejection,
     StepBreakdown,
 };
-
-/// The pinned `rapier3d` version (`[workspace.dependencies]` in the root `Cargo.toml`): reading
-/// this constant is cheaper than grepping the manifest for anyone confirming which version the
-/// workspace resolved, and a pin move is a hash-moving event, so it is worth stating twice.
-pub fn rapier_version() -> &'static str {
-    "0.35.3"
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn rapier_version_matches_pin() {
-        assert_eq!(super::rapier_version(), "0.35.3");
-    }
-}

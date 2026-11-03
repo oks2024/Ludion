@@ -54,7 +54,9 @@
 //!   (`ludion docs hierarchy`). [`spawn_prefab`] spawns a `kind: prefab` document from a system,
 //!   each part carrying a [`PrefabInstance`]; [`revert_prefab`] and [`unpack_prefab`] edit one.
 //!   [`SingleExt`] adds `world.single::<T>()` / `world.single_get::<T>()`: the first entity carrying a
-//!   singleton component, and its value.
+//!   singleton component, and its value. [`Phase`] is the phase a system runs in, which the world
+//!   enforces the sim/presentation boundary by; [`SemanticValidate`] is the trait a component
+//!   implements for cross-field invariants JSON Schema cannot express.
 //! - **Sim/input/time** — [`InputState`], [`Key`], [`InputEvent`]; the mouse/gamepad devices
 //!   [`MouseState`]/[`GamepadState`] (reached via `input.mouse()`/`input.gamepad()`) and their
 //!   name enums [`MouseButton`], [`GamepadButton`], [`GamepadAxis`]; the const-constructible key-or-button
@@ -96,16 +98,38 @@
 //!   with a [`Falloff`]) and answers body counts, sleep state and its three read-only queries
 //!   ([`QueryFilter`], [`QueryHit`]), which report a bad argument as [`PhysicsError`]. An entity
 //!   belongs to one tier or the other, never both.
+//! - **Physics events** — [`ContactEvent`] (a contact beginning or ending between two bodies; `ludion
+//!   docs physics`, `ludion docs collision-layers`), [`SensorEvent`] (a body entering or leaving a
+//!   sensor volume; `ludion docs physics-sensors`) and [`JointBroken`] (a carrier's joint breaking;
+//!   `ludion docs physics-joints`), each read off [`PhysicsWorld`] as one step's sorted list.
 //! - **Animation events** — [`animation_events`] is a sim system a game registers after whatever
 //!   writes `Animation`; each tick it rewrites the [`AnimationEvents`] resource with the
 //!   [`ClipEvent`]s the clip clock crossed (authored events, plus `end` for a one-shot), in a
-//!   deterministic order. Only the incoming clip of a crossfade emits. [`set_speed`] changes a
+//!   deterministic order. Only the incoming clip of a crossfade emits. [`set_clip_speed`] changes a
 //!   playing clip's rate without a jump in pose or events.
 //! - **Ragdolls** — [`switch_to_ragdoll`] promotes a posed `Mesh.shape: assembly` entity into one
 //!   `rigid` body entity per part, joined by [`Joint`]s (fixed to its parent unless the assembly's
 //!   `joints:` binds it to something else); the root entity survives, stripped of its drawing/physics
 //!   components. [`AssemblyData`] (+ [`load_assembly`]) is the meshed model the switch reads —
 //!   whatever a game's asset cache already holds for the entity's `assembly` path.
+//! - **Projectile patterns** — [`Volley`] is one fired volley, a closed-form bullet field on the
+//!   entity that carries it; [`PatternPlayer`] plays a `kind: pattern` document's timeline, standing
+//!   a [`Volley`] up on each entry's frame. [`play_patterns`] and [`advance_volleys`] are the
+//!   systems that fire and reap them; the `bullet_*` readers ([`bullet_position`], [`bullet_age`],
+//!   [`bullet_is_alive`]) and [`volley_hits`] answer where a bullet is and what it touches at a
+//!   gameplay time (`ludion docs patterns`).
+//! - **Camera rig** — [`CameraRig`] on the camera entity follows a target with springs and look-ahead
+//!   in its [`TrackRig`] mode; a game writes its `trauma` with [`add_trauma`] and cuts to the desired
+//!   pose with [`snap_rig`] (`ludion docs camera`).
+//! - **Paths** — [`PathFollower`] moves an entity along a `kind: path` document, [`path_follow`] is the
+//!   system that does it, and [`PathSampler`] is the arc-length access to a path's positions and
+//!   directions (`ludion docs path`).
+//! - **Character motor** — [`CharacterMotor`] gives an entity a kinematic capsule whose origin is the
+//!   character's feet; [`move_character`] (or [`move_character_with`], taking an explicit
+//!   constraint) moves it through the world. The `MOTOR_*` constants are the colours of the `motor`
+//!   debug-draw category (`ludion docs motor`). [`LaneConstraint`] holds a motor to a `kind: path`
+//!   lane; the `LANE_*` constants are the colours (and [`LANE_ERROR_FULL`], the error that reaches
+//!   the full off-lane colour) of the `lane` debug-draw category (`ludion docs lane`).
 //! - **Audio** — [`AudioQueue`] (the resource a system pushes into) and [`AudioEvent`] (a sound
 //!   path and a gain). Draining and playback are the engine's job; a system only pushes.
 //!   [`AudioEmitter`] (with [`AudioCategory`]) is the declarative half: a looping sound placed in
@@ -179,7 +203,7 @@ pub use ludion_engine::{
     debug_draw, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
     move_character, move_character_with, path_follow, path_follower_motion, play_patterns,
     posed_joint_world, probe_character_ground, reparent, report_diagnostic, report_full_diagnostic,
-    resize_character, revert_prefab, set_speed, snap_rig, spawn_prefab, switch_to_ragdoll,
+    resize_character, revert_prefab, set_clip_speed, snap_rig, spawn_prefab, switch_to_ragdoll,
     teleport_character, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
 };
 

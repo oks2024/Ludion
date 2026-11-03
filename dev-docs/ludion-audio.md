@@ -97,7 +97,7 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
 - **One envelope per voice; `VoiceLimits` bounds the rest.** `voice_limits(VoiceCaps)` builds them (oldest-steal); the caps (default 4 per sound / 64 total) reach `AudioSink::spawn` from the game's `ludion.toml` `[audio]` table, read by the facade host (`host::voice_caps`, nearest manifest at or above the scene dir). `Envelope` is an integer countdown stepped
   once per device frame (`RAMP_MS` = 10) for fades and slews. Only live voices (loops, or not-retiring
   one-shots) count against the caps; `voices` holds ≤ 2×total, cutting the lowest fading voice. Loops
-  are never stolen; the Router holds those past the total. `Quietest` is level × bus master. `Mixer::new` reserves every container and
+  are never stolen; the Router holds those past the total. `Mixer::new` reserves every container and
   `render` mixes in blocks; tests build a `Mixer` with other limits.
 - `#![forbid(unsafe_code)]`, `#![warn(missing_docs)]`, like every sibling.
 

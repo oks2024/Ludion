@@ -502,7 +502,7 @@ fn flipbook_frames_are_exact_on_every_tick() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A `set_speed` anchor keeps the boundary exact: from tick 62 at half speed the clip has counted
+/// A `set_clip_speed` anchor keeps the boundary exact: from tick 62 at half speed the clip has counted
 /// `tick + 62` half-ticks, so its frame is `(tick + 62) * fps / 120`.
 #[test]
 fn an_anchored_flipbook_is_exact_across_set_speed() {
@@ -512,7 +512,7 @@ fn an_anchored_flipbook_is_exact_across_set_speed() {
         .world_mut()
         .query_ids::<(&mut ludion_engine::Animation,)>()
     {
-        ludion_engine::set_speed(animation, 0.5, SimTime::from_ticks(62, TickRate::DEFAULT));
+        ludion_engine::set_clip_speed(animation, 0.5, SimTime::from_ticks(62, TickRate::DEFAULT));
     }
     for tick in 62..=362 {
         assert_rates_at(&engine, tick, tick + 62, 120);

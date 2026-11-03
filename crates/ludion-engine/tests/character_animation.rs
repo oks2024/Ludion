@@ -271,7 +271,7 @@ fn the_overlay_speed_multiplies_the_animation_speed() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A `set_speed` anchor poses from the same clock the events read: half speed from `ticks: 30`
+/// A `set_clip_speed` anchor poses from the same clock the events read: half speed from `ticks: 30`
 /// (0.5 s) at frame 30 has consumed 0.75 s by tick 60, which is the plain speed-1 pose at tick 45.
 /// This also proves the authored anchor YAML loads.
 #[test]
@@ -379,14 +379,14 @@ fn a_crossfade_blends_then_lands_exactly_on_the_incoming_clip() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// `set_speed` on every animated entity at gameplay `tick`.
+/// `set_clip_speed` on every animated entity at gameplay `tick`.
 fn set_speeds(engine: &mut Engine, speed: f32, tick: u64) {
     let now = SimTime::from_ticks(tick, TickRate::DEFAULT);
     for (_, (animation,)) in engine
         .world_mut()
         .query_ids::<(&mut ludion_engine::Animation,)>()
     {
-        ludion_engine::set_speed(animation, speed, now);
+        ludion_engine::set_clip_speed(animation, speed, now);
     }
 }
 

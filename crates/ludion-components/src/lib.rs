@@ -4456,7 +4456,7 @@ fn ui_element_non_positive_size(value: f64, pointer: &str) -> Diagnostic {
 /// The component is ordinary hashed sim state: it snapshots, rides a scene switch, and shows in a
 /// `WorldHash`. That is why `started` is a [`FrameIndex`] and not accumulated seconds — an exact
 /// integer, with elapsed clip seconds derived on demand as `(now − started) × seconds_per_tick ×
-/// speed`. `set_speed` changes the rate mid-clip by writing an [`anchor`](Animation::anchor): the
+/// speed`. `set_clip_speed` changes the rate mid-clip by writing an [`anchor`](Animation::anchor): the
 /// clip ticks consumed at the frame it was called, after which the new `speed` covers the ticks
 /// since.
 ///
@@ -4480,11 +4480,11 @@ pub struct Animation {
     pub started: FrameIndex,
     /// Playback rate multiplier: `2.0` plays twice as fast, `0.0` freezes on the first instant
     /// (default `1.0`). Written directly it re-times the whole clip from `started`; use
-    /// `set_speed` to change it mid-clip without a jump.
+    /// `set_clip_speed` to change it mid-clip without a jump.
     #[serde(default = "one")]
     #[schemars(range(min = 0.0))]
     pub speed: f32,
-    /// Where `set_speed` re-based the clip clock (default none). It applies only while its
+    /// Where `set_clip_speed` re-based the clip clock (default none). It applies only while its
     /// `started` equals this component's `started`, so a restamp or a crossfade retires it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor: Option<ClipAnchor>,
@@ -4539,7 +4539,7 @@ impl Default for Animation {
     }
 }
 
-/// Where a `set_speed` re-based the clip clock: at gameplay `frame` the playback stamped `started`
+/// Where a `set_clip_speed` re-based the clip clock: at gameplay `frame` the playback stamped `started`
 /// had consumed `ticks` clip ticks (before any character binding speed).
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
 pub struct ClipAnchor {

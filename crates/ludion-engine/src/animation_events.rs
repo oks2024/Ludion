@@ -9,7 +9,7 @@
 //! registers it is untouched.
 //!
 //! **The crossing rule.** Clip time is the unwrapped `T(n)` the renderer evaluates
-//! (`clip_elapsed`, so a [`set_speed`](crate::set_speed) anchor counts) times the binding speed,
+//! (`clip_elapsed`, so a [`set_clip_speed`](crate::set_clip_speed) anchor counts) times the binding speed,
 //! read at gameplay time. A walk fires what lies in `(T_prev, T(n)]`, and an event at `t = 0` is in
 //! the first window, which is closed at zero. A `started` in the future fires nothing, and speed `0`
 //! fires nothing after the start. A one-shot fires each event once, then an implicit `end` event

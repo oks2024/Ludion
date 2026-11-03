@@ -602,7 +602,7 @@ fn ramp(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
         _ => return,
     };
     for (_, (animation,)) in world.query_ids::<(&mut Animation,)>() {
-        ludion_engine::set_speed(animation, speed, ctx.game_time);
+        ludion_engine::set_clip_speed(animation, speed, ctx.game_time);
     }
 }
 
@@ -614,7 +614,7 @@ fn ramp_off_grid(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
         _ => return,
     };
     for (_, (animation,)) in world.query_ids::<(&mut Animation,)>() {
-        ludion_engine::set_speed(animation, speed, ctx.game_time);
+        ludion_engine::set_clip_speed(animation, speed, ctx.game_time);
     }
 }
 
@@ -622,7 +622,7 @@ fn ramp_off_grid(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
 fn slow_at_sixty(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
     if ctx.game_frame.as_u64() == 60 {
         for (_, (animation,)) in world.query_ids::<(&mut Animation,)>() {
-            ludion_engine::set_speed(animation, 0.25, ctx.game_time);
+            ludion_engine::set_clip_speed(animation, 0.25, ctx.game_time);
         }
     }
 }
@@ -631,7 +631,7 @@ fn slow_at_sixty(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
 fn slow_at_59(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
     if ctx.game_frame.as_u64() == 59 {
         for (_, (animation,)) in world.query_ids::<(&mut Animation,)>() {
-            ludion_engine::set_speed(animation, 0.5, ctx.game_time);
+            ludion_engine::set_clip_speed(animation, 0.5, ctx.game_time);
         }
     }
 }
@@ -826,7 +826,7 @@ impl Write for SharedSink {
     }
 }
 
-/// A `set_speed` anchor holds an `f64` in hashed state; it must survive JSON text bit for bit, in a
+/// A `set_clip_speed` anchor holds an `f64` in hashed state; it must survive JSON text bit for bit, in a
 /// snapshot sent over the wire and in a replay keyframe verified by a fresh engine.
 #[test]
 fn a_set_speed_anchor_survives_snapshot_text_and_a_keyframe_verify() {
@@ -865,7 +865,7 @@ fn a_set_speed_anchor_survives_snapshot_text_and_a_keyframe_verify() {
     assert_eq!(report.verified, report.keyframes);
 }
 
-/// A raw `speed` write (no `set_speed`, no restamp) of 0.25 at game frame 60.
+/// A raw `speed` write (no `set_clip_speed`, no restamp) of 0.25 at game frame 60.
 fn raw_slow_at_sixty(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
     if ctx.game_frame.as_u64() == 60 {
         for (_, (animation,)) in world.query_ids::<(&mut Animation,)>() {
@@ -936,7 +936,7 @@ fn a_late_start_just_before_a_hold_fires_its_zero_event_once() {
     );
 }
 
-/// Holds raw ticks 41..=50 (a hold on raw frame N holds tick N + 1) and calls `set_speed(0.5)`
+/// Holds raw ticks 41..=50 (a hold on raw frame N holds tick N + 1) and calls `set_clip_speed(0.5)`
 /// mid-hold, at raw frame 45.
 fn hold_and_slow(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
     let raw = ctx.frame.as_u64();
@@ -945,7 +945,7 @@ fn hold_and_slow(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
     }
     if raw == 45 {
         for (_, (animation,)) in world.query_ids::<(&mut Animation,)>() {
-            ludion_engine::set_speed(animation, 0.5, ctx.game_time);
+            ludion_engine::set_clip_speed(animation, 0.5, ctx.game_time);
         }
     }
 }

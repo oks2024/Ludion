@@ -145,7 +145,7 @@ pub use dispatch::{Dispatched, dispatch};
 pub use docs::{DocStore, content_root_yaml, is_engine_kind};
 pub use egress::{Egress, EgressChannels, EgressEvent, EgressFrame};
 pub use engine::{ENGINE_VERSION, Engine, GiRebakeMode, KEYFRAME_INTERVAL};
-pub use extract::set_speed;
+pub use extract::set_clip_speed;
 pub use extract::{check_atlas_reference, extract, extract_at, mesh_grid_cell};
 pub use font_sheet::render_font_sheet;
 pub use fonts::FontLibrary;

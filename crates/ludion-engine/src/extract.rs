@@ -4773,14 +4773,14 @@ pub(crate) fn clip_ticks(animation: &Animation, now: SimTime) -> f64 {
 ///
 /// ```
 /// use ludion_core::time::{SimTime, TickRate};
-/// use ludion_engine::{Animation, set_speed};
+/// use ludion_engine::{Animation, set_clip_speed};
 ///
 /// let mut animation = Animation { clip: "walk".into(), ..Animation::default() };
-/// set_speed(&mut animation, 0.5, SimTime::from_ticks(60, TickRate::DEFAULT));
+/// set_clip_speed(&mut animation, 0.5, SimTime::from_ticks(60, TickRate::DEFAULT));
 /// assert_eq!(animation.speed, 0.5);
 /// assert_eq!(animation.anchor.unwrap().ticks, 60.0);
 /// ```
-pub fn set_speed(animation: &mut Animation, speed: f32, now: SimTime) {
+pub fn set_clip_speed(animation: &mut Animation, speed: f32, now: SimTime) {
     let speed = if speed.is_finite() && speed >= 0.0 {
         speed
     } else {

@@ -58,7 +58,7 @@ A flipbook is declared on the `kind: atlas-source`/`kind: atlas` documents, not 
 **The timing arithmetic.** A flipbook's length in **clip frames** is the sum of `hold` (or one per
 `frames` entry with no `hold`); its length in **seconds** is that count divided by `fps`. At an
 instant `ticks` clip ticks into playback (the game counts them: each played tick adds the `Animation`'s
-`speed`, continued across `set_speed`), the clip frame showing is `floor(ticks × fps / rate)` with
+`speed`, continued across `set_clip_speed`), the clip frame showing is `floor(ticks × fps / rate)` with
 the division last — counted from zero on every call, never accumulated, so two hosts reaching the
 same tick by different routes show the same frame, and 15, 30 and 60 fps clips at 60 Hz turn over
 exactly on their tick — then wrapped into `[0, total)` for a looping clip or clamped to `total - 1` for
@@ -121,7 +121,7 @@ Sprite:
   late, not wrong: `ludion docs game-clock`.
 - **`speed: 0.0` freezes on the first frame**, not the frame showing when it was set — elapsed time is
   always measured from `started`, so a speed dropped to zero mid-clip jumps back to frame zero.
-  `set_speed(&mut animation, 0.0, ctx.game_time)` freezes on the current frame instead; a raw write
+  `set_clip_speed(&mut animation, 0.0, ctx.game_time)` freezes on the current frame instead; a raw write
   still jumps.
 - **A `started` frame in the future shows the first frame**, never a negative or wrapped time.
 - **`hold` counts clip frames, not seconds** — divide by `fps` to read one in real time.

@@ -160,18 +160,6 @@ impl MeshEditMap {
             MeshEditMap::Emissive => "emissive",
         }
     }
-
-    /// The mesh document key this slot reads (`base_color_texture`, ...) — the bridge between a
-    /// `map:` name and [`crate::MeshTextures`]' canonical key order.
-    pub fn texture_key(self) -> &'static str {
-        match self {
-            MeshEditMap::BaseColor => "base_color_texture",
-            MeshEditMap::MetallicRoughness => "metallic_roughness_texture",
-            MeshEditMap::Normal => "normal_texture",
-            MeshEditMap::Occlusion => "occlusion_texture",
-            MeshEditMap::Emissive => "emissive_texture",
-        }
-    }
 }
 
 /// A region and its edge: weight `1` inside the shape's surface, falling linearly to `0` over

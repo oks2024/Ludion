@@ -83,26 +83,13 @@ const RAMP_MS: usize = 10;
 /// device buffer is mixed in several passes.
 const MIX_BLOCK_FRAMES: usize = 1024;
 
-/// How many voices may sound at once and who gives way past that.
+/// How many voices may sound at once; past a cap the oldest live one-shot gives way.
 #[derive(Clone, Copy, Debug)]
 struct VoiceLimits {
     /// Most live one-shots of one sound, or `None` for no per-sound cap.
     per_sound: Option<usize>,
     /// Most live voices of all sounds, loops included. At least 1.
     total: usize,
-    /// Which live one-shot fades out to make room for a newcomer.
-    steal: Steal,
-}
-
-/// Which live one-shot gives way when a cap is hit.
-#[derive(Clone, Copy, Debug)]
-enum Steal {
-    /// The one that started first.
-    Oldest,
-    /// The one with the lowest level times its bus master; a newcomer quieter than every candidate
-    /// is refused instead.
-    #[cfg_attr(not(test), allow(dead_code))]
-    Quietest,
 }
 
 /// The limits for a game's `caps`: the oldest one-shot gives way when either cap is full. The
@@ -111,7 +98,6 @@ fn voice_limits(caps: VoiceCaps) -> VoiceLimits {
     VoiceLimits {
         per_sound: Some(caps.per_sound),
         total: caps.total,
-        steal: Steal::Oldest,
     }
 }
 
@@ -1498,7 +1484,7 @@ impl Mixer {
             }
             Some(_) => {}
             None => {
-                if self.live() >= self.limits.total && !self.steal(None, None) {
+                if self.live() >= self.limits.total && !self.steal(None) {
                     return;
                 }
             }
@@ -1525,11 +1511,11 @@ impl Mixer {
     fn admit(&mut self, voice: Voice) {
         if let Some(cap) = self.limits.per_sound {
             let sound = voice.sound_id();
-            if self.live_one_shots(Some(sound)) >= cap && !self.steal(Some(sound), Some(&voice)) {
+            if self.live_one_shots(Some(sound)) >= cap && !self.steal(Some(sound)) {
                 return;
             }
         }
-        if self.live() >= self.limits.total && !self.steal(None, Some(&voice)) {
+        if self.live() >= self.limits.total && !self.steal(None) {
             return;
         }
         let room = 2 * self.limits.total;
@@ -1539,28 +1525,13 @@ impl Mixer {
         }
     }
 
-    /// Fades out one live one-shot (of `sound`, if given) per `limits.steal`. False when there is no
-    /// candidate, or — under [`Steal::Quietest`] — when `newcomer` is quieter than every candidate.
-    fn steal(&mut self, sound: Option<usize>, newcomer: Option<&Voice>) -> bool {
-        let gains = &self.gains;
-        let loudness = |v: &Voice| v.envelope.level * gains.gain_for(v.category);
+    /// Fades out the oldest live one-shot (of `sound`, if given). False when there is no candidate.
+    fn steal(&mut self, sound: Option<usize>) -> bool {
         let mut candidates = self
             .voices
             .iter_mut()
             .filter(|v| !v.envelope.retiring && sound.is_none_or(|s| v.sound_id() == s));
-        let victim = match self.limits.steal {
-            Steal::Oldest => candidates.next(),
-            Steal::Quietest => {
-                let mut quietest: Option<&mut Voice> = None;
-                for v in candidates {
-                    if quietest.as_ref().is_none_or(|q| loudness(v) < loudness(q)) {
-                        quietest = Some(v);
-                    }
-                }
-                quietest.filter(|q| newcomer.is_none_or(|n| loudness(n) >= loudness(q)))
-            }
-        };
-        let Some(victim) = victim else {
+        let Some(victim) = candidates.next() else {
             return false;
         };
         victim.envelope.fade_out(self.ramp_frames);
@@ -2164,12 +2135,8 @@ mod tests {
         voice_limits(VoiceCaps::default())
     }
 
-    fn limits(per_sound: Option<usize>, total: usize, steal: Steal) -> VoiceLimits {
-        VoiceLimits {
-            per_sound,
-            total,
-            steal,
-        }
+    fn limits(per_sound: Option<usize>, total: usize) -> VoiceLimits {
+        VoiceLimits { per_sound, total }
     }
 
     /// Renders `samples` samples of `mixer`.
@@ -2508,11 +2475,7 @@ mod tests {
     /// The per-sound cap: the oldest live one-shot of the sound fades out and the newcomer starts.
     #[test]
     fn a_per_sound_cap_steals_the_oldest_with_a_fade() {
-        let mut mixer = test_mixer(
-            1,
-            CategoryGains::default(),
-            limits(Some(2), 8, Steal::Oldest),
-        );
+        let mut mixer = test_mixer(1, CategoryGains::default(), limits(Some(2), 8));
         let a = constant(1.0, 64);
         mixer.apply(one_shot_command(&a, 0.5));
         assert_eq!(render(&mut mixer, 1), [0.5]);
@@ -2541,32 +2504,8 @@ mod tests {
     }
 
     #[test]
-    fn a_per_sound_cap_steals_the_quietest() {
-        let mut mixer = test_mixer(
-            1,
-            CategoryGains::default(),
-            limits(Some(2), 8, Steal::Quietest),
-        );
-        let a = constant(1.0, 64);
-        mixer.apply(one_shot_command(&a, 0.125));
-        render(&mut mixer, 1);
-        mixer.apply(one_shot_command(&a, 0.25));
-        render(&mut mixer, 1);
-        mixer.apply(one_shot_command(&a, 0.1875));
-        assert_eq!(
-            render(&mut mixer, 5),
-            [0.53125, 0.5, 0.46875, 0.4375, 0.4375]
-        );
-        // Quieter than both live voices: refused, so nothing fades.
-        mixer.apply(one_shot_command(&a, 0.0625));
-        assert_eq!(render(&mut mixer, 1), [0.4375]);
-        assert_eq!(mixer.voices.len(), 2);
-        assert!(mixer.voices.iter().all(|v| !v.envelope.retiring));
-    }
-
-    #[test]
     fn the_total_cap_steals_the_oldest_across_sounds() {
-        let mut mixer = test_mixer(1, CategoryGains::default(), limits(None, 2, Steal::Oldest));
+        let mut mixer = test_mixer(1, CategoryGains::default(), limits(None, 2));
         mixer.apply(one_shot_command(&constant(1.0, 64), 0.5));
         assert_eq!(render(&mut mixer, 1), [0.5]);
         mixer.apply(one_shot_command(&constant(1.0, 64), 0.25));
@@ -2575,30 +2514,9 @@ mod tests {
         assert_eq!(render(&mut mixer, 5), [0.75, 0.625, 0.5, 0.375, 0.375]);
     }
 
-    /// Quietest compares what each voice is actually heard at: its level times its bus master.
-    #[test]
-    fn quietest_reads_the_bus_master() {
-        let gains = CategoryGains {
-            sfx: 1.0,
-            ambient: 0.25,
-            ..CategoryGains::default()
-        };
-        let mut mixer = test_mixer(1, gains, limits(None, 2, Steal::Quietest));
-        mixer.apply(one_shot_command(&constant(1.0, 64), 0.25));
-        mixer.apply(VoiceCommand::OneShot(one_shot(
-            &constant(1.0, 64),
-            0.5,
-            AudioCategory::Ambient,
-        )));
-        assert_eq!(render(&mut mixer, 1), [0.375]);
-        // The ambient voice's authored gain is the higher, but it is heard quieter.
-        mixer.apply(one_shot_command(&constant(1.0, 64), 0.25));
-        assert_eq!(render(&mut mixer, 5), [0.59375, 0.5625, 0.53125, 0.5, 0.5]);
-    }
-
     #[test]
     fn loops_are_never_stolen() {
-        let mut mixer = test_mixer(1, CategoryGains::default(), limits(None, 2, Steal::Oldest));
+        let mut mixer = test_mixer(1, CategoryGains::default(), limits(None, 2));
         let wind = LoopKey::Sound(1);
         mixer.apply(loop_command(bed(), &constant(1.0, 64), 0.25));
         mixer.apply(one_shot_command(&constant(1.0, 64), 0.5));
@@ -2623,7 +2541,7 @@ mod tests {
     /// exactly as `Mixer::new` reserved it.
     #[test]
     fn a_burst_over_the_caps_never_grows_the_mixers_storage() {
-        let bound = limits(Some(2), 4, Steal::Oldest);
+        let bound = limits(Some(2), 4);
         let mut mixer = test_mixer(2, CategoryGains::default(), bound);
         let capacities = |m: &Mixer| {
             (

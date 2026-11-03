@@ -27,12 +27,6 @@ pub(crate) fn cone_half_angle(roughness: f32) -> f32 {
     2.0 * atan(r * r)
 }
 
-/// The roughness whose [`cone_half_angle`] is `half_angle`.
-#[allow(dead_code)] // read by the SSR pass; no caller yet
-pub(crate) fn roughness_for_half_angle(half_angle: f32) -> f32 {
-    sqrt(tan(half_angle * 0.5).max(0.0))
-}
-
 /// The smallest face of a specular chain. A 1×1 face cannot hold a wide lobe over a gradient sky
 /// (it collapses to the face average), so the chain stops at 8×8, as Filament's does.
 pub(crate) const FLOOR_FACE: u32 = 8;
@@ -184,20 +178,6 @@ mod tests {
             let a = cone_half_angle(i as f32 / 100.0);
             assert!(a > last, "not monotonic at {i}");
             last = a;
-        }
-    }
-
-    #[test]
-    fn the_inverse_recovers_the_roughness() {
-        for i in 1..=100 {
-            let r = i as f32 / 100.0;
-            if r > 0.99 {
-                continue; // tan blows up at the hemisphere
-            }
-            assert!(
-                (roughness_for_half_angle(cone_half_angle(r)) - r).abs() < 1e-3,
-                "r = {r}"
-            );
         }
     }
 
