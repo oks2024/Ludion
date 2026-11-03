@@ -99,7 +99,7 @@ The per-file catalogue (one entry per calibration scene and per-OS twin, with me
   every frame for the sky, so it is its own `[passes]` line). A pyramid pass is one per level, named
   `hiz_reduce_<k>` / `ssr_color_reduce_<k>`: a `[passes]` key may name any level, and the group sums them all.
 - **A budget with GPU lines needs a GPU measurement.** `[passes]`, `[post_groups]`,
-  `post_total_ms`, `gpu_frame_ms` and `gpu_frame_max_ms` against a run with no adapter, or no timestamp queries, is `L4019` (exit non-zero),
+  `post_total_ms`, `gpu_frame_ms` and `gpu_frame_max_ms` against a run with no adapter, no timestamp queries, or a graph over `PassTimingRing::MAX_PASSES` (passes named, none timed), is `L4019` (exit non-zero),
   not a quiet pass; a pass merely absent from a run that did measure stays quiet. A CPU-only budget
   carries none of those lines. `committed_budget_files_parse_and_name_producible_keys` loads every
   committed budget CPU-only, so a renamed pass fails per push.

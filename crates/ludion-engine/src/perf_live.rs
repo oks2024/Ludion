@@ -454,7 +454,11 @@ impl WindowBuilder {
                         .and_then(|(_, ms)| *ms)
                 }));
             }
-            if sample.passes.is_some() {
+            if sample
+                .passes
+                .as_ref()
+                .is_some_and(|passes| passes.iter().any(|(_, ms)| ms.is_some()))
+            {
                 sampled_frames += 1;
             }
             if let Some(span) = sample.gpu_frame_ms {
@@ -1034,6 +1038,78 @@ mod tests {
         );
         assert_eq!(window.samples.pass_ms[2], [None, None, Some(3.0), None]);
         assert_eq!(window.gpu.passes[2].median_ms, Some(3.0));
+    }
+
+    fn named(frame: u64, passes: Vec<(&str, Option<f64>)>) -> FrameSample {
+        FrameSample {
+            passes: Some(
+                passes
+                    .into_iter()
+                    .map(|(name, ms)| (name.to_string(), ms))
+                    .collect(),
+            ),
+            render_stamp: Some(FrameIndex::new(frame + 1)),
+            ..sample(frame)
+        }
+    }
+
+    #[test]
+    fn an_untimed_graph_counts_no_sampled_frames() {
+        let window = closed((0..3).map(|f| named(f, vec![("scene", None)])).collect());
+        assert_eq!(window.gpu.sampled_frames, 0);
+        assert_eq!(window.gpu.passes.len(), 1);
+        assert_eq!(window.gpu.passes[0].name, "scene");
+        assert_eq!(window.gpu.passes[0].median_ms, None);
+    }
+
+    #[test]
+    fn sampled_frames_counts_only_timed_frames() {
+        let window = closed(vec![
+            named(0, vec![("scene", Some(1.0))]),
+            named(1, vec![("scene", None)]),
+            sample(2),
+            named(3, vec![("scene", None), ("post", Some(2.0))]),
+        ]);
+        assert_eq!(window.gpu.sampled_frames, 2);
+    }
+
+    #[test]
+    fn an_untimed_graph_fails_a_gpu_budget() {
+        use crate::profile::{Budget, check_budget};
+        let mut builder = WindowBuilder::new(3, true);
+        builder.samples = (0..3).map(|f| named(f, vec![("scene", None)])).collect();
+        let report = builder.close(true).into_report("live".into(), false);
+        assert!(report.gpu.available, "named passes prove an adapter");
+        let budget = Budget {
+            passes: std::collections::BTreeMap::from([("scene".to_string(), 100.0)]),
+            ..Budget::default()
+        };
+        let over = check_budget(&report, &budget);
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert_eq!(
+            over[0].code,
+            ludion_core::codes::code::BUDGET_GPU_UNMEASURED
+        );
+        assert!(over[0].message.contains("timing ring"), "{over:?}");
+    }
+
+    #[test]
+    fn one_timed_pass_among_untimed_ones_is_not_an_unmeasured_graph() {
+        use crate::profile::{Budget, check_budget};
+        let mut builder = WindowBuilder::new(3, true);
+        builder.samples = (0..3)
+            .map(|f| named(f, vec![("scene", Some(1.0)), ("post", None)]))
+            .collect();
+        let report = builder.close(true).into_report("live".into(), false);
+        let budget = Budget {
+            passes: std::collections::BTreeMap::from([
+                ("scene".to_string(), 100.0),
+                ("post".to_string(), 100.0),
+            ]),
+            ..Budget::default()
+        };
+        let over = check_budget(&report, &budget);
+        assert!(over.is_empty(), "{over:?}");
     }
 
     #[test]

@@ -160,7 +160,7 @@ four labelled lanes and no overlap warnings.
 
 ## Gotchas
 
-- **A pass with a `null` median while `timestamps_supported` is true means the graph exceeded `PassTimingRing::MAX_PASSES`:** its passes are named and untimed.
+- **A pass with a `null` median while `timestamps_supported` is true means the graph exceeded `PassTimingRing::MAX_PASSES`:** its passes are named and untimed. A budget with GPU lines fails `L4019` on such a run, and `sampled_frames` counts timed frames only.
 - **Windowed present left the sim thread.** A window is drawn by the presenter thread on its own renderer; the profile report and `--dump-timings` measure the sim-side renderer (the stream's), never the window's.
 - **Debug-build numbers are not comparable to a release budget.** QOI encode in particular is an
   order of magnitude slower unoptimized (see `frame-streaming`). Profile in `--release`, on the

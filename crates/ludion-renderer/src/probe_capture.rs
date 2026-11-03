@@ -44,8 +44,9 @@ fn face_camera(position: Vec3, face: u32) -> RenderCamera {
 
 /// `scene` seen from one probe face: the lit world only. The overlay content, the screen-space
 /// effects and the sun disc (the IBL excludes it, so a probe does too) are dropped; the tables the
-/// caches key on stay, and the capture resolves them without evicting, so it neither misses what the
-/// main frame holds nor takes it away.
+/// caches key on stay. Of the caches, only the three keyed ones that take `CacheEviction`
+/// (`Renderer::resolve_textures`, `resolve_mesh_textures`, `resolve_mesh_assets`) are resolved
+/// without evicting, so they keep what the main frame holds.
 pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> RenderScene {
     let mut out = scene.clone();
     out.camera = face_camera(position, face);

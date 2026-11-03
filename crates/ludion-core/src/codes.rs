@@ -2196,7 +2196,8 @@ pub mod code {
 
     /// `L4019` — a budget file gates GPU timings (`[passes]`, `[post_groups]`, `post_total_ms`,
     /// `gpu_frame_ms`, `gpu_frame_max_ms`) but the profile run measured none: no adapter, one
-    /// without timestamp queries, or (for the frame keys) a backend that cannot prove one queue timeline. Raised by
+    /// without timestamp queries, a graph over the pass-timing ring's cap (named, untimed), or (for
+    /// the frame keys) a backend that cannot prove one queue timeline. Raised by
     /// `ludion-engine`'s budget check — a gate that measured nothing must not read as a pass.
     pub const BUDGET_GPU_UNMEASURED: DiagnosticCode = DiagnosticCode::new("L4019");
 
@@ -8282,18 +8283,21 @@ part of the compiled `ludion-renderer` crate.",
 A dev-flagged shader reload could not be applied, so the previous shader stays live — a bad edit
 never kills the running session; the next frame renders with the last good pipeline.
 
-There are two causes, both carried in the message:
+There are three causes, all carried in the message:
 
   - the new WGSL failed to parse or validate (naga runs the exact front-end and validator wgpu's
     `create_shader_module` runs, so the error is the one the GPU would report) — a syntax slip or a
     type error in the edit;
   - the WGSL parsed but the recreated pipeline is incompatible with the existing bind group layouts:
     the reload changed a binding shape (a uniform struct's size, or a group/binding slot), which the
-    fixed, size-pinned layouts reject.
+    fixed, size-pinned layouts reject;
+  - the shader, or a snippet it composes, is compiled once per renderer (the GI bake and inject, the
+    probe relight; see `crates/ludion-renderer/src/shader_reload.rs`), so nothing was applied.
 
-Fix: correct the WGSL and save again — the watcher (or an explicit `asset.reload`) retries, and a
-clean edit takes effect on the next frame. A deliberate change to a shader's *interface* (binding
-layout, uniform size) cannot hot-reload; rebuild the engine for that.",
+Fix: for the first cause, correct the WGSL and save again — the watcher (or an explicit
+`asset.reload`) retries, and a clean edit takes effect on the next frame. A deliberate change to a
+shader's *interface* (binding layout, uniform size) cannot hot-reload; rebuild the engine for that. For
+the compile-once cause, rebuild the engine and restart the host, as the message says.",
     },
     CodeEntry {
         code: code::RENDER_GPU_ERROR,
@@ -10397,7 +10401,8 @@ Fix: give every system a distinct name (the function's own name is the conventio
         explanation: "\
 A budget file names GPU lines (`[passes]`, `[post_groups]`, `post_total_ms`, `gpu_frame_ms` or
 `gpu_frame_max_ms`), but the profile run measured none of them: the host had no GPU adapter, the
-adapter has no timestamp queries, or — for the two frame keys — the backend cannot prove one queue
+adapter has no timestamp queries, the graph schedules more passes than the timing ring holds (they are
+named and untimed), or — for the two frame keys — the backend cannot prove one queue
 timeline for a frame, so the report carries no `gpu.frame_median_ms`. Nothing
 measured cannot be over budget, so without this error the check would exit 0 with every GPU line
 silently unchecked — a green gate that gated nothing.

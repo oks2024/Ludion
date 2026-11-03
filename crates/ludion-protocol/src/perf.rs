@@ -695,7 +695,7 @@ impl ProfileWindowData {
                 threads: Some(self.threads),
             },
             gpu: GpuProfile {
-                available: self.gpu.sampled_frames > 0,
+                available: self.gpu.sampled_frames > 0 || !self.gpu.passes.is_empty(),
                 timestamps_supported: self.gpu.timestamps_supported,
                 passes: self.gpu.passes,
                 frame_median_ms: self.gpu.frame_median_ms,
@@ -937,9 +937,17 @@ mod tests {
         // No GPU sample at all reads as no adapter — the offline report's `available: false`.
         let mut headless = window();
         headless.gpu.sampled_frames = 0;
+        headless.gpu.passes.clear();
         let report = headless.into_report("live".into(), false);
         assert!(!report.gpu.available);
         assert!(report.samples.is_none());
+
+        // Named passes with no timed frame still prove an adapter.
+        let mut untimed = window();
+        untimed.gpu.sampled_frames = 0;
+        assert!(!untimed.gpu.passes.is_empty());
+        let report = untimed.into_report("live".into(), false);
+        assert!(report.gpu.available);
     }
 
     /// The descriptor round-trips whole, and its label is carried rather than derived — three of the

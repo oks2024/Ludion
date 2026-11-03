@@ -1428,7 +1428,8 @@ fn measured_sum(report: &ProfileReport, members: &[&str]) -> Option<(f64, usize)
 ///   only when none was.
 ///
 /// A budget that names any of those GPU lines against a report with no GPU measurement (no adapter,
-/// or no timestamp queries) is `L4019` — the skips above are per-scene, never per-machine.
+/// no timestamp queries, or a graph over `PassTimingRing::MAX_PASSES` whose passes are named and
+/// untimed) is `L4019` — the skips above are per-scene, never per-machine.
 /// `gpu_frame_ms` and `gpu_frame_max_ms` check the frame-spanning GPU time and its tail; a report
 /// without a span (also a backend that cannot prove one queue timeline) is `L4019` too.
 ///
@@ -1540,7 +1541,8 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
         || !budget.post_groups.is_empty()
         || budget.post_total_ms.is_some();
     let gates_frame = budget.gpu_frame_ms.is_some() || budget.gpu_frame_max_ms.is_some();
-    let no_gpu = !(report.gpu.available && report.gpu.timestamps_supported);
+    let no_gpu = !(report.gpu.available && report.gpu.timestamps_supported)
+        || all_passes_untimed(&report.gpu);
     if (gates_gpu && no_gpu) || (gates_frame && report.gpu.frame_median_ms.is_none()) {
         over.push(gpu_unmeasured(report));
     }
@@ -1631,12 +1633,19 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
     over
 }
 
+/// Whether the report names passes but timed none of them.
+fn all_passes_untimed(gpu: &GpuProfile) -> bool {
+    !gpu.passes.is_empty() && gpu.passes.iter().all(|p| p.median_ms.is_none())
+}
+
 /// Builds the `L4019` for a budget that gates GPU timings against a run that measured none.
 fn gpu_unmeasured(report: &ProfileReport) -> Diagnostic {
     let why = if !report.gpu.available {
         "no GPU adapter was available"
     } else if !report.gpu.timestamps_supported {
         "the GPU adapter has no timestamp queries"
+    } else if all_passes_untimed(&report.gpu) {
+        "the graph schedules more passes than the timing ring holds, so they are named and untimed"
     } else {
         "this backend cannot prove one queue timeline for a frame"
     };
