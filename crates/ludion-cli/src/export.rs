@@ -27,8 +27,12 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_engine::manifest::{self, Manifest};
 use ludion_engine::{ProbeBake, ProbeBakeReport, ProbeOutcome};
 
-/// The file a finished export leaves in its folder, so a re-export may overwrite it.
+/// Marks a folder as ours, so a later export may overwrite it. Written before anything else.
+/// Lists the template files the export owns, one relative path per line.
 const MARKER: &str = ".ludion-export";
+
+/// The default profile folder under the project root, which for the default scene is its directory.
+const SAVE_DIR: &str = "save";
 
 /// A platform `ludion export` can target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -184,6 +188,22 @@ fn check_flags(target: IosTarget, options: &Options) -> Result<(), Diagnostic> {
             return refuse(
                 format!("`--replay {}` is not a file", replay.display()),
                 "name a recorded `.lrp` file",
+            );
+        }
+    }
+    for (index, replay) in options.replays.iter().enumerate() {
+        let name = replay.file_name().expect("checked to be a file");
+        if options.replays[..index].iter().any(|other| {
+            other
+                .file_name()
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        }) {
+            return refuse(
+                format!(
+                    "two `--replay` files are named `{}`",
+                    name.to_string_lossy()
+                ),
+                "rename one: replays are copied into the bundle by file name",
             );
         }
     }
@@ -666,6 +686,22 @@ fn write_export(
         ));
     }
 
+    let owned: Vec<String> = TEMPLATES
+        .iter()
+        .map(|t| substitutions.apply(t.rel_path))
+        .collect();
+    let previous = read_marker(out)?;
+    // A failure from here on leaves every file an earlier export wrote still listed.
+    let mut listed = owned.clone();
+    listed.extend(
+        previous
+            .iter()
+            .map(|path| path.to_string_lossy().replace('\\', "/")),
+    );
+    listed.sort();
+    listed.dedup();
+    write_marker(out, &listed)?;
+
     for template in TEMPLATES {
         write_file(
             &out.join(substitutions.apply(template.rel_path)),
@@ -689,7 +725,14 @@ fn write_export(
             )));
         }
     }
-    copy_tree(&content_src, &content_root.join(scene_dir))?;
+    let has_save = content_src.join(SAVE_DIR).is_dir();
+    copy_tree_leaving_out(&content_src, &content_root.join(scene_dir), Some(SAVE_DIR))?;
+    if has_save {
+        eprintln!(
+            "note: left `{}/{SAVE_DIR}/` out of the bundle: it is the desktop player profile's folder",
+            scene_dir.display()
+        );
+    }
     // The app's host finds it by walking up from the scene directory, so its `[audio]` caps apply.
     let manifest_dst = content_root.join("ludion.toml");
     create_parent(&manifest_dst)?;
@@ -741,18 +784,92 @@ fn write_export(
         if dst.exists() {
             return Err(export_failed(
                 format!(
-                    "two `--replay` files are named `{}`",
+                    "--replay `{}` would overwrite `{}` in the bundle's content",
+                    replay.display(),
                     name.to_string_lossy()
                 ),
-                "rename one: replays are copied into the bundle by file name",
+                "rename the file: replays are copied into the bundle by file name",
             ));
         }
         ludion_core::atomic::copy_atomic(replay, &dst)
             .map_err(|err| output_io(format!("could not copy `{}`: {err}", replay.display())))?;
     }
 
-    write_file(&out.join(MARKER), "")?;
+    remove_stale(out, &previous, &owned);
+    write_marker(out, &owned)?;
     Ok(shipped)
+}
+
+/// The template files an earlier export recorded; a missing marker lists none. A line that is
+/// absolute or leaves the folder is ignored, so an edited marker cannot reach outside it.
+fn read_marker(out: &Path) -> Result<Vec<PathBuf>, Diagnostic> {
+    let text = match std::fs::read_to_string(out.join(MARKER)) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(output_io(format!(
+                "could not read `{}`: {err}",
+                out.join(MARKER).display()
+            )));
+        }
+    };
+    Ok(text
+        .lines()
+        .map(PathBuf::from)
+        .filter(|path| {
+            path.components().next().is_some()
+                && path
+                    .components()
+                    .all(|part| matches!(part, Component::Normal(_)))
+        })
+        .collect())
+}
+
+fn write_marker(out: &Path, owned: &[String]) -> Result<(), Diagnostic> {
+    let body: String = owned.iter().map(|line| format!("{line}\n")).collect();
+    write_file(&out.join(MARKER), &body)
+}
+
+/// Removes the files an earlier export wrote that this one does not, then their empty folders.
+/// A leftover that cannot be removed is a note, not a failure.
+fn remove_stale(out: &Path, previous: &[PathBuf], owned: &[String]) {
+    let mut noted: Vec<PathBuf> = Vec::new();
+    for path in previous {
+        // Compared without case: a case-only rename names the same file on a case-insensitive disk.
+        if owned
+            .iter()
+            .any(|current| current.eq_ignore_ascii_case(&path.to_string_lossy()))
+        {
+            continue;
+        }
+        let full = out.join(path);
+        match std::fs::remove_file(&full) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => eprintln!("note: could not remove `{}`: {err}", full.display()),
+        }
+        let mut dir = full.parent();
+        while let Some(current) = dir.filter(|current| *current != out) {
+            if std::fs::remove_dir(current).is_err() {
+                break;
+            }
+            dir = current.parent();
+        }
+        let Some(Component::Normal(first)) = path.components().next() else {
+            continue;
+        };
+        let project_dir = out.join(first);
+        if first.to_string_lossy().ends_with(".xcodeproj")
+            && project_dir.exists()
+            && !noted.contains(&project_dir)
+        {
+            eprintln!(
+                "note: kept `{}`: it holds files the export did not write (Xcode's user data); delete it if you no longer need it",
+                project_dir.display()
+            );
+            noted.push(project_dir);
+        }
+    }
 }
 
 /// True when `path` is `dir` or below it, comparing names without case as the content trees' file
@@ -861,6 +978,15 @@ fn write_file(path: &Path, body: &str) -> Result<(), Diagnostic> {
 
 /// Copies a directory tree, skipping dot-files.
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), Diagnostic> {
+    copy_tree_leaving_out(src, dst, None)
+}
+
+/// `copy_tree`, also skipping a directory named `leave_out` directly under `src`.
+fn copy_tree_leaving_out(
+    src: &Path,
+    dst: &Path,
+    leave_out: Option<&str>,
+) -> Result<(), Diagnostic> {
     std::fs::create_dir_all(dst)
         .map_err(|err| output_io(format!("could not create `{}`: {err}", dst.display())))?;
     let read_failed = |err: std::io::Error| {
@@ -878,6 +1004,9 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), Diagnostic> {
         }
         let (from, to) = (entry.path(), dst.join(entry.file_name()));
         if from.is_dir() {
+            if leave_out.is_some_and(|name| entry.file_name().eq_ignore_ascii_case(name)) {
+                continue;
+            }
             copy_tree(&from, &to)?;
         } else {
             ludion_core::atomic::copy_atomic(&from, &to)
@@ -1175,6 +1304,207 @@ mod tests {
             !out.join("content/assets/derived/.ludion-sync.json")
                 .exists()
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A bare project (one scene, no imports) under a per-test temp root: `(root, project)`.
+    fn bare_project(tag: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("ludion-export-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join("scenes")).unwrap();
+        std::fs::write(project.join("scenes/main.yaml"), "entities: []\n").unwrap();
+        std::fs::write(
+            project.join("ludion.toml"),
+            "name = \"probe\"\ndefault_scene = \"scenes/main.yaml\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("libgame.a"), "archive").unwrap();
+        (root, project)
+    }
+
+    fn export_named(
+        root: &Path,
+        project: &Path,
+        name: &str,
+        replays: &[PathBuf],
+    ) -> Result<Shipped, Diagnostic> {
+        let manifest = manifest::load(project).unwrap();
+        let substitutions = Substitutions {
+            name,
+            bundle_id: "dev.ludion.probe",
+            quality: "",
+        };
+        write_export(
+            &root.join("out"),
+            project,
+            &manifest,
+            &substitutions,
+            &root.join("libgame.a"),
+            replays,
+        )
+    }
+
+    fn touch(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "x").unwrap();
+    }
+
+    #[test]
+    fn a_developers_save_stays_out_of_the_bundle() {
+        let (root, project) = bare_project("save");
+        touch(&project.join("scenes/save/profile.yaml"));
+        touch(&project.join("scenes/save/profile.yaml.bak.abc"));
+        touch(&project.join("scenes/sub/save/keep.png"));
+        touch(&project.join("scenes/saved/x.png"));
+        std::fs::write(
+            project.join("ludion.toml"),
+            "name = \"probe\"\ndefault_scene = \"scenes/main.yaml\"\n\n[[import]]\nfrom = \"art/*/export/*.gltf\"\nto = \"assets/derived\"\n",
+        )
+        .unwrap();
+        touch(&project.join("assets/derived/save/y.yaml"));
+        export_named(&root, &project, "probe", &[]).unwrap();
+        let content = root.join("out/content");
+        assert!(!content.join("scenes/save").exists());
+        assert!(content.join("scenes/main.yaml").is_file());
+        assert!(content.join("scenes/sub/save/keep.png").is_file());
+        assert!(content.join("scenes/saved/x.png").is_file());
+        assert!(content.join("assets/derived/save/y.yaml").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_first_export_can_be_rerun() {
+        let (root, project) = bare_project("rerun");
+        std::fs::write(
+            project.join("ludion.toml"),
+            "name = \"probe\"\ndefault_scene = \"scenes/main.yaml\"\n\n[[import]]\nfrom = \"art/*/export/*.gltf\"\nto = \"assets/derived\"\n",
+        )
+        .unwrap();
+        assert!(export_named(&root, &project, "probe", &[]).is_err());
+        let out = root.join("out");
+        assert!(out.join(MARKER).is_file());
+        assert!(resolve_out(&out, &project).is_ok());
+        std::fs::create_dir_all(project.join("assets/derived")).unwrap();
+        export_named(&root, &project, "probe", &[]).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_renamed_game_loses_its_old_project_and_only_that() {
+        let (root, project) = bare_project("rename");
+        export_named(&root, &project, "old", &[]).unwrap();
+        let out = root.join("out");
+        touch(&out.join("build/keep"));
+        touch(&out.join("notes.txt"));
+        export_named(&root, &project, "new", &[]).unwrap();
+        assert!(!out.join("old.xcodeproj").exists());
+        assert!(out.join("new.xcodeproj/project.pbxproj").is_file());
+        assert!(out.join("build/keep").is_file() && out.join("notes.txt").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_stale_project_holding_user_data_is_kept() {
+        let (root, project) = bare_project("userdata");
+        export_named(&root, &project, "old", &[]).unwrap();
+        let out = root.join("out");
+        touch(&out.join("old.xcodeproj/xcuserdata/me.xcscheme"));
+        export_named(&root, &project, "new", &[]).unwrap();
+        assert!(!out.join("old.xcodeproj/project.pbxproj").exists());
+        assert!(out.join("old.xcodeproj/xcuserdata/me.xcscheme").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_case_only_rename_keeps_the_project() {
+        let (root, project) = bare_project("casefold");
+        export_named(&root, &project, "Probe", &[]).unwrap();
+        export_named(&root, &project, "probe", &[]).unwrap();
+        assert!(root.join("out/probe.xcodeproj/project.pbxproj").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_re_export_keeps_the_earlier_entries_listed() {
+        let (root, project) = bare_project("unionmarker");
+        export_named(&root, &project, "old", &[]).unwrap();
+        let manifest = "name = \"probe\"\ndefault_scene = \"scenes/main.yaml\"\n";
+        std::fs::write(
+            project.join("ludion.toml"),
+            format!(
+                "{manifest}\n[[import]]\nfrom = \"art/*/export/*.gltf\"\nto = \"assets/derived\"\n"
+            ),
+        )
+        .unwrap();
+        let out = root.join("out");
+        assert!(export_named(&root, &project, "new", &[]).is_err());
+        let listed = std::fs::read_to_string(out.join(MARKER)).unwrap();
+        assert!(listed.lines().any(|l| l == "old.xcodeproj/project.pbxproj"));
+        assert!(out.join("old.xcodeproj/project.pbxproj").is_file());
+        std::fs::create_dir_all(project.join("assets/derived")).unwrap();
+        export_named(&root, &project, "new", &[]).unwrap();
+        assert!(!out.join("old.xcodeproj").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_re_export_keeps_the_current_projects_user_data() {
+        let (root, project) = bare_project("keepcurrent");
+        export_named(&root, &project, "new", &[]).unwrap();
+        let out = root.join("out");
+        touch(&out.join("new.xcodeproj/xcuserdata/me.xcscheme"));
+        export_named(&root, &project, "new", &[]).unwrap();
+        assert!(out.join("new.xcodeproj/xcuserdata/me.xcscheme").is_file());
+        assert!(out.join("new.xcodeproj/project.pbxproj").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_marker_cannot_reach_outside_the_folder() {
+        let (root, project) = bare_project("marker");
+        let out = root.join("out");
+        touch(&out.join("Host/Gone.m"));
+        touch(&root.join("outside.txt"));
+        let absolute = root.join("absolute.txt");
+        touch(&absolute);
+        std::fs::write(
+            out.join(MARKER),
+            format!("Host/Gone.m\n../outside.txt\n{}\n\n", absolute.display()),
+        )
+        .unwrap();
+        export_named(&root, &project, "probe", &[]).unwrap();
+        assert!(!out.join("Host/Gone.m").exists());
+        assert!(root.join("outside.txt").is_file() && absolute.is_file());
+        let substitutions = Substitutions {
+            name: "probe",
+            bundle_id: "dev.ludion.probe",
+            quality: "",
+        };
+        let mut expected: Vec<String> = TEMPLATES
+            .iter()
+            .map(|t| substitutions.apply(t.rel_path))
+            .collect();
+        expected.sort();
+        let mut listed: Vec<String> = std::fs::read_to_string(out.join(MARKER))
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        listed.sort();
+        assert_eq!(listed, expected);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_replay_named_like_content_is_its_own_message() {
+        let (root, project) = bare_project("replayclash");
+        let replay = root.join("elsewhere/ludion.toml");
+        touch(&replay);
+        let err = export_named(&root, &project, "probe", &[replay]).unwrap_err();
+        assert_eq!(err.code, EXPORT_FAILED);
+        assert!(err.message.contains("bundle's content"));
+        assert!(!err.message.contains("two"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

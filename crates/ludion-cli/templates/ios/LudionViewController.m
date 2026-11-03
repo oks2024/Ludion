@@ -123,16 +123,38 @@
     memcpy(_size, size, sizeof size);
 }
 
+// A strip under the resume overlay for the session: the condition that raised it stays true.
+- (void)showSaveWarning {
+    UILabel *label = [[UILabel alloc] init];
+    label.text = @"Saving is unavailable: progress may be lost";
+    label.textColor = UIColor.whiteColor;
+    label.font = [UIFont systemFontOfSize:15];
+    label.textAlignment = NSTextAlignmentCenter;
+    label.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
+    label.userInteractionEnabled = NO;
+    CGRect area = UIEdgeInsetsInsetRect(self.view.bounds, self.view.safeAreaInsets);
+    label.frame = CGRectMake(area.origin.x, area.origin.y, area.size.width, 32);
+    label.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [self.view insertSubview:label belowSubview:_resumeView];
+}
+
 - (void)startWithSize:(const uint32_t *)size {
     NSString *content = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"content"];
+    NSError *error = nil;
     NSURL *support = [NSFileManager.defaultManager URLForDirectory:NSApplicationSupportDirectory
                                                           inDomain:NSUserDomainMask
                                                  appropriateForURL:nil
                                                             create:YES
-                                                             error:nil];
+                                                             error:&error];
+    NSString *save = support.path;
+    if (save == nil) {
+        NSLog(@"could not open Application Support (%@); saving to the temporary directory, which iOS may purge", error);
+        save = NSTemporaryDirectory();
+        [self showSaveWarning];
+    }
     LudionStartParams params = {
         .content_root = content.fileSystemRepresentation,
-        .save_root = support.path.fileSystemRepresentation,
+        .save_root = save.fileSystemRepresentation,
         .surface_kind = LUDION_SURFACE_UIKIT,
         .view = (__bridge void *)self.view,
         .width = size[0],

@@ -114,8 +114,18 @@ fn flag_refusals_run_before_anything_else() {
     let replay = dir.join("run.lrp");
     fs::write(&replay, "x").unwrap();
     let replay = replay.to_str().unwrap();
+    let (first, second) = (dir.join("a/run.lrp"), dir.join("b/RUN.lrp"));
+    for file in [&first, &second] {
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, "x").unwrap();
+    }
+    let (first, second) = (first.to_str().unwrap(), second.to_str().unwrap());
     let cases: &[(&[&str], &str)] = &[
         (&["--replay", replay], "--replay"),
+        (
+            &["--debug", "--replay", first, "--replay", second],
+            "two `--replay`",
+        ),
         (&["--debug", "--replay", "missing.lrp"], "is not a file"),
         (&["--debug", "--", "--replay-verify", "run.lrp"], "--run"),
         (&["--run", "--", "--replay-verify", "run.lrp"], "--debug"),

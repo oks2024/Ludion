@@ -54,7 +54,9 @@ attaches): `xcrun simctl io <udid> screenshot m.png` writes the portrait framebu
 | `[ios] quality` | Optional: the render quality preset the app ships with (`low`, `medium`, `high`, `full`; absent is `full`). A preset name only — no override file. |
 
 The export folder (`--out`; new, empty, or holding a previous export's `.ludion-export` marker,
-and never inside the project):
+and never inside the project). The marker is written first and lists the template files the export
+owns; a re-export removes listed files it no longer writes (an old `<name>.xcodeproj`) and leaves
+everything else, including `build/` and Xcode's user data inside the project:
 
 | Path | Holds |
 | --- | --- |
@@ -71,7 +73,9 @@ and never inside the project):
 - **Bundle only what the scene reads.** `content/` is the default scene's directory plus each
   `[[import]]` tree (`ludion sync` runs first; the trees are copied under the sync lock, so a sync
   running beside the export finishes first, and the export says on stderr that it is waiting), so assets sit beside the scenes or under a tree's
-  own path; a project's `src/`, `goldens/` and `target/` never enter the bundle.
+  own path; a project's `src/`, `goldens/` and `target/` never enter the bundle. `<scene dir>/save/`,
+  the default profile folder, is left out with a stderr note. The export cannot see a custom
+  `profile_path` or a save from a run rooted at a nested scene, so those folders ship unless moved.
 - **The bundle ships cooked maps.** The export cooks the `ios` target (ASTC,
   KTX2) and copies the entries the import trees and `[cook]` roots reference into `content/.ludion/cooked/ios/`, beside
   the PNGs. The app runs `cooked`, so those maps upload compressed; a map with no entry falls back to
@@ -81,8 +85,9 @@ and never inside the project):
   needs no re-export (`ludion docs quality`).
 - **Pick your own `bundle_id` before the first device install and keep it.** A free Apple team
   registers only a few app IDs a week; `ludion new` writes `com.example.<name>` as a placeholder.
-- **Refusals come before the build.** `L0024` for a flag combination, `L0023` for the manifest, an overlapping or occupied `--out`,
+- **Refusals come before the build.** `L0024` for a flag combination or two `--replay` files of the same name, `L0023` for the manifest, an overlapping or occupied `--out`,
   `L0022` when Xcode's SDK for the target or the rustup target is missing.
+  A replay colliding with bundled content is `L0034`, after the build.
 
 ## Gotchas
 
@@ -93,7 +98,8 @@ and never inside the project):
 - **A simulator app is a Mac process:** its loopback `9411` (`--debug`) contends with a desktop host
   on that port — stop one before starting the other.
 - The simulator's Metal is not the Mac's: an engine that refuses to start there prints its diagnostic
-  to the launch console; a failed start is logged once and the app stays blank.
+  to the launch console; a failed start is logged once and the app stays blank. If Application Support cannot be opened, the
+  app logs the error, saves to the temporary directory (which iOS may purge) and shows a warning.
 
 ## Next
 
