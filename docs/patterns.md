@@ -146,7 +146,7 @@ you take by hand (the file is the pattern's only truth; there is no wire method 
 - **The engine ships the vocabulary; the game owns every rule.** `play_patterns` (stands volleys up
   on schedule) and `advance_volleys` (reaps a volley whose bullets are all dead or past `life`) are
   `pub fn`s a game registers in its own schedule order — the `spatial_rebuild` precedent
-  (`ludion docs collision`). `volley_hits(volley, origin, kind, now, plane, centre, radius) ->
+  (`ludion docs collision`). A world with a `PatternPlayer` or `Volley` where either fn never ran warns `L1394`; calling them from your own system is silent. `volley_hits(volley, origin, kind, now, plane, centre, radius) ->
   impl Iterator<Item = u32>` is the pure overlap query a hit system calls; setting a kill bit,
   scoring, damage and sides are entirely game code. **Cancel is a despawn over a `Volley` query** —
   what appears in a cancelled bullet's place (score items, an FX burst) is the game's own spawn at

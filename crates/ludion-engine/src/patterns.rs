@@ -621,6 +621,85 @@ fn volley_seed(player: EntityId, frame: FrameIndex, ordinal: u32) -> u64 {
         .next_u64()
 }
 
+/// Which pattern systems have run in this world. Observation only: a resource, so never hashed or
+/// snapshotted; [`report_unrun_patterns`] reads it to tell a forgotten system from a held frame.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct PatternSystemsRan {
+    play: bool,
+    advance: bool,
+}
+
+/// Records that a pattern system ran. Only the first call inserts the resource, so an ordinary tick
+/// allocates nothing.
+fn mark_ran(world: &mut World, flag: fn(&mut PatternSystemsRan) -> &mut bool) {
+    if let Some(ran) = world.resource_mut::<PatternSystemsRan>() {
+        *flag(ran) = true;
+        return;
+    }
+    let mut ran = PatternSystemsRan::default();
+    *flag(&mut ran) = true;
+    world.insert_resource(ran);
+}
+
+/// Reports a pattern system the world needs and the schedule never ran, once per system (`L1394`):
+/// a [`PatternPlayer`] naming a pattern with no `play_patterns`, a [`Volley`] with no
+/// `advance_volleys`. A bare host's empty schedule is not a game that forgot a system, so
+/// `game_systems` gates both.
+///
+/// It runs only after a tick (every diagnostics drain is behind one), so a paused or just-loaded
+/// engine never reaches it. **Known limit:** a wrapper that calls `play_patterns` only behind its
+/// own guard, such as a menu state, warns until its first call.
+pub(crate) fn report_unrun_patterns(world: &mut World, game_systems: bool) {
+    if !game_systems {
+        return;
+    }
+    let ran = world
+        .resource::<PatternSystemsRan>()
+        .copied()
+        .unwrap_or_default();
+    if !ran.play
+        && world.component_count::<PatternPlayer>() > 0
+        && !crate::diagnostics::is_latched(world, code::PATTERN_SYSTEM_NOT_RUN, "play_patterns")
+    {
+        let player = world
+            .query_ids::<(&PatternPlayer,)>()
+            .find(|(_, (player,))| !player.pattern.is_empty())
+            .map(|(id, _)| id);
+        if let Some(id) = player {
+            let named = crate::scene_physics::entity_label(world, id);
+            report(
+                world,
+                code::PATTERN_SYSTEM_NOT_RUN,
+                "play_patterns",
+                format!(
+                    "{named} has a `PatternPlayer`, but no `play_patterns` system ever ran, so it \
+                     fires nothing: register `.system(\"play_patterns\", play_patterns)` on the \
+                     `EngineBuilder`"
+                ),
+            );
+        }
+    }
+    if !ran.advance
+        && world.component_count::<Volley>() > 0
+        && !crate::diagnostics::is_latched(world, code::PATTERN_SYSTEM_NOT_RUN, "advance_volleys")
+    {
+        let volley = world.query_ids::<(&Volley,)>().next().map(|(id, _)| id);
+        if let Some(id) = volley {
+            let named = crate::scene_physics::entity_label(world, id);
+            report(
+                world,
+                code::PATTERN_SYSTEM_NOT_RUN,
+                "advance_volleys",
+                format!(
+                    "{named} is a `Volley`, but no `advance_volleys` system ever ran, so spent \
+                     volleys are never reaped: register \
+                     `.system(\"advance_volleys\", advance_volleys)` after the hit systems"
+                ),
+            );
+        }
+    }
+}
+
 /// Stands volleys up on schedule: for every [`PatternPlayer`] + [`Transform`], walks its
 /// [`PatternDoc`]'s timeline at `t = gameplay frame − started` (modulo `loop`) and spawns one
 /// [`Volley`] entity per entry whose frame has come (`Plan/projectile-patterns.md` decision 6).
@@ -634,6 +713,7 @@ fn volley_seed(player: EntityId, frame: FrameIndex, ordinal: u32) -> u64 {
 /// same gameplay frame reaches the system again), so this returns immediately on it: a held run
 /// neither re-fires an entry nor silently passes one whose frame went by while it was frozen.
 pub fn play_patterns(world: &mut World, ctx: &SystemCtx) {
+    mark_ran(world, |ran| &mut ran.play);
     if !ctx.game_advanced() {
         return;
     }
@@ -886,6 +966,7 @@ impl Walk<'_> {
 /// [`play_patterns`] this runs on every frame — reaping is idempotent, and a volley killed during a
 /// hold should leave the field as soon as the hit that emptied it lands.
 pub fn advance_volleys(world: &mut World, ctx: &SystemCtx) {
+    mark_ran(world, |ran| &mut ran.advance);
     let mut reap: Vec<EntityId> = Vec::new();
     let mut warnings: Vec<(String, String)> = Vec::new();
 

@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use crossbeam_channel::{bounded, unbounded};
 use ludion_core::time::{SimTime, TickRate};
+use ludion_ecs::{SystemCtx, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
     BulletKind, DocStore, Egress, EgressChannels, Engine, EngineBuilder, PatternDoc, QualityParams,
@@ -23,12 +24,12 @@ use ludion_engine::{
     play_patterns, volley_hits,
 };
 use ludion_protocol::command::{
-    AssetReloadParams, SimStepParams, StreamSubscribeParams, SubscribeMode,
+    AssetReloadParams, EngineRestoreParams, SimStepParams, StreamSubscribeParams, SubscribeMode,
 };
 use ludion_protocol::event::{Event, LogEvent};
 use ludion_protocol::frame::FrameFormat;
 use ludion_protocol::replay::{ReplayReader, ReplayRecord};
-use ludion_protocol::{Channel, Command};
+use ludion_protocol::{Channel, Command, ResponseBody};
 use ludion_renderer::SpriteInstance;
 use ludion_spatial::Plane;
 
@@ -642,6 +643,143 @@ fn a_missing_pattern_document_degrades_with_one_l2108() {
         reported[0].message
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// --- A pattern system that never ran ----------------------------------------------------------
+
+/// A scene system standing in for "the game has systems, but not the pattern ones".
+fn idle(_world: &mut World, _ctx: &SystemCtx) {}
+
+/// A wrapper that owns the call: `play_patterns` runs from the game's own system every tick.
+fn wrapped(world: &mut World, ctx: &SystemCtx) {
+    play_patterns(world, ctx);
+    advance_volleys(world, ctx);
+}
+
+fn l1394(lines: &[LogEvent]) -> Vec<&LogEvent> {
+    lines.iter().filter(|l| code_is(l, "L1394")).collect()
+}
+
+/// An engine over `docs` with the given game systems registered and `scene` loaded.
+fn with_systems(tag: &str, scene: &str, build: fn(EngineBuilder) -> EngineBuilder) -> Engine {
+    let dir = root(tag, &[("probe", CADENCE)]);
+    let mut engine = build(Engine::builder().patterns().project_root(&dir))
+        .build()
+        .expect("the pattern documents validate");
+    engine.load_inline_scene(scene).expect("the scene loads");
+    engine
+}
+
+#[test]
+fn a_player_without_play_patterns_warns_once() {
+    let engine = with_systems("unrun", SCENE, |b| b.system("idle", idle));
+    let lines = log_lines(engine, 20);
+    let warned = l1394(&lines);
+    assert_eq!(warned.len(), 1, "once over 20 ticks: {warned:?}");
+    assert!(
+        warned[0].message.contains("play_patterns"),
+        "the line names the fix: {}",
+        warned[0].message
+    );
+}
+
+#[test]
+fn volleys_without_advance_volleys_warn_once() {
+    let engine = with_systems("no-advance", SCENE, |b| {
+        b.system("play_patterns", play_patterns)
+    });
+    let lines = log_lines(engine, 30);
+    let warned = l1394(&lines);
+    assert_eq!(warned.len(), 1, "once over 30 ticks: {warned:?}");
+    assert!(
+        warned[0].message.contains("advance_volleys"),
+        "the line names the fix: {}",
+        warned[0].message
+    );
+}
+
+/// A pattern system registered in the wrong phase must not panic on its marker write; it only
+/// panics if it really spawns or despawns, which this scene never makes it do.
+#[test]
+fn pattern_systems_in_the_presentation_phase_do_not_panic_on_their_marker() {
+    const BARE: &str = "format: 1\nseed: 5\nentities:\n  - name: camera\n    components:\n      Transform:\n        translation:\n          - 0.0\n          - 2.0\n          - 8.0\n      Camera: {}\n";
+    let dir = root("presentation", &[("probe", CADENCE)]);
+    let mut engine = Engine::builder()
+        .patterns()
+        .presentation_system("play_patterns", play_patterns)
+        .presentation_system("advance_volleys", advance_volleys)
+        .project_root(&dir)
+        .build()
+        .expect("the pattern documents validate");
+    engine.load_inline_scene(BARE).expect("the scene loads");
+    advance(&mut engine, 5);
+    assert_eq!(engine.frame().as_u64(), 5, "the world is still running");
+    let lines = log_lines(engine, 3);
+    assert!(
+        !lines.iter().any(|l| code_is(l, "L4007")),
+        "no sim panic: {lines:?}"
+    );
+}
+
+#[test]
+fn registered_pattern_systems_never_warn_across_a_restore() {
+    let (_, mut engine) = playing("ran", &[("probe", CADENCE)], SCENE);
+    advance(&mut engine, 12);
+    let snapshot = match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    engine
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .expect("the snapshot restores");
+    let lines = log_lines(engine, 5);
+    assert!(l1394(&lines).is_empty(), "{:?}", l1394(&lines));
+}
+
+#[test]
+fn a_paused_correct_game_warns_neither_unticked_nor_after_its_first_step() {
+    let (_, engine) = playing("paused", &[("probe", CADENCE)], SCENE);
+    let lines = log_lines(engine, 0);
+    assert!(l1394(&lines).is_empty(), "no tick, no check: {lines:?}");
+    let (_, engine) = playing("paused-step", &[("probe", CADENCE)], SCENE);
+    let lines = log_lines(engine, 1);
+    assert!(l1394(&lines).is_empty(), "{:?}", l1394(&lines));
+}
+
+#[test]
+fn a_wrapper_that_calls_the_pattern_systems_never_warns() {
+    let engine = with_systems("wrapped", SCENE, |b| b.system("wrapped", wrapped));
+    let lines = log_lines(engine, 10);
+    assert!(l1394(&lines).is_empty(), "{:?}", l1394(&lines));
+}
+
+#[test]
+fn a_world_without_game_systems_never_warns() {
+    let engine = with_systems("bare", SCENE, |b| b);
+    let lines = log_lines(engine, 10);
+    assert!(l1394(&lines).is_empty(), "{:?}", l1394(&lines));
+}
+
+#[test]
+fn an_empty_pattern_name_never_warns() {
+    const EMPTY: &str = "\
+format: 1
+seed: 5
+entities:
+  - name: turret
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      PatternPlayer:
+        pattern: \"\"
+        started: 0
+";
+    let engine = with_systems("empty", EMPTY, |b| b.system("idle", idle));
+    let lines = log_lines(engine, 10);
+    assert!(l1394(&lines).is_empty(), "{:?}", l1394(&lines));
 }
 
 // --- The plane -------------------------------------------------------------------------------

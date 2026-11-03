@@ -20,7 +20,7 @@ fn steer(world: &mut World, _ctx: &SystemCtx) {
 }
 ```
 
-`is_held` is level; `was_pressed`/`was_released` are one-frame edges. `Key` variants games use:
+`is_held` is level; `was_pressed`/`was_released` are one-frame edges (one sim tick; under a hold, see `ludion docs game-clock`). `Key` variants games use:
 `A`–`Z`, `Digit0`–`Digit9`, `Up`/`Down`/`Left`/`Right`, `Space`, `Enter`, `Escape`, `Shift`, `Ctrl`, `Alt` (folded —
 left and right are one key, held while either is down; Cmd/Super is not mapped).
 

@@ -40,9 +40,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::rng::{DeterministicRng, WorldSeed};
 use ludion_core::time::{FrameIndex, GameClock, TickRate};
-use ludion_ecs::{
-    ComponentInfo, Phase, QueryElemShape, QueryObservations, Registry, Schedule, World,
-};
+use ludion_ecs::{ComponentInfo, QueryElemShape, QueryObservations, Registry, Schedule, World};
 use ludion_protocol::command::ViewPose;
 use ludion_protocol::envelope::Seq;
 use ludion_protocol::event::{Event, LogEvent, SceneChangedData};
@@ -828,12 +826,9 @@ impl Engine {
         engine
     }
 
-    /// Builds a fresh [`Schedule`]: [`path_follow`](crate::path_follow) always first, so a rider reads
-    /// this tick's platform pose; then the registered [`systems`](Engine::systems), in registration
-    /// order; then the physics triple when `physics` is `Some` — after every game system
-    /// (`Plan/physics.md` W2) — then [`camera_rig`](crate::camera_rig) always, so the camera reads
-    /// this tick's settled target pose. Both engine systems are no-ops on an empty query, so every
-    /// world rebuild yields the same schedule shape. Called at every world reset — construction, `scene.load`,
+    /// Builds a fresh [`Schedule`] from the registered [`systems`](Engine::systems) and `physics`,
+    /// in the order [`assemble_schedule`](scene_physics::assemble_schedule) states. Called at every
+    /// world reset — construction, `scene.load`,
     /// `engine.restore`, `scene.switch` — so the game schedule is reinstated instead of dropped (the
     /// bug this fixes: the old code hard-coded `Schedule::new()` on load and restore, silently
     /// discarding any configured schedule).
@@ -842,21 +837,7 @@ impl Engine {
     /// the restore and switch paths build the schedule **before** the point of no return, and the
     /// field is committed only after it.
     pub(crate) fn build_schedule(&self, physics: Option<&ScenePhysics>) -> Schedule {
-        let mut schedule = Schedule::new();
-        crate::path_follow::install(&mut schedule);
-        for spec in self.systems.iter().filter(|s| s.phase == Phase::Sim) {
-            schedule.add_system_shared(spec.name, spec.run.clone());
-        }
-        scene_physics::install(&mut schedule, physics);
-        crate::camera_rig::install(&mut schedule);
-        for spec in self
-            .systems
-            .iter()
-            .filter(|s| s.phase == Phase::Presentation)
-        {
-            schedule.add_presentation_system_shared(spec.name, spec.run.clone());
-        }
-        schedule
+        scene_physics::assemble_schedule(physics, &self.systems)
     }
 
     /// Sets the default screenshot resolution (used when a `render.screenshot` omits dimensions).
@@ -1694,6 +1675,7 @@ impl Engine {
             physics_installed,
             game_systems,
         );
+        crate::patterns::report_unrun_patterns(self.driver.world_mut(), game_systems);
         crate::fonts::report_font_faults(self.driver.world_mut());
         scene_physics::report_rejections(self.driver.world_mut());
         scene_physics::report_missing_joints(self.driver.world_mut());
@@ -2373,6 +2355,7 @@ impl Engine {
         world.allow_presentation_writes::<crate::Diagnostics>();
         world.allow_presentation_writes::<AudioQueue>();
         world.allow_presentation_writes::<crate::prefab::PrefabLibrary>();
+        world.allow_presentation_writes::<crate::patterns::PatternSystemsRan>();
         world.set_entity_label::<crate::components::Name>();
     }
 

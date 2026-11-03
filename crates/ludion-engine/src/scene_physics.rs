@@ -7,7 +7,7 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
-use ludion_ecs::{Parent, Schedule, World};
+use ludion_ecs::{Parent, Phase, Schedule, World};
 use ludion_physics::{
     CharacterMotor, CollisionLayers, MIRROR, PhysicsSettings, PhysicsSpace, PhysicsWorld, STEP,
     WRITE, WireBody,
@@ -105,6 +105,30 @@ pub(crate) fn install(schedule: &mut Schedule, physics: Option<&ScenePhysics>) {
     }
 }
 
+/// Builds a fresh [`Schedule`]: [`path_follow`](crate::path_follow) always first, so a rider reads
+/// this tick's platform pose; then the registered Sim `systems`, in registration order; then the
+/// physics triple when `physics` is `Some` — after every game system (`Plan/physics.md` W2) — then
+/// [`camera_rig`](crate::camera_rig) always, so the camera reads this tick's settled target pose;
+/// then the Presentation `systems`. Both engine systems are no-ops on an empty query, so every
+/// world rebuild yields the same schedule shape. The engine and the bare host share this one
+/// assembly, so the order cannot drift between them.
+pub(crate) fn assemble_schedule(
+    physics: Option<&ScenePhysics>,
+    systems: &[crate::engine::SystemSpec],
+) -> Schedule {
+    let mut schedule = Schedule::new();
+    crate::path_follow::install(&mut schedule);
+    for spec in systems.iter().filter(|s| s.phase == Phase::Sim) {
+        schedule.add_system_shared(spec.name, spec.run.clone());
+    }
+    install(&mut schedule, physics);
+    crate::camera_rig::install(&mut schedule);
+    for spec in systems.iter().filter(|s| s.phase == Phase::Presentation) {
+        schedule.add_presentation_system_shared(spec.name, spec.run.clone());
+    }
+    schedule
+}
+
 /// The driver every registry-only host (`render`, `sweep`) builds: no game systems, just the
 /// scene's `physics:` block installed on an otherwise empty schedule, and the scene's seed —
 /// physics is the one exception to "no game schedule is ever installed here", since a scene's
@@ -121,13 +145,9 @@ pub(crate) fn bare_driver(
     world.insert_resource(crate::FontLibrary::load(ludion_assets::AssetRoot::content(
         project_root,
     )));
-    let mut schedule = Schedule::new();
-    crate::path_follow::install(&mut schedule);
-    install(&mut schedule, scene.physics.as_ref());
-    crate::camera_rig::install(&mut schedule);
     SimDriver::new(
         world,
-        schedule,
+        assemble_schedule(scene.physics.as_ref(), &[]),
         SimConfig {
             seed: scene.seed.unwrap_or(0),
             ..SimConfig::default()
@@ -541,6 +561,23 @@ mod tests {
     use ludion_core::time::{FrameIndex, TickRate};
     use ludion_ecs::SystemCtx;
     use ludion_spatial::{Body, Collider, JointKind, RigidBody, Shape};
+
+    #[test]
+    fn the_assembled_schedule_runs_path_follow_physics_then_camera_rig() {
+        let physics = physics_with_layers(Vec::new());
+        let schedule = assemble_schedule(Some(&physics), &[]);
+        let names: Vec<_> = schedule.system_names().collect();
+        assert_eq!(
+            names,
+            [
+                crate::path_follow::SYSTEM_NAME,
+                WRITE,
+                STEP,
+                MIRROR,
+                crate::camera_rig::SYSTEM_NAME
+            ]
+        );
+    }
 
     #[test]
     fn the_offender_key_has_three_forms_and_is_scoped() {

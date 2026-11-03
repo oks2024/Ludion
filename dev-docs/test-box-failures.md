@@ -39,7 +39,9 @@ be performed on a file with a user-mapped section open"* when another process ho
   (about 10 us per entry), once per process; later opens in the same process take about 50 ms. Measured at
   about 4 s with ~366k files, and nextest's parallel processes each pay it. It slows
   the host's first sound and the device open, and an `Embedded::stop` during it spends up to
-  `AUDIO_STOP_GRACE` waiting, but cannot fail on it. Sweep or clean the target tree by hand (`cargo sweep --time 7`, or `cargo clean` on a tree already
+  `AUDIO_STOP_GRACE` waiting, but cannot fail on it. The renderer's first device lookup pays the
+  same scan (`request_adapter` -> `MTLCopyAllDevices` -> bundle lookup), and under load it can cross
+  a wire client's timeouts as `L3009` on GPU tests. Sweep or clean the target tree by hand (`cargo sweep --time 7`, or `cargo clean` on a tree already
   past ~100k files) when the prune is not enough. Cargo never prunes stale objects, and macOS's default
   `split-debuginfo = "unpacked"` leaves a loose `.o` per codegen unit there. `split-debuginfo = "packed"`
   would stop that but triples the incremental rebuild (dsymutil), so it is not set; instead `check.mjs`

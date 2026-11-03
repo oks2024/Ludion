@@ -127,12 +127,13 @@ writing the pose.
   follower spawned at runtime moves like an authored one.
 - A path that cannot be read or fails validation raises `L1215` once per offender (a prefab part, a named entity, or an unnamed entity's slot); the entity stays put.
 - A `speed` or `phase` that is not a finite `f32` (NaN, infinite, or past `f32` range) is `L1269` at `/speed` or `/phase`; built in Rust, the follower is held where it is and `L1269` is raised once per offender.
-- The path library is read at load, restore and district switch and never hashed or snapshotted.
+- Each path file is read the first time a follower or lane names it, and the library is emptied at every load, restore and district switch; it is never hashed or snapshotted.
 
 ## Gotchas
 
-- `asset.reload` does not re-read a path: an edited path takes effect at the next load, restore or
-  switch, which keeps a mid-session reload replay-safe.
+- `asset.reload` does not re-read a path. A path already read keeps its text until the next load,
+  restore or switch; a path first named after an edit reads the edited file, and neither enters the
+  doc-reload log a recording replays, so do not edit a path under a running recording.
 - A follower on a `rigid` body has its pose overwritten by the physics mirror every tick. Put it on a
   `kinematic` body or none.
 - A block-style file only: a flow-style `points: [[0,0,0]]` fails `L1005`.

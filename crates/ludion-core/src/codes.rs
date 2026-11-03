@@ -1630,6 +1630,11 @@ pub mod code {
     /// range check, the save remap and the carry remap cannot address. Raised by `ludion-ecs`.
     pub const ENTITY_REF_IN_COLLECTION: DiagnosticCode = DiagnosticCode::new("L1392");
 
+    /// `L1394` — the world holds a `PatternPlayer` naming a pattern, or a `Volley`, but the schedule
+    /// never ran `play_patterns` or `advance_volleys`, so no volley fires or none is ever reaped.
+    /// A lint raised once, at runtime, after a tick.
+    pub const PATTERN_SYSTEM_NOT_RUN: DiagnosticCode = DiagnosticCode::new("L1394");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -8038,6 +8043,23 @@ Fix: hold each reference in its own named field, or derive the collection from a
 instead of storing it.",
     },
     CodeEntry {
+        code: code::PATTERN_SYSTEM_NOT_RUN,
+        severity: Severity::Warning,
+        title: "a pattern system never ran",
+        explanation: "\
+The world holds a `PatternPlayer` naming a pattern, or a `Volley`, but the schedule never ran
+`play_patterns` (so the player fires nothing) or `advance_volleys` (so spent volleys are never
+reaped). Raised once per system, after a tick, in a world with game systems.
+
+Fix: register them on the `EngineBuilder`, `advance_volleys` after the game's hit systems:
+
+  .system(\"play_patterns\", play_patterns)
+  .system(\"advance_volleys\", advance_volleys)
+
+Known limit: a wrapper that calls `play_patterns` only behind its own guard, such as a menu state,
+warns until its first call.",
+    },
+    CodeEntry {
         code: code::CAMERA_OFFSET_DUPLICATE,
         severity: Severity::Error,
         title: "more than one camera offset",
@@ -10930,6 +10952,7 @@ mod tests {
         code::PREFAB_EMPTY,
         code::GENERATION_JOBS_UNKNOWN,
         code::ENTITY_REF_IN_COLLECTION,
+        code::PATTERN_SYSTEM_NOT_RUN,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -11195,6 +11218,7 @@ mod tests {
             code::CAMERA_DOF_FOCUS_ZERO,
             code::SUN_DISC_SIZE_MISMATCH,
             code::CAMERA_OFFSET_FOV_CLAMPED,
+            code::PATTERN_SYSTEM_NOT_RUN,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

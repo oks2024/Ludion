@@ -53,6 +53,10 @@ frame (not once per sim tick) returns on.
   `ParticleEmitter.started` and `Animation.started` all want `ctx.game_frame`, never `ctx.frame`:
   on an unheld run the two are equal, so an existing stamp is unaffected; on a held run a
   `ctx.frame` stamp lands in the future and the effect starts late.
+- **Input edges are per sim tick, not per gameplay frame.** `was_pressed` is true on one tick,
+  including a held one, so a system that returns on `!ctx.game_advanced()` loses a press made
+  during a hold. Latch it in an unguarded system ahead of the guarded one, and consume the latch on
+  the next advanced frame.
 - `play_patterns` walks the timeline on `ctx.game_frame` and returns immediately on
   `!ctx.game_advanced()`, so a hold neither re-fires a timeline entry nor skips one whose frame
   passed while frozen. `advance_volleys` still runs every tick (reaping is idempotent) but ages on
