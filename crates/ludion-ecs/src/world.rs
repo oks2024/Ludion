@@ -416,6 +416,23 @@ impl World {
         self.entities.iter_alive()
     }
 
+    /// The live sim entity in slot `index`: `None` for a free slot, an out-of-range index or a
+    /// presentation index. It pairs with [`entity_indices_with`](Self::entity_indices_with).
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_ecs::World;
+    ///
+    /// let mut world = World::new();
+    /// let a = world.spawn();
+    /// assert_eq!(world.live_id_at(a.index()), Some(a));
+    /// world.despawn(a).unwrap();
+    /// assert_eq!(world.live_id_at(a.index()), None);
+    /// ```
+    pub fn live_id_at(&self, index: u32) -> Option<EntityId> {
+        self.entities.live_id_at(index)
+    }
+
     /// Iterates the currently-live presentation entities in ascending index order. Empty in
     /// [`Sim`](Phase::Sim) phase: the sim never sees them.
     pub fn presentation_entities(&self) -> impl Iterator<Item = EntityId> + '_ {

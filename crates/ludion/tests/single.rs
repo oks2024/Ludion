@@ -62,6 +62,19 @@ fn index_order_not_spawn_order() {
 }
 
 #[test]
+fn recycled_slot_answers_the_new_generation() {
+    let mut world = World::new();
+    let a = world.spawn();
+    world.insert(a, Tag(1)).unwrap();
+    world.despawn(a).unwrap();
+    let b = world.spawn();
+    assert_eq!(b.index(), a.index());
+    assert_ne!(b.generation(), a.generation());
+    world.insert(b, Tag(2)).unwrap();
+    assert_eq!(check(&world), Some(b));
+}
+
+#[test]
 fn presentation_entities_are_not_singletons() {
     let mut world = World::new();
     let p = world.spawn_presentation();

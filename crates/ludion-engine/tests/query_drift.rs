@@ -83,6 +83,15 @@ fn step(engine: &mut Engine) -> Result<(), ludion_core::diagnostics::Diagnostic>
 }
 
 #[test]
+fn query_before_any_system_is_l1393_naming_the_call_site() {
+    let Err(err) = Engine::builder().query::<(&Health,)>().build() else {
+        panic!("a query with no system must fail the build");
+    };
+    assert_eq!(err.code, ludion_core::codes::code::QUERY_DECL_NO_SYSTEM);
+    assert!(err.message.contains("query_drift.rs"), "{}", err.message);
+}
+
+#[test]
 fn declared_query_that_runs_is_clean() {
     let mut engine = build("regen", regen);
     let report = check_query_drift_with(&mut engine, step).unwrap();

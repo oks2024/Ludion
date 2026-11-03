@@ -84,6 +84,8 @@ or the resource accessors. **A missed access still records** — a `get` on a de
 entity without the component records the same shape as a hit, because the observation is about the
 system's access *intent*, not whether this run's data satisfied it.
 
+A system whose only touch of `T` is `has::<T>` is therefore outside `L1126`. This is deliberate: recording it would make every guard a declared shape, including guards inside engine helpers (`lane`, `camera_offset`, `hierarchy`) that would be charged to the calling game system.
+
 Attribution comes from the `Schedule`: it tags each system with `set_recording_system` before running
 it and calls `clear_recording_system` once the tick's systems are done, so host-side component traffic
 (scene loading, the world hash, extract, command application) lands in no system's set. A

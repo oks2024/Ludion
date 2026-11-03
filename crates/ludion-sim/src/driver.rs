@@ -459,6 +459,7 @@ impl SimDriver {
             }
             None => false,
         };
+        let panicked = self.restore_removed_input(frame) || panicked;
 
         // 4. Advance the frame counter.
         self.frame = frame.next();
@@ -473,6 +474,32 @@ impl SimDriver {
             self.cursor = 0;
         }
         panicked
+    }
+
+    /// Step 1 of every tick expects the `InputState` resource. A system that removed it gets an
+    /// empty one back and an `L4007` pause rather than a dead sim thread; a real panic's
+    /// diagnostic, when both happened, is kept. Returns whether it restored.
+    fn restore_removed_input(&mut self, frame: FrameIndex) -> bool {
+        if self.world.resource::<InputState>().is_some() {
+            return false;
+        }
+        self.world.insert_resource(InputState::default());
+        self.system_panic.get_or_insert_with(|| {
+            Diagnostic::new(
+                code::SYSTEM_PANICKED,
+                format!(
+                    "a system removed the `InputState` resource on frame {}; the engine restored \
+                     an empty one, so held input is lost",
+                    frame.as_u64()
+                ),
+            )
+            .with_help(format!(
+                "reset it in place (`*input = InputState::default()`) rather than removing it; \
+                 search for `remove_resource::<InputState>`. `sim.resume` continues at frame {}",
+                frame.as_u64() + 1
+            ))
+        });
+        true
     }
 }
 
@@ -1039,6 +1066,29 @@ mod tests {
         assert!(help.contains("frame 2"), "{help}");
         assert!(help.contains("frame 3"), "{help}");
         assert!(help.contains("does not retry"), "{help}");
+        assert!(driver.take_system_panic().is_none());
+    }
+
+    fn removes_input_on_frame_two(world: &mut World, ctx: &SystemCtx) {
+        if ctx.frame.as_u64() == 2 {
+            world.remove_resource::<InputState>();
+        }
+    }
+
+    #[test]
+    fn a_system_removing_input_state_pauses_with_l4007_and_the_sim_continues() {
+        let mut schedule = Schedule::new();
+        schedule.add_system("removes_input_on_frame_two", removes_input_on_frame_two);
+        let mut driver = SimDriver::new(World::new(), schedule, SimConfig::default());
+        driver.run_ticks(5);
+        assert_eq!(driver.frame().as_u64(), 3);
+        assert_eq!(driver.run_state(), RunState::Paused);
+        assert!(driver.world().resource::<InputState>().is_some());
+        let held = driver.take_system_panic().expect("L4007 held");
+        assert_eq!(held.code, code::SYSTEM_PANICKED);
+        assert!(held.message.contains("InputState"), "{}", held.message);
+        driver.run_ticks(2);
+        assert_eq!(driver.frame().as_u64(), 5);
         assert!(driver.take_system_panic().is_none());
     }
 

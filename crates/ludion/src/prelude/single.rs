@@ -4,7 +4,7 @@
 use std::any::TypeId;
 
 use ludion_core::ids::EntityId;
-use ludion_ecs::{Component, PRESENTATION_BASE, World};
+use ludion_ecs::{Component, World};
 
 /// Singleton lookups on a [`World`].
 ///
@@ -13,8 +13,7 @@ use ludion_ecs::{Component, PRESENTATION_BASE, World};
 pub trait SingleExt {
     /// The live sim entity with the lowest slot index carrying `T`; `None` when there is none.
     ///
-    /// An absent `T` is O(1). A present `T` walks the entity slots up to the match: the ECS exposes
-    /// no index-to-id lookup, so the cost is linear in the match's slot index.
+    /// O(1).
     ///
     /// # Example
     /// ```
@@ -51,11 +50,8 @@ pub trait SingleExt {
 impl SingleExt for World {
     fn single<T: Component>(&self) -> Option<EntityId> {
         let index = self.entity_indices_with(TypeId::of::<T>()).next()?;
-        // Outside the Sim phase the column also lists presentation rows, which `entities()` never yields.
-        if index >= PRESENTATION_BASE {
-            return None;
-        }
-        self.entities().find(|e| e.index() == index)
+        // Outside the Sim phase the column also lists presentation rows; `live_id_at` answers `None` for them.
+        self.live_id_at(index)
     }
 
     fn single_get<T: Component>(&self) -> Option<&T> {

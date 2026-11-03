@@ -333,6 +333,12 @@ impl EntityAllocator {
         EntityId::new(index, slot.generation)
     }
 
+    /// The live [`EntityId`] in slot `index`; `None` for a free or out-of-range slot.
+    pub(crate) fn live_id_at(&self, index: u32) -> Option<EntityId> {
+        let slot = self.slots.get(index as usize)?;
+        slot.alive.then(|| EntityId::new(index, slot.generation))
+    }
+
     /// A human-readable reason a handle is not alive, for diagnostics. Only meaningful when
     /// [`is_alive`](Self::is_alive) is `false`.
     pub(crate) fn not_alive_reason(&self, entity: EntityId) -> &'static str {

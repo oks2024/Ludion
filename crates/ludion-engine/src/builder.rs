@@ -96,6 +96,8 @@ pub enum CursorMode {
 /// `ludion::run` / [`replay_hashes_with`](crate::replay_hashes_with), which build it for you).
 #[derive(Default)]
 pub struct EngineBuilder {
+    /// The first `.query()` called before any `.system()`; `build_at` refuses it (`L1393`).
+    orphan_query: Option<&'static std::panic::Location<'static>>,
     project_root: PathBuf,
     save_root: Option<PathBuf>,
     profile_persistence: bool,
@@ -132,6 +134,7 @@ impl EngineBuilder {
     /// root and a 1280×720 screenshot size, no game components or systems yet.
     pub fn new() -> Self {
         EngineBuilder {
+            orphan_query: None,
             project_root: PathBuf::from("."),
             save_root: None,
             profile_persistence: false,
@@ -495,20 +498,20 @@ impl EngineBuilder {
     /// `L1125`. The query-drift verifier (`ludion_engine::check_query_drift_replay`) compares these
     /// declarations against what a run actually iterated.
     ///
-    /// # Panics
-    /// If called before any [`system`](EngineBuilder::system) — there is no system to attribute the
-    /// query to. Chain it directly onto the `.system(...)` it describes.
+    /// Called before any [`system`](EngineBuilder::system) there is no system to attribute the
+    /// query to: the call is recorded and [`build`](EngineBuilder::build) fails with `L1393`
+    /// naming the call site. Chain it directly onto the `.system(...)` it describes.
     #[must_use]
+    #[track_caller]
     pub fn query<'w, Q: ludion_ecs::Query<'w>>(mut self) -> Self {
         let shape = Q::shape();
-        let spec = self.systems.last_mut().unwrap_or_else(|| {
-            panic!(
-                "EngineBuilder::query::<...>() was called before any system was registered; chain \
-                 it onto the .system(name, fn) it describes — e.g. \
-                 .system(\"fire\", fire).query::<(&Loadout, &Transform)>()"
-            )
-        });
-        spec.declared_queries.push(shape);
+        match self.systems.last_mut() {
+            Some(spec) => spec.declared_queries.push(shape),
+            None => {
+                self.orphan_query
+                    .get_or_insert(std::panic::Location::caller());
+            }
+        }
         self
     }
 
@@ -875,6 +878,20 @@ impl EngineBuilder {
     /// # Errors
     /// Any registration [`Diagnostic`], or an `L4018` for a duplicate or reserved system name.
     pub fn build_at(self, project_root: PathBuf) -> Result<Engine, Diagnostic> {
+        if let Some(at) = self.orphan_query {
+            return Err(Diagnostic::new(
+                code::QUERY_DECL_NO_SYSTEM,
+                format!(
+                    "`EngineBuilder::query::<...>()` at {}:{} was called before any system was registered, so it describes no system",
+                    at.file(),
+                    at.line()
+                ),
+            )
+            .with_help(
+                "chain it onto the `.system(name, fn)` it describes — e.g. \
+                 .system(\"fire\", fire).query::<(&Loadout, &Transform)>()",
+            ));
+        }
         let mut registry = builtin_registry();
         for register in self.registrations {
             register(&mut registry)?;

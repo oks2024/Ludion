@@ -577,6 +577,11 @@ pub mod code {
     /// Raised by `ludion-engine`'s engine build.
     pub const QUERY_DECL_UNKNOWN_COMPONENT: DiagnosticCode = DiagnosticCode::new("L1125");
 
+    /// `L1393` — `EngineBuilder::query::<...>()` was called before any `.system(...)`, so the
+    /// declaration describes no system. A **build error** raised by `ludion-engine`'s engine build;
+    /// the message names the call site's file and line.
+    pub const QUERY_DECL_NO_SYSTEM: DiagnosticCode = DiagnosticCode::new("L1393");
+
     /// `L1126` — a system ran a query whose component shape it never declared (observed-but-undeclared).
     /// An **error** raised by the query-drift verifier (`ludion_engine::check_query_drift_*`) after an
     /// instrumented replay/driver run: the system's declared `.query::<...>()` set does not cover a
@@ -2105,6 +2110,7 @@ pub mod code {
     /// `L4007` — a game system panicked. The schedule's per-system unwind boundary caught it, the
     /// rest of the tick was skipped, and the sim auto-paused instead of taking the host down. Raised
     /// by `ludion-engine` at the frame boundary, from the record `ludion-ecs` left in the world.
+    /// Also raised when a system removed the `InputState` resource (the driver restores an empty one).
     pub const SYSTEM_PANICKED: DiagnosticCode = DiagnosticCode::new("L4007");
 
     /// `L4008` — a render-time scene override (`ludion render --set <json-pointer>=<value>`) could
@@ -5359,6 +5365,19 @@ type. Fix: register the component before building — `EngineBuilder::components
 r.register::<T>(\"Name\"))` — or correct the `.query::<...>()` to name a component the game actually
 registers. (A type used only in a system *body* but never declared is fine; only *declared* types are
 resolved.)",
+    },
+    CodeEntry {
+        code: code::QUERY_DECL_NO_SYSTEM,
+        severity: Severity::Error,
+        title: "declared query has no system",
+        explanation: "\
+`EngineBuilder::query::<...>()` was called before any `.system(name, fn)`, so there is no system to
+attribute the declaration to. The call is recorded and the build fails here, naming the call site's
+file and line.
+
+A query declaration describes the system registered just before it. Fix: chain it onto that system:
+
+  .system(\"fire\", fire).query::<(&Loadout, &Transform)>()",
     },
     CodeEntry {
         code: code::QUERY_DRIFT_UNDECLARED,
@@ -9976,6 +9995,9 @@ directly. The systems after the panicking one did not run this tick, so their ef
 design, not by corruption. The pause lands after frame N's tick (the frame the message names), so
 `sim.hash` and the frame counter report N+1.
 
+The same code covers a system that removed the `InputState` resource: the engine restores an empty
+one and pauses, so held input is lost. Reset it in place instead of removing it.
+
 Fix: read the panic message and location; it is ordinary Rust, and the usual shapes are an `unwrap`
 on a `get_mut`/`resource` that returned `None` (the entity was despawned, or the component was never
 inserted), or an index out of bounds. Handle the missing case rather than unwrapping it — a system
@@ -10748,6 +10770,7 @@ mod tests {
         code::DIRECTIONAL_LIGHT_INVALID_FRUSTUM,
         code::SCHEDULE_MODULE_CONCENTRATION,
         code::QUERY_DECL_UNKNOWN_COMPONENT,
+        code::QUERY_DECL_NO_SYSTEM,
         code::QUERY_DRIFT_UNDECLARED,
         code::QUERY_DRIFT_UNOBSERVED,
         code::ENVIRONMENT_INVALID_FIELD,
