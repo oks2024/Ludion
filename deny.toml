@@ -38,6 +38,7 @@ ignore = [
     { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.39.4: build-time only, via the wayland-scanner proc-macro (winit, Linux); parses the fixed Wayland protocol XML shipped in the crate, never runtime input; the fix needs quick-xml 0.41 upstream" },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained: reached via winit, sctk-adwaita and ab_glyph, Linux client-side window decorations only" },
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained: Tauri host only, via gtk-rs 0.18 glib-macros (the Linux webview stack); a proc-macro" },
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained: a compile-time proc-macro reached through ctt-astcenc in the texture cooker (ludion-cook), nothing at runtime; no upgrade exists" },
     { id = "RUSTSEC-2025-0075", reason = "unic-* unmaintained: Tauri host only, via urlpattern in tauri-utils" },
     { id = "RUSTSEC-2025-0080", reason = "unic-* unmaintained: Tauri host only, via urlpattern in tauri-utils" },
     { id = "RUSTSEC-2025-0081", reason = "unic-* unmaintained: Tauri host only, via urlpattern in tauri-utils" },
