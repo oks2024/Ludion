@@ -284,13 +284,7 @@ fn export(target: IosTarget, out: &Path, project: &Path, options: &Options) -> R
             substitutions.bundle_id,
             options.app_args,
         )
-        .map_err(|message| {
-            export_failed(
-                message,
-                "fix the step above (its own output is printed first)",
-            )
-            .into()
-        });
+        .map_err(Failure::from);
     }
     println!();
     println!("next: build it with Xcode's command line —");
@@ -392,11 +386,11 @@ fn toolchain_with(target: IosTarget, xcrun: &str, rustup: &str) -> Result<(), Di
     if !sdk_found {
         return Err(Diagnostic::new(
             EXPORT_TOOLCHAIN_UNAVAILABLE,
-            format!("`{xcrun} --sdk {sdk} --show-sdk-path` found no SDK — an iOS export needs Xcode"),
+            format!(
+                "`{xcrun} --sdk {sdk} --show-sdk-path` found no SDK — an iOS export needs Xcode"
+            ),
         )
-        .with_help(
-            "install Xcode, open it once, and select it with `xcode-select -s /Applications/Xcode.app`",
-        ));
+        .with_help(XCODE_HELP));
     }
     if let Ok(installed) = Command::new(rustup)
         .args(["target", "list", "--installed"])
@@ -1111,16 +1105,23 @@ fn pick_simulator(list_json: &str) -> Option<Simulator> {
         .or_else(|| devices().find(|device| device.name.starts_with("iPhone")))
 }
 
+/// The help for a developer-tool program that cannot start.
+const XCODE_HELP: &str =
+    "install Xcode, open it once, and select it with `xcode-select -s /Applications/Xcode.app`";
+
 /// Runs `program` with inherited stdio; an error if it cannot start or exits non-zero.
-fn stream(program: &str, args: &[String]) -> Result<(), String> {
+fn stream(program: &str, args: &[String]) -> Result<(), Diagnostic> {
     let status = Command::new(program)
         .args(args)
         .status()
-        .map_err(|err| format!("could not run `{program}`: {err}"))?;
+        .map_err(|err| export_failed(format!("could not run `{program}`: {err}"), XCODE_HELP))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("`{program} {}` failed ({status})", args.join(" ")))
+        Err(export_failed(
+            format!("`{program} {}` failed ({status})", args.join(" ")),
+            "the tool's own output is printed above; fix what it reports and rerun",
+        ))
     }
 }
 
@@ -1131,7 +1132,7 @@ fn simulator_lane(
     name: &str,
     bundle_id: &str,
     app_args: &[String],
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     let mut build = xcodebuild_args(out, name, IosTarget::IosSim);
     build.insert(0, "-quiet".into());
     stream("xcodebuild", &build)?;
@@ -1143,11 +1144,13 @@ fn simulator_lane(
         .args(["simctl", "list", "devices", "available", "-j"])
         .stderr(Stdio::inherit())
         .output()
-        .map_err(|err| format!("could not run `xcrun simctl`: {err}"))?;
-    let simulator = pick_simulator(&String::from_utf8_lossy(&listing.stdout)).ok_or(
-        "no simulator to run on: `xcrun simctl list devices available` shows no booted device or \
-         iPhone — create one in Xcode (Window > Devices and Simulators)",
-    )?;
+        .map_err(|err| export_failed(format!("could not run `xcrun simctl`: {err}"), XCODE_HELP))?;
+    let simulator = pick_simulator(&String::from_utf8_lossy(&listing.stdout)).ok_or_else(|| {
+        export_failed(
+            "no simulator to run on: `xcrun simctl list devices available` shows no booted device or iPhone",
+            "create one in Xcode (Window > Devices and Simulators)",
+        )
+    })?;
     println!("simulator: {} ({})", simulator.udid, simulator.name);
     let udid = simulator.udid;
     if !simulator.booted {
@@ -1183,6 +1186,23 @@ fn simulator_lane(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tool_that_cannot_start_points_at_xcode() {
+        let failure = stream("ludion-no-such-program", &[]).unwrap_err();
+        assert_eq!(failure.code, EXPORT_FAILED);
+        let help = failure.help.unwrap();
+        assert!(help.contains("Xcode"), "{help}");
+        assert!(!help.contains("printed above"), "{help}");
+    }
+
+    #[test]
+    fn a_tool_that_exits_non_zero_points_at_its_own_output() {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let failure = stream(&cargo, &["--no-such-flag".to_string()]).unwrap_err();
+        assert_eq!(failure.code, EXPORT_FAILED);
+        assert!(failure.help.unwrap().contains("printed above"));
+    }
 
     fn baked(key: u64, name: Option<&str>) -> ProbeBake {
         ProbeBake {

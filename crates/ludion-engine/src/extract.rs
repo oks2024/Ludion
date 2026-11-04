@@ -447,28 +447,26 @@ pub(crate) fn check_loaded_atlas(
     }
 }
 
-/// The `L1151` an unreadable or unparseable atlas reports, carrying the underlying messages as its
-/// help — the [`resolve_texture`] precedent, nearest-filename suggestion included.
+/// The `L1151` an unreadable or unparseable atlas reports. The underlying causes travel as
+/// `related`, their codes and remedies intact; the help names the fix and, for a missing file, the
+/// nearest filename.
 fn atlas_unresolved(
     project_root: AssetRoot<'_>,
     rel: &str,
     pointer: &str,
     causes: Vec<Diagnostic>,
 ) -> Diagnostic {
-    let mut help = causes
-        .iter()
-        .map(|diagnostic| diagnostic.message.as_str())
-        .collect::<Vec<_>>()
-        .join("; ");
-    if let Some(name) = suggest_asset(project_root, rel) {
-        help = format!("{help} (nearest match is `{name}`)");
-    }
-    Diagnostic::new(
+    let mut diagnostic = Diagnostic::new(
         code::SPRITE_ATLAS_UNRESOLVED,
         format!("atlas `{rel}` could not be resolved"),
     )
     .with_path(format!("{pointer}/atlas"))
-    .with_help(help)
+    .with_help("fix the cause reported below, or correct the `atlas` path; a committed atlas is regenerated with `ludion generate-atlas`");
+    diagnostic.related = causes;
+    if let Some(name) = suggest_asset(project_root, rel) {
+        diagnostic = diagnostic.append_help(format!("nearest match is `{name}`"));
+    }
+    diagnostic
 }
 
 /// The `L1151` an atlas reference with no `frame` reports. Schema validation rejects the same shape
@@ -2017,7 +2015,7 @@ fn decal_map(
             let mut diagnostic =
                 base.with_path(format!("/entities/{index}/components/Decal/{field}/path"));
             if let Some(name) = suggest_asset(project_root, &rel) {
-                diagnostic = diagnostic.with_help(format!("nearest match is `{name}`"));
+                diagnostic = diagnostic.append_help(format!("nearest match is `{name}`"));
             }
             errors.push(diagnostic);
             None
@@ -4153,7 +4151,7 @@ fn resolve_texture(
         Err(base) => {
             let mut diagnostic = base.with_path(site.pointer());
             if let Some(name) = suggest_asset(project_root, rel) {
-                diagnostic = diagnostic.with_help(format!("nearest match is `{name}`"));
+                diagnostic = diagnostic.append_help(format!("nearest match is `{name}`"));
             }
             errors.push(diagnostic);
             None
@@ -5073,9 +5071,13 @@ pub(crate) fn mesh_error(
 /// Suggests the nearest existing filename in `rel`'s directory (relative to `project_root`), if one
 /// is a plausible typo. Goes through [`ludion_core::suggest::nearest`] — the one nearest-match
 /// helper every other diagnostic in the engine uses — so a transposed letter (`lantren` for
-/// `lantern`) suggests here exactly as it does for a misspelled component or field name.
+/// `lantern`) suggests here exactly as it does for a misspelled component or field name. A file that
+/// exists but failed to load is not a typo, so it gets no suggestion.
 pub(crate) fn suggest_asset(project_root: AssetRoot<'_>, rel: &str) -> Option<String> {
     let joined = project_root.dir().join(rel);
+    if joined.exists() {
+        return None;
+    }
     let dir = joined.parent()?;
     let target = joined.file_name()?.to_string_lossy().to_string();
     let entries = std::fs::read_dir(dir).ok()?;

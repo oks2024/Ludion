@@ -245,7 +245,7 @@ fn a_scene_tilemap_legend_reports_l1152() {
 }
 
 /// An `atlas` naming no file is `L1151` at the component's `atlas` field, carrying the read failure
-/// as help.
+/// as a related diagnostic.
 #[test]
 fn a_scene_naming_a_missing_atlas_reports_l1151() {
     let (_, stderr) = check("scene-missing-atlas.yaml", false);

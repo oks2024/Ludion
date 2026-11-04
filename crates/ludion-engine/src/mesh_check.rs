@@ -400,7 +400,7 @@ fn unread_path(fault: &Diagnostic) -> Option<&str> {
     rest.split('`').next()
 }
 
-/// A read failure's help: the derived-tree case, else the nearest filename, else the reader's own.
+/// A read failure's help: the derived-tree case, else the reader's own plus any nearest filename.
 fn helped(
     project_root: &Path,
     mut fault: Diagnostic,
@@ -436,7 +436,7 @@ fn helped(
         }
     }
     if let Some(name) = suggest_asset(AssetRoot::content(project_root), rel) {
-        fault.help = Some(format!("nearest match is `{name}`"));
+        fault = fault.append_help(format!("nearest match is `{name}`"));
     }
     fault
 }

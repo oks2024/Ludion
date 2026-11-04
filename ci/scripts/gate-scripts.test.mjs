@@ -18,7 +18,7 @@ import { runGate as mapGate } from '../../scripts/map-drift.mjs';
 import { runGate as voxelGate } from '../../scripts/voxel-drift.mjs';
 import { findScriptWrites, findWrites, runGate as atomicGate } from './atomic-writes.mjs';
 import { writeFileAtomic } from '../../scripts/atomic-write.mjs';
-import { findPrefixedPrints, scanFiles } from './diagnostic-prints.mjs';
+import { findPrefixedPrints, findUncodedFailurePrints, scanFiles } from './diagnostic-prints.mjs';
 import { findScheduleText, scanFiles as scheduleFiles, unallowedHits, ALLOWLIST as SCHEDULE_ALLOWLIST } from './schedule-comments.mjs';
 import { BEGIN as CG_BEGIN, END as CG_END, checkCrateGraph, renderEdges, spliceEdges } from '../../scripts/crate-graph-edges.mjs';
 import { render as renderDenylist } from '../../scripts/clippy-denylist.mjs';
@@ -536,6 +536,16 @@ test('diagnostic-prints flags a hand-written error or warning print and nothing 
   assert.equal(hits('eprintln!("{diagnostic}");'), 0);
   assert.equal(hits('assert!(s.starts_with("error[L0001]"));'), 0);
   assert.equal(hits('child_failed("error[L1013]: x");'), 0);
+});
+
+test('diagnostic-prints flags a codeless failure print and nothing else', () => {
+  const hits = (text) => findUncodedFailurePrints(text).length;
+  assert.equal(hits('eprintln!("could not write x: {error}");'), 1);
+  assert.equal(hits('eprintln!(\n    "failed to read {x}"\n);'), 1);
+  assert.equal(hits('eprint!("cannot open x");'), 1);
+  assert.equal(hits('eprintln!("{diagnostic}");'), 0);
+  assert.equal(hits('let m = format!("could not x");'), 0);
+  assert.equal(hits('println!("failed {stem}");'), 0);
 });
 
 test('diagnostic-prints passes on the tree', () => {

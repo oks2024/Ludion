@@ -219,7 +219,7 @@ fn an_unknown_frame_is_l1152_with_a_suggestion() {
 }
 
 /// An `atlas` path that names no file is `L1151` at the component's `atlas` field — the
-/// texture-error precedent, with the load failure carried as help.
+/// texture-error precedent, with the load failure carried as a related diagnostic.
 #[test]
 fn a_missing_atlas_is_l1151_at_the_atlas_field() {
     let dir = content_root("missing");
@@ -239,6 +239,47 @@ fn a_missing_atlas_is_l1151_at_the_atlas_field() {
     assert_eq!(
         errors[0].path.as_deref(),
         Some("/entities/0/components/Sprite/atlas")
+    );
+    assert_eq!(errors[0].related[0].code.as_str(), "L1101");
+    assert!(
+        !errors[0]
+            .help
+            .as_deref()
+            .unwrap()
+            .contains("could not read"),
+        "the cause is related, not joined into the help: {:?}",
+        errors[0].help
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An atlas file that exists but does not parse keeps its causes as related diagnostics and is not
+/// offered a nearest-filename suggestion.
+#[test]
+fn an_unparseable_atlas_carries_its_causes_and_suggests_nothing() {
+    let dir = content_root("unparseable");
+    std::fs::create_dir_all(dir.join("art")).unwrap();
+    std::fs::write(dir.join("art/bad.atlas.yaml"), "format: [unterminated").unwrap();
+    std::fs::write(dir.join("art/bad2.atlas.yaml"), "format: 1\n").unwrap();
+    let mut world = World::new();
+    spawn_sprite(
+        &mut world,
+        Sprite {
+            atlas: Some("art/bad.atlas.yaml".to_string()),
+            frame: Some("ship/idle".to_string()),
+            ..Sprite::default()
+        },
+    );
+
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code.as_str(), "L1151");
+    assert!(!errors[0].related.is_empty(), "{:?}", errors[0]);
+    assert!(
+        !errors[0].help.as_deref().unwrap().contains("nearest match"),
+        "{:?}",
+        errors[0].help
     );
 
     let _ = std::fs::remove_dir_all(&dir);

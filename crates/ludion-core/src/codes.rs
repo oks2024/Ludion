@@ -417,8 +417,9 @@ pub mod code {
 
     /// `L1038` — an output file could not be written: a directory could not be created, a file could
     /// not be written, renamed or removed, or its bytes could not be encoded. Raised by `ludion-cli`,
-    /// `ludion-engine` (`scene.save`, the replay recorder), `ludion-mesh-edit`, `ludion-gen` (run folders,
-    /// `run.json`, the contact sheet, an accepted file).
+    /// the `ludion` facade (`--trace` to stdout), `ludion-engine` (`scene.save`, the replay
+    /// recorder), `ludion-mesh-edit`, `ludion-gen` (run folders, `run.json`, the contact sheet, an
+    /// accepted file).
     pub const OUTPUT_IO: DiagnosticCode = DiagnosticCode::new("L1038");
 
     /// `L1039` — a generated scene differs from what its map source generates (`generate-map
@@ -3721,7 +3722,8 @@ the base. A failure *writing* an output file is L1038; an asset file referenced 
         title: "output file could not be written",
         explanation: "\
 An output file could not be produced: a directory could not be created, a file could not be written,
-renamed or removed, or its bytes could not be encoded.
+renamed or removed, or its bytes could not be encoded. A stream counts: writing a trace to stdout
+fails the same way when the pipe is closed or the redirect target is full.
 
 The message includes the operating system's reason — typically the destination directory does not
 exist or the path is a directory, permissions deny access, another process holds the file open, or

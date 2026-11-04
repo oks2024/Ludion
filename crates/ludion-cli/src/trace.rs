@@ -9,6 +9,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
+use ludion_core::codes::code;
+use ludion_core::diagnostics::Diagnostic;
 use ludion_engine::TraceChannel;
 use ludion_sim::InputScript;
 
@@ -49,7 +51,12 @@ pub fn run(
     match ludion_engine::write_jsonl(&records, &mut stdout).and_then(|()| stdout.flush()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("could not write the trace to stdout: {error}");
+            let diagnostic = Diagnostic::new(
+                code::OUTPUT_IO,
+                format!("could not write the trace to stdout: {error}"),
+            )
+            .with_help("check what stdout is piped or redirected to: a closed pipe or a full disk");
+            eprintln!("{diagnostic}");
             ExitCode::FAILURE
         }
     }

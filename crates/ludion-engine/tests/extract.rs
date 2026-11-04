@@ -2053,10 +2053,43 @@ fn missing_texture_suggests_a_transposed_filename() {
         errors[0].path.as_deref(),
         Some("/entities/0/components/Sprite/texture")
     );
-    assert_eq!(
-        errors[0].help.as_deref(),
-        Some("nearest match is `grass.png`")
-    );
+    let help = errors[0].help.as_deref().unwrap();
+    assert!(help.contains("nearest match is `grass.png`"), "{help}");
+    assert!(help.contains("check the path is correct"), "{help}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file that exists but fails to decode keeps the loader's help and is not a typo: no
+/// nearest-filename suggestion, even with a similarly named sibling.
+#[test]
+fn a_truncated_png_keeps_the_loaders_help_and_suggests_nothing() {
+    let dir = std::env::temp_dir().join(format!("ludion-extract-truncated-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("art")).unwrap();
+    let mut truncated = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    truncated.extend_from_slice(&[0, 0, 0]);
+    std::fs::write(dir.join("art/hero.png"), truncated).unwrap();
+    std::fs::write(dir.join("art/hero2.png"), b"sibling").unwrap();
+
+    let mut world = World::new();
+    let e = world.spawn();
+    world
+        .insert(
+            e,
+            Sprite {
+                texture: Some("art/hero.png".to_string()),
+                ..Sprite::default()
+            },
+        )
+        .unwrap();
+
+    let errors = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code.as_str(), "L1102");
+    let help = errors[0].help.as_deref().unwrap();
+    assert!(help.contains("re-export"), "{help}");
+    assert!(!help.contains("nearest match"), "{help}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

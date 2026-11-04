@@ -13,6 +13,10 @@
 // `std::io::stderr()`). A plain string literal in a test (`"error[E0308]..."`, an `assert!`) is not
 // a hit.
 //
+// A second finder, `findUncodedFailurePrints`, catches an `eprint!`/`eprintln!` whose literal starts
+// `could not `, `failed to ` or `cannot `: a codeless failure with no `error:` prefix. It skips
+// `examples/`, whose demos print such lines on purpose.
+//
 // Allowlist, the two usage helpers: `crates/ludion-cli/src/diagnostic.rs` (`usage_error`) and
 // `crates/ludion/src/usage.rs` (`usage_error`, `usage_warning`).
 //
@@ -36,6 +40,18 @@ const PREFIXED_PRINT = /\b(?:e?print(?:ln)?|write(?:ln)?|format)!\(\s*(?:[^,"()]
 export function findPrefixedPrints(text) {
   const hits = [];
   for (const match of text.matchAll(PREFIXED_PRINT)) {
+    const line = text.slice(0, match.index).split('\n').length;
+    hits.push({ line, snippet: match[0].replace(/\s+/g, ' ') });
+  }
+  return hits;
+}
+
+const UNCODED_FAILURE_PRINT = /\beprint(?:ln)?!\(\s*r?#*"(?:could not |failed to |cannot )/g;
+
+// Every `eprint!`/`eprintln!` in `text` whose literal opens as a bare failure sentence.
+export function findUncodedFailurePrints(text) {
+  const hits = [];
+  for (const match of text.matchAll(UNCODED_FAILURE_PRINT)) {
     const line = text.slice(0, match.index).split('\n').length;
     hits.push({ line, snippet: match[0].replace(/\s+/g, ' ') });
   }
@@ -81,6 +97,11 @@ function main() {
     const text = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
     for (const { line, snippet } of findPrefixedPrints(text)) {
       failures.push(`${rel}:${line}: ${snippet} — print a coded Diagnostic through Display, or usage_error for a flag error`);
+    }
+    if (!rel.split('/').includes('examples')) {
+      for (const { line, snippet } of findUncodedFailurePrints(text)) {
+        failures.push(`${rel}:${line}: ${snippet} — print a coded Diagnostic through Display`);
+      }
     }
   }
   if (seen === 0) failures.push('the walk saw no Rust files under crates/*, games/* or the editor host');
