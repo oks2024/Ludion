@@ -7,8 +7,9 @@
 //! **Cross-platform bit-stable by construction.** Every transcendental here routes through
 //! [`ludion_core::math`] (pure-Rust `libm`), never the `f32` inherent methods or `glam`'s
 //! trig-bearing constructors (`Mat4::perspective_rh`, `Quat::from_euler`) — those call the platform C
-//! `libm`, which differs in the last bit between Windows and macOS. Only plain matrix arithmetic and
-//! `Mat4::inverse` (deterministic as-is) touch `glam`. The formulas mirror the renderer's camera
+//! `libm`, which differs in the last bit between Windows and macOS. Matrix inverses go through
+//! [`ludion_core::math::mat4_inverse`] (a fixed scalar order; `glam`'s `Mat4::inverse` sums in a
+//! different order on SSE2 and NEON), so only plain matrix arithmetic touches `glam`. The formulas mirror the renderer's camera
 //! (`crates/ludion-engine/src/extract.rs`) and the editor gizmo's projection
 //! (`editor/app/src/editor/gizmo/camera.ts`); the deterministic (libm-trig) build differs from the
 //! renderer's glam-std-trig matrix by well under a pixel — sim determinism outranks last-bit

@@ -13,7 +13,7 @@
 //!
 //! - **Once per `(code, key)` per session.** The resource latches every pair it has already
 //!   reported, so a system reporting the same fault sixty times a second prints one line. `key` is
-//!   the offender's identity — a doc name, a scene name, or for an entity [`offender_key`], never
+//!   the offender's identity — a doc name, a scene name, or for an entity `offender_key`, never
 //!   the id with its generation (a respawn takes a new generation) — so the same code still prints
 //!   once for each distinct offender.
 //! - **Never hashed, never serialized.** The resource is engine-owned world state like
@@ -137,7 +137,7 @@ impl Diagnostics {
         }
     }
 
-    /// Sets the scene identity [`offender_key`] prefixes onto entity keys.
+    /// Sets the scene identity `offender_key` prefixes onto entity keys.
     pub(crate) fn set_scope(&mut self, scope: String) {
         self.scope = scope;
     }

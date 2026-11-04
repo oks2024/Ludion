@@ -36,7 +36,7 @@
 //! decomposition of the `look_at` pose, so the render matches the intended framing exactly. `near`
 //! is `NEAR`, `far` is `FAR` — comfortably bracketing `D ± (sphere + ground)`.
 //!
-//! **Lights.** The engine has only ambient + [`PointLight`](crate::PointLight), so the two-light rig
+//! **Lights.** The engine has only ambient + [`PointLight`], so the two-light rig
 //! is placed **per view, relative to the camera** (a world-fixed rig would leave the back view
 //! unlit): a neutral-warm key up-and-left of the view direction and a dimmer cool fill low-and-right,
 //! both at `LIGHT_RANGE_FACTOR`·D range so attenuation never clips. Offsets and intensities
@@ -47,8 +47,8 @@
 //! The synthesized rig above is a bright neutral one — deliberately, since it must read every model.
 //! A game whose content is consumed under a night sky needs the other read, so [`render_model_sheet`]
 //! optionally **lifts** the lighting and grade out of an existing scene: every entity carrying any of
-//! [`Environment`](crate::Environment), [`PostProcess`](crate::PostProcess),
-//! [`DirectionalLight`](crate::DirectionalLight), [`PointLight`](crate::PointLight), or
+//! [`Environment`], [`PostProcess`],
+//! [`DirectionalLight`](crate::DirectionalLight), [`PointLight`], or
 //! [`SpotLight`](crate::SpotLight) is copied
 //! whole (its `Transform` included) into the sheet scene, re-emitted through the canonical writer so
 //! no second YAML emitter exists. A rig carrying any light replaces the synthesized key + fill
@@ -122,7 +122,7 @@
 //! `tick × seconds_per_tick × overlay speed`, and a report's `time` is that clip time.
 //! [`ModelSheetRequest::crossfade`] renders the blend of two bound clips as a strip whose phases are
 //! the fade's weights. The pose is not a second evaluator: the synthesized scene's model entity
-//! carries an [`Animation`](crate::Animation) component and the sheet extracts through
+//! carries an [`Animation`] component and the sheet extracts through
 //! [`extract_at`], so what a sheet shows is exactly what a game running that
 //! clip at that instant shows.
 //!

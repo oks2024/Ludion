@@ -115,7 +115,7 @@ use tokio::sync::watch;
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 /// The longest [`Server::shutdown`] can take: the connection drain and runtime wind-down share one
-/// [`SHUTDOWN_GRACE`] deadline, the runtime keeps a 100 ms floor past it, and the sim join waits at
+/// `SHUTDOWN_GRACE` deadline, the runtime keeps a 100 ms floor past it, and the sim join waits at
 /// most [`SIM_STOP_GRACE`]. A host that stops a listener-bearing core waits at least this long.
 pub const TEARDOWN_BOUND: Duration = Duration::from_millis(
     (SHUTDOWN_GRACE.as_millis() + RUNTIME_FLOOR.as_millis() + SIM_STOP_GRACE.as_millis()) as u64,

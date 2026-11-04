@@ -87,7 +87,7 @@ pub(crate) fn classify(key: &str) -> Result<ReloadTarget, Diagnostic> {
 /// GPU, so a host can refuse before it reads the file.
 ///
 /// # Errors
-/// `L2009`, as [`classify`].
+/// `L2009`, as `classify`.
 pub fn check_shader_reload(key: &str) -> Result<(), Diagnostic> {
     classify(key).map(|_| ())
 }
@@ -95,7 +95,7 @@ pub fn check_shader_reload(key: &str) -> Result<(), Diagnostic> {
 /// Whether `path`'s file name is one of the renderer's `.wgsl` files — render shader, compute shader
 /// or snippet. The membership test an `asset.reload` handler uses to route a `.wgsl` to the shader
 /// branch (or to `L2008`) instead of the texture, mesh and document branches; the reload key itself
-/// is [`classify`]'s.
+/// is `classify`'s.
 pub fn is_renderer_shader(path: &str) -> bool {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     ShaderId::all().any(|id| id.file_name() == name)

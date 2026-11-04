@@ -9,8 +9,8 @@
 // node gates (privacy-canary, size-gate, claude-md-budget, ecs-budget, lists-in-step,
 // diagnostic-prints, atomic-writes, schedule-comments, the gate-script, commit-wrapper, voxel-grid
 // and physics-pin-ritual node tests; physics-features, mobile-check and the schema-drift test ride
-// the full lane because they call cargo or need editor/protocol's npm install). The drift gates,
-// schema-drift itself, clippy, doctests and packaging are not run here.
+// the full lane because they call cargo or need editor/protocol's npm install, which the lane runs).
+// The drift gates, schema-drift itself, clippy, doctests and packaging are not run here.
 //
 // The export is `ls-files -co` (tracked + untracked-not-ignored), so another instance's uncommitted
 // files are exported too.
@@ -201,6 +201,8 @@ async function main() {
     results.push(['npm ci', false]);
   }
   await nodeGates();
+  // schema-drift's test fails (never skips) without editor/protocol's own install.
+  await step('npm ci (editor/protocol)', 'npm', ['ci'], path.join(tree, 'editor', 'protocol'));
   for (const [label, script] of CARGO_NODE_GATES) await step(label, 'node', [script], tree, cargoEnv);
   await step('node --test ci/scripts/schema-drift.test.mjs', 'node', ['--test', 'ci/scripts/schema-drift.test.mjs'], tree, cargoEnv);
   finish(results);

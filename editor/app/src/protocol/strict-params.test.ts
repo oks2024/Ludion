@@ -69,7 +69,8 @@ export function strayKeys(command: Command): string[] {
   );
   expect(member, `no schema member for ${command.method}`).toBeDefined();
   const params = 'params' in command ? command.params : undefined;
-  return strays(params, (member?.properties as Record<string, Schema>).params, '/params');
+  const properties = member?.properties as Record<string, Schema> | undefined;
+  return strays(params, properties?.params, '/params');
 }
 
 const E1 = { index: 1, generation: 0 };

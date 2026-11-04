@@ -301,7 +301,7 @@ const IMPULSE_WINDOW: f32 = 1.0 - 1e-4;
 /// spell this.
 const PHYSICS_BLOB_MAGIC: [u8; 4] = *b"LPB1";
 
-/// The layout version of a tagged blob's body (the field set of [`SnapshotOwned`]). A blob written
+/// The layout version of a tagged blob's body (the field set of `SnapshotOwned`). A blob written
 /// at another version is refused rather than decoded positionally into the wrong shape.
 pub const PHYSICS_BLOB_VERSION: u32 = 1;
 

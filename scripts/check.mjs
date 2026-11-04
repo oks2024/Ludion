@@ -574,7 +574,7 @@ const denySteps = [
 // workspace member regardless of `publish = false` (that flag only gates `cargo publish`), so a
 // games/* crate would otherwise hit this gate's dependency-version check for no reason — it never
 // ships to crates.io.
-const GAMES = ['breakout', 'hello-paddle', 'shmup-stress', 'sokoban'];
+const GAMES = ['breakout', 'character-course', 'hello-paddle', 'shmup-stress', 'sokoban'];
 const excludeGames = GAMES.flatMap((g) => ['--exclude', g]);
 // Full verify (each crate rebuilt from its isolated tarball): possible because `ludion-cli`
 // vendors its embedded docs inside the crate (`embedded-docs/`, drift-gated against `docs/`), so

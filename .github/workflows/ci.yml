@@ -298,14 +298,14 @@ jobs:
         shell: bash
         run: rm -rf target/package target/package-verify/package target/package-verify/*/.fingerprint/*ludion* target/package-verify/*/deps/*ludion* "$HOME/.cargo/registry/src"/*/ludion-*
       - name: cargo package --workspace
-        run: cargo package --workspace --exclude breakout --exclude hello-paddle --exclude shmup-stress --exclude sokoban
+        run: cargo package --workspace --exclude breakout --exclude character-course --exclude hello-paddle --exclude shmup-stress --exclude sokoban
         env:
           CARGO_TARGET_DIR: target/package-verify
 
       # Warnings are errors: the Phase 9 freeze pass drove rustdoc warnings to zero, and docs.rs
       # is a publication surface — a broken intra-doc link is a defect there, not a nicety.
       - name: cargo doc --no-deps
-        run: cargo doc --workspace --no-deps --exclude breakout --exclude hello-paddle --exclude shmup-stress --exclude sokoban
+        run: cargo doc --workspace --no-deps --exclude breakout --exclude character-course --exclude hello-paddle --exclude shmup-stress --exclude sokoban
         env:
           RUSTDOCFLAGS: -D warnings
 

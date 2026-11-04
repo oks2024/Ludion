@@ -275,9 +275,9 @@ const RECENT_FLOOR: Duration = Duration::from_secs(24 * 3600);
 const TEMP_TTL: Duration = Duration::from_secs(3600);
 
 /// Bounds the store at `dir` by last-used age (an entry's mtime: a write sets it, a store hit
-/// refreshes it): entries unused past [`UNUSED_TTL`] go, then the oldest until the store fits
-/// [`STORE_CAP`], never one used within [`RECENT_FLOOR`]. An entry whose key is in `keep` (what the
-/// caller just resolved) is never removed. A temp older than [`TEMP_TTL`] goes; a live writer's is
+/// refreshes it): entries unused past `UNUSED_TTL` go, then the oldest until the store fits
+/// `STORE_CAP`, never one used within `RECENT_FLOOR`. An entry whose key is in `keep` (what the
+/// caller just resolved) is never removed. A temp older than `TEMP_TTL` goes; a live writer's is
 /// fresh. Any other name is left alone. A cache: failures are dropped.
 pub fn prune_store(dir: &Path, keep: &[u64], now: SystemTime) -> ProbePrune {
     prune_with(dir, keep, now, &Limits::DEFAULT)

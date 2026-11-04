@@ -133,7 +133,7 @@ pub struct ReplayHeader {
     pub engine_version: String,
     /// The protocol version in force during recording.
     pub protocol_version: u32,
-    /// The description-stripped schema hash at record time ([`schema::replay_schema_hash`]); a
+    /// The description-stripped schema hash at record time ([`replay_schema_hash`](crate::schema::replay_schema_hash)); a
     /// replayer compares it to its own to detect drift. Doc-comment edits do not move it.
     pub schema_hash: WireHash,
     /// Where the initial world comes from.
