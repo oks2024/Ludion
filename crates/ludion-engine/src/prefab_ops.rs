@@ -249,16 +249,31 @@ pub(crate) fn create(
         &registry,
     );
     library.validate(&key, &text)?;
-    if let Ok(held) = std::fs::read_to_string(root.join(&key))
-        && let Ok(PrefabDocument {
-            generated_from: Some(source),
-            ..
-        }) = ludion_scene::parse_prefab(&held)
-    {
-        return Err(create_refusal(
-            format!("`{key}` is generated from `{source}`; delete it first to replace it"),
-            "a generated prefab is write-only: the next import would overwrite the new one",
-        ));
+    let destination = root.join(&key);
+    if destination.exists() {
+        match std::fs::read_to_string(&destination)
+            .ok()
+            .and_then(|held| ludion_scene::parse_prefab(&held).ok())
+        {
+            Some(PrefabDocument {
+                generated_from: Some(source),
+                ..
+            }) => {
+                return Err(create_refusal(
+                    format!("`{key}` is generated from `{source}`; delete it first to replace it"),
+                    "a generated prefab is write-only: the next import would overwrite the new one",
+                ));
+            }
+            Some(_) => {}
+            None => {
+                return Err(create_refusal(
+                    format!(
+                        "`{key}` already exists and is not a prefab document; not overwriting it"
+                    ),
+                    "choose another path, or delete the file first if it is meant to be replaced",
+                ));
+            }
+        }
     }
     // A prefab the library holds takes the new text first, as `apply` does, so a later spawn agrees
     // with the file; a failed write puts the library back.

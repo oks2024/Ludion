@@ -60,7 +60,7 @@ survives later edits to the file.
 The next four edit prefabs and their instances; `instance` is any part of the instance:
 
 ```jsonc
-// → write live entities out as a prefab (the first is its root); overwrites an existing file
+// → write live entities out as a prefab (the first is its root); overwrites an existing prefab, refuses any other existing file (`L1236`)
 {"v": 1, "id": 13, "method": "prefab.create", "params": {"entities": [{"index": 6, "generation": 0}, {"index": 7, "generation": 0}], "path": "prefabs/lamp.prefab.yaml"}}
 // ← the normalized path
 {"id": 13, "ok": {"kind": "prefab_created", "path": "prefabs/lamp.prefab.yaml"}, "frame": 12, "game_frame": 12}

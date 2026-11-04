@@ -319,14 +319,40 @@ fn create_refuses_to_overwrite_a_generated_prefab_with_l1236() {
 }
 
 #[test]
-fn create_overwrites_an_existing_file() {
+fn create_refuses_to_overwrite_a_file_that_is_not_a_prefab_with_l1236() {
+    let root = root("create-not-prefab");
+    let mut engine = loaded(&root, SET);
+    let ids = index(engine.world_mut());
+    let set = [ids["post"], ids["arm"], ids["weld"]];
+    for held in ["format: 1\nentities: []\n", "precious notes, not yaml: [\n"] {
+        std::fs::write(root.join("set.prefab.yaml"), held).unwrap();
+        let found = engine.create_prefab(&set, "set.prefab.yaml").unwrap_err();
+        assert_eq!(found[0].code, code::PREFAB_CREATE, "{}", found[0].message);
+        assert_eq!(
+            std::fs::read_to_string(root.join("set.prefab.yaml")).unwrap(),
+            held,
+            "the file is untouched"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn create_overwrites_an_existing_prefab() {
     let root = root("create-overwrite");
     let mut engine = loaded(&root, SET);
     let post = index(engine.world_mut())["post"];
-    std::fs::write(root.join("set.prefab.yaml"), "stale").unwrap();
+    std::fs::write(
+        root.join("set.prefab.yaml"),
+        "format: 1\nkind: prefab\nname: set\nentities:\n  - name: old\n    components: {}\n",
+    )
+    .unwrap();
     engine.create_prefab(&[post], "set.prefab.yaml").unwrap();
     let text = std::fs::read_to_string(root.join("set.prefab.yaml")).unwrap();
-    assert!(text.contains("kind: prefab"), "{text}");
+    assert!(
+        text.contains("kind: prefab") && !text.contains("old"),
+        "{text}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 

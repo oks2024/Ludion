@@ -14,7 +14,7 @@
 //! names `T`, so this module owns the one place `T`'s fields are known — deserialization.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::{Diagnostic, Severity};
@@ -639,12 +639,20 @@ pub(crate) fn peek_reload_kind(key: &str, source: &str) -> Result<Option<String>
 
 /// Resolves an `asset.reload` path (relative to `root`, or absolute as a host watcher forwards it) to
 /// a `(content-root-relative key, file source)` pair **iff** it names an existing `*.yaml` under the
-/// content root — the gate the doc-reload branch checks before peeking `kind:`. `None` for a non-YAML
-/// path, a file outside the root, or one that cannot be read (the caller then leaves it a no-op).
+/// content root — the gate the doc-reload branch checks before peeking `kind:`. `Ok(None)` for a
+/// non-YAML path, an absolute file outside the root, or one that cannot be read (the caller then
+/// leaves it a no-op).
 ///
-/// The key matches the boot walk's ([`content_root_yaml`]), so a reload upserts the same `DocStore` entry the
-/// boot load created rather than a divergent one.
-pub(crate) fn resolve_doc_path(root: &Path, incoming: &str) -> Option<(String, String)> {
+/// The key matches the boot walk's ([`content_root_yaml`]), so a reload upserts the same `DocStore`
+/// entry the boot load created rather than a divergent one. The walk never yields a key with `..`,
+/// so a path that climbs — relative, or absolute with a `..` segment — is refused before any read.
+///
+/// # Errors
+/// `L1321` for a `*.yaml` path that climbs with `..`.
+pub(crate) fn resolve_doc_path(
+    root: &Path,
+    incoming: &str,
+) -> Result<Option<(String, String)>, Diagnostic> {
     let incoming_path = Path::new(incoming);
     let abs = if incoming_path.is_absolute() {
         incoming_path.to_path_buf()
@@ -652,11 +660,24 @@ pub(crate) fn resolve_doc_path(root: &Path, incoming: &str) -> Option<(String, S
         root.join(incoming_path)
     };
     if abs.extension().and_then(|e| e.to_str()) != Some("yaml") {
-        return None;
+        return Ok(None);
     }
-    let key = doc_key(root, &abs)?;
-    let source = std::fs::read_to_string(&abs).ok()?;
-    Some((key, source))
+    if abs
+        .strip_prefix(root)
+        .is_ok_and(|rel| rel.components().any(|c| matches!(c, Component::ParentDir)))
+    {
+        return Err(Diagnostic::new(
+            ludion_core::codes::code::CONTENT_PATH_OUTSIDE_ROOT,
+            format!("asset path `{incoming}` climbs out of the content root with `..`"),
+        )
+        .with_help("name the document relative to the content root, without `..` segments"));
+    }
+    let Some(key) = doc_key(root, &abs) else {
+        return Ok(None);
+    };
+    Ok(std::fs::read_to_string(&abs)
+        .ok()
+        .map(|source| (key, source)))
 }
 
 /// The content-root-relative, slash-normalized key for `abs`, or `None` if `abs` is not under `root`.

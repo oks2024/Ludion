@@ -1565,6 +1565,9 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
 
     for (name, &limit) in &budget.passes {
         match report.gpu.passes.iter().find(|p| &p.name == name) {
+            // A median of exactly 0.0 is a pass that was never stamped (an empty pass on Metal, a
+            // stuck timestamp), not a free one: it cannot be told apart from the failure.
+            Some(pass) if pass.median_ms == Some(0.0) => over.push(pass_unmeasured(name)),
             Some(pass) => {
                 if let Some(measured) = pass.median_ms
                     && measured > limit
@@ -1636,6 +1639,18 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
 /// Whether the report names passes but timed none of them.
 fn all_passes_untimed(gpu: &GpuProfile) -> bool {
     !gpu.passes.is_empty() && gpu.passes.iter().all(|p| p.median_ms.is_none())
+}
+
+/// Builds the `L4019` for a budgeted `[passes]` entry whose median read exactly 0.0.
+fn pass_unmeasured(name: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::BUDGET_GPU_UNMEASURED,
+        format!("budget gates GPU pass `{name}`, but its median read exactly 0.0 ms: not measured"),
+    )
+    .with_help(
+        "an empty pass, or a timestamp that never advanced, reads 0.0; remove the pass from \
+         `[passes]` if it is empty in the calibration scene",
+    )
 }
 
 /// Builds the `L4019` for a budget that gates GPU timings against a run that measured none.
@@ -3091,6 +3106,19 @@ entities:
     }
 
     #[test]
+    fn a_budgeted_pass_reading_exactly_zero_is_l4019() {
+        let mut report = sample_report();
+        report.gpu.passes[0].median_ms = Some(0.0);
+        let budget = Budget {
+            passes: BTreeMap::from([("scene".to_string(), 100.0)]),
+            ..Budget::default()
+        };
+        let over = check_budget(&report, &budget);
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert_eq!(over[0].code, code::BUDGET_GPU_UNMEASURED);
+    }
+
+    #[test]
     fn producible_but_unmeasured_pass_is_not_a_violation() {
         // `overlay` (UI-only) and `shadow` (sun-only) are real frame-graph pass names — both absent
         // from `sample_report`'s single-pass GPU section, but producible, so they stay quiet. `shadow`
@@ -3242,13 +3270,13 @@ entities:
                     path.display()
                 );
             }
-            // Every producible name measured at zero: only an unknown key can produce a diagnostic.
+            // Every producible name measured near zero: only an unknown key can produce a diagnostic.
             let mut report = loaded_report(0.0);
             report.gpu.passes = KNOWN_PASS_NAMES
                 .iter()
                 .map(|name| PassTiming {
                     name: (*name).to_string(),
-                    median_ms: Some(0.0),
+                    median_ms: Some(1e-9),
                 })
                 .collect();
             report.sim.systems = budget

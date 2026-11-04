@@ -256,6 +256,10 @@ pub struct Engine {
     current_scene_path: Option<String>,
     /// Where `engine.snapshot` writes the scene-session sidecar; `None` writes none.
     scene_session_file: Option<PathBuf>,
+    /// The frame, scene identity and scene path the last snapshot captured: a later `scene.save`
+    /// rewrites only the sidecar's bases under that stamp, because a restart restores the snapshot,
+    /// not the live world.
+    scene_session_stamp: Option<SceneSessionStamp>,
     /// The wire request id of the command being executed, set by the live loop around each command.
     current_request: Option<RequestId>,
     /// The directory the profile resolves under; `None` = the project root. Set by
@@ -522,6 +526,13 @@ const AUDIO_LOG_CAPACITY: usize = 4096;
 /// [`AUDIO_LOG_CAPACITY`] bound, for the same reason: a long session must not grow it without limit.
 const PROFILE_SAVE_LOG_CAPACITY: usize = 4096;
 
+/// What `engine.snapshot` captured, which the scene-session sidecar keeps describing.
+struct SceneSessionStamp {
+    frame: u64,
+    scene_hash: String,
+    path: Option<String>,
+}
+
 /// Per-session engine state that is **not** world content and is **not** captured verbatim in a
 /// snapshot: the frame-stamped verification logs (audio, profile-save — a replay regenerates them),
 /// the last non-fatal diagnostics (profile-save `L1122`, transition `L3018`–`L3020`, a caught system
@@ -756,6 +767,7 @@ impl Engine {
             scene_bases: BTreeMap::new(),
             current_scene_path: None,
             scene_session_file: None,
+            scene_session_stamp: None,
             current_request: None,
             save_root: None,
             category_gains: CategoryGains::default(),
@@ -2974,7 +2986,8 @@ impl Engine {
     /// caller leaves it the existing silent no-op.
     ///
     /// # Errors
-    /// `L100x` if the edited doc fails to parse as strict-subset YAML at all, `L1119`/`L1120` if it
+    /// `L1321` for a `*.yaml` path that climbs out of the root with `..`; `L100x` if the edited doc
+    /// fails to parse as strict-subset YAML at all, `L1119`/`L1120` if it
     /// parses but is malformed, and any `Error` the registered validators report after the swap that
     /// they did not report before it (`L1144`, `L1149`–`L1152`, `L1315` for a second doc of a
     /// `doc_singleton` kind, a game's own codes) — each a diagnosed
@@ -2987,7 +3000,7 @@ impl Engine {
         if self.doc_kinds.is_empty() {
             return Ok(None);
         }
-        let Some((key, source)) = crate::docs::resolve_doc_path(&self.project_root, path) else {
+        let Some((key, source)) = crate::docs::resolve_doc_path(&self.project_root, path)? else {
             return Ok(None);
         };
         if self.doc_texts.contains_key(&key) {
@@ -3057,7 +3070,7 @@ impl Engine {
     /// The prefab's diagnostics when the edited file fails validation; the library keeps the entry it
     /// had.
     pub(crate) fn reload_prefab(&mut self, path: &str) -> Result<Option<u64>, Diagnostic> {
-        let Some((key, source)) = crate::docs::resolve_doc_path(&self.project_root, path) else {
+        let Some((key, source)) = crate::docs::resolve_doc_path(&self.project_root, path)? else {
             return Ok(None);
         };
         let Some(library) = self
@@ -3086,7 +3099,7 @@ impl Engine {
     /// `L1255` while a recording is armed: fonts are sim-visible through measurement, so a swap
     /// would desynchronize the replay.
     pub(crate) fn reload_fonts(&mut self, path: &str) -> Result<Option<u64>, Diagnostic> {
-        let Some((key, source)) = crate::docs::resolve_doc_path(&self.project_root, path) else {
+        let Some((key, source)) = crate::docs::resolve_doc_path(&self.project_root, path)? else {
             return Ok(None);
         };
         let Some(library) = self.driver.world().resource::<crate::FontLibrary>() else {
@@ -3112,15 +3125,18 @@ impl Engine {
     /// Writes the live `entities` as a new `kind: prefab` at `path` under the content root and
     /// returns the normalized key. The first entity is the prefab's root, and the parts follow in the
     /// order given; each needs a unique `Name` without `/`, and a reference between them must stay
-    /// inside the set. An existing file is overwritten, like `scene.save`. The world's entities are
-    /// unchanged. When the session's prefab library already holds the prefab it takes the new text as
+    /// inside the set. An existing prefab is overwritten with no check against what it held
+    /// (unlike `scene.save`, there is no base to compare); an existing file that is not a prefab
+    /// document is refused. The world's entities are unchanged. When the session's prefab library
+    /// already holds the prefab it takes the new text as
     /// a recorded reload, so later spawns use it and a replay agrees; live instances are not
     /// re-expanded. The file is written after the library accepted the text, and the library is
     /// restored if the write fails.
     ///
     /// # Errors
     /// `L1236` for an empty or duplicate set, a dead entity, a missing, duplicate or `/`-bearing
-    /// name, a reference out of the set, a path that is not a `.prefab.yaml` or a failed write;
+    /// name, a reference out of the set, a path that is not a `.prefab.yaml`, an existing file that is not
+    /// a prefab document (or a generated prefab) or a failed write;
     /// `L1230` for an absolute path or a world with no prefab library; the prefab's own diagnostics
     /// (`L1229` for a `Camera` part) when the result would not validate, including a dependent
     /// prefab the new text breaks. Nothing is written on error.
@@ -3371,14 +3387,33 @@ impl Engine {
     }
 
     /// Writes the scene-session sidecar: the frame, scene path and conflict bases as of now.
-    pub(crate) fn write_scene_session(&self) {
-        let Some(file) = &self.scene_session_file else {
-            return;
-        };
-        let doc = crate::scene_session::SceneSessionDoc {
+    pub(crate) fn write_scene_session(&mut self) {
+        self.scene_session_stamp = Some(SceneSessionStamp {
             frame: self.frame().as_u64(),
             scene_hash: self.scene_identity(),
             path: self.current_scene_path.clone(),
+        });
+        self.write_scene_session_doc();
+    }
+
+    /// Rewrites the sidecar after a `scene.save`: the current bases under the snapshot's own frame,
+    /// scene and path, so a restart from that snapshot sees the save instead of a stale base. No-op
+    /// before the first snapshot.
+    pub(crate) fn refresh_scene_session(&self) {
+        if self.scene_session_stamp.is_some() {
+            self.write_scene_session_doc();
+        }
+    }
+
+    fn write_scene_session_doc(&self) {
+        let (Some(file), Some(stamp)) = (&self.scene_session_file, &self.scene_session_stamp)
+        else {
+            return;
+        };
+        let doc = crate::scene_session::SceneSessionDoc {
+            frame: stamp.frame,
+            scene_hash: stamp.scene_hash.clone(),
+            path: stamp.path.clone(),
             bases: self
                 .scene_bases
                 .iter()

@@ -60,10 +60,9 @@ extract_ms = 1.6
 # batched by `(layer, texture)` into three draws. Measured 0.328 under `scene` on the 2026-09-15 runs,
 # and `transparents` 0.4435 / 0.4444 / 0.4448 / 0.4437 on 2026-10-26 (the smeared Metal reading, see
 # the header); the ceiling is 0.9. `reflections` is the sky's full-screen resolve (0.0845–0.085).
-# `scene` now draws no mesh and Metal writes no end stamp for an empty pass, so it reads 0.0 and its
-# line is a small placeholder, not a 2x ceiling.
+# `scene` now draws no mesh and Metal writes no end stamp for an empty pass, so it reads 0.0, which a
+# budget treats as not measured (`L4019`): it carries no line.
 [passes]
-scene = 0.1           # 0.0 measured (an empty pass; placeholder)
 reflections = 0.17    # 0.085 measured (median of four)
 transparents = 0.9    # 0.444 measured (median of four)
 

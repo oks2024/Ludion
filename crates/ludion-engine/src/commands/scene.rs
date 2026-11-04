@@ -148,6 +148,7 @@ pub(crate) fn save(
     ludion_core::atomic::write_atomic(&resolved, &yaml)
         .map_err(|error| write_failure(&resolved, &error))?;
     engine.set_scene_base(resolved, yaml);
+    engine.refresh_scene_session();
     engine.asset_cache_prune_requested();
     // The scene on disk changed — notify `scene.changed` subscribers (dropped if none are open).
     engine.push_event(Event::SceneChanged(SceneChangedData {

@@ -504,6 +504,48 @@ entities:
     fn idle(_world: &mut World, _ctx: &SystemCtx) {}
 
     #[test]
+    fn a_save_after_the_snapshot_is_the_base_a_restart_adopts() {
+        let dir = fresh_dir("session-save-window");
+        std::fs::write(dir.join("next.yaml"), NEXT).unwrap();
+        let mut first = first_engine(&dir, idle);
+        scene_load(&mut first, "next.yaml");
+        let snapshot = snapshot_of(&mut first);
+        // Another client edits and saves while the child runs on, before dev kills it.
+        first.world_mut().spawn();
+        scene_save(&mut first, "next.yaml", true).expect("a forced save writes");
+        let saved = std::fs::read_to_string(dir.join("next.yaml")).unwrap();
+
+        let mut second = restored_engine(&dir, snapshot);
+        adopt(&mut second, &dir).expect("the frames match");
+        assert!(
+            !conflict(scene_save(&mut second, "next.yaml", false)),
+            "the file holds exactly what the session saved: {saved}"
+        );
+    }
+
+    #[test]
+    fn a_load_and_save_after_the_snapshot_keep_the_snapshots_path() {
+        let dir = fresh_dir("session-save-other-path");
+        std::fs::write(dir.join("next.yaml"), NEXT).unwrap();
+        std::fs::write(dir.join("town.yaml"), SCENE).unwrap();
+        let mut first = first_engine(&dir, idle);
+        scene_load(&mut first, "next.yaml");
+        let snapshot = snapshot_of(&mut first);
+        // The window after the snapshot: another client switches scene and saves it.
+        scene_load(&mut first, "town.yaml");
+        scene_save(&mut first, "town.yaml", true).expect("a forced save writes");
+
+        let mut second = restored_engine(&dir, snapshot);
+        adopt(&mut second, &dir).expect("the frames match");
+        let changed = next_scene_changed(&mut second);
+        assert_eq!(
+            changed.path.as_deref(),
+            Some("next.yaml"),
+            "the restored world is the snapshot's, so a restart names its path"
+        );
+    }
+
+    #[test]
     fn a_restored_boot_adopts_the_session_path_and_bases() {
         let dir = fresh_dir("session-adopt");
         let hand = format!("# hand note\n{NEXT}");

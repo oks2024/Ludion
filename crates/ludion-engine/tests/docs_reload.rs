@@ -400,6 +400,47 @@ fn a_non_doc_yaml_reload_is_ignored_and_not_recorded() {
     );
 }
 
+#[test]
+fn a_reload_path_that_climbs_out_of_the_root_is_refused_and_never_read() {
+    let parent = fresh_dir("climb");
+    let dir = parent.join("game");
+    write(&dir, KEY, DOC_V1);
+    // A valid doc of the registered kind, one directory above the project root.
+    write(&parent, "other/tuning.yaml", DOC_V2);
+    // A prefab-shaped file out there too: the prefab and font branches share the resolver.
+    write(
+        &parent,
+        "other/x.prefab.yaml",
+        "format: 1\nkind: prefab\nentities: []\n",
+    );
+
+    let sink = SharedSink::default();
+    let mut engine = game(&dir).build().unwrap();
+    engine.load_inline_scene(SCENE).unwrap();
+    engine.set_recording(sink.clone()).unwrap();
+
+    let absolute = dir.join("..").join("other").join("tuning.yaml");
+    for path in [
+        "../other/tuning.yaml".to_string(),
+        absolute.to_string_lossy().into_owned(),
+        "../other/x.prefab.yaml".to_string(),
+    ] {
+        let err = engine
+            .execute(Command::AssetReload(AssetReloadParams {
+                path: Some(path.clone()),
+            }))
+            .expect_err(&format!("`{path}` leaves the project root"));
+        assert_eq!(err.code.as_str(), "L1321", "{path}: {err}");
+    }
+
+    assert_eq!(generation(&engine), 0, "nothing was read into the store");
+    engine.stop_recording().unwrap();
+    assert!(
+        !has_doc_reload(&sink.bytes()),
+        "a refused reload records nothing"
+    );
+}
+
 /// Whether a recorded session contains any `DocReload` record.
 fn has_doc_reload(bytes: &[u8]) -> bool {
     ReplayReader::new(bytes)
