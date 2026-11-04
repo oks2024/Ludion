@@ -8,7 +8,7 @@
 //! `seeds` run the engine's PBR plausibility validators, with bounds a rules TOML may override.
 
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -375,36 +375,15 @@ fn set_files(set: &MapSet) -> Vec<(&'static str, &[u8])> {
     files
 }
 
-/// `to` spelled relative to the directory `from`, with forward slashes.
-pub(crate) fn relative(from: &Path, to: &Path) -> String {
-    fn parts(path: &Path) -> Vec<String> {
-        let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-        let mut out: Vec<String> = Vec::new();
-        for component in absolute.components() {
-            match component {
-                Component::CurDir => {}
-                Component::ParentDir => {
-                    out.pop();
-                }
-                other => out.push(other.as_os_str().to_string_lossy().into_owned()),
-            }
-        }
-        out
-    }
-    let (from, to) = (parts(from), parts(to));
-    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
-    if common == 0 {
-        return to.join("/");
-    }
-    let mut out = vec![".."; from.len() - common];
-    out.extend(to[common..].iter().map(String::as_str));
-    out.join("/")
-}
-
-fn sidecar_bytes(recipe: &Path, out_dir: &Path, size: u32, set: &MapSet) -> Vec<u8> {
+fn sidecar_bytes(
+    recipe: &Path,
+    out_dir: &Path,
+    size: u32,
+    set: &MapSet,
+) -> Result<Vec<u8>, Diagnostic> {
     let sidecar = Sidecar {
         generated_by: "ludion texture build".to_string(),
-        recipe: relative(out_dir, recipe),
+        recipe: ludion_import::relative_to(out_dir, recipe, code::OUTPUT_IO)?,
         size,
         maps: set_files(set)
             .iter()
@@ -413,7 +392,7 @@ fn sidecar_bytes(recipe: &Path, out_dir: &Path, size: u32, set: &MapSet) -> Vec<
     };
     let mut text = serde_json::to_string_pretty(&sidecar).expect("sidecar serializes");
     text.push('\n');
-    text.into_bytes()
+    Ok(text.into_bytes())
 }
 
 fn map_report(maps: &Maps, out_dir: &Path) -> Value {
@@ -547,7 +526,11 @@ fn write_feedback(
                 .transpose()?,
         };
         let timer = Stopwatch::start();
-        match texture_preview::render(&dir, &relative(&dir, recipe), &refs)? {
+        match texture_preview::render(
+            &dir,
+            &ludion_import::relative_to(&dir, recipe, code::OUTPUT_IO).map_err(|d| vec![d])?,
+            &refs,
+        )? {
             texture_preview::Outcome::Rendered(path) => rendered = Some(path),
             texture_preview::Outcome::NoAdapter(reason) => skipped = Some(reason),
         }
@@ -619,7 +602,10 @@ pub fn run_build(
         Err(diagnostics) => return fail(recipe, &diagnostics, json),
     };
     let out_dir = out.map_or_else(|| default_out(recipe), Path::to_path_buf);
-    let sidecar = sidecar_bytes(recipe, &out_dir, size, &built.set);
+    let sidecar = match sidecar_bytes(recipe, &out_dir, size, &built.set) {
+        Ok(bytes) => bytes,
+        Err(diagnostic) => return fail(recipe, &[diagnostic], json),
+    };
     let mut written = Vec::new();
     if let Err(error) = write_set(&out_dir, &built.set, &sidecar, &mut written) {
         return fail(recipe, &[io_error(error)], json);
@@ -762,7 +748,10 @@ pub fn run_check(recipe: &Path, out: Option<&Path>, rules: Option<&Path>, json: 
         Ok(built) => built,
         Err(diagnostics) => return fail(recipe, &diagnostics, json),
     };
-    let sidecar = sidecar_bytes(recipe, &out_dir, size, &built.set);
+    let sidecar = match sidecar_bytes(recipe, &out_dir, size, &built.set) {
+        Ok(bytes) => bytes,
+        Err(diagnostic) => return fail(recipe, &[diagnostic], json),
+    };
     let mut expected = set_files(&built.set);
     expected.push((SIDECAR, sidecar.as_slice()));
 
@@ -1087,16 +1076,6 @@ mod tests {
     fn a_misspelled_rule_field_or_level_does_not_parse() {
         assert!(toml::from_str::<Rules>("seam_height = { mx = 1.0 }").is_err());
         assert!(toml::from_str::<Rules>("seam_height = { level = \"fatal\" }").is_err());
-    }
-
-    #[test]
-    fn relative_paths_climb_out_of_the_out_dir() {
-        let rel = relative(Path::new("/a/b/stem"), Path::new("/a/b/stem.texture.yaml"));
-        assert_eq!(rel, "../stem.texture.yaml");
-        assert_eq!(
-            relative(Path::new("/a/out"), Path::new("/a/b/x.texture.yaml")),
-            "../b/x.texture.yaml"
-        );
     }
 
     #[test]

@@ -4,16 +4,16 @@
 //! an optional clip/time/strip pose, and for a scene, an optional [`GoldenTest::frames`] tick count
 //! so a mid-clip flipbook or emitter can land on a committed golden at all. The source is dispatched
 //! on its `kind:` (via [`ludion_scene::peek_kind`]): a kind the table marks `model_sheet`
-//! (`ludion_scene::KINDS`: `voxel`/`mesh`/`assembly`/`sculpt`) **model document** renders through
-//! the engine's model-view harness ([`ludion_engine::render_model_sheet`]) as a deterministic
-//! turntable contact sheet (an assembly at its rest pose, or — with [`GoldenTest::clip`] set — posed
-//! at an instant or as a phase strip, which is how a *clip* gets a committed golden at all); anything
-//! else is a **scene** and drives the exact same lockstep path `ludion render` uses
-//! ([`ludion_engine::render_scene`]) — check → instantiate → tick(0) → extract → render
-//! — or, with [`GoldenTest::with_builder`], the game's own engine
-//! ([`ludion_engine::render_scene_with_builder`]), whose ticks run the game's systems so a golden can
-//! be an early wave instead of the scene at rest. An engine the test built and drove itself goes
-//! through [`check_engine_golden`], and a recorded session through [`GoldenTest::from_replay`].
+//! (`ludion_scene::KINDS`) **model document** renders through the engine's model-view harness
+//! ([`ludion_engine::render_model_sheet`]) as a deterministic turntable contact sheet (an assembly
+//! at its rest pose, or — with [`GoldenTest::clip`] set — posed at an instant or as a phase strip,
+//! which is how a *clip* gets a committed golden at all); anything else is a **scene** and drives the
+//! exact same lockstep path `ludion render` uses ([`ludion_engine::render_scene`]) — check →
+//! instantiate → tick(0) → extract → render — or, with [`GoldenTest::with_builder`], the game's own
+//! engine ([`ludion_engine::render_scene_with_builder`]), whose ticks run the game's systems so a
+//! golden can be an early wave instead of the scene at rest. An engine the test built and drove
+//! itself goes through [`check_engine_golden`], and a recorded session through
+//! [`GoldenTest::from_replay`].
 //! Either way a golden test is never a second render pipeline to keep in sync with the real one; the
 //! sheet is just the rendered image, and everything downstream is identical. Comparison and reporting
 //! are [`crate::ssim`] and [`crate::report`]; this module is the glue: render, load the golden,
@@ -1165,30 +1165,13 @@ fn test_stem(golden: &Path) -> String {
 /// Encodes and writes `image` as a PNG at `path` (used for both the golden and the `.actual.png`
 /// artifact — the same deterministic encoder either way).
 fn write_png(path: &Path, image: &DecodedImage) -> Result<(), Vec<Diagnostic>> {
-    let mut bytes = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut bytes, image.width, image.height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|error| {
+    let bytes =
+        ludion_assets::encode_png(image.width, image.height, &image.rgba).map_err(|reason| {
             vec![Diagnostic::new(
                 code::RENDER_PNG_IO,
-                format!(
-                    "could not write PNG header for `{}`: {error}",
-                    path.display()
-                ),
+                format!("could not encode PNG for `{}`: {reason}", path.display()),
             )]
         })?;
-        writer.write_image_data(&image.rgba).map_err(|error| {
-            vec![Diagnostic::new(
-                code::RENDER_PNG_IO,
-                format!(
-                    "could not write PNG pixel data for `{}`: {error}",
-                    path.display()
-                ),
-            )]
-        })?;
-    }
     ludion_core::atomic::write_atomic(path, bytes).map_err(|error| vec![io_diagnostic(path, error)])
 }
 

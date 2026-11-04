@@ -1,15 +1,7 @@
-//! A decoded RGBA8 image, and the minimal PNG decoder golden files need.
+//! A decoded RGBA8 image, and the golden PNG decoder.
 //!
-//! `ludion-testkit` deliberately does **not** depend on `ludion-assets` or `ludion-renderer`
-//! directly (the crate graph in `engine-architecture.md` §2 keeps testkit's dependency edge to
-//! `ludion-engine` only), so this is a small, local decoder over the same `png` crate
-//! `ludion-assets` and `ludion-render-graph` already use — not a new dependency. Golden PNGs are
-//! always produced by this crate's own [`crate::golden`] bless flow (via
-//! `ludion_renderer::RenderedImage::encode_png`, reached through `ludion_engine::render_scene`), so
-//! the decoder only needs to accept plain 8-bit RGBA — the shape our own encoder always writes. The
-//! render side of the conversion is a plain field-by-field copy in [`crate::golden`] (its `width` /
-//! `height` / `rgba` fields are public; naming the `RenderedImage` type itself would require
-//! depending on `ludion-renderer`, which the crate graph reserves for later).
+//! Decoding is `ludion_assets::decode_png`, re-coded to `L2204`: a bad golden is a test failure,
+//! not an asset failure.
 
 use std::path::Path;
 
@@ -57,69 +49,21 @@ pub(crate) fn decode_png(bytes: &[u8]) -> Result<DecodedImage, Diagnostic> {
 /// Decodes RGBA8/RGB8/grayscale PNG `bytes` (named `path` for diagnostics).
 ///
 /// # Errors
-/// `L2204` if the bytes are not a decodable PNG.
+/// `L2204` if the bytes are not a decodable PNG, or the header declares a side over 8192.
 fn decode_rgba8(bytes: &[u8], path: &Path) -> Result<DecodedImage, Diagnostic> {
-    let decode_error = |detail: String| {
-        Diagnostic::new(
-            code::RENDER_GOLDEN_PNG_DECODE,
-            format!(
-                "golden image `{}` is not a valid PNG: {detail}",
-                path.display()
-            ),
-        )
-        .with_help("re-bless the golden (`ludion test --bless`) to write a fresh, valid PNG")
-    };
-
-    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let mut reader = decoder
-        .read_info()
-        .map_err(|error| decode_error(format!("not a readable PNG: {error}")))?;
-    let mut buffer = vec![0u8; reader.output_buffer_size().unwrap_or(0)];
-    let info = reader
-        .next_frame(&mut buffer)
-        .map_err(|error| decode_error(format!("could not decode PNG pixels: {error}")))?;
-    buffer.truncate(info.buffer_size());
-
-    let (width, height) = (info.width, info.height);
-    let pixels = (width as usize) * (height as usize);
-    let rgba = match info.color_type {
-        png::ColorType::Rgba => buffer,
-        png::ColorType::Rgb => expand(&buffer, pixels, 3, |src, dst| {
-            dst[0..3].copy_from_slice(&src[0..3]);
-            dst[3] = 255;
-        }),
-        png::ColorType::GrayscaleAlpha => expand(&buffer, pixels, 2, |src, dst| {
-            dst[0..3].fill(src[0]);
-            dst[3] = src[1];
-        }),
-        png::ColorType::Grayscale => expand(&buffer, pixels, 1, |src, dst| {
-            dst[0..3].fill(src[0]);
-            dst[3] = 255;
-        }),
-        other => {
-            return Err(decode_error(format!(
-                "unsupported PNG color type {other:?} after expansion"
-            )));
-        }
-    };
+    let (width, height, rgba) = ludion_assets::decode_png(bytes, &path.display().to_string())
+        .map_err(|error| {
+            Diagnostic::new(
+                code::RENDER_GOLDEN_PNG_DECODE,
+                format!("golden image: {}", error.message),
+            )
+            .with_help("re-bless the golden (`ludion test --bless`) to write a fresh, valid PNG")
+        })?;
     Ok(DecodedImage {
         width,
         height,
         rgba,
     })
-}
-
-/// Widens `pixels` source samples of `stride` bytes each into RGBA8 via `fill`.
-fn expand(src: &[u8], pixels: usize, stride: usize, fill: impl Fn(&[u8], &mut [u8; 4])) -> Vec<u8> {
-    let mut out = vec![0u8; pixels * 4];
-    for i in 0..pixels {
-        let s = &src[i * stride..i * stride + stride];
-        let mut px = [0u8; 4];
-        fill(s, &mut px);
-        out[i * 4..i * 4 + 4].copy_from_slice(&px);
-    }
-    out
 }
 
 #[cfg(test)]
@@ -159,5 +103,35 @@ mod tests {
         let error = read_golden(&path).unwrap_err();
         assert_eq!(error.code.as_str(), "L2201");
         assert!(error.help.is_some());
+    }
+
+    /// A hand-written 16-bit RGBA PNG with a `gAMA` chunk (source gamma 0.45).
+    fn rgba16_with_gamma(width: u32, height: u32, data: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Sixteen);
+            encoder.set_source_gamma(png::ScaledFloat::new(0.45));
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(data).unwrap();
+        }
+        bytes
+    }
+
+    #[test]
+    fn decodes_16_bit_and_ignores_gamma() {
+        // Two samples per channel byte pair; the decoder keeps the high byte, with no gamma applied.
+        let data = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0];
+        let image = decode_rgba8(&rgba16_with_gamma(1, 1, &data), Path::new("deep.png")).unwrap();
+        assert_eq!(image.rgba, [0x12, 0x56, 0x9a, 0xde]);
+    }
+
+    #[test]
+    fn an_oversized_header_is_l2204() {
+        let bytes = tiny_png(8193, 1, &vec![0u8; 8193 * 4]);
+        let error = decode_rgba8(&bytes, Path::new("wide.png")).unwrap_err();
+        assert_eq!(error.code.as_str(), "L2204");
+        assert!(error.message.contains("8193"), "{}", error.message);
     }
 }

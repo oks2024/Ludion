@@ -9,7 +9,7 @@ use std::process::{Command as ProcCommand, Output};
 use ludion_engine::{Engine, dispatch};
 use ludion_protocol::Command;
 use ludion_protocol::command::SceneSaveParams;
-use ludion_testkit::{GoldenOutcome, GoldenTest, bless_requested};
+use ludion_testkit::GoldenTest;
 
 use crate::common;
 
@@ -996,15 +996,12 @@ fn needs_gpu_exit_gate() {
         );
     }
 
-    // 3. Render the committed scene and compare against the blessed golden (960×540, SSIM ≥ 0.99).
-    if assert_matches_golden(
+    // 3. Render the committed scene and compare against the blessed golden (960×540, byte-exact).
+    assert_matches_golden(
         &expected_dir().join("scene.yaml"),
         &golden(platform),
         "import_golden_out",
-        "exit_gate",
-    ) {
-        return;
-    }
+    );
 
     // 4. scene.load → scene.save is a canonical byte-exact fixed point (the imported scene is
     //    already canonical, so re-exporting it through the engine reproduces it exactly).
@@ -1056,14 +1053,11 @@ fn needs_gpu_textured_exit_gate() {
     }
 
     // 3. Render the committed scene and compare against the blessed golden.
-    if assert_matches_golden(
+    assert_matches_golden(
         &textured_root().join("expected").join("scene.yaml"),
         &textured_golden(platform),
         "import_textured_golden_out",
-        "textured_exit_gate",
-    ) {
-        return;
-    }
+    );
 
     // 4. scene.load → scene.save is a canonical byte-exact fixed point.
     assert_load_save_roundtrip(
@@ -1089,59 +1083,17 @@ fn needs_gpu_tinted_emissive_exit_gate() {
         }
     };
     let scene = tinted_root().join("expected").join("scene.yaml");
-    if assert_matches_golden(
-        &scene,
-        &tinted_golden(platform),
-        "import_tinted_golden_out",
-        "tinted_emissive_exit_gate",
-    ) {
-        return;
-    }
+    assert_matches_golden(&scene, &tinted_golden(platform), "import_tinted_golden_out");
     assert_load_save_roundtrip(&scene, "import_tinted_roundtrip");
 }
 
-/// Renders `scene` and asserts it matches `golden` at exactly SSIM 1.0 (same-machine render vs its
-/// own blessed golden must be byte-exact). Honors `LUDION_BLESS` (`bless_requested`) exactly like
-/// `ludion-testkit/tests/gallery.rs`'s per-test bless arms: (re)writes the golden and returns.
-/// Returns `true` when the caller should return early — either a fresh bless, or the no-GPU-adapter
-/// skip (`L2003`) that matches the gallery golden suite's convention.
-fn assert_matches_golden(scene: &Path, golden: &Path, scratch_name: &str, label: &str) -> bool {
-    let test = GoldenTest::new(scene.to_path_buf(), golden.to_path_buf());
-
-    if bless_requested() {
-        return match test.bless() {
-            Ok(GoldenOutcome::Blessed { golden }) => {
-                eprintln!("blessed {} — review it, then commit it", golden.display());
-                true
-            }
-            Ok(_) => unreachable!("bless() only ever returns Blessed"),
-            Err(diagnostics) if ludion_core::require_gpu::is_no_adapter(&diagnostics) => {
-                eprintln!("SKIPPED {label} bless: no GPU adapter");
-                true
-            }
-            Err(diagnostics) => panic!("blessing the {label} golden failed: {diagnostics:?}"),
-        };
-    }
-
-    let report = match test.run(&scratch(scratch_name)) {
-        Ok(GoldenOutcome::Passed { report }) => report,
-        Ok(GoldenOutcome::Failed { report, .. }) => {
-            panic!("golden comparison failed: {}", report.summary)
-        }
-        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
-        Err(diagnostics) if ludion_core::require_gpu::is_no_adapter(&diagnostics) => {
-            eprintln!("SKIPPED {label} render: no GPU adapter");
-            return true;
-        }
-        Err(diagnostics) => panic!("render failed: {diagnostics:?}"),
-    };
-    assert!(report.pass, "imported scene must match its blessed golden");
-    assert_eq!(
-        report.ssim,
-        Some(1.0),
-        "same-machine render vs its blessed golden must be byte-exact"
-    );
-    false
+/// Renders `scene` and checks it against `golden` at exactly SSIM 1.0 (a same-machine render vs its
+/// own blessed golden is byte-exact), through the shared [`GoldenTest::check`] flow: it blesses on
+/// `LUDION_BLESS`, skips off the pinned tier and without a GPU adapter, and panics on a mismatch.
+fn assert_matches_golden(scene: &Path, golden: &Path, scratch_name: &str) {
+    let mut test = GoldenTest::new(scene.to_path_buf(), golden.to_path_buf());
+    test.ssim_threshold = 1.0;
+    test.check(&scratch(scratch_name));
 }
 
 /// Asserts `scene.load` → `scene.save` is a canonical byte-exact fixed point for the already

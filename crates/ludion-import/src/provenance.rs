@@ -1,10 +1,11 @@
-use std::path::{Component, Path, Prefix, PrefixComponent};
+use std::path::{Component, Path, PathBuf, Prefix, PrefixComponent};
 
 use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
 
-/// `file` expressed relative to `dir` with forward slashes — the `generated_from:` provenance the
-/// drift gate rediscovers the pair through. In the default layout (the pair written beside its
-/// source) this is just the file name.
+/// `file` expressed relative to `dir` with forward slashes — the recorded source path (a
+/// `generated_from:` the drift gate rediscovers the pair through, a sidecar's `recipe:`). In the
+/// default layout (the pair written beside its source) this is just the file name. `.` and `..`
+/// resolve lexically first, so the result does not depend on how the platform keeps them.
 ///
 /// # Errors
 /// `code` when `dir` and `file` are on different drives: no relative path exists, and an absolute
@@ -18,6 +19,7 @@ pub fn relative_to(dir: &Path, file: &Path, code: DiagnosticCode) -> Result<Stri
     let (Ok(dir), Ok(file)) = (std::path::absolute(dir), std::path::absolute(file)) else {
         return Ok(file_name());
     };
+    let (dir, file) = (normalized(&dir), normalized(&file));
     let mut left = dir.components().peekable();
     let mut right = file.components().peekable();
     if let (Some(Component::Prefix(left_prefix)), Some(Component::Prefix(right_prefix))) =
@@ -37,7 +39,7 @@ pub fn relative_to(dir: &Path, file: &Path, code: DiagnosticCode) -> Result<Stri
             return Err(Diagnostic::new(
                 code,
                 format!(
-                    "`{}` is on a different drive from the output `{}`: `generated_from` cannot name it relatively",
+                    "`{}` is on a different drive from the output `{}`: no relative path can name it",
                     file.display(),
                     dir.display()
                 ),
@@ -61,6 +63,23 @@ pub fn relative_to(dir: &Path, file: &Path, code: DiagnosticCode) -> Result<Stri
         return Ok(file_name());
     }
     Ok(parts.join("/"))
+}
+
+/// `path` with `.` and `..` resolved lexically; a `..` never pops a prefix or the root.
+fn normalized(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -107,5 +126,32 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn dot_dot_components_resolve_before_the_climb_is_counted() {
+        if !Path::new("/a").is_absolute() {
+            return;
+        }
+        let rel = |dir: &str, file: &str| {
+            relative_to(Path::new(dir), Path::new(file), code::OUTPUT_IO).unwrap()
+        };
+        assert_eq!(rel("/a/b/../c", "/a/c/x"), "x");
+        assert_eq!(rel("/a/tex/out", "/a/b/../tex/x.yaml"), "../x.yaml");
+    }
+
+    #[test]
+    fn relative_paths_climb_out_of_the_out_dir() {
+        if !Path::new("/a").is_absolute() {
+            return;
+        }
+        let rel = |dir: &str, file: &str| {
+            relative_to(Path::new(dir), Path::new(file), code::OUTPUT_IO).unwrap()
+        };
+        assert_eq!(
+            rel("/a/b/stem", "/a/b/stem.texture.yaml"),
+            "../stem.texture.yaml"
+        );
+        assert_eq!(rel("/a/out", "/a/b/x.texture.yaml"), "../b/x.texture.yaml");
     }
 }

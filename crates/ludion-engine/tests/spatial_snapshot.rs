@@ -201,6 +201,55 @@ fn a_non_finite_collider_pose_refuses_the_snapshot() {
     );
 }
 
+/// A game writing the pose finite again after the rebuild filed the NaN one.
+fn heal(world: &mut World, _ctx: &SystemCtx) {
+    let ids: Vec<EntityId> = world.entities().collect();
+    for id in ids {
+        if matches!(world.get::<Poisoned>(id), Ok(Some(_))) {
+            world.get_mut::<Transform>(id).unwrap().unwrap().translation[0] = 3.0;
+        }
+    }
+}
+
+#[test]
+fn an_index_entry_filed_from_a_pose_since_healed_is_left_out_of_the_snapshot() {
+    let build = || {
+        let mut engine = Engine::builder()
+            .components(|reg| {
+                reg.register::<Poisoned>("Poisoned")?;
+                Ok(())
+            })
+            .system("poison", poison)
+            .system(
+                "spatial_rebuild",
+                spatial::rebuild::<Transform, TransformHierarchy>,
+            )
+            .system("heal", heal)
+            .build()
+            .expect("boots");
+        engine.load_inline_scene(POISON_SCENE).unwrap();
+        engine
+    };
+    let mut first = build();
+    first.advance_live();
+    let snapshot = match first
+        .execute(Command::EngineSnapshot)
+        .expect("the world holds only finite poses")
+        .body
+    {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let filed = snapshot["spatial_index"]
+        .as_array()
+        .expect("the snapshot stores the index as a list of entries");
+    assert_eq!(filed.len(), 1, "only the finite entry is stored: {filed:?}");
+
+    build()
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .expect("the stored index restores");
+}
+
 #[test]
 fn a_world_without_a_rebuild_snapshots_no_index() {
     let mut bare = Engine::builder()

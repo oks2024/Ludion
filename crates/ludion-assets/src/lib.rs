@@ -556,10 +556,10 @@ pub fn decode_png(bytes: &[u8], label: &str) -> Result<(u32, u32, Vec<u8>), Diag
 ///
 /// **Deterministic:** the `png` encoder writes only IHDR / IDAT / IEND — no `tIME` or other
 /// timestamped ancillary chunks — and deflate is a pure function of its input, so identical pixels
-/// always produce byte-identical files. This is the one PNG encoder in the engine: `ludion render`'s
-/// readback writer and `ludion import`'s texture re-encode both go through it, so a re-encoded image
-/// and a freshly rendered one share an identity (`ludion-render-graph` and `ludion-import` delegate
-/// here — the encoder lives in the GPU-free assets crate so the importer never depends on wgpu).
+/// always produce byte-identical files. `ludion render`'s readback writer, `ludion import`'s texture
+/// re-encode and the testkit's golden writer share this encoder, so a re-encoded image and a freshly
+/// rendered one share an identity (`ludion-render-graph` and `ludion-import` delegate here — the
+/// encoder lives in the GPU-free assets crate so the importer never depends on wgpu).
 ///
 /// Returns the encoder's own reason string on failure (a caller wraps it in its domain's diagnostic
 /// code — `L2006` for a render write, `L1203` for an import write); encoding into a `Vec` has no IO

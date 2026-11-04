@@ -1772,8 +1772,9 @@ impl Engine {
 
     /// Writes a keyframe (preceded by a `SimStep` flush of the batched free-run ticks) when the
     /// current frame has crossed the [`KEYFRAME_INTERVAL`] boundary — the free-run analogue of the
-    /// keyframe half of [`write_record`](Engine::write_record). A no-op between boundaries. Returns the
-    /// skip diagnostic when the keyframe was skipped (see [`keyframe_or_skip`](Engine::keyframe_or_skip)).
+    /// keyframe half of [`write_record`](Engine::write_record). A no-op between boundaries. Returns
+    /// the skip diagnostic when the keyframe was skipped (see
+    /// [`keyframe_or_skip`](Engine::keyframe_or_skip)).
     fn free_run_keyframe(&self, recorder: &mut Recorder) -> Result<Option<Diagnostic>, Diagnostic> {
         let current = self.frame();
         if current.as_u64() >= recorder.last_keyframe.as_u64() + recorder.keyframe_interval {

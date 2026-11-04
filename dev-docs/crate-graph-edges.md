@@ -82,8 +82,8 @@ ludion-spatial         → core, ecs  [schemars, serde, serde_json]
     dev: sim
 ludion-sprite          → assets, core, scene
 ludion-testkit         → assets, audio, core, ecs, engine, protocol, scene, sim  [crossbeam-channel,
-      png, saphyr-parser, serde, serde_json]
-    dev: ludion  [schemars]
+      saphyr-parser, serde, serde_json]
+    dev: ludion  [png, schemars]
 ludion-texgen          → core, scene  [png, serde_json]
     dev: assets
 ludion-window          → client, core, protocol, render-graph  [crossbeam-channel, gilrs, lz4_flex,
