@@ -1408,7 +1408,7 @@ fn color_component_diagnostic(
 /// A per-instance screen-door dither fade: a deterministic Bayer-matrix discard on the opaque mesh
 /// pipeline (blend and depth-write untouched), with an optional world-height threshold. This is the
 /// **render-only** occlusion-plumbing input — WHO fades and when is game policy (a camera→player
-/// raycast with hysteresis, game-side, G7's experiment); this component just carries the numbers the
+/// raycast with hysteresis, kept in the game); this component just carries the numbers the
 /// renderer discards fragments with.
 ///
 /// A mesh without its own `Fade` takes its nearest ancestor's through `Parent`, so fading a prefab's
