@@ -21,8 +21,8 @@ ludion render --scene scenes/plume.yaml --frames 0,30,60 --out target/particles-
 A single `--frames N` ticks the built-in schedule (no game systems run) `N` times and renders one PNG
 at that tick — the only way to see a burst mid-flight, since a burst is invisible at tick 0. Two or
 more ascending, comma-separated values (`--out` required) stitch a labelled `frame N` contact-sheet
-strip, one row, so a burst's whole arc is one image. With no `--frames`, `render` still renders tick
-0 exactly as before `ParticleEmitter` existed — an endless emitter (see Rules) is already full there.
+strip in one row, a burst's whole arc as one image. With no `--frames`, `render` renders tick 0 — an
+endless emitter (see Rules) is already full there.
 
 ## Format
 
@@ -70,8 +70,7 @@ that draws, the `Sprite`/`GroundMarker` posture. `shape` picks where inside `ext
 spawns: `point` ignores `extent` and releases from the entity's origin; `sphere` releases uniformly
 through the volume of a sphere of radius `extent.x`; `box` releases uniformly through an
 axis-aligned box of half-extents `extent`; `disc` releases uniformly across a disc of radius
-`extent.x` in the local XZ plane. See `ludion docs components` for the built-in-component table's
-one-line row form.
+`extent.x` in the local XZ plane. The built-in-component table's row form: `ludion docs components`.
 
 ## Rules
 
@@ -79,7 +78,7 @@ one-line row form.
   sim.** Every frame recomputes the live set analytically: continuous particle *i* releases at
   `started + i / rate`, burst particle *j* at `started`, and each one's position/size/colour follow
   in closed form from its age. Nothing is spawned or stepped, so a particle is never a `WorldHash`
-  term, never a replay record, and never an inspector row — a paused engine renders the same frame
+  term, replay record or inspector row — a paused engine renders the same frame
   twice, and a restored snapshot renders what the recorded session rendered. The evaluator reads the
   world's `GameClock` like every other closed-form evaluator, so a held game's particles freeze too
   (`ludion docs game-clock`). The evaluation cost rides inside the existing `extract_ms` measurement
@@ -92,8 +91,8 @@ one-line row form.
 - **The trail idiom: one short-life burst emitter spawned where the thing was.** There is no
   `space: world` option and none is coming — a trail behind a moving object is a fresh burst emitter
   (or a re-stamped `started` on a small `duration`) placed at the object's position each time a
-  segment is due, left to finish its own `life` and then reaped by a countdown-`f32` despawn, the
-  same idiom a `GroundMarker` warmup uses.
+  segment is due, left to finish its own `life`, then reaped by a countdown-`f32` despawn like a
+  `GroundMarker` warmup.
 - **`started` is a stamp, not a trigger — write it once, when the choice happens.** A burst releases
   its particles at `started` and is spent one `life`-max later, so firing an effect is a single write
   of the *current gameplay frame* (`ctx.game_frame`, never `ctx.frame`; over the wire, the
@@ -112,9 +111,8 @@ one-line row form.
   exactly like an emissive mesh (`ludion docs post-processing`), which is how urgency or heat reads
   at a glance regardless of blend mode.
 - **`floor` clips drawing, it does not stop the particle existing.** A particle whose current Y falls
-  below `floor` (default `-f32::MAX`, i.e. no floor) is simply not drawn that frame — cheaper and
-  steadier than shortening `life` to keep debris off a ground plane, and a particle whose motion
-  carries it back above `floor` reappears.
+  below `floor` (default `-f32::MAX`, i.e. no floor) is not drawn that frame — cheaper and steadier
+  than shortening `life` to keep debris off a ground plane; one carried back above `floor` reappears.
 - **The live-population cap is `PARTICLE_MAX_LIVE_PER_EMITTER` = 4096.** The *entire* live set is
   iterated every extracted frame with no pool to amortize against, so `rate × life[1] + burst` above
   the cap is `L2107` — almost always a mis-typed `rate` rather than an intended effect
@@ -124,7 +122,7 @@ one-line row form.
 - **Draw order is fixed: after opaque meshes and sprites, before text.** So a particle always paints
   over every sprite — including a background emitter behind a foreground sprite, which no `layer`
   or depth can reorder. A scene with no
-  `ParticleEmitter` (or one drawing nothing) issues no particle draw at all — byte-identical to the
+  `ParticleEmitter` (or one drawing nothing) issues no particle draw — byte-identical to the
   pre-particle pipeline. Fog, beams and DoF still use each particle's own distance, and an additive
   particle claims in proportion to its brightness (`ludion docs atmosphere`).
 - **Particles are unlit unless `lit: true`.** Unlit, the authored colour is the look. Lit, a

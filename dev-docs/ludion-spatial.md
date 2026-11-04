@@ -17,6 +17,8 @@ it needs only the guide chapter.
 - `crates/ludion-spatial/src/lib.rs` — crate doc, the `GroundPosition` trait (the position-component seam), re-exports.
 - `crates/ludion-spatial/src/collider.rs` — `Collider { shape, body }`, `Shape` (`circle`/`aabb`, externally tagged), `Body` (`static`/`kinematic`/`rigid` + the contact material; `is_solver_owned` is a 3D shape or a `rigid` body), the `SemanticValidate` impl (`L1116`).
 - `crates/ludion-spatial/src/spatial.rs` — `SpatialIndex` (static/kinematic `HalfIndex`es, each a sparse grid plus an oversize grid, `CELL_SIZE`), `rebuild`, `overlaps`/`overlaps_any`/`raycast`/`k_nearest`, `move_and_slide`, the narrow-phase math.
+- `crates/ludion-spatial/src/joint.rs`, `crates/ludion-spatial/src/joint_motor.rs` — the `Joint` builtin component and its `JointKind`; the `JointMotor` builtin component.
+- `crates/ludion-spatial/src/velocity.rs`, `crates/ludion-spatial/src/plane.rs` — the `Velocity` builtin component; `Plane`, which two world axes a game's 2D queries live in.
 - `crates/ludion-spatial/tests/conformance.rs` — double-run bit-identity, the brute-force O(n²) oracle (set AND order), tie-break cases.
 - `crates/ludion-spatial/tests/slide.rs` — `move_and_slide` behavior/edge cases, its oracle, the two-run `WorldHash`-trace test (dev-dep on `ludion-sim`).
 - `crates/ludion-spatial/tests/e6_bench.rs` — the ignored release-mode E6 microbench (run explicitly; asserts the recorded 1.5 ms sub-budget).

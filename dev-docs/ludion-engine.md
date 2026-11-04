@@ -15,6 +15,7 @@ hash, the `frame` LFR1 format) is `ludion devdocs ludion-protocol`; the WS host 
 
 ## Spokes
 
+- `ludion devdocs engine-layout` — the per-file map of `src/`, each file routed to its owning spoke.
 - `ludion devdocs engine-live-loop` — the tokio-free live seam: `run_live`'s drain/tick/emit/park
   loop, the frame-boundary drains, the diagnostics channel, and egress fan-out.
 - `ludion devdocs engine-replay` — recording, replay, snapshots, keyframes, divergence bisection.
@@ -33,26 +34,10 @@ hash, the `frame` LFR1 format) is `ludion devdocs ludion-protocol`; the WS host 
 
 ## Layout
 
-- `crates/ludion-engine/src/lib.rs` — crate doc and the re-export surface; the list is the file.
-- `crates/ludion-engine/src/engine.rs` — the `Engine`: `SimDriver` (which owns `World` by value), `Registry`, seed, scene ref, project root, render size, lazy GPU `Renderer`, optional window `PresentTarget` (`attach_surface`, `present_attached`), subscription table, optional `Recorder`; `execute()`, `load_inline_scene`, `set_recording`/`stop_recording`, `world_hash`, `advance_live`, `render_frame(frame, readback, present)`.
-- `crates/ludion-engine/src/dispatch.rs` — one exhaustive `match` over every `Command` variant → `Dispatched { body, frame, game_frame }`. 79 lines, all routing.
-- `crates/ludion-engine/src/commands/` — the handler logic, one module per method family (`scene`, `entity`, `sim`, `render`, `stream`, `asset`, `engine_cmds`); `mod.rs` has `collapse()`, `Vec<Diagnostic>` → one wire diagnostic with `related`.
-- `crates/ludion-engine/src/hierarchy.rs` — `world_transform`/`world_affine` (the derived world pose, never stored), `reparent` and `Keep`, the `L1218`–`L1225` faults and the `L1260` reparent refusal, the `hierarchy` debug-draw lines.
-- `crates/ludion-engine/src/particles.rs` — the particle motion kernel (`Motion`, closed-form `position_at`) and the analytic `ParticleEmitter` evaluator (`evaluate`); pure functions of `(component, Transform, SimTime)`, no world/resource/clock reads, read fresh by `extract.rs` every frame.
-- `crates/ludion-engine/src/manifest.rs` — the `ludion.toml` reader (`load`, `find`, `Manifest::voice_caps`, `L0023`/`L5004`); read by `export`, `sync` and every game host.
-- `crates/ludion-engine/src/live.rs`, `crates/ludion-engine/src/egress.rs`, `crates/ludion-engine/src/diagnostics.rs` — `ludion devdocs engine-live-loop`.
-- `crates/ludion-components/src/lib.rs` — `ludion devdocs engine-components`.
-- `crates/ludion-engine/src/render_extent.rs`, `crates/ludion-engine/src/render_size.rs`, `crates/ludion-engine/src/render_view.rs` — `ludion devdocs engine-present`.
-- `crates/ludion-engine/src/perf_live.rs`, `crates/ludion-engine/src/profile.rs` — `ludion devdocs profiling`.
-- `crates/ludion-engine/src/recording.rs`, `crates/ludion-engine/src/replay.rs`, `crates/ludion-engine/src/snapshot.rs`, `crates/ludion-engine/src/bisect.rs` — `ludion devdocs engine-replay`.
-- `crates/ludion-engine/src/docs.rs`, `crates/ludion-engine/src/player_profile.rs`, `crates/ludion-engine/src/transition.rs`, `crates/ludion-engine/src/query_drift.rs` — `ludion devdocs engine-content-kinds`.
-- `crates/ludion-engine/src/residue_store.rs` — `ludion devdocs engine-residue`.
-- `crates/ludion-engine/src/voxelizer.rs`, `crates/ludion-engine/src/voxel_sheet.rs` — `ludion devdocs engine-voxelizer`.
-- `crates/ludion-engine/src/sculpt_mesh.rs` — the `kind: sculpt` loader: bytes → `check_sculpt` → `ludion_sculpt::mesh` → `MeshData` keyed by content hash, the `voxel_mesh.rs` shape; `sculpt_budget_warning` is this crate's `L1112` re-check on the meshed vertex count. The mesher itself is `ludion devdocs ludion-sculpt`.
-- `crates/ludion-engine/src/assembly_mesh.rs`, `crates/ludion-engine/src/asset_cache.rs` (the `dependents` map of source-file edges), and `extract.rs`'s `part_placements` — `ludion devdocs assembly-animation`.
-- `crates/ludion-engine/src/cooked_maps.rs` — `TextureSource` and the cooked-map lookup behind `Engine::set_textures` (`source` decodes PNGs, `cooked` reads the `ludion sync` store of the first GPU-supported target that has one, and falls back per map with `L1271`; a decal's maps always read their PNG, since sync cooks only what mesh documents name); a host switch like quality, never hashed. `cook_resolved == false` is the one retry lever: a rebuild, `set_textures` or an `asset.reload` of a `.ludion/cooked/` file re-resolves the lookup and re-tests the held fallbacks. Hosts: `ludion docs quality`.
-- `crates/ludion-engine/src/extract.rs`, `crates/ludion-engine/src/render.rs`, `crates/ludion-engine/src/ui.rs`, `crates/ludion-engine/src/model_sheet.rs`, `crates/ludion-engine/src/sweep.rs` — `ludion devdocs engine-image-paths`.
-- `crates/ludion-engine/tests/` — `dispatch.rs` (per-family happy + diagnostic paths, no GPU), `gpu_dispatch.rs`/`gpu_render.rs` (graceful-skip on `L2003`), `extract.rs`, `dump_graph_snapshot.rs` + `snapshots/`, `docs.rs`, `docs_reload.rs`, `presentation.rs` (presentation entities through snapshot, replay, extract), `transition*.rs`; all compiled as modules of `tests/it.rs` except `thread_identity.rs`.
+- `crates/ludion-engine/src/engine.rs` — the `Engine`: `SimDriver` (which owns `World` by value), `Registry`, seed, scene ref, project root, render size, lazy GPU `Renderer`, optional window `PresentTarget`, subscription table, optional `Recorder`; `execute()`, `world_hash`, `advance_live`, `render_frame`.
+- `crates/ludion-engine/src/dispatch.rs` — one exhaustive `match` over every `Command` variant → `Dispatched`. All routing.
+- `crates/ludion-engine/src/commands/` — the handler logic, one module per method family.
+- Every other file: `ludion devdocs engine-layout`.
 
 ## Rules
 

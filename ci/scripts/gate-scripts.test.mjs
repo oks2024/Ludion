@@ -21,6 +21,7 @@ import { writeFileAtomic } from '../../scripts/atomic-write.mjs';
 import { findPrefixedPrints, findUncodedFailurePrints, scanFiles } from './diagnostic-prints.mjs';
 import { findScheduleText, scanFiles as scheduleFiles, unallowedHits, ALLOWLIST as SCHEDULE_ALLOWLIST } from './schedule-comments.mjs';
 import { BEGIN as CG_BEGIN, END as CG_END, checkCrateGraph, renderEdges, spliceEdges } from '../../scripts/crate-graph-edges.mjs';
+import { checkDocCitations } from '../../scripts/doc-citations.mjs';
 import { render as renderDenylist } from '../../scripts/clippy-denylist.mjs';
 import { bareVersions, checkManifests, nonFacadeDeps } from '../../scripts/manifest-rules.mjs';
 import { countCodeLines } from '../../scripts/ecs-budget.mjs';
@@ -861,6 +862,38 @@ test('crate-graph: spliceEdges round-trips, is idempotent, and throws on a missi
 
 test('crate-graph: the real tree is in step', () => {
   assert.deepEqual(checkCrateGraph(ROOT).errors, []);
+});
+
+// ── doc citations (scripts/doc-citations.mjs) ────────────────────────────────
+
+function citationRoot(files) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'doc-cites-'));
+  for (const [rel, text] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    writeFileSync(path.join(root, rel), text);
+  }
+  return root;
+}
+
+test('doc-citations: a good citation passes, a wrong-root one fails with the hint, a wrapped one resolves', () => {
+  const root = citationRoot({
+    'docs/guide.md': 'See `ludion docs guide` and `ludion docs <topic>`.\n',
+    'dev-docs/internals.md': 'See `ludion devdocs internals`, or `ludion docs internals` (wrong).\n',
+    'crates/a/src/lib.rs': '//! Read `ludion\n//! devdocs internals` and `ludion docs\n//! guide`.\n',
+  });
+  try {
+    const { errors, count } = checkDocCitations(root);
+    assert.equal(count, 5);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /dev-docs\/internals\.md:1 cites `ludion docs internals`/);
+    assert.match(errors[0], /use `ludion devdocs internals`/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('doc-citations: the real tree is in step', () => {
+  assert.deepEqual(checkDocCitations(ROOT).errors, []);
 });
 
 // ── manifest rules (scripts/manifest-rules.mjs) ──────────────────────────────

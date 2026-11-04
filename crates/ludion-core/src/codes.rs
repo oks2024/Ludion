@@ -139,7 +139,8 @@ pub mod code {
     pub const EXPORT_TOOLCHAIN_UNAVAILABLE: DiagnosticCode = DiagnosticCode::new("L0022");
 
     /// `L0023` — the project manifest (`ludion.toml`) is missing, unreadable, malformed, or lacks a
-    /// key the verb needs. Raised by `ludion-cli`'s `export` verb.
+    /// key the verb needs. Raised by `ludion-engine`'s `manifest` reader for every consumer (`export`,
+    /// `sync`, every game host), and by `ludion-cli`'s `new --refresh-guide` when no manifest is found.
     pub const MANIFEST_INVALID: DiagnosticCode = DiagnosticCode::new("L0023");
 
     /// `L0024` — `ludion export` was given a flag combination it cannot honour: `--run` on a
@@ -536,9 +537,10 @@ pub mod code {
     /// `check_doc` (the same schema checker scene components use, `L1014`).
     pub const DOC_SCHEMA_MISMATCH: DiagnosticCode = DiagnosticCode::new("L1120");
 
-    /// `L1121` — a saved player profile could not be loaded as authored, so the file was backed up
-    /// and a fresh default profile started — the game still boots (progress is preserved in the
-    /// backup, never destroyed). Raised for a malformed profile envelope (a missing/wrong `format`,
+    /// `L1121` — a saved player profile could not be loaded as authored, so a fresh default
+    /// profile started — a persisting host first renames the file aside as a backup, and any other
+    /// engine, or a failed rename, leaves it in place. The game still boots and the player's bytes are
+    /// never destroyed. Raised for a malformed profile envelope (a missing/wrong `format`,
     /// a missing/wrong/non-`profile` `kind`, a non-mapping or unparseable document) by
     /// `ludion-scene`'s `open_profile`, and for a value that no longer deserializes into the game's
     /// current profile type (a retyped field) or a newer-than-engine `format` by the engine's
@@ -788,7 +790,7 @@ pub mod code {
     /// `L1148` — a `kind: pattern` document's timeline entry names a bullet kind that is not in
     /// the document's own `bullets:` map. The diagnostic points at `/timeline/<i>/bullet` and
     /// carries a nearest-match suggestion over the document's own bullet names, the same
-    /// did-you-mean shape as `L1152`. Raised by `ludion-scene` (`Plan/projectile-patterns.md`
+    /// did-you-mean shape as `L1152`. Raised by `ludion-engine`'s `patterns` (`Plan/projectile-patterns.md`
     /// decision 4).
     pub const PATTERN_BULLET_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1148");
 
@@ -796,14 +798,14 @@ pub mod code {
     /// kind's `motion` list over four segments, a segment carrying both `ramp` and `turn` (no
     /// elementary closed form), a volley `count` over 256 (the kill bitset's width), an `every: 0`
     /// paired with `repeat > 1`, or a non-finite or negative speed, frame count, or `life`. The
-    /// pointer names the offending field. Raised by `ludion-scene` (`Plan/projectile-patterns.md`
+    /// pointer names the offending field. Raised by `ludion-engine`'s `patterns` (`Plan/projectile-patterns.md`
     /// decisions 1 and 4).
     pub const PATTERN_ENTRY_INVALID: DiagnosticCode = DiagnosticCode::new("L1149");
 
     /// `L1150` — a timeline entry's `play: <name>` does not resolve to a playable pattern: the
     /// named document does not exist, the named document itself contains a `play:` entry (nesting
     /// is one level deep), or the chain cycles back to the playing document. The pointer is
-    /// `/timeline/<i>/play`. Raised by `ludion-scene` (`Plan/projectile-patterns.md` decision 4).
+    /// `/timeline/<i>/play`. Raised by `ludion-engine`'s `patterns` (`Plan/projectile-patterns.md` decision 4).
     pub const PATTERN_PLAY_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L1150");
 
     /// `L1151` — a `Sprite` or `Tilemap` legend entry's atlas reference does not resolve: the named
@@ -2061,12 +2063,13 @@ pub mod code {
     pub const RECORDING_ARM_REFUSED: DiagnosticCode = DiagnosticCode::new("L3047");
 
     /// `L3048` — an `engine.restore` snapshot was captured by a different engine version than the
-    /// running build. Reported in the restore report, not fatal. Raised by `ludion-engine`.
+    /// running build. Reported in the restore report, not fatal. Raised by `ludion-protocol`'s
+    /// `restore` module.
     pub const RESTORE_ENGINE_VERSION_DIFFERS: DiagnosticCode = DiagnosticCode::new("L3048");
 
     /// `L3049` — an `engine.restore` snapshot carried a top-level field this build does not know,
     /// which the restore ignored. Reported in the restore report, not fatal. Raised by
-    /// `ludion-engine`.
+    /// `ludion-protocol`'s `restore` module.
     pub const RESTORE_SNAPSHOT_FIELD_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L3049");
 
     /// `L3050` — a replay marks a system panic on a tick that, re-driven with the current build, did
@@ -2120,20 +2123,20 @@ pub mod code {
     /// `ludion-sim`.
     pub const INVALID_SIM_SPEED: DiagnosticCode = DiagnosticCode::new("L4001");
 
-    /// `L4002` — an input-script file could not be read from disk. Raised by `ludion-cli`
-    /// (`ludion sim-hash --script`).
+    /// `L4002` — an input-script file could not be read from disk. Raised by `ludion-engine`'s `trace`
+    /// (`load_input_script`, entered via `ludion sim-hash --script`).
     pub const INPUT_SCRIPT_IO: DiagnosticCode = DiagnosticCode::new("L4002");
 
-    /// `L4003` — an input-script file is not valid input-script JSON. Raised by `ludion-cli`
-    /// (`ludion sim-hash --script`).
+    /// `L4003` — an input-script file is not valid input-script JSON. Raised by `ludion-engine`'s `trace`
+    /// (`load_input_script`, entered via `ludion sim-hash --script`).
     pub const INPUT_SCRIPT_INVALID: DiagnosticCode = DiagnosticCode::new("L4003");
 
     /// `L4004` — a profile budget file could not be read, or is not valid budget TOML. Raised by
-    /// `ludion-cli` (`ludion profile --check`).
+    /// `ludion-engine`'s `profile` (entered via `ludion profile --check`).
     pub const BUDGET_FILE_INVALID: DiagnosticCode = DiagnosticCode::new("L4004");
 
-    /// `L4005` — a measured timing exceeded its budget. Raised by `ludion-cli`
-    /// (`ludion profile --check`), one diagnostic per over-budget line.
+    /// `L4005` — a measured timing exceeded its budget. Raised by `ludion-engine`'s
+    /// `profile` (entered via `ludion profile --check`), one diagnostic per over-budget line.
     pub const BUDGET_EXCEEDED: DiagnosticCode = DiagnosticCode::new("L4005");
 
     /// `L4006` — a budget file names a system or GPU pass that no producible name matches: not a
@@ -2193,7 +2196,7 @@ pub mod code {
 
     /// `L4014` — a PNG offered to the sprite-document importer holds more distinct RGBA colours
     /// than a sprite document has glyphs to name them with (`SPRITE_GLYPH_BUDGET`), and no
-    /// `--quantize N` was given. Raised by `ludion-cli`'s import path.
+    /// `--quantize N` was given. Raised by `ludion-sprite`'s import.
     pub const SPRITE_IMPORT_NEEDS_QUANTIZE: DiagnosticCode = DiagnosticCode::new("L4014");
 
     /// `L4015` — a sprite-document import ran `--quantize N` and merged colours, so the written
@@ -3375,7 +3378,7 @@ the format does not define is an error rather than silently ignored. `bounds` is
 drop it).
 
 The diagnostic's JSON Pointer names the offending node. Fix: reshape the value to match the format —
-`ludion docs ludion-scene` documents the map and map-kit shapes field by field.",
+`ludion docs map-authoring` documents the map and map-kit shapes field by field.",
     },
     CodeEntry {
         code: code::MAP_KIT_INVALID,
@@ -5283,17 +5286,18 @@ every part `bone` name a bone in the list. An unrigged model needs exactly one b
     CodeEntry {
         code: code::PROFILE_LOAD_FAILED,
         severity: Severity::Warning,
-        title: "saved profile could not be loaded — backed up and defaulted",
+        title: "saved profile could not be loaded — defaulted",
         explanation: "\
 A saved player profile (`save/profile.yaml`, the persistent save state a game registers with
-`profile::<P>`) could not be loaded as it was written on disk, so the engine backed the file up
-(renamed it to `profile.yaml.bak.<content-hash>`) and started a fresh profile from `P::default()`.
+`profile::<P>`) could not be loaded as it was written on disk, so the engine started a fresh profile from
+`P::default()`. A persisting host first renames the file aside as a backup
+(`profile.yaml.bak.<content-hash>`); any other engine, or a failed rename, leaves the file in place.
 The game still boots — this is a warning, never a hard failure — and the player's original bytes are
-preserved untouched in the backup, never destroyed.
+never destroyed.
 
 A profile is loaded *leniently*, unlike an authored data-doc (`L1119`/`L1120`): a field the game
 added since the save is filled from its default, and a field the game removed is dropped — neither
-triggers this code. The backup-and-default path is only taken when the file cannot be honored at all:
+triggers this code. The default-profile path is only taken when the file cannot be honored at all:
 
   - its envelope is malformed — a missing or non-integer `format`, or a `kind` that is missing, not a
     string, or not `profile` (a non-mapping or unparseable document counts too);
@@ -5303,7 +5307,8 @@ triggers this code. The backup-and-default path is only taken when the file cann
     downgrade a save a newer build wrote.
 
 Fix: nothing is required — the game runs on a fresh default profile and the next save overwrites it.
-To recover the old values, open the `profile.yaml.bak.<hash>` sibling and reconcile it by hand.",
+To recover the old values, open the `profile.yaml.bak.<hash>` sibling (or, when no backup was made,
+the untouched `profile.yaml`) and reconcile it by hand.",
     },
     CodeEntry {
         code: code::PROFILE_SAVE_FAILED,

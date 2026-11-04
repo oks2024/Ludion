@@ -40,7 +40,7 @@ dev reload restored frame=9724 in 3175 ms  # a reload completed; the world is ba
 dev resumed frame=9724 from the kept snapshot <path> in 812 ms   # a fresh start resumed a kept snapshot
 dev reload build failed                     # cargo errors printed above this; see below
 dev reload launch failed; snapshot kept at <path>, retrying on the next save   # see below
-dev reload snapshot failed (L3009: …); restarting fresh, session state lost    # see below
+dev reload snapshot failed (L3054: …); restarting fresh, session state lost    # see below
 dev reload child exited; state lost, relaunching                               # see below
 ```
 

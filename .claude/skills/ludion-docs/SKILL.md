@@ -82,7 +82,8 @@ design.
    yet know what you need; spokes carry the content. Shape: a `dev-docs/ludion-renderer.md` hub over
    `renderer-shading` / `renderer-ibl` / `renderer-medium` / `renderer-shaders` / `renderer-passes`.
 8. **Cross-references are commands** — `ludion docs voxel-format`, `ludion devdocs renderer-ibl` —
-   never a bare `docs/x.md` path: a scaffolded project has no `docs/` on disk.
+   never a bare `docs/x.md` path: a scaffolded project has no `docs/` on disk. The `lists-in-step`
+   gate resolves each citation against the right root (`docs` vs `devdocs`).
 
 ## The two skeletons
 

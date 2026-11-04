@@ -134,7 +134,7 @@ fn report_checkout_only(set: &DocSet) -> ExitCode {
 ///
 /// `CLAUDE.md` + `docs/` used to be the test, and it misfired: `ludion new` writes a `CLAUDE.md` into
 /// every scaffolded project, so a user who added an ordinary `docs/` directory silently flipped into
-/// checkout mode — `ludion docs` listed *their* files and `ludion docs determinism` became an
+/// checkout mode — `ludion docs` listed *their* files and `ludion docs <topic>` became an
 /// `L0009` with a suggestion drawn from their filenames, while the real docs sat unread in the
 /// binary. A crate path in the engine's own workspace cannot be produced by accident.
 const ENGINE_MARKER: &str = "crates/ludion-core/Cargo.toml";
