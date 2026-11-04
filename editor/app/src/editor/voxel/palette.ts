@@ -1,7 +1,7 @@
 // The palette editor's pure half: what a color picker and three material sliders may write, and
 // what they must refuse.
 //
-// WHY THIS EXISTS AT ALL. G7's voxel-authoring report ends at "a competent model lands in 1–2
+// WHY THIS EXISTS AT ALL. The voxel-authoring report ended at "a competent model lands in 1–2
 // renders; color taste is the only loop left" — every extra render across the whole six-model series
 // was palette-value calibration. The shipped fix was a guide paragraph telling the author to write
 // albedo 2–3× darker than the target read, because the sheet rig is a bright neutral key+fill while

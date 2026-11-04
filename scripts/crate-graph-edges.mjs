@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The crate-graph edge listing, generated from `cargo metadata` (audit 2026-10-31 section 27). The
+// The crate-graph edge listing, generated from `cargo metadata`. The
 // block between the markers in `dev-docs/crate-graph-edges.md` used to be hand-kept and had drifted
 // from the manifests (ten missing crates, wrong feature gates). Now it is derived: in-workspace edges
 // with the feature that turns each optional one on, the third-party stacks, and the confinement rows.

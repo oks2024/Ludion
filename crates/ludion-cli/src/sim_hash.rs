@@ -23,8 +23,7 @@
 //! **No game systems run at this level.** The CLI has only the built-in registry — game systems
 //! and game components live in the game binary, which reaches the sim through the engine (`ludion dev`,
 //! the protocol's `sim.hash`). The command still proves the determinism claim end to end: scene → world instantiation, N ticks of the fixed-timestep driver, and the
-//! canonical hash are all deterministic across processes. The same pipeline, not a demo stand-in,
-//! gains systems when the engine arrives.
+//! canonical hash are all deterministic across processes. It is the real pipeline, not a demo stand-in.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

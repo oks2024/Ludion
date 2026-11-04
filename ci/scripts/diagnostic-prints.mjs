@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The prefixed-print lint (audit 2026-10-03 diagnostics L7/L8): no Rust source under
+// The prefixed-print lint: no Rust source under
 // `crates/*/src`, `games/*/src`, their `examples/` or their `build.rs`, nor the editor's Tauri host
 // (`editor/app/src-tauri`), prints a hand-written
 // `error:` / `warning:` / `error[` / `warning[` line. A runtime

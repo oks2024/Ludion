@@ -1,5 +1,5 @@
-//! A persistent **player profile** — the copyable G5 "memory" pattern (Phase 16's text-profile
-//! wave, E5).
+//! A persistent **player profile** — the copyable memory pattern (Phase 16's text-profile
+//! wave).
 //!
 //! This is the runnable proof of the profile facade surface. A game registers **one** serde
 //! save-state type with [`EngineBuilder::profile`] and gets a [`Profile<SaveState>`] resource that

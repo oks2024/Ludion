@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The schedule-comment lint (audit 2026-10-10): CLAUDE.md says "a comment describes state, never
+// The schedule-comment lint: CLAUDE.md says "a comment describes state, never
 // schedule" — no "this wave", "lands in Wave 3", "a later phase", "(M1)". Sequencing belongs in `Plan/`;
 // a comment that dates itself is stale the day the plan moves. This gate fails on schedule phrasing in
 // source, docs and user-facing strings.

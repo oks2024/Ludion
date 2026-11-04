@@ -370,7 +370,7 @@ reproducibility story (Wave 4) → the runnable example, host wiring polish, gui
   `ProfileSaveEntry` into `profile_save_log`, and — when persistence is enabled — `emit_doc` + write
   atomically. `Engine::profile_save_log()` exposes the stream (the `audio_log` mold).
 - `ludion_core::atomic::write_atomic(path, bytes)` (write a hidden temp sibling → `fs::rename`, creating parent dirs).
-- Persistence gate: `Engine::set_profile_save_path(path)` (or `enable_profile_persistence()`), wired by
+- Persistence gate: `EngineBuilder::persist_profile`, wired by
   the host in Wave 5; unset ⇒ log-only, no disk write (decision 5). A save-time IO error is a **warning**
   `L1122` (logged, non-fatal; the next request retries), never a sim crash.
 - `ludion-core`: **`L1122`** ("a profile could not be written to disk this frame") registered

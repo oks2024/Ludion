@@ -17,7 +17,7 @@
 //! `Occluder`/`Marker` components, and the `reveal_occluders` system are the whole pattern. The
 //! occlusion *test* here (is the wall between the camera and the marker?) is a deliberately trivial
 //! depth+corridor check: a real game would raycast camera→player through [`ludion_spatial`] with
-//! hysteresis (G7's job) — but that only changes *which* walls the system decides to fade, not the
+//! hysteresis — but that only changes *which* walls the system decides to fade, not the
 //! `Fade` values it writes, which is the part worth copying.
 //!
 //! Run it headless (this file's `main` steps the scene and prints each wall's resolved fade):

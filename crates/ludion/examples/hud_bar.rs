@@ -1,5 +1,5 @@
-//! A screen-space HP bar that tracks player health — the copyable G3 HUD pattern (Phase 14's
-//! screen-space UI wave, E3).
+//! A screen-space HP bar that tracks player health — the copyable HUD pattern (Phase 14's
+//! screen-space UI wave).
 //!
 //! This is the runnable proof of the UI facade surface: a [`UiRect`] frame + fill pair (anchored
 //! `bottom_left`, per the coordinate model in the engine guide's "Screen-space UI" chapter) and a

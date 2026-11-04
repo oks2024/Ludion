@@ -14,7 +14,8 @@
 //     viewport, and the local grid already draws the stroke live from the working document.
 //   - The PALETTE editor THROTTLES at `WRITE_THROTTLE_MS` during a drag and always commits on
 //     release. Watching the model change *while* you drag the color is the entire point of this view
-//     (the G7 palette-calibration friction), so mid-drag writes are the feature, not the cost.
+//     (palette calibration by re-rendering was the slow loop), so mid-drag writes are the feature,
+//     not the cost.
 //
 // `WRITE_THROTTLE_MS` is the host watcher's own debounce: writing faster than the watcher coalesces
 // buys no extra frames, only disk churn.

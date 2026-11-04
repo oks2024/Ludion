@@ -116,7 +116,7 @@ fn recorded_session_replays_to_identical_worldhash_trace() {
     );
 }
 
-/// The replay-to-frames capability (G7's clip tooling, the seam behind `cargo run -p breakout --
+/// The replay-to-frames capability (the clip tooling seam behind `cargo run -p breakout --
 /// --replay-frames run.lrp --frames-out <dir> --from 0 --to 60`): driving the committed `run.lrp`
 /// frame-by-frame through breakout's own builder renders one correctly-named, decodable PNG per sim
 /// frame in the requested `[from, to]` window, at the requested resolution.

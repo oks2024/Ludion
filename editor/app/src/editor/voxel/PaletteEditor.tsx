@@ -1,7 +1,7 @@
 // The palette entry editor — the swatch strip's second duty.
 //
-// This is the control that retires the G7 friction directly: drag the color while watching the model
-// under the game's own `env-night.yaml`. So the panel carries a one-click shortcut to the night rig
+// This is the control that removes that calibration loop directly: drag the color while watching
+// the model under the game's own `env-night.yaml`. So the panel carries a one-click shortcut to the night rig
 // when you are not on it — the workflow is worth exactly as much as it is short.
 //
 // Every control is a live drag: `onChange` streams (throttled to the disk by `save.ts`) and the

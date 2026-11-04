@@ -1,4 +1,4 @@
-//! Held input across the three rebuilds (audit 2026-09-25 B3): a scene switch carries the held
+//! Held input across the three rebuilds: a scene switch carries the held
 //! keys, the cursor and the pending injected events; `engine.restore` continues the snapshot's held
 //! input; `scene.load` starts a new session with none. Edges never re-fire after a carry.
 

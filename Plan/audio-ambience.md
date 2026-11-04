@@ -252,7 +252,7 @@ Wave 3 lands.
 - **Runtime-adjustable category gain (a volume slider).** Decision 6; trigger is `Plan/ui-widgets.md`
   landing a settings surface, or a game wanting programmatic ducking badly enough to justify the
   `AudioSink`-side setter early.
-- **Loop fade-out on stop.** Shipped: a 10 ms stop fade and gain slew (audit 2026-10-03 U7).
+- **Loop fade-out on stop.** Shipped: a 10 ms stop fade and gain slew.
 - **Stereo pan.** In scope since 2026-11-01: a 3D consumer needs "from the right direction" (vigil
   did not), shipped as the opt-in `AudioPan` (see Status).
 - **Reverb, geometry occlusion, HRTF, Doppler.** Out of scope — §6.1 asks for "audible when near".

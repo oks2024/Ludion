@@ -84,8 +84,7 @@ pub struct DocStore<T> {
 }
 
 impl<T> DocStore<T> {
-    /// A store of `docs` at generation 0 (a fresh boot; a live reload bumps the generation in a
-    /// later wave).
+    /// A store of `docs` at generation 0 (a fresh boot; a live reload bumps the generation).
     pub(crate) fn new(docs: BTreeMap<String, T>) -> Self {
         DocStore {
             docs,

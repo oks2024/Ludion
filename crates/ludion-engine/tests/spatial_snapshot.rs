@@ -1,4 +1,4 @@
-//! A snapshot restore continues the spatial index exactly (audit 2026-10-10 M17).
+//! A snapshot restore continues the spatial index exactly.
 //!
 //! The index a system scheduled *before* `spatial_rebuild` reads on tick N was filed during tick
 //! N-1, from the poses the world held when the rebuild ran; a system after the rebuild then moved

@@ -1,5 +1,5 @@
-//! An in-run **scene transition** — the copyable G6 "districts" pattern (Phase 17's transition
-//! wave, E7).
+//! An in-run **scene transition** — the copyable districts pattern (Phase 17's transition
+//! wave).
 //!
 //! This is the runnable proof of the scene-switch facade surface. A game splits its world into
 //! districts authored as **separate scene files** and connects them with gates. When a system decides

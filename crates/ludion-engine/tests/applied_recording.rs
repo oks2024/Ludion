@@ -1,4 +1,4 @@
-//! Recording writes what a command actually applied (audit 2026-09-25 B2/B6).
+//! Recording writes what a command actually applied.
 //!
 //! A failed `entity.spawn` mutates nothing, a `sim.step` stopped by a system panic records the ticks
 //! that ran, and a free-run tick whose system panicked is batched like any other — so each session

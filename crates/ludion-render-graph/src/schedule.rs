@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn depth_only_pass_orders_before_a_later_sampler() {
-        // The future shadow-map shape: a depth-only pass writes a depth resource that a later pass
+        // The shadow-map shape: a depth-only pass writes a depth resource that a later pass
         // samples. The scheduler must derive the shadow→scene edge from the depth write, exactly as
         // it does for a color write — proving depth resources can be read by a later pass.
         let mut graph = RenderGraph::new();

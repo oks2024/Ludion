@@ -1,8 +1,7 @@
-//! Implementation of `ludion sculpt new` — the write side of sculpt authoring (`Plan/mesh-modeling.md`
-//! Wave 1 step 5).
+//! Implementation of `ludion sculpt new` — the write side of sculpt authoring.
 //!
 //! The read side (`check-scene --bounds`, `render --model`) tells an author what a
-//! sculpt *is*; today this is the only verb that changes one — there is no `sculpt apply` yet, so a
+//! sculpt *is*; today this is the only verb that changes one — there is no `sculpt apply`, so a
 //! scaffolded model grows by hand-editing `parts:` in the text editor, checked with `check-scene`
 //! after every change. `new` follows the voxel verb's validate-then-swap discipline: the whole
 //! document is built in memory, checked with [`ludion_scene::check_sculpt`], and only then written
@@ -64,7 +63,7 @@ pub fn run_new(out: &Path, name: Option<&str>, palette_from: Option<&Path>) -> E
 /// The scaffold's header comment: what the file is and where to read more. Plain text, not a
 /// structured document field — the strict-subset YAML reader skips full-line comments anywhere, so
 /// this survives a `check_sculpt` parse untouched but is not reproduced by `emit_sculpt` (unlike a
-/// voxel model's `VoxelComments`, a sculpt document carries no comment-preserving structure yet).
+/// voxel model's `VoxelComments`, a sculpt document carries no comment-preserving structure).
 fn scaffold_header(name: Option<&str>) -> String {
     let title = name.unwrap_or("model");
     format!(

@@ -169,7 +169,7 @@
   boot migration (`:228`), and arms recording before the engine moves to the sim thread (`:232-247`).
   A live switch resolves the target text from **disk** and (when recording) writes a `SceneSwitch`
   record; a replay resolves it from the **embedded record text** — the same live-writes / replay-reads
-  gating that governs profile persistence (`enable_profile_persistence`, `engine.rs:635`) and the audio
+  gating that governs profile persistence (`EngineBuilder::persist_profile`) and the audio
   sink (`set_audio_sender`, `engine.rs:605`).
 - **Prelude + example + guide molds.** The prelude re-exports the engine's game-facing types
   (`crates/ludion/src/prelude.rs:45-49`, incl. `AudioQueue`, `Profile`, `DocStore`); E7 adds

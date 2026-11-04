@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Manifest rules, checked mechanically (audit 2026-10-31 section 27). Two rules had been held by
+// Manifest rules, checked mechanically. Two rules had been held by
 // review alone and had drifted:
 //
 //   bare versions  a member crate's dependency inherits from the root `[workspace.dependencies]`

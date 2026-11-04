@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Lists that must stay in step, checked mechanically (audit 2026-09-25 J4). Each of these was a
+// Lists that must stay in step, checked mechanically. Each of these was a
 // hand-kept copy that had already drifted, or was one edit away from it:
 //
 //   nextest   `.config/nextest.toml` selects GPU tests by name: the `gpu` test-group override and the
@@ -29,13 +29,13 @@
 //             crate is classified in `CRATES` and every classified dir exists. `--write` there regenerates.
 //   crate-allow  no strict or sim crate carries a crate-level `#![allow(..)]` / `#![expect(..)]` of
 //             `clippy::disallowed_methods` / `disallowed_types`, which would switch the denylist off for
-//             the whole crate; an item-level allow with a why-comment stays legal (audit 2026-10-03 Q5).
+//             the whole crate; an item-level allow with a why-comment stays legal.
 //   orphan    in a package with `autotests = false` (ludion-engine's merged `it` binary), every top-level
 //             `tests/*.rs` is a `[[test]]` path or a `mod <stem>;` of one of the package's test roots, else
 //             it never compiles or runs. Binary ids come from the manifest's `[[test]]` tables there.
 //   proptest  every `proptest!` block opens with a `proptest_config` that is `deterministic_config()` or a
 //             `RngSeed::Fixed` seed with `failure_persistence: None`, so a red run reproduces anywhere and
-//             no `.proptest-regressions` file is written (audit 2026-10-31 section 34).
+//             no `.proptest-regressions` file is written.
 //   crate-graph  the edge listing in `dev-docs/crate-graph-edges.md` is generated from `cargo metadata`
 //             by `scripts/crate-graph-edges.mjs`; the block must match the manifests byte for byte
 //             (`--write` regenerates), and every workspace package needs a Layout line in
@@ -445,8 +445,8 @@ function checkHeader() {
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
-// A no-adapter skip that bypasses `ludion_core::require_gpu` passes on a lane that must gate images
-// (audit 2026-10-03 Q1). Nextest never logs a passing test's stderr, so a log scan cannot catch it;
+// A no-adapter skip that bypasses `ludion_core::require_gpu` passes on a lane that must gate images.
+// Nextest never logs a passing test's stderr, so a log scan cannot catch it;
 // the source can.
 function checkRequireGpu() {
   const errors = [];
@@ -482,7 +482,7 @@ function checkRequireGpu() {
 }
 
 // A bless switch read with its own parse (`var_os(..).is_some()` blesses on `LUDION_BLESS=0`; `var(..)`
-// does not) makes one switch mean two things across tests (audit 2026-10-03 Q6). Every read goes
+// does not) makes one switch mean two things across tests. Every read goes
 // through `ludion_core::bless`.
 const BLESS_HELPER = 'crates/ludion-core/src/bless.rs';
 const BLESS_READ = /\bvar(?:_os)?\(\s*"(?:LUDION_BLESS\w*|BLESS_SCHEMA)"/;

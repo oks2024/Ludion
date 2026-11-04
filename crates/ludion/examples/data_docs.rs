@@ -1,5 +1,5 @@
-//! A weapon table authored as game **data-docs** and tuned live — the copyable G4 armory pattern
-//! (Phase 15's data-doc wave, E4).
+//! A weapon table authored as game **data-docs** and tuned live — the copyable armory pattern
+//! (Phase 15's data-doc wave).
 //!
 //! This is the runnable proof of the data-doc facade surface. A game registers a serde `kind:` type
 //! with [`EngineBuilder::doc_kind`] and every matching `*.yaml` under the content root loads,

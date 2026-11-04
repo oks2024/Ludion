@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The determinism denylists, generated from one source (audit 2026-09-25 F7). Every crate's
+// The determinism denylists, generated from one source. Every crate's
 // `clippy.toml` used to carry a hand-copied list; the copies drifted (reworded reasons, a missing
 // entry) and nothing stopped a crate from omitting a rule. Now this file holds the rules and the
 // tier each crate belongs to; a `clippy.toml` is its hand-written header (why the crate is in its

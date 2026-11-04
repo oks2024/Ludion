@@ -3298,7 +3298,7 @@ entities:
 
     #[test]
     fn renamed_system_key_is_l4006_even_without_a_close_typo_match() {
-        // The audit's concrete near-miss (games/vigil, G2): a system renamed `auto_fire` -> `fire`.
+        // A real near-miss: a system renamed `auto_fire` -> `fire`.
         // The two names are too far apart (5-character edit distance) for the typo-suggestion budget,
         // so no "nearest match" fires — but the stale key must still be flagged rather than silently
         // passing, which is the bug this fixes.

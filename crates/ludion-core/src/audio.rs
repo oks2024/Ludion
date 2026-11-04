@@ -84,7 +84,7 @@ pub enum AudioCategory {
 /// sink, which multiplies every voice by its own bus's value while mixing. It is a mixdown decision,
 /// the same category of thing as which device to open — never simulation state: it reaches no
 /// `WorldHash`, no snapshot and no audio log, so changing a value here cannot move a replay. There
-/// is no runtime setter: a player-facing volume slider is a separate surface that does not exist yet.
+/// is no runtime setter: a player-facing volume slider would be a separate surface.
 ///
 /// It lives here, beside [`AudioCategory`], because the engine (which stores the authored value) and
 /// the sink (which applies it) both need the type and neither may depend on the other.

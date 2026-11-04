@@ -220,7 +220,7 @@ Place **Reflection probe** from the Level Designer palette inside a room with a 
 ## Held-input release (Clockout 0025)
 Play mode, focus the viewer, hold D (the hero runs), Alt-Tab (Windows) / Cmd-Tab (M4) away and back: the hero stands. Same in the perf preview. Same with a held left mouse button. Hold D, then play → edit → play: the hero stands.
 
-## Host path confinement (audit 2026-10-31 33/L3)
+## Host path confinement
 With vigil (in the repo) and a project outside the repo, no view shows an "outside the engine checkout" refusal:
 - Switch between the two projects: every view still loads.
 - Game Designer: edit and save a value.
@@ -229,9 +229,9 @@ With vigil (in the repo) and a project outside the repo, no view shows an "outsi
 - Terminal drawer: the status line still updates.
 - Performance: save.
 
-**Pattern tab, New pattern with an existing name (code audit H-02):** type a name whose slug is already listed (try a different case too) and press New: the note reads "already exists — pick it from the list to open it", the file's bytes are unchanged, and nothing is rewritten. A non-pattern `.yaml` at that path reads the host's "already exists" error instead.
+**Pattern tab, New pattern with an existing name:** type a name whose slug is already listed (try a different case too) and press New: the note reads "already exists — pick it from the list to open it", the file's bytes are unchanged, and nothing is rewritten. A non-pattern `.yaml` at that path reads the host's "already exists" error instead.
 
-## Inspector u64 round trip (audit 2026-10-31 16/M1)
+## Inspector u64 round trip
 With vigil playing a random-shape volley, select the live `Volley` in the inspector (edit mode) and nudge `angle_deg`: in-flight bullets keep their angles and speeds, no killed bullet reappears, and the `seed` field shows the same digits before and after.
 
 ## Refused scene load (Clockout 0033)
@@ -239,7 +239,7 @@ With a project whose collider mesh file is renamed:
 - Boot it from the game stage: the failure card reads "The game failed to start" with `L1212` and its `L1101` in the detail, not a blank stage.
 - In a live session, pick that scene in the scene picker: the `DiagnosticBanner` shows the `L1212` with an expandable related `L1101`, and the prior scene stays loaded and running.
 
-## Scene save conflict and `scene.changed` identity (code audit A-03)
+## Scene save conflict and `scene.changed` identity
 Serve a hand scene in the editor (`node scripts/editor.mjs <project>`), Level Designer view:
 - [ ] Move an entity, press Ctrl+S: saves, no banner, dirty clears, Ctrl+Z still undoes the move.
 - [ ] Edit the same YAML in a text editor and save it, move an entity, press Ctrl+S: the banner appears, the file still holds the external edit, undo still works.
@@ -254,7 +254,7 @@ Serve a hand scene in the editor (`node scripts/editor.mjs <project>`), Level De
 - [ ] Hand-edit the scene file, restart `ludion dev`, press Ctrl+S: the banner appears and the file keeps the hand edit.
 - [ ] Save a world with a checker warning (a rigid body under a `Parent`): the file is written and the diagnostic shows in the banner row.
 
-## Presentation undo and redo (code audit A-04)
+## Presentation undo and redo
 `node scripts/editor.mjs games/vigil`, Level Designer view. Read `sim.hash` from a second client; it must not move in the first four.
 - [ ] Place `town/cath-bay`, Ctrl+Z, Ctrl+Y: back, ids in the presentation range.
 - [ ] Delete a placed one by its root, Ctrl+Z: every part back under its parent. Ctrl+Y deletes again.
