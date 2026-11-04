@@ -2866,6 +2866,22 @@ mod tests {
         assert_eq!(stage.status().phase, StagePhase::Stopped);
     }
 
+    /// Whether `port`'s lock is free, allowing a few seconds. A child some other test forks while
+    /// a holder drops keeps the lock fd open until it execs, so "released" is eventually true, not
+    /// instantly (`children::tests::no_forks` only fences the pty tests).
+    fn lock_released(dir: &Path, port: u16) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if try_port_lock(dir, port).unwrap().is_some() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// A state dir of this test's own, so port locks and records never leak between tests (or into
     /// a developer's real editor).
     fn state_dir(name: &str) -> StateDir {
@@ -2924,7 +2940,7 @@ mod tests {
             "another port"
         );
         drop(held);
-        assert!(try_port_lock(&dir, 40101).unwrap().is_some(), "released");
+        assert!(lock_released(&dir, 40101), "released");
     }
 
     #[test]
@@ -3033,10 +3049,7 @@ mod tests {
             "a running session holds its port's lock"
         );
         stage.stop();
-        assert!(
-            try_port_lock(&dir, 40114).unwrap().is_some(),
-            "the lock outlived the session"
-        );
+        assert!(lock_released(&dir, 40114), "the lock outlived the session");
     }
 
     /// Two starts racing through the slow pre-steps spawn one child: the second finds the first's
@@ -3153,10 +3166,7 @@ mod tests {
         });
         assert_eq!(stage.status().phase, StagePhase::Starting);
         stage.stop();
-        assert!(
-            try_port_lock(&dir, 40123).unwrap().is_some(),
-            "the lock outlived the sessions"
-        );
+        assert!(lock_released(&dir, 40123), "the lock outlived the sessions");
     }
 
     /// A start cancelled by `stop()` and never followed by another leaves no lock behind once its
@@ -3192,7 +3202,7 @@ mod tests {
         assert_eq!(stage.status().phase, StagePhase::Stopped);
         assert_eq!(steps.spawned(), 0);
         assert!(
-            try_port_lock(&dir, 40124).unwrap().is_some(),
+            lock_released(&dir, 40124),
             "the cancelled start kept the port locked"
         );
     }
@@ -3321,10 +3331,7 @@ mod tests {
             record.engine_pid
         );
         assert_eq!(read_record(&dir, 40121), None, "the record was consumed");
-        assert!(
-            try_port_lock(&dir, 40121).unwrap().is_some(),
-            "the lock outlived the session"
-        );
+        assert!(lock_released(&dir, 40121), "the lock outlived the session");
     }
 
     /// A stop while the build is still running spawns no engine.
