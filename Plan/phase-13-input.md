@@ -411,8 +411,10 @@ wave is independently landable, one commit.
   couch/local-multiplayer game (E2 brief non-goal).
 - **Editor input forwarding** (the Tauri viewer sending mouse/pad) — deferred; trigger: designers
   playtesting through the editor. Ships as `input.inject` from the editor when it fires (decision 8).
-- **Sub-pixel/high-frequency mouse or raw-input paths, gamepad rumble/haptics, gyro** — trigger: a game
-  that measurably needs them; none foreseen for G2.
+- **Raw mouse input — promoted by Serious Isaac 0001** (owner approved 2026-11-06): `mouse_motion` →
+  `MouseState::delta()`, `CursorMode::Locked`, `CursorLock`; the in-process window only. The editor's
+  `injectCoalescer.ts` must sum, never drop, `mouse_motion` if it ever forwards it. Rumble and gyro stay
+  deferred. Trigger for a wire lock route: a client (attach viewer, editor) that must apply the lock.
 - **A wire command for input beyond `input.inject`** — the one command already carries every event
   (opaque `Value`); trigger: none foreseen (decision 8).
 

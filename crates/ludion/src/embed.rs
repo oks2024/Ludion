@@ -287,7 +287,7 @@ pub struct Embedded {
     touch: Mutex<TouchHost>,
     ended: Receiver<()>,
     render_fault: Receiver<Diagnostic>,
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     cursor_lock: Receiver<bool>,
     /// Set by the boot thread once it serves its intake; until then a transition is queued, not awaited.
     running: Arc<AtomicBool>,
@@ -540,7 +540,7 @@ impl Embedded {
 
     /// Where the engine reports each change of the game's pointer-lock request (`true` locks,
     /// `false` releases); the sender drops with the engine.
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn cursor_lock_requests(&self) -> Receiver<bool> {
         self.cursor_lock.clone()
     }

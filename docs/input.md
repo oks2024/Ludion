@@ -38,6 +38,20 @@ left and right are one key, held while either is down; Cmd/Super is not mapped).
   unbounded — not clamped to the window like `position`); accumulates like `wheel` and resets each
   tick. Scale for sensitivity yourself. Wire form: `{"kind": "mouse_motion", "delta_bits": [<u32>, <u32>]}`.
 
+## Mouse look
+
+- `delta()` is raw device counts; the game scales them (sensitivity, invert, smoothing).
+- `.cursor(CursorMode::Locked)` starts the window locked; a system switches at runtime with the
+  `CursorLock` resource's `lock()` / `release()` (pause menu, death screen).
+- `position()` freezes while locked; `delta()` keeps flowing.
+- Focus loss always frees the pointer; focus regain re-locks it with no click. Motion only arrives
+  while the window is focused.
+- macOS (and Wayland) use `Locked`: relative mode, pointer frozen. Windows (and X11) use `Confined`
+  plus host recentring, with raw motion from device events. If neither grab works the pointer is only
+  hidden.
+- Headless: a no-op. Only the in-process window (`run --window`, `launch`) applies the lock; the
+  attach viewer and the editor do not.
+
 ## Gamepad — `input.gamepad()`
 
 Player one's pad (the capture layer forwards the first connected pad only; when it unplugs, the

@@ -51,17 +51,17 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_engine::CursorMode;
 use ludion_engine::live::SIM_STOP_GRACE;
 use ludion_window::chrome::{
-    self, CursorAutoHide, ExtentDebounce, FullscreenChord, HostPlatform, KeyRoute, dev_title,
-    game_title,
+    self, CursorAutoHide, ExtentDebounce, FullscreenChord, GrabAction, HostPlatform, KeyRoute,
+    PointerGrab, dev_title, game_title,
 };
 use ludion_window::host_input::HostInput;
 use ludion_window::mouse;
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{ModifiersState, PhysicalKey};
-use winit::window::{Fullscreen, Window, WindowId};
+use winit::window::{CursorGrabMode, Fullscreen, Window, WindowId};
 
 use crate::embed::{Embedded, Injector, Source, StartOptions, Surface};
 use crate::host;
@@ -194,6 +194,8 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
         modifiers: ModifiersState::empty(),
         chord: FullscreenChord::default(),
         cursor: None,
+        grab: PointerGrab::new(cursor == CursorMode::Locked),
+        confined: false,
         extent: ExtentDebounce::default(),
     };
     let loop_result = event_loop.run_app(&mut app);
@@ -261,6 +263,8 @@ enum HostEvent {
     RenderFault(Diagnostic),
     /// The boot thread has ended, however it did: exit the loop.
     Ended,
+    /// The game asked to lock (`true`) or release (`false`) the pointer.
+    CursorLock(bool),
 }
 
 /// The winit application: the window and everything the host owns behind it. `embedded` and every
@@ -306,6 +310,10 @@ struct App {
     chord: FullscreenChord,
     /// Built with the window.
     cursor: Option<CursorAutoHide>,
+    /// Whether the pointer is grabbed (game request and window focus).
+    grab: PointerGrab,
+    /// The grab fell back to `Confined`, so the host recentres the pointer.
+    confined: bool,
     /// Settles drag-resizes before the render extent follows the window.
     extent: ExtentDebounce,
 }
@@ -387,6 +395,7 @@ impl App {
             host::ctrl_c_stop(),
             embedded.ended(),
             embedded.render_fault(),
+            embedded.cursor_lock_requests(),
             internal_stop,
             self.proxy.clone(),
         ));
@@ -395,7 +404,44 @@ impl App {
         self.cursor = Some(CursorAutoHide::new(self.cursor_enabled, Instant::now()));
         self.embedded = Some(embedded);
         self.window = Some(window);
+        let action = self.grab.start();
+        self.apply_grab(action);
         Ok(())
+    }
+
+    /// Applies a grab change with the platform's relative mode: `Locked` where it exists (macOS,
+    /// Wayland), else `Confined` with host recentring (Windows, X11). Every call is best-effort; if
+    /// both grabs fail the pointer is only hidden.
+    // The window host owns the wall clock; the cursor timer never touches the sim.
+    #[allow(clippy::disallowed_methods)]
+    fn apply_grab(&mut self, action: Option<GrabAction>) {
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        match action {
+            Some(GrabAction::Lock) => {
+                if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+                    self.confined = window.set_cursor_grab(CursorGrabMode::Confined).is_ok();
+                }
+                window.set_cursor_visible(false);
+                self.recentre();
+            }
+            Some(GrabAction::Release) => {
+                let _ = window.set_cursor_grab(CursorGrabMode::None);
+                window.set_cursor_visible(true);
+                self.confined = false;
+                self.cursor = Some(CursorAutoHide::new(self.cursor_enabled, Instant::now()));
+            }
+            None => {}
+        }
+    }
+
+    /// Moves the pointer to the window's centre.
+    fn recentre(&self) {
+        if let Some(window) = &self.window {
+            let (w, h) = self.surface_size;
+            let _ = window.set_cursor_position(PhysicalPosition::new(w / 2, h / 2));
+        }
     }
 
     /// Asks the host to wind down without leaving the loop: the boot thread drops the engine, and
@@ -497,6 +543,10 @@ impl ApplicationHandler<HostEvent> for App {
                 self.request_stop();
             }
             HostEvent::Ended => event_loop.exit(),
+            HostEvent::CursorLock(lock) => {
+                let action = self.grab.request(lock);
+                self.apply_grab(action);
+            }
         }
     }
 
@@ -511,7 +561,9 @@ impl ApplicationHandler<HostEvent> for App {
             event_loop.exit();
             return;
         }
-        if let Some(cursor) = &mut self.cursor
+        let locked = self.grab.is_locked();
+        if !locked
+            && let Some(cursor) = &mut self.cursor
             && let Some(visible) = cursor.poll(now)
             && let Some(window) = &self.window
         {
@@ -524,7 +576,11 @@ impl ApplicationHandler<HostEvent> for App {
         }
         let next = [
             self.stop_timer.deadline(),
-            self.cursor.as_ref().and_then(CursorAutoHide::deadline),
+            if locked {
+                None
+            } else {
+                self.cursor.as_ref().and_then(CursorAutoHide::deadline)
+            },
             self.extent.deadline(),
         ]
         .into_iter()
@@ -585,6 +641,21 @@ impl ApplicationHandler<HostEvent> for App {
                 }
                 self.route_input(&event);
             }
+            WindowEvent::Focused(focused) => {
+                self.route_input(&event);
+                let action = self.grab.focus(focused);
+                self.apply_grab(action);
+            }
+            WindowEvent::CursorMoved { position, .. } if self.grab.is_locked() => {
+                let (cx, cy) = (
+                    f64::from(self.surface_size.0 / 2),
+                    f64::from(self.surface_size.1 / 2),
+                );
+                if self.confined && ((position.x - cx).abs() > 1.0 || (position.y - cy).abs() > 1.0)
+                {
+                    self.recentre();
+                }
+            }
             WindowEvent::CursorMoved { .. } => {
                 if let Some(cursor) = &mut self.cursor
                     && let Some(visible) = cursor.on_motion(Instant::now())
@@ -625,11 +696,13 @@ fn spawn_waiter_thread(
     ctrl_c: Receiver<()>,
     ended: Receiver<()>,
     render_fault: Receiver<Diagnostic>,
+    cursor_lock: Receiver<bool>,
     internal_stop: Receiver<()>,
     proxy: EventLoopProxy<HostEvent>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut render_fault = render_fault;
+        let mut cursor_lock = cursor_lock;
         loop {
             crossbeam_channel::select! {
                 recv(ctrl_c) -> _ => { let _ = proxy.send_event(HostEvent::Stop); }
@@ -638,6 +711,11 @@ fn spawn_waiter_thread(
                     // The engine dropped its sender; `ended` follows. A disconnected receiver
                     // would fire every pass, so swap it for one that never does.
                     Err(_) => render_fault = crossbeam_channel::never(),
+                },
+                recv(cursor_lock) -> lock => match lock {
+                    Ok(lock) => { let _ = proxy.send_event(HostEvent::CursorLock(lock)); }
+                    // The engine dropped its sender; swap in a receiver that never fires.
+                    Err(_) => cursor_lock = crossbeam_channel::never(),
                 },
                 recv(ended) -> _ => {
                     let _ = proxy.send_event(HostEvent::Ended);

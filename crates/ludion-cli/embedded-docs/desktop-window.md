@@ -36,11 +36,12 @@ fn main() -> std::process::ExitCode {
 | Named extent | `--render-size`, `LUDION_RENDER_SIZE` or an explicit `EngineBuilder::render_size` always wins. |
 | Fullscreen | Borderless. Alt+Enter or F11 on Windows, Ctrl+Cmd+F on macOS, plus the green button. The chord is consumed and never reaches `InputState`. |
 | Fullscreen at start | `--fullscreen` (needs `--window`) beats `LUDION_FULLSCREEN=1\|0`, which beats the builder's `.fullscreen(true)`. A malformed value is `L0037`. Nothing persists across launches. |
-| Cursor | Hides after 2 s idle and returns on motion; `.cursor(CursorMode::Visible)` opts out. |
+| Cursor | Hides after 2 s idle and returns on motion; `.cursor(CursorMode::Visible)` opts out; `CursorMode::Locked` grabs and hides it for mouse look (`ludion docs input` § Mouse look). |
 
 ## Rules
 
 - `--record` pins the default extent, because mouse coordinates are render-target pixels: record committed `.lrp` files at the default extent, never from a resized window.
+- A `CursorLock` request reaches the host but never the world, the hash, snapshots or the wire.
 - Title, fullscreen and cursor never reach the world, the hash, snapshots or the wire; the extent travels as an ordinary recorded `render.size`.
 - `launch` has no argv, no scene file in the title, and in a `window`-only build no listener and no tokio. It must run on the main thread. Closing the window, Ctrl-C or a `Shutdown` request (`ludion docs running`) stops it gracefully.
 - With the default features `launch` also binds the loopback listener. On a box with no display it fails `L2007`.

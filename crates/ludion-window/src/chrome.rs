@@ -151,6 +151,71 @@ impl CursorAutoHide {
     }
 }
 
+/// What the window must do to the pointer grab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrabAction {
+    /// Grab and hide the pointer.
+    Lock,
+    /// Free and show the pointer.
+    Release,
+}
+
+/// Whether the pointer is grabbed: it is when the game wants it locked *and* the window is focused,
+/// so focus loss always frees the pointer and focus regain re-locks it. Each input returns the
+/// action to take, only when the state changes.
+#[derive(Debug)]
+pub struct PointerGrab {
+    wanted: bool,
+    focused: bool,
+    applied: bool,
+}
+
+impl PointerGrab {
+    /// `wanted` is the game's initial request; the window starts focused and ungrabbed.
+    pub fn new(wanted: bool) -> Self {
+        Self {
+            wanted,
+            focused: true,
+            applied: false,
+        }
+    }
+
+    /// The initial action, once the window exists.
+    pub fn start(&mut self) -> Option<GrabAction> {
+        self.settle()
+    }
+
+    /// The game asked to lock (`true`) or release (`false`) the pointer.
+    pub fn request(&mut self, lock: bool) -> Option<GrabAction> {
+        self.wanted = lock;
+        self.settle()
+    }
+
+    /// The window gained or lost focus.
+    pub fn focus(&mut self, focused: bool) -> Option<GrabAction> {
+        self.focused = focused;
+        self.settle()
+    }
+
+    /// Whether the pointer is currently grabbed.
+    pub fn is_locked(&self) -> bool {
+        self.applied
+    }
+
+    fn settle(&mut self) -> Option<GrabAction> {
+        let target = self.wanted && self.focused;
+        if target == self.applied {
+            return None;
+        }
+        self.applied = target;
+        Some(if target {
+            GrabAction::Lock
+        } else {
+            GrabAction::Release
+        })
+    }
+}
+
 /// How long a window must sit at one size before the render extent follows it.
 pub const EXTENT_SETTLE: Duration = Duration::from_millis(200);
 
@@ -275,6 +340,47 @@ mod tests {
 
     const PRESSED: ElementState = ElementState::Pressed;
     const RELEASED: ElementState = ElementState::Released;
+
+    #[test]
+    fn a_grab_starts_only_when_wanted() {
+        assert_eq!(PointerGrab::new(true).start(), Some(GrabAction::Lock));
+        assert_eq!(PointerGrab::new(false).start(), None);
+    }
+
+    #[test]
+    fn focus_loss_releases_and_regain_relocks() {
+        let mut grab = PointerGrab::new(true);
+        grab.start();
+        assert_eq!(grab.focus(false), Some(GrabAction::Release));
+        assert!(!grab.is_locked());
+        assert_eq!(grab.focus(true), Some(GrabAction::Lock));
+        assert!(grab.is_locked());
+    }
+
+    #[test]
+    fn a_release_request_survives_refocus() {
+        let mut grab = PointerGrab::new(true);
+        grab.start();
+        assert_eq!(grab.request(false), Some(GrabAction::Release));
+        assert_eq!(grab.focus(true), None);
+    }
+
+    #[test]
+    fn a_lock_request_waits_for_focus() {
+        let mut grab = PointerGrab::new(false);
+        grab.start();
+        grab.focus(false);
+        assert_eq!(grab.request(true), None);
+        assert_eq!(grab.focus(true), Some(GrabAction::Lock));
+    }
+
+    #[test]
+    fn a_repeated_request_is_a_no_op() {
+        let mut grab = PointerGrab::new(false);
+        grab.start();
+        assert_eq!(grab.request(true), Some(GrabAction::Lock));
+        assert_eq!(grab.request(true), None);
+    }
 
     fn route(
         chord: &mut FullscreenChord,
