@@ -324,6 +324,12 @@ pub struct Engine {
     /// [`RenderSettings`](crate::RenderSettings), the strongest source. Lives here rather than in the
     /// world so a district switch or restore does not forget it; same status as the others.
     anti_aliasing_game: Option<AntiAliasing>,
+    /// The pointer lock the game last requested through [`CursorLock`](crate::CursorLock). Lives here
+    /// so a world rebuild does not forget it; host state, never hashed or snapshotted.
+    cursor_lock_game: Option<bool>,
+    /// The window host's channel for [`cursor_lock_game`](Engine::cursor_lock_request) changes
+    /// ([`set_cursor_lock_sender`](Engine::set_cursor_lock_sender)); unset headless.
+    cursor_lock_sender: Option<crossbeam_channel::Sender<bool>>,
     /// The host's render quality setting ([`set_quality`](Engine::set_quality)) — which optional
     /// effects to draw, plus the label of the choice that produced them. Default
     /// [`QualitySetting::default`] (everything the scene authors, labelled `"full"`). A client
@@ -784,6 +790,8 @@ impl Engine {
             present_interpolation: false,
             anti_aliasing_override: None,
             anti_aliasing_game: None,
+            cursor_lock_game: None,
+            cursor_lock_sender: None,
             quality: QualitySetting::default(),
             textures: TextureSource::default(),
             cook_resolved: false,
@@ -842,6 +850,7 @@ impl Engine {
         engine.install_scene_switch();
         engine.install_shutdown();
         engine.install_render_settings();
+        engine.install_cursor_lock();
         engine.install_debug_draw();
         engine.install_game_clock(GameClock::default());
         engine.install_diagnostics(crate::Diagnostics::default());
@@ -1675,6 +1684,7 @@ impl Engine {
         self.drain_profile(frame);
         self.drain_residue_clear();
         self.drain_render_settings();
+        self.drain_cursor_lock();
         if !self.drain_shutdown() {
             self.drain_scene_switch(frame);
         }
@@ -2172,6 +2182,25 @@ impl Engine {
         }
     }
 
+    /// Moves the game's pending [`CursorLock`](crate::CursorLock) request onto the engine and sends it
+    /// to the armed host channel when it differs from the last one. Host state: nothing about it is
+    /// recorded, hashed or snapshotted.
+    fn drain_cursor_lock(&mut self) {
+        let requested = self
+            .driver
+            .world_mut()
+            .resource_mut::<crate::CursorLock>()
+            .and_then(crate::CursorLock::take);
+        if let Some(value) = requested
+            && self.cursor_lock_game != Some(value)
+        {
+            self.cursor_lock_game = Some(value);
+            if let Some(sender) = &self.cursor_lock_sender {
+                let _ = sender.send(value);
+            }
+        }
+    }
+
     /// Drains a quit a game system asked for through the [`Shutdown`](crate::Shutdown) resource,
     /// returning whether one was pending.
     ///
@@ -2442,6 +2471,14 @@ impl Engine {
         self.driver
             .world_mut()
             .insert_resource(crate::RenderSettings::default());
+    }
+
+    /// Installs a fresh (empty) [`CursorLock`](crate::CursorLock) resource into the current world, the
+    /// [`install_render_settings`](Engine::install_render_settings) mold.
+    fn install_cursor_lock(&mut self) {
+        self.driver
+            .world_mut()
+            .insert_resource(crate::CursorLock::default());
     }
 
     /// Installs a fresh (empty) [`DebugDraw`](crate::DebugDraw) resource into the current world. Called
@@ -3304,6 +3341,20 @@ impl Engine {
     /// sim.
     pub fn set_audio_sender(&mut self, sender: crossbeam_channel::Sender<AudioMessage>) {
         self.audio_sender = Some(sender);
+    }
+
+    /// Wires the one-directional channel to the window host: each change of the game's
+    /// [`CursorLock`](crate::CursorLock) request is sent here (`true` locks, `false` releases), once
+    /// per change. A host installs this before the engine moves onto the sim thread; a headless/test
+    /// engine leaves it unset and the request stays a silent no-op.
+    pub fn set_cursor_lock_sender(&mut self, sender: crossbeam_channel::Sender<bool>) {
+        self.cursor_lock_sender = Some(sender);
+    }
+
+    /// The pointer lock the game last requested through [`CursorLock`](crate::CursorLock), `None`
+    /// before any request.
+    pub fn cursor_lock_request(&self) -> Option<bool> {
+        self.cursor_lock_game
     }
 
     /// The frame-stamped profile-save requests drained so far this session, in request order — the
@@ -6055,6 +6106,7 @@ impl Engine {
         }
         self.install_shutdown();
         self.install_render_settings();
+        self.install_cursor_lock();
         self.install_debug_draw();
         // A restore resumes the gameplay time it captured, not a clock level with the frame counter.
         self.install_game_clock(match &kind {

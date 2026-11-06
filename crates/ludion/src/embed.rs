@@ -287,6 +287,8 @@ pub struct Embedded {
     touch: Mutex<TouchHost>,
     ended: Receiver<()>,
     render_fault: Receiver<Diagnostic>,
+    #[allow(dead_code)]
+    cursor_lock: Receiver<bool>,
     /// Set by the boot thread once it serves its intake; until then a transition is queued, not awaited.
     running: Arc<AtomicBool>,
     scene: PathBuf,
@@ -313,6 +315,8 @@ struct Boot {
     running: Arc<AtomicBool>,
     /// The engine's channel for a fatal render fault, armed in `run_boot`.
     render_fault: Sender<Diagnostic>,
+    /// The engine's channel for pointer-lock changes, armed in `run_boot`.
+    cursor_lock: Sender<bool>,
 }
 
 /// How the boot thread gets its engine.
@@ -460,6 +464,7 @@ impl Embedded {
         let (ended_tx, ended) = crossbeam_channel::bounded::<()>(0);
 
         let (fault_tx, render_fault) = crossbeam_channel::bounded::<Diagnostic>(1);
+        let (lock_tx, cursor_lock) = crossbeam_channel::unbounded::<bool>();
 
         let running = Arc::new(AtomicBool::new(false));
         let boot = Boot {
@@ -473,6 +478,7 @@ impl Embedded {
             resize: resize.clone(),
             running: running.clone(),
             render_fault: fault_tx,
+            cursor_lock: lock_tx,
         };
         // The scene load used to run on `main`'s stack; keep its headroom on the boot thread.
         let handle = std::thread::Builder::new()
@@ -499,6 +505,7 @@ impl Embedded {
             }),
             ended,
             render_fault,
+            cursor_lock,
             running,
             scene,
             boot: handle,
@@ -529,6 +536,13 @@ impl Embedded {
     /// `L2007`): holds at most one diagnostic at a time; the sender drops with the engine.
     pub(crate) fn render_fault(&self) -> Receiver<Diagnostic> {
         self.render_fault.clone()
+    }
+
+    /// Where the engine reports each change of the game's pointer-lock request (`true` locks,
+    /// `false` releases); the sender drops with the engine.
+    #[allow(dead_code)]
+    pub(crate) fn cursor_lock_requests(&self) -> Receiver<bool> {
+        self.cursor_lock.clone()
     }
 
     /// The surface's present handle, once the boot has attached it: the frame size the last present
@@ -833,6 +847,7 @@ fn run_boot(boot: Boot) -> bool {
         resize,
         running,
         render_fault,
+        cursor_lock,
     } = boot;
 
     let mut engine = match prep {
@@ -908,6 +923,7 @@ fn run_boot(boot: Boot) -> bool {
     }
 
     engine.arm_render_fault_notify(render_fault);
+    engine.set_cursor_lock_sender(cursor_lock);
 
     // Before any renderer exists, and before a listener moves the engine onto its own sim thread.
     let attached = surface.is_some();
@@ -1566,6 +1582,40 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("the fault reaches the host's channel");
         assert_eq!(fault.code, code::RENDER_DEVICE_LOST);
+        embedded.stop();
+    }
+
+    /// A booted host arms the engine's pointer-lock channel: a game system's `lock()` reaches
+    /// [`Embedded::cursor_lock_requests`].
+    #[cfg(feature = "wire")]
+    #[test]
+    fn a_booted_host_delivers_a_pointer_lock_request_on_its_channel() {
+        fn lock_it(world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {
+            if let Some(lock) = world.resource_mut::<ludion_engine::CursorLock>() {
+                lock.lock();
+            }
+        }
+        let content = content_root("cursor-lock-channel");
+        let scene = content.join("scenes/main.yaml");
+        let engine = builder()
+            .system("lock_it", lock_it)
+            .load_scene_file(&scene)
+            .unwrap_or_else(|d| panic!("{d}"));
+        let embedded = Embedded::start_from(
+            Source::Built {
+                engine,
+                scene,
+                record_path: None,
+            },
+            None,
+            StartOptions::default(),
+        )
+        .unwrap_or_else(|d| panic!("{d}"));
+        let request = embedded
+            .cursor_lock_requests()
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the request reaches the host's channel");
+        assert!(request);
         embedded.stop();
     }
 

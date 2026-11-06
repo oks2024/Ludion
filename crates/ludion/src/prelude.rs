@@ -164,6 +164,8 @@
 //! - **Anti-aliasing** — [`RenderSettings`]: the resource an options-menu system sets with
 //!   `request_anti_aliasing(`[`AntiAliasing`]`)`, beating the host's choice and the builder's
 //!   `anti_aliasing` default from the next frame. Write-only: a system cannot read the effective mode.
+//! - **Pointer lock** — [`CursorLock`], which a system sets with `lock()`/`release()`; the in-process
+//!   window grabs and hides the pointer, and focus loss frees it. `CursorMode::Locked` starts locked.
 //! - **Diagnostics & ids** — [`Diagnostic`], [`DiagnosticCode`], [`EntityId`], and the channel a
 //!   *system* reports through: [`report_diagnostic`]`(world, code, key, message)` (or the
 //!   [`Diagnostics`] resource behind it); [`report_full_diagnostic`]`(world, key, diagnostic)` takes a
@@ -185,29 +187,29 @@
 pub use ludion_engine::{
     Anchor, Animation, AnimationEvents, AntiAliasing, AssemblyData, AudioCategory, AudioDistance,
     AudioEmitter, AudioEvent, AudioPan, AudioQueue, BlendCurve, BlendIn, BulletKind, Camera,
-    CameraOffset, CameraRig, CategoryGains, ClipAnchor, ClipEvent, CursorMode, DebugCategories,
-    DebugPen, Decal, DecalBlend, DecalMap, DecalReceiverSet, Diagnostics, DirectionalLight,
-    DocStore, DropShadow, EmitShape, Engine, EngineBuilder, Environment, Fade, FollowerMotion,
-    FontLibrary, GiDynamic, GroundMarker, GroundMarkerShape, Keep, LANE_ANCHOR, LANE_ERROR_FULL,
-    LANE_FORWARD, LANE_LATERAL, LANE_OFF, LANE_ON, LANE_PATH, LaneConstraint, LaneEnds, LaneInput,
-    LookAhead, MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED,
-    MOTOR_PROBE, MOTOR_STUCK, MOTOR_WALL, MapWrap, Mesh, MeshGrid, MeshSource, MotionSegment, Name,
-    NoInterpolate, PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter, PathDocument,
-    PathFollower, PathFrame, PathInterpolation, PathMetric, PathMode, PathOrient, PathSampler,
-    PatternDoc, PatternPlayer, PointLight, PostProcess, PrefabApplied, PrefabInstance,
-    PrefabReverted, ProbeShape, Profile, Projection, RampSpec, ReflectionProbe, RenderExtent,
-    RenderSettings, Residue, ResidueStore, RigConfig, RigMode, RigState, SceneSwitch, ShakeConfig,
-    Shutdown, SpotLight, Springs, Sprite, SpriteBlend, SwitchTo, Text, TileAppearance, Tilemap,
-    TimelineEntry, TrackRig, Transform, TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect,
-    UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Volley, VolleyCenter, VolleyShape,
-    WorldPose, add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age,
-    bullet_is_alive, bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade,
-    debug_draw, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
-    move_character, move_character_with, path_follow, path_follower_motion, play_patterns,
-    play_sound, posed_joint_world, probe_character_ground, reparent, report_diagnostic,
-    report_full_diagnostic, resize_character, revert_prefab, set_clip_speed, snap_rig,
-    spawn_prefab, switch_to_ragdoll, teleport_character, unpack_prefab, validate_pattern_docs,
-    volley_hits, world_transform,
+    CameraOffset, CameraRig, CategoryGains, ClipAnchor, ClipEvent, CursorLock, CursorMode,
+    DebugCategories, DebugPen, Decal, DecalBlend, DecalMap, DecalReceiverSet, Diagnostics,
+    DirectionalLight, DocStore, DropShadow, EmitShape, Engine, EngineBuilder, Environment, Fade,
+    FollowerMotion, FontLibrary, GiDynamic, GroundMarker, GroundMarkerShape, Keep, LANE_ANCHOR,
+    LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF, LANE_ON, LANE_PATH, LaneConstraint,
+    LaneEnds, LaneInput, LookAhead, MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING,
+    MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE, MOTOR_STUCK, MOTOR_WALL, MapWrap, Mesh,
+    MeshGrid, MeshSource, MotionSegment, Name, NoInterpolate, PARTICLE_MAX_LIVE_PER_EMITTER,
+    ParticleBlend, ParticleEmitter, PathDocument, PathFollower, PathFrame, PathInterpolation,
+    PathMetric, PathMode, PathOrient, PathSampler, PatternDoc, PatternPlayer, PointLight,
+    PostProcess, PrefabApplied, PrefabInstance, PrefabReverted, ProbeShape, Profile, Projection,
+    RampSpec, ReflectionProbe, RenderExtent, RenderSettings, Residue, ResidueStore, RigConfig,
+    RigMode, RigState, SceneSwitch, ShakeConfig, Shutdown, SpotLight, Springs, Sprite, SpriteBlend,
+    SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
+    TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect, UiText, VOLLEY_MAX_BULLETS,
+    VOLLEY_SALT, VerticalAnchor, Volley, VolleyCenter, VolleyShape, WorldPose, add_trauma,
+    advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
+    bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw,
+    fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly, move_character,
+    move_character_with, path_follow, path_follower_motion, play_patterns, play_sound,
+    posed_joint_world, probe_character_ground, reparent, report_diagnostic, report_full_diagnostic,
+    resize_character, revert_prefab, set_clip_speed, snap_rig, spawn_prefab, switch_to_ragdoll,
+    teleport_character, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;

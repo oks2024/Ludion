@@ -78,8 +78,8 @@ type Registration = Box<dyn FnOnce(&mut Registry) -> Result<(), Diagnostic> + Se
 pub type ResourceCarrier =
     Box<dyn Fn(&mut ludion_ecs::World, &mut ludion_ecs::World) + Send + Sync>;
 
-/// Whether a window host hides the mouse cursor after it has been idle. Host state, like the rest of
-/// the builder's window settings.
+/// How a window host treats the mouse cursor: hidden when idle, always shown, or locked. Host state,
+/// like the rest of the builder's window settings.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CursorMode {
     /// Hide the cursor after 2 s without motion; any motion shows it again.
@@ -87,6 +87,10 @@ pub enum CursorMode {
     AutoHide,
     /// Always show the cursor.
     Visible,
+    /// Start with the pointer locked: grabbed, hidden and centred; raw `delta()` keeps flowing. A
+    /// system releases or re-locks it through [`CursorLock`](crate::CursorLock). Only the in-process
+    /// window applies it.
+    Locked,
 }
 
 /// Builds an [`Engine`] that hosts a game's components and systems on top of the built-in core.
@@ -1158,6 +1162,8 @@ mod tests {
         assert_eq!(set.title_hint(), Some("Game"));
         assert!(set.fullscreen_hint());
         assert_eq!(set.cursor_hint(), CursorMode::Visible);
+        let locked = Engine::builder().cursor(CursorMode::Locked);
+        assert_eq!(locked.cursor_hint(), CursorMode::Locked);
     }
 
     #[test]

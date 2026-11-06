@@ -46,6 +46,7 @@ mod collider_mesh;
 mod commands;
 pub mod components;
 mod cooked_maps;
+mod cursor_lock;
 mod debug_draw;
 pub mod diagnostics;
 mod dispatch;
@@ -139,6 +140,7 @@ pub use components::{
     Visibility, builtin_registry, crossfade,
 };
 pub use cooked_maps::TextureSource;
+pub use cursor_lock::CursorLock;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
 pub use diagnostics::{
     Diagnostics, report as report_diagnostic, report_full as report_full_diagnostic,
