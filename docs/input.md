@@ -46,9 +46,9 @@ left and right are one key, held while either is down; Cmd/Super is not mapped).
 - `position()` freezes while locked; `delta()` keeps flowing.
 - Focus loss always frees the pointer; focus regain re-locks it with no click. Motion only arrives
   while the window is focused.
-- macOS (and Wayland) use `Locked`: relative mode, pointer frozen. Windows (and X11) use `Confined`
-  plus host recentring, with raw motion from device events. If neither grab works the pointer is only
-  hidden.
+- macOS and Windows both use the `Locked` grab: the host centres the pointer, then locks it there
+  (relative mode on macOS, a 1×1 clip on Windows); raw motion arrives from device events. Where
+  `Locked` is unsupported the pointer is only hidden.
 - Headless: a no-op. Only the in-process window (`run --window`, `launch`) applies the lock; the
   attach viewer and the editor do not.
 

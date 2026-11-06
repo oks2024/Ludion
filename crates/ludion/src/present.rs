@@ -51,8 +51,8 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_engine::CursorMode;
 use ludion_engine::live::SIM_STOP_GRACE;
 use ludion_window::chrome::{
-    self, CursorAutoHide, ExtentDebounce, FullscreenChord, GrabAction, HostPlatform, KeyRoute,
-    PointerGrab, dev_title, game_title,
+    self, CursorAutoHide, ExtentDebounce, FullscreenChord, GrabAction, HostOp, HostPlatform,
+    KeyRoute, PointerGrab, dev_title, game_title,
 };
 use ludion_window::host_input::HostInput;
 use ludion_window::mouse;
@@ -195,7 +195,6 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
         chord: FullscreenChord::default(),
         cursor: None,
         grab: PointerGrab::new(cursor == CursorMode::Locked),
-        confined: false,
         extent: ExtentDebounce::default(),
     };
     let loop_result = event_loop.run_app(&mut app);
@@ -312,8 +311,6 @@ struct App {
     cursor: Option<CursorAutoHide>,
     /// Whether the pointer is grabbed (game request and window focus).
     grab: PointerGrab,
-    /// The grab fell back to `Confined`, so the host recentres the pointer.
-    confined: bool,
     /// Settles drag-resizes before the render extent follows the window.
     extent: ExtentDebounce,
 }
@@ -403,36 +400,40 @@ impl App {
         self.surface_size = (inner.width, inner.height);
         self.cursor = Some(CursorAutoHide::new(self.cursor_enabled, Instant::now()));
         self.embedded = Some(embedded);
+        let focused = window.has_focus();
         self.window = Some(window);
-        let action = self.grab.start();
+        let action = self.grab.start(focused);
         self.apply_grab(action);
         Ok(())
     }
 
-    /// Applies a grab change with the platform's relative mode: `Locked` where it exists (macOS,
-    /// Wayland), else `Confined` with host recentring (Windows, X11). Every call is best-effort; if
-    /// both grabs fail the pointer is only hidden.
+    /// Locked on macOS and Windows (relative mode / a 1×1 clip at the centre). Recentre first: see
+    /// `GrabAction::ops`. Where `Locked` is unsupported the pointer is only hidden. Every call is
+    /// best-effort.
     // The window host owns the wall clock; the cursor timer never touches the sim.
     #[allow(clippy::disallowed_methods)]
     fn apply_grab(&mut self, action: Option<GrabAction>) {
         let Some(window) = self.window.clone() else {
             return;
         };
-        match action {
-            Some(GrabAction::Lock) => {
-                if window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
-                    self.confined = window.set_cursor_grab(CursorGrabMode::Confined).is_ok();
+        let Some(action) = action else {
+            return;
+        };
+        for op in action.ops() {
+            match op {
+                HostOp::Recentre => self.recentre(),
+                HostOp::Lock => {
+                    let _ = window.set_cursor_grab(CursorGrabMode::Locked);
                 }
-                window.set_cursor_visible(false);
-                self.recentre();
+                HostOp::Hide => window.set_cursor_visible(false),
+                HostOp::Unlock => {
+                    let _ = window.set_cursor_grab(CursorGrabMode::None);
+                }
+                HostOp::Show => window.set_cursor_visible(true),
+                HostOp::RestartIdle => {
+                    self.cursor = Some(CursorAutoHide::new(self.cursor_enabled, Instant::now()));
+                }
             }
-            Some(GrabAction::Release) => {
-                let _ = window.set_cursor_grab(CursorGrabMode::None);
-                window.set_cursor_visible(true);
-                self.confined = false;
-                self.cursor = Some(CursorAutoHide::new(self.cursor_enabled, Instant::now()));
-            }
-            None => {}
         }
     }
 
@@ -646,16 +647,8 @@ impl ApplicationHandler<HostEvent> for App {
                 let action = self.grab.focus(focused);
                 self.apply_grab(action);
             }
-            WindowEvent::CursorMoved { position, .. } if self.grab.is_locked() => {
-                let (cx, cy) = (
-                    f64::from(self.surface_size.0 / 2),
-                    f64::from(self.surface_size.1 / 2),
-                );
-                if self.confined && ((position.x - cx).abs() > 1.0 || (position.y - cy).abs() > 1.0)
-                {
-                    self.recentre();
-                }
-            }
+            // Locked: the cursor position is frozen, so nothing is forwarded and the auto-hide idles.
+            WindowEvent::CursorMoved { .. } if self.grab.is_locked() => {}
             WindowEvent::CursorMoved { .. } => {
                 if let Some(cursor) = &mut self.cursor
                     && let Some(visible) = cursor.on_motion(Instant::now())

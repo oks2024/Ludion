@@ -160,6 +160,35 @@ pub enum GrabAction {
     Release,
 }
 
+/// One host call that applies a [`GrabAction`], in the order the host must run them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostOp {
+    /// Move the pointer to the window centre.
+    Recentre,
+    /// Grab the pointer in `Locked` mode.
+    Lock,
+    /// Hide the cursor.
+    Hide,
+    /// Free the pointer grab.
+    Unlock,
+    /// Show the cursor.
+    Show,
+    /// Restart the idle auto-hide timer.
+    RestartIdle,
+}
+
+impl GrabAction {
+    /// The host calls for this action, in order. Locking recentres *first*: macOS re-associates the
+    /// mouse on a position set (undoing a lock), and Windows' `Locked` clips to the pointer's
+    /// current position, so a later recentre would be clamped to nothing.
+    pub fn ops(self) -> &'static [HostOp] {
+        match self {
+            GrabAction::Lock => &[HostOp::Recentre, HostOp::Lock, HostOp::Hide],
+            GrabAction::Release => &[HostOp::Unlock, HostOp::Show, HostOp::RestartIdle],
+        }
+    }
+}
+
 /// Whether the pointer is grabbed: it is when the game wants it locked *and* the window is focused,
 /// so focus loss always frees the pointer and focus regain re-locks it. Each input returns the
 /// action to take, only when the state changes.
@@ -171,7 +200,7 @@ pub struct PointerGrab {
 }
 
 impl PointerGrab {
-    /// `wanted` is the game's initial request; the window starts focused and ungrabbed.
+    /// `wanted` is the game's initial request; ungrabbed until [`start`](Self::start) seeds the window's focus.
     pub fn new(wanted: bool) -> Self {
         Self {
             wanted,
@@ -180,8 +209,9 @@ impl PointerGrab {
         }
     }
 
-    /// The initial action, once the window exists.
-    pub fn start(&mut self) -> Option<GrabAction> {
+    /// The initial action, once the window exists; `focused` is its focus at that moment.
+    pub fn start(&mut self, focused: bool) -> Option<GrabAction> {
+        self.focused = focused;
         self.settle()
     }
 
@@ -343,14 +373,33 @@ mod tests {
 
     #[test]
     fn a_grab_starts_only_when_wanted() {
-        assert_eq!(PointerGrab::new(true).start(), Some(GrabAction::Lock));
-        assert_eq!(PointerGrab::new(false).start(), None);
+        assert_eq!(PointerGrab::new(true).start(true), Some(GrabAction::Lock));
+        assert_eq!(PointerGrab::new(false).start(true), None);
+    }
+
+    #[test]
+    fn lock_recentres_before_it_locks() {
+        assert_eq!(
+            GrabAction::Lock.ops(),
+            [HostOp::Recentre, HostOp::Lock, HostOp::Hide]
+        );
+        assert_eq!(
+            GrabAction::Release.ops(),
+            [HostOp::Unlock, HostOp::Show, HostOp::RestartIdle]
+        );
+    }
+
+    #[test]
+    fn an_unfocused_start_does_not_grab_until_focus() {
+        let mut grab = PointerGrab::new(true);
+        assert_eq!(grab.start(false), None);
+        assert_eq!(grab.focus(true), Some(GrabAction::Lock));
     }
 
     #[test]
     fn focus_loss_releases_and_regain_relocks() {
         let mut grab = PointerGrab::new(true);
-        grab.start();
+        grab.start(true);
         assert_eq!(grab.focus(false), Some(GrabAction::Release));
         assert!(!grab.is_locked());
         assert_eq!(grab.focus(true), Some(GrabAction::Lock));
@@ -360,7 +409,7 @@ mod tests {
     #[test]
     fn a_release_request_survives_refocus() {
         let mut grab = PointerGrab::new(true);
-        grab.start();
+        grab.start(true);
         assert_eq!(grab.request(false), Some(GrabAction::Release));
         assert_eq!(grab.focus(true), None);
     }
@@ -368,7 +417,7 @@ mod tests {
     #[test]
     fn a_lock_request_waits_for_focus() {
         let mut grab = PointerGrab::new(false);
-        grab.start();
+        grab.start(true);
         grab.focus(false);
         assert_eq!(grab.request(true), None);
         assert_eq!(grab.focus(true), Some(GrabAction::Lock));
@@ -377,7 +426,7 @@ mod tests {
     #[test]
     fn a_repeated_request_is_a_no_op() {
         let mut grab = PointerGrab::new(false);
-        grab.start();
+        grab.start(true);
         assert_eq!(grab.request(true), Some(GrabAction::Lock));
         assert_eq!(grab.request(true), None);
     }
