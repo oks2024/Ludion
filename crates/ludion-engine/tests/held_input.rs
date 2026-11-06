@@ -385,6 +385,31 @@ fn folded_modifier_keys_inject_and_edge_like_any_key() {
 }
 
 #[test]
+fn injected_mouse_motion_accumulates_within_a_frame_and_clears_the_next() {
+    let dir = fresh_dir("motion");
+    let mut engine = booted(&dir);
+    let motion = |x: f32, y: f32| json!({ "kind": "mouse_motion", "delta_bits": [x.to_bits(), y.to_bits()] });
+    inject(&mut engine, Some(1), motion(3.0, -1.5));
+    inject(&mut engine, Some(1), motion(0.25, 4.0));
+
+    engine.advance_live(); // frame 0
+    assert_eq!(input(&engine).mouse().delta(), [0.0, 0.0]);
+    engine.advance_live(); // frame 1
+    assert_eq!(input(&engine).mouse().delta(), [3.25, 2.5]);
+    assert_eq!(input(&engine).mouse().position(), [0.0, 0.0]);
+    engine.advance_live(); // frame 2
+    assert_eq!(input(&engine).mouse().delta(), [0.0, 0.0]);
+
+    let error = engine
+        .execute(Command::InputInject(InputInjectParams {
+            frame: None,
+            event: motion(f32::NAN, 0.0),
+        }))
+        .unwrap_err();
+    assert_eq!(error.code, ludion_core::codes::code::PROTOCOL_INVALID_INPUT);
+}
+
+#[test]
 fn non_finite_or_out_of_range_analogs_are_refused_and_leave_input_unchanged() {
     let dir = fresh_dir("analog-validation");
     let mut engine = booted(&dir);

@@ -191,8 +191,8 @@ pub enum GamepadButton {
 }
 
 impl InputEvent {
-    /// Checks the analog payload of a wire-supplied event: mouse positions and wheel deltas must
-    /// be finite, a gamepad axis finite and inside its range (sticks `[-1, 1]`, triggers
+    /// Checks the analog payload of a wire-supplied event: mouse positions, wheel and motion deltas
+    /// must be finite, a gamepad axis finite and inside its range (sticks `[-1, 1]`, triggers
     /// `[0, 1]`, bounds inclusive; `-0.0` is valid). Key and button events are always valid.
     ///
     /// # Errors
@@ -203,6 +203,7 @@ impl InputEvent {
                 check_finite("mouse_move", "position_bits", position)
             }
             InputEvent::MouseWheel { delta } => check_finite("mouse_wheel", "delta_bits", delta),
+            InputEvent::MouseMotion { delta } => check_finite("mouse_motion", "delta_bits", delta),
             InputEvent::GamepadAxis { axis, value } => {
                 let (low, range) = match axis {
                     GamepadAxis::LeftTrigger | GamepadAxis::RightTrigger => (0.0, "[0, 1]"),
@@ -359,6 +360,14 @@ pub enum InputEvent {
         #[schemars(with = "[u32; 2]")]
         delta: [f32; 2],
     },
+    /// Raw mouse motion in device counts; `delta` accumulates into this tick's
+    /// [`MouseState::delta`](crate::input::MouseState::delta) and never moves the position.
+    MouseMotion {
+        /// The motion to accumulate.
+        #[serde(rename = "delta_bits", with = "f32x2_bits")]
+        #[schemars(with = "[u32; 2]")]
+        delta: [f32; 2],
+    },
     /// A gamepad analog axis was set to a new level value.
     GamepadAxis {
         /// Which axis.
@@ -478,13 +487,14 @@ impl From<InputScript> for Vec<ScriptedInput> {
     }
 }
 
-/// Mouse state: level position, edge button sets, and a per-frame wheel accumulator.
+/// Mouse state: level position, edge button sets, and per-frame wheel and raw-motion accumulators.
 ///
 /// Mirrors [`InputState`]'s key vocabulary: [`is_held`](MouseState::is_held) is level,
 /// [`was_pressed`](MouseState::was_pressed)/[`was_released`](MouseState::was_released) are
 /// one-frame edges. [`wheel`](MouseState::wheel) accumulates every [`InputEvent::MouseWheel`]
 /// delta applied this frame and resets to zero on the next [`InputState::begin_tick`] — it reads
-/// like an edge (this frame's motion only), not a level.
+/// like an edge (this frame's motion only), not a level. [`delta`](MouseState::delta) does the same
+/// for [`InputEvent::MouseMotion`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct MouseState {
@@ -500,10 +510,18 @@ pub struct MouseState {
     #[serde(with = "f32x2_bits")]
     #[schemars(with = "[u32; 2]")]
     wheel: [f32; 2],
+    // Skipped when zero so engine snapshots written before motion existed stay byte-identical.
+    #[serde(with = "f32x2_bits", skip_serializing_if = "all_zero_bits_x2")]
+    #[schemars(with = "[u32; 2]")]
+    delta: [f32; 2],
 }
 
 fn all_zero_bits(values: &[f32]) -> bool {
     values.iter().all(|v| v.to_bits() == 0)
+}
+
+fn all_zero_bits_x2(values: &[f32; 2]) -> bool {
+    all_zero_bits(values)
 }
 
 impl MouseState {
@@ -513,6 +531,7 @@ impl MouseState {
             && self.released.is_empty()
             && all_zero_bits(&self.position)
             && all_zero_bits(&self.wheel)
+            && all_zero_bits(&self.delta)
     }
 
     /// The current position, in render-target pixels (origin top-left, +Y down).
@@ -540,7 +559,16 @@ impl MouseState {
         self.wheel
     }
 
-    /// Whether any button went down this frame. Buttons only: position and wheel never count.
+    /// This tick's accumulated raw mouse motion, in device counts (unscaled, not render-target
+    /// pixels; +X right, +Y down as the OS reports it), zero when the mouse did not move.
+    /// Unbounded: not clamped to the window like `position`. Sensitivity, invert and smoothing
+    /// are the game's.
+    pub fn delta(&self) -> [f32; 2] {
+        self.delta
+    }
+
+    /// Whether any button went down this frame. Buttons only: position, wheel and motion never
+    /// count.
     pub fn any_pressed(&self) -> bool {
         !self.pressed.is_empty()
     }
@@ -866,7 +894,7 @@ impl InputState {
             && !self.action_held(action)
     }
 
-    /// The mouse's state (level position, edge buttons, wheel accumulator).
+    /// The mouse's state (level position, edge buttons, wheel and motion accumulators).
     pub fn mouse(&self) -> &MouseState {
         &self.mouse
     }
@@ -876,7 +904,8 @@ impl InputState {
         &self.gamepad
     }
 
-    /// Starts a new tick: clears the pressed/released edge sets and the wheel accumulator. Held
+    /// Starts a new tick: clears the pressed/released edge sets and the wheel and motion
+    /// accumulators. Held
     /// keys/buttons and level analogs (mouse position, gamepad sticks/triggers) persist.
     ///
     /// The driver calls this at every tick boundary before applying that frame's events; it is
@@ -887,6 +916,7 @@ impl InputState {
         self.mouse.pressed.clear();
         self.mouse.released.clear();
         self.mouse.wheel = [0.0, 0.0];
+        self.mouse.delta = [0.0, 0.0];
         self.gamepad.pressed.clear();
         self.gamepad.released.clear();
     }
@@ -896,7 +926,8 @@ impl InputState {
     /// A `*Down` for an already-held key/button changes nothing (no repeat edges); a `*Up` for one
     /// that is not held is ignored. These rules make event application idempotent per level, so a
     /// script's meaning does not depend on OS-style auto-repeat quirks. `MouseMove`/`GamepadAxis`
-    /// simply set the named level value; `MouseWheel` accumulates into this frame's wheel total.
+    /// simply set the named level value; `MouseWheel` and `MouseMotion` accumulate into this frame's
+    /// wheel and motion totals.
     pub fn apply(&mut self, event: InputEvent) {
         match event {
             InputEvent::KeyDown { key } => {
@@ -925,6 +956,10 @@ impl InputState {
             InputEvent::MouseWheel { delta } => {
                 self.mouse.wheel[0] += delta[0];
                 self.mouse.wheel[1] += delta[1];
+            }
+            InputEvent::MouseMotion { delta } => {
+                self.mouse.delta[0] += delta[0];
+                self.mouse.delta[1] += delta[1];
             }
             InputEvent::GamepadAxis { axis, value } => match axis {
                 GamepadAxis::LeftStickX => self.gamepad.left_stick[0] = value,
@@ -1120,6 +1155,22 @@ mod tests {
     }
 
     #[test]
+    fn mouse_motion_accumulates_within_a_tick_and_clears_on_begin_tick() {
+        let mut input = InputState::default();
+        input.begin_tick();
+        input.apply(InputEvent::MouseMotion { delta: [3.0, -2.0] });
+        input.apply(InputEvent::MouseMotion { delta: [0.5, 7.0] });
+        assert_eq!(input.mouse().delta(), [3.5, 5.0]);
+        assert_eq!(input.mouse().position(), [0.0, 0.0]);
+
+        input.begin_tick();
+        assert_eq!(input.mouse().delta(), [0.0, 0.0]);
+
+        input.apply(InputEvent::MouseMotion { delta: [-1e6, 1e6] });
+        assert_eq!(input.mouse().delta(), [-1e6, 1e6]);
+    }
+
+    #[test]
     fn gamepad_button_press_and_release_edges() {
         let mut input = InputState::default();
         input.begin_tick();
@@ -1205,11 +1256,19 @@ mod tests {
                 button: MouseButton::Middle,
             },
             InputEvent::MouseWheel { delta: [0.0, -1.0] },
+            InputEvent::MouseMotion { delta: [1.5, -2.0] },
         ] {
             let json = serde_json::to_value(event).unwrap();
             let back: InputEvent = serde_json::from_value(json).unwrap();
             assert_eq!(back, event);
         }
+        assert_eq!(
+            serde_json::to_value(InputEvent::MouseMotion { delta: [1.5, -2.0] }).unwrap(),
+            serde_json::json!({
+                "kind": "mouse_motion",
+                "delta_bits": [1.5f32.to_bits(), (-2.0f32).to_bits()],
+            })
+        );
         let json = serde_json::to_value(InputEvent::MouseDown {
             button: MouseButton::Right,
         })
@@ -1284,6 +1343,7 @@ mod tests {
                 position: [5.0, 5.0],
             },
             InputEvent::MouseWheel { delta: [0.0, 1.0] },
+            InputEvent::MouseMotion { delta: [2.0, 1.0] },
             axis(GamepadAxis::LeftStickX, 1.0),
             axis(GamepadAxis::LeftTrigger, 0.49),
         ]);
@@ -1534,6 +1594,9 @@ mod tests {
             InputEvent::MouseWheel {
                 delta: [0.0, f32::INFINITY],
             },
+            InputEvent::MouseMotion {
+                delta: [f32::NAN, 0.0],
+            },
         ];
         for event in bad {
             let err = event.validate().expect_err("must be refused");
@@ -1560,6 +1623,9 @@ mod tests {
                 position: [-12.5, 40.0],
             },
             InputEvent::MouseWheel { delta: [-1.0, 3.0] },
+            InputEvent::MouseMotion {
+                delta: [-500.0, 1e6],
+            },
             InputEvent::KeyDown { key: Key::W },
         ];
         for event in ok {
@@ -1576,5 +1642,26 @@ mod tests {
         let json = serde_json::to_value(&input).unwrap();
         let back: InputState = serde_json::from_value(json).unwrap();
         assert_eq!(back.gamepad().left_stick()[0].to_bits(), 0x8000_0000);
+    }
+
+    #[test]
+    fn mouse_state_omits_a_zero_delta_when_serialized() {
+        let mut input = InputState::default();
+        let json = serde_json::to_value(&input).unwrap();
+        assert!(!json.to_string().contains("delta"), "{json}");
+
+        input.apply(InputEvent::MouseMotion { delta: [1.5, -2.0] });
+        let json = serde_json::to_value(&input).unwrap();
+        assert!(json.to_string().contains("delta"), "{json}");
+        let back: InputState = serde_json::from_value(json).unwrap();
+        assert_eq!(back.mouse().delta(), [1.5, -2.0]);
+
+        // Accumulating onto +0.0 never yields -0.0, so reach it through a restored document.
+        let doc = serde_json::json!({ "mouse": { "delta": [0x8000_0000u32, 0u32] } });
+        let input: InputState = serde_json::from_value(doc).unwrap();
+        assert!(!input.mouse().is_idle());
+        let json = serde_json::to_value(&input).unwrap();
+        let back: InputState = serde_json::from_value(json).unwrap();
+        assert_eq!(back.mouse().delta()[0].to_bits(), 0x8000_0000);
     }
 }

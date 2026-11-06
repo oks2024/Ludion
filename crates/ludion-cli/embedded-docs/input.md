@@ -34,6 +34,9 @@ left and right are one key, held while either is down; Cmd/Super is not mapped).
   keys (`MouseButton` is `Left` / `Right` / `Middle`).
 - `input.mouse().wheel()` — `[f32; 2]`, this frame's accumulated scroll (an edge-like accumulator:
   it sums every wheel motion during the tick and resets to zero at the next tick).
+- `input.mouse().delta()` — `[f32; 2]`, this tick's raw mouse motion in device counts (unscaled,
+  unbounded — not clamped to the window like `position`); accumulates like `wheel` and resets each
+  tick. Scale for sensitivity yourself. Wire form: `{"kind": "mouse_motion", "delta_bits": [<u32>, <u32>]}`.
 
 ## Gamepad — `input.gamepad()`
 

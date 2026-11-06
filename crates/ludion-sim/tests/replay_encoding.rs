@@ -1,6 +1,6 @@
 //! Phase 13 (E2 input) Wave 2 — "the encoding proof", scheduled *before* Wave 4 records real
 //! captures (`Plan/phase-13-input.md`, decision 3). Wave 1 encodes every analog `InputEvent` field
-//! (`MouseMove.position`, `MouseWheel.delta`, `GamepadAxis.value`) as an IEEE-754 bit pattern
+//! (`MouseMove.position`, `MouseWheel.delta`, `MouseMotion.delta`, `GamepadAxis.value`) as an IEEE-754 bit pattern
 //! (`f32_bits`/`f32x2_bits` in `crates/ludion-sim/src/input.rs`) rather than a JSON number, because
 //! `serde_json` deserializes `f32` through `f64` — a decimal -> `f64` -> `f32` double rounding that
 //! is not guaranteed to reproduce the original bits. This file proves the encoding survives the
@@ -95,12 +95,15 @@ fn boundary_bits() -> Vec<u32> {
 
 /// Builds one `InputEvent` of each analog-bearing variant from a single `f32`, so every variant's
 /// `*_bits` field gets the same boundary/random sample.
-fn analog_events(value: f32) -> [InputEvent; 3] {
+fn analog_events(value: f32) -> [InputEvent; 4] {
     [
         InputEvent::MouseMove {
             position: [value, -value],
         },
         InputEvent::MouseWheel {
+            delta: [value, -value],
+        },
+        InputEvent::MouseMotion {
             delta: [value, -value],
         },
         InputEvent::GamepadAxis {
@@ -115,7 +118,9 @@ fn analog_events(value: f32) -> [InputEvent; 3] {
 fn analog_bits(event: &InputEvent) -> Vec<u32> {
     match *event {
         InputEvent::MouseMove { position } => vec![position[0].to_bits(), position[1].to_bits()],
-        InputEvent::MouseWheel { delta } => vec![delta[0].to_bits(), delta[1].to_bits()],
+        InputEvent::MouseWheel { delta } | InputEvent::MouseMotion { delta } => {
+            vec![delta[0].to_bits(), delta[1].to_bits()]
+        }
         InputEvent::GamepadAxis { value, .. } => vec![value.to_bits()],
         ref other => panic!("analog_bits called on a non-analog event: {other:?}"),
     }

@@ -355,7 +355,7 @@ fn invalid_speed_is_a_structured_l4001() {
 //
 // Wave 1 encodes every analog InputEvent field as an IEEE-754 bit pattern rather than a JSON
 // number (input.rs's `f32_bits`/`f32x2_bits`); Wave 2 proves it end to end through a real driver
-// run: an InputScript carrying mouse-move, mouse-wheel, and gamepad-axis events with awkward exact
+// run: an InputScript carrying mouse-move, mouse-wheel, mouse-motion, and gamepad-axis events with awkward exact
 // bit patterns (subnormals, a mantissa-precision boundary, MIN_POSITIVE) drives a system that
 // copies those analog fields into a hashed component, and two runs of the same script — plus a
 // third run built from the script's own re-serialized-then-reloaded form — all produce the
@@ -369,15 +369,18 @@ struct Aim {
     mouse_y: f32,
     wheel_x: f32,
     wheel_y: f32,
+    motion_x: f32,
+    motion_y: f32,
     axis: f32,
 }
 
 fn record_aim(world: &mut World, _ctx: &SystemCtx) {
-    let (position, wheel, axis) = {
+    let (position, wheel, motion, axis) = {
         let input = world.resource::<InputState>().unwrap();
         (
             input.mouse().position(),
             input.mouse().wheel(),
+            input.mouse().delta(),
             input.gamepad().left_stick()[0],
         )
     };
@@ -386,6 +389,8 @@ fn record_aim(world: &mut World, _ctx: &SystemCtx) {
         aim.mouse_y = position[1];
         aim.wheel_x = wheel[0];
         aim.wheel_y = wheel[1];
+        aim.motion_x = motion[0];
+        aim.motion_y = motion[1];
         aim.axis = axis;
     }
 }
@@ -422,6 +427,25 @@ fn awkward_analog_script() -> InputScript {
             value: f32::from_bits(0x3f7f_ffff), // just under 1.0
         },
     );
+    // Two motions on one frame (accumulated), then one on the next (the per-tick reset).
+    script.push(
+        FrameIndex::new(2),
+        InputEvent::MouseMotion {
+            delta: [f32::from_bits(1), 16_777_216.0],
+        },
+    );
+    script.push(
+        FrameIndex::new(2),
+        InputEvent::MouseMotion {
+            delta: [-f32::MIN_POSITIVE, 1.0],
+        },
+    );
+    script.push(
+        FrameIndex::new(3),
+        InputEvent::MouseMotion {
+            delta: [0.25, f32::from_bits(0x3f7f_ffff)],
+        },
+    );
     script.push(
         FrameIndex::new(5),
         InputEvent::GamepadAxis {
@@ -443,6 +467,8 @@ fn aim_fixture(script: InputScript) -> (SimDriver, ludion_core::ids::EntityId) {
                 mouse_y: 0.0,
                 wheel_x: 0.0,
                 wheel_y: 0.0,
+                motion_x: 0.0,
+                motion_y: 0.0,
                 axis: 0.0,
             },
         )
