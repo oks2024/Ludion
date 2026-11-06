@@ -58,7 +58,7 @@ use ludion_window::host_input::HostInput;
 use ludion_window::mouse;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{ModifiersState, PhysicalKey};
 use winit::window::{Fullscreen, Window, WindowId};
@@ -434,6 +434,14 @@ impl App {
         );
     }
 
+    /// Sends the pending raw mouse motion, if any, to the forwarder channel.
+    fn flush_motion(&mut self) {
+        let input_tx = &self.input_tx;
+        self.input.flush_motion(|value| {
+            let _ = input_tx.send(value);
+        });
+    }
+
     /// Records a fatal diagnostic and exits the loop. Only safe while the boot does not yet hold
     /// the surface; a runtime fault goes through [`request_stop`](Self::request_stop) instead.
     fn fail(&mut self, event_loop: &ActiveEventLoop, diagnostic: Diagnostic) {
@@ -475,6 +483,12 @@ impl ApplicationHandler<HostEvent> for App {
         }
     }
 
+    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        if let DeviceEvent::MouseMotion { delta } = event {
+            self.input.motion(delta.0, delta.1);
+        }
+    }
+
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: HostEvent) {
         match event {
             HostEvent::Stop => self.request_stop(),
@@ -490,6 +504,7 @@ impl ApplicationHandler<HostEvent> for App {
     // flow is set: the stop timer and the idle-cursor timer share it.
     #[allow(clippy::disallowed_methods)]
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.flush_motion();
         let now = Instant::now();
         if self.stop_timer.expired(now) {
             self.stuck = true;

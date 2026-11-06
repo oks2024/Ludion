@@ -1,5 +1,5 @@
 //! The one device-event → `input.inject` path both native window hosts share: this crate's attach
-//! viewer and the `ludion` facade's in-process window. Routing keyboard, mouse and focus events
+//! viewer and the `ludion` facade's in-process window. Routing keyboard, mouse, raw motion and focus events
 //! through the same code is what makes a session recorded through either window carry the same
 //! events.
 
@@ -16,9 +16,25 @@ use crate::mouse::{self, MouseButtons};
 pub struct HostInput {
     keys: KeyMapper,
     mouse: MouseButtons,
+    /// Raw device counts not yet emitted; summed in `f64` and narrowed once at emit.
+    motion: [f64; 2],
 }
 
 impl HostInput {
+    /// Adds raw device motion to the pending total.
+    pub fn motion(&mut self, dx: f64, dy: f64) {
+        self.motion[0] += dx;
+        self.motion[1] += dy;
+    }
+
+    /// Emits the pending motion as one event (nothing when it is zero) and clears it.
+    pub fn flush_motion(&mut self, mut emit: impl FnMut(Value)) {
+        let [dx, dy] = std::mem::take(&mut self.motion);
+        if dx != 0.0 || dy != 0.0 {
+            emit(mouse::mouse_motion_event([dx as f32, dy as f32]));
+        }
+    }
+
     /// The event for a key transition, or `None` when nothing should be sent (see
     /// [`KeyMapper::map`]).
     pub fn key(&mut self, code: KeyCode, state: ElementState, repeat: bool) -> Option<Value> {
@@ -53,6 +69,7 @@ impl HostInput {
         map_cursor: impl FnOnce(f32, f32) -> Option<[f32; 2]>,
         mut emit: impl FnMut(Value),
     ) {
+        self.flush_motion(&mut emit);
         match event {
             WindowEvent::KeyboardInput {
                 event,
@@ -112,6 +129,50 @@ mod tests {
         let mut input = held_input();
         assert_eq!(input.focus_lost(), expected_release());
         assert!(input.focus_lost().is_empty());
+    }
+
+    fn motion_json(x: f32, y: f32) -> Value {
+        mouse::mouse_motion_event([x, y])
+    }
+
+    #[test]
+    fn motion_calls_coalesce_into_one_event_then_nothing() {
+        let mut input = HostInput::default();
+        input.motion(1.0, 2.0);
+        input.motion(0.5, -1.0);
+        input.motion(1.0, 0.0);
+        let mut out = Vec::new();
+        input.flush_motion(|v| out.push(v));
+        assert_eq!(out, vec![motion_json(2.5, 1.0)]);
+        input.flush_motion(|v| out.push(v));
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn flush_without_motion_emits_nothing() {
+        let mut out = Vec::new();
+        HostInput::default().flush_motion(|v| out.push(v));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn motion_precedes_a_routed_click() {
+        let mut input = HostInput::default();
+        input.motion(3.0, 0.0);
+        let event = WindowEvent::MouseInput {
+            device_id: winit::event::DeviceId::dummy(),
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+        };
+        let mut out = Vec::new();
+        input.route(&event, |_, _| None, |v| out.push(v));
+        assert_eq!(
+            out,
+            vec![
+                motion_json(3.0, 0.0),
+                serde_json::json!({"kind": "mouse_down", "button": "left"}),
+            ]
+        );
     }
 
     #[test]

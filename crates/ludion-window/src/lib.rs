@@ -95,7 +95,7 @@ use ludion_protocol::Command;
 use ludion_protocol::command::InputInjectParams;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
@@ -318,6 +318,19 @@ fn map_cursor(
 }
 
 impl ApplicationHandler<UserEvent> for App {
+    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        if let DeviceEvent::MouseMotion { delta } = event {
+            self.input.motion(delta.0, delta.1);
+        }
+    }
+
+    fn about_to_wait(&mut self, _: &ActiveEventLoop) {
+        let input_tx = &self.input_tx;
+        self.input.flush_motion(|value| {
+            let _ = input_tx.send(value);
+        });
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return; // already created (resumed can fire more than once on some platforms)

@@ -84,6 +84,15 @@ pub fn mouse_move_event(position: [f32; 2]) -> serde_json::Value {
     })
 }
 
+/// Builds the `input.inject` event `Value` for raw device motion:
+/// `{"kind": "mouse_motion", "delta_bits": [<u32>, <u32>]}`.
+pub fn mouse_motion_event(delta: [f32; 2]) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "mouse_motion",
+        "delta_bits": [delta[0].to_bits(), delta[1].to_bits()],
+    })
+}
+
 /// Maps a winit mouse button to the engine's abstract name, or `None` for a button the engine's
 /// milestone-minimal [`MouseButton`](ludion_sim's) set has no name for (`Back`/`Forward`/`Other`).
 fn button_name(button: MouseButton) -> Option<&'static str> {
@@ -237,6 +246,17 @@ mod tests {
         assert_eq!(
             map_cursor_to_frame((0.0, 0.0), 100, 100, 0, 200, None),
             None
+        );
+    }
+
+    #[test]
+    fn mouse_motion_event_carries_delta_bits() {
+        assert_eq!(
+            mouse_motion_event([1.5, -2.0]),
+            serde_json::json!({
+                "kind": "mouse_motion",
+                "delta_bits": [1.5f32.to_bits(), (-2.0f32).to_bits()],
+            })
         );
     }
 
