@@ -1880,6 +1880,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ludion-projectiles"
+version = "0.1.0"
+dependencies = [
+ "ludion-core",
+ "ludion-ecs",
+ "ludion-physics",
+ "ludion-spatial",
+ "schemars",
+ "serde",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "ludion-protocol"
 version = "0.1.0"
 dependencies = [

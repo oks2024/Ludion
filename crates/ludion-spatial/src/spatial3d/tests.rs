@@ -533,3 +533,26 @@ fn a_second_build_reuses_every_buffer() {
     index.build();
     assert_eq!(caps(&index), before);
 }
+
+#[test]
+fn cast_skipping_passes_over_the_skipped_handles() {
+    let index = built(&[
+        sphere(0, [2.0, 0.0, 0.0], 0.5, 1),
+        sphere(1, [5.0, 0.0, 0.0], 0.5, 1),
+        sphere(2, [8.0, 0.0, 0.0], 0.5, 1),
+    ]);
+    let (o, d, f) = ([0.0; 3], [10.0, 0.0, 0.0], Filter::new(1));
+    assert_eq!(
+        index.cast_skipping(o, d, 0.0, &f, &[]),
+        index.cast(o, d, 0.0, &f)
+    );
+    let second = index.cast_skipping(o, d, 0.0, &f, &[h(0)]).unwrap();
+    assert_eq!(second.handle, h(1));
+    let third = index.cast_skipping(o, d, 0.0, &f, &[h(0), h(1)]).unwrap();
+    assert_eq!(third.handle, h(2));
+    assert!(
+        index
+            .cast_skipping(o, d, 0.0, &f, &[h(0), h(1), h(2)])
+            .is_none()
+    );
+}

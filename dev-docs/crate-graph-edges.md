@@ -64,6 +64,8 @@ ludion-mesh-edit       → assets, core, scene  [serde]
     dev: (none)  [serde_json]
 ludion-physics         → core, ecs, spatial  [bincode, rapier3d, schemars, serde, serde_json]
     dev: (none)  [xxhash-rust]
+ludion-projectiles     → core, physics, spatial  [xxhash-rust]
+    dev: ecs  [schemars, serde]
 ludion-protocol        → core  [schemars, serde, serde_json, serde_path_to_error, xxhash-rust, zstd]
 ludion-render-graph    → assets, core  [pollster, serde, serde_json, wgpu]
 ludion-renderer        → assets, core, font, render-graph  [bytemuck, naga, pollster, wgpu]
@@ -104,7 +106,8 @@ assets/watch  ← ludion(wire), cli, server
 font/bake     ← cli
 
 no wgpu in the tree: assets, audio, camera, client, components, cook, core, ecs, font, gen, import,
-      mcp, mesh-edit, physics, protocol, scene, sculpt, shader-bindgen, sim, spatial, sprite, texgen
+      mcp, mesh-edit, physics, projectiles, protocol, scene, sculpt, shader-bindgen, sim, spatial,
+      sprite, texgen
 ```
 <!-- end generated -->
 

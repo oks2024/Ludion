@@ -1,0 +1,22 @@
+[package]
+name = "ludion-projectiles"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Pooled 3D projectiles for the Ludion game engine: a fixed-capacity structure-of-arrays pool with generational ids and a deterministic swept step against the physics world and the spatial3d index."
+keywords = ["ludion", "projectiles", "determinism", "game-engine", "sweep"]
+categories = ["game-engines", "simulation"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }
+ludion-physics = { path = "../ludion-physics", version = "0.1.0" }
+ludion-spatial = { path = "../ludion-spatial", version = "0.1.0" }
+xxhash-rust.workspace = true
+
+[dev-dependencies]
+# A local pose component to drive the physics fixtures.
+ludion-ecs = { path = "../ludion-ecs", version = "0.1.0" }
+schemars.workspace = true
+serde.workspace = true

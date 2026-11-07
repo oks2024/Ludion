@@ -37,6 +37,7 @@ ludion-ecs           → core            custom ECS + component registry (name +
 ludion-scene         → core, ecs       strict-YAML parse/emit, validator, canonical writer
 ludion-assets        → core            CPU-only asset data, content hashes, notify watcher, reload events
 ludion-sim           → core, ecs       tick loop driver, input events, run-state, WorldHash
+ludion-projectiles  → core, physics, spatial   pooled 3D projectiles: SoA pool, swept step, hit events
 ludion-render-graph  → core  [wgpu]    virtual resources, pass scheduling, transient aliasing,
                                        dump-graph / dump-timings JSON
 ludion-renderer      → core, render-graph, assets [wgpu]

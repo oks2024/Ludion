@@ -177,6 +177,38 @@ impl Index3d {
         radius: f32,
         filter: &Filter,
     ) -> Option<CastHit> {
+        self.cast_skipping(origin, delta, radius, filter, &[])
+    }
+
+    /// [`cast`](Self::cast) that also never sees the handles in `skip`: the pierce memory of a
+    /// projectile that has already passed through them (a crowd overlaps, so the probe starts
+    /// inside the last one it pierced). Keep `skip` short; it is searched linearly per candidate.
+    ///
+    /// ```
+    /// use ludion_spatial::spatial3d::{Filter, Handle, Index3d, Item, Volume};
+    ///
+    /// let mut index = Index3d::new();
+    /// for i in 0..2u32 {
+    ///     index.push(Item {
+    ///         handle: Handle::slot(i, 0),
+    ///         volume: Volume::Sphere { center: [2.0 + 4.0 * i as f32, 0.0, 0.0], radius: 1.0 },
+    ///         layers: 1,
+    ///     });
+    /// }
+    /// index.build();
+    /// let (o, d, f) = ([0.0; 3], [10.0, 0.0, 0.0], Filter::new(1));
+    /// assert_eq!(index.cast(o, d, 0.0, &f).unwrap().handle, Handle::slot(0, 0));
+    /// let second = index.cast_skipping(o, d, 0.0, &f, &[Handle::slot(0, 0)]).unwrap();
+    /// assert_eq!(second.handle, Handle::slot(1, 0));
+    /// ```
+    pub fn cast_skipping(
+        &self,
+        origin: [f32; 3],
+        delta: [f32; 3],
+        radius: f32,
+        filter: &Filter,
+        skip: &[Handle],
+    ) -> Option<CastHit> {
         if self.nodes.is_empty()
             || !narrow::is_finite3(origin)
             || !narrow::is_finite3(delta)
@@ -204,7 +236,7 @@ impl Index3d {
             if node.count > 0 {
                 let range = node.first as usize..(node.first + node.count) as usize;
                 for item in &self.items[range] {
-                    if !filter.passes(item) {
+                    if !filter.passes(item) || skip.contains(&item.handle) {
                         continue;
                     }
                     let Some((t, point, normal)) =
