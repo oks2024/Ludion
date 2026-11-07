@@ -215,8 +215,11 @@ these shows. On iOS, `AutoNoVsync` resolves to `Fifo` and the sim thread itself 
 - A `LUDION_PRESENT_TRACE` capture on a 120 Hz Mac (the user's MBP is unpinned but fine for a look
   check): ~120 presents/s, ~60 distinct frames/s, no gaps.
 - The iOS M3 stall measurement re-read against this design (`Plan/ios-target.md` Risks).
-- CLAUDE.md's Active plans gains this plan (the Tech Lead's edit; CLAUDE.md carries foreign
-  uncommitted edits today).
+
+## Status
+
+- 01–03 shipped (presenter thread, interpolation). Serious Isaac 0004 added `low_latency` (decision 16, r2144) and
+  `late_latch` over the `CameraLatch` seam (decision 17, r2145–r2146). Owed: `Plan/owed.md` (the 0026 entry).
 
 ## Measurements
 
