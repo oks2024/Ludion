@@ -6,7 +6,7 @@ use std::collections::BinaryHeap;
 
 use ludion_core::math::sqrt;
 
-use crate::grid::{NEIGHBORS, NavGrid, NodeId};
+use crate::grid::{NEIGHBORS, NavGrid, NodeId, OPPOSITE};
 
 /// A Dijkstra frontier entry, ordered by `(distance, node)` so pop order is fully pinned.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,7 +28,8 @@ impl PartialOrd for HeapNode {
     }
 }
 
-/// Per-node distance to a target and the unit flow direction toward it, computed within a radius.
+/// Per-node distance from the node to a target along the links an agent walks, and the unit flow
+/// direction toward it, computed within a radius.
 /// Buffers are reused across [`compute`](FlowField::compute) calls.
 #[derive(Clone, Debug, Default)]
 pub struct FlowField {
@@ -40,8 +41,10 @@ pub struct FlowField {
 }
 
 impl FlowField {
-    /// Runs a Dijkstra from `target`, expanding no node farther than `radius` from it, then derives the
-    /// flow (the normalised down-gradient) over the reached set. Nodes beyond keep an infinite distance.
+    /// Runs a Dijkstra backward from `target` over the links agents walk, so each node gets its
+    /// distance to the target, expanding no node farther than `radius` from it, then derives the
+    /// flow (the normalised down-gradient) over the reached set. Nodes beyond keep an infinite
+    /// distance.
     pub fn compute(&mut self, grid: &NavGrid, target: NodeId, radius: f32) {
         let n = grid.node_count();
         if self.distance.len() != n || self.flow.len() != n {
@@ -76,20 +79,27 @@ impl FlowField {
             if node.dist > radius {
                 continue;
             }
-            let links = grid.raw_links(node.node);
-            let costs = grid.raw_costs(node.node);
-            for dir in 0..8 {
-                let l = links[dir];
-                if l == crate::grid::NO_LINK {
+            // Relax over in-links: the distance is from `x` to the target along the links `x`
+            // walks, and the grid's corner-cut rule makes links asymmetric.
+            let (ui, uj) = grid.node_column(node.node);
+            let (nx, nz) = (grid.params().nx as i32, grid.params().nz as i32);
+            for (dir, ((di, dj), _cost)) in NEIGHBORS.into_iter().enumerate() {
+                let (xi, xj) = (ui as i32 + di, uj as i32 + dj);
+                if xi < 0 || xj < 0 || xi >= nx || xj >= nz {
                     continue;
                 }
-                let nd = node.dist + costs[dir];
-                if nd < self.distance[l as usize] {
-                    if !self.distance[l as usize].is_finite() {
-                        self.reached.push(l);
+                for x in grid.column_nodes(xi as u32, xj as u32) {
+                    if grid.raw_links(x)[OPPOSITE[dir]] != node.node {
+                        continue;
                     }
-                    self.distance[l as usize] = nd;
-                    self.heap.push(Reverse(HeapNode { dist: nd, node: l }));
+                    let nd = node.dist + grid.raw_costs(x)[OPPOSITE[dir]];
+                    if nd < self.distance[x as usize] {
+                        if !self.distance[x as usize].is_finite() {
+                            self.reached.push(x);
+                        }
+                        self.distance[x as usize] = nd;
+                        self.heap.push(Reverse(HeapNode { dist: nd, node: x }));
+                    }
                 }
             }
         }
@@ -127,7 +137,8 @@ impl FlowField {
         self.target
     }
 
-    /// Distance from the target to `n`; infinite when unreached or out of range.
+    /// Distance from `n` to the target along the links an agent walks; infinite when unreached or
+    /// out of range.
     pub fn distance(&self, n: NodeId) -> f32 {
         self.distance
             .get(n.0 as usize)

@@ -135,7 +135,7 @@
 //! becomes visible only after the step that follows. The two casts return every hit as a
 //! [`QueryHit`], sorted `(distance, entity)` ascending; `overlap` returns every hit `EntityId`,
 //! sorted ascending. Rapier's own BVH traversal order is never exposed. Each takes a [`QueryFilter`]:
-//! one excluded entity plus ignored layer names, which only drops hits.
+//! one excluded entity, ignored layer names and optionally static colliders only, which only drops hits.
 //!
 //! [`PhysicsWorld::first_hit`] and [`PhysicsWorld::first_hits`] return the one nearest hit of a swept
 //! sphere by `(t, entity)` with no allocation, the [`QueryFilter`] resolved once by

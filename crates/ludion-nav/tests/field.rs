@@ -93,3 +93,34 @@ fn a_wall_with_a_gap_bends_the_flow() {
     // A blocked cell reads its lowest neighbour.
     assert!(f.flow_at(&grid, at(4, 3, 0.0)).is_some());
 }
+
+#[test]
+fn distances_follow_the_links_an_agent_walks() {
+    // a(0,0) y0, P(1,0) y0.5, Q(0,1) y0.1, b(1,1) y0.3. a and P differ by more than a step, so the
+    // corner-cut rule drops a -> b while b -> a stays.
+    let grid = NavGrid::build(
+        params(2, 2),
+        &FnSource(|i, j, out| {
+            out.push(flat(match (i, j) {
+                (0, 0) => 0.0,
+                (1, 0) => 0.5,
+                (0, 1) => 0.1,
+                _ => 0.3,
+            }))
+        }),
+    );
+    let a = grid.node_at(at(0, 0, 0.0)).unwrap();
+    let b = grid.node_at(at(1, 1, 0.3)).unwrap();
+    assert_eq!(grid.link(a, 4), None, "a cannot cut the corner to b");
+    assert_eq!(grid.link(b, 7), Some(a), "b can step down to a");
+
+    let mut field = FlowField::default();
+    field.compute(&grid, b, f32::INFINITY);
+    let walked = (1.01f32).sqrt() + (1.04f32).sqrt();
+    assert!(
+        (field.distance(a) - walked).abs() < 1e-5,
+        "{} vs {walked}",
+        field.distance(a)
+    );
+    assert!(field.distance(a) > 2.09f32.sqrt() + 0.1);
+}

@@ -6,9 +6,10 @@
 
 ## Design decisions
 
-1. **A layered 2.5D grid, sampled from static physics colliders, not derived from voxels.** Any
-   static collider is walkable ground, not only voxel rooms, and bridges and overhangs are extra
-   layers in a column.
+1. **A layered 2.5D grid, sampled from static physics colliders only, not derived from voxels.**
+   Kinematic and rigid bodies never shape the grid (a moving body would leave a stale hole and split
+   a restored world's grid from the original). `ignore_layers` is optional. Any static collider is
+   walkable ground, not only voxel rooms, and bridges and overhangs are extra layers in a column.
 2. **Walkability is sampled per column**: a downward ray walk finds every floor, an upward ray
    measures headroom, and a capsule overlap of the agent's radius drops floors an agent cannot
    stand on. Columns are spread over `par`.
@@ -42,7 +43,7 @@ wall is the failure the field exists to prevent. It lands before or with the mig
 Shipped, by commit subject: `ludion-nav` holds layered walkability and flow fields; the engine
 builds a navigation grid from static physics colliders (`Nav`, `nav_update`, L4032); nav agents
 steer through the shared flow fields (`NavAgent`, `NavSteering`, `nav_steer`, L1340); this bench and
-`ludion docs nav`.
+`ludion docs nav`. Review fixes: static-only sampling, in-link flow search.
 
 Bench (release, unpinned M5 laptop, 2026-11-07, indicative only; 64 × 64 m room, ramp, pillars,
 chase target crossing a cell every 30 ticks): `nav_steer` 100 agents 0.03 ms at 1 thread and 0.04 ms

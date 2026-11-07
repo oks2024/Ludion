@@ -57,8 +57,8 @@ what `nav_steer` writes each tick.
 ## Rules
 
 - **One agent class per `Nav`.** Radius, height, step and slope belong to the config, not the agent.
-- **Agents' own colliders go on a layer listed in `ignore_layers`**: the sampler sees every collider,
-  so a resting agent otherwise blocks its own column.
+- **Only static colliders shape the grid**, so motors, props and the player never block it;
+  `ignore_layers` optionally drops static layers that are not ground or obstacles.
 - **The grid reads the last completed physics step**: a static spawned at tick N is in the grid from
   N + 1. A static added, moved or removed costs one region rebuild the next tick, in entity order —
   rooms assembled at runtime need nothing extra. `request_full_rebuild` after a change the diff
@@ -90,12 +90,15 @@ fn motor_mover(world: &mut World, ctx: &SystemCtx) {
 }
 ```
 
-Put the motors on a layer that ignores itself and list it in `ignore_layers`.
+Put the motors on a layer that ignores itself, so they don't block each other. Nav needs no
+`ignore_layers` for them: kinematic and rigid bodies are never sampled.
 
 ## Gotchas
 
-- A target whose cell has no node (within `agent_radius` of a wall, off the grid, beyond
-  `flow_radius`) gives walkers the straight-line fallback — which can face a wall. Aim at open floor.
+- A target whose cell has no node (within `agent_radius` of a wall, off the grid) gives walkers the
+  straight-line fallback — which can face a wall. Aim at open floor.
+- An **agent** farther than `flow_radius` from its target gets no field direction and heads straight
+  for it.
 - Stacked ramps link each cell to the closest-height layer per direction.
 - Cost, unpinned M5 laptop, release (indicative; pinned figures are owed): `nav_steer` 100 agents
   0.03 ms, 500 agents 0.17 ms at one thread; one flow field over a 64 x 64 room 0.11 ms; full grid

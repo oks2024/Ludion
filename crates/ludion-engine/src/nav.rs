@@ -7,11 +7,11 @@
 //! [`FlowCache`] are derived state: not hashed, not snapshotted. A restored world gets a fresh
 //! [`Nav`], whose first update re-samples the restored physics.
 //!
-//! Each column is sampled by physics queries: a down-walk of ray casts finds the floors, an upward
-//! ray measures headroom, and a capsule overlap of the agent's radius drops a floor the agent cannot
-//! stand on (the grid assumes the source already inflated obstacles by the agent radius). The columns
-//! are sampled over [`ludion_core::par`], each a pure function of the physics world and its
-//! coordinates, so the grid is identical at any thread count.
+//! Each column is sampled by physics queries against static colliders only: a down-walk of ray
+//! casts finds the floors, an upward ray measures headroom, and a capsule overlap of the agent's
+//! radius drops a floor the agent cannot stand on (the grid assumes the source already inflated
+//! obstacles by the agent radius). The columns are sampled over [`ludion_core::par`], each a pure
+//! function of the physics world and its coordinates, so the grid is identical at any thread count.
 
 use ludion_components::{NavAgent, NavSteering};
 use ludion_core::codes::code;
@@ -73,8 +73,8 @@ pub struct NavConfig {
     pub max_slope_deg: f32,
     /// How far from its target a flow field reaches, in metres.
     pub flow_radius: f32,
-    /// Physics layers the sampling queries ignore (names from the scene's `physics.layers`),
-    /// typically the agents' own.
+    /// Static-collider layers that are not walkable ground or obstacles (optional; empty by
+    /// default). Names come from the scene's `physics.layers`.
     pub ignore_layers: Vec<String>,
 }
 
@@ -470,10 +470,9 @@ fn dirty_rect(
 ///
 /// **Schedule it before the systems that read the grid.** It reads the physics state of the last
 /// completed step (the physics systems run after the game's), so a static spawned at tick N shows in
-/// the grid from tick N+1. Only static bodies are diffed, but the sampling queries see every
-/// collider: a rigid or kinematic body resting on a floor when its column is (re)sampled blocks it
-/// until that column is next sampled, so put agents' own colliders on a layer in
-/// [`NavConfig::ignore_layers`]. A bad layer name reports `L4032` once and keeps the old grid.
+/// the grid from tick N+1. Only static colliders are sampled and diffed, so kinematic and rigid
+/// bodies, character motors included, never shape the grid. A bad layer name reports `L4032` once and
+/// keeps the old grid.
 ///
 /// # Example
 /// ```
@@ -516,7 +515,9 @@ fn update(nav: &mut Nav, physics: &PhysicsWorld) -> Result<(), PhysicsError> {
     let filter = config
         .ignore_layers
         .iter()
-        .fold(QueryFilter::new(), |q, name| q.ignore_layer(name.clone()));
+        .fold(QueryFilter::new().only_fixed(), |q, name| {
+            q.ignore_layer(name.clone())
+        });
     let full = nav.full_rebuild || nav.grid.is_none();
     let (min, max) = if full {
         ([0, 0], [config.nx - 1, config.nz - 1])

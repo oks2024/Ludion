@@ -3586,7 +3586,7 @@ pub struct NavAgent {
         skip_serializing_if = "is_nav_sep_radius_default"
     )]
     pub separation_radius: f32,
-    /// Speed of the separation push, per summed unit of overlap (default `2`).
+    /// Speed added per metre of summed offset from the neighbours (default `2`).
     #[serde(
         default = "nav_sep_strength_default",
         skip_serializing_if = "is_nav_sep_strength_default"

@@ -10,7 +10,7 @@ use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{
     CollisionLayers, NoParent, PhysicsError, PhysicsSettings, PhysicsSpace, PhysicsWorld,
-    QueryFilter, QueryHit, install,
+    QueryFilter, QueryHit, Sweep, install,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
@@ -34,6 +34,64 @@ fn spawn_static_box(world: &mut World, x: f32) -> EntityId {
         .insert(entity, box_collider(Body::new_static()))
         .expect("a fresh entity accepts a collider");
     entity
+}
+
+#[test]
+fn only_fixed_keeps_static_colliders_for_every_query() {
+    let mut world = World::new();
+    let mut spawn = |x: f32, body: Body| {
+        let entity = world.spawn();
+        world.insert(entity, TestPose::at([x, 0.0, 0.0])).unwrap();
+        world.insert(entity, box_collider(body)).unwrap();
+        entity
+    };
+    let fixed = spawn(2.0, Body::new_static());
+    let kinematic = spawn(4.0, Body::new_kinematic());
+    let rigid = spawn(6.0, Body::Rigid(RigidBody::default()));
+    let mut schedule = free_schedule();
+    tick(&mut world, &mut schedule, 0);
+    let physics = physics(&world);
+    let only = QueryFilter::new().only_fixed();
+
+    let all = physics
+        .ray_cast([0.0; 3], [1.0, 0.0, 0.0], 100.0, &QueryFilter::new())
+        .unwrap();
+    assert_eq!(all.len(), 3, "{all:?}");
+    let cast = physics
+        .ray_cast([0.0; 3], [1.0, 0.0, 0.0], 100.0, &only)
+        .unwrap();
+    assert_eq!(cast.iter().map(|h| h.entity).collect::<Vec<_>>(), [fixed]);
+
+    let spanning = Shape::Box {
+        half_extents: [4.0, 1.0, 1.0],
+    };
+    let id = [0.0, 0.0, 0.0, 1.0];
+    let all = physics
+        .overlap(&spanning, [4.0, 0.0, 0.0], id, &QueryFilter::new())
+        .unwrap();
+    assert_eq!(all, [fixed, kinematic, rigid]);
+    let hit = physics
+        .overlap(&spanning, [4.0, 0.0, 0.0], id, &only)
+        .unwrap();
+    assert_eq!(hit, [fixed]);
+
+    let probe = Sweep::new([3.0, 0.0, 0.0], [10.0, 0.0, 0.0], 0.0);
+    let swept = |filter: &QueryFilter| {
+        let filter = physics.sweep_filter(filter).unwrap();
+        physics.first_hit(&probe, &filter).map(|h| h.entity)
+    };
+    assert_eq!(swept(&QueryFilter::new()), Some(kinematic));
+    assert_eq!(
+        swept(&only),
+        None,
+        "the fixed box is behind the probe; the rigid one is dropped"
+    );
+    let back = Sweep::new([3.0, 0.0, 0.0], [-10.0, 0.0, 0.0], 0.0);
+    let filter = physics.sweep_filter(&only).unwrap();
+    assert_eq!(
+        physics.first_hit(&back, &filter).map(|h| h.entity),
+        Some(fixed)
+    );
 }
 
 fn free_schedule() -> Schedule {

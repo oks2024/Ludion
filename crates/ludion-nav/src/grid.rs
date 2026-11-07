@@ -19,6 +19,9 @@ pub const NEIGHBORS: [((i32, i32), f32); 8] = [
     ((-1, -1), SQRT_2),
 ];
 
+/// The direction index that undoes each [`NEIGHBORS`] step.
+pub(crate) const OPPOSITE: [usize; 8] = [1, 0, 3, 2, 7, 6, 5, 4];
+
 /// An upward-facing surface at a column centre.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FloorSample {
@@ -290,6 +293,12 @@ impl NavGrid {
     /// The traversal cost of the link `n` → `dir`, or `None` when unlinked.
     pub fn link_cost(&self, n: NodeId, dir: usize) -> Option<f32> {
         self.link(n, dir).map(|_| self.link_cost[n.0 as usize][dir])
+    }
+
+    /// The `(i, j)` column of node `n`.
+    pub(crate) fn node_column(&self, n: u32) -> (u32, u32) {
+        let c = self.node_cell[n as usize];
+        (c % self.params.nx, c / self.params.nx)
     }
 
     pub(crate) fn raw_links(&self, n: u32) -> &[u32; 8] {

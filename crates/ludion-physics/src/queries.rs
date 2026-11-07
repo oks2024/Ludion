@@ -136,8 +136,8 @@ fn check_direction(direction: [f32; 3]) -> Result<[f32; 3], PhysicsError> {
 }
 
 /// What a query leaves out: one entity (typically the caller's own body), any number of
-/// collision layers by name, and sensor colliders unless [`include_sensors`](QueryFilter::include_sensors)
-/// is called.
+/// collision layers by name, sensor colliders unless [`include_sensors`](QueryFilter::include_sensors)
+/// is called, and every non-static body if [`only_fixed`](QueryFilter::only_fixed) is called.
 ///
 /// The filter only drops hits after they are collected, so result order is unchanged. An ignored
 /// name must be `default` (always valid) or a layer the scene's `physics.layers` declares;
@@ -170,6 +170,7 @@ pub struct QueryFilter {
     pub(crate) exclude_also: Option<EntityId>,
     pub(crate) ignored_layers: Vec<String>,
     pub(crate) include_sensors: bool,
+    pub(crate) only_fixed: bool,
 }
 
 impl QueryFilter {
@@ -201,13 +202,32 @@ impl QueryFilter {
         self.include_sensors = true;
         self
     }
+
+    /// Keeps hits on static (`body: static`) colliders only and drops kinematic bodies, rigid
+    /// bodies and character motors.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_physics::{PhysicsWorld, QueryFilter};
+    ///
+    /// let world = PhysicsWorld::new(TickRate::DEFAULT);
+    /// // `tests/queries.rs` covers a static, a kinematic and a rigid box on one ray.
+    /// let filter = QueryFilter::new().only_fixed();
+    /// let hits = world.ray_cast([0.0; 3], [1.0, 0.0, 0.0], 10.0, &filter).unwrap();
+    /// assert!(hits.is_empty());
+    /// ```
+    pub fn only_fixed(mut self) -> Self {
+        self.only_fixed = true;
+        self
+    }
 }
 
 impl PhysicsWorld {
     /// Casts a ray from `origin` along `direction` (need not be unit length; normalized here) up
     /// to `max_distance` world units, returning every hit sorted `(distance, entity)` ascending —
-    /// never rapier's BVH traversal order. `filter` drops excluded entities, ignored layers and sensors
-    /// ([`QueryFilter`]).
+    /// never rapier's BVH traversal order. `filter` drops excluded entities, ignored layers, sensors
+    /// and, with `only_fixed`, non-static bodies ([`QueryFilter`]).
     ///
     /// Reads the state as of the last completed step (see the crate's `# Queries` docs): a body
     /// created, moved, teleported or despawned this tick is visible only after the step that
@@ -262,7 +282,7 @@ impl PhysicsWorld {
     /// Sweeps `shape` (authored the same way a `Collider` is, laid out on the world's plane if it
     /// has one) from `translation`/`rotation` along `direction` up to `max_distance` world units,
     /// returning every hit sorted `(distance, entity)` ascending. `filter` drops excluded entities,
-    /// ignored layers and sensors ([`QueryFilter`]).
+    /// ignored layers, sensors and, with `only_fixed`, non-static bodies ([`QueryFilter`]).
     ///
     /// Candidates come from the swept axis-aligned bounding box of the start and end poses, each
     /// then given one exact cast — never rapier's first-hit `cast_shape`, which would pick among
@@ -350,7 +370,8 @@ impl PhysicsWorld {
     }
 
     /// Every entity whose collider overlaps `shape` at `translation`/`rotation`, sorted by entity
-    /// ascending. `filter` drops excluded entities, ignored layers and sensors ([`QueryFilter`]).
+    /// ascending. `filter` drops excluded entities, ignored layers, sensors and, with
+    /// `only_fixed`, non-static bodies ([`QueryFilter`]).
     ///
     /// Reads the state as of the last completed step, same as
     /// [`ray_cast`](PhysicsWorld::ray_cast). `translation` must be finite and `rotation` finite and

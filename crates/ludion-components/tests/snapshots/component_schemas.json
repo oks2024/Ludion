@@ -3359,7 +3359,7 @@
         "format": "float"
       },
       "separation_strength": {
-        "description": "Speed of the separation push, per summed unit of overlap (default `2`).",
+        "description": "Speed added per metre of summed offset from the neighbours (default `2`).",
         "type": "number",
         "format": "float"
       },

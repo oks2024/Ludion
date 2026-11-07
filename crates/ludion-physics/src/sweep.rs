@@ -12,7 +12,8 @@ use rapier3d::prelude::{Aabb, BoundingVolume, Ray};
 
 use crate::queries::{QueryFilter, advance, unit};
 use crate::world::{
-    DEFAULT_LAYER, PhysicsError, PhysicsWorld, entity_from_bits, from_vector, to_pose, to_vector,
+    BodyKind, DEFAULT_LAYER, PhysicsError, PhysicsWorld, entity_from_bits, from_vector, to_pose,
+    to_vector,
 };
 
 /// Probes per parallel chunk of [`PhysicsWorld::first_hits`]; fixed so the split never depends on
@@ -81,6 +82,7 @@ impl Sweep {
 pub struct SweepFilter {
     ignored: u32,
     include_sensors: bool,
+    only_fixed: bool,
     exclude: Option<EntityId>,
     exclude_also: Option<EntityId>,
 }
@@ -152,6 +154,7 @@ impl PhysicsWorld {
         Ok(SweepFilter {
             ignored,
             include_sensors: filter.include_sensors,
+            only_fixed: filter.only_fixed,
             exclude: filter.exclude,
             exclude_also: filter.exclude_also,
         })
@@ -245,6 +248,10 @@ impl PhysicsWorld {
                 || Some(entity) == filter.exclude_also
                 || (!filter.include_sensors && collider.is_sensor())
                 || collider.collision_groups().memberships.bits() & filter.ignored != 0
+                || (filter.only_fixed
+                    && !self
+                        .entry(entity)
+                        .is_some_and(|e| e.kind == BodyKind::Fixed))
             {
                 continue;
             }

@@ -2408,6 +2408,13 @@ impl PhysicsWorld {
             if !filter.include_sensors && self.entry(entity).is_some_and(|e| e.source.sensor) {
                 return true;
             }
+            if filter.only_fixed
+                && !self
+                    .entry(entity)
+                    .is_some_and(|e| e.kind == BodyKind::Fixed)
+            {
+                return true;
+            }
             if filter.ignored_layers.is_empty() {
                 return false;
             }
@@ -2472,7 +2479,7 @@ impl PhysicsWorld {
     }
 
     /// The table row for `entity`, if it has one.
-    fn entry(&self, entity: EntityId) -> Option<&BodyEntry> {
+    pub(crate) fn entry(&self, entity: EntityId) -> Option<&BodyEntry> {
         self.rows.get(&entity).map(|&row| &self.table[row])
     }
 

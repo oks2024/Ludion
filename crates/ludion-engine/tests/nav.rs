@@ -740,3 +740,126 @@ fn walkers_are_still_before_the_grid_exists() {
     assert_eq!(v.len(), 30);
     assert!(v.iter().all(|v| *v == [0.0; 3]));
 }
+
+// --- Static-only sampling ----------------------------------------------------------------------
+
+/// A kinematic box resting on the low floor, in the walkers' way.
+const SLIDER: &str = "  - name: slider\n    components:\n      Transform:\n        translation:\n          - 4.0\n          - 0.5\n          - 10.0\n      Collider:\n        shape:\n          box:\n            half_extents:\n              - 0.5\n              - 0.5\n              - 0.5\n        body: kinematic\n";
+
+/// Slides the kinematic box along x as a pure function of the frame.
+fn slide(world: &mut World, ctx: &ludion_ecs::SystemCtx) {
+    let ids: Vec<_> = world
+        .query_ids::<(&Collider,)>()
+        .filter(|(_, (c,))| c.body == Body::new_kinematic())
+        .map(|(id, _)| id)
+        .collect();
+    for id in ids {
+        let x = 3.0 + (ctx.frame.0 % 40) as f32 * 0.25;
+        world.get_mut::<Transform>(id).unwrap().unwrap().translation = [x, 0.5, 10.0];
+    }
+}
+
+fn slide_engine() -> Engine {
+    let mut engine = Engine::builder()
+        .nav(config())
+        .system("slide", slide)
+        .system(
+            "spatial3d_rebuild",
+            spatial3d::rebuild::<Transform, TransformHierarchy>,
+        )
+        .system("nav_update", nav_update)
+        .system("nav_steer", nav_steer)
+        .system("mover", mover)
+        .build()
+        .expect("boots");
+    engine
+        .load_inline_scene(&(crowd(&ramp_room()) + SLIDER))
+        .unwrap();
+    engine
+}
+
+#[test]
+fn a_moving_kinematic_body_never_shapes_the_grid_and_a_restore_matches() {
+    let whole = trace(&mut slide_engine(), 200);
+    let mut first = slide_engine();
+    trace(&mut first, 80);
+    assert_same(grid(&first), &built(config(), &ramp_room()));
+    let snapshot = snapshot_of(&mut first);
+    let mut resumed = slide_engine();
+    resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
+    let tail = trace(&mut resumed, 120);
+    assert_eq!(tail, whole[80..], "the restored chase matches from tick 81");
+}
+
+/// Copies the motor's position into every agent's target.
+fn follow_motor(world: &mut World, _ctx: &ludion_ecs::SystemCtx) {
+    let Some(at) = world
+        .query_ids::<(&Transform, &ludion_physics::CharacterMotor)>()
+        .map(|(_, (t, _))| t.translation)
+        .next()
+    else {
+        return;
+    };
+    let ids: Vec<_> = world
+        .query_ids::<(&NavAgent,)>()
+        .map(|(id, _)| id)
+        .collect();
+    for id in ids {
+        world.get_mut::<NavAgent>(id).unwrap().unwrap().target = at;
+    }
+}
+
+#[test]
+fn walkers_get_field_directions_toward_a_motor_target() {
+    let mut engine = Engine::builder()
+        .nav(config())
+        .system("follow_motor", follow_motor)
+        .system(
+            "spatial3d_rebuild",
+            spatial3d::rebuild::<Transform, TransformHierarchy>,
+        )
+        .system("nav_update", nav_update)
+        .system("nav_steer", nav_steer)
+        .build()
+        .expect("boots");
+    let mut yaml = scene(&[ground()]);
+    let fields = format!("        speed: 4.0\n{}", target_yaml([20.0, 0.0, 20.0]));
+    for n in 0..4 {
+        yaml += &agent(n, [3.0 + n as f32, 0.0, 6.0], &fields);
+    }
+    yaml += "  - name: motor\n    components:\n      Transform:\n        translation:\n          - 12.5\n          - 0.0\n          - 12.5\n      CharacterMotor: {}\n";
+    engine.load_inline_scene(&yaml).unwrap();
+    run(&mut engine, 5);
+
+    let target = engine
+        .world_mut()
+        .query_ids::<(&ludion_physics::CharacterMotor, &Transform)>()
+        .map(|(_, (_, t))| t.translation)
+        .next()
+        .unwrap();
+    let velocities = velocities(&mut engine);
+    let positions: Vec<[f32; 3]> = {
+        let mut all: Vec<_> = engine
+            .world_mut()
+            .query_ids::<(&NavSteering, &Transform)>()
+            .map(|(id, (_, t))| (id, t.translation))
+            .collect();
+        all.sort_by_key(|(id, _)| *id);
+        all.into_iter().map(|(_, p)| p).collect()
+    };
+    let (grid, cache) = engine.world_mut().resource_mut::<Nav>().unwrap().parts();
+    let grid = grid.expect("the grid is built");
+    let node = grid.node_at(target).expect("the motor's cell has a node");
+    let field = cache.get(node).expect("the agents share the motor's field");
+    assert_eq!(velocities.len(), 4);
+    for (pos, v) in positions.iter().zip(&velocities) {
+        let flow = field.flow_at(grid, *pos).expect("a flow direction");
+        let want = [flow[0] * 4.0, 0.0, flow[1] * 4.0];
+        assert!(
+            (0..3).all(|a| (v[a] - want[a]).abs() < 1e-6),
+            "{v:?} vs {want:?}"
+        );
+    }
+}

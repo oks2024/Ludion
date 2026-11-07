@@ -179,8 +179,7 @@ tick is visible only after the step that follows. The two casts return every hit
 layers — `ludion docs collision-layers`; sensors are skipped unless the filter calls `include_sensors()`) and
 reports errors rather than an empty result: a non-finite or negative input, a `rotation` that is not
 a unit quaternion, or a query shape the solver cannot build, is
-`Err(PhysicsError::QueryInput | QueryShape)`. Filtering by body kind (`static`/`kinematic`/`rigid`)
-is the caller's job. A straight-down `ray_cast` through a `heightfield` vertex or cell
+`Err(PhysicsError::QueryInput | QueryShape)`. `only_fixed()` keeps static colliders only. A straight-down `ray_cast` through a `heightfield` vertex or cell
 edge always hits; a slanted ray lying exactly in a grid plane can miss at a shared edge or vertex.
 
 **First hit.** `first_hit`/`first_hits` sweep a sphere (radius 0 is a ray) along a segment and return
