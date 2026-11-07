@@ -1627,6 +1627,16 @@ pub mod code {
     /// 1 to 179 degrees; the result is clamped.
     pub const CAMERA_OFFSET_FOV_CLAMPED: DiagnosticCode = DiagnosticCode::new("L1335");
 
+    /// `L1336` — a `Viewmodel` mesh exists but the scene has no single camera that is both
+    /// perspective and a first-person `CameraRig`; the mesh draws as an ordinary world mesh.
+    pub const VIEWMODEL_NO_CAMERA: DiagnosticCode = DiagnosticCode::new("L1336");
+
+    /// `L1337` — a `ViewmodelLens` is on an entity without a `Camera`; it is ignored.
+    pub const VIEWMODEL_LENS_NOT_ON_CAMERA: DiagnosticCode = DiagnosticCode::new("L1337");
+
+    /// `L1338` — a `ViewmodelLens` field is out of range.
+    pub const VIEWMODEL_LENS_INVALID: DiagnosticCode = DiagnosticCode::new("L1338");
+
     /// `L1390` — a prefab document's `entities` list is empty, so an instance would spawn nothing.
     pub const PREFAB_EMPTY: DiagnosticCode = DiagnosticCode::new("L1390");
 
@@ -8065,6 +8075,39 @@ degrees, so the drawn field of view is clamped to that range. Reported once; the
 Fix: keep `Camera.fov_y_deg + fov_delta` within 1 to 179, for instance by clamping the tween.",
     },
     CodeEntry {
+        code: code::VIEWMODEL_NO_CAMERA,
+        severity: Severity::Warning,
+        title: "a viewmodel has no first-person camera",
+        explanation: "\
+A mesh is flagged `Viewmodel` (directly or through a `Parent` ancestor), but the scene has no single
+camera that is both perspective and a first-person `CameraRig`, so there is no camera to hold it in
+front of. Reported once; the mesh draws as an ordinary world mesh, shadows included.
+
+Fix: give exactly one perspective camera a `CameraRig` in `first_person` mode, or remove the
+`Viewmodel` flag.",
+    },
+    CodeEntry {
+        code: code::VIEWMODEL_LENS_NOT_ON_CAMERA,
+        severity: Severity::Warning,
+        title: "a viewmodel lens is not on a camera",
+        explanation: "\
+A `ViewmodelLens` is on an entity that has no `Camera`, so nothing reads it. It is ignored and
+reported once.
+
+Fix: move the `ViewmodelLens` onto the first-person camera entity, or delete it.",
+    },
+    CodeEntry {
+        code: code::VIEWMODEL_LENS_INVALID,
+        severity: Severity::Error,
+        title: "a viewmodel lens field is out of range",
+        explanation: "\
+A `ViewmodelLens` field is out of range (pointer `/entities/{i}/components/ViewmodelLens/{field}`):
+`fov_y_deg` must be finite and in 1 to 179, `near` finite and above 0, `depth_slice` finite and in
+(0, 0.5]. A scene with one is refused; at runtime the defaults are used and it is reported once.
+
+Fix: write a value in range, or omit the field to take its default.",
+    },
+    CodeEntry {
         code: code::PREFAB_EMPTY,
         severity: Severity::Error,
         title: "a prefab has no parts",
@@ -11122,6 +11165,9 @@ mod tests {
         code::CAMERA_OFFSET_ON_SIM_ENTITY,
         code::CAMERA_OFFSET_DUPLICATE,
         code::CAMERA_OFFSET_FOV_CLAMPED,
+        code::VIEWMODEL_NO_CAMERA,
+        code::VIEWMODEL_LENS_NOT_ON_CAMERA,
+        code::VIEWMODEL_LENS_INVALID,
         code::PREFAB_EMPTY,
         code::GENERATION_JOBS_UNKNOWN,
         code::ENTITY_REF_IN_COLLECTION,
@@ -11397,6 +11443,8 @@ mod tests {
             code::CAMERA_DOF_FOCUS_ZERO,
             code::SUN_DISC_SIZE_MISMATCH,
             code::CAMERA_OFFSET_FOV_CLAMPED,
+            code::VIEWMODEL_NO_CAMERA,
+            code::VIEWMODEL_LENS_NOT_ON_CAMERA,
             code::PATTERN_SYSTEM_NOT_RUN,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,

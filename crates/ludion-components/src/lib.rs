@@ -3396,6 +3396,145 @@ fn is_zero3(value: &[f32; 3]) -> bool {
     *value == [0.0; 3]
 }
 
+/// Marks a mesh as a first-person **viewmodel** (a held weapon or tool): drawn with its own
+/// projection and a depth slice in front of the world, so it never clips into a wall. Authored
+/// `Viewmodel: {}`; a field-less flag, so any extra field raises the ordinary `L1014`.
+///
+/// The flag is inherited down the `Parent`/`ParentJoint` chain by **OR**: one flagged ancestor
+/// makes every descendant mesh a viewmodel (unlike `Visibility`, whose fold is AND). Author the gun
+/// on **presentation entities** (`presentation: true`) parented to the first-person camera, so the
+/// flag stays out of `WorldHash`; on a sim entity it is hashed like any other component. It is
+/// render-only: the sim never reads it.
+///
+/// The projection comes from the camera's optional [`ViewmodelLens`]; absent means its defaults.
+/// That projection is independent of the gameplay `fov_y_deg`, of `CameraOffset.fov_delta` and of
+/// the late latch. Flagged meshes cast no world shadow. When no single perspective first-person
+/// `CameraRig` camera exists the mesh draws as an ordinary world mesh and is reported once
+/// (`code::VIEWMODEL_NO_CAMERA`, `L1336`).
+///
+/// ```yaml
+/// presentation: true
+/// components:
+///   Parent:
+///     index: 0          # the first-person camera: the first entity in the list
+///     generation: 0
+///   Viewmodel: {}
+///   Mesh:
+///     shape: cube
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
+// A zero-field struct's derived schema omits `properties`, and the unknown-field check only fires
+// when it is present; forcing the empty map keeps `Viewmodel: { x: 1 }` an ordinary `L1014`.
+#[schemars(extend("properties" = serde_json::json!({})))]
+pub struct Viewmodel {}
+
+/// The projection and depth slice a [`Viewmodel`] is drawn with. It sits on the **camera entity**
+/// (the first-person camera); absent means the defaults, and `ViewmodelLens: {}` is the default.
+/// Every field defaults and is omitted from text at its default.
+///
+/// The lens projection is independent of the camera's gameplay `fov_y_deg`, of
+/// `CameraOffset.fov_delta` and of the late latch, so a wide gameplay FOV does not stretch the gun.
+/// `ViewmodelLens` is constant config; on the sim camera it is hashed. On an entity without a
+/// `Camera` it is ignored and reported once (`code::VIEWMODEL_LENS_NOT_ON_CAMERA`, `L1337`). A field
+/// out of range is `L1338`: a scene with one is refused, and at runtime the defaults are used.
+///
+/// `fov_y_deg` is the vertical field of view in degrees, finite in 1 to 179. `near` is the near
+/// plane in world units, finite and above 0. `depth_slice` is the fraction of the depth range the
+/// viewmodel occupies, finite in (0, 0.5].
+///
+/// ```yaml
+/// components:
+///   Camera: {}
+///   ViewmodelLens:
+///     fov_y_deg: 60.0
+///     depth_slice: 0.02
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct ViewmodelLens {
+    /// Vertical field of view of the viewmodel projection, degrees (default `55`).
+    #[serde(
+        default = "viewmodel_fov_default",
+        skip_serializing_if = "is_viewmodel_fov_default"
+    )]
+    pub fov_y_deg: f32,
+    /// Near plane of the viewmodel projection, world units (default `0.01`).
+    #[serde(
+        default = "viewmodel_near_default",
+        skip_serializing_if = "is_viewmodel_near_default"
+    )]
+    pub near: f32,
+    /// Fraction of the depth range the viewmodel is drawn in, in (0, 0.5] (default `0.01`).
+    #[serde(
+        default = "viewmodel_depth_slice_default",
+        skip_serializing_if = "is_viewmodel_depth_slice_default"
+    )]
+    pub depth_slice: f32,
+}
+
+impl Default for ViewmodelLens {
+    fn default() -> Self {
+        ViewmodelLens {
+            fov_y_deg: viewmodel_fov_default(),
+            near: viewmodel_near_default(),
+            depth_slice: viewmodel_depth_slice_default(),
+        }
+    }
+}
+
+fn viewmodel_fov_default() -> f32 {
+    55.0
+}
+fn viewmodel_near_default() -> f32 {
+    0.01
+}
+fn viewmodel_depth_slice_default() -> f32 {
+    0.01
+}
+fn is_viewmodel_fov_default(value: &f32) -> bool {
+    value.to_bits() == viewmodel_fov_default().to_bits()
+}
+fn is_viewmodel_near_default(value: &f32) -> bool {
+    value.to_bits() == viewmodel_near_default().to_bits()
+}
+fn is_viewmodel_depth_slice_default(value: &f32) -> bool {
+    value.to_bits() == viewmodel_depth_slice_default().to_bits()
+}
+
+impl SemanticValidate for ViewmodelLens {
+    /// Rejects `fov_y_deg` outside [1, 179], `near` not above 0 and `depth_slice` outside (0, 0.5],
+    /// or any of them non-finite (`L1338`, pointer `/fov_y_deg`, `/near` or `/depth_slice`). An
+    /// absent field is its default and adds nothing.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        let mut check = |field: &str, ok: fn(f64) -> bool, expected: &str| {
+            if let Some(number) = value.get(field).and_then(as_stored_f32)
+                && (!number.is_finite() || !ok(number))
+            {
+                out.push(
+                    Diagnostic::new(
+                        code::VIEWMODEL_LENS_INVALID,
+                        format!("the `ViewmodelLens` field `/{field}` must be {expected}"),
+                    )
+                    .with_path(format!("/{field}"))
+                    .with_help("pick a value in range; `ludion explain L1338`"),
+                );
+            }
+        };
+        check(
+            "fov_y_deg",
+            |n| (1.0..=179.0).contains(&n),
+            "finite and in 1 to 179 degrees",
+        );
+        check("near", |n| n > 0.0, "finite and above 0");
+        check(
+            "depth_slice",
+            |n| n > 0.0 && n <= 0.5,
+            "finite and in (0, 0.5]",
+        );
+        out
+    }
+}
+
 impl SemanticValidate for Text {
     /// `color` is an HDR colour (`L1263`); `size`, the world height of one line, is a strictly
     /// positive, finite number (`L1118`, pointer `/size`). An absent `size` (default `1.0`) adds
@@ -5560,6 +5699,12 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<CameraOffset>("CameraOffset")
         .expect("unique");
+    // The first-person viewmodel flag and its optional lens, appended after `CameraOffset`. The
+    // flag has no invalid value; the lens is validated for out-of-range fields.
+    registry.register::<Viewmodel>("Viewmodel").expect("unique");
+    registry
+        .register_validated::<ViewmodelLens>("ViewmodelLens")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -5992,12 +6137,14 @@ mod tests {
                 "ParentJoint",
                 "Visibility",
                 "CameraOffset",
+                "Viewmodel",
+                "ViewmodelLens",
             ]
         );
         assert_eq!(
             registry.len(),
-            45,
-            "appending CameraOffset grows the registry by exactly one"
+            47,
+            "appending Viewmodel and ViewmodelLens grows the registry by exactly two"
         );
     }
 
@@ -7266,6 +7413,74 @@ mod tests {
         assert!(CameraOffset::validate_semantics(&finite).is_empty());
     }
 
+    /// `ViewmodelLens: {}` is the default, and the default serializes back to `{}`.
+    #[test]
+    fn empty_viewmodel_lens_is_the_default_and_round_trips() {
+        let lens: ViewmodelLens = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(lens, ViewmodelLens::default());
+        assert_eq!(serde_json::to_value(lens).unwrap(), serde_json::json!({}));
+        let tuned = ViewmodelLens {
+            fov_y_deg: 60.0,
+            ..ViewmodelLens::default()
+        };
+        assert_eq!(
+            serde_json::to_value(tuned).unwrap(),
+            serde_json::json!({ "fov_y_deg": 60.0 })
+        );
+    }
+
+    /// Each out-of-range lens field is `L1338` at its own pointer; the default is clean.
+    #[test]
+    fn an_out_of_range_viewmodel_lens_field_is_l1338_at_its_pointer() {
+        for (field, value) in [
+            ("fov_y_deg", 0.0),
+            ("fov_y_deg", 180.0),
+            ("near", -1.0),
+            ("near", 0.0),
+            ("depth_slice", 0.6),
+            ("depth_slice", 0.0),
+        ] {
+            let found = ViewmodelLens::validate_semantics(&serde_json::json!({ field: value }));
+            assert_eq!(found.len(), 1, "{field}={value}: {found:?}");
+            assert_eq!(found[0].code, code::VIEWMODEL_LENS_INVALID);
+            assert_eq!(found[0].path.as_deref(), Some(format!("/{field}").as_str()));
+        }
+        let default = serde_json::to_value(ViewmodelLens::default()).unwrap();
+        assert!(ViewmodelLens::validate_semantics(&default).is_empty());
+        let edge = serde_json::json!({ "fov_y_deg": 179.0, "near": 0.001, "depth_slice": 0.5 });
+        assert!(ViewmodelLens::validate_semantics(&edge).is_empty());
+    }
+
+    /// An invalid lens in a scene is refused with `L1338` at the full pointer.
+    #[test]
+    fn a_scene_with_an_invalid_viewmodel_lens_is_refused() {
+        let registry = builtin_registry();
+        let bad = "format: 1\nentities:\n  - components:\n      ViewmodelLens:\n        depth_slice: 0.6\n";
+        let diagnostics = ludion_scene::check(bad, &registry).unwrap_err();
+        assert!(
+            diagnostics.iter().any(|d| d.code.as_str() == "L1338"
+                && d.path.as_deref() == Some("/entities/0/components/ViewmodelLens/depth_slice")),
+            "expected an L1338 at ViewmodelLens/depth_slice: {diagnostics:?}"
+        );
+    }
+
+    /// `Viewmodel` is field-less, so an authored key is the ordinary `L1014` (the `GiDynamic`
+    /// posture), and `Viewmodel: {}` is the default.
+    #[test]
+    fn viewmodel_is_a_field_less_marker_that_rejects_extras() {
+        let marker: Viewmodel = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(marker, Viewmodel::default());
+        assert_eq!(serde_json::to_value(marker).unwrap(), serde_json::json!({}));
+        let registry = builtin_registry();
+        let bad = "format: 1\nentities:\n  - components:\n      Viewmodel:\n        x: 1\n";
+        let diagnostics = ludion_scene::check(bad, &registry).unwrap_err();
+        assert!(
+            diagnostics.iter().any(|d| d.code.as_str() == "L1014"
+                && d.path.as_deref() == Some("/entities/0/components/Viewmodel/x")),
+            "expected an L1014 at Viewmodel/x: {diagnostics:?}"
+        );
+    }
+
     /// A component authored with nothing but its defaults is never refused by the colour rules.
     #[test]
     fn default_colours_validate_clean() {
@@ -7280,6 +7495,7 @@ mod tests {
         clean::<PointLight>("PointLight");
         clean::<SpotLight>("SpotLight");
         clean::<CameraOffset>("CameraOffset");
+        clean::<ViewmodelLens>("ViewmodelLens");
         clean::<ReflectionProbe>("ReflectionProbe");
         clean::<ludion_physics::CharacterMotor>("CharacterMotor");
         clean::<ludion_physics::SurfaceVelocity>("SurfaceVelocity");

@@ -138,7 +138,7 @@ pub use components::{
     PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter, PointLight,
     PostProcess, ProbeShape, Projection, ReflectionProbe, Residue, SkinBone, SpotLight, Sprite,
     SpriteBlend, Text, TileAppearance, Tilemap, Transform, UiList, UiListItem, UiRect, UiText,
-    Visibility, builtin_registry, crossfade,
+    Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
 };
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
