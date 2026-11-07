@@ -24,9 +24,10 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::FrameIndex;
 use ludion_render_graph::{FrameSinks, Gpu, PresentOutcome, PresentTarget, StreamReadback};
 
-use crate::blend::{BlendData, blend};
+use crate::blend::{BlendData, blend, latch_camera};
 use crate::camera_latch::CameraLatch;
 use crate::graph::{AntiAliasing, FrameSize};
+use crate::look_motion::{LookCounts, LookMotion};
 use crate::probe_capture::ProbeResolve;
 use crate::quality::{Quality, QualityParams};
 use crate::render::Renderer;
@@ -62,7 +63,7 @@ pub struct PresentSettings {
 }
 
 /// When a tick ran on the sim thread's wall clock, for the presenter's trace.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TickStamp {
     /// The instant the tick ran.
     pub at: Instant,
@@ -72,6 +73,9 @@ pub struct TickStamp {
     pub rebased: bool,
     /// The oldest host-side input arrival this tick consumed, for the present trace only.
     pub input: Option<Instant>,
+    /// The host's cumulative raw mouse total the sim had been given when this tick ran: the late
+    /// latch's cut. `None` before any host-tagged motion.
+    pub motion: Option<[f64; 2]>,
 }
 
 /// One tick's worth of render input, handed from the sim thread to the presenter.
@@ -162,8 +166,9 @@ pub struct Presenter {
 }
 
 impl Presenter {
-    /// Starts the thread over `backend`. Reads `LUDION_PRESENT_TRACE` once.
-    pub fn spawn(backend: Box<dyn PresentBackend>) -> Presenter {
+    /// Starts the thread over `backend`. Reads `LUDION_PRESENT_TRACE` once. `look` is the host's
+    /// raw mouse total when the late latch is on; `None` leaves every frame as the tick drew it.
+    pub fn spawn(backend: Box<dyn PresentBackend>, look: Option<Arc<LookMotion>>) -> Presenter {
         let shared = Arc::new(Shared {
             slot: Mutex::new(Slot {
                 packet: None,
@@ -179,7 +184,7 @@ impl Presenter {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
                 .name("ludion-presenter".to_owned())
-                .spawn(move || run_loop(&shared, backend, &notes_tx, trace))
+                .spawn(move || run_loop(&shared, backend, &notes_tx, trace, look.as_deref()))
                 .expect("spawning the presenter thread")
         };
         Presenter {
@@ -239,6 +244,7 @@ fn run_loop(
     mut backend: Box<dyn PresentBackend>,
     notes: &Sender<PresenterNote>,
     mut trace: Option<PresentTrace>,
+    look: Option<&LookMotion>,
 ) {
     if let Some(trace) = trace.as_mut() {
         trace.frame_latency = backend.frame_latency();
@@ -247,6 +253,8 @@ fn run_loop(
     let mut prev_blend: Option<(Arc<RenderScene>, Arc<BlendData>)> = None;
     // The last drawn frame, and whether it was drawn at alpha 1 (a settled image needs no redraw).
     let mut drawn: Option<(FrameIndex, bool)> = None;
+    // The extra look the last drawn image carried; a settled frame redraws when it changes.
+    let mut drawn_extra: Option<[f32; 2]> = None;
     let mut dead = false;
     let mut last_probes = ProbeResolve::default();
     let mut last_error: Option<String> = None;
@@ -284,6 +292,8 @@ fn run_loop(
             new_tick = true;
         }
         let mut blended_now = false;
+        let mut latched_now = false;
+        let mut latch_oldest = None;
         let mut failure = None;
         // After a skipped present, only a new tick is worth a render: a blend redrawn for a frame
         // nobody is acquiring would just burn the GPU.
@@ -298,10 +308,22 @@ fn run_loop(
                 _ => None,
             };
             let settled = blending.is_none();
-            if !(settled && drawn == Some((cur.frame, true))) {
-                let result = match blending {
-                    Some((prev_scene, prev, next, alpha)) => backend.render(&PresentPacket {
-                        scene: Arc::new(blend(prev_scene, prev, &cur.scene, next, alpha)),
+            let extra = latch_extra(look.map(LookMotion::load), cur);
+            if !(settled && drawn == Some((cur.frame, true)) && extra == drawn_extra) {
+                let scene = blending.map(|(prev_scene, prev, next, alpha)| {
+                    Arc::new(blend(prev_scene, prev, &cur.scene, next, alpha))
+                });
+                let latched = match (extra, cur.camera_latch.as_deref()) {
+                    (Some(extra), Some(latch)) => {
+                        latched_scene(latch, extra, scene.as_deref().unwrap_or(&cur.scene))
+                    }
+                    _ => None,
+                };
+                latched_now = latched.is_some();
+                let scene = latched.map(Arc::new).or(scene);
+                let result = match scene {
+                    Some(scene) => backend.render(&PresentPacket {
+                        scene,
                         ..cur.clone()
                     }),
                     None => backend.render(cur),
@@ -309,7 +331,12 @@ fn run_loop(
                 match result {
                     Ok(()) => {
                         drawn = Some((cur.frame, settled));
+                        drawn_extra = extra;
                         blended_now = !settled;
+                        // Every render consumes the pending arrival, latched or not, so a later
+                        // latched sample counts only from motion newer than this image.
+                        let oldest = look.and_then(LookMotion::take_oldest);
+                        latch_oldest = oldest.filter(|_| latched_now);
                         if let Some(probes) = backend.probe_resolve()
                             && probes != last_probes
                         {
@@ -344,7 +371,11 @@ fn run_loop(
             }
             Ok(PresentOutcome::Presented) => {
                 if let (Some(trace), Some((frame, _))) = (trace.as_mut(), drawn) {
-                    trace.note_present(frame, started.elapsed(), blended_now, Instant::now());
+                    let now = Instant::now();
+                    if latched_now {
+                        trace.note_latched(latch_oldest, now);
+                    }
+                    trace.note_present(frame, started.elapsed(), blended_now, now);
                 }
             }
             // Nothing paced this iteration (occluded, stale or timed-out swapchain): park instead of
@@ -369,6 +400,7 @@ fn merge_replaced(
     packet: &mut PresentPacket,
     covers_from: FrameIndex,
 ) -> FrameIndex {
+    // The latch cut needs no merge: the newer packet's `motion` already covers the replaced one's.
     // First, before any early return: the oldest input of a skipped tick must reach the trace.
     if let Some(older) = replaced.tick.and_then(|tick| tick.input)
         && let Some(tick) = packet.tick.as_mut()
@@ -395,6 +427,29 @@ fn merge_replaced(
         tick.rebased = true;
     }
     covers_from
+}
+
+/// The extra look (degrees) the latch applies over `packet`'s tick: `Some` only with a locked pointer,
+/// a latch and a tick on the packet, and raw counts the tick has not consumed.
+fn latch_extra(look: Option<LookCounts>, packet: &PresentPacket) -> Option<[f32; 2]> {
+    let counts = look.filter(|counts| counts.locked)?;
+    let latch = packet.camera_latch.as_deref()?;
+    let cut = packet.tick?.motion.unwrap_or([0.0; 2]);
+    let (dx, dy) = (counts.total[0] - cut[0], counts.total[1] - cut[1]);
+    (dx != 0.0 || dy != 0.0).then(|| latch.look_from_counts(dx as f32, dy as f32))
+}
+
+/// `scene` with its camera re-resolved by `extra` look; `None` when the latch cannot resolve.
+fn latched_scene(
+    latch: &dyn CameraLatch,
+    extra: [f32; 2],
+    scene: &RenderScene,
+) -> Option<RenderScene> {
+    let tick = latch.resolve([0.0; 2])?;
+    let latched = latch.resolve(extra)?;
+    let mut out = scene.clone();
+    latch_camera(&mut out, &tick, &latched);
+    Some(out)
 }
 
 /// The previous tick's scene and blend data when `next` can blend toward it: both ticks carry data, every
@@ -470,6 +525,9 @@ struct PresentTrace {
     /// The oldest input arrival not yet presented, with the frame that carries it.
     pending_input: Option<(FrameIndex, Instant)>,
     input_ms: Vec<f64>,
+    /// Presents of a frame re-resolved with fresher look, and their oldest-look→present times.
+    latched: usize,
+    latch_ms: Vec<f64>,
     frame_latency: Option<u32>,
 }
 
@@ -489,6 +547,8 @@ impl PresentTrace {
             window_start: None,
             pending_input: None,
             input_ms: Vec::with_capacity(TRACE_INTERVAL),
+            latched: 0,
+            latch_ms: Vec::new(),
             frame_latency: None,
         })
     }
@@ -502,6 +562,15 @@ impl PresentTrace {
                 .pending_input
                 .map_or(input, |(_, held)| held.min(input));
             self.pending_input = Some((frame, oldest));
+        }
+    }
+
+    /// Records a latched present at `now`; `oldest` is the first look count it carried.
+    fn note_latched(&mut self, oldest: Option<Instant>, now: Instant) {
+        self.latched += 1;
+        if let Some(oldest) = oldest {
+            self.latch_ms
+                .push(now.saturating_duration_since(oldest).as_secs_f64() * 1000.0);
         }
     }
 
@@ -536,6 +605,7 @@ impl PresentTrace {
     fn report(&mut self, elapsed: Duration) {
         self.waits_ms.sort_by(f64::total_cmp);
         self.input_ms.sort_by(f64::total_cmp);
+        self.latch_ms.sort_by(f64::total_cmp);
         let percentile = |sorted: &[f64], fraction: f64| {
             let index = ((sorted.len() as f64 * fraction).ceil() as usize).max(1) - 1;
             sorted[index.min(sorted.len() - 1)]
@@ -551,6 +621,16 @@ impl PresentTrace {
                 self.input_ms.len()
             )
         };
+        let latch = if self.latch_ms.is_empty() {
+            "n/a".to_string()
+        } else {
+            format!(
+                "p50 {:.1} ms p95 {:.1} ms (n {})",
+                percentile(&self.latch_ms, 0.50),
+                percentile(&self.latch_ms, 0.95),
+                self.latch_ms.len()
+            )
+        };
         let latency = self
             .frame_latency
             .map_or_else(|| "?".to_string(), |latency| latency.to_string());
@@ -558,7 +638,7 @@ impl PresentTrace {
             "present-trace: {:.1} presents/s, {} distinct frames, {} repeats, {} frame-index gaps, \
              {} rebased ticks, {} blended presents, {} skipped presents, \
              acquire+present p50 {:.2} ms p99 {:.2} ms, \
-             input→present {}, frame latency {}",
+             input→present {}, frame latency {}, {} latched presents, latched look→present {}",
             self.presents as f64 / elapsed.as_secs_f64().max(1e-9),
             self.distinct,
             self.repeats,
@@ -570,6 +650,8 @@ impl PresentTrace {
             at(0.99),
             input,
             latency,
+            self.latched,
+            latch,
         );
         self.presents = 0;
         self.distinct = 0;
@@ -580,6 +662,8 @@ impl PresentTrace {
         self.skips = 0;
         self.waits_ms.clear();
         self.input_ms.clear();
+        self.latched = 0;
+        self.latch_ms.clear();
         self.window_start = None;
     }
 }
@@ -688,6 +772,8 @@ mod tests {
         /// Every mesh's x translation at each render.
         mesh_xs: Vec<Vec<f32>>,
         presents: usize,
+        /// The camera's x position at each render.
+        cam_xs: Vec<f32>,
     }
 
     /// Renders are logged; `present` blocks on `gate` until a token arrives (or the sender drops),
@@ -701,6 +787,7 @@ mod tests {
         fn render(&mut self, packet: &PresentPacket) -> Result<(), Diagnostic> {
             let mut log = self.log.lock().unwrap();
             log.renders.push(packet.frame.0);
+            log.cam_xs.push(packet.scene.camera.position.x);
             if let Some(mesh) = packet.scene.meshes.first() {
                 log.xs.push(mesh.model.w_axis.x);
             }
@@ -785,6 +872,7 @@ mod tests {
                 period: Duration::from_secs(1_000_000_000),
                 rebased: false,
                 input: None,
+                motion: None,
             }),
             blend: Some(Arc::new(BlendData {
                 poses: vec![(KEY, a), (KEY_B, b)],
@@ -851,7 +939,7 @@ mod tests {
             }
         }
         let log = Arc::new(Mutex::new(Log::default()));
-        let presenter = Presenter::spawn(Box::new(Skipping(Arc::clone(&log))));
+        let presenter = Presenter::spawn(Box::new(Skipping(Arc::clone(&log))), None);
         let now = Instant::now();
         presenter.publish(pair(1, now, &[]));
         presenter.publish(pair(2, now, &[]));
@@ -880,6 +968,7 @@ mod tests {
                 period,
                 rebased,
                 input: None,
+                motion: None,
             }),
             blend: Some(Arc::new(BlendData {
                 poses: vec![(KEY, model)],
@@ -893,10 +982,13 @@ mod tests {
     fn spawn_fake() -> (Presenter, Arc<Mutex<Log>>, mpsc::Sender<()>) {
         let log = Arc::new(Mutex::new(Log::default()));
         let (gate_tx, gate) = mpsc::channel();
-        let presenter = Presenter::spawn(Box::new(Fake {
-            log: Arc::clone(&log),
-            gate,
-        }));
+        let presenter = Presenter::spawn(
+            Box::new(Fake {
+                log: Arc::clone(&log),
+                gate,
+            }),
+            None,
+        );
         (presenter, log, gate_tx)
     }
 
@@ -980,6 +1072,7 @@ mod tests {
                 period,
                 rebased: false,
                 input: None,
+                motion: None,
             })
         };
         assert_eq!(alpha_at(at, None), 1.0);
@@ -996,6 +1089,7 @@ mod tests {
                     period,
                     rebased: false,
                     input: None,
+                    motion: None,
                 })
             ),
             1.0
@@ -1019,6 +1113,7 @@ mod tests {
                 period: Duration::from_millis(16),
                 rebased: false,
                 input,
+                motion: None,
             }),
             ..packet(frame)
         }
@@ -1038,6 +1133,8 @@ mod tests {
             window_start: None,
             pending_input: None,
             input_ms: Vec::new(),
+            latched: 0,
+            latch_ms: Vec::new(),
             frame_latency: None,
         }
     }
@@ -1064,6 +1161,7 @@ mod tests {
             period: Duration::from_millis(16),
             rebased: false,
             input,
+            motion: None,
         };
         trace.note_tick(FrameIndex(3), tick(Some(t0)));
         let wait = Duration::from_millis(1);
@@ -1090,10 +1188,13 @@ mod tests {
     fn the_newest_packet_wins_and_a_repeat_present_does_not_re_render() {
         let log = Arc::new(Mutex::new(Log::default()));
         let (gate_tx, gate) = mpsc::channel();
-        let presenter = Presenter::spawn(Box::new(Fake {
-            log: Arc::clone(&log),
-            gate,
-        }));
+        let presenter = Presenter::spawn(
+            Box::new(Fake {
+                log: Arc::clone(&log),
+                gate,
+            }),
+            None,
+        );
         presenter.publish(packet(0));
         until("frame 0 rendered", || log.lock().unwrap().renders == [0]);
         for frame in 1..=3 {
@@ -1136,7 +1237,7 @@ mod tests {
             }
         }
         let log = Arc::new(Mutex::new(Log::default()));
-        let presenter = Presenter::spawn(Box::new(Dying(Arc::clone(&log))));
+        let presenter = Presenter::spawn(Box::new(Dying(Arc::clone(&log))), None);
         presenter.publish(packet(0));
         let mut notes = Vec::new();
         until("a fault note", || {
@@ -1145,5 +1246,112 @@ mod tests {
         });
         assert!(matches!(&notes[0], PresenterNote::Fault(d) if d.code == code::RENDER_DEVICE_LOST));
         assert_eq!(log.lock().unwrap().presents, 0);
+    }
+
+    /// A latch whose camera sits at x = yaw extra; one count is one degree.
+    struct StubLatch;
+
+    impl CameraLatch for StubLatch {
+        fn resolve(&self, extra: [f32; 2]) -> Option<crate::blend::CameraBlend> {
+            Some(crate::blend::CameraBlend {
+                key: KEY,
+                model: Mat4::from_translation(Vec3::new(extra[0], 0.0, 0.0)),
+                fov_y_deg: None,
+                near: 0.1,
+                far: 100.0,
+                aspect: 1.0,
+            })
+        }
+        fn look_from_counts(&self, dx: f32, dy: f32) -> [f32; 2] {
+            [dx, dy]
+        }
+    }
+
+    fn latched_packet(frame: u64, cut: [f64; 2]) -> PresentPacket {
+        PresentPacket {
+            tick: Some(TickStamp {
+                at: Instant::now(),
+                period: Duration::from_secs(1_000_000_000),
+                rebased: false,
+                input: None,
+                motion: Some(cut),
+            }),
+            camera_latch: Some(Arc::new(StubLatch)),
+            ..packet(frame)
+        }
+    }
+
+    fn spawn_latched(look: &Arc<LookMotion>) -> (Presenter, Arc<Mutex<Log>>, mpsc::Sender<()>) {
+        let log = Arc::new(Mutex::new(Log::default()));
+        let (gate_tx, gate) = mpsc::channel();
+        let presenter = Presenter::spawn(
+            Box::new(Fake {
+                log: Arc::clone(&log),
+                gate,
+            }),
+            Some(Arc::clone(look)),
+        );
+        (presenter, log, gate_tx)
+    }
+
+    #[test]
+    fn the_latch_applies_only_the_motion_past_the_cut_and_only_once() {
+        let look = LookMotion::new();
+        look.set_locked(true);
+        look.store([10.0, 0.0], None);
+        let (presenter, log, gate_tx) = spawn_latched(&look);
+        presenter.publish(latched_packet(1, [10.0, 0.0]));
+        until("frame 1 rendered", || {
+            log.lock().unwrap().renders.len() == 1
+        });
+        // Everything the tick consumed is cut: the tick's own camera, no double count.
+        assert_eq!(log.lock().unwrap().cam_xs, [0.0]);
+        look.store([15.0, 0.0], None);
+        gate_tx.send(()).unwrap();
+        until("latched render", || log.lock().unwrap().renders.len() == 2);
+        assert_eq!(log.lock().unwrap().cam_xs, [0.0, 5.0]);
+        for _ in 0..3 {
+            gate_tx.send(()).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            log.lock().unwrap().renders.len(),
+            2,
+            "no new motion, no render"
+        );
+        drop(gate_tx);
+    }
+
+    #[test]
+    fn an_unlocked_pointer_is_never_latched() {
+        let look = LookMotion::new();
+        look.store([15.0, 0.0], None);
+        let (presenter, log, gate_tx) = spawn_latched(&look);
+        presenter.publish(latched_packet(1, [10.0, 0.0]));
+        until("frame 1 rendered", || {
+            log.lock().unwrap().renders.len() == 1
+        });
+        for _ in 0..3 {
+            gate_tx.send(()).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let log = log.lock().unwrap();
+        assert_eq!((log.renders.len(), log.cam_xs[0]), (1, 0.0));
+        drop(gate_tx);
+    }
+
+    #[test]
+    fn a_render_without_extra_look_clears_the_oldest_arrival() {
+        let look = LookMotion::new();
+        look.store([15.0, 0.0], Some(Instant::now()));
+        let (presenter, log, gate_tx) = spawn_latched(&look);
+        // Unlocked: the render is not latched, but it still consumes the arrival.
+        presenter.publish(latched_packet(1, [10.0, 0.0]));
+        until("frame 1 rendered", || {
+            log.lock().unwrap().renders.len() == 1
+        });
+        assert_eq!(look.load().oldest, None);
+        drop(gate_tx);
+        drop(presenter);
     }
 }

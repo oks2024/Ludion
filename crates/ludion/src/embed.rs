@@ -54,6 +54,9 @@ pub struct Surface {
     pub width: u32,
     /// The surface's initial size in physical pixels.
     pub height: u32,
+    /// The window host's raw mouse total, for [`late_latch`](ludion_engine::EngineBuilder::late_latch);
+    /// `None` for a host with no mouse.
+    pub look_motion: Option<Arc<ludion_engine::LookMotion>>,
 }
 
 /// The host switches [`Embedded::start`] takes beside the builder and the roots. Everything else a
@@ -205,17 +208,26 @@ pub(crate) struct Injector(Sender<StampedCommand>);
 impl Injector {
     /// Fire-and-forget `input.inject` of an already-serialized event.
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
-    pub(crate) fn inject_value_at(&self, event: serde_json::Value, arrived: Option<Instant>) {
+    pub(crate) fn inject_value_at(
+        &self,
+        event: serde_json::Value,
+        arrived: Option<Instant>,
+        motion_total: Option<[f64; 2]>,
+    ) {
         let (stamped, _reply) = StampedCommand::new(Command::InputInject(InputInjectParams {
             frame: None,
             event,
         }));
-        let _ = self.0.send(stamped.with_arrival(arrived));
+        let _ = self.0.send(
+            stamped
+                .with_arrival(arrived)
+                .with_motion_total(motion_total),
+        );
     }
 
     /// [`inject_value_at`](Injector::inject_value_at) without an arrival stamp.
     pub(crate) fn inject_value(&self, event: serde_json::Value) {
-        self.inject_value_at(event, None);
+        self.inject_value_at(event, None, None);
     }
 }
 
@@ -940,8 +952,12 @@ fn run_boot(boot: Boot) -> bool {
         surface,
         width,
         height,
+        look_motion,
     }) = surface
     {
+        if let Some(look) = look_motion {
+            engine.set_look_motion(look);
+        }
         let present = match engine.attach_surface(&instance, surface, width, height) {
             Ok(present) => present,
             Err(diagnostic) => return fail(diagnostic),

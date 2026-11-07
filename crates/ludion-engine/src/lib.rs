@@ -268,7 +268,7 @@ pub use voxel_sheet::{GiSheetOutcome, VoxelSheetOutcome, render_gi_sheet, render
 // along because [`Engine::attach_surface`] returns one: a windowed host must be able to name what
 // it holds.
 pub use ludion_renderer::{
-    AntiAliasing, DebugView, FrameSize, GpuUploads, PresentSize, ProbePrune, Quality,
+    AntiAliasing, DebugView, FrameSize, GpuUploads, LookMotion, PresentSize, ProbePrune, Quality,
     QualityParams, RenderScale, dump_frame_graph_json,
 };
 

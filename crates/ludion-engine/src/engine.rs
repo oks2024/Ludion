@@ -320,6 +320,11 @@ pub struct Engine {
     /// Whether the window surface asks for frame latency 1
     /// ([`EngineBuilder::low_latency`](crate::EngineBuilder::low_latency)). Render-only.
     pub(crate) low_latency: bool,
+    /// Whether the presenter re-resolves the first-person camera with unconsumed mouse motion
+    /// ([`EngineBuilder::late_latch`](crate::EngineBuilder::late_latch)). Render-only.
+    pub(crate) late_latch: bool,
+    /// The window host's raw mouse total ([`set_look_motion`](Engine::set_look_motion)).
+    pub(crate) look_motion: Option<Arc<ludion_renderer::LookMotion>>,
     /// The host's explicit mode ([`set_anti_aliasing`](Engine::set_anti_aliasing)), if it named one.
     /// Same status as `anti_aliasing_default`.
     anti_aliasing_override: Option<AntiAliasing>,
@@ -792,6 +797,8 @@ impl Engine {
             anti_aliasing_default: AntiAliasing::Off,
             present_interpolation: false,
             low_latency: false,
+            late_latch: false,
+            look_motion: None,
             anti_aliasing_override: None,
             anti_aliasing_game: None,
             cursor_lock_game: None,
@@ -3983,9 +3990,7 @@ impl Engine {
                 settings: self.present_settings(),
                 tick,
                 blend: collect.then(|| Arc::new(blend)),
-                camera_latch: self
-                    .view_override
-                    .is_none()
+                camera_latch: (self.late_latch && self.view_override.is_none())
                     .then(|| crate::camera_latch::collect(self.driver.world(), (width, height)))
                     .flatten(),
             });
@@ -4401,16 +4406,28 @@ impl Engine {
         )?;
         let size = target.size_handle();
         let backend = WindowBackend::new(gpu.share()?, target)?;
-        self.presenter = Some(Presenter::spawn(Box::new(backend)));
+        self.presenter = Some(Presenter::spawn(Box::new(backend), self.presenter_look()));
         self.surface_gpu = Some(gpu);
         Ok(size)
+    }
+
+    /// Hands the engine the window host's raw mouse total, which the presenter latches against
+    /// when [`late_latch`](crate::EngineBuilder::late_latch) is on. Call before
+    /// [`attach_surface`](Engine::attach_surface).
+    pub fn set_look_motion(&mut self, look: Arc<ludion_renderer::LookMotion>) {
+        self.look_motion = Some(look);
+    }
+
+    /// What the presenter gets: the host's mouse total, only with the late latch on.
+    fn presenter_look(&self) -> Option<Arc<ludion_renderer::LookMotion>> {
+        self.late_latch.then(|| self.look_motion.clone()).flatten()
     }
 
     /// Test seam: runs a presenter over `backend` in place of a window, so the sim/presenter
     /// decoupling is exercised without a surface.
     #[doc(hidden)]
     pub fn attach_present_backend(&mut self, backend: Box<dyn PresentBackend>) {
-        self.presenter = Some(Presenter::spawn(backend));
+        self.presenter = Some(Presenter::spawn(backend, self.presenter_look()));
     }
 
     /// Whether a window surface is attached ([`attach_surface`](Engine::attach_surface)) — the live

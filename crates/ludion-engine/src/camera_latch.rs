@@ -153,4 +153,97 @@ entities:
         engine.advance_live();
         assert!(engine.present_camera_latch().is_none());
     }
+
+    const PLAIN_SCENE: &str = "format: 1
+seed: 1
+entities:
+  - name: camera
+    components:
+      Transform: {}
+      Camera: {}
+      CameraRig:
+        target:
+          index: 1
+          generation: 0
+        rig:
+          mode:
+            first_person: {}
+  - name: hero
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 0.0
+          - -2.0
+";
+
+    fn look(world: &mut ludion_ecs::World, _: &ludion_ecs::SystemCtx) {
+        let [dx, dy] = world
+            .resource::<ludion_sim::InputState>()
+            .unwrap()
+            .mouse()
+            .delta();
+        let cam = world
+            .entities()
+            .find(|&id| world.has::<ludion_camera::CameraRig>(id))
+            .unwrap();
+        let rig = world
+            .get_mut::<ludion_camera::CameraRig>(cam)
+            .unwrap()
+            .unwrap();
+        ludion_camera::add_look_counts(rig, dx, dy);
+    }
+
+    /// The latched view and the view the sim draws once it consumes the same counts are the same
+    /// camera, so reconciling never pops.
+    #[test]
+    fn the_sim_lands_exactly_where_the_latch_showed() {
+        use ludion_camera::{CameraRig, resolved_camera};
+        use ludion_protocol::Command;
+        use ludion_protocol::command::InputInjectParams;
+
+        let mut engine = Engine::builder()
+            .system("look", look)
+            .build()
+            .expect("the game builds");
+        engine.load_inline_scene(PLAIN_SCENE).expect("loads");
+        for _ in 0..3 {
+            engine.advance_live();
+        }
+        let latch = engine.present_camera_latch().expect("a first-person rig");
+        let rig = |engine: &Engine| {
+            let world = engine.world();
+            let id = world
+                .entities()
+                .find(|&id| world.has::<CameraRig>(id))
+                .unwrap();
+            world.get::<CameraRig>(id).unwrap().unwrap().clone()
+        };
+        let before = rig(&engine);
+        let (counts, extra) = ([10.0_f32, 5.0], latch.look_from_counts(10.0, 5.0));
+        let latched = latch.resolve(extra).expect("resolves");
+        let expected = resolved_camera(&before, [1.0, 0.0, -2.0], extra).expect("resolves");
+
+        let event = serde_json::json!({
+            "kind": "mouse_motion",
+            "delta_bits": [counts[0].to_bits(), counts[1].to_bits()],
+        });
+        crate::dispatch(
+            &mut engine,
+            Command::InputInject(InputInjectParams { frame: None, event }),
+        )
+        .expect("injects");
+        engine.advance_live();
+
+        let drawn = engine
+            .extract_present_scene()
+            .expect("extracts")
+            .1
+            .camera
+            .expect("a camera");
+        assert_eq!(drawn, latched);
+        let after = rig(&engine).aim().expect("posed");
+        assert_eq!(after.yaw_deg, expected.aim.yaw_deg);
+        assert_eq!(after.pitch_deg, expected.aim.pitch_deg);
+    }
 }

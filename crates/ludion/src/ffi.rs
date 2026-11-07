@@ -340,6 +340,7 @@ unsafe fn uikit_surface(params: &LudionStartParams) -> Result<Surface, Diagnosti
         surface,
         width: params.width,
         height: params.height,
+        look_motion: None,
     })
 }
 

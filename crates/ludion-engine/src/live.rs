@@ -99,6 +99,9 @@ pub struct StampedCommand {
     /// Host-side wall-clock arrival of the input event this command carries, for the present
     /// trace only: never serialized, hashed or recorded.
     pub arrived: Option<Instant>,
+    /// Host-side cumulative raw mouse total, including this event, for the late latch only: never
+    /// serialized, hashed or recorded.
+    pub motion_total: Option<[f64; 2]>,
 }
 
 impl StampedCommand {
@@ -123,6 +126,7 @@ impl StampedCommand {
                 reply,
                 request: None,
                 arrived: None,
+                motion_total: None,
             },
             receiver,
         )
@@ -144,6 +148,13 @@ impl StampedCommand {
         let (mut stamped, receiver) = StampedCommand::new(command);
         stamped.request = Some(id);
         (stamped, receiver)
+    }
+
+    /// Records the host cumulative raw mouse total the input this command carries ends at.
+    #[must_use]
+    pub fn with_motion_total(mut self, total: Option<[f64; 2]>) -> Self {
+        self.motion_total = total;
+        self
     }
 
     /// Records the host-side arrival of the input this command carries.
@@ -311,6 +322,13 @@ fn fold_arrival(pending: &mut Option<Instant>, arrived: Option<Instant>) {
     };
 }
 
+/// Moves the late latch's cut to a newer cumulative mouse total; an untagged command keeps it.
+fn fold_motion(consumed: &mut Option<[f64; 2]>, tag: Option<[f64; 2]>) {
+    if tag.is_some() {
+        *consumed = tag;
+    }
+}
+
 /// Applies the pending commands in arrival order, at most [`MAX_COMMANDS_PER_DRAIN`], returning how
 /// many it applied, or `None` once every producer is gone.
 fn drain(
@@ -320,12 +338,14 @@ fn drain(
     egress_state: &mut EgressState,
     activity: &AtomicU32,
     pending_input: &mut Option<Instant>,
+    consumed_motion: &mut Option<[f64; 2]>,
 ) -> Option<usize> {
     let mut applied = 0;
     while applied < MAX_COMMANDS_PER_DRAIN {
         match intake.try_recv() {
             Ok(stamped) => {
                 fold_arrival(pending_input, stamped.arrived);
+                fold_motion(consumed_motion, stamped.motion_total);
                 // Only a command that can change the image owes a frame subscriber a render the
                 // frame index would not already trigger (a `component.set` does; a poll or a
                 // queued input does not). Re-submitting an unchanged world on every poll fills
@@ -369,6 +389,9 @@ fn live_loop(
     let mut rebase_pending = false;
     // The oldest input arrival not yet folded into a tick's stamp.
     let mut pending_input: Option<Instant> = None;
+    // The newest host mouse total any command so far carried: the late latch's cut. Persists
+    // across ticks, so a tick's stamp always names everything the sim has been given.
+    let mut consumed_motion: Option<[f64; 2]> = None;
 
     loop {
         // 1. Drain the commands pending at this frame boundary, up to the cap.
@@ -379,6 +402,7 @@ fn live_loop(
             &mut egress_state,
             &shutdown.1,
             &mut pending_input,
+            &mut consumed_motion,
         )
         .is_none()
         {
@@ -438,6 +462,7 @@ fn live_loop(
                     period,
                     rebased: rebase_pending || reset,
                     input: pending_input.take(),
+                    motion: consumed_motion,
                 });
                 rebase_pending = false;
             }
@@ -476,6 +501,8 @@ fn live_loop(
             recv(intake) -> msg => match msg {
                 Ok(stamped) => {
                     fold_arrival(&mut pending_input, stamped.arrived);
+                    // Folded after this boundary's tick, so it belongs to the next one.
+                    fold_motion(&mut consumed_motion, stamped.motion_total);
                     let dirty = stamped.command.may_change_frame();
                     pending_capture = pending_capture.or(reply(engine, stamped, &shutdown.1));
                     egress_state.frame_dirty |= dirty;
@@ -1286,6 +1313,7 @@ mod tests {
             &mut egress_state,
             &receiver.1,
             &mut None,
+            &mut None,
         );
         assert_eq!(first, Some(MAX_COMMANDS_PER_DRAIN));
         assert_eq!(intake.len(), 3);
@@ -1301,6 +1329,7 @@ mod tests {
             &mut egress_state,
             &receiver.1,
             &mut None,
+            &mut None,
         );
         assert_eq!(second, Some(3));
         assert!(replies[MAX_COMMANDS_PER_DRAIN + 2].try_recv().is_ok());
@@ -1313,6 +1342,7 @@ mod tests {
                 &mut pending,
                 &mut egress_state,
                 &receiver.1,
+                &mut None,
                 &mut None
             ),
             None
@@ -1346,8 +1376,47 @@ mod tests {
             &mut egress_state,
             &receiver.1,
             &mut pending_input,
+            &mut None,
         );
         assert_eq!(pending_input, Some(t0));
+    }
+
+    /// The cut is the newest tag, untagged commands keep it, and a later drain never rewinds it.
+    #[test]
+    fn a_drain_keeps_the_newest_motion_total_across_drains() {
+        let mut engine = engine();
+        let (intake_tx, intake) = crossbeam_channel::unbounded();
+        let (_signal, receiver) = shutdown_channel();
+        let mut pending = None;
+        let mut egress_state = EgressState::new(engine.subscriptions().frames_opened());
+        let mut consumed = None;
+        let mut run = |tags: &[Option<[f64; 2]>], consumed: &mut Option<[f64; 2]>| {
+            let _replies: Vec<_> = tags
+                .iter()
+                .map(|tag| {
+                    let (stamped, reply) = StampedCommand::new(Command::SimHash);
+                    intake_tx.send(stamped.with_motion_total(*tag)).unwrap();
+                    reply
+                })
+                .collect();
+            drain(
+                &mut engine,
+                &intake,
+                &mut pending,
+                &mut egress_state,
+                &receiver.1,
+                &mut None,
+                consumed,
+            );
+        };
+        run(&[Some([3.0, 0.0]), None, Some([5.0, 1.0])], &mut consumed);
+        assert_eq!(consumed, Some([5.0, 1.0]));
+        run(&[None, None], &mut consumed);
+        assert_eq!(
+            consumed,
+            Some([5.0, 1.0]),
+            "motion before the cut stays cut"
+        );
     }
 
     fn engine() -> Engine {

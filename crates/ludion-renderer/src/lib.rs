@@ -58,6 +58,7 @@ pub mod graph;
 mod ibl;
 mod lobe;
 mod local_shadow;
+mod look_motion;
 mod mesh;
 mod mipgen;
 mod presenter;
@@ -80,7 +81,7 @@ mod voxel_bake;
 mod shader_gen;
 mod smaa_lut;
 
-pub use blend::{BlendData, CameraBlend, InstanceKey, blend};
+pub use blend::{BlendData, CameraBlend, InstanceKey, blend, latch_camera};
 pub use camera_latch::CameraLatch;
 pub use cluster::{ClusterStats, cluster_stats};
 pub use compressed::{CompressedUploadError, check_compressed};
@@ -93,6 +94,7 @@ pub use graph::{
 pub use local_shadow::{
     LocalShadowStats, is_valid_atlas_edge, local_shadow_marks, local_shadow_stats,
 };
+pub use look_motion::{LookCounts, LookMotion};
 pub use ludion_font::GlyphQuad;
 pub use ludion_render_graph::PresentOutcome;
 pub use presenter::{

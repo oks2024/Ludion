@@ -117,6 +117,7 @@ pub struct EngineBuilder {
     fullscreen: bool,
     present_interpolation: bool,
     low_latency: bool,
+    late_latch: bool,
     cursor: CursorMode,
     registrations: Vec<Registration>,
     systems: Vec<SystemSpec>,
@@ -155,6 +156,7 @@ impl EngineBuilder {
             fullscreen: false,
             present_interpolation: false,
             low_latency: false,
+            late_latch: false,
             cursor: CursorMode::default(),
             registrations: Vec::new(),
             systems: Vec::new(),
@@ -386,6 +388,29 @@ impl EngineBuilder {
     #[must_use]
     pub fn low_latency(mut self, on: bool) -> Self {
         self.low_latency = on;
+        self
+    }
+
+    /// Sets whether a windowed host re-resolves the first-person camera with the mouse motion the
+    /// last tick has not consumed yet, every refresh (default off): look reaches the screen at
+    /// display rate instead of after the next tick.
+    ///
+    /// Applies to a single unparented perspective first-person
+    /// [`CameraRig`](ludion_camera::CameraRig) camera, only while the window's pointer is locked, and
+    /// assumes the game turns every mouse count into look through `add_look_counts`. Mouse only: the
+    /// gamepad stick is not latched. With it on, the camera's rotation is not interpolated. Window
+    /// only; render-only: the sim, hashes, replays, screenshot, stream and goldens are unchanged.
+    /// See `ludion docs presentation` § Late latch.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::Engine;
+    ///
+    /// assert!(Engine::builder().late_latch(true).late_latch_hint());
+    /// ```
+    #[must_use]
+    pub fn late_latch(mut self, on: bool) -> Self {
+        self.late_latch = on;
         self
     }
 
@@ -881,6 +906,11 @@ impl EngineBuilder {
         self.present_interpolation
     }
 
+    /// The flag recorded by [`late_latch`](EngineBuilder::late_latch).
+    pub fn late_latch_hint(&self) -> bool {
+        self.late_latch
+    }
+
     /// The flag recorded by [`low_latency`](EngineBuilder::low_latency).
     pub fn low_latency_hint(&self) -> bool {
         self.low_latency
@@ -957,6 +987,7 @@ impl EngineBuilder {
         engine.anti_aliasing_default = self.anti_aliasing;
         engine.present_interpolation = self.present_interpolation;
         engine.low_latency = self.low_latency;
+        engine.late_latch = self.late_latch;
         engine.install_plane();
         // Set before `install_docs`, which runs them: the passes are engine configuration derived
         // from the game, re-run on every world the engine builds.
@@ -1180,6 +1211,8 @@ mod tests {
         assert!(!defaults.present_interpolation_hint());
         assert!(!defaults.low_latency_hint());
         assert!(Engine::builder().low_latency(true).low_latency_hint());
+        assert!(!defaults.late_latch_hint());
+        assert!(Engine::builder().late_latch(true).late_latch_hint());
         assert_eq!(defaults.cursor_hint(), CursorMode::AutoHide);
 
         let set = Engine::builder()

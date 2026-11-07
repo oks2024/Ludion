@@ -161,6 +161,15 @@ these shows. On iOS, `AutoNoVsync` resolves to `Fifo` and the sim thread itself 
     arrival stamp → `TickStamp.input` → first present of the frame), host-side only: never hashed,
     serialized or recorded. It ends at submission, so it cannot see the swapchain queue latency 1
     shortens; the photon capture is owed on the M4.
+17. **Opt-in late latch (Serious Isaac 0004).** `EngineBuilder::late_latch(true)` re-resolves the first-person
+    camera at present time with mouse counts the packet's tick has not consumed. The cut is one cumulative
+    raw-count `f64` total owned by the window host's `HostInput`: it rides each flushed motion event as a host
+    stamp into `StampedCommand.motion_total`, the live loop keeps the newest as `TickStamp.motion`, and the
+    presenter latches `LookMotion.total − tick.motion` (the same variable read at two moments, so an
+    all-consumed total is exactly zero and the tick's camera is untouched). Applies only while the pointer is
+    locked; mouse only. `latch_camera` keeps the drawn (blended) position and substitutes the rotation, so
+    rotation is not interpolated. Render-only: no `InputEvent`/`InputState`/`Command`/wire change, nothing
+    hashed, serialized or recorded; the latch is collected only with the flag on.
 
 ## Phasing
 
@@ -219,8 +228,10 @@ sitting after Serious Isaac 0004 subtask 03:
    `PROBE_LOW_LATENCY`, `ludion::run`) into `crates/ludion/examples/latency_probe.rs`.
 2. `cargo build --release -p ludion --example latency_probe`.
 3. For each of `PROBE_LOW_LATENCY=0` and `=1`, run `LUDION_PRESENT_TRACE=1 target/release/examples/latency_probe
-   --window --scene examples/gallery/camera-rig.yaml`, moving the mouse continuously for at least three trace windows.
+   --window --scene target/latency_probe.yaml`, moving the mouse continuously for at least three trace windows.
 4. Record the `input→present` p50/p95 and `frame latency` here, then delete the example.
+5. Late latch: the same probe with `PROBE_LATE_LATCH=1` (it also locks the pointer), recording the
+   `latched look→present` p50/p95 and `latched presents` from the trace line (decision 17).
 
 - 2026-11-06, M5: the trace prints `frame latency 2` (off) and `1` (on) at a steady 120 presents/s, acquire+present
   p50 about 7.7 ms either way. The input→present figure is still owed: synthetic `CGEventPost` moves from

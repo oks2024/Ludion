@@ -12,6 +12,25 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use crate::keymap::KeyMapper;
 use crate::mouse::{self, MouseButtons};
 
+/// Host-side facts that travel beside one emitted event and never enter its payload.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HostStamp {
+    /// Arrival of the event's first device count.
+    pub at: Option<Instant>,
+    /// Cumulative raw mouse counts since the host began, including this event; set only on a
+    /// flushed motion. The late latch's cut between consumed and pending look.
+    pub motion_total: Option<[f64; 2]>,
+}
+
+impl HostStamp {
+    fn arrived(at: Option<Instant>) -> Self {
+        HostStamp {
+            at,
+            motion_total: None,
+        }
+    }
+}
+
 /// Maps winit window events to `input.inject` event `Value`s, remembering what is held so a focus
 /// loss can release it.
 #[derive(Default)]
@@ -22,6 +41,8 @@ pub struct HostInput {
     motion: [f64; 2],
     /// Arrival of the first count in `motion`: a coalesced event keeps the oldest arrival.
     motion_at: Option<Instant>,
+    /// Every raw count ever added, in `f64`: the one counter the late latch cuts against.
+    total: [f64; 2],
 }
 
 impl HostInput {
@@ -30,18 +51,29 @@ impl HostInput {
     pub fn motion(&mut self, dx: f64, dy: f64, at: Option<Instant>) {
         self.motion[0] += dx;
         self.motion[1] += dy;
+        self.total[0] += dx;
+        self.total[1] += dy;
         if self.motion_at.is_none() {
             self.motion_at = at;
         }
     }
 
-    /// Emits the pending motion as one event (nothing when it is zero) with its first arrival, and
-    /// clears it.
-    pub fn flush_motion(&mut self, mut emit: impl FnMut(Value, Option<Instant>)) {
+    /// Every raw count added so far, flushed or not.
+    pub fn motion_total(&self) -> [f64; 2] {
+        self.total
+    }
+
+    /// Emits the pending motion as one event (nothing when it is zero) with its first arrival and
+    /// the running total including it, and clears the pending counts.
+    pub fn flush_motion(&mut self, mut emit: impl FnMut(Value, HostStamp)) {
         let [dx, dy] = std::mem::take(&mut self.motion);
         let at = self.motion_at.take();
         if dx != 0.0 || dy != 0.0 {
-            emit(mouse::mouse_motion_event([dx as f32, dy as f32]), at);
+            let stamp = HostStamp {
+                at,
+                motion_total: Some(self.total),
+            };
+            emit(mouse::mouse_motion_event([dx as f32, dy as f32]), stamp);
         }
     }
 
@@ -79,9 +111,10 @@ impl HostInput {
         event: &WindowEvent,
         at: Option<Instant>,
         map_cursor: impl FnOnce(f32, f32) -> Option<[f32; 2]>,
-        mut emit: impl FnMut(Value, Option<Instant>),
+        mut emit: impl FnMut(Value, HostStamp),
     ) {
         self.flush_motion(&mut emit);
+        let stamp = HostStamp::arrived(at);
         match event {
             WindowEvent::KeyboardInput {
                 event,
@@ -91,26 +124,26 @@ impl HostInput {
                 if let PhysicalKey::Code(code) = event.physical_key
                     && let Some(value) = self.key(code, event.state, event.repeat)
                 {
-                    emit(value, at);
+                    emit(value, stamp);
                 }
             }
             // A key or button let go while another window had focus never gets a release.
             WindowEvent::Focused(false) => {
                 for value in self.focus_lost() {
-                    emit(value, at);
+                    emit(value, stamp);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(pos) = map_cursor(position.x as f32, position.y as f32) {
-                    emit(mouse::mouse_move_event(pos), at);
+                    emit(mouse::mouse_move_event(pos), stamp);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(value) = self.button(*button, *state) {
-                    emit(value, at);
+                    emit(value, stamp);
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => emit(mouse::mouse_wheel_event(*delta), at),
+            WindowEvent::MouseWheel { delta, .. } => emit(mouse::mouse_wheel_event(*delta), stamp),
             _ => {}
         }
     }
@@ -170,10 +203,32 @@ mod tests {
         input.motion(1.0, 0.0, Some(t0));
         input.motion(1.0, 0.0, Some(t1));
         let mut out = Vec::new();
-        input.flush_motion(|v, at| out.push((v, at)));
-        assert_eq!(out, vec![(motion_json(2.0, 0.0), Some(t0))]);
-        input.flush_motion(|v, at| out.push((v, at)));
+        input.flush_motion(|v, stamp| out.push((v, stamp)));
         assert_eq!(out.len(), 1);
+        assert_eq!(out[0].1.at, Some(t0));
+        input.flush_motion(|v, stamp| out.push((v, stamp)));
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn a_flushed_motion_carries_the_running_total_and_other_events_none() {
+        let mut input = HostInput::default();
+        input.motion(1.5, 0.0, None);
+        input.motion(2.0, -1.0, None);
+        assert_eq!(input.motion_total(), [3.5, -1.0], "unflushed counts count");
+        let event = WindowEvent::MouseInput {
+            device_id: winit::event::DeviceId::dummy(),
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+        };
+        let mut out = Vec::new();
+        input.route(&event, None, |_, _| None, |v, s| out.push((v, s)));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].1.motion_total, Some([3.5, -1.0]));
+        assert_eq!(out[1].1.motion_total, None);
+        input.motion(0.5, 0.0, None);
+        input.flush_motion(|_, s| out.push((Value::Null, s)));
+        assert_eq!(out[2].1.motion_total, Some([4.0, -1.0]));
     }
 
     #[test]

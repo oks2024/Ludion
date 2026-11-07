@@ -54,7 +54,7 @@ use ludion_window::chrome::{
     self, CursorAutoHide, ExtentDebounce, FullscreenChord, GrabAction, HostOp, HostPlatform,
     KeyRoute, PointerGrab, dev_title, game_title,
 };
-use ludion_window::host_input::HostInput;
+use ludion_window::host_input::{HostInput, HostStamp};
 use ludion_window::mouse;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
@@ -161,8 +161,7 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
     let stop_grace = window_stop_grace(listening);
 
     let running = Arc::new(AtomicBool::new(true));
-    let (input_tx, input_rx) =
-        crossbeam_channel::unbounded::<(serde_json::Value, Option<Instant>)>();
+    let (input_tx, input_rx) = crossbeam_channel::unbounded::<(serde_json::Value, HostStamp)>();
     // Wakes the waiter thread on loop exit when no stop ever fired (the window was closed). The
     // Ctrl-C handler holds a stop sender for the life of the process, so the waiter can never end by
     // disconnection alone.
@@ -176,6 +175,7 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
         running: running.clone(),
         input_tx,
         input: HostInput::default(),
+        look_motion: ludion_engine::LookMotion::new(),
         input_rx: Some(input_rx),
         internal_stop_rx: Some(internal_stop_rx),
         window: None,
@@ -276,11 +276,13 @@ struct App {
     embedded: Option<Embedded>,
     proxy: EventLoopProxy<HostEvent>,
     running: Arc<AtomicBool>,
-    input_tx: Sender<(serde_json::Value, Option<Instant>)>,
+    input_tx: Sender<(serde_json::Value, HostStamp)>,
     /// Maps keyboard, mouse and focus events to `input.inject` events.
     input: HostInput,
+    /// The raw mouse total and pointer lock the presenter latches against (`late_latch`).
+    look_motion: Arc<ludion_engine::LookMotion>,
     /// Handed to the forwarder thread on `resumed`.
-    input_rx: Option<Receiver<(serde_json::Value, Option<Instant>)>>,
+    input_rx: Option<Receiver<(serde_json::Value, HostStamp)>>,
     /// Handed to the waiter thread on `resumed`.
     internal_stop_rx: Option<Receiver<()>>,
     window: Option<Arc<Window>>,
@@ -367,6 +369,7 @@ impl App {
                 surface,
                 width: inner.width,
                 height: inner.height,
+                look_motion: Some(Arc::clone(&self.look_motion)),
             }),
             options,
         )?;
@@ -385,7 +388,7 @@ impl App {
         let gamepad_tx = self.input_tx.clone();
         self.gamepad = Some(ludion_window::spawn_gamepad_thread(
             move |value| {
-                let _ = gamepad_tx.send((value, None));
+                let _ = gamepad_tx.send((value, HostStamp::default()));
             },
             self.running.clone(),
         ));
@@ -440,6 +443,7 @@ impl App {
                 }
             }
         }
+        self.look_motion.set_locked(self.grab.is_locked());
     }
 
     /// Moves the pointer to the window's centre.
@@ -484,8 +488,8 @@ impl App {
             event,
             Some(Instant::now()),
             |x, y| map_cursor(embedded, surface_size, x, y),
-            |value, at| {
-                let _ = input_tx.send((value, at));
+            |value, stamp| {
+                let _ = input_tx.send((value, stamp));
             },
         );
     }
@@ -493,8 +497,8 @@ impl App {
     /// Sends the pending raw mouse motion, if any, to the forwarder channel.
     fn flush_motion(&mut self) {
         let input_tx = &self.input_tx;
-        self.input.flush_motion(|value, at| {
-            let _ = input_tx.send((value, at));
+        self.input.flush_motion(|value, stamp| {
+            let _ = input_tx.send((value, stamp));
         });
     }
 
@@ -543,7 +547,9 @@ impl ApplicationHandler<HostEvent> for App {
     #[allow(clippy::disallowed_methods)]
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
         if let DeviceEvent::MouseMotion { delta } = event {
-            self.input.motion(delta.0, delta.1, Some(Instant::now()));
+            let now = Instant::now();
+            self.input.motion(delta.0, delta.1, Some(now));
+            self.look_motion.store(self.input.motion_total(), Some(now));
         }
     }
 
@@ -683,11 +689,11 @@ impl ApplicationHandler<HostEvent> for App {
 /// Ends when every sender is dropped (the event loop torn down).
 fn spawn_input_forwarder(
     injector: Injector,
-    input_rx: Receiver<(serde_json::Value, Option<Instant>)>,
+    input_rx: Receiver<(serde_json::Value, HostStamp)>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
-        while let Ok((event, arrived)) = input_rx.recv() {
-            injector.inject_value_at(event, arrived);
+        while let Ok((event, stamp)) = input_rx.recv() {
+            injector.inject_value_at(event, stamp.at, stamp.motion_total);
         }
     })
 }

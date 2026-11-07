@@ -129,7 +129,7 @@ Runnable: `crates/ludion/examples/first_person_kick.rs`.
 - `[0, 0]` is the tick's camera bit for bit; `None` before the first pose.
 - Extra look `[yaw, pitch]` (degrees, signs as `look_deg`) applies to a `first_person` rig only, and not while a blend runs; otherwise it is ignored. Pitch clamps to `pitch_limit_deg`, the eye follows the new yaw, and kick, roll, FOV and shake apply on top.
 - Extra look equals what `add_look` plus one held tick would give, so a later tick that consumes the same look never pops the view.
-- The renderer sees it through `ludion_renderer::CameraLatch`, built by the engine into each present packet for a first-person rig camera.
+- The renderer sees it through `ludion_renderer::CameraLatch`, built by the engine into each present packet for a first-person rig camera when `late_latch` is on (`ludion docs presentation` § Late latch).
 
 ## The offset frame (`track`)
 

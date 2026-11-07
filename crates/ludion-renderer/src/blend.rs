@@ -225,6 +225,23 @@ pub fn blend(
     out
 }
 
+/// Substitutes a latched camera's rotation into `scene`, keeping its drawn position.
+///
+/// `tick` is the tick's own camera and `latched` the same camera re-resolved with fresher look. The
+/// scene's position moves by what the look changed (the eye offset turning with yaw), so a blended
+/// position is kept and only the rotation is replaced; the projection is untouched. With no
+/// interpolation the scene's position is `tick`'s, and the camera becomes `latched` exactly. Never
+/// call it for a zero extra look: that frame draws the packet's scene as is.
+pub fn latch_camera(scene: &mut RenderScene, tick: &CameraBlend, latched: &CameraBlend) {
+    let mut model = latched.model;
+    let position = scene.camera.position + (latched.model.w_axis - tick.model.w_axis).truncate();
+    model.w_axis = position.extend(latched.model.w_axis.w);
+    if model.is_finite() && model.determinant().abs() > DET_EPS {
+        scene.camera.view = model.inverse();
+        scene.camera.position = position;
+    }
+}
+
 const DET_EPS: f32 = 1e-12;
 
 fn sorted<T>(list: &[T], key: impl Fn(&T) -> InstanceKey) -> bool {

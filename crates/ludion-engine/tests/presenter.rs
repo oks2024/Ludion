@@ -394,3 +394,89 @@ fn interpolation_leaves_the_world_hash_unchanged() {
         assert_eq!(on[frame], off[frame], "frame {frame} diverged");
     }
 }
+
+/// A first-person camera riding a hero, turned by a game system from the mouse delta.
+const LOOK_SCENE: &str = "format: 1
+seed: 1
+entities:
+  - name: cam
+    components:
+      Transform: {}
+      Camera: {}
+      CameraRig:
+        target:
+          index: 1
+          generation: 0
+        rig:
+          mode:
+            first_person: {}
+  - name: hero
+    components:
+      Transform: {}
+";
+
+fn look(world: &mut World, _ctx: &ludion_ecs::SystemCtx) {
+    let [dx, dy] = world
+        .resource::<ludion_sim::InputState>()
+        .unwrap()
+        .mouse()
+        .delta();
+    let Some(cam) = world
+        .entities()
+        .find(|&id| world.has::<ludion_camera::CameraRig>(id))
+    else {
+        return;
+    };
+    let rig = world
+        .get_mut::<ludion_camera::CameraRig>(cam)
+        .unwrap()
+        .unwrap();
+    ludion_camera::add_look_counts(rig, dx, dy);
+}
+
+#[test]
+fn late_latch_leaves_the_world_hash_unchanged() {
+    let hashes = |latch| {
+        let engine = Engine::builder()
+            .late_latch(latch)
+            .system("look", look)
+            .build()
+            .unwrap();
+        let motion = ludion_renderer::LookMotion::new();
+        motion.set_locked(true);
+        let mut engine = engine;
+        engine.set_look_motion(Arc::clone(&motion));
+        let (mut engine, _) = attach(engine, LOOK_SCENE, Some((Duration::from_millis(4), false)));
+        let seen = Arc::new(Mutex::new(BTreeMap::new()));
+        engine.set_tick_observer(Hashes(Arc::clone(&seen)));
+        let live = run(engine);
+        // Scripted look at fixed frames, with the host total running ahead so the latch has work.
+        for i in 0..8_u64 {
+            let counts = 3.0 + i as f32;
+            motion.store([f64::from(counts) * (i + 1) as f64, 0.0], None);
+            live.send(Command::InputInject(
+                ludion_protocol::command::InputInjectParams {
+                    frame: Some(FrameIndex(20 + 3 * i)),
+                    event: serde_json::json!({
+                        "kind": "mouse_motion",
+                        "delta_bits": [counts.to_bits(), 1.0_f32.to_bits()],
+                    }),
+                },
+            ));
+        }
+        until("50 recorded frames", || seen.lock().unwrap().len() >= 50);
+        live.stop();
+        Arc::try_unwrap(seen).unwrap().into_inner().unwrap()
+    };
+    let on = hashes(true);
+    let off = hashes(false);
+    let common: Vec<_> = on.keys().filter(|f| off.contains_key(f)).collect();
+    assert!(
+        common.len() >= 30,
+        "the runs overlap on {} frames",
+        common.len()
+    );
+    for frame in common {
+        assert_eq!(on[frame], off[frame], "frame {frame} diverged");
+    }
+}
