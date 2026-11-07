@@ -511,7 +511,7 @@ move-and-slide (Wave 4) → expose + gallery + degrade-nowhere checks (Wave 5) �
   authoring colliders visually; would ship with inverse-carrying responses per the parity discipline.
   Decision 9.
 - **Flow-field / grid navigation (`ludion-nav`)** — stays game-side (G6 builds a walkability grid from
-  static colliders); trigger: a second consumer or a stabilized API (roadmap non-goal).
+  static colliders); trigger: a second consumer or a stabilized API (roadmap non-goal). Trigger fired (the external FPS request 0007) → `Plan/nav.md`.
 - **In-process game-systems profiling for `ludion profile`** — the path the whole-game E6 budget scene
   needs; E1's microbench is decoupled and does not build it. Trigger: E6/G1 wiring the budget scene.
   *(Fired 2026-07-15 — the facade's `--profile`/`--profile-check` mode landed for the first E6

@@ -92,7 +92,7 @@ settled plan, nothing built; **rejected** — closed by design.
 
 - Navmesh, pathfinding library, behaviour trees, steering, perception — absent in the engine.
   vigil runs game-side flow fields; `ludion-nav` deferred until a second consumer
-  (a private plan).
+  (a private plan). Trigger fired (the external FPS request 0007) → `Plan/nav.md`.
 
 ### Audio
 

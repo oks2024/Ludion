@@ -53,6 +53,7 @@ mod mesh_collider;
 mod mesh_grid;
 mod model_sheet;
 mod nav;
+mod nav_bench;
 mod parent_joint;
 mod particles;
 mod path_follow;

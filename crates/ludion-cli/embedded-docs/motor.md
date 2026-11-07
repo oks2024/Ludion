@@ -124,3 +124,4 @@ Category `motor` (`DebugCategories::parse("motor")`), drawn only by `ludion_engi
 - `ludion docs physics` — the bodies the motor pushes; `ludion docs physics-sensors` — triggers
 - `ludion docs lane` — a path corridor for the motor; `ludion docs collision` — the 2D `move_and_slide`; `ludion docs path` — moving platforms
 - `ludion docs debug-draw`, `ludion docs verify-loop` — seeing and tracing a move
+- `ludion docs nav` — walkability grid, shared flow fields and `NavAgent` steering (feeds the motor).

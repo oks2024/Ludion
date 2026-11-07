@@ -16,13 +16,13 @@ use ludion_spatial::{Body, Collider, Shape, spatial3d};
 use serde_json::Value;
 
 /// One static box: centre, half extents, Euler rotation in degrees.
-struct Block {
-    at: [f32; 3],
-    half: [f32; 3],
-    rot: [f32; 3],
+pub(crate) struct Block {
+    pub(crate) at: [f32; 3],
+    pub(crate) half: [f32; 3],
+    pub(crate) rot: [f32; 3],
 }
 
-fn block(at: [f32; 3], half: [f32; 3]) -> Block {
+pub(crate) fn block(at: [f32; 3], half: [f32; 3]) -> Block {
     Block {
         at,
         half,
@@ -36,14 +36,19 @@ fn ground() -> Block {
 }
 
 /// A 3-vector as a block-style YAML sequence at `indent` spaces.
-fn seq(v: [f32; 3], indent: usize) -> String {
+pub(crate) fn seq(v: [f32; 3], indent: usize) -> String {
     v.iter()
         .map(|c| format!("{:indent$}- {c:?}\n", ""))
         .collect()
 }
 
-fn scene(blocks: &[Block]) -> String {
-    let mut out = String::from("format: 1\nseed: 1\nphysics:\n  space: free\nentities:\n");
+pub(crate) fn scene(blocks: &[Block]) -> String {
+    scene_with_layers(blocks, "")
+}
+
+/// `layers` is already-indented YAML inserted under `physics:`.
+pub(crate) fn scene_with_layers(blocks: &[Block], layers: &str) -> String {
+    let mut out = format!("format: 1\nseed: 1\nphysics:\n  space: free\n{layers}entities:\n");
     for (n, b) in blocks.iter().enumerate() {
         out +=
             &format!("  - name: b{n}\n    components:\n      Transform:\n        translation:\n");
@@ -469,7 +474,7 @@ fn a_bad_config_names_its_field() {
 const DECK: [f32; 3] = [20.5, 2.0, 12.5];
 
 /// One agent entity: `fields` is the `NavAgent` body, already indented by 8 spaces.
-fn agent(n: usize, at: [f32; 3], fields: &str) -> String {
+pub(crate) fn agent(n: usize, at: [f32; 3], fields: &str) -> String {
     let mut out =
         format!("  - name: a{n}\n    components:\n      Transform:\n        translation:\n");
     out += &seq(at, 10);
@@ -478,7 +483,7 @@ fn agent(n: usize, at: [f32; 3], fields: &str) -> String {
     out
 }
 
-fn target_yaml(target: [f32; 3]) -> String {
+pub(crate) fn target_yaml(target: [f32; 3]) -> String {
     format!("        target:\n{}", seq(target, 10))
 }
 
@@ -497,7 +502,7 @@ fn crowd(blocks: &[Block]) -> String {
 }
 
 /// Applies each agent's steering: `xz += velocity * dt`, `y` from the grid node under it.
-fn mover(world: &mut World, ctx: &ludion_ecs::SystemCtx) {
+pub(crate) fn mover(world: &mut World, ctx: &ludion_ecs::SystemCtx) {
     let moves: Vec<_> = world
         .query_ids::<(&Transform, &NavSteering)>()
         .map(|(id, (t, s))| (id, t.translation, s.velocity))
