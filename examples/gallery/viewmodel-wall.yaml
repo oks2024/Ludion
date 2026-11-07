@@ -2,7 +2,7 @@
 # 0.25 in front of the eye never clips it. The barrel pokes through the wall's face; `ViewmodelLens`
 # gives the gun its own field of view (`ludion docs camera`).
 format: 1
-name: "viewmodel-wall - a first-person gun pushed through a wall draws whole"
+name: viewmodel-wall - a first-person gun pushed through a wall draws whole
 seed: 1
 entities:
   - name: camera

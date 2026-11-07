@@ -2,7 +2,7 @@
 # rim rings it where it crosses a wall corner, and the gun itself takes no occlusion
 # (`ludion docs post-processing`).
 format: 1
-name: "viewmodel-ssao - a first-person gun in front of a wall corner has no AO halo"
+name: viewmodel-ssao - a first-person gun in front of a wall corner has no AO halo
 seed: 1
 entities:
   - name: camera

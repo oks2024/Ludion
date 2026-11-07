@@ -3,7 +3,7 @@
 # of a wall 0.25 from the eye even though it spawns past the wall's face, and blooms
 # (`ludion docs camera`).
 format: 1
-name: "viewmodel-muzzle - a muzzle flash past a close wall draws in front of it"
+name: viewmodel-muzzle - a muzzle flash past a close wall draws in front of it
 seed: 1
 entities:
   - name: camera

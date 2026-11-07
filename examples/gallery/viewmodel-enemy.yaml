@@ -2,7 +2,7 @@
 # gun still draws over it; a far wall stands behind. The viewmodel's depth slice sits in front of
 # every world draw (`ludion docs camera`).
 format: 1
-name: "viewmodel-enemy - a first-person gun draws over a close enemy"
+name: viewmodel-enemy - a first-person gun draws over a close enemy
 seed: 1
 entities:
   - name: camera
