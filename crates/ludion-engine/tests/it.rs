@@ -52,6 +52,7 @@ mod local_shadow_fade;
 mod mesh_collider;
 mod mesh_grid;
 mod model_sheet;
+mod nav;
 mod parent_joint;
 mod particles;
 mod path_follow;

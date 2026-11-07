@@ -112,6 +112,8 @@ pub use host::ctrl_c_fan_out;
 #[cfg(feature = "wire")]
 pub use host::{HostOptions, host_scene};
 pub use ludion_core::collections;
+/// The walkability grid and flow-field types behind [`prelude::Nav`].
+pub use ludion_nav as nav;
 
 #[cfg(feature = "wire")]
 use std::collections::BTreeMap;

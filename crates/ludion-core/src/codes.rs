@@ -2300,6 +2300,12 @@ pub mod code {
     /// **warning**; the rest of the restore proceeds.
     pub const PROJECTILE_RESTORE_CAPACITY: DiagnosticCode = DiagnosticCode::new("L4031");
 
+    /// `L4032` — a `NavConfig` is invalid: a non-finite or non-positive size, a grid with no
+    /// columns or more than 2^22, an empty height range, a slope outside `(0, 90)`, or an empty or
+    /// unknown `ignore_layers` name. An **error**. Raised by `ludion-engine`'s builder at `build`
+    /// and by `nav_update` for an unknown layer name.
+    pub const NAV_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L4032");
+
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
     /// `L5001` — no audio output device is available, so the playback sink cannot open a stream.
@@ -10746,6 +10752,26 @@ Fix: raise `ProjectileConfig::capacity` to at least the number the message names
 the old build.",
     },
     CodeEntry {
+        code: code::NAV_CONFIG_INVALID,
+        severity: Severity::Error,
+        title: "nav config is invalid",
+        explanation: "\
+A `NavConfig` cannot build a walkability grid. The message names the field:
+
+- `origin`, `cell_size`, `y_min`, `y_max`, `agent_radius`, `agent_height`, `max_step`,
+  `max_slope_deg` and `flow_radius` must be finite; the sizes and `flow_radius` must be positive;
+- `nx` and `nz` must be at least 1, and `nx * nz` at most 4194304;
+- `y_min` must be below `y_max`;
+- `max_slope_deg` must be in `(0, 90)`;
+- `ignore_layers` must name layers declared in the scene's `physics.layers`, and no name may be
+  empty.
+
+Raised by `Engine::builder().build()` for everything but an unknown layer name, and by `nav_update`
+for that (reported once; the grid keeps its last build until the name is fixed).
+
+Fix: correct the field the message names.",
+    },
+    CodeEntry {
         code: code::AUDIO_DEVICE_UNAVAILABLE,
         severity: Severity::Warning,
         title: "no audio output device available",
@@ -11450,6 +11476,7 @@ mod tests {
         code::PROJECTILE_MUZZLE_UNRESOLVED,
         code::PROJECTILE_STEP_NOT_RUN,
         code::PROJECTILE_RESTORE_CAPACITY,
+        code::NAV_CONFIG_INVALID,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,

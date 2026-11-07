@@ -212,6 +212,9 @@ pub struct Engine {
     /// The game's projectile pool config ([`EngineBuilder::projectiles`](crate::EngineBuilder::projectiles)),
     /// already validated at build; `None` installs no pool.
     pub(crate) projectile_config: Option<crate::ProjectileConfig>,
+    /// The game's nav config ([`EngineBuilder::nav`](crate::EngineBuilder::nav)), already validated at
+    /// build; `None` installs no grid.
+    pub(crate) nav_config: Option<crate::NavConfig>,
     /// How the pool is drawn ([`EngineBuilder::projectile_visuals`](crate::EngineBuilder::projectile_visuals)).
     pub(crate) projectile_draw: crate::projectile_draw::ProjectileDraw,
     /// What the last install-time validation pass reported at `Warning` severity — the errors
@@ -773,6 +776,7 @@ impl Engine {
             doc_texts: BTreeMap::new(),
             resource_carriers: Vec::new(),
             projectile_config: None,
+            nav_config: None,
             projectile_draw: crate::projectile_draw::ProjectileDraw::default(),
             doc_validation_warnings: Vec::new(),
             doc_skip_warnings: Vec::new(),
@@ -2490,6 +2494,21 @@ impl Engine {
         }
         if let Ok(projectiles) = crate::Projectiles::new(config.clone()) {
             self.driver.world_mut().insert_resource(projectiles);
+        }
+    }
+
+    /// Installs the configured [`Nav`](crate::Nav) into the current world unless it already holds one
+    /// (one a `carry_resource` moved across a switch). Called after every world (re)build, so a
+    /// restored world gets a fresh grid; a no-op for a game that configured none.
+    pub(crate) fn install_nav(&mut self) {
+        let Some(config) = &self.nav_config else {
+            return;
+        };
+        if self.driver.world().resource::<crate::Nav>().is_some() {
+            return;
+        }
+        if let Ok(nav) = crate::Nav::new(config.clone()) {
+            self.driver.world_mut().insert_resource(nav);
         }
     }
 
@@ -6164,6 +6183,7 @@ impl Engine {
         self.install_presentation_rules();
         self.install_scene_switch();
         self.install_projectiles();
+        self.install_nav();
         if matches!(
             kind,
             Rebuild::Switch { restart: true, .. }

@@ -786,6 +786,7 @@ dependencies = [
  "ludion-core",
  "ludion-ecs",
  "ludion-font",
+ "ludion-nav",
  "ludion-physics",
  "ludion-projectiles",
  "ludion-protocol",
@@ -845,6 +846,13 @@ dependencies = [
  "ryu",
  "serde_json",
  "xxhash-rust",
+]
+
+[[package]]
+name = "ludion-nav"
+version = "0.1.0"
+dependencies = [
+ "ludion-core",
 ]
 
 [[package]]

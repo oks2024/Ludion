@@ -95,6 +95,10 @@
 //!   with [`spawn_projectile`] (a [`projectiles::ProjectileDesc`]), and the tick's
 //!   [`projectiles::HitEvent`]s read from the [`Projectiles`] resource. Re-exported as a module so
 //!   its `Response` and `HitEvent` do not clash.
+//! - **Navigation** — the opt-in walkability grid built from the static physics colliders:
+//!   `Engine::builder().nav(`[`NavConfig`]`)` and [`nav_update`] scheduled before whatever reads the
+//!   [`Nav`] resource. The `ludion::nav` module (not in the prelude, which would clash with a game's own `nav`) holds the grid and flow-field types (`NavGrid`,
+//!   `FlowCache`, `FlowField`).
 //! - **Rigid-body dynamics** — the second tier of the same [`Collider`] surface: a 3D [`Shape`] or
 //!   `body: rigid` (with [`RigidBody`] and its [`AxisLock`]; a static or kinematic body takes a
 //!   [`ContactMaterial`]) is simulated rather than indexed, and
@@ -205,7 +209,7 @@ pub use ludion_engine::{
     KickConfig, LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF, LANE_ON,
     LANE_PATH, LaneConstraint, LaneEnds, LaneInput, LookAhead, MOTOR_AIRBORNE, MOTOR_CARRY,
     MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE, MOTOR_STUCK, MOTOR_WALL,
-    MapWrap, Mesh, MeshGrid, MeshSource, MotionSegment, Name, NoInterpolate,
+    MapWrap, Mesh, MeshGrid, MeshSource, MotionSegment, Name, Nav, NavConfig, NoInterpolate,
     PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter, PathDocument, PathFollower,
     PathFrame, PathInterpolation, PathMetric, PathMode, PathOrient, PathSampler, PatternDoc,
     PatternPlayer, PointLight, PostProcess, PrefabApplied, PrefabInstance, PrefabReverted,
@@ -219,11 +223,11 @@ pub use ludion_engine::{
     add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
     bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw,
     first_person_eye, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
-    move_character, move_character_with, path_follow, path_follower_motion, play_patterns,
-    play_sound, posed_joint_world, probe_character_ground, projectiles_step, reparent,
-    report_diagnostic, report_full_diagnostic, resize_character, revert_prefab, set_clip_speed,
-    set_look, snap_rig, spawn_prefab, spawn_projectile, switch_to_ragdoll, teleport_character,
-    unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
+    move_character, move_character_with, nav_update, path_follow, path_follower_motion,
+    play_patterns, play_sound, posed_joint_world, probe_character_ground, projectiles_step,
+    reparent, report_diagnostic, report_full_diagnostic, resize_character, revert_prefab,
+    set_clip_speed, set_look, snap_rig, spawn_prefab, spawn_projectile, switch_to_ragdoll,
+    teleport_character, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;

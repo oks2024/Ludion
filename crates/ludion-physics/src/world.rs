@@ -191,6 +191,21 @@ struct Mirrored {
     angular: [f32; 3],
 }
 
+/// One `static` body as [`PhysicsWorld::static_bodies`] reports it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct StaticBody {
+    /// The entity that owns the body.
+    pub entity: EntityId,
+    /// Minimum corner of the posed collider's world AABB.
+    pub min: [f32; 3],
+    /// Maximum corner of the posed collider's world AABB.
+    pub max: [f32; 3],
+    /// Changes when the collider is rebuilt or the body's pose changes, even when the AABB does not
+    /// (a cube turned about its own axis).
+    pub revision: u64,
+}
+
 /// One row of the creation-order handle table.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct BodyEntry {
@@ -883,6 +898,42 @@ impl PhysicsWorld {
     /// The entities that have a body, in creation order — the table's own order.
     pub fn entities(&self) -> impl Iterator<Item = EntityId> + '_ {
         self.table.iter().map(|entry| entry.entity)
+    }
+
+    /// The `static` bodies, in creation order, each with its posed world AABB and a `revision` that
+    /// changes whenever the collider is rebuilt or the body is re-posed. A consumer that caches
+    /// geometry derived from static colliders diffs two scans by `entity` and refreshes what moved.
+    ///
+    /// Reads the state as of the last completed step, like the queries.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_physics::PhysicsWorld;
+    ///
+    /// assert_eq!(PhysicsWorld::new(TickRate::DEFAULT).static_bodies().count(), 0);
+    /// ```
+    pub fn static_bodies(&self) -> impl Iterator<Item = StaticBody> + '_ {
+        self.table
+            .iter()
+            .filter(|entry| entry.kind == BodyKind::Fixed)
+            .filter_map(|entry| {
+                let collider = self.rapier.colliders.get(entry.collider)?;
+                let aabb = collider.compute_aabb();
+                let (index, generation) = entry.collider.into_raw_parts();
+                let pose = self.rapier.bodies.get(entry.body)?.position();
+                let (t, r) = (pose.translation, pose.rotation);
+                let mut revision = (u64::from(index) << 32) | u64::from(generation);
+                for bits in [t.x, t.y, t.z, r.x, r.y, r.z, r.w].map(f32::to_bits) {
+                    revision = (revision ^ u64::from(bits)).wrapping_mul(0x0000_0100_0000_01b3);
+                }
+                Some(StaticBody {
+                    entity: entry.entity,
+                    min: from_vector(aabb.mins),
+                    max: from_vector(aabb.maxs),
+                    revision,
+                })
+            })
     }
 
     /// The parry shape `entity`'s collider was built as, or `None` if it has no body.
