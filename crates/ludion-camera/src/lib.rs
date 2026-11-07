@@ -10,6 +10,9 @@
 //! 3. **blend** — an interpolation from the frozen source pose to the live rig pose;
 //! 4. **shake** — seeded trauma noise on the output only; it never feeds back into the state.
 //!
+//! The `first_person` mode skips the path and the springs: the game writes look deltas
+//! ([`add_look`]), the rig owns yaw and pitch, and [`CameraRig::aim`] reports the pre-shake aim.
+//!
 //! The crate owns the types and the maths. The engine registers the component, resolves the target
 //! and the path (a [`ludion_scene::PathSampler`]), calls [`step_rig`] and writes the result to the
 //! camera's `Transform` and `Camera`. [`camera_relative`] maps a stick to world directions from the
@@ -21,6 +24,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod first_person;
 mod relative;
 mod rig;
 mod shake;
@@ -29,10 +33,12 @@ mod step;
 mod track;
 mod validate;
 
+pub use first_person::first_person_eye;
 pub use relative::{camera_relative, camera_relative_yaw};
 pub use rig::{
-    Blend, BlendCurve, BlendIn, CameraRig, LookAhead, Pose, RigConfig, RigMode, RigState,
-    ShakeConfig, Springs, TrackRig, VerticalAnchor, add_trauma, snap_rig,
+    Aim, Blend, BlendCurve, BlendIn, CameraRig, FirstPersonRig, LookAhead, Pose, RigConfig,
+    RigMode, RigState, ShakeConfig, Springs, TrackRig, VerticalAnchor, add_look, add_trauma,
+    set_look, snap_rig,
 };
 pub use step::{RigInput, RigOutput, step_rig};
 pub use track::{rig_focus, track_eye};

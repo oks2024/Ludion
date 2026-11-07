@@ -1,8 +1,9 @@
 //! The rig pipeline, tick by tick, on hand-built paths.
 
 use ludion_camera::{
-    Blend, BlendCurve, BlendIn, CameraRig, LookAhead, RigConfig, RigInput, RigMode, RigOutput,
-    Springs, TrackRig, add_trauma, camera_relative, camera_relative_yaw, snap_rig, step_rig,
+    Blend, BlendCurve, BlendIn, CameraRig, FirstPersonRig, LookAhead, RigConfig, RigInput, RigMode,
+    RigOutput, Springs, TrackRig, add_look, add_trauma, camera_relative, camera_relative_yaw,
+    set_look, snap_rig, step_rig,
 };
 use ludion_core::math::{euler_xyz_degrees_to_quat, quat_rotate};
 use ludion_core::time::FrameIndex;
@@ -697,7 +698,9 @@ fn an_empty_document_is_the_defaults_and_the_spec_example_round_trips() {
     let rig: CameraRig = serde_json::from_value(doc).unwrap();
     assert_eq!(rig.rig.fov_y_deg, Some(55.0));
     assert_eq!(rig.rig.blend_in.curve, BlendCurve::EaseInOut);
-    let RigMode::Track(track) = &rig.rig.mode;
+    let RigMode::Track(track) = &rig.rig.mode else {
+        panic!("track mode")
+    };
     assert_eq!(track.path, "paths/behind-1.path.yaml");
     let again: CameraRig = serde_json::from_value(serde_json::to_value(&rig).unwrap()).unwrap();
     assert_eq!(again, rig);
@@ -724,4 +727,241 @@ fn a_restored_rig_resumes_bit_exact_mid_blend() {
         let b = tick(&mut restored, &path, target(k), k);
         assert_eq!(a, b, "tick {k}");
     }
+}
+
+// ── first person ─────────────────────────────────────────────────────────────────────────────────
+
+fn fp_cfg(blend_seconds: f32) -> RigConfig {
+    RigConfig {
+        mode: RigMode::FirstPerson(FirstPersonRig::default()),
+        blend_in: BlendIn {
+            seconds: blend_seconds,
+            curve: BlendCurve::Linear,
+        },
+        ..RigConfig::default()
+    }
+}
+
+fn fp_tick_dt(rig: &mut CameraRig, target: [f32; 3], frame: u64, game_dt: f32) -> RigOutput {
+    let input = RigInput {
+        target: Some(target),
+        path: None,
+        game_dt,
+        dt: DT,
+        game_frame: FrameIndex::new(frame),
+        camera_fov_y_deg: None,
+    };
+    step_rig(rig, &input).expect("target present")
+}
+
+fn fp_tick(rig: &mut CameraRig, target: [f32; 3], frame: u64) -> RigOutput {
+    fp_tick_dt(rig, target, frame, DT)
+}
+
+fn fp_rig() -> CameraRig {
+    rig_with(fp_cfg(0.0))
+}
+
+#[test]
+fn first_person_pitch_clamps_and_yaw_wraps() {
+    let mut rig = fp_rig();
+    add_look(&mut rig, 0.0, 500.0);
+    fp_tick(&mut rig, [0.0; 3], 0);
+    assert_eq!(rig.state.pitch_deg, 89.0);
+    add_look(&mut rig, 0.0, -1000.0);
+    fp_tick(&mut rig, [0.0; 3], 1);
+    assert_eq!(rig.state.pitch_deg, -89.0);
+    set_look(&mut rig, 170.0, 0.0);
+    add_look(&mut rig, 20.0, 0.0);
+    fp_tick(&mut rig, [0.0; 3], 2);
+    assert!((rig.state.yaw_deg + 170.0).abs() < 1e-4);
+}
+
+#[test]
+fn first_person_look_is_consumed_and_empty_look_is_not_serialized() {
+    let mut rig = fp_rig();
+    assert!(
+        serde_json::to_value(&rig)
+            .unwrap()
+            .get("look_deg")
+            .is_none()
+    );
+    add_look(&mut rig, 5.0, 3.0);
+    add_look(&mut rig, f32::NAN, f32::INFINITY);
+    assert_eq!(rig.look_deg, [5.0, 3.0]);
+    assert!(
+        serde_json::to_value(&rig)
+            .unwrap()
+            .get("look_deg")
+            .is_some()
+    );
+    fp_tick(&mut rig, [0.0; 3], 0);
+    assert_eq!(rig.look_deg, [0.0; 2]);
+    assert!(
+        serde_json::to_value(&rig)
+            .unwrap()
+            .get("look_deg")
+            .is_none()
+    );
+}
+
+#[test]
+fn first_person_eye_follows_the_target_in_the_yaw_frame() {
+    let mut rig = rig_with(RigConfig {
+        mode: RigMode::FirstPerson(FirstPersonRig {
+            eye_offset: [1.0, 1.6, 0.0],
+            ..FirstPersonRig::default()
+        }),
+        ..fp_cfg(0.0)
+    });
+    set_look(&mut rig, 90.0, 20.0);
+    let out = fp_tick(&mut rig, [3.0, 0.0, -2.0], 0);
+    // Yaw 90: the right vector points to -Z; pitch does not tilt the offset.
+    assert!(
+        near(out.translation, [3.0, 1.6, -3.0], 1e-5),
+        "{:?}",
+        out.translation
+    );
+    let out = fp_tick(&mut rig, [4.0, 1.0, -2.0], 1);
+    assert!(near(out.translation, [4.0, 2.6, -3.0], 1e-5));
+}
+
+#[test]
+fn first_person_runs_are_bit_identical_and_aim_matches_the_pose() {
+    let run = || {
+        let mut rig = fp_rig();
+        let mut outs = Vec::new();
+        for k in 0..300u64 {
+            let kf = k as f32;
+            add_look(
+                &mut rig,
+                ludion_core::math::sin(kf * 0.37) * 4.0,
+                ludion_core::math::cos(kf * 0.11) * 2.5,
+            );
+            let out = fp_tick(&mut rig, [kf * 0.01, 0.0, -kf * 0.02], k);
+            let aim = rig.aim().expect("posed");
+            assert_eq!(aim.rotation_deg(), out.rotation_deg, "tick {k}");
+            outs.push(out);
+        }
+        outs
+    };
+    let (a, b) = (run(), run());
+    for (x, y) in a.iter().zip(&b) {
+        let bits = |o: &RigOutput| {
+            o.translation
+                .iter()
+                .chain(&o.rotation_deg)
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(x), bits(y));
+    }
+}
+
+#[test]
+fn aim_forward_is_unit_and_matches_yaw_and_pitch() {
+    let mut rig = fp_rig();
+    set_look(&mut rig, 90.0, 0.0);
+    fp_tick(&mut rig, [0.0; 3], 0);
+    let f = rig.aim().unwrap().forward();
+    assert!(near(f, [-1.0, 0.0, 0.0], 1e-5), "{f:?}");
+    set_look(&mut rig, 0.0, 90.0 - 1e-3);
+    fp_tick(&mut rig, [0.0; 3], 1);
+    assert!(rig.aim().unwrap().forward()[1] < -0.99);
+}
+
+#[test]
+fn switching_from_track_blends_and_keeps_the_yaw() {
+    let path = straight();
+    let mut rig = rig_with(rigid([0.0, 2.2, 4.5]));
+    for k in 0..5 {
+        tick(&mut rig, &path, [0.0, 0.0, -10.0], k);
+    }
+    let yaw = rig.state.yaw_deg;
+    rig.rig = fp_cfg(1.0);
+    let out = fp_tick(&mut rig, [0.0, 0.0, -10.0], 5);
+    assert_eq!(rig.state.yaw_deg, yaw);
+    assert!(rig.state.blend.is_some());
+    let first_eye = [0.0, 1.6, -10.0];
+    assert!(
+        dist(out.translation, first_eye) > 0.5,
+        "starts at the old pose"
+    );
+    for k in 6..70 {
+        fp_tick(&mut rig, [0.0, 0.0, -10.0], k);
+    }
+    let out = fp_tick(&mut rig, [0.0, 0.0, -10.0], 70);
+    assert!(rig.state.blend.is_none());
+    assert!(near(out.translation, first_eye, 1e-5));
+}
+
+#[test]
+fn snap_keeps_the_look() {
+    let mut rig = fp_rig();
+    set_look(&mut rig, 40.0, 10.0);
+    fp_tick(&mut rig, [0.0; 3], 0);
+    snap_rig(&mut rig);
+    fp_tick(&mut rig, [5.0, 0.0, 0.0], 1);
+    assert_eq!((rig.state.yaw_deg, rig.state.pitch_deg), (40.0, 10.0));
+    assert!(near(rig.state.eye, [5.0, 1.6, 0.0], 1e-5));
+}
+
+#[test]
+fn a_held_clock_still_looks_and_freezes_trauma() {
+    let mut rig = fp_rig();
+    rig.trauma = 0.5;
+    fp_tick(&mut rig, [0.0; 3], 0);
+    let shake_time = rig.state.shake_time;
+    add_look(&mut rig, 10.0, 5.0);
+    let out = fp_tick_dt(&mut rig, [2.0, 0.0, 0.0], 0, 0.0);
+    assert_eq!((rig.state.yaw_deg, rig.state.pitch_deg), (10.0, 5.0));
+    assert_eq!(rig.trauma, 0.5);
+    assert_eq!(rig.state.shake_time, shake_time);
+    assert!(
+        (out.translation[1] - 1.6).abs() < 0.3,
+        "eye rides the target while held"
+    );
+    assert_eq!(rig.aim().unwrap().eye[0], 2.0);
+}
+
+#[test]
+fn camera_relative_follows_the_look_yaw() {
+    let mut rig = fp_rig();
+    set_look(&mut rig, 90.0, 0.0);
+    fp_tick(&mut rig, [0.0; 3], 0);
+    let forward = camera_relative([0.0, 1.0], &rig);
+    assert!(near(forward, [-1.0, 0.0, 0.0], 1e-5), "{forward:?}");
+}
+
+#[test]
+fn shake_never_moves_the_aim() {
+    let mut shaken = fp_rig();
+    shaken.trauma = 1.0;
+    let mut calm = fp_rig();
+    let mut moved = false;
+    for k in 0..30u64 {
+        for rig in [&mut shaken, &mut calm] {
+            add_look(rig, 1.0, 0.5);
+        }
+        let a = fp_tick(&mut shaken, [0.0; 3], k);
+        let b = fp_tick(&mut calm, [0.0; 3], k);
+        moved |= a.rotation_deg != b.rotation_deg;
+        assert_eq!(shaken.aim(), calm.aim(), "tick {k}");
+    }
+    assert!(moved, "the shake did move the output");
+}
+
+#[test]
+fn first_person_needs_no_path_and_a_document_round_trips() {
+    let rig: CameraRig = serde_json::from_value(serde_json::json!({
+        "rig": { "mode": { "first_person": { "pitch_limit_deg": 80.0 } } },
+        "look_deg": [1.0, 2.0],
+    }))
+    .unwrap();
+    let RigMode::FirstPerson(fp) = &rig.rig.mode else {
+        panic!("first_person mode")
+    };
+    assert_eq!((fp.pitch_limit_deg, fp.eye_offset), (80.0, [0.0, 1.6, 0.0]));
+    let again: CameraRig = serde_json::from_value(serde_json::to_value(&rig).unwrap()).unwrap();
+    assert_eq!(again, rig);
 }

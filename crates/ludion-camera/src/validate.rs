@@ -45,29 +45,54 @@ fn config_violations(config: &RigConfig) -> Vec<(&'static str, &'static str)> {
             found.push((pointer, POSITIVE));
         }
     };
-    let RigMode::Track(track) = &config.mode;
-    positive("/mode/track/search_window", track.search_window);
+    if let RigMode::Track(track) = &config.mode {
+        positive("/mode/track/search_window", track.search_window);
+    }
     positive("/look_ahead/full_speed", config.look_ahead.full_speed);
     let mut finite = |pointer, value: f32| {
         if !value.is_finite() {
             found.push((pointer, FINITE));
         }
     };
-    for (axis, value) in track.offset.into_iter().enumerate() {
-        finite(
-            [
-                "/mode/track/offset/0",
-                "/mode/track/offset/1",
-                "/mode/track/offset/2",
-            ][axis],
-            value,
-        );
+    match &config.mode {
+        RigMode::Track(track) => {
+            for (axis, value) in track.offset.into_iter().enumerate() {
+                finite(
+                    [
+                        "/mode/track/offset/0",
+                        "/mode/track/offset/1",
+                        "/mode/track/offset/2",
+                    ][axis],
+                    value,
+                );
+            }
+        }
+        RigMode::FirstPerson(fp) => {
+            for (axis, value) in fp.eye_offset.into_iter().enumerate() {
+                finite(
+                    [
+                        "/mode/first_person/eye_offset/0",
+                        "/mode/first_person/eye_offset/1",
+                        "/mode/first_person/eye_offset/2",
+                    ][axis],
+                    value,
+                );
+            }
+        }
     }
     for (axis, value) in config.focus_offset.into_iter().enumerate() {
         finite(
             ["/focus_offset/0", "/focus_offset/1", "/focus_offset/2"][axis],
             value,
         );
+    }
+    if let RigMode::FirstPerson(fp) = &config.mode
+        && !(fp.pitch_limit_deg > 0.0 && fp.pitch_limit_deg < 90.0)
+    {
+        found.push((
+            "/mode/first_person/pitch_limit_deg",
+            "must be between 0 and 90 degrees, exclusive",
+        ));
     }
     if let Some(fov) = config.fov_y_deg
         && !(fov.is_finite() && fov > 0.0 && fov < 180.0)
@@ -106,6 +131,11 @@ fn violations(rig: &CameraRig) -> Vec<(String, &'static str)> {
             found.push((pointer.to_string(), POSITIVE));
         }
     }
+    for (axis, value) in rig.look_deg.into_iter().enumerate() {
+        if !value.is_finite() {
+            found.push((format!("/look_deg/{axis}"), FINITE));
+        }
+    }
     if !(0.0..=1.0).contains(&rig.trauma) {
         found.push(("/trauma".to_string(), "must be between 0 and 1"));
     }
@@ -133,7 +163,8 @@ fn diagnostic(what: &str, pointer: &str, rule: &str) -> Diagnostic {
     .with_help(
         "keep half-lives, slacks and shake limits non-negative, `search_window`, \
          `full_speed`, `frequency` and `exponent` above 0, `fov_y_deg` inside (0, 180) \
-         and `trauma` in [0, 1]",
+         `trauma` in [0, 1], `pitch_limit_deg` inside (0, 90) and `eye_offset` and `look_deg` \
+         finite",
     )
 }
 
@@ -156,8 +187,9 @@ impl SemanticValidate for CameraRig {
     /// Rejects every out-of-range field (`L1304`) at its pointer under `/rig/…` or `/shake/…`:
     /// half-lives, `look_ahead.distance`, slacks, `blend_in.seconds`, `decay_per_second` and the shake
     /// maxima negative or not finite; `search_window`, `full_speed`, `frequency`, `exponent` not
-    /// positive; offsets not finite; `fov_y_deg` outside `(0, 180)`; `trauma` outside `[0, 1]`. A value
-    /// that does not deserialize is left to the schema.
+    /// positive; offsets and `look_deg` not finite; `pitch_limit_deg` outside `(0, 90)`; `fov_y_deg`
+    /// outside `(0, 180)`; `trauma` outside `[0, 1]`. A value that does not deserialize is left to
+    /// the schema.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let Ok(rig) = serde_json::from_value::<CameraRig>(value.clone()) else {
             return Vec::new();
@@ -230,6 +262,14 @@ mod tests {
                 json!({"rig": {"mode": {"track": {"search_window": 0.0}}}}),
                 "/rig/mode/track/search_window",
             ),
+            (
+                json!({"rig": {"mode": {"first_person": {"pitch_limit_deg": 90.0}}}}),
+                "/rig/mode/first_person/pitch_limit_deg",
+            ),
+            (
+                json!({"rig": {"mode": {"first_person": {"pitch_limit_deg": 0.0}}}}),
+                "/rig/mode/first_person/pitch_limit_deg",
+            ),
             (json!({"rig": {"fov_y_deg": 0.0}}), "/rig/fov_y_deg"),
             (json!({"rig": {"fov_y_deg": 180.0}}), "/rig/fov_y_deg"),
             (
@@ -279,6 +319,27 @@ mod tests {
         assert_eq!(
             invalid_field(&rig).map(|(pointer, _)| pointer).as_deref(),
             Some("/rig/mode/track/offset/0")
+        );
+    }
+
+    #[test]
+    fn first_person_fields_are_checked_in_rust() {
+        let mut rig = CameraRig::default();
+        rig.rig.mode = RigMode::FirstPerson(crate::FirstPersonRig {
+            eye_offset: [0.0, f32::NAN, 0.0],
+            ..Default::default()
+        });
+        assert_eq!(
+            invalid_field(&rig).map(|(pointer, _)| pointer).as_deref(),
+            Some("/rig/mode/first_person/eye_offset/1")
+        );
+        let rig = CameraRig {
+            look_deg: [0.0, f32::INFINITY],
+            ..CameraRig::default()
+        };
+        assert_eq!(
+            invalid_field(&rig).map(|(pointer, _)| pointer).as_deref(),
+            Some("/look_deg/1")
         );
     }
 

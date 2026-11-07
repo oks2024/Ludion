@@ -15,12 +15,20 @@
 //! despawned target (`L1305`) or a track path that fails to load (`L1306`). With several rigs only
 //! the lowest entity id runs (`L1308`). A `target` of `None` or an empty `path` is inert, not a fault.
 //!
-//! The `camera` debug-draw category shows the track, the search window, the projection, the desired
-//! and actual eye, the focus, the anchor, the look-ahead and a running blend; a held rig draws nothing.
+//! A `first_person` rig needs only a live target: no path, no `L1306`. Look is applied on every tick
+//! it poses, a held clock included.
+//!
+//! The `camera` debug-draw category shows, for `track`, the track, the search window, the projection,
+//! the desired and actual eye, the focus, the anchor, the look-ahead and a running blend; for
+//! `first_person`, the target, its line to the eye, the eye, a 2 m aim ray and a running blend. A
+//! held rig draws nothing.
+
+use std::sync::Arc;
 
 use ludion_camera::{CameraRig, RigInput, RigMode, invalid_field, rig_focus, step_rig, track_eye};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
+use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, Schedule, SystemCtx, World};
 use ludion_scene::PathSampler;
 use serde_json::Value;
@@ -50,6 +58,8 @@ const LOOK_AHEAD: [f32; 4] = [0.6, 1.0, 0.2, 1.0];
 /// A running blend's source eye and its line to the actual eye.
 const BLEND: [f32; 4] = [1.0, 0.5, 0.1, 1.0];
 const CROSS: f32 = 0.2;
+/// Length of the first-person aim ray, in metres.
+const AIM_RAY: f32 = 2.0;
 /// Spans of the search-window polyline.
 const WINDOW_SPANS: usize = 8;
 
@@ -142,8 +152,12 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         );
         return;
     }
-    let RigMode::Track(track) = &rig.rig.mode;
-    let (Some(target), false) = (rig.target, track.path.is_empty()) else {
+    let track_path = match &rig.rig.mode {
+        RigMode::Track(track) if track.path.is_empty() => return,
+        RigMode::Track(track) => Some(track.path.clone()),
+        RigMode::FirstPerson(_) => None,
+    };
+    let Some(target) = rig.target else {
         return;
     };
     let Some(target_position) =
@@ -161,36 +175,14 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         );
         return;
     };
-    let Some(library) = world.resource_mut::<PathLibrary>() else {
-        return;
+    let sampler = match &track_path {
+        Some(path) => match load_sampler(world, entity, path) {
+            Some(sampler) => Some(sampler),
+            None => return,
+        },
+        None => None,
     };
-    let sampler = match library.sampler(&track.path) {
-        Ok(sampler) => sampler,
-        Err(causes) => {
-            let diagnostic = causes.iter().cloned().fold(
-                Diagnostic::new(
-                    code::CAMERA_RIG_PATH_UNLOADED,
-                    format!(
-                        "the `CameraRig` track path `{}` failed to load: {}",
-                        track.path,
-                        causes
-                            .iter()
-                            .map(|cause| cause.message.as_str())
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    ),
-                )
-                .with_path("/rig/mode/track/path")
-                .with_help(
-                    "point `path` at an existing `kind: path` document, relative to the content root",
-                ),
-                Diagnostic::with_related,
-            );
-            let key = crate::diagnostics::offender_key(world, entity);
-            crate::diagnostics::report_full(world, key, diagnostic);
-            return;
-        }
-    };
+
     let camera_fov_y_deg = match world.get::<Camera>(entity) {
         Ok(Some(Camera {
             projection: Projection::Perspective { fov_y_deg },
@@ -204,7 +196,7 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         &mut rig,
         &RigInput {
             target: Some(target_position),
-            path: Some(&sampler),
+            path: sampler.as_deref(),
             game_dt: ctx.game_dt,
             dt: ctx.dt,
             game_frame: ctx.game_frame,
@@ -212,7 +204,10 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         },
     );
     if let Some(output) = &output {
-        draw(world, &rig, &sampler, target_position, output.translation);
+        match &sampler {
+            Some(sampler) => draw(world, &rig, sampler, target_position, output.translation),
+            None => draw_first_person(world, &rig, target_position, output.translation),
+        }
     }
     if let Ok(Some(stored)) = world.get_mut::<CameraRig>(entity) {
         *stored = rig;
@@ -237,6 +232,36 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
     }
 }
 
+/// The sampler of the track `path`, or `None` after reporting `L1306` once (the camera holds).
+fn load_sampler(world: &mut World, entity: EntityId, path: &str) -> Option<Arc<PathSampler>> {
+    let library = world.resource_mut::<PathLibrary>()?;
+    let causes = match library.sampler(path) {
+        Ok(sampler) => return Some(sampler),
+        Err(causes) => causes,
+    };
+    let diagnostic = causes.iter().cloned().fold(
+        Diagnostic::new(
+            code::CAMERA_RIG_PATH_UNLOADED,
+            format!(
+                "the `CameraRig` track path `{path}` failed to load: {}",
+                causes
+                    .iter()
+                    .map(|cause| cause.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        )
+        .with_path("/rig/mode/track/path")
+        .with_help(
+            "point `path` at an existing `kind: path` document, relative to the content root",
+        ),
+        Diagnostic::with_related,
+    );
+    let key = crate::diagnostics::offender_key(world, entity);
+    crate::diagnostics::report_full(world, key, diagnostic);
+    None
+}
+
 /// Draws one tick's `camera` primitives (the module docs name the category): the track, the search
 /// window around the projection, the projected point, the desired and actual eye, the focus, the
 /// anchored height, the look-ahead and, while one runs, the blend's source eye.
@@ -247,7 +272,9 @@ fn draw(
     target: [f32; 3],
     eye: [f32; 3],
 ) {
-    let RigMode::Track(track) = &rig.rig.mode;
+    let RigMode::Track(track) = &rig.rig.mode else {
+        return;
+    };
     let state = &rig.state;
     let Some(param) = state.param else {
         return;
@@ -279,6 +306,25 @@ fn draw(
             [state.look_ahead[0], 0.0, state.look_ahead[1]],
             LOOK_AHEAD,
         );
+    if let Some(blend) = &state.blend {
+        pen.cross(blend.from.eye, CROSS, BLEND)
+            .line(blend.from.eye, eye, BLEND);
+    }
+}
+
+/// Draws a first-person rig's `camera` primitives: the target, the line to the eye, the eye, a
+/// [`AIM_RAY`] metre ray along the aim and, while one runs, the blend's source eye.
+fn draw_first_person(world: &mut World, rig: &CameraRig, target: [f32; 3], eye: [f32; 3]) {
+    let state = &rig.state;
+    let aim = rig.aim();
+    let mut pen = debug_draw(world, CATEGORY);
+    pen.cross(target, CROSS, PROJECTED)
+        .line(target, eye, DESIRED)
+        .cross(eye, CROSS, EYE);
+    if let Some(aim) = aim {
+        let forward = aim.forward().map(|v| v * AIM_RAY);
+        pen.ray(aim.eye, forward, FOCUS);
+    }
     if let Some(blend) = &state.blend {
         pen.cross(blend.from.eye, CROSS, BLEND)
             .line(blend.from.eye, eye, BLEND);

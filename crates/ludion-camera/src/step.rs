@@ -6,7 +6,8 @@ use ludion_core::math::{
 use ludion_core::time::FrameIndex;
 use ludion_scene::PathSampler;
 
-use crate::rig::{Blend, CameraRig, Pose};
+use crate::first_person::{apply_look, first_person_eye};
+use crate::rig::{Blend, CameraRig, Pose, RigMode};
 use crate::shake::shake_noise;
 use crate::spring::{damp, ease, lerp_pose, spring_step, wrap180};
 use crate::track::{Desired, desired};
@@ -16,7 +17,8 @@ use crate::track::{Desired, desired};
 pub struct RigInput<'a> {
     /// The target's world position, or `None` when it names no live entity.
     pub target: Option<[f32; 3]>,
-    /// The loaded track path, or `None` when it is empty or failed to load.
+    /// The loaded track path, or `None` when it is empty or failed to load. A `first_person` rig
+    /// ignores it.
     pub path: Option<&'a PathSampler>,
     /// Gameplay seconds this tick; `0` while the clock is held.
     pub game_dt: f32,
@@ -40,12 +42,13 @@ pub struct RigOutput {
 }
 
 /// Advances `rig` one tick and returns the camera pose, or `None` (touching nothing, so the engine
-/// holds the last pose) when there is no target or no path.
+/// holds the last pose) when there is no target or, in `track` mode, no path.
 ///
 /// A rig without `state.last_applied`, or flagged by [`snap_rig`](crate::snap_rig), snaps; a `rig`
 /// that differs from `last_applied` starts a blend from the current pose. Springs, look-ahead, the
 /// anchor, trauma and the shake clock advance only while `game_dt > 0`; a held tick re-poses from
-/// the frozen state.
+/// the frozen state. A `first_person` rig has no springs: it applies and zeroes `look_deg` on every
+/// tick it poses, held clock included, and places the eye rigidly on the target.
 ///
 /// # Example
 ///
@@ -73,7 +76,14 @@ pub struct RigOutput {
 /// ```
 pub fn step_rig(rig: &mut CameraRig, input: &RigInput) -> Option<RigOutput> {
     let target = input.target?;
-    let sampler = input.path?;
+    let sampler = match &rig.rig.mode {
+        RigMode::Track(_) => Some(input.path?),
+        RigMode::FirstPerson(_) => None,
+    };
+    if let RigMode::FirstPerson(fp) = &rig.rig.mode {
+        let look = std::mem::take(&mut rig.look_deg);
+        apply_look(&mut rig.state, fp, look);
+    }
 
     let bad_blend = rig
         .state
@@ -89,10 +99,13 @@ pub fn step_rig(rig: &mut CameraRig, input: &RigInput) -> Option<RigOutput> {
     if !snapped && input.game_dt > 0.0 {
         advance(rig, target, sampler, input.game_dt);
     }
+    if let RigMode::FirstPerson(fp) = &rig.rig.mode {
+        rig.state.eye = first_person_eye(fp, target, rig.state.yaw_deg);
+    }
 
     let pose = blended_pose(rig, input);
     rig.state.pose = Some(pose.clone());
-    Some(output(rig, &pose))
+    Some(post_aim(rig, &pose))
 }
 
 /// A rewound or hand-edited blend snaps; `switch` only ever writes `seconds > 0`.
@@ -108,8 +121,21 @@ fn unusable_blend(blend: &Blend, frame: FrameIndex) -> bool {
 }
 
 /// Re-initialises the projection and the springs at rest on the desired pose of the current config.
-fn rest_on_desired(rig: &mut CameraRig, target: [f32; 3], sampler: &PathSampler) {
+fn rest_on_desired(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>) {
     let state = &rig.state;
+    let sampler = match (&rig.rig.mode, sampler) {
+        (RigMode::FirstPerson(fp), _) => {
+            let eye = first_person_eye(fp, target, state.yaw_deg);
+            let state = &mut rig.state;
+            state.eye = eye;
+            state.eye_velocity = [0.0; 3];
+            state.yaw_velocity = 0.0;
+            state.pitch_velocity = 0.0;
+            return;
+        }
+        (RigMode::Track(_), Some(sampler)) => sampler,
+        (RigMode::Track(_), None) => return,
+    };
     let last = (state.yaw_deg, state.pitch_deg);
     let Desired {
         param,
@@ -135,7 +161,7 @@ fn rest_on_desired(rig: &mut CameraRig, target: [f32; 3], sampler: &PathSampler)
     state.pitch_velocity = 0.0;
 }
 
-fn snap(rig: &mut CameraRig, target: [f32; 3], sampler: &PathSampler) {
+fn snap(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>) {
     rig.state.anchor_y = target[1];
     rig.state.look_ahead = [0.0; 2];
     rig.state.last_target = Some(target);
@@ -147,7 +173,7 @@ fn snap(rig: &mut CameraRig, target: [f32; 3], sampler: &PathSampler) {
 
 /// A config write: blend from the current pose into the new config, whose projection and springs
 /// start at rest. The anchor, look-ahead and velocity history carry over.
-fn switch(rig: &mut CameraRig, target: [f32; 3], sampler: &PathSampler, input: &RigInput) {
+fn switch(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>, input: &RigInput) {
     let old_fov = rig
         .state
         .last_applied
@@ -173,9 +199,13 @@ fn switch(rig: &mut CameraRig, target: [f32; 3], sampler: &PathSampler, input: &
     rig.state.last_applied = Some(rig.rig.clone());
 }
 
-fn advance(rig: &mut CameraRig, target: [f32; 3], sampler: &PathSampler, dt: f32) {
+fn advance(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>, dt: f32) {
     rig.trauma = (rig.trauma - rig.shake.decay_per_second * dt).max(0.0);
     rig.state.shake_time += f64::from(dt);
+    let Some(sampler) = sampler else {
+        rig.state.last_target = Some(target);
+        return;
+    };
 
     let cfg = &rig.rig;
     let state = &mut rig.state;
@@ -277,8 +307,9 @@ fn blended_pose(rig: &mut CameraRig, input: &RigInput) -> Pose {
     }
 }
 
-/// The pose as a camera transform, with the trauma shake applied to the result only.
-fn output(rig: &CameraRig, pose: &Pose) -> RigOutput {
+/// The post-aim stage: the pose as a camera transform with the trauma shake applied to the result
+/// only. Effects that must never leak into `CameraRig::aim` belong here.
+fn post_aim(rig: &CameraRig, pose: &Pose) -> RigOutput {
     let mut translation = pose.eye;
     let mut rotation_deg = Orbit {
         target: pose.eye,

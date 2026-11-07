@@ -15,7 +15,7 @@ use ludion_ecs::{SystemCtx, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
     Camera, CameraOffset, CameraRig, DebugCategories, Egress, EgressChannels, Engine, Name,
-    RigMode, Transform, add_trauma, snap_rig,
+    RigMode, Transform, add_look, add_trauma, snap_rig,
 };
 use ludion_protocol::command::{
     EngineRestoreParams, SimStepParams, StreamSubscribeParams, SubscribeMode,
@@ -246,7 +246,9 @@ const SNAP_AT: u64 = 60;
 fn retarget(world: &mut World) {
     let cam = named(world, "cam");
     let rig = world.get_mut::<CameraRig>(cam).unwrap().unwrap();
-    let RigMode::Track(track) = &mut rig.rig.mode;
+    let RigMode::Track(track) = &mut rig.rig.mode else {
+        panic!("track mode")
+    };
     track.offset = [3.0, 5.0, 9.0];
 }
 
@@ -883,7 +885,9 @@ fn add_rig(world: &mut World, ctx: &SystemCtx) {
         target: Some(hero),
         ..CameraRig::default()
     };
-    let RigMode::Track(track) = &mut rig.rig.mode;
+    let RigMode::Track(track) = &mut rig.rig.mode else {
+        panic!("track mode")
+    };
     track.path = "track.path.yaml".to_string();
     world.insert(cam, rig).unwrap();
 }
@@ -1127,4 +1131,98 @@ fn the_camera_debug_category_ignores_the_offset() {
     let plain = lines("offset-draw-plain", false);
     assert!(plain.iter().any(|tick| !tick.is_empty()), "the rig drew");
     assert_eq!(lines("offset-draw-moved", true), plain);
+}
+
+// ---- first person ----
+
+fn fp_scene() -> String {
+    "format: 1\nseed: 3\nentities:\n  - name: cam\n    components:\n      Transform: {}\n      Camera: {}\n      CameraRig:\n        target:\n          index: 1\n          generation: 0\n        rig:\n          mode:\n            first_person: {}\n  - name: hero\n    components:\n      Transform:\n        translation:\n          - 1.0\n          - 0.0\n          - -3.0\n".to_string()
+}
+
+fn look(world: &mut World, ctx: &SystemCtx) {
+    let cam = named(world, "cam");
+    let k = ctx.frame.as_u64() as f32;
+    add_look(
+        world.get_mut::<CameraRig>(cam).unwrap().unwrap(),
+        ludion_core::math::sin(k * 0.3) * 3.0,
+        ludion_core::math::cos(k * 0.1),
+    );
+}
+
+fn look_once_more(world: &mut World, ctx: &SystemCtx) {
+    look(world, ctx);
+    if ctx.frame.as_u64() == 20 {
+        let cam = named(world, "cam");
+        add_look(world.get_mut::<CameraRig>(cam).unwrap().unwrap(), 0.5, 0.0);
+    }
+}
+
+fn fp_engine(tag: &str, system: fn(&mut World, &SystemCtx)) -> Engine {
+    engine_for(tag, &[], &fp_scene(), &[("look", system)])
+}
+
+fn fp_hashes(engine: &mut Engine, ticks: usize) -> Vec<u64> {
+    (0..ticks)
+        .map(|_| {
+            engine.advance_live();
+            engine.world_hash().unwrap().as_u64()
+        })
+        .collect()
+}
+
+#[test]
+fn first_person_runs_without_a_path_and_matches_aim() {
+    let mut engine = fp_engine("fp-aim", look);
+    advance(&mut engine, 40);
+    let rig = rig_of(&engine);
+    let aim = rig.aim().expect("posed");
+    assert!((aim.eye[0] - 1.0).abs() < 1e-4 && (aim.eye[1] - 1.6).abs() < 1e-4);
+    let world = engine.world();
+    let transform = world
+        .get::<Transform>(named(world, "cam"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(transform.rotation, aim.rotation_deg());
+    assert_eq!(transform.translation, aim.eye);
+}
+
+#[test]
+fn first_person_hashes_repeat_and_cover_the_look() {
+    let a = fp_hashes(&mut fp_engine("fp-a", look), 60);
+    let b = fp_hashes(&mut fp_engine("fp-b", look), 60);
+    assert_eq!(a, b);
+    let c = fp_hashes(&mut fp_engine("fp-c", look_once_more), 60);
+    assert_eq!(a[..20], c[..20]);
+    assert_ne!(a[20..], c[20..], "one extra look moves the hash");
+}
+
+#[test]
+fn first_person_snapshot_restore_resumes_bit_exact() {
+    const AT: usize = 25;
+    let reference = fp_hashes(&mut fp_engine("fp-ref", look), 80);
+    let mut before = fp_engine("fp-pre", look);
+    advance(&mut before, AT);
+    let snapshot = match before.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let mut resumed = fp_engine("fp-post", look);
+    match resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap()
+        .body
+    {
+        ResponseBody::Restored { .. } => {}
+        other => panic!("expected a restore, got {other:?}"),
+    }
+    assert_eq!(resumed.world_hash().unwrap().as_u64(), reference[AT - 1]);
+    for (i, expected) in reference[AT..].iter().enumerate() {
+        resumed.advance_live();
+        assert_eq!(
+            resumed.world_hash().unwrap().as_u64(),
+            *expected,
+            "tick {} after the restore",
+            i + 1
+        );
+    }
 }

@@ -25,7 +25,14 @@ pub(crate) fn desired(
     hint: Option<f32>,
     last: (f32, f32),
 ) -> Desired {
-    let RigMode::Track(track) = &cfg.mode;
+    let RigMode::Track(track) = &cfg.mode else {
+        return Desired {
+            param: hint.unwrap_or(0.0),
+            eye: [0.0; 3],
+            yaw_deg: last.0,
+            pitch_deg: last.1,
+        };
+    };
     let p = [
         f64::from(target[0]),
         f64::from(anchor_y),

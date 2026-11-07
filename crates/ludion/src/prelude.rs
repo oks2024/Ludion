@@ -119,8 +119,9 @@
 //!   [`bullet_is_alive`]) and [`volley_hits`] answer where a bullet is and what it touches at a
 //!   gameplay time (`ludion docs patterns`).
 //! - **Camera rig** — [`CameraRig`] on the camera entity follows a target with springs and look-ahead
-//!   in its [`TrackRig`] mode; a game writes its `trauma` with [`add_trauma`] and cuts to the desired
-//!   pose with [`snap_rig`] (`ludion docs camera`).
+//!   in its [`TrackRig`] mode, or sits rigidly on it with game-written look in [`FirstPersonRig`] mode
+//!   ([`add_look`], [`set_look`], [`CameraRig::aim`]); a game writes its `trauma` with [`add_trauma`]
+//!   and cuts to the desired pose with [`snap_rig`] (`ludion docs camera`).
 //! - **Paths** — [`PathFollower`] moves an entity along a `kind: path` document, [`path_follow`] is the
 //!   system that does it, and [`PathSampler`] is the arc-length access to a path's positions and
 //!   directions (`ludion docs path`).
@@ -185,14 +186,14 @@
 //! `Cargo.toml` — they are the game's dependencies, not something the facade injects.
 
 pub use ludion_engine::{
-    Anchor, Animation, AnimationEvents, AntiAliasing, AssemblyData, AudioCategory, AudioDistance,
-    AudioEmitter, AudioEvent, AudioPan, AudioQueue, BlendCurve, BlendIn, BulletKind, Camera,
-    CameraOffset, CameraRig, CategoryGains, ClipAnchor, ClipEvent, CursorLock, CursorMode,
+    Aim, Anchor, Animation, AnimationEvents, AntiAliasing, AssemblyData, AudioCategory,
+    AudioDistance, AudioEmitter, AudioEvent, AudioPan, AudioQueue, BlendCurve, BlendIn, BulletKind,
+    Camera, CameraOffset, CameraRig, CategoryGains, ClipAnchor, ClipEvent, CursorLock, CursorMode,
     DebugCategories, DebugPen, Decal, DecalBlend, DecalMap, DecalReceiverSet, Diagnostics,
     DirectionalLight, DocStore, DropShadow, EmitShape, Engine, EngineBuilder, Environment, Fade,
-    FollowerMotion, FontLibrary, GiDynamic, GroundMarker, GroundMarkerShape, Keep, LANE_ANCHOR,
-    LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF, LANE_ON, LANE_PATH, LaneConstraint,
-    LaneEnds, LaneInput, LookAhead, MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING,
+    FirstPersonRig, FollowerMotion, FontLibrary, GiDynamic, GroundMarker, GroundMarkerShape, Keep,
+    LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF, LANE_ON, LANE_PATH,
+    LaneConstraint, LaneEnds, LaneInput, LookAhead, MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING,
     MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE, MOTOR_STUCK, MOTOR_WALL, MapWrap, Mesh,
     MeshGrid, MeshSource, MotionSegment, Name, NoInterpolate, PARTICLE_MAX_LIVE_PER_EMITTER,
     ParticleBlend, ParticleEmitter, PathDocument, PathFollower, PathFrame, PathInterpolation,
@@ -202,14 +203,15 @@ pub use ludion_engine::{
     RigMode, RigState, SceneSwitch, ShakeConfig, Shutdown, SpotLight, Springs, Sprite, SpriteBlend,
     SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
     TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect, UiText, VOLLEY_MAX_BULLETS,
-    VOLLEY_SALT, VerticalAnchor, Volley, VolleyCenter, VolleyShape, WorldPose, add_trauma,
-    advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
+    VOLLEY_SALT, VerticalAnchor, Volley, VolleyCenter, VolleyShape, WorldPose, add_look,
+    add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
     bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw,
-    fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly, move_character,
-    move_character_with, path_follow, path_follower_motion, play_patterns, play_sound,
-    posed_joint_world, probe_character_ground, reparent, report_diagnostic, report_full_diagnostic,
-    resize_character, revert_prefab, set_clip_speed, snap_rig, spawn_prefab, switch_to_ragdoll,
-    teleport_character, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
+    first_person_eye, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
+    move_character, move_character_with, path_follow, path_follower_motion, play_patterns,
+    play_sound, posed_joint_world, probe_character_ground, reparent, report_diagnostic,
+    report_full_diagnostic, resize_character, revert_prefab, set_clip_speed, set_look, snap_rig,
+    spawn_prefab, switch_to_ragdoll, teleport_character, unpack_prefab, validate_pattern_docs,
+    volley_hits, world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;

@@ -1513,8 +1513,9 @@ pub mod code {
 
     /// `L1304` — a `CameraRig` field is out of range: a half-life, slack, distance, decay or limit is
     /// negative or not finite, a window, speed, frequency or exponent is not positive, an offset is
-    /// not finite, `fov_y_deg` is outside (0, 180) or `trauma` is outside [0, 1]. Raised by the
-    /// component's validator and, for a rig built in Rust, once per entity at runtime.
+    /// not finite, `pitch_limit_deg` is outside (0, 90), `look_deg` is not finite, `fov_y_deg` is
+    /// outside (0, 180) or `trauma` is outside [0, 1]. Raised by the component's validator and, for a
+    /// rig built in Rust, once per entity at runtime.
     pub const CAMERA_RIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1304");
 
     /// `L1305` — a `CameraRig` `target` names an entity that no longer exists. A warning raised once
@@ -7773,7 +7774,8 @@ run along the ground, not for ladders or shafts.",
         explanation: "A `CameraRig` field is out of range. A half-life, `look_ahead.distance`, `up_slack`, `down_slack`,
 `blend_in.seconds`, `decay_per_second`, `max_offset` or `max_angle_deg` is negative or not finite;
 `search_window`, `full_speed`, `frequency` or `exponent` is not a positive finite number; `offset` or
-`focus_offset` is not finite; `fov_y_deg` is outside (0, 180); `trauma` is outside [0, 1]. The pointer
+`focus_offset` or the first-person `eye_offset` is not finite; `pitch_limit_deg` is outside (0, 90);
+`look_deg` is not finite; `fov_y_deg` is outside (0, 180); `trauma` is outside [0, 1]. The pointer
 names the field. A rig built in Rust with such a value is reported once per entity at runtime and
 holds, so the camera stays where it was.
 

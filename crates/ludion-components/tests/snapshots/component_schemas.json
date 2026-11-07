@@ -285,7 +285,7 @@
   "CameraRig": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "CameraRig",
-    "description": "The rig on the camera entity. `rig` is the authored configuration (writing a different value\nstarts a timed blend), `shake` survives switches, `trauma` and `grounded` are game-written\ninputs, `state` is engine-written. Every field defaults, so older documents keep loading.\n\n# Example\n\n```\nuse ludion_camera::{CameraRig, RigMode};\n\nlet rig: CameraRig = serde_json::from_value(serde_json::json!({\n    \"rig\": { \"mode\": { \"track\": { \"path\": \"paths/behind-1.path.yaml\", \"offset\": [0.0, 2.2, 4.5] } } },\n    \"trauma\": 0.25,\n}))\n.unwrap();\nlet RigMode::Track(track) = &rig.rig.mode;\nassert_eq!(track.offset, [0.0, 2.2, 4.5]);\nassert_eq!(rig.rig.springs.position_half_life, 0.15);\n```",
+    "description": "The rig on the camera entity. `rig` is the authored configuration (writing a different value\nstarts a timed blend), `shake` survives switches, `trauma`, `grounded` and `look_deg` are\ngame-written inputs, `state` is engine-written. Every field defaults, so older documents keep loading.\n\n# Example\n\n```\nuse ludion_camera::{CameraRig, RigMode};\n\nlet rig: CameraRig = serde_json::from_value(serde_json::json!({\n    \"rig\": { \"mode\": { \"track\": { \"path\": \"paths/behind-1.path.yaml\", \"offset\": [0.0, 2.2, 4.5] } } },\n    \"trauma\": 0.25,\n}))\n.unwrap();\nlet RigMode::Track(track) = &rig.rig.mode else { unreachable!() };\nassert_eq!(track.offset, [0.0, 2.2, 4.5]);\nassert_eq!(rig.rig.springs.position_half_life, 0.15);\n```",
     "type": "object",
     "properties": {
       "target": {
@@ -384,6 +384,16 @@
         "description": "Game-written hint: whether the target stands on ground (steers the vertical anchor).",
         "type": "boolean",
         "default": true
+      },
+      "look_deg": {
+        "description": "First-person look input `[yaw, pitch]` in degrees (positive yaw turns left, positive pitch\nlooks down). The game writes it, usually through [`add_look`]; the rig applies and zeroes it\non each tick it poses.",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2
       },
       "state": {
         "description": "Engine-written state: springs, projection, blend and shake clock.",
@@ -508,6 +518,19 @@
               "track"
             ],
             "additionalProperties": false
+          },
+          {
+            "description": "The eye rides the target rigidly; yaw and pitch are game-written look deltas on\n[`CameraRig::look_deg`], unsmoothed.",
+            "type": "object",
+            "properties": {
+              "first_person": {
+                "$ref": "#/$defs/FirstPersonRig"
+              }
+            },
+            "required": [
+              "first_person"
+            ],
+            "additionalProperties": false
           }
         ]
       },
@@ -541,6 +564,33 @@
             "type": "number",
             "format": "float",
             "default": 3.0
+          }
+        }
+      },
+      "FirstPersonRig": {
+        "description": "The `first_person` mode.",
+        "type": "object",
+        "properties": {
+          "eye_offset": {
+            "description": "The eye offset from the target origin in the yaw frame (not pitched), in metres: `+x`\nright, `+y` up, `+z` back.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              1.600000023841858,
+              0.0
+            ]
+          },
+          "pitch_limit_deg": {
+            "description": "The pitch clamp in degrees either way; in `(0, 90)`.",
+            "type": "number",
+            "format": "float",
+            "default": 89.0
           }
         }
       },

@@ -1,17 +1,26 @@
 //! The authored and engine-written types of a camera rig.
 
 use ludion_core::ids::EntityId;
+use ludion_core::math::{Orbit, sin_cos};
 use ludion_core::time::FrameIndex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::spring::wrap180;
+
+const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
 
 fn frame_zero() -> FrameIndex {
     FrameIndex::ZERO
 }
 
+fn look_is_zero(look: &[f32; 2]) -> bool {
+    *look == [0.0; 2]
+}
+
 /// The rig on the camera entity. `rig` is the authored configuration (writing a different value
-/// starts a timed blend), `shake` survives switches, `trauma` and `grounded` are game-written
-/// inputs, `state` is engine-written. Every field defaults, so older documents keep loading.
+/// starts a timed blend), `shake` survives switches, `trauma`, `grounded` and `look_deg` are
+/// game-written inputs, `state` is engine-written. Every field defaults, so older documents keep loading.
 ///
 /// # Example
 ///
@@ -23,7 +32,7 @@ fn frame_zero() -> FrameIndex {
 ///     "trauma": 0.25,
 /// }))
 /// .unwrap();
-/// let RigMode::Track(track) = &rig.rig.mode;
+/// let RigMode::Track(track) = &rig.rig.mode else { unreachable!() };
 /// assert_eq!(track.offset, [0.0, 2.2, 4.5]);
 /// assert_eq!(rig.rig.springs.position_half_life, 0.15);
 /// ```
@@ -41,6 +50,11 @@ pub struct CameraRig {
     pub trauma: f32,
     /// Game-written hint: whether the target stands on ground (steers the vertical anchor).
     pub grounded: bool,
+    /// First-person look input `[yaw, pitch]` in degrees (positive yaw turns left, positive pitch
+    /// looks down). The game writes it, usually through [`add_look`]; the rig applies and zeroes it
+    /// on each tick it poses.
+    #[serde(skip_serializing_if = "look_is_zero")]
+    pub look_deg: [f32; 2],
     /// Engine-written state: springs, projection, blend and shake clock.
     pub state: RigState,
 }
@@ -53,6 +67,7 @@ impl Default for CameraRig {
             shake: ShakeConfig::default(),
             trauma: 0.0,
             grounded: true,
+            look_deg: [0.0; 2],
             state: RigState::default(),
         }
     }
@@ -64,12 +79,87 @@ impl CameraRig {
     pub fn yaw_deg(&self) -> f32 {
         self.state.pose.as_ref().map_or(0.0, |pose| pose.yaw_deg)
     }
+
+    /// The eye and orientation the rig last posed, before shake and any other post-aim effect;
+    /// `None` before the first pose. Valid in every mode. It is the one source of truth for aim
+    /// rays and anything that must follow where the player looks; it lags a game system by one tick,
+    /// like [`camera_relative`](crate::camera_relative).
+    pub fn aim(&self) -> Option<Aim> {
+        self.state.pose.as_ref().map(|pose| Aim {
+            eye: pose.eye,
+            yaw_deg: pose.yaw_deg,
+            pitch_deg: pose.pitch_deg,
+        })
+    }
+}
+
+/// The resolved pre-shake eye and orientation of a rig ([`CameraRig::aim`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Aim {
+    /// Eye position in world space.
+    pub eye: [f32; 3],
+    /// Degrees about +Y from +Z, wrapped to `(-180, 180]`; yaw 0 looks along -Z.
+    pub yaw_deg: f32,
+    /// Degrees looking down.
+    pub pitch_deg: f32,
+}
+
+impl Aim {
+    /// The unit look direction.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ludion_camera::Aim;
+    ///
+    /// let aim = Aim { eye: [0.0; 3], yaw_deg: 0.0, pitch_deg: 0.0 };
+    /// assert_eq!(aim.forward(), [0.0, 0.0, -1.0]);
+    /// ```
+    #[must_use]
+    pub fn forward(&self) -> [f32; 3] {
+        let (sy, cy) = sin_cos(self.yaw_deg * DEG_TO_RAD);
+        let (sp, cp) = sin_cos(self.pitch_deg * DEG_TO_RAD);
+        [-sy * cp, -sp, -cy * cp]
+    }
+
+    /// The camera `Transform` rotation (Euler XYZ degrees) for this aim.
+    #[must_use]
+    pub fn rotation_deg(&self) -> [f32; 3] {
+        Orbit {
+            target: self.eye,
+            azimuth_deg: self.yaw_deg,
+            pitch_deg: self.pitch_deg,
+            distance: 1.0,
+        }
+        .rotation_deg()
+    }
 }
 
 /// Cuts the next tick to the rig's desired pose: a global path search, springs, look-ahead and the
 /// anchor at rest, any blend dropped. Use it for respawns and teleports.
 pub fn snap_rig(rig: &mut CameraRig) {
     rig.state.snap = true;
+}
+
+/// Adds a look delta (degrees) to the rig's pending [`CameraRig::look_deg`]; a non-finite component
+/// is ignored.
+pub fn add_look(rig: &mut CameraRig, yaw_deg: f32, pitch_deg: f32) {
+    if yaw_deg.is_finite() {
+        rig.look_deg[0] += yaw_deg;
+    }
+    if pitch_deg.is_finite() {
+        rig.look_deg[1] += pitch_deg;
+    }
+}
+
+/// Sets the first-person facing outright (a spawn or respawn): the yaw wrapped, the pitch clamped
+/// to the mode's limit on the next tick, any pending look dropped. A non-finite value is ignored.
+pub fn set_look(rig: &mut CameraRig, yaw_deg: f32, pitch_deg: f32) {
+    if yaw_deg.is_finite() && pitch_deg.is_finite() {
+        rig.state.yaw_deg = wrap180(yaw_deg);
+        rig.state.pitch_deg = pitch_deg;
+        rig.look_deg = [0.0; 2];
+    }
 }
 
 /// Adds `amount` to the rig's trauma, clamped to `[0, 1]`; a non-finite amount is ignored.
@@ -108,6 +198,9 @@ pub enum RigMode {
     /// Ride a level-authored path: the target is projected onto it and the camera sits at an offset
     /// in the path's frame.
     Track(TrackRig),
+    /// The eye rides the target rigidly; yaw and pitch are game-written look deltas on
+    /// [`CameraRig::look_deg`], unsmoothed.
+    FirstPerson(FirstPersonRig),
 }
 
 impl Default for RigMode {
@@ -136,6 +229,26 @@ impl Default for TrackRig {
             path: String::new(),
             offset: [0.0, 2.2, 4.5],
             search_window: 3.0,
+        }
+    }
+}
+
+/// The `first_person` mode.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct FirstPersonRig {
+    /// The eye offset from the target origin in the yaw frame (not pitched), in metres: `+x`
+    /// right, `+y` up, `+z` back.
+    pub eye_offset: [f32; 3],
+    /// The pitch clamp in degrees either way; in `(0, 90)`.
+    pub pitch_limit_deg: f32,
+}
+
+impl Default for FirstPersonRig {
+    fn default() -> Self {
+        Self {
+            eye_offset: [0.0, 1.6, 0.0],
+            pitch_limit_deg: 89.0,
         }
     }
 }
