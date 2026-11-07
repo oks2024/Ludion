@@ -11,6 +11,10 @@
 //! [`spatial::k_nearest`]). It deliberately has **no rigid-body dynamics** —
 //! games write their own collision response on top of the queries.
 //!
+//! [`spatial3d`] is the 3D counterpart: a generic, bit-exact bounding-volume hierarchy over
+//! caller-fed spheres and boxes (overlap, k-nearest, first-hit swept-sphere cast), independent of
+//! [`Collider`] and the ground plane.
+//!
 //! # Boundary
 //!
 //! This crate sits beside `ludion-sim` on the CPU-only sim side and depends only on `ludion-core`
@@ -36,6 +40,7 @@ mod joint_motor;
 mod parent_pose;
 mod plane;
 pub mod spatial;
+pub mod spatial3d;
 mod velocity;
 
 pub use collider::{
