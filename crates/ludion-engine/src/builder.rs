@@ -116,6 +116,7 @@ pub struct EngineBuilder {
     title: Option<String>,
     fullscreen: bool,
     present_interpolation: bool,
+    low_latency: bool,
     cursor: CursorMode,
     registrations: Vec<Registration>,
     systems: Vec<SystemSpec>,
@@ -153,6 +154,7 @@ impl EngineBuilder {
             title: None,
             fullscreen: false,
             present_interpolation: false,
+            low_latency: false,
             cursor: CursorMode::default(),
             registrations: Vec::new(),
             systems: Vec::new(),
@@ -367,6 +369,23 @@ impl EngineBuilder {
     #[must_use]
     pub fn present_interpolation(mut self, on: bool) -> Self {
         self.present_interpolation = on;
+        self
+    }
+
+    /// Sets whether a windowed host keeps its `Fifo` swapchain at frame latency 1 instead of 2
+    /// (default off): up to one refresh less input-to-photon, at the cost of less slack before a
+    /// missed refresh. Window only; render-only: the sim, hashes, replays, screenshot, stream and
+    /// goldens are unchanged. See `ludion docs presentation` § Frame pacing.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::Engine;
+    ///
+    /// assert!(Engine::builder().low_latency(true).low_latency_hint());
+    /// ```
+    #[must_use]
+    pub fn low_latency(mut self, on: bool) -> Self {
+        self.low_latency = on;
         self
     }
 
@@ -862,6 +881,11 @@ impl EngineBuilder {
         self.present_interpolation
     }
 
+    /// The flag recorded by [`low_latency`](EngineBuilder::low_latency).
+    pub fn low_latency_hint(&self) -> bool {
+        self.low_latency
+    }
+
     /// The mode recorded by [`cursor`](EngineBuilder::cursor).
     pub fn cursor_hint(&self) -> CursorMode {
         self.cursor
@@ -932,6 +956,7 @@ impl EngineBuilder {
         engine.plane = self.plane;
         engine.anti_aliasing_default = self.anti_aliasing;
         engine.present_interpolation = self.present_interpolation;
+        engine.low_latency = self.low_latency;
         engine.install_plane();
         // Set before `install_docs`, which runs them: the passes are engine configuration derived
         // from the game, re-run on every world the engine builds.
@@ -1153,6 +1178,8 @@ mod tests {
         assert_eq!(defaults.title_hint(), None);
         assert!(!defaults.fullscreen_hint());
         assert!(!defaults.present_interpolation_hint());
+        assert!(!defaults.low_latency_hint());
+        assert!(Engine::builder().low_latency(true).low_latency_hint());
         assert_eq!(defaults.cursor_hint(), CursorMode::AutoHide);
 
         let set = Engine::builder()

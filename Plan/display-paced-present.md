@@ -155,6 +155,12 @@ these shows. On iOS, `AutoNoVsync` resolves to `Fifo` and the sim thread itself 
 15. **Particles and bullets blend by stable instance key (correspondence).** Clip and skinned poses keep
     the newer tick because games step them deliberately (Clockout 0027); revisit if a game asks. The pose
     table holds stored transforms, so a prefab part's clip offset (like an assembly part's) takes the newer tick.
+16. **Opt-in frame latency 1 (Serious Isaac 0004).** `EngineBuilder::low_latency(true)` sets the window
+    surface's `desired_maximum_frame_latency` to 1 (default 2). Still `Fifo`: no Mailbox, no `FifoRelaxed`.
+    This amends decision 4 (owner-approved 2026-11-06). The trace gains an input→present figure (host
+    arrival stamp → `TickStamp.input` → first present of the frame), host-side only: never hashed,
+    serialized or recorded. It ends at submission, so it cannot see the swapchain queue latency 1
+    shortens; the photon capture is owed on the M4.
 
 ## Phasing
 
@@ -202,3 +208,21 @@ these shows. On iOS, `AutoNoVsync` resolves to `Fifo` and the sim thread itself 
 - The iOS M3 stall measurement re-read against this design (`Plan/ios-target.md` Risks).
 - CLAUDE.md's Active plans gains this plan (the Tech Lead's edit; CLAUDE.md carries foreign
   uncommitted edits today).
+
+## Measurements
+
+`low_latency` off vs on, input→present from `LUDION_PRESENT_TRACE=1` (decision 16). *Unpinned, indicative only*
+(the M5, 120 Hz). The figure ends at submission, so expect little movement between off and on. Recipe, one human
+sitting after Serious Isaac 0004 subtask 03:
+
+1. Copy the throwaway probe (a mouse-look system as in `first_person_kick`, `low_latency` read from
+   `PROBE_LOW_LATENCY`, `ludion::run`) into `crates/ludion/examples/latency_probe.rs`.
+2. `cargo build --release -p ludion --example latency_probe`.
+3. For each of `PROBE_LOW_LATENCY=0` and `=1`, run `LUDION_PRESENT_TRACE=1 target/release/examples/latency_probe
+   --window --scene examples/gallery/camera-rig.yaml`, moving the mouse continuously for at least three trace windows.
+4. Record the `input→present` p50/p95 and `frame latency` here, then delete the example.
+
+- 2026-11-06, M5: the trace prints `frame latency 2` (off) and `1` (on) at a steady 120 presents/s, acquire+present
+  p50 about 7.7 ms either way. The input→present figure is still owed: synthetic `CGEventPost` moves from
+  `osascript` never reached the window (no input samples in either run), so the figures need a human at the mouse.
+

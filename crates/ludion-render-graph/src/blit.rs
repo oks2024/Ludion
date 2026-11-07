@@ -78,6 +78,7 @@ impl SurfaceSetup {
         width: u32,
         height: u32,
         present_mode: wgpu::PresentMode,
+        frame_latency: u32,
     ) -> wgpu::SurfaceConfiguration {
         let (width, height) = surface_extent(width, height);
         wgpu::SurfaceConfiguration {
@@ -87,7 +88,7 @@ impl SurfaceSetup {
             width,
             height,
             present_mode,
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: frame_latency,
             alpha_mode: self.alpha_mode,
             view_formats: vec![self.view_format],
         }
@@ -278,6 +279,14 @@ mod tests {
             formats,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn config_carries_the_requested_frame_latency() {
+        let setup = SurfaceSetup::choose(&caps(vec![F::Bgra8UnormSrgb])).unwrap();
+        let config = |latency| setup.config(8, 8, wgpu::PresentMode::Fifo, latency);
+        assert_eq!(config(1).desired_maximum_frame_latency, 1);
+        assert_eq!(config(2).desired_maximum_frame_latency, 2);
     }
 
     #[test]

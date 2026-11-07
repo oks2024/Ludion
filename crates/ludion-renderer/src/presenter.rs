@@ -69,6 +69,8 @@ pub struct TickStamp {
     pub period: Duration,
     /// Whether the live loop re-based its deadline for this tick (a lag, a speed change, a resume).
     pub rebased: bool,
+    /// The oldest host-side input arrival this tick consumed, for the present trace only.
+    pub input: Option<Instant>,
 }
 
 /// One tick's worth of render input, handed from the sim thread to the presenter.
@@ -123,6 +125,10 @@ pub trait PresentBackend: Send {
     fn reload_shader(&mut self, path: &str, source: String) -> Result<u64, Diagnostic>;
     /// Whether there is nothing to present into (a 0×0 surface).
     fn idle(&self) -> bool;
+    /// The surface's maximum frame latency, when the backend has a swapchain.
+    fn frame_latency(&self) -> Option<u32> {
+        None
+    }
 }
 
 struct Slot {
@@ -230,6 +236,9 @@ fn run_loop(
     notes: &Sender<PresenterNote>,
     mut trace: Option<PresentTrace>,
 ) {
+    if let Some(trace) = trace.as_mut() {
+        trace.frame_latency = backend.frame_latency();
+    }
     let mut current: Option<PresentPacket> = None;
     let mut prev_blend: Option<(Arc<RenderScene>, Arc<BlendData>)> = None;
     // The last drawn frame, and whether it was drawn at alpha 1 (a settled image needs no redraw).
@@ -264,7 +273,7 @@ fn run_loop(
             && current.as_ref().is_none_or(|c| c.frame != packet.frame)
         {
             if let (Some(trace), Some(tick)) = (trace.as_mut(), packet.tick) {
-                trace.note_tick(tick);
+                trace.note_tick(packet.frame, tick);
             }
             prev_blend = blend_source(current.as_ref(), &packet, covers_from);
             current = Some(packet);
@@ -331,7 +340,7 @@ fn run_loop(
             }
             Ok(PresentOutcome::Presented) => {
                 if let (Some(trace), Some((frame, _))) = (trace.as_mut(), drawn) {
-                    trace.note_present(frame, started.elapsed(), blended_now);
+                    trace.note_present(frame, started.elapsed(), blended_now, Instant::now());
                 }
             }
             // Nothing paced this iteration (occluded, stale or timed-out swapchain): park instead of
@@ -356,6 +365,12 @@ fn merge_replaced(
     packet: &mut PresentPacket,
     covers_from: FrameIndex,
 ) -> FrameIndex {
+    // First, before any early return: the oldest input of a skipped tick must reach the trace.
+    if let Some(older) = replaced.tick.and_then(|tick| tick.input)
+        && let Some(tick) = packet.tick.as_mut()
+    {
+        tick.input = Some(tick.input.map_or(older, |own| own.min(older)));
+    }
     if replaced.frame.0 + 1 != packet.frame.0 {
         return packet.frame;
     }
@@ -448,6 +463,10 @@ struct PresentTrace {
     last_frame: Option<FrameIndex>,
     waits_ms: Vec<f64>,
     window_start: Option<Instant>,
+    /// The oldest input arrival not yet presented, with the frame that carries it.
+    pending_input: Option<(FrameIndex, Instant)>,
+    input_ms: Vec<f64>,
+    frame_latency: Option<u32>,
 }
 
 impl PresentTrace {
@@ -464,18 +483,34 @@ impl PresentTrace {
             last_frame: None,
             waits_ms: Vec::with_capacity(TRACE_INTERVAL),
             window_start: None,
+            pending_input: None,
+            input_ms: Vec::with_capacity(TRACE_INTERVAL),
+            frame_latency: None,
         })
     }
 
-    fn note_tick(&mut self, tick: TickStamp) {
+    fn note_tick(&mut self, frame: FrameIndex, tick: TickStamp) {
         if tick.rebased {
             self.rebased += 1;
         }
+        if let Some(input) = tick.input {
+            let oldest = self
+                .pending_input
+                .map_or(input, |(_, held)| held.min(input));
+            self.pending_input = Some((frame, oldest));
+        }
     }
 
-    #[allow(clippy::disallowed_methods)]
-    fn note_present(&mut self, frame: FrameIndex, wait: Duration, blended: bool) {
-        let now = Instant::now();
+    /// Records one present of `frame` that returned at `now`, `wait` after it started. The first
+    /// present of a frame carrying input takes the input→present sample.
+    fn note_present(&mut self, frame: FrameIndex, wait: Duration, blended: bool, now: Instant) {
+        if let Some((input_frame, input)) = self.pending_input
+            && input_frame == frame
+        {
+            self.input_ms
+                .push(now.saturating_duration_since(input).as_secs_f64() * 1000.0);
+            self.pending_input = None;
+        }
         let start = *self.window_start.get_or_insert(now - wait);
         self.presents += 1;
         self.blended += usize::from(blended);
@@ -496,14 +531,30 @@ impl PresentTrace {
 
     fn report(&mut self, elapsed: Duration) {
         self.waits_ms.sort_by(f64::total_cmp);
-        let at = |fraction: f64| {
-            let index = ((self.waits_ms.len() as f64 * fraction).ceil() as usize).max(1) - 1;
-            self.waits_ms[index.min(self.waits_ms.len() - 1)]
+        self.input_ms.sort_by(f64::total_cmp);
+        let percentile = |sorted: &[f64], fraction: f64| {
+            let index = ((sorted.len() as f64 * fraction).ceil() as usize).max(1) - 1;
+            sorted[index.min(sorted.len() - 1)]
         };
+        let at = |fraction: f64| percentile(&self.waits_ms, fraction);
+        let input = if self.input_ms.is_empty() {
+            "n/a".to_string()
+        } else {
+            format!(
+                "p50 {:.1} ms p95 {:.1} ms (n {})",
+                percentile(&self.input_ms, 0.50),
+                percentile(&self.input_ms, 0.95),
+                self.input_ms.len()
+            )
+        };
+        let latency = self
+            .frame_latency
+            .map_or_else(|| "?".to_string(), |latency| latency.to_string());
         eprintln!(
             "present-trace: {:.1} presents/s, {} distinct frames, {} repeats, {} frame-index gaps, \
              {} rebased ticks, {} blended presents, {} skipped presents, \
-             acquire+present p50 {:.2} ms p99 {:.2} ms",
+             acquire+present p50 {:.2} ms p99 {:.2} ms, \
+             input→present {}, frame latency {}",
             self.presents as f64 / elapsed.as_secs_f64().max(1e-9),
             self.distinct,
             self.repeats,
@@ -513,6 +564,8 @@ impl PresentTrace {
             self.skips,
             at(0.50),
             at(0.99),
+            input,
+            latency,
         );
         self.presents = 0;
         self.distinct = 0;
@@ -522,6 +575,7 @@ impl PresentTrace {
         self.blended = 0;
         self.skips = 0;
         self.waits_ms.clear();
+        self.input_ms.clear();
         self.window_start = None;
     }
 }
@@ -606,6 +660,10 @@ impl PresentBackend for WindowBackend {
     fn idle(&self) -> bool {
         let (width, height) = self.target.requested_size();
         width == 0 || height == 0
+    }
+
+    fn frame_latency(&self) -> Option<u32> {
+        Some(self.target.frame_latency())
     }
 }
 
@@ -721,6 +779,7 @@ mod tests {
                 at: now,
                 period: Duration::from_secs(1_000_000_000),
                 rebased: false,
+                input: None,
             }),
             blend: Some(Arc::new(BlendData {
                 poses: vec![(KEY, a), (KEY_B, b)],
@@ -815,6 +874,7 @@ mod tests {
                 at,
                 period,
                 rebased,
+                input: None,
             }),
             blend: Some(Arc::new(BlendData {
                 poses: vec![(KEY, model)],
@@ -914,6 +974,7 @@ mod tests {
                 at,
                 period,
                 rebased: false,
+                input: None,
             })
         };
         assert_eq!(alpha_at(at, None), 1.0);
@@ -928,7 +989,8 @@ mod tests {
                 Some(TickStamp {
                     at: later,
                     period,
-                    rebased: false
+                    rebased: false,
+                    input: None,
                 })
             ),
             1.0
@@ -943,6 +1005,70 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("timed out waiting for {what}");
+    }
+
+    fn stamped(frame: u64, input: Option<Instant>) -> PresentPacket {
+        PresentPacket {
+            tick: Some(TickStamp {
+                at: Instant::now(),
+                period: Duration::from_millis(16),
+                rebased: false,
+                input,
+            }),
+            ..packet(frame)
+        }
+    }
+
+    fn armed_trace() -> PresentTrace {
+        PresentTrace {
+            presents: 0,
+            distinct: 0,
+            repeats: 0,
+            gaps: 0,
+            rebased: 0,
+            blended: 0,
+            skips: 0,
+            last_frame: None,
+            waits_ms: Vec::new(),
+            window_start: None,
+            pending_input: None,
+            input_ms: Vec::new(),
+            frame_latency: None,
+        }
+    }
+
+    #[test]
+    fn a_replaced_packet_hands_its_older_input_to_the_next_across_a_gap() {
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(4);
+        let mut next = stamped(5, Some(t1));
+        // Frame 2 → 5 is a gap: the early return must not lose the older arrival.
+        merge_replaced(stamped(2, Some(t0)), &mut next, FrameIndex(2));
+        assert_eq!(next.tick.unwrap().input, Some(t0));
+        let mut unstamped = stamped(6, None);
+        merge_replaced(stamped(5, Some(t1)), &mut unstamped, FrameIndex(5));
+        assert_eq!(unstamped.tick.unwrap().input, Some(t1));
+    }
+
+    #[test]
+    fn the_first_present_of_a_frame_takes_one_input_sample() {
+        let t0 = Instant::now();
+        let mut trace = armed_trace();
+        let tick = |input| TickStamp {
+            at: t0,
+            period: Duration::from_millis(16),
+            rebased: false,
+            input,
+        };
+        trace.note_tick(FrameIndex(3), tick(Some(t0)));
+        let wait = Duration::from_millis(1);
+        // A present of another frame takes none.
+        trace.note_present(FrameIndex(2), wait, false, t0 + Duration::from_millis(5));
+        assert!(trace.input_ms.is_empty());
+        trace.note_present(FrameIndex(3), wait, false, t0 + Duration::from_millis(10));
+        trace.note_present(FrameIndex(3), wait, false, t0 + Duration::from_millis(26));
+        assert_eq!(trace.input_ms.len(), 1);
+        assert!((trace.input_ms[0] - 10.0).abs() < 1e-6);
     }
 
     #[test]

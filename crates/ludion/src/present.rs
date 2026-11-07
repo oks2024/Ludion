@@ -161,7 +161,8 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
     let stop_grace = window_stop_grace(listening);
 
     let running = Arc::new(AtomicBool::new(true));
-    let (input_tx, input_rx) = crossbeam_channel::unbounded::<serde_json::Value>();
+    let (input_tx, input_rx) =
+        crossbeam_channel::unbounded::<(serde_json::Value, Option<Instant>)>();
     // Wakes the waiter thread on loop exit when no stop ever fired (the window was closed). The
     // Ctrl-C handler holds a stop sender for the life of the process, so the waiter can never end by
     // disconnection alone.
@@ -275,11 +276,11 @@ struct App {
     embedded: Option<Embedded>,
     proxy: EventLoopProxy<HostEvent>,
     running: Arc<AtomicBool>,
-    input_tx: Sender<serde_json::Value>,
+    input_tx: Sender<(serde_json::Value, Option<Instant>)>,
     /// Maps keyboard, mouse and focus events to `input.inject` events.
     input: HostInput,
     /// Handed to the forwarder thread on `resumed`.
-    input_rx: Option<Receiver<serde_json::Value>>,
+    input_rx: Option<Receiver<(serde_json::Value, Option<Instant>)>>,
     /// Handed to the waiter thread on `resumed`.
     internal_stop_rx: Option<Receiver<()>>,
     window: Option<Arc<Window>>,
@@ -380,8 +381,12 @@ impl App {
             .take()
             .expect("the device-event channel is handed over exactly once");
         self.forwarder = Some(spawn_input_forwarder(embedded.injector(), input_rx));
+        // Only mouse and keyboard are stamped; a gamepad sample carries no arrival.
+        let gamepad_tx = self.input_tx.clone();
         self.gamepad = Some(ludion_window::spawn_gamepad_thread(
-            self.input_tx.clone(),
+            move |value| {
+                let _ = gamepad_tx.send((value, None));
+            },
             self.running.clone(),
         ));
         let internal_stop = self
@@ -466,7 +471,10 @@ impl App {
         }
     }
 
-    /// Routes a device event to the forwarder channel through the shared router.
+    /// Routes a device event to the forwarder channel through the shared router, stamped with its
+    /// arrival for the present trace.
+    // The arrival instant is host-side only: it never reaches the sim, a hash or a replay.
+    #[allow(clippy::disallowed_methods)]
     fn route_input(&mut self, event: &WindowEvent) {
         let (embedded, surface_size) = (self.embedded.as_ref(), self.surface_size);
         // Best-effort: if the forwarder has gone, the game just stops receiving input — never a
@@ -474,9 +482,10 @@ impl App {
         let input_tx = &self.input_tx;
         self.input.route(
             event,
+            Some(Instant::now()),
             |x, y| map_cursor(embedded, surface_size, x, y),
-            |value| {
-                let _ = input_tx.send(value);
+            |value, at| {
+                let _ = input_tx.send((value, at));
             },
         );
     }
@@ -484,8 +493,8 @@ impl App {
     /// Sends the pending raw mouse motion, if any, to the forwarder channel.
     fn flush_motion(&mut self) {
         let input_tx = &self.input_tx;
-        self.input.flush_motion(|value| {
-            let _ = input_tx.send(value);
+        self.input.flush_motion(|value, at| {
+            let _ = input_tx.send((value, at));
         });
     }
 
@@ -530,9 +539,11 @@ impl ApplicationHandler<HostEvent> for App {
         }
     }
 
+    // The arrival instant is host-side only: it never reaches the sim, a hash or a replay.
+    #[allow(clippy::disallowed_methods)]
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
         if let DeviceEvent::MouseMotion { delta } = event {
-            self.input.motion(delta.0, delta.1);
+            self.input.motion(delta.0, delta.1, Some(Instant::now()));
         }
     }
 
@@ -672,11 +683,11 @@ impl ApplicationHandler<HostEvent> for App {
 /// Ends when every sender is dropped (the event loop torn down).
 fn spawn_input_forwarder(
     injector: Injector,
-    input_rx: Receiver<serde_json::Value>,
+    input_rx: Receiver<(serde_json::Value, Option<Instant>)>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
-        while let Ok(event) = input_rx.recv() {
-            injector.inject_value(event);
+        while let Ok((event, arrived)) = input_rx.recv() {
+            injector.inject_value_at(event, arrived);
         }
     })
 }

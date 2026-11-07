@@ -20,7 +20,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use ludion_core::codes::code;
@@ -205,12 +205,17 @@ pub(crate) struct Injector(Sender<StampedCommand>);
 impl Injector {
     /// Fire-and-forget `input.inject` of an already-serialized event.
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
-    pub(crate) fn inject_value(&self, event: serde_json::Value) {
+    pub(crate) fn inject_value_at(&self, event: serde_json::Value, arrived: Option<Instant>) {
         let (stamped, _reply) = StampedCommand::new(Command::InputInject(InputInjectParams {
             frame: None,
             event,
         }));
-        let _ = self.0.send(stamped);
+        let _ = self.0.send(stamped.with_arrival(arrived));
+    }
+
+    /// [`inject_value_at`](Injector::inject_value_at) without an arrival stamp.
+    pub(crate) fn inject_value(&self, event: serde_json::Value) {
+        self.inject_value_at(event, None);
     }
 }
 

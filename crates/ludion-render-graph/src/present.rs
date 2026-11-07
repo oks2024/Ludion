@@ -206,6 +206,9 @@ impl PresentTarget {
     /// `Rgba8UnormSrgb`, so sampling decodes and the sRGB view re-encodes: when the surface and the
     /// frame are the same size, the presented bytes are the bytes readback would return.
     ///
+    /// `frame_latency` is the swapchain's `desired_maximum_frame_latency` (2 by default; 1 under
+    /// `EngineBuilder::low_latency`).
+    ///
     /// A zero dimension leaves the swapchain unconfigured; the first [`PresentSize::set`] with a
     /// real size configures it.
     ///
@@ -216,11 +219,12 @@ impl PresentTarget {
         surface: wgpu::Surface<'static>,
         width: u32,
         height: u32,
+        frame_latency: u32,
     ) -> Result<PresentTarget, Diagnostic> {
         let setup = SurfaceSetup::for_surface(gpu, &surface)?;
         // Fifo is the one mode every backend guarantees, never tears, and blocks in acquire — the
         // presenter thread is off the sim thread, so that block is the display clock pacing it.
-        let config = setup.config(width, height, wgpu::PresentMode::Fifo);
+        let config = setup.config(width, height, wgpu::PresentMode::Fifo, frame_latency);
 
         let mut target = PresentTarget {
             surface,
@@ -235,6 +239,11 @@ impl PresentTarget {
             target.configure(gpu, width, height);
         }
         Ok(target)
+    }
+
+    /// The swapchain's `desired_maximum_frame_latency`: how many frames the display may queue.
+    pub fn frame_latency(&self) -> u32 {
+        self.config.desired_maximum_frame_latency
     }
 
     /// A handle the window thread keeps to report resizes. See [`PresentSize`].

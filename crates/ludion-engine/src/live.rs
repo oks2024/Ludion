@@ -96,6 +96,9 @@ pub struct StampedCommand {
     /// The wire request id this command answers, if it came over a connection; the sim thread
     /// exposes it to the handler so an event it emits can name its cause.
     pub request: Option<RequestId>,
+    /// Host-side wall-clock arrival of the input event this command carries, for the present
+    /// trace only: never serialized, hashed or recorded.
+    pub arrived: Option<Instant>,
 }
 
 impl StampedCommand {
@@ -119,6 +122,7 @@ impl StampedCommand {
                 command,
                 reply,
                 request: None,
+                arrived: None,
             },
             receiver,
         )
@@ -140,6 +144,13 @@ impl StampedCommand {
         let (mut stamped, receiver) = StampedCommand::new(command);
         stamped.request = Some(id);
         (stamped, receiver)
+    }
+
+    /// Records the host-side arrival of the input this command carries.
+    #[must_use]
+    pub fn with_arrival(mut self, at: Option<Instant>) -> Self {
+        self.arrived = at;
+        self
     }
 }
 
@@ -292,6 +303,14 @@ pub fn run_live(
 /// flush; the remainder keeps its order and is drained at the next boundary.
 const MAX_COMMANDS_PER_DRAIN: usize = 1024;
 
+/// Folds one input arrival into the pending one, keeping the older.
+fn fold_arrival(pending: &mut Option<Instant>, arrived: Option<Instant>) {
+    *pending = match (*pending, arrived) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+}
+
 /// Applies the pending commands in arrival order, at most [`MAX_COMMANDS_PER_DRAIN`], returning how
 /// many it applied, or `None` once every producer is gone.
 fn drain(
@@ -300,11 +319,13 @@ fn drain(
     pending_capture: &mut Option<PendingCapture>,
     egress_state: &mut EgressState,
     activity: &AtomicU32,
+    pending_input: &mut Option<Instant>,
 ) -> Option<usize> {
     let mut applied = 0;
     while applied < MAX_COMMANDS_PER_DRAIN {
         match intake.try_recv() {
             Ok(stamped) => {
+                fold_arrival(pending_input, stamped.arrived);
                 // Only a command that can change the image owes a frame subscriber a render the
                 // frame index would not already trigger (a `component.set` does; a poll or a
                 // queued input does not). Re-submitting an unchanged world on every poll fills
@@ -346,6 +367,8 @@ fn live_loop(
     // reset, a speed change or a resume from pause marks the next stamp `rebased`.
     let mut latest_tick: Option<TickStamp> = None;
     let mut rebase_pending = false;
+    // The oldest input arrival not yet folded into a tick's stamp.
+    let mut pending_input: Option<Instant> = None;
 
     loop {
         // 1. Drain the commands pending at this frame boundary, up to the cap.
@@ -355,6 +378,7 @@ fn live_loop(
             &mut pending_capture,
             &mut egress_state,
             &shutdown.1,
+            &mut pending_input,
         )
         .is_none()
         {
@@ -413,6 +437,7 @@ fn live_loop(
                     at: now,
                     period,
                     rebased: rebase_pending || reset,
+                    input: pending_input.take(),
                 });
                 rebase_pending = false;
             }
@@ -450,6 +475,7 @@ fn live_loop(
         crossbeam_channel::select! {
             recv(intake) -> msg => match msg {
                 Ok(stamped) => {
+                    fold_arrival(&mut pending_input, stamped.arrived);
                     let dirty = stamped.command.may_change_frame();
                     pending_capture = pending_capture.or(reply(engine, stamped, &shutdown.1));
                     egress_state.frame_dirty |= dirty;
@@ -1259,6 +1285,7 @@ mod tests {
             &mut pending,
             &mut egress_state,
             &receiver.1,
+            &mut None,
         );
         assert_eq!(first, Some(MAX_COMMANDS_PER_DRAIN));
         assert_eq!(intake.len(), 3);
@@ -1273,6 +1300,7 @@ mod tests {
             &mut pending,
             &mut egress_state,
             &receiver.1,
+            &mut None,
         );
         assert_eq!(second, Some(3));
         assert!(replies[MAX_COMMANDS_PER_DRAIN + 2].try_recv().is_ok());
@@ -1284,10 +1312,42 @@ mod tests {
                 &intake,
                 &mut pending,
                 &mut egress_state,
-                &receiver.1
+                &receiver.1,
+                &mut None
             ),
             None
         );
+    }
+
+    /// The oldest arrival a drain sees survives out-of-order and unstamped commands.
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn a_drain_keeps_the_oldest_input_arrival() {
+        let mut engine = engine();
+        let (intake_tx, intake) = crossbeam_channel::unbounded();
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(5);
+        let _replies: Vec<_> = [Some(t1), Some(t0), None]
+            .into_iter()
+            .map(|at| {
+                let (stamped, reply) = StampedCommand::new(Command::SimHash);
+                intake_tx.send(stamped.with_arrival(at)).unwrap();
+                reply
+            })
+            .collect();
+        let (_signal, receiver) = shutdown_channel();
+        let mut pending = None;
+        let mut egress_state = EgressState::new(engine.subscriptions().frames_opened());
+        let mut pending_input = None;
+        drain(
+            &mut engine,
+            &intake,
+            &mut pending,
+            &mut egress_state,
+            &receiver.1,
+            &mut pending_input,
+        );
+        assert_eq!(pending_input, Some(t0));
     }
 
     fn engine() -> Engine {

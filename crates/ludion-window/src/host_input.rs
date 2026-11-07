@@ -3,6 +3,8 @@
 //! through the same code is what makes a session recorded through either window carry the same
 //! events.
 
+use std::time::Instant;
+
 use serde_json::Value;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -18,20 +20,28 @@ pub struct HostInput {
     mouse: MouseButtons,
     /// Raw device counts not yet emitted; summed in `f64` and narrowed once at emit.
     motion: [f64; 2],
+    /// Arrival of the first count in `motion`: a coalesced event keeps the oldest arrival.
+    motion_at: Option<Instant>,
 }
 
 impl HostInput {
-    /// Adds raw device motion to the pending total.
-    pub fn motion(&mut self, dx: f64, dy: f64) {
+    /// Adds raw device motion to the pending total; `at` is its host-side arrival, kept only for
+    /// the first count of a pending total.
+    pub fn motion(&mut self, dx: f64, dy: f64, at: Option<Instant>) {
         self.motion[0] += dx;
         self.motion[1] += dy;
+        if self.motion_at.is_none() {
+            self.motion_at = at;
+        }
     }
 
-    /// Emits the pending motion as one event (nothing when it is zero) and clears it.
-    pub fn flush_motion(&mut self, mut emit: impl FnMut(Value)) {
+    /// Emits the pending motion as one event (nothing when it is zero) with its first arrival, and
+    /// clears it.
+    pub fn flush_motion(&mut self, mut emit: impl FnMut(Value, Option<Instant>)) {
         let [dx, dy] = std::mem::take(&mut self.motion);
+        let at = self.motion_at.take();
         if dx != 0.0 || dy != 0.0 {
-            emit(mouse::mouse_motion_event([dx as f32, dy as f32]));
+            emit(mouse::mouse_motion_event([dx as f32, dy as f32]), at);
         }
     }
 
@@ -60,14 +70,16 @@ impl HostInput {
         out
     }
 
-    /// Routes one window event to `emit`; events that carry no input emit nothing.
+    /// Routes one window event to `emit`, stamped with its host-side arrival `at`; events that
+    /// carry no input emit nothing.
     /// `map_cursor` turns a window-surface position into render-target pixels (`None` when it has
     /// nowhere to land yet).
     pub fn route(
         &mut self,
         event: &WindowEvent,
+        at: Option<Instant>,
         map_cursor: impl FnOnce(f32, f32) -> Option<[f32; 2]>,
-        mut emit: impl FnMut(Value),
+        mut emit: impl FnMut(Value, Option<Instant>),
     ) {
         self.flush_motion(&mut emit);
         match event {
@@ -79,26 +91,26 @@ impl HostInput {
                 if let PhysicalKey::Code(code) = event.physical_key
                     && let Some(value) = self.key(code, event.state, event.repeat)
                 {
-                    emit(value);
+                    emit(value, at);
                 }
             }
             // A key or button let go while another window had focus never gets a release.
             WindowEvent::Focused(false) => {
                 for value in self.focus_lost() {
-                    emit(value);
+                    emit(value, at);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(pos) = map_cursor(position.x as f32, position.y as f32) {
-                    emit(mouse::mouse_move_event(pos));
+                    emit(mouse::mouse_move_event(pos), at);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(value) = self.button(*button, *state) {
-                    emit(value);
+                    emit(value, at);
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => emit(mouse::mouse_wheel_event(*delta)),
+            WindowEvent::MouseWheel { delta, .. } => emit(mouse::mouse_wheel_event(*delta), at),
             _ => {}
         }
     }
@@ -138,34 +150,50 @@ mod tests {
     #[test]
     fn motion_calls_coalesce_into_one_event_then_nothing() {
         let mut input = HostInput::default();
-        input.motion(1.0, 2.0);
-        input.motion(0.5, -1.0);
-        input.motion(1.0, 0.0);
+        input.motion(1.0, 2.0, None);
+        input.motion(0.5, -1.0, None);
+        input.motion(1.0, 0.0, None);
         let mut out = Vec::new();
-        input.flush_motion(|v| out.push(v));
+        input.flush_motion(|v, _| out.push(v));
         assert_eq!(out, vec![motion_json(2.5, 1.0)]);
-        input.flush_motion(|v| out.push(v));
+        input.flush_motion(|v, _| out.push(v));
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn a_coalesced_motion_event_keeps_its_first_arrival() {
+        let (t0, t1) = (
+            Instant::now(),
+            Instant::now() + std::time::Duration::from_millis(5),
+        );
+        let mut input = HostInput::default();
+        input.motion(1.0, 0.0, Some(t0));
+        input.motion(1.0, 0.0, Some(t1));
+        let mut out = Vec::new();
+        input.flush_motion(|v, at| out.push((v, at)));
+        assert_eq!(out, vec![(motion_json(2.0, 0.0), Some(t0))]);
+        input.flush_motion(|v, at| out.push((v, at)));
         assert_eq!(out.len(), 1);
     }
 
     #[test]
     fn flush_without_motion_emits_nothing() {
         let mut out = Vec::new();
-        HostInput::default().flush_motion(|v| out.push(v));
+        HostInput::default().flush_motion(|v, _| out.push(v));
         assert!(out.is_empty());
     }
 
     #[test]
     fn motion_precedes_a_routed_click() {
         let mut input = HostInput::default();
-        input.motion(3.0, 0.0);
+        input.motion(3.0, 0.0, None);
         let event = WindowEvent::MouseInput {
             device_id: winit::event::DeviceId::dummy(),
             state: ElementState::Pressed,
             button: MouseButton::Left,
         };
         let mut out = Vec::new();
-        input.route(&event, |_, _| None, |v| out.push(v));
+        input.route(&event, None, |_, _| None, |v, _| out.push(v));
         assert_eq!(
             out,
             vec![
@@ -179,9 +207,19 @@ mod tests {
     fn route_releases_on_focus_loss_and_ignores_focus_gain() {
         let mut input = held_input();
         let mut out = Vec::new();
-        input.route(&WindowEvent::Focused(true), |_, _| None, |v| out.push(v));
+        input.route(
+            &WindowEvent::Focused(true),
+            None,
+            |_, _| None,
+            |v, _| out.push(v),
+        );
         assert!(out.is_empty());
-        input.route(&WindowEvent::Focused(false), |_, _| None, |v| out.push(v));
+        input.route(
+            &WindowEvent::Focused(false),
+            None,
+            |_, _| None,
+            |v, _| out.push(v),
+        );
         assert_eq!(out, expected_release());
     }
 }

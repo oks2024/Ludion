@@ -317,6 +317,9 @@ pub struct Engine {
     /// ([`EngineBuilder::present_interpolation`](crate::EngineBuilder::present_interpolation)).
     /// Render-only; never hashed or snapshotted.
     pub(crate) present_interpolation: bool,
+    /// Whether the window surface asks for frame latency 1
+    /// ([`EngineBuilder::low_latency`](crate::EngineBuilder::low_latency)). Render-only.
+    pub(crate) low_latency: bool,
     /// The host's explicit mode ([`set_anti_aliasing`](Engine::set_anti_aliasing)), if it named one.
     /// Same status as `anti_aliasing_default`.
     anti_aliasing_override: Option<AntiAliasing>,
@@ -788,6 +791,7 @@ impl Engine {
             render_scale_override: None,
             anti_aliasing_default: AntiAliasing::Off,
             present_interpolation: false,
+            low_latency: false,
             anti_aliasing_override: None,
             anti_aliasing_game: None,
             cursor_lock_game: None,
@@ -4383,7 +4387,13 @@ impl Engine {
             ));
         }
         let gpu = Gpu::request_for_surface(instance, &surface)?;
-        let target = PresentTarget::new(&gpu, surface, width, height)?;
+        let target = PresentTarget::new(
+            &gpu,
+            surface,
+            width,
+            height,
+            if self.low_latency { 1 } else { 2 },
+        )?;
         let size = target.size_handle();
         let backend = WindowBackend::new(gpu.share()?, target)?;
         self.presenter = Some(Presenter::spawn(Box::new(backend)));

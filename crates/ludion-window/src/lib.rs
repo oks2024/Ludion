@@ -176,7 +176,13 @@ pub fn run(options: WindowOptions, stop: Receiver<()>) -> Result<(), Diagnostic>
         running.clone(),
     );
     let input = spawn_input_thread(options.url.clone(), input_rx);
-    let gamepad = spawn_gamepad_thread(input_tx.clone(), running.clone());
+    let gamepad_tx = input_tx.clone();
+    let gamepad = spawn_gamepad_thread(
+        move |value| {
+            let _ = gamepad_tx.send(value);
+        },
+        running.clone(),
+    );
     let waiter = spawn_waiter_thread(stop, internal_stop_rx, proxy.clone());
 
     let mut app = App {
@@ -320,13 +326,13 @@ fn map_cursor(
 impl ApplicationHandler<UserEvent> for App {
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
         if let DeviceEvent::MouseMotion { delta } = event {
-            self.input.motion(delta.0, delta.1);
+            self.input.motion(delta.0, delta.1, None);
         }
     }
 
     fn about_to_wait(&mut self, _: &ActiveEventLoop) {
         let input_tx = &self.input_tx;
-        self.input.flush_motion(|value| {
+        self.input.flush_motion(|value, _| {
             let _ = input_tx.send(value);
         });
     }
@@ -402,10 +408,11 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => self.redraw(event_loop),
             event => self.input.route(
                 &event,
+                None,
                 |x, y| map_cursor(self.presenter.as_ref(), &self.slot, self.window_size, x, y),
                 // Best-effort: if the input thread has gone, the game just stops receiving
                 // input — never a reason to tear the window down.
-                |value| {
+                |value, _| {
                     let _ = self.input_tx.send(value);
                 },
             ),
@@ -511,10 +518,9 @@ fn connect_input(url: &str) -> Option<Client> {
         .ok()
 }
 
-/// The gamepad thread: poll `gilrs` for the first connected pad's events and push mapped
-/// `gamepad_*` event `Value`s onto `input_tx`, the same channel this crate's own input thread
-/// drains (a caller reusing this function, like the facade's in-process present host, drains
-/// `input_tx`'s receiver itself instead).
+/// The gamepad thread: poll `gilrs` for the first connected pad's events and hand mapped
+/// `gamepad_*` event `Value`s to `send` (this crate's own viewer sends them on the channel its input
+/// thread drains; the facade's in-process present host stamps its own channel's items).
 ///
 /// `Gilrs::new` failing (no backend available, e.g. an unsupported OS configuration) simply ends the
 /// thread immediately — the headless/no-gamepad degrade (`InputState` stays default) covers it, same
@@ -525,7 +531,7 @@ fn connect_input(url: &str) -> Option<Client> {
 /// from that pad first sends the releases for everything it held (axes to zero, buttons up), then
 /// promotes the next still-connected pad, if any.
 pub fn spawn_gamepad_thread(
-    input_tx: Sender<serde_json::Value>,
+    send: impl Fn(serde_json::Value) + Send + 'static,
     running: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
@@ -551,7 +557,7 @@ pub fn spawn_gamepad_thread(
                     for value in
                         gamepad::on_disconnect(&mut primary, event.id, &mut held, connected)
                     {
-                        let _ = input_tx.send(value);
+                        send(value);
                     }
                     continue;
                 }
@@ -561,7 +567,7 @@ pub fn spawn_gamepad_thread(
                 continue; // a second pad: out of scope, ignore its events
             }
             if let Some(value) = held.forward(&event.event) {
-                let _ = input_tx.send(value);
+                send(value);
             }
         }
     })

@@ -72,7 +72,7 @@ impl Presenter {
 
         let gpu = Gpu::request_for_surface(&instance, &surface)?;
         let setup = SurfaceSetup::for_surface(&gpu, &surface)?;
-        let config = setup.config(size.width, size.height, wgpu::PresentMode::Fifo);
+        let config = setup.config(size.width, size.height, wgpu::PresentMode::Fifo, 2);
         surface.configure(gpu.device(), &config);
         let blit = Blit::new(gpu.device(), setup.view_format);
 
