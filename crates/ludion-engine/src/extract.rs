@@ -1414,7 +1414,8 @@ fn extract_inner(
             now,
             particle_density,
             CameraBasis::from_view(camera.view),
-            viewmodel_camera.map(|cam| (&viewmodel_frame, camera_entity_model(world, cam))),
+            viewmodel_camera
+                .map(|cam| (&viewmodel_frame, crate::viewmodel::camera_frame(world, cam))),
             collect.then_some(&mut particle_keys),
         ),
         lights: extract_lights(placed.lights),

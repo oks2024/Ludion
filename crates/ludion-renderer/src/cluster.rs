@@ -23,7 +23,7 @@ use ludion_core::math::glam::{Mat4, Vec3};
 
 use crate::cull::{Aabb, instance_bounds};
 use crate::probe::{MAX_PROBES, ProbeData, ProbeVolume};
-use crate::scene::{MeshInstance, RenderCamera, RenderScene};
+use crate::scene::{MeshInstance, MeshShape, RenderCamera, RenderScene};
 use crate::shader_gen::{CLUSTER_SLICES, CLUSTER_TILES_X, CLUSTER_TILES_Y, Light, LightHeader};
 
 /// `Light.axis` for a point light: `w < -1.5` is the shaders' point-light marker, which skips the
@@ -239,11 +239,17 @@ pub(crate) fn build_lights(
 /// when any flagged bound is unknown (every light is admitted).
 fn viewmodel_bounds(scene: &RenderScene) -> Option<Option<Aabb>> {
     scene.viewmodel.as_ref()?;
-    let asset_bounds: Vec<Option<Aabb>> = scene
-        .mesh_assets
-        .iter()
-        .map(|asset| Aabb::of_positions(&asset.positions))
-        .collect();
+    // Only the assets the gun references are measured; the rest stay `None` and are never read.
+    let mut asset_bounds: Vec<Option<Aabb>> = vec![None; scene.mesh_assets.len()];
+    let mut measured = vec![false; scene.mesh_assets.len()];
+    for mesh in scene.meshes.iter().filter(|m| m.viewmodel) {
+        if let MeshShape::Asset(i) = mesh.shape
+            && i < measured.len()
+            && !std::mem::replace(&mut measured[i], true)
+        {
+            asset_bounds[i] = Aabb::of_positions(&scene.mesh_assets[i].positions);
+        }
+    }
     let gun: Vec<MeshInstance> = scene
         .meshes
         .iter()

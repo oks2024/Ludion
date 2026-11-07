@@ -3,6 +3,7 @@
 //! the frame's drawn camera, shared by extract, [`blend`](crate::blend) and
 //! [`latch_camera`](crate::latch_camera).
 
+use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat3, Mat4, Vec3, Vec4};
 
 use crate::scene::RenderScene;
@@ -77,6 +78,8 @@ pub struct ViewmodelParticle {
 pub struct ViewmodelLocal {
     /// Index into [`RenderScene::meshes`].
     pub mesh: u32,
+    /// The entity that owns the mesh; blending pairs locals across ticks by it.
+    pub owner: EntityId,
     /// Camera-local model matrix.
     pub model: Mat4,
     /// Camera-local normal matrix.
@@ -110,10 +113,11 @@ mod tests {
     use ludion_core::math::glam::{Quat, Vec3};
 
     use super::*;
-    use crate::blend::{BlendData, CameraBlend, blend, latch_camera};
+    use crate::blend::{BlendData, CameraBlend, InstanceKey, blend, latch_camera};
     use crate::scene::{MeshInstance, MeshShape, ParticleInstance};
 
     const CAMERA: EntityId = EntityId::new(1, 0);
+    const GUN: EntityId = EntityId::new(2, 0);
 
     fn camera_model(x: f32, yaw: f32) -> Mat4 {
         Mat4::from_rotation_translation(Quat::from_rotation_y(yaw), Vec3::new(x, 1.0, 2.0))
@@ -153,6 +157,7 @@ mod tests {
             projection: Mat4::IDENTITY,
             locals: vec![ViewmodelLocal {
                 mesh: 0,
+                owner: GUN,
                 model: local,
                 normal_matrix: Mat3::from_mat4(local),
             }],
@@ -307,6 +312,82 @@ mod tests {
         let blended = out.camera.view.inverse();
         assert!(out.meshes[0].model.abs_diff_eq(blended * local(), 1e-5));
         assert_ne!(out.meshes[0].model, next.meshes[0].model);
+    }
+
+    /// `scene(model)` with the gun's camera-local translation set to `x` along X, composed.
+    fn scene_with_local_x(model: Mat4, x: f32) -> RenderScene {
+        let mut s = scene(model);
+        let local = Mat4::from_translation(Vec3::new(x, -0.2, -0.5));
+        let locals = &mut s.viewmodel.as_mut().unwrap().locals;
+        locals[0].model = local;
+        locals[0].normal_matrix = Mat3::from_mat4(local);
+        compose_viewmodel(&mut s, model);
+        s
+    }
+
+    fn local_at(x: f32) -> Mat4 {
+        Mat4::from_translation(Vec3::new(x, -0.2, -0.5))
+    }
+
+    #[test]
+    fn a_moving_local_lands_halfway_at_half_alpha() {
+        let cam = camera_model(1.0, 0.3);
+        let (prev, next) = (scene_with_local_x(cam, 0.0), scene_with_local_x(cam, 0.2));
+        let out = blend(&prev, &data(cam), &next, &data(cam), 0.5);
+        assert!(out.meshes[0].model.abs_diff_eq(cam * local_at(0.1), 1e-5));
+        assert_ne!(out.meshes[0].model, next.meshes[0].model);
+    }
+
+    #[test]
+    fn a_moving_local_and_camera_blend_together() {
+        let (p, n) = (camera_model(0.0, 0.0), camera_model(2.0, 0.4));
+        let (prev, next) = (scene_with_local_x(p, 0.0), scene_with_local_x(n, 0.2));
+        let out = blend(&prev, &data(p), &next, &data(n), 0.5);
+        let blended = out.camera.view.inverse();
+        assert!(
+            out.meshes[0]
+                .model
+                .abs_diff_eq(blended * local_at(0.1), 1e-5)
+        );
+    }
+
+    #[test]
+    fn a_snapped_owner_takes_the_newer_local() {
+        let cam = camera_model(1.0, 0.3);
+        let (prev, next) = (scene_with_local_x(cam, 0.0), scene_with_local_x(cam, 0.2));
+        let mut next_data = data(cam);
+        next_data.snaps = vec![GUN];
+        let out = blend(&prev, &data(cam), &next, &next_data, 0.5);
+        assert_eq!(out.meshes[0].model, next.meshes[0].model);
+        assert_eq!(out.viewmodel, next.viewmodel);
+    }
+
+    #[test]
+    fn a_moving_flash_centre_lands_halfway() {
+        let cam = camera_model(1.0, 0.3);
+        let key = InstanceKey {
+            owner: GUN,
+            started: 0,
+            burst: true,
+            index: 0,
+        };
+        let moved = |z: f32| {
+            let mut s = scene(cam);
+            s.viewmodel.as_mut().unwrap().particles[0].center = Vec3::new(0.0, 0.1, z);
+            compose_viewmodel(&mut s, cam);
+            s
+        };
+        let (prev, next) = (moved(-0.6), moved(-0.8));
+        let keyed = |cam| BlendData {
+            particles: vec![key],
+            ..data(cam)
+        };
+        let out = blend(&prev, &keyed(cam), &next, &keyed(cam), 0.5);
+        assert!(
+            out.particles[0]
+                .center
+                .abs_diff_eq(cam.transform_point3(Vec3::new(0.0, 0.1, -0.7)), 1e-5)
+        );
     }
 
     #[test]

@@ -45,6 +45,7 @@ fn add_gun_at(scene: &mut RenderScene, local: Mat4) {
         ),
         locals: vec![ViewmodelLocal {
             mesh: scene.meshes.len() as u32 - 1,
+            owner: ludion_core::ids::EntityId::new(1, 0),
             model: local,
             normal_matrix: Mat3::IDENTITY,
         }],

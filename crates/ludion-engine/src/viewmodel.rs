@@ -171,9 +171,8 @@ pub(crate) fn apply(
 ) -> Option<ViewmodelData> {
     let camera = world.get::<Camera>(cam).ok().flatten().copied()?;
     let (lens, _) = lens(world, cam);
-    let cam_model = crate::extract::camera_entity_model(world, cam);
-    #[allow(clippy::disallowed_methods)] // render-side: GPU matrix, never reaches a hash
-    let cam_inverse = cam_model.as_dmat4().inverse();
+    let cam_model = camera_frame(world, cam);
+    let cam_inverse = camera_inverse(cam_model);
     let cam_rotation_t = Mat3::from_mat4(cam_model).transpose();
     let mut locals = Vec::new();
     for (index, (mesh, &owner)) in meshes.iter_mut().zip(owners).enumerate() {
@@ -184,6 +183,7 @@ pub(crate) fn apply(
         mesh.cast_shadows = false;
         locals.push(ViewmodelLocal {
             mesh: u32::try_from(index).ok()?,
+            owner,
             model: (cam_inverse * mesh.model.as_dmat4()).as_mat4(),
             normal_matrix: cam_rotation_t * mesh.normal_matrix,
         });
@@ -205,6 +205,15 @@ pub(crate) fn apply(
         locals,
         particles: Vec::new(),
     })
+}
+
+/// The frame a viewmodel item's local pose is measured in: the camera entity's rotation and
+/// translation with its scale dropped, matching the rotation-translation `compose_viewmodel`
+/// places locals onto. A scaled camera's scale stays in its children's locals.
+pub(crate) fn camera_frame(world: &World, cam: EntityId) -> Mat4 {
+    let (_, rotation, translation) =
+        crate::extract::camera_entity_model(world, cam).to_scale_rotation_translation();
+    Mat4::from_rotation_translation(rotation, translation)
 }
 
 /// The inverse of the camera's model, in f64, that [`camera_local`] measures poses against.

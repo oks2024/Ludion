@@ -397,3 +397,51 @@ fn a_viewmodel_emitter_does_not_move_the_world_hash() {
         );
     }
 }
+
+/// Two columns point along the same line (either sign), within a relative tolerance.
+fn parallel(a: ludion_core::math::glam::Vec3, b: ludion_core::math::glam::Vec3) -> bool {
+    a.cross(b).length() <= 1e-4 * a.length().max(1e-6) * b.length().max(1e-6)
+}
+
+#[test]
+fn a_scaled_camera_draws_its_child_gun_at_the_extracted_world_pose() {
+    let scaled = |flag| {
+        scene("", flag, "")
+            .replacen(
+                "      Transform: {}\n      Camera: {}",
+                "      Transform:\n        scale:\n          - 2.0\n          - 2.0\n          - 2.0\n      Camera: {}",
+                1,
+            )
+            .replacen(
+                "      Transform: {}\n      Mesh:",
+                "      Transform:\n        translation:\n          - 0.1\n          - -0.2\n          - -0.5\n      Mesh:",
+                1,
+            )
+    };
+    let flagged = extract(&mut engine_for(&scaled(FLAG)));
+    let world = extract(&mut engine_for(&scaled(None)));
+    let index = flagged
+        .viewmodel
+        .as_ref()
+        .expect("a viewmodel packet")
+        .locals[0]
+        .mesh as usize;
+    let (gun, reference) = (&flagged.meshes[index], &world.meshes[index]);
+    assert!(
+        (reference.model.x_axis.truncate().length() - 2.0).abs() < 1e-5,
+        "the camera scale reaches its child"
+    );
+    assert!(
+        gun.model.abs_diff_eq(reference.model, 1e-5),
+        "{:?} vs {:?}",
+        gun.model,
+        reference.model
+    );
+    for (a, b) in [
+        (gun.normal_matrix.x_axis, reference.normal_matrix.x_axis),
+        (gun.normal_matrix.y_axis, reference.normal_matrix.y_axis),
+        (gun.normal_matrix.z_axis, reference.normal_matrix.z_axis),
+    ] {
+        assert!(parallel(a, b), "{a:?} vs {b:?}");
+    }
+}

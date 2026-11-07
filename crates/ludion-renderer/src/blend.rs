@@ -207,6 +207,11 @@ pub fn blend(
     blend_particles(prev_scene, prev, next, next_data, alpha, &mut out);
     blend_bullets(prev_scene, prev, next_data, alpha, &mut out);
 
+    let locals_moved = blend_viewmodel(prev_scene, prev, next_data, alpha, &mut out);
+
+    // The drawn camera the viewmodel composes onto: the blended one, else the newer tick's when
+    // only a local pose or flash centre moved.
+    let mut camera_model = None;
     if let (Some(p), Some(n)) = (&prev.camera, &next_data.camera)
         && p.key == n.key
         && next_data.snaps.binary_search(&n.key).is_err()
@@ -216,7 +221,7 @@ pub fn blend(
         if model.is_finite() && model.determinant().abs() > DET_EPS {
             out.camera.view = model.inverse();
             out.camera.position = model.w_axis.truncate();
-            compose_viewmodel(&mut out, model);
+            camera_model = Some(model);
             if let (Some(a), Some(b)) = (p.fov_y_deg, n.fov_y_deg) {
                 let fov = a + (b - a) * alpha;
                 out.camera.projection =
@@ -224,7 +229,86 @@ pub fn blend(
             }
         }
     }
+    if camera_model.is_none() && locals_moved {
+        camera_model = next_data.camera.map(|c| c.model);
+    }
+    if let Some(model) = camera_model {
+        compose_viewmodel(&mut out, model);
+    }
     out
+}
+
+/// Interpolates the viewmodel's camera-local poses and flash centres between the two ticks, so a
+/// recoil or sway moves smoothly beside the blended camera. Meshes pair by owner (the n-th
+/// occurrence with the n-th), flash particles by [`InstanceKey`]; a snapped owner takes the newer
+/// local. Returns whether anything changed, which means `out` needs a fresh compose.
+fn blend_viewmodel(
+    prev_scene: &RenderScene,
+    prev: &BlendData,
+    next_data: &BlendData,
+    alpha: f32,
+    out: &mut RenderScene,
+) -> bool {
+    let (Some(prev_vm), Some(_)) = (&prev_scene.viewmodel, &out.viewmodel) else {
+        return false;
+    };
+    let keyed_particles = prev.particles.len() == prev_scene.particles.len()
+        && next_data.particles.len() == out.particles.len()
+        && sorted(&prev.particles, |k| *k)
+        && sorted(&next_data.particles, |k| *k);
+    let Some(mut vm) = out.viewmodel.take() else {
+        return false;
+    };
+    let mut changed = false;
+
+    for i in 0..vm.locals.len() {
+        let owner = vm.locals[i].owner;
+        if next_data.snaps.binary_search(&owner).is_ok() {
+            continue;
+        }
+        let nth = vm.locals[..i].iter().filter(|l| l.owner == owner).count();
+        let Some(old) = prev_vm.locals.iter().filter(|l| l.owner == owner).nth(nth) else {
+            continue;
+        };
+        let local = &mut vm.locals[i];
+        if old.model == local.model {
+            continue;
+        }
+        let model = trs_lerp(old.model, local.model, alpha);
+        if !model.is_finite() {
+            continue;
+        }
+        let (scale, rotation, _) = model.to_scale_rotation_translation();
+        let inverse_scale = scale.map(|s| if s == 0.0 { 0.0 } else { 1.0 / s });
+        local.model = model;
+        local.normal_matrix = Mat3::from_quat(rotation) * Mat3::from_diagonal(inverse_scale);
+        changed = true;
+    }
+
+    if keyed_particles {
+        for local in &mut vm.particles {
+            let Some(key) = next_data.particles.get(local.particle as usize) else {
+                continue;
+            };
+            if next_data.snaps.binary_search(&key.owner).is_ok() {
+                continue;
+            }
+            let Some(old) = prev_vm
+                .particles
+                .iter()
+                .find(|p| prev.particles.get(p.particle as usize) == Some(key))
+            else {
+                continue;
+            };
+            if old.center != local.center {
+                local.center = old.center.lerp(local.center, alpha);
+                changed = true;
+            }
+        }
+    }
+
+    out.viewmodel = Some(vm);
+    changed
 }
 
 /// Substitutes a latched camera's rotation into `scene`, keeping its drawn position.

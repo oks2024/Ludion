@@ -54,3 +54,4 @@ So the engine needs a viewmodel layer: a per-entity flag, an own projection and 
 - **3** shipped: SSAO, SSR and DoF exclude gun pixels (decision 12); `viewmodel-ssao` gallery scene.
 - **4a** shipped: viewmodel-layer particles (decision 13) and the fog evidence; `viewmodel-muzzle` gallery scene (macOS golden blessed on an unpinned machine; pinned blesses owed). The `camera` docs topic section is 4b.
 - **4b** shipped: the `viewmodel` docs topic (`docs/viewmodel.md`) and its cross-links from `camera`, `post-processing`, `particles` and `components`.
+- **Review fixes** shipped: blended gun locals and flash centres under `present_interpolation`, gun bounds over the gun's assets only, locals measured against the unscaled camera frame.
