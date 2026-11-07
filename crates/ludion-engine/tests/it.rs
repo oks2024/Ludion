@@ -83,6 +83,7 @@ mod presentation;
 mod presenter;
 mod profile_capture;
 mod projectiles;
+mod projectiles_extract_bench;
 mod quality;
 mod query_drift;
 mod ragdoll;

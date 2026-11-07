@@ -207,3 +207,4 @@ its `Collider` changes, reported once per offender. Rapier mapping: `ludion devd
 - `ludion docs collision-layers` — which pairs never meet, and query filters.
 - `ludion docs physics-joints` — the `Joint` and `JointMotor` components.
 - `ludion docs physics-time-scale` — `scale_time`, `freeze`, hit-stop.
+- `ludion docs projectiles` — pooled 3D shots swept against physics and the `spatial3d` index.

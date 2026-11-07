@@ -219,3 +219,4 @@ you take by hand (the file is the pattern's only truth; there is no wire method 
 - `ludion docs collision` — `Plane`, the spatial queries a hit system builds on.
 - `ludion docs components` — the built-in component table, including `Volley` and `PatternPlayer`.
 - `ludion docs game-clock` — `GameClock`, and freezing a whole field of bullets on demand.
+- `ludion docs projectiles` — pooled 3D shots swept against physics and the `spatial3d` index.

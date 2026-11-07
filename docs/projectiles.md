@@ -1,0 +1,132 @@
+---
+description: Pooled 3D projectiles — swept against physics and the spatial3d index, hit responses, drawing
+---
+
+# Projectiles: thousands of fast 3D shots, swept deterministically
+
+**Scope:** `ProjectileConfig`, the pool resource `Projectiles`, `spawn_projectile`,
+`projectiles_step`, its events, `ProjectileVisuals`. For 2D bullet fields use `ludion docs
+patterns`; for one-off physics bodies use `ludion docs physics`.
+
+## The loop
+
+1. Configure: `.projectiles(ProjectileConfig { capacity: 5_000, ..default })`. Without it there is no
+   pool and nothing in `WorldHash` changes.
+2. Schedule `projectiles_step` **after** `spatial3d_rebuild`, and every system that reads its events
+   after the step. The game schedules it; nothing runs it implicitly.
+3. Fire with `spawn_projectile(world, ProjectileDesc)`; a refusal is `L4026`, never a panic.
+4. Read `Projectiles::events()` (`hits`, `expired`) in a later system.
+5. Prove it: `ludion sim-hash` or a test over `WorldHash`.
+
+```rust
+Engine::builder()
+    .projectiles(ProjectileConfig::default())
+    .projectile_visuals(visuals())
+    .system("spatial3d_rebuild", spatial3d::rebuild::<Transform, TransformHierarchy>)
+    .system("fire", fire)
+    .system("projectiles_step", projectiles_step)
+    .system("score", score) // reads p.events().hits
+```
+
+The full runnable game is `crates/ludion/examples/projectiles.rs`
+(`cargo run -p ludion --example projectiles`).
+
+## Format
+
+`ProjectileConfig` (host setting, validated at build; invalid is `L4027`):
+
+| Field | Default | Range / meaning |
+| --- | --- | --- |
+| `capacity` | `1024` | `1..=1048576` live shots |
+| `gravity` | `[0, -9.81, 0]` | finite m/s²; scaled per shot by `gravity_scale` |
+| `targets` | all bits | layer mask of the `spatial3d` index a shot can hit |
+| `ignore_layers` | `[]` | `physics.layers` names the sweep skips |
+| `include_sensors` | `false` | whether sensor colliders are hit |
+
+`ProjectileDesc::new(position, velocity)` is a ray with no gravity or drag, ten seconds to live,
+despawning on its first hit. Set fields after it:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `gravity_scale`, `drag` | `0`, `0` | `v *= 1 / (1 + drag·dt)` per tick; `drag >= 0` |
+| `radius` | `0` | sweep radius; `0` is a ray |
+| `owner` | `None` | a `Handle` this shot never hits (the shooter) |
+| `lifetime` | `10` | seconds, `> 0`; expiry emits an `Expired` event |
+| `tag` | `0` | opaque `u32`, echoed in every event |
+| `response` | `Despawn` | `Despawn`, `Reflect { restitution, max_bounces }`, `Pierce { max }`, `Stop` |
+
+## Rules
+
+- **Per tick** the step integrates gravity and drag, then sweeps each shot's travel against the
+  physics world (the last completed physics step) and the `spatial3d` index, and resolves the first
+  hit by its response inside the step, so a ricochet continues the remaining travel the same tick.
+  Casts fan out over `ludion_core::par`; results are identical at any thread count.
+- **Responses:** `Reflect` bounces `v − (1 + restitution)(v·n)n` and the hit after `max_bounces`
+  despawns. `Pierce` passes through up to `max` **index targets**; a world (physics) hit always
+  despawns. `Stop` parks the shot at the contact. Reflect and Pierce never re-hit the surface they
+  just left.
+- **Projectiles are not in the target index.** Shots never hit each other; put targets in the index
+  with `SpatialVolume` (`ludion docs spatial-3d`).
+- **Events** (`HitEvent`: id, handle, point, normal, `t`, arrival velocity, tag, outcome; `Expired`)
+  are valid until the next step, ordered by slot then hit order. A held frame (`game_dt == 0`)
+  freezes every shot.
+- **Hashing:** `WorldHash` folds the pool as one block, only while the resource exists. Engine
+  snapshots carry the pool, its generations, free list and pending events, and the `spatial3d` index;
+  a restore reproduces the uninterrupted trace.
+- **Diagnostics:** `L4026` refused spawn (once per cause), `L4027` invalid config, `L4028` invalid
+  visuals, `L4029` unresolved muzzle, `L4030` a pool holding shots whose step never ran (usually an
+  unscheduled `projectiles_step`).
+
+## Game-code recipes
+
+The engine owns motion and the first hit; behaviour is the game's, driven by events and `tag`.
+
+```rust
+// Homing: steer toward a target each tick before the step.
+let projectiles = world.resource_mut::<Projectiles>().unwrap();
+let at = projectiles.pool().position(id).unwrap();
+projectiles.pool_mut().set_velocity(id, scale(normalize(target - at), speed));
+
+// Splash and damage: on a HitEvent, query the index and look the tag up in your own table.
+for hit in projectiles.events().hits.clone() {
+    index.overlap_sphere(hit.point, radius, &Filter::new(ACTORS), &mut near);
+    apply_damage(damage_for(hit.tag), &near);
+}
+```
+
+## Drawing
+
+`.projectile_visuals(ProjectileVisuals)` is a per-tag table with a `fallback` for tags without an entry:
+
+| `ProjectileVisual` field | Default | Meaning |
+| --- | --- | --- |
+| `look` | `Billboard { softness: 1.0 }` | also `Cube`, `Sphere`, `Hidden` |
+| `size` | `0.05` | metres, positive and finite |
+| `stretch` | `0` | seconds of travel in the streak: length `max(size, speed·stretch)` along the heading |
+| `color` | white | linear RGBA |
+| `emissive` | `4` | mesh emissive strength or billboard RGB multiplier |
+| `additive` | `true` | billboard only |
+
+Shots join the scene pass's existing instanced draws; there is no new pass. Under
+`present_interpolation` they interpolate between ticks. `muzzle: Some("gun")` names a `Viewmodel`
+entity: a shot first seen by extract is drawn leaving that point and eases onto its simulated path
+over `converge_distance` (default 4 m). The offset is render-only and never reaches the sim or the
+hash. A one-shot render (`ludion render`), a restore and the first frame after a load extract
+unprimed, so shots in flight draw at their simulated position.
+
+## Gotchas
+
+- Scheduling `projectiles_step` before `spatial3d_rebuild` sweeps the previous tick's index; never
+  scheduling it is `L4030`.
+- Pierce counts index targets only; a pierce shot into a wall still despawns.
+- A shot spawned already touching a collider hits at `t = 0`.
+- Events are gone after the next step: copy what you need in the same tick.
+- Cost at 5,000 live shots is measured by `cargo test -p ludion-projectiles --release --test
+  bulk_bench -- --ignored --nocapture`; keep damage and homing work proportional to hits, not shots.
+
+## Next
+
+- `ludion docs spatial-3d` — the target index, `SpatialVolume`, queries for splash.
+- `ludion docs physics` — the colliders a shot sweeps against, `physics.layers`.
+- `ludion docs viewmodel` — the first-person gun a muzzle names.
+- `ludion docs patterns` — 2D bullet volleys (a separate system).

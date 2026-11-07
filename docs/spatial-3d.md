@@ -90,3 +90,4 @@ index.k_nearest(origin, 2, 50.0, &filter, &mut near);
 
 - `ludion docs collision` — the 2D `Collider` grid and its queries.
 - `ludion docs systems` — the system contract and schedule order.
+- `ludion docs projectiles` — pooled 3D shots swept against physics and the `spatial3d` index.

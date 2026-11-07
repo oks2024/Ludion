@@ -381,6 +381,7 @@ Requests from the external game's `ludion-requests/`, one at a time, each a mini
 - Cloth, soft bodies, fluids, destruction: never in this plan; each needs a written case.
 - Continuous collision detection: speculative contacts cover bullets-through-walls at the sim rate;
   full CCD only if a slice shows tunnelling the substep count cannot fix.
+  Fast 3D shots sweep with `first_hit` in the projectile pool instead (`Plan/bulk-projectiles.md`).
 - A physics debug view in the editor: rides the parity gate — the wireframe is a `render.*` flag
   first, then a peer-client toggle.
 - Island parallelism: excluded by `enhanced-determinism`; only reachable by leaving rapier.

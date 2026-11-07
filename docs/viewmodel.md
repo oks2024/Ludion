@@ -106,3 +106,4 @@ construction; put it on a world emitter. `ludion docs particles`.
 - `ludion docs camera` — the first-person rig and its kick channels.
 - `ludion docs presentation` — presentation entities.
 - `ludion docs particles` — `ParticleEmitter`.
+- `ludion docs projectiles` — pooled 3D shots swept against physics and the `spatial3d` index.
