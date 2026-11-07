@@ -27,7 +27,7 @@ impl RenderScene {
     /// The frame's world view-projection with the depth remap folded in: `projection * view`
     /// unchanged when no viewmodel is drawn, else the world occupies depth `[s, 1]` of
     /// [`ViewmodelData::depth_slice`]. Every world depth-writing draw and every depth decode
-    /// (through its inverse) reads this or [`RenderScene::viewmodel_view_proj`].
+    /// (through its inverse) reads this or `RenderScene::viewmodel_view_proj`.
     pub fn depth_view_proj(&self) -> Mat4 {
         let view_proj = self.camera.projection * self.camera.view;
         match &self.viewmodel {
