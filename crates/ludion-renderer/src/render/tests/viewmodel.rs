@@ -1,7 +1,7 @@
 //! The viewmodel's depth slice: GPU tests over the remapped depth buffer.
 
 use super::*;
-use crate::viewmodel::{ViewmodelData, ViewmodelLocal, compose_viewmodel};
+use crate::viewmodel::{ViewmodelData, ViewmodelLocal, ViewmodelParticle, compose_viewmodel};
 use ludion_core::math::glam::Mat4;
 
 const PX: u32 = 64;
@@ -48,6 +48,7 @@ fn add_gun_at(scene: &mut RenderScene, local: Mat4) {
             model: local,
             normal_matrix: Mat3::IDENTITY,
         }],
+        particles: Vec::new(),
     });
     compose_viewmodel(scene, scene.camera.view.inverse());
 }
@@ -739,6 +740,143 @@ fn needs_gpu_gun_pixels_take_no_ao_ssr_or_dof() {
         assert!(
             worst <= 2,
             "post touched the gun at ({x}, {y}): {worst} LSB"
+        );
+    }
+}
+
+/// A close wall with a bright additive flash at camera-local z −0.5, behind the wall's face in
+/// world depth. The flash is listed in the lens data, so it draws through the gun's depth slice.
+fn flash_scene() -> RenderScene {
+    let mut scene = gun_scene();
+    scene
+        .meshes
+        .push(slab(Vec3::new(0.0, 0.0, -0.35), 0.2, SLAB_COLOR));
+    let local = Vec3::new(0.0, 0.0, -0.5);
+    scene.particles.push(ParticleInstance {
+        additive: true,
+        viewmodel: true,
+        ..particle(local, 0.2, [0.0, 1.0, 0.0, 1.0], 0.0)
+    });
+    scene.viewmodel = Some(ViewmodelData {
+        fov_y_deg: 55.0,
+        near: 0.01,
+        depth_slice: SLICE,
+        projection: Mat4::perspective_rh(
+            55.0_f32.to_radians(),
+            crate::scene::aspect_ratio((PX, PX)),
+            0.01,
+            1000.0,
+        ),
+        locals: Vec::new(),
+        particles: vec![ViewmodelParticle {
+            particle: 0,
+            center: local,
+            right: Vec3::X,
+            up: Vec3::Y,
+        }],
+    });
+    let model = scene.camera.view.inverse();
+    compose_viewmodel(&mut scene, model);
+    scene
+}
+
+/// [`flash_scene`] with the flash removed but the lens kept, so the world's depth remap matches.
+fn without_flash(scene: &RenderScene) -> RenderScene {
+    let mut off = scene.clone();
+    off.particles.clear();
+    off.viewmodel.as_mut().unwrap().particles.clear();
+    off
+}
+
+/// A flash behind a close wall in world depth still shows: it draws in the gun's slice. Flagged off
+/// it is an ordinary world particle and the wall hides it. Skips with no GPU.
+#[test]
+fn needs_gpu_a_viewmodel_particle_draws_in_front_of_a_close_wall() {
+    let Some(renderer) = skip_or_renderer("a_viewmodel_particle_draws_in_front_of_a_close_wall")
+    else {
+        return;
+    };
+    let size = FrameSize::native(PX, PX);
+    let scene = flash_scene();
+    let wall = renderer.render(&without_flash(&scene), size).expect("wall");
+    let flash = renderer.render(&scene, size).expect("flash");
+    let (wall_px, flash_px) = (
+        rgb_at(&wall, PX / 2, PX / 2),
+        rgb_at(&flash, PX / 2, PX / 2),
+    );
+    assert!(
+        flash_px[1] > wall_px[1] + 100,
+        "the flash is hidden by the wall: {flash_px:?} vs {wall_px:?}"
+    );
+
+    let mut world = scene.clone();
+    world.particles[0].viewmodel = false;
+    world.viewmodel = None;
+    let hidden = renderer.render(&world, size).expect("world particle");
+    let bare = rgb_at(&hidden, PX / 2, PX / 2);
+    assert!(
+        bare[1] < wall_px[1] + 10,
+        "a world particle behind the wall shows: {bare:?}"
+    );
+}
+
+/// The flash writes nothing to the transparent layer: it matches the frame without the flash.
+/// Skips with no GPU.
+#[test]
+fn needs_gpu_a_viewmodel_particle_writes_no_transparent_layer() {
+    let Some(renderer) = skip_or_renderer("a_viewmodel_particle_writes_no_transparent_layer")
+    else {
+        return;
+    };
+    let size = FrameSize::native(PX, PX);
+    let scene = flash_scene();
+    let with = layer_texels(&renderer, &scene, size);
+    let without = layer_texels(&renderer, &without_flash(&scene), size);
+    assert!(
+        with.iter().zip(&without).all(|(a, b)| a == b),
+        "the flash wrote into the transparent layer"
+    );
+}
+
+/// The gun is decoded as a world surface just under the near plane, so fog sees it at about
+/// `near`, not its true distance. Under dense fog the mean gun-pixel change stays within what fog
+/// at `near` does, plus two LSB. Skips with no GPU.
+#[test]
+fn needs_gpu_gun_fog_is_bounded_by_the_near_plane() {
+    let Some(renderer) = skip_or_renderer("gun_fog_is_bounded_by_the_near_plane") else {
+        return;
+    };
+    let size = FrameSize::native(PX, PX);
+    let sigma = 0.5_f32;
+    let near = 0.1_f32;
+    let mut scene = gun_scene();
+    add_gun(&mut scene);
+    let mask = gun_mask(&renderer, &scene);
+    let dense = PostData {
+        fog_density: sigma,
+        fog_color: FOG_COLOR,
+        ..exact_post()
+    };
+    let clear = renderer.render(&scene, size).expect("gun, no fog");
+    scene.post = Some(dense);
+    let fogged = renderer.render(&scene, size).expect("gun, fog");
+
+    let amount = 1.0 - (-sigma * near).exp();
+    for channel in 0..3 {
+        let mean = |image: &RenderedImage| {
+            mask.iter()
+                .map(|&(x, y)| f32::from(rgb_at(image, x, y)[channel]))
+                .sum::<f32>()
+                / mask.len() as f32
+        };
+        let measured = (mean(&fogged) - mean(&clear)).abs();
+        let c = GUN_COLOR[channel];
+        let at_near =
+            (srgb8_from_linear(c + amount * (FOG_COLOR[channel] - c)) - srgb8_from_linear(c)).abs();
+        eprintln!("gun fog, channel {channel}: measured {measured:.2} LSB, bound {at_near:.2}");
+        assert!(
+            measured <= at_near + 2.0,
+            "channel {channel}: fog moved the gun {measured} LSB, over {at_near} + 2"
         );
     }
 }

@@ -128,7 +128,7 @@ pub use sun_cascade::{
     SunCascadeStats, SunCascades, fit_sun_cascades, sun_atlas_grid, sun_atlas_tile,
     sun_cascade_stats,
 };
-pub use viewmodel::{ViewmodelData, ViewmodelLocal, compose_viewmodel};
+pub use viewmodel::{ViewmodelData, ViewmodelLocal, ViewmodelParticle, compose_viewmodel};
 // Re-exported so callers can write PNGs / hold rendered pixels, own a live-streaming readback or
 // pass-timing ring, or attach a window surface, without also depending on `ludion-render-graph`
 // directly.

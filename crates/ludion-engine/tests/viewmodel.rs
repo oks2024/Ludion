@@ -102,6 +102,35 @@ fn inverse(m: Mat4) -> Mat4 {
 
 const FLAG: Option<&str> = Some("Viewmodel: {}");
 
+/// A presentation emitter parented to the camera, past the gun; `flagged` carries its own marker.
+fn emitter(flagged: bool) -> String {
+    let flag = if flagged { "      Viewmodel: {}\n" } else { "" };
+    format!(
+        "  - name: flash
+    presentation: true
+    components:
+      Parent:
+        index: 0
+        generation: 0
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - -0.5
+      ParticleEmitter:
+        rate: 20.0
+        life:
+          - 1.0
+          - 1.0
+        speed:
+          - 0.2
+          - 0.2
+        blend: additive
+        seed: 5
+{flag}"
+    )
+}
+
 /// The one viewmodel item of a scene extracted with the flag.
 fn gun(scene: &RenderScene) -> &ludion_renderer::MeshInstance {
     let local = &scene.viewmodel.as_ref().expect("a viewmodel packet").locals;
@@ -288,4 +317,83 @@ fn the_gi_grid_does_not_see_the_gun() {
     )));
     let grid = no_gun.voxel.as_ref().expect("the world builds a grid");
     assert_eq!(flagged.voxel.as_ref(), Some(grid));
+}
+
+#[test]
+fn a_flagged_emitter_extracts_camera_local_particles() {
+    let scene = extract(&mut engine_for(&scene("", None, &emitter(true))));
+    let data = scene.viewmodel.as_ref().expect("lens data for the flash");
+    assert!(data.locals.is_empty());
+    assert!(!scene.particles.is_empty());
+    assert!(scene.particles.iter().all(|p| p.viewmodel));
+    assert_eq!(data.particles.len(), scene.particles.len());
+    let model = inverse(scene.camera.view);
+    for listed in &data.particles {
+        let drawn = &scene.particles[listed.particle as usize];
+        assert!(
+            drawn
+                .center
+                .abs_diff_eq(model.transform_point3(listed.center), 1e-4),
+            "{drawn:?} vs {listed:?}"
+        );
+        assert!((listed.center.z + 0.5).abs() < 0.5, "{:?}", listed.center);
+        assert!(
+            listed
+                .right
+                .abs_diff_eq(ludion_core::math::glam::Vec3::X, 1e-6)
+        );
+    }
+}
+
+#[test]
+fn the_latched_flash_follows_the_latched_camera() {
+    let mut engine = engine_for(&scene("", None, &emitter(true)));
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+    let mut packet = engine.extract_present_scene().expect("extracts").0;
+    let before = packet.particles[0].center;
+    let latch = engine.present_camera_latch().expect("a first-person rig");
+    let tick = latch.resolve([0.0; 2]).expect("resolves");
+    let latched = latch.resolve([15.0, 4.0]).expect("resolves");
+    latch_camera(&mut packet, &tick, &latched);
+    let model = inverse(packet.camera.view);
+    let local = packet.viewmodel.as_ref().unwrap().particles[0].center;
+    assert!(
+        packet.particles[0]
+            .center
+            .abs_diff_eq(model.transform_point3(local), 1e-4)
+    );
+    assert_ne!(packet.particles[0].center, before);
+}
+
+#[test]
+fn a_track_rig_draws_the_flash_as_a_world_emitter() {
+    let track = scene("", None, &emitter(true)).replace("first_person: {}", "track: {}");
+    let scene = extract(&mut engine_for(&track));
+    assert!(scene.viewmodel.is_none());
+    assert!(!scene.particles.is_empty());
+    assert!(scene.particles.iter().all(|p| !p.viewmodel));
+}
+
+#[test]
+fn an_unflagged_emitter_leaves_the_frame_without_viewmodel_data() {
+    let scene = extract(&mut engine_for(&scene("", None, &emitter(false))));
+    assert!(scene.viewmodel.is_none());
+    assert!(scene.particles.iter().all(|p| !p.viewmodel));
+}
+
+#[test]
+fn a_viewmodel_emitter_does_not_move_the_world_hash() {
+    let mut with = engine_for(&scene("", FLAG, &emitter(true)));
+    let mut without = engine_for(&scene("", FLAG, &emitter(false)));
+    for tick in 0..10 {
+        with.advance_live();
+        without.advance_live();
+        assert_eq!(
+            with.world_hash().unwrap(),
+            without.world_hash().unwrap(),
+            "tick {tick}"
+        );
+    }
 }

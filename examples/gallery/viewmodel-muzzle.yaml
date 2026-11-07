@@ -1,0 +1,163 @@
+# Feature: Viewmodel particles — a muzzle flash is a `ParticleEmitter` flagged `Viewmodel`, so it
+# simulates in the first-person camera's frame and draws in the gun's depth slice: it shows in front
+# of a wall 0.25 from the eye even though it spawns past the wall's face, and blooms
+# (`ludion docs camera`).
+format: 1
+name: "viewmodel-muzzle - a muzzle flash past a close wall draws in front of it"
+seed: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.6
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 70.0
+      CameraRig:
+        target:
+          index: 1
+          generation: 0
+        rig:
+          mode:
+            first_person: {}
+      ViewmodelLens: {}
+      PostProcess:
+        bloom_strength: 0.35
+        bloom_threshold: 1.0
+  - name: hero
+    components:
+      Transform: {}
+  - name: sun
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.4
+          - -0.7
+          - -0.5
+        color:
+          - 1.0
+          - 0.96
+          - 0.88
+        intensity: 2.4
+  - name: lamp
+    components:
+      Transform:
+        translation:
+          - 0.6
+          - 2.4
+          - 0.8
+      PointLight:
+        color:
+          - 1.0
+          - 0.85
+          - 0.6
+        intensity: 2.0
+        range: 8.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - -10.0
+        scale:
+          - 40.0
+          - 1.0
+          - 40.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.42
+          - 0.46
+          - 0.4
+          - 1.0
+        roughness: 0.9
+  - name: wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.6
+          - -1.75
+        scale:
+          - 4.0
+          - 3.0
+          - 3.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.78
+          - 0.3
+          - 0.26
+          - 1.0
+        roughness: 0.7
+  - name: gun
+    presentation: true
+    components:
+      Parent:
+        index: 0
+        generation: 0
+      Transform:
+        translation:
+          - 0.22
+          - -0.18
+          - -0.45
+        scale:
+          - 0.08
+          - 0.08
+          - 0.45
+      Mesh:
+        shape: cube
+        color:
+          - 0.1
+          - 0.9
+          - 0.35
+          - 1.0
+        roughness: 0.4
+      Viewmodel: {}
+  - name: muzzle-flash
+    presentation: true
+    components:
+      Parent:
+        index: 0
+        generation: 0
+      Transform:
+        translation:
+          - 0.22
+          - -0.18
+          - -0.72
+        rotation:
+          - -90.0
+          - 0.0
+          - 0.0
+      ParticleEmitter:
+        shape: point
+        rate: 60.0
+        life:
+          - 0.25
+          - 0.4
+        speed:
+          - 0.4
+          - 0.9
+        spread_deg: 20.0
+        start_size: 0.14
+        end_size: 0.04
+        start_color:
+          - 6.0
+          - 4.0
+          - 1.5
+          - 1.0
+        end_color:
+          - 3.0
+          - 1.0
+          - 0.2
+          - 0.0
+        blend: additive
+        softness: 0.9
+        seed: 7
+      Viewmodel: {}

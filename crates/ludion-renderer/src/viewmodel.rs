@@ -3,7 +3,7 @@
 //! the frame's drawn camera, shared by extract, [`blend`](crate::blend) and
 //! [`latch_camera`](crate::latch_camera).
 
-use ludion_core::math::glam::{Mat3, Mat4, Vec4};
+use ludion_core::math::glam::{Mat3, Mat4, Vec3, Vec4};
 
 use crate::scene::RenderScene;
 
@@ -55,6 +55,21 @@ pub struct ViewmodelData {
     pub projection: Mat4,
     /// One entry per composed item, ascending by [`ViewmodelLocal::mesh`].
     pub locals: Vec<ViewmodelLocal>,
+    /// One entry per flagged particle, ascending by [`ViewmodelParticle::particle`].
+    pub particles: Vec<ViewmodelParticle>,
+}
+
+/// A flagged particle's centre and billboard axes in the drawn camera's frame.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ViewmodelParticle {
+    /// Index into [`RenderScene::particles`].
+    pub particle: u32,
+    /// Camera-local centre.
+    pub center: Vec3,
+    /// Camera-local billboard right.
+    pub right: Vec3,
+    /// Camera-local billboard up.
+    pub up: Vec3,
 }
 
 /// A composed mesh's pose in the drawn camera's frame.
@@ -81,6 +96,12 @@ pub fn compose_viewmodel(scene: &mut RenderScene, camera_model: Mat4) {
         mesh.model = camera_model * local.model;
         mesh.normal_matrix = rotation * local.normal_matrix;
     }
+    for local in &data.particles {
+        let particle = &mut scene.particles[local.particle as usize];
+        particle.center = camera_model.transform_point3(local.center);
+        particle.right = rotation * local.right;
+        particle.up = rotation * local.up;
+    }
 }
 
 #[cfg(test)]
@@ -90,13 +111,15 @@ mod tests {
 
     use super::*;
     use crate::blend::{BlendData, CameraBlend, blend, latch_camera};
-    use crate::scene::{MeshInstance, MeshShape};
+    use crate::scene::{MeshInstance, MeshShape, ParticleInstance};
 
     const CAMERA: EntityId = EntityId::new(1, 0);
 
     fn camera_model(x: f32, yaw: f32) -> Mat4 {
         Mat4::from_rotation_translation(Quat::from_rotation_y(yaw), Vec3::new(x, 1.0, 2.0))
     }
+
+    const PARTICLE_LOCAL: Vec3 = Vec3::new(0.0, 0.1, -0.6);
 
     fn local() -> Mat4 {
         Mat4::from_translation(Vec3::new(0.3, -0.2, -0.5))
@@ -133,6 +156,23 @@ mod tests {
                 model: local,
                 normal_matrix: Mat3::from_mat4(local),
             }],
+            particles: vec![ViewmodelParticle {
+                particle: 0,
+                center: PARTICLE_LOCAL,
+                right: Vec3::X,
+                up: Vec3::Y,
+            }],
+        });
+        scene.particles.push(ParticleInstance {
+            center: Vec3::ZERO,
+            right: Vec3::ZERO,
+            up: Vec3::ZERO,
+            size: 0.1,
+            color: [1.0; 4],
+            softness: 0.0,
+            additive: true,
+            lit: false,
+            viewmodel: true,
         });
         scene.camera.view = camera_model.inverse();
         scene.camera.position = camera_model.w_axis.truncate();
@@ -173,6 +213,7 @@ mod tests {
             depth_slice: s,
             projection: Mat4::perspective_rh(0.9, 1.0, 0.01, 100.0),
             locals: Vec::new(),
+            particles: Vec::new(),
         });
         scene
     }
@@ -212,6 +253,24 @@ mod tests {
         }
     }
 
+    /// Every gun depth `d` in `[0, s)` decodes through the world inverse to a view distance just
+    /// under the world near plane, so fog and shafts see the gun at about `near`.
+    #[test]
+    fn gun_depths_decode_to_just_under_the_world_near() {
+        let s = lens_scene(0.01);
+        let inverse = s.depth_view_proj().inverse();
+        let near = 0.1;
+        for step in 0..=100 {
+            let d = 0.01 * (step as f32 / 100.0) * 0.999;
+            let p = inverse * Vec4::new(0.0, 0.0, d, 1.0);
+            let distance = -p.z / p.w;
+            assert!(
+                (0.98 * near - 1e-5..=near + 1e-5).contains(&distance),
+                "d = {d}: decoded to {distance}"
+            );
+        }
+    }
+
     #[test]
     fn an_identity_local_composes_to_the_camera() {
         let model = camera_model(3.0, 0.7);
@@ -248,6 +307,53 @@ mod tests {
         let blended = out.camera.view.inverse();
         assert!(out.meshes[0].model.abs_diff_eq(blended * local(), 1e-5));
         assert_ne!(out.meshes[0].model, next.meshes[0].model);
+    }
+
+    #[test]
+    fn a_listed_particle_composes_onto_the_camera() {
+        let model = camera_model(3.0, 0.7);
+        let s = scene(model);
+        let p = &s.particles[0];
+        assert!(
+            p.center
+                .abs_diff_eq(model.transform_point3(PARTICLE_LOCAL), 1e-6)
+        );
+        assert!(p.right.abs_diff_eq(model.transform_vector3(Vec3::X), 1e-6));
+        assert!(p.up.abs_diff_eq(model.transform_vector3(Vec3::Y), 1e-6));
+    }
+
+    #[test]
+    fn latching_moves_a_listed_particle_with_the_camera() {
+        let (tick, latched) = (camera_model(0.0, 0.0), camera_model(0.0, 0.3));
+        let mut s = scene(tick);
+        let blend_of = |model| CameraBlend {
+            key: CAMERA,
+            model,
+            fov_y_deg: None,
+            near: 0.1,
+            far: 100.0,
+            aspect: 1.0,
+        };
+        latch_camera(&mut s, &blend_of(tick), &blend_of(latched));
+        assert!(
+            s.particles[0]
+                .center
+                .abs_diff_eq(latched.transform_point3(PARTICLE_LOCAL), 1e-5)
+        );
+    }
+
+    #[test]
+    fn a_blended_camera_carries_a_listed_particle() {
+        let (p, n) = (camera_model(0.0, 0.0), camera_model(2.0, 0.4));
+        let (prev, next) = (scene(p), scene(n));
+        let out = blend(&prev, &data(p), &next, &data(n), 0.5);
+        let blended = out.camera.view.inverse();
+        assert!(
+            out.particles[0]
+                .center
+                .abs_diff_eq(blended.transform_point3(PARTICLE_LOCAL), 1e-5)
+        );
+        assert_ne!(out.particles[0].center, next.particles[0].center);
     }
 
     #[test]

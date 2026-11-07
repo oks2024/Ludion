@@ -741,6 +741,7 @@ mod tests {
             softness: 0.0,
             additive: false,
             lit: false,
+            viewmodel: false,
         }
     }
 

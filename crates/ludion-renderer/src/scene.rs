@@ -189,6 +189,9 @@ pub struct ParticleInstance {
     pub additive: bool,
     /// Lit: the colour is shaded once, at the centre, by the lit sprite's light rule.
     pub lit: bool,
+    /// Camera-local, drawn through the viewmodel lens and depth slice; see
+    /// [`ViewmodelParticle`](crate::ViewmodelParticle).
+    pub viewmodel: bool,
 }
 
 /// The world-space Y offset every ground marker is lifted by, so a marker lying on a floor never

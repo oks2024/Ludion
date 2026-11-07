@@ -11,11 +11,12 @@ use ludion_camera::{CameraRig, RigMode};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
-use ludion_core::math::glam::{Mat3, Mat4};
+use ludion_core::math::glam::{DMat4, Mat3, Mat4};
+use ludion_core::math::{Affine3, quat_to_euler_xyz_degrees};
 use ludion_ecs::{SemanticValidate, World};
 use ludion_renderer::{MeshInstance, ViewmodelData, ViewmodelLocal, aspect_ratio};
 
-use crate::components::{Camera, Projection, Viewmodel, ViewmodelLens};
+use crate::components::{Camera, Projection, Transform, Viewmodel, ViewmodelLens};
 
 /// The entities that are viewmodels this frame: flagged, or under a flagged `Parent` ancestor.
 /// Empty, with no walk, when the world has no `Viewmodel`.
@@ -157,8 +158,8 @@ pub(crate) fn report(
 }
 
 /// Marks each flagged mesh (`viewmodel`, no shadow) and returns the packet data with its
-/// camera-local pose; `None` when the frame draws no composed item. `owners` is parallel to
-/// `meshes`.
+/// camera-local pose; `None` when the frame draws no composed mesh and no flagged particle
+/// (`has_particles`). `owners` is parallel to `meshes`.
 pub(crate) fn apply(
     world: &World,
     cam: EntityId,
@@ -166,6 +167,7 @@ pub(crate) fn apply(
     meshes: &mut [MeshInstance],
     owners: &[EntityId],
     viewport: (u32, u32),
+    has_particles: bool,
 ) -> Option<ViewmodelData> {
     let camera = world.get::<Camera>(cam).ok().flatten().copied()?;
     let (lens, _) = lens(world, cam);
@@ -186,7 +188,7 @@ pub(crate) fn apply(
             normal_matrix: cam_rotation_t * mesh.normal_matrix,
         });
     }
-    if locals.is_empty() {
+    if locals.is_empty() && !has_particles {
         return None;
     }
     let (_, far) = camera.depth_range();
@@ -201,5 +203,32 @@ pub(crate) fn apply(
             far,
         ),
         locals,
+        particles: Vec::new(),
     })
+}
+
+/// The inverse of the camera's model, in f64, that [`camera_local`] measures poses against.
+pub(crate) fn camera_inverse(cam_model: Mat4) -> DMat4 {
+    #[allow(clippy::disallowed_methods)] // render-side: GPU matrix, never reaches a hash
+    cam_model.as_dmat4().inverse()
+}
+
+/// `world` (an entity's world model) as a [`Transform`] in the frame of the camera `cam_inverse`
+/// inverts, composed in f64 as [`apply`] does for meshes.
+pub(crate) fn camera_local(cam_inverse: &DMat4, world: Mat4) -> Transform {
+    let local = (*cam_inverse * world.as_dmat4()).as_mat4();
+    let affine = Affine3 {
+        cols: [
+            local.x_axis.truncate().to_array(),
+            local.y_axis.truncate().to_array(),
+            local.z_axis.truncate().to_array(),
+            local.w_axis.truncate().to_array(),
+        ],
+    };
+    let trs = affine.to_trs_lossy();
+    Transform {
+        translation: trs.translation,
+        rotation: quat_to_euler_xyz_degrees(trs.rotation),
+        scale: trs.scale,
+    }
 }

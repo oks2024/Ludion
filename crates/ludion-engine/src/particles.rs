@@ -649,6 +649,7 @@ impl EmitterContext {
             softness: self.emitter.softness,
             additive: self.emitter.blend == ParticleBlend::Additive,
             lit: self.emitter.lit,
+            viewmodel: false,
         })
     }
 }

@@ -1298,6 +1298,12 @@ fn extract_inner(
             _ => None,
         }
     };
+    let viewmodel_emitters = viewmodel_camera.is_some()
+        && ids.iter().any(|&id| {
+            viewmodel_frame.contains(id)
+                && world.has::<ParticleEmitter>(id)
+                && !visibility.hidden(id)
+        });
     let viewmodel = viewmodel_camera.and_then(|cam| {
         crate::viewmodel::apply(
             world,
@@ -1306,6 +1312,7 @@ fn extract_inner(
             &mut meshes,
             &mesh_owners,
             viewport,
+            viewmodel_emitters,
         )
     });
 
@@ -1407,6 +1414,7 @@ fn extract_inner(
             now,
             particle_density,
             CameraBasis::from_view(camera.view),
+            viewmodel_camera.map(|cam| (&viewmodel_frame, camera_entity_model(world, cam))),
             collect.then_some(&mut particle_keys),
         ),
         lights: extract_lights(placed.lights),
@@ -1423,6 +1431,20 @@ fn extract_inner(
         bone_palette,
         viewmodel,
     };
+    if let Some(data) = scene.viewmodel.as_mut() {
+        data.particles = scene
+            .particles
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.viewmodel)
+            .map(|(index, p)| ludion_renderer::ViewmodelParticle {
+                particle: index as u32,
+                center: p.center,
+                right: p.right,
+                up: p.up,
+            })
+            .collect();
+    }
     if let (Some(cam), Some(_)) = (viewmodel_camera, &scene.viewmodel) {
         ludion_renderer::compose_viewmodel(&mut scene, drawn_camera_model(world, &ids, cam));
     }
@@ -2091,8 +2113,11 @@ fn extract_particles(
     now: SimTime,
     particle_density: f32,
     basis: CameraBasis,
+    viewmodel: Option<(&crate::viewmodel::FrameViewmodel, Mat4)>,
     keys: Option<&mut Vec<InstanceKey>>,
 ) -> Vec<ParticleInstance> {
+    let camera_inverse = viewmodel.map(|(_, model)| crate::viewmodel::camera_inverse(model));
+    let local_basis = CameraBasis::from_view(Mat4::IDENTITY);
     let mut emitters = Vec::new();
     let mut live = 0;
     for &id in ids {
@@ -2104,7 +2129,22 @@ fn extract_particles(
         };
         let pose = render_pose(world, poses, id);
         live += particles::live_bound(emitter, now, particle_density);
-        emitters.push((id, emitter, pose.transform()));
+        // A viewmodel emitter simulates in the first-person camera's frame, so its particles are
+        // camera-local and `compose_viewmodel` places them on the drawn camera.
+        let gun = match (viewmodel, &camera_inverse) {
+            (Some((frame, _)), Some(inverse)) if frame.contains(id) => Some(inverse),
+            _ => None,
+        };
+        match gun {
+            Some(inverse) => emitters.push((
+                id,
+                emitter,
+                crate::viewmodel::camera_local(inverse, pose.model()),
+                local_basis,
+                true,
+            )),
+            None => emitters.push((id, emitter, pose.transform(), basis, false)),
+        }
     }
 
     // The keyed path pairs each particle with its instance key; the plain path is unchanged.
@@ -2113,9 +2153,10 @@ fn extract_particles(
             par::par_map_chunks(&emitters, PARTICLE_PAR_CHUNK, |_, chunk| {
                 chunk
                     .iter()
-                    .flat_map(|(id, emitter, transform)| {
-                        particles::evaluate_keyed(emitter, transform, now, particle_density, basis)
-                            .map(|(stream, p)| {
+                    .flat_map(|(id, emitter, transform, basis, gun)| {
+                        particles::evaluate_keyed(emitter, transform, now, particle_density, *basis)
+                            .map(|(stream, mut p)| {
+                                p.viewmodel = *gun;
                                 (particles::instance_key(*id, emitter.started, stream), p)
                             })
                     })
@@ -2139,8 +2180,13 @@ fn extract_particles(
         par::par_map_chunks(&emitters, PARTICLE_PAR_CHUNK, |_, chunk| {
             chunk
                 .iter()
-                .flat_map(|(_, emitter, transform)| {
-                    particles::evaluate(emitter, transform, now, particle_density, basis)
+                .flat_map(|(_, emitter, transform, basis, gun)| {
+                    particles::evaluate(emitter, transform, now, particle_density, *basis).map(
+                        |mut p| {
+                            p.viewmodel = *gun;
+                            p
+                        },
+                    )
                 })
                 .collect::<Vec<_>>()
         })

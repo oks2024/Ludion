@@ -1337,6 +1337,7 @@ mod tests {
             depth_slice: 0.01,
             projection: Mat4::IDENTITY,
             locals: Vec::new(),
+            particles: Vec::new(),
         });
         scene
     }

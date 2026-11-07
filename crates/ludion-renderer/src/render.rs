@@ -1626,25 +1626,30 @@ impl Renderer {
             &camera_buf,
             &bone_palette_buf,
         );
-        let viewmodel_camera_skin_bg = scene.viewmodel_view_proj().map(|view_proj| {
-            let raw = Camera {
-                view_proj: view_proj.to_cols_array_2d(),
-                lens: [1.0, 0.0, 0.0, 0.0],
-                ..camera_raw
-            };
-            let buf = init_buffer(
-                device,
-                wgpu::BufferUsages::UNIFORM,
-                bytemuck::bytes_of(&raw),
-            );
-            skin_bind_group(
-                device,
-                self.layouts.get(LayoutId::CameraSkin),
-                CAMERA_BINDING,
-                &buf,
-                &bone_palette_buf,
-            )
-        });
+        let (viewmodel_camera_skin_bg, viewmodel_camera_bg) = scene
+            .viewmodel_view_proj()
+            .map(|view_proj| {
+                let raw = Camera {
+                    view_proj: view_proj.to_cols_array_2d(),
+                    lens: [1.0, 0.0, 0.0, 0.0],
+                    ..camera_raw
+                };
+                let buf = init_buffer(
+                    device,
+                    wgpu::BufferUsages::UNIFORM,
+                    bytemuck::bytes_of(&raw),
+                );
+                let skin = skin_bind_group(
+                    device,
+                    self.layouts.get(LayoutId::CameraSkin),
+                    CAMERA_BINDING,
+                    &buf,
+                    &bone_palette_buf,
+                );
+                let plain = uniform_bind_group(device, self.layouts.get(LayoutId::Camera), &buf);
+                (Some(skin), Some(plain))
+            })
+            .unwrap_or((None, None));
 
         // The clustered light group: the header uniform + the three storage buffers. Recreated per
         // frame like every other per-frame upload — light population, positions and the cell tables
@@ -1923,6 +1928,7 @@ impl Renderer {
             camera_bg,
             camera_skin_bg,
             viewmodel_camera_skin_bg,
+            viewmodel_camera_bg,
             viewmodel_slice: scene.viewmodel.as_ref().map_or(0.0, |v| v.depth_slice),
             bone_palette_buf,
             lights_bg,
@@ -2534,7 +2540,7 @@ impl Renderer {
         scene: &RenderScene,
         device: &wgpu::Device,
     ) -> Option<ParticleDraw> {
-        let raws = particle_raws(&scene.camera.view, &scene.particles);
+        let (raws, viewmodel_start) = particle_raws_split(&scene.camera.view, &scene.particles);
         if raws.is_empty() {
             return None;
         }
@@ -2545,6 +2551,7 @@ impl Renderer {
                 bytemuck::cast_slice(&raws),
             ),
             count: raws.len() as u32,
+            viewmodel_start: viewmodel_start as u32,
         })
     }
 
@@ -3280,6 +3287,9 @@ fn ground_marker_raws(markers: &[GroundMarkerInstance]) -> Vec<GroundMarkerInsta
 struct ParticleDraw {
     instances: wgpu::Buffer,
     count: u32,
+    /// Instances `viewmodel_start..count` are viewmodel-layer particles, drawn through the lens
+    /// camera group after the world's; `count` when there are none.
+    viewmodel_start: u32,
 }
 
 /// The draw order of `sprites` under `view`: `layer` first (a higher layer draws in front), then
@@ -3348,6 +3358,25 @@ fn particle_raws(view: &Mat4, particles: &[ParticleInstance]) -> Vec<ParticleIns
         .collect()
 }
 
+/// [`particle_raws`] with the viewmodel-layer particles packed after the world's, each list sorted
+/// back-to-front on its own, and the index where the viewmodel ones start. A scene with no flagged
+/// particle packs exactly [`particle_raws`] and starts them at `len`.
+fn particle_raws_split(
+    view: &Mat4,
+    particles: &[ParticleInstance],
+) -> (Vec<ParticleInstanceRaw>, usize) {
+    if !particles.iter().any(|p| p.viewmodel) {
+        let raws = particle_raws(view, particles);
+        let len = raws.len();
+        return (raws, len);
+    }
+    let (gun, world): (Vec<_>, Vec<_>) = particles.iter().copied().partition(|p| p.viewmodel);
+    let mut raws = particle_raws(view, &world);
+    let start = raws.len();
+    raws.extend(particle_raws(view, &gun));
+    (raws, start)
+}
+
 /// One batch of the overlay pass's UI draws, in the scene's pinned draw order: either a run of rects
 /// sharing one texture (instanced) or a run of text (one glyph vertex buffer).
 enum UiBatch {
@@ -3389,6 +3418,8 @@ struct FrameRecorder<'a> {
     /// [`camera_skin_bg`](FrameRecorder::camera_skin_bg) over the viewmodel's view-projection; present
     /// only on a frame that draws a viewmodel.
     viewmodel_camera_skin_bg: Option<wgpu::BindGroup>,
+    /// The lens camera without the skin palette, for the viewmodel-layer particles.
+    viewmodel_camera_bg: Option<wgpu::BindGroup>,
     /// The viewmodel's reserved depth slice `s` (`0.0` on a frame with no viewmodel): a stored depth
     /// below it is a gun pixel. Post passes that exclude the gun compare against it.
     viewmodel_slice: f32,
@@ -5078,7 +5109,16 @@ impl FrameRecorder<'_> {
             rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
             rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
             rp.set_vertex_buffer(0, particles.instances.slice(..));
-            rp.draw(0..6, 0..particles.count);
+            rp.draw(0..6, 0..particles.viewmodel_start);
+            // The gun's particles draw last through the lens and depth slice, so a flash is never
+            // clipped by a close wall.
+            if let (true, Some(lens_bg)) = (
+                particles.viewmodel_start < particles.count,
+                &self.viewmodel_camera_bg,
+            ) {
+                rp.set_bind_group(CAMERA_GROUP, lens_bg, &[]);
+                rp.draw(0..6, particles.viewmodel_start..particles.count);
+            }
         }
 
         // Text.
@@ -5139,7 +5179,9 @@ impl FrameRecorder<'_> {
             rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
             rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
             rp.set_vertex_buffer(0, particles.instances.slice(..));
-            rp.draw(0..6, 0..particles.count);
+            // The world's own distance only: a gun-layer particle must not stand in for the world
+            // behind it.
+            rp.draw(0..6, 0..particles.viewmodel_start);
         }
 
         for text in &self.text_draws {
@@ -23670,7 +23712,41 @@ mod tests {
             softness,
             additive: false,
             lit: false,
+            viewmodel: false,
         }
+    }
+
+    /// A scene with no viewmodel particle packs exactly the world list and starts the viewmodel
+    /// ones at its end; a flagged one packs after every world one, each list sorted on its own.
+    #[test]
+    fn viewmodel_particles_pack_after_the_world_ones() {
+        let view = Mat4::IDENTITY;
+        let world = [
+            particle(Vec3::new(0.0, 0.0, -1.0), 1.0, [1.0; 4], 0.0),
+            particle(Vec3::new(0.0, 0.0, -9.0), 2.0, [1.0; 4], 0.0),
+        ];
+        let (raws, start) = particle_raws_split(&view, &world);
+        let bytes = |raws: &[ParticleInstanceRaw]| bytemuck::cast_slice::<_, u8>(raws).to_vec();
+        assert_eq!(bytes(&raws), bytes(&particle_raws(&view, &world)));
+        assert_eq!(start, world.len());
+
+        let mut mixed = vec![
+            ParticleInstance {
+                viewmodel: true,
+                ..particle(Vec3::new(0.0, 0.0, -0.3), 3.0, [1.0; 4], 0.0)
+            },
+            world[0],
+            ParticleInstance {
+                viewmodel: true,
+                ..particle(Vec3::new(0.0, 0.0, -0.6), 4.0, [1.0; 4], 0.0)
+            },
+            world[1],
+        ];
+        let (raws, start) = particle_raws_split(&view, &mixed);
+        let sizes: Vec<f32> = raws.iter().map(|r| r.params[0]).collect();
+        assert_eq!((start, sizes), (2, vec![2.0, 1.0, 4.0, 3.0]));
+        mixed.retain(|p| !p.viewmodel);
+        assert_eq!(bytes(&raws[..2]), bytes(&particle_raws(&view, &mixed)));
     }
 
     /// Particles **draw, and draw deterministically, and cost nothing when there are none**: (a) a
