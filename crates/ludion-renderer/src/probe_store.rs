@@ -122,7 +122,7 @@ pub(crate) fn world_key(
         voxel,
         gi,
         bone_palette,
-        // CPU-only lens data; the flagged meshes themselves are in `meshes`
+        // CPU-only lens data, always `None` here: `face_scene` drops the gun and its lens
         viewmodel: _,
     } = face_scene;
 

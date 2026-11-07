@@ -21,8 +21,9 @@
 use bytemuck::Zeroable;
 use ludion_core::math::glam::{Mat4, Vec3};
 
+use crate::cull::{Aabb, instance_bounds};
 use crate::probe::{MAX_PROBES, ProbeData, ProbeVolume};
-use crate::scene::{RenderCamera, RenderScene};
+use crate::scene::{MeshInstance, RenderCamera, RenderScene};
 use crate::shader_gen::{CLUSTER_SLICES, CLUSTER_TILES_X, CLUSTER_TILES_Y, Light, LightHeader};
 
 /// `Light.axis` for a point light: `w < -1.5` is the shaders' point-light marker, which skips the
@@ -193,12 +194,27 @@ pub(crate) fn build_lights(
         sun_color: sun.map_or([0.0; 4], |s| [s.color.x, s.color.y, s.color.z, 0.0]),
     };
 
-    let (table, mut indices, mut stats) = match build {
+    let (mut table, mut indices, mut stats) = match build {
         ClusterBuild::Culled => cull(&lights, &scene.camera, render_extent, (scale, bias)),
         #[cfg(test)]
         ClusterBuild::Degenerate => degenerate(lights.len()),
     };
     stats.lights = lights.len() as u32;
+
+    // The viewmodel's cell sits after the grid (`VIEWMODEL_CELL`): gun fragments never read a tile.
+    if let Some(bounds) = viewmodel_bounds(scene) {
+        match build {
+            ClusterBuild::Culled => {
+                let start = indices.len() as u32;
+                indices.extend(
+                    (0..lights.len() as u32).filter(|&i| reaches(&lights[i as usize], bounds)),
+                );
+                table.push([start, indices.len() as u32 - start]);
+            }
+            #[cfg(test)]
+            ClusterBuild::Degenerate => table.push([0, lights.len() as u32]),
+        }
+    }
 
     // wgpu rejects a zero-sized buffer binding, and the generated BGL's `min_binding_size` is one
     // element (naga sizes a runtime array as exactly one), so an empty array uploads as a single
@@ -217,6 +233,43 @@ pub(crate) fn build_lights(
         indices,
         stats,
     }
+}
+
+/// The union world bounds of the flagged meshes: `None` on a frame without a viewmodel, `Some(None)`
+/// when any flagged bound is unknown (every light is admitted).
+fn viewmodel_bounds(scene: &RenderScene) -> Option<Option<Aabb>> {
+    scene.viewmodel.as_ref()?;
+    let asset_bounds: Vec<Option<Aabb>> = scene
+        .mesh_assets
+        .iter()
+        .map(|asset| Aabb::of_positions(&asset.positions))
+        .collect();
+    let gun: Vec<MeshInstance> = scene
+        .meshes
+        .iter()
+        .filter(|m| m.viewmodel)
+        .cloned()
+        .collect();
+    let mut union: Option<Aabb> = None;
+    for bound in instance_bounds(&gun, &asset_bounds) {
+        let Some(bound) = bound else {
+            return Some(None);
+        };
+        union = Some(union.map_or(bound, |u| Aabb {
+            min: u.min.min(bound.min),
+            max: u.max.max(bound.max),
+        }));
+    }
+    Some(union)
+}
+
+/// Whether a light's bounding sphere meets the gun bounds (`None` = unknown, so always).
+fn reaches(light: &Light, bounds: Option<Aabb>) -> bool {
+    let Some(bounds) = bounds else { return true };
+    let (center, radius) = bounding_sphere(light);
+    let nearest = center.clamp(bounds.min, bounds.max);
+    let radius = radius * (1.0 + SHELL_MARGIN);
+    (center - nearest).length_squared() <= radius * radius
 }
 
 /// Builds the frame's cluster tables and returns only how crowded they came out — the occupancy
@@ -1256,5 +1309,77 @@ mod tests {
             stats.max_list_len,
             stats.mean_list_len,
         );
+    }
+
+    /// A scene whose only flagged mesh is a unit cube at `gun` (world), with viewmodel data present.
+    fn scene_with_gun(gun: Vec3, lights: Vec<PointLightData>) -> RenderScene {
+        let mut scene = scene_with(camera_at(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO), lights);
+        scene.meshes.push(MeshInstance {
+            shape: crate::scene::MeshShape::Cube,
+            model: Mat4::from_translation(gun),
+            normal_matrix: ludion_core::math::glam::Mat3::IDENTITY,
+            color: [1.0; 4],
+            material: [1.0, 0.0, 1.0],
+            use_vertex_material: false,
+            fade: 1.0,
+            fade_height_min: -f32::MAX,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
+            bone_offset: 0,
+            cast_shadows: false,
+            viewmodel: true,
+        });
+        scene.viewmodel = Some(crate::viewmodel::ViewmodelData {
+            fov_y_deg: 55.0,
+            near: 0.01,
+            depth_slice: 0.01,
+            projection: Mat4::IDENTITY,
+            locals: Vec::new(),
+        });
+        scene
+    }
+
+    #[test]
+    fn a_frame_without_a_viewmodel_keeps_the_grid_only_table() {
+        let scene = scene_with(
+            camera_at(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO),
+            vec![light(Vec3::ZERO, 3.0)],
+        );
+        for build in [ClusterBuild::Culled, ClusterBuild::Degenerate] {
+            assert_eq!(
+                build_lights(&scene, EXTENT, build).table.len(),
+                CLUSTER_CELLS
+            );
+        }
+    }
+
+    #[test]
+    fn the_viewmodel_cell_lists_exactly_the_lights_reaching_the_gun_ascending() {
+        // Gun cube spans [-0.5, 0.5]^3 at x = 10.
+        let lights = vec![
+            light(Vec3::new(10.0, 0.0, 1.5), 1.2), // reaches: 1.0 from the face
+            light(Vec3::new(30.0, 0.0, 0.0), 2.0), // far
+            light(Vec3::new(10.0, 0.0, -1.0), 0.6), // reaches
+            light(Vec3::new(10.0, 4.0, 0.0), 1.0), // 3.5 from the top face: out of reach
+        ];
+        let scene = scene_with_gun(Vec3::new(10.0, 0.0, 0.0), lights);
+        let upload = build_lights(&scene, EXTENT, ClusterBuild::Culled);
+        assert_eq!(upload.table.len(), CLUSTER_CELLS + 1);
+        let [offset, count] = upload.table[CLUSTER_CELLS];
+        let cell = &upload.indices[offset as usize..(offset + count) as usize];
+        assert_eq!(cell, &[0, 2]);
+        assert_eq!(upload.stats.cells, CLUSTER_CELLS as u32);
+    }
+
+    #[test]
+    fn the_degenerate_viewmodel_cell_holds_every_light() {
+        let scene = scene_with_gun(
+            Vec3::new(10.0, 0.0, 0.0),
+            vec![light(Vec3::ZERO, 1.0), light(Vec3::X, 1.0)],
+        );
+        let upload = build_lights(&scene, EXTENT, ClusterBuild::Degenerate);
+        assert_eq!(upload.table[CLUSTER_CELLS], [0, 2]);
     }
 }

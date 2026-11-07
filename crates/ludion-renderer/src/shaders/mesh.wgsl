@@ -197,7 +197,11 @@ fn wrap_band(
     }
     var sum = vec3<f32>(0.0);
     let to_camera = camera.cam_pos.xyz - world_pos;
-    let slice = cluster_slice(frag_pos, dot(to_camera, to_camera));
+    let is_viewmodel = camera.lens.x > 0.5;
+    var slice = cluster_slice(frag_pos, dot(to_camera, to_camera));
+    if (is_viewmodel) {
+        slice = viewmodel_slice();
+    }
     for (var i: u32 = 0u; i < slice.y; i = i + 1u) {
         let light_index = cluster_lights[slice.x + i];
         let light = light_list[light_index];
@@ -213,8 +217,14 @@ fn wrap_band(
         let excess = wrap_excess(nl, wrap.a, wrap.rgb);
         if (any(excess > vec3<f32>(0.0))) {
             let lift = min(wrap_lift(nl, l, extent), dist);
+            var local_vis: f32;
+            if (is_viewmodel) {
+                local_vis = viewmodel_local_shadow(light_index, light);
+            } else {
+                local_vis = local_shadow(light_index, world_pos + l * lift, n, l, dist - lift);
+            }
             sum += light.color.rgb * spot_factor(light, l)
-                * local_shadow(light_index, world_pos + l * lift, n, l, dist - lift)
+                * local_vis
                 * excess * atten * atten;
         }
     }
@@ -224,7 +234,11 @@ fn wrap_band(
         let nl = dot(n, l_sun);
         let excess = wrap_excess(nl, wrap.a, wrap.rgb);
         if (any(excess > vec3<f32>(0.0))) {
-            sum += sun.color.rgb * sun_shadow(world_pos + l_sun * wrap_lift(nl, l_sun, extent)) * excess;
+            var sun_point = world_pos + l_sun * wrap_lift(nl, l_sun, extent);
+            if (is_viewmodel) {
+                sun_point = camera.cam_pos.xyz;
+            }
+            sum += sun.color.rgb * sun_shadow(sun_point) * excess;
         }
     }
     return sum * diffuse * direct_ao;

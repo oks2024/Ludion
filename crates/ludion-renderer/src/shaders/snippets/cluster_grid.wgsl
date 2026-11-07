@@ -10,6 +10,9 @@
 const CLUSTER_TILES_X: u32 = 16u;
 const CLUSTER_TILES_Y: u32 = 9u;
 const CLUSTER_SLICES: u32 = 16u;
+// The viewmodel's own cell, one past the grid: the light table appends it when a frame draws a
+// viewmodel, and gun fragments read it instead of a tile (their screen position is the lens's).
+const VIEWMODEL_CELL: u32 = CLUSTER_TILES_X * CLUSTER_TILES_Y * CLUSTER_SLICES;
 
 // Both coordinates clamp on the float side before the u32 conversion, so an edge fragment or a
 // distance off either end of the ladder lands in a real cell instead of reading out of bounds.

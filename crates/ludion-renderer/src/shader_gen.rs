@@ -216,6 +216,11 @@ pub const TONEMAP_NONE: u32 = 3;
 /// Declared in `decal_lit.wgsl`, `mesh.wgsl`.
 pub const UNSHADOWED: u32 = 4294967295;
 
+/// `VIEWMODEL_CELL`, hoisted from WGSL `const VIEWMODEL_CELL: u32`.
+///
+/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `probe_debug.wgsl`, `reflections.wgsl`, `sprite.wgsl`.
+pub const VIEWMODEL_CELL: u32 = 2304;
+
 /// WGSL `struct BloomThreshold`.
 ///
 /// Declared in `threshold.wgsl`.
@@ -253,11 +258,13 @@ pub struct Camera {
     pub view_proj: [[f32; 4]; 4],
     pub cam_pos: [f32; 4],
     pub view_forward: [f32; 4],
+    pub lens: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<Camera>() == 96);
+const _: () = assert!(core::mem::size_of::<Camera>() == 112);
 const _: () = assert!(core::mem::offset_of!(Camera, view_proj) == 0);
 const _: () = assert!(core::mem::offset_of!(Camera, cam_pos) == 64);
 const _: () = assert!(core::mem::offset_of!(Camera, view_forward) == 80);
+const _: () = assert!(core::mem::offset_of!(Camera, lens) == 96);
 
 /// WGSL `struct Composite`.
 ///
@@ -2169,7 +2176,7 @@ pub fn create_camera_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(96),
+                min_binding_size: wgpu::BufferSize::new(112),
             },
             count: None,
         }],
@@ -2187,7 +2194,7 @@ pub fn create_camera_bone_palette_bgl(device: &wgpu::Device) -> wgpu::BindGroupL
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(96),
+                    min_binding_size: wgpu::BufferSize::new(112),
                 },
                 count: None,
             },

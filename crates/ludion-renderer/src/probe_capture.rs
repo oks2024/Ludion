@@ -50,6 +50,10 @@ fn face_camera(position: Vec3, face: u32) -> RenderCamera {
 pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> RenderScene {
     let mut out = scene.clone();
     out.camera = face_camera(position, face);
+    // The gun belongs to the screen, not the world: a face draws no viewmodel, and its moving pose
+    // must not re-key the capture.
+    out.meshes.retain(|mesh| !mesh.viewmodel);
+    out.viewmodel = None;
     out.sprites.clear();
     out.particles.clear();
     out.texts.clear();
@@ -562,6 +566,39 @@ pub(crate) mod tests {
     use crate::probe::{ProbeData, ProbeVolume};
     use crate::scene::{MeshInstance, MeshShape, SunData};
     use ludion_core::math::glam::{Mat3, Quat};
+
+    #[test]
+    fn a_face_scene_carries_no_viewmodel() {
+        let mut scene = RenderScene::empty((64, 64));
+        let world = mesh(MeshShape::Cube, Mat4::IDENTITY, [1.0; 4], [1.0, 0.0, 1.0]);
+        let mut gun = world;
+        gun.viewmodel = true;
+        scene.meshes = vec![world, gun];
+        scene.viewmodel = Some(crate::viewmodel::ViewmodelData {
+            fov_y_deg: 55.0,
+            near: 0.01,
+            depth_slice: 0.01,
+            projection: Mat4::IDENTITY,
+            locals: Vec::new(),
+        });
+        let face = face_scene(&scene, Vec3::ZERO, 0);
+        assert_eq!(face.meshes.len(), 1);
+        assert!(face.meshes.iter().all(|m| !m.viewmodel));
+        assert!(face.viewmodel.is_none());
+        let key = |scene: &RenderScene| {
+            probe_store::world_key(
+                &face_scene(scene, Vec3::ZERO, 0),
+                &crate::quality::Quality::FULL,
+                &crate::quality::QualityParams::MEDIUM,
+                0,
+                16,
+            )
+        };
+        let mut without = scene.clone();
+        without.meshes.pop();
+        without.viewmodel = None;
+        assert_eq!(key(&scene), key(&without));
+    }
 
     /// Every face's camera maps the cube direction `face_dir` gives to the mirrored NDC point
     /// (−u, −v), which `probe_face.wgsl`'s x flip turns into the cube texel (u, v).

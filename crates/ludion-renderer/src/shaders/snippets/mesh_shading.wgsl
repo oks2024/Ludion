@@ -377,6 +377,16 @@ fn local_shadow(index: u32, world_pos: vec3<f32>, n: vec3<f32>, l: vec3<f32>, di
     return select(mix(1.0, shadow, view.params.w), shadow, view.params.w >= 1.0);
 }
 
+// The viewmodel's local shadow: one sample at the camera eye toward the light, so a wall the gun
+// pokes into cannot darken it (`Plan/viewmodel.md` decision 7). Zero normal: no gun surface offset.
+fn viewmodel_local_shadow(index: u32, light: Light) -> f32 {
+    let eye = camera.cam_pos.xyz;
+    let to_light = light.position.xyz - eye;
+    let dist = length(to_light);
+    let l = select(vec3<f32>(0.0), normalize(to_light), dist > 0.0);
+    return local_shadow(index, eye, vec3<f32>(0.0), l, dist);
+}
+
 // The sky-visibility read, through the shared probe snippet (`gi_probe.wgsl`): the ONE function that
 // reads the visibility volume is `sky_visibility_at`, and the mesh pass binds its inputs here.
 fn gi_sky_visibility(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
@@ -546,7 +556,11 @@ fn shade(
     // order. Indices ascend within a cell and the array is extract order, so the sum below is the
     // same sum, in the same order, a flat loop over every light would produce — the snippet's
     // identity argument. ALU only: the non-uniform bound forbids an implicit-derivative sample here.
-    let slice = cluster_slice(frag_pos, dot(to_camera, to_camera));
+    let is_viewmodel = camera.lens.x > 0.5;
+    var slice = cluster_slice(frag_pos, dot(to_camera, to_camera));
+    if (is_viewmodel) {
+        slice = viewmodel_slice();
+    }
     for (var i: u32 = 0u; i < slice.y; i = i + 1u) {
         let light_index = cluster_lights[slice.x + i];
         let light = light_list[light_index];
@@ -561,7 +575,13 @@ fn shade(
         let ndh = max(dot(n, h), 0.0);
         let vdh = max(dot(v, h), 0.0);
         // Premultiplied convention: radiance IS the diffuse response at ndl = 1, ranged atten^2.
-        let radiance = light.color.rgb * spot_factor(light, l) * local_shadow(light_index, world_pos, n, l, dist) * ndl * atten * atten * direct_ao;
+        var local_vis: f32;
+        if (is_viewmodel) {
+            local_vis = viewmodel_local_shadow(light_index, light);
+        } else {
+            local_vis = local_shadow(light_index, world_pos, n, l, dist);
+        }
+        let radiance = light.color.rgb * spot_factor(light, l) * local_vis * ndl * atten * atten * direct_ao;
         let d = distribution_ggx(ndh, alpha);
         let vis = visibility_smith(ndl, ndv, alpha);
         let f = fresnel_schlick(vdh, f0);
@@ -579,7 +599,11 @@ fn shade(
         let h_sun = normalize(l_sun + v);
         let ndh_sun = max(dot(n, h_sun), 0.0);
         let vdh_sun = max(dot(v, h_sun), 0.0);
-        let shadow = sun_shadow(world_pos) * direct_ao;
+        var sun_point = world_pos;
+        if (is_viewmodel) {
+            sun_point = camera.cam_pos.xyz;
+        }
+        let shadow = sun_shadow(sun_point) * direct_ao;
         if (sun.disc_sin > 0.0) {
             // Representative point (Karis 2013): the direction inside the sun's disc closest to the
             // mirror ray. The disc is absent from the IBL, the probes and SSR's input, so this is

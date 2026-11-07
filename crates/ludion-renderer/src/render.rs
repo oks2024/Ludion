@@ -1598,6 +1598,7 @@ impl Renderer {
             view_proj: view_proj.to_cols_array_2d(),
             cam_pos: scene.camera.position.extend(1.0).to_array(),
             view_forward: scene.camera.view_forward_lane(),
+            lens: [0.0; 4],
         };
         let camera_buf = init_buffer(
             device,
@@ -1628,6 +1629,7 @@ impl Renderer {
         let viewmodel_camera_skin_bg = scene.viewmodel_view_proj().map(|view_proj| {
             let raw = Camera {
                 view_proj: view_proj.to_cols_array_2d(),
+                lens: [1.0, 0.0, 0.0, 0.0],
                 ..camera_raw
             };
             let buf = init_buffer(

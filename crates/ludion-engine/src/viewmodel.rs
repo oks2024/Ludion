@@ -40,7 +40,7 @@ impl FrameViewmodel {
         self.flagged.is_empty()
     }
 
-    fn contains(&self, id: EntityId) -> bool {
+    pub(crate) fn contains(&self, id: EntityId) -> bool {
         self.flagged.contains(&id)
     }
 }

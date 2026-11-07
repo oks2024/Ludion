@@ -1347,6 +1347,11 @@ fn extract_inner(
     // the same ascending-entity-slot walk everything else here consumes — because that order is
     // what makes its last-writer combine rule deterministic. An unchanged instance set hits the
     // loader's voxelization cache and rasterizes nothing.
+    // The composed viewmodel is screen-space: its moving pose must not rasterize into the grid or
+    // churn the instance signature. Nothing below reads `placed.meshes`.
+    if viewmodel_camera.is_some() {
+        placed.meshes.retain(|m| !viewmodel_frame.contains(m.id));
+    }
     let (voxel, gi) = match extract_gi_volume(world, &ids) {
         None => (None, None),
         Some((index, volume)) => {

@@ -72,6 +72,11 @@ fn cluster_slice(frag_pos: vec2<f32>, view_dist_sq: f32) -> vec2<u32> {
     return cluster_table[cluster_cell(frag_pos, view_dist_sq, lights.grid)];
 }
 
+// The viewmodel cell's slice: every light that reaches the gun, wherever the lens draws it.
+fn viewmodel_slice() -> vec2<u32> {
+    return cluster_table[VIEWMODEL_CELL];
+}
+
 // A spot's cone factor for the surface-to-light unit vector `l`: 1 inside the inner cone, a Hermite
 // ramp between, and an exact 0.0 at or outside the outer cone (which is what keeps a conservatively
 // over-filed spot a `+0.0`). Written out rather than `smoothstep` so a hard edge

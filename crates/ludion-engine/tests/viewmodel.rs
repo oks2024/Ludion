@@ -273,3 +273,19 @@ fn a_view_override_draws_world_meshes_silently() {
     assert!(packet.meshes.iter().all(|m| !m.viewmodel));
     assert!(reported(&engine, code::VIEWMODEL_NO_CAMERA).is_empty());
 }
+
+#[test]
+fn the_gi_grid_does_not_see_the_gun() {
+    let gi = "  - name: gi
+    components:
+      GiVolume:
+        cell_size: 0.5
+        probe_spacing: 2.0
+";
+    let flagged = extract(&mut engine_for(&scene("", FLAG, gi)));
+    let no_gun = extract(&mut engine_for(&format!(
+        "format: 1\nseed: 3\nentities:\n  - name: cam\n    components:\n{RIG}{WORLD}{gi}"
+    )));
+    let grid = no_gun.voxel.as_ref().expect("the world builds a grid");
+    assert_eq!(flagged.voxel.as_ref(), Some(grid));
+}
