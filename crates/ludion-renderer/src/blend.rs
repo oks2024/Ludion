@@ -9,6 +9,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat3, Mat4, Quat};
 
 use crate::scene::{RenderScene, SpotLightData};
+use crate::viewmodel::compose_viewmodel;
 
 /// The poses and per-item keys one extracted tick records for [`blend`].
 ///
@@ -215,6 +216,7 @@ pub fn blend(
         if model.is_finite() && model.determinant().abs() > DET_EPS {
             out.camera.view = model.inverse();
             out.camera.position = model.w_axis.truncate();
+            compose_viewmodel(&mut out, model);
             if let (Some(a), Some(b)) = (p.fov_y_deg, n.fov_y_deg) {
                 let fov = a + (b - a) * alpha;
                 out.camera.projection =
@@ -239,6 +241,7 @@ pub fn latch_camera(scene: &mut RenderScene, tick: &CameraBlend, latched: &Camer
     if model.is_finite() && model.determinant().abs() > DET_EPS {
         scene.camera.view = model.inverse();
         scene.camera.position = position;
+        compose_viewmodel(scene, model);
     }
 }
 
@@ -418,6 +421,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         }
     }
 

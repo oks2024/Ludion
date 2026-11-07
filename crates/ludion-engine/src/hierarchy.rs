@@ -84,6 +84,15 @@ fn chain(world: &World, entity: EntityId) -> (Vec<EntityId>, Option<HierarchyFau
     (up, fault)
 }
 
+/// Whether `entity` or any `Parent` ancestor satisfies `flag` (an OR fold, unlike `Visibility`'s
+/// AND). An unparented entity costs one check and no chain walk.
+pub(crate) fn inherits(world: &World, entity: EntityId, flag: impl Fn(EntityId) -> bool) -> bool {
+    if flag(entity) {
+        return true;
+    }
+    world.has::<Parent>(entity) && chain(world, entity).0.into_iter().any(flag)
+}
+
 /// The topmost ancestor of `entity` through `Parent`: the entity itself when it has none or its
 /// chain is a cycle or too deep. A dead or presentation parent cuts the walk, so the result is the
 /// last valid ancestor below it.

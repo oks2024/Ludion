@@ -122,6 +122,8 @@ pub(crate) fn world_key(
         voxel,
         gi,
         bone_palette,
+        // CPU-only lens data; the flagged meshes themselves are in `meshes`
+        viewmodel: _,
     } = face_scene;
 
     let mut w = KeyWriter(Vec::new());

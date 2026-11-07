@@ -9636,6 +9636,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         };
         let mut scene = RenderScene::empty((64, 64));
         scene.meshes = vec![
@@ -9715,6 +9716,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         };
         assert_eq!(instance_material(&base), [0.3, 0.7, 2.0, 0.0]);
         assert_eq!(
@@ -9761,6 +9763,7 @@ mod tests {
             scatter_color: scatter,
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         }
     }
 
@@ -10144,6 +10147,7 @@ mod tests {
                 scatter_color: [1.0; 3],
                 bone_offset: 0,
                 cast_shadows: true,
+                viewmodel: false,
             });
         }
 
@@ -10269,6 +10273,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         };
         let empty = MeshData {
             positions: vec![],
@@ -10367,6 +10372,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         }
     }
 
@@ -10387,6 +10393,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         }
     }
 
@@ -10675,6 +10682,7 @@ mod tests {
                 scatter_color: [1.0; 3],
                 bone_offset: 0,
                 cast_shadows: true,
+                viewmodel: false,
             },
         ];
 
@@ -10716,6 +10724,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         }
     }
 
@@ -10836,6 +10845,7 @@ mod tests {
             scatter_color: scatter,
             bone_offset: 0,
             cast_shadows: cast,
+            viewmodel: false,
         }
     }
 
@@ -11483,6 +11493,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         };
 
         let mut scene = RenderScene::empty((w, h));
@@ -11592,6 +11603,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset,
             cast_shadows: true,
+            viewmodel: false,
         }
     }
 
@@ -11859,6 +11871,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         }];
         scene
     }
@@ -12133,6 +12146,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         }];
         scene
     }
@@ -13117,6 +13131,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         }
     }
 
@@ -13725,6 +13740,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         });
         scene
     }
@@ -18973,6 +18989,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            viewmodel: false,
         }
     }
 

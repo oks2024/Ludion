@@ -540,6 +540,7 @@ fn floor_instance() -> MeshInstance {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        viewmodel: false,
     }
 }
 

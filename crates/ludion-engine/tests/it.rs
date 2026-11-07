@@ -116,4 +116,5 @@ mod transition_restart;
 mod transition_snapshot;
 mod trigger_edges;
 mod ui_list_nav;
+mod viewmodel;
 mod voxelizer;

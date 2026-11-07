@@ -107,6 +107,7 @@ mod tick_observer;
 mod trace;
 pub mod transition;
 pub mod ui;
+mod viewmodel;
 mod voxel_mesh;
 mod voxel_sheet;
 mod voxelizer;

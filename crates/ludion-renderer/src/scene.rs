@@ -103,6 +103,10 @@ pub struct MeshInstance {
     /// occlusion; `true` for every instance a Visibility-free scene extracts. CPU-only: it never
     /// reaches the GPU instance data.
     pub cast_shadows: bool,
+    /// Whether this instance is a first-person viewmodel: its `model` is composed onto the frame's
+    /// drawn camera (see [`RenderScene::viewmodel`]). CPU-only like `cast_shadows`: it never reaches
+    /// the GPU instance data.
+    pub viewmodel: bool,
 }
 
 /// A single sprite/billboard: a textured, tinted quad in world space.
@@ -1344,6 +1348,9 @@ pub struct RenderScene {
     /// indexes the uploaded buffer directly (`0` = identity, this list's entries start at `1`). Empty
     /// for a scene with no skinned mesh.
     pub bone_palette: Vec<Mat4>,
+    /// The first-person viewmodel lens and the camera-local pose of each flagged mesh, `Some` only
+    /// on a frame that draws at least one composed item. CPU-only: the GPU path ignores it.
+    pub viewmodel: Option<crate::viewmodel::ViewmodelData>,
 }
 
 impl RenderScene {
@@ -1377,6 +1384,7 @@ impl RenderScene {
             voxel: None,
             gi: None,
             bone_palette: Vec::new(),
+            viewmodel: None,
         }
     }
 }

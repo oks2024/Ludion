@@ -3410,7 +3410,7 @@ fn is_zero3(value: &[f32; 3]) -> bool {
 /// That projection is independent of the gameplay `fov_y_deg`, of `CameraOffset.fov_delta` and of
 /// the late latch. Flagged meshes cast no world shadow. When no single perspective first-person
 /// `CameraRig` camera exists the mesh draws as an ordinary world mesh and is reported once
-/// (`code::VIEWMODEL_NO_CAMERA`, `L1336`).
+/// (`L1336`).
 ///
 /// ```yaml
 /// presentation: true
@@ -3435,7 +3435,7 @@ pub struct Viewmodel {}
 /// The lens projection is independent of the camera's gameplay `fov_y_deg`, of
 /// `CameraOffset.fov_delta` and of the late latch, so a wide gameplay FOV does not stretch the gun.
 /// `ViewmodelLens` is constant config; on the sim camera it is hashed. On an entity without a
-/// `Camera` it is ignored and reported once (`code::VIEWMODEL_LENS_NOT_ON_CAMERA`, `L1337`). A field
+/// `Camera` it is ignored and reported once (`L1337`). A field
 /// out of range is `L1338`: a scene with one is refused, and at runtime the defaults are used.
 ///
 /// `fov_y_deg` is the vertical field of view in degrees, finite in 1 to 179. `near` is the near

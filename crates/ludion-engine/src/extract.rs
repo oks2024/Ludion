@@ -715,6 +715,7 @@ fn extract_inner(
         .collect();
     let mut camera = resolve_camera(world, &ids, viewport, view).map_err(|d| vec![d])?;
     crate::camera_offset::report(world, &ids, degraded);
+    crate::viewmodel::report(world, &ids, view.is_some(), degraded);
     let fonts = font_library(world, project_root);
 
     // One walk, one sizing computation: `place` produces every renderable's world geometry, and both
@@ -1222,6 +1223,7 @@ fn extract_inner(
                         scatter_color: mesh.scatter_color,
                         bone_offset: 0,
                         cast_shadows,
+                        viewmodel: false,
                     });
                 }
                 continue;
@@ -1281,9 +1283,31 @@ fn extract_inner(
                 scatter_color: mesh.scatter_color,
                 bone_offset,
                 cast_shadows,
+                viewmodel: false,
             });
         }
     }
+
+    // Flagged meshes lose their shadow before decals and drop shadows read `cast_shadows`.
+    let viewmodel_frame = crate::viewmodel::FrameViewmodel::of(world, &ids);
+    let viewmodel_camera = if viewmodel_frame.is_empty() {
+        None
+    } else {
+        match crate::viewmodel::site(world, &ids, view.is_some()) {
+            crate::viewmodel::Site::Camera(cam) => Some(cam),
+            _ => None,
+        }
+    };
+    let viewmodel = viewmodel_camera.and_then(|cam| {
+        crate::viewmodel::apply(
+            world,
+            cam,
+            &viewmodel_frame,
+            &mut meshes,
+            &mesh_owners,
+            viewport,
+        )
+    });
 
     let (decals, decal_ids) = extract_decals(
         world,
@@ -1358,7 +1382,7 @@ fn extract_inner(
     };
 
     let mut particle_keys: Vec<InstanceKey> = Vec::new();
-    let scene = RenderScene {
+    let mut scene = RenderScene {
         camera,
         ambient,
         textures,
@@ -1392,7 +1416,11 @@ fn extract_inner(
         voxel,
         gi,
         bone_palette,
+        viewmodel,
     };
+    if let (Some(cam), Some(_)) = (viewmodel_camera, &scene.viewmodel) {
+        ludion_renderer::compose_viewmodel(&mut scene, drawn_camera_model(world, &ids, cam));
+    }
     if let Some(blend) = blend {
         let camera_key = if view.is_none() && !pixel_snapped {
             single_camera(world, &ids).ok().flatten()
@@ -1407,7 +1435,11 @@ fn extract_inner(
             viewport,
             camera_key,
             BlendKeys {
-                meshes: mesh_owners,
+                meshes: mesh_owners
+                    .iter()
+                    .zip(&scene.meshes)
+                    .map(|(&owner, mesh)| (!mesh.viewmodel).then_some(owner))
+                    .collect(),
                 sprites: sprite_keys,
                 lights: light_ids,
                 spot_lights: spot_light_ids,
@@ -1425,7 +1457,7 @@ fn extract_inner(
 
 /// The entities behind each keyed `RenderScene` list, as extract collected them.
 struct BlendKeys {
-    meshes: Vec<EntityId>,
+    meshes: Vec<Option<EntityId>>,
     sprites: Vec<Option<EntityId>>,
     lights: Vec<EntityId>,
     spot_lights: Vec<EntityId>,
@@ -1481,7 +1513,7 @@ fn fill_blend(
             .map(|id| id.map(|id| socket_key(world, id)))
             .collect()
     };
-    blend.meshes = some(keys.meshes);
+    blend.meshes = optional(keys.meshes);
     blend.sprites = optional(keys.sprites);
     blend.lights = some(keys.lights);
     blend.spot_lights = some(keys.spot_lights);
@@ -4007,6 +4039,37 @@ pub(crate) fn compose_camera(
     )
 }
 
+/// The camera entity's own world model, without any presentation offset: the frame a viewmodel
+/// item's local pose is measured in.
+pub(crate) fn camera_entity_model(world: &World, id: EntityId) -> Mat4 {
+    render_pose(world, &mut WorldAffines::new(), id).model()
+}
+
+/// The camera's rig pose with the active presentation offset composed on, and its projection.
+fn drawn_pose(
+    world: &World,
+    ids: &[EntityId],
+    id: EntityId,
+    cam: &Camera,
+) -> (Quat, Vec3, Projection) {
+    let pose = render_pose(world, &mut WorldAffines::new(), id);
+    let offset = crate::camera_offset::active(world, ids);
+    compose_camera(
+        pose.quat(),
+        Vec3::from(pose.translation()),
+        cam,
+        offset.as_ref(),
+    )
+}
+
+/// The drawn camera's world model (camera space to world): the one transform a viewmodel item is
+/// composed onto. [`build_camera`] inverts exactly this matrix.
+pub(crate) fn drawn_camera_model(world: &World, ids: &[EntityId], id: EntityId) -> Mat4 {
+    let cam = get::<Camera>(world, id).copied().unwrap_or_default();
+    let (rotation, translation, _) = drawn_pose(world, ids, id, &cam);
+    Mat4::from_rotation_translation(rotation, translation)
+}
+
 /// Builds the view + projection matrices for the camera entity `id`, with the active presentation
 /// offset among `ids` composed onto the rig's pose.
 pub(crate) fn build_camera(
@@ -4017,14 +4080,7 @@ pub(crate) fn build_camera(
 ) -> RenderCamera {
     let cam = get::<Camera>(world, id).copied().unwrap_or_default();
     let (near, far) = cam.depth_range();
-    let pose = render_pose(world, &mut WorldAffines::new(), id);
-    let offset = crate::camera_offset::active(world, ids);
-    let (rotation, translation, cam_projection) = compose_camera(
-        pose.quat(),
-        Vec3::from(pose.translation()),
-        &cam,
-        offset.as_ref(),
-    );
+    let (rotation, translation, cam_projection) = drawn_pose(world, ids, id, &cam);
     let model = Mat4::from_rotation_translation(rotation, translation);
     #[allow(clippy::disallowed_methods)] // render-side: GPU matrix, never reaches a hash
     let view = model.inverse();
