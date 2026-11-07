@@ -64,7 +64,7 @@ pub(crate) fn unit(direction: [f32; 3]) -> Option<[f32; 3]> {
 }
 
 /// `point` advanced by `distance` world units along `direction` (assumed unit length).
-fn advance(point: [f32; 3], direction: [f32; 3], distance: f32) -> [f32; 3] {
+pub(crate) fn advance(point: [f32; 3], direction: [f32; 3], distance: f32) -> [f32; 3] {
     from_vector(to_vector(point) + to_vector(direction) * distance)
 }
 

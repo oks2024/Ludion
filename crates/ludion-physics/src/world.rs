@@ -44,7 +44,7 @@ use crate::systems::{CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, PhysicsSettings
 pub const DEFAULT_GRAVITY: [f32; 3] = [0.0, -9.81, 0.0];
 
 /// The layer a collider with no `layer` is on, and layer index 0 of every table.
-const DEFAULT_LAYER: &str = "default";
+pub(crate) const DEFAULT_LAYER: &str = "default";
 
 /// The `L1186` reason for a layer `name` no table in `declared` names, with the nearest declared
 /// name when there is one.
@@ -2313,19 +2313,18 @@ impl PhysicsWorld {
         self.joint_events.sort_by_key(|event| event.joint);
     }
 
-    /// Resolves `filter` into a predicate that is true for a hit to drop. Every ignored layer name
-    /// is validated first: `default` is always valid, any other name must be in the layer table.
-    /// A hit's layer comes from its table row, never from rapier's groups (an unlayered collider's
-    /// groups are `all()` and name no layer).
-    pub(crate) fn query_drops<'a>(
-        &'a self,
-        filter: &'a QueryFilter,
-    ) -> Result<impl Fn(EntityId) -> bool + 'a, PhysicsError> {
+    /// The layer table, if the scene declares one.
+    pub(crate) fn layer_table(&self) -> Option<&CollisionLayers> {
+        self.layers.as_ref()
+    }
+
+    /// `Err(QueryInput)` for the first of `names` that is neither `default` nor in the layer table.
+    pub(crate) fn check_layer_names(&self, names: &[String]) -> Result<(), PhysicsError> {
         let declared: &[String] = match &self.layers {
             Some(table) => table.names(),
             None => &[],
         };
-        for name in &filter.ignored_layers {
+        for name in names {
             let known = name == DEFAULT_LAYER || declared.iter().any(|d| d == name);
             if !known {
                 let declared_names: Vec<String> = if declared.is_empty() {
@@ -2339,6 +2338,18 @@ impl PhysicsWorld {
                 )));
             }
         }
+        Ok(())
+    }
+
+    /// Resolves `filter` into a predicate that is true for a hit to drop. Every ignored layer name
+    /// is validated first: `default` is always valid, any other name must be in the layer table.
+    /// A hit's layer comes from its table row, never from rapier's groups (an unlayered collider's
+    /// groups are `all()` and name no layer).
+    pub(crate) fn query_drops<'a>(
+        &'a self,
+        filter: &'a QueryFilter,
+    ) -> Result<impl Fn(EntityId) -> bool + 'a, PhysicsError> {
+        self.check_layer_names(&filter.ignored_layers)?;
         Ok(move |entity: EntityId| {
             if Some(entity) == filter.exclude || Some(entity) == filter.exclude_also {
                 return true;

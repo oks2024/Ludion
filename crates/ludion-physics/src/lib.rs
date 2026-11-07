@@ -137,6 +137,10 @@
 //! sorted ascending. Rapier's own BVH traversal order is never exposed. Each takes a [`QueryFilter`]:
 //! one excluded entity plus ignored layer names, which only drops hits.
 //!
+//! [`PhysicsWorld::first_hit`] and [`PhysicsWorld::first_hits`] return the one nearest hit of a swept
+//! sphere by `(t, entity)` with no allocation, the [`QueryFilter`] resolved once by
+//! [`PhysicsWorld::sweep_filter`]; the batch form fans out over `par`.
+//!
 //! # Joints
 //!
 //! A [`Joint`](ludion_spatial::Joint) component names its two bodies by `EntityId` and is mapped
@@ -175,6 +179,7 @@ mod motor;
 mod pose;
 mod queries;
 mod sensors;
+mod sweep;
 mod systems;
 mod time_scale;
 mod wireframe;
@@ -194,6 +199,7 @@ pub use motor::{
 pub use pose::PhysicsPose;
 pub use queries::{QueryFilter, QueryHit};
 pub use sensors::{ExitCause, SensorEvent, SensorPhase};
+pub use sweep::{Sweep, SweepFilter, SweepHit};
 pub use systems::{
     CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, DEFAULT_SOLVER_ITERATIONS,
     DEFAULT_STABILIZATION_ITERATIONS, KinematicTeleports, MAX_COLLISION_LAYERS, MIRROR,
