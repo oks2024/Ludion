@@ -2278,6 +2278,11 @@ pub mod code {
     /// `ludion-engine`'s builder at `build`, by snapshot restore, and by `projectiles_step`.
     pub const PROJECTILE_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L4027");
 
+    /// `L4028` — a `ProjectileVisuals` table is invalid: a non-positive or non-finite size, a
+    /// negative or non-finite stretch, colour, emissive or convergence distance, or a billboard
+    /// softness outside `0..=1`. An **error**. Raised by `ludion-engine`'s builder at `build`.
+    pub const PROJECTILE_VISUALS_INVALID: DiagnosticCode = DiagnosticCode::new("L4028");
+
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
     /// `L5001` — no audio output device is available, so the playback sink cannot open a stream.
@@ -10659,6 +10664,22 @@ restore whose recorded config fails the same check, and, for an unknown layer na
 Fix: correct the field the message names. An unknown layer is a typo against `physics.layers`.",
     },
     CodeEntry {
+        code: code::PROJECTILE_VISUALS_INVALID,
+        severity: Severity::Error,
+        title: "projectile visuals are invalid",
+        explanation: "\
+A `ProjectileVisuals` table given to `Engine::builder().projectile_visuals(..)` cannot be drawn.
+The path names the field (`/tags/3/size`, `/fallback/color/0`):
+
+- `size` must be a finite number > 0 (metres);
+- `stretch`, `emissive`, each `color` channel and `converge_distance` must be finite and >= 0;
+- a billboard's `softness` must be in `0..=1`.
+
+Raised by `Engine::builder().build()`.
+
+Fix: correct the field the path names.",
+    },
+    CodeEntry {
         code: code::AUDIO_DEVICE_UNAVAILABLE,
         severity: Severity::Warning,
         title: "no audio output device available",
@@ -11359,6 +11380,7 @@ mod tests {
         code::BUDGET_LOAD_UNMEASURED,
         code::PROJECTILE_SPAWN_REFUSED,
         code::PROJECTILE_CONFIG_INVALID,
+        code::PROJECTILE_VISUALS_INVALID,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,

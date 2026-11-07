@@ -56,10 +56,38 @@ fn score(world: &mut World, _ctx: &SystemCtx) {
     tally.hits.extend(hits);
 }
 
+/// How each tag draws: tag 1 a stretched orange tracer, tag 2 a small cube; any other tag falls
+/// back to the default white billboard. Used only by a windowed or rendered run.
+fn visuals() -> ProjectileVisuals {
+    let mut visuals = ProjectileVisuals::default();
+    visuals.tags.insert(
+        1,
+        ProjectileVisual {
+            look: ProjectileLook::Billboard { softness: 0.6 },
+            size: 0.08,
+            stretch: 0.02,
+            color: [1.0, 0.6, 0.2, 1.0],
+            ..ProjectileVisual::default()
+        },
+    );
+    visuals.tags.insert(
+        2,
+        ProjectileVisual {
+            look: ProjectileLook::Cube,
+            size: 0.1,
+            color: [0.2, 0.8, 1.0, 1.0],
+            emissive: 2.0,
+            ..ProjectileVisual::default()
+        },
+    );
+    visuals
+}
+
 /// The game: rebuild the target index, fire, step the pool, score.
 pub fn game() -> EngineBuilder {
     Engine::builder()
         .projectiles(ProjectileConfig::default())
+        .projectile_visuals(visuals())
         .system(
             "spatial3d_rebuild",
             spatial3d::rebuild::<Transform, TransformHierarchy>,

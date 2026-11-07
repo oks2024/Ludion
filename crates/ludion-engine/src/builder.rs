@@ -131,6 +131,7 @@ pub struct EngineBuilder {
     doc_texts: std::collections::BTreeMap<String, String>,
     resource_carriers: Vec<ResourceCarrier>,
     projectile_config: Option<crate::ProjectileConfig>,
+    projectile_visuals: Option<crate::ProjectileVisuals>,
     profile_kind: Option<ProfileKind>,
     profile_path: Option<PathBuf>,
     default_scene: Option<PathBuf>,
@@ -167,6 +168,7 @@ impl EngineBuilder {
             doc_texts: std::collections::BTreeMap::new(),
             resource_carriers: Vec::new(),
             projectile_config: None,
+            projectile_visuals: None,
             profile_kind: None,
             profile_path: None,
             default_scene: None,
@@ -847,6 +849,29 @@ impl EngineBuilder {
         self
     }
 
+    /// Sets how the projectile pool is drawn: a table from shot `tag` to a look (billboard streak,
+    /// cube or sphere mesh, or hidden), with a fallback for unlisted tags. Shots draw through the
+    /// scene pass's existing particle and mesh paths, so no pass is added. Without a table every
+    /// shot draws as a small additive white billboard. The last call wins;
+    /// [`build`](EngineBuilder::build) refuses an invalid table with `L4028`.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{Engine, ProjectileConfig, ProjectileVisuals};
+    ///
+    /// let engine = Engine::builder()
+    ///     .projectiles(ProjectileConfig::default())
+    ///     .projectile_visuals(ProjectileVisuals::default())
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = engine;
+    /// ```
+    #[must_use]
+    pub fn projectile_visuals(mut self, visuals: crate::ProjectileVisuals) -> Self {
+        self.projectile_visuals = Some(visuals);
+        self
+    }
+
     /// Registers the game's one player-profile type `P`: its persistent save state
     /// ([`Profile<P>`](crate::Profile)), loaded from `save/profile.yaml` (or [`profile_path`](EngineBuilder::profile_path))
     /// into a resource at every world build and mutated by the game's systems.
@@ -982,6 +1007,9 @@ impl EngineBuilder {
         if let Some(config) = &self.projectile_config {
             config.validate()?;
         }
+        if let Some(visuals) = &self.projectile_visuals {
+            visuals.validate()?;
+        }
         let mut registry = builtin_registry();
         registry
             .register_resource_digest::<crate::Projectiles>("projectiles", |p| p.pool().digest())?;
@@ -1031,6 +1059,9 @@ impl EngineBuilder {
         engine.doc_texts = doc_texts;
         engine.resource_carriers = self.resource_carriers;
         engine.projectile_config = self.projectile_config;
+        if let Some(visuals) = self.projectile_visuals {
+            engine.projectile_draw.visuals = visuals;
+        }
         engine.install_projectiles();
         // Populate the data-doc stores into the initial (pre-scene-load) world so a game driven
         // before any `scene.load` still sees its docs; a malformed doc — or a broken cross-reference

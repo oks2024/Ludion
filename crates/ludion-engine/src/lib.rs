@@ -82,6 +82,7 @@ mod probe_bake;
 mod probe_check;
 mod probe_dump;
 pub mod profile;
+mod projectile_draw;
 mod projectiles;
 mod quality;
 mod query_drift;
@@ -216,6 +217,7 @@ pub use profile::{
     SystemTiming, TimingTail, check_budget, load_budget, profile_engine, profile_replay,
     profile_scene, warmup_for,
 };
+pub use projectile_draw::{ProjectileLook, ProjectileVisual, ProjectileVisuals};
 pub use projectiles::{ProjectileConfig, Projectiles, projectiles_step, spawn_projectile};
 pub use quality::{QUALITY_ENV, QualitySetting, resolve_render_scale, resolve_startup_quality};
 pub use query_drift::{QueryDriftReport, check_query_drift_replay, check_query_drift_with};

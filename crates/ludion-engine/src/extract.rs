@@ -34,9 +34,9 @@ use ludion_renderer::{
     DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
     GroundMarkerInstance, InstanceKey, LocalShadowData, MAX_SUN_CASCADES, MapImage, MeshData,
     MeshInstance, MeshShape, MeshTexture, ParticleInstance, PointLightData, PostData, ProbeData,
-    ProbeVolume, QualityParams, RenderCamera, RenderScene, SkinJoint, SpotLightData,
-    SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap, UiInstance,
-    WorldVoxelGrid, aspect_ratio,
+    ProbeVolume, ProjectileItem, QualityParams, RenderCamera, RenderScene, SkinJoint,
+    SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap,
+    UiInstance, WorldVoxelGrid, aspect_ratio,
 };
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -58,6 +58,7 @@ use crate::particles::{self, CameraBasis};
 use crate::patterns::{self, BulletKind, PatternDoc, Volley};
 use crate::prefab::PrefabInstance;
 use crate::prefab_clips::{PartRests, PrefabClipData};
+use crate::projectile_draw::ProjectileDraw;
 use crate::ui;
 use crate::voxel_mesh::VoxelStaticGrid;
 
@@ -643,6 +644,7 @@ pub(crate) fn extract_through(
         view,
         degraded,
         None,
+        None,
     )
 }
 
@@ -659,6 +661,7 @@ pub(crate) fn extract_through_blend(
     view: Option<&ViewPose>,
     degraded: &mut Vec<(String, Diagnostic)>,
     blend: Option<&mut BlendData>,
+    projectiles: Option<&mut ProjectileDraw>,
 ) -> Result<RenderScene, Vec<Diagnostic>> {
     // The cache owns the decoded bytes; `extract`'s `RenderScene` gets a handle, so a hit reads out
     // of the cache instead of touching disk. Every asset is `Arc`-shared (a hit is a refcount bump,
@@ -684,6 +687,7 @@ pub(crate) fn extract_through_blend(
         view,
         degraded,
         blend,
+        projectiles,
     )
 }
 
@@ -701,6 +705,7 @@ fn extract_inner(
     view: Option<&ViewPose>,
     degraded: &mut Vec<(String, Diagnostic)>,
     blend: Option<&mut BlendData>,
+    projectiles: Option<&mut ProjectileDraw>,
 ) -> Result<RenderScene, Vec<Diagnostic>> {
     // Gameplay time, read once: every closed form below — a volley's bullets, a particle emitter's
     // live window, a clip's phase — measures `now − started`, so reading the world's `GameClock`
@@ -1446,6 +1451,16 @@ fn extract_inner(
             })
             .collect();
     }
+    // Appended last among the world's lists so decals and drop shadows never land on a shot and GI
+    // never sees one; `None` draws with the default table.
+    let projectile_keys = match projectiles {
+        Some(draw) => crate::projectile_draw::extract_projectiles(&mut scene, world, draw),
+        None => crate::projectile_draw::extract_projectiles(
+            &mut scene,
+            world,
+            &ProjectileDraw::default(),
+        ),
+    };
     if let (Some(cam), Some(_)) = (viewmodel_camera, &scene.viewmodel) {
         ludion_renderer::compose_viewmodel(&mut scene, drawn_camera_model(world, &ids, cam));
     }
@@ -1467,7 +1482,16 @@ fn extract_inner(
                     .iter()
                     .zip(&scene.meshes)
                     .map(|(&owner, mesh)| (!mesh.viewmodel).then_some(owner))
+                    // Appended projectile meshes have no owner entity: unkeyed, but present, so the
+                    // list stays parallel to `scene.meshes`.
+                    .chain(
+                        projectile_keys
+                            .iter()
+                            .filter(|(_, item)| matches!(item, ProjectileItem::Mesh(_)))
+                            .map(|_| None),
+                    )
                     .collect(),
+                projectiles: projectile_keys,
                 sprites: sprite_keys,
                 lights: light_ids,
                 spot_lights: spot_light_ids,
@@ -1495,6 +1519,7 @@ struct BlendKeys {
     decals: Vec<EntityId>,
     particles: Vec<InstanceKey>,
     bullets: Vec<(InstanceKey, u32)>,
+    projectiles: Vec<(u64, ProjectileItem)>,
 }
 
 /// The entity whose blend delta moves `id`: the outermost parent across a resolved `ParentJoint`
@@ -1557,6 +1582,7 @@ fn fill_blend(
         .collect();
     blend.particles = keys.particles;
     blend.bullets = keys.bullets;
+    blend.projectiles = keys.projectiles;
 
     let unique: BTreeSet<EntityId> = [
         &blend.meshes,
@@ -5317,6 +5343,7 @@ mod tests {
             ludion_renderer::QualityParams::FULL.particle_density,
             None,
             &mut degraded,
+            None,
             None,
         )
         .expect("the world extracts");

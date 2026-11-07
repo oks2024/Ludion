@@ -42,12 +42,25 @@ pub struct BlendData {
     pub drop_shadows: Vec<Option<EntityId>>,
     /// Keys parallel to [`RenderScene::decals`].
     pub decals: Vec<Option<EntityId>>,
-    /// Instance keys parallel to [`RenderScene::particles`], ascending; empty when uncollected.
-    /// An unsorted or length-mismatched list is treated as unkeyed.
+    /// Instance keys for the leading [`RenderScene::particles`] (the emitters'; pool billboards
+    /// follow them unkeyed), ascending; empty when uncollected. An unsorted list, or one longer
+    /// than the scene's particles, is treated as unkeyed.
     pub particles: Vec<InstanceKey>,
     /// Volley bullets: each key with its index into [`RenderScene::sprites`], ascending by key.
     /// The matching `sprites` key entries stay `None`.
     pub bullets: Vec<(InstanceKey, u32)>,
+    /// Projectile-pool shots: each key (`index << 32 | generation`) with the scene item that draws
+    /// it, ascending by key. A shot has no owner entity, so its mesh entry in `meshes` is `None`.
+    pub projectiles: Vec<(u64, ProjectileItem)>,
+}
+
+/// The scene item that draws one pool projectile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectileItem {
+    /// An index into [`RenderScene::meshes`].
+    Mesh(u32),
+    /// An index into [`RenderScene::particles`].
+    Particle(u32),
 }
 
 /// The identity of one particle or bullet across ticks.
@@ -115,7 +128,10 @@ pub fn blend(
     };
     if alpha >= 1.0
         || prev.epoch != next_data.epoch
-        || (prev.poses.is_empty() && prev.particles.is_empty() && prev.bullets.is_empty())
+        || (prev.poses.is_empty()
+            && prev.particles.is_empty()
+            && prev.bullets.is_empty()
+            && prev.projectiles.is_empty())
     {
         return next.clone();
     }
@@ -206,6 +222,7 @@ pub fn blend(
 
     blend_particles(prev_scene, prev, next, next_data, alpha, &mut out);
     blend_bullets(prev_scene, prev, next_data, alpha, &mut out);
+    blend_projectiles(prev_scene, prev, next_data, alpha, &mut out);
 
     let locals_moved = blend_viewmodel(prev_scene, prev, next_data, alpha, &mut out);
 
@@ -252,8 +269,8 @@ fn blend_viewmodel(
     let (Some(prev_vm), Some(_)) = (&prev_scene.viewmodel, &out.viewmodel) else {
         return false;
     };
-    let keyed_particles = prev.particles.len() == prev_scene.particles.len()
-        && next_data.particles.len() == out.particles.len()
+    let keyed_particles = prev.particles.len() <= prev_scene.particles.len()
+        && next_data.particles.len() <= out.particles.len()
         && sorted(&prev.particles, |k| *k)
         && sorted(&next_data.particles, |k| *k);
     let Some(mut vm) = out.viewmodel.take() else {
@@ -372,8 +389,8 @@ fn blend_particles(
     alpha: f32,
     out: &mut RenderScene,
 ) {
-    if prev.particles.len() != prev_scene.particles.len()
-        || next_data.particles.len() != next.particles.len()
+    if prev.particles.len() > prev_scene.particles.len()
+        || next_data.particles.len() > next.particles.len()
     {
         return;
     }
@@ -419,6 +436,61 @@ fn blend_bullets(
             o.center = a.lerp(o.center, alpha);
         },
     );
+}
+
+/// Lerps each pool shot found in both ticks (by its `index << 32 | generation` key) between its two
+/// positions; a birth or death takes the newer tick. A shot has no owner, so nothing snaps it.
+fn blend_projectiles(
+    prev_scene: &RenderScene,
+    prev: &BlendData,
+    next_data: &BlendData,
+    alpha: f32,
+    out: &mut RenderScene,
+) {
+    let in_range = |list: &[(u64, ProjectileItem)], meshes: usize, particles: usize| {
+        list.iter().all(|(_, item)| match *item {
+            ProjectileItem::Mesh(i) => (i as usize) < meshes,
+            ProjectileItem::Particle(i) => (i as usize) < particles,
+        })
+    };
+    if !in_range(
+        &prev.projectiles,
+        prev_scene.meshes.len(),
+        prev_scene.particles.len(),
+    ) || !in_range(
+        &next_data.projectiles,
+        out.meshes.len(),
+        out.particles.len(),
+    ) || !prev.projectiles.windows(2).all(|w| w[0].0 < w[1].0)
+        || !next_data.projectiles.windows(2).all(|w| w[0].0 < w[1].0)
+    {
+        return;
+    }
+    let (mut i, mut j) = (0, 0);
+    while i < prev.projectiles.len() && j < next_data.projectiles.len() {
+        let ((ka, a), (kb, b)) = (prev.projectiles[i], next_data.projectiles[j]);
+        match ka.cmp(&kb) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                match (a, b) {
+                    (ProjectileItem::Mesh(a), ProjectileItem::Mesh(b)) => {
+                        let from = prev_scene.meshes[a as usize].model.w_axis;
+                        let o = &mut out.meshes[b as usize].model.w_axis;
+                        *o = from.lerp(*o, alpha);
+                    }
+                    (ProjectileItem::Particle(a), ProjectileItem::Particle(b)) => {
+                        let from = prev_scene.particles[a as usize].center;
+                        let o = &mut out.particles[b as usize].center;
+                        *o = from.lerp(*o, alpha);
+                    }
+                    _ => {}
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+    }
 }
 
 /// The keys for a list of `len` items: the parallel list when it matches, otherwise all unkeyed.
@@ -864,6 +936,63 @@ mod tests {
         let (ps, pd) = particles(&[(key(E1, 6), 0.0, 1.0), (key(E1, 5), 0.0, 1.0)]);
         let (ns, nd) = particles(&[(key(E1, 5), 1.0, 1.0)]);
         assert_eq!(blend(&ps, &pd, &ns, &nd, 0.5), ns);
+    }
+
+    /// A scene with entity mesh `E1` at `mx`, an emitter particle at `px` (keyed), and pool shots
+    /// appended: a mesh shot and a billboard shot at `sx` for each key in `shots`.
+    fn with_shots(mx: f32, px: f32, sx: f32, shots: &[u64]) -> (RenderScene, BlendData) {
+        let mut s = RenderScene::empty((64, 64));
+        let mut d = BlendData {
+            epoch: 1,
+            poses: vec![(E1, at(mx))],
+            ..BlendData::default()
+        };
+        s.meshes.push(mesh(at(mx)));
+        d.meshes.push(Some(E1));
+        s.particles.push(particle(px, 1.0));
+        d.particles.push(key(E1, 0));
+        for &k in shots {
+            d.projectiles
+                .push((k, ProjectileItem::Mesh(s.meshes.len() as u32)));
+            s.meshes.push(mesh(at(sx)));
+            d.meshes.push(None);
+            d.projectiles
+                .push((k + 1, ProjectileItem::Particle(s.particles.len() as u32)));
+            s.particles.push(particle(sx, 1.0));
+        }
+        (s, d)
+    }
+
+    #[test]
+    fn matched_projectiles_lerp_and_births_take_the_newer_tick() {
+        let (ps, pd) = with_shots(0.0, 0.0, 0.0, &[10]);
+        let (ns, nd) = with_shots(2.0, 2.0, 4.0, &[10, 20]);
+        let out = blend(&ps, &pd, &ns, &nd, 0.5);
+        // The entity mesh and the emitter particle still blend beside the appended shots.
+        assert_eq!(out.meshes[0].model.w_axis.x, 1.0);
+        assert_eq!(out.particles[0].center.x, 1.0);
+        // The matched shot lerps (mesh and billboard); the birth is as extracted.
+        assert_eq!(out.meshes[1].model.w_axis.x, 2.0);
+        assert_eq!(out.particles[1].center.x, 2.0);
+        assert_eq!(out.meshes[2], ns.meshes[2]);
+        assert_eq!(out.particles[2], ns.particles[2]);
+    }
+
+    #[test]
+    fn a_pool_only_scene_still_interpolates() {
+        let mk = |x: f32| {
+            let mut s = RenderScene::empty((64, 64));
+            s.particles.push(particle(x, 1.0));
+            let d = BlendData {
+                epoch: 1,
+                projectiles: vec![(7, ProjectileItem::Particle(0))],
+                ..BlendData::default()
+            };
+            (s, d)
+        };
+        let (ps, pd) = mk(0.0);
+        let (ns, nd) = mk(2.0);
+        assert_eq!(blend(&ps, &pd, &ns, &nd, 0.5).particles[0].center.x, 1.0);
     }
 
     #[test]

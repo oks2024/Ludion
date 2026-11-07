@@ -82,7 +82,7 @@ mod voxel_bake;
 mod shader_gen;
 mod smaa_lut;
 
-pub use blend::{BlendData, CameraBlend, InstanceKey, blend, latch_camera};
+pub use blend::{BlendData, CameraBlend, InstanceKey, ProjectileItem, blend, latch_camera};
 pub use camera_latch::CameraLatch;
 pub use cluster::{ClusterStats, cluster_stats};
 pub use compressed::{CompressedUploadError, check_compressed};

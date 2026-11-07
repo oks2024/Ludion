@@ -212,6 +212,8 @@ pub struct Engine {
     /// The game's projectile pool config ([`EngineBuilder::projectiles`](crate::EngineBuilder::projectiles)),
     /// already validated at build; `None` installs no pool.
     pub(crate) projectile_config: Option<crate::ProjectileConfig>,
+    /// How the pool is drawn ([`EngineBuilder::projectile_visuals`](crate::EngineBuilder::projectile_visuals)).
+    pub(crate) projectile_draw: crate::projectile_draw::ProjectileDraw,
     /// What the last install-time validation pass reported at `Warning` severity — the errors
     /// refused the load, so only lints survive to be read. Host/test state like
     /// [`profile_migration`](Engine::profile_migration): never hashed, never snapshotted. See
@@ -771,6 +773,7 @@ impl Engine {
             doc_texts: BTreeMap::new(),
             resource_carriers: Vec::new(),
             projectile_config: None,
+            projectile_draw: crate::projectile_draw::ProjectileDraw::default(),
             doc_validation_warnings: Vec::new(),
             doc_skip_warnings: Vec::new(),
             doc_skip_summary: None,
@@ -4705,6 +4708,7 @@ impl Engine {
         let world = self.driver.world();
         let root = AssetRoot::content(&self.project_root);
         let cache = &mut self.asset_cache;
+        let projectile_draw = &mut self.projectile_draw;
         let mut degraded = Vec::new();
         if prefetched {
             let misses = cache.cook_misses();
@@ -4729,6 +4733,7 @@ impl Engine {
             view,
             &mut degraded,
             blend,
+            Some(projectile_draw),
         )
         .map(|mut scene| {
             scene.debug_lines = crate::debug_draw::segments(world, &self.debug_draw);
