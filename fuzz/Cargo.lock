@@ -787,6 +787,7 @@ dependencies = [
  "ludion-ecs",
  "ludion-font",
  "ludion-physics",
+ "ludion-projectiles",
  "ludion-protocol",
  "ludion-renderer",
  "ludion-scene",
@@ -858,6 +859,16 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ludion-projectiles"
+version = "0.1.0"
+dependencies = [
+ "ludion-core",
+ "ludion-physics",
+ "ludion-spatial",
+ "xxhash-rust",
 ]
 
 [[package]]
