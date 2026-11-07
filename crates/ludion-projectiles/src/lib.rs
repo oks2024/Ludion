@@ -55,10 +55,12 @@
 //! assert_eq!(pool.position(id), Some([1.0, 0.0, 0.0]));
 //! ```
 
+mod codec;
 mod hash;
 mod pool;
 mod step;
 
+pub use codec::{DecodeError, MAX_DECODE_CAPACITY};
 pub use pool::{PIERCE_MEMORY, ProjectileDesc, ProjectileId, ProjectilePool, Response, SpawnError};
 pub use step::{
     Expired, HitEvent, HitOutcome, MAX_HITS_PER_TICK, SKIN, StepConfig, StepEvents, step,

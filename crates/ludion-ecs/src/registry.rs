@@ -298,12 +298,73 @@ pub struct Registry {
     entries: Vec<ComponentInfo>,
     by_name: BTreeMap<String, usize>,
     by_type: BTreeMap<TypeId, usize>,
+    resource_digests: Vec<ResourceDigest>,
+}
+
+type DigestReader = Box<dyn Fn(&World) -> Option<u64> + Send + Sync>;
+
+/// A resource the world hash folds in (rule 6): its name, type, and an erased digest reader.
+struct ResourceDigest {
+    name: String,
+    type_id: TypeId,
+    digest: DigestReader,
 }
 
 impl Registry {
     /// Creates an empty registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Registers a **resource digest**: the world hash folds `digest(&T)` in (rule 6) whenever the
+    /// world holds a `T`, and adds no bytes when it does not. Digests are emitted in registration
+    /// order. The digest must be a pure function of sim state.
+    ///
+    /// # Errors
+    /// `L0005` if `name` is already taken by a resource digest, or if `T` already has one.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_ecs::{Registry, World};
+    ///
+    /// struct Score(u64);
+    /// let mut registry = Registry::new();
+    /// registry.register_resource_digest::<Score>("score", |s| s.0).unwrap();
+    /// let mut world = World::new();
+    /// assert_eq!(registry.resource_digests(&world).count(), 0);
+    /// world.insert_resource(Score(7));
+    /// assert_eq!(registry.resource_digests(&world).collect::<Vec<_>>(), [("score", 7)]);
+    /// ```
+    pub fn register_resource_digest<T: Send + Sync + 'static>(
+        &mut self,
+        name: &str,
+        digest: fn(&T) -> u64,
+    ) -> Result<(), Diagnostic> {
+        let type_id = TypeId::of::<T>();
+        if self
+            .resource_digests
+            .iter()
+            .any(|r| r.name == name || r.type_id == type_id)
+        {
+            return Err(duplicate_name(name));
+        }
+        self.resource_digests.push(ResourceDigest {
+            name: name.to_string(),
+            type_id,
+            digest: Box::new(move |w| w.resource::<T>().map(digest)),
+        });
+        Ok(())
+    }
+
+    /// The `(name, digest)` of every registered resource digest whose resource is present in
+    /// `world`, in registration order.
+    pub fn resource_digests<'a>(
+        &'a self,
+        world: &'a World,
+    ) -> impl Iterator<Item = (&'a str, u64)> + 'a {
+        self.resource_digests
+            .iter()
+            .filter_map(|r| (r.digest)(world).map(|d| (r.name.as_str(), d)))
     }
 
     /// Registers component `T` under `name`.

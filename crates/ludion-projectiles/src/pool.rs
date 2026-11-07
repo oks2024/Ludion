@@ -151,10 +151,10 @@ pub struct ProjectilePool {
     pub(crate) cols: Cols,
     pub(crate) scratch: Vec<Work>,
     /// LIFO of freed slots.
-    free: Vec<u32>,
+    pub(crate) free: Vec<u32>,
     /// Slots ever handed out; the step only visits `0..high_water`.
     pub(crate) high_water: usize,
-    live: usize,
+    pub(crate) live: usize,
 }
 
 const NO_HANDLE: Handle = Handle {

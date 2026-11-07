@@ -95,8 +95,10 @@ quiescent degrade.
 `WorldHash` is XXH3-64 (seed 0) over a canonical byte stream: preamble, then every *live* entity
 in ascending slot-index order (`E` + index/generation as u32 LE), then each entity's *registered*
 components in registry registration order (`C` + length-prefixed name + canonical JSON-value
-encoding with explicitly sorted object keys and ryu shortest-round-trip number text). Resources —
-including RNG state — and the free-list shape are deliberately excluded: the hash covers
+encoding with explicitly sorted object keys and ryu shortest-round-trip number text). Then (rule 6) each
+resource the registry names with `register_resource_digest` that is present: `R` + length-prefixed
+name + the digest as u64 LE; an absent resource adds no bytes, so the domain tag stays `v2`. Other
+resources — including RNG state — and the free-list shape are deliberately excluded: the hash covers
 observable world content; divergence elsewhere must eventually surface as diverging component
 data, which the per-frame hash sequence catches. Display/serde form is exactly 16 lowercase hex
 digits (`WorldHash::parse` accepts only that).

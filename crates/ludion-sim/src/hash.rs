@@ -40,6 +40,11 @@
 //!    - object ⇒ `{` + entry count + entries **sorted by key bytes**, each as length-prefixed key
 //!      then value encoding. (Struct fields therefore hash in a fixed order regardless of
 //!      declaration order or `serde_json` map internals.)
+//! 6. **Resource digests:** after the entity loop, for each resource the registry names with a digest
+//!    ([`Registry::register_resource_digest`]) that is present in the world, in registration order:
+//!    the byte `R`, then the length-prefixed resource name, then the digest as `u64` little-endian.
+//!    An absent resource writes nothing, so a world without one hashes as it always did and the
+//!    domain tag stays `v2`.
 //!
 //! The value being encoded is the one a component's `Serialize` describes — the same value
 //! `serde_json::to_value` would have built. The private `canonical` submodule holds the encoder that
@@ -47,11 +52,12 @@
 //! with that `Value`; the rules above are what it must produce, and the oracle test below is what
 //! pins it there.
 //!
-//! **Deliberately excluded:** resources (including the `DeterministicRng` state) and the free-list
-//! shape. The hash covers observable world *content*, per the architecture's definition
-//! ("canonical world serialization: registry order, entity-index order"); RNG state and allocator
-//! internals are covered by snapshots, and any divergence in them that ever matters must surface
-//! as diverging component data — which the per-frame hash sequence catches.
+//! **Deliberately excluded:** resources (including the `DeterministicRng` state), except one the
+//! registry names with a digest (rule 6), and the free-list shape. The hash covers observable world
+//! *content*, per the architecture's definition ("canonical world serialization: registry order,
+//! entity-index order"); RNG state and allocator internals are covered by snapshots, and any
+//! divergence in them that ever matters must surface as diverging component data — which the
+//! per-frame hash sequence catches.
 
 mod canonical;
 
@@ -234,6 +240,11 @@ impl WorldHash {
                     }
                 }
             }
+        }
+        for (name, digest) in registry.resource_digests(world) {
+            hasher.update(b"R");
+            update_bytes(&mut hasher, name.as_bytes());
+            hasher.update(&digest.to_le_bytes());
         }
         Ok(HashReport {
             hash: WorldHash(hasher.digest()),
@@ -1176,6 +1187,84 @@ mod tests {
 
         // A sim spawn after all that still gets the id a world without popups would hand out.
         assert_eq!(world.spawn(), plain.spawn());
+    }
+
+    struct Pool(u64);
+
+    #[derive(Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Copy)]
+    struct Tint(u32);
+
+    fn world_with_tint() -> World {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert(e, Tint(1)).unwrap();
+        world
+    }
+
+    fn tint_registry() -> Registry {
+        let mut registry = Registry::new();
+        registry.register::<Tint>("Tint").unwrap();
+        registry
+    }
+
+    #[test]
+    fn a_resource_digest_is_hashed_only_while_the_resource_exists() {
+        let plain = tint_registry();
+        let mut digested = tint_registry();
+        digested
+            .register_resource_digest::<Pool>("pool", |p| p.0)
+            .unwrap();
+        let mut world = world_with_tint();
+        let base = WorldHash::compute(&world, &plain).unwrap();
+        // Registered but absent: no bytes.
+        assert_eq!(WorldHash::compute(&world, &digested).unwrap(), base);
+        world.insert_resource(Pool(5));
+        let with = WorldHash::compute(&world, &digested).unwrap();
+        assert_ne!(with, base);
+        // An unregistered resource stays invisible.
+        assert_eq!(WorldHash::compute(&world, &plain).unwrap(), base);
+        // The digest value counts.
+        world.insert_resource(Pool(6));
+        assert_ne!(WorldHash::compute(&world, &digested).unwrap(), with);
+        // The stream is the tag, the entities and components, then `R`, the name and the digest.
+        let mut expected = Xxh3::new();
+        expected.update(DOMAIN_TAG);
+        expected.update(b"E");
+        let e = world.entities().next().unwrap();
+        expected.update(&e.index().to_le_bytes());
+        expected.update(&e.generation().to_le_bytes());
+        expected.update(b"C");
+        update_bytes(&mut expected, b"Tint");
+        expected.update(Canonical::default().encode(&Tint(1)).unwrap());
+        expected.update(b"R");
+        update_bytes(&mut expected, b"pool");
+        expected.update(&6u64.to_le_bytes());
+        assert_eq!(
+            WorldHash::compute(&world, &digested).unwrap().as_u64(),
+            expected.digest()
+        );
+    }
+
+    #[test]
+    fn a_duplicate_resource_digest_is_l0005() {
+        let mut registry = Registry::new();
+        registry
+            .register_resource_digest::<Pool>("pool", |p| p.0)
+            .unwrap();
+        let err = registry
+            .register_resource_digest::<Pool>("other", |p| p.0)
+            .unwrap_err();
+        assert_eq!(
+            err.code,
+            ludion_core::codes::code::DUPLICATE_COMPONENT_REGISTRATION
+        );
+        let err = registry
+            .register_resource_digest::<u8>("pool", |p| *p as u64)
+            .unwrap_err();
+        assert_eq!(
+            err.code,
+            ludion_core::codes::code::DUPLICATE_COMPONENT_REGISTRATION
+        );
     }
 
     #[test]
