@@ -384,6 +384,19 @@
   READY per the roadmap.** Handoff open item: G1 integrates and deletes `games/vigil`'s interim
   collision.
 
+- **3D broadphase (`spatial3d`, decision 10) landed 2026-11-07** (Serious Isaac request 0005,
+  r2158–r2160). Core: a sorted-median-split BVH over caller-fed `Handle{Entity|Slot}` items, with
+  overlap, k-nearest and swept first-hit queries in a total order, checked against a brute-force
+  oracle and for thread-count invariance. Integration: `SpatialVolume`, registered last, so no
+  existing hash moves; `spatial3d::rebuild` is explicitly scheduled. The index is not yet carried
+  by snapshots, because that moves `replay_content_hash`; it lands with request 0006's corpus
+  re-record, so readers run after the rebuild. Docs: `ludion docs spatial-3d`. Bench:
+  `cargo test -p ludion-spatial --release --test spatial3d_bench -- --ignored --nocapture`.
+  Indicative figures on the unpinned M5 (500 enemies + 5,000 projectiles): rebuild 0.29 ms;
+  5,000 swept casts 2.55 ms serial, 0.48 ms over `par_chunks`; 500 k-nearest 0.64 ms; serial
+  frame sum 3.57 ms against the inline `SPATIAL3D_BUDGET_MS = 11`. Pinned M4/3090 runs are owed
+  (`Plan/owed.md`).
+
 ## Waves
 
 Ordering rationale: build enough to measure (Wave 1) → **measure before the API commits** (Wave 2,
