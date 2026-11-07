@@ -2295,6 +2295,11 @@ pub mod code {
     /// Raised by `ludion-engine` after a tick.
     pub const PROJECTILE_STEP_NOT_RUN: DiagnosticCode = DiagnosticCode::new("L4030");
 
+    /// `L4031` — a snapshot restore found the build's `ProjectileConfig::capacity` below the
+    /// snapshot pool's high-water mark, so the pool was not restored and starts empty. A
+    /// **warning**; the rest of the restore proceeds.
+    pub const PROJECTILE_RESTORE_CAPACITY: DiagnosticCode = DiagnosticCode::new("L4031");
+
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
     /// `L5001` — no audio output device is available, so the playback sink cannot open a stream.
@@ -10725,6 +10730,22 @@ Known limit: a wrapper that calls `projectiles_step` only behind its own guard, 
 state, warns until its first call.",
     },
     CodeEntry {
+        code: code::PROJECTILE_RESTORE_CAPACITY,
+        severity: Severity::Warning,
+        title: "projectile pool too small for the snapshot",
+        explanation: "\
+A snapshot restore found the build's `ProjectileConfig::capacity` below the number of slots the
+snapshot's pool had ever used (its high-water mark). Shrinking would drop live shots and leave a
+free list no run produced, so the snapshot's pool was not restored: the engine starts a fresh,
+empty pool at the build's capacity. The rest of the restore proceeds.
+
+A restore otherwise takes the build's `ProjectileConfig` (gravity, targets, layers, capacity), not
+the one the snapshot was taken under.
+
+Fix: raise `ProjectileConfig::capacity` to at least the number the message names, or restore with
+the old build.",
+    },
+    CodeEntry {
         code: code::AUDIO_DEVICE_UNAVAILABLE,
         severity: Severity::Warning,
         title: "no audio output device available",
@@ -11428,6 +11449,7 @@ mod tests {
         code::PROJECTILE_VISUALS_INVALID,
         code::PROJECTILE_MUZZLE_UNRESOLVED,
         code::PROJECTILE_STEP_NOT_RUN,
+        code::PROJECTILE_RESTORE_CAPACITY,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,
@@ -11603,6 +11625,7 @@ mod tests {
             code::PROJECTILE_SPAWN_REFUSED,
             code::PROJECTILE_MUZZLE_UNRESOLVED,
             code::PROJECTILE_STEP_NOT_RUN,
+            code::PROJECTILE_RESTORE_CAPACITY,
             code::AUDIO_DEVICE_UNAVAILABLE,
             code::AUDIO_STREAM_FAILED,
             code::MUSIC_TRACK_UNPLAYABLE,

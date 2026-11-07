@@ -126,6 +126,46 @@ fn a_decoded_pool_continues_identically() {
 }
 
 #[test]
+fn a_resized_pool_continues_identically() {
+    let (reference, _) = churned();
+    let high = reference.high_water();
+    assert!(high > 0 && high < reference.capacity());
+    let (world, _) = box_world(&[([20.0, 3.0, 0.0], [0.5, 4.0, 4.0])]);
+    let physics = physics_ref(&world);
+    let mut cfg = config(physics);
+    cfg.gravity = [0.0, -9.8, 0.0];
+    let index = index_of(&[sphere(Handle::slot(500, 0), [4.0, 1.0, 0.0], 1.0, 1)]);
+
+    for capacity in [reference.capacity() * 4, high] {
+        let (mut a, _) = churned();
+        let (mut b, _) = churned();
+        assert!(b.resize(capacity));
+        assert_eq!(b.capacity(), capacity);
+        assert_eq!(a.digest(), b.digest());
+        let (mut ea, mut eb) = (StepEvents::default(), StepEvents::default());
+        for k in 0..20u32 {
+            step(&mut a, DT, physics, &index, &cfg, &mut ea);
+            step(&mut b, DT, physics, &index, &cfg, &mut eb);
+            assert_eq!(a.digest(), b.digest(), "capacity {capacity}, tick {k}");
+            assert_eq!(
+                event_bits(&ea),
+                event_bits(&eb),
+                "capacity {capacity}, tick {k}"
+            );
+        }
+        if capacity > high {
+            assert_eq!(a.spawn(desc(7)), b.spawn(desc(7)), "next id");
+        }
+    }
+    let mut pool = reference;
+    assert!(
+        !pool.resize(high - 1),
+        "below the high-water mark is refused"
+    );
+    assert_eq!(pool.capacity(), 64);
+}
+
+#[test]
 fn nan_and_negative_zero_survive() {
     let mut pool = ProjectilePool::with_capacity(2);
     let mut d = ProjectileDesc::new([0.0; 3], [1.0, 0.0, 0.0]);

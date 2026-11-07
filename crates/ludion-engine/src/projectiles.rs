@@ -233,6 +233,10 @@ pub fn spawn_projectile(world: &mut World, desc: ProjectileDesc) -> Option<Proje
 /// Advances the pool one tick: gravity, drag and lifetime, then the swept first hit against the
 /// physics colliders and the `spatial3d` index, then each hit's response.
 ///
+/// The crate's step allocates nothing at one thread; this system takes the [`Projectiles`] resource
+/// out of the world and puts it back each tick, which re-boxes it (the ECS has no scoped take, and
+/// the step needs the physics world and index while it mutates the pool).
+///
 /// **Schedule it after `spatial3d_rebuild`.** It reads the physics state of the last completed step
 /// (the physics systems run after the game's), and the events it leaves in
 /// [`Projectiles::events`] are valid until the next step. Projectiles are not entries of the target

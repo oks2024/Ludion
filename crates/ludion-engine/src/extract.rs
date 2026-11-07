@@ -4162,7 +4162,7 @@ pub(crate) fn drawn_camera_model(world: &World, ids: &[EntityId], id: EntityId) 
 }
 
 /// Where a shot is drawn from: the named muzzle's world point on the drawn camera, or `None` (no
-/// muzzle named, no live shot, or the name unresolved, which latches `L4029`).
+/// muzzle named, no `from_muzzle` look, no live shot, or the name unresolved, which latches `L4029`).
 ///
 /// The gun draws through the lens projection and a shot through the world one, so the muzzle's
 /// camera-local x and y are rescaled by the focal-length ratio to land on the same screen pixel.
@@ -4178,6 +4178,10 @@ fn muzzle_point(
     degraded: &mut Vec<(String, Diagnostic)>,
 ) -> Option<Vec3> {
     let name = draw.visuals.muzzle.as_deref()?;
+    let visuals = &draw.visuals;
+    if !visuals.fallback.from_muzzle && !visuals.tags.values().any(|v| v.from_muzzle) {
+        return None;
+    }
     if world
         .resource::<crate::Projectiles>()
         .is_none_or(|res| res.pool().is_empty())

@@ -649,11 +649,27 @@ fn capture_projectiles(projectiles: &crate::Projectiles) -> ProjectilesDoc {
     }
 }
 
-/// Rebuilds the pool resource from a snapshot's `projectiles` field.
+/// What a snapshot's `projectiles` field restores into.
+enum RestoredPool {
+    /// The pool, under the builder's config.
+    Pool(Box<crate::Projectiles>),
+    /// The builder configured no pool: nothing is restored.
+    Dropped,
+    /// The builder's capacity is below the snapshot's high-water mark: nothing is restored (the
+    /// engine installs a fresh builder pool) and this warning is reported.
+    Refused(Diagnostic),
+}
+
+/// Rebuilds the pool resource from a snapshot's `projectiles` field under the **builder's**
+/// `ProjectileConfig`: the snapshot's own config is validated but not used, so a restart that
+/// changed gravity, capacity or targeting takes the new settings (the pool is resized).
 ///
 /// # Errors
 /// `L3008` if the config is invalid or the blob does not decode.
-fn restore_projectiles(doc: &ProjectilesDoc) -> Result<crate::Projectiles, Diagnostic> {
+fn restore_projectiles(
+    doc: &ProjectilesDoc,
+    builder: Option<&crate::ProjectileConfig>,
+) -> Result<RestoredPool, Diagnostic> {
     let invalid = |why: String| {
         Diagnostic::new(
             code::PROTOCOL_SNAPSHOT_INVALID,
@@ -665,7 +681,7 @@ fn restore_projectiles(doc: &ProjectilesDoc) -> Result<crate::Projectiles, Diagn
     doc.config.validate().map_err(|d| invalid(d.message))?;
     let bytes = base64::decode(&doc.state).map_err(|error| invalid(format!("`state`: {error}")))?;
     let mut cursor = bytes.as_slice();
-    let pool = ludion_projectiles::ProjectilePool::decode(&mut cursor)
+    let mut pool = ludion_projectiles::ProjectilePool::decode(&mut cursor)
         .map_err(|error| invalid(error.to_string()))?;
     let events = ludion_projectiles::StepEvents::decode(&mut cursor)
         .map_err(|error| invalid(error.to_string()))?;
@@ -675,11 +691,32 @@ fn restore_projectiles(doc: &ProjectilesDoc) -> Result<crate::Projectiles, Diagn
     if pool.capacity() != doc.config.capacity as usize {
         return Err(invalid("pool capacity differs from the config".to_string()));
     }
-    Ok(crate::Projectiles::with_pool(
-        doc.config.clone(),
+    let Some(builder) = builder else {
+        return Ok(RestoredPool::Dropped);
+    };
+    if !pool.resize(builder.capacity as usize) {
+        return Ok(RestoredPool::Refused(
+            Diagnostic::new(
+                code::PROJECTILE_RESTORE_CAPACITY,
+                format!(
+                    "the snapshot's projectile pool has used {} slots but the build's \
+                     `ProjectileConfig::capacity` is {}; the pool was not restored and starts empty",
+                    pool.high_water(),
+                    builder.capacity
+                ),
+            )
+            .with_path("/projectiles")
+            .with_help(format!(
+                "raise `ProjectileConfig::capacity` to at least {}, or restore with the old build",
+                pool.high_water()
+            )),
+        ));
+    }
+    Ok(RestoredPool::Pool(Box::new(crate::Projectiles::with_pool(
+        builder.clone(),
         pool,
         events,
-    ))
+    ))))
 }
 
 /// Decodes a snapshot's `physics` field back into a solver state at `tick_rate`.
@@ -1003,7 +1040,13 @@ pub(crate) fn restore_into(
         world.insert_resource(SpatialIndex::from_entries(entries));
     }
     if let Some(projectiles) = &doc.projectiles {
-        world.insert_resource(restore_projectiles(projectiles)?);
+        match restore_projectiles(projectiles, engine.projectile_config.as_ref())? {
+            RestoredPool::Pool(pool) => {
+                world.insert_resource(*pool);
+            }
+            RestoredPool::Dropped => {}
+            RestoredPool::Refused(warning) => invalid.push(warning),
+        }
     }
     if let Some(items) = doc.spatial_index_3d.take() {
         let mut index = ludion_spatial::spatial3d::Index3d::new();

@@ -62,7 +62,9 @@ despawning on its first hit. Set fields after it:
   hit by its response inside the step, so a ricochet continues the remaining travel the same tick.
   Casts fan out over `ludion_core::par`; results are identical at any thread count. After warm-up a
   step at one thread (`LUDION_THREADS=1`) allocates nothing; at more threads `par` spawns scoped
-  workers each tick, which allocate.
+  workers each tick, which allocate. The engine's `projectiles_step` system takes the resource out of
+  the world and puts it back, so it re-boxes that resource once per tick (the crate step itself does
+  not allocate).
 - **Responses:** `Reflect` bounces `v − (1 + restitution)(v·n)n` and the hit after `max_bounces`
   despawns. `Pierce` passes through up to `max` **index targets**; a world (physics) hit always
   despawns, except on an entity the shot already pierced, whose collider is skipped too. `Stop`
@@ -74,10 +76,13 @@ despawning on its first hit. Set fields after it:
   freezes every shot.
 - **Hashing:** `WorldHash` folds the pool as one block, only while the resource exists. Engine
   snapshots carry the pool, its generations, free list and pending events, and the `spatial3d` index;
-  a restore reproduces the uninterrupted trace.
+  a restore reproduces the uninterrupted trace. A restore takes the **build's** `ProjectileConfig`
+  (gravity, capacity, layers), not the snapshot's, and resizes the pool to it; a build with no pool
+  drops the snapshot's. A capacity below the pool's high-water mark restores an empty pool instead
+  (`L4031`).
 - **Diagnostics:** `L4026` refused spawn (once per cause), `L4027` invalid config, `L4028` invalid
   visuals, `L4029` unresolved muzzle, `L4030` a pool holding shots whose step never ran (usually an
-  unscheduled `projectiles_step`).
+  unscheduled `projectiles_step`), `L4031` a restore refused for a too-small capacity.
 
 ## Game-code recipes
 
@@ -108,10 +113,11 @@ for hit in projectiles.events().hits.clone() {
 | `color` | white | linear RGBA |
 | `emissive` | `4` | mesh emissive strength or billboard RGB multiplier |
 | `additive` | `true` | billboard only |
+| `from_muzzle` | `false` | draw this tag's new shots from the muzzle and converge them |
 
 Shots join the scene pass's existing instanced draws; there is no new pass. Under
 `present_interpolation` they interpolate between ticks. `muzzle: Some("gun")` names a `Viewmodel`
-entity: a shot first seen by extract is drawn leaving that point and eases onto its simulated path
+entity: a shot of a `from_muzzle` tag first seen by extract is drawn leaving that point and eases onto its simulated path
 over `converge_distance` (default 4 m). The offset is render-only and never reaches the sim or the
 hash. A one-shot render (`ludion render`), a restore and the first frame after a load extract
 unprimed, so shots in flight draw at their simulated position.

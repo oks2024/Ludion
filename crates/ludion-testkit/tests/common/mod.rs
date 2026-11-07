@@ -184,6 +184,7 @@ pub fn projectile_builder() -> EngineBuilder {
             color: [1.0, 0.55, 0.15, 1.0],
             emissive: 5.0,
             additive: true,
+            from_muzzle: true,
         },
     );
     visuals.tags.insert(
@@ -195,6 +196,7 @@ pub fn projectile_builder() -> EngineBuilder {
             color: [0.3, 0.8, 1.0, 1.0],
             emissive: 4.0,
             additive: false,
+            from_muzzle: true,
         },
     );
     Engine::builder()

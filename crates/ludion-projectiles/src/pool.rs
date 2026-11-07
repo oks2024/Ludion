@@ -192,6 +192,50 @@ impl ProjectilePool {
         }
     }
 
+    /// Slots ever handed out; a pool cannot shrink below this.
+    pub fn high_water(&self) -> usize {
+        self.high_water
+    }
+
+    /// Changes the slot count to `capacity`, keeping every live shot, id and the free list.
+    /// Returns `false` and changes nothing when `capacity` is below [`high_water`](Self::high_water).
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_projectiles::{ProjectileDesc, ProjectilePool};
+    ///
+    /// let mut pool = ProjectilePool::with_capacity(4);
+    /// let id = pool.spawn(ProjectileDesc::new([0.0; 3], [1.0, 0.0, 0.0])).unwrap();
+    /// assert!(pool.resize(16));
+    /// assert_eq!(pool.capacity(), 16);
+    /// assert!(pool.position(id).is_some());
+    /// assert!(!pool.resize(0)); // one slot has been handed out
+    /// ```
+    pub fn resize(&mut self, capacity: usize) -> bool {
+        if capacity < self.high_water {
+            return false;
+        }
+        let c = &mut self.cols;
+        c.pos.resize(capacity, [0.0; 3]);
+        c.vel.resize(capacity, [0.0; 3]);
+        c.gravity_scale.resize(capacity, 0.0);
+        c.drag.resize(capacity, 0.0);
+        c.radius.resize(capacity, 0.0);
+        c.owner.resize(capacity, None);
+        c.life.resize(capacity, 0.0);
+        c.tag.resize(capacity, 0);
+        c.response.resize(capacity, Response::Despawn);
+        c.bounces.resize(capacity, 0);
+        c.pierces.resize(capacity, 0);
+        c.pierced.resize(capacity, [NO_HANDLE; PIERCE_MEMORY]);
+        c.parked.resize(capacity, false);
+        c.generation.resize(capacity, 0);
+        c.alive.resize(capacity, false);
+        self.scratch.resize(capacity, Work::empty());
+        self.free.reserve(capacity.saturating_sub(self.free.len()));
+        true
+    }
+
     /// Slot count.
     pub fn capacity(&self) -> usize {
         self.cols.alive.len()

@@ -55,6 +55,9 @@ pub struct ProjectileVisual {
     pub emissive: f32,
     /// Billboard only: additive blending (the usual tracer) rather than alpha.
     pub additive: bool,
+    /// Draw new shots of this tag leaving [`ProjectileVisuals::muzzle`] and converge them; `false`
+    /// (default) draws them at their simulated position — enemy shots, for example.
+    pub from_muzzle: bool,
 }
 
 impl Default for ProjectileVisual {
@@ -66,6 +69,7 @@ impl Default for ProjectileVisual {
             color: [1.0; 4],
             emissive: 4.0,
             additive: true,
+            from_muzzle: false,
         }
     }
 }
@@ -101,10 +105,11 @@ pub struct ProjectileVisuals {
     /// The look of a tag with no entry.
     pub fallback: ProjectileVisual,
     /// `Name` of the entity a shot is drawn from: a `Viewmodel` (or a child of one) under a
-    /// first-person camera. A shot first seen by extract is drawn at that point and converges onto
-    /// its simulated path over [`converge_distance`](Self::converge_distance); the offset is
-    /// render-only and never reaches the sim or the hash. `None` draws shots at their simulated
-    /// position; a name that cannot be resolved does too, with `L4029`.
+    /// first-person camera. A shot of a [`from_muzzle`](ProjectileVisual::from_muzzle) tag, first
+    /// seen by extract, is drawn at that point and converges onto its simulated path over
+    /// [`converge_distance`](Self::converge_distance); the offset is render-only and never reaches
+    /// the sim or the hash. `None` draws shots at their simulated position; a name that cannot be
+    /// resolved does too, with `L4029`.
     ///
     /// Convergence needs extracts across ticks (the store remembers each shot's first sighting): a
     /// one-shot render, a restore or the first frame after a load extracts unprimed, so shots in
@@ -318,7 +323,8 @@ pub(crate) fn extract_projectiles(
             continue;
         };
         let (position, velocity) = (Vec3::from(position), Vec3::from(velocity));
-        let position = position + draw.offset(id, position, muzzle, priming);
+        let from = muzzle.filter(|_| draw.visuals.of(tag).from_muzzle);
+        let position = position + draw.offset(id, position, from, priming);
         let visual = draw.visuals.of(tag);
         let speed = velocity.length();
         let dir = if speed > 0.0 {
@@ -465,6 +471,7 @@ entities:
             color: [0.5, 0.25, 1.0, 1.0],
             emissive: 3.0,
             additive: true,
+            from_muzzle: false,
         }
     }
 
@@ -608,6 +615,10 @@ entities:
     fn muzzle_engine(muzzle: &str, scene: &str) -> Engine {
         let visuals = ProjectileVisuals {
             muzzle: Some(muzzle.to_string()),
+            fallback: ProjectileVisual {
+                from_muzzle: true,
+                ..ProjectileVisual::default()
+            },
             ..ProjectileVisuals::default()
         };
         let mut engine = Engine::builder()
@@ -651,6 +662,41 @@ entities:
         engine.load_inline_scene(MUZZLE_SCENE).unwrap();
         fire(&mut engine, [0.0, 0.0, -50.0], 0);
         assert_eq!(drawn(&mut engine), Vec3::new(1.0, 2.0, 0.0));
+    }
+
+    #[test]
+    fn only_a_from_muzzle_tag_converges() {
+        let mut visuals = ProjectileVisuals {
+            muzzle: Some("muzzle".to_string()),
+            ..ProjectileVisuals::default()
+        };
+        for (tag, from_muzzle) in [(0, true), (1, false)] {
+            visuals.tags.insert(
+                tag,
+                ProjectileVisual {
+                    from_muzzle,
+                    ..ProjectileVisual::default()
+                },
+            );
+        }
+        let mut engine = Engine::builder()
+            .projectiles(ProjectileConfig {
+                capacity: 8,
+                ..ProjectileConfig::default()
+            })
+            .projectile_visuals(visuals)
+            .build()
+            .expect("boots");
+        engine.load_inline_scene(MUZZLE_SCENE).unwrap();
+        engine.extract_present_scene().unwrap();
+        fire(&mut engine, [0.0, 0.0, -50.0], 0);
+        fire(&mut engine, [0.0, 0.0, -50.0], 1);
+        let (scene, _) = engine.extract_present_scene().unwrap();
+        let mut centers: Vec<Vec3> = scene.particles.iter().map(|p| p.center).collect();
+        centers.sort_by(|a, b| a.z.total_cmp(&b.z));
+        assert_eq!(centers.len(), 2);
+        assert!((centers[0].z - -0.7).abs() < 1e-3, "{centers:?}");
+        assert_eq!(centers[1], Vec3::new(1.0, 2.0, 0.0), "{centers:?}");
     }
 
     #[test]

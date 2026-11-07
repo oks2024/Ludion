@@ -34,7 +34,8 @@
 10. **Muzzle convergence is render-only**: extract captures an offset when it first sees a shot's
     generational id (the muzzle under the frame's resolved camera, minus the drawn position) and eases
     it to zero over `converge_distance` (4 m). The sim never sees it; `WorldHash` is pinned equal with
-    late latch and visuals on or off.
+    late latch and visuals on or off. Convergence is a per-tag opt-in (`ProjectileVisual::from_muzzle`,
+    default off): an enemy's shots should not start at the player's gun.
 11. **`first_hit` at `t = 0` uses a solid point projection**, because parry's EPA allocates for a ball
     that starts touching or inside a collider. A start that touches and travels away from, or along,
     the surface is no hit (the ray form tests a step along the ray against the shape); inward travel
@@ -42,6 +43,14 @@
 13. **The pool capacity cap is `1 << 15`** (32,768): 4× the 5,000-shot target, rounded to a power of
     two. Per-slot step scratch is about 0.7 KB, so 2^20 would have meant roughly 0.9 GB. The pool digest
     is domain `v2` and covers high water, the free list and dead-slot generations.
+14. **A restore takes the build's `ProjectileConfig`, not the snapshot's** (`ludion dev` restarts
+    through `engine.restore`, so a changed gravity or capacity must apply). The snapshot's config is
+    still validated; the pool is resized. A build with no pool drops the snapshot's. A capacity below
+    the high-water mark restores nothing and warns `L4031`: truncating would drop live shots and leave
+    a free list and generations no run produced.
+15. **`projectiles_step` re-boxes its resource once per tick.** The ECS has no take-and-scope
+    pattern, and the step needs the physics world and index while it mutates the pool; the crate
+    step allocates nothing at one thread.
 12. **L4030** warns once when a pool holds shots but `projectiles_step` never ran, the usual sign of
     an unscheduled step.
 
@@ -55,6 +64,9 @@ allocation-free `t = 0` sweep and L4030; this bench and `ludion docs projectiles
 
 Review fixes, sim side (06a): pierce skips a pierced entity's collider, outbound `t = 0` is no hit,
 position-scaled push-out, digest v2, capacity cap 2^15, alloc claims scoped to one thread.
+
+Review fixes, engine side (06b): `from_muzzle` per-tag convergence, restore under the builder's
+config (`ProjectilePool::resize`, `L4031`), the per-tick re-box documented.
 
 Bench (release, unpinned M5 laptop, 2026-11-07, indicative only): 5,000 live shots against a
 120×12×120 room, 40 pillars and 500 index targets — `step + digest` 1.9 ms at 1 thread (step 1.8,

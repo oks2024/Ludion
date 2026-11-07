@@ -278,6 +278,71 @@ fn a_mid_flight_restore_continues_bit_identically() {
     );
 }
 
+/// A mid-flight snapshot from the default build (capacity 16, default gravity).
+fn mid_flight_snapshot() -> (Value, usize) {
+    let mut first = engine();
+    trace(&mut first, 20);
+    let high = first
+        .world()
+        .resource::<Projectiles>()
+        .unwrap()
+        .pool()
+        .high_water();
+    assert!(high > 0);
+    (snapshot_of(&mut first), high)
+}
+
+#[test]
+fn a_restore_takes_the_builders_config() {
+    let (snapshot, high) = mid_flight_snapshot();
+    let bigger = ProjectileConfig {
+        capacity: 64,
+        gravity: [0.0, -1.0, 0.0],
+        ..ProjectileConfig::default()
+    };
+    let mut resumed = engine_with(Some(bigger.clone()), true);
+    restore(&mut resumed, snapshot).unwrap();
+    let res = resumed.world().resource::<Projectiles>().unwrap();
+    assert_eq!(res.config(), &bigger);
+    assert_eq!(res.pool().capacity(), 64);
+    assert_eq!(res.pool().high_water(), high);
+    assert!(!res.pool().is_empty(), "live shots kept");
+    // The restored run follows the new gravity, not the snapshot's.
+    let mut same = engine();
+    let (snapshot, _) = mid_flight_snapshot();
+    restore(&mut same, snapshot).unwrap();
+    assert_ne!(trace(&mut resumed, 10), trace(&mut same, 10));
+}
+
+#[test]
+fn a_restore_into_a_build_without_a_pool_drops_it() {
+    let (snapshot, _) = mid_flight_snapshot();
+    let mut bare = engine_with(None, true);
+    restore(&mut bare, snapshot).unwrap();
+    assert!(bare.world().resource::<Projectiles>().is_none());
+}
+
+#[test]
+fn a_capacity_below_the_snapshots_high_water_starts_a_fresh_pool() {
+    let (snapshot, high) = mid_flight_snapshot();
+    let small = ProjectileConfig {
+        capacity: (high - 1) as u32,
+        ..ProjectileConfig::default()
+    };
+    let mut resumed = engine_with(Some(small), true);
+    restore(&mut resumed, snapshot).expect("the rest of the restore proceeds");
+    let res = resumed.world().resource::<Projectiles>().unwrap();
+    assert!(res.pool().is_empty());
+    assert_eq!(res.pool().capacity(), high - 1);
+    let reported: Vec<_> = resumed
+        .world()
+        .resource::<Diagnostics>()
+        .unwrap()
+        .reported(code::PROJECTILE_RESTORE_CAPACITY)
+        .collect();
+    assert_eq!(reported.len(), 1, "{reported:?}");
+}
+
 #[test]
 fn no_pool_means_no_bytes() {
     // Both games schedule `fire`; the shots are refused (no pool), so neither world holds a pool.
