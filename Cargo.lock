@@ -1867,6 +1867,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ludion-nav"
+version = "0.1.0"
+dependencies = [
+ "ludion-core",
+]
+
+[[package]]
 name = "ludion-physics"
 version = "0.1.0"
 dependencies = [

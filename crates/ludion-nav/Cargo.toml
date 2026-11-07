@@ -1,0 +1,13 @@
+[package]
+name = "ludion-nav"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Navigation for the Ludion game engine: a layered 2.5D walkability grid built from an abstract per-column floor source, and bounded Dijkstra flow fields cached per target node."
+keywords = ["ludion", "navigation", "flow-field", "determinism", "game-engine"]
+categories = ["game-engines", "simulation"]
+
+[dependencies]
+ludion-core = { path = "../ludion-core", version = "0.1.0" }

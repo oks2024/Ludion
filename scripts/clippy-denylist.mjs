@@ -130,6 +130,7 @@ export const CRATES = {
   'crates/ludion-import': 'permissive',
   'crates/ludion-mcp': 'permissive',
   'crates/ludion-mesh-edit': 'sim',
+  'crates/ludion-nav': 'sim',
   'crates/ludion-physics': 'sim',
   'crates/ludion-projectiles': 'sim',
   'crates/ludion-protocol': 'strict',
