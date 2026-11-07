@@ -285,7 +285,7 @@
   "CameraRig": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "CameraRig",
-    "description": "The rig on the camera entity. `rig` is the authored configuration (writing a different value\nstarts a timed blend), `shake` survives switches, `trauma`, `grounded` and `look_deg` are\ngame-written inputs, `state` is engine-written. Every field defaults, so older documents keep loading.\n\n# Example\n\n```\nuse ludion_camera::{CameraRig, RigMode};\n\nlet rig: CameraRig = serde_json::from_value(serde_json::json!({\n    \"rig\": { \"mode\": { \"track\": { \"path\": \"paths/behind-1.path.yaml\", \"offset\": [0.0, 2.2, 4.5] } } },\n    \"trauma\": 0.25,\n}))\n.unwrap();\nlet RigMode::Track(track) = &rig.rig.mode else { unreachable!() };\nassert_eq!(track.offset, [0.0, 2.2, 4.5]);\nassert_eq!(rig.rig.springs.position_half_life, 0.15);\n```",
+    "description": "The rig on the camera entity. `rig` is the authored configuration (writing a different value\nstarts a timed blend), `shake` survives switches, `trauma`, `grounded` and `look_deg` are\ngame-written inputs, `state` is engine-written. The kick, roll and FOV channels are game-written\ntoo (the engine decays only the two kicks) and apply after aim. Every field defaults, so older documents keep loading.\n\n# Example\n\n```\nuse ludion_camera::{CameraRig, RigMode};\n\nlet rig: CameraRig = serde_json::from_value(serde_json::json!({\n    \"rig\": { \"mode\": { \"track\": { \"path\": \"paths/behind-1.path.yaml\", \"offset\": [0.0, 2.2, 4.5] } } },\n    \"trauma\": 0.25,\n}))\n.unwrap();\nlet RigMode::Track(track) = &rig.rig.mode else { unreachable!() };\nassert_eq!(track.offset, [0.0, 2.2, 4.5]);\nassert_eq!(rig.rig.springs.position_half_life, 0.15);\n```",
     "type": "object",
     "properties": {
       "target": {
@@ -394,6 +394,35 @@
         },
         "minItems": 2,
         "maxItems": 2
+      },
+      "kick": {
+        "description": "The kick decay; not part of `rig`, so a switch never blends or resets it.",
+        "$ref": "#/$defs/KickConfig"
+      },
+      "kick_deg": {
+        "description": "Recoil kick `[yaw, pitch, roll]` in degrees, post-aim (positive yaw turns left, positive\npitch looks down, so recoil up is negative pitch). Add through [`add_kick`]; it decays to\nexactly `0` on gameplay time.",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "fov_kick_deg": {
+        "description": "Field-of-view kick in degrees, added through [`add_fov_kick`]; decays like `kick_deg`.",
+        "type": "number",
+        "format": "float"
+      },
+      "roll_deg": {
+        "description": "Persistent roll in degrees, post-aim; the game writes it and the rig never changes it.\nPositive turns the camera's right vector upward.",
+        "type": "number",
+        "format": "float"
+      },
+      "fov_offset_deg": {
+        "description": "Persistent field-of-view offset in degrees, post-aim; the game writes it and the rig never\nchanges it. Inert when the rig sets no `fov_y_deg`.",
+        "type": "number",
+        "format": "float"
       },
       "state": {
         "description": "Engine-written state: springs, projection, blend and shake clock.",
@@ -750,6 +779,24 @@
             "format": "uint64",
             "minimum": 0,
             "default": 1
+          }
+        }
+      },
+      "KickConfig": {
+        "description": "How fast the kicks return to centre, in gameplay seconds (`0` is an instant return).",
+        "type": "object",
+        "properties": {
+          "half_life": {
+            "description": "Seconds for the `kick_deg` error to halve.",
+            "type": "number",
+            "format": "float",
+            "default": 0.07999999821186066
+          },
+          "fov_half_life": {
+            "description": "Seconds for the `fov_kick_deg` error to halve.",
+            "type": "number",
+            "format": "float",
+            "default": 0.15000000596046448
           }
         }
       },

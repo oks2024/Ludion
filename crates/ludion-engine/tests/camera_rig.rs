@@ -15,7 +15,7 @@ use ludion_ecs::{SystemCtx, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
     Camera, CameraOffset, CameraRig, DebugCategories, Egress, EgressChannels, Engine, Name,
-    RigMode, Transform, add_look, add_trauma, snap_rig,
+    RigMode, Transform, add_kick, add_look, add_trauma, snap_rig,
 };
 use ludion_protocol::command::{
     EngineRestoreParams, SimStepParams, StreamSubscribeParams, SubscribeMode,
@@ -1207,6 +1207,61 @@ fn first_person_snapshot_restore_resumes_bit_exact() {
         other => panic!("expected a snapshot, got {other:?}"),
     };
     let mut resumed = fp_engine("fp-post", look);
+    match resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap()
+        .body
+    {
+        ResponseBody::Restored { .. } => {}
+        other => panic!("expected a restore, got {other:?}"),
+    }
+    assert_eq!(resumed.world_hash().unwrap().as_u64(), reference[AT - 1]);
+    for (i, expected) in reference[AT..].iter().enumerate() {
+        resumed.advance_live();
+        assert_eq!(
+            resumed.world_hash().unwrap().as_u64(),
+            *expected,
+            "tick {} after the restore",
+            i + 1
+        );
+    }
+}
+
+fn look_and_kick_at_20(world: &mut World, ctx: &SystemCtx) {
+    look(world, ctx);
+    if ctx.frame.as_u64() == 20 {
+        let cam = named(world, "cam");
+        add_kick(
+            world.get_mut::<CameraRig>(cam).unwrap().unwrap(),
+            0.5,
+            -2.0,
+            0.3,
+        );
+    }
+}
+
+#[test]
+fn a_kick_hashes_while_it_lasts_and_rejoins_the_unkicked_run() {
+    let plain = fp_hashes(&mut fp_engine("kick-plain", look), 120);
+    let a = fp_hashes(&mut fp_engine("kick-a", look_and_kick_at_20), 120);
+    let b = fp_hashes(&mut fp_engine("kick-b", look_and_kick_at_20), 120);
+    assert_eq!(a, b);
+    assert_eq!(a[..20], plain[..20]);
+    assert_ne!(a[20], plain[20], "the kick moves the hash");
+    assert_eq!(a[119], plain[119], "the kick has rested and is unhashed");
+}
+
+#[test]
+fn a_kick_snapshot_restore_resumes_bit_exact() {
+    const AT: usize = 25;
+    let reference = fp_hashes(&mut fp_engine("kick-ref", look_and_kick_at_20), 80);
+    let mut before = fp_engine("kick-pre", look_and_kick_at_20);
+    advance(&mut before, AT);
+    let snapshot = match before.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let mut resumed = fp_engine("kick-post", look_and_kick_at_20);
     match resumed
         .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
         .unwrap()

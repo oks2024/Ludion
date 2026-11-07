@@ -8,7 +8,8 @@
 //! 2. **advance** (gameplay time only) — trauma decay, target velocity, look-ahead, the vertical
 //!    anchor, the `track` pose projected onto a path, then the critically damped springs;
 //! 3. **blend** — an interpolation from the frozen source pose to the live rig pose;
-//! 4. **shake** — seeded trauma noise on the output only; it never feeds back into the state.
+//! 4. **post-aim** — kick, roll and the field-of-view channels, then seeded trauma shake, on the
+//!    output only; none feeds back into the state.
 //!
 //! The `first_person` mode skips the path and the springs: the game writes look deltas
 //! ([`add_look`]), the rig owns yaw and pitch, and [`CameraRig::aim`] reports the pre-shake aim.
@@ -36,9 +37,9 @@ mod validate;
 pub use first_person::first_person_eye;
 pub use relative::{camera_relative, camera_relative_yaw};
 pub use rig::{
-    Aim, Blend, BlendCurve, BlendIn, CameraRig, FirstPersonRig, LookAhead, Pose, RigConfig,
-    RigMode, RigState, ShakeConfig, Springs, TrackRig, VerticalAnchor, add_look, add_trauma,
-    set_look, snap_rig,
+    Aim, Blend, BlendCurve, BlendIn, CameraRig, FirstPersonRig, KickConfig, LookAhead, Pose,
+    RigConfig, RigMode, RigState, ShakeConfig, Springs, TrackRig, VerticalAnchor, add_fov_kick,
+    add_kick, add_look, add_trauma, set_look, snap_rig,
 };
 pub use step::{RigInput, RigOutput, step_rig};
 pub use track::{rig_focus, track_eye};

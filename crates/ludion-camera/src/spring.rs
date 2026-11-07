@@ -31,6 +31,19 @@ pub(crate) fn damp(x: f32, goal: f32, half_life: f32, dt: f32) -> f32 {
     x + (goal - x) * (1.0 - exp2(-dt / half_life))
 }
 
+/// Magnitude below which a decaying kick is set to exactly `0`, so the field returns to rest.
+const KICK_REST_DEG: f32 = 1e-4;
+
+/// One step of a kick returning to `0` ([`damp`]), snapped to exactly `0.0` once negligible.
+pub(crate) fn decay(x: f32, half_life: f32, dt: f32) -> f32 {
+    let next = damp(x, 0.0, half_life, dt);
+    if next.abs() < KICK_REST_DEG {
+        0.0
+    } else {
+        next
+    }
+}
+
 /// Wraps degrees into `(-180, 180]`.
 pub(crate) fn wrap180(degrees: f32) -> f32 {
     degrees - 360.0 * ((degrees - 180.0) / 360.0).ceil()
@@ -128,6 +141,17 @@ mod tests {
             x = damp(x, 0.0, 0.5, 1.0 / 60.0);
         }
         assert!((x - 0.5).abs() < 1e-4, "{x}");
+    }
+
+    #[test]
+    fn a_kick_decays_to_exactly_zero() {
+        let mut x = 2.0;
+        for _ in 0..600 {
+            x = decay(x, 0.08, 1.0 / 60.0);
+        }
+        assert_eq!(x.to_bits(), 0.0f32.to_bits());
+        assert_eq!(decay(-3.0, 0.0, 0.016), 0.0);
+        assert_eq!(decay(0.0, 0.08, 0.016).to_bits(), 0.0f32.to_bits());
     }
 
     #[test]

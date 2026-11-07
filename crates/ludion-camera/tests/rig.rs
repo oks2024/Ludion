@@ -1,9 +1,9 @@
 //! The rig pipeline, tick by tick, on hand-built paths.
 
 use ludion_camera::{
-    Blend, BlendCurve, BlendIn, CameraRig, FirstPersonRig, LookAhead, RigConfig, RigInput, RigMode,
-    RigOutput, Springs, TrackRig, add_look, add_trauma, camera_relative, camera_relative_yaw,
-    set_look, snap_rig, step_rig,
+    Blend, BlendCurve, BlendIn, CameraRig, FirstPersonRig, KickConfig, LookAhead, RigConfig,
+    RigInput, RigMode, RigOutput, Springs, TrackRig, add_fov_kick, add_kick, add_look, add_trauma,
+    camera_relative, camera_relative_yaw, set_look, snap_rig, step_rig,
 };
 use ludion_core::math::{euler_xyz_degrees_to_quat, quat_rotate};
 use ludion_core::time::FrameIndex;
@@ -964,4 +964,233 @@ fn first_person_needs_no_path_and_a_document_round_trips() {
     assert_eq!((fp.pitch_limit_deg, fp.eye_offset), (80.0, [0.0, 1.6, 0.0]));
     let again: CameraRig = serde_json::from_value(serde_json::to_value(&rig).unwrap()).unwrap();
     assert_eq!(again, rig);
+}
+
+// ── kick and roll ────────────────────────────────────────────────────────────────────────────────
+
+fn bits3(v: [f32; 3]) -> [u32; 3] {
+    v.map(f32::to_bits)
+}
+
+#[test]
+fn a_pitch_kick_moves_the_output_but_never_the_aim() {
+    let mut rig = fp_rig();
+    let mut twin = fp_rig();
+    add_look(&mut rig, 30.0, 10.0);
+    add_look(&mut twin, 30.0, 10.0);
+    add_kick(&mut rig, 0.0, -3.0, 0.0);
+    let out = fp_tick(&mut rig, [0.0; 3], 0);
+    let base = fp_tick(&mut twin, [0.0; 3], 0);
+    assert_ne!(out.rotation_deg, base.rotation_deg);
+    assert_eq!(rig.aim(), twin.aim());
+    assert_eq!(rig.yaw_deg().to_bits(), twin.yaw_deg().to_bits());
+    assert_eq!(rig.state.pose, twin.state.pose);
+    assert_eq!(
+        camera_relative([0.0, 1.0], &rig).map(f32::to_bits),
+        camera_relative([0.0, 1.0], &twin).map(f32::to_bits)
+    );
+}
+
+#[test]
+fn a_kick_decays_to_exactly_zero_and_rejoins_its_twin() {
+    let mut rig = fp_rig();
+    let mut twin = fp_rig();
+    add_kick(&mut rig, 1.0, -2.0, 0.5);
+    add_fov_kick(&mut rig, 3.0);
+    let mut frame = 0;
+    while rig.kick_deg != [0.0; 3] || rig.fov_kick_deg != 0.0 {
+        fp_tick(&mut rig, [0.0; 3], frame);
+        fp_tick(&mut twin, [0.0; 3], frame);
+        frame += 1;
+        assert!(frame < 600, "a kick rests within a bounded tick count");
+    }
+    let a = fp_tick(&mut rig, [0.0; 3], frame);
+    let b = fp_tick(&mut twin, [0.0; 3], frame);
+    assert_eq!(bits3(a.rotation_deg), bits3(b.rotation_deg));
+    assert_eq!(rig, twin, "at rest the whole component is the twin's");
+}
+
+#[test]
+fn a_scripted_look_and_kick_run_is_bit_identical() {
+    let run = || {
+        let mut rig = fp_rig();
+        (0..90)
+            .map(|k| {
+                add_look(&mut rig, 0.7, -0.2);
+                if k % 17 == 0 {
+                    add_kick(&mut rig, 0.3, -1.5, 0.4);
+                    add_fov_kick(&mut rig, 2.0);
+                }
+                let out = fp_tick(&mut rig, [0.0, 0.0, -(k as f32)], k);
+                (bits3(out.rotation_deg), bits3(out.translation))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(run(), run());
+}
+
+#[test]
+fn a_held_clock_freezes_the_decay_and_still_shows_a_new_kick() {
+    let mut rig = fp_rig();
+    add_kick(&mut rig, 0.0, -4.0, 0.0);
+    fp_tick(&mut rig, [0.0; 3], 0);
+    fp_tick(&mut rig, [0.0; 3], 1);
+    let frozen = rig.kick_deg;
+    assert!(frozen[1] < 0.0 && frozen[1] > -4.0, "it has decayed some");
+    let before = fp_tick_dt(&mut rig, [0.0; 3], 1, 0.0).rotation_deg;
+    fp_tick_dt(&mut rig, [0.0; 3], 1, 0.0);
+    assert_eq!(bits3(rig.kick_deg), bits3(frozen));
+    add_kick(&mut rig, 0.0, -1.0, 0.0);
+    let during = fp_tick_dt(&mut rig, [0.0; 3], 1, 0.0).rotation_deg;
+    assert_ne!(during, before, "a kick added in a hold shows at once");
+    // Resuming decays from the held value exactly as a rig holding that value would.
+    let mut twin = rig.clone();
+    fp_tick(&mut rig, [0.0; 3], 2);
+    fp_tick(&mut twin, [0.0; 3], 2);
+    assert_eq!(bits3(rig.kick_deg), bits3(twin.kick_deg));
+    assert!(rig.kick_deg[1].abs() < (frozen[1] - 1.0).abs());
+}
+
+#[test]
+fn positive_roll_raises_the_right_vector_and_persists() {
+    let mut rig = fp_rig();
+    let right =
+        |out: &RigOutput| quat_rotate(euler_xyz_degrees_to_quat(out.rotation_deg), [1.0, 0.0, 0.0]);
+    let level = fp_tick(&mut rig, [0.0; 3], 0);
+    assert!(right(&level)[1].abs() < 1e-6);
+    rig.roll_deg = 10.0;
+    for k in 1..5 {
+        let out = fp_tick(&mut rig, [0.0; 3], k);
+        assert!(right(&out)[1] > 0.1, "tick {k}");
+        assert_eq!(rig.roll_deg, 10.0, "the rig never consumes roll");
+    }
+    let mut twin = fp_rig();
+    for k in 0..5 {
+        fp_tick(&mut twin, [0.0; 3], k);
+    }
+    assert_eq!(rig.aim(), twin.aim());
+    let mut kicked = fp_rig();
+    add_kick(&mut kicked, 0.0, 0.0, 10.0);
+    assert!(right(&fp_tick(&mut kicked, [0.0; 3], 0))[1] > 0.1);
+}
+
+#[test]
+fn fov_channels_add_clamp_and_decay() {
+    let cfg = RigConfig {
+        fov_y_deg: Some(90.0),
+        ..fp_cfg(0.0)
+    };
+    let mut rig = rig_with(cfg);
+    rig.fov_offset_deg = 8.0;
+    add_fov_kick(&mut rig, 4.0);
+    let first = fp_tick(&mut rig, [0.0; 3], 0).fov_y_deg.unwrap();
+    assert_eq!(first, 102.0, "a kick shows on the tick it is added");
+    let mut last = first;
+    for k in 1..200 {
+        last = fp_tick(&mut rig, [0.0; 3], k).fov_y_deg.unwrap();
+    }
+    assert_eq!(last, 98.0);
+    rig.fov_offset_deg = 500.0;
+    assert_eq!(fp_tick(&mut rig, [0.0; 3], 200).fov_y_deg, Some(179.0));
+    rig.fov_offset_deg = -500.0;
+    assert_eq!(fp_tick(&mut rig, [0.0; 3], 201).fov_y_deg, Some(1.0));
+
+    let mut inert = fp_rig();
+    inert.fov_offset_deg = 8.0;
+    add_fov_kick(&mut inert, 4.0);
+    assert_eq!(fp_tick(&mut inert, [0.0; 3], 0).fov_y_deg, None);
+}
+
+#[test]
+fn a_first_person_kick_clamps_at_the_pitch_limit() {
+    let mut rig = fp_rig();
+    add_look(&mut rig, 0.0, 85.0);
+    add_kick(&mut rig, 0.0, 30.0, 0.0);
+    let out = fp_tick(&mut rig, [0.0; 3], 0);
+    let mut twin = fp_rig();
+    add_look(&mut twin, 0.0, 89.0);
+    let limit = fp_tick(&mut twin, [0.0; 3], 0);
+    assert_eq!(bits3(out.rotation_deg), bits3(limit.rotation_deg));
+}
+
+#[test]
+fn a_track_rig_is_bit_identical_at_zero_and_rolls_when_asked() {
+    let path = straight();
+    let run = |roll: f32| {
+        let mut rig = rig_with(blended_cfg([0.0, 2.2, 4.5], 1.0));
+        rig.roll_deg = roll;
+        (0..30)
+            .map(|k| tick(&mut rig, &path, [0.0, 0.0, -10.0 - k as f32 * 0.1], k))
+            .collect::<Vec<_>>()
+    };
+    let plain = run(0.0);
+    assert_eq!(plain, run(0.0));
+    assert_ne!(run(8.0)[29].rotation_deg, plain[29].rotation_deg);
+}
+
+#[test]
+fn a_switch_mid_kick_blends_from_the_unkicked_pose() {
+    let mut rig = rig_with(fp_cfg(1.0));
+    add_kick(&mut rig, 5.0, -5.0, 5.0);
+    fp_tick(&mut rig, [0.0; 3], 0);
+    fp_tick(&mut rig, [0.0; 3], 1);
+    rig.rig = RigConfig {
+        mode: RigMode::FirstPerson(FirstPersonRig {
+            eye_offset: [0.0, 1.0, 0.0],
+            ..FirstPersonRig::default()
+        }),
+        ..fp_cfg(1.0)
+    };
+    fp_tick(&mut rig, [0.0; 3], 2);
+    let blend = rig.state.blend.as_ref().expect("a blend started");
+    assert_eq!(blend.from.yaw_deg, 0.0);
+    assert_eq!(blend.from.pitch_deg, 0.0);
+    assert_ne!(rig.kick_deg, [0.0; 3], "a switch leaves the kick alone");
+}
+
+#[test]
+fn snap_keeps_the_kick() {
+    let mut rig = fp_rig();
+    add_kick(&mut rig, 1.0, 2.0, 3.0);
+    add_fov_kick(&mut rig, 4.0);
+    fp_tick(&mut rig, [0.0; 3], 0);
+    let kept = (rig.kick_deg, rig.fov_kick_deg);
+    snap_rig(&mut rig);
+    fp_tick_dt(&mut rig, [0.0; 3], 1, 0.0);
+    assert_eq!((rig.kick_deg, rig.fov_kick_deg), kept);
+}
+
+#[test]
+fn the_new_channels_serialize_only_when_off_rest() {
+    let keys = [
+        "kick",
+        "kick_deg",
+        "fov_kick_deg",
+        "roll_deg",
+        "fov_offset_deg",
+    ];
+    let at_rest = serde_json::to_value(CameraRig::default()).unwrap();
+    for key in keys {
+        assert!(at_rest.get(key).is_none(), "{key}");
+    }
+    let mut rig = CameraRig {
+        roll_deg: 3.0,
+        fov_offset_deg: 8.0,
+        kick: KickConfig {
+            half_life: 0.2,
+            fov_half_life: 0.3,
+        },
+        ..CameraRig::default()
+    };
+    add_kick(&mut rig, 1.0, -2.0, 0.5);
+    add_fov_kick(&mut rig, 4.0);
+    let value = serde_json::to_value(&rig).unwrap();
+    for key in keys {
+        assert!(value.get(key).is_some(), "{key}");
+    }
+    let back: CameraRig = serde_json::from_value(value).unwrap();
+    assert_eq!(back, rig);
+    add_kick(&mut rig, f32::NAN, f32::INFINITY, 0.0);
+    add_fov_kick(&mut rig, f32::NAN);
+    assert_eq!((rig.kick_deg, rig.fov_kick_deg), ([1.0, -2.0, 0.5], 4.0));
 }

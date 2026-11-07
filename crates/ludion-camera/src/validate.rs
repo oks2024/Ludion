@@ -136,6 +136,28 @@ fn violations(rig: &CameraRig) -> Vec<(String, &'static str)> {
             found.push((format!("/look_deg/{axis}"), FINITE));
         }
     }
+    for (pointer, value) in [
+        ("/kick/half_life", rig.kick.half_life),
+        ("/kick/fov_half_life", rig.kick.fov_half_life),
+    ] {
+        if !value.is_finite() || value < 0.0 {
+            found.push((pointer.to_string(), NOT_NEGATIVE));
+        }
+    }
+    for (axis, value) in rig.kick_deg.into_iter().enumerate() {
+        if !value.is_finite() {
+            found.push((format!("/kick_deg/{axis}"), FINITE));
+        }
+    }
+    for (pointer, value) in [
+        ("/fov_kick_deg", rig.fov_kick_deg),
+        ("/roll_deg", rig.roll_deg),
+        ("/fov_offset_deg", rig.fov_offset_deg),
+    ] {
+        if !value.is_finite() {
+            found.push((pointer.to_string(), FINITE));
+        }
+    }
     if !(0.0..=1.0).contains(&rig.trauma) {
         found.push(("/trauma".to_string(), "must be between 0 and 1"));
     }
@@ -163,8 +185,8 @@ fn diagnostic(what: &str, pointer: &str, rule: &str) -> Diagnostic {
     .with_help(
         "keep half-lives, slacks and shake limits non-negative, `search_window`, \
          `full_speed`, `frequency` and `exponent` above 0, `fov_y_deg` inside (0, 180) \
-         `trauma` in [0, 1], `pitch_limit_deg` inside (0, 90) and `eye_offset` and `look_deg` \
-         finite",
+         `trauma` in [0, 1], `pitch_limit_deg` inside (0, 90) and `eye_offset`, `look_deg`, \
+         `kick_deg`, `fov_kick_deg`, `roll_deg` and `fov_offset_deg` finite",
     )
 }
 
@@ -187,7 +209,8 @@ impl SemanticValidate for CameraRig {
     /// Rejects every out-of-range field (`L1304`) at its pointer under `/rig/…` or `/shake/…`:
     /// half-lives, `look_ahead.distance`, slacks, `blend_in.seconds`, `decay_per_second` and the shake
     /// maxima negative or not finite; `search_window`, `full_speed`, `frequency`, `exponent` not
-    /// positive; offsets and `look_deg` not finite; `pitch_limit_deg` outside `(0, 90)`; `fov_y_deg`
+    /// positive; `kick` half-lives negative or not finite; offsets, `look_deg`, `kick_deg`, `fov_kick_deg`,
+    /// `roll_deg` and `fov_offset_deg` not finite; `pitch_limit_deg` outside `(0, 90)`; `fov_y_deg`
     /// outside `(0, 180)`; `trauma` outside `[0, 1]`. A value that does not deserialize is left to
     /// the schema.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
@@ -286,6 +309,11 @@ mod tests {
             ),
             (json!({"shake": {"frequency": 0.0}}), "/shake/frequency"),
             (json!({"shake": {"exponent": -2.0}}), "/shake/exponent"),
+            (json!({"kick": {"half_life": -0.1}}), "/kick/half_life"),
+            (
+                json!({"kick": {"fov_half_life": -0.1}}),
+                "/kick/fov_half_life",
+            ),
             (json!({"trauma": 1.5}), "/trauma"),
             (json!({"trauma": -0.1}), "/trauma"),
         ] {
@@ -341,6 +369,41 @@ mod tests {
             invalid_field(&rig).map(|(pointer, _)| pointer).as_deref(),
             Some("/look_deg/1")
         );
+        for (rig, pointer) in [
+            (
+                CameraRig {
+                    kick_deg: [0.0, 0.0, f32::NAN],
+                    ..CameraRig::default()
+                },
+                "/kick_deg/2",
+            ),
+            (
+                CameraRig {
+                    fov_kick_deg: f32::INFINITY,
+                    ..CameraRig::default()
+                },
+                "/fov_kick_deg",
+            ),
+            (
+                CameraRig {
+                    roll_deg: f32::NAN,
+                    ..CameraRig::default()
+                },
+                "/roll_deg",
+            ),
+            (
+                CameraRig {
+                    fov_offset_deg: f32::NAN,
+                    ..CameraRig::default()
+                },
+                "/fov_offset_deg",
+            ),
+        ] {
+            assert_eq!(
+                invalid_field(&rig).map(|(pointer, _)| pointer).as_deref(),
+                Some(pointer)
+            );
+        }
     }
 
     #[test]

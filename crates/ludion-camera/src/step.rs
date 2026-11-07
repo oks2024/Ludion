@@ -9,7 +9,7 @@ use ludion_scene::PathSampler;
 use crate::first_person::{apply_look, first_person_eye};
 use crate::rig::{Blend, CameraRig, Pose, RigMode};
 use crate::shake::shake_noise;
-use crate::spring::{damp, ease, lerp_pose, spring_step, wrap180};
+use crate::spring::{damp, decay, ease, lerp_pose, spring_step, wrap180};
 use crate::track::{Desired, desired};
 
 /// What the engine resolved for one rig tick.
@@ -46,7 +46,7 @@ pub struct RigOutput {
 ///
 /// A rig without `state.last_applied`, or flagged by [`snap_rig`](crate::snap_rig), snaps; a `rig`
 /// that differs from `last_applied` starts a blend from the current pose. Springs, look-ahead, the
-/// anchor, trauma and the shake clock advance only while `game_dt > 0`; a held tick re-poses from
+/// anchor, trauma, the kick decay and the shake clock advance only while `game_dt > 0`; a held tick re-poses from
 /// the frozen state. A `first_person` rig has no springs: it applies and zeroes `look_deg` on every
 /// tick it poses, held clock included, and places the eye rigidly on the target.
 ///
@@ -202,6 +202,9 @@ fn switch(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>, 
 fn advance(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>, dt: f32) {
     rig.trauma = (rig.trauma - rig.shake.decay_per_second * dt).max(0.0);
     rig.state.shake_time += f64::from(dt);
+    let kick = &rig.kick;
+    rig.kick_deg = rig.kick_deg.map(|x| decay(x, kick.half_life, dt));
+    rig.fov_kick_deg = decay(rig.fov_kick_deg, kick.fov_half_life, dt);
     let Some(sampler) = sampler else {
         rig.state.last_target = Some(target);
         return;
@@ -307,17 +310,30 @@ fn blended_pose(rig: &mut CameraRig, input: &RigInput) -> Pose {
     }
 }
 
-/// The post-aim stage: the pose as a camera transform with the trauma shake applied to the result
-/// only. Effects that must never leak into `CameraRig::aim` belong here.
+/// The post-aim stage: the pose as a camera transform with the recoil kick, roll, field-of-view
+/// channels and then the trauma shake applied to the result only. Effects that must never leak into
+/// `CameraRig::aim` belong here. With every channel at zero the arithmetic is the plain pose's.
 fn post_aim(rig: &CameraRig, pose: &Pose) -> RigOutput {
     let mut translation = pose.eye;
+    let mut pitch_deg = pose.pitch_deg + rig.kick_deg[1];
+    if let RigMode::FirstPerson(fp) = &rig.rig.mode
+        && rig.kick_deg[1] != 0.0
+    {
+        pitch_deg = pitch_deg.clamp(-fp.pitch_limit_deg, fp.pitch_limit_deg);
+    }
     let mut rotation_deg = Orbit {
         target: pose.eye,
-        azimuth_deg: pose.yaw_deg,
-        pitch_deg: pose.pitch_deg,
+        azimuth_deg: wrap180(pose.yaw_deg + rig.kick_deg[0]),
+        pitch_deg,
         distance: 1.0,
     }
     .rotation_deg();
+    let roll = rig.roll_deg + rig.kick_deg[2];
+    if roll != 0.0 {
+        let base = euler_xyz_degrees_to_quat(rotation_deg);
+        rotation_deg =
+            quat_to_euler_xyz_degrees(quat_mul(base, euler_xyz_degrees_to_quat([0.0, 0.0, roll])));
+    }
     if rig.trauma > 0.0 {
         let shake = &rig.shake;
         let magnitude = powf(rig.trauma, shake.exponent);
@@ -332,9 +348,15 @@ fn post_aim(rig: &CameraRig, pose: &Pose) -> RigOutput {
         let angles = [0, 1, 2].map(|i| shake.max_angle_deg[i] * noise(3 + i as u32) * magnitude);
         rotation_deg = quat_to_euler_xyz_degrees(quat_mul(base, euler_xyz_degrees_to_quat(angles)));
     }
+    let fov_y_deg = if rig.fov_offset_deg != 0.0 || rig.fov_kick_deg != 0.0 {
+        pose.fov_y_deg
+            .map(|fov| (fov + rig.fov_offset_deg + rig.fov_kick_deg).clamp(1.0, 179.0))
+    } else {
+        pose.fov_y_deg
+    };
     RigOutput {
         translation,
         rotation_deg,
-        fov_y_deg: pose.fov_y_deg,
+        fov_y_deg,
     }
 }

@@ -164,9 +164,9 @@ pub use lane::{
     LaneConstraint, LaneEnds, LaneInput, lane_error_colour, lane_frame, lane_relative,
 };
 pub use ludion_camera::{
-    Aim, BlendCurve, BlendIn, CameraRig, FirstPersonRig, LookAhead, RigConfig, RigMode, RigState,
-    ShakeConfig, Springs, TrackRig, VerticalAnchor, add_look, add_trauma, camera_relative,
-    camera_relative_yaw, first_person_eye, set_look, snap_rig,
+    Aim, BlendCurve, BlendIn, CameraRig, FirstPersonRig, KickConfig, LookAhead, RigConfig, RigMode,
+    RigState, ShakeConfig, Springs, TrackRig, VerticalAnchor, add_fov_kick, add_kick, add_look,
+    add_trauma, camera_relative, camera_relative_yaw, first_person_eye, set_look, snap_rig,
 };
 pub use ludion_scene::{
     PathDocument, PathFrame, PathInterpolation, PathMetric, PathSampler, check_path,

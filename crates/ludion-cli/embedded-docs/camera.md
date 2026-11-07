@@ -100,9 +100,30 @@ fn look(world: &mut World, _ctx: &SystemCtx) {
 }
 ```
 
+## Kick and roll
+
+Four post-aim channels on `CameraRig`, applied in every mode in the order kick, roll, shake. Defaults are omitted from files and the hash.
+
+```yaml
+CameraRig:
+  kick: { half_life: 0.08, fov_half_life: 0.15 }  # gameplay seconds to halve; 0 returns at once
+  kick_deg: [0.0, -2.0, 0.0]   # [yaw, pitch, roll] impulse, add with add_kick, decays to exactly 0
+  fov_kick_deg: 4.0            # add with add_fov_kick, decays like kick_deg
+  roll_deg: 8.0                # persistent, game-written (wall run, bank); never decays
+  fov_offset_deg: 8.0          # persistent, game-written (sprint widening); never decays
+```
+
+- Signs match `look_deg`: positive yaw turns left, positive pitch looks down, so **recoil up is a negative pitch kick**. Positive roll turns the camera's right vector upward.
+- Kicks decay on gameplay seconds: a held clock freezes them, yet a kick added during the hold shows at once. `roll_deg` and `fov_offset_deg` apply as written every tick. Kicks are not clamped; a first-person kicked pitch clamps to `pitch_limit_deg`.
+- Field of view is `fov_y_deg + fov_offset_deg + fov_kick_deg` clamped to [1, 179]; both channels are inert when the rig sets no `fov_y_deg`.
+- A snap keeps the kicks (zero them for a clean respawn). A switch neither blends nor resets them, and a blend never bakes a kick in.
+- Recoil is visual: `aim()`, `yaw_deg()` and `camera_relative` never see these channels, so the shot goes where the crosshair was. Use `CameraOffset` for presentation-only effects; use these when the feel must replay.
+
+Runnable: `crates/ludion/examples/first_person_kick.rs`.
+
 ## The offset frame (`track`)
 
-The target is projected onto the rail (the nearest point within `search_window` of last tick's); the path's no-roll frame there gives the axes. The desired eye is `point + offset.x * right + offset.y * up + offset.z * back`, **zero roll**: the camera never rolls with the rail. The eye and the yaw/pitch toward the focus then chase it on critically damped springs. Look-ahead shifts the **focus only**, never the projection. While `grounded` the vertical anchor follows the target's height; airborne it holds until the target leaves `up_slack`/`down_slack`.
+The target is projected onto the rail (the nearest point within `search_window` of last tick's); the path's no-roll frame there gives the axes. The desired eye is `point + offset.x * right + offset.y * up + offset.z * back`, **zero roll**: the camera never rolls with the rail (a game-written `roll_deg` still applies post-aim). The eye and the yaw/pitch toward the focus then chase it on critically damped springs. Look-ahead shifts the **focus only**, never the projection. While `grounded` the vertical anchor follows the target's height; airborne it holds until the target leaves `up_slack`/`down_slack`.
 
 ## Blend and snap
 
@@ -119,7 +140,7 @@ add_trauma(rig, 0.4);            // clamped to 1; a non-finite amount is ignored
 
 ## The clock
 
-The pipeline runs on the **gameplay clock**: a `GameClock::hold` on frame f freezes springs, blend and shake from f+1, and the rig re-poses from the frozen state, so a pause neither drifts nor jumps. Trauma decays and shake advances on gameplay seconds only. Shake is applied last and never moves `CameraRig::yaw_deg()`.
+The pipeline runs on the **gameplay clock**: a `GameClock::hold` on frame f freezes springs, blend and shake from f+1, and the rig re-poses from the frozen state, so a pause neither drifts nor jumps. Trauma and the kicks decay, and shake advances, on gameplay seconds only. Shake is applied last and never moves `CameraRig::yaw_deg()`.
 
 ## Ordering and `camera_relative`
 
@@ -137,7 +158,7 @@ On `L1304`–`L1307` and `L1309` the rig **holds its pose**; on `L1308` the lowe
 
 | code | raised when |
 | --- | --- |
-| L1304 | a field is out of range (pointer under `/rig/…`, `/shake/…`, `/trauma`, `/look_deg`; `pitch_limit_deg` outside (0, 90), a non-finite `eye_offset` or `look_deg`) |
+| L1304 | a field is out of range (pointer under `/rig/…`, `/shake/…`, `/trauma`, `/look_deg`, `/kick`, `/kick_deg`, `/roll_deg`; `pitch_limit_deg` outside (0, 90), a non-finite `eye_offset`, `look_deg` or kick channel) |
 | L1305 | `target` names a despawned entity (warning, once) |
 | L1306 | the track `path` fails to load (once) |
 | L1307 | the entity has no `Camera` |

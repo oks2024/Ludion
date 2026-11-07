@@ -18,9 +18,22 @@ fn look_is_zero(look: &[f32; 2]) -> bool {
     *look == [0.0; 2]
 }
 
+fn kick_is_default(kick: &KickConfig) -> bool {
+    *kick == KickConfig::default()
+}
+
+fn zero3(v: &[f32; 3]) -> bool {
+    *v == [0.0; 3]
+}
+
+fn zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
 /// The rig on the camera entity. `rig` is the authored configuration (writing a different value
 /// starts a timed blend), `shake` survives switches, `trauma`, `grounded` and `look_deg` are
-/// game-written inputs, `state` is engine-written. Every field defaults, so older documents keep loading.
+/// game-written inputs, `state` is engine-written. The kick, roll and FOV channels are game-written
+/// too (the engine decays only the two kicks) and apply after aim. Every field defaults, so older documents keep loading.
 ///
 /// # Example
 ///
@@ -55,6 +68,25 @@ pub struct CameraRig {
     /// on each tick it poses.
     #[serde(skip_serializing_if = "look_is_zero")]
     pub look_deg: [f32; 2],
+    /// The kick decay; not part of `rig`, so a switch never blends or resets it.
+    #[serde(skip_serializing_if = "kick_is_default")]
+    pub kick: KickConfig,
+    /// Recoil kick `[yaw, pitch, roll]` in degrees, post-aim (positive yaw turns left, positive
+    /// pitch looks down, so recoil up is negative pitch). Add through [`add_kick`]; it decays to
+    /// exactly `0` on gameplay time.
+    #[serde(skip_serializing_if = "zero3")]
+    pub kick_deg: [f32; 3],
+    /// Field-of-view kick in degrees, added through [`add_fov_kick`]; decays like `kick_deg`.
+    #[serde(skip_serializing_if = "zero")]
+    pub fov_kick_deg: f32,
+    /// Persistent roll in degrees, post-aim; the game writes it and the rig never changes it.
+    /// Positive turns the camera's right vector upward.
+    #[serde(skip_serializing_if = "zero")]
+    pub roll_deg: f32,
+    /// Persistent field-of-view offset in degrees, post-aim; the game writes it and the rig never
+    /// changes it. Inert when the rig sets no `fov_y_deg`.
+    #[serde(skip_serializing_if = "zero")]
+    pub fov_offset_deg: f32,
     /// Engine-written state: springs, projection, blend and shake clock.
     pub state: RigState,
 }
@@ -68,6 +100,11 @@ impl Default for CameraRig {
             trauma: 0.0,
             grounded: true,
             look_deg: [0.0; 2],
+            kick: KickConfig::default(),
+            kick_deg: [0.0; 3],
+            fov_kick_deg: 0.0,
+            roll_deg: 0.0,
+            fov_offset_deg: 0.0,
             state: RigState::default(),
         }
     }
@@ -80,7 +117,7 @@ impl CameraRig {
         self.state.pose.as_ref().map_or(0.0, |pose| pose.yaw_deg)
     }
 
-    /// The eye and orientation the rig last posed, before shake and any other post-aim effect;
+    /// The eye and orientation the rig last posed, before shake, kick, roll, the FOV channels and any other post-aim effect;
     /// `None` before the first pose. Valid in every mode. It is the one source of truth for aim
     /// rays and anything that must follow where the player looks; it lags a game system by one tick,
     /// like [`camera_relative`](crate::camera_relative).
@@ -159,6 +196,24 @@ pub fn set_look(rig: &mut CameraRig, yaw_deg: f32, pitch_deg: f32) {
         rig.state.yaw_deg = wrap180(yaw_deg);
         rig.state.pitch_deg = pitch_deg;
         rig.look_deg = [0.0; 2];
+    }
+}
+
+/// Adds a recoil kick (degrees) to [`CameraRig::kick_deg`]; a non-finite component is ignored.
+/// Recoil up is a negative `pitch_deg`.
+pub fn add_kick(rig: &mut CameraRig, yaw_deg: f32, pitch_deg: f32, roll_deg: f32) {
+    for (slot, value) in rig.kick_deg.iter_mut().zip([yaw_deg, pitch_deg, roll_deg]) {
+        if value.is_finite() {
+            *slot += value;
+        }
+    }
+}
+
+/// Adds a field-of-view kick (degrees) to [`CameraRig::fov_kick_deg`]; a non-finite value is
+/// ignored.
+pub fn add_fov_kick(rig: &mut CameraRig, deg: f32) {
+    if deg.is_finite() {
+        rig.fov_kick_deg += deg;
     }
 }
 
@@ -375,6 +430,25 @@ impl Default for ShakeConfig {
             decay_per_second: 1.2,
             exponent: 2.0,
             seed: 1,
+        }
+    }
+}
+
+/// How fast the kicks return to centre, in gameplay seconds (`0` is an instant return).
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct KickConfig {
+    /// Seconds for the `kick_deg` error to halve.
+    pub half_life: f32,
+    /// Seconds for the `fov_kick_deg` error to halve.
+    pub fov_half_life: f32,
+}
+
+impl Default for KickConfig {
+    fn default() -> Self {
+        Self {
+            half_life: 0.08,
+            fov_half_life: 0.15,
         }
     }
 }
