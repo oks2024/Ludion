@@ -5,7 +5,7 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::pool::{PIERCE_MEMORY, ProjectilePool, Response};
 
-const DOMAIN: &[u8] = b"ludion.projectiles.v1";
+const DOMAIN: &[u8] = b"ludion.projectiles.v2";
 /// Canonical NaN: x86 and ARM disagree on the default NaN bits.
 const NAN_BITS: u32 = 0x7fc0_0000;
 
@@ -46,9 +46,11 @@ impl Buf {
 }
 
 impl ProjectilePool {
-    /// XXH3-64 over the domain tag, the live count and, for each live slot in ascending order, its
-    /// index, generation and every field as little-endian bits (NaN canonicalised, `-0.0`
-    /// distinct). The free list is left out: an id divergence shows in the ids that are hashed.
+    /// XXH3-64 over the domain tag, the live count, the id-allocation state (high-water mark, the
+    /// free list in the order it will be reused, and the generation of every dead slot below the
+    /// high-water mark) and, for each live slot in ascending order, its index, generation and every
+    /// field as little-endian bits (NaN canonicalised, `-0.0` distinct). Covering the allocation
+    /// state means a divergence shows at once, not at the next spawn.
     ///
     /// # Example
     /// ```
@@ -65,6 +67,14 @@ impl ProjectilePool {
         hasher.update(DOMAIN);
         hasher.update(&(self.len() as u32).to_le_bytes());
         let c = &self.cols;
+        hasher.update(&(self.high_water as u32).to_le_bytes());
+        hasher.update(&(self.free.len() as u32).to_le_bytes());
+        for slot in self.free.iter().rev() {
+            hasher.update(&slot.to_le_bytes());
+        }
+        for i in (0..self.high_water).filter(|&i| !c.alive[i]) {
+            hasher.update(&c.generation[i].to_le_bytes());
+        }
         for i in (0..self.high_water).filter(|&i| c.alive[i]) {
             let mut b = Buf {
                 bytes: [0; 192],
@@ -131,8 +141,9 @@ mod tests {
         let a = ProjectilePool::with_capacity(0).digest();
         assert_eq!(a, ProjectilePool::with_capacity(64).digest());
         let mut hasher = Xxh3::new();
-        hasher.update(b"ludion.projectiles.v1");
-        hasher.update(&0u32.to_le_bytes());
+        hasher.update(b"ludion.projectiles.v2");
+        // Live count, high water and free count, all zero.
+        hasher.update(&[0u8; 12]);
         assert_eq!(a, hasher.digest());
     }
 
@@ -170,6 +181,19 @@ mod tests {
         let mut fresh = ProjectilePool::with_capacity(2);
         fresh.spawn(a).unwrap();
         assert_ne!(churned.digest(), fresh.digest());
+    }
+
+    #[test]
+    fn the_free_list_order_is_hashed() {
+        let desc = ProjectileDesc::new([0.0; 3], [1.0, 0.0, 0.0]);
+        let drained = |order: [usize; 2]| {
+            let mut pool = ProjectilePool::with_capacity(4);
+            let ids: Vec<_> = (0..3).map(|_| pool.spawn(desc).unwrap()).collect();
+            pool.despawn(ids[order[0]]);
+            pool.despawn(ids[order[1]]);
+            pool.digest()
+        };
+        assert_ne!(drained([0, 2]), drained([2, 0]));
     }
 
     #[test]

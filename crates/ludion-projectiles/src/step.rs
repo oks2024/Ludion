@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 
+use ludion_core::ids::EntityId;
 use ludion_core::par;
 use ludion_physics::{PhysicsWorld, Sweep, SweepFilter};
 use ludion_spatial::spatial3d::{Filter, Handle, Index3d};
@@ -15,8 +16,9 @@ const CHUNK: usize = 256;
 /// post-contact state and drops the rest of the tick's travel.
 pub const MAX_HITS_PER_TICK: usize = 8;
 
-/// Distance a reflected projectile is pushed off the surface along its normal. The reflected
-/// velocity points away from the surface, so the next cast does not touch it again.
+/// The floor of the distance a reflected projectile is pushed off the surface along its normal; the
+/// step scales it up with the position's magnitude so it survives f32 rounding far from the origin.
+/// The reflected velocity points away from the surface, so the next cast does not touch it again.
 pub const SKIN: f32 = 1e-3;
 
 /// What one tick needs besides the pool and the two worlds.
@@ -168,9 +170,10 @@ type Contact = (f32, Handle, [f32; 3], [f32; 3], bool);
 /// Per projectile: gravity then drag integrate the velocity, the lifetime ages (expiry frees the
 /// slot with no sweep; a parked projectile ages but never moves), then the tick's segment
 /// `v·dt` is swept against `physics` (excluding the owner entity) and `index` (skipping the owner
-/// and the handles it pierced) and the nearer hit, by `(t, handle)`, is resolved with the time left
-/// in the tick; a full tie goes to the physics hit. At most [`MAX_HITS_PER_TICK`] hits resolve per
-/// projectile; past that it keeps its last post-contact state and drops the rest of the tick.
+/// and the handles it pierced, whose physics colliders are skipped as well) and the nearer hit, by
+/// `(t, handle)`, is resolved with the time left in the tick; a full tie goes to the physics hit.
+/// At most [`MAX_HITS_PER_TICK`] hits resolve per projectile; past that it keeps its last
+/// post-contact state and drops the rest of the tick.
 /// [`SKIN`] is the reflect push-out; [`PIERCE_MEMORY`] the pierce ring.
 ///
 /// Per-slot work fans out over `ludion_core::par`; results apply in ascending slot order, so the
@@ -259,6 +262,13 @@ pub fn step(
     }
 }
 
+/// The push-out distance at `centre`: [`SKIN`], or more when the position is so large that `SKIN`
+/// would round away.
+fn skin_at(centre: [f32; 3]) -> f32 {
+    let m = centre.iter().fold(0.0f32, |m, c| m.max(c.abs()));
+    SKIN.max(4.0 * f32::EPSILON * m)
+}
+
 fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
@@ -333,8 +343,14 @@ fn sweep_slot(
             sweep = sweep.excluding(e);
         }
         let skip_len = (w.pierces as usize).min(PIERCE_MEMORY);
+        let mut skip = [EntityId::new(0, 0); PIERCE_MEMORY];
+        let mut skip_n = 0;
+        for entity in w.pierced[..skip_len].iter().filter_map(|h| h.as_entity()) {
+            skip[skip_n] = entity;
+            skip_n += 1;
+        }
         let world = physics
-            .first_hit(&sweep, &cfg.world)
+            .first_hit_skipping(&sweep, &cfg.world, &skip[..skip_n])
             .map(|h| (h.t, Handle::entity(h.entity), h.point, h.normal, true) as Contact);
         let target = index
             .cast_skipping(w.pos, delta, radius, &filter, &w.pierced[..skip_len])
@@ -361,7 +377,7 @@ fn sweep_slot(
                     for (v, n) in w.vel.iter_mut().zip(normal) {
                         *v -= k * n;
                     }
-                    w.pos = add(centre, scale(normal, SKIN));
+                    w.pos = add(centre, scale(normal, skin_at(centre)));
                     w.bounces += 1;
                     outcome = HitOutcome::Reflected;
                     keep_going = true;

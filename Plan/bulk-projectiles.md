@@ -27,13 +27,21 @@
 8. **Casts fan out over `par`**: chunked, thread-count-invariant; the bench asserts the digest trace
    at 1 and N threads is identical.
 9. **No re-hit**: the last contact is excluded from the next cast and the shot is pushed out by an
-   epsilon, so Reflect and Pierce cannot stick to or re-pierce a surface.
+   epsilon, so Reflect and Pierce cannot stick to or re-pierce a surface. Pierce memory also skips the
+   pierced entity's physics collider (`first_hit_skipping`), so an actor with both a collider and an
+   index volume is hit once. The push-out is `SKIN` scaled by the position's magnitude, so it
+   survives f32 rounding far from the origin.
 10. **Muzzle convergence is render-only**: extract captures an offset when it first sees a shot's
     generational id (the muzzle under the frame's resolved camera, minus the drawn position) and eases
     it to zero over `converge_distance` (4 m). The sim never sees it; `WorldHash` is pinned equal with
     late latch and visuals on or off.
 11. **`first_hit` at `t = 0` uses a solid point projection**, because parry's EPA allocates for a ball
-    that starts touching or inside a collider.
+    that starts touching or inside a collider. A start that touches and travels away from, or along,
+    the surface is no hit (the ray form tests a step along the ray against the shape); inward travel
+    and an inside start still hit at `t = 0`.
+13. **The pool capacity cap is `1 << 15`** (32,768): 4× the 5,000-shot target, rounded to a power of
+    two. Per-slot step scratch is about 0.7 KB, so 2^20 would have meant roughly 0.9 GB. The pool digest
+    is domain `v2` and covers high water, the free list and dead-slot generations.
 12. **L4030** warns once when a pool holds shots but `projectiles_step` never ran, the usual sign of
     an unscheduled step.
 
@@ -44,6 +52,9 @@ pool crate and its byte codec; the engine hosting (`.projectiles(config)`, `proj
 resource digest, snapshots, L4026/L4027, corpus re-recorded with records identical); the drawing
 (`.projectile_visuals`, L4028); muzzle convergence (L4029, gallery `projectile-muzzle`); the
 allocation-free `t = 0` sweep and L4030; this bench and `ludion docs projectiles`.
+
+Review fixes, sim side (06a): pierce skips a pierced entity's collider, outbound `t = 0` is no hit,
+position-scaled push-out, digest v2, capacity cap 2^15, alloc claims scoped to one thread.
 
 Bench (release, unpinned M5 laptop, 2026-11-07, indicative only): 5,000 live shots against a
 120×12×120 room, 40 pillars and 500 index targets — `step + digest` 1.9 ms at 1 thread (step 1.8,

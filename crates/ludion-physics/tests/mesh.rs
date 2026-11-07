@@ -354,3 +354,23 @@ fn a_mesh_is_not_a_query_shape() {
             .is_err()
     );
 }
+
+#[test]
+fn a_ray_on_a_trimesh_face_hits_going_in_and_misses_going_out() {
+    use ludion_physics::Sweep;
+    let mut world = World::new();
+    world.insert_resource(library(0.0));
+    spawn(
+        &mut world,
+        mesh_collider("floor.mesh.yaml", Body::new_static()),
+        [0.0; 3],
+    );
+    let mut schedule = schedule();
+    tick(&mut world, &mut schedule, 0);
+    let filter = physics(&world).sweep_filter(&QueryFilter::new()).unwrap();
+    let cast = |delta: [f32; 3]| {
+        physics(&world).first_hit(&Sweep::new([0.25, 0.0, 0.25], delta, 0.0), &filter)
+    };
+    assert_eq!(cast([0.0, -4.0, 0.0]).map(|h| h.t), Some(0.0));
+    assert!(cast([0.0, 4.0, 0.0]).is_none());
+}

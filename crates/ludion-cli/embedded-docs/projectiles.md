@@ -37,7 +37,7 @@ The full runnable game is `crates/ludion/examples/projectiles.rs`
 
 | Field | Default | Range / meaning |
 | --- | --- | --- |
-| `capacity` | `1024` | `1..=1048576` live shots |
+| `capacity` | `1024` | `1..=32768` live shots |
 | `gravity` | `[0, -9.81, 0]` | finite m/s²; scaled per shot by `gravity_scale` |
 | `targets` | all bits | layer mask of the `spatial3d` index a shot can hit |
 | `ignore_layers` | `[]` | `physics.layers` names the sweep skips |
@@ -60,11 +60,13 @@ despawning on its first hit. Set fields after it:
 - **Per tick** the step integrates gravity and drag, then sweeps each shot's travel against the
   physics world (the last completed physics step) and the `spatial3d` index, and resolves the first
   hit by its response inside the step, so a ricochet continues the remaining travel the same tick.
-  Casts fan out over `ludion_core::par`; results are identical at any thread count.
+  Casts fan out over `ludion_core::par`; results are identical at any thread count. After warm-up a
+  step at one thread (`LUDION_THREADS=1`) allocates nothing; at more threads `par` spawns scoped
+  workers each tick, which allocate.
 - **Responses:** `Reflect` bounces `v − (1 + restitution)(v·n)n` and the hit after `max_bounces`
   despawns. `Pierce` passes through up to `max` **index targets**; a world (physics) hit always
-  despawns. `Stop` parks the shot at the contact. Reflect and Pierce never re-hit the surface they
-  just left.
+  despawns, except on an entity the shot already pierced, whose collider is skipped too. `Stop`
+  parks the shot at the contact. Reflect and Pierce never re-hit the surface they just left.
 - **Projectiles are not in the target index.** Shots never hit each other; put targets in the index
   with `SpatialVolume` (`ludion docs spatial-3d`).
 - **Events** (`HitEvent`: id, handle, point, normal, `t`, arrival velocity, tag, outcome; `Expired`)
@@ -119,7 +121,11 @@ unprimed, so shots in flight draw at their simulated position.
 - Scheduling `projectiles_step` before `spatial3d_rebuild` sweeps the previous tick's index; never
   scheduling it is `L4030`.
 - Pierce counts index targets only; a pierce shot into a wall still despawns.
-- A shot spawned already touching a collider hits at `t = 0`.
+- A shot spawned already touching a collider hits at `t = 0` when it travels into it; touching and
+  moving away or along the surface is no hit.
+- Put actor colliders (capsules) on a layer the pool ignores (`ProjectileConfig::ignore_layers`) and
+  give actors a `SpatialVolume`: a Pierce shot crosses index targets only, and a physics hit
+  despawns it.
 - Events are gone after the next step: copy what you need in the same tick.
 - Cost at 5,000 live shots is measured by `cargo test -p ludion-projectiles --release --test
   bulk_bench -- --ignored --nocapture`; keep damage and homing work proportional to hits, not shots.

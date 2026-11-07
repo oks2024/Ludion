@@ -8,6 +8,7 @@ use ludion_projectiles::{
     HitEvent, HitOutcome, ProjectileDesc, ProjectileId, ProjectilePool, Response, SKIN, StepEvents,
     step,
 };
+use ludion_spatial::Shape;
 use ludion_spatial::spatial3d::{Handle, Index3d};
 
 fn run(
@@ -428,4 +429,73 @@ fn a_ball_that_reflects_does_not_re_hit_the_same_wall() {
     }
     assert_eq!(hits, 1);
     assert_eq!(pool.bounces(id), Some(1));
+}
+
+#[test]
+fn pierce_does_not_rehit_the_collider_of_a_pierced_entity() {
+    let capsule = Shape::Capsule {
+        half_height: 0.5,
+        radius: 0.4,
+    };
+    let (world, ids) = shape_world(&[([5.0, 0.0, 0.0], capsule)]);
+    let physics = physics_ref(&world);
+    let mut cfg = config(physics);
+    cfg.targets = 1;
+    let target = Handle::entity(ids[0]);
+    let index = index_of(&[sphere(target, [5.0, 0.0, 0.0], 1.5, 1)]);
+    let mut pool = ProjectilePool::with_capacity(2);
+    let mut d = ProjectileDesc::new([0.0; 3], [600.0, 0.0, 0.0]);
+    d.response = Response::Pierce { max: 2 };
+    let id = one(&mut pool, d);
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        let ev = run(&mut pool, physics, &index, DT, &cfg);
+        seen.extend(ev.hits.iter().map(|h| (h.handle, h.outcome)));
+    }
+    assert_eq!(seen, vec![(target, HitOutcome::Pierced)]);
+    assert!(pool.contains(id));
+    assert!(pool.position(id).unwrap()[0] > 6.5);
+}
+
+#[test]
+fn a_ricochet_far_from_the_origin_bounces_once_and_leaves() {
+    let (world, _) = box_world(&[([10_001.0, 0.0, 0.0], [1.0, 50.0, 50.0])]);
+    let physics = physics_ref(&world);
+    let cfg = config(physics);
+    let mut pool = ProjectilePool::with_capacity(2);
+    let mut d = ProjectileDesc::new([9_990.0, 0.0, 0.0], [600.0, 0.0, 0.0]);
+    d.response = Response::Reflect {
+        restitution: 1.0,
+        max_bounces: 8,
+    };
+    let id = one(&mut pool, d);
+    let mut reflected = 0;
+    for _ in 0..30 {
+        reflected += run(&mut pool, physics, &Index3d::new(), DT, &cfg)
+            .hits
+            .iter()
+            .filter(|h| h.outcome == HitOutcome::Reflected)
+            .count();
+    }
+    assert_eq!(reflected, 1);
+    assert!(pool.velocity(id).unwrap()[0] < 0.0);
+    assert!(pool.position(id).unwrap()[0] < 10_000.0);
+}
+
+#[test]
+fn a_reflect_shot_touching_a_wall_and_moving_away_has_no_event() {
+    let (world, _) = wall_x();
+    let physics = physics_ref(&world);
+    let cfg = config(physics);
+    let mut pool = ProjectilePool::with_capacity(2);
+    let mut d = ProjectileDesc::new([4.9, 0.0, 0.0], [-10.0, 0.0, 0.0]);
+    d.radius = 0.2;
+    d.response = Response::Reflect {
+        restitution: 1.0,
+        max_bounces: 3,
+    };
+    let id = one(&mut pool, d);
+    let events = run(&mut pool, physics, &Index3d::new(), DT, &cfg);
+    assert!(events.hits.is_empty());
+    assert_eq!(pool.bounces(id), Some(0));
 }

@@ -38,7 +38,8 @@ pub struct Sweep {
     pub delta: [f32; 3],
     /// Sphere radius; `0.0` sweeps a ray.
     pub radius: f32,
-    /// A collider this probe skips — the last one a projectile hit, for pierce and ricochet.
+    /// A collider this probe skips, such as the shooter's own; see
+    /// [`PhysicsWorld::first_hit_skipping`] for more.
     pub exclude: Option<EntityId>,
 }
 
@@ -99,8 +100,13 @@ pub struct SweepHit {
     /// `origin` when the probe's centre starts inside.
     pub point: [f32; 3],
     /// World-space unit normal at `point`, pointing out of the hit collider toward the probe. A probe
-    /// that starts touching or inside reports the reversed travel direction instead.
+    /// that starts touching or inside reports the reversed travel direction instead. A probe that
+    /// starts touching and is moving away from, or along, the surface has no hit at all.
     pub normal: [f32; 3],
+}
+
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 /// The best hit so far, keyed `(toi, entity)`.
@@ -158,7 +164,8 @@ impl PhysicsWorld {
     /// Every collider gets one exact cast, never rapier's first-hit calls, so equal times of impact go
     /// to the lowest entity whatever the BVH order. A probe that starts touching or inside a collider
     /// hits at `t == 0` with `normal == -direction` and `point` the nearest surface point (`origin`
-    /// when the centre is inside).
+    /// when the centre is inside). A probe that starts touching a surface but travels away from it or
+    /// along it does not hit that collider; a ray starting on a surface and leaving it likewise.
     ///
     /// An invalid probe is a miss, not an error: a non-finite origin, delta or radius, a negative
     /// radius, a zero-length delta, or a delta whose length is not finite.
@@ -174,6 +181,31 @@ impl PhysicsWorld {
     /// assert!(world.first_hit(&probe, &filter).is_none());
     /// ```
     pub fn first_hit(&self, sweep: &Sweep, filter: &SweepFilter) -> Option<SweepHit> {
+        self.first_hit_skipping(sweep, filter, &[])
+    }
+
+    /// [`first_hit`](PhysicsWorld::first_hit) that also skips every collider whose entity is in
+    /// `skip`, such as the entities a piercing projectile already passed through. The result is the
+    /// next hit behind them, or `None`.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::ids::EntityId;
+    /// use ludion_core::time::TickRate;
+    /// use ludion_physics::{PhysicsWorld, QueryFilter, Sweep};
+    ///
+    /// let world = PhysicsWorld::new(TickRate::DEFAULT);
+    /// let filter = world.sweep_filter(&QueryFilter::new()).unwrap();
+    /// let probe = Sweep::new([0.0; 3], [10.0, 0.0, 0.0], 0.25);
+    /// let passed = [EntityId::new(3, 0)];
+    /// assert!(world.first_hit_skipping(&probe, &filter, &passed).is_none());
+    /// ```
+    pub fn first_hit_skipping(
+        &self,
+        sweep: &Sweep,
+        filter: &SweepFilter,
+        skip: &[EntityId],
+    ) -> Option<SweepHit> {
         let Sweep {
             origin,
             delta,
@@ -208,6 +240,7 @@ impl PhysicsWorld {
         for (_, collider) in pipeline.intersect_aabb_conservative(swept) {
             let entity = entity_from_bits(collider.user_data);
             if Some(entity) == exclude
+                || skip.contains(&entity)
                 || Some(entity) == filter.exclude
                 || Some(entity) == filter.exclude_also
                 || (!filter.include_sensors && collider.is_sensor())
@@ -224,6 +257,24 @@ impl PhysicsWorld {
                 ) else {
                     continue;
                 };
+                // A ray that starts on the surface and leaves it is not a hit. A surface shape reports
+                // the face normal; a solid reports a zero one, so test whether a step along the ray
+                // is still in the shape.
+                if hit.time_of_impact == 0.0 {
+                    let normal = from_vector(hit.normal);
+                    let leaving = if normal == [0.0; 3] {
+                        let scale = origin.iter().fold(1.0_f32, |m, c| m.max(c.abs()));
+                        let step = advance(origin, unit_dir, 1e-4 * scale);
+                        !collider
+                            .shape()
+                            .contains_point(collider.position(), to_vector(step))
+                    } else {
+                        dot3(unit_dir, normal) > 0.0
+                    };
+                    if leaving {
+                        continue;
+                    }
+                }
                 (
                     hit.time_of_impact,
                     advance(origin, unit_dir, hit.time_of_impact),
@@ -237,7 +288,15 @@ impl PhysicsWorld {
                     .shape()
                     .project_point(pose, to_vector(origin), true);
                 let gap = proj.point - to_vector(origin);
-                if proj.is_inside || sqrt(gap.x * gap.x + gap.y * gap.y + gap.z * gap.z) <= radius {
+                let gap_len = sqrt(gap.x * gap.x + gap.y * gap.y + gap.z * gap.z);
+                if proj.is_inside || gap_len <= radius {
+                    // Touching but moving away from, or along, the nearest surface point is no hit.
+                    if !proj.is_inside
+                        && gap_len > 0.0
+                        && dot3(delta, [-gap.x, -gap.y, -gap.z]) >= 0.0
+                    {
+                        continue;
+                    }
                     let point = if proj.is_inside {
                         origin
                     } else {

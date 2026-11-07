@@ -21,13 +21,15 @@
 //!
 //! - **Despawn** frees the projectile at the contact.
 //! - **Reflect** mirrors the velocity about the contact normal (scaled by `restitution`), puts the
-//!   centre at the contact plus [`SKIN`] along the normal, and never excludes the surface by handle.
+//!   centre at the contact plus [`SKIN`] along the normal (scaled up with the position's magnitude so it
+//!   survives rounding far from the origin), and never excludes the surface by handle.
 //!   A world collider can be a whole room (one trimesh), so excluding it would let the projectile
 //!   leave through every other wall; the push-out and the outward velocity keep the next cast off
 //!   the surface instead.
 //! - **Pierce** continues through *index targets only*, remembering the last [`PIERCE_MEMORY`]
-//!   handles it passed so overlapping targets are not re-hit within a sweep or across ticks. A
-//!   physics (world) hit despawns a piercing projectile.
+//!   handles it passed so overlapping targets are not re-hit within a sweep or across ticks; physics
+//!   hits on a pierced entity are skipped too. Any other physics (world) hit despawns a piercing
+//!   projectile.
 //! - **Stop** parks the projectile at the contact: live, motionless, still aging.
 //!
 //! # Determinism
@@ -35,8 +37,9 @@
 //! The step uses only `+ - * /` (no transcendental, no `sqrt`), integrates semi-implicitly
 //! (gravity, then drag as `v *= 1 / (1 + drag·dt)`, then the sweep), fans the per-projectile work
 //! out over [`ludion_core::par`] in fixed chunks and applies results serially in ascending slot
-//! order. Results, events and ids are therefore identical at any thread count. After warm-up a step
-//! allocates nothing.
+//! order. Results, events and ids are therefore identical at any thread count. After warm-up a step at
+//! one thread (`LUDION_THREADS=1`) allocates nothing; at more threads `par` spawns scoped workers each
+//! tick, which allocate.
 //!
 //! ```
 //! use ludion_core::time::TickRate;

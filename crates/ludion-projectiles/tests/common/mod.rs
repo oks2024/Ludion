@@ -53,16 +53,25 @@ impl PhysicsPose for TestPose {
 /// A world of static boxes `(centre, half_extents)`, stepped once so the physics world exists.
 /// Returns the world and the box entities in order.
 pub fn box_world(boxes: &[([f32; 3], [f32; 3])]) -> (World, Vec<EntityId>) {
+    let shapes: Vec<_> = boxes
+        .iter()
+        .map(|&(at, half)| (at, Shape::Box { half_extents: half }))
+        .collect();
+    shape_world(&shapes)
+}
+
+/// [`box_world`] for any static shapes `(centre, shape)`.
+pub fn shape_world(shapes: &[([f32; 3], Shape)]) -> (World, Vec<EntityId>) {
     let mut world = World::new();
     let mut ids = Vec::new();
-    for &(at, half) in boxes {
+    for (at, shape) in shapes.iter().cloned() {
         let e = world.spawn();
         world.insert(e, TestPose::at(at)).unwrap();
         world
             .insert(
                 e,
                 Collider {
-                    shape: Shape::Box { half_extents: half },
+                    shape,
                     body: Body::new_static(),
                     layer: None,
                     sensor: false,

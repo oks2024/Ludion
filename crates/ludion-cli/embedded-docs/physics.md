@@ -185,9 +185,11 @@ edge always hits; a slanted ray lying exactly in a grid plane can miss at a shar
 
 **First hit.** `first_hit`/`first_hits` sweep a sphere (radius 0 is a ray) along a segment and return
 the nearest `SweepHit` by `(t, entity)` with no allocation. `sweep_filter` resolves a `QueryFilter`
-once per tick; a `Sweep` can also skip one collider (`excluding`). A probe that starts inside reports
-`t = 0`, `normal = -direction` and `point` = the nearest surface point (`origin` when its centre is
-inside). An invalid probe is `None`. The batch form is thread-count invariant.
+once per tick; a `Sweep` can also skip one collider (`excluding`), and `first_hit_skipping` takes a
+list. A probe that starts inside, or touching and travelling into the surface, reports `t = 0`,
+`normal = -direction` and `point` = the nearest surface point (`origin` when its centre is inside).
+One that starts touching and travels away from, or along, a surface does not hit it; a ray leaving
+the surface it starts on likewise. An invalid probe is `None`. The batch form is thread-count invariant.
 
 **Collision layers** — which pairs never meet, and query filtering: `ludion docs collision-layers`.
 

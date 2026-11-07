@@ -146,7 +146,7 @@ fn sweeps_starting_in_contact_do_not_allocate() {
     let probes: Vec<Sweep> = (0..4)
         .flat_map(|i| {
             let x = i as f32 * 10.0;
-            [0.1, 0.6].map(|dx| Sweep::new([x + dx, 0.0, 0.0], [0.0, 0.0, 4.0], 0.2))
+            [0.1, 0.6].map(|dx| Sweep::new([x + dx, 0.0, 0.0], [-4.0, 0.0, 0.0], 0.2))
         })
         .collect();
     let _ = physics.first_hit(&probes[0], &filter);

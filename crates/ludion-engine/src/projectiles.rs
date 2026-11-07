@@ -43,7 +43,7 @@ use crate::diagnostics::report_full;
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectileConfig {
-    /// Most live projectiles; `1..=1048576`.
+    /// Most live projectiles; `1..=32768`.
     pub capacity: u32,
     /// Acceleration in m/s², scaled per shot by its `gravity_scale` (default 0: inert).
     pub gravity: [f32; 3],
@@ -71,7 +71,7 @@ impl ProjectileConfig {
     /// Checks the config.
     ///
     /// # Errors
-    /// `L4027` if `capacity` is outside `1..=1048576`, `gravity` is not finite, or a layer name is
+    /// `L4027` if `capacity` is outside `1..=32768`, `gravity` is not finite, or a layer name is
     /// empty.
     pub fn validate(&self) -> Result<(), Diagnostic> {
         let invalid = |path: &str, what: String, help: &str| {

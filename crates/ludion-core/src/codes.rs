@@ -2273,7 +2273,7 @@ pub mod code {
     /// per session.
     pub const PROJECTILE_SPAWN_REFUSED: DiagnosticCode = DiagnosticCode::new("L4026");
 
-    /// `L4027` — a `ProjectileConfig` is invalid: a capacity outside `1..=1048576`, a non-finite
+    /// `L4027` — a `ProjectileConfig` is invalid: a capacity outside `1..=32768`, a non-finite
     /// gravity, or an empty or unknown `ignore_layers` name. An **error**. Raised by
     /// `ludion-engine`'s builder at `build`, by snapshot restore, and by `projectiles_step`.
     pub const PROJECTILE_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L4027");
@@ -10664,7 +10664,7 @@ zero, a normalise of a zero vector).",
         explanation: "\
 A `ProjectileConfig` cannot build a pool. The message names the field:
 
-- `capacity` must be in `1..=1048576`;
+- `capacity` must be in `1..=32768`;
 - `gravity` must be three finite numbers (m/s^2);
 - `ignore_layers` must name layers declared in the scene's `physics.layers`, and no name may be
   empty.

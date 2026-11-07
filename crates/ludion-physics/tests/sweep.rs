@@ -245,11 +245,53 @@ fn a_ball_overlapping_with_its_centre_outside_hits_at_zero() {
     let mut world = World::new();
     let target = spawn_box(&mut world, BoxSpec::at([0.0, 0.0, 0.0]));
     step_free(&mut world);
-    let got = hit(&world, &Sweep::new([0.6, 0.0, 0.0], [0.0, 4.0, 0.0], 0.25)).unwrap();
+    let got = hit(&world, &Sweep::new([0.6, 0.0, 0.0], [-4.0, 0.0, 0.0], 0.25)).unwrap();
     assert_eq!(got.entity, target);
     assert_eq!(got.t, 0.0);
-    assert_eq!(got.normal, [0.0, -1.0, 0.0]);
+    assert_eq!(got.normal, [1.0, 0.0, 0.0]);
     assert_eq!(got.point, [0.5, 0.0, 0.0]);
+}
+
+#[test]
+fn a_touching_start_moving_away_or_along_the_surface_is_no_hit() {
+    let mut world = World::new();
+    spawn_box(&mut world, BoxSpec::at([0.0, 0.0, 0.0]));
+    step_free(&mut world);
+    // The ball touches the +x face (x = 0.5) with its centre outside.
+    let touching = [0.6, 0.0, 0.0];
+    assert!(hit(&world, &Sweep::new(touching, [4.0, 0.0, 0.0], 0.25)).is_none());
+    assert!(hit(&world, &Sweep::new(touching, [0.0, 4.0, 0.0], 0.25)).is_none());
+    assert_eq!(
+        hit(&world, &Sweep::new(touching, [-4.0, 0.0, 0.0], 0.25)).map(|h| h.t),
+        Some(0.0)
+    );
+    // A ray on the face leaving it misses; entering it hits at zero.
+    let on_face = [0.5, 0.0, 0.0];
+    assert!(hit(&world, &Sweep::new(on_face, [4.0, 0.0, 0.0], 0.0)).is_none());
+    assert_eq!(
+        hit(&world, &Sweep::new(on_face, [-4.0, 0.0, 0.0], 0.0)).map(|h| h.t),
+        Some(0.0)
+    );
+}
+
+#[test]
+fn first_hit_skipping_skips_the_listed_entity_and_finds_the_next() {
+    let (world, ids) = row_world();
+    let filter = physics(&world)
+        .sweep_filter(&QueryFilter::new())
+        .expect("an empty filter");
+    let probe = Sweep::new([-5.0, 0.0, 0.0], [20.0, 0.0, 0.0], 0.25);
+    let near = physics(&world).first_hit(&probe, &filter).unwrap();
+    assert_eq!(near.entity, ids[3]);
+    let next = physics(&world)
+        .first_hit_skipping(&probe, &filter, &[ids[3]])
+        .unwrap();
+    assert_eq!(next.entity, ids[2]);
+    assert!(
+        physics(&world)
+            .first_hit_skipping(&probe, &filter, &ids[..4])
+            .is_none()
+    );
 }
 
 fn layered_row() -> (World, [EntityId; 4]) {
@@ -439,4 +481,32 @@ fn invalid_probes_hit_nothing() {
     ] {
         assert!(hit(&world, &probe).is_none(), "{probe:?}");
     }
+}
+
+#[test]
+fn a_ray_on_a_heightfield_surface_hits_going_in_and_misses_going_out() {
+    let mut world = World::new();
+    let ground = world.spawn();
+    world.insert(ground, TestPose::at([0.0; 3])).unwrap();
+    world
+        .insert(
+            ground,
+            Collider {
+                shape: Shape::Heightfield {
+                    rows: 3,
+                    cols: 3,
+                    heights: vec![0.0; 9],
+                    scale: [4.0, 1.0, 4.0],
+                },
+                body: Body::new_static(),
+                layer: None,
+                sensor: false,
+            },
+        )
+        .unwrap();
+    step_free(&mut world);
+    let on_surface = [0.3, 0.0, 0.2];
+    let down = hit(&world, &Sweep::new(on_surface, [0.0, -4.0, 0.0], 0.0));
+    assert_eq!(down.map(|h| h.t), Some(0.0));
+    assert!(hit(&world, &Sweep::new(on_surface, [0.0, 4.0, 0.0], 0.0)).is_none());
 }

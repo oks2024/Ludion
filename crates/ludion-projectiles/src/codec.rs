@@ -11,9 +11,10 @@ const POOL_MAGIC: &[u8; 4] = b"LPRJ";
 const EVENTS_MAGIC: &[u8; 4] = b"LPEV";
 const VERSION: u8 = 1;
 
-/// Largest capacity [`ProjectilePool::decode`] accepts, so a corrupt length cannot request an
-/// unbounded allocation.
-pub const MAX_DECODE_CAPACITY: u32 = 1 << 20;
+/// Largest pool capacity, for [`ProjectilePool::decode`] and the engine's config: 4× the 5,000-shot
+/// target, rounded up to a power of two. A step's per-slot scratch is about 0.7 KB, so the cap bounds
+/// the worst case near 30 MB and a corrupt length cannot request an unbounded allocation.
+pub const MAX_DECODE_CAPACITY: u32 = 1 << 15;
 
 /// Why a [`ProjectilePool`] or [`StepEvents`] blob did not decode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
