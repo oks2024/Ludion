@@ -31,7 +31,9 @@ use ludion_core::text::single_char;
 use ludion_core::time::FrameIndex;
 use ludion_ecs::{Parent, Registry, SemanticValidate};
 use ludion_physics::PhysicsPose;
-use ludion_spatial::{Collider, GroundPosition, Joint, JointMotor, Plane, Velocity};
+use ludion_spatial::{
+    Collider, GroundPosition, Joint, JointMotor, Plane, SpatialVolume, Velocity, WorldPosition,
+};
 
 pub mod lane;
 pub mod path_follow;
@@ -87,6 +89,12 @@ impl Default for Transform {
             rotation: [0.0; 3],
             scale: [1.0; 3],
         }
+    }
+}
+
+impl WorldPosition for Transform {
+    fn world_position(&self) -> [f32; 3] {
+        self.translation
     }
 }
 
@@ -5705,6 +5713,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<ViewmodelLens>("ViewmodelLens")
         .expect("unique");
+    // The 3D broadphase bound, appended last so no existing scene or hash moves.
+    registry
+        .register_validated::<SpatialVolume>("SpatialVolume")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -5713,7 +5725,7 @@ pub fn builtin_registry() -> Registry {
 }
 
 /// The built-ins whose engine-owned consumer is a sim-phase system.
-const SIM_ONLY_COMPONENTS: [&str; 10] = [
+const SIM_ONLY_COMPONENTS: [&str; 11] = [
     "Collider",
     "Velocity",
     "Joint",
@@ -5724,6 +5736,7 @@ const SIM_ONLY_COMPONENTS: [&str; 10] = [
     "LaneConstraint",
     "PathFollower",
     "CameraRig",
+    "SpatialVolume",
 ];
 
 #[cfg(test)]
@@ -5752,6 +5765,7 @@ mod tests {
             "LaneConstraint",
             "PathFollower",
             "CameraRig",
+            "SpatialVolume",
         ];
         expected.sort_unstable();
         assert_eq!(marked, expected);
@@ -6139,12 +6153,13 @@ mod tests {
                 "CameraOffset",
                 "Viewmodel",
                 "ViewmodelLens",
+                "SpatialVolume",
             ]
         );
         assert_eq!(
             registry.len(),
-            47,
-            "appending Viewmodel and ViewmodelLens grows the registry by exactly two"
+            48,
+            "appending SpatialVolume grows the registry to 48"
         );
     }
 
@@ -7496,6 +7511,7 @@ mod tests {
         clean::<SpotLight>("SpotLight");
         clean::<CameraOffset>("CameraOffset");
         clean::<ViewmodelLens>("ViewmodelLens");
+        clean::<SpatialVolume>("SpatialVolume");
         clean::<ReflectionProbe>("ReflectionProbe");
         clean::<ludion_physics::CharacterMotor>("CharacterMotor");
         clean::<ludion_physics::SurfaceVelocity>("SurfaceVelocity");

@@ -51,6 +51,7 @@ pub use joint_motor::{JointMotor, expected_targets};
 pub use parent_pose::{NoParent, ParentPose};
 pub use plane::Plane;
 pub use spatial::{Entry, RayHit, SpatialIndex};
+pub use spatial3d::{SpatialVolume, VolumeShape};
 pub use velocity::Velocity;
 
 /// A component that yields a collider's center on the two in-plane axes ([`Plane`]; x/z by default).
@@ -64,4 +65,14 @@ pub use velocity::Velocity;
 pub trait GroundPosition {
     /// The collider's center on `plane`'s two in-plane axes.
     fn ground_position(&self, plane: Plane) -> [f32; 2];
+}
+
+/// A component that yields an entity's world translation, for the 3D index
+/// ([`spatial3d::rebuild`]); the sibling of [`GroundPosition`] without the plane projection.
+///
+/// `ludion-components` implements it for its `Transform` as `translation`. Under a `Parent` the
+/// resolver's composed pose replaces it.
+pub trait WorldPosition {
+    /// The entity's world translation.
+    fn world_position(&self) -> [f32; 3];
 }

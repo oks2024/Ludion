@@ -1637,6 +1637,9 @@ pub mod code {
     /// `L1338` — a `ViewmodelLens` field is out of range.
     pub const VIEWMODEL_LENS_INVALID: DiagnosticCode = DiagnosticCode::new("L1338");
 
+    /// `L1339` — a `SpatialVolume` has a non-positive or non-finite size, or no layer bit.
+    pub const SPATIAL_VOLUME_INVALID: DiagnosticCode = DiagnosticCode::new("L1339");
+
     /// `L1390` — a prefab document's `entities` list is empty, so an instance would spawn nothing.
     pub const PREFAB_EMPTY: DiagnosticCode = DiagnosticCode::new("L1390");
 
@@ -8108,6 +8111,18 @@ A `ViewmodelLens` field is out of range (pointer `/entities/{i}/components/Viewm
 Fix: write a value in range, or omit the field to take its default.",
     },
     CodeEntry {
+        code: code::SPATIAL_VOLUME_INVALID,
+        severity: Severity::Error,
+        title: "a spatial volume is invalid",
+        explanation: "\
+A `SpatialVolume` has a size that is not a positive finite `f32` (pointer
+`/entities/{i}/components/SpatialVolume/shape/sphere/radius` or `.../shape/aabb/half_extents/{k}`), or
+`layers` is `0` (pointer `.../layers`), a mask no query filter can ever match. A scene with one is
+refused.
+
+Fix: give the radius and every half extent a value above 0, and set at least one bit in `layers`.",
+    },
+    CodeEntry {
         code: code::PREFAB_EMPTY,
         severity: Severity::Error,
         title: "a prefab has no parts",
@@ -11168,6 +11183,7 @@ mod tests {
         code::VIEWMODEL_NO_CAMERA,
         code::VIEWMODEL_LENS_NOT_ON_CAMERA,
         code::VIEWMODEL_LENS_INVALID,
+        code::SPATIAL_VOLUME_INVALID,
         code::PREFAB_EMPTY,
         code::GENERATION_JOBS_UNKNOWN,
         code::ENTITY_REF_IN_COLLECTION,

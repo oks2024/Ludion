@@ -86,6 +86,10 @@
 //!   schedule position, then calls `spatial::{overlaps, raycast, k_nearest, move_and_slide}`.
 //!   [`GroundPosition`] is the seam a custom position component implements to feed the index
 //!   (the engine already implements it for [`Transform`]).
+//! - **3D spatial queries** — [`SpatialVolume`] (+ [`VolumeShape`]) and the [`spatial3d`] module: a
+//!   game registers `spatial3d::rebuild::<Transform, TransformHierarchy>` as a system, then queries
+//!   the `Index3d` resource (`overlap_sphere`, `overlap_aabb`, `k_nearest`, `cast`) with a layer
+//!   `Filter`. [`WorldPosition`] is the seam a custom position component implements.
 //! - **Rigid-body dynamics** — the second tier of the same [`Collider`] surface: a 3D [`Shape`] or
 //!   `body: rigid` (with [`RigidBody`] and its [`AxisLock`]; a static or kinematic body takes a
 //!   [`ContactMaterial`]) is simulated rather than indexed, and
@@ -242,7 +246,8 @@ pub use ludion_physics::{
 };
 pub use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, ContactMaterial, GroundPosition, Joint,
-    JointKind, JointMotor, NoParent, ParentPose, Plane, RigidBody, Shape, Velocity, spatial,
+    JointKind, JointMotor, NoParent, ParentPose, Plane, RigidBody, Shape, SpatialVolume, Velocity,
+    VolumeShape, WorldPosition, spatial, spatial3d,
 };
 
 pub use ludion_core::codes::code;

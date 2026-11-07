@@ -282,6 +282,48 @@
    responses, per the standing parity discipline). **If any wave discovers a wire change is needed,
    that is a flagged decision, not a drive-by — none is foreseen.**
 
+10. **A 3D broadphase sits beside the 2D grid (`spatial3d`, Serious Isaac request 0005); additive, no
+    prior decision amended.** A game needing hitscan, swept-sphere casts, radius queries and nearest
+    neighbours in true 3D (a first-person shooter, a projectile pool) has no answer in the 2D grid:
+    decision 1's colliders have no vertical extent. `ludion_spatial::spatial3d` adds `Index3d` next to
+    `SpatialIndex`; it replaces nothing.
+
+    The structure is a sorted-median-split BVH, not a 3D grid: item sizes are mixed (0.05 m
+    projectiles to multi-metre bosses), so a grid needs a tuned cell size plus an oversize list; a BVH
+    adapts by construction. First-hit casts of any length run front to back with best-`t` pruning,
+    k-nearest is a plain branch and bound, there is no tunable to calibrate, and the flat arrays
+    follow the Wave 2 bench lesson (`StableMap` traversal costs more than fat cells).
+
+    **Pinned order.** The build sorts by `(morton, handle)`; overlaps come out sorted by handle;
+    k-nearest by `(distance², handle)`; the first hit by `(t, handle)`. Every result is a pure
+    function of the item *set*, never of push order or thread count. Parallelism lives only in the
+    build's key pass, in fixed-size chunks.
+
+    **Handles and filters.** A `Handle` is `Entity` or `Slot` (a caller-owned pool's slot), totally
+    ordered. A `Filter` is a layer mask plus an `exclude` handle and an `owner` handle, so a projectile's
+    cast never hits its shooter or the shooter's owner.
+
+    **`SpatialVolume` is registered last, with a raw `u32` mask and `L1339`.** Sphere or box, centred
+    on the entity's world translation (rotation and scale ignored, the axis-aligned precedent of
+    decision 1). `layers` is a bitmask of game-defined layers, not tied to the named, rapier-only
+    `physics.layers`; `0` is rejected because no filter can see it. Registered after every existing
+    component and absent from existing scenes, so no scene, `WorldHash` or replay moves.
+
+    **The `Index3d` resource is outside `WorldHash` and not carried by snapshots (yet).** Readers are
+    scheduled after the rebuild, so a restore loses nothing they can see. A snapshot field would move
+    `replay_content_hash` and force a corpus re-record, so the carry is deferred to the projectile
+    pool (0006), which must ride snapshots anyway; one re-record covers both.
+
+    **The 2D `raycast` is not routed through the new index.** A 2D collider has no vertical extent
+    (decision 1) and the 3D index has no infinite-height primitive, so routing would need a
+    2D-specific narrow phase anyway; its `t` would come from different formulas, so bit identity with
+    the frozen 2D results (and vigil's hashes) could not be guaranteed. The 2D raycast is not on a hot
+    path (Status, Wave 2).
+
+    *Rejected:* a uniform 3D grid (a cell-size tunable and an oversize list for mixed sizes, and an
+    inflated cell walk for long casts); rapier's query pipeline (bodies only, allocates per call);
+    amending decisions 1–9.
+
 ## Status
 
 - **Wave 1 landed 2026-07-13.** One amendment to decision 2, forced by the crate-graph rule the

@@ -4465,6 +4465,89 @@
       "bone"
     ]
   },
+  "SpatialVolume": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "SpatialVolume",
+    "description": "A 3D bound and layer mask that files an entity into the [`Index3d`](super::Index3d) when a game\nschedules [`rebuild`](super::rebuild).\n\nCentred on the entity's world translation; rotation and scale are ignored (the bounds are\naxis-aligned, like `Collider`). `layers` is a raw bitmask, one bit per game-defined layer, and\nis unrelated to the named `physics.layers`. Every field defaults, so `{}` is a `0.5`-radius\nsphere on layer bit 0.\n\n```yaml\nSpatialVolume:\n  shape:\n    sphere:\n      radius: 0.5\n  layers: 1\n```",
+    "type": "object",
+    "properties": {
+      "shape": {
+        "description": "The bounds (default a `0.5`-radius sphere).",
+        "$ref": "#/$defs/VolumeShape",
+        "default": {
+          "sphere": {
+            "radius": 0.5
+          }
+        }
+      },
+      "layers": {
+        "description": "Layer bits a query filter matches against (must be non-zero; default `1`).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0,
+        "default": 1
+      }
+    },
+    "$defs": {
+      "VolumeShape": {
+        "description": "The bounds of a [`SpatialVolume`], serialized with serde's external tagging:\n\n```yaml\nshape:\n  sphere:\n    radius: 0.5\nshape:\n  aabb:\n    half_extents: [0.5, 1.0, 0.5]\n```",
+        "oneOf": [
+          {
+            "description": "A sphere about the entity's world translation.",
+            "type": "object",
+            "properties": {
+              "sphere": {
+                "type": "object",
+                "properties": {
+                  "radius": {
+                    "description": "Radius in world units (must be `> 0`; default `0.5`).",
+                    "type": "number",
+                    "format": "float",
+                    "minimum": 0.0,
+                    "default": 0.5
+                  }
+                }
+              }
+            },
+            "required": [
+              "sphere"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "An axis-aligned box about the entity's world translation.",
+            "type": "object",
+            "properties": {
+              "aabb": {
+                "type": "object",
+                "properties": {
+                  "half_extents": {
+                    "description": "Half-extents on x, y and z, in world units (each must be `> 0`; default\n`[0.5, 0.5, 0.5]`).",
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "default": [
+                      0.5,
+                      0.5,
+                      0.5
+                    ]
+                  }
+                }
+              }
+            },
+            "required": [
+              "aabb"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  },
   "SpotLight": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "SpotLight",

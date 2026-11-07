@@ -28,11 +28,17 @@
 
 mod narrow;
 mod query;
+mod system;
 #[cfg(test)]
 mod tests;
+mod volume;
+
+pub use system::{push_entity_volumes, rebuild};
+pub use volume::{SpatialVolume, VolumeShape};
 
 use ludion_core::ids::EntityId;
 use ludion_core::par;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use narrow::V3;
@@ -45,7 +51,9 @@ const KEY_CHUNK: usize = 1024;
 const STACK: usize = 64;
 
 /// What a [`Handle`] names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub enum HandleKind {
     /// An ECS entity. Sorts before [`HandleKind::Slot`].
     Entity,
@@ -55,7 +63,9 @@ pub enum HandleKind {
 
 /// An opaque, totally ordered item identity: kind, then index, then generation. Handles must be
 /// unique within one build; ties in every query break by handle ascending.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub struct Handle {
     /// What the handle names.
     pub kind: HandleKind,
@@ -94,7 +104,7 @@ impl Handle {
 }
 
 /// The shape an [`Item`] occupies, in world space.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum Volume {
     /// A sphere; `radius` must be finite and non-negative.
     Sphere {
@@ -197,7 +207,7 @@ fn zero3(v: V3) -> V3 {
 }
 
 /// One thing in the index: an identity, a shape and the layers it lives on.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Item {
     /// Identity; unique within a build.
     pub handle: Handle,
