@@ -1,6 +1,6 @@
 # Plan: Viewmodel — a first-person held-object layer in the main scene pass
 
-> Status: **in progress** — components and codes shipped (subtask 1a); extraction and rendering follow. An external game's request 0003 (priority *blocking*). Code facts read from the tree on 2026-11-07 (file:line pointers are of that date; re-grep before editing).
+> Status: **mechanized** — every subtask shipped (r2148–r2156); the pinned blesses, the default-golden check and the live look are owed (`Plan/owed.md`). An external game's request 0003 (priority *blocking*). Code facts read from the tree on 2026-11-07 (file:line pointers are of that date; re-grep before editing).
 
 ## Context
 
@@ -49,9 +49,13 @@ So the engine needs a viewmodel layer: a per-entity flag, an own projection and 
 
 ## Status
 
+- **1a** shipped: `Viewmodel`, `ViewmodelLens`, L1336–L1338.
+- **1b** shipped: extraction onto the drawn camera (`compose_viewmodel` from extract, blend and latch); no world shadow, no blend key.
 - **2a** shipped: depth slice, world remap folded into the clip matrix, one decode (`RenderScene::depth_view_proj`); `viewmodel-wall` and `viewmodel-enemy` gallery scenes.
 - **2b** shipped: the viewmodel light cell, `Camera.lens`, the eye shadow sample, probe-capture and voxelizer exclusion (decision 11).
 - **3** shipped: SSAO, SSR and DoF exclude gun pixels (decision 12); `viewmodel-ssao` gallery scene.
 - **4a** shipped: viewmodel-layer particles (decision 13) and the fog evidence; `viewmodel-muzzle` gallery scene (macOS golden blessed on an unpinned machine; pinned blesses owed). The `camera` docs topic section is 4b.
 - **4b** shipped: the `viewmodel` docs topic (`docs/viewmodel.md`) and its cross-links from `camera`, `post-processing`, `particles` and `components`.
 - **Review fixes** shipped: blended gun locals and flash centres under `present_interpolation`, gun bounds over the gun's assets only, locals measured against the unscaled camera frame.
+- **Known limit:** `FrameViewmodel::of` walks the `Parent` chain for every entity each frame while any `Viewmodel` exists (O(entities × depth)); profile it on a large scene before it matters.
+- **Engine acceptance met** (macOS goldens unpinned). Game-owned: the wall golden in first person, the morph-state golden, the collider-invariant test. The skinned/morph proof rides `skeletal-animation` (decision 9).
