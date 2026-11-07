@@ -119,6 +119,9 @@ pub struct Projectiles {
     /// Stand-ins for a world with no physics or no built index; never serialized.
     fallback_physics: Option<PhysicsWorld>,
     fallback_index: Index3d,
+    /// Whether `projectiles_step` ever ran on this resource. Host-only: not in the pool codec, so
+    /// never hashed or snapshotted.
+    stepped: bool,
 }
 
 impl Projectiles {
@@ -152,6 +155,7 @@ impl Projectiles {
             query,
             fallback_physics: None,
             fallback_index: Index3d::new(),
+            stepped: false,
         }
     }
 
@@ -250,6 +254,7 @@ pub fn projectiles_step(world: &mut World, ctx: &SystemCtx) {
     let Some(mut res) = world.remove_resource::<Projectiles>() else {
         return;
     };
+    res.stepped = true;
     let Projectiles {
         config,
         pool,
@@ -257,6 +262,7 @@ pub fn projectiles_step(world: &mut World, ctx: &SystemCtx) {
         query,
         fallback_physics,
         fallback_index,
+        ..
     } = &mut res;
     if world.resource::<PhysicsWorld>().is_none() && fallback_physics.is_none() {
         *fallback_physics = Some(PhysicsWorld::new(TickRate::DEFAULT));
@@ -288,4 +294,29 @@ pub fn projectiles_step(world: &mut World, ctx: &SystemCtx) {
         }
     }
     world.insert_resource(res);
+}
+
+/// Reports a live pool whose `projectiles_step` never ran, once (`L4030`). A bare host's empty
+/// schedule is not a game that forgot the system, so `game_systems` gates it. Runs only after a
+/// tick. **Known limit:** a wrapper that steps only behind its own guard warns until its first call.
+pub(crate) fn report_unrun_step(world: &mut World, game_systems: bool) {
+    if !game_systems
+        || world
+            .resource::<Projectiles>()
+            .is_none_or(|res| res.stepped || res.pool.is_empty())
+        || crate::diagnostics::is_latched(world, code::PROJECTILE_STEP_NOT_RUN, "projectiles_step")
+    {
+        return;
+    }
+    report_full(
+        world,
+        "projectiles_step",
+        Diagnostic::new(
+            code::PROJECTILE_STEP_NOT_RUN,
+            "the projectile pool holds live shots, but no `projectiles_step` system ever ran, so \
+             they never move, hit or expire: register \
+             `.system(\"projectiles_step\", projectiles_step)` after `spatial3d_rebuild`",
+        )
+        .with_help("`ludion explain L4030`"),
+    );
 }

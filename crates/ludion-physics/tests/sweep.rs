@@ -236,7 +236,20 @@ fn a_probe_starting_inside_reports_reversed_travel() {
         assert_eq!(got.t, 0.0);
         assert_eq!(got.distance, 0.0);
         assert_eq!(got.normal, [0.0, -1.0, 0.0]);
+        assert_eq!(got.point, [0.1, 0.0, 0.0]);
     }
+}
+
+#[test]
+fn a_ball_overlapping_with_its_centre_outside_hits_at_zero() {
+    let mut world = World::new();
+    let target = spawn_box(&mut world, BoxSpec::at([0.0, 0.0, 0.0]));
+    step_free(&mut world);
+    let got = hit(&world, &Sweep::new([0.6, 0.0, 0.0], [0.0, 4.0, 0.0], 0.25)).unwrap();
+    assert_eq!(got.entity, target);
+    assert_eq!(got.t, 0.0);
+    assert_eq!(got.normal, [0.0, -1.0, 0.0]);
+    assert_eq!(got.point, [0.5, 0.0, 0.0]);
 }
 
 fn layered_row() -> (World, [EntityId; 4]) {

@@ -2290,6 +2290,11 @@ pub mod code {
     /// name.
     pub const PROJECTILE_MUZZLE_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L4029");
 
+    /// `L4030` — a projectile pool holds live shots, but `projectiles_step` never ran, so they
+    /// never move, hit or expire and the pool fills. A **warning**, latched once per session.
+    /// Raised by `ludion-engine` after a tick.
+    pub const PROJECTILE_STEP_NOT_RUN: DiagnosticCode = DiagnosticCode::new("L4030");
+
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
     /// `L5001` — no audio output device is available, so the playback sink cannot open a stream.
@@ -10704,6 +10709,22 @@ Fix: name a `Viewmodel` entity (or a child of one) in a scene whose camera has a
 `CameraRig`, or set `muzzle` to `None`.",
     },
     CodeEntry {
+        code: code::PROJECTILE_STEP_NOT_RUN,
+        severity: Severity::Warning,
+        title: "projectiles_step never ran",
+        explanation: "\
+The projectile pool holds live shots, but no `projectiles_step` system ever ran, so the shots
+never move, hit or expire and the pool fills until spawns are refused (`L4026`).
+
+Raised once per session, after a tick.
+
+Fix: register `.system(\"projectiles_step\", projectiles_step)` on the `EngineBuilder`, after
+`spatial3d_rebuild`.
+
+Known limit: a wrapper that calls `projectiles_step` only behind its own guard, such as a menu
+state, warns until its first call.",
+    },
+    CodeEntry {
         code: code::AUDIO_DEVICE_UNAVAILABLE,
         severity: Severity::Warning,
         title: "no audio output device available",
@@ -11406,6 +11427,7 @@ mod tests {
         code::PROJECTILE_CONFIG_INVALID,
         code::PROJECTILE_VISUALS_INVALID,
         code::PROJECTILE_MUZZLE_UNRESOLVED,
+        code::PROJECTILE_STEP_NOT_RUN,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,
@@ -11580,6 +11602,7 @@ mod tests {
             code::HASHED_NON_FINITE_FLOAT,
             code::PROJECTILE_SPAWN_REFUSED,
             code::PROJECTILE_MUZZLE_UNRESOLVED,
+            code::PROJECTILE_STEP_NOT_RUN,
             code::AUDIO_DEVICE_UNAVAILABLE,
             code::AUDIO_STREAM_FAILED,
             code::MUSIC_TRACK_UNPLAYABLE,

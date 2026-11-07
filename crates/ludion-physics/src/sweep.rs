@@ -95,7 +95,8 @@ pub struct SweepHit {
     pub t: f32,
     /// World units travelled before the hit (`t` times the length of `delta`).
     pub distance: f32,
-    /// World-space point on the hit collider's surface.
+    /// World-space point on the hit collider's surface; at `t == 0` the nearest surface point, or
+    /// `origin` when the probe's centre starts inside.
     pub point: [f32; 3],
     /// World-space unit normal at `point`, pointing out of the hit collider toward the probe. A probe
     /// that starts touching or inside reports the reversed travel direction instead.
@@ -150,12 +151,14 @@ impl PhysicsWorld {
         })
     }
 
-    /// The nearest hit of `sweep` by `(t, entity)`, or `None` for a miss. Allocates nothing.
+    /// The nearest hit of `sweep` by `(t, entity)`, or `None` for a miss. Allocates nothing, even
+    /// at `t == 0`.
     ///
     /// Reads the state as of the last completed step, like [`ray_cast`](PhysicsWorld::ray_cast).
     /// Every collider gets one exact cast, never rapier's first-hit calls, so equal times of impact go
     /// to the lowest entity whatever the BVH order. A probe that starts touching or inside a collider
-    /// hits at `t == 0` with `normal == -direction`.
+    /// hits at `t == 0` with `normal == -direction` and `point` the nearest surface point (`origin`
+    /// when the centre is inside).
     ///
     /// An invalid probe is a miss, not an error: a non-finite origin, delta or radius, a negative
     /// radius, a zero-length delta, or a delta whose length is not finite.
@@ -228,21 +231,36 @@ impl PhysicsWorld {
                 )
             } else {
                 let pose = collider.position();
-                let Ok(Some(hit)) = pipeline.dispatcher.cast_shapes(
-                    &pose.inv_mul(&start),
-                    pose.rotation.inverse() * to_vector(unit_dir),
-                    collider.shape(),
-                    &ball,
-                    options,
-                ) else {
-                    continue;
-                };
-                let hit = hit.transform1_by(pose);
-                (
-                    hit.time_of_impact,
-                    from_vector(hit.witness1),
-                    from_vector(hit.normal1),
-                )
+                // parry's cast runs a heap-allocating EPA when the ball starts in contact, so
+                // detect t = 0 with a closed-form projection and cast only a clear start.
+                let proj = collider
+                    .shape()
+                    .project_point(pose, to_vector(origin), true);
+                let gap = proj.point - to_vector(origin);
+                if proj.is_inside || sqrt(gap.x * gap.x + gap.y * gap.y + gap.z * gap.z) <= radius {
+                    let point = if proj.is_inside {
+                        origin
+                    } else {
+                        from_vector(proj.point)
+                    };
+                    (0.0, point, unit_dir.map(|c| -c))
+                } else {
+                    let Ok(Some(hit)) = pipeline.dispatcher.cast_shapes(
+                        &pose.inv_mul(&start),
+                        pose.rotation.inverse() * to_vector(unit_dir),
+                        collider.shape(),
+                        &ball,
+                        options,
+                    ) else {
+                        continue;
+                    };
+                    let hit = hit.transform1_by(pose);
+                    (
+                        hit.time_of_impact,
+                        from_vector(hit.witness1),
+                        from_vector(hit.normal1),
+                    )
+                }
             };
             if best.as_ref().is_none_or(|b| b.beaten_by(toi, entity)) {
                 best = Some(Best {

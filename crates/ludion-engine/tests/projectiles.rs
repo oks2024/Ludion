@@ -391,3 +391,23 @@ fn a_corrupt_blob_is_l3008() {
     let mut resumed = engine();
     assert_eq!(restore(&mut resumed, snapshot).unwrap_err(), "L3008");
 }
+
+#[test]
+fn an_unstepped_live_pool_warns_once() {
+    let reported = |engine: &Engine| {
+        engine
+            .world()
+            .resource::<Diagnostics>()
+            .unwrap()
+            .reported(code::PROJECTILE_STEP_NOT_RUN)
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let mut unstepped = engine_with(Some(config()), false);
+    trace(&mut unstepped, 20);
+    assert_eq!(reported(&unstepped), ["projectiles_step"]);
+
+    let mut stepped = engine();
+    trace(&mut stepped, 20);
+    assert!(reported(&stepped).is_empty());
+}

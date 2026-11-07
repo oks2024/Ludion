@@ -5,6 +5,7 @@
 mod common;
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{TestPose, tick};
@@ -16,6 +17,8 @@ use ludion_spatial::{Body, Collider, Shape};
 struct Counting;
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
+/// The counter is global, so the tests in this binary take turns.
+static SERIAL: Mutex<()> = Mutex::new(());
 
 // SAFETY: forwards every call to `System` unchanged; it only counts.
 unsafe impl GlobalAlloc for Counting {
@@ -37,6 +40,7 @@ static GLOBAL: Counting = Counting;
 
 #[test]
 fn sweeps_do_not_allocate() {
+    let _turn = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut world = World::new();
     for i in 0..30 {
         let entity = world.spawn();
@@ -89,6 +93,69 @@ fn sweeps_do_not_allocate() {
             let _ = physics.first_hit(probe, &filter);
         }
         physics.first_hits(&probes, &filter, &mut out);
+    });
+    assert_eq!(ALLOCS.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn sweeps_starting_in_contact_do_not_allocate() {
+    let _turn = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let shapes = [
+        Shape::Compound {
+            parts: vec![ludion_spatial::CompoundPart {
+                shape: Shape::Box {
+                    half_extents: [0.5; 3],
+                },
+                translation: [0.0; 3],
+                rotation: [0.0; 3],
+            }],
+        },
+        Shape::Box {
+            half_extents: [0.5; 3],
+        },
+        Shape::Sphere { radius: 0.5 },
+        Shape::Capsule {
+            half_height: 0.5,
+            radius: 0.5,
+        },
+    ];
+    let mut world = World::new();
+    for (i, shape) in shapes.into_iter().enumerate() {
+        let entity = world.spawn();
+        world
+            .insert(entity, TestPose::at([i as f32 * 10.0, 0.0, 0.0]))
+            .unwrap();
+        world
+            .insert(
+                entity,
+                Collider {
+                    shape,
+                    body: Body::new_static(),
+                    layer: None,
+                    sensor: false,
+                },
+            )
+            .unwrap();
+    }
+    let mut schedule = Schedule::new();
+    install::<TestPose, NoParent>(&mut schedule, PhysicsSpace::Free);
+    tick(&mut world, &mut schedule, 0);
+    let physics = world.resource::<PhysicsWorld>().expect("bodies claimed");
+    let filter = physics.sweep_filter(&QueryFilter::new()).unwrap();
+    // Per collider: centre inside, then centre outside but overlapping (gap 0.1 < radius 0.2).
+    let probes: Vec<Sweep> = (0..4)
+        .flat_map(|i| {
+            let x = i as f32 * 10.0;
+            [0.1, 0.6].map(|dx| Sweep::new([x + dx, 0.0, 0.0], [0.0, 0.0, 4.0], 0.2))
+        })
+        .collect();
+    let _ = physics.first_hit(&probes[0], &filter);
+    ALLOCS.store(0, Ordering::Relaxed);
+    par::with_threads(1, || {
+        for probe in &probes {
+            let got = physics.first_hit(probe, &filter).expect("in contact");
+            assert_eq!(got.t, 0.0);
+        }
     });
     assert_eq!(ALLOCS.load(Ordering::Relaxed), 0);
 }

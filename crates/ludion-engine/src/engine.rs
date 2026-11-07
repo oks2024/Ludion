@@ -1743,6 +1743,7 @@ impl Engine {
             game_systems,
         );
         crate::patterns::report_unrun_patterns(self.driver.world_mut(), game_systems);
+        crate::projectiles::report_unrun_step(self.driver.world_mut(), game_systems);
         crate::fonts::report_font_faults(self.driver.world_mut());
         scene_physics::report_rejections(self.driver.world_mut());
         scene_physics::report_missing_joints(self.driver.world_mut());
