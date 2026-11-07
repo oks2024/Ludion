@@ -81,7 +81,7 @@ pub(crate) fn site(world: &World, ids: &[EntityId], view_override: bool) -> Site
 }
 
 /// The camera's lens, and whether it was authored out of range (the defaults are used then).
-fn lens(world: &World, cam: EntityId) -> (ViewmodelLens, bool) {
+pub(crate) fn lens(world: &World, cam: EntityId) -> (ViewmodelLens, bool) {
     let Some(lens) = world.get::<ViewmodelLens>(cam).ok().flatten().copied() else {
         return (ViewmodelLens::default(), true);
     };

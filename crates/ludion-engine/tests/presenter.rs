@@ -480,3 +480,161 @@ fn late_latch_leaves_the_world_hash_unchanged() {
         assert_eq!(on[frame], off[frame], "frame {frame} diverged");
     }
 }
+
+/// `LOOK_SCENE` plus a gun and a named muzzle under the camera, both `Viewmodel` presentation
+/// entities, so convergence has a muzzle to draw from.
+const MUZZLE_LOOK_SCENE: &str = "format: 1
+seed: 1
+entities:
+  - name: cam
+    components:
+      Transform: {}
+      Camera: {}
+      CameraRig:
+        target:
+          index: 1
+          generation: 0
+        rig:
+          mode:
+            first_person: {}
+  - name: hero
+    components:
+      Transform: {}
+  - name: gun
+    presentation: true
+    components:
+      Parent:
+        index: 0
+        generation: 0
+      Transform:
+        translation:
+          - 0.2
+          - -0.2
+          - -0.4
+      Mesh: {}
+      Viewmodel: {}
+  - name: muzzle
+    presentation: true
+    components:
+      Parent:
+        index: 0
+        generation: 0
+      Transform:
+        translation:
+          - 0.2
+          - -0.2
+          - -0.7
+      Viewmodel: {}
+";
+
+/// Every third tick, a shot from the camera along -Z.
+fn fire(world: &mut World, ctx: &ludion_ecs::SystemCtx) {
+    if !ctx.frame.as_u64().is_multiple_of(3) {
+        return;
+    }
+    let origin = world
+        .entities()
+        .find(|&id| world.has::<ludion_camera::CameraRig>(id))
+        .and_then(|id| {
+            world
+                .get::<ludion_engine::Transform>(id)
+                .ok()
+                .flatten()
+                .copied()
+        })
+        .map_or([0.0; 3], |t| t.translation);
+    ludion_engine::spawn_projectile(
+        world,
+        ludion_projectiles::ProjectileDesc::new(origin, [0.0, 0.0, -30.0]),
+    );
+}
+
+/// Records each tick's `WorldHash` and the pool's live count.
+struct PoolHashes(Arc<Mutex<BTreeMap<u64, (WorldHash, usize)>>>);
+
+impl TickObserver for PoolHashes {
+    fn after_tick(&mut self, frame: FrameIndex, world: &World, registry: &Registry) {
+        let live = world
+            .resource::<ludion_engine::Projectiles>()
+            .map_or(0, |p| p.pool().len());
+        if let Ok(hash) = WorldHash::compute(world, registry) {
+            self.0.lock().unwrap().insert(frame.0, (hash, live));
+        }
+    }
+}
+
+/// Live projectiles drawn from a muzzle: neither the late latch nor the visual table (muzzle
+/// convergence included) moves the sim's hash.
+#[test]
+fn late_latch_and_convergence_leave_the_world_hash_unchanged_with_live_projectiles() {
+    let run_with = |latch: bool, visuals: bool| {
+        let mut builder = Engine::builder()
+            .late_latch(latch)
+            .present_interpolation(true)
+            .projectiles(ludion_engine::ProjectileConfig {
+                capacity: 32,
+                ..Default::default()
+            })
+            .system("look", look)
+            .system(
+                "spatial3d_rebuild",
+                ludion_spatial::spatial3d::rebuild::<
+                    ludion_engine::Transform,
+                    ludion_engine::TransformHierarchy,
+                >,
+            )
+            .system("fire", fire)
+            .system("projectiles_step", ludion_engine::projectiles_step);
+        if visuals {
+            builder = builder.projectile_visuals(ludion_engine::ProjectileVisuals {
+                muzzle: Some("muzzle".to_string()),
+                ..Default::default()
+            });
+        }
+        let engine = builder.build().unwrap();
+        let motion = ludion_renderer::LookMotion::new();
+        motion.set_locked(true);
+        let mut engine = engine;
+        engine.set_look_motion(Arc::clone(&motion));
+        let (mut engine, _) = attach(
+            engine,
+            MUZZLE_LOOK_SCENE,
+            Some((Duration::from_millis(4), false)),
+        );
+        let seen = Arc::new(Mutex::new(BTreeMap::new()));
+        engine.set_tick_observer(PoolHashes(Arc::clone(&seen)));
+        let live = run(engine);
+        for i in 0..8_u64 {
+            let counts = 3.0 + i as f32;
+            motion.store([f64::from(counts) * (i + 1) as f64, 0.0], None);
+            live.send(Command::InputInject(
+                ludion_protocol::command::InputInjectParams {
+                    frame: Some(FrameIndex(20 + 3 * i)),
+                    event: serde_json::json!({
+                        "kind": "mouse_motion",
+                        "delta_bits": [counts.to_bits(), 1.0_f32.to_bits()],
+                    }),
+                },
+            ));
+        }
+        until("50 recorded frames", || seen.lock().unwrap().len() >= 50);
+        live.stop();
+        Arc::try_unwrap(seen).unwrap().into_inner().unwrap()
+    };
+    let on = run_with(true, true);
+    for other in [run_with(false, true), run_with(false, false)] {
+        let common: Vec<_> = on.keys().filter(|f| other.contains_key(f)).collect();
+        assert!(
+            common.len() >= 30,
+            "the runs overlap on {} frames",
+            common.len()
+        );
+        assert!(
+            common.iter().any(|f| on[*f].1 > 0),
+            "the pool held shots on a recorded frame"
+        );
+        for frame in common {
+            assert_eq!(on[frame].0, other[frame].0, "frame {frame} diverged");
+        }
+    }
+}

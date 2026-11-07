@@ -1454,11 +1454,24 @@ fn extract_inner(
     // Appended last among the world's lists so decals and drop shadows never land on a shot and GI
     // never sees one; `None` draws with the default table.
     let projectile_keys = match projectiles {
-        Some(draw) => crate::projectile_draw::extract_projectiles(&mut scene, world, draw),
+        Some(draw) => {
+            let muzzle = muzzle_point(
+                world,
+                &ids,
+                &mut poses,
+                &viewmodel_frame,
+                viewmodel_camera,
+                &scene,
+                draw,
+                degraded,
+            );
+            crate::projectile_draw::extract_projectiles(&mut scene, world, draw, muzzle)
+        }
         None => crate::projectile_draw::extract_projectiles(
             &mut scene,
             world,
-            &ProjectileDraw::default(),
+            &mut ProjectileDraw::default(),
+            None,
         ),
     };
     if let (Some(cam), Some(_)) = (viewmodel_camera, &scene.viewmodel) {
@@ -4146,6 +4159,66 @@ pub(crate) fn drawn_camera_model(world: &World, ids: &[EntityId], id: EntityId) 
     let cam = get::<Camera>(world, id).copied().unwrap_or_default();
     let (rotation, translation, _) = drawn_pose(world, ids, id, &cam);
     Mat4::from_rotation_translation(rotation, translation)
+}
+
+/// Where a shot is drawn from: the named muzzle's world point on the drawn camera, or `None` (no
+/// muzzle named, no live shot, or the name unresolved, which latches `L4029`).
+///
+/// The gun draws through the lens projection and a shot through the world one, so the muzzle's
+/// camera-local x and y are rescaled by the focal-length ratio to land on the same screen pixel.
+#[allow(clippy::too_many_arguments)]
+fn muzzle_point(
+    world: &World,
+    ids: &[EntityId],
+    poses: &mut WorldAffines,
+    frame: &crate::viewmodel::FrameViewmodel,
+    camera: Option<EntityId>,
+    scene: &RenderScene,
+    draw: &ProjectileDraw,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) -> Option<Vec3> {
+    let name = draw.visuals.muzzle.as_deref()?;
+    if world
+        .resource::<crate::Projectiles>()
+        .is_none_or(|res| res.pool().is_empty())
+    {
+        return None;
+    }
+    let muzzle = ids
+        .iter()
+        .copied()
+        .find(|&id| get::<crate::components::Name>(world, id).is_some_and(|n| n.0 == name))
+        .filter(|&id| frame.contains(id));
+    let (Some(cam), Some(muzzle)) = (camera, muzzle) else {
+        degraded.push((
+            format!("projectile-muzzle/{name}"),
+            Diagnostic::new(
+                code::PROJECTILE_MUZZLE_UNRESOLVED,
+                format!(
+                    "projectile muzzle `{name}` is not a `Viewmodel` entity in a frame with a \
+                     first-person camera; shots draw at their simulated position"
+                ),
+            )
+            .with_help("`ludion explain L4029`"),
+        ));
+        return None;
+    };
+    let cam_inverse = crate::viewmodel::camera_inverse(crate::viewmodel::camera_frame(world, cam));
+    let local =
+        crate::viewmodel::camera_local(&cam_inverse, render_pose(world, poses, muzzle).model())
+            .translation;
+    let lens = crate::viewmodel::lens(world, cam).0;
+    let lens_focal = Mat4::perspective_rh(lens.fov_y_deg.to_radians(), 1.0, 0.1, 100.0)
+        .y_axis
+        .y;
+    let k = lens_focal / scene.camera.projection.y_axis.y;
+    Some(
+        drawn_camera_model(world, ids, cam).transform_point3(Vec3::new(
+            local[0] * k,
+            local[1] * k,
+            local[2],
+        )),
+    )
 }
 
 /// Builds the view + projection matrices for the camera entity `id`, with the active presentation

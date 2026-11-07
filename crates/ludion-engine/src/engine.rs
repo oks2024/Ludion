@@ -6284,6 +6284,7 @@ impl Engine {
         self.gi_rebake_force = true;
         self.probe_world_stale();
         self.present_epoch = self.present_epoch.wrapping_add(1);
+        self.projectile_draw.reset_convergence();
         // Prefetched at the first extract, not here: headless rebuilds (replay verification, sim
         // hashing) never draw, and must not pay the decode bill.
         self.prefetch_pending = true;

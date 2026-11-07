@@ -2283,6 +2283,13 @@ pub mod code {
     /// softness outside `0..=1`. An **error**. Raised by `ludion-engine`'s builder at `build`.
     pub const PROJECTILE_VISUALS_INVALID: DiagnosticCode = DiagnosticCode::new("L4028");
 
+    /// `L4029` — `ProjectileVisuals.muzzle` names an entity that cannot anchor muzzle convergence:
+    /// no entity has that `Name`, it is not a `Viewmodel` (or under one), or the frame has no
+    /// first-person camera to compose it onto (or a `render.view` override is in force). A
+    /// **warning**: shots draw at their simulated position, with no convergence. Latched once per
+    /// name.
+    pub const PROJECTILE_MUZZLE_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L4029");
+
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
     /// `L5001` — no audio output device is available, so the playback sink cannot open a stream.
@@ -10680,6 +10687,23 @@ Raised by `Engine::builder().build()`.
 Fix: correct the field the path names.",
     },
     CodeEntry {
+        code: code::PROJECTILE_MUZZLE_UNRESOLVED,
+        severity: Severity::Warning,
+        title: "projectile muzzle is unresolved",
+        explanation: "\
+`ProjectileVisuals.muzzle` names an entity, but the frame cannot use it as the muzzle a shot is
+drawn from. One of:
+
+- no entity has that `Name`;
+- the entity is not a `Viewmodel` and has no `Viewmodel` ancestor;
+- the scene has no single perspective first-person camera, or a `render.view` override is in force.
+
+Shots draw at their simulated position, with no convergence. The warning is latched once per name.
+
+Fix: name a `Viewmodel` entity (or a child of one) in a scene whose camera has a first-person
+`CameraRig`, or set `muzzle` to `None`.",
+    },
+    CodeEntry {
         code: code::AUDIO_DEVICE_UNAVAILABLE,
         severity: Severity::Warning,
         title: "no audio output device available",
@@ -11381,6 +11405,7 @@ mod tests {
         code::PROJECTILE_SPAWN_REFUSED,
         code::PROJECTILE_CONFIG_INVALID,
         code::PROJECTILE_VISUALS_INVALID,
+        code::PROJECTILE_MUZZLE_UNRESOLVED,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,
@@ -11554,6 +11579,7 @@ mod tests {
             code::SPRITE_IMPORT_QUANTIZED,
             code::HASHED_NON_FINITE_FLOAT,
             code::PROJECTILE_SPAWN_REFUSED,
+            code::PROJECTILE_MUZZLE_UNRESOLVED,
             code::AUDIO_DEVICE_UNAVAILABLE,
             code::AUDIO_STREAM_FAILED,
             code::MUSIC_TRACK_UNPLAYABLE,

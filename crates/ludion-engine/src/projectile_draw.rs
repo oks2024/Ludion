@@ -19,6 +19,7 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::{Mat4, Quat, Vec3};
 use ludion_ecs::World;
+use ludion_projectiles::ProjectileId;
 use ludion_renderer::{MeshInstance, MeshShape, ParticleInstance, ProjectileItem, RenderScene};
 
 use crate::particles::CameraBasis;
@@ -99,10 +100,18 @@ pub struct ProjectileVisuals {
     pub tags: BTreeMap<u32, ProjectileVisual>,
     /// The look of a tag with no entry.
     pub fallback: ProjectileVisual,
-    /// Name of the entity whose transform is the visible muzzle, read by muzzle convergence.
+    /// `Name` of the entity a shot is drawn from: a `Viewmodel` (or a child of one) under a
+    /// first-person camera. A shot first seen by extract is drawn at that point and converges onto
+    /// its simulated path over [`converge_distance`](Self::converge_distance); the offset is
+    /// render-only and never reaches the sim or the hash. `None` draws shots at their simulated
+    /// position; a name that cannot be resolved does too, with `L4029`.
+    ///
+    /// Convergence needs extracts across ticks (the store remembers each shot's first sighting): a
+    /// one-shot render, a restore or the first frame after a load extracts unprimed, so shots in
+    /// flight draw at their simulated position.
     pub muzzle: Option<String>,
-    /// Metres over which a shot fired from the muzzle converges onto its true path, read by muzzle
-    /// convergence.
+    /// Metres of straight-line travel from first sight over which a shot converges, eased by
+    /// smoothstep; `0` disables convergence. A ricochet inside the distance converges a little later.
     pub converge_distance: f32,
 }
 
@@ -205,14 +214,77 @@ fn invalid(path: &str, what: String) -> Diagnostic {
         )
 }
 
-/// The engine's per-host projectile drawing state: the visual table.
+/// The engine's per-host projectile drawing state: the visual table and the convergence store.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ProjectileDraw {
     pub(crate) visuals: ProjectileVisuals,
+    /// Whether the store has seen a pool extract since the last reset; shots already in flight at the
+    /// first sight are recorded with no offset.
+    primed: bool,
+    /// Per pool slot: the shot last seen there.
+    seen: Vec<Option<Seen>>,
+}
+
+/// A shot's first sighting.
+#[derive(Clone, Copy, Debug)]
+struct Seen {
+    generation: u32,
+    /// Simulated position at first sight.
+    origin: Vec3,
+    /// Muzzle minus `origin` (zero when the muzzle is unresolved or the shot was in flight).
+    offset: Vec3,
+}
+
+impl ProjectileDraw {
+    /// Forgets every sighting: the next extract with a pool is a first sight.
+    pub(crate) fn reset_convergence(&mut self) {
+        self.primed = false;
+        self.seen.clear();
+    }
+
+    /// The offset to add to the shot's simulated `position` this frame.
+    fn offset(
+        &mut self,
+        id: ProjectileId,
+        position: Vec3,
+        muzzle: Option<Vec3>,
+        priming: bool,
+    ) -> Vec3 {
+        let slot = id.index as usize;
+        if self.seen.len() <= slot {
+            self.seen.resize(slot + 1, None);
+        }
+        let entry = match self.seen[slot] {
+            Some(seen) if seen.generation == id.generation => seen,
+            _ => {
+                let seen = Seen {
+                    generation: id.generation,
+                    origin: position,
+                    offset: if priming {
+                        Vec3::ZERO
+                    } else {
+                        muzzle.map_or(Vec3::ZERO, |m| m - position)
+                    },
+                };
+                self.seen[slot] = Some(seen);
+                seen
+            }
+        };
+        let distance = self.visuals.converge_distance;
+        let w = if distance > 0.0 {
+            let t = ((position - entry.origin).length() / distance).clamp(0.0, 1.0);
+            1.0 - t * t * (3.0 - 2.0 * t)
+        } else {
+            0.0
+        };
+        entry.offset * w
+    }
 }
 
 /// Appends the live shots to `scene` (meshes, then particles) and returns their blend keys,
 /// ascending. A world with no pool, or an empty one, returns nothing and leaves `scene` untouched.
+/// `muzzle` is the world point a new shot starts drawing from (see
+/// [`ProjectileVisuals::muzzle`]).
 ///
 /// Called after the scene's own lists are built and before the viewmodel is composed: appending
 /// after decals and drop shadows keeps them off the shots, and GI (which reads the placed meshes)
@@ -221,12 +293,18 @@ pub(crate) struct ProjectileDraw {
 pub(crate) fn extract_projectiles(
     scene: &mut RenderScene,
     world: &World,
-    draw: &ProjectileDraw,
+    draw: &mut ProjectileDraw,
+    muzzle: Option<Vec3>,
 ) -> Vec<(u64, ProjectileItem)> {
     let Some(res) = world.resource::<crate::Projectiles>() else {
+        draw.reset_convergence();
         return Vec::new();
     };
     let pool = res.pool();
+    // An extract of an empty pool primes too: only shots already in flight at the first sight draw
+    // with no offset.
+    let priming = !draw.primed;
+    draw.primed = true;
     if pool.is_empty() {
         return Vec::new();
     }
@@ -239,8 +317,9 @@ pub(crate) fn extract_projectiles(
         else {
             continue;
         };
-        let visual = draw.visuals.of(tag);
         let (position, velocity) = (Vec3::from(position), Vec3::from(velocity));
+        let position = position + draw.offset(id, position, muzzle, priming);
+        let visual = draw.visuals.of(tag);
         let speed = velocity.length();
         let dir = if speed > 0.0 {
             velocity / speed
@@ -485,5 +564,161 @@ entities:
             softness.validate().unwrap_err().path.as_deref(),
             Some("/fallback/look/softness")
         );
+    }
+
+    const MUZZLE_SCENE: &str = "\
+format: 1
+seed: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.6
+          - 0.0
+      Camera: {}
+      CameraRig:
+        target:
+          index: 1
+          generation: 0
+        rig:
+          mode:
+            first_person: {}
+  - name: hero
+    components:
+      Transform: {}
+  - name: muzzle
+    presentation: true
+    components:
+      Parent:
+        index: 0
+        generation: 0
+      Transform:
+        translation:
+          - 0.2
+          - -0.2
+          - -0.7
+      Viewmodel: {}
+  - name: loose
+    components:
+      Transform: {}
+";
+
+    fn muzzle_engine(muzzle: &str, scene: &str) -> Engine {
+        let visuals = ProjectileVisuals {
+            muzzle: Some(muzzle.to_string()),
+            ..ProjectileVisuals::default()
+        };
+        let mut engine = Engine::builder()
+            .projectiles(ProjectileConfig {
+                capacity: 8,
+                ..ProjectileConfig::default()
+            })
+            .projectile_visuals(visuals)
+            .build()
+            .expect("boots");
+        engine.load_inline_scene(scene).unwrap();
+        engine
+    }
+
+    fn drawn(engine: &mut Engine) -> Vec3 {
+        let (scene, _) = engine.extract_present_scene().unwrap();
+        scene.particles.last().expect("a shot draws").center
+    }
+
+    #[test]
+    fn a_new_shot_draws_at_the_muzzle_and_an_unprimed_one_at_its_sim_position() {
+        let mut engine = muzzle_engine("muzzle", MUZZLE_SCENE);
+        // Empty pool extract primes the store.
+        engine.extract_present_scene().unwrap();
+        fire(&mut engine, [0.0, 0.0, -50.0], 0);
+        let at = drawn(&mut engine);
+        // Camera at (0, 1.6, 0) looking down -Z; muzzle local (0.2, -0.2, -0.7), rescaled by the lens.
+        assert!((at.z - -0.7).abs() < 1e-3, "{at:?}");
+        assert!(at.x > 0.0 && at.y < 1.6, "{at:?}");
+
+        let mut cold = muzzle_engine("muzzle", MUZZLE_SCENE);
+        fire(&mut cold, [0.0, 0.0, -50.0], 0);
+        assert_eq!(
+            drawn(&mut cold),
+            Vec3::new(1.0, 2.0, 0.0),
+            "unprimed: sim position"
+        );
+        // A world replacement unprimes again.
+        let mut engine = muzzle_engine("muzzle", MUZZLE_SCENE);
+        engine.extract_present_scene().unwrap();
+        engine.load_inline_scene(MUZZLE_SCENE).unwrap();
+        fire(&mut engine, [0.0, 0.0, -50.0], 0);
+        assert_eq!(drawn(&mut engine), Vec3::new(1.0, 2.0, 0.0));
+    }
+
+    #[test]
+    fn convergence_eases_to_the_sim_position_at_the_distance() {
+        let mut draw = ProjectileDraw {
+            visuals: ProjectileVisuals::default(),
+            ..ProjectileDraw::default()
+        };
+        draw.primed = true;
+        let id = ProjectileId {
+            index: 3,
+            generation: 1,
+        };
+        let muzzle = Some(Vec3::new(0.0, -1.0, 0.0));
+        let start = Vec3::ZERO;
+        assert_eq!(
+            draw.offset(id, start, muzzle, false),
+            Vec3::new(0.0, -1.0, 0.0)
+        );
+        let half = draw.offset(id, Vec3::new(0.0, 0.0, -2.0), muzzle, false);
+        assert!(
+            (half - Vec3::new(0.0, -0.5, 0.0)).length() < 1e-6,
+            "{half:?}"
+        );
+        assert_eq!(
+            draw.offset(id, Vec3::new(0.0, 0.0, -4.0), muzzle, false),
+            Vec3::ZERO
+        );
+        assert_eq!(
+            draw.offset(id, Vec3::new(0.0, 0.0, -9.0), muzzle, false),
+            Vec3::ZERO
+        );
+        // A reused slot with a new generation is a new shot.
+        let next = ProjectileId {
+            index: 3,
+            generation: 2,
+        };
+        assert_eq!(
+            draw.offset(next, start, muzzle, false),
+            Vec3::new(0.0, -1.0, 0.0)
+        );
+        // A shot first seen while priming has none; D = 0 disables convergence.
+        let other = ProjectileId {
+            index: 4,
+            generation: 0,
+        };
+        assert_eq!(draw.offset(other, start, muzzle, true), Vec3::ZERO);
+        draw.visuals.converge_distance = 0.0;
+        let last = ProjectileId {
+            index: 5,
+            generation: 0,
+        };
+        assert_eq!(draw.offset(last, start, muzzle, false), Vec3::ZERO);
+    }
+
+    #[test]
+    fn an_unresolved_muzzle_warns_and_draws_at_the_sim_position() {
+        for (name, scene) in [("nobody", MUZZLE_SCENE), ("loose", MUZZLE_SCENE)] {
+            let mut engine = muzzle_engine(name, scene);
+            engine.extract_present_scene().unwrap();
+            fire(&mut engine, [0.0, 0.0, -50.0], 0);
+            assert_eq!(drawn(&mut engine), Vec3::new(1.0, 2.0, 0.0), "{name}");
+            let sink = engine.world().resource::<crate::Diagnostics>().unwrap();
+            assert_eq!(
+                sink.reported(code::PROJECTILE_MUZZLE_UNRESOLVED).count(),
+                1,
+                "{name}: L4029 latched once"
+            );
+        }
     }
 }

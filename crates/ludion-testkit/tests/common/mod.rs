@@ -148,3 +148,65 @@ pub fn rig_builder() -> EngineBuilder {
         .system("drive_rig", drive_rig)
         .query::<(&mut CameraRig,)>()
 }
+
+/// **projectile-muzzle** — [`fire_shots`] fires one shot per tick for [`SHOT_TICKS`] ticks from the
+/// eye along -Z, alternating a billboard tracer (tag 0) and a stretched sphere (tag 1); the scene's
+/// `muzzle` entity makes them draw from the gun and converge onto that line
+/// (`ludion docs viewmodel`).
+pub const SHOT_TICKS: u64 = 10;
+/// The tick the muzzle golden is rendered at: the last shots are still near the gun.
+pub const SHOT_GOLDEN_TICK: u64 = 12;
+
+pub fn fire_shots(world: &mut World, ctx: &SystemCtx) {
+    let tick = ctx.frame.as_u64();
+    if tick >= SHOT_TICKS {
+        return;
+    }
+    let mut desc =
+        ludion::prelude::projectiles::ProjectileDesc::new([0.0, 1.6, 0.0], [0.0, 0.0, -25.0]);
+    desc.tag = (tick % 2) as u32;
+    ludion_engine::spawn_projectile(world, desc);
+}
+
+/// The muzzle-convergence scene's engine: a pool, the two looks and the muzzle name.
+pub fn projectile_builder() -> EngineBuilder {
+    use ludion_engine::{ProjectileLook, ProjectileVisual, ProjectileVisuals};
+    let mut visuals = ProjectileVisuals {
+        muzzle: Some("muzzle".to_string()),
+        ..ProjectileVisuals::default()
+    };
+    visuals.tags.insert(
+        0,
+        ProjectileVisual {
+            look: ProjectileLook::Billboard { softness: 0.7 },
+            size: 0.06,
+            stretch: 0.02,
+            color: [1.0, 0.55, 0.15, 1.0],
+            emissive: 5.0,
+            additive: true,
+        },
+    );
+    visuals.tags.insert(
+        1,
+        ProjectileVisual {
+            look: ProjectileLook::Sphere,
+            size: 0.05,
+            stretch: 0.02,
+            color: [0.3, 0.8, 1.0, 1.0],
+            emissive: 4.0,
+            additive: false,
+        },
+    );
+    Engine::builder()
+        .projectiles(ludion_engine::ProjectileConfig::default())
+        .projectile_visuals(visuals)
+        .system(
+            "spatial3d_rebuild",
+            ludion::prelude::spatial3d::rebuild::<
+                ludion_engine::Transform,
+                ludion_engine::TransformHierarchy,
+            >,
+        )
+        .system("fire_shots", fire_shots)
+        .system("projectiles_step", ludion_engine::projectiles_step)
+}

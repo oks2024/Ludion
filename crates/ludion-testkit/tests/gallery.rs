@@ -1257,3 +1257,24 @@ fn needs_gpu_broken_scene_diff_report_localizes_the_damaged_region() {
         "the written report must match the returned one"
     );
 }
+
+/// The `projectile-muzzle` scene driven tick by tick: shots fired from the eye leave the viewmodel
+/// muzzle and meet the crosshair line within 4 m. The engine is driven by hand (`advance_live` then
+/// `extract_present_scene`) because convergence lives in the extract-side store, which a one-shot
+/// render never primes. The bare discovered `projectile-muzzle.png` has no shots.
+#[test]
+fn needs_gpu_projectile_muzzle_shot_matches_committed_golden() {
+    let mut engine = common::projectile_builder()
+        .load_scene_file(&gallery_dir().join("projectile-muzzle.yaml"))
+        .expect("the scene loads");
+    for _ in 0..common::SHOT_GOLDEN_TICK {
+        assert!(engine.advance_live(), "the sim ticks");
+        engine.extract_present_scene().expect("extracts");
+    }
+    ludion_testkit::check_engine_golden(
+        &mut engine,
+        gallery_dir().join("goldens"),
+        "projectile-muzzle-shot",
+        &scratch_dir("projectile_muzzle_shot_out"),
+    );
+}
