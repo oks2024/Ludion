@@ -30,6 +30,10 @@ fn zero(v: &f32) -> bool {
     *v == 0.0
 }
 
+fn is_default_sensitivity(v: &f32) -> bool {
+    *v == CameraRig::DEFAULT_LOOK_DEG_PER_COUNT
+}
+
 /// The rig on the camera entity. `rig` is the authored configuration (writing a different value
 /// starts a timed blend), `shake` survives switches, `trauma`, `grounded` and `look_deg` are
 /// game-written inputs, `state` is engine-written. The kick, roll and FOV channels are game-written
@@ -68,6 +72,10 @@ pub struct CameraRig {
     /// on each tick it poses.
     #[serde(skip_serializing_if = "look_is_zero")]
     pub look_deg: [f32; 2],
+    /// Degrees of look per raw mouse count: the one sensitivity the sim ([`add_look_counts`]) and a
+    /// late-latching presenter share.
+    #[serde(skip_serializing_if = "is_default_sensitivity")]
+    pub look_deg_per_count: f32,
     /// The kick decay; not part of `rig`, so a switch never blends or resets it.
     #[serde(skip_serializing_if = "kick_is_default")]
     pub kick: KickConfig,
@@ -100,6 +108,7 @@ impl Default for CameraRig {
             trauma: 0.0,
             grounded: true,
             look_deg: [0.0; 2],
+            look_deg_per_count: Self::DEFAULT_LOOK_DEG_PER_COUNT,
             kick: KickConfig::default(),
             kick_deg: [0.0; 3],
             fov_kick_deg: 0.0,
@@ -111,6 +120,9 @@ impl Default for CameraRig {
 }
 
 impl CameraRig {
+    /// The default [`look_deg_per_count`](Self::look_deg_per_count).
+    pub const DEFAULT_LOOK_DEG_PER_COUNT: f32 = 0.1;
+
     /// The yaw the rig last posed at, in degrees, before shake; `0.0` before the first pose.
     /// [`camera_relative`](crate::camera_relative) reads it.
     pub fn yaw_deg(&self) -> f32 {
@@ -187,6 +199,32 @@ pub fn add_look(rig: &mut CameraRig, yaw_deg: f32, pitch_deg: f32) {
     if pitch_deg.is_finite() {
         rig.look_deg[1] += pitch_deg;
     }
+}
+
+/// The `[yaw, pitch]` look in degrees for raw mouse counts through the rig's
+/// [`look_deg_per_count`](CameraRig::look_deg_per_count): a mouse moving right turns right
+/// (negative yaw) and moving down looks down (positive pitch). The one conversion the sim and a
+/// presenter share.
+///
+/// # Example
+///
+/// ```
+/// use ludion_camera::{CameraRig, look_from_counts};
+///
+/// let rig = CameraRig::default();
+/// assert_eq!(look_from_counts(&rig, 10.0, 5.0), [-1.0, 0.5]);
+/// ```
+#[must_use]
+pub fn look_from_counts(rig: &CameraRig, dx: f32, dy: f32) -> [f32; 2] {
+    let s = rig.look_deg_per_count;
+    [-dx * s, dy * s]
+}
+
+/// Adds raw mouse counts to the rig's pending look through [`look_from_counts`]; a non-finite
+/// component is ignored.
+pub fn add_look_counts(rig: &mut CameraRig, dx: f32, dy: f32) {
+    let [yaw, pitch] = look_from_counts(rig, dx, dy);
+    add_look(rig, yaw, pitch);
 }
 
 /// Sets the first-person facing outright (a spawn or respawn): the yaw wrapped, the pitch clamped

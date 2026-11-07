@@ -10,9 +10,21 @@ const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
 /// Applies a `[yaw, pitch]` look delta to the state's yaw and pitch: yaw wrapped, pitch clamped to
 /// the mode's limit. A zero delta still clamps, which covers `set_look` and a tightened limit.
 pub(crate) fn apply_look(state: &mut RigState, fp: &FirstPersonRig, look: [f32; 2]) {
-    state.yaw_deg = wrap180(state.yaw_deg + look[0]);
+    (state.yaw_deg, state.pitch_deg) = looked(fp, state.yaw_deg, state.pitch_deg, look);
+}
+
+/// `(yaw, pitch)` after a `[yaw, pitch]` look delta: yaw wrapped, pitch clamped to the limit.
+pub(crate) fn looked(
+    fp: &FirstPersonRig,
+    yaw_deg: f32,
+    pitch_deg: f32,
+    look: [f32; 2],
+) -> (f32, f32) {
     let limit = fp.pitch_limit_deg;
-    state.pitch_deg = (state.pitch_deg + look[1]).clamp(-limit, limit);
+    (
+        wrap180(yaw_deg + look[0]),
+        (pitch_deg + look[1]).clamp(-limit, limit),
+    )
 }
 
 /// The eye a `first_person` rig wants: `target` plus `fp.eye_offset` in the yaw frame (right, up,

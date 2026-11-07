@@ -9,7 +9,8 @@
 //!    anchor, the `track` pose projected onto a path, then the critically damped springs;
 //! 3. **blend** — an interpolation from the frozen source pose to the live rig pose;
 //! 4. **post-aim** — kick, roll and the field-of-view channels, then seeded trauma shake, on the
-//!    output only; none feeds back into the state.
+//!    output only; none feeds back into the state. [`resolved_camera`] reaches it, for the tick and
+//!    for a presenter that latches fresher look.
 //!
 //! The `first_person` mode skips the path and the springs: the game writes look deltas
 //! ([`add_look`]), the rig owns yaw and pitch, and [`CameraRig::aim`] reports the pre-shake aim.
@@ -39,8 +40,8 @@ pub use relative::{camera_relative, camera_relative_yaw};
 pub use rig::{
     Aim, Blend, BlendCurve, BlendIn, CameraRig, FirstPersonRig, KickConfig, LookAhead, Pose,
     RigConfig, RigMode, RigState, ShakeConfig, Springs, TrackRig, VerticalAnchor, add_fov_kick,
-    add_kick, add_look, add_trauma, set_look, snap_rig,
+    add_kick, add_look, add_look_counts, add_trauma, look_from_counts, set_look, snap_rig,
 };
-pub use step::{RigInput, RigOutput, step_rig};
+pub use step::{ResolvedCamera, RigInput, RigOutput, resolved_camera, step_rig};
 pub use track::{rig_focus, track_eye};
 pub use validate::{invalid_config, invalid_field};

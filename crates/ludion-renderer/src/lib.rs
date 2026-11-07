@@ -44,6 +44,7 @@
 
 mod blend;
 mod cache_eviction;
+mod camera_latch;
 mod cluster;
 mod compressed;
 mod compute_shader;
@@ -80,6 +81,7 @@ mod shader_gen;
 mod smaa_lut;
 
 pub use blend::{BlendData, CameraBlend, InstanceKey, blend};
+pub use camera_latch::CameraLatch;
 pub use cluster::{ClusterStats, cluster_stats};
 pub use compressed::{CompressedUploadError, check_compressed};
 pub use debug_view::{DebugView, PROBE_VIEW_PALETTE, SUN_CASCADE_VIEW_PALETTE};

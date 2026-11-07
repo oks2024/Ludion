@@ -17,8 +17,6 @@ use std::process::ExitCode;
 
 // --- The game (copyable) -------------------------------------------------------------------------
 
-/// Degrees of look per raw mouse count.
-const DEG_PER_COUNT: f32 = 0.1;
 /// Degrees of pitch kick per shot; recoil up is a negative pitch.
 const RECOIL_PITCH_DEG: f32 = -2.0;
 
@@ -32,7 +30,7 @@ fn look_and_fire(world: &mut World, _ctx: &SystemCtx) {
         return;
     };
     let rig = world.get_mut::<CameraRig>(cam).unwrap().unwrap();
-    add_look(rig, -delta[0] * DEG_PER_COUNT, delta[1] * DEG_PER_COUNT);
+    add_look_counts(rig, delta[0], delta[1]);
     if fired {
         add_kick(rig, 0.0, RECOIL_PITCH_DEG, 0.0);
     }

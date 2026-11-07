@@ -94,11 +94,12 @@ The rig owns yaw and pitch as hashed state; the game writes look deltas into `lo
 ```rust
 fn look(world: &mut World, _ctx: &SystemCtx) {
     let [dx, dy] = world.resource::<InputState>().unwrap().mouse().delta();
-    const DEG_PER_COUNT: f32 = 0.1;
     let cam = camera_entity(world);
-    add_look(world.get_mut::<CameraRig>(cam).unwrap().unwrap(), -dx * DEG_PER_COUNT, dy * DEG_PER_COUNT);
+    add_look_counts(world.get_mut::<CameraRig>(cam).unwrap().unwrap(), dx, dy);
 }
 ```
+
+Mouse sensitivity has one source: `look_deg_per_count` (default `0.1`, omitted from files at the default, finite per `L1304`). `add_look_counts(rig, dx, dy)` converts raw counts through it (mouse right turns right, mouse down looks down); `look_from_counts(rig, dx, dy)` is the same conversion as a value.
 
 ## Kick and roll
 
@@ -120,6 +121,15 @@ CameraRig:
 - Recoil is visual: `aim()`, `yaw_deg()` and `camera_relative` never see these channels, so the shot goes where the crosshair was. Use `CameraOffset` for presentation-only effects; use these when the feel must replay.
 
 Runnable: `crates/ludion/examples/first_person_kick.rs`.
+
+## The frame's resolved camera
+
+`ludion_camera::resolved_camera(rig, target, extra_look_deg) -> Option<ResolvedCamera { aim, view }>` is the one seam that turns a rig's last pose into the frame's camera: extra look, then `aim`, then the post-aim stage (kick, roll, FOV channels, shake). `step_rig` returns `resolved_camera(.., [0, 0]).view`; a presenter latching fresher mouse motion calls it with the look accumulated since the tick. The viewmodel and muzzle convergence read it too.
+
+- `[0, 0]` is the tick's camera bit for bit; `None` before the first pose.
+- Extra look `[yaw, pitch]` (degrees, signs as `look_deg`) applies to a `first_person` rig only, and not while a blend runs; otherwise it is ignored. Pitch clamps to `pitch_limit_deg`, the eye follows the new yaw, and kick, roll, FOV and shake apply on top.
+- Extra look equals what `add_look` plus one held tick would give, so a later tick that consumes the same look never pops the view.
+- The renderer sees it through `ludion_renderer::CameraLatch`, built by the engine into each present packet for a first-person rig camera.
 
 ## The offset frame (`track`)
 
@@ -158,7 +168,7 @@ On `L1304`–`L1307` and `L1309` the rig **holds its pose**; on `L1308` the lowe
 
 | code | raised when |
 | --- | --- |
-| L1304 | a field is out of range (pointer under `/rig/…`, `/shake/…`, `/trauma`, `/look_deg`, `/kick`, `/kick_deg`, `/roll_deg`; `pitch_limit_deg` outside (0, 90), a non-finite `eye_offset`, `look_deg` or kick channel) |
+| L1304 | a field is out of range (pointer under `/rig/…`, `/shake/…`, `/trauma`, `/look_deg`, `/look_deg_per_count`, `/kick`, `/kick_deg`, `/roll_deg`; `pitch_limit_deg` outside (0, 90), a non-finite `eye_offset`, `look_deg` or kick channel) |
 | L1305 | `target` names a despawned entity (warning, once) |
 | L1306 | the track `path` fails to load (once) |
 | L1307 | the entity has no `Camera` |

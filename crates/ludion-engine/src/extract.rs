@@ -3990,7 +3990,7 @@ fn snap_view_height(height: f32, viewport_h: u32, ppu: f32) -> f32 {
 /// presentation offset composed on, and `cam`'s projection with its `fov_delta`. The one place the
 /// offset meets the camera — `build_camera` and the blend's camera both read it, so the drawn frame
 /// and the interpolated one cannot disagree. `None` returns its inputs untouched.
-fn compose_camera(
+pub(crate) fn compose_camera(
     rotation: Quat,
     translation: Vec3,
     cam: &Camera,

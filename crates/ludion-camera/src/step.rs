@@ -6,8 +6,8 @@ use ludion_core::math::{
 use ludion_core::time::FrameIndex;
 use ludion_scene::PathSampler;
 
-use crate::first_person::{apply_look, first_person_eye};
-use crate::rig::{Blend, CameraRig, Pose, RigMode};
+use crate::first_person::{apply_look, first_person_eye, looked};
+use crate::rig::{Aim, Blend, CameraRig, Pose, RigMode};
 use crate::shake::shake_noise;
 use crate::spring::{damp, decay, ease, lerp_pose, spring_step, wrap180};
 use crate::track::{Desired, desired};
@@ -104,8 +104,72 @@ pub fn step_rig(rig: &mut CameraRig, input: &RigInput) -> Option<RigOutput> {
     }
 
     let pose = blended_pose(rig, input);
-    rig.state.pose = Some(pose.clone());
-    Some(post_aim(rig, &pose))
+    rig.state.pose = Some(pose);
+    resolved_camera(rig, target, [0.0; 2]).map(|resolved| resolved.view)
+}
+
+/// The frame's resolved camera: the pre-effect aim and the final view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResolvedCamera {
+    /// The eye and orientation before kick, roll, FOV channels and shake ([`CameraRig::aim`]).
+    pub aim: Aim,
+    /// The camera pose after the post-aim stage, as [`step_rig`] returns it.
+    pub view: RigOutput,
+}
+
+/// The one seam that produces a frame's camera from a rig's last pose: extra look, then aim, then
+/// the post-aim stage. [`step_rig`] goes through it with no extra look; a presenter that latches
+/// fresher mouse motion calls it with the look accumulated since the tick.
+///
+/// `None` before the first pose. With `extra_look_deg == [0, 0]` the result is the tick's camera
+/// bit for bit. The extra look `[yaw, pitch]` (degrees, as [`add_look`](crate::add_look)) applies
+/// only to a `first_person` rig with no blend running; pitch clamps to the mode's limit, the eye
+/// follows the new yaw, and kick, roll, the FOV channels and shake apply on top. In any other case
+/// it is ignored.
+///
+/// # Example
+///
+/// ```
+/// use ludion_camera::{CameraRig, RigInput, resolved_camera, step_rig};
+/// use ludion_core::time::FrameIndex;
+///
+/// let mut rig = CameraRig::default();
+/// rig.rig.mode = ludion_camera::RigMode::FirstPerson(Default::default());
+/// let target = [0.0, 0.0, -3.0];
+/// let input = RigInput {
+///     target: Some(target),
+///     path: None,
+///     game_dt: 1.0 / 60.0,
+///     dt: 1.0 / 60.0,
+///     game_frame: FrameIndex::ZERO,
+///     camera_fov_y_deg: None,
+/// };
+/// let out = step_rig(&mut rig, &input).unwrap();
+/// assert_eq!(resolved_camera(&rig, target, [0.0; 2]).unwrap().view, out);
+/// let turned = resolved_camera(&rig, target, [10.0, 0.0]).unwrap();
+/// assert_eq!(turned.aim.yaw_deg, 10.0);
+/// ```
+pub fn resolved_camera(
+    rig: &CameraRig,
+    target: [f32; 3],
+    extra_look_deg: [f32; 2],
+) -> Option<ResolvedCamera> {
+    let mut pose = rig.state.pose.clone()?;
+    if extra_look_deg != [0.0; 2]
+        && rig.state.blend.is_none()
+        && let RigMode::FirstPerson(fp) = &rig.rig.mode
+    {
+        (pose.yaw_deg, pose.pitch_deg) = looked(fp, pose.yaw_deg, pose.pitch_deg, extra_look_deg);
+        pose.eye = first_person_eye(fp, target, pose.yaw_deg);
+    }
+    Some(ResolvedCamera {
+        aim: Aim {
+            eye: pose.eye,
+            yaw_deg: pose.yaw_deg,
+            pitch_deg: pose.pitch_deg,
+        },
+        view: post_aim(rig, &pose),
+    })
 }
 
 /// A rewound or hand-edited blend snaps; `switch` only ever writes `seconds > 0`.

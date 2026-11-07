@@ -150,6 +150,7 @@ fn violations(rig: &CameraRig) -> Vec<(String, &'static str)> {
         }
     }
     for (pointer, value) in [
+        ("/look_deg_per_count", rig.look_deg_per_count),
         ("/fov_kick_deg", rig.fov_kick_deg),
         ("/roll_deg", rig.roll_deg),
         ("/fov_offset_deg", rig.fov_offset_deg),
@@ -186,7 +187,7 @@ fn diagnostic(what: &str, pointer: &str, rule: &str) -> Diagnostic {
         "keep half-lives, slacks and shake limits non-negative, `search_window`, \
          `full_speed`, `frequency` and `exponent` above 0, `fov_y_deg` inside (0, 180) \
          `trauma` in [0, 1], `pitch_limit_deg` inside (0, 90) and `eye_offset`, `look_deg`, \
-         `kick_deg`, `fov_kick_deg`, `roll_deg` and `fov_offset_deg` finite",
+         `look_deg_per_count`, `kick_deg`, `fov_kick_deg`, `roll_deg` and `fov_offset_deg` finite",
     )
 }
 
@@ -209,7 +210,7 @@ impl SemanticValidate for CameraRig {
     /// Rejects every out-of-range field (`L1304`) at its pointer under `/rig/…` or `/shake/…`:
     /// half-lives, `look_ahead.distance`, slacks, `blend_in.seconds`, `decay_per_second` and the shake
     /// maxima negative or not finite; `search_window`, `full_speed`, `frequency`, `exponent` not
-    /// positive; `kick` half-lives negative or not finite; offsets, `look_deg`, `kick_deg`, `fov_kick_deg`,
+    /// positive; `kick` half-lives negative or not finite; offsets, `look_deg`, `look_deg_per_count`, `kick_deg`, `fov_kick_deg`,
     /// `roll_deg` and `fov_offset_deg` not finite; `pitch_limit_deg` outside `(0, 90)`; `fov_y_deg`
     /// outside `(0, 180)`; `trauma` outside `[0, 1]`. A value that does not deserialize is left to
     /// the schema.

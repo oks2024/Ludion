@@ -2,8 +2,9 @@
 
 use ludion_camera::{
     Blend, BlendCurve, BlendIn, CameraRig, FirstPersonRig, KickConfig, LookAhead, RigConfig,
-    RigInput, RigMode, RigOutput, Springs, TrackRig, add_fov_kick, add_kick, add_look, add_trauma,
-    camera_relative, camera_relative_yaw, set_look, snap_rig, step_rig,
+    RigInput, RigMode, RigOutput, Springs, TrackRig, add_fov_kick, add_kick, add_look,
+    add_look_counts, add_trauma, camera_relative, camera_relative_yaw, look_from_counts,
+    resolved_camera, set_look, snap_rig, step_rig,
 };
 use ludion_core::math::{euler_xyz_degrees_to_quat, quat_rotate};
 use ludion_core::time::FrameIndex;
@@ -1193,4 +1194,124 @@ fn the_new_channels_serialize_only_when_off_rest() {
     add_kick(&mut rig, f32::NAN, f32::INFINITY, 0.0);
     add_fov_kick(&mut rig, f32::NAN);
     assert_eq!((rig.kick_deg, rig.fov_kick_deg), ([1.0, -2.0, 0.5], 4.0));
+}
+
+fn out_bits(o: &RigOutput) -> Vec<u32> {
+    o.translation
+        .iter()
+        .chain(&o.rotation_deg)
+        .chain(&o.fov_y_deg)
+        .map(|v| v.to_bits())
+        .collect()
+}
+
+#[test]
+fn resolved_camera_with_no_extra_look_is_the_ticks_camera_bit_for_bit() {
+    let mut rig = fp_rig();
+    rig.rig.fov_y_deg = Some(70.0);
+    rig.trauma = 0.6;
+    for k in 0..40u64 {
+        let kf = k as f32;
+        add_look(&mut rig, ludion_core::math::sin(kf * 0.3) * 3.0, 0.7);
+        add_kick(&mut rig, 0.2, -1.0, 0.5);
+        add_fov_kick(&mut rig, 1.5);
+        let target = [kf * 0.05, 0.0, -kf * 0.03];
+        let out = fp_tick(&mut rig, target, k);
+        let resolved = resolved_camera(&rig, target, [0.0; 2]).unwrap();
+        assert_eq!(out_bits(&resolved.view), out_bits(&out), "tick {k}");
+        let aim = rig.aim().unwrap();
+        assert_eq!(resolved.aim, aim);
+    }
+    let path = straight();
+    let mut track = rig_with(rigid([0.0, 2.2, 4.5]));
+    track.trauma = 0.5;
+    for k in 0..20 {
+        let target = [0.0, 0.0, -10.0 - k as f32];
+        let out = tick(&mut track, &path, target, k);
+        let resolved = resolved_camera(&track, target, [0.0; 2]).unwrap();
+        assert_eq!(out_bits(&resolved.view), out_bits(&out), "track tick {k}");
+    }
+}
+
+#[test]
+fn resolved_camera_is_none_before_the_first_pose() {
+    assert!(resolved_camera(&fp_rig(), [0.0; 3], [0.0; 2]).is_none());
+}
+
+#[test]
+fn extra_look_equals_the_look_applied_on_a_held_tick() {
+    let mut rig = fp_rig();
+    rig.trauma = 0.4;
+    add_kick(&mut rig, 0.3, -2.0, 1.0);
+    let target = [1.0, 0.0, -2.0];
+    for k in 0..10u64 {
+        add_look(&mut rig, 1.5, 0.5);
+        fp_tick(&mut rig, target, k);
+    }
+    for extra in [[10.0, 500.0], [-30.0, -20.0], [200.0, 0.0]] {
+        let latched = resolved_camera(&rig, target, extra).unwrap();
+        let mut reference = rig.clone();
+        add_look(&mut reference, extra[0], extra[1]);
+        let out = fp_tick_dt(&mut reference, target, 10, 0.0);
+        assert_eq!(out_bits(&latched.view), out_bits(&out), "{extra:?}");
+        assert_eq!(Some(latched.aim), reference.aim());
+    }
+}
+
+#[test]
+fn extra_look_is_ignored_on_track_rigs_and_during_a_blend() {
+    let path = straight();
+    let mut track = rig_with(rigid([0.0, 2.2, 4.5]));
+    tick(&mut track, &path, [0.0, 0.0, -10.0], 0);
+    let base = resolved_camera(&track, [0.0, 0.0, -10.0], [0.0; 2]).unwrap();
+    let looked = resolved_camera(&track, [0.0, 0.0, -10.0], [30.0, 10.0]).unwrap();
+    assert_eq!(base, looked);
+
+    let mut rig = fp_rig();
+    fp_tick(&mut rig, [0.0; 3], 0);
+    rig.rig.fov_y_deg = Some(50.0);
+    fp_tick(&mut rig, [0.0; 3], 1);
+    assert!(rig.state.blend.is_none());
+    rig.rig = fp_cfg(1.0);
+    rig.rig.fov_y_deg = Some(60.0);
+    fp_tick(&mut rig, [0.0; 3], 2);
+    assert!(rig.state.blend.is_some());
+    let base = resolved_camera(&rig, [0.0; 3], [0.0; 2]).unwrap();
+    let looked = resolved_camera(&rig, [0.0; 3], [30.0, 10.0]).unwrap();
+    assert_eq!(base, looked);
+}
+
+#[test]
+fn counts_convert_through_the_rigs_one_sensitivity() {
+    let mut rig = fp_rig();
+    assert_eq!(CameraRig::DEFAULT_LOOK_DEG_PER_COUNT, 0.1);
+    rig.look_deg_per_count = 0.25;
+    add_look_counts(&mut rig, 8.0, 4.0);
+    assert_eq!(rig.look_deg, [-2.0, 1.0]);
+    assert_eq!(look_from_counts(&rig, 8.0, 4.0), [-2.0, 1.0]);
+    add_look_counts(&mut rig, f32::NAN, 4.0);
+    assert_eq!(rig.look_deg, [-2.0, 2.0]);
+}
+
+#[test]
+fn sensitivity_is_serialized_only_off_the_default() {
+    let mut rig = fp_rig();
+    assert!(
+        serde_json::to_value(&rig)
+            .unwrap()
+            .get("look_deg_per_count")
+            .is_none()
+    );
+    rig.look_deg_per_count = 0.05;
+    let value = serde_json::to_value(&rig).unwrap();
+    assert_eq!(value["look_deg_per_count"], 0.05f32);
+    let back: CameraRig = serde_json::from_value(value).unwrap();
+    assert_eq!(back.look_deg_per_count, 0.05);
+    rig.look_deg_per_count = f32::NAN;
+    assert_eq!(
+        ludion_camera::invalid_field(&rig)
+            .map(|(p, _)| p)
+            .as_deref(),
+        Some("/look_deg_per_count")
+    );
 }

@@ -25,6 +25,7 @@ use ludion_core::time::FrameIndex;
 use ludion_render_graph::{FrameSinks, Gpu, PresentOutcome, PresentTarget, StreamReadback};
 
 use crate::blend::{BlendData, blend};
+use crate::camera_latch::CameraLatch;
 use crate::graph::{AntiAliasing, FrameSize};
 use crate::probe_capture::ProbeResolve;
 use crate::quality::{Quality, QualityParams};
@@ -89,6 +90,9 @@ pub struct PresentPacket {
     /// The poses and keys that let a display-rate frame blend toward this tick, when the host
     /// collected them.
     pub blend: Option<Arc<BlendData>>,
+    /// Re-resolves the tick's camera with fresher look, when the host built one; the presenter does
+    /// not read it.
+    pub camera_latch: Option<Arc<dyn CameraLatch>>,
 }
 
 /// What the presenter sends back to the sim thread.
@@ -740,6 +744,7 @@ mod tests {
             },
             tick: None,
             blend: None,
+            camera_latch: None,
         }
     }
 

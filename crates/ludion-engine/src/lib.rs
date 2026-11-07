@@ -38,6 +38,7 @@ pub mod audio;
 pub mod bisect;
 mod bounds;
 pub mod builder;
+mod camera_latch;
 mod camera_offset;
 mod camera_rig;
 mod character;
@@ -166,7 +167,8 @@ pub use lane::{
 pub use ludion_camera::{
     Aim, BlendCurve, BlendIn, CameraRig, FirstPersonRig, KickConfig, LookAhead, RigConfig, RigMode,
     RigState, ShakeConfig, Springs, TrackRig, VerticalAnchor, add_fov_kick, add_kick, add_look,
-    add_trauma, camera_relative, camera_relative_yaw, first_person_eye, set_look, snap_rig,
+    add_look_counts, add_trauma, camera_relative, camera_relative_yaw, first_person_eye,
+    look_from_counts, set_look, snap_rig,
 };
 pub use ludion_scene::{
     PathDocument, PathFrame, PathInterpolation, PathMetric, PathSampler, check_path,

@@ -3983,6 +3983,11 @@ impl Engine {
                 settings: self.present_settings(),
                 tick,
                 blend: collect.then(|| Arc::new(blend)),
+                camera_latch: self
+                    .view_override
+                    .is_none()
+                    .then(|| crate::camera_latch::collect(self.driver.world(), (width, height)))
+                    .flatten(),
             });
         }
         if !readback {
@@ -4580,6 +4585,17 @@ impl Engine {
             .extract_render_scene_blend(width, height, true, Some(&mut blend))
             .map_err(crate::commands::collapse)?;
         Ok((scene, blend))
+    }
+
+    /// The camera latch a windowed host's packet would carry for the current world, or `None`
+    /// (not a first-person rig camera, or a view override in force). A test seam.
+    #[doc(hidden)]
+    pub fn present_camera_latch(&self) -> Option<Arc<dyn ludion_renderer::CameraLatch>> {
+        let (width, height) = self.render_size;
+        self.view_override
+            .is_none()
+            .then(|| crate::camera_latch::collect(self.driver.world(), (width, height)))
+            .flatten()
     }
 
     /// [`extract_render_scene`](Engine::extract_render_scene), through the view override when

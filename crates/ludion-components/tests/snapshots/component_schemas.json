@@ -395,6 +395,11 @@
         "minItems": 2,
         "maxItems": 2
       },
+      "look_deg_per_count": {
+        "description": "Degrees of look per raw mouse count: the one sensitivity the sim ([`add_look_counts`]) and a\nlate-latching presenter share.",
+        "type": "number",
+        "format": "float"
+      },
       "kick": {
         "description": "The kick decay; not part of `rig`, so a switch never blends or resets it.",
         "$ref": "#/$defs/KickConfig"
