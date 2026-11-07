@@ -209,6 +209,9 @@ pub struct Engine {
     /// that continues a session, so it is the one rebuild a resource may cross. Empty for a game that
     /// registered none, which is every game until one asks.
     pub(crate) resource_carriers: Vec<crate::builder::ResourceCarrier>,
+    /// The game's projectile pool config ([`EngineBuilder::projectiles`](crate::EngineBuilder::projectiles)),
+    /// already validated at build; `None` installs no pool.
+    pub(crate) projectile_config: Option<crate::ProjectileConfig>,
     /// What the last install-time validation pass reported at `Warning` severity — the errors
     /// refused the load, so only lints survive to be read. Host/test state like
     /// [`profile_migration`](Engine::profile_migration): never hashed, never snapshotted. See
@@ -767,6 +770,7 @@ impl Engine {
             game_doc_kinds: false,
             doc_texts: BTreeMap::new(),
             resource_carriers: Vec::new(),
+            projectile_config: None,
             doc_validation_warnings: Vec::new(),
             doc_skip_warnings: Vec::new(),
             doc_skip_summary: None,
@@ -2463,6 +2467,26 @@ impl Engine {
         self.driver
             .world_mut()
             .insert_resource(crate::transition::SceneSwitch::default());
+    }
+
+    /// Installs the configured [`Projectiles`](crate::Projectiles) pool into the current world unless
+    /// it already holds one (a restore's, or one a `carry_resource` moved across a switch). Called
+    /// after every world (re)build; a no-op for a game that configured none.
+    pub(crate) fn install_projectiles(&mut self) {
+        let Some(config) = &self.projectile_config else {
+            return;
+        };
+        if self
+            .driver
+            .world()
+            .resource::<crate::Projectiles>()
+            .is_some()
+        {
+            return;
+        }
+        if let Ok(projectiles) = crate::Projectiles::new(config.clone()) {
+            self.driver.world_mut().insert_resource(projectiles);
+        }
     }
 
     /// Installs a fresh (empty) [`Shutdown`](crate::Shutdown) resource into the current world so game
@@ -6133,6 +6157,7 @@ impl Engine {
         self.install_audio_queue();
         self.install_presentation_rules();
         self.install_scene_switch();
+        self.install_projectiles();
         if matches!(
             kind,
             Rebuild::Switch { restart: true, .. }

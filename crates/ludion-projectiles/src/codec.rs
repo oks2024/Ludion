@@ -162,6 +162,11 @@ impl Reader<'_, '_> {
     }
 }
 
+/// Smallest encoded slot (`owner` is a 1-byte tag when absent and `Response` is 1 byte for
+/// the payload-free variants): `decode` rejects a `high_water` the payload cannot hold before
+/// allocating.
+const SLOT_BYTES: usize = 12 + 12 + 4 * 3 + 1 + 4 + 4 + 1 + 2 + 2 + PIERCE_MEMORY * 9 + 1 + 4 + 1;
+
 impl ProjectilePool {
     /// Appends the whole pool: every column of every slot below the high-water mark, the free
     /// list (order matters: it decides the next ids) and the live count. Floats are raw bits, so
@@ -229,6 +234,9 @@ impl ProjectilePool {
             return Err(DecodeError("truncated"));
         }
         let free: Vec<u32> = (0..free_len).map(|_| r.u32()).collect::<Result<_>>()?;
+        if (high_water as usize).saturating_mul(SLOT_BYTES) > r.remaining() {
+            return Err(DecodeError("truncated"));
+        }
         let mut pool = ProjectilePool::with_capacity(capacity as usize);
         let c: &mut Cols = &mut pool.cols;
         for i in 0..high_water as usize {

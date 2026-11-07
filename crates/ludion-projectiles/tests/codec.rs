@@ -205,3 +205,25 @@ fn hostile_bytes_are_errors() {
     m[5..9].copy_from_slice(&u32::MAX.to_le_bytes()); // capacity
     assert!(ProjectilePool::decode(&mut m.as_slice()).is_err());
 }
+
+fn header(capacity: u32, high_water: u32) -> Vec<u8> {
+    let mut b = b"LPRJ".to_vec();
+    b.push(1);
+    for v in [capacity, high_water, 0, 0] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b
+}
+
+#[test]
+fn sizes_are_bounded_before_allocating() {
+    let max = ludion_projectiles::MAX_DECODE_CAPACITY;
+    let err = ProjectilePool::decode(&mut header(max, max).as_slice())
+        .err()
+        .unwrap();
+    assert_eq!(err.reason(), "truncated");
+    let err = ProjectilePool::decode(&mut header(max + 1, 0).as_slice())
+        .err()
+        .unwrap();
+    assert_eq!(err.reason(), "capacity too large");
+}

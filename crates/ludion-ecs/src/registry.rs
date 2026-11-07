@@ -301,7 +301,7 @@ pub struct Registry {
     resource_digests: Vec<ResourceDigest>,
 }
 
-type DigestReader = Box<dyn Fn(&World) -> Option<u64> + Send + Sync>;
+type DigestReader = Box<dyn Fn(&World) -> Option<u64> + Send + Sync + std::panic::RefUnwindSafe>;
 
 /// A resource the world hash folds in (rule 6): its name, type, and an erased digest reader.
 struct ResourceDigest {

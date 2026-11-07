@@ -130,6 +130,7 @@ pub struct EngineBuilder {
     doc_validators: Vec<DocValidator>,
     doc_texts: std::collections::BTreeMap<String, String>,
     resource_carriers: Vec<ResourceCarrier>,
+    projectile_config: Option<crate::ProjectileConfig>,
     profile_kind: Option<ProfileKind>,
     profile_path: Option<PathBuf>,
     default_scene: Option<PathBuf>,
@@ -165,6 +166,7 @@ impl EngineBuilder {
             doc_validators: Vec::new(),
             doc_texts: std::collections::BTreeMap::new(),
             resource_carriers: Vec::new(),
+            projectile_config: None,
             profile_kind: None,
             profile_path: None,
             default_scene: None,
@@ -820,6 +822,31 @@ impl EngineBuilder {
         self
     }
 
+    /// Opts the game into the projectile pool: the engine installs a
+    /// [`Projectiles`](crate::Projectiles) resource sized by `config` at every world build. Schedule
+    /// [`projectiles_step`](crate::projectiles_step) after `spatial3d_rebuild` to move it. The last
+    /// call wins; [`build`](EngineBuilder::build) refuses an invalid config with `L4027`.
+    ///
+    /// A scene switch gives the arriving district a fresh pool; add
+    /// `carry_resource::<Projectiles>()` to keep the departing one instead.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{Engine, ProjectileConfig, projectiles_step};
+    ///
+    /// let engine = Engine::builder()
+    ///     .projectiles(ProjectileConfig { capacity: 64, ..ProjectileConfig::default() })
+    ///     .system("projectiles_step", projectiles_step)
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = engine;
+    /// ```
+    #[must_use]
+    pub fn projectiles(mut self, config: crate::ProjectileConfig) -> Self {
+        self.projectile_config = Some(config);
+        self
+    }
+
     /// Registers the game's one player-profile type `P`: its persistent save state
     /// ([`Profile<P>`](crate::Profile)), loaded from `save/profile.yaml` (or [`profile_path`](EngineBuilder::profile_path))
     /// into a resource at every world build and mutated by the game's systems.
@@ -952,7 +979,12 @@ impl EngineBuilder {
                  .system(\"fire\", fire).query::<(&Loadout, &Transform)>()",
             ));
         }
+        if let Some(config) = &self.projectile_config {
+            config.validate()?;
+        }
         let mut registry = builtin_registry();
+        registry
+            .register_resource_digest::<crate::Projectiles>("projectiles", |p| p.pool().digest())?;
         for register in self.registrations {
             register(&mut registry)?;
         }
@@ -998,6 +1030,8 @@ impl EngineBuilder {
         // Set before `install_docs`, which merges them over the content-root walk.
         engine.doc_texts = doc_texts;
         engine.resource_carriers = self.resource_carriers;
+        engine.projectile_config = self.projectile_config;
+        engine.install_projectiles();
         // Populate the data-doc stores into the initial (pre-scene-load) world so a game driven
         // before any `scene.load` still sees its docs; a malformed doc — or a broken cross-reference
         // a registered validation pass reports as an error — fails the build here (the collapsed

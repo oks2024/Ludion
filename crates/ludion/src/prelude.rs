@@ -90,6 +90,11 @@
 //!   game registers `spatial3d::rebuild::<Transform, TransformHierarchy>` as a system, then queries
 //!   the `Index3d` resource (`overlap_sphere`, `overlap_aabb`, `k_nearest`, `cast`) with a layer
 //!   `Filter`. [`WorldPosition`] is the seam a custom position component implements.
+//! - **Projectiles** — the opt-in pool of swept 3D shots: `Engine::builder().projectiles(`
+//!   [`ProjectileConfig`]`)`, [`projectiles_step`] scheduled after `spatial3d_rebuild`, shots fired
+//!   with [`spawn_projectile`] (a [`projectiles::ProjectileDesc`]), and the tick's
+//!   [`projectiles::HitEvent`]s read from the [`Projectiles`] resource. Re-exported as a module so
+//!   its `Response` and `HitEvent` do not clash.
 //! - **Rigid-body dynamics** — the second tier of the same [`Collider`] surface: a 3D [`Shape`] or
 //!   `body: rigid` (with [`RigidBody`] and its [`AxisLock`]; a static or kinematic body takes a
 //!   [`ContactMaterial`]) is simulated rather than indexed, and
@@ -204,20 +209,20 @@ pub use ludion_engine::{
     PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter, PathDocument, PathFollower,
     PathFrame, PathInterpolation, PathMetric, PathMode, PathOrient, PathSampler, PatternDoc,
     PatternPlayer, PointLight, PostProcess, PrefabApplied, PrefabInstance, PrefabReverted,
-    ProbeShape, Profile, Projection, RampSpec, ReflectionProbe, RenderExtent, RenderSettings,
-    Residue, ResidueStore, RigConfig, RigMode, RigState, SceneSwitch, ShakeConfig, Shutdown,
-    SpotLight, Springs, Sprite, SpriteBlend, SwitchTo, Text, TileAppearance, Tilemap,
-    TimelineEntry, TrackRig, Transform, TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect,
-    UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Volley,
-    VolleyCenter, VolleyShape, WorldPose, add_fov_kick, add_kick, add_look, add_look_counts,
-    add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
-    bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw,
-    first_person_eye, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
-    move_character, move_character_with, path_follow, path_follower_motion, play_patterns,
-    play_sound, posed_joint_world, probe_character_ground, reparent, report_diagnostic,
-    report_full_diagnostic, resize_character, revert_prefab, set_clip_speed, set_look, snap_rig,
-    spawn_prefab, switch_to_ragdoll, teleport_character, unpack_prefab, validate_pattern_docs,
-    volley_hits, world_transform,
+    ProbeShape, Profile, ProjectileConfig, Projectiles, Projection, RampSpec, ReflectionProbe,
+    RenderExtent, RenderSettings, Residue, ResidueStore, RigConfig, RigMode, RigState, SceneSwitch,
+    ShakeConfig, Shutdown, SpotLight, Springs, Sprite, SpriteBlend, SwitchTo, Text, TileAppearance,
+    Tilemap, TimelineEntry, TrackRig, Transform, TransformHierarchy, TurnSpec, UiList, UiListItem,
+    UiRect, UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens,
+    Volley, VolleyCenter, VolleyShape, WorldPose, add_fov_kick, add_kick, add_look,
+    add_look_counts, add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age,
+    bullet_is_alive, bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade,
+    debug_draw, first_person_eye, fits_character, lane_error_colour, lane_frame, lane_relative,
+    load_assembly, move_character, move_character_with, path_follow, path_follower_motion,
+    play_patterns, play_sound, posed_joint_world, probe_character_ground, projectiles_step,
+    reparent, report_diagnostic, report_full_diagnostic, resize_character, revert_prefab,
+    set_clip_speed, set_look, snap_rig, spawn_prefab, spawn_projectile, switch_to_ragdoll,
+    teleport_character, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;
@@ -244,6 +249,7 @@ pub use ludion_physics::{
     QueryFilter, QueryHit, ResizeReport, SensorEvent, SensorPhase, SurfaceHit, SurfaceVelocity,
     height_in_force, teleport_kinematic,
 };
+pub use ludion_projectiles as projectiles;
 pub use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, ContactMaterial, GroundPosition, Joint,
     JointKind, JointMotor, NoParent, ParentPose, Plane, RigidBody, Shape, SpatialVolume, Velocity,

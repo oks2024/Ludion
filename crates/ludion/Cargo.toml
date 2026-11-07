@@ -49,6 +49,7 @@ ludion-sim = { path = "../ludion-sim", version = "0.1.0" }
 # `GroundPosition` seam (Phase 12). The engine already registers `Collider` as a builtin; the facade
 # re-exports the authoring types and the functions a game schedules and calls.
 ludion-spatial = { path = "../ludion-spatial", version = "0.1.0" }
+ludion-projectiles = { path = "../ludion-projectiles", version = "0.1.0" }
 # Prelude re-export: `PhysicsWorld`, the solver resource a game reads body counts and sleep state
 # off. Registration is a scene's `physics:` block, so the facade names the crate only for this type;
 # the engine already depends on it unconditionally.

@@ -82,6 +82,13 @@
 //! serializes byte-identically to before the field existed; an older snapshot restores with none.
 //! A resource, invisible to the world hash.
 //!
+//! The **projectile pool** (`projectiles`) and the 3D **spatial index** (`spatial_index_3d`) ride it
+//! the same way: the pool as its config plus a base64 blob of the pool and its last events (so a
+//! reader scheduled before `projectiles_step` sees the same previous-tick events), the index as its
+//! built items. A game without a pool, or that never ran `spatial3d_rebuild`, omits the field and
+//! serializes byte-identically to before it existed. The pool is hashed (`WorldHash` rule 6); the
+//! index is a resource, invisible to the hash.
+//!
 //! **Presentation entities** (`Plan/presentation-state.md`) ride the same way: the `presentation`
 //! entity list and, only when the live set cannot reproduce it, `presentation_allocator`. A world
 //! without presentation entities omits both and serializes byte-identically to before.
@@ -188,6 +195,17 @@ struct SnapshotDoc {
     /// uninterrupted run. An entry with a non-finite float is left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     follower_motions: Option<Vec<FollowerMotionEntry>>,
+    /// The projectile pool, or `None` for a game that configured none. Optional and additive (the
+    /// `physics` precedent): a restore re-creates the pool slot for slot, so in-flight shots, their
+    /// generations and the free list continue as in the uninterrupted run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    projectiles: Option<ProjectilesDoc>,
+    /// The `spatial3d` index's built items, or `None` for a session that never ran
+    /// `spatial3d_rebuild`. Optional and additive (the `spatial_index` precedent): a reader
+    /// scheduled before the rebuild sees the index it saw uninterrupted. Items are finite by
+    /// construction, so none is filtered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spatial_index_3d: Option<Vec<ludion_spatial::spatial3d::Item>>,
     /// The RNG state — restored verbatim so the sequence continues identically.
     rng: DeterministicRng,
     /// The gameplay clock — how much of the frame count the game had held out of its own time, and
@@ -266,6 +284,14 @@ struct SnapshotDoc {
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     #[schemars(skip)]
     unknown: BTreeMap<String, Value>,
+}
+
+/// The snapshot's `projectiles` field: the pool's config and its bytes.
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct ProjectilesDoc {
+    config: crate::ProjectileConfig,
+    /// Base64 of the pool's codec bytes followed by the last tick's events' bytes.
+    state: String,
 }
 
 /// The snapshot's `scene_physics` field: the serde shape of a loaded scene's `physics:` block
@@ -469,6 +495,14 @@ pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
             .resource::<FollowerMotions>()
             .map(FollowerMotions::entries)
             .filter(|entries| !entries.is_empty()),
+        projectiles: engine
+            .world()
+            .resource::<crate::Projectiles>()
+            .map(capture_projectiles),
+        spatial_index_3d: engine
+            .world()
+            .resource::<ludion_spatial::spatial3d::Index3d>()
+            .map(|index| index.items().to_vec()),
         rng: *engine.rng()?,
         game_clock: engine
             .world()
@@ -602,6 +636,50 @@ fn capture_physics(engine: &Engine) -> Result<Option<String>, Diagnostic> {
         )
     })?;
     Ok(Some(base64::encode(bytes)))
+}
+
+/// The live pool as the snapshot's `projectiles` field.
+fn capture_projectiles(projectiles: &crate::Projectiles) -> ProjectilesDoc {
+    let mut bytes = Vec::new();
+    projectiles.pool().encode(&mut bytes);
+    projectiles.events().encode(&mut bytes);
+    ProjectilesDoc {
+        config: projectiles.config().clone(),
+        state: base64::encode(bytes),
+    }
+}
+
+/// Rebuilds the pool resource from a snapshot's `projectiles` field.
+///
+/// # Errors
+/// `L3008` if the config is invalid or the blob does not decode.
+fn restore_projectiles(doc: &ProjectilesDoc) -> Result<crate::Projectiles, Diagnostic> {
+    let invalid = |why: String| {
+        Diagnostic::new(
+            code::PROTOCOL_SNAPSHOT_INVALID,
+            format!("snapshot `projectiles` is invalid: {why}"),
+        )
+        .with_path("/projectiles")
+        .with_help("record the snapshot again with the current engine")
+    };
+    doc.config.validate().map_err(|d| invalid(d.message))?;
+    let bytes = base64::decode(&doc.state).map_err(|error| invalid(format!("`state`: {error}")))?;
+    let mut cursor = bytes.as_slice();
+    let pool = ludion_projectiles::ProjectilePool::decode(&mut cursor)
+        .map_err(|error| invalid(error.to_string()))?;
+    let events = ludion_projectiles::StepEvents::decode(&mut cursor)
+        .map_err(|error| invalid(error.to_string()))?;
+    if !cursor.is_empty() {
+        return Err(invalid("trailing bytes after the events".to_string()));
+    }
+    if pool.capacity() != doc.config.capacity as usize {
+        return Err(invalid("pool capacity differs from the config".to_string()));
+    }
+    Ok(crate::Projectiles::with_pool(
+        doc.config.clone(),
+        pool,
+        events,
+    ))
 }
 
 /// Decodes a snapshot's `physics` field back into a solver state at `tick_rate`.
@@ -923,6 +1001,15 @@ pub(crate) fn restore_into(
     }
     if let Some(entries) = doc.spatial_index.take() {
         world.insert_resource(SpatialIndex::from_entries(entries));
+    }
+    if let Some(projectiles) = &doc.projectiles {
+        world.insert_resource(restore_projectiles(projectiles)?);
+    }
+    if let Some(items) = doc.spatial_index_3d.take() {
+        let mut index = ludion_spatial::spatial3d::Index3d::new();
+        items.into_iter().for_each(|item| index.push(item));
+        index.build();
+        world.insert_resource(index);
     }
     if let Some(entries) = doc.follower_motions.take() {
         world.insert_resource(FollowerMotions::from_entries(entries));

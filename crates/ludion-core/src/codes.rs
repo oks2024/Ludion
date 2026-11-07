@@ -2267,6 +2267,17 @@ pub mod code {
     /// budget check — a gate that measured nothing must not read as a pass.
     pub const BUDGET_LOAD_UNMEASURED: DiagnosticCode = DiagnosticCode::new("L4025");
 
+    /// `L4026` — a projectile spawn was refused: no pool is configured, the pool is full, or the
+    /// description carries a non-finite or out-of-range field. A **warning**: the shot is not
+    /// fired and the game continues. Raised by `ludion-engine`'s `spawn_projectile`, once per cause
+    /// per session.
+    pub const PROJECTILE_SPAWN_REFUSED: DiagnosticCode = DiagnosticCode::new("L4026");
+
+    /// `L4027` — a `ProjectileConfig` is invalid: a capacity outside `1..=1048576`, a non-finite
+    /// gravity, or an empty or unknown `ignore_layers` name. An **error**. Raised by
+    /// `ludion-engine`'s builder at `build`, by snapshot restore, and by `projectiles_step`.
+    pub const PROJECTILE_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L4027");
+
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
     /// `L5001` — no audio output device is available, so the playback sink cannot open a stream.
@@ -10610,6 +10621,44 @@ captures.",
     },
     // --- L5xxx: audio ---
     CodeEntry {
+        code: code::PROJECTILE_SPAWN_REFUSED,
+        severity: Severity::Warning,
+        title: "projectile spawn refused",
+        explanation: "\
+`spawn_projectile` did not fire a shot. The message names the cause, which is reported once per
+cause per session:
+
+- no pool: the game never called `Engine::builder().projectiles(..)`;
+- pool full: every slot holds a live projectile;
+- an invalid field: the description has a non-finite position or velocity, a negative or
+  non-finite radius, drag or lifetime, or a gravity scale that is not finite. The message names the
+  field.
+
+The shot is dropped and the game continues.
+
+Fix: add `.projectiles(ProjectileConfig { .. })` to the builder, raise `ProjectileConfig::capacity`
+or shorten the shots' `lifetime`, or guard the maths that built the description (a division by
+zero, a normalise of a zero vector).",
+    },
+    CodeEntry {
+        code: code::PROJECTILE_CONFIG_INVALID,
+        severity: Severity::Error,
+        title: "projectile config is invalid",
+        explanation: "\
+A `ProjectileConfig` cannot build a pool. The message names the field:
+
+- `capacity` must be in `1..=1048576`;
+- `gravity` must be three finite numbers (m/s^2);
+- `ignore_layers` must name layers declared in the scene's `physics.layers`, and no name may be
+  empty.
+
+Raised by `Engine::builder().build()` for the first two and for an empty name, by a snapshot
+restore whose recorded config fails the same check, and, for an unknown layer name, by
+`projectiles_step` (reported once; the pool does not move until the name is fixed).
+
+Fix: correct the field the message names. An unknown layer is a typo against `physics.layers`.",
+    },
+    CodeEntry {
         code: code::AUDIO_DEVICE_UNAVAILABLE,
         severity: Severity::Warning,
         title: "no audio output device available",
@@ -11308,6 +11357,8 @@ mod tests {
         code::SIM_THREAD_STUCK,
         code::HASHED_NON_FINITE_FLOAT,
         code::BUDGET_LOAD_UNMEASURED,
+        code::PROJECTILE_SPAWN_REFUSED,
+        code::PROJECTILE_CONFIG_INVALID,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,
@@ -11480,6 +11531,7 @@ mod tests {
             code::IMPULSE_TARGET_INVALID,
             code::SPRITE_IMPORT_QUANTIZED,
             code::HASHED_NON_FINITE_FLOAT,
+            code::PROJECTILE_SPAWN_REFUSED,
             code::AUDIO_DEVICE_UNAVAILABLE,
             code::AUDIO_STREAM_FAILED,
             code::MUSIC_TRACK_UNPLAYABLE,

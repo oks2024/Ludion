@@ -82,6 +82,7 @@ mod present_blend;
 mod presentation;
 mod presenter;
 mod profile_capture;
+mod projectiles;
 mod quality;
 mod query_drift;
 mod ragdoll;
