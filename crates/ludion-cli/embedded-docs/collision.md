@@ -228,3 +228,4 @@ so a reader scheduled before the rebuild continues exactly.
 - `ludion docs tilemaps` — the `Tilemap` grid component.
 - `ludion docs recipes` — copyable patterns.
 - `ludion docs verify-loop` — the `cargo test` verification loop.
+- `ludion docs spatial-3d` — the 3D broadphase: `SpatialVolume`, swept-sphere cast, k-nearest.

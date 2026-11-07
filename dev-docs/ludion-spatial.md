@@ -1,12 +1,12 @@
 ---
-description: Deterministic 2D ground-plane collision — Collider, the spatial hash, pinned-order queries
+description: Deterministic 2D ground-plane collision (Collider, spatial hash) and the 3D BVH broadphase
 ---
 
 # ludion-spatial
 
-**Scope:** The `ludion-spatial` crate: the `Collider` builtin component, the per-frame
+**Scope:** The `ludion-spatial` crate, 2D and 3D. 2D: the `Collider` builtin component, the per-frame
 `SpatialIndex` broadphase and its `rebuild` system, the pinned-order queries
-(`overlaps`/`overlaps_any`/`raycast`/`k_nearest`), and the kinematic `move_and_slide`. For the determinism rules
+(`overlaps`/`overlaps_any`/`raycast`/`k_nearest`), and the kinematic `move_and_slide`. 3D: the `spatial3d` BVH (`SpatialVolume`, `Index3d`, `rebuild`; game-facing: `ludion docs spatial-3d`). For the determinism rules
 this crate enforces (and how) see `determinism`; for its position in the workspace see
 `crate-graph`; for authoring `Collider` in a scene and the game-facing walkthrough see the engine
 guide's "Collision and spatial queries" chapter. Read this when changing the crate; a game *using*
@@ -22,6 +22,8 @@ it needs only the guide chapter.
 - `crates/ludion-spatial/tests/conformance.rs` — double-run bit-identity, the brute-force O(n²) oracle (set AND order), tie-break cases.
 - `crates/ludion-spatial/tests/slide.rs` — `move_and_slide` behavior/edge cases, its oracle, the two-run `WorldHash`-trace test (dev-dep on `ludion-sim`).
 - `crates/ludion-spatial/tests/e6_bench.rs` — the ignored release-mode E6 microbench (run explicitly; asserts the recorded 1.5 ms sub-budget).
+- `crates/ludion-spatial/src/spatial3d/` — the 3D index: `mod.rs` (types, `build`), `query.rs` (the four queries), `narrow.rs` (shape math), `volume.rs` (`SpatialVolume`, `L1339`), `system.rs` (`rebuild`, `push_entity_volumes`), `tests.rs`.
+- `crates/ludion-spatial/tests/spatial3d_hash.rs`, `crates/ludion-spatial/tests/spatial3d_bench.rs` — the thread-count identity gate; the ignored release microbench (asserts its recorded sub-budget, reports the casts' parallel and separate-index arms).
 - `crates/ludion-spatial/clippy.toml` — strict determinism denylist (see `determinism`).
 
 ## Rules
@@ -47,6 +49,11 @@ it needs only the guide chapter.
 - **`move_and_slide` resolves against `Static` colliders only, and is a pure read.** Kinematic-vs-
   kinematic response is game logic built on `k_nearest`. The game applies the returned delta to
   `Transform` itself — the only hashed write stays in game code, on the game's visible schedule.
+- **The 3D index has a pinned order and strict pruning.** `build` sorts into an order that depends
+  only on the item set; queries prune strictly with padded bounds, so a boundary touch is never lost
+  to rounding; `-0.0` is canonicalized before keys and tie-breaks; only the key pass runs on
+  `ludion_core::par` (fixed chunk), so results are thread-count-invariant. The index is not carried
+  by snapshots. Rationale: decision 10 in `Plan/phase-12-spatial.md`.
 - **No rigid-body dynamics.** No forces, no constraint solving, no depenetration (a mover starting
   inside a static resolves to zero delta). Games write response logic on the queries.
 - **Determinism denylist active** (own `clippy.toml`, verbatim from `ludion-sim`): no std hash
@@ -102,6 +109,7 @@ and the `SemanticValidate` hook rejects zero/non-finite sizes (`L1116`, with poi
 cargo test -p ludion-spatial
 cargo clippy -p ludion-spatial --all-targets -- -D warnings
 cargo test -p ludion-spatial --release --test e6_bench -- --ignored --nocapture
+cargo test -p ludion-spatial --release --test spatial3d_bench -- --ignored --nocapture
 cargo test -p ludion --test spatial_smoke
 ```
 
