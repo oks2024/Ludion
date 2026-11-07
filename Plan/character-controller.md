@@ -4,8 +4,9 @@
 > W2 holds the motor (`CharacterMotor`, `move_character`, `MoveReport`), `SurfaceVelocity`, resize and
 > teleport, platform carry, the numeric trace and the course (`ludion docs motor`, `games/character-course`). The fourth external request added
 > the lane constraint (`LaneConstraint`, `ludion docs lane`): a lateral hold to a `kind: path` corridor, and the fifth the
-> track camera rig (`CameraRig`, `ludion-camera`, `ludion docs camera`), proved on the course's behind and side rigs. `chase`, `follow`,
-> `manual`, occlusion, decisions 15–16 and the vigil migration remain open.
+> track camera rig (`CameraRig`, `ludion-camera`, `ludion docs camera`), proved on the course's behind and side rigs. A first-person game's
+> request added the `first_person` mode (look deltas, pitch clamp, `aim()`) and post-aim kick, roll and FOV channels. `chase`, `follow`,
+> occlusion, decision 16 and the vigil migration remain open; `manual` is dropped (decision 12, amended).
 > W1 holds mesh colliders, `kind: path` with its sampler queries, `PathFollower` (motion readout, wrap
 > teleports, `orient`) and world-space debug draw including the `colliders` category and `axes`. The
 > external platformer's first engine request drove its last additions, and its second shipped sensor
@@ -165,6 +166,8 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
       - trauma shake (deterministic, seeded).
     - Every mode exposes its target (entity or point) and offsets as fields.
     - An engine helper `camera_relative(stick, &rig)` maps input to world directions.
+    - **Amended (2026-11-06, the owner's ruling):** a dedicated `first_person` mode replaces `manual`. The engine owns
+      yaw and pitch so a presenter can late-latch look, and recoil, FOV kick and roll apply after aim, as shake does.
     - **Amended:** the game-written `grounded` hint steers the vertical anchor; `camera_relative` reads the
       yaw posed on the previous tick (the rig runs after game systems).
     - **Why:** a game shouldn't recode the common case, and shouldn't recode everything because the rig
