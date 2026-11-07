@@ -3543,6 +3543,196 @@ impl SemanticValidate for ViewmodelLens {
     }
 }
 
+/// A navigating agent. A game writes `target` each tick; `nav_steer` (in `ludion-engine`) writes the
+/// desired velocity into [`NavSteering`]. A walking agent follows the shared flow field toward its
+/// target; a flying one seeks it in 3D. Both add separation from their `spatial3d` neighbours. The
+/// game's own mover applies the velocity. Every field defaults and is omitted from text at its
+/// default; `NavAgent: {}` is the default agent.
+///
+/// `speed`, `arrive_radius`, `separation_radius` and `separation_strength` are finite and not
+/// negative; `separation_neighbors` is at most 16. A field out of range is `L1340`. `neighbor_layers`
+/// is the `Index3d` layer mask the neighbours are read from; `0` turns separation off.
+///
+/// ```yaml
+/// components:
+///   NavAgent:
+///     speed: 3.5
+///     neighbor_layers: 2
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct NavAgent {
+    /// World position the agent heads for (default the origin).
+    #[serde(default, skip_serializing_if = "is_zero_vec3")]
+    pub target: [f32; 3],
+    /// Desired speed, metres per second (default `4`).
+    #[serde(
+        default = "nav_speed_default",
+        skip_serializing_if = "is_nav_speed_default"
+    )]
+    pub speed: f32,
+    /// A flyer seeks in 3D and never reads the nav grid (default `false`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flying: bool,
+    /// Inside this distance of the target the seek is zero; horizontal for a walker, 3D for a flyer
+    /// (default `0.5`).
+    #[serde(
+        default = "nav_arrive_default",
+        skip_serializing_if = "is_nav_arrive_default"
+    )]
+    pub arrive_radius: f32,
+    /// Neighbours closer than this push the agent away (default `0.75`).
+    #[serde(
+        default = "nav_sep_radius_default",
+        skip_serializing_if = "is_nav_sep_radius_default"
+    )]
+    pub separation_radius: f32,
+    /// Speed of the separation push, per summed unit of overlap (default `2`).
+    #[serde(
+        default = "nav_sep_strength_default",
+        skip_serializing_if = "is_nav_sep_strength_default"
+    )]
+    pub separation_strength: f32,
+    /// Most neighbours considered, at most 16 (default `4`).
+    #[serde(
+        default = "nav_sep_neighbors_default",
+        skip_serializing_if = "is_nav_sep_neighbors_default"
+    )]
+    pub separation_neighbors: u32,
+    /// `Index3d` layer mask the neighbours come from; `0` disables separation (default all bits).
+    #[serde(
+        default = "nav_neighbor_layers_default",
+        skip_serializing_if = "is_nav_neighbor_layers_default"
+    )]
+    pub neighbor_layers: u32,
+}
+
+/// Most separation neighbours a [`NavAgent`] may ask for.
+pub const NAV_AGENT_MAX_NEIGHBORS: u32 = 16;
+
+impl Default for NavAgent {
+    fn default() -> Self {
+        NavAgent {
+            target: [0.0; 3],
+            speed: nav_speed_default(),
+            flying: false,
+            arrive_radius: nav_arrive_default(),
+            separation_radius: nav_sep_radius_default(),
+            separation_strength: nav_sep_strength_default(),
+            separation_neighbors: nav_sep_neighbors_default(),
+            neighbor_layers: nav_neighbor_layers_default(),
+        }
+    }
+}
+
+fn is_zero_vec3(value: &[f32; 3]) -> bool {
+    value.iter().all(|c| c.to_bits() == 0)
+}
+fn nav_speed_default() -> f32 {
+    4.0
+}
+fn nav_arrive_default() -> f32 {
+    0.5
+}
+fn nav_sep_radius_default() -> f32 {
+    0.75
+}
+fn nav_sep_strength_default() -> f32 {
+    2.0
+}
+fn nav_sep_neighbors_default() -> u32 {
+    4
+}
+fn nav_neighbor_layers_default() -> u32 {
+    u32::MAX
+}
+fn is_nav_speed_default(value: &f32) -> bool {
+    value.to_bits() == nav_speed_default().to_bits()
+}
+fn is_nav_arrive_default(value: &f32) -> bool {
+    value.to_bits() == nav_arrive_default().to_bits()
+}
+fn is_nav_sep_radius_default(value: &f32) -> bool {
+    value.to_bits() == nav_sep_radius_default().to_bits()
+}
+fn is_nav_sep_strength_default(value: &f32) -> bool {
+    value.to_bits() == nav_sep_strength_default().to_bits()
+}
+fn is_nav_sep_neighbors_default(value: &u32) -> bool {
+    *value == nav_sep_neighbors_default()
+}
+fn is_nav_neighbor_layers_default(value: &u32) -> bool {
+    *value == nav_neighbor_layers_default()
+}
+
+impl SemanticValidate for NavAgent {
+    /// Rejects a non-finite `target` component (`/target/{i}`), a `speed`, `arrive_radius`,
+    /// `separation_radius` or `separation_strength` that is negative or non-finite, and
+    /// `separation_neighbors` above 16 (`L1340`). An absent field is its default and adds nothing.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        let mut reject = |pointer: String, what: String| {
+            out.push(
+                Diagnostic::new(code::NAV_AGENT_INVALID, what)
+                    .with_path(pointer)
+                    .with_help("use a finite, non-negative value; `ludion explain L1340`"),
+            );
+        };
+        if let Some(items) = value.get("target").and_then(Value::as_array) {
+            for (i, item) in items.iter().enumerate() {
+                if let Some(n) = as_stored_f32(item)
+                    && !n.is_finite()
+                {
+                    reject(
+                        format!("/target/{i}"),
+                        format!("the `NavAgent` target component {i} must be finite"),
+                    );
+                }
+            }
+        }
+        for field in [
+            "speed",
+            "arrive_radius",
+            "separation_radius",
+            "separation_strength",
+        ] {
+            if let Some(n) = value.get(field).and_then(as_stored_f32)
+                && (!n.is_finite() || n < 0.0)
+            {
+                reject(
+                    format!("/{field}"),
+                    format!("the `NavAgent` field `/{field}` must be finite and not negative"),
+                );
+            }
+        }
+        if let Some(n) = value.get("separation_neighbors").and_then(Value::as_u64)
+            && n > u64::from(NAV_AGENT_MAX_NEIGHBORS)
+        {
+            reject(
+                "/separation_neighbors".to_string(),
+                format!(
+                    "`NavAgent` `separation_neighbors` is {n}, above the limit of {NAV_AGENT_MAX_NEIGHBORS}"
+                ),
+            );
+        }
+        out
+    }
+}
+
+/// The desired velocity `nav_steer` computed for a [`NavAgent`] this tick, in metres per second:
+/// the seek toward its target plus separation. The game's mover reads it and moves the entity;
+/// nothing else applies it. Defaults to zero.
+///
+/// ```yaml
+/// components:
+///   NavSteering: {}
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq)]
+pub struct NavSteering {
+    /// Desired velocity, world axes (default zero).
+    #[serde(default, skip_serializing_if = "is_zero_vec3")]
+    pub velocity: [f32; 3],
+}
+
 impl SemanticValidate for Text {
     /// `color` is an HDR colour (`L1263`); `size`, the world height of one line, is a strictly
     /// positive, finite number (`L1118`, pointer `/size`). An absent `size` (default `1.0`) adds
@@ -5717,6 +5907,13 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<SpatialVolume>("SpatialVolume")
         .expect("unique");
+    // The navigation agent and its steering output, appended after `SpatialVolume`.
+    registry
+        .register_validated::<NavAgent>("NavAgent")
+        .expect("unique");
+    registry
+        .register::<NavSteering>("NavSteering")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -5725,7 +5922,7 @@ pub fn builtin_registry() -> Registry {
 }
 
 /// The built-ins whose engine-owned consumer is a sim-phase system.
-const SIM_ONLY_COMPONENTS: [&str; 11] = [
+const SIM_ONLY_COMPONENTS: [&str; 13] = [
     "Collider",
     "Velocity",
     "Joint",
@@ -5737,6 +5934,8 @@ const SIM_ONLY_COMPONENTS: [&str; 11] = [
     "PathFollower",
     "CameraRig",
     "SpatialVolume",
+    "NavAgent",
+    "NavSteering",
 ];
 
 #[cfg(test)]
@@ -5766,6 +5965,8 @@ mod tests {
             "PathFollower",
             "CameraRig",
             "SpatialVolume",
+            "NavAgent",
+            "NavSteering",
         ];
         expected.sort_unstable();
         assert_eq!(marked, expected);
@@ -6154,12 +6355,14 @@ mod tests {
                 "Viewmodel",
                 "ViewmodelLens",
                 "SpatialVolume",
+                "NavAgent",
+                "NavSteering",
             ]
         );
         assert_eq!(
             registry.len(),
-            48,
-            "appending SpatialVolume grows the registry to 48"
+            50,
+            "appending NavAgent and NavSteering grows the registry to 50"
         );
     }
 
@@ -7496,6 +7699,48 @@ mod tests {
         );
     }
 
+    /// `NavAgent: {}` is the default and the default serializes back to `{}`; each invalid field is
+    /// `L1340` at its own pointer.
+    #[test]
+    fn nav_agent_defaults_round_trip_and_invalid_fields_report() {
+        let agent: NavAgent = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(agent, NavAgent::default());
+        assert_eq!(serde_json::to_value(agent).unwrap(), serde_json::json!({}));
+        let steering = serde_json::to_value(NavSteering::default()).unwrap();
+        assert_eq!(steering, serde_json::json!({}));
+        let default = serde_json::to_value(NavAgent::default()).unwrap();
+        assert!(NavAgent::validate_semantics(&default).is_empty());
+        let cases = [
+            ("speed", serde_json::json!(-1.0), "/speed"),
+            ("arrive_radius", serde_json::json!(-0.1), "/arrive_radius"),
+            (
+                "separation_radius",
+                serde_json::json!(1e40),
+                "/separation_radius",
+            ),
+            (
+                "separation_strength",
+                serde_json::json!(-2.0),
+                "/separation_strength",
+            ),
+            (
+                "separation_neighbors",
+                serde_json::json!(17),
+                "/separation_neighbors",
+            ),
+            ("target", serde_json::json!([0.0, 1e40, 0.0]), "/target/1"),
+        ];
+        for (field, bad, pointer) in cases {
+            let found = NavAgent::validate_semantics(&serde_json::json!({ field: bad }));
+            assert_eq!(found.len(), 1, "{field}: {found:?}");
+            assert_eq!(found[0].code, code::NAV_AGENT_INVALID);
+            assert_eq!(found[0].path.as_deref(), Some(pointer));
+        }
+        let edge =
+            serde_json::json!({ "speed": 0.0, "separation_neighbors": 16, "neighbor_layers": 0 });
+        assert!(NavAgent::validate_semantics(&edge).is_empty());
+    }
+
     /// A component authored with nothing but its defaults is never refused by the colour rules.
     #[test]
     fn default_colours_validate_clean() {
@@ -7512,6 +7757,7 @@ mod tests {
         clean::<CameraOffset>("CameraOffset");
         clean::<ViewmodelLens>("ViewmodelLens");
         clean::<SpatialVolume>("SpatialVolume");
+        clean::<NavAgent>("NavAgent");
         clean::<ReflectionProbe>("ReflectionProbe");
         clean::<ludion_physics::CharacterMotor>("CharacterMotor");
         clean::<ludion_physics::SurfaceVelocity>("SurfaceVelocity");

@@ -59,3 +59,14 @@ fn end_frame_evicts_unused_targets_in_stable_order() {
     assert_eq!(cache.targets().collect::<Vec<_>>(), vec![ids[0], ids[2]]);
     assert_eq!(cache.computes(), 3);
 }
+
+#[test]
+fn get_reads_a_cached_field_without_computing() {
+    let grid = NavGrid::build(params(8, 8), &open());
+    let mut cache = FlowCache::new(f32::INFINITY);
+    let t = grid.node_at(at(2, 2, 0.0)).unwrap();
+    assert!(cache.get(t).is_none());
+    cache.field(&grid, t);
+    assert!(cache.get(t).is_some());
+    assert_eq!(cache.computes(), 1);
+}

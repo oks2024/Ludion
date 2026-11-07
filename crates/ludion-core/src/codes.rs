@@ -1639,6 +1639,8 @@ pub mod code {
 
     /// `L1339` — a `SpatialVolume` has a non-positive or non-finite size, or no layer bit.
     pub const SPATIAL_VOLUME_INVALID: DiagnosticCode = DiagnosticCode::new("L1339");
+    /// `L1340` — a `NavAgent` has a non-finite or negative field, or too many separation neighbours.
+    pub const NAV_AGENT_INVALID: DiagnosticCode = DiagnosticCode::new("L1340");
 
     /// `L1390` — a prefab document's `entities` list is empty, so an instance would spawn nothing.
     pub const PREFAB_EMPTY: DiagnosticCode = DiagnosticCode::new("L1390");
@@ -8162,6 +8164,18 @@ refused.
 Fix: give the radius and every half extent a value above 0, and set at least one bit in `layers`.",
     },
     CodeEntry {
+        code: code::NAV_AGENT_INVALID,
+        severity: Severity::Error,
+        title: "a nav agent is invalid",
+        explanation: "\
+A `NavAgent` field is out of range (pointer `/entities/{i}/components/NavAgent/{field}`): `target` has a
+non-finite component, `speed`, `arrive_radius`, `separation_radius` or `separation_strength` is negative or
+not finite, or `separation_neighbors` is above 16. A scene with one is refused.
+
+Fix: write a finite, non-negative value, and at most 16 separation neighbours, or omit the field to take
+its default.",
+    },
+    CodeEntry {
         code: code::PREFAB_EMPTY,
         severity: Severity::Error,
         title: "a prefab has no parts",
@@ -11346,6 +11360,7 @@ mod tests {
         code::VIEWMODEL_LENS_NOT_ON_CAMERA,
         code::VIEWMODEL_LENS_INVALID,
         code::SPATIAL_VOLUME_INVALID,
+        code::NAV_AGENT_INVALID,
         code::PREFAB_EMPTY,
         code::GENERATION_JOBS_UNKNOWN,
         code::ENTITY_REF_IN_COLLECTION,

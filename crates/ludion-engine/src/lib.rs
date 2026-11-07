@@ -138,11 +138,11 @@ pub use commands::sim::step_in_batches;
 pub use components::{
     Anchor, Animation, AudioEmitter, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, EmitShape, Environment, Fade, GiDynamic,
-    GiVolume, GroundMarker, GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, Name,
-    PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter, PointLight,
-    PostProcess, ProbeShape, Projection, ReflectionProbe, Residue, SkinBone, SpotLight, Sprite,
-    SpriteBlend, Text, TileAppearance, Tilemap, Transform, UiList, UiListItem, UiRect, UiText,
-    Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
+    GiVolume, GroundMarker, GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, Name, NavAgent,
+    NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter,
+    PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Residue, SkinBone, SpotLight,
+    Sprite, SpriteBlend, Text, TileAppearance, Tilemap, Transform, UiList, UiListItem, UiRect,
+    UiText, Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
 };
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
@@ -190,7 +190,7 @@ pub use motor::{
     MOTOR_STUCK, MOTOR_WALL, fits_character, move_character, move_character_with,
     probe_character_ground, resize_character, teleport_character,
 };
-pub use nav::{Nav, NavConfig, nav_update};
+pub use nav::{Nav, NavConfig, nav_steer, nav_update};
 pub use parent_joint::{posed_joint_world, scene_parent_joint_diagnostics};
 pub use path_follow::{
     FollowerMotion, PathFollower, PathMode, PathOrient, path_follow, path_follower_motion,

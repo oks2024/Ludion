@@ -5,11 +5,14 @@ use ludion_core::codes::code;
 use ludion_core::par;
 use ludion_ecs::World;
 use ludion_engine::diagnostics::Diagnostics;
-use ludion_engine::{Engine, Nav, NavConfig, Transform, nav_update};
+use ludion_engine::{
+    Engine, Nav, NavAgent, NavConfig, NavSteering, Transform, TransformHierarchy, nav_steer,
+    nav_update,
+};
 use ludion_nav::{NEIGHBORS, NavGrid, NodeId};
 use ludion_protocol::command::EngineRestoreParams;
 use ludion_protocol::{Command, ResponseBody};
-use ludion_spatial::{Body, Collider, Shape};
+use ludion_spatial::{Body, Collider, Shape, spatial3d};
 use serde_json::Value;
 
 /// One static box: centre, half extents, Euler rotation in degrees.
@@ -459,4 +462,276 @@ fn a_bad_config_names_its_field() {
         assert_eq!(error.path.as_deref(), Some(path), "{error:?}");
         assert!(Engine::builder().nav(bad).build().is_err(), "{path}");
     }
+}
+
+// --- Agents: `NavAgent` -> `nav_steer` -> `NavSteering` -------------------------------------------
+
+const DECK: [f32; 3] = [20.5, 2.0, 12.5];
+
+/// One agent entity: `fields` is the `NavAgent` body, already indented by 8 spaces.
+fn agent(n: usize, at: [f32; 3], fields: &str) -> String {
+    let mut out =
+        format!("  - name: a{n}\n    components:\n      Transform:\n        translation:\n");
+    out += &seq(at, 10);
+    out += "      SpatialVolume:\n        layers: 2\n      NavAgent:\n";
+    out += fields;
+    out
+}
+
+fn target_yaml(target: [f32; 3]) -> String {
+    format!("        target:\n{}", seq(target, 10))
+}
+
+/// Thirty walkers on the low floor, all heading for the deck.
+fn crowd(blocks: &[Block]) -> String {
+    let mut out = scene(blocks);
+    let fields = format!(
+        "        speed: 6.0\n        neighbor_layers: 2\n{}",
+        target_yaml(DECK)
+    );
+    for n in 0..30 {
+        let at = [2.0 + 1.2 * (n % 6) as f32, 0.0, 8.0 + 1.2 * (n / 6) as f32];
+        out += &agent(n, at, &fields);
+    }
+    out
+}
+
+/// Applies each agent's steering: `xz += velocity * dt`, `y` from the grid node under it.
+fn mover(world: &mut World, ctx: &ludion_ecs::SystemCtx) {
+    let moves: Vec<_> = world
+        .query_ids::<(&Transform, &NavSteering)>()
+        .map(|(id, (t, s))| (id, t.translation, s.velocity))
+        .collect();
+    for (id, at, v) in moves {
+        let mut next = [at[0] + v[0] * ctx.dt, at[1], at[2] + v[2] * ctx.dt];
+        if let Some(grid) = world.resource::<Nav>().and_then(Nav::grid) {
+            // Probe a little above the agent so a ramp cell a slope-widened step up is found.
+            if let Some(node) = grid.node_at([next[0], at[1] + 0.6, next[2]]) {
+                next[1] = grid.node_pos(node)[1];
+            }
+        }
+        world.get_mut::<Transform>(id).unwrap().unwrap().translation = next;
+    }
+}
+
+fn steering_builder() -> ludion_engine::EngineBuilder {
+    Engine::builder()
+        .system(
+            "spatial3d_rebuild",
+            spatial3d::rebuild::<Transform, TransformHierarchy>,
+        )
+        .system("nav_update", nav_update)
+        .system("nav_steer", nav_steer)
+}
+
+fn chase_engine() -> Engine {
+    let mut engine = steering_builder()
+        .nav(config())
+        .system("mover", mover)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(&crowd(&ramp_room())).unwrap();
+    engine
+}
+
+fn trace(engine: &mut Engine, ticks: usize) -> Vec<u64> {
+    (0..ticks)
+        .map(|_| {
+            engine.advance_live();
+            engine.world_hash().unwrap().as_u64()
+        })
+        .collect()
+}
+
+fn velocities(engine: &mut Engine) -> Vec<[f32; 3]> {
+    let mut all: Vec<_> = engine
+        .world_mut()
+        .query_ids::<(&NavSteering,)>()
+        .map(|(id, (s,))| (id, s.velocity))
+        .collect();
+    all.sort_by_key(|(id, _)| *id);
+    all.into_iter().map(|(_, v)| v).collect()
+}
+
+fn computes(engine: &mut Engine) -> u64 {
+    engine
+        .world_mut()
+        .resource_mut::<Nav>()
+        .unwrap()
+        .cache_mut()
+        .computes()
+}
+
+#[test]
+fn a_crowd_reaches_the_deck_and_repeats_bit_for_bit() {
+    let mut first = chase_engine();
+    let a = trace(&mut first, 300);
+    let b = trace(&mut chase_engine(), 300);
+    assert_eq!(a, b, "two fresh runs give the same per-tick hashes");
+    assert_ne!(a[0], a[299], "the crowd moved");
+    let arrived = first
+        .world_mut()
+        .query_ids::<(&Transform, &NavAgent)>()
+        .filter(|(_, (t, _))| {
+            let d = [t.translation[0] - DECK[0], t.translation[2] - DECK[2]];
+            (d[0] * d[0] + d[1] * d[1]).sqrt() < 2.0 && (t.translation[1] - 2.0).abs() < 1e-3
+        })
+        .count();
+    assert!(
+        arrived >= 25,
+        "{arrived} of 30 reached the deck by the ramp"
+    );
+}
+
+#[test]
+fn a_restore_mid_chase_continues_the_same_trace() {
+    let whole = trace(&mut chase_engine(), 200);
+
+    let mut first = chase_engine();
+    trace(&mut first, 80);
+    let snapshot = snapshot_of(&mut first);
+    let mut resumed = chase_engine();
+    resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
+    let tail = trace(&mut resumed, 120);
+    assert_eq!(tail, whole[80..], "the restored chase matches from tick 81");
+}
+
+#[test]
+fn the_chase_is_the_same_at_any_thread_count() {
+    let one = par::with_threads(1, || trace(&mut chase_engine(), 120));
+    let many = par::with_threads(8, || trace(&mut chase_engine(), 120));
+    assert_eq!(one, many);
+}
+
+#[test]
+fn agents_share_one_field_per_target_cell() {
+    let mut engine = steering_builder().nav(config()).build().expect("boots");
+    let mut yaml = scene(&ramp_room());
+    for n in 0..30 {
+        yaml += &agent(
+            n,
+            [2.0 + 0.5 * n as f32 % 8.0, 0.0, 8.0],
+            &format!("        neighbor_layers: 0\n{}", target_yaml(DECK)),
+        );
+    }
+    engine.load_inline_scene(&yaml).unwrap();
+    run(&mut engine, 3);
+    assert_eq!(computes(&mut engine), 1, "30 agents, one target cell");
+
+    let other = [4.5, 0.0, 20.5];
+    let ids: Vec<_> = engine
+        .world_mut()
+        .query_ids::<(&NavAgent,)>()
+        .map(|(id, _)| id)
+        .collect();
+    for (n, id) in ids.iter().enumerate() {
+        if n % 2 == 0 {
+            engine
+                .world_mut()
+                .get_mut::<NavAgent>(*id)
+                .unwrap()
+                .unwrap()
+                .target = other;
+        }
+    }
+    run(&mut engine, 1);
+    assert_eq!(computes(&mut engine), 2, "a second cell, a second field");
+
+    for id in &ids {
+        let agent = engine
+            .world_mut()
+            .get_mut::<NavAgent>(*id)
+            .unwrap()
+            .unwrap();
+        if agent.target == other {
+            agent.target = [4.9, 0.0, 20.1];
+        }
+    }
+    run(&mut engine, 3);
+    assert_eq!(
+        computes(&mut engine),
+        2,
+        "moving inside the cell recomputes nothing"
+    );
+}
+
+fn lone_scene(agents: &[(usize, [f32; 3], String)], blocks: &[Block]) -> String {
+    let mut yaml = scene(blocks);
+    for (n, at, fields) in agents {
+        yaml += &agent(*n, *at, fields);
+    }
+    yaml
+}
+
+#[test]
+fn a_flyer_heads_straight_for_its_target_with_or_without_nav() {
+    let fields = format!(
+        "        flying: true\n        speed: 5.0\n{}",
+        target_yaml([10.0, 1.0, 12.0])
+    );
+    let yaml = lone_scene(
+        &[(0, [4.0, 5.0, 12.0], fields)],
+        &[ground(), block([7.0, 2.0, 12.0], [0.5, 2.0, 4.0])],
+    );
+    for with_nav in [false, true] {
+        let builder = if with_nav {
+            steering_builder().nav(config())
+        } else {
+            Engine::builder()
+                .system(
+                    "spatial3d_rebuild",
+                    spatial3d::rebuild::<Transform, TransformHierarchy>,
+                )
+                .system("nav_steer", nav_steer)
+        };
+        let mut engine = builder.build().expect("boots");
+        engine.load_inline_scene(&yaml).unwrap();
+        run(&mut engine, 3);
+        let v = velocities(&mut engine)[0];
+        let want = [6.0 / 52f32.sqrt() * 5.0, -4.0 / 52f32.sqrt() * 5.0, 0.0];
+        for axis in 0..3 {
+            assert!(
+                (v[axis] - want[axis]).abs() < 1e-4,
+                "nav {with_nav}: {v:?} vs {want:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn neighbours_push_apart_and_layer_zero_turns_it_off() {
+    let pair = |layers: u32| {
+        let fields = format!(
+            "        arrive_radius: 100.0\n        neighbor_layers: {layers}\n{}",
+            target_yaml([10.0, 0.0, 12.0])
+        );
+        let yaml = lone_scene(
+            &[
+                (0, [10.0, 0.0, 12.0], fields.clone()),
+                (1, [10.4, 0.0, 12.0], fields),
+            ],
+            &[ground()],
+        );
+        let mut engine = steering_builder().nav(config()).build().expect("boots");
+        engine.load_inline_scene(&yaml).unwrap();
+        run(&mut engine, 3);
+        velocities(&mut engine)
+    };
+    let on = pair(2);
+    assert!(on[0][0] < 0.0 && on[1][0] > 0.0, "opposite pushes: {on:?}");
+    assert!((on[0][0] + on[1][0]).abs() < 1e-5);
+    assert_eq!((on[0][1], on[0][2]), (0.0, 0.0));
+    assert_eq!(pair(0), vec![[0.0; 3]; 2]);
+}
+
+#[test]
+fn walkers_are_still_before_the_grid_exists() {
+    let mut engine = chase_engine();
+    run(&mut engine, 1);
+    assert!(nav(&engine).grid().is_none());
+    let v = velocities(&mut engine);
+    assert_eq!(v.len(), 30);
+    assert!(v.iter().all(|v| *v == [0.0; 3]));
 }

@@ -62,6 +62,16 @@ impl FlowCache {
         &entry.field
     }
 
+    /// The cached field toward `target`, with no compute and no used-mark. Valid after
+    /// [`field`](FlowCache::field) ran for `target` on the current grid; lets many readers share
+    /// the cache through `&FlowCache`.
+    pub fn get(&self, target: NodeId) -> Option<&FlowField> {
+        self.entries
+            .iter()
+            .find(|e| e.target == target)
+            .map(|e| &e.field)
+    }
+
     /// The field toward the node under `p`, or `None` when `p` has no node.
     pub fn field_at(&mut self, grid: &NavGrid, p: [f32; 3]) -> Option<&FlowField> {
         let target = grid.node_at(p)?;

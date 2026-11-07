@@ -13,18 +13,25 @@
 //! are sampled over [`ludion_core::par`], each a pure function of the physics world and its
 //! coordinates, so the grid is identical at any thread count.
 
+use ludion_components::{NavAgent, NavSteering};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
+use ludion_core::ids::EntityId;
+use ludion_core::math::sqrt;
 use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
-use ludion_nav::{ColumnSource, FloorSample, FlowCache, GridParams, NavGrid};
+use ludion_nav::{ColumnSource, FloorSample, FlowCache, GridParams, NavGrid, NodeId};
 use ludion_physics::{PhysicsError, PhysicsWorld, QueryFilter, StaticBody};
 use ludion_spatial::Shape;
+use ludion_spatial::spatial3d::{Filter, Handle, Index3d, Neighbor};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::report_full;
+use crate::hierarchy::world_transform;
 
+/// Agents per parallel steering chunk.
+const STEER_CHUNK: usize = 64;
 /// Floors a column keeps at most (a down-walk stops here).
 const MAX_COLUMN_LAYERS: usize = 32;
 /// Columns per parallel chunk.
@@ -539,4 +546,179 @@ fn update(nav: &mut Nav, physics: &PhysicsWorld) -> Result<(), PhysicsError> {
     nav.full_rebuild = false;
     nav.rebuilds += 1;
     Ok(())
+}
+
+/// One agent as the steering phase sees it.
+struct Steer {
+    entity: EntityId,
+    agent: NavAgent,
+    pos: [f32; 3],
+    /// The walking agent's target node, `None` for a flyer or a target off the grid.
+    node: Option<NodeId>,
+}
+
+/// Writes every [`NavAgent`]'s desired velocity into its [`NavSteering`], in ascending entity order.
+///
+/// A walker follows the shared flow field toward its target (one field per target cell, whatever
+/// the agent count) and falls back to a straight line where the field has no direction; with no
+/// grid yet its seek is zero. A flyer seeks its target in 3D and never reads the grid. Both add a
+/// push away from their nearest [`Index3d`] neighbours on `neighbor_layers` (the walker's flat,
+/// the flyer's in 3D). Inside `arrive_radius` the seek is zero. The velocity is the whole result:
+/// the game's mover applies it.
+///
+/// Each agent is a pure function of the state at the start of the tick (neighbour centres come
+/// frozen from the index), computed over [`ludion_core::par`], so the result is identical at any
+/// thread count. **Schedule it** `spatial3d_rebuild` → [`nav_update`] → `nav_steer` → the game's
+/// mover. An agent with no world pose is skipped. A no-op for a game with no [`NavAgent`].
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Engine, NavConfig, nav_steer, nav_update};
+///
+/// let engine = Engine::builder()
+///     .nav(NavConfig::default())
+///     .system("nav_update", nav_update)
+///     .system("nav_steer", nav_steer)
+///     .build()
+///     .unwrap();
+/// # let _ = engine;
+/// ```
+pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
+    let mut agents: Vec<(EntityId, NavAgent)> = world
+        .query_ids::<(&NavAgent,)>()
+        .map(|(id, (agent,))| (id, *agent))
+        .collect();
+    if agents.is_empty() {
+        return;
+    }
+    agents.sort_by_key(|(entity, _)| *entity);
+    let mut steers: Vec<Steer> = agents
+        .into_iter()
+        .filter_map(|(entity, agent)| {
+            let pos = world_transform(world, entity)?.trs.translation;
+            Some(Steer {
+                entity,
+                agent,
+                pos,
+                node: None,
+            })
+        })
+        .collect();
+
+    let mut nav = world.remove_resource::<Nav>();
+    if let Some(nav) = nav.as_mut() {
+        let (grid, cache) = nav.parts();
+        if let Some(grid) = grid {
+            for steer in steers.iter_mut().filter(|s| !s.agent.flying) {
+                steer.node = grid.node_at(steer.agent.target);
+                if let Some(node) = steer.node {
+                    cache.field(grid, node);
+                }
+            }
+        }
+    }
+
+    let empty;
+    let index = match world.resource::<Index3d>() {
+        Some(index) => index,
+        None => {
+            let mut fallback = Index3d::new();
+            fallback.build();
+            empty = fallback;
+            &empty
+        }
+    };
+    let grid = nav.as_ref().and_then(Nav::grid);
+    let cache = nav.as_ref().map(|n| &n.cache);
+    let chunks = par::par_map_chunks(&steers, STEER_CHUNK, |_, chunk| {
+        let mut scratch: Vec<Neighbor> = Vec::new();
+        chunk
+            .iter()
+            .map(|steer| steer_one(steer, grid, cache, index, &mut scratch))
+            .collect::<Vec<[f32; 3]>>()
+    });
+
+    for (steer, velocity) in steers.iter().zip(chunks.into_iter().flatten()) {
+        match world.get_mut::<NavSteering>(steer.entity) {
+            Ok(Some(out)) => out.velocity = velocity,
+            _ => {
+                let _ = world.insert(steer.entity, NavSteering { velocity });
+            }
+        }
+    }
+    if let Some(mut nav) = nav {
+        nav.cache.end_frame();
+        world.insert_resource(nav);
+    }
+}
+
+fn steer_one(
+    steer: &Steer,
+    grid: Option<&NavGrid>,
+    cache: Option<&FlowCache>,
+    index: &Index3d,
+    scratch: &mut Vec<Neighbor>,
+) -> [f32; 3] {
+    let Steer {
+        entity, agent, pos, ..
+    } = steer;
+    let mut velocity = if agent.flying {
+        seek_flying(agent, *pos)
+    } else {
+        seek_walking(steer, grid, cache)
+    };
+    if agent.neighbor_layers != 0 && agent.separation_neighbors > 0 {
+        let filter = Filter::new(agent.neighbor_layers).excluding(Handle::entity(*entity));
+        index.k_nearest(
+            *pos,
+            agent.separation_neighbors as usize,
+            agent.separation_radius,
+            &filter,
+            scratch,
+        );
+        let mut push = [0.0f32; 3];
+        for n in scratch.iter() {
+            for (axis, p) in push.iter_mut().enumerate() {
+                *p += pos[axis] - n.center[axis];
+            }
+        }
+        if !agent.flying {
+            push[1] = 0.0;
+        }
+        for (v, p) in velocity.iter_mut().zip(push) {
+            *v += p * agent.separation_strength;
+        }
+    }
+    velocity
+}
+
+fn seek_flying(agent: &NavAgent, pos: [f32; 3]) -> [f32; 3] {
+    let to = [
+        agent.target[0] - pos[0],
+        agent.target[1] - pos[1],
+        agent.target[2] - pos[2],
+    ];
+    let d = sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]);
+    if d <= agent.arrive_radius || d <= 0.0 {
+        return [0.0; 3];
+    }
+    to.map(|c| c / d * agent.speed)
+}
+
+fn seek_walking(steer: &Steer, grid: Option<&NavGrid>, cache: Option<&FlowCache>) -> [f32; 3] {
+    let (agent, pos) = (&steer.agent, steer.pos);
+    let Some(grid) = grid else {
+        return [0.0; 3];
+    };
+    let to = [agent.target[0] - pos[0], agent.target[2] - pos[2]];
+    let d = sqrt(to[0] * to[0] + to[1] * to[1]);
+    if d <= agent.arrive_radius || d <= 0.0 {
+        return [0.0; 3];
+    }
+    let dir = steer
+        .node
+        .and_then(|node| cache?.get(node))
+        .and_then(|field| field.flow_at(grid, pos))
+        .unwrap_or([to[0] / d, to[1] / d]);
+    [dir[0] * agent.speed, 0.0, dir[1] * agent.speed]
 }

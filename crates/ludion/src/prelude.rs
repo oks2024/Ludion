@@ -97,7 +97,9 @@
 //!   its `Response` and `HitEvent` do not clash.
 //! - **Navigation** — the opt-in walkability grid built from the static physics colliders:
 //!   `Engine::builder().nav(`[`NavConfig`]`)` and [`nav_update`] scheduled before whatever reads the
-//!   [`Nav`] resource. The `ludion::nav` module (not in the prelude, which would clash with a game's own `nav`) holds the grid and flow-field types (`NavGrid`,
+//!   [`Nav`] resource. A [`NavAgent`] entity gets its desired velocity in [`NavSteering`] from [`nav_steer`]
+//!   (scheduled after `nav_update`, before the game's mover): a flow-field seek for a walker, a 3D seek for a
+//!   flyer, plus separation from `spatial3d` neighbours. The `ludion::nav` module (not in the prelude, which would clash with a game's own `nav`) holds the grid and flow-field types (`NavGrid`,
 //!   `FlowCache`, `FlowField`).
 //! - **Rigid-body dynamics** — the second tier of the same [`Collider`] surface: a 3D [`Shape`] or
 //!   `body: rigid` (with [`RigidBody`] and its [`AxisLock`]; a static or kinematic body takes a
@@ -209,21 +211,21 @@ pub use ludion_engine::{
     KickConfig, LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF, LANE_ON,
     LANE_PATH, LaneConstraint, LaneEnds, LaneInput, LookAhead, MOTOR_AIRBORNE, MOTOR_CARRY,
     MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE, MOTOR_STUCK, MOTOR_WALL,
-    MapWrap, Mesh, MeshGrid, MeshSource, MotionSegment, Name, Nav, NavConfig, NoInterpolate,
-    PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter, PathDocument, PathFollower,
-    PathFrame, PathInterpolation, PathMetric, PathMode, PathOrient, PathSampler, PatternDoc,
-    PatternPlayer, PointLight, PostProcess, PrefabApplied, PrefabInstance, PrefabReverted,
-    ProbeShape, Profile, ProjectileConfig, ProjectileLook, ProjectileVisual, ProjectileVisuals,
-    Projectiles, Projection, RampSpec, ReflectionProbe, RenderExtent, RenderSettings, Residue,
-    ResidueStore, RigConfig, RigMode, RigState, SceneSwitch, ShakeConfig, Shutdown, SpotLight,
-    Springs, Sprite, SpriteBlend, SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry, TrackRig,
-    Transform, TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect, UiText,
-    VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Volley,
+    MapWrap, Mesh, MeshGrid, MeshSource, MotionSegment, Name, Nav, NavAgent, NavConfig,
+    NavSteering, NoInterpolate, PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend, ParticleEmitter,
+    PathDocument, PathFollower, PathFrame, PathInterpolation, PathMetric, PathMode, PathOrient,
+    PathSampler, PatternDoc, PatternPlayer, PointLight, PostProcess, PrefabApplied, PrefabInstance,
+    PrefabReverted, ProbeShape, Profile, ProjectileConfig, ProjectileLook, ProjectileVisual,
+    ProjectileVisuals, Projectiles, Projection, RampSpec, ReflectionProbe, RenderExtent,
+    RenderSettings, Residue, ResidueStore, RigConfig, RigMode, RigState, SceneSwitch, ShakeConfig,
+    Shutdown, SpotLight, Springs, Sprite, SpriteBlend, SwitchTo, Text, TileAppearance, Tilemap,
+    TimelineEntry, TrackRig, Transform, TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect,
+    UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Volley,
     VolleyCenter, VolleyShape, WorldPose, add_fov_kick, add_kick, add_look, add_look_counts,
     add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
     bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw,
     first_person_eye, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
-    move_character, move_character_with, nav_update, path_follow, path_follower_motion,
+    move_character, move_character_with, nav_steer, nav_update, path_follow, path_follower_motion,
     play_patterns, play_sound, posed_joint_world, probe_character_ground, projectiles_step,
     reparent, report_diagnostic, report_full_diagnostic, resize_character, revert_prefab,
     set_clip_speed, set_look, snap_rig, spawn_prefab, spawn_projectile, switch_to_ragdoll,

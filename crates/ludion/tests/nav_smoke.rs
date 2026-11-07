@@ -23,6 +23,18 @@ const SCENE: &str = concat!(
     "              - 0.5\n",
     "              - 4.0\n",
     "        body: static\n",
+    "  - name: agent\n",
+    "    components:\n",
+    "      Transform:\n",
+    "        translation:\n",
+    "          - 6.5\n",
+    "          - 0.0\n",
+    "          - 6.5\n",
+    "      NavAgent:\n",
+    "        target:\n",
+    "          - 0.5\n",
+    "          - 0.0\n",
+    "          - 0.5\n",
 );
 
 #[test]
@@ -34,6 +46,7 @@ fn a_floor_becomes_a_flow_field_through_the_facade() {
             ..NavConfig::default()
         })
         .system("nav_update", nav_update)
+        .system("nav_steer", nav_steer)
         .build()
         .expect("the game builds");
     engine.load_inline_scene(SCENE).expect("the scene loads");
@@ -51,5 +64,33 @@ fn a_floor_becomes_a_flow_field_through_the_facade() {
     assert!(
         flow[0] < 0.0 && flow[1] < 0.0,
         "toward the corner: {flow:?}"
+    );
+}
+
+#[test]
+fn a_nav_agent_gets_a_steering_velocity_through_the_facade() {
+    let mut engine = Engine::builder()
+        .nav(NavConfig {
+            nx: 8,
+            nz: 8,
+            ..NavConfig::default()
+        })
+        .system("nav_update", nav_update)
+        .system("nav_steer", nav_steer)
+        .build()
+        .expect("the game builds");
+    engine.load_inline_scene(SCENE).expect("the scene loads");
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+    let velocities: Vec<[f32; 3]> = engine
+        .world_mut()
+        .query_ids::<(&NavSteering,)>()
+        .map(|(_, (steering,))| steering.velocity)
+        .collect();
+    assert_eq!(velocities.len(), 1);
+    assert!(
+        velocities[0][0] < 0.0 && velocities[0][2] < 0.0,
+        "toward the corner: {velocities:?}"
     );
 }

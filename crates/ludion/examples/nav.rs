@@ -3,9 +3,11 @@
 //! `.nav(..)` opts in; `nav_update` samples the grid from the static physics colliders (a floor, a
 //! 2 m deck and a ramp joining them) and keeps it current when a static changes. A game asks the
 //! [`Nav`] resource's cache for the flow field toward a target, then follows the direction at an
-//! agent's position.
+//! agent's position. Two `NavAgent` entities chase a point on the deck: `nav_steer` writes each one's
+//! desired velocity into `NavSteering`, and the game's own mover would apply it.
 //!
-//! Run it headless (prints the node count and the flow at the bottom of the ramp):
+//! Run it headless (prints the node count, the flow at the bottom of the ramp and each agent's
+//! steering):
 //!
 //! ```text
 //! cargo run -p ludion --example nav
@@ -26,6 +28,7 @@ fn game() -> EngineBuilder {
             ..NavConfig::default()
         })
         .system("nav_update", nav_update)
+        .system("nav_steer", nav_steer)
 }
 
 /// The flow direction `(dx, dz)` toward `target` at `from`, from the shared field of the target's cell.
@@ -94,6 +97,30 @@ entities:
               - 0.1
               - 2.0
         body: static
+  - name: agent-a
+    components:
+      Transform:
+        translation:
+          - 4.0
+          - 0.0
+          - 12.5
+      NavAgent:
+        target:
+          - 20.5
+          - 2.0
+          - 12.5
+  - name: agent-b
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 0.0
+          - 9.5
+      NavAgent:
+        target:
+          - 20.5
+          - 2.0
+          - 12.5
 ";
 
 fn main() -> ExitCode {
@@ -122,5 +149,8 @@ fn main() -> ExitCode {
     println!("walkable nodes: {nodes:?}");
     let flow = flow_toward(engine.world_mut(), [20.5, 2.0, 12.5], [8.5, 0.0, 12.5]);
     println!("flow at the foot of the ramp toward the deck: {flow:?}");
+    for (_, (steering,)) in engine.world_mut().query_ids::<(&NavSteering,)>() {
+        println!("agent steering: {:?}", steering.velocity);
+    }
     ExitCode::SUCCESS
 }

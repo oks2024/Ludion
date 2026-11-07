@@ -3323,6 +3323,78 @@
     "description": "An entity's human-readable name — the world-side home of a scene entity's `name:` field.\n\nThis is a **reserved** component ([`Registry::register_reserved`]): a scene document authors it\nonly through the entity `name:` field, never as a `components:` block, so there is exactly one\nway to name an entity (the regularity pillar). The engine moves the field into a `Name` at load\nand back out to the field at save (`Engine::world_to_scene`); it is otherwise an\nordinary component — it enters the world hash and snapshots, and `component.get` reads it back.",
     "type": "string"
   },
+  "NavAgent": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "NavAgent",
+    "description": "A navigating agent. A game writes `target` each tick; `nav_steer` (in `ludion-engine`) writes the\ndesired velocity into [`NavSteering`]. A walking agent follows the shared flow field toward its\ntarget; a flying one seeks it in 3D. Both add separation from their `spatial3d` neighbours. The\ngame's own mover applies the velocity. Every field defaults and is omitted from text at its\ndefault; `NavAgent: {}` is the default agent.\n\n`speed`, `arrive_radius`, `separation_radius` and `separation_strength` are finite and not\nnegative; `separation_neighbors` is at most 16. A field out of range is `L1340`. `neighbor_layers`\nis the `Index3d` layer mask the neighbours are read from; `0` turns separation off.\n\n```yaml\ncomponents:\n  NavAgent:\n    speed: 3.5\n    neighbor_layers: 2\n```",
+    "type": "object",
+    "properties": {
+      "target": {
+        "description": "World position the agent heads for (default the origin).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "speed": {
+        "description": "Desired speed, metres per second (default `4`).",
+        "type": "number",
+        "format": "float"
+      },
+      "flying": {
+        "description": "A flyer seeks in 3D and never reads the nav grid (default `false`).",
+        "type": "boolean"
+      },
+      "arrive_radius": {
+        "description": "Inside this distance of the target the seek is zero; horizontal for a walker, 3D for a flyer\n(default `0.5`).",
+        "type": "number",
+        "format": "float"
+      },
+      "separation_radius": {
+        "description": "Neighbours closer than this push the agent away (default `0.75`).",
+        "type": "number",
+        "format": "float"
+      },
+      "separation_strength": {
+        "description": "Speed of the separation push, per summed unit of overlap (default `2`).",
+        "type": "number",
+        "format": "float"
+      },
+      "separation_neighbors": {
+        "description": "Most neighbours considered, at most 16 (default `4`).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "neighbor_layers": {
+        "description": "`Index3d` layer mask the neighbours come from; `0` disables separation (default all bits).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      }
+    }
+  },
+  "NavSteering": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "NavSteering",
+    "description": "The desired velocity `nav_steer` computed for a [`NavAgent`] this tick, in metres per second:\nthe seek toward its target plus separation. The game's mover reads it and moves the entity;\nnothing else applies it. Defaults to zero.\n\n```yaml\ncomponents:\n  NavSteering: {}\n```",
+    "type": "object",
+    "properties": {
+      "velocity": {
+        "description": "Desired velocity, world axes (default zero).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      }
+    }
+  },
   "Parent": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Parent",
