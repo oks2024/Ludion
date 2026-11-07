@@ -7,7 +7,8 @@ description: ParticleEmitter — the analytic particle effect, its fields, firin
 **Scope:** `ParticleEmitter` — a visual effect described by numbers, not entities: a plume, a burst, a
 spill of sparks. Registering/defaulting components in general is `ludion docs components`; the other
 scene-pass analytic primitive it draws alongside is `ludion docs ground-telegraphs`; HDR colour and
-bloom are `ludion docs post-processing`.
+bloom are `ludion docs post-processing`; a muzzle flash that follows a first-person gun is
+`ludion docs viewmodel`.
 
 ## The loop
 

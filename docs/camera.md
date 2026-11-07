@@ -124,7 +124,7 @@ Runnable: `crates/ludion/examples/first_person_kick.rs`.
 
 ## The frame's resolved camera
 
-`ludion_camera::resolved_camera(rig, target, extra_look_deg) -> Option<ResolvedCamera { aim, view }>` is the one seam that turns a rig's last pose into the frame's camera: extra look, then `aim`, then the post-aim stage (kick, roll, FOV channels, shake). `step_rig` returns `resolved_camera(.., [0, 0]).view`; a presenter latching fresher mouse motion calls it with the look accumulated since the tick. The viewmodel and muzzle convergence read it too.
+`ludion_camera::resolved_camera(rig, target, extra_look_deg) -> Option<ResolvedCamera { aim, view }>` is the one seam that turns a rig's last pose into the frame's camera: extra look, then `aim`, then the post-aim stage (kick, roll, FOV channels, shake). `step_rig` returns `resolved_camera(.., [0, 0]).view`; a presenter latching fresher mouse motion calls it with the look accumulated since the tick. The viewmodel and muzzle convergence read it too; the gun itself is `ludion docs viewmodel`.
 
 - `[0, 0]` is the tick's camera bit for bit; `None` before the first pose.
 - Extra look `[yaw, pitch]` (degrees, signs as `look_deg`) applies to a `first_person` rig only, and not while a blend runs; otherwise it is ignored. Pitch clamps to `pitch_limit_deg`, the eye follows the new yaw, and kick, roll, FOV and shake apply on top.

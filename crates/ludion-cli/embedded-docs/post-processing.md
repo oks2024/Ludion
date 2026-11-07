@@ -108,7 +108,8 @@ anisotropy.
 **Ambient occlusion**
 
 - **`ssao`** — how much of the estimate to apply, `[0, 1]` (default `0.0` — off, and the gate). Above
-  zero, three passes are prepended to the frame; at zero none is built.
+  zero, three passes are prepended to the frame; at zero none is built. SSAO, SSR and DoF skip a
+  first-person viewmodel's pixels: `ludion docs viewmodel`.
 - **`ssao_radius`** — the sampling hemisphere in **world units**, `>= 0` (default `0.5`), which is
   what makes the effect identical at any resolution and any render scale.
 - **`ssao_bias`** — the world-space depth a sample must clear before it counts as occluded, `>= 0`
