@@ -1923,6 +1923,7 @@ impl Renderer {
             camera_bg,
             camera_skin_bg,
             viewmodel_camera_skin_bg,
+            viewmodel_slice: scene.viewmodel.as_ref().map_or(0.0, |v| v.depth_slice),
             bone_palette_buf,
             lights_bg,
             probe_list_buf,
@@ -3388,6 +3389,9 @@ struct FrameRecorder<'a> {
     /// [`camera_skin_bg`](FrameRecorder::camera_skin_bg) over the viewmodel's view-projection; present
     /// only on a frame that draws a viewmodel.
     viewmodel_camera_skin_bg: Option<wgpu::BindGroup>,
+    /// The viewmodel's reserved depth slice `s` (`0.0` on a frame with no viewmodel): a stored depth
+    /// below it is a gun pixel. Post passes that exclude the gun compare against it.
+    viewmodel_slice: f32,
     /// The uploaded bone palette (`[identity] ++ scene.bone_palette`), kept alongside the bind groups
     /// built from it so [`record_shadow`](FrameRecorder::record_shadow) can build the shadow pass's
     /// own `{shadow_view, bone_palette}` group without re-uploading it.
@@ -3628,7 +3632,7 @@ impl PassRecorder for FrameRecorder<'_> {
                     sky_horizon: self.environment.map_or([0.0; 3], |env| env.sky_horizon),
                     sky_ground: self.environment.map_or([0.0; 3], |env| env.sky_ground),
                     transparent_depth: u32::from(self.has_transparent_depth),
-                    pad1: 0.0,
+                    viewmodel_slice: self.viewmodel_slice,
                     pad2: 0.0,
                     inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
                     view_forward: self.view_forward,
@@ -3791,30 +3795,23 @@ impl FrameRecorder<'_> {
         rp.set_pipeline(self.r.pipeline(ShaderId::Prepass));
         rp.set_bind_group(CAMERA_GROUP, &self.camera_skin_bg, &[]);
         let mut variant = MeshVariant::PLAIN;
-        let mut viewmodel = false;
-        for draw in &self.mesh_draws {
+        // The gun stays out of the prepass, its only reader being SSAO: the AO texture is then the
+        // no-gun frame's, so it cannot halo.
+        for draw in self.mesh_draws.iter().filter(|d| !d.viewmodel) {
             rp.set_bind_group(MATERIAL_GROUP, &self.r.default_material_bg, &[]);
             if draw.variant() != variant {
                 variant = draw.variant();
                 rp.set_pipeline(self.mesh_pipeline(ShaderId::Prepass, variant));
-            }
-            if draw.viewmodel != viewmodel {
-                viewmodel = draw.viewmodel;
-                rp.set_bind_group(CAMERA_GROUP, self.camera_group_for(viewmodel), &[]);
             }
             let mb = self.r.mesh_of(draw.shape);
             rp.set_vertex_buffer(0, mb.buffer.slice(..));
             rp.set_vertex_buffer(1, draw.instances.slice(..));
             rp.draw(0..mb.vertex_count, 0..draw.count);
         }
-        for draw in &self.mesh_asset_draws {
+        for draw in self.mesh_asset_draws.iter().filter(|d| !d.viewmodel) {
             if draw.variant() != variant {
                 variant = draw.variant();
                 rp.set_pipeline(self.mesh_pipeline(ShaderId::Prepass, variant));
-            }
-            if draw.viewmodel != viewmodel {
-                viewmodel = draw.viewmodel;
-                rp.set_bind_group(CAMERA_GROUP, self.camera_group_for(viewmodel), &[]);
             }
             rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
@@ -3906,7 +3903,7 @@ impl FrameRecorder<'_> {
             focus_distance: self.post.focus_distance,
             max_coc: self.post.dof,
             transparent_depth: u32::from(self.has_transparent_depth),
-            pad1: 0.0,
+            viewmodel_slice: self.viewmodel_slice,
             pad2: 0.0,
             view_forward: self.view_forward,
         };
@@ -4954,7 +4951,7 @@ impl FrameRecorder<'_> {
             cam_pos: self.camera_position.extend(1.0).to_array(),
             look: [
                 crate::ssr_trace::SsrLook::from_post(&self.post).intensity,
-                0.0,
+                self.viewmodel_slice,
                 0.0,
                 0.0,
             ],
@@ -5360,7 +5357,8 @@ impl FrameRecorder<'_> {
         let target = pass.colors()[0].extent;
         let params = shader_gen::HizParams {
             target_extent: [target.width as f32, target.height as f32],
-            pad: [0.0; 2],
+            viewmodel_slice: self.viewmodel_slice,
+            pad: 0.0,
         };
         let id = if pass.kind == pass::HIZ_SEED {
             ShaderId::HizSeed
@@ -5400,7 +5398,7 @@ impl FrameRecorder<'_> {
                     self.ssr_view,
                     Some((crate::DebugView::SsrFootprint, _))
                 )),
-                0.0,
+                self.viewmodel_slice,
             ],
             look: [
                 look.max_distance,
@@ -22227,7 +22225,8 @@ mod tests {
         let view = upload_2d(&renderer, wgpu::TextureFormat::R32Float, src, &bytes, 4);
         let params = shader_gen::HizParams {
             target_extent: [dst.0 as f32, dst.1 as f32],
-            pad: [0.0; 2],
+            viewmodel_slice: 0.0,
+            pad: 0.0,
         };
         let target = run_effect_into(
             &renderer,

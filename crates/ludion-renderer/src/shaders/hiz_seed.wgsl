@@ -10,7 +10,9 @@
 struct HizParams {
     // The target (trace-extent) mip size in texels.
     target_extent: vec2<f32>,
-    pad: vec2<f32>,
+    // x = the frame's viewmodel depth slice (0 without a viewmodel): the gun never enters the pyramid.
+    viewmodel_slice: f32,
+    pad: f32,
 };
 
 @group(0) @binding(0) var hiz_depth: texture_depth_2d;
@@ -32,7 +34,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     for (var y = first.y; y <= last.y; y = y + 1) {
         for (var x = first.x; x <= last.x; x = x + 1) {
             let texel = clamp(vec2<i32>(x, y), vec2<i32>(0, 0), max_texel);
-            nearest = min(nearest, textureLoad(hiz_depth, texel, 0));
+            let d = textureLoad(hiz_depth, texel, 0);
+            if (d >= hiz_params.viewmodel_slice) {
+                nearest = min(nearest, d);
+            }
         }
     }
     return vec4<f32>(nearest, 0.0, 0.0, 1.0);

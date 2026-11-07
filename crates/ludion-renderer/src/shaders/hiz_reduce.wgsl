@@ -9,7 +9,9 @@
 struct HizParams {
     // The target (this mip) size in texels.
     target_extent: vec2<f32>,
-    pad: vec2<f32>,
+    // Unused here; the seed reads its viewmodel slice from the lane (one struct, one layout).
+    viewmodel_slice: f32,
+    pad: f32,
 };
 
 @group(0) @binding(0) var hiz_src: texture_2d<f32>;

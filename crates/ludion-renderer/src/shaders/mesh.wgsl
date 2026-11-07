@@ -265,6 +265,10 @@ fn shade_fragment(in: VsOut, front_facing: bool) -> CaptureOut {
     var ao = 1.0;
     if (env.ao.x > 0.5) {
         ao = textureSampleLevel(ao_tex, env_samp, in.clip.xy * env.ao.yz, 0.0).r;
+        // The prepass leaves the gun out, so the AO texture holds the world behind it.
+        if (camera.lens.x > 0.5) {
+            ao = 1.0;
+        }
     }
 
     // The instance × vertex colour — the albedo of an untextured draw, and the emissive term's base

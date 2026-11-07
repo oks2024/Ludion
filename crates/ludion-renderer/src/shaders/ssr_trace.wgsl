@@ -42,7 +42,8 @@ struct SsrTrace {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     cam_pos: vec4<f32>,
-    // x = proj[1][1], y = the pyramids' level count.
+    // x = proj[1][1], y = the pyramids' level count, z = the footprint view flag, w = the frame's
+    // viewmodel depth slice (0 without a viewmodel).
     proj_levels: vec4<f32>,
     // x = max distance, y = thickness, zw = the roughness fade (full below z, zero above w).
     look: vec4<f32>,
@@ -99,7 +100,7 @@ fn trace_resolve(o: vec3<f32>, d: vec3<f32>, t0: f32, t1: f32) -> Resolve {
         let pz = textureLoad(trace_depth, px, 0);
         let za = o.z + d.z * t;
         let zb = o.z + d.z * tb;
-        if (pz < 1.0 && max(za, zb) >= pz) {
+        if (pz < 1.0 && pz >= trace_params.proj_levels.w && max(za, zb) >= pz) {
             // The least-excess behind point: the crossing, else the end nearer the camera.
             var ts = select(tb, t, d.z >= 0.0);
             if (min(za, zb) < pz) {
@@ -125,7 +126,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let trace_f = vec2<f32>(trace);
     let p = ssr_source_pixel(vec2<i32>(in.pos.xy), render, trace);
     let depth = textureLoad(trace_depth, p, 0);
-    if (depth >= 1.0) {
+    if (depth >= 1.0 || depth < trace_params.proj_levels.w) {
         return vec4<f32>(0.0);
     }
     let nr = textureLoad(trace_normal, p, 0);

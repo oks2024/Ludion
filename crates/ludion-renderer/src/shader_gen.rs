@@ -303,7 +303,7 @@ pub struct Composite {
     pub sky_zenith: [f32; 3],
     pub transparent_depth: u32,
     pub sky_horizon: [f32; 3],
-    pub pad1: f32,
+    pub viewmodel_slice: f32,
     pub sky_ground: [f32; 3],
     pub pad2: f32,
     pub inv_view_proj: [[f32; 4]; 4],
@@ -341,7 +341,7 @@ const _: () = assert!(core::mem::offset_of!(Composite, fog_sky) == 156);
 const _: () = assert!(core::mem::offset_of!(Composite, sky_zenith) == 160);
 const _: () = assert!(core::mem::offset_of!(Composite, transparent_depth) == 172);
 const _: () = assert!(core::mem::offset_of!(Composite, sky_horizon) == 176);
-const _: () = assert!(core::mem::offset_of!(Composite, pad1) == 188);
+const _: () = assert!(core::mem::offset_of!(Composite, viewmodel_slice) == 188);
 const _: () = assert!(core::mem::offset_of!(Composite, sky_ground) == 192);
 const _: () = assert!(core::mem::offset_of!(Composite, pad2) == 204);
 const _: () = assert!(core::mem::offset_of!(Composite, inv_view_proj) == 208);
@@ -388,7 +388,7 @@ pub struct DofCoc {
     pub focus_distance: f32,
     pub max_coc: f32,
     pub transparent_depth: u32,
-    pub pad1: f32,
+    pub viewmodel_slice: f32,
     pub pad2: f32,
     pub view_forward: [f32; 4],
 }
@@ -398,7 +398,7 @@ const _: () = assert!(core::mem::offset_of!(DofCoc, cam_pos) == 64);
 const _: () = assert!(core::mem::offset_of!(DofCoc, focus_distance) == 76);
 const _: () = assert!(core::mem::offset_of!(DofCoc, max_coc) == 80);
 const _: () = assert!(core::mem::offset_of!(DofCoc, transparent_depth) == 84);
-const _: () = assert!(core::mem::offset_of!(DofCoc, pad1) == 88);
+const _: () = assert!(core::mem::offset_of!(DofCoc, viewmodel_slice) == 88);
 const _: () = assert!(core::mem::offset_of!(DofCoc, pad2) == 92);
 const _: () = assert!(core::mem::offset_of!(DofCoc, view_forward) == 96);
 
@@ -494,11 +494,13 @@ const _: () = assert!(core::mem::offset_of!(GiInjectParams, rays) == 80);
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct HizParams {
     pub target_extent: [f32; 2],
-    pub pad: [f32; 2],
+    pub viewmodel_slice: f32,
+    pub pad: f32,
 }
 const _: () = assert!(core::mem::size_of::<HizParams>() == 16);
 const _: () = assert!(core::mem::offset_of!(HizParams, target_extent) == 0);
-const _: () = assert!(core::mem::offset_of!(HizParams, pad) == 8);
+const _: () = assert!(core::mem::offset_of!(HizParams, viewmodel_slice) == 8);
+const _: () = assert!(core::mem::offset_of!(HizParams, pad) == 12);
 
 /// WGSL `struct Light`.
 ///

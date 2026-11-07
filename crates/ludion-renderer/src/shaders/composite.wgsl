@@ -246,7 +246,9 @@ struct Composite {
     // does for `dof_tex`.
     transparent_depth: u32,
     sky_horizon: vec3<f32>,
-    pad1: f32,
+    // The frame's viewmodel depth slice `s` (0 without a viewmodel): a pixel whose depth is below it is
+    // the gun, which the defocus mix leaves alone.
+    viewmodel_slice: f32,
     sky_ground: vec3<f32>,
     pad2: f32,
     // Inverse view-projection, for reconstructing a fragment's world position from its depth.
@@ -681,7 +683,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // upscale.
     if (composite.dof != 0u) {
         let defocused = textureSample(dof_tex, samp, in.uv);
-        scene = mix(scene, defocused.rgb / max(defocused.a, 1e-4), defocused.a);
+        // A blurred near-world foreground claims gun pixels through its coverage; the gun stays sharp.
+        var is_gun = false;
+        if (composite.viewmodel_slice > 0.0) {
+            is_gun = textureLoad(scene_depth_tex, vec2<i32>(in.pos.xy), 0) < composite.viewmodel_slice;
+        }
+        if (!is_gun) {
+            scene = mix(scene, defocused.rgb / max(defocused.a, 1e-4), defocused.a);
+        }
     }
     var hdr = scene + bloom * composite.strength;
     // Halation reuses the blurred bright field `bloom_tex` already holds rather than blurring again,

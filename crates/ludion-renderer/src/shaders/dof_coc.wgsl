@@ -60,7 +60,9 @@ struct DofCoc {
     max_coc: f32,
     // Nonzero when `coc_layer` is real: it mirrors the graph's own gate, as the composite's flag does.
     transparent_depth: u32,
-    pad1: f32,
+    // The frame's viewmodel depth slice (0 without a viewmodel): a texel below it is the gun, with no
+    // circle of confusion.
+    viewmodel_slice: f32,
     pad2: f32,
     // `.xyz` is the unit view direction and `.w` is 1 under an orthographic camera (0 otherwise), where
     // distance is measured along the view and not out from the eye.
@@ -131,6 +133,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             covered = covered || layer.g > 0.0;
             let uv = (texel + vec2<f32>(0.5)) / dims;
             let depth = textureLoad(coc_depth, vec2<i32>(texel), 0);
+            if (depth < coc_params.viewmodel_slice) {
+                // The gun: no blur, and distance 0 so it wins the nearest pick.
+                chosen_distance = 0.0;
+                chosen_coc = 0.0;
+                continue;
+            }
             let back = coc_view_distance(world_from_depth(uv, depth, coc_params.inv_view_proj));
             var distance = back;
             var coc = dof_circle_of_confusion(back);
@@ -167,6 +175,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             nearest = depth;
             nearest_uv = (texel + vec2<f32>(0.5)) / dims;
         }
+    }
+
+    if (nearest < coc_params.viewmodel_slice) {
+        return vec4<f32>(hdr_safe(textureSampleLevel(coc_scene, coc_samp, in.uv, 0.0).rgb), 0.0);
     }
 
     // One bilinear tap, which at the native 2:1 ratio lands exactly between four source texels and so

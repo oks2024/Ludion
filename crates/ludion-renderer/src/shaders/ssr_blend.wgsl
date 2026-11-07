@@ -27,7 +27,8 @@
 struct SsrBlendParams {
     inv_view_proj: mat4x4<f32>,
     cam_pos: vec4<f32>,
-    // x = the look's intensity (scales the confidence).
+    // x = the look's intensity (scales the confidence), y = the frame's viewmodel depth slice (0
+    // without a viewmodel).
     look: vec4<f32>,
     // xyz = unit world-space camera forward, w = 1 under an orthographic projection (zero otherwise).
     view_forward: vec4<f32>,
@@ -59,7 +60,7 @@ fn ssr_upsample(p: vec2<i32>, n: vec3<f32>, dist: f32) -> vec4<f32> {
         let bilinear = select(1.0 - f.x, f.x, o.x > 0.5) * select(1.0 - f.y, f.y, o.y > 0.5);
         let g = ssr_source_pixel(t, render, trace);
         let gd = textureLoad(blend_depth, g, 0);
-        if (gd >= 1.0) {
+        if (gd >= 1.0 || gd < blend_params.look.y) {
             continue;
         }
         let depth_gap = abs(blend_distance(g, gd, render_f) - dist) / (0.1 * dist);
@@ -82,7 +83,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let p = vec2<i32>(in.pos.xy);
     // Far depth is the sky, which `transparents` draws later.
     let depth = textureLoad(blend_depth, p, 0);
-    if (depth >= 1.0) {
+    if (depth >= 1.0 || depth < blend_params.look.y) {
         return vec4<f32>(0.0);
     }
     let size = vec2<f32>(textureDimensions(blend_depth));
