@@ -3,9 +3,44 @@
 //! the frame's drawn camera, shared by extract, [`blend`](crate::blend) and
 //! [`latch_camera`](crate::latch_camera).
 
-use ludion_core::math::glam::{Mat3, Mat4};
+use ludion_core::math::glam::{Mat3, Mat4, Vec4};
 
 use crate::scene::RenderScene;
+
+/// Clip-space depth remap of the world into `[s, 1]`: `z' = (1-s)·z + s·w`.
+pub(crate) fn world_depth_remap(s: f32) -> Mat4 {
+    Mat4::from_cols(
+        Vec4::X,
+        Vec4::Y,
+        Vec4::new(0.0, 0.0, 1.0 - s, 0.0),
+        Vec4::new(0.0, 0.0, s, 1.0),
+    )
+}
+
+/// Clip-space depth remap of the viewmodel into `[0, s]`: `z' = s·z`.
+pub(crate) fn viewmodel_depth_remap(s: f32) -> Mat4 {
+    Mat4::from_cols(Vec4::X, Vec4::Y, Vec4::new(0.0, 0.0, s, 0.0), Vec4::W)
+}
+
+impl RenderScene {
+    /// The frame's world view-projection with the depth remap folded in: `projection * view`
+    /// unchanged when no viewmodel is drawn, else the world occupies depth `[s, 1]` of
+    /// [`ViewmodelData::depth_slice`]. Every world depth-writing draw and every depth decode
+    /// (through its inverse) reads this or [`RenderScene::viewmodel_view_proj`].
+    pub fn depth_view_proj(&self) -> Mat4 {
+        let view_proj = self.camera.projection * self.camera.view;
+        match &self.viewmodel {
+            None => view_proj,
+            Some(data) => world_depth_remap(data.depth_slice) * view_proj,
+        }
+    }
+
+    /// The viewmodel's view-projection with its depth in `[0, s]`; `None` without a viewmodel.
+    pub(crate) fn viewmodel_view_proj(&self) -> Option<Mat4> {
+        let data = self.viewmodel.as_ref()?;
+        Some(viewmodel_depth_remap(data.depth_slice) * data.projection * self.camera.view)
+    }
+}
 
 /// The viewmodel lens and the camera-local pose of every composed item in one frame.
 #[derive(Clone, PartialEq, Debug)]
@@ -119,6 +154,61 @@ mod tests {
             }),
             meshes: vec![None],
             ..BlendData::default()
+        }
+    }
+
+    /// NDC depth of a view-space point under `view_proj` (camera at origin, view = identity).
+    fn depth(view_proj: Mat4, z: f32) -> f32 {
+        let clip = view_proj * Vec4::new(0.0, 0.0, -z, 1.0);
+        clip.z / clip.w
+    }
+
+    fn lens_scene(s: f32) -> RenderScene {
+        let mut scene = RenderScene::empty((64, 64));
+        scene.camera.projection = Mat4::perspective_rh(1.0, 1.0, 0.1, 100.0);
+        scene.camera.view = Mat4::IDENTITY;
+        scene.viewmodel = Some(ViewmodelData {
+            fov_y_deg: 55.0,
+            near: 0.01,
+            depth_slice: s,
+            projection: Mat4::perspective_rh(0.9, 1.0, 0.01, 100.0),
+            locals: Vec::new(),
+        });
+        scene
+    }
+
+    #[test]
+    fn without_a_viewmodel_the_view_proj_is_untouched() {
+        let mut s = lens_scene(0.01);
+        s.viewmodel = None;
+        assert_eq!(s.depth_view_proj(), s.camera.projection * s.camera.view);
+        assert!(s.viewmodel_view_proj().is_none());
+    }
+
+    #[test]
+    fn the_world_maps_into_the_upper_slice() {
+        let s = lens_scene(0.2);
+        let vp = s.depth_view_proj();
+        assert!((depth(vp, 0.1) - 0.2).abs() < 1e-5);
+        assert!((depth(vp, 100.0) - 1.0).abs() < 1e-5);
+        assert!(depth(vp, 5.0) > 0.2);
+    }
+
+    #[test]
+    fn the_lens_maps_into_the_lower_slice() {
+        let s = lens_scene(0.2);
+        let vp = s.viewmodel_view_proj().unwrap();
+        assert!(depth(vp, 0.01).abs() < 1e-5);
+        assert!((depth(vp, 100.0) - 0.2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_gun_point_is_below_every_world_depth() {
+        let s = lens_scene(0.2);
+        let (gun, world) = (s.viewmodel_view_proj().unwrap(), s.depth_view_proj());
+        let nearest_world = depth(world, 0.1);
+        for z in [0.01, 0.2, 1.0, 50.0, 100.0] {
+            assert!(depth(gun, z) <= nearest_world + 1e-5);
         }
     }
 

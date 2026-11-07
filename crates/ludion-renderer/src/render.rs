@@ -1593,7 +1593,7 @@ impl Renderer {
         let chain = self.frame_chain(scene);
 
         // Camera uniform.
-        let view_proj = scene.camera.projection * scene.camera.view;
+        let view_proj = scene.depth_view_proj();
         let camera_raw = Camera {
             view_proj: view_proj.to_cols_array_2d(),
             cam_pos: scene.camera.position.extend(1.0).to_array(),
@@ -1625,6 +1625,24 @@ impl Renderer {
             &camera_buf,
             &bone_palette_buf,
         );
+        let viewmodel_camera_skin_bg = scene.viewmodel_view_proj().map(|view_proj| {
+            let raw = Camera {
+                view_proj: view_proj.to_cols_array_2d(),
+                ..camera_raw
+            };
+            let buf = init_buffer(
+                device,
+                wgpu::BufferUsages::UNIFORM,
+                bytemuck::bytes_of(&raw),
+            );
+            skin_bind_group(
+                device,
+                self.layouts.get(LayoutId::CameraSkin),
+                CAMERA_BINDING,
+                &buf,
+                &bone_palette_buf,
+            )
+        });
 
         // The clustered light group: the header uniform + the three storage buffers. Recreated per
         // frame like every other per-frame upload — light population, positions and the cell tables
@@ -1902,6 +1920,7 @@ impl Renderer {
             size,
             camera_bg,
             camera_skin_bg,
+            viewmodel_camera_skin_bg,
             bone_palette_buf,
             lights_bg,
             probe_list_buf,
@@ -2254,16 +2273,23 @@ impl Renderer {
     /// Groups mesh instances by shape into per-shape instance buffers.
     fn build_mesh_draws(&self, scene: &RenderScene, device: &wgpu::Device) -> Vec<MeshDraw> {
         let mut draws = Vec::new();
-        // Unmirrored draws first, in today's order; mirrored ones follow.
-        for (mirrored, shape) in [false, true].into_iter().flat_map(|mirrored| {
-            [MeshShape::Cube, MeshShape::Plane, MeshShape::Sphere]
-                .map(move |shape| (mirrored, shape))
+        // World draws first, then the viewmodel's; within each, unmirrored draws first, in today's
+        // order, mirrored ones follow.
+        for (viewmodel, (mirrored, shape)) in [false, true].into_iter().flat_map(|viewmodel| {
+            [false, true].into_iter().flat_map(move |mirrored| {
+                [MeshShape::Cube, MeshShape::Plane, MeshShape::Sphere]
+                    .map(move |shape| (viewmodel, (mirrored, shape)))
+            })
         }) {
             let (sources, raws): (Vec<u32>, Vec<MeshInstanceRaw>) = scene
                 .meshes
                 .iter()
                 .enumerate()
-                .filter(|(_, m)| m.shape == shape && is_mirrored(&m.model) == mirrored)
+                .filter(|(_, m)| {
+                    m.shape == shape
+                        && is_mirrored(&m.model) == mirrored
+                        && m.viewmodel == viewmodel
+                })
                 .map(|(i, m)| {
                     (
                         i as u32,
@@ -2291,6 +2317,7 @@ impl Renderer {
                 instances: buffer,
                 count: raws.len() as u32,
                 mirrored,
+                viewmodel,
                 sources,
             });
         }
@@ -2308,10 +2335,10 @@ impl Renderer {
         meshes: &[MeshAssetGpu],
     ) -> Vec<MeshAssetDraw> {
         let mut draws = Vec::new();
-        for mirrored in [false, true] {
+        for (viewmodel, mirrored) in [(false, false), (false, true), (true, false), (true, true)] {
             let asset_bounds: Vec<Option<Aabb>> = meshes.iter().map(|asset| asset.bounds).collect();
             let (buckets, sources) =
-                bucket_asset_instances(scene, meshes.len(), &asset_bounds, mirrored);
+                bucket_asset_instances(scene, meshes.len(), &asset_bounds, mirrored, viewmodel);
             for ((mesh, raws), sources) in meshes.iter().zip(buckets.iter()).zip(sources) {
                 // An empty mesh is valid content (erasing a model's last voxel) with nothing to draw;
                 // its zero-size buffers cannot be sliced, so it never reaches a draw loop.
@@ -2328,6 +2355,7 @@ impl Renderer {
                     instances: buffer,
                     count: raws.len() as u32,
                     mirrored,
+                    viewmodel,
                     sources,
                 });
             }
@@ -2862,8 +2890,7 @@ impl Renderer {
         scene: &RenderScene,
         env: &crate::scene::EnvironmentData,
     ) -> wgpu::BindGroup {
-        let view_proj = scene.camera.projection * scene.camera.view;
-        let inv_view_proj = view_proj.inverse();
+        let inv_view_proj = scene.depth_view_proj().inverse();
         // Disc only when a sun is present AND a size is authored; direction points toward the sun.
         let (sun_dir, has_disc) = match &scene.sun {
             Some(s) if env.sun_disc_size > 0.0 => (-s.direction, 1.0_f32),
@@ -3094,6 +3121,8 @@ struct MeshDraw {
     count: u32,
     /// Draws through the shader's winding-reversed variant ([`is_mirrored`]).
     mirrored: bool,
+    /// Every instance is a viewmodel mesh: the draw binds the viewmodel's camera group.
+    viewmodel: bool,
     /// Ascending indices into `scene.meshes` of this draw's instances, in instance order, so the
     /// drop-shadow occlusion pass can skip a caster's own.
     sources: Vec<u32>,
@@ -3159,6 +3188,8 @@ struct MeshAssetDraw {
     count: u32,
     /// Draws through the shader's winding-reversed variant ([`is_mirrored`]).
     mirrored: bool,
+    /// As [`MeshDraw::viewmodel`].
+    viewmodel: bool,
     /// As [`MeshDraw::sources`].
     sources: Vec<u32>,
 }
@@ -3352,6 +3383,9 @@ struct FrameRecorder<'a> {
     /// sprite, particle and text keep binding [`camera_bg`](FrameRecorder::camera_bg) — they never
     /// skin a vertex.
     camera_skin_bg: wgpu::BindGroup,
+    /// [`camera_skin_bg`](FrameRecorder::camera_skin_bg) over the viewmodel's view-projection; present
+    /// only on a frame that draws a viewmodel.
+    viewmodel_camera_skin_bg: Option<wgpu::BindGroup>,
     /// The uploaded bone palette (`[identity] ++ scene.bone_palette`), kept alongside the bind groups
     /// built from it so [`record_shadow`](FrameRecorder::record_shadow) can build the shadow pass's
     /// own `{shadow_view, bone_palette}` group without re-uploading it.
@@ -3645,6 +3679,15 @@ impl PassRecorder for FrameRecorder<'_> {
 }
 
 impl FrameRecorder<'_> {
+    /// Group 0 for a mesh batch: the viewmodel's camera for a viewmodel batch, the world's otherwise
+    /// (and for a viewmodel batch on a frame that has no viewmodel camera).
+    fn camera_group_for(&self, viewmodel: bool) -> &wgpu::BindGroup {
+        match (&self.viewmodel_camera_skin_bg, viewmodel) {
+            (Some(bg), true) => bg,
+            _ => &self.camera_skin_bg,
+        }
+    }
+
     /// The depth-only sun shadow pass (present only on a sun frame), plus the cutout caster for mask
     /// meshes: every mesh — both the per-shape primitive draws and the indexed asset draws — rendered
     /// into the graph-owned shadow map with the shadow pipeline, reusing the scene pass's instance
@@ -3746,11 +3789,16 @@ impl FrameRecorder<'_> {
         rp.set_pipeline(self.r.pipeline(ShaderId::Prepass));
         rp.set_bind_group(CAMERA_GROUP, &self.camera_skin_bg, &[]);
         let mut variant = MeshVariant::PLAIN;
+        let mut viewmodel = false;
         for draw in &self.mesh_draws {
             rp.set_bind_group(MATERIAL_GROUP, &self.r.default_material_bg, &[]);
             if draw.variant() != variant {
                 variant = draw.variant();
                 rp.set_pipeline(self.mesh_pipeline(ShaderId::Prepass, variant));
+            }
+            if draw.viewmodel != viewmodel {
+                viewmodel = draw.viewmodel;
+                rp.set_bind_group(CAMERA_GROUP, self.camera_group_for(viewmodel), &[]);
             }
             let mb = self.r.mesh_of(draw.shape);
             rp.set_vertex_buffer(0, mb.buffer.slice(..));
@@ -3761,6 +3809,10 @@ impl FrameRecorder<'_> {
             if draw.variant() != variant {
                 variant = draw.variant();
                 rp.set_pipeline(self.mesh_pipeline(ShaderId::Prepass, variant));
+            }
+            if draw.viewmodel != viewmodel {
+                viewmodel = draw.viewmodel;
+                rp.set_bind_group(CAMERA_GROUP, self.camera_group_for(viewmodel), &[]);
             }
             rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
@@ -4081,10 +4133,15 @@ impl FrameRecorder<'_> {
         rp.set_bind_group(SUN_GROUP, &sun_bg, &[]);
         rp.set_bind_group(ENV_GROUP, &env_bg, &[]);
         let mut variant = MeshVariant::PLAIN;
+        let mut viewmodel = false;
         for draw in &self.mesh_draws {
             if draw.variant() != variant {
                 variant = draw.variant();
                 rp.set_pipeline(mesh_pipeline(variant));
+            }
+            if draw.viewmodel != viewmodel {
+                viewmodel = draw.viewmodel;
+                rp.set_bind_group(CAMERA_GROUP, self.camera_group_for(viewmodel), &[]);
             }
             let mb = self.r.mesh_of(draw.shape);
             // Group 4 is the per-draw material. A procedural primitive has no material document, so it
@@ -4101,6 +4158,10 @@ impl FrameRecorder<'_> {
             if draw.variant() != variant {
                 variant = draw.variant();
                 rp.set_pipeline(mesh_pipeline(variant));
+            }
+            if draw.viewmodel != viewmodel {
+                viewmodel = draw.viewmodel;
+                rp.set_bind_group(CAMERA_GROUP, self.camera_group_for(viewmodel), &[]);
             }
             rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
@@ -4535,6 +4596,9 @@ impl FrameRecorder<'_> {
         for draw in &self.mesh_draws {
             let draw_bg = draw_bgs.next().expect("one bind group per draw");
             let Some(draw_bg) = draw_bg else { continue };
+            if draw.viewmodel {
+                continue;
+            }
             let kept = only_ranges(&draw.sources, &self.decals.receivers);
             if draw.variant() != variant {
                 variant = draw.variant();
@@ -4552,6 +4616,9 @@ impl FrameRecorder<'_> {
         for draw in &self.mesh_asset_draws {
             let draw_bg = draw_bgs.next().expect("one bind group per draw");
             let Some(draw_bg) = draw_bg else { continue };
+            if draw.viewmodel {
+                continue;
+            }
             let kept = only_ranges(&draw.sources, &self.decals.receivers);
             if draw.variant() != variant {
                 variant = draw.variant();
@@ -6211,7 +6278,7 @@ fn instance_normal_lanes(m: &MeshInstance, asset_bounds: &[Option<Aabb>]) -> [[f
 
 /// Buckets every [`MeshShape::Asset`] instance in `scene` by its asset index, in scene order, into
 /// `asset_count` buckets — one linear pass instead of one filter pass per asset — keeping only the
-/// instances whose [`is_mirrored`] equals `mirrored`.
+/// instances whose [`is_mirrored`] equals `mirrored` and whose viewmodel flag equals `viewmodel`.
 ///
 /// Instances whose index is out of range are dropped: the caller has no GPU mesh to draw them with.
 /// Draw order is golden-bearing (this repo gates on bit-exact pinned-GPU images), and this is the
@@ -6223,6 +6290,7 @@ fn bucket_asset_instances(
     asset_count: usize,
     asset_bounds: &[Option<Aabb>],
     mirrored: bool,
+    viewmodel: bool,
 ) -> (Vec<Vec<MeshInstanceRaw>>, Vec<Vec<u32>>) {
     let mut buckets: Vec<Vec<MeshInstanceRaw>> = vec![Vec::new(); asset_count];
     let mut sources: Vec<Vec<u32>> = vec![Vec::new(); asset_count];
@@ -6230,7 +6298,7 @@ fn bucket_asset_instances(
         let MeshShape::Asset(index) = m.shape else {
             continue;
         };
-        if is_mirrored(&m.model) != mirrored {
+        if is_mirrored(&m.model) != mirrored || m.viewmodel != viewmodel {
             continue;
         }
         let Some(bucket) = buckets.get_mut(index) else {
@@ -9083,6 +9151,7 @@ mod tests {
 
     mod lit_additive;
     mod shaft_layer;
+    mod viewmodel;
 
     /// The decision-16 mapping-drift guard: the string this crate composes and compiles for every
     /// shader (its snippets + body, from `include_str!`) must be byte-identical to what the bindgen
@@ -9651,7 +9720,7 @@ mod tests {
         ];
         let asset_count = 4; // index 3 is registered but unreferenced: an empty bucket
 
-        let bucketed = bucket_asset_instances(&scene, asset_count, &[], false).0;
+        let bucketed = bucket_asset_instances(&scene, asset_count, &[], false, false).0;
         let refiltered = bucket_asset_instances_by_refiltering(&scene, asset_count);
         assert_eq!(bucketed.len(), refiltered.len());
         for (index, (new, old)) in bucketed.iter().zip(refiltered.iter()).enumerate() {

@@ -715,7 +715,8 @@ fn extract_inner(
         .collect();
     let mut camera = resolve_camera(world, &ids, viewport, view).map_err(|d| vec![d])?;
     crate::camera_offset::report(world, &ids, degraded);
-    crate::viewmodel::report(world, &ids, view.is_some(), degraded);
+    let viewmodel_frame = crate::viewmodel::FrameViewmodel::of(world, &ids);
+    crate::viewmodel::report(world, &ids, &viewmodel_frame, view.is_some(), degraded);
     let fonts = font_library(world, project_root);
 
     // One walk, one sizing computation: `place` produces every renderable's world geometry, and both
@@ -1289,7 +1290,6 @@ fn extract_inner(
     }
 
     // Flagged meshes lose their shadow before decals and drop shadows read `cast_shadows`.
-    let viewmodel_frame = crate::viewmodel::FrameViewmodel::of(world, &ids);
     let viewmodel_camera = if viewmodel_frame.is_empty() {
         None
     } else {

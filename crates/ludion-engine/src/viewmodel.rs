@@ -98,6 +98,7 @@ fn lens(world: &World, cam: EntityId) -> (ViewmodelLens, bool) {
 pub(crate) fn report(
     world: &World,
     ids: &[EntityId],
+    flagged: &FrameViewmodel,
     view_override: bool,
     degraded: &mut Vec<(String, Diagnostic)>,
 ) {
@@ -118,10 +119,6 @@ pub(crate) fn report(
             }
         }
     }
-    if world.component_count::<Viewmodel>() == 0 {
-        return;
-    }
-    let flagged = FrameViewmodel::of(world, ids);
     let Some(&lowest) = flagged.flagged.first() else {
         return;
     };
