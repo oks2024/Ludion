@@ -334,6 +334,21 @@ pub(crate) fn mesh(doc: &VoxelDocument, hash: u64) -> MeshData {
     data
 }
 
+/// The 1-based `lods` levels of `doc` whose downsampled grid holds no solid cell: they draw nothing.
+/// The chain stops being checked after the first empty level, since every coarser one is empty too.
+pub fn voxel_empty_lod_levels(doc: &VoxelDocument) -> Vec<u32> {
+    let mut grid = Grid::from_doc(doc);
+    let mut empty = Vec::new();
+    for level in 1..=doc.lods.len() as u32 {
+        grid = grid.downsample();
+        if grid.cells.iter().all(Option::is_none) {
+            empty.extend(level..=doc.lods.len() as u32);
+            break;
+        }
+    }
+    empty
+}
+
 /// What every level of one document shares: the base's model-frame offset and its palette channels.
 struct Frame<'a> {
     offset: [f32; 3],
@@ -1003,6 +1018,18 @@ mod tests {
             grid.cells[(x + size[0] * (y + size[1] * z)) as usize] = Some(pi);
         }
         grid
+    }
+
+    #[test]
+    fn a_level_that_halves_to_nothing_is_reported_with_every_coarser_one() {
+        let mut thin = doc([4, 1, 1], vec![entry("A", RED)], &[]);
+        thin.slices = vec![vec!["AAAA".to_string()]];
+        thin.lods = [0.2, 0.1]
+            .map(|screen_size| ludion_scene::VoxelLod { screen_size })
+            .to_vec();
+        assert_eq!(voxel_empty_lod_levels(&thin), [1, 2]);
+        assert!(voxel_empty_lod_levels(&cube_with_lods(4, &[0.25, 0.08])).is_empty());
+        assert!(voxel_empty_lod_levels(&cube_with_lods(4, &[])).is_empty());
     }
 
     #[test]

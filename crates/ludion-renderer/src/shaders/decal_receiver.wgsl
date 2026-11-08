@@ -41,19 +41,32 @@ struct VsIn {
     @location(21) medium: f32,
 };
 
-// Where this draw's instances start in `recv_ids`.
+// Where this draw's instances start in `recv_ids`. `culled` is 1 when the draw reads the cull's
+// compacted camera-view slice, whose instances carry their bucket-local source index (+1) in the
+// medium lane's `y`; `inst_first` is the bucket's first slot in that slice.
 struct RecvDraw {
     base: u32,
+    culled: u32,
+    inst_first: u32,
     pad0: u32,
-    pad1: u32,
-    pad2: u32,
 }
+
+// A `MeshInstanceRaw` (224 bytes), read only for its medium lane (`rest[9]`).
+struct RecvInstance {
+    model: mat4x4<f32>,
+    rest: array<vec4<f32>, 10>,
+}
+
+// `recv_ids` entry of an instance no decal lists.
+const RECV_NONE: u32 = 0xFFFFFFFFu;
 
 // The opaque pass's depth, at the render extent (loaded, never filtered).
 @group(1) @binding(0) var recv_depth: texture_depth_2d;
 // `scene.meshes` index of every instance of every mesh draw, the draws' `sources` concatenated.
 @group(1) @binding(1) var<storage, read> recv_ids: array<u32>;
 @group(1) @binding(2) var<uniform> recv_draw: RecvDraw;
+// The instance buffer the draw's instances come from (the cull's output when `recv_draw.culled`).
+@group(1) @binding(3) var<storage, read> recv_instances: array<RecvInstance>;
 
 // How far the redraw's depth may sit from `scene_depth`, as a share of the distance to the far
 // plane's depth (1 - depth), plus an absolute floor: two rasterizations of one surface through
@@ -114,5 +127,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (abs(in.clip.z - scene) > DEPTH_SLACK * (1.0 - scene) + DEPTH_FLOOR) {
         discard;
     }
-    return vec4<f32>(f32(recv_ids[recv_draw.base + in.instance] + 1u), 0.0, 0.0, 0.0);
+    var local = in.instance;
+    if (recv_draw.culled != 0u) {
+        local = u32(recv_instances[recv_draw.inst_first + in.instance].rest[9].y) - 1u;
+    }
+    let id = recv_ids[recv_draw.base + local];
+    if (id == RECV_NONE) {
+        discard;
+    }
+    return vec4<f32>(f32(id + 1u), 0.0, 0.0, 0.0);
 }

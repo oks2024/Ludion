@@ -431,6 +431,13 @@ pub(super) struct Culled<'a> {
     views: u32,
 }
 
+impl<'a> Culled<'a> {
+    /// The cull's compacted instances, every view's slice.
+    pub(super) fn instances(self) -> &'a wgpu::Buffer {
+        self.instances
+    }
+}
+
 /// The cull pass's outputs from a pass's buffer reads, placed by the frame's `cull`. `None` when the
 /// pass declares no read, which is every direct draw.
 pub(super) fn culled_buffers<'a>(

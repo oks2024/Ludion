@@ -3212,13 +3212,15 @@ pub struct Camera {
     pub far: f32,
     /// Mesh LOD bias added to the machine's quality bias (default none, meaning `0`): each unit
     /// halves every switch distance, so `+1` picks coarser levels sooner and `-1` holds fine levels
-    /// longer. Finite, within `-4..=4` (`L1397`). Render-only; see `ludion docs culling`. A free
-    /// `render.view` camera takes the game camera's value.
+    /// longer. Finite, within `-4..=4` (`L1397`). Absent is omitted from the document and the hash;
+    /// a value is hashed like any `Camera` field. See `ludion docs culling`. A free `render.view`
+    /// camera takes the game camera's value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = -4.0, max = 4.0))]
     pub lod_bias: Option<f32>,
     /// Levels a shadow draws coarser than the camera's own pick (default none, meaning `0`), at
-    /// most 3 (`L1397`). Render-only; see `ludion docs culling`.
+    /// most 3 (`L1397`). Absent is omitted from the document and the hash; a value is hashed like any
+    /// `Camera` field. See `ludion docs culling`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 3))]
     pub shadow_bias_levels: Option<u32>,

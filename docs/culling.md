@@ -28,7 +28,7 @@ Bounds are conservative: a mesh may be kept when off screen, never dropped when 
 A mesh asset with a `lods:` chain draws the coarser level its screen size selects, chosen in the same cull pass.
 - **Asset.** Up to three levels, each a sibling mesh document that matches its base's draw key and joints
   (`ludion docs materials`, `L1395`/`L1396`). `ludion import --lod <screen>[:<ratio>]` writes one (`ludion docs
-  blender-craft`); the gallery `meshes/lod/` is a three-level mannequin. Generated levels are faceted (flat normals) and take each corner's uv from the first vertex at its position.
+  blender-craft`); the gallery `meshes/lod/` is a three-level mannequin. Generated levels keep each corner's normal and uv from the first base vertex at its position (a base without normals stays flat).
 - **Selection** is stateless and rotation-invariant: the fraction of viewport height the bounding sphere covers
   from the drawn camera's eye, against each `screen_size`, so turning never changes a level. Shadow views take the
   camera's eye, never their own frustum, so a shadow is never finer than its mesh.
@@ -36,9 +36,14 @@ A mesh asset with a `lods:` chain draws the coarser level its screen size select
   goes coarser sooner. `Camera.shadow_bias_levels` (`0..=3`) makes shadow views draw that many levels coarser.
   Out of range is `L1397`. A free `render.view` camera takes the game camera's values.
 - `lod_bias` in the machine quality (`ludion docs quality`: `0` at `full`/`high`, `0.5` `medium`, `1.0` `low`) adds to the
-  camera's, so a quality only ever coarsens. All knobs are render-only and none hashed.
-- **Level 0 always:** a mesh without a chain, views past the output cap, probe captures, the decal-receiver redraw,
-  the viewmodel, and every instance on an adapter without `INDIRECT_FIRST_INSTANCE` (the profile says so).
+  camera's, so a quality only ever coarsens. Absent camera knobs leave `WorldHash` unchanged; authoring
+  `Camera.lod_bias` or `shadow_bias_levels` moves it like any `Camera` field, and the quality's `lod_bias` is unhashed.
+- **Level 0 always:** a mesh without a chain, views past the output cap, probe captures, the viewmodel, and every
+  instance on an adapter without `INDIRECT_FIRST_INSTANCE` (the profile says so; `--debug-draw cull` then tints
+  everything as level 0). The decal-receiver redraw follows the camera view's levels, so a decal's ids land on the
+  level the scene pass drew.
+- **`cull_from: game|frozen`** selects levels from the cull camera's eye, the intended debugging view: freeze the
+  cull and fly away to see the levels the frozen camera picked.
 - **Voxel models** chain too: `lods: [{screen_size}]` on the `kind: voxel` document (`ludion docs voxel-format`),
   up to three levels, each a 2× majority downsample generated at load. Selection, knobs and observing are the
   mesh chain's; sculpt and assembly parts are not chained. `examples/gallery/voxel-horde.yaml` draws four levels:

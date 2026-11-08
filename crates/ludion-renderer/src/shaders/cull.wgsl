@@ -47,7 +47,8 @@ struct CullView {
     lod_eye: vec4<f32>,
 }
 
-// A `MeshInstanceRaw` (224 bytes), copied whole; only `model` is read.
+// A `MeshInstanceRaw` (224 bytes), copied whole; only `model` is read. `rest[9]` is the medium lane,
+// whose spare `y` the scatter overwrites with the bucket-local source index + 1.
 struct CullInstance {
     model: mat4x4<f32>,
     rest: array<vec4<f32>, 10>,
@@ -313,7 +314,11 @@ fn cs_scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
     let b = cull_items[i].bucket;
     let first = cull_buckets[b].first;
     let slot = finer_count(view, level, b) + prefix(lane, i) - prefix(lane, first);
-    cull_out[view * cull_params.instance_cap + first + slot] = cull_in[i];
+    var out = cull_in[i];
+    // The instance's index inside its bucket, plus one, in the medium lane's spare `y`: the decal
+    // receiver redraw maps a compacted instance back to its mesh with it. No other pass reads it.
+    out.rest[9].y = f32(i - first + 1u);
+    cull_out[view * cull_params.instance_cap + first + slot] = out;
 }
 
 @compute @workgroup_size(64)

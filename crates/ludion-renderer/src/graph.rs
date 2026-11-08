@@ -1641,12 +1641,16 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // Decal receiver ids are read from `scene_depth` alone. Both decal passes read them, so they sit
     // right after the opaque pass.
     if let Some(receivers) = decal_receivers {
-        graph.add_external_pass(
+        let recv = graph.add_external_pass(
             pass::DECAL_RECEIVERS,
             pass::DECAL_RECEIVERS,
             vec![scene_depth],
             vec![receivers],
         );
+        // A chained mesh is redrawn at the level the cull selected for the camera.
+        if let Some((_, instances, args)) = cull {
+            graph.read_buffers(recv, &[instances, args]);
+        }
     }
     // The lit decals paint into `scene` before the relight and the reflections, so those see the paint.
     if let Some(tail) = decals_lit_tail {

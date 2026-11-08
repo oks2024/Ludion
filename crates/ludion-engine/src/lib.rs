@@ -268,7 +268,7 @@ pub use trace::{
     SurfaceRecord, TraceChannel, TraceRecord, load_input_script, trace, trace_with, write_jsonl,
 };
 pub use transition::{RESIDUE_MAX_RECORDS_PER_SCENE, RESIDUE_MAX_SCENES, SceneSwitch, SwitchTo};
-pub use voxel_mesh::{VoxelMeshStats, voxel_mesh_stats};
+pub use voxel_mesh::{VoxelMeshStats, voxel_empty_lod_levels, voxel_mesh_stats};
 pub use voxel_sheet::{GiSheetOutcome, VoxelSheetOutcome, render_gi_sheet, render_voxel_sheet};
 
 // Re-exported so the CLI's `dump-graph` gets the real frame-graph JSON without depending on

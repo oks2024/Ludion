@@ -1675,6 +1675,10 @@ pub mod code {
     /// `shadow_bias_levels` is above 3. Raised by `Camera`'s semantic validator.
     pub const CAMERA_LOD_INVALID: DiagnosticCode = DiagnosticCode::new("L1397");
 
+    /// `L1398` — a voxel model's `lods:` chain has a level whose downsampled grid holds no solid
+    /// cell, so the level draws nothing. A warning raised by `ludion check-scene`.
+    pub const VOXEL_LOD_EMPTY_LEVEL: DiagnosticCode = DiagnosticCode::new("L1398");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -8309,6 +8313,20 @@ chain has four levels). The JSON Pointer names the offending field.
 Fix: bring the value into range, or drop the field to keep the chain's own thresholds.",
     },
     CodeEntry {
+        code: code::VOXEL_LOD_EMPTY_LEVEL,
+        severity: Severity::Warning,
+        title: "voxel LOD level is empty",
+        explanation: "\
+A `kind: voxel` document's `lods:` level is made by halving the grid again, and a coarse cell is
+solid only when at least four of its eight fine cells are. A thin or sparse model can lose every
+cell that way, so the level draws nothing and the model vanishes once the camera passes that
+level's `screen_size`. The message names the level. It is a **warning**: the document loads and
+the level draws as an empty mesh.
+
+Fix: drop that level and the ones after it, so the chain stops before the model thins out. A model
+one cell thick is better left unchained.",
+    },
+    CodeEntry {
         code: code::CAMERA_OFFSET_DUPLICATE,
         severity: Severity::Error,
         title: "more than one camera offset",
@@ -11456,6 +11474,7 @@ mod tests {
         code::MESH_LOD_CHAIN,
         code::MESH_LOD_LEVEL_MISMATCH,
         code::CAMERA_LOD_INVALID,
+        code::VOXEL_LOD_EMPTY_LEVEL,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,
@@ -11738,6 +11757,7 @@ mod tests {
             code::VIEWMODEL_NO_CAMERA,
             code::VIEWMODEL_LENS_NOT_ON_CAMERA,
             code::PATTERN_SYSTEM_NOT_RUN,
+            code::VOXEL_LOD_EMPTY_LEVEL,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::TRANSITION_CARRY_DEAD,

@@ -23,10 +23,11 @@ pub const SLOPPY_TARGET_ERROR: f32 = 1.0;
 ///
 /// Vertices at one position are welded for the simplifier (a faceted mesh gives every corner its own
 /// normal, which would pin every edge), and `simplify_sloppy` takes over when the plain pass leaves
-/// more than 10% above the target. The level is faceted: every output triangle owns three vertices
-/// (`indices` is `0..n`), `normals` is absent so the loader computes flat ones, and each corner takes
-/// the uv, tangent, emissive, metallic, roughness, skin weights and bone indices of the first base
-/// vertex at its position, so a texture may smear along a UV seam. `joints` are the base's. The
+/// more than 10% above the target. The level is unindexed: every output triangle owns three vertices
+/// (`indices` is `0..n`) and each corner takes the normal, uv, tangent, emissive, metallic, roughness,
+/// skin weights and bone indices of the first base vertex at its position, so a texture may smear
+/// along a UV seam. A base without `normals` gives a level without, which the loader computes flat
+/// (a smooth base keeps smooth normals). `joints` are the base's. The
 /// result may sit above the target when neither pass reaches it, and is empty only for a base with
 /// no triangles.
 #[must_use]
@@ -84,7 +85,7 @@ pub fn simplify_level(base: &MeshDocument, ratio: f64) -> MeshDocument {
     };
     MeshDocument {
         positions: gather(&base.positions, &corners, 3),
-        normals: None,
+        normals: gather_f64(&base.normals, 3),
         uvs: gather_f64(&base.uvs, 2),
         tangents: gather_f64(&base.tangents, 4),
         emissive: gather_f64(&base.emissive, 1),
@@ -581,6 +582,25 @@ mod tests {
         let expected: Vec<u32> = (0..level.indices.len() as u32).collect();
         assert_eq!(level.indices, expected);
         assert!(level.normals.is_none());
+        ludion_scene::check_mesh(&ludion_scene::emit_mesh(&level)).expect("a valid level");
+    }
+
+    #[test]
+    fn a_smooth_base_keeps_each_corners_normal() {
+        let mut base = grid(16);
+        let normals: Vec<f64> = (0..base.positions.len() / 3)
+            .flat_map(|v| [v as f64 * 0.01, 0.0, 1.0])
+            .collect();
+        base.normals = Some(normals.clone());
+        let level = simplify_level(&base, 0.25);
+        let kept = level.normals.as_ref().expect("a smooth base gives normals");
+        assert_eq!(kept.len(), level.positions.len());
+        for (v, position) in level.positions.chunks(3).enumerate() {
+            let source = (0..base.positions.len() / 3)
+                .find(|&s| base.positions[s * 3..s * 3 + 3] == *position)
+                .expect("a corner sits at a base position");
+            assert_eq!(kept[v * 3..v * 3 + 3], normals[source * 3..source * 3 + 3]);
+        }
         ludion_scene::check_mesh(&ludion_scene::emit_mesh(&level)).expect("a valid level");
     }
 

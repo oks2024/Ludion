@@ -481,12 +481,18 @@ fn box_edges(corners: &[Vec3; 8], color: [f32; 4], out: &mut Vec<DebugSegment>) 
 /// unknown (always drawn). Viewmodel meshes never enter the world cull and are not marked. When the
 /// frame culls against a `cull_camera`, that camera's frustum is outlined in yellow. A kept mesh
 /// whose asset carries a `lods:` chain is tinted by the level the camera view selects
-/// ([`LEVEL_TINTS`]); `quality_lod_bias` is the machine's `QualityParams::lod_bias`.
+/// ([`LEVEL_TINTS`]); `quality_lod_bias` is the machine's `QualityParams::lod_bias`. With
+/// `draws_levels` false (a device that cannot place a level run, [`Renderer::draws_lod_levels`]) every
+/// mesh is tinted as level 0, the level it draws.
 ///
 /// Computed by the CPU oracle over the same bounds the GPU table is built from, so the marks are
 /// the set the GPU keeps. It is the source of the `cull` debug-draw category: the verdict depends on
 /// the camera, so the engine appends these to the extracted scene's lines.
-pub fn cull_marks(scene: &RenderScene, quality_lod_bias: f32) -> Vec<DebugSegment> {
+pub fn cull_marks(
+    scene: &RenderScene,
+    quality_lod_bias: f32,
+    draws_levels: bool,
+) -> Vec<DebugSegment> {
     let view_proj = scene.cull_view_proj();
     let frustum = Frustum::from_view_proj(view_proj);
     let assets: Vec<AssetBounds> = scene
@@ -515,7 +521,11 @@ pub fn cull_marks(scene: &RenderScene, quality_lod_bias: f32) -> Vec<DebugSegmen
                         }
                         _ => Vec::new(),
                     };
-                    let level = instance_level(Some(*b), &thresholds, &lod_view);
+                    let level = if draws_levels {
+                        instance_level(Some(*b), &thresholds, &lod_view)
+                    } else {
+                        0
+                    };
                     LEVEL_TINTS[(level as usize).min(LEVEL_TINTS.len() - 1)]
                 } else {
                     CULLED
@@ -738,13 +748,13 @@ mod tests {
     #[test]
     fn cull_marks_paint_kept_green_and_culled_red_and_skip_the_viewmodel() {
         let scene = marks_scene(vec![cube_instance(-10.0), cube_instance(10.0)]);
-        let marks = cull_marks(&scene, 0.0);
+        let marks = cull_marks(&scene, 0.0, true);
         assert_eq!((count(&marks, KEPT), count(&marks, CULLED)), (12, 12));
 
         let mut gun = cube_instance(-2.0);
         gun.viewmodel = true;
         let scene = marks_scene(vec![gun]);
-        assert!(cull_marks(&scene, 0.0).is_empty());
+        assert!(cull_marks(&scene, 0.0, true).is_empty());
     }
 
     /// A kept mesh with a chain is tinted by its level (green, then yellow, orange, magenta); a
@@ -775,29 +785,29 @@ mod tests {
         let mut scene = marks_scene(vec![asset(-2.0), asset(-8.0), asset(-20.0), asset(-60.0)]);
         scene.mesh_assets = vec![Arc::new(base)];
         scene.camera.position = Vec3::ZERO;
-        let marks = cull_marks(&scene, 0.0);
+        let marks = cull_marks(&scene, 0.0, true);
         for (tint, expected) in LEVEL_TINTS.iter().enumerate() {
             assert_eq!(count(&marks, *expected), 12, "level {tint}");
         }
         // A bias of 1 halves every switch distance: each instance moves one level coarser.
-        let marks = cull_marks(&scene, 1.0);
+        let marks = cull_marks(&scene, 1.0, true);
         assert_eq!(count(&marks, KEPT), 0);
         assert_eq!(count(&marks, LEVEL_TINTS[3]), 24);
         // No chain: green however far.
         let mut plain = marks_scene(vec![cube_instance(-90.0)]);
         plain.lod.bias = 3.0;
-        assert_eq!(count(&cull_marks(&plain, 0.0), KEPT), 12);
+        assert_eq!(count(&cull_marks(&plain, 0.0, true), KEPT), 12);
     }
 
     #[test]
     fn a_cull_camera_decides_admission_and_outlines_its_frustum() {
         let mut scene = marks_scene(vec![cube_instance(-10.0)]);
-        assert_eq!(count(&cull_marks(&scene, 0.0), CULL_FRUSTUM), 0);
+        assert_eq!(count(&cull_marks(&scene, 0.0, true), CULL_FRUSTUM), 0);
         // Looking the other way, the cube is behind the cull camera.
         let mut turned = scene.camera;
         turned.view = Mat4::look_at_rh(Vec3::ZERO, Vec3::Z, Vec3::Y);
         scene.cull_camera = Some(turned);
-        let marks = cull_marks(&scene, 0.0);
+        let marks = cull_marks(&scene, 0.0, true);
         assert_eq!((count(&marks, KEPT), count(&marks, CULLED)), (0, 12));
         assert_eq!(count(&marks, CULL_FRUSTUM), 12);
     }

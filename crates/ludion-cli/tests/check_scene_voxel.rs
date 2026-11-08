@@ -521,3 +521,23 @@ fn out_of_range_rim_power_reports_l1114_at_the_pointer() {
     assert!(stderr.contains("L1114"), "stderr was: {stderr}");
     assert!(stderr.contains("/rim/power"), "stderr was: {stderr}");
 }
+
+/// `L1398`: a one-cell-thick row halves to nothing (a coarse cell needs four of its eight cells),
+/// so the level it names draws nothing. A warning, not a failure.
+#[test]
+fn a_voxel_lod_level_that_halves_to_nothing_is_warned() {
+    let source = "format: 1\nkind: voxel\nsize:\n  - 4\n  - 1\n  - 1\npalette:\n  A:\n    color:\n      - 1.0\n      - 1.0\n      - 1.0\n      - 1.0\nslices:\n  -\n    - \"AAAA\"\nlods:\n  - screen_size: 0.2\n";
+    let path = std::env::temp_dir().join(format!(
+        "ludion-check-scene-lod-empty-{}.voxel.yaml",
+        std::process::id()
+    ));
+    std::fs::write(&path, source).expect("failed to write the temp fixture");
+
+    let output = run_check_scene(&path);
+    let _ = std::fs::remove_file(&path);
+
+    assert!(output.status.success(), "L1398 is a lint, not a failure");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1398"), "stderr was: {stderr}");
+    assert!(stderr.contains("`lods` level 1"), "stderr was: {stderr}");
+}

@@ -230,6 +230,9 @@ are **not** connected.
   so it names no file. An odd extent rounds up when halved, so a coarse level overhangs the base by
   under one coarse cell toward +X/+Y/+Z. A sculpt `shape: voxel` part and an assembly part ignore the
   chain.
+- **`L1398` — an empty `lods:` level (warning):** a level's halved grid holds no solid cell (a coarse cell
+  needs four of its eight), so it and every coarser level draw nothing. `check-scene` names the first.
+  Drop it, or keep a thin model unchained.
 - **`L1113` — structure:** a missing key, a wrong `kind`, a non-integer `size`, or an unknown key
   (reported with a nearest-match suggestion).
 - **Block scalars are rejected (`L1006`).** The strict-YAML subset forbids `|` and `>`, so a layer

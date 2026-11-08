@@ -366,9 +366,17 @@ fn needs_gpu_the_cull_pass_matches_the_cpu_oracle_and_compacts_in_input_order() 
                 }
             }
             for (b, &(first, count)) in fx.buckets.iter().enumerate() {
-                let survivors: Vec<&MeshInstanceRaw> = (first..first + count)
+                // The cull stamps each copy with its bucket-local source index + 1 in the medium
+                // lane's spare `y`; nothing else about the instance changes.
+                let survivors: Vec<MeshInstanceRaw> = (first..first + count)
                     .filter(|&i| mask[i as usize])
-                    .map(|i| &fx.raws[i as usize])
+                    .map(|i| {
+                        let raw = fx.raws[i as usize];
+                        MeshInstanceRaw {
+                            medium: [raw.medium[0], (i - first + 1) as f32, 0.0, 0.0],
+                            ..raw
+                        }
+                    })
                     .collect();
                 let slot = (v * shape.buckets as usize + b) * 5;
                 assert_eq!(
@@ -380,7 +388,7 @@ fn needs_gpu_the_cull_pass_matches_the_cpu_oracle_and_compacts_in_input_order() 
                 let got = &out[start..start + survivors.len() * INSTANCE_BYTES];
                 let want: Vec<u8> = survivors
                     .iter()
-                    .flat_map(|r| bytemuck::bytes_of(*r).iter().copied())
+                    .flat_map(|r| bytemuck::bytes_of(r).iter().copied())
                     .collect();
                 assert!(
                     got == want,
@@ -1198,6 +1206,91 @@ fn needs_gpu_a_chain_draws_its_levels_and_cull_on_and_off_render_identical_bytes
     assert!(renderer.frame_chain(&flat).cull.is_none());
     let level0 = renderer.render(&flat, size).expect("level 0 render");
     assert_ne!(on.rgba, level0.rgba, "the chain never drew a coarser level");
+}
+
+/// **A decal's receiver ids follow the levels the scene pass drew.** A decal listing only the chained
+/// row paints the same bytes as one listing nobody out: the id redraw lands on the coarse levels' depth
+/// too, where a level-0 redraw would miss the half-size boxes and leave them unpainted.
+#[test]
+fn needs_gpu_decal_receivers_follow_the_selected_level() {
+    let Some(renderer) = skip_or_renderer("decal_receivers_follow_the_selected_level") else {
+        return;
+    };
+    if !renderer.gpu.supports_indirect_first_instance() {
+        return;
+    }
+    let size = FrameSize::native(96, 96);
+    let scene = lod_scene(true);
+    let decal = |receivers| {
+        // The decal projects along its box's Y; rotate that onto the row's -Z so the faces front it.
+        let box_to_world = Mat4::from_translation(Vec3::new(0.0, 0.0, -40.0))
+            * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2)
+            * Mat4::from_scale(Vec3::new(400.0, 200.0, 400.0));
+        crate::scene::DecalInstance {
+            box_to_world,
+            world_to_box: box_to_world.inverse(),
+            blend: crate::scene::DecalBlend::Multiply,
+            color: [0.0, 0.0, 0.0, 1.0],
+            opacity: 1.0,
+            roughness: None,
+            metallic: 0.0,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            angle_fade: [60.0, 80.0],
+            layer: 0,
+            maps: crate::scene::DecalMaps::default(),
+            receivers,
+        }
+    };
+    let render = |receivers| {
+        let mut scene = scene.clone();
+        scene.decals = vec![decal(receivers)];
+        renderer.render(&scene, size).expect("decal render")
+    };
+    let bare = renderer.render(&scene, size).expect("bare render");
+    let everyone = render(crate::scene::DecalReceivers::Exclude(Vec::new()));
+    let listed = render(crate::scene::DecalReceivers::Only(
+        (0..scene.meshes.len() as u32).collect(),
+    ));
+    assert_ne!(bare.rgba, everyone.rgba, "the decal paints the row");
+    assert_eq!(
+        listed.rgba, everyone.rgba,
+        "a listed chained mesh must claim every pixel its drawn level covers"
+    );
+}
+
+/// **Without `INDIRECT_FIRST_INSTANCE` a chained frame draws level 0.** With the hook forcing that
+/// path, a chained scene renders the bytes of the same scene with its chain removed, culling on and
+/// off, and the debug marks tint everything as level 0.
+#[test]
+fn needs_gpu_a_device_without_first_instance_draws_level_zero() {
+    let Some(mut renderer) = skip_or_renderer("a_device_without_first_instance") else {
+        return;
+    };
+    renderer.force_level_zero = true;
+    assert!(!renderer.draws_lod_levels());
+    let size = FrameSize::native(96, 96);
+    let (chained, flat) = (lod_scene(true), lod_scene(false));
+    for cull_on in [true, false] {
+        renderer.set_frustum_culling(cull_on);
+        let chain = renderer.frame_chain(&chained).cull;
+        assert!(
+            chain.is_none_or(|shape| shape.levels == 1),
+            "cull {cull_on}"
+        );
+        let a = renderer.render(&chained, size).expect("chained render");
+        let b = renderer.render(&flat, size).expect("flat render");
+        assert_eq!(a.rgba, b.rgba, "cull {cull_on}: a chain must draw level 0");
+    }
+    let tints = |levels| -> std::collections::BTreeSet<[u32; 4]> {
+        crate::cull::cull_marks(&chained, 0.0, levels)
+            .iter()
+            .map(|s| s.color.map(f32::to_bits))
+            .collect()
+    };
+    assert!(
+        tints(true).len() > tints(false).len(),
+        "the tint follows the drawn level"
+    );
 }
 
 /// The shape of a chain-free frame is today's, and a chain adds lanes but not instance bytes.

@@ -4834,9 +4834,14 @@ impl Engine {
                 };
             }
             if self.debug_draw.enables(crate::debug_draw::CULL) {
+                let levels = self
+                    .renderer
+                    .as_ref()
+                    .is_none_or(Renderer::draws_lod_levels);
                 scene.debug_lines.extend(ludion_renderer::cull_marks(
                     &scene,
                     self.quality.params.lod_bias,
+                    levels,
                 ));
             }
             if self.debug_draw.enables(crate::debug_draw::LOCAL_SHADOWS) {

@@ -459,7 +459,7 @@ pub(crate) fn extract_scene_file(
     )?;
     render_scene.debug_lines = crate::debug_draw::segments(driver.world(), debug);
     if debug.enables(crate::debug_draw::CULL) {
-        let marks = ludion_renderer::cull_marks(&render_scene, quality.lod_bias);
+        let marks = ludion_renderer::cull_marks(&render_scene, quality.lod_bias, true);
         render_scene.debug_lines.extend(marks);
     }
     let drawn = crate::debug_draw::drawn(driver.world());

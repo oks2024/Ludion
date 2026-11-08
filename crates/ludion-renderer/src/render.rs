@@ -497,6 +497,8 @@ pub struct Renderer {
     cull_pipelines: CullPipelines,
     /// Whether the frame culls on the GPU ([`set_frustum_culling`](Renderer::set_frustum_culling)).
     frustum_culling: bool,
+    /// Test hook: behave as a device without `INDIRECT_FIRST_INSTANCE`.
+    force_level_zero: bool,
     /// The dynamic-light injection: the compute pipeline the frame graph's one compute pass
     /// dispatches, and the 1×1×1 fallback volume every frame without that pass binds
     /// (`gi_inject.rs`). Its per-frame uploads are built in [`Renderer::prepare_frame`]; the volume
@@ -701,6 +703,7 @@ impl Renderer {
             probe_relight,
             cull_pipelines,
             frustum_culling: true,
+            force_level_zero: false,
             gi_inject,
             quality: Quality::FULL,
             quality_params: QualityParams::FULL,
@@ -1114,6 +1117,12 @@ impl Renderer {
         self.frustum_culling = on;
     }
 
+    /// Whether this renderer draws a chain's coarser levels: the device places a level run with
+    /// `first_instance`, else every mesh draws level 0.
+    pub fn draws_lod_levels(&self) -> bool {
+        self.gpu.supports_indirect_first_instance() && !self.force_level_zero
+    }
+
     /// Whether the frame culls on the GPU.
     pub fn frustum_culling(&self) -> bool {
         self.frustum_culling
@@ -1156,7 +1165,7 @@ impl Renderer {
             cull: chain
                 .cull
                 .map(|shape| CullShape {
-                    levels: if self.gpu.supports_indirect_first_instance() {
+                    levels: if self.draws_lod_levels() {
                         shape.levels
                     } else {
                         1
@@ -4795,7 +4804,11 @@ impl FrameRecorder<'_> {
     /// where its depth matches `scene_depth`. `R32Float` holds an integer exactly below 2^24, so the
     /// index is exact for any scene a frame can hold.
     fn record_decal_receivers(&self, pass: &mut RecordedPass<'_>) {
-        // Every draw's instance sources in one buffer, the draws' offsets into it kept alongside.
+        let culled = culled_buffers(pass.buffer_reads, self.cull.as_ref());
+        // Every draw's instance sources in one buffer, the draws' offsets into it kept alongside. An
+        // instance no decal lists holds `RECV_NONE`, so a draw of the cull's compacted slice (which
+        // keeps every instance) claims nothing for it.
+        const RECV_NONE: u32 = u32::MAX;
         let mut ids: Vec<u32> = Vec::new();
         let mut bases: Vec<u32> = Vec::new();
         let sources_of_draws = || {
@@ -4806,10 +4819,16 @@ impl FrameRecorder<'_> {
         };
         for draw_sources in sources_of_draws() {
             bases.push(ids.len() as u32);
-            ids.extend_from_slice(draw_sources);
+            ids.extend(draw_sources.iter().map(|id| {
+                if self.decals.receivers.binary_search(id).is_ok() {
+                    *id
+                } else {
+                    RECV_NONE
+                }
+            }));
         }
         debug_assert!(
-            ids.iter().all(|&id| id < 1 << 24),
+            ids.iter().all(|&id| id < 1 << 24 || id == RECV_NONE),
             "an R32Float receiver id is exact below 2^24 meshes",
         );
         let ids_buf = init_buffer(
@@ -4817,18 +4836,31 @@ impl FrameRecorder<'_> {
             wgpu::BufferUsages::STORAGE,
             &storage_bytes(&ids),
         );
+        // Where each draw's instances come from: an asset draw with a chain redraws the levels the
+        // cull selected for the camera, so the redraw's depth is the scene pass's; the rest redraw
+        // their own packed instances.
+        let chained = |draw: &MeshAssetDraw| culled.filter(|_| draw.level_count(culled, 0) > 1);
+        let draw_inputs: Vec<(&[u32], &wgpu::Buffer, Option<u32>)> = self
+            .mesh_draws
+            .iter()
+            .map(|d| (d.sources.as_slice(), &d.instances, None))
+            .chain(self.mesh_asset_draws.iter().map(|d| match chained(d) {
+                Some(c) => (d.sources.as_slice(), c.instances(), Some(d.first)),
+                None => (d.sources.as_slice(), &d.instances, None),
+            }))
+            .collect();
         let draw_bgs: Vec<Option<wgpu::BindGroup>> = bases
             .iter()
-            .zip(sources_of_draws())
-            .map(|(&base, draw_sources)| {
+            .zip(&draw_inputs)
+            .map(|(&base, &(draw_sources, instances, culled_first))| {
                 if only_ranges(draw_sources, &self.decals.receivers).is_empty() {
                     return None;
                 }
                 let uniform = shader_gen::RecvDraw {
                     base,
+                    culled: u32::from(culled_first.is_some()),
+                    inst_first: culled_first.unwrap_or(0),
                     pad0: 0,
-                    pad1: 0,
-                    pad2: 0,
                 };
                 let buf = init_buffer(
                     pass.device,
@@ -4850,6 +4882,10 @@ impl FrameRecorder<'_> {
                         wgpu::BindGroupEntry {
                             binding: shader_gen::RECV_DRAW_BINDING,
                             resource: buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::RECV_INSTANCES_BINDING,
+                            resource: instances.as_entire_binding(),
                         },
                     ],
                 }))
@@ -4887,12 +4923,32 @@ impl FrameRecorder<'_> {
             if draw.viewmodel {
                 continue;
             }
-            let kept = only_ranges(&draw.sources, &self.decals.receivers);
             if draw.variant() != variant {
                 variant = draw.variant();
                 rp.set_pipeline(self.mesh_pipeline(ShaderId::DecalReceiver, variant));
             }
             rp.set_bind_group(1, draw_bg, &[]);
+            if let Some(culled) = chained(draw) {
+                for level in 0..draw.level_count(Some(culled), 0) {
+                    let mesh = draw.level(level);
+                    if mesh.index_count == 0 {
+                        continue;
+                    }
+                    let DrawSource {
+                        instances,
+                        bytes,
+                        indirect,
+                    } = draw.source(Some(culled), 0, level);
+                    let (args, at) = indirect.expect("a chained draw is culled");
+                    rp.set_bind_group(MATERIAL_GROUP, &mesh.material_bg, &[]);
+                    rp.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    rp.set_vertex_buffer(1, instances.slice(bytes));
+                    rp.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    rp.draw_indexed_indirect(args, at);
+                }
+                continue;
+            }
+            let kept = only_ranges(&draw.sources, &self.decals.receivers);
             rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
             rp.set_vertex_buffer(1, draw.instances.slice(draw.instance_bytes()));
@@ -7846,7 +7902,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::DecalReceiver,
-        create: shader_gen::create_recv_depth_recv_ids_recv_draw_bgl,
+        create: shader_gen::create_recv_depth_recv_ids_recv_draw_recv_instances_bgl,
     },
     LayoutDesc {
         id: LayoutId::DecalLit,

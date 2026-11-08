@@ -131,6 +131,11 @@ pub const NO_OCCLUSION: u32 = 4294967295;
 /// Declared in `gi_bake.wgsl`.
 pub const PUSH_OUT_RADIUS: i32 = 2;
 
+/// `RECV_NONE`, hoisted from WGSL `const RECV_NONE: u32`.
+///
+/// Declared in `decal_receiver.wgsl`.
+pub const RECV_NONE: u32 = 4294967295;
+
 /// `SCATTER_UNSHADOWED`, hoisted from WGSL `const SCATTER_UNSHADOWED: u32`.
 ///
 /// Declared in `medium_scatter.wgsl`.
@@ -894,15 +899,28 @@ const _: () = assert!(core::mem::offset_of!(ProjectorParams, flags) == 128);
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct RecvDraw {
     pub base: u32,
+    pub culled: u32,
+    pub inst_first: u32,
     pub pad0: u32,
-    pub pad1: u32,
-    pub pad2: u32,
 }
 const _: () = assert!(core::mem::size_of::<RecvDraw>() == 16);
 const _: () = assert!(core::mem::offset_of!(RecvDraw, base) == 0);
-const _: () = assert!(core::mem::offset_of!(RecvDraw, pad0) == 4);
-const _: () = assert!(core::mem::offset_of!(RecvDraw, pad1) == 8);
-const _: () = assert!(core::mem::offset_of!(RecvDraw, pad2) == 12);
+const _: () = assert!(core::mem::offset_of!(RecvDraw, culled) == 4);
+const _: () = assert!(core::mem::offset_of!(RecvDraw, inst_first) == 8);
+const _: () = assert!(core::mem::offset_of!(RecvDraw, pad0) == 12);
+
+/// WGSL `struct RecvInstance`.
+///
+/// Declared in `decal_receiver.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct RecvInstance {
+    pub model: [[f32; 4]; 4],
+    pub rest: [[f32; 4]; 10],
+}
+const _: () = assert!(core::mem::size_of::<RecvInstance>() == 224);
+const _: () = assert!(core::mem::offset_of!(RecvInstance, model) == 0);
+const _: () = assert!(core::mem::offset_of!(RecvInstance, rest) == 64);
 
 /// WGSL `struct Reflections`.
 ///
@@ -2097,6 +2115,10 @@ pub const SCATTER_GI_G_BINDING: u32 = 2;
 /// `cluster_lights` — `@group(1) @binding(3)`, in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `sprite.wgsl`.
 pub const CLUSTER_LIGHTS_GROUP: u32 = 1;
 pub const CLUSTER_LIGHTS_BINDING: u32 = 3;
+
+/// `recv_instances` — `@group(1) @binding(3)`, in `decal_receiver.wgsl`.
+pub const RECV_INSTANCES_GROUP: u32 = 1;
+pub const RECV_INSTANCES_BINDING: u32 = 3;
 
 /// `scatter_gi_b` — `@group(1) @binding(3)`, in `medium_scatter.wgsl`.
 pub const SCATTER_GI_B_GROUP: u32 = 1;
@@ -3456,10 +3478,12 @@ pub fn create_rect_tex_rect_sampler_bgl(device: &wgpu::Device) -> wgpu::BindGrou
     })
 }
 
-/// Bind group layout `recv_depth_recv_ids_recv_draw` (@group 1), from `decal_receiver.wgsl`.
-pub fn create_recv_depth_recv_ids_recv_draw_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+/// Bind group layout `recv_depth_recv_ids_recv_draw_recv_instances` (@group 1), from `decal_receiver.wgsl`.
+pub fn create_recv_depth_recv_ids_recv_draw_recv_instances_bgl(
+    device: &wgpu::Device,
+) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("recv_depth_recv_ids_recv_draw"),
+        label: Some("recv_depth_recv_ids_recv_draw_recv_instances"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: RECV_DEPTH_BINDING,
@@ -3488,6 +3512,16 @@ pub fn create_recv_depth_recv_ids_recv_draw_bgl(device: &wgpu::Device) -> wgpu::
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: wgpu::BufferSize::new(16),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: RECV_INSTANCES_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(224),
                 },
                 count: None,
             },

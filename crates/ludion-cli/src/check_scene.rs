@@ -565,6 +565,21 @@ fn run_voxel(mut reporter: Reporter, source: &str, views: &VoxelViews) -> ExitCo
     if let Some(warning) = ludion_scene::voxel_budget_warning(&voxel) {
         reporter.warn(warning);
     }
+    if let Some(first) = ludion_engine::voxel_empty_lod_levels(&voxel).first() {
+        reporter.warn(
+            Diagnostic::new(
+                code::VOXEL_LOD_EMPTY_LEVEL,
+                format!(
+                    "`lods` level {first} downsamples to no solid cell, so it and every coarser \
+                     level draw nothing"
+                ),
+            )
+            .with_path(format!("/lods/{}", first - 1))
+            .with_help(
+                "drop that level, or space the `screen_size`s so fewer levels halve the model",
+            ),
+        );
+    }
     // One decode and one flood fill answer both the warning and the summary's component count; the
     // two convenience calls would walk the whole grid twice over.
     let (components, connectivity) = voxel.connectivity();
