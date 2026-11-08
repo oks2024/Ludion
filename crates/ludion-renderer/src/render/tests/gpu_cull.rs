@@ -366,3 +366,140 @@ fn needs_gpu_the_cull_pass_matches_the_cpu_oracle_and_compacts_in_input_order() 
     }
     assert!(seen.contains(&(Kind::Always as u8, true)));
 }
+
+/// The on/off fixture: primitives, a rigid asset, a skinned asset, mirrored copies, a viewmodel gun,
+/// AO and a sun. A row of instances spreads far past the frustum so about half are off-screen.
+fn onoff_scene(size: (u32, u32)) -> RenderScene {
+    let mut scene = fog_scene(size.0, size.1);
+    scene.meshes.clear();
+    scene.post = Some(PostData {
+        ssao: 1.0,
+        dither: false,
+        ..PostData::default()
+    });
+    scene.sun = Some(test_sun(
+        Vec3::new(0.4, -1.0, 0.3),
+        Vec3::new(3.0, 3.0, 3.0),
+        0.002,
+    ));
+    scene.mesh_assets = vec![
+        Arc::new(skin_quad([1.0, 0.0, 0.0, 0.0], [0, 0, 0, 0], 0xC0_11_10)),
+        Arc::new(bounded_skin_quad(0xC0_11_11)),
+    ];
+    scene.bone_palette = vec![Mat4::IDENTITY];
+    let shapes = [
+        MeshShape::Cube,
+        MeshShape::Plane,
+        MeshShape::Sphere,
+        MeshShape::Asset(0),
+        MeshShape::Asset(1),
+    ];
+    for i in 0..40usize {
+        let x = -24.0 + 1.25 * i as f32;
+        let z = -10.0 - 1.5 * (i % 4) as f32;
+        let shape = shapes[i % shapes.len()];
+        let mirror = if i % 7 == 3 { -1.0 } else { 1.0 };
+        let mut mesh = slab(Vec3::ZERO, 1.0, [0.4, 0.3 + 0.01 * i as f32, 0.2]);
+        mesh.shape = shape;
+        mesh.model = Mat4::from_translation(Vec3::new(x, -1.0 + 0.5 * (i % 3) as f32, z))
+            * Mat4::from_scale(Vec3::new(mirror, 1.0, 1.0));
+        if shape == MeshShape::Asset(1) {
+            mesh.bone_offset = 1;
+        }
+        scene.meshes.push(mesh);
+    }
+    super::viewmodel::add_gun(&mut scene);
+    scene
+}
+
+fn visible_world(scene: &RenderScene) -> (usize, usize) {
+    let assets: Vec<AssetBounds> = scene
+        .mesh_assets
+        .iter()
+        .map(|m| AssetBounds::of_mesh(m))
+        .collect();
+    let bounds = instance_bounds(&scene.meshes, &assets, &scene.bone_palette);
+    let frustum = Frustum::from_view_proj(scene.depth_view_proj());
+    let visible = cull(&bounds, &CullVolume::Frustum(frustum));
+    let world = scene.meshes.iter().filter(|m| !m.viewmodel).count();
+    let seen = visible
+        .iter()
+        .filter(|&&i| !scene.meshes[i as usize].viewmodel)
+        .count();
+    (seen, world)
+}
+
+fn second_camera(scene: &mut RenderScene) {
+    scene.camera.view = Mat4::look_at_rh(
+        Vec3::new(-6.0, 0.0, 0.0),
+        Vec3::new(2.0, 0.0, -12.0),
+        Vec3::Y,
+    );
+    scene.camera.position = Vec3::new(-6.0, 0.0, 0.0);
+}
+
+/// **Culling on and off render the same bytes.** At two cameras, on one renderer, the frame with the
+/// GPU cull scheduled equals the direct-draw frame; the oracle confirms each camera really culls.
+#[test]
+fn needs_gpu_frustum_culling_on_and_off_render_identical_bytes() {
+    let Some(mut renderer) = skip_or_renderer("frustum_culling_on_and_off_identical") else {
+        return;
+    };
+    let size = FrameSize::native(96, 96);
+    let mut near = onoff_scene((96, 96));
+    near.camera.projection = Mat4::perspective_rh(
+        60.0_f32.to_radians(),
+        crate::scene::aspect_ratio((96, 96)),
+        0.1,
+        1000.0,
+    );
+    let mut far = near.clone();
+    second_camera(&mut far);
+    for (name, scene) in [("origin", &near), ("side", &far)] {
+        let (seen, world) = visible_world(scene);
+        assert!(
+            seen > 0 && seen < world,
+            "{name}: {seen} of {world} visible"
+        );
+        renderer.set_frustum_culling(true);
+        assert!(renderer.frame_chain(scene).cull.is_some());
+        let on = renderer.render(scene, size).expect("culled render");
+        renderer.set_frustum_culling(false);
+        assert!(renderer.frame_chain(scene).cull.is_none());
+        let off = renderer.render(scene, size).expect("direct render");
+        assert_eq!(on.rgba, off.rgba, "{name}: culling changed the image");
+    }
+}
+
+/// The culled render of the on/off fixture is stable over 20 repeats.
+#[test]
+fn needs_gpu_the_culled_render_repeats_identically() {
+    let Some(renderer) = skip_or_renderer("the_culled_render_repeats_identically") else {
+        return;
+    };
+    let size = FrameSize::native(96, 96);
+    let scene = onoff_scene((96, 96));
+    let first = renderer.render(&scene, size).expect("first render");
+    for run in 1..20 {
+        let again = renderer.render(&scene, size).expect("repeat render");
+        assert_eq!(first.rgba, again.rgba, "repeat {run} differs");
+    }
+}
+
+/// The graph follows the switch: the chain schedules the cull exactly when it is on and a world mesh
+/// exists, and a viewmodel-only scene has none.
+#[test]
+fn needs_gpu_the_frame_chain_follows_the_culling_switch() {
+    let Some(mut renderer) = skip_or_renderer("the_frame_chain_follows_the_culling_switch") else {
+        return;
+    };
+    let scene = onoff_scene((64, 64));
+    assert!(renderer.frustum_culling());
+    assert!(renderer.frame_chain(&scene).cull.is_some());
+    renderer.set_frustum_culling(false);
+    assert!(renderer.frame_chain(&scene).cull.is_none());
+    renderer.set_frustum_culling(true);
+    let mut gun_only = scene.clone();
+    gun_only.meshes.retain(|m| m.viewmodel);
+    assert!(renderer.frame_chain(&gun_only).cull.is_none());
+}

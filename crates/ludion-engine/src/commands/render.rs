@@ -278,8 +278,11 @@ pub(crate) fn dump_graph(engine: &mut Engine) -> Result<ResponseBody, Diagnostic
         .extract_render_scene(width, height)
         .map_err(collapse)?;
     let quality = engine.quality();
-    let chain =
+    let mut chain =
         ludion_renderer::PostChain::for_scene(&scene).masked(&quality.quality, &quality.params);
+    if !engine.frustum_culling() {
+        chain.cull = None;
+    }
     let json = ludion_renderer::dump_frame_graph_json(engine.frame_size(width, height)?, chain)?;
     let graph = parse_json(&json, "render graph dump")?;
     Ok(ResponseBody::GraphDump { graph })

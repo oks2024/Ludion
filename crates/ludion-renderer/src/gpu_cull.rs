@@ -8,6 +8,7 @@
 //! `DrawIndirectArgs`; `first_instance` stays 0, so the draw binds `cull_out` at the bucket's offset
 //! instead of needing `INDIRECT_FIRST_INSTANCE`.
 
+use ludion_core::math::glam::Mat4;
 use wgpu::util::DeviceExt;
 
 use crate::cull::{Aabb, CullBoundsRaw, Frustum, bounds_slot};
@@ -95,6 +96,77 @@ impl CullPipelines {
             outputs,
         }
     }
+}
+
+/// One world draw as the cull sees it: its range of the packed instance buffer, its draw element
+/// count (vertices of a primitive, indices of an asset) and the `scene.meshes` index of each instance.
+pub(crate) struct WorldBucket<'a> {
+    pub(crate) first: u32,
+    pub(crate) count: u32,
+    pub(crate) elements: u32,
+    pub(crate) sources: &'a [u32],
+}
+
+/// What [`world_cull`] reads.
+pub(crate) struct WorldCullInput<'a> {
+    pub(crate) instances: &'a wgpu::Buffer,
+    pub(crate) meshes: &'a [MeshInstance],
+    /// `cull::instance_bounds` of `meshes`.
+    pub(crate) bounds: &'a [Option<Aabb>],
+    pub(crate) buckets: &'a [WorldBucket<'a>],
+    /// The one view-projection the camera uniform uses.
+    pub(crate) view_proj: Mat4,
+    pub(crate) bounds_table: &'a wgpu::Buffer,
+    pub(crate) shape: CullShape,
+}
+
+/// Prepares the cull over the frame's world draws, one bucket each, in packing order.
+pub(crate) fn world_cull(
+    device: &wgpu::Device,
+    pipelines: &CullPipelines,
+    input: WorldCullInput<'_>,
+) -> CullFrame {
+    let WorldCullInput {
+        instances,
+        meshes,
+        bounds,
+        buckets,
+        view_proj,
+        bounds_table,
+        shape,
+    } = input;
+    let items: Vec<CullItem> = buckets
+        .iter()
+        .enumerate()
+        .flat_map(|(b, bucket)| {
+            bucket
+                .sources
+                .iter()
+                .map(move |&src| (b as u32, src as usize))
+        })
+        .map(|(b, src)| cull_item(&meshes[src], b, bounds[src]))
+        .collect();
+    let cull_buckets: Vec<CullBucket> = buckets
+        .iter()
+        .map(|bucket| CullBucket {
+            first: bucket.first,
+            count: bucket.count,
+            elements: bucket.elements,
+            pad0: 0,
+        })
+        .collect();
+    CullFrame::prepare(
+        device,
+        pipelines,
+        CullInput {
+            instances,
+            items: &items,
+            buckets: &cull_buckets,
+            views: &[Frustum::from_view_proj(view_proj)],
+            bounds_table,
+            shape,
+        },
+    )
 }
 
 /// What a frame's cull reads.

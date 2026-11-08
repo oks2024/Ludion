@@ -4390,7 +4390,9 @@ impl Engine {
         let hold = self.gi_hold();
         let store = self.probe_store.clone();
         let anti_aliasing = self.anti_aliasing();
+        let frustum_culling = self.frustum_culling;
         let renderer = self.renderer.as_mut().expect("just initialized");
+        renderer.set_frustum_culling(frustum_culling);
         renderer.set_gi_hold(hold);
         renderer.set_anti_aliasing(anti_aliasing);
         renderer.set_probe_store(store);
@@ -4430,6 +4432,7 @@ impl Engine {
             anti_aliasing: self.anti_aliasing(),
             gi_hold: self.gi_hold(),
             probe_store: self.probe_store.clone(),
+            frustum_culling: self.frustum_culling,
         }
     }
 

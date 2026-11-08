@@ -60,6 +60,8 @@ pub struct PresentSettings {
     pub gi_hold: bool,
     /// The reflection-probe store directory, if any.
     pub probe_store: Option<PathBuf>,
+    /// Whether the renderer culls on the GPU.
+    pub frustum_culling: bool,
 }
 
 /// When a tick ran on the sim thread's wall clock, for the presenter's trace.
@@ -704,6 +706,7 @@ impl WindowBackend {
         self.renderer.set_anti_aliasing(settings.anti_aliasing);
         self.renderer.set_gi_hold(settings.gi_hold);
         self.renderer.set_probe_store(settings.probe_store.clone());
+        self.renderer.set_frustum_culling(settings.frustum_culling);
         self.applied = Some(settings.clone());
     }
 }
@@ -828,6 +831,7 @@ mod tests {
                 anti_aliasing: AntiAliasing::Off,
                 gi_hold: false,
                 probe_store: None,
+                frustum_culling: true,
             },
             tick: None,
             blend: None,

@@ -20,7 +20,7 @@ fn gun_scene() -> RenderScene {
 
 /// Pushes a 0.1 cube flagged as a viewmodel at camera-local z −0.45 and the lens data that goes
 /// with it, composed onto the scene's camera.
-fn add_gun(scene: &mut RenderScene) {
+pub(super) fn add_gun(scene: &mut RenderScene) {
     add_gun_at(
         scene,
         Mat4::from_translation(Vec3::new(0.0, 0.0, -0.45)) * Mat4::from_scale(Vec3::splat(0.1)),

@@ -54,10 +54,6 @@ mod frame_observer;
 mod gi_bake;
 mod gi_bin;
 mod gi_inject;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into the frame by the cull pass")
-)]
 mod gpu_cull;
 pub mod graph;
 mod ibl;

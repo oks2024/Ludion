@@ -16,6 +16,10 @@ use ludion_renderer::{AntiAliasing, FrameSize, PostChain};
 /// produces.
 const SNAPSHOT: &str = include_str!("snapshots/frame_graph_64x64.json");
 
+/// The same graph for a scene with a world mesh: the GPU `cull` pass first, its three buffers at the
+/// 256-instance / 16-bucket floor every small scene shares.
+const CULL_SNAPSHOT: &str = include_str!("snapshots/frame_graph_64x64_cull.json");
+
 fn gallery(scene: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/gallery")
@@ -65,10 +69,11 @@ fn smaa_chain_dump_graph_matches_committed_snapshot() {
     );
 }
 
-/// A UI-free, sunless scene dumps exactly the pinned minimal graph — the scene-derived path and the
-/// snapshot above agree by construction, not by coincidence.
+/// A UI-free, sunless scene with meshes dumps exactly the pinned culled graph — the scene-derived path
+/// and the snapshot agree by construction, not by coincidence. The same scene without the host's
+/// culling dumps the minimal graph.
 #[test]
-fn a_bare_scene_dumps_the_minimal_graph() {
+fn a_bare_mesh_scene_dumps_the_culled_minimal_graph() {
     let json = ludion_engine::dump_scene_graph_json(
         &gallery("meshes.yaml"),
         FrameSize::native(64, 64),
@@ -76,7 +81,7 @@ fn a_bare_scene_dumps_the_minimal_graph() {
         AntiAliasing::Off,
     )
     .expect("the gallery scene validates and schedules");
-    assert_eq!(json, SNAPSHOT);
+    assert_eq!(json, CULL_SNAPSHOT);
 }
 
 /// A scene carrying screen-space UI dumps its real shape: `composite` into the `ldr` transient,
@@ -93,6 +98,7 @@ fn a_ui_scene_dumps_the_overlay_pass() {
     assert_eq!(
         scheduled_passes(&json),
         [
+            "cull",
             "scene",
             "reflections",
             "transparents",
@@ -128,7 +134,7 @@ fn a_ground_marker_scene_dumps_the_unchanged_minimal_graph() {
     )
     .expect("the gallery scene validates and schedules");
     assert_eq!(
-        json, SNAPSHOT,
+        json, CULL_SNAPSHOT,
         "a GroundMarker scene must not change the scheduled pass list",
     );
 }
@@ -147,7 +153,7 @@ fn a_particle_scene_dumps_the_unchanged_minimal_graph() {
     )
     .expect("the gallery scene validates and schedules");
     assert_eq!(
-        json, SNAPSHOT,
+        json, CULL_SNAPSHOT,
         "a ParticleEmitter scene must not change the scheduled pass list",
     );
 }
@@ -167,6 +173,7 @@ fn a_sun_scene_dumps_the_shadow_pass() {
         scheduled_passes(&json),
         [
             "shadow",
+            "cull",
             "scene",
             "reflections",
             "transparents",
@@ -358,7 +365,7 @@ fn a_host_aa_mode_dumps_the_smaa_passes_after_composite() {
         AntiAliasing::Off,
     )
     .unwrap();
-    assert_eq!(off, SNAPSHOT);
+    assert_eq!(off, CULL_SNAPSHOT);
 }
 
 /// `ParticleEmitter.lit` leaves the schedule alone: absent, `lit: false` and `lit: true` dump

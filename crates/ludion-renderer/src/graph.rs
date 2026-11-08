@@ -164,7 +164,8 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_render_graph::{
-    MAX_TEXTURE_DIMENSION_2D, RenderGraph, ResourceId, TextureDesc, schedule,
+    BufferDesc, BufferUsage, MAX_TEXTURE_DIMENSION_2D, RenderGraph, ResourceId, TextureDesc,
+    schedule,
 };
 
 use crate::quality::{Quality, QualityParams};
@@ -275,6 +276,11 @@ pub mod pass {
     /// It owns its depth rather than sharing `scene_depth`, so the scene pass keeps its own `Less`
     /// test and clear.
     pub const PREPASS: &str = "prepass";
+    /// The GPU frustum cull: a **compute** pass testing every world mesh instance against the
+    /// camera the frame draws with and compacting the survivors into the buffers `prepass` and
+    /// `scene` draw indirectly from. Present only when
+    /// [`PostChain::cull`](super::PostChain::cull) is `Some`.
+    pub const CULL: &str = "cull";
     /// The dynamic-light injection: the frame graph's one **compute** pass, replaying the GI bake's
     /// cached hits against a world-space bin of the scene's `GiDynamic`-marked lights into a
     /// transient probe-lattice volume the scene pass samples
@@ -667,6 +673,14 @@ impl CullShape {
     }
 }
 
+/// The cull's capacities for `scene`: one view, a bucket per world draw at most (a primitive shape
+/// and a mirror twin, or an asset and its twin, each unmirrored and mirrored), and an instance per
+/// world mesh. `None` without a world mesh.
+fn cull_shape(scene: &RenderScene) -> Option<CullShape> {
+    let world = scene.meshes.iter().filter(|m| !m.viewmodel).count();
+    (world > 0).then(|| CullShape::for_counts(world, 2 * (3 + scene.mesh_assets.len()), 1))
+}
+
 /// What a scene's content requires of the graph's *structure* — everything but the resolution.
 ///
 /// Plain `Copy` data, so [`build_frame_graph`] stays a pure function of its arguments: no GPU, no
@@ -730,6 +744,12 @@ pub struct PostChain {
     /// with no marked light (or a machine with the effect off) byte-identical by construction rather
     /// than by care.
     pub gi_inject: Option<[u32; 3]>,
+    /// The GPU cull's capacities, or `None` when the frame draws no world mesh (or culling is
+    /// off): the [`pass::CULL`] pass and its three buffers are declared exactly when it is `Some`.
+    /// Like [`gi_inject`](PostChain::gi_inject) it carries the extent because a buffer's size is
+    /// graph structure; the scene-derived counts round up to a shape the buffer cache reuses.
+    /// Content, so `masked` keeps it.
+    pub cull: Option<CullShape>,
     /// The scene carries world-space debug lines: the `overlay` pass is appended exactly as for
     /// [`ui`](PostChain::ui), and additionally reads `scene_depth` so the lines can be dimmed where
     /// geometry hides them.
@@ -858,6 +878,7 @@ impl PostChain {
             // implements it, so the graph and the recorder read one function rather than two copies
             // of a conjunction.
             gi_inject: crate::gi_inject::scheduled_lattice(scene),
+            cull: cull_shape(scene),
             debug_lines: !scene.debug_lines.is_empty(),
             // `ssr` is a strength *and* the gate: at zero the blend takes the sky fill alone, so
             // tracing would be work with no output. Machines scale it down in `masked`.
@@ -1245,6 +1266,30 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     let gi_dynamic = chain.gi_inject.map(|[cx, cy, cz]| {
         graph.transient(pass::GI_INJECT, TextureDesc::hdr_storage_volume(cx, cy, cz))
     });
+    // The cull's three buffers: the scan scratch, the compacted instances (also the vertex source
+    // the draws bind) and the indirect args. Graph buffers live one frame, so the pass rewrites all
+    // three every frame it exists.
+    let cull = chain.cull.map(|shape| {
+        let scratch = graph.buffer(
+            "cull_scratch",
+            BufferDesc::new(shape.scratch_bytes(), &[BufferUsage::Storage]),
+        );
+        let instances = graph.buffer(
+            "cull_instances",
+            BufferDesc::new(
+                shape.instance_bytes(),
+                &[BufferUsage::Storage, BufferUsage::Vertex],
+            ),
+        );
+        let args = graph.buffer(
+            "cull_args",
+            BufferDesc::new(
+                shape.args_bytes(),
+                &[BufferUsage::Storage, BufferUsage::Indirect],
+            ),
+        );
+        (scratch, instances, args)
+    });
     // The SSR input pyramids, at the trace extent (a post target: sized from the output). Declared
     // only when SSR is on, after the other conditional chains and before `final`.
     let ssr = chain.ssr.map(|scale| {
@@ -1353,14 +1398,26 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     }
     // Prepass → ssao → blur, each ordered by the next one's read, and the scene pass's read of the
     // blurred factor is what puts the whole chain in front of it.
+    // The cull has no texture edges: its buffer edges schedule it ahead of the prepass and the scene.
+    if let Some((scratch, instances, args)) = cull {
+        graph.add_external_buffer_compute_pass(
+            pass::CULL,
+            pass::CULL,
+            vec![],
+            vec![scratch, instances, args],
+        );
+    }
     if let Some(ao) = ao {
-        graph.add_external_pass_with_depth(
+        let prepass = graph.add_external_pass_with_depth(
             pass::PREPASS,
             pass::PREPASS,
             vec![],
             vec![ao.normal],
             ao.depth,
         );
+        if let Some((_, instances, args)) = cull {
+            graph.read_buffers(prepass, &[instances, args]);
+        }
         graph.add_external_pass(
             pass::SSAO,
             pass::SSAO,
@@ -1385,13 +1442,16 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     scene_reads.extend(local_shadow_atlas);
     // The lit decals shade like the scene pass, so they read what it reads, after their own inputs.
     let decals_lit_tail = chain.lit_decals.then(|| scene_reads.clone());
-    graph.add_external_pass_with_depth(
+    let scene_pass = graph.add_external_pass_with_depth(
         pass::SCENE,
         pass::SCENE,
         scene_reads,
         vec![scene, scene_normal, scene_specular],
         scene_depth,
     );
+    if let Some((_, instances, args)) = cull {
+        graph.read_buffers(scene_pass, &[instances, args]);
+    }
     // Decal receiver ids are read from `scene_depth` alone. Both decal passes read them, so they sit
     // right after the opaque pass.
     if let Some(receivers) = decal_receivers {
@@ -2024,6 +2084,82 @@ mod tests {
         }
     }
 
+    fn cull_mesh(viewmodel: bool) -> crate::scene::MeshInstance {
+        use ludion_core::math::glam::{Mat3, Mat4};
+        crate::scene::MeshInstance {
+            shape: crate::scene::MeshShape::Cube,
+            model: Mat4::IDENTITY,
+            normal_matrix: Mat3::IDENTITY,
+            color: [1.0; 4],
+            material: [1.0, 0.0, 1.0],
+            use_vertex_material: false,
+            fade: 1.0,
+            fade_height_min: -f32::MAX,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
+            bone_offset: 0,
+            cast_shadows: true,
+            viewmodel,
+        }
+    }
+
+    /// A world mesh gives the chain a cull shape, a viewmodel-only or empty scene none, and the graph
+    /// declares the pass with its three buffers exactly when the shape is there: `prepass` and `scene`
+    /// read the compacted instances and the args, and the probe capture graph never has the pass.
+    #[test]
+    fn the_cull_pass_and_its_buffers_follow_the_chain() {
+        let mut scene = RenderScene::empty((64, 64));
+        assert_eq!(PostChain::for_scene(&scene).cull, None);
+        scene.meshes.push(cull_mesh(true));
+        assert_eq!(
+            PostChain::for_scene(&scene).cull,
+            None,
+            "a gun is never culled"
+        );
+        scene.meshes.push(cull_mesh(false));
+        let chain = PostChain::for_scene(&scene);
+        assert_eq!(chain.cull, Some(CullShape::for_counts(1, 6, 1)));
+        let masked = chain.masked(&Quality::LOW, &QualityParams::LOW);
+        assert_eq!(masked.cull, chain.cull, "content: masking keeps it");
+
+        let with_ao = PostChain {
+            ssao: true,
+            ..chain
+        };
+        for chain in [chain, with_ao] {
+            let (graph, _) = build_frame_graph(FrameSize::native(64, 64), chain);
+            let names = pass_names(&graph);
+            assert_eq!(names[0], "cull", "{names:?}");
+            let buffers: Vec<&str> = graph.buffers().iter().map(|b| b.name.as_str()).collect();
+            assert_eq!(buffers, ["cull_scratch", "cull_instances", "cull_args"]);
+            let readers: Vec<&str> = graph
+                .passes()
+                .iter()
+                .filter(|p| p.buffer_reads.len() == 2)
+                .map(|p| p.name.as_str())
+                .collect();
+            let want: &[&str] = if chain.ssao {
+                &["prepass", "scene"]
+            } else {
+                &["scene"]
+            };
+            assert_eq!(readers, want);
+        }
+
+        let (bare, _) = build_frame_graph(
+            FrameSize::native(64, 64),
+            PostChain {
+                cull: None,
+                ..chain
+            },
+        );
+        assert!(!pass_names(&bare).contains(&"cull") && bare.buffers().is_empty());
+        let (capture, _, _) = build_probe_capture_graph(64, PostChain::default());
+        assert!(!pass_names(&capture).contains(&"cull") && capture.buffers().is_empty());
+    }
+
     /// The scene pass writes the capture's fourth, emissive target, and the face pass copies it out
     /// beside the lit face.
     #[test]
@@ -2127,6 +2263,7 @@ mod tests {
                 shafts: bits & 8 != 0,
                 dof: bits & 16 != 0,
                 gi_inject: (bits & 32 != 0).then_some([4, 4, 4]),
+                cull: None,
                 // Content like `ui`, so masking leaves it alone (`ui` already varies over the walk).
                 debug_lines: bits & 1 != 0,
                 // Varies with `ssao` so both gates are walked; `FULL` keeps the same scale.

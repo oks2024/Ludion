@@ -1,0 +1,678 @@
+{
+  "passes": [
+    {
+      "name": "cull",
+      "kind": "cull",
+      "reads": [],
+      "writes": [],
+      "buffer_writes": [
+        "cull_scratch",
+        "cull_instances",
+        "cull_args"
+      ]
+    },
+    {
+      "name": "scene",
+      "kind": "scene",
+      "reads": [],
+      "writes": [
+        "scene",
+        "scene_normal",
+        "scene_specular",
+        "scene_depth"
+      ],
+      "buffer_reads": [
+        "cull_instances",
+        "cull_args"
+      ]
+    },
+    {
+      "name": "reflections",
+      "kind": "reflections",
+      "reads": [
+        "scene_normal",
+        "scene_specular",
+        "scene_depth"
+      ],
+      "writes": [
+        "scene"
+      ]
+    },
+    {
+      "name": "transparents",
+      "kind": "transparents",
+      "reads": [],
+      "writes": [
+        "scene",
+        "scene_depth"
+      ]
+    },
+    {
+      "name": "bloom_threshold",
+      "kind": "bloom_threshold",
+      "reads": [
+        "scene"
+      ],
+      "writes": [
+        "bloom_bright"
+      ]
+    },
+    {
+      "name": "bloom_down_1",
+      "kind": "bloom_down_1",
+      "reads": [
+        "bloom_bright"
+      ],
+      "writes": [
+        "bloom_down_1"
+      ]
+    },
+    {
+      "name": "bloom_down_2",
+      "kind": "bloom_down_2",
+      "reads": [
+        "bloom_down_1"
+      ],
+      "writes": [
+        "bloom_down_2"
+      ]
+    },
+    {
+      "name": "bloom_down_3",
+      "kind": "bloom_down_3",
+      "reads": [
+        "bloom_down_2"
+      ],
+      "writes": [
+        "bloom_down_3"
+      ]
+    },
+    {
+      "name": "bloom_down_4",
+      "kind": "bloom_down_4",
+      "reads": [
+        "bloom_down_3"
+      ],
+      "writes": [
+        "bloom_down_4"
+      ]
+    },
+    {
+      "name": "bloom_down_5",
+      "kind": "bloom_down_5",
+      "reads": [
+        "bloom_down_4"
+      ],
+      "writes": [
+        "bloom_down_5"
+      ]
+    },
+    {
+      "name": "bloom_up_4",
+      "kind": "bloom_up_4",
+      "reads": [
+        "bloom_down_5",
+        "bloom_down_4"
+      ],
+      "writes": [
+        "bloom_up_4"
+      ]
+    },
+    {
+      "name": "bloom_up_3",
+      "kind": "bloom_up_3",
+      "reads": [
+        "bloom_up_4",
+        "bloom_down_3"
+      ],
+      "writes": [
+        "bloom_up_3"
+      ]
+    },
+    {
+      "name": "bloom_up_2",
+      "kind": "bloom_up_2",
+      "reads": [
+        "bloom_up_3",
+        "bloom_down_2"
+      ],
+      "writes": [
+        "bloom_up_2"
+      ]
+    },
+    {
+      "name": "bloom_up_1",
+      "kind": "bloom_up_1",
+      "reads": [
+        "bloom_up_2",
+        "bloom_down_1"
+      ],
+      "writes": [
+        "bloom_up_1"
+      ]
+    },
+    {
+      "name": "bloom_up_0",
+      "kind": "bloom_up_0",
+      "reads": [
+        "bloom_up_1",
+        "bloom_bright"
+      ],
+      "writes": [
+        "bloom_up_0"
+      ]
+    },
+    {
+      "name": "composite",
+      "kind": "composite",
+      "reads": [
+        "scene",
+        "bloom_up_0",
+        "scene_depth"
+      ],
+      "writes": [
+        "final"
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "name": "scene",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 64,
+      "height": 64,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "scene_depth",
+      "kind": "transient",
+      "format": "depth32_float",
+      "width": 64,
+      "height": 64,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "scene_normal",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 64,
+      "height": 64,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "scene_specular",
+      "kind": "transient",
+      "format": "rgba8unorm_srgb",
+      "width": 64,
+      "height": 64,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom_bright",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 32,
+      "height": 32,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom_down_1",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 16,
+      "height": 16,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom_down_2",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 8,
+      "height": 8,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom_down_3",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 4,
+      "height": 4,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom_down_4",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 2,
+      "height": 2,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom_down_5",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 1,
+      "height": 1,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom_up_0",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 32,
+      "height": 32,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom_up_1",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 16,
+      "height": 16,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom_up_2",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 8,
+      "height": 8,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom_up_3",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 4,
+      "height": 4,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "bloom_up_4",
+      "kind": "transient",
+      "format": "rgba16float",
+      "width": 2,
+      "height": 2,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "final",
+      "kind": "output",
+      "format": "rgba8unorm_srgb",
+      "width": 64,
+      "height": 64,
+      "usages": [
+        "render_attachment",
+        "copy_src"
+      ]
+    }
+  ],
+  "buffers": [
+    {
+      "name": "cull_scratch",
+      "size": 40,
+      "usages": [
+        "storage"
+      ]
+    },
+    {
+      "name": "cull_instances",
+      "size": 49152,
+      "usages": [
+        "storage",
+        "vertex"
+      ]
+    },
+    {
+      "name": "cull_args",
+      "size": 320,
+      "usages": [
+        "storage",
+        "indirect"
+      ]
+    }
+  ],
+  "schedule": [
+    "cull",
+    "scene",
+    "reflections",
+    "transparents",
+    "bloom_threshold",
+    "bloom_down_1",
+    "bloom_down_2",
+    "bloom_down_3",
+    "bloom_down_4",
+    "bloom_down_5",
+    "bloom_up_4",
+    "bloom_up_3",
+    "bloom_up_2",
+    "bloom_up_1",
+    "bloom_up_0",
+    "composite"
+  ],
+  "aliasing": {
+    "physical_texture_count": 16,
+    "physical_textures": [
+      {
+        "id": 0,
+        "format": "rgba8unorm_srgb",
+        "width": 64,
+        "height": 64,
+        "usages": [
+          "render_attachment",
+          "copy_src"
+        ],
+        "resources": [
+          "final"
+        ]
+      },
+      {
+        "id": 1,
+        "format": "rgba16float",
+        "width": 64,
+        "height": 64,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "scene"
+        ]
+      },
+      {
+        "id": 2,
+        "format": "depth32_float",
+        "width": 64,
+        "height": 64,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "scene_depth"
+        ]
+      },
+      {
+        "id": 3,
+        "format": "rgba16float",
+        "width": 64,
+        "height": 64,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "scene_normal"
+        ]
+      },
+      {
+        "id": 4,
+        "format": "rgba8unorm_srgb",
+        "width": 64,
+        "height": 64,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "scene_specular"
+        ]
+      },
+      {
+        "id": 5,
+        "format": "rgba16float",
+        "width": 32,
+        "height": 32,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "bloom_bright"
+        ]
+      },
+      {
+        "id": 6,
+        "format": "rgba16float",
+        "width": 16,
+        "height": 16,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "bloom_down_1"
+        ]
+      },
+      {
+        "id": 7,
+        "format": "rgba16float",
+        "width": 8,
+        "height": 8,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "bloom_down_2"
+        ]
+      },
+      {
+        "id": 8,
+        "format": "rgba16float",
+        "width": 4,
+        "height": 4,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "bloom_down_3"
+        ]
+      },
+      {
+        "id": 9,
+        "format": "rgba16float",
+        "width": 2,
+        "height": 2,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "bloom_down_4"
+        ]
+      },
+      {
+        "id": 10,
+        "format": "rgba16float",
+        "width": 1,
+        "height": 1,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "bloom_down_5"
+        ]
+      },
+      {
+        "id": 11,
+        "format": "rgba16float",
+        "width": 2,
+        "height": 2,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "bloom_up_4"
+        ]
+      },
+      {
+        "id": 12,
+        "format": "rgba16float",
+        "width": 4,
+        "height": 4,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "bloom_up_3"
+        ]
+      },
+      {
+        "id": 13,
+        "format": "rgba16float",
+        "width": 8,
+        "height": 8,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "bloom_up_2"
+        ]
+      },
+      {
+        "id": 14,
+        "format": "rgba16float",
+        "width": 16,
+        "height": 16,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "bloom_up_1"
+        ]
+      },
+      {
+        "id": 15,
+        "format": "rgba16float",
+        "width": 32,
+        "height": 32,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "bloom_up_0"
+        ]
+      }
+    ],
+    "assignment": [
+      {
+        "resource": "scene",
+        "physical": 1
+      },
+      {
+        "resource": "scene_depth",
+        "physical": 2
+      },
+      {
+        "resource": "scene_normal",
+        "physical": 3
+      },
+      {
+        "resource": "scene_specular",
+        "physical": 4
+      },
+      {
+        "resource": "bloom_bright",
+        "physical": 5
+      },
+      {
+        "resource": "bloom_down_1",
+        "physical": 6
+      },
+      {
+        "resource": "bloom_down_2",
+        "physical": 7
+      },
+      {
+        "resource": "bloom_down_3",
+        "physical": 8
+      },
+      {
+        "resource": "bloom_down_4",
+        "physical": 9
+      },
+      {
+        "resource": "bloom_down_5",
+        "physical": 10
+      },
+      {
+        "resource": "bloom_up_0",
+        "physical": 15
+      },
+      {
+        "resource": "bloom_up_1",
+        "physical": 14
+      },
+      {
+        "resource": "bloom_up_2",
+        "physical": 13
+      },
+      {
+        "resource": "bloom_up_3",
+        "physical": 12
+      },
+      {
+        "resource": "bloom_up_4",
+        "physical": 11
+      },
+      {
+        "resource": "final",
+        "physical": 0
+      }
+    ]
+  }
+}

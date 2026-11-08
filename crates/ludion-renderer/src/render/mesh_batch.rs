@@ -1,0 +1,457 @@
+//! The frame's mesh draws: instances grouped by shape (primitives) or asset index, packed into one
+//! `VERTEX | STORAGE` buffer, world draws first, so the `cull` pass can read every world instance
+//! and the draws bind their own byte range of it.
+
+use ludion_core::math::glam::{Mat3, Mat4, Vec3};
+
+use super::{CasterPipeline, MeshAssetGpu, MeshVariant, init_buffer};
+use crate::cull::{Aabb, AssetBounds, local_bounds};
+use crate::scene::{MeshInstance, MeshShape, RenderScene};
+use bytemuck::{Pod, Zeroable};
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub(crate) struct MeshInstanceRaw {
+    pub(super) model: [[f32; 4]; 4],
+    pub(super) color: [f32; 4],
+    /// `(roughness, metallic, emissive, use_vertex_material)`. `w` is the branch-free selection
+    /// flag: `1.0` selects the vertex material, `0.0` these per-instance scalars.
+    pub(super) material: [f32; 4],
+    /// The normal matrix (inverse-transpose of the model's upper-3×3), embedded in a `mat4` via
+    /// [`Mat4::from_mat3`] so the shader can apply it with the same `mat4 * vec4(n, 0)` arithmetic
+    /// the old upper-3×3 path used — which keeps uniform-scale output bit-identical (the normal
+    /// matrix then *is* the model's upper-3×3, and the `w` column is annihilated by the `0`).
+    ///
+    /// The lanes that product never reads are **repurposed** to carry the wrap-diffuse data, so this
+    /// struct needs no extra attribute (see [`instance_normal_lanes`]). The next per-instance value
+    /// gets a real lane of its own, not more packing here.
+    pub(super) normal: [[f32; 4]; 4],
+    /// `(fade, height_min, bone_offset, handedness)`. Read at `@location(16)`: the first two lanes by
+    /// the mesh shader's Bayer-dither discard (from the entity's `Fade` component, defaults
+    /// `(1.0, -f32::MAX)`; the default can never discard, so a fade-free frame is render-identical by
+    /// construction), the third by the vertex shader as the bone-palette offset
+    /// ([`MeshInstance::bone_offset`], `0` = unskinned, never read), the fourth as the model's
+    /// handedness sign (`-1.0` for a reflection; see [`is_mirrored`]).
+    pub(super) fade: [f32; 4],
+    /// Per-instance hit-flash lane `(flash_color.rgb, amount)`, from the entity's `Mesh` component
+    /// (default `(1, 1, 1, 0)`). Read at `@location(17)`; the mesh shader lerps the shaded colour
+    /// toward `flash_color` by `amount`, and `amount == 0` can never change a pixel.
+    pub(super) flash: [f32; 4],
+}
+
+pub(super) struct MeshDraw {
+    pub(super) shape: MeshShape,
+    pub(super) instances: wgpu::Buffer,
+    pub(super) count: u32,
+    /// Index of this draw's first instance in the frame's packed buffer.
+    pub(super) first: u32,
+    /// The world draw's sequential index among world draws (its `cull` bucket); `None` for a
+    /// viewmodel draw, which is never culled.
+    pub(super) bucket: Option<u32>,
+    /// Draws through the shader's winding-reversed variant ([`is_mirrored`]).
+    pub(super) mirrored: bool,
+    /// Every instance is a viewmodel mesh: the draw binds the viewmodel's camera group.
+    pub(super) viewmodel: bool,
+    /// Ascending indices into `scene.meshes` of this draw's instances, in instance order, so the
+    /// drop-shadow occlusion pass can skip a caster's own.
+    pub(super) sources: Vec<u32>,
+}
+
+impl MeshDraw {
+    /// A primitive is always single-sided.
+    pub(super) fn variant(&self) -> MeshVariant {
+        MeshVariant {
+            mirrored: self.mirrored,
+            double_sided: false,
+        }
+    }
+
+    /// A primitive has no material, so it always casts through the depth-only pipeline.
+    pub(super) fn caster(&self) -> CasterPipeline {
+        CasterPipeline {
+            variant: self.variant(),
+            cutout: false,
+        }
+    }
+}
+
+pub(super) struct MeshAssetDraw {
+    pub(super) mesh: MeshAssetGpu,
+    pub(super) instances: wgpu::Buffer,
+    pub(super) count: u32,
+    /// As [`MeshDraw::first`].
+    pub(super) first: u32,
+    /// As [`MeshDraw::bucket`].
+    pub(super) bucket: Option<u32>,
+    /// Draws through the shader's winding-reversed variant ([`is_mirrored`]).
+    pub(super) mirrored: bool,
+    /// As [`MeshDraw::viewmodel`].
+    pub(super) viewmodel: bool,
+    /// As [`MeshDraw::sources`].
+    pub(super) sources: Vec<u32>,
+}
+
+impl MeshAssetDraw {
+    pub(super) fn variant(&self) -> MeshVariant {
+        MeshVariant {
+            mirrored: self.mirrored,
+            double_sided: self.mesh.double_sided,
+        }
+    }
+
+    /// The shadow caster pipeline this draw records with.
+    pub(super) fn caster(&self) -> CasterPipeline {
+        CasterPipeline {
+            variant: self.variant(),
+            cutout: self.mesh.cutout,
+        }
+    }
+}
+
+/// The per-instance material vec4 `(roughness, metallic, emissive, use_vertex_material)`: the
+/// component-driven scalars plus the branch-free selection flag (`1.0` = the geometry's own vertex
+/// material wins, `0.0` = these scalars do).
+pub(super) fn instance_material(m: &MeshInstance) -> [f32; 4] {
+    let [roughness, metallic, emissive] = m.material;
+    let flag = if m.use_vertex_material { 1.0 } else { 0.0 };
+    [roughness, metallic, emissive, flag]
+}
+
+/// Whether `model` is a reflection (negative determinant). The one predicate behind both halves of
+/// mirror correctness: the winding-reversed pipeline twin a draw records with and the handedness
+/// sign the mesh shader multiplies into the tangent frame, so the two can never disagree.
+pub(super) fn is_mirrored(model: &Mat4) -> bool {
+    Mat3::from_mat4(*model).determinant() < 0.0
+}
+
+/// The per-instance occlusion-fade vec4 `(fade, height_min, bone_offset, handedness)`. The mesh
+/// shader's Bayer-dither discard reads the first two lanes (the default `(1.0, -f32::MAX)` never
+/// discards, so a fade-free frame is render-identical by construction); the vertex shader reads the
+/// third lane as the bone-palette offset (`0` = unskinned, never read) and the fourth as the model's
+/// handedness sign (`-1.0` for a reflection).
+pub(super) fn instance_fade(m: &MeshInstance) -> [f32; 4] {
+    let handedness = if is_mirrored(&m.model) { -1.0 } else { 1.0 };
+    [m.fade, m.fade_height_min, m.bone_offset as f32, handedness]
+}
+
+/// The per-instance hit-flash vec4 `(flash_color.rgb, amount)` the mesh shader lerps the shaded
+/// colour toward. The default `amount == 0.0` mixes nothing, so a flash-free frame is render-identical
+/// by construction.
+pub(super) fn instance_flash(m: &MeshInstance) -> [f32; 4] {
+    let [r, g, b] = m.flash_color;
+    [r, g, b, m.flash]
+}
+
+/// The instance's normal-matrix lanes, which also carry the wrap-diffuse data. The shader reads the
+/// matrix only as `(normal_mat * vec4(n, 0.0)).xyz`, so the `w` row (`n0.w`, `n1.w`, `n2.w`) and the
+/// column multiplied by `0.0` (`n3`) reach no result. A wrapped instance (`wrap > 0`) stores there:
+/// `n0.w` = wrap, `n3.xyz` = scatter colour, `(n1.w, n2.w, n3.w)` = world half-extents of its bounds
+/// (how far the band's shadow test lifts toward the light; zero when unknown). Wrap off is exactly
+/// `Mat4::from_mat3`'s bytes. Every write goes through here, every read through `wrap_lanes` in
+/// `mesh.wgsl`. Everything written is finite: `n3.xyz` is multiplied by `0.0`, so a NaN there would
+/// poison the normal.
+pub(super) fn instance_normal_lanes(
+    m: &MeshInstance,
+    asset_bounds: &[AssetBounds],
+) -> [[f32; 4]; 4] {
+    let mut lanes = Mat4::from_mat3(m.normal_matrix).to_cols_array_2d();
+    if m.wrap.is_nan() || m.wrap <= 0.0 {
+        return lanes;
+    }
+    let scatter = m
+        .scatter_color
+        .map(|c| if c.is_finite() { c.max(0.0) } else { 1.0 });
+    let half = local_bounds(m.shape, asset_bounds)
+        .map(|local| local.transformed(&m.model))
+        .filter(Aabb::is_finite)
+        .map_or(Vec3::ZERO, |b| (b.max - b.min) * 0.5);
+    lanes[0][3] = m.wrap.min(1.0);
+    lanes[3] = [scatter[0], scatter[1], scatter[2], half.z];
+    lanes[1][3] = half.x;
+    lanes[2][3] = half.y;
+    lanes
+}
+
+/// Buckets every [`MeshShape::Asset`] instance in `scene` by its asset index, in scene order, into
+/// `asset_count` buckets — one linear pass instead of one filter pass per asset — keeping only the
+/// instances whose [`is_mirrored`] equals `mirrored` and whose viewmodel flag equals `viewmodel`.
+///
+/// Instances whose index is out of range are dropped: the caller has no GPU mesh to draw them with.
+/// Draw order is golden-bearing (this repo gates on bit-exact pinned-GPU images), and this is the
+/// order that decides it: buckets ascending, scene order within a bucket.
+///
+/// The second return value is, per bucket, the ascending `scene.meshes` index of each instance.
+pub(super) fn bucket_asset_instances(
+    scene: &RenderScene,
+    asset_count: usize,
+    asset_bounds: &[AssetBounds],
+    mirrored: bool,
+    viewmodel: bool,
+) -> (Vec<Vec<MeshInstanceRaw>>, Vec<Vec<u32>>) {
+    let mut buckets: Vec<Vec<MeshInstanceRaw>> = vec![Vec::new(); asset_count];
+    let mut sources: Vec<Vec<u32>> = vec![Vec::new(); asset_count];
+    for (scene_index, m) in scene.meshes.iter().enumerate() {
+        let MeshShape::Asset(index) = m.shape else {
+            continue;
+        };
+        if is_mirrored(&m.model) != mirrored || m.viewmodel != viewmodel {
+            continue;
+        }
+        let Some(bucket) = buckets.get_mut(index) else {
+            continue;
+        };
+        sources[index].push(scene_index as u32);
+        bucket.push(MeshInstanceRaw {
+            model: m.model.to_cols_array_2d(),
+            color: m.color,
+            material: instance_material(m),
+            normal: instance_normal_lanes(m, asset_bounds),
+            fade: instance_fade(m),
+            flash: instance_flash(m),
+        });
+    }
+    (buckets, sources)
+}
+
+/// The byte range of a draw's instances inside the packed buffer.
+fn instance_range(first: u32, count: u32) -> std::ops::Range<u64> {
+    let stride = std::mem::size_of::<MeshInstanceRaw>() as u64;
+    u64::from(first) * stride..u64::from(first + count) * stride
+}
+
+impl MeshDraw {
+    /// This draw's bytes of the packed instance buffer.
+    pub(super) fn instance_bytes(&self) -> std::ops::Range<u64> {
+        instance_range(self.first, self.count)
+    }
+}
+
+impl MeshAssetDraw {
+    /// This draw's bytes of the packed instance buffer.
+    pub(super) fn instance_bytes(&self) -> std::ops::Range<u64> {
+        instance_range(self.first, self.count)
+    }
+}
+
+/// The frame's mesh draws and the one buffer they share.
+pub(super) struct MeshBatch {
+    pub(super) draws: Vec<MeshDraw>,
+    pub(super) asset_draws: Vec<MeshAssetDraw>,
+    /// Every draw's instances: primitive world draws, asset world draws, then the viewmodel's.
+    /// `None` when nothing draws.
+    pub(super) instances: Option<wgpu::Buffer>,
+}
+
+struct PrimPending {
+    shape: MeshShape,
+    mirrored: bool,
+    viewmodel: bool,
+    sources: Vec<u32>,
+    raws: Vec<MeshInstanceRaw>,
+}
+
+struct AssetPending {
+    mesh: MeshAssetGpu,
+    mirrored: bool,
+    viewmodel: bool,
+    sources: Vec<u32>,
+    raws: Vec<MeshInstanceRaw>,
+}
+
+/// Groups the scene's mesh instances into per-shape and per-asset draws and uploads them once.
+/// Draw order is golden-bearing and unchanged from the per-draw buffers this replaced; only the
+/// packing differs (world draws contiguous, so a world draw's `bucket` is its `cull` bucket).
+pub(super) fn build_mesh_batch(
+    scene: &RenderScene,
+    device: &wgpu::Device,
+    meshes: &[MeshAssetGpu],
+) -> MeshBatch {
+    let prims = pending_primitives(scene);
+    let assets = pending_assets(scene, meshes);
+
+    let mut packed: Vec<MeshInstanceRaw> = Vec::new();
+    let mut bucket = 0u32;
+    let mut prim_slot = vec![(0u32, None); prims.len()];
+    let mut asset_slot = vec![(0u32, None); assets.len()];
+    for viewmodel in [false, true] {
+        let mut place = |raws: &[MeshInstanceRaw]| {
+            let first = packed.len() as u32;
+            packed.extend_from_slice(raws);
+            let b = (!viewmodel).then(|| {
+                bucket += 1;
+                bucket - 1
+            });
+            (first, b)
+        };
+        for (i, p) in prims
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.viewmodel == viewmodel)
+        {
+            prim_slot[i] = place(&p.raws);
+        }
+        for (i, a) in assets
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.viewmodel == viewmodel)
+        {
+            asset_slot[i] = place(&a.raws);
+        }
+    }
+    let instances = (!packed.is_empty()).then(|| {
+        init_buffer(
+            device,
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
+            bytemuck::cast_slice(&packed),
+        )
+    });
+    let draws = prims
+        .into_iter()
+        .zip(prim_slot)
+        .map(|(p, (first, bucket))| MeshDraw {
+            shape: p.shape,
+            instances: instances.clone().expect("a pending draw has instances"),
+            count: p.raws.len() as u32,
+            first,
+            bucket,
+            mirrored: p.mirrored,
+            viewmodel: p.viewmodel,
+            sources: p.sources,
+        })
+        .collect();
+    let asset_draws = assets
+        .into_iter()
+        .zip(asset_slot)
+        .map(|(a, (first, bucket))| MeshAssetDraw {
+            mesh: a.mesh,
+            instances: instances.clone().expect("a pending draw has instances"),
+            count: a.raws.len() as u32,
+            first,
+            bucket,
+            mirrored: a.mirrored,
+            viewmodel: a.viewmodel,
+            sources: a.sources,
+        })
+        .collect();
+    MeshBatch {
+        draws,
+        asset_draws,
+        instances,
+    }
+}
+
+/// Groups mesh instances by shape; world draws first, then the viewmodel's, unmirrored before
+/// mirrored within each.
+fn pending_primitives(scene: &RenderScene) -> Vec<PrimPending> {
+    let mut out = Vec::new();
+    for (viewmodel, (mirrored, shape)) in [false, true].into_iter().flat_map(|viewmodel| {
+        [false, true].into_iter().flat_map(move |mirrored| {
+            [MeshShape::Cube, MeshShape::Plane, MeshShape::Sphere]
+                .map(move |shape| (viewmodel, (mirrored, shape)))
+        })
+    }) {
+        let (sources, raws): (Vec<u32>, Vec<MeshInstanceRaw>) = scene
+            .meshes
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| {
+                m.shape == shape && is_mirrored(&m.model) == mirrored && m.viewmodel == viewmodel
+            })
+            .map(|(i, m)| {
+                (
+                    i as u32,
+                    MeshInstanceRaw {
+                        model: m.model.to_cols_array_2d(),
+                        color: m.color,
+                        material: instance_material(m),
+                        normal: instance_normal_lanes(m, &[]),
+                        fade: instance_fade(m),
+                        flash: instance_flash(m),
+                    },
+                )
+            })
+            .unzip();
+        if raws.is_empty() {
+            continue;
+        }
+        out.push(PrimPending {
+            shape,
+            mirrored,
+            viewmodel,
+            sources,
+            raws,
+        });
+    }
+    out
+}
+
+/// Groups asset-mesh instances by their `mesh_assets` index, keyed like [`pending_primitives`] and
+/// paired with that mesh's cached GPU buffers for an **indexed** instanced draw.
+fn pending_assets(scene: &RenderScene, meshes: &[MeshAssetGpu]) -> Vec<AssetPending> {
+    let mut out = Vec::new();
+    let asset_bounds: Vec<AssetBounds> = meshes.iter().map(|asset| asset.bounds.clone()).collect();
+    for (viewmodel, mirrored) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (buckets, sources) =
+            bucket_asset_instances(scene, meshes.len(), &asset_bounds, mirrored, viewmodel);
+        for ((mesh, raws), sources) in meshes.iter().zip(buckets).zip(sources) {
+            // An empty mesh is valid content (erasing a model's last voxel) with nothing to draw;
+            // its zero-size buffers cannot be sliced, so it never reaches a draw loop.
+            if raws.is_empty() || mesh.vertex_count == 0 || mesh.index_count == 0 {
+                continue;
+            }
+            out.push(AssetPending {
+                mesh: mesh.clone(),
+                mirrored,
+                viewmodel,
+                sources,
+                raws,
+            });
+        }
+    }
+    out
+}
+
+/// The cull pass's two outputs a draw can read, `(compacted instances, indirect args)`, from a
+/// pass's buffer reads. `None` when the pass declares no read, which is every direct draw.
+pub(super) fn culled_buffers<'a>(
+    reads: &'a [&'a wgpu::Buffer],
+) -> Option<(&'a wgpu::Buffer, &'a wgpu::Buffer)> {
+    match reads {
+        [instances, args] => Some((instances, args)),
+        _ => None,
+    }
+}
+
+/// Bytes per indirect-args slot (`DrawIndexedIndirectArgs`).
+const ARGS_STRIDE: u64 = 20;
+
+fn source_of<'a>(
+    own: &'a wgpu::Buffer,
+    bucket: Option<u32>,
+    culled: Option<(&'a wgpu::Buffer, &'a wgpu::Buffer)>,
+) -> (&'a wgpu::Buffer, Option<(&'a wgpu::Buffer, u64)>) {
+    match (culled, bucket) {
+        (Some((instances, args)), Some(b)) => (instances, Some((args, u64::from(b) * ARGS_STRIDE))),
+        _ => (own, None),
+    }
+}
+
+impl MeshDraw {
+    /// Where this draw's instances come from and, when culled, its indirect args.
+    pub(super) fn source<'a>(
+        &'a self,
+        culled: Option<(&'a wgpu::Buffer, &'a wgpu::Buffer)>,
+    ) -> (&'a wgpu::Buffer, Option<(&'a wgpu::Buffer, u64)>) {
+        source_of(&self.instances, self.bucket, culled)
+    }
+}
+
+impl MeshAssetDraw {
+    /// As [`MeshDraw::source`].
+    pub(super) fn source<'a>(
+        &'a self,
+        culled: Option<(&'a wgpu::Buffer, &'a wgpu::Buffer)>,
+    ) -> (&'a wgpu::Buffer, Option<(&'a wgpu::Buffer, u64)>) {
+        source_of(&self.instances, self.bucket, culled)
+    }
+}

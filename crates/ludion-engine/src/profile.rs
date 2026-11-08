@@ -3719,6 +3719,7 @@ gpu_frame_max_ms = 9.5
             shafts: true,
             dof: true,
             gi_inject: Some([4, 4, 4]),
+            cull: None,
             debug_lines: true,
             ssr: Some(0.5),
             ssr_view: Some(DebugView::SsrConfidence),
