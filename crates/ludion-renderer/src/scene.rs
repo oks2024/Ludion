@@ -1261,6 +1261,9 @@ impl PartialEq for ProbeWorld {
 pub struct RenderScene {
     /// The resolved camera.
     pub camera: RenderCamera,
+    /// The camera the camera cull view tests against when it is not the drawn one; `None` culls
+    /// against `camera`. A debug surface: the image is still drawn through `camera`.
+    pub cull_camera: Option<RenderCamera>,
     /// Small constant ambient light added to every lit surface (linear RGB).
     pub ambient: [f32; 3],
     /// Unique decoded textures, referenced by index from [`SpriteInstance::texture`]. Their colour
@@ -1364,6 +1367,7 @@ impl RenderScene {
     pub fn empty(viewport: (u32, u32)) -> RenderScene {
         RenderScene {
             camera: RenderCamera::default_framing(viewport),
+            cull_camera: None,
             ambient: DEFAULT_AMBIENT,
             textures: Vec::new(),
             mesh_assets: Vec::new(),

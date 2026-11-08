@@ -355,6 +355,7 @@ fn a_render_view_override_ignores_the_offset() {
         engine,
         Command::RenderView(RenderViewParams {
             pose: Some(Some(pose)),
+            ..Default::default()
         }),
     )
     .unwrap()

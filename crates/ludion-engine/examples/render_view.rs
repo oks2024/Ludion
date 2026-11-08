@@ -71,6 +71,7 @@ fn main() -> ExitCode {
                 rotation: [0.0, 0.0, 0.0],
                 fov_y_deg: Some(40.0),
             })),
+            ..Default::default()
         }),
     )
     .expect("a well-formed pose is accepted");
@@ -95,7 +96,10 @@ fn main() -> ExitCode {
     // byte-for-byte the same answer as before the override was ever set.
     dispatch(
         &mut engine,
-        Command::RenderView(RenderViewParams { pose: Some(None) }),
+        Command::RenderView(RenderViewParams {
+            pose: Some(None),
+            ..Default::default()
+        }),
     )
     .expect("clearing the override is accepted");
     let cleared_rect = mesh_screen_rect(&mut engine, CameraChoice::View);

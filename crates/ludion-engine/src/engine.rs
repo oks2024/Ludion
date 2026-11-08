@@ -41,7 +41,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::rng::{DeterministicRng, WorldSeed};
 use ludion_core::time::{FrameIndex, GameClock, TickRate};
 use ludion_ecs::{ComponentInfo, QueryElemShape, QueryObservations, Registry, Schedule, World};
-use ludion_protocol::command::ViewPose;
+use ludion_protocol::command::{CullFrom, ViewPose};
 use ludion_protocol::envelope::Seq;
 use ludion_protocol::event::{Event, LogEvent, SceneChangeKind, SceneChangedData};
 use ludion_protocol::profile::ProfileMigration;
@@ -302,6 +302,12 @@ pub struct Engine {
     /// exactly as [`quality`](Engine::quality) is — not hashed, not snapshotted, not recorded — and
     /// invisible to every path that did not ask for it: see `crate::render_view`.
     view_override: Option<ViewPose>,
+    /// Which camera the camera cull view tests against (`render.view`'s `cull_from`). Host render
+    /// state like `view_override`: never hashed, snapshotted or recorded.
+    cull_from: CullFrom,
+    /// The stream camera captured when `cull_from: frozen` applied; `Some` only while that mode is
+    /// in force. Host render state, never hashed, snapshotted or recorded.
+    pub(crate) frozen_cull: Option<ludion_renderer::RenderCamera>,
     /// The host's debug-draw filter ([`set_debug_draw`](Engine::set_debug_draw)): which categories the
     /// stream's [`RenderScene`] carries. Host render state like `view_override`, never in a world.
     debug_draw: crate::DebugCategories,
@@ -806,6 +812,8 @@ impl Engine {
             asset_cache: AssetCache::new(),
             render_size,
             view_override: None,
+            cull_from: CullFrom::View,
+            frozen_cull: None,
             debug_draw: crate::DebugCategories::None,
             debug_view: None,
             render_scale_override: None,
@@ -957,6 +965,34 @@ impl Engine {
     /// The view override in force, or `None` when the stream is on the scene's own `Camera`.
     pub fn view_override(&self) -> Option<&ViewPose> {
         self.view_override.as_ref()
+    }
+
+    /// The camera the camera cull view tests against ([`CullFrom::View`] unless `render.view` chose).
+    pub fn cull_from(&self) -> CullFrom {
+        self.cull_from
+    }
+
+    /// Chooses the camera the camera cull view tests against. Host render state, exactly as
+    /// [`set_view_override`](Engine::set_view_override) is.
+    ///
+    /// `Frozen` captures the stream camera now (the view override in force, else the scene's) and
+    /// holds it; setting `Frozen` again recaptures; `View` and `Game` drop the capture. The image is
+    /// always drawn through the rendered camera; only the frustum the cull keeps instances by moves.
+    ///
+    /// # Errors
+    /// The camera diagnostic (`L2101`, an ambiguous scene) when `Frozen` cannot resolve the stream
+    /// camera; nothing changes then.
+    pub fn set_cull_from(&mut self, mode: CullFrom) -> Result<(), Diagnostic> {
+        self.frozen_cull = match mode {
+            CullFrom::Frozen => Some(crate::extract::stream_camera(
+                self.driver.world(),
+                self.render_size,
+                self.view_override.as_ref(),
+            )?),
+            CullFrom::View | CullFrom::Game => None,
+        };
+        self.cull_from = mode;
+        Ok(())
     }
 
     /// Chooses which debug-draw categories the render extraction carries (`crate::debug_draw`).
@@ -4788,6 +4824,20 @@ impl Engine {
         )
         .map(|mut scene| {
             scene.debug_lines = crate::debug_draw::segments(world, &self.debug_draw);
+            if use_view {
+                scene.cull_camera = match self.cull_from {
+                    CullFrom::Game if view.is_some() => {
+                        crate::extract::stream_camera(world, (width, height), None).ok()
+                    }
+                    CullFrom::Frozen => self.frozen_cull,
+                    _ => None,
+                };
+            }
+            if self.debug_draw.enables(crate::debug_draw::CULL) {
+                scene
+                    .debug_lines
+                    .extend(ludion_renderer::cull_marks(&scene));
+            }
             if self.debug_draw.enables(crate::debug_draw::LOCAL_SHADOWS) {
                 let edge = self.quality.local_shadow_edge();
                 scene

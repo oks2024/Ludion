@@ -1450,6 +1450,7 @@ fn extract_inner(
     assets.extract_end(ExtractPhase::Lights);
     let mut scene = RenderScene {
         camera,
+        cull_camera: None,
         ambient,
         textures,
         mesh_assets,
@@ -2601,6 +2602,14 @@ pub(crate) fn any_probe(world: &World) -> bool {
         .entities()
         .chain(world.presentation_entities())
         .any(|id| world.has::<ReflectionProbe>(id))
+}
+
+/// Whether any entity has a `Mesh`, for the `cull` debug-draw category.
+pub(crate) fn any_mesh(world: &World) -> bool {
+    world
+        .entities()
+        .chain(world.presentation_entities())
+        .any(|id| get::<Mesh>(world, id).is_some())
 }
 
 /// Whether any point or spot light casts a shadow, for the `local_shadows` debug-draw category.
@@ -4099,6 +4108,23 @@ fn resolve_camera(
         (None, None) => Ok(RenderCamera::default_framing(viewport)),
         (None, Some(id)) => Ok(build_camera(world, ids, id, viewport)),
     }
+}
+
+/// The camera the stream draws through for `view` (the host's `render.view` override, or the scene's
+/// own camera): what the extract resolves before any per-frame adjustment. `cull_from` holds it.
+///
+/// # Errors
+/// `L2101` when the world has more than one `Camera`.
+pub(crate) fn stream_camera(
+    world: &World,
+    viewport: (u32, u32),
+    view: Option<&ViewPose>,
+) -> Result<RenderCamera, Diagnostic> {
+    let ids: Vec<EntityId> = world
+        .entities()
+        .chain(world.presentation_entities())
+        .collect();
+    resolve_camera(world, &ids, viewport, view)
 }
 
 /// The single camera's `(height, near, far)` when it is an orthographic one with `pixel_snap` on, or

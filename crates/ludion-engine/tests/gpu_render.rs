@@ -1225,9 +1225,9 @@ fn needs_gpu_a_line_behind_geometry_shows_dimmed() {
     let Some(open_plain) = probe_frame(&project, false, &DebugCategories::None) else {
         return;
     };
-    let open_lines = probe_frame(&project, false, &DebugCategories::All).unwrap();
+    let open_lines = probe_frame(&project, false, &DebugCategories::parse("probe")).unwrap();
     let hidden_plain = probe_frame(&project, true, &DebugCategories::None).unwrap();
-    let hidden_lines = probe_frame(&project, true, &DebugCategories::All).unwrap();
+    let hidden_lines = probe_frame(&project, true, &DebugCategories::parse("probe")).unwrap();
     let open = channel_delta(&open_plain, &open_lines);
     let hidden = channel_delta(&hidden_plain, &hidden_lines);
     assert!(hidden > 0, "x-ray: the occluded line is still drawn");

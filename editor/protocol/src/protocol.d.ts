@@ -234,6 +234,21 @@ export type Command =
  */
 export type GiRebakeMode = 'auto' | 'hold';
 /**
+ * Which camera the camera cull view tests against, for `render.view`.
+ *
+ * The image is always drawn through the rendered camera; this moves only the frustum the GPU cull
+ * keeps instances by, so a flown view can show what the game camera would cull. Debug surface:
+ * the cull is conservative, and a cull camera that is not the drawn one drops visible meshes.
+ *
+ * # Example
+ * ```
+ * use ludion_protocol::command::CullFrom;
+ * assert_eq!(CullFrom::default(), CullFrom::View);
+ * assert_eq!(serde_json::to_value(CullFrom::Frozen).unwrap(), serde_json::json!("frozen"));
+ * ```
+ */
+export type CullFrom = 'view' | 'game' | 'frozen';
+/**
  * A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,
  * the local-light shadow atlas, or the lit frame tinted by sun cascade.
  * The spelling matches `ludion render --debug-view`.
@@ -843,6 +858,21 @@ export type Response1 =
             [k: string]: unknown;
           }
         | {
+            /**
+             * Which camera the camera cull view tests against, for `render.view`.
+             *
+             * The image is always drawn through the rendered camera; this moves only the frustum the GPU cull
+             * keeps instances by, so a flown view can show what the game camera would cull. Debug surface:
+             * the cull is conservative, and a cull camera that is not the drawn one drops visible meshes.
+             *
+             * # Example
+             * ```
+             * use ludion_protocol::command::CullFrom;
+             * assert_eq!(CullFrom::default(), CullFrom::View);
+             * assert_eq!(serde_json::to_value(CullFrom::Frozen).unwrap(), serde_json::json!("frozen"));
+             * ```
+             */
+            cull_from: 'view' | 'game' | 'frozen';
             kind: 'render_view';
             /**
              * The pose the stream is flying at, or `None` for the scene camera.
@@ -1297,6 +1327,21 @@ export type ResponseBody =
       [k: string]: unknown;
     }
   | {
+      /**
+       * Which camera the camera cull view tests against, for `render.view`.
+       *
+       * The image is always drawn through the rendered camera; this moves only the frustum the GPU cull
+       * keeps instances by, so a flown view can show what the game camera would cull. Debug surface:
+       * the cull is conservative, and a cull camera that is not the drawn one drops visible meshes.
+       *
+       * # Example
+       * ```
+       * use ludion_protocol::command::CullFrom;
+       * assert_eq!(CullFrom::default(), CullFrom::View);
+       * assert_eq!(serde_json::to_value(CullFrom::Frozen).unwrap(), serde_json::json!("frozen"));
+       * ```
+       */
+      cull_from: 'view' | 'game' | 'frozen';
       kind: 'render_view';
       /**
        * The pose the stream is flying at, or `None` for the scene camera.
@@ -1975,7 +2020,7 @@ export interface RenderSizeParams {
  * # Example
  * ```
  * use ludion_protocol::Command;
- * use ludion_protocol::command::{RenderViewParams, ViewPose};
+ * use ludion_protocol::command::{CullFrom, RenderViewParams, ViewPose};
  *
  * // Fly the stream to a pose.
  * let cmd = Command::RenderView(RenderViewParams {
@@ -1984,6 +2029,8 @@ export interface RenderSizeParams {
  *         rotation: [-15.0, 0.0, 0.0],
  *         fov_y_deg: Some(50.0),
  *     })),
+ *     // Keep culling against the live scene camera while the view flies.
+ *     cull_from: Some(CullFrom::Game),
  * });
  * assert_eq!(
  *     serde_json::to_value(&cmd).unwrap(),
@@ -1993,7 +2040,7 @@ export interface RenderSizeParams {
  *             "translation": [0.0, 2.0, 6.0],
  *             "rotation": [-15.0, 0.0, 0.0],
  *             "fov_y_deg": 50.0,
- *         }},
+ *         }, "cull_from": "game" },
  *     }),
  * );
  *
@@ -2004,6 +2051,12 @@ export interface RenderSizeParams {
  * ```
  */
 export interface RenderViewParams {
+  /**
+   * Which camera the camera cull view tests against (see [`CullFrom`]); absent keeps what is in
+   * force, `view` is the default. `frozen` captures the stream camera as the command applies and
+   * holds it; `game` follows the live scene camera. The image is still drawn through the view.
+   */
+  cull_from?: CullFrom | null;
   /**
    * The pose to fly to, an explicit `null` to clear the override, or absent to read it.
    */
@@ -2912,6 +2965,12 @@ export interface ProfileReport {
    */
   cluster?: ClusterProfile | null;
   /**
+   * The GPU frustum cull's per-view counts, the median over the measured frames. Absent for a
+   * scene without a world mesh, with culling off, and for a live capture, for `cluster`'s reason:
+   * the counts come back through a readback ring only the **offline** driver arms.
+   */
+  culling?: CullingProfile | null;
+  /**
    * Projected decals of the frame: how many of each blend mode and how many draws and receiver
    * meshes the projector pass plans. Filled by the **offline** driver for a scene with a decal;
    * absent otherwise and for a live capture, for `cluster`'s reason.
@@ -3021,6 +3080,42 @@ export interface ClusterProfile {
    * gets looser, whether or not any single list gets longer.
    */
   total_refs: number;
+  [k: string]: unknown;
+}
+/**
+ * What the GPU frustum cull kept, per view, read back from its indirect args.
+ */
+export interface CullingProfile {
+  /**
+   * Views past the 128 MiB cull-output cap: they draw every caster and are not in `views`.
+   */
+  over_cap_views: number;
+  /**
+   * Frames whose counts were read back; a full readback ring skips a frame rather than wait.
+   */
+  sampled_frames: number;
+  /**
+   * One entry per cull view, in cull order.
+   */
+  views: CullViewProfile[];
+  [k: string]: unknown;
+}
+/**
+ * One cull view's counts.
+ */
+export interface CullViewProfile {
+  /**
+   * Median over the sampled frames of the instances the view kept to draw.
+   */
+  drawn_median: number;
+  /**
+   * Median over the sampled frames of the instances the view tested.
+   */
+  instances_median: number;
+  /**
+   * `camera | sun | cascade_N | local_N`.
+   */
+  name: string;
   [k: string]: unknown;
 }
 /**

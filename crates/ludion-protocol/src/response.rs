@@ -247,6 +247,8 @@ pub enum ResponseBody {
     RenderView {
         /// The pose the stream is flying at, or `None` for the scene camera.
         pose: Option<crate::command::ViewPose>,
+        /// The camera the camera cull view tests against.
+        cull_from: crate::command::CullFrom,
     },
 
     /// Result of `render.debug` — the debug-draw categories enabled once the command applied, and

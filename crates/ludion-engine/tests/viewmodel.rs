@@ -289,6 +289,7 @@ fn a_view_override_draws_world_meshes_silently() {
         &mut engine,
         Command::RenderView(RenderViewParams {
             pose: Some(Some(pose)),
+            ..Default::default()
         }),
     )
     .unwrap()

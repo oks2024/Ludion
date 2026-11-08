@@ -34,6 +34,11 @@ pub(crate) const PROBES: &str = "probes";
 /// the extracted scene, not from the world.
 pub(crate) const LOCAL_SHADOWS: &str = "local_shadows";
 
+/// The category the engine appends to the extracted scene's lines: the camera cull view's verdict on
+/// every world mesh box, green kept and red culled. It depends on the camera, so it is drawn from the
+/// extracted scene, not from the world.
+pub(crate) const CULL: &str = "cull";
+
 /// The category [`segments`] draws from the live `PhysicsWorld`'s colliders.
 pub(crate) const COLLIDERS: &str = "colliders";
 
@@ -390,7 +395,8 @@ pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegm
 
 /// The categories the world has drawn: what [`DebugDraw::drawn`] lists plus `hierarchy` when any
 /// entity has a `Parent`, `probes` when any has a `ReflectionProbe` and `colliders` when the
-/// physics world holds a body and `local_shadows` when any point or spot light casts, sorted.
+/// physics world holds a body, `local_shadows` when any point or spot light casts and `cull` when
+/// any entity has a `Mesh`, sorted.
 pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = world
         .resource::<DebugDraw>()
@@ -406,6 +412,9 @@ pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
     }
     if crate::extract::any_local_shadow_caster(world) {
         names.push(LOCAL_SHADOWS);
+    }
+    if crate::extract::any_mesh(world) {
+        names.push(CULL);
     }
     names.sort_unstable();
     names.dedup();
@@ -828,7 +837,7 @@ mod tests {
         assert!(lines(&mut engine).is_empty());
 
         engine.set_debug_draw(DebugCategories::parse("local_shadows"));
-        assert_eq!(engine.debug_draw_drawn(), ["local_shadows"]);
+        assert_eq!(engine.debug_draw_drawn(), ["cull", "local_shadows"]);
         let marks = lines(&mut engine);
         assert_eq!(marks.len(), 3 + 4);
         assert!(marks.iter().all(|m| m.color == GREEN));
@@ -839,6 +848,33 @@ mod tests {
         let marks = lines(&mut engine);
         assert_eq!(marks.len(), 3 + 4);
         assert!(marks.iter().all(|m| m.color == DENIED));
+
+        engine.set_debug_draw(DebugCategories::None);
+        assert!(lines(&mut engine).is_empty());
+    }
+
+    /// The `cull` marks: a mesh in front of the camera is a green box, one behind it a red box
+    /// (12 edges each), and the category is absent when off.
+    #[test]
+    fn the_cull_category_marks_kept_green_and_culled_red() {
+        const KEPT: [f32; 4] = [0.2, 1.0, 0.2, 1.0];
+        const CULLED: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
+        let mut engine = engine(0);
+        engine
+            .load_inline_scene(
+                "format: 1\nentities:\n  - components:\n      Transform:\n        translation:\n          - 0.0\n          - 0.0\n          - 5.0\n      Camera: {}\n  \
+                 - components:\n      Mesh: {}\n  \
+                 - components:\n      Transform:\n        translation:\n          - 0.0\n          - 0.0\n          - 20.0\n      Mesh: {}\n",
+            )
+            .unwrap();
+        assert!(lines(&mut engine).is_empty());
+
+        engine.set_debug_draw(DebugCategories::parse("cull"));
+        assert_eq!(engine.debug_draw_drawn(), ["cull"]);
+        let marks = lines(&mut engine);
+        assert_eq!(marks.iter().filter(|m| m.color == KEPT).count(), 12);
+        assert_eq!(marks.iter().filter(|m| m.color == CULLED).count(), 12);
+        assert_eq!(marks.len(), 24);
 
         engine.set_debug_draw(DebugCategories::None);
         assert!(lines(&mut engine).is_empty());

@@ -458,6 +458,10 @@ pub(crate) fn extract_scene_file(
         particle_density,
     )?;
     render_scene.debug_lines = crate::debug_draw::segments(driver.world(), debug);
+    if debug.enables(crate::debug_draw::CULL) {
+        let marks = ludion_renderer::cull_marks(&render_scene);
+        render_scene.debug_lines.extend(marks);
+    }
     let drawn = crate::debug_draw::drawn(driver.world());
     Ok((render_scene, applied_overrides, drawn))
 }

@@ -88,6 +88,7 @@ pub use blend::{BlendData, CameraBlend, InstanceKey, ProjectileItem, blend, latc
 pub use camera_latch::CameraLatch;
 pub use cluster::{ClusterStats, cluster_stats};
 pub use compressed::{CompressedUploadError, check_compressed};
+pub use cull::cull_marks;
 pub use cull_stats::CullViewCount;
 pub use debug_view::{DebugView, PROBE_VIEW_PALETTE, SUN_CASCADE_VIEW_PALETTE};
 pub use frame_observer::{FrameObserver, FramePhase};

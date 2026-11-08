@@ -951,6 +951,30 @@ impl CameraChoice {
     }
 }
 
+/// Which camera the camera cull view tests against, for `render.view`.
+///
+/// The image is always drawn through the rendered camera; this moves only the frustum the GPU cull
+/// keeps instances by, so a flown view can show what the game camera would cull. Debug surface:
+/// the cull is conservative, and a cull camera that is not the drawn one drops visible meshes.
+///
+/// # Example
+/// ```
+/// use ludion_protocol::command::CullFrom;
+/// assert_eq!(CullFrom::default(), CullFrom::View);
+/// assert_eq!(serde_json::to_value(CullFrom::Frozen).unwrap(), serde_json::json!("frozen"));
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CullFrom {
+    /// The rendered camera: the flown view, or the scene camera when no override is in force.
+    #[default]
+    View,
+    /// The live scene camera, following the game while the view flies elsewhere.
+    Game,
+    /// The stream camera as it stood when the command applied, held until the next `view`/`game`.
+    Frozen,
+}
+
 /// A free camera pose for `render.view`: where the view camera stands, where it looks, and how wide
 /// it sees.
 ///
@@ -998,7 +1022,7 @@ pub struct ViewPose {
 /// # Example
 /// ```
 /// use ludion_protocol::Command;
-/// use ludion_protocol::command::{RenderViewParams, ViewPose};
+/// use ludion_protocol::command::{CullFrom, RenderViewParams, ViewPose};
 ///
 /// // Fly the stream to a pose.
 /// let cmd = Command::RenderView(RenderViewParams {
@@ -1007,6 +1031,8 @@ pub struct ViewPose {
 ///         rotation: [-15.0, 0.0, 0.0],
 ///         fov_y_deg: Some(50.0),
 ///     })),
+///     // Keep culling against the live scene camera while the view flies.
+///     cull_from: Some(CullFrom::Game),
 /// });
 /// assert_eq!(
 ///     serde_json::to_value(&cmd).unwrap(),
@@ -1016,7 +1042,7 @@ pub struct ViewPose {
 ///             "translation": [0.0, 2.0, 6.0],
 ///             "rotation": [-15.0, 0.0, 0.0],
 ///             "fov_y_deg": 50.0,
-///         }},
+///         }, "cull_from": "game" },
 ///     }),
 /// );
 ///
@@ -1036,6 +1062,11 @@ pub struct RenderViewParams {
     )]
     #[schemars(with = "Option<ViewPose>")]
     pub pose: Option<Option<ViewPose>>,
+    /// Which camera the camera cull view tests against (see [`CullFrom`]); absent keeps what is in
+    /// force, `view` is the default. `frozen` captures the stream camera as the command applies and
+    /// holds it; `game` follows the live scene camera. The image is still drawn through the view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cull_from: Option<CullFrom>,
 }
 
 /// Parameters for `render.debug`.
@@ -1617,7 +1648,10 @@ mod tests {
         );
         assert_eq!(serde_json::from_value::<Command>(value).unwrap(), read);
 
-        let clear = Command::RenderView(RenderViewParams { pose: Some(None) });
+        let clear = Command::RenderView(RenderViewParams {
+            pose: Some(None),
+            cull_from: None,
+        });
         let value = serde_json::to_value(&clear).unwrap();
         assert_eq!(
             value,
@@ -1635,6 +1669,7 @@ mod tests {
                 rotation: [-15.0, 45.0, 0.0],
                 fov_y_deg: None,
             })),
+            cull_from: None,
         });
         let value = serde_json::to_value(&set).unwrap();
         assert_eq!(
@@ -1649,6 +1684,18 @@ mod tests {
             "an omitted fov serializes away, so the scene camera's own is what the pose means",
         );
         assert_eq!(serde_json::from_value::<Command>(value).unwrap(), set);
+    }
+
+    /// `cull_from` is absent by default, parses its snake_case names, and refuses anything else.
+    #[test]
+    fn render_view_cull_from_parses_and_refuses_unknown() {
+        let parse = |text: &str| serde_json::from_str::<RenderViewParams>(text);
+        assert_eq!(parse("{}").unwrap().cull_from, None);
+        assert_eq!(
+            parse(r#"{"cull_from": "frozen"}"#).unwrap().cull_from,
+            Some(CullFrom::Frozen)
+        );
+        assert!(parse(r#"{"cull_from": "bogus"}"#).is_err());
     }
 
     /// `render.debug`'s `view` has the same three forms as `render.view`'s `pose`: absent reads, an

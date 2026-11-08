@@ -94,6 +94,9 @@ pub(crate) fn world_key(
     let RenderScene {
         // per face; the capture point enters through `probe_key`
         camera: _,
+        // a debug-only frustum for the camera cull view; probe capture prepares no cull and draws
+        // through its own face cameras, so it must never move a key (as `camera` above)
+        cull_camera: _,
         ambient,
         // only sprites, particles, text and the UI index it, and the face scene has none
         textures: _,

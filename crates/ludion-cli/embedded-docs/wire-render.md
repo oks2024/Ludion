@@ -58,13 +58,21 @@ Sets or clears a free pose the *stream* renders through instead of the scene's `
 ```jsonc
 // → translation, Euler-XYZ degrees rotation, an optional named field of view
 {"v": 1, "id": 6, "method": "render.view", "params": {"pose": {"translation": [4.0, 2.0, 6.0], "rotation": [-15.0, 30.0, 0.0], "fov_y_deg": 50.0}}}
-{"id": 6, "ok": {"kind": "render_view", "pose": {"translation": [4.0, 2.0, 6.0], "rotation": [-15.0, 30.0, 0.0], "fov_y_deg": 50.0}}, "frame": 12, "game_frame": 12}
+{"id": 6, "ok": {"kind": "render_view", "pose": {"translation": [4.0, 2.0, 6.0], "rotation": [-15.0, 30.0, 0.0], "fov_y_deg": 50.0}, "cull_from": "view"}, "frame": 12, "game_frame": 12}
 ```
 
 `{}` alone reports the override without changing it, and `{"pose": null}` clears it — the three wire
 shapes a plain `Option<Option<..>>` field exists to tell apart. An omitted `fov_y_deg` inherits the
 scene camera's (or 60° when the world has none); a non-finite coordinate, or a `fov_y_deg` outside
 the open interval `0..180`, is `L3032` and refuses the whole pose, leaving the override as it was.
+
+`cull_from` (`"view"` default, `"game"`, `"frozen"`; absent keeps the mode in force) picks the camera
+the GPU cull's camera view tests against while the image is still drawn through the flown view:
+`game` follows the live scene camera, `frozen` holds the stream camera as the command applied (send
+it again to recapture; `view` or `game` drop it). It shows what the game would cull, so a mesh the
+cull camera cannot see is absent from the flown frame. Only the camera view moves; shadow views
+cull as always. The reply always carries the mode. A `frozen` that cannot capture (an ambiguous scene
+camera) applies nothing, the pose included. Like the pose it is host state, never hashed or recorded.
 
 The override is never written to a scene, folded into `WorldHash`, captured by `engine.snapshot`, or
 recorded into a replay (unlike `render.size`). A session flown to a rooftop hashes, records and

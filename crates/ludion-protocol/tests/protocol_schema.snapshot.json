@@ -126,6 +126,26 @@
         ],
         "type": "object"
       },
+      "CullFrom": {
+        "description": "Which camera the camera cull view tests against, for `render.view`.\n\nThe image is always drawn through the rendered camera; this moves only the frustum the GPU cull\nkeeps instances by, so a flown view can show what the game camera would cull. Debug surface:\nthe cull is conservative, and a cull camera that is not the drawn one drops visible meshes.\n\n# Example\n```\nuse ludion_protocol::command::CullFrom;\nassert_eq!(CullFrom::default(), CullFrom::View);\nassert_eq!(serde_json::to_value(CullFrom::Frozen).unwrap(), serde_json::json!(\"frozen\"));\n```",
+        "oneOf": [
+          {
+            "const": "view",
+            "description": "The rendered camera: the flown view, or the scene camera when no override is in force.",
+            "type": "string"
+          },
+          {
+            "const": "game",
+            "description": "The live scene camera, following the game while the view flies elsewhere.",
+            "type": "string"
+          },
+          {
+            "const": "frozen",
+            "description": "The stream camera as it stood when the command applied, held until the next `view`/`game`.",
+            "type": "string"
+          }
+        ]
+      },
       "EngineRestoreParams": {
         "additionalProperties": false,
         "description": "Parameters for `engine.restore`.\n\n`snapshot` is an opaque snapshot document produced by `engine.snapshot`; the protocol carries it\nas a [`serde_json::Value`] and the engine interprets it.",
@@ -673,8 +693,19 @@
       },
       "RenderViewParams": {
         "additionalProperties": false,
-        "description": "Parameters for `render.view`.\n\nOne verb that sets, clears and queries, the [`RenderSizeParams`] shape — but the three forms need\nthree states, so `pose` is a *double* option and each JSON form means something different:\n\n- `{}` — absent: a pure read. The reply carries the override in force.\n- `{\"pose\": null}` — the override is cleared and the stream returns to the scene's `Camera`.\n- `{\"pose\": {…}}` — the stream flies to that pose.\n\nThe override is host render state, never world state: it is not hashed into a `WorldHash`, not\ncaptured by `engine.snapshot`, and not recorded into a replay, so a session with a flown view\nsimulates and records exactly as one without it. It moves the *stream*; `render.screenshot` and\n`render.bounds` choose per call through [`CameraChoice`], defaulting to the scene camera.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{RenderViewParams, ViewPose};\n\n// Fly the stream to a pose.\nlet cmd = Command::RenderView(RenderViewParams {\n    pose: Some(Some(ViewPose {\n        translation: [0.0, 2.0, 6.0],\n        rotation: [-15.0, 0.0, 0.0],\n        fov_y_deg: Some(50.0),\n    })),\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({\n        \"method\": \"render.view\",\n        \"params\": { \"pose\": {\n            \"translation\": [0.0, 2.0, 6.0],\n            \"rotation\": [-15.0, 0.0, 0.0],\n            \"fov_y_deg\": 50.0,\n        }},\n    }),\n);\n\n// An explicit `null` clears it; an absent `pose` only reads.\nlet cleared: RenderViewParams = serde_json::from_str(r#\"{\"pose\": null}\"#).unwrap();\nassert_eq!(cleared.pose, Some(None));\nassert_eq!(RenderViewParams::default().pose, None);\n```",
+        "description": "Parameters for `render.view`.\n\nOne verb that sets, clears and queries, the [`RenderSizeParams`] shape — but the three forms need\nthree states, so `pose` is a *double* option and each JSON form means something different:\n\n- `{}` — absent: a pure read. The reply carries the override in force.\n- `{\"pose\": null}` — the override is cleared and the stream returns to the scene's `Camera`.\n- `{\"pose\": {…}}` — the stream flies to that pose.\n\nThe override is host render state, never world state: it is not hashed into a `WorldHash`, not\ncaptured by `engine.snapshot`, and not recorded into a replay, so a session with a flown view\nsimulates and records exactly as one without it. It moves the *stream*; `render.screenshot` and\n`render.bounds` choose per call through [`CameraChoice`], defaulting to the scene camera.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{CullFrom, RenderViewParams, ViewPose};\n\n// Fly the stream to a pose.\nlet cmd = Command::RenderView(RenderViewParams {\n    pose: Some(Some(ViewPose {\n        translation: [0.0, 2.0, 6.0],\n        rotation: [-15.0, 0.0, 0.0],\n        fov_y_deg: Some(50.0),\n    })),\n    // Keep culling against the live scene camera while the view flies.\n    cull_from: Some(CullFrom::Game),\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({\n        \"method\": \"render.view\",\n        \"params\": { \"pose\": {\n            \"translation\": [0.0, 2.0, 6.0],\n            \"rotation\": [-15.0, 0.0, 0.0],\n            \"fov_y_deg\": 50.0,\n        }, \"cull_from\": \"game\" },\n    }),\n);\n\n// An explicit `null` clears it; an absent `pose` only reads.\nlet cleared: RenderViewParams = serde_json::from_str(r#\"{\"pose\": null}\"#).unwrap();\nassert_eq!(cleared.pose, Some(None));\nassert_eq!(RenderViewParams::default().pose, None);\n```",
         "properties": {
+          "cull_from": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CullFrom"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which camera the camera cull view tests against (see [`CullFrom`]); absent keeps what is in\nforce, `view` is the default. `frozen` captures the stream camera as the command applies and\nholds it; `game` follows the live scene camera. The image is still drawn through the view."
+          },
           "pose": {
             "anyOf": [
               {
@@ -2436,6 +2467,26 @@
         ],
         "type": "object"
       },
+      "CullFrom": {
+        "description": "Which camera the camera cull view tests against, for `render.view`.\n\nThe image is always drawn through the rendered camera; this moves only the frustum the GPU cull\nkeeps instances by, so a flown view can show what the game camera would cull. Debug surface:\nthe cull is conservative, and a cull camera that is not the drawn one drops visible meshes.\n\n# Example\n```\nuse ludion_protocol::command::CullFrom;\nassert_eq!(CullFrom::default(), CullFrom::View);\nassert_eq!(serde_json::to_value(CullFrom::Frozen).unwrap(), serde_json::json!(\"frozen\"));\n```",
+        "oneOf": [
+          {
+            "const": "view",
+            "description": "The rendered camera: the flown view, or the scene camera when no override is in force.",
+            "type": "string"
+          },
+          {
+            "const": "game",
+            "description": "The live scene camera, following the game while the view flies elsewhere.",
+            "type": "string"
+          },
+          {
+            "const": "frozen",
+            "description": "The stream camera as it stood when the command applied, held until the next `view`/`game`.",
+            "type": "string"
+          }
+        ]
+      },
       "EngineRestoreParams": {
         "additionalProperties": false,
         "description": "Parameters for `engine.restore`.\n\n`snapshot` is an opaque snapshot document produced by `engine.snapshot`; the protocol carries it\nas a [`serde_json::Value`] and the engine interprets it.",
@@ -2983,8 +3034,19 @@
       },
       "RenderViewParams": {
         "additionalProperties": false,
-        "description": "Parameters for `render.view`.\n\nOne verb that sets, clears and queries, the [`RenderSizeParams`] shape — but the three forms need\nthree states, so `pose` is a *double* option and each JSON form means something different:\n\n- `{}` — absent: a pure read. The reply carries the override in force.\n- `{\"pose\": null}` — the override is cleared and the stream returns to the scene's `Camera`.\n- `{\"pose\": {…}}` — the stream flies to that pose.\n\nThe override is host render state, never world state: it is not hashed into a `WorldHash`, not\ncaptured by `engine.snapshot`, and not recorded into a replay, so a session with a flown view\nsimulates and records exactly as one without it. It moves the *stream*; `render.screenshot` and\n`render.bounds` choose per call through [`CameraChoice`], defaulting to the scene camera.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{RenderViewParams, ViewPose};\n\n// Fly the stream to a pose.\nlet cmd = Command::RenderView(RenderViewParams {\n    pose: Some(Some(ViewPose {\n        translation: [0.0, 2.0, 6.0],\n        rotation: [-15.0, 0.0, 0.0],\n        fov_y_deg: Some(50.0),\n    })),\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({\n        \"method\": \"render.view\",\n        \"params\": { \"pose\": {\n            \"translation\": [0.0, 2.0, 6.0],\n            \"rotation\": [-15.0, 0.0, 0.0],\n            \"fov_y_deg\": 50.0,\n        }},\n    }),\n);\n\n// An explicit `null` clears it; an absent `pose` only reads.\nlet cleared: RenderViewParams = serde_json::from_str(r#\"{\"pose\": null}\"#).unwrap();\nassert_eq!(cleared.pose, Some(None));\nassert_eq!(RenderViewParams::default().pose, None);\n```",
+        "description": "Parameters for `render.view`.\n\nOne verb that sets, clears and queries, the [`RenderSizeParams`] shape — but the three forms need\nthree states, so `pose` is a *double* option and each JSON form means something different:\n\n- `{}` — absent: a pure read. The reply carries the override in force.\n- `{\"pose\": null}` — the override is cleared and the stream returns to the scene's `Camera`.\n- `{\"pose\": {…}}` — the stream flies to that pose.\n\nThe override is host render state, never world state: it is not hashed into a `WorldHash`, not\ncaptured by `engine.snapshot`, and not recorded into a replay, so a session with a flown view\nsimulates and records exactly as one without it. It moves the *stream*; `render.screenshot` and\n`render.bounds` choose per call through [`CameraChoice`], defaulting to the scene camera.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::{CullFrom, RenderViewParams, ViewPose};\n\n// Fly the stream to a pose.\nlet cmd = Command::RenderView(RenderViewParams {\n    pose: Some(Some(ViewPose {\n        translation: [0.0, 2.0, 6.0],\n        rotation: [-15.0, 0.0, 0.0],\n        fov_y_deg: Some(50.0),\n    })),\n    // Keep culling against the live scene camera while the view flies.\n    cull_from: Some(CullFrom::Game),\n});\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({\n        \"method\": \"render.view\",\n        \"params\": { \"pose\": {\n            \"translation\": [0.0, 2.0, 6.0],\n            \"rotation\": [-15.0, 0.0, 0.0],\n            \"fov_y_deg\": 50.0,\n        }, \"cull_from\": \"game\" },\n    }),\n);\n\n// An explicit `null` clears it; an absent `pose` only reads.\nlet cleared: RenderViewParams = serde_json::from_str(r#\"{\"pose\": null}\"#).unwrap();\nassert_eq!(cleared.pose, Some(None));\nassert_eq!(RenderViewParams::default().pose, None);\n```",
         "properties": {
+          "cull_from": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CullFrom"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which camera the camera cull view tests against (see [`CullFrom`]); absent keeps what is in\nforce, `view` is the default. `frozen` captures the stream camera as the command applies and\nholds it; `game` follows the live scene camera. The image is still drawn through the view."
+          },
           "pose": {
             "anyOf": [
               {
@@ -3950,6 +4012,81 @@
         ],
         "type": "object"
       },
+      "CullFrom": {
+        "description": "Which camera the camera cull view tests against, for `render.view`.\n\nThe image is always drawn through the rendered camera; this moves only the frustum the GPU cull\nkeeps instances by, so a flown view can show what the game camera would cull. Debug surface:\nthe cull is conservative, and a cull camera that is not the drawn one drops visible meshes.\n\n# Example\n```\nuse ludion_protocol::command::CullFrom;\nassert_eq!(CullFrom::default(), CullFrom::View);\nassert_eq!(serde_json::to_value(CullFrom::Frozen).unwrap(), serde_json::json!(\"frozen\"));\n```",
+        "oneOf": [
+          {
+            "const": "view",
+            "description": "The rendered camera: the flown view, or the scene camera when no override is in force.",
+            "type": "string"
+          },
+          {
+            "const": "game",
+            "description": "The live scene camera, following the game while the view flies elsewhere.",
+            "type": "string"
+          },
+          {
+            "const": "frozen",
+            "description": "The stream camera as it stood when the command applied, held until the next `view`/`game`.",
+            "type": "string"
+          }
+        ]
+      },
+      "CullViewProfile": {
+        "description": "One cull view's counts.",
+        "properties": {
+          "drawn_median": {
+            "description": "Median over the sampled frames of the instances the view kept to draw.",
+            "format": "double",
+            "type": "number"
+          },
+          "instances_median": {
+            "description": "Median over the sampled frames of the instances the view tested.",
+            "format": "double",
+            "type": "number"
+          },
+          "name": {
+            "description": "`camera | sun | cascade_N | local_N`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "instances_median",
+          "drawn_median"
+        ],
+        "type": "object"
+      },
+      "CullingProfile": {
+        "description": "What the GPU frustum cull kept, per view, read back from its indirect args.",
+        "properties": {
+          "over_cap_views": {
+            "description": "Views past the 128 MiB cull-output cap: they draw every caster and are not in `views`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sampled_frames": {
+            "description": "Frames whose counts were read back; a full readback ring skips a frame rather than wait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "views": {
+            "description": "One entry per cull view, in cull order.",
+            "items": {
+              "$ref": "#/$defs/CullViewProfile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sampled_frames",
+          "over_cap_views",
+          "views"
+        ],
+        "type": "object"
+      },
       "DecalProfile": {
         "description": "Projected decals — the frame's decals by blend mode and what the projector pass plans for them.\n\nNot measurements: the counts are the shape of the frame's plan, reduced from the same packing the\nrenderer runs, so two runs of the same frame produce identical numbers.",
         "properties": {
@@ -4438,6 +4575,17 @@
               }
             ],
             "description": "Clustered-forward light binning: what the frame's cluster tables cost to build and how\ncrowded they came out. Filled by the **offline** driver and absent for a live capture — the\nmirror image of `transport`, and for the mirror-image reason: the live host builds its\ncluster tables inside a frame a profiler must neither stall nor make pay twice, while the\noffline driver owns its own loop and can time the build as its own span."
+          },
+          "culling": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CullingProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The GPU frustum cull's per-view counts, the median over the measured frames. Absent for a\nscene without a world mesh, with culling off, and for a live capture, for `cluster`'s reason:\nthe counts come back through a readback ring only the **offline** driver arms."
           },
           "decals": {
             "anyOf": [
@@ -5395,6 +5543,10 @@
           {
             "description": "Result of `render.view` — the view override in force once the command applied, or `null`\nwhen the stream is back on the scene's own `Camera`. Every form of the command answers with\nit, so a client that only wants to *read* sends empty params.",
             "properties": {
+              "cull_from": {
+                "$ref": "#/$defs/CullFrom",
+                "description": "The camera the camera cull view tests against."
+              },
               "kind": {
                 "const": "render_view",
                 "type": "string"
@@ -5412,7 +5564,8 @@
               }
             },
             "required": [
-              "kind"
+              "kind",
+              "cull_from"
             ],
             "type": "object"
           },
@@ -6309,6 +6462,81 @@
         ],
         "type": "object"
       },
+      "CullFrom": {
+        "description": "Which camera the camera cull view tests against, for `render.view`.\n\nThe image is always drawn through the rendered camera; this moves only the frustum the GPU cull\nkeeps instances by, so a flown view can show what the game camera would cull. Debug surface:\nthe cull is conservative, and a cull camera that is not the drawn one drops visible meshes.\n\n# Example\n```\nuse ludion_protocol::command::CullFrom;\nassert_eq!(CullFrom::default(), CullFrom::View);\nassert_eq!(serde_json::to_value(CullFrom::Frozen).unwrap(), serde_json::json!(\"frozen\"));\n```",
+        "oneOf": [
+          {
+            "const": "view",
+            "description": "The rendered camera: the flown view, or the scene camera when no override is in force.",
+            "type": "string"
+          },
+          {
+            "const": "game",
+            "description": "The live scene camera, following the game while the view flies elsewhere.",
+            "type": "string"
+          },
+          {
+            "const": "frozen",
+            "description": "The stream camera as it stood when the command applied, held until the next `view`/`game`.",
+            "type": "string"
+          }
+        ]
+      },
+      "CullViewProfile": {
+        "description": "One cull view's counts.",
+        "properties": {
+          "drawn_median": {
+            "description": "Median over the sampled frames of the instances the view kept to draw.",
+            "format": "double",
+            "type": "number"
+          },
+          "instances_median": {
+            "description": "Median over the sampled frames of the instances the view tested.",
+            "format": "double",
+            "type": "number"
+          },
+          "name": {
+            "description": "`camera | sun | cascade_N | local_N`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "instances_median",
+          "drawn_median"
+        ],
+        "type": "object"
+      },
+      "CullingProfile": {
+        "description": "What the GPU frustum cull kept, per view, read back from its indirect args.",
+        "properties": {
+          "over_cap_views": {
+            "description": "Views past the 128 MiB cull-output cap: they draw every caster and are not in `views`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sampled_frames": {
+            "description": "Frames whose counts were read back; a full readback ring skips a frame rather than wait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "views": {
+            "description": "One entry per cull view, in cull order.",
+            "items": {
+              "$ref": "#/$defs/CullViewProfile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sampled_frames",
+          "over_cap_views",
+          "views"
+        ],
+        "type": "object"
+      },
       "DecalProfile": {
         "description": "Projected decals — the frame's decals by blend mode and what the projector pass plans for them.\n\nNot measurements: the counts are the shape of the frame's plan, reduced from the same packing the\nrenderer runs, so two runs of the same frame produce identical numbers.",
         "properties": {
@@ -6797,6 +7025,17 @@
               }
             ],
             "description": "Clustered-forward light binning: what the frame's cluster tables cost to build and how\ncrowded they came out. Filled by the **offline** driver and absent for a live capture — the\nmirror image of `transport`, and for the mirror-image reason: the live host builds its\ncluster tables inside a frame a profiler must neither stall nor make pay twice, while the\noffline driver owns its own loop and can time the build as its own span."
+          },
+          "culling": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CullingProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The GPU frustum cull's per-view counts, the median over the measured frames. Absent for a\nscene without a world mesh, with culling off, and for a live capture, for `cluster`'s reason:\nthe counts come back through a readback ring only the **offline** driver arms."
           },
           "decals": {
             "anyOf": [
@@ -8332,6 +8571,10 @@
       {
         "description": "Result of `render.view` — the view override in force once the command applied, or `null`\nwhen the stream is back on the scene's own `Camera`. Every form of the command answers with\nit, so a client that only wants to *read* sends empty params.",
         "properties": {
+          "cull_from": {
+            "$ref": "#/$defs/CullFrom",
+            "description": "The camera the camera cull view tests against."
+          },
           "kind": {
             "const": "render_view",
             "type": "string"
@@ -8349,7 +8592,8 @@
           }
         },
         "required": [
-          "kind"
+          "kind",
+          "cull_from"
         ],
         "type": "object"
       },

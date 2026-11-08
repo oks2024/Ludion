@@ -1970,7 +1970,7 @@ impl Renderer {
                 frustum
             });
         let (cull_views, over_cap) = chain.cull.map_or_else(Default::default, |shape| {
-            cull_views(view_proj, &sun_maps, local_frusta, shape)
+            cull_views(scene.cull_view_proj(), &sun_maps, local_frusta, shape)
         });
         let stats = self.cull_stats.borrow().is_some();
         let cull_names = if stats {

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use ludion_core::math::glam::{Mat4, Vec3, Vec4};
 
-use crate::scene::{MeshData, MeshInstance, MeshShape};
+use crate::scene::{DebugSegment, MeshData, MeshInstance, MeshShape, RenderScene};
 
 /// An axis-aligned box.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -336,6 +336,106 @@ pub(crate) fn cull(bounds: &[Option<Aabb>], volume: &CullVolume) -> Vec<u32> {
         .collect()
 }
 
+const KEPT: [f32; 4] = [0.2, 1.0, 0.2, 1.0];
+const CULLED: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
+const CULL_FRUSTUM: [f32; 4] = [1.0, 0.85, 0.1, 1.0];
+const UNBOUNDED_HALF: f32 = 0.25;
+
+/// The 12 edges of a box, as index pairs into [`box_corners`].
+const BOX_EDGES: [(usize, usize); 12] = [
+    (0, 1),
+    (2, 3),
+    (4, 5),
+    (6, 7),
+    (0, 2),
+    (1, 3),
+    (4, 6),
+    (5, 7),
+    (0, 4),
+    (1, 5),
+    (2, 6),
+    (3, 7),
+];
+
+/// Corner `i` has x from bit 0, y from bit 1, z from bit 2 (`0` = min/near, `1` = max/far).
+fn box_corners(min: Vec3, max: Vec3) -> [Vec3; 8] {
+    std::array::from_fn(|i| {
+        Vec3::new(
+            if i & 1 == 0 { min.x } else { max.x },
+            if i & 2 == 0 { min.y } else { max.y },
+            if i & 4 == 0 { min.z } else { max.z },
+        )
+    })
+}
+
+fn box_edges(corners: &[Vec3; 8], color: [f32; 4], out: &mut Vec<DebugSegment>) {
+    out.extend(BOX_EDGES.iter().map(|&(a, b)| DebugSegment {
+        a: corners[a].to_array(),
+        b: corners[b].to_array(),
+        color,
+    }));
+}
+
+/// The camera cull view's verdict on every world mesh, as debug lines: the mesh's world box in green
+/// when the cull keeps it and red when it culls it, a green cross for a mesh whose bounds are
+/// unknown (always drawn). Viewmodel meshes never enter the world cull and are not marked. When the
+/// frame culls against a `cull_camera`, that camera's frustum is outlined in yellow.
+///
+/// Computed by the CPU oracle over the same bounds the GPU table is built from, so the marks are
+/// the set the GPU keeps. It is the source of the `cull` debug-draw category: the verdict depends on
+/// the camera, so the engine appends these to the extracted scene's lines.
+pub fn cull_marks(scene: &RenderScene) -> Vec<DebugSegment> {
+    let view_proj = scene.cull_view_proj();
+    let frustum = Frustum::from_view_proj(view_proj);
+    let assets: Vec<AssetBounds> = scene
+        .mesh_assets
+        .iter()
+        .map(|mesh| AssetBounds::of_mesh(mesh))
+        .collect();
+    let bounds = instance_bounds(&scene.meshes, &assets, &scene.bone_palette);
+    let mut out = Vec::new();
+    for (mesh, bound) in scene.meshes.iter().zip(&bounds) {
+        if mesh.viewmodel {
+            continue;
+        }
+        match bound {
+            Some(b) => {
+                let color = if frustum.intersects_aabb(b) {
+                    KEPT
+                } else {
+                    CULLED
+                };
+                box_edges(&box_corners(b.min, b.max), color, &mut out);
+            }
+            None => {
+                let at = mesh.model.w_axis.truncate();
+                for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                    out.push(DebugSegment {
+                        a: (at - axis * UNBOUNDED_HALF).to_array(),
+                        b: (at + axis * UNBOUNDED_HALF).to_array(),
+                        color: KEPT,
+                    });
+                }
+            }
+        }
+    }
+    if scene.cull_camera.is_some() {
+        let inverse = view_proj.inverse();
+        let corners: [Vec3; 8] = std::array::from_fn(|i| {
+            let ndc = Vec4::new(
+                if i & 1 == 0 { -1.0 } else { 1.0 },
+                if i & 2 == 0 { -1.0 } else { 1.0 },
+                if i & 4 == 0 { 0.0 } else { 1.0 },
+                1.0,
+            );
+            let world = inverse * ndc;
+            world.truncate() / world.w
+        });
+        box_edges(&corners, CULL_FRUSTUM, &mut out);
+    }
+    out
+}
+
 /// `ranges` (instance positions of a draw whose `sources` are ascending `scene.meshes` indices) with
 /// every position whose source does not cast (`casts[source]` false) removed, survivors re-coalesced.
 pub(crate) fn casting_ranges(
@@ -415,6 +515,50 @@ mod tests {
         let view = Mat4::look_at_rh(Vec3::ZERO, -Vec3::Z, Vec3::Y);
         let proj = Mat4::perspective_rh(90.0_f32.to_radians(), 1.0, 1.0, 100.0);
         Frustum::from_view_proj(proj * view)
+    }
+
+    fn marks_scene(meshes: Vec<MeshInstance>) -> RenderScene {
+        let mut scene = RenderScene::empty((160, 90));
+        scene.camera.view = Mat4::look_at_rh(Vec3::ZERO, -Vec3::Z, Vec3::Y);
+        scene.camera.projection = Mat4::perspective_rh(90.0_f32.to_radians(), 1.0, 1.0, 100.0);
+        scene.meshes = meshes;
+        scene
+    }
+
+    fn count(marks: &[DebugSegment], color: [f32; 4]) -> usize {
+        marks.iter().filter(|m| m.color == color).count()
+    }
+
+    fn cube_instance(z: f32) -> MeshInstance {
+        instance(
+            MeshShape::Cube,
+            Mat4::from_translation(Vec3::new(0.0, 0.0, z)),
+        )
+    }
+
+    #[test]
+    fn cull_marks_paint_kept_green_and_culled_red_and_skip_the_viewmodel() {
+        let scene = marks_scene(vec![cube_instance(-10.0), cube_instance(10.0)]);
+        let marks = cull_marks(&scene);
+        assert_eq!((count(&marks, KEPT), count(&marks, CULLED)), (12, 12));
+
+        let mut gun = cube_instance(-2.0);
+        gun.viewmodel = true;
+        let scene = marks_scene(vec![gun]);
+        assert!(cull_marks(&scene).is_empty());
+    }
+
+    #[test]
+    fn a_cull_camera_decides_admission_and_outlines_its_frustum() {
+        let mut scene = marks_scene(vec![cube_instance(-10.0)]);
+        assert_eq!(count(&cull_marks(&scene), CULL_FRUSTUM), 0);
+        // Looking the other way, the cube is behind the cull camera.
+        let mut turned = scene.camera;
+        turned.view = Mat4::look_at_rh(Vec3::ZERO, Vec3::Z, Vec3::Y);
+        scene.cull_camera = Some(turned);
+        let marks = cull_marks(&scene);
+        assert_eq!((count(&marks, KEPT), count(&marks, CULLED)), (0, 12));
+        assert_eq!(count(&marks, CULL_FRUSTUM), 12);
     }
 
     #[test]

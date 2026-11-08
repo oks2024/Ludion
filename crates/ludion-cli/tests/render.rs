@@ -1725,6 +1725,64 @@ fn needs_gpu_debug_draw_colliders_draws_the_gallery_floor() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `--debug-draw cull` outlines the camera cull view's verdict on the gallery's meshes: the PNG
+/// differs from the plain render and the summary names the category. Skips when no GPU adapter is
+/// available.
+#[test]
+fn needs_gpu_debug_draw_cull_outlines_the_gallery_meshes() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/gallery/collider-wireframes.yaml");
+    let scene = scene.to_str().unwrap().to_string();
+    let dir = std::env::temp_dir().join(format!("ludion-render-cull-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain_out = dir.join("plain.png");
+    let drawn_out = dir.join("drawn.png");
+    let render = |out: &std::path::Path, extra: &[&str]| {
+        let mut args = vec![
+            "render",
+            "--scene",
+            &scene,
+            "--out",
+            out.to_str().unwrap(),
+            "--width",
+            "192",
+            "--height",
+            "108",
+            "--frames",
+            "2",
+        ];
+        args.extend_from_slice(extra);
+        run_ludion(&args)
+    };
+
+    let plain = render(&plain_out, &[]);
+    if !plain.status.success() {
+        if is_no_adapter(&plain) {
+            eprintln!("SKIPPED debug_draw_cull_outlines_the_gallery_meshes: no GPU adapter");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        panic!("render failed: {}", String::from_utf8_lossy(&plain.stderr));
+    }
+    let drawn = render(&drawn_out, &["--debug-draw", "cull"]);
+    assert!(
+        drawn.status.success(),
+        "{}",
+        String::from_utf8_lossy(&drawn.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&drawn.stdout);
+    assert!(
+        stdout.contains("(debug draw: cull)") && !stdout.contains("nothing drawn"),
+        "summary names the draw: {stdout}"
+    );
+    assert_ne!(
+        decode_png(&plain_out).2,
+        decode_png(&drawn_out).2,
+        "the cull boxes must be drawn over the frame"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `--debug-draw` is refused where it cannot draw: with a multi-value `--frames` strip and with a
 /// model sheet. Both refusals happen before any GPU work.
 #[test]

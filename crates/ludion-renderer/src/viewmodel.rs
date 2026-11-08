@@ -36,6 +36,20 @@ impl RenderScene {
         }
     }
 
+    /// [`depth_view_proj`](Self::depth_view_proj) for the camera the camera cull view tests
+    /// against: the same depth remap over `cull_camera`'s matrices, or `depth_view_proj` itself
+    /// when no cull camera is set.
+    pub fn cull_view_proj(&self) -> Mat4 {
+        let Some(cull) = &self.cull_camera else {
+            return self.depth_view_proj();
+        };
+        let view_proj = cull.projection * cull.view;
+        match &self.viewmodel {
+            None => view_proj,
+            Some(data) => world_depth_remap(data.depth_slice) * view_proj,
+        }
+    }
+
     /// The viewmodel's view-projection with its depth in `[0, s]`; `None` without a viewmodel.
     pub(crate) fn viewmodel_view_proj(&self) -> Option<Mat4> {
         let data = self.viewmodel.as_ref()?;

@@ -887,6 +887,7 @@ fn bounds_project_through_the_offset_but_not_through_the_view_override() {
             engine,
             Command::RenderView(RenderViewParams {
                 pose: Some(Some(pose)),
+                ..Default::default()
             }),
         )
         .unwrap();

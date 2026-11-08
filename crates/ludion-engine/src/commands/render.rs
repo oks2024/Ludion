@@ -204,14 +204,23 @@ pub(crate) fn view(
     engine: &mut Engine,
     params: RenderViewParams,
 ) -> Result<ResponseBody, Diagnostic> {
+    let previous = engine.view_override().copied();
     if let Some(requested) = params.pose {
         // Validated before anything is written, so a refused pose leaves the human looking at the
         // last good one rather than at nothing.
         let accepted = requested.map(render_view::accept).transpose()?;
         engine.set_view_override(accepted);
     }
+    if let Some(mode) = params.cull_from
+        && let Err(refused) = engine.set_cull_from(mode)
+    {
+        // A `frozen` that cannot capture applies nothing, the pose included.
+        engine.set_view_override(previous);
+        return Err(refused);
+    }
     Ok(ResponseBody::RenderView {
         pose: engine.view_override().copied(),
+        cull_from: engine.cull_from(),
     })
 }
 
@@ -330,7 +339,7 @@ fn parse_json(json: &str, what: &str) -> Result<Value, Diagnostic> {
 
 #[cfg(test)]
 mod tests {
-    use ludion_protocol::command::ViewPose;
+    use ludion_protocol::command::{CullFrom, ViewPose};
 
     use super::*;
 
@@ -519,7 +528,14 @@ mod tests {
     }
 
     fn flown(engine: &mut Engine, pose: Option<Option<ViewPose>>) -> ResponseBody {
-        view(engine, RenderViewParams { pose }).expect("the pose is accepted")
+        view(
+            engine,
+            RenderViewParams {
+                pose,
+                ..Default::default()
+            },
+        )
+        .expect("the pose is accepted")
     }
 
     /// Empty params are a pure read: nothing moves, and the reply still carries the override in
@@ -529,7 +545,10 @@ mod tests {
         let mut engine = engine();
         assert_eq!(
             flown(&mut engine, None),
-            ResponseBody::RenderView { pose: None },
+            ResponseBody::RenderView {
+                pose: None,
+                cull_from: CullFrom::View,
+            },
         );
         assert_eq!(engine.view_override(), None);
     }
@@ -541,13 +560,19 @@ mod tests {
         let mut engine = engine();
         assert_eq!(
             flown(&mut engine, Some(Some(pose()))),
-            ResponseBody::RenderView { pose: Some(pose()) },
+            ResponseBody::RenderView {
+                pose: Some(pose()),
+                cull_from: CullFrom::View,
+            },
         );
         assert_eq!(engine.view_override(), Some(&pose()));
 
         assert_eq!(
             flown(&mut engine, Some(None)),
-            ResponseBody::RenderView { pose: None },
+            ResponseBody::RenderView {
+                pose: None,
+                cull_from: CullFrom::View,
+            },
         );
         assert_eq!(
             engine.view_override(),
@@ -568,11 +593,63 @@ mod tests {
             &mut engine,
             RenderViewParams {
                 pose: Some(Some(bad)),
+                ..Default::default()
             },
         )
         .expect_err("a non-finite pose must be refused");
         assert_eq!(diagnostic.code, code::PROTOCOL_RENDER_VIEW_INVALID);
         assert_eq!(engine.view_override(), Some(&pose()));
+    }
+
+    /// `cull_from` is read and set through the same verb; `frozen` holds the camera it captured, and
+    /// `view` or `game` drop it.
+    #[test]
+    fn cull_from_reads_sets_and_freezes() {
+        let mut engine = engine();
+        assert_eq!(engine.cull_from(), CullFrom::View);
+        let set = |engine: &mut Engine, mode| {
+            view(
+                engine,
+                RenderViewParams {
+                    cull_from: Some(mode),
+                    ..Default::default()
+                },
+            )
+            .expect("the mode is accepted")
+        };
+        assert_eq!(
+            set(&mut engine, CullFrom::Frozen),
+            ResponseBody::RenderView {
+                pose: None,
+                cull_from: CullFrom::Frozen,
+            },
+        );
+        assert!(engine.frozen_cull.is_some(), "frozen captures the camera");
+        // An empty-params read keeps the mode and the capture.
+        flown(&mut engine, None);
+        assert_eq!(engine.cull_from(), CullFrom::Frozen);
+        assert!(engine.frozen_cull.is_some());
+        set(&mut engine, CullFrom::Game);
+        assert!(engine.frozen_cull.is_none(), "game drops the capture");
+    }
+
+    /// A refused pose sent together with `frozen` applies nothing: no pose, no mode, no capture.
+    #[test]
+    fn a_refused_pose_with_frozen_changes_nothing() {
+        let mut engine = engine();
+        let mut bad = pose();
+        bad.translation[1] = f32::NAN;
+        view(
+            &mut engine,
+            RenderViewParams {
+                pose: Some(Some(bad)),
+                cull_from: Some(CullFrom::Frozen),
+            },
+        )
+        .expect_err("a non-finite pose must be refused");
+        assert_eq!(engine.view_override(), None);
+        assert_eq!(engine.cull_from(), CullFrom::View);
+        assert!(engine.frozen_cull.is_none());
     }
 
     /// The override is a pure render concern: flying it moves no frame index and no `WorldHash`, so
