@@ -494,12 +494,13 @@ mod tests {
                 "shafts.steps",
                 4,
             ),
-            // Two: the segment march reads the count as the loop bound and as the step's divisor.
+            // Four: each of the two marches (the lights' segments, the GI term's whole ray) reads the
+            // count as its loop bound and as the step's divisor.
             (
                 "medium_scatter.wgsl",
                 include_str!("shaders/medium_scatter.wgsl"),
                 "scatter.steps",
-                2,
+                4,
             ),
             (
                 "dof.wgsl",

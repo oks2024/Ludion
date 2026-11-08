@@ -1,7 +1,9 @@
 //! Local-light in-scatter: GPU tests over the `medium_scatter` pass and its composite add.
 
 use super::*;
-use crate::scene::{PointLightData, SpotLightData};
+use std::sync::Arc;
+
+use crate::scene::{GiData, PointLightData, SpotLightData, WorldVoxelGrid};
 
 /// The frame edge of the fixtures.
 const PX: u32 = 128;
@@ -470,4 +472,210 @@ fn needs_gpu_cube_faces_cover_every_direction() {
         eprintln!("{name}: lit {a}, shaded {b}");
         assert!(b + 20 < a, "{name}: shaded {b} against lit {a}");
     }
+}
+
+// --- the GI term ---------------------------------------------------------------------------------
+
+/// The fixtures' haze: a mid-grey ambient, so the glow of the medium (not a surface) is what a pixel
+/// reads. The slab behind it is black and unlit, so the haze is the pixel.
+const GI_SIGMA: f32 = 0.4;
+
+/// An `8³` unit-cell grid at the origin: a solid one-cell skin when `shell` (a sealed box no sky ray
+/// leaves, whose skin glows `radiance` red), else all free.
+fn gi_grid(shell: bool, radiance: f32) -> Arc<WorldVoxelGrid> {
+    let extent = [8u32, 8, 8];
+    let total = 8 * 8 * 8;
+    let skin = |i: usize| {
+        let (x, y, z) = (i % 8, i / 8 % 8, i / 64);
+        [x, y, z].iter().any(|&c| c == 0 || c == 7)
+    };
+    Arc::new(
+        WorldVoxelGrid {
+            origin: Vec3::ZERO,
+            cell_size: 1.0,
+            extent,
+            occupancy: (0..total).map(|i| shell && skin(i)).collect(),
+            albedo: vec![[1.0, 0.1, 0.1, 1.0]; total],
+            emissive: (0..total)
+                .map(|i| if shell && skin(i) { radiance } else { 0.0 })
+                .collect(),
+            hash: 0,
+        }
+        .sealed(),
+    )
+}
+
+/// The haze scene inside the grid's box: a camera at its centre looking down -Z at a black slab,
+/// a grey medium, no light. `gi` is `(sky_visibility, bounce)` of a volume over the grid, or none.
+fn gi_scene(grid: &Arc<WorldVoxelGrid>, gi: Option<(f32, f32)>) -> RenderScene {
+    let mut scene = fog_scene(PX, PX);
+    let eye = Vec3::new(4.0, 4.0, 4.0);
+    scene.camera.view = Mat4::look_at_rh(eye, eye - Vec3::Z, Vec3::Y);
+    scene.camera.position = eye;
+    scene.meshes = vec![slab(Vec3::new(4.0, 4.0, 0.0), 3.0, [0.0; 3])];
+    scene.post = Some(PostData {
+        fog_density: GI_SIGMA,
+        fog_color: [0.5; 3],
+        ..exact_post()
+    });
+    if let Some((sky_visibility, bounce)) = gi {
+        let count = [9u32; 3];
+        scene.voxel = Some(grid.clone());
+        scene.gi = Some(GiData {
+            probe_spacing: 1.0,
+            normal_bias: 0.25,
+            sky_visibility,
+            bounce,
+            count,
+            origin: Vec3::ZERO,
+            span: Vec3::splat(8.0),
+        });
+    }
+    scene
+}
+
+fn linear(byte: u8) -> f32 {
+    let c = f32::from(byte) / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// A sealed room lets no sky in, so its haze goes dark; an open volume leaves it as it was.
+#[test]
+fn needs_gpu_an_enclosed_room_darkens_its_haze() {
+    let Some(renderer) = skip_or_renderer("an_enclosed_room_darkens_its_haze") else {
+        return;
+    };
+    let room = gi_grid(true, 0.0);
+    let open = gi_grid(false, 0.0);
+    let bare = sum(pixel(&renderer, &gi_scene(&room, None), CENTRE.0, CENTRE.1));
+    let sealed = sum(pixel(
+        &renderer,
+        &gi_scene(&room, Some((1.0, 0.0))),
+        CENTRE.0,
+        CENTRE.1,
+    ));
+    let visible = sum(pixel(
+        &renderer,
+        &gi_scene(&open, Some((1.0, 0.0))),
+        CENTRE.0,
+        CENTRE.1,
+    ));
+    eprintln!("bare {bare}, sealed {sealed}, open {visible}");
+    assert!(bare > 150, "the medium glows without GI: {bare}");
+    assert!(
+        sealed < bare / 3,
+        "the sealed room darkens the haze: {sealed} against {bare}"
+    );
+    assert!(
+        (visible - bare).abs() <= 3,
+        "open sky leaves it: {visible} against {bare}"
+    );
+}
+
+/// A volume at zero strength is no volume: the whole frame is the one without it, medium and all.
+#[test]
+fn needs_gpu_sky_visibility_zero_and_bounce_zero_is_byte_identical_to_no_gi() {
+    let Some(renderer) = skip_or_renderer("zero_strength_gi_is_byte_identical") else {
+        return;
+    };
+    let room = gi_grid(true, 4.0);
+    let none = renderer
+        .render(&gi_scene(&room, None), size())
+        .expect("render");
+    let zero = renderer
+        .render(&gi_scene(&room, Some((0.0, 0.0))), size())
+        .expect("render");
+    assert_eq!(none.rgba, zero.rgba);
+}
+
+/// A red emitter's bounce reddens the haze it fills: the black slab is lit by nothing, so the
+/// change is the in-scatter alone.
+#[test]
+fn needs_gpu_bounce_adds_tinted_in_scatter() {
+    let Some(renderer) = skip_or_renderer("bounce_adds_tinted_in_scatter") else {
+        return;
+    };
+    let room = gi_grid(true, 0.2);
+    let off = pixel(
+        &renderer,
+        &gi_scene(&room, Some((0.0, 0.0))),
+        CENTRE.0,
+        CENTRE.1,
+    );
+    let on = pixel(
+        &renderer,
+        &gi_scene(&room, Some((0.0, 1.0))),
+        CENTRE.0,
+        CENTRE.1,
+    );
+    eprintln!("off {off:?}, on {on:?}");
+    let gain = |c: usize| i32::from(on[c]) - i32::from(off[c]);
+    assert!(
+        gain(0) > 10,
+        "the haze takes the bounce: {on:?} against {off:?}"
+    );
+    assert!(
+        gain(0) > 3 * gain(2).max(1),
+        "and its red tint: {on:?} against {off:?}"
+    );
+}
+
+/// The sky takes no medium, so no GI term: a frame of nothing but background is the one without GI.
+#[test]
+fn needs_gpu_the_background_takes_no_gi_term() {
+    let Some(renderer) = skip_or_renderer("the_background_takes_no_gi_term") else {
+        return;
+    };
+    let room = gi_grid(true, 4.0);
+    let mut bare = gi_scene(&room, None);
+    bare.meshes.clear();
+    let mut lit = gi_scene(&room, Some((1.0, 1.0)));
+    lit.meshes.clear();
+    let none = renderer.render(&bare, size()).expect("render");
+    let with = renderer.render(&lit, size()).expect("render");
+    assert_eq!(none.rgba, with.rgba);
+}
+
+/// Both terms in one pass add: the light's glow rides on the GI-scaled ambient, so its linear
+/// contribution is the same with or without the volume.
+#[test]
+fn needs_gpu_a_scattering_light_and_gi_compose() {
+    let Some(renderer) = skip_or_renderer("a_scattering_light_and_gi_compose") else {
+        return;
+    };
+    let room = gi_grid(true, 0.0);
+    let lit = |gi: Option<(f32, f32)>, scatter: f32| {
+        let mut scene = gi_scene(&room, gi);
+        scene.lights = vec![point(
+            Vec3::new(4.0, 4.0, 2.5),
+            Vec3::splat(0.05),
+            6.0,
+            scatter,
+        )];
+        linear(pixel(&renderer, &scene, CENTRE.0, CENTRE.1)[1])
+    };
+    let none = lit(None, 0.0);
+    let light = lit(None, 1.0);
+    let gi = lit(Some((0.5, 0.0)), 0.0);
+    let both = lit(Some((0.5, 0.0)), 1.0);
+    eprintln!("none {none}, light {light}, gi {gi}, both {both}");
+    assert!(
+        light > none + 0.02,
+        "the light glows: {light} against {none}"
+    );
+    assert!(
+        gi < none - 0.02,
+        "the volume dims the ambient: {gi} against {none}"
+    );
+    let tolerance = 1.0 / 255.0;
+    assert!(
+        ((both - gi) - (light - none)).abs() <= tolerance,
+        "light term {} with GI, {} without",
+        both - gi,
+        light - none,
+    );
 }

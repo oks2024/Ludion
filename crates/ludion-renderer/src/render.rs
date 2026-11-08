@@ -1535,7 +1535,9 @@ impl Renderer {
         emissive_dest: wgpu::TexelCopyTextureInfo<'_>,
     ) -> Result<Option<AxisIrradiance>, Diagnostic> {
         let size = FrameSize::native(face_size, face_size);
-        let chain = PostChain::for_scene(face_scene).masked(&self.quality, &self.quality_params);
+        let chain = PostChain::for_scene(face_scene)
+            .masked(&self.quality, &self.quality_params)
+            .without_medium();
         let (graph, output, emissive) = build_probe_capture_graph(face_size, chain);
         let schedule = schedule(&graph).expect("the probe capture graph schedules");
         // The capture graph declares no cull, so the face prepares none and its shadow pass draws directly.
@@ -1937,7 +1939,7 @@ impl Renderer {
             .local_shadow_atlas
             .map(|edge| plan_local_shadows(scene, edge));
         let (scatter_lights, scatter_views) =
-            medium_pass::lanes_for(scene, chain.medium_scatter, local_shadow.as_ref());
+            medium_pass::lanes_for(scene, chain.local_scatter, local_shadow.as_ref());
         debug_assert!(
             local_shadow
                 .as_ref()
@@ -2083,6 +2085,7 @@ impl Renderer {
             has_ao: chain.ssao,
             has_shafts: chain.shafts,
             has_medium_scatter: chain.medium_scatter,
+            has_medium_gi: chain.medium_gi,
             scatter_lights,
             scatter_views,
             has_dof: chain.dof,
@@ -3476,6 +3479,8 @@ struct FrameRecorder<'a> {
     has_shafts: bool,
     /// Whether this frame runs the local-light in-scatter pair; mirrors [`PostChain::medium_scatter`].
     has_medium_scatter: bool,
+    /// Whether that pass also carries the GI term; mirrors [`PostChain::medium_gi`].
+    has_medium_gi: bool,
     /// The selected scattering lights, ascending light-list order; empty unless `has_medium_scatter`.
     scatter_lights: Vec<shader_gen::ScatterLight>,
     /// The shadow views those lanes index, compacted (`medium_pass::scatter_views`).
@@ -3693,6 +3698,7 @@ impl PassRecorder for FrameRecorder<'_> {
                     medium_scatter: u32::from(self.has_medium_scatter),
                     inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
                     view_forward: self.view_forward,
+                    medium_gi: [u32::from(self.has_medium_gi), 0, 0, 0],
                 };
                 // The composite's three optional inputs, each at the binding the WGSL itself declares,
                 // so neither can move the other and turning one off cannot shift the one behind it.
@@ -5417,6 +5423,18 @@ impl FrameRecorder<'_> {
         optional: &[OptionalInput<'_>],
         uniform: &[u8],
     ) {
+        self.fullscreen_effect_with(pass, id, optional, uniform, None);
+    }
+
+    /// [`fullscreen_effect`](Self::fullscreen_effect) plus a renderer-owned bind group at index 1.
+    fn fullscreen_effect_with(
+        &self,
+        pass: &mut RecordedPass<'_>,
+        id: ShaderId,
+        optional: &[OptionalInput<'_>],
+        uniform: &[u8],
+        extra: Option<&wgpu::BindGroup>,
+    ) {
         let device = pass.device;
         let inputs = pass.inputs;
         let uniform_buf = init_buffer(device, wgpu::BufferUsages::UNIFORM, uniform);
@@ -5464,6 +5482,9 @@ impl FrameRecorder<'_> {
         let mut rp = pass.begin_clear(wgpu::Color::BLACK);
         rp.set_pipeline(pipelines.for_target(target));
         rp.set_bind_group(0, &bind_group, &[]);
+        if let Some(extra) = extra {
+            rp.set_bind_group(1, extra, &[]);
+        }
         rp.draw(0..3, 0..1);
     }
 
@@ -5842,15 +5863,12 @@ fn target_texel(pass: &RecordedPass<'_>) -> [f32; 2] {
     ]
 }
 
-/// The single bind group layout a fullscreen effect's pipeline binds — its registry row's lone
-/// entry. Panics for a shader that binds several (only a fullscreen post shader reaches here).
+/// The bind group layout a fullscreen effect binds at group 0 — its registry row's first entry; a
+/// second one is the caller's own (`fullscreen_effect_with`). Only a fullscreen post shader reaches here.
 fn fullscreen_layout(id: ShaderId) -> LayoutId {
     match id.desc().layouts {
-        [Some(layout)] => *layout,
-        _ => panic!(
-            "{} is not a fullscreen effect: it binds several layouts",
-            id.file_name()
-        ),
+        [Some(layout), ..] => *layout,
+        _ => panic!("{} is not a fullscreen effect", id.file_name()),
     }
 }
 
@@ -6861,7 +6879,10 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         file_name: "medium_scatter.wgsl",
         body: include_str!("shaders/medium_scatter.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Bayer, Snippet::Medium],
-        layouts: &[Some(LayoutId::MediumScatter)],
+        layouts: &[
+            Some(LayoutId::MediumScatter),
+            Some(LayoutId::MediumScatterGi),
+        ],
     },
     ShaderDesc {
         id: ShaderId::MediumScatterBlur,
@@ -7493,10 +7514,12 @@ enum LayoutId {
     SmaaWeights,
     /// The SMAA blend pass: the composite and the weights.
     SmaaBlend,
+    /// The medium march's group 1: the four baked GI volumes.
+    MediumScatterGi,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 44;
+const LAYOUT_COUNT: usize = 45;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -7592,7 +7615,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::MediumScatter,
-        create: shader_gen::create_scatter_depth_scatter_layer_scatter_atlas_scatter_samp_scatter_bgl,
+        create: shader_gen::create_scatter_depth_scatter_layer_scatter_atlas_scatter_dyn_scatter_samp_scatter_bgl,
     },
     LayoutDesc {
         id: LayoutId::MediumScatterBlur,
@@ -7685,6 +7708,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::SmaaBlend,
         create: shader_gen::create_smaa_blend_src_smaa_blend_weights_smaa_blend_samp_smaa_blend_params_bgl,
+    },
+    LayoutDesc {
+        id: LayoutId::MediumScatterGi,
+        create: shader_gen::create_scatter_gi_scatter_gi_r_scatter_gi_g_scatter_gi_b_bgl,
     },
 ];
 

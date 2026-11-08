@@ -263,6 +263,9 @@ struct Composite {
     // The `view_ray.wgsl` lane: the camera's one view direction, with `w` set for an orthographic
     // camera. Fog measures distance along it there rather than along the per-pixel ray.
     view_forward: vec4<f32>,
+    // `.x` is nonzero when the local-light pass also carries the GI-scaled ambient in its alpha
+    // (`medium_scatter.wgsl`); the other lanes are pad.
+    medium_gi: vec4<u32>,
 };
 @group(0) @binding(8) var<uniform> composite: Composite;
 
@@ -744,6 +747,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 ),
                 composite.fog_sky,
             );
+        }
+        // The GI-weighted mean of the ambient along this ray (`medium_scatter.wgsl`'s alpha), 1 where the
+        // volume lets the sky through. Beside the ambient it scales, outside the depth branch below.
+        if (composite.medium_gi.x != 0u) {
+            ambient = ambient * textureSample(medium_scatter_tex, samp, in.uv).a;
         }
         let depth = textureLoad(scene_depth_tex, vec2<i32>(in.pos.xy), 0);
         // The medium does not apply where nothing was drawn. A pixel still at the far plane is the

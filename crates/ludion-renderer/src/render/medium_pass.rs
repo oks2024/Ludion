@@ -5,7 +5,8 @@ use bytemuck::Zeroable;
 use ludion_core::math::glam::Vec3;
 
 use super::{
-    FrameRecorder, OptionalInput, RecordedPass, ShaderId, UNSHADOWED, local_view_gpu, target_texel,
+    FrameRecorder, LayoutId, OptionalInput, RecordedPass, ShaderId, UNSHADOWED, local_view_gpu,
+    target_texel,
 };
 use crate::local_shadow::LocalShadowPlan;
 use crate::scene::RenderScene;
@@ -74,6 +75,7 @@ impl FrameRecorder<'_> {
         lights[..self.scatter_lights.len()].copy_from_slice(&self.scatter_lights);
         let mut views = [shader_gen::LocalView::zeroed(); crate::scatter::MAX_SCATTER_LIGHTS];
         views[..self.scatter_views.len()].copy_from_slice(&self.scatter_views);
+        let gi = &self.resolved_gi;
         let scatter = shader_gen::MediumScatter {
             inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
             cam_pos: self.camera_position.to_array(),
@@ -87,6 +89,22 @@ impl FrameRecorder<'_> {
             light_count: self.scatter_lights.len() as u32,
             transparent_depth: u32::from(self.has_transparent_depth),
             view_forward: self.view_forward,
+            gi_origin: gi.origin,
+            gi_scale: gi.scale,
+            gi: [
+                if self.has_medium_gi {
+                    self.gi_strengths.sky_visibility
+                } else {
+                    0.0
+                },
+                if self.has_medium_gi {
+                    self.gi_strengths.bounce
+                } else {
+                    0.0
+                },
+                f32::from(self.has_medium_gi && self.gi_inject.is_some()),
+                f32::from(self.has_medium_gi && gi.origin[3] > 0.5),
+            ],
             lights,
             views,
         };
@@ -101,13 +119,39 @@ impl FrameRecorder<'_> {
                 present: self.local_shadow.is_some(),
                 fallback: &self.r.fallback_shadow.view,
             },
+            OptionalInput {
+                binding: shader_gen::SCATTER_DYN_BINDING,
+                present: self.has_medium_gi && self.gi_inject.is_some(),
+                fallback: self.r.gi_inject.fallback(),
+            },
         ];
-        self.fullscreen_effect(
+        let volumes = self.gi_volumes_bind_group(pass.device);
+        self.fullscreen_effect_with(
             pass,
             ShaderId::MediumScatter,
             &optional,
             bytemuck::bytes_of(&scatter),
+            Some(&volumes),
         );
+    }
+
+    /// The baked GI volumes the march binds at group 1, in the shader's binding order.
+    fn gi_volumes_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
+        let gi = &self.resolved_gi;
+        let views = [&gi.probes, &gi.bounce[0], &gi.bounce[1], &gi.bounce[2]];
+        let entries: Vec<_> = views
+            .into_iter()
+            .enumerate()
+            .map(|(binding, view)| wgpu::BindGroupEntry {
+                binding: binding as u32,
+                resource: wgpu::BindingResource::TextureView(view),
+            })
+            .collect();
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("medium scatter gi bind group"),
+            layout: self.r.layouts.get(LayoutId::MediumScatterGi),
+            entries: &entries,
+        })
     }
 
     /// The 4×4 box blur over the local-light term's four channels. Source and target share an extent.

@@ -753,7 +753,15 @@ pub struct PostChain {
     /// Independent of [`shafts`](PostChain::shafts): it needs no sun and no shadow map, and a scene
     /// with a scattering light but no shaft strength still gets it. The shafts/medium quality switch
     /// masks it.
+    ///
+    /// This is the pass gate: it is on when either reason below holds.
     pub medium_scatter: bool,
+    /// Reason one: the medium **and** a selected scattering local light.
+    pub local_scatter: bool,
+    /// Reason two: the medium **and** a `GiVolume` that authors a nonzero `sky_visibility` or `bounce`
+    /// — the pass then also carries the GI-scaled ambient (alpha) and the bounce in-scatter. A
+    /// volume at zero strength derives `false`, so such a scene's graph is the one without it.
+    pub medium_gi: bool,
     /// The scene enables depth of field: the [`pass::DOF_COC`] and [`pass::DOF`] passes are added
     /// behind the scene pass and `composite` gains its second optional input. False leaves the graph
     /// with neither, which is what makes an in-focus frame byte-identical by construction rather than
@@ -857,6 +865,16 @@ pub struct PostChain {
 }
 
 impl PostChain {
+    /// The chain with the medium's in-scatter pass dropped: a probe face has no composite to add it to.
+    pub(crate) fn without_medium(self) -> Self {
+        Self {
+            medium_scatter: false,
+            local_scatter: false,
+            medium_gi: false,
+            ..self
+        }
+    }
+
     /// The chain `scene`'s content requires — the one place the "which passes does this scene need"
     /// question is answered, so every render path and the `dump-graph` command cannot disagree about
     /// what a given scene draws.
@@ -881,6 +899,15 @@ impl PostChain {
             (Some(_), None) => 1,
             (None, _) => 0,
         };
+        // The medium is the first half of each reason; `select_scatter` already returns nothing
+        // without extinction, so a lit-but-off-screen light derives false.
+        let medium = scene.post.is_some_and(|post| post.fog_density > 0.0);
+        let local_scatter = medium && !crate::scatter::select_scatter(scene).is_empty();
+        let medium_gi = medium
+            && scene
+                .gi
+                .as_ref()
+                .is_some_and(|gi| gi.sky_visibility > 0.0 || gi.bounce > 0.0);
         Self {
             ui: !scene.ui.is_empty(),
             // A sun draws a shadow map, at the extent the scene's own authoring implies. Lowering it
@@ -902,10 +929,10 @@ impl PostChain {
                 .post
                 .is_some_and(|post| post.shafts > 0.0 && post.fog_density > 0.0)
                 && scene.sun.is_some(),
-            // The medium is the first half of the gate and the selection the second: `select_scatter`
-            // already returns nothing without extinction, so a lit-but-off-screen light derives false.
-            medium_scatter: scene.post.is_some_and(|post| post.fog_density > 0.0)
-                && !crate::scatter::select_scatter(scene).is_empty(),
+            // The pass runs for either reason; the recorder branches on each.
+            medium_scatter: local_scatter || medium_gi,
+            local_scatter,
+            medium_gi,
             // `dof` is the far field's circle of confusion *and* the gate: at zero every pixel is in
             // focus, so the gather would return each pixel's own colour and the blend weight would be
             // zero everywhere — two passes to reproduce their own input.
@@ -1039,6 +1066,8 @@ impl PostChain {
             shafts: self.shafts && quality.shafts && shadow_map.is_some(),
             // Needs no shadow map: the unshadowed march reads only depth.
             medium_scatter: self.medium_scatter && quality.shafts,
+            local_scatter: self.local_scatter && quality.shafts,
+            medium_gi: self.medium_gi && quality.shafts,
             dof: self.dof && quality.dof,
             // Off removes the trace and its pyramids; on re-sizes them to this machine's extent.
             ssr: self.ssr.filter(|_| quality.ssr).map(|_| params.ssr_scale),
@@ -1732,6 +1761,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
                 .into_iter()
                 .chain(transparent_layer)
                 .chain(local_shadow_atlas)
+                .chain(gi_dynamic.filter(|_| chain.medium_gi))
                 .collect(),
             vec![targets.raw],
         );
@@ -2499,7 +2529,9 @@ mod tests {
                 ssao: bits & 4 != 0,
                 shafts: bits & 8 != 0,
                 // Rides with `shafts`: the same switch masks it, with or without a shadow map.
-                medium_scatter: bits & 8 != 0,
+                medium_scatter: bits & 12 != 0,
+                local_scatter: bits & 8 != 0,
+                medium_gi: bits & 4 != 0,
                 dof: bits & 16 != 0,
                 gi_inject: (bits & 32 != 0).then_some([4, 4, 4]),
                 cull: None,
@@ -2549,6 +2581,8 @@ mod tests {
                     ssao: false,
                     shafts: false,
                     medium_scatter: false,
+                    local_scatter: false,
+                    medium_gi: false,
                     dof: false,
                     gi_inject: None,
                     shadow_map: None,
@@ -5243,6 +5277,73 @@ mod tests {
             !PostChain::for_scene(&scene).medium_scatter,
             "behind the camera"
         );
+    }
+
+    /// `medium_gi` needs a medium **and** a `GiVolume` that authors a nonzero strength, and nothing
+    /// else: no light, no sun. It schedules the pass on its own; zero strengths, no medium and the Low
+    /// preset's shafts switch each leave it out.
+    #[test]
+    fn for_scene_gates_medium_gi_on_a_medium_and_a_nonzero_volume() {
+        let mut scene = RenderScene::empty((1920, 1080));
+        let gi = |sky_visibility, bounce| crate::scene::GiData {
+            probe_spacing: 1.0,
+            normal_bias: 0.0,
+            sky_visibility,
+            bounce,
+            count: [2, 2, 2],
+            origin: ludion_core::math::glam::Vec3::ZERO,
+            span: ludion_core::math::glam::Vec3::ONE,
+        };
+        let fogged = Some(crate::scene::PostData {
+            fog_density: 0.02,
+            ..crate::scene::PostData::default()
+        });
+        scene.gi = Some(gi(1.0, 0.0));
+        assert!(!PostChain::for_scene(&scene).medium_gi, "no post");
+        scene.post = Some(crate::scene::PostData::default());
+        assert!(!PostChain::for_scene(&scene).medium_gi, "no medium");
+        scene.post = fogged;
+        let chain = PostChain::for_scene(&scene);
+        assert!(chain.medium_gi && chain.medium_scatter && !chain.local_scatter);
+        scene.gi = Some(gi(0.0, 1.0));
+        assert!(PostChain::for_scene(&scene).medium_gi, "bounce alone");
+        scene.gi = Some(gi(0.0, 0.0));
+        let off = PostChain::for_scene(&scene);
+        assert!(!off.medium_gi && !off.medium_scatter, "both strengths zero");
+        scene.gi = None;
+        assert!(!PostChain::for_scene(&scene).medium_gi, "no volume");
+        scene.gi = Some(gi(1.0, 1.0));
+        let low = PostChain::for_scene(&scene).masked(&Quality::LOW, &QualityParams::LOW);
+        assert!(!low.medium_gi && !low.medium_scatter, "LOW");
+    }
+
+    /// The GI pass reads the injected volume (after the atlas slot) exactly when the chain injects and
+    /// the pass carries the GI term: an ordering edge after `gi_inject`.
+    #[test]
+    fn medium_scatter_reads_the_injected_volume_exactly_when_it_carries_gi() {
+        let reads = |chain: PostChain| {
+            let (graph, _) = build_frame_graph(FrameSize::native(64, 64), chain);
+            graph
+                .passes()
+                .iter()
+                .find(|p| p.name == pass::MEDIUM_SCATTER)
+                .map(|p| p.reads().len())
+        };
+        let base = PostChain {
+            medium_scatter: true,
+            gi_inject: Some([2, 2, 2]),
+            ..PostChain::default()
+        };
+        let with_gi = PostChain {
+            medium_gi: true,
+            ..base
+        };
+        assert_eq!(reads(with_gi), reads(base).map(|n| n + 1));
+        let no_inject = PostChain {
+            gi_inject: None,
+            ..with_gi
+        };
+        assert_eq!(reads(no_inject), reads(base));
     }
 
     /// The Low preset's shafts switch drops the pair, and a machine with shadows off keeps it: the

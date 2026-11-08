@@ -34,6 +34,20 @@
 // No clock, frame index or RNG: the step offset is `BAYER4` at the fragment's pixel, which
 // `box_blur`'s 4×4 period averages away exactly (here through `medium_scatter_blur`).
 //
+// # The GI term
+//
+// The haze's ambient in-scatter is `α(1 - T)·L_ambient`, a glow at full ambient wherever the eye ray
+// goes. In a scene with a `GiVolume` the march also integrates the volume along the same ray:
+//
+//     V̄ = Σ w·mix(1, vis, s_vis) / Σ w          (alpha: the composite scales its ambient by it)
+//     L_b = σ_s · bounce · Σ w·B · dt           (added to rgb, on top of the lights' term)
+//
+// `w = T·local` is the in-scatter weight of the ambient closed form (`σ_t·T·local`, up to the constant
+// the mean cancels), `vis` the volume's baked DC sky visibility and `B` its bounce DC plus the injected
+// dynamic DC. The medium is isotropic, so only the DC term (`n = 0` in `mesh_shading.wgsl`'s `sh_l1`)
+// is read, with the mesh pass's clamps. Outside the volume `vis = 1` and `B = 0`: no leak past the
+// lattice. With the flag off alpha is exactly 1.
+//
 // `VsOut` + `vs_main` come from `shaders/snippets/fullscreen_vs.wgsl`, `BAYER4` from
 // `shaders/snippets/bayer.wgsl`, the medium functions from `shaders/snippets/medium.wgsl`.
 
@@ -81,6 +95,12 @@ struct MediumScatter {
     transparent_depth: u32,
     // `.xyz` is the unit view direction and `.w` is 1 under an orthographic camera.
     view_forward: vec4<f32>,
+    // The GiVolume's placement, as `EnvParams` carries it: xyz origin, and xyz 1/span (w unused here).
+    gi_origin: vec4<f32>,
+    gi_scale: vec4<f32>,
+    // x = sky_visibility strength, y = bounce strength, z = 1 when `scatter_dyn` is real, w = 1 when
+    // the GI term runs at all.
+    gi: vec4<f32>,
     lights: array<ScatterLight, 64>,
     // The granted lights' views, compacted: each light's views are consecutive from `shadow.x`.
     views: array<LocalView, 64>,
@@ -94,8 +114,17 @@ struct MediumScatter {
 // The local-shadow atlas: the **optional** input. A light's `shadow.x` is SCATTER_UNSHADOWED whenever
 // the frame has no atlas, so the 1x1 stand-in is never read.
 @group(0) @binding(2) var scatter_atlas: texture_depth_2d;
-@group(0) @binding(3) var scatter_samp: sampler;
-@group(0) @binding(4) var<uniform> scatter: MediumScatter;
+// The injected dynamic-bounce volume: the **optional** input (the 1x1x1 fallback with `scatter.gi.z`
+// zero otherwise).
+@group(0) @binding(3) var scatter_dyn: texture_3d<f32>;
+@group(0) @binding(4) var scatter_samp: sampler;
+@group(0) @binding(5) var<uniform> scatter: MediumScatter;
+// The baked volumes (renderer-owned, same lattice as `scatter_dyn`): the SH-L1 sky visibility and
+// the bounce in R, G, B, each read at its DC term.
+@group(1) @binding(0) var scatter_gi: texture_3d<f32>;
+@group(1) @binding(1) var scatter_gi_r: texture_3d<f32>;
+@group(1) @binding(2) var scatter_gi_g: texture_3d<f32>;
+@group(1) @binding(3) var scatter_gi_b: texture_3d<f32>;
 
 const SCATTER_OPTICAL_CUTOFF: f32 = 3.0;
 const SCATTER_MIN_DENSITY: f32 = 1e-4;
@@ -275,5 +304,58 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
         sum = sum + acc * dt;
     }
-    return vec4<f32>(sum * scatter.albedo * scatter.density, 1.0);
+    var ambient_scale = 1.0;
+    // The background takes no medium (the composite skips it); a covered transparent texel does.
+    if (scatter.gi.w != 0.0 && (depth < 1.0 || coverage > 0.0)) {
+        let dt = end / f32(scatter.steps);
+        var w_sum = 0.0;
+        var w_vis = 0.0;
+        var w_bounce = vec3<f32>(0.0);
+        for (var k: u32 = 0u; k < scatter.steps; k = k + 1u) {
+            let t = (f32(k) + jitter) * dt;
+            let p = origin + ray * t;
+            var weight = exp(-medium_optical_depth(
+                scatter.density,
+                scatter.fog_start,
+                scatter.fog_height,
+                scatter.fog_height_falloff,
+                origin.y,
+                ray.y,
+                t,
+            )) * medium_density_ratio(
+                scatter.fog_start,
+                scatter.fog_height,
+                scatter.fog_height_falloff,
+                origin.y,
+                ray.y,
+                t,
+            );
+            if (coverage > 0.0 && t > layer_t) {
+                weight = weight * past;
+            }
+            let uv = (p - scatter.gi_origin.xyz) * scatter.gi_scale.xyz;
+            var vis = 1.0;
+            var bounce = vec3<f32>(0.0);
+            if (all(uv >= vec3<f32>(0.0)) && all(uv <= vec3<f32>(1.0))) {
+                vis = clamp(textureSampleLevel(scatter_gi, scatter_samp, uv, 0.0).x, 0.0, 1.0);
+                bounce = max(vec3<f32>(
+                    textureSampleLevel(scatter_gi_r, scatter_samp, uv, 0.0).x,
+                    textureSampleLevel(scatter_gi_g, scatter_samp, uv, 0.0).x,
+                    textureSampleLevel(scatter_gi_b, scatter_samp, uv, 0.0).x,
+                ), vec3<f32>(0.0));
+                if (scatter.gi.z > 0.5) {
+                    bounce = bounce
+                        + max(textureSampleLevel(scatter_dyn, scatter_samp, uv, 0.0).rgb, vec3<f32>(0.0));
+                }
+            }
+            w_sum = w_sum + weight;
+            w_vis = w_vis + weight * mix(1.0, vis, scatter.gi.x);
+            w_bounce = w_bounce + weight * bounce;
+        }
+        if (w_sum > 0.0) {
+            ambient_scale = w_vis / w_sum;
+        }
+        sum = sum + w_bounce * (scatter.gi.y * dt);
+    }
+    return vec4<f32>(sum * scatter.albedo * scatter.density, ambient_scale);
 }
