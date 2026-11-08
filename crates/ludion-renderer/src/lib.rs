@@ -72,6 +72,7 @@ mod probe_store;
 mod projector;
 mod quality;
 mod render;
+mod scatter;
 mod scene;
 mod shader_reload;
 mod ssr_pyramid;

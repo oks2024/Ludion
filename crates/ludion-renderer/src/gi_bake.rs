@@ -1288,6 +1288,7 @@ mod tests {
             range,
             dynamic: false,
             shadow: None,
+            scatter: 0.0,
         }
     }
 

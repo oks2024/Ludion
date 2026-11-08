@@ -237,6 +237,7 @@ fn point(position: Vec3, intensity: f32, range: f32) -> crate::scene::PointLight
         range,
         dynamic: false,
         shadow: None,
+        scatter: 0.0,
     }
 }
 

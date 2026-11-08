@@ -2240,6 +2240,7 @@ mod tests {
                 distance: None,
                 fade: 0.0,
             }),
+            scatter: 0.0,
         });
     }
 
@@ -3689,6 +3690,7 @@ mod tests {
             cos_inner: 15.0_f32.to_radians().cos(),
             cos_outer: 30.0_f32.to_radians().cos(),
             shadow,
+            scatter: 0.0,
         });
         scene
     }
@@ -4053,6 +4055,7 @@ mod tests {
                 distance: None,
                 fade: 0.0,
             }),
+            scatter: 0.0,
         }];
         scene
     }

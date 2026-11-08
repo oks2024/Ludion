@@ -555,6 +555,7 @@ mod tests {
             range,
             dynamic,
             shadow: None,
+            scatter: 0.0,
         }
     }
 

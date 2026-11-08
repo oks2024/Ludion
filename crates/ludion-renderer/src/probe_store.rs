@@ -596,6 +596,7 @@ mod tests {
             range: 8.0,
             dynamic: false,
             shadow: None,
+            scatter: 0.0,
         }];
         scene.spot_lights = vec![SpotLightData {
             position: Vec3::new(0.0, 4.0, 0.0),
@@ -606,6 +607,7 @@ mod tests {
             cos_inner: 0.9,
             cos_outer: 0.8,
             shadow: None,
+            scatter: 0.0,
         }];
         scene.voxel = Some(Arc::new(
             WorldVoxelGrid {
@@ -655,6 +657,15 @@ mod tests {
     #[test]
     fn the_same_input_gives_the_same_key() {
         assert_eq!(key_of(&fixture()), key_of(&fixture()));
+    }
+
+    #[test]
+    fn light_scatter_never_re_keys_a_capture() {
+        let base = key_of(&fixture());
+        let mut f = fixture();
+        f.scene.lights[0].scatter = 2.0;
+        f.scene.spot_lights[0].scatter = 0.5;
+        assert_eq!(key_of(&f), base);
     }
 
     #[test]

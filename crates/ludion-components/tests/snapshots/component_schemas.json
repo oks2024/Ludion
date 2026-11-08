@@ -3910,6 +3910,16 @@
           0.0,
           50.0
         ]
+      },
+      "scatter": {
+        "description": "How strongly the light scatters into the `PostProcess` medium (default `0`: not at all).\n`1.0` is physical for the medium; only lights that opt in pay for it (`ludion docs atmosphere`).",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0,
+        "x-ui-range": [
+          0.0,
+          4.0
+        ]
       }
     }
   },
@@ -4732,6 +4742,16 @@
         "x-ui-range": [
           0.0,
           50.0
+        ]
+      },
+      "scatter": {
+        "description": "How strongly the light scatters into the `PostProcess` medium (default `0`: not at all).\n`1.0` is physical for the medium; only lights that opt in pay for it (`ludion docs atmosphere`).",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0,
+        "x-ui-range": [
+          0.0,
+          4.0
         ]
       }
     }

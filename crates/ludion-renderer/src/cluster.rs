@@ -631,6 +631,7 @@ mod tests {
             range,
             dynamic: false,
             shadow: None,
+            scatter: 0.0,
         }
     }
 
@@ -991,6 +992,7 @@ mod tests {
             cos_inner: inner_deg.to_radians().cos(),
             cos_outer: outer_deg.to_radians().cos(),
             shadow: None,
+            scatter: 0.0,
         }
     }
 

@@ -519,6 +519,12 @@ pub struct PointLight {
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     #[schemars(extend("x-ui-range" = [0.0, 50.0]))]
     pub shadow_fade: f32,
+    /// How strongly the light scatters into the `PostProcess` medium (default `0`: not at all).
+    /// `1.0` is physical for the medium; only lights that opt in pay for it (`ludion docs atmosphere`).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    #[schemars(range(min = 0.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 4.0]))]
+    pub scatter: f32,
 }
 
 impl Default for PointLight {
@@ -532,6 +538,7 @@ impl Default for PointLight {
             shadow_near: local_shadow_near_default(),
             shadow_distance: None,
             shadow_fade: 0.0,
+            scatter: 0.0,
         }
     }
 }
@@ -617,6 +624,12 @@ pub struct SpotLight {
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     #[schemars(extend("x-ui-range" = [0.0, 50.0]))]
     pub shadow_fade: f32,
+    /// How strongly the light scatters into the `PostProcess` medium (default `0`: not at all).
+    /// `1.0` is physical for the medium; only lights that opt in pay for it (`ludion docs atmosphere`).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    #[schemars(range(min = 0.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 4.0]))]
+    pub scatter: f32,
 }
 
 impl Default for SpotLight {
@@ -633,6 +646,7 @@ impl Default for SpotLight {
             shadow_near: local_shadow_near_default(),
             shadow_distance: None,
             shadow_fade: 0.0,
+            scatter: 0.0,
         }
     }
 }
@@ -7138,6 +7152,7 @@ mod tests {
             shadow_near: 0.2,
             shadow_distance: Some(30.0),
             shadow_fade: 8.0,
+            scatter: 0.5,
         };
         let json = serde_json::to_value(custom).unwrap();
         assert_eq!(serde_json::from_value::<SpotLight>(json).unwrap(), custom);
@@ -7180,6 +7195,7 @@ mod tests {
             shadow_near: 0.2,
             shadow_distance: Some(30.0),
             shadow_fade: 8.0,
+            scatter: 0.5,
         };
         let json = serde_json::to_value(custom).unwrap();
         assert_eq!(serde_json::from_value::<PointLight>(json).unwrap(), custom);

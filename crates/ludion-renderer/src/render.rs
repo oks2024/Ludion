@@ -13682,6 +13682,7 @@ mod tests {
                 range: 30.0,
                 dynamic: false,
                 shadow: None,
+                scatter: 0.0,
             }];
         }
         scene
@@ -15917,6 +15918,7 @@ mod tests {
                 distance: None,
                 fade: 0.0,
             }),
+            scatter: 0.0,
         });
         scene
     }
@@ -23019,6 +23021,7 @@ mod tests {
             range,
             dynamic: false,
             shadow: None,
+            scatter: 0.0,
         }
     }
 
@@ -23358,6 +23361,7 @@ mod tests {
                             range: range_lo + rng.next_f32() * (range_hi - range_lo),
                             dynamic: false,
                             shadow: None,
+                            scatter: 0.0,
                         }
                     })
                     .collect();
@@ -23393,6 +23397,7 @@ mod tests {
                             cos_inner: f32::to_radians(inner).cos(),
                             cos_outer: f32::to_radians(outer).cos(),
                             shadow: None,
+                            scatter: 0.0,
                         }
                     })
                     .collect();
@@ -23442,6 +23447,7 @@ mod tests {
             cos_inner: inner_deg.to_radians().cos(),
             cos_outer: outer_deg.to_radians().cos(),
             shadow: None,
+            scatter: 0.0,
         }
     }
 

@@ -2489,6 +2489,7 @@ fn point_light_data(light: &PointLight, position: Vec3, dynamic: bool) -> Option
             light.shadow_distance,
             light.shadow_fade,
         ),
+        scatter: light.scatter.max(0.0),
     })
 }
 
@@ -2553,6 +2554,7 @@ fn spot_light_data(light: &SpotLight, position: Vec3) -> Option<SpotLightData> {
             light.shadow_distance,
             light.shadow_fade,
         ),
+        scatter: light.scatter.max(0.0),
     })
 }
 
@@ -6427,6 +6429,28 @@ mod tests {
         }
     }
 
+    /// `scatter` is carried onto both local lights: default `0`, an authored value passes through,
+    /// and a negative Rust-built one clamps to `0`.
+    #[test]
+    fn scatter_is_carried_and_clamped_to_non_negative() {
+        let point = |scatter| PointLight {
+            scatter,
+            ..PointLight::default()
+        };
+        let spot = |scatter| SpotLight {
+            scatter,
+            ..SpotLight::default()
+        };
+        let p = |l: &PointLight| point_light_data(l, Vec3::ZERO, false).unwrap().scatter;
+        let s = |l: &SpotLight| spot_light_data(l, Vec3::ZERO).unwrap().scatter;
+        assert_eq!(p(&PointLight::default()), 0.0);
+        assert_eq!(s(&SpotLight::default()), 0.0);
+        assert_eq!(p(&point(0.75)), 0.75);
+        assert_eq!(s(&spot(0.75)), 0.75);
+        assert_eq!(p(&point(-1.0)), 0.0);
+        assert_eq!(s(&spot(-1.0)), 0.0);
+    }
+
     /// Only a casting light carries shadow data: the authored bias and near pass through, and a
     /// Rust-built bad near or NaN bias falls back instead of reaching the renderer.
     #[test]
@@ -7040,6 +7064,7 @@ mod tests {
                     range: 10.0,
                     dynamic: false,
                     shadow: None,
+                    scatter: 0.0,
                 },
             ));
         }

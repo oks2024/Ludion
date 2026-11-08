@@ -517,6 +517,7 @@ fn point_light(
         range,
         dynamic,
         shadow: None,
+        scatter: 0.0,
     }
 }
 

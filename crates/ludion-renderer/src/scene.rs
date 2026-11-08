@@ -728,6 +728,8 @@ pub struct SpotLightData {
     pub cos_outer: f32,
     /// The light's shadow tunables; `None` is unshadowed.
     pub shadow: Option<LocalShadowData>,
+    /// In-scatter strength into the medium, `0` = none; render-only.
+    pub scatter: f32,
 }
 
 /// One local light's shadow tunables: a world-unit depth bias and the near plane; the far plane is
@@ -767,6 +769,8 @@ pub struct PointLightData {
     pub dynamic: bool,
     /// The light's shadow tunables; `None` is unshadowed.
     pub shadow: Option<LocalShadowData>,
+    /// In-scatter strength into the medium, `0` = none; render-only.
+    pub scatter: f32,
 }
 
 /// How a text run samples a baked font's atlas: `texture` indexes [`RenderScene::textures`], and

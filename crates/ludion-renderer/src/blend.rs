@@ -607,6 +607,7 @@ mod tests {
             range: 5.0,
             dynamic: false,
             shadow: None,
+            scatter: 0.0,
         }
     }
 
@@ -620,6 +621,7 @@ mod tests {
             cos_inner: 0.9,
             cos_outer: 0.8,
             shadow: None,
+            scatter: 0.0,
         }
     }
 

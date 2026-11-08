@@ -61,12 +61,15 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
     out.ground_markers.clear();
     out.drop_shadows.clear();
     out.decals.clear();
-    // Probes are lit by local lights unshadowed, like the GI bake.
+    // Probes are lit by local lights unshadowed, like the GI bake. A face has no composite, so
+    // in-scatter into the medium must not re-key it.
     for light in &mut out.lights {
         light.shadow = None;
+        light.scatter = 0.0;
     }
     for light in &mut out.spot_lights {
         light.shadow = None;
+        light.scatter = 0.0;
     }
     out.ui.clear();
     out.debug_lines.clear();
