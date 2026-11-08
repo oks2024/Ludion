@@ -1,5 +1,7 @@
-//! The bulk-projectile benchmark: 5,000 live shots against a walled room, ~40 pillars and a
-//! 500-target `spatial3d` index, stepped at one thread and at the machine's thread count.
+//! The bulk-projectile benchmarks, both on a walled room with ~40 pillars and a 500-target
+//! `spatial3d` index, stepped at one thread and at the machine's thread count:
+//! `bulk_projectiles_bench` holds 5,000 live shots; `bulk_gibs_bench` adds 1,000 settling,
+//! spinning gibs beside them.
 //!
 //! Ignored by default so CI stays fast; run it explicitly, in release:
 //!
@@ -27,9 +29,18 @@ use ludion_spatial::spatial3d::Handle;
 /// (not authoritative), 2026-11-07, rounded up. Pinned M4 / RTX 3090 figures are owed.
 const BULK_PROJECTILES_BUDGET_MS: f64 = 6.0;
 
+/// Per-frame sub-budget, in milliseconds, for the serial gib arm: `step` + `digest` with 5,000
+/// shots and 1,000 gibs. About 3x the release median sum (1.92 ms: step 1.82, digest 0.10; 0.51 ms
+/// at 8 threads; ~389 of 1,000 gibs parked) on an unpinned M5 laptop (not authoritative),
+/// 2026-11-08, rounded up. Pinned M4 / RTX 3090 figures are owed.
+const BULK_GIBS_BUDGET_MS: f64 = 6.0;
+
 const WARMUP: usize = 10;
 const MEASURED: usize = 60;
 const LIVE: usize = 5_000;
+const GIBS: usize = 1_000;
+const GIB_TAG: u32 = 1;
+const PREROLL: usize = 300;
 const TARGETS: usize = 500;
 const PILLARS: usize = 40;
 const ROOM: [f32; 3] = [120.0, 12.0, 120.0];
@@ -99,16 +110,45 @@ fn shot(rng: &mut DeterministicRng) -> ProjectileDesc {
     desc
 }
 
+fn gib(rng: &mut DeterministicRng) -> ProjectileDesc {
+    let mut desc = ProjectileDesc::new(
+        [
+            range(rng, 2.0, ROOM[0] - 2.0),
+            range(rng, 0.5, 4.0),
+            range(rng, 2.0, ROOM[2] - 2.0),
+        ],
+        [
+            range(rng, -6.0, 6.0),
+            range(rng, 2.0, 8.0),
+            range(rng, -6.0, 6.0),
+        ],
+    );
+    desc.gravity_scale = 1.0;
+    desc.radius = range(rng, 0.05, 0.15);
+    desc.response = Response::settle(0.35, 0.4, 0.6);
+    desc.spin = [
+        range(rng, -10.0, 10.0),
+        range(rng, -10.0, 10.0),
+        range(rng, -10.0, 10.0),
+    ];
+    desc.targets = Some(0);
+    desc.lifetime = range(rng, 1.5, 6.0);
+    desc.tag = GIB_TAG;
+    desc
+}
+
 struct Arm {
     digests: Vec<u64>,
     step: Vec<Duration>,
     digest: Vec<Duration>,
     sum: Vec<Duration>,
     live: usize,
+    parked: usize,
 }
 
-fn run_arm(threads: usize) -> Arm {
+fn run_arm(threads: usize, gibs: usize) -> Arm {
     let mut rng = DeterministicRng::new(0xB01C);
+    let mut gib_rng = DeterministicRng::new(0x61B5);
     let w = ROOM;
     let mut boxes = vec![
         (
@@ -171,20 +211,38 @@ fn run_arm(threads: usize) -> Arm {
     let index = index_of(&items);
     let mut cfg = config(physics);
     cfg.targets = 1;
+    if gibs > 0 {
+        cfg.gravity = [0.0, -9.81, 0.0];
+    }
 
-    let mut pool = ProjectilePool::with_capacity(LIVE);
-    let mut events = StepEvents::with_capacity(LIVE * 2, LIVE);
+    let mut pool = ProjectilePool::with_capacity(LIVE + gibs);
+    let mut events = StepEvents::with_capacity((LIVE + gibs) * 2, LIVE + gibs);
     let mut arm = Arm {
         digests: Vec::new(),
         step: Vec::new(),
         digest: Vec::new(),
         sum: Vec::new(),
         live: 0,
+        parked: 0,
     };
     par::with_threads(threads, || {
-        for tick in 0..WARMUP + MEASURED {
-            while pool.len() < LIVE {
-                let _ = pool.spawn(shot(&mut rng));
+        let preroll = if gibs > 0 { PREROLL } else { 0 };
+        for tick in 0..preroll + WARMUP + MEASURED {
+            if gibs == 0 {
+                while pool.len() < LIVE {
+                    let _ = pool.spawn(shot(&mut rng));
+                }
+            } else {
+                let gib_count = pool
+                    .ids()
+                    .filter(|&id| pool.tag(id) == Some(GIB_TAG))
+                    .count();
+                for _ in pool.len() - gib_count..LIVE {
+                    let _ = pool.spawn(shot(&mut rng));
+                }
+                for _ in gib_count..gibs {
+                    let _ = pool.spawn(gib(&mut gib_rng));
+                }
             }
             let t0 = now();
             step(&mut pool, DT, physics, &index, &cfg, &mut events);
@@ -192,7 +250,15 @@ fn run_arm(threads: usize) -> Arm {
             let digest = pool.digest();
             let t2 = now();
             arm.digests.push(digest);
-            if tick >= WARMUP {
+            if tick >= preroll + WARMUP {
+                if gibs > 0 {
+                    arm.parked += pool
+                        .ids()
+                        .filter(|&id| {
+                            pool.tag(id) == Some(GIB_TAG) && pool.is_parked(id) == Some(true)
+                        })
+                        .count();
+                }
                 arm.step.push(t1.duration_since(t0));
                 arm.digest.push(t2.duration_since(t1));
                 arm.sum.push(t2.duration_since(t0));
@@ -207,8 +273,8 @@ fn run_arm(threads: usize) -> Arm {
 #[ignore = "release-mode benchmark; run explicitly (see the module docs)"]
 fn bulk_projectiles_bench() {
     let n = par::auto_threads();
-    let mut serial = run_arm(1);
-    let mut wide = run_arm(n);
+    let mut serial = run_arm(1, 0);
+    let mut wide = run_arm(n, 0);
     assert_eq!(
         serial.digests, wide.digests,
         "the pool digest trace differs between 1 and {n} threads"
@@ -229,5 +295,35 @@ fn bulk_projectiles_bench() {
     assert!(
         sum1 < BULK_PROJECTILES_BUDGET_MS,
         "serial step + digest {sum1:.3} ms is over the {BULK_PROJECTILES_BUDGET_MS} ms budget"
+    );
+}
+
+#[test]
+#[ignore = "release-mode benchmark; run explicitly (see the module docs)"]
+fn bulk_gibs_bench() {
+    let n = par::auto_threads();
+    let mut serial = run_arm(1, GIBS);
+    let mut wide = run_arm(n, GIBS);
+    assert_eq!(
+        serial.digests, wide.digests,
+        "the pool digest trace differs between 1 and {n} threads"
+    );
+    let sum1 = median_ms(&mut serial.sum);
+    for (label, arm) in [
+        ("1 thread", &mut serial),
+        (&*format!("{n} threads"), &mut wide),
+    ] {
+        println!(
+            "{label:>10}: 5000 shots + 1000 gibs: step {:.3} ms, digest {:.3} ms, sum {:.3} ms, live after step ~{}, parked ~{} of {GIBS}",
+            median_ms(&mut arm.step),
+            median_ms(&mut arm.digest),
+            median_ms(&mut arm.sum),
+            arm.live / MEASURED,
+            arm.parked / MEASURED,
+        );
+    }
+    assert!(
+        sum1 < BULK_GIBS_BUDGET_MS,
+        "serial step + digest {sum1:.3} ms is over the {BULK_GIBS_BUDGET_MS} ms budget"
     );
 }

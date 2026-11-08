@@ -1,5 +1,6 @@
 //! The extract cost of drawing 5,000 live projectiles: `extract_present_scene` with the pool full
-//! against the same scene with it empty. CPU-only; indicative, so it prints and asserts nothing.
+//! against the same scene with it empty, and the added cost of 1,000 posed Mesh/Voxel-look gibs
+//! on top of the 5,000 shots. CPU-only; indicative, so it prints and asserts nothing.
 //!
 //! Ignored by default; run it explicitly, in release:
 //!
@@ -12,7 +13,9 @@
 use std::time::{Duration, Instant};
 
 use ludion_core::rng::DeterministicRng;
-use ludion_engine::{Engine, ProjectileConfig, Projectiles};
+use ludion_engine::{
+    Engine, ProjectileConfig, ProjectileLook, ProjectileVisual, ProjectileVisuals, Projectiles,
+};
 use ludion_projectiles::ProjectileDesc;
 
 const WARMUP: usize = 10;
@@ -96,5 +99,81 @@ fn extract_cost_of_5000_shots() {
     println!(
         "per-frame extract cost of {LIVE} shots: {:.3} ms",
         full - empty
+    );
+}
+
+#[test]
+#[ignore = "release-mode benchmark; run explicitly (see the module docs)"]
+fn extract_cost_of_1000_gibs() {
+    const GIBS: usize = 1_000;
+    let gib_visual = |look, size| ProjectileVisual {
+        look,
+        size,
+        scale: [1.0, 1.4, 0.8],
+        cast_shadows: true,
+        fade_out: 1.5,
+        emissive: 0.0,
+        additive: false,
+        ..ProjectileVisual::default()
+    };
+    let mut visuals = ProjectileVisuals::default();
+    visuals.tags.insert(
+        1,
+        gib_visual(
+            ProjectileLook::Mesh {
+                asset: "meshes/crystal.mesh.yaml".to_string(),
+            },
+            0.3,
+        ),
+    );
+    visuals.tags.insert(
+        2,
+        gib_visual(
+            ProjectileLook::Voxel {
+                model: "voxels/beacon.voxel.yaml".to_string(),
+            },
+            0.05,
+        ),
+    );
+    let mut engine = Engine::builder()
+        .project_root(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/gallery"
+        ))
+        .projectiles(ProjectileConfig {
+            capacity: (LIVE + GIBS) as u32,
+            ..ProjectileConfig::default()
+        })
+        .projectile_visuals(visuals)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(SCENE).unwrap();
+
+    let mut rng = DeterministicRng::new(7);
+    let f = |rng: &mut DeterministicRng| rng.next_f32() * 2.0 - 1.0;
+    let pool = engine.world_mut().resource_mut::<Projectiles>().unwrap();
+    for _ in 0..LIVE {
+        let position = [f(&mut rng) * 20.0, f(&mut rng) * 5.0, f(&mut rng) * 20.0];
+        let velocity = [f(&mut rng) * 60.0, f(&mut rng) * 60.0, f(&mut rng) * 60.0];
+        pool.spawn(ProjectileDesc::new(position, velocity)).unwrap();
+    }
+    let shots = extract_median(&mut engine);
+
+    let pool = engine.world_mut().resource_mut::<Projectiles>().unwrap();
+    for i in 0..GIBS {
+        let position = [f(&mut rng) * 20.0, f(&mut rng) * 5.0, f(&mut rng) * 20.0];
+        let mut desc = ProjectileDesc::new(position, [0.0; 3]);
+        desc.tag = 1 + (i % 2) as u32;
+        desc.spin = [f(&mut rng) * 10.0, f(&mut rng) * 10.0, f(&mut rng) * 10.0];
+        desc.orientation = [f(&mut rng), f(&mut rng), f(&mut rng), 1.0];
+        pool.spawn(desc).unwrap();
+    }
+    let with_gibs = extract_median(&mut engine);
+
+    println!("extract, {LIVE} shots: {shots:.3} ms");
+    println!("extract, + {GIBS} gibs (mesh + voxel): {with_gibs:.3} ms");
+    println!(
+        "per-frame extract cost of {GIBS} gibs: {:.3} ms",
+        with_gibs - shots
     );
 }

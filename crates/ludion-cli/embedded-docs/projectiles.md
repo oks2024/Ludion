@@ -53,7 +53,10 @@ despawning on its first hit. Set fields after it:
 | `owner` | `None` | a `Handle` this shot never hits (the shooter) |
 | `lifetime` | `10` | seconds, `> 0`; expiry emits an `Expired` event |
 | `tag` | `0` | opaque `u32`, echoed in every event |
-| `response` | `Despawn` | `Despawn`, `Reflect { restitution, max_bounces }`, `Pierce { max }`, `Stop` |
+| `response` | `Despawn` | `Despawn`, `Reflect { restitution, max_bounces }`, `Pierce { max }`, `Stop`, `Settle { restitution, friction, rest_speed, floor_cos }` (`Response::settle(r, f, v)` fills the 45° floor) |
+| `spin` | `[0; 3]` | world-space angular velocity, rad/s; integrates `orientation` |
+| `orientation` | identity `[x, y, z, w]` | starting quaternion, normalised at spawn |
+| `targets` | `None` | this shot's `spatial3d` layer mask; `None` uses the pool's `targets` |
 
 ## Rules
 
@@ -69,6 +72,12 @@ despawning on its first hit. Set fields after it:
   despawns. `Pierce` passes through up to `max` **index targets**; a world (physics) hit always
   despawns, except on an entity the shot already pierced, whose collider is skipped too. `Stop`
   parks the shot at the contact. Reflect and Pierce never re-hit the surface they just left.
+- **Settle** is the gib: it bounces off every surface (normal speed × `restitution`; tangential speed
+  and spin × `1 − friction`) and parks on a floor (`n.y >= floor_cos`, +Y up, default 45°) once
+  slower than `rest_speed`, zeroing spin and keeping its orientation. Walls never park and bounces
+  have no cap. A rest is final: a parked gib is never pushed and expires with `Expired`. Events are
+  `Reflected` / `Stopped`. `spin` integrates `orientation` each tick; a shot using none of
+  `spin`, `orientation` or `targets` hashes exactly as before.
 - **Projectiles are not in the target index.** Shots never hit each other; put targets in the index
   with `SpatialVolume` (`ludion docs spatial-3d`).
 - **Events** (`HitEvent`: id, handle, point, normal, `t`, arrival velocity, tag, outcome; `Expired`)
@@ -82,7 +91,8 @@ despawning on its first hit. Set fields after it:
   (`L4031`).
 - **Diagnostics:** `L4026` refused spawn (once per cause), `L4027` invalid config, `L4028` invalid
   visuals, `L4029` unresolved muzzle, `L4030` a pool holding shots whose step never ran (usually an
-  unscheduled `projectiles_step`), `L4031` a restore refused for a too-small capacity.
+  unscheduled `projectiles_step`), `L4031` a restore refused for a too-small capacity, `L4033` a `Mesh`/`Voxel` look whose file is
+  missing (refused at build) or fails to load (drawn as nothing, reported once as degraded).
 
 ## Game-code recipes
 
@@ -101,22 +111,42 @@ for hit in projectiles.events().hits.clone() {
 }
 ```
 
+```rust
+// Gibs on a kill: settle on the floor, tumble, hit the world only.
+for _ in 0..24 {
+    let mut gib = ProjectileDesc::new(at, scatter(&mut rng, 2.0..8.0));
+    gib.gravity_scale = 1.0;
+    gib.radius = 0.08;
+    gib.lifetime = 6.0;
+    gib.tag = GIB_TAG; // visuals: tag -> Mesh { asset } look, scale, fade_out
+    gib.response = Response::settle(0.35, 0.4, 0.6);
+    gib.spin = [spin(&mut rng), spin(&mut rng), spin(&mut rng)];
+    gib.targets = Some(0);
+    spawn_projectile(world, gib);
+}
+```
+
 ## Drawing
 
 `.projectile_visuals(ProjectileVisuals)` is a per-tag table with a `fallback` for tags without an entry:
 
 | `ProjectileVisual` field | Default | Meaning |
 | --- | --- | --- |
-| `look` | `Billboard { softness: 1.0 }` | also `Cube`, `Sphere`, `Hidden` |
+| `look` | `Billboard { softness: 1.0 }` | also `Cube`, `Sphere`, `Hidden`, `Mesh { asset }` (a `*.mesh.yaml`; skinned assets at bind pose), `Voxel { model }` (a `*.voxel.yaml`; `size` is metres per voxel, pivots on its occupied-voxel centre; not `kind: assembly`) |
 | `size` | `0.05` | metres, positive and finite |
 | `stretch` | `0` | seconds of travel in the streak: length `max(size, speed·stretch)` along the heading |
 | `color` | white | linear RGBA |
 | `emissive` | `4` | mesh emissive strength or billboard RGB multiplier |
 | `additive` | `true` | billboard only |
 | `from_muzzle` | `false` | draw this tag's new shots from the muzzle and converge them |
+| `scale` | `[1, 1, 1]` | per-axis extent multiplier on `Cube`, `Sphere`, `Mesh`, `Voxel`; each finite and `> 0` (`L4028`) |
+| `cast_shadows` | `false` | whether a mesh-instanced shot casts a shadow |
+| `fade_out` | `0` | seconds before expiry over which extents shrink to nothing, `>= 0` (`L4028`); opaque |
 | `medium` | `1.0` | fog medium scale in `[0, 1]` (`L4028`); `0` keeps the shot's hue in haze (`ludion docs atmosphere`) |
 
-Shots join the scene pass's existing instanced draws; there is no new pass. Under
+`Mesh` and `Voxel` always draw the shot's simulated orientation, extents `size × scale`, no `stretch`;
+`Cube` and `Sphere` do once the shot has `spin` or a starting `orientation`, otherwise they face the
+heading. Shots join the scene pass's existing instanced draws; there is no new pass. Under
 `present_interpolation` they interpolate between ticks. `muzzle: Some("gun")` names a `Viewmodel`
 entity: a shot of a `from_muzzle` tag first seen by extract is drawn leaving that point and eases onto its simulated path
 over `converge_distance` (default 4 m). The offset is render-only and never reaches the sim or the
@@ -134,8 +164,10 @@ unprimed, so shots in flight draw at their simulated position.
   give actors a `SpatialVolume`: a Pierce shot crosses index targets only, and a physics hit
   despawns it.
 - Events are gone after the next step: copy what you need in the same tick.
-- Cost at 5,000 live shots is measured by `cargo test -p ludion-projectiles --release --test
-  bulk_bench -- --ignored --nocapture`; keep damage and homing work proportional to hits, not shots.
+- A gib whose `targets` is not `Some(0)` hits actors and raises `HitEvent`s.
+- Cost at 5,000 live shots (and `bulk_gibs_bench`, 1,000 gibs beside them) is measured by `cargo
+  test -p ludion-projectiles --release --test bulk_bench -- --ignored --nocapture`; the draw side
+  by `projectiles_extract_bench` (`extract_cost_of_1000_gibs`); keep damage and homing work proportional to hits, not shots.
 
 ## Next
 

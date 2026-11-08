@@ -1,9 +1,9 @@
 # Plan: Bulk 3D projectiles
 
 > **Mechanized — every subtask shipped; pinned bench figures and the pinned golden blesses are owed
-> (`Plan/owed.md`).** Driven by the external FPS request 0006: thousands of fast shots in a 3D room,
-> deterministic, swept (no tunnelling), drawn leaving the gun. Game-facing doc: `ludion docs
-> projectiles`; crate doc: `ludion devdocs ludion-projectiles`.
+> (`Plan/owed.md`).** Driven by the external FPS requests 0006 (shots) and 0012 (gibs): thousands of
+> fast shots in a 3D room, deterministic, swept (no tunnelling), drawn leaving the gun. Game-facing
+> doc: `ludion docs projectiles`; crate doc: `ludion devdocs ludion-projectiles`.
 
 ## Design decisions
 
@@ -53,6 +53,41 @@
     step allocates nothing at one thread.
 12. **L4030** warns once when a pool holds shots but `projectiles_step` never ran, the usual sign of
     an unscheduled step.
+16. **Gibs ride the shot pool**, not rigid bodies (request 0012's numbers: 2,000 rigid bodies cost 4.6 ms
+    mean / 9.6 ms p99 per step, against the game's whole 3.0 ms physics budget, with ~750 live gibs
+    at gibfest) and not a second pool (one sweep, one hash block, one
+    snapshot). The new per-shot fields (`spin`, `orientation`, `targets`) are optional and
+    byte-identical when absent: an ext bit in the parked byte (codec v1 and digest `v2` stay) and
+    `Settle` as response tag 4, so committed snapshots, replays and hashes do not move.
+17. **Orientation and spin conventions.** Orientation is an `[x, y, z, w]` quaternion, spin a
+    world-space angular velocity in rad/s, integrated `q += ½·dt·(ω,0)⊗q` and renormalised with
+    `ludion_core::math::sqrt`, the crate's only root. Integration is skipped at bit-zero
+    spin, so a spin-less shot never renormalises.
+18. **Settle semantics.** It parks on `n.y >= floor_cos` (+Y up, default 45°) rather than against
+    gravity, because gravity can be zero or scaled negative per shot. Walls never park and bounces
+    are uncapped: only a floor contact is a rest, so a gib that hits a wall keeps bouncing instead
+    of freezing mid-air. A rest is final: no push, no
+    re-wake, expiry as usual. No new `HitOutcome`: `Reflected` / `Stopped` keep every consumer's
+    match and the event codec unchanged.
+19. **Per-shot `targets` only.** The index mask is what a gib needs to ignore actors; `ignore_layers`
+    stays pool-wide because it is a physics-sweep filter built once per step.
+20. **The Mesh look.** `scale` is a per-axis multiplier on all mesh-instanced looks (default 1, exact
+    for existing visuals). A mesh draws the simulated orientation, never the heading; `Cube`/`Sphere`
+    do once the shot has spin or an orientation. `cast_shadows` is opt-in (default `false`, tracers
+    cast none). `fade_out` shrinks extents only, so it stays opaque. Such shots blend as
+    `ProjectileItem::Posed`, a full TRS blend, while existing shots keep the translation-only one.
+    `L4033` has two tiers: a missing file is refused at build; a load failure degrades, reports once
+    and draws nothing. Skinned assets draw at bind pose.
+21. **The Voxel look.** `size` is metres per voxel and the model document's own `scale` is ignored,
+    so a tag's size means one thing across looks. The model pivots on the centre of its occupied
+    voxels, so it tumbles and rests about its middle rather than the mesher's bottom-centre origin;
+    the pivot is applied only when non-zero, keeping Mesh looks bit-identical. Assemblies are not a
+    look: they are several models.
+22. **The gib bench rows.** `bulk_gibs_bench` runs 1,000 settling, spinning gibs beside 5,000 shots,
+    after an untimed 300-tick pre-roll so the window holds flying, bouncing and parked gibs with
+    ongoing churn (about 39 % parked); gravity is set in the gib arm only so the shots-only row
+    stays the run that produced the recorded figures. `extract_cost_of_1000_gibs` prices 1,000
+    posed Mesh/Voxel gibs on top of 5,000 shots.
 
 ## Status
 
@@ -73,9 +108,24 @@ Bench (release, unpinned M5 laptop, 2026-11-07, indicative only): 5,000 live sho
 digest 0.08) and 0.47 ms at 8 threads; `extract_present_scene` for 5,000 drawn shots adds 0.13 ms.
 The 1- and N-thread digest traces are identical. Pinned figures owed: `Plan/owed.md`.
 
+Gibs (request 0012), by commit subject: gibs on the pool, `Response::Settle` with `spin`, `orientation`
+and per-shot `targets` (r2211, sim); the Mesh look with `scale`, `cast_shadows`, `fade_out`, `Posed`
+and L4033 (r2215); the Voxel look (r2216). Gallery `projectile-gibs`, `projectile-gibs-settle` and
+`projectile-gibs-voxel`, macOS blessed on the unpinned M5. This arc adds the gib bench rows, the
+`ludion docs projectiles` coverage and `ludion devdocs ludion-projectiles`.
+
+Gib bench (release, unpinned M5 laptop, 2026-11-08, indicative only): 5,000 shots + 1,000 gibs,
+`step + digest` 1.92 ms at 1 thread (step 1.82, digest 0.10) and 0.51 ms at 8 threads, about 389 of
+1,000 gibs parked; the digest traces are identical. `extract_present_scene` for 1,000 Mesh/Voxel
+gibs on top of 5,000 shots adds about 0.03 ms (0.143 to 0.170 ms). Pinned figures owed: `Plan/owed.md`.
+
 ## Explicitly out of scope (triggers recorded)
 
 - **Volleys are not bridged to the pool.** Trigger: a 2D-pattern game needs physics-swept bullets, or
   a 3D game wants `kind: pattern` timelines for pooled shots.
-- **Asset-mesh and textured shot looks.** The looks are billboard, cube, sphere and hidden. Trigger: a
-  game needs a non-primitive or textured shot.
+- **Textured or UV-mapped shot looks.** Mesh and Voxel looks draw the asset's own material. Trigger: a
+  game needs a per-shot texture.
+- **`kind: assembly` / `sculpt` looks.** Trigger: a game wants a multi-part or sculpted shot.
+- **Pushing or re-waking parked debris.** A rest is final. Trigger: an explosion must kick rests.
+- **Alpha or translucent fade.** `fade_out` shrinks, opaque. Trigger: a game wants a dissolve.
+- **Per-shot `ignore_layers`.** Pool-wide only. Trigger: a shot class needs its own physics filter.

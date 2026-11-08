@@ -37,6 +37,7 @@ hash, the `frame` LFR1 format) is `ludion devdocs ludion-protocol`; the WS host 
 - `crates/ludion-engine/src/engine.rs` — the `Engine`: `SimDriver` (which owns `World` by value), `Registry`, seed, scene ref, project root, render size, lazy GPU `Renderer`, optional window `PresentTarget`, subscription table, optional `Recorder`; `execute()`, `world_hash`, `advance_live`, `render_frame`.
 - `crates/ludion-engine/src/dispatch.rs` — one exhaustive `match` over every `Command` variant → `Dispatched`. All routing.
 - `crates/ludion-engine/src/commands/` — the handler logic, one module per method family.
+- `crates/ludion-engine/src/projectile_draw.rs` — projectile looks and visuals; see `ludion devdocs ludion-projectiles`.
 - Every other file: `ludion devdocs engine-layout`.
 
 ## Rules
