@@ -82,6 +82,8 @@ struct VsOut {
     @location(9) @interpolate(flat) wrap_extent: vec3<f32>,
     // Per-instance rim `(color·strength rgb, power)`, flat like `flash`.
     @location(10) @interpolate(flat) rim: vec4<f32>,
+    // Per-instance medium scale, flat like `rim`; only `fs_medium` reads it.
+    @location(11) @interpolate(flat) medium: f32,
 };
 
 struct WrapLanes {
@@ -130,6 +132,7 @@ fn vs_main(in: VsIn) -> VsOut {
     // Carry the hit-flash lane to the fragment stage.
     out.flash = in.flash;
     out.rim = in.rim;
+    out.medium = in.medium;
     let wrap = wrap_lanes(in);
     out.wrap = wrap.wrap;
     out.wrap_extent = wrap.extent;
@@ -161,6 +164,20 @@ struct CaptureOut {
 fn fs_main(in: VsOut, @builtin(front_facing) front_facing: bool) -> FsOut {
     let c = shade_fragment(in, front_facing, true);
     return FsOut(c.color, c.normal_roughness, c.specular);
+}
+
+// The medium twin's extra target: the mesh's medium scale per pixel, read by the composite.
+struct MediumOut {
+    @location(0) color: vec4<f32>,
+    @location(1) normal_roughness: vec4<f32>,
+    @location(2) specular: vec4<f32>,
+    @location(3) medium: vec4<f32>,
+}
+
+@fragment
+fn fs_medium(in: VsOut, @builtin(front_facing) front_facing: bool) -> MediumOut {
+    let c = shade_fragment(in, front_facing, true);
+    return MediumOut(c.color, c.normal_roughness, c.specular, vec4<f32>(in.medium, 0.0, 0.0, 0.0));
 }
 
 @fragment

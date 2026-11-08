@@ -140,7 +140,12 @@
 // carries the GI ambient scale V̄. Otherwise the recorder binds the same 1x1 stand-in and
 // `composite.medium_scatter` is zero, so the add below never reads it.
 @group(0) @binding(6) var medium_scatter_tex: texture_2d<f32>;
-@group(0) @binding(7) var samp: sampler;
+// The per-pixel medium scale of the mesh drawn there (R8, 1 = the whole medium), at the render extent —
+// the fifth **optional** input, behind `medium_scatter_tex`. It exists when a mesh sets `medium` below 1
+// under fog; otherwise the recorder binds the same 1x1 stand-in and `composite.medium_gi.y` is zero, so
+// no scale below is applied.
+@group(0) @binding(7) var scene_medium_tex: texture_2d<f32>;
+@group(0) @binding(8) var samp: sampler;
 
 // The selector values `Composite.tonemap` carries, one per `PostProcess.tonemap` variant. The
 // shader-bindgen hoists integer consts into `shader_gen`, so the recorder maps its `TonemapOperator`
@@ -265,10 +270,16 @@ struct Composite {
     // camera. Fog measures distance along it there rather than along the per-pixel ray.
     view_forward: vec4<f32>,
     // `.x` is nonzero when the local-light pass also carries the GI-scaled ambient in its alpha
-    // (`medium_scatter.wgsl`); the other lanes are pad.
+    // (`medium_scatter.wgsl`); `.y` nonzero when `scene_medium_tex` is real; the other lanes are pad.
     medium_gi: vec4<u32>,
 };
-@group(0) @binding(8) var<uniform> composite: Composite;
+@group(0) @binding(9) var<uniform> composite: Composite;
+
+// The extinguished fraction of the same ray with its optical depth scaled by `m`: T^m = exp(-m·τ).
+fn medium_scaled(extinguished: f32, m: f32) -> f32 {
+    if (m <= 0.0) { return 0.0; }
+    return 1.0 - pow(max(1.0 - extinguished, 1e-30), m);
+}
 
 // Rec.709 luma weights: the grey axis the white balance normalizes against and the saturation mix
 // collapses toward. One definition, so "luminance-preserving" means the same thing in both steps.
@@ -710,6 +721,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (composite.halation != 0.0) {
         hdr = hdr + bloom * halation_gain() * composite.halation;
     }
+    var ray_scale = 1.0;
     if (composite.fog_density > 0.0) {
         // The transparent layer: sprites, particles and world text, which write no depth, hold their
         // own mean distance and coverage here. Under one the pixel is fogged at that distance, not at
@@ -720,6 +732,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let layer = textureLoad(transparent_depth_tex, vec2<i32>(in.pos.xy), 0);
             coverage = layer.g;
             layer_t = layer.r / max(layer.g, 1e-4);
+        }
+        // The mesh's medium scale, loaded beside the layer for the same byte-identity reason.
+        var m = 1.0;
+        if (composite.medium_gi.y != 0u) {
+            m = textureLoad(scene_medium_tex, vec2<i32>(in.pos.xy), 0).r;
         }
         // The medium's ambient radiance: the authored slab, the sky along this pixel's view ray, or a
         // blend. The ray is reconstructed at the **far plane** because a ray's direction does not
@@ -771,6 +788,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             var back = 0.0;
             if (depth < 1.0) {
                 back = fog_factor(world_from_depth(in.uv, depth));
+                if (composite.medium_gi.y != 0u) {
+                    let bm = medium_scaled(back, m);
+                    ray_scale = select(m, bm / back, back > 1e-6);
+                    back = bm;
+                }
             }
             let extinguished = mix(back, fog_factor(layer_world(in.uv, layer_t)), coverage);
             if (composite.fog_albedo == 1.0) {
@@ -790,7 +812,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             // which is not the same bits as `x*(1 - s) + y*s`), so the shipped fog's bytes live in the
             // intrinsic, not in the algebra — decision 9's skip-don't-compute rule applied one level
             // down, exactly as `lift_gamma_gain` guards its own reciprocal power.
-            let extinguished = fog_factor(world_from_depth(in.uv, depth));
+            var extinguished = fog_factor(world_from_depth(in.uv, depth));
+            if (composite.medium_gi.y != 0u) {
+                let e = extinguished;
+                let em = medium_scaled(e, m);
+                ray_scale = select(m, em / e, e > 1e-6);
+                extinguished = em;
+            }
             if (composite.fog_albedo == 1.0) {
                 hdr = mix(hdr, ambient, extinguished);
             } else {
@@ -805,12 +833,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // fraction of the output extent while this pass runs at the render extent — a bilinear upscale of
     // an already-blurred, deliberately low-frequency field.
     if (composite.shafts != 0u) {
-        let shafts = textureSample(shafts_tex, samp, in.uv).r;
+        var shafts = textureSample(shafts_tex, samp, in.uv).r;
+        if (composite.medium_gi.y != 0u) {
+            shafts = shafts * ray_scale;
+        }
         hdr = hdr + composite.shafts_color * shafts;
     }
     // The local lights' directional term: already coloured and scaled by the march, so a plain add.
     if (composite.medium_scatter != 0u) {
-        hdr = hdr + textureSample(medium_scatter_tex, samp, in.uv).rgb;
+        var scatter = textureSample(medium_scatter_tex, samp, in.uv).rgb;
+        if (composite.medium_gi.y != 0u) {
+            scatter = scatter * ray_scale;
+        }
+        hdr = hdr + scatter;
     }
     if (composite.exposure != 1.0) {
         hdr = hdr * composite.exposure;

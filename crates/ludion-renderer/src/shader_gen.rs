@@ -1962,25 +1962,29 @@ pub const REFLECTIONS_BINDING: u32 = 7;
 pub const RELIGHT_OUT_GROUP: u32 = 0;
 pub const RELIGHT_OUT_BINDING: u32 = 7;
 
-/// `samp` — `@group(0) @binding(7)`, in `composite.wgsl`.
-pub const SAMP_GROUP: u32 = 0;
-pub const SAMP_BINDING: u32 = 7;
+/// `scene_medium_tex` — `@group(0) @binding(7)`, in `composite.wgsl`.
+pub const SCENE_MEDIUM_TEX_GROUP: u32 = 0;
+pub const SCENE_MEDIUM_TEX_BINDING: u32 = 7;
 
 /// `bake_bin_table` — `@group(0) @binding(8)`, in `gi_bake.wgsl`.
 pub const BAKE_BIN_TABLE_GROUP: u32 = 0;
 pub const BAKE_BIN_TABLE_BINDING: u32 = 8;
 
-/// `composite` — `@group(0) @binding(8)`, in `composite.wgsl`.
-pub const COMPOSITE_GROUP: u32 = 0;
-pub const COMPOSITE_BINDING: u32 = 8;
-
 /// `downsample_dst` — `@group(0) @binding(8)`, in `ibl.wgsl`.
 pub const DOWNSAMPLE_DST_GROUP: u32 = 0;
 pub const DOWNSAMPLE_DST_BINDING: u32 = 8;
 
+/// `samp` — `@group(0) @binding(8)`, in `composite.wgsl`.
+pub const SAMP_GROUP: u32 = 0;
+pub const SAMP_BINDING: u32 = 8;
+
 /// `bake_bin_indices` — `@group(0) @binding(9)`, in `gi_bake.wgsl`.
 pub const BAKE_BIN_INDICES_GROUP: u32 = 0;
 pub const BAKE_BIN_INDICES_BINDING: u32 = 9;
+
+/// `composite` — `@group(0) @binding(9)`, in `composite.wgsl`.
+pub const COMPOSITE_GROUP: u32 = 0;
+pub const COMPOSITE_BINDING: u32 = 9;
 
 /// `refl_probe_cubes` — `@group(0) @binding(9)`, in `reflections.wgsl`.
 pub const REFL_PROBE_CUBES_GROUP: u32 = 0;
@@ -3816,12 +3820,12 @@ pub fn create_scatter_gi_scatter_gi_r_scatter_gi_g_scatter_gi_b_bgl(
     })
 }
 
-/// Bind group layout `scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_samp_composite` (@group 0), from `composite.wgsl`.
-pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_samp_composite_bgl(
+/// Bind group layout `scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_samp_composite` (@group 0), from `composite.wgsl`.
+pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_samp_composite_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_samp_composite"),
+        label: Some("scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_samp_composite"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: SCENE_TEX_BINDING,
@@ -3885,6 +3889,16 @@ pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent
             },
             wgpu::BindGroupLayoutEntry {
                 binding: MEDIUM_SCATTER_TEX_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: SCENE_MEDIUM_TEX_BINDING,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },

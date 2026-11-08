@@ -862,15 +862,27 @@ pub struct PostChain {
     pub transparent_cover: bool,
     /// The scene's medium has a density (`fog_density > 0`). Content too, so `masked` keeps it.
     pub fog: bool,
+    /// The medium is on **and** some mesh scales it below 1 (`Mesh.medium`): the scene pass gains a
+    /// fourth colour write, the [`scene_medium`](PostChain::mesh_medium_scheduled) mask, and `composite`
+    /// its fifth optional input. Content, so `masked` keeps it. A frame with no such mesh keeps the
+    /// graph without either.
+    pub mesh_medium: bool,
 }
 
 impl PostChain {
+    /// Whether the `scene_medium` target is declared: [`mesh_medium`](PostChain::mesh_medium), unless a
+    /// debug view replaces the composite that would read it.
+    pub fn mesh_medium_scheduled(self) -> bool {
+        self.mesh_medium && self.view().is_none()
+    }
+
     /// The chain with the medium's in-scatter pass dropped: a probe face has no composite to add it to.
     pub(crate) fn without_medium(self) -> Self {
         Self {
             medium_scatter: false,
             local_scatter: false,
             medium_gi: false,
+            mesh_medium: false,
             ..self
         }
     }
@@ -976,6 +988,7 @@ impl PostChain {
                 || !scene.particles.is_empty()
                 || !scene.texts.is_empty(),
             fog: scene.post.is_some_and(|post| post.fog_density > 0.0),
+            mesh_medium: medium && scene.meshes.iter().any(|m| m.medium < 1.0),
             aa: AntiAliasing::Off,
         }
     }
@@ -1298,6 +1311,11 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             TextureDesc::layer_color(render_w, render_h),
         )
     });
+    // The mesh medium mask (only when a mesh scales the medium below 1, so every other frame's resource
+    // list is exactly the mask-free graph's).
+    let scene_medium = chain
+        .mesh_medium_scheduled()
+        .then(|| graph.transient("scene_medium", TextureDesc::mask_color(render_w, render_h)));
     // The ambient-occlusion chain (only when the scene enables it, so an AO-free scene's resource list
     // is exactly the pre-SSAO graph's — the same inversion the shadow map rests on).
     let ao = chain.ssao.then(|| AoTargets {
@@ -1559,7 +1577,11 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         pass::SCENE,
         pass::SCENE,
         scene_reads,
-        vec![scene, scene_normal, scene_specular],
+        {
+            let mut writes = vec![scene, scene_normal, scene_specular];
+            writes.extend(scene_medium);
+            writes
+        },
         scene_depth,
     );
     if let Some((_, instances, args)) = cull {
@@ -1797,6 +1819,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     composite_reads.extend(dof_term);
     composite_reads.extend(transparent_layer);
     composite_reads.extend(medium_scatter_term);
+    composite_reads.extend(scene_medium);
     // A debug view stands in for the whole composite: the tail after it is unchanged. Bloom, shafts
     // and dof still schedule with unread outputs — acceptable for a debug frame.
     match (chain.ssr_view, &ssr) {
@@ -2558,6 +2581,7 @@ mod tests {
                 // Content too: no quality switch removes a transparent or the medium.
                 transparent_cover: bits & 1 != 0,
                 fog: bits & 1 != 0,
+                mesh_medium: false,
                 // A client setting: no quality preset masks it, so it varies with `ui` and survives.
                 aa: if bits & 1 != 0 {
                     AntiAliasing::Smaa
@@ -5858,6 +5882,74 @@ mod tests {
         assert!(json.contains("rg16float"));
         let plain = dump_frame_graph_json(FrameSize::native(64, 64), PostChain::default()).unwrap();
         assert!(!plain.contains("transparent_depth") && !plain.contains("rg16float"));
+    }
+
+    /// `mesh_medium` needs the medium **and** a mesh scaling it below 1; either alone derives `false`.
+    #[test]
+    fn for_scene_reads_the_mesh_medium_gate() {
+        let fog = crate::scene::PostData {
+            fog_density: 0.05,
+            ..crate::scene::PostData::default()
+        };
+        let mut scene = RenderScene::empty((64, 64));
+        scene.meshes = vec![cull_mesh(false), cull_mesh(false)];
+        scene.meshes[1].medium = 0.0;
+        assert!(!PostChain::for_scene(&scene).mesh_medium, "no post");
+        scene.post = Some(crate::scene::PostData::default());
+        assert!(!PostChain::for_scene(&scene).mesh_medium, "no fog");
+        scene.post = Some(fog);
+        assert!(PostChain::for_scene(&scene).mesh_medium);
+        scene.meshes[1].medium = 1.0;
+        assert!(!PostChain::for_scene(&scene).mesh_medium, "every mesh at 1");
+    }
+
+    /// Off, the graph has no `scene_medium`, the scene pass writes three targets and `composite` reads
+    /// what it did. On, the mask is the scene pass's fourth write and `composite`'s last read; a debug
+    /// view that replaces the composite does not schedule it.
+    #[test]
+    fn the_scene_medium_mask_is_the_fourth_scene_write_and_the_last_composite_read() {
+        let size = FrameSize::native(64, 64);
+        let names = |graph: &RenderGraph, pass_name: &str, writes: bool| {
+            let pass = graph.passes().iter().find(|p| p.name == pass_name).unwrap();
+            let ids: Vec<_> = if writes {
+                pass.color_targets().to_vec()
+            } else {
+                pass.reads().to_vec()
+            };
+            ids.iter()
+                .map(|r| graph.resources()[r.index()].name.clone())
+                .collect::<Vec<_>>()
+        };
+        let (off, _) = build_frame_graph(size, PostChain::default());
+        assert!(!off.resources().iter().any(|r| r.name == "scene_medium"));
+        assert_eq!(names(&off, pass::SCENE, true).len(), 3);
+
+        let on_chain = PostChain {
+            fog: true,
+            mesh_medium: true,
+            ..PostChain::default()
+        };
+        let (on, _) = build_frame_graph(size, on_chain);
+        let mask = on
+            .resources()
+            .iter()
+            .find(|r| r.name == "scene_medium")
+            .expect("the mask is declared");
+        assert_eq!(mask.desc.format.as_str(), "r8unorm");
+        let writes = names(&on, pass::SCENE, true);
+        assert_eq!(writes.len(), 4);
+        assert_eq!(writes[3], "scene_medium");
+        let mut expected = names(&off, pass::COMPOSITE, false);
+        expected.push("scene_medium".to_string());
+        assert_eq!(names(&on, pass::COMPOSITE, false), expected);
+
+        let viewed = PostChain {
+            probe_view: true,
+            ..on_chain
+        };
+        assert!(!viewed.mesh_medium_scheduled());
+        let (graph, _) = build_frame_graph(size, viewed);
+        assert!(!graph.resources().iter().any(|r| r.name == "scene_medium"));
     }
 
     // --- Depth of field (Plan/post-process-pipeline.md) ------------------------------------

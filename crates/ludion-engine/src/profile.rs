@@ -3812,6 +3812,7 @@ gpu_frame_max_ms = 9.5
             medium_scatter: true,
             local_scatter: true,
             medium_gi: true,
+            mesh_medium: true,
             dof: true,
             gi_inject: Some([4, 4, 4]),
             cull: Some(ludion_renderer::CullShape::for_counts(1000, 8, 4)),

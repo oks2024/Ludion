@@ -916,6 +916,15 @@ impl Renderer {
         &variants[variant.index()]
     }
 
+    /// The mesh shader's medium-mask pipeline (four targets) for `variant`.
+    fn medium_pipeline(&self, id: ShaderId, variant: MeshVariant) -> &wgpu::RenderPipeline {
+        let variants = self.pipelines[id as usize]
+            .medium
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} has no medium pipeline variants", id.label()));
+        &variants[variant.index()]
+    }
+
     /// The projector's decal pipeline for `blend` (`Multiply` or `Add`).
     fn decal_pipeline(&self, blend: ProjectorBlend) -> &wgpu::RenderPipeline {
         let pair = self.pipelines[ShaderId::Projector as usize]
@@ -2086,6 +2095,7 @@ impl Renderer {
             has_shafts: chain.shafts,
             has_medium_scatter: chain.medium_scatter,
             has_medium_gi: chain.medium_gi,
+            has_mesh_medium: chain.mesh_medium_scheduled(),
             scatter_lights,
             scatter_views,
             has_dof: chain.dof,
@@ -3481,6 +3491,8 @@ struct FrameRecorder<'a> {
     has_medium_scatter: bool,
     /// Whether that pass also carries the GI term; mirrors [`PostChain::medium_gi`].
     has_medium_gi: bool,
+    /// Whether the scene pass writes `scene_medium`; mirrors [`PostChain::mesh_medium_scheduled`].
+    has_mesh_medium: bool,
     /// The selected scattering lights, ascending light-list order; empty unless `has_medium_scatter`.
     scatter_lights: Vec<shader_gen::ScatterLight>,
     /// The shadow views those lanes index, compacted (`medium_pass::scatter_views`).
@@ -3698,7 +3710,12 @@ impl PassRecorder for FrameRecorder<'_> {
                     medium_scatter: u32::from(self.has_medium_scatter),
                     inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
                     view_forward: self.view_forward,
-                    medium_gi: [u32::from(self.has_medium_gi), 0, 0, 0],
+                    medium_gi: [
+                        u32::from(self.has_medium_gi),
+                        u32::from(self.has_mesh_medium),
+                        0,
+                        0,
+                    ],
                 };
                 // The composite's three optional inputs, each at the binding the WGSL itself declares,
                 // so neither can move the other and turning one off cannot shift the one behind it.
@@ -3721,6 +3738,11 @@ impl PassRecorder for FrameRecorder<'_> {
                     OptionalInput {
                         binding: shader_gen::MEDIUM_SCATTER_TEX_BINDING,
                         present: self.has_medium_scatter,
+                        fallback: &self.r.fallback_hdr.view,
+                    },
+                    OptionalInput {
+                        binding: shader_gen::SCENE_MEDIUM_TEX_BINDING,
+                        present: self.has_mesh_medium,
                         fallback: &self.r.fallback_hdr.view,
                     },
                 ];
@@ -4148,9 +4170,15 @@ impl FrameRecorder<'_> {
             .depth
             .expect("the scene pass declares a depth attachment");
         let [target, normal, specular] = [0, 1, 2].map(|i| pass.colors()[i].view);
-        // Only the probe capture graph declares a fourth target (the emissive part the relight
-        // leaves unscaled), and it draws through the `fs_capture` pipelines.
-        let emissive = pass.colors().get(3).map(|c| c.view);
+        // A fourth target is either the probe capture's emissive part (HDR, the part the relight leaves
+        // unscaled, drawn through `fs_capture`) or the medium mask (`R8Unorm`, through `fs_medium`).
+        let fourth = pass.colors().get(3);
+        let medium_mask = fourth
+            .filter(|c| c.format == ludion_render_graph::TextureFormat::R8Unorm)
+            .map(|c| c.view);
+        let emissive = fourth
+            .filter(|c| c.format != ludion_render_graph::TextureFormat::R8Unorm)
+            .map(|c| c.view);
 
         let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("scene"),
@@ -4176,6 +4204,18 @@ impl FrameRecorder<'_> {
             ]
             .into_iter()
             .chain(emissive.map(|view| Some(clear_transparent(view))))
+            .chain(medium_mask.map(|view| {
+                // White: a pixel no mesh drew keeps the whole medium.
+                Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })
+            }))
             .collect::<Vec<_>>(),
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth_view,
@@ -4198,6 +4238,8 @@ impl FrameRecorder<'_> {
         let mesh_pipeline = |variant| {
             if emissive.is_some() {
                 self.r.capture_pipeline(ShaderId::Mesh, variant)
+            } else if medium_mask.is_some() {
+                self.r.medium_pipeline(ShaderId::Mesh, variant)
             } else {
                 self.mesh_pipeline(ShaderId::Mesh, variant)
             }
@@ -7595,7 +7637,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::Composite,
         create:
-            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_samp_composite_bgl,
+            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_samp_composite_bgl,
     },
     LayoutDesc {
         id: LayoutId::Resolve,
@@ -7743,6 +7785,9 @@ struct ShaderPipelines {
     variants: Option<[wgpu::RenderPipeline; 4]>,
     /// The reflections shader's twin that also writes `refl_fill` (entry `fs_split`).
     split: Option<wgpu::RenderPipeline>,
+    /// The mesh shader's medium-mask variants, by [`MeshVariant::index`], with the fourth, `scene_medium`
+    /// target (entry `fs_medium`).
+    medium: Option<[wgpu::RenderPipeline; 4]>,
     /// The mesh shader's probe-capture variants, by [`MeshVariant::index`], with the fourth, emissive
     /// target (entry `fs_capture`).
     capture: Option<[wgpu::RenderPipeline; 4]>,
@@ -7810,6 +7855,7 @@ fn build_pipeline(
             variants: Some(variants),
             split: None,
             capture: None,
+            medium: None,
             decal: None,
             lit: None,
             hdr: None,
@@ -7822,6 +7868,9 @@ fn build_pipeline(
             return ShaderPipelines {
                 capture: Some(MeshVariant::ALL.map(|variant| {
                     build_mesh_capture_pipeline(device, label, &shader, &layout, variant)
+                })),
+                medium: Some(MeshVariant::ALL.map(|variant| {
+                    build_mesh_medium_pipeline(device, label, &shader, &layout, variant)
                 })),
                 ..twinned(build_mesh_pipeline, &shader)
             };
@@ -7891,6 +7940,7 @@ fn build_pipeline(
                     device, label, src, &layout,
                 )),
                 capture: None,
+                medium: None,
                 decal: None,
                 lit: None,
                 hdr: None,
@@ -7919,6 +7969,7 @@ fn build_pipeline(
                 variants: None,
                 split: None,
                 capture: None,
+                medium: None,
                 decal: None,
                 lit: Some(lit),
                 hdr: None,
@@ -7931,6 +7982,7 @@ fn build_pipeline(
                 variants: None,
                 split: None,
                 capture: None,
+                medium: None,
                 decal: Some(
                     [PROJECTOR_MULTIPLY, PROJECTOR_ADD]
                         .map(|blend| build_decal_pipeline(device, label, src, &layout, blend)),
@@ -7951,6 +8003,7 @@ fn build_pipeline(
         variants: None,
         split: None,
         capture: None,
+        medium: None,
         decal: None,
         lit: None,
         hdr,
@@ -8186,6 +8239,31 @@ fn build_mesh_capture_pipeline(
         variant,
         "fs_capture",
         &[HDR_FORMAT, HDR_FORMAT, OUTPUT_FORMAT, HDR_FORMAT],
+    )
+}
+
+/// The scene pass of a frame with a mesh below `medium` 1: [`build_mesh_pipeline`]'s three targets plus
+/// `scene_medium` (`R8Unorm`), the per-pixel medium scale the composite reads.
+fn build_mesh_medium_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    variant: MeshVariant,
+) -> wgpu::RenderPipeline {
+    build_mesh_pipeline_for(
+        device,
+        label,
+        shader,
+        layout,
+        variant,
+        "fs_medium",
+        &[
+            HDR_FORMAT,
+            HDR_FORMAT,
+            OUTPUT_FORMAT,
+            wgpu::TextureFormat::R8Unorm,
+        ],
     )
 }
 
@@ -9231,6 +9309,7 @@ mod tests {
     mod gpu_cull;
     mod lit_additive;
     mod medium_scatter;
+    mod mesh_medium;
     mod rim;
     mod shaft_layer;
     mod skin_bounds;
@@ -9325,9 +9404,10 @@ mod tests {
             ],
             [0, 1, 2],
         );
-        // Seven input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
-        // the blurred shaft term, blends the depth-of-field gather, loads the transparent layer and adds the local-light term —
-        // the first three in the graph pass's declared read order, and the last four the arc's
+        // Eight input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
+        // the blurred shaft term, blends the depth-of-field gather, loads the transparent layer, adds the
+        // local-light term and loads the mesh medium mask —
+        // the first three in the graph pass's declared read order, and the last five the arc's
         // *optional* slots, whose bindings are fixed whether or not the scene enables them (see
         // `optional_inputs_hold_their_binding`).
         assert_eq!(
@@ -9339,10 +9419,11 @@ mod tests {
                 shader_gen::DOF_TEX_BINDING,
                 shader_gen::TRANSPARENT_DEPTH_TEX_BINDING,
                 shader_gen::MEDIUM_SCATTER_TEX_BINDING,
+                shader_gen::SCENE_MEDIUM_TEX_BINDING,
                 shader_gen::SAMP_BINDING,
                 shader_gen::COMPOSITE_BINDING,
             ],
-            [0, 1, 2, 3, 4, 5, 6, 7, 8],
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         );
         // Three input textures: the depth-of-field prefilter samples the scene, loads its depth, in
         // the graph pass's declared read order, and loads the transparent layer in the *optional* slot
