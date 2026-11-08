@@ -221,7 +221,7 @@ fn wrap_band(
     }
     var sum = vec3<f32>(0.0);
     let to_camera = camera.cam_pos.xyz - world_pos;
-    let is_viewmodel = camera.lens.x > 0.5;
+    let is_viewmodel = VIEWMODEL;
     var slice = cluster_slice(frag_pos, dot(to_camera, to_camera));
     if (is_viewmodel) {
         slice = viewmodel_slice();
@@ -290,7 +290,7 @@ fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
     if (env.ao.x > 0.5) {
         ao = textureSampleLevel(ao_tex, env_samp, in.clip.xy * env.ao.yz, 0.0).r;
         // The prepass leaves the gun out, so the AO texture holds the world behind it.
-        if (camera.lens.x > 0.5) {
+        if (VIEWMODEL) {
             ao = 1.0;
         }
     }

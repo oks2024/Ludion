@@ -8,8 +8,6 @@ struct Camera {
     // xyz = unit world-space camera forward, w = 1 under an orthographic projection and 0 under a
     // perspective one (see `view_ray.wgsl`).
     view_forward: vec4<f32>,
-    // x = 1 on the viewmodel's lens camera, 0 on the world's; yzw unused.
-    lens: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;

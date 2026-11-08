@@ -241,6 +241,79 @@ fn point(position: Vec3, intensity: f32, range: f32) -> crate::scene::PointLight
     }
 }
 
+/// The viewmodel is a pipeline constant, not camera data: the composed mesh shader declares one
+/// `VIEWMODEL` override defaulting to false, so a pipeline built without constants shades the
+/// world, and the `Camera` uniform carries no viewmodel field.
+#[test]
+fn the_viewmodel_is_a_pipeline_constant_defaulting_to_the_world() {
+    let module = naga::front::wgsl::parse_str(&builtin_composed(ShaderId::Mesh))
+        .expect("the composed mesh shader parses");
+    let overrides: Vec<_> = module.overrides.iter().map(|(_, o)| o).collect();
+    assert_eq!(overrides.len(), 1, "the mesh shader declares one override");
+    assert_eq!(overrides[0].name.as_deref(), Some("VIEWMODEL"));
+    let init = overrides[0].init.expect("VIEWMODEL has a default");
+    assert!(
+        matches!(
+            module.global_expressions[init],
+            naga::Expression::Literal(naga::Literal::Bool(false))
+        ),
+        "VIEWMODEL defaults to false"
+    );
+    let camera = module
+        .types
+        .iter()
+        .find(|(_, t)| t.name.as_deref() == Some("Camera"))
+        .expect("the mesh shader declares Camera");
+    let naga::TypeInner::Struct { members, .. } = &camera.1.inner else {
+        panic!("Camera is a struct");
+    };
+    let names: Vec<_> = members.iter().filter_map(|m| m.name.as_deref()).collect();
+    assert_eq!(names, ["view_proj", "cam_pos", "view_forward"]);
+}
+
+/// A gun draw records with the mesh shader's `VIEWMODEL` twin and a world draw with the default
+/// pipeline, on a plain frame and on a medium-mask frame alike; a flagged mesh with no lens camera
+/// draws as the world does. Skips with no GPU.
+#[test]
+fn needs_gpu_gun_draws_select_the_viewmodel_twin() {
+    let Some(renderer) = skip_or_renderer("gun_draws_select_the_viewmodel_twin") else {
+        return;
+    };
+    let size = FrameSize::native(PX, PX);
+    let mut scene = gun_scene();
+    lit_gun(&mut scene);
+    let recorder = renderer
+        .prepare_frame(&scene, size, None)
+        .expect("gun frame");
+    for variant in MeshVariant::ALL {
+        for medium in [false, true] {
+            let twin = renderer.viewmodel_pipeline(variant, medium);
+            let world = if medium {
+                renderer.medium_pipeline(ShaderId::Mesh, variant)
+            } else {
+                renderer.variant_pipeline(ShaderId::Mesh, variant)
+            };
+            assert!(twin != world, "the twin is its own pipeline");
+            assert!(recorder.scene_mesh_pipeline(variant, true, medium) == twin);
+            assert!(recorder.scene_mesh_pipeline(variant, false, medium) == world);
+        }
+        assert!(
+            renderer.viewmodel_pipeline(variant, true)
+                != renderer.viewmodel_pipeline(variant, false),
+            "the medium twin writes a fourth target"
+        );
+    }
+    drop(recorder);
+    scene.viewmodel = None;
+    let recorder = renderer
+        .prepare_frame(&scene, size, None)
+        .expect("lens-less frame");
+    assert!(
+        recorder.scene_mesh_pipeline(MeshVariant::PLAIN, true, false)
+            == renderer.variant_pipeline(ShaderId::Mesh, MeshVariant::PLAIN)
+    );
+}
+
 /// A point light behind the eye lights a gun whose lens position is nowhere near that light's world
 /// tile. Skips with no GPU.
 #[test]

@@ -2,6 +2,11 @@
 // local-light shadows (@group 2), the IBL / AO / GI environment (@group 3), the Cook-Torrance lobes and
 // `shade`. Composed after the camera, lights, dfg, gi_probe and view_ray snippets; needs `math.wgsl` ahead of it.
 
+// True only in the scene pass's viewmodel twins, which draw the gun: its fragments read the viewmodel
+// light cell and take their shadows at the camera eye. A pipeline constant rather than a uniform, so a
+// world fragment carries none of those branches.
+override VIEWMODEL: bool = false;
+
 // The directional "sun" — a mesh-only @group(2) (Plan/shadow-mapping.md decision 3), so the shared
 // camera/lights layouts and the sprite/text shaders are untouched. `sun.color` is premultiplied and
 // is zero for a sunless frame (a zeroed uniform), which makes the whole sun term vanish with no
@@ -556,7 +561,7 @@ fn shade(
     // order. Indices ascend within a cell and the array is extract order, so the sum below is the
     // same sum, in the same order, a flat loop over every light would produce — the snippet's
     // identity argument. ALU only: the non-uniform bound forbids an implicit-derivative sample here.
-    let is_viewmodel = camera.lens.x > 0.5;
+    let is_viewmodel = VIEWMODEL;
     var slice = cluster_slice(frag_pos, dot(to_camera, to_camera));
     if (is_viewmodel) {
         slice = viewmodel_slice();
