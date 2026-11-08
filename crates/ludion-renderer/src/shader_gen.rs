@@ -1292,7 +1292,7 @@ pub struct Sun {
     pub cascade_params: [[f32; 4]; 4],
     pub view_depth: [f32; 4],
     pub cascade_count: u32,
-    pub cascade_view: u32,
+    pub cascade_pad0: u32,
     pub cascade_pad1: u32,
     pub cascade_pad2: u32,
 }
@@ -1309,7 +1309,7 @@ const _: () = assert!(core::mem::offset_of!(Sun, cascade_rect) == 368);
 const _: () = assert!(core::mem::offset_of!(Sun, cascade_params) == 432);
 const _: () = assert!(core::mem::offset_of!(Sun, view_depth) == 496);
 const _: () = assert!(core::mem::offset_of!(Sun, cascade_count) == 512);
-const _: () = assert!(core::mem::offset_of!(Sun, cascade_view) == 516);
+const _: () = assert!(core::mem::offset_of!(Sun, cascade_pad0) == 516);
 const _: () = assert!(core::mem::offset_of!(Sun, cascade_pad1) == 520);
 const _: () = assert!(core::mem::offset_of!(Sun, cascade_pad2) == 524);
 

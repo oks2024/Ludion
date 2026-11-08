@@ -1,5 +1,6 @@
-//! The mesh shader's pipelines: the scene pass, its medium-mask twin, their `VIEWMODEL` twins and the
-//! probe capture, one builder over their fragment stages. Kept beside `render.rs` rather than in it.
+//! The mesh shader's pipelines: the scene pass, its medium-mask twin, their `VIEWMODEL` and
+//! `SUN_CASCADE_VIEW` twins and the probe capture, one builder over their fragment stages. Kept
+//! beside `render.rs` rather than in it.
 
 use super::{
     HDR_FORMAT, MESH_INSTANCE_ATTRS, MESH_VERTEX_ATTRS, MeshInstanceRaw, MeshVariant, MeshVertex,
@@ -65,34 +66,96 @@ pub(super) fn build_mesh_capture_pipeline(
     build_mesh_pipeline_for(device, label, shader, layout, variant, capture)
 }
 
-/// The scene pass's pipelines compiled with `VIEWMODEL` true, the gun's, by [`MeshVariant::index`].
-/// The gun casts no shadow and is left out of the prepass and probe captures, so only the two
-/// scene-pass fragments have twins.
-pub(super) struct ViewmodelTwins {
-    pub(super) scene: [wgpu::RenderPipeline; 4],
-    pub(super) medium: [wgpu::RenderPipeline; 4],
+/// The scene pass's two fragments, plain and medium-mask, compiled with one set of pipeline
+/// constants, by [`MeshVariant::index`].
+pub(super) struct SceneTwins {
+    scene: [wgpu::RenderPipeline; 4],
+    medium: [wgpu::RenderPipeline; 4],
 }
 
-impl ViewmodelTwins {
-    pub(super) fn build(
+impl SceneTwins {
+    /// The gun's twins, `VIEWMODEL` true. The gun casts no shadow and is left out of the prepass and
+    /// probe captures, so only the two scene-pass fragments have twins.
+    pub(super) fn viewmodel(
         device: &wgpu::Device,
         label: &str,
         shader: &wgpu::ShaderModule,
         layout: &wgpu::PipelineLayout,
     ) -> Self {
+        Self::build(device, label, shader, layout, &[("VIEWMODEL", 1.0)])
+    }
+
+    fn build(
+        device: &wgpu::Device,
+        label: &str,
+        shader: &wgpu::ShaderModule,
+        layout: &wgpu::PipelineLayout,
+        constants: &'static [(&'static str, f64)],
+    ) -> Self {
         let twins = |fragment: MeshFragment<'static>| {
             let fragment = MeshFragment {
-                constants: &[("VIEWMODEL", 1.0)],
+                constants,
                 ..fragment
             };
             MeshVariant::ALL.map(|variant| {
                 build_mesh_pipeline_for(device, label, shader, layout, variant, fragment)
             })
         };
-        ViewmodelTwins {
+        SceneTwins {
             scene: twins(SCENE),
             medium: twins(MEDIUM),
         }
+    }
+
+    /// The pipeline for `variant`: the medium-mask one when the scene pass writes `scene_medium`.
+    pub(super) fn get(&self, variant: MeshVariant, medium: bool) -> &wgpu::RenderPipeline {
+        let variants = if medium { &self.medium } else { &self.scene };
+        &variants[variant.index()]
+    }
+}
+
+/// The `sun_cascades` debug view's scene pipelines, `SUN_CASCADE_VIEW` true, for world draws and for
+/// the gun's. Built on the view's first frame, so a game that never opens it neither compiles them
+/// nor pays for the tint in any fragment. A shader reload builds a fresh, empty set.
+pub(super) struct CascadeViewTwins {
+    label: &'static str,
+    shader: wgpu::ShaderModule,
+    layout: wgpu::PipelineLayout,
+    /// `[world, gun]`.
+    built: std::sync::OnceLock<[SceneTwins; 2]>,
+}
+
+impl CascadeViewTwins {
+    pub(super) fn new(
+        label: &'static str,
+        shader: &wgpu::ShaderModule,
+        layout: &wgpu::PipelineLayout,
+    ) -> Self {
+        CascadeViewTwins {
+            label,
+            shader: shader.clone(),
+            layout: layout.clone(),
+            built: std::sync::OnceLock::new(),
+        }
+    }
+
+    pub(super) fn get(
+        &self,
+        device: &wgpu::Device,
+        variant: MeshVariant,
+        viewmodel: bool,
+        medium: bool,
+    ) -> &wgpu::RenderPipeline {
+        let built = self.built.get_or_init(|| {
+            let build = |constants| {
+                SceneTwins::build(device, self.label, &self.shader, &self.layout, constants)
+            };
+            [
+                build(&[("SUN_CASCADE_VIEW", 1.0)]),
+                build(&[("SUN_CASCADE_VIEW", 1.0), ("VIEWMODEL", 1.0)]),
+            ]
+        });
+        built[usize::from(viewmodel)].get(variant, medium)
     }
 }
 

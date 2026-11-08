@@ -7,6 +7,10 @@
 // world fragment carries none of those branches.
 override VIEWMODEL: bool = false;
 
+// True only in the scene pass's `sun_cascades` debug-view twins: the lit colour is tinted by the cascade
+// that shades it. A pipeline constant, so a frame without the view carries no branch for it.
+override SUN_CASCADE_VIEW: bool = false;
+
 // The directional "sun" — a mesh-only @group(2) (Plan/shadow-mapping.md decision 3), so the shared
 // camera/lights layouts and the sprite/text shaders are untouched. `sun.color` is premultiplied and
 // is zero for a sunless frame (a zeroed uniform), which makes the whole sun term vanish with no
@@ -42,8 +46,7 @@ struct Sun {
     // View depth of p = dot(view_depth.xyz, p) + view_depth.w: the negated third row of the camera's view matrix.
     view_depth: vec4<f32>,
     cascade_count: u32,
-    // 1 = the `sun_cascades` debug view: tint by cascade. Host render state, never set by a scene file.
-    cascade_view: u32,
+    cascade_pad0: u32,
     cascade_pad1: u32,
     cascade_pad2: u32,
 };

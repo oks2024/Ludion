@@ -53,6 +53,17 @@ consts, `create_*_bgl` functions, `*_VS_MAIN_INPUTS` — are **generated**, not 
   lights binding, only its own light-space matrix. Its sibling `shadow_cutout.wgsl` composes
   `skin.wgsl` + `mesh_material.wgsl` so its fragment stage binds the asset's material and discards on
   the same coverage test as the scene pass.
+- **A debug or rare optional path must not cost the general case.** A uniform flag read in every
+  fragment is paid by every frame that never sets it. When the path is per-frame (a debug view) or
+  per-draw for a few draws (the gun), make it a WGSL `override` defaulting to the general case and
+  build twin pipelines with it set (`PipelineCompilationOptions::constants`):
+  - **`VIEWMODEL`:** the gun's twins are built with the shader.
+  - **`SUN_CASCADE_VIEW`:** the debug view's twins are built on first use (`render/mesh_pipeline.rs`).
+
+  Weigh each twin against what it costs: every pipeline split is another bind and draw boundary, so
+  a flag that varies across many ordinary draws splits batches and instancing. Keep such a flag as
+  data when the branch is cheap and the case is common. `render/tests/viewmodel.rs` pins the mesh
+  shader's overrides and their defaults.
 - **What stays hand-written on purpose:** the vertex-buffer *structs* (`MeshInstanceRaw`,
   `SpriteInstanceRaw`, `TextVertexRaw`, `UiRectInstanceRaw`, `UiTextVertexRaw` in `render.rs`), the
   per-vertex/per-instance buffer split, and vertex step modes — WGSL doesn't express any of that,

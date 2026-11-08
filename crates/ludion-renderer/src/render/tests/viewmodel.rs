@@ -241,23 +241,44 @@ fn point(position: Vec3, intensity: f32, range: f32) -> crate::scene::PointLight
     }
 }
 
-/// The viewmodel is a pipeline constant, not camera data: the composed mesh shader declares one
-/// `VIEWMODEL` override defaulting to false, so a pipeline built without constants shades the
-/// world, and the `Camera` uniform carries no viewmodel field.
+/// The viewmodel and the `sun_cascades` view are pipeline constants, not uniform data: the composed
+/// mesh shader declares a `VIEWMODEL` and a `SUN_CASCADE_VIEW` override, each defaulting to false,
+/// so a pipeline built without constants shades the world with no debug tint, and neither the
+/// `Camera` nor the `Sun` uniform carries a field for them.
 #[test]
-fn the_viewmodel_is_a_pipeline_constant_defaulting_to_the_world() {
+fn the_mesh_overrides_default_to_the_world() {
     let module = naga::front::wgsl::parse_str(&builtin_composed(ShaderId::Mesh))
         .expect("the composed mesh shader parses");
-    let overrides: Vec<_> = module.overrides.iter().map(|(_, o)| o).collect();
-    assert_eq!(overrides.len(), 1, "the mesh shader declares one override");
-    assert_eq!(overrides[0].name.as_deref(), Some("VIEWMODEL"));
-    let init = overrides[0].init.expect("VIEWMODEL has a default");
+    let names: Vec<_> = module
+        .overrides
+        .iter()
+        .map(|(_, o)| o.name.as_deref())
+        .collect();
+    assert_eq!(names, [Some("VIEWMODEL"), Some("SUN_CASCADE_VIEW")]);
+    for (_, o) in module.overrides.iter() {
+        let init = o.init.expect("each override has a default");
+        assert!(
+            matches!(
+                module.global_expressions[init],
+                naga::Expression::Literal(naga::Literal::Bool(false))
+            ),
+            "{:?} defaults to false",
+            o.name
+        );
+    }
+    let sun = module
+        .types
+        .iter()
+        .find(|(_, t)| t.name.as_deref() == Some("Sun"))
+        .expect("the mesh shader declares Sun");
+    let naga::TypeInner::Struct { members, .. } = &sun.1.inner else {
+        panic!("Sun is a struct");
+    };
     assert!(
-        matches!(
-            module.global_expressions[init],
-            naga::Expression::Literal(naga::Literal::Bool(false))
-        ),
-        "VIEWMODEL defaults to false"
+        members
+            .iter()
+            .all(|m| m.name.as_deref() != Some("cascade_view")),
+        "the cascade view is not uniform data"
     );
     let camera = module
         .types

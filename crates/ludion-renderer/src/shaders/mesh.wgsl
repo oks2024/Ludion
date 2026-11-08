@@ -347,7 +347,7 @@ fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
         let diffuse = (1.0 - clamp(surface.y, 0.0, 1.0)) * albedo;
         lit = lit + wrap_band(in.world_pos, shaded.n, diffuse, ao, in.clip.xy, in.wrap, in.wrap_extent);
     }
-    if (sun.cascade_view != 0u && sun.cascade_count > 0u) {
+    if (SUN_CASCADE_VIEW && sun.cascade_count > 0u) {
         lit = lit * sun_cascade_tint(in.world_pos);
     }
     // Emissive rides the HDR/bloom pipeline: colour * intensity, no new pass, no new uniform — times
