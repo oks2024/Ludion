@@ -74,8 +74,10 @@ despawning on its first hit. Set fields after it:
   parks the shot at the contact. Reflect and Pierce never re-hit the surface they just left.
 - **Settle** is the gib: it bounces off every surface (normal speed × `restitution`; tangential speed
   and spin × `1 − friction`) and parks on a floor (`n.y >= floor_cos`, +Y up, default 45°) once
-  slower than `rest_speed`, zeroing spin and keeping its orientation. Walls never park and bounces
-  have no cap. A rest is final: a parked gib is never pushed and expires with `Expired`. Events are
+  slower than `rest_speed` (`> 0`), zeroing spin and keeping its orientation. Only world colliders
+  park a gib: walls and targets (index volumes) bounce it, and bounces have no cap. A resting gib
+  re-bounces at about `restitution·|g|·dt/(1+restitution)` per tick (~0.04 m/s at 60 Hz, r 0.35), so
+  keep `rest_speed` well above that or it jitters and raises a `Reflected` hit every tick. A rest is final: a parked gib is never pushed and expires with `Expired`. Events are
   `Reflected` / `Stopped`. `spin` integrates `orientation` each tick; a shot using none of
   `spin`, `orientation` or `targets` hashes exactly as before.
 - **Projectiles are not in the target index.** Shots never hit each other; put targets in the index
@@ -132,7 +134,7 @@ for _ in 0..24 {
 
 | `ProjectileVisual` field | Default | Meaning |
 | --- | --- | --- |
-| `look` | `Billboard { softness: 1.0 }` | also `Cube`, `Sphere`, `Hidden`, `Mesh { asset }` (a `*.mesh.yaml`; skinned assets at bind pose), `Voxel { model }` (a `*.voxel.yaml`; `size` is metres per voxel, pivots on its occupied-voxel centre; not `kind: assembly`) |
+| `look` | `Billboard { softness: 1.0 }` | also `Cube`, `Sphere`, `Hidden`, `Mesh { asset }` (a `*.mesh.yaml`; skinned assets at bind pose; pivots on its bounding-box centre), `Voxel { model }` (a `*.voxel.yaml`; `size` is metres per voxel, pivots on its occupied-voxel box centre; not `kind: assembly`) |
 | `size` | `0.05` | metres, positive and finite |
 | `stretch` | `0` | seconds of travel in the streak: length `max(size, speed·stretch)` along the heading |
 | `color` | white | linear RGBA |

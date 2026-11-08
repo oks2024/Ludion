@@ -46,14 +46,14 @@ into a scene item (`ProjectileItem::Mesh` / `Posed` / …) for interpolated pres
 - **A step at one thread is allocation-free** after warm-up (`tests/alloc.rs`); keep scratch in the
   pool or `StepEvents`.
 - Settle parks on `n.y >= floor_cos` (+Y up), not against gravity, because gravity may be zero or
-  scaled negative; a rest is final.
+  scaled negative; a rest is final, and only a physics-world contact parks (index targets bounce).
 
 ## Gotchas
 
 - `ProjectileItem::Posed` must be counted with `Mesh` when padding `BlendKeys` (`extract.rs`): the
   appended projectile meshes pad the mesh key list, and a miscount leaves it out of step with
   `scene.meshes`, so every mesh blends against the wrong owner.
-- A voxel pivot is applied only when non-zero (`projectile_draw.rs`), which keeps `Mesh` looks bit-identical.
+- `Mesh` and `Voxel` looks both pivot on their asset's bounding-box centre (`projectile_draw.rs`, `bounds_centre`); a zero pivot is skipped.
 - A `Mesh`/`Voxel` look is refused at build (`L4033`) unless its file is under the builder's
   `project_root`; benches and tests that draw gibs must set it.
 - User-facing fields: `ludion docs projectiles`; do not copy them here.

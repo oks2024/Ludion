@@ -43,8 +43,9 @@ pub enum ProjectileLook {
     Sphere,
     /// A `*.mesh.yaml` asset (path relative to the project root), drawn with the shot's simulated
     /// orientation: the identity is the asset's authored pose. Extents are
-    /// `size × `[`scale`](ProjectileVisual::scale), with no heading stretch. A skinned asset draws
-    /// at its bind pose. A missing file is refused at `build` (`L4033`); one that fails to load
+    /// `size × `[`scale`](ProjectileVisual::scale), with no heading stretch. The pivot is the
+    /// centre of the asset's bounding box, so a gib tumbles, settles and fades about its middle. A
+    /// skinned asset draws at its bind pose. A missing file is refused at `build` (`L4033`); one that fails to load
     /// draws nothing, with `L4033`.
     Mesh {
         /// Project-relative path of the mesh document.
@@ -55,9 +56,8 @@ pub enum ProjectileLook {
     /// [`Mesh`](ProjectileLook::Mesh) is: the shot's simulated orientation, extents
     /// `size × `[`scale`](ProjectileVisual::scale), the palette and authored material as a voxel
     /// entity draws them. One voxel is one unit, so `size` is metres per voxel; the document's own
-    /// `scale` is not read. Unlike `Mesh`, the pivot is the centre of the model's occupied box, not
-    /// its bottom-centre origin, so a gib tumbles, settles and fades about its middle. A
-    /// `kind: assembly` is not a single model and is not accepted. A missing file is refused at
+    /// `scale` is not read. The pivot is the centre of the model's occupied box, not its
+    /// bottom-centre origin. A `kind: assembly` is not a single model and is not accepted. A missing file is refused at
     /// `build` (`L4033`); one that fails to load draws nothing, with `L4033`.
     Voxel {
         /// Project-relative path of the voxel document.
@@ -666,8 +666,8 @@ pub(crate) fn extract_projectiles(
 const IDENTITY_BITS: [u32; 4] = [0, 0, 0, 0x3f80_0000];
 
 /// The `mesh_assets` index and pivot of each distinct `Mesh` and `Voxel` look in the table (`None`
-/// when it failed to load, latched in `degraded` once per asset). The pivot is zero for `Mesh` and
-/// the occupied-box centre for `Voxel`. Resolved once per extract, before the shot loop,
+/// when it failed to load, latched in `degraded` once per asset). The pivot is the centre of the
+/// asset's bounding box, for both looks. Resolved once per extract, before the shot loop,
 /// through the same path index entity meshes use, so a shared asset uploads once.
 fn resolve_looks(
     visuals: &ProjectileVisuals,
@@ -724,11 +724,10 @@ fn resolve_looks(
                 }
             }
         };
-        let pivot = |index: usize| match kind {
-            SourceKind::Mesh => Vec3::ZERO,
-            SourceKind::Voxel => bounds_centre(&scene.mesh_assets[index]),
-        };
-        out.insert(asset.to_string(), index.map(|i| (i, pivot(i))));
+        out.insert(
+            asset.to_string(),
+            index.map(|i| (i, bounds_centre(&scene.mesh_assets[i]))),
+        );
     }
     out
 }
@@ -1153,6 +1152,27 @@ entities:
 
     const CRYSTAL: &str = include_str!("../../../examples/gallery/meshes/crystal.mesh.yaml");
 
+    /// One triangle whose bounding-box centre, (1, 2, 0), is off its origin.
+    const OFF_CENTRE: &str = "\
+format: 1
+kind: mesh
+name: off-centre
+positions:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 2.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 4.0
+  - 0.0
+indices:
+  - 0
+  - 1
+  - 2
+";
+
     const VOXEL_GIB: &str = "\
 format: 1
 kind: voxel
@@ -1262,7 +1282,7 @@ slices:
 
     #[test]
     fn a_mesh_look_draws_the_sim_orientation_per_axis_and_shares_its_asset() {
-        let root = project_with("look", Some(CRYSTAL));
+        let root = project_with("look", Some(OFF_CENTRE));
         let mut visuals = ProjectileVisuals::default();
         visuals.tags.insert(1, gib(mesh_look()));
         visuals.tags.insert(2, gib(mesh_look()));
@@ -1275,10 +1295,15 @@ slices:
         let m = &scene.meshes[1];
         assert_eq!(m.shape, MeshShape::Asset(0));
         assert!(m.cast_shadows);
-        let (s, r, t) = m.model.to_scale_rotation_translation();
+        let (s, r, _) = m.model.to_scale_rotation_translation();
         assert!((s - Vec3::new(0.1, 0.2, 0.3)).abs().max_element() < 1e-5);
         assert!(r.dot(q).abs() > 0.99999);
-        assert_eq!(t, Vec3::new(1.0, 2.0, 0.0));
+        let centre = bounds_centre(&scene.mesh_assets[0]);
+        assert!(centre != Vec3::ZERO, "an off-centre asset");
+        for mesh in &scene.meshes[1..] {
+            let at = mesh.model.transform_point3(centre);
+            assert!((at - Vec3::new(1.0, 2.0, 0.0)).length() < 1e-5, "{at:?}");
+        }
         assert_eq!(scene.meshes[2].shape, MeshShape::Asset(0));
         assert!(
             blend

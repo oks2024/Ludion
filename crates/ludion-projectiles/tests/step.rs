@@ -579,6 +579,38 @@ fn settle_parks_with_zero_velocity_and_spin_and_keeps_its_orientation() {
 }
 
 #[test]
+fn settle_parks_on_world_colliders_but_not_on_index_targets() {
+    let drop = || {
+        let mut d = ProjectileDesc::new([0.0, 3.0, 0.0], [0.0, -5.0, 0.0]);
+        d.response = Response::settle(0.0, 0.0, 1.0);
+        d.targets = None;
+        d
+    };
+    // A floor collider parks the gib.
+    let (world, _) = floor();
+    let physics = physics_ref(&world);
+    let cfg = config(physics);
+    let mut pool = ProjectilePool::with_capacity(2);
+    let id = one(&mut pool, drop());
+    let ev = run(&mut pool, physics, &Index3d::new(), 1.0, &cfg);
+    assert_eq!(ev.hits[0].outcome, HitOutcome::Stopped);
+    assert_eq!(pool.is_parked(id), Some(true));
+
+    // The top of an index volume (+Y normal, speed under rest_speed) only bounces it.
+    let physics = empty_physics();
+    let index = index_of(&[sphere(Handle::slot(7, 0), [0.0, 0.0, 0.0], 1.0, 1)]);
+    let mut cfg = config(&physics);
+    cfg.targets = 1;
+    let mut pool = ProjectilePool::with_capacity(2);
+    let id = one(&mut pool, drop());
+    let ev = run(&mut pool, &physics, &index, 1.0, &cfg);
+    assert_eq!(ev.hits.len(), 1);
+    assert_eq!(ev.hits[0].outcome, HitOutcome::Reflected);
+    assert!(ev.hits[0].normal[1] > 0.99);
+    assert_eq!(pool.is_parked(id), Some(false));
+}
+
+#[test]
 fn settle_bounces_off_a_wall_without_parking() {
     let (world, _) = wall_x();
     let physics = physics_ref(&world);
@@ -674,7 +706,11 @@ fn invalid_gib_fields_name_the_field() {
     let base = ProjectileDesc::new([0.0; 3], [1.0, 0.0, 0.0]);
     let mut pool = ProjectilePool::with_capacity(1);
     type Edit = Box<dyn Fn(&mut ProjectileDesc)>;
-    let cases: [(&str, Edit); 8] = [
+    let cases: [(&str, Edit); 9] = [
+        (
+            "response.rest_speed",
+            Box::new(|d| d.response = Response::settle(0.5, 0.5, 0.0)),
+        ),
         ("spin", Box::new(|d| d.spin = [f32::NAN, 0.0, 0.0])),
         ("orientation", Box::new(|d| d.orientation = [0.0; 4])),
         (

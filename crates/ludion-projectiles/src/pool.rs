@@ -53,15 +53,19 @@ pub enum Response {
     /// cap. The up axis is **+Y**, the engine's up (not the gravity direction: pool gravity can be
     /// zero and `gravity_scale` negative): a contact is a floor when `n.y >= floor_cos`. On a floor,
     /// when `|v'|² < rest_speed²` the shot parks with zero velocity and spin and keeps its
-    /// orientation; the outcome is [`HitOutcome::Stopped`](crate::HitOutcome::Stopped). Walls and
-    /// ceilings never park: they report `Reflected`. A parked shot keeps aging and expires at its
-    /// lifetime.
+    /// orientation; the outcome is [`HitOutcome::Stopped`](crate::HitOutcome::Stopped). Only world
+    /// (physics) colliders park a shot: walls, ceilings and index targets bounce and report
+    /// `Reflected`. A parked shot keeps aging and expires at its lifetime.
+    ///
+    /// A resting gib re-bounces at about `restitution·|g|·dt/(1+restitution)` per tick (~0.04 m/s
+    /// at 60 Hz, restitution 0.35), so `rest_speed` must sit well above that or the gib jitters and
+    /// raises a `Reflected` hit every tick.
     Settle {
         /// Normal-velocity scale in `[0, 1]`.
         restitution: f32,
         /// Tangential speed and spin lost per contact, in `[0, 1]`.
         friction: f32,
-        /// Speed in m/s under which a floor contact parks the shot, `>= 0`.
+        /// Speed in m/s under which a floor contact parks the shot, `> 0`.
         rest_speed: f32,
         /// Minimum `n.y` for a contact to count as a floor, in `[0, 1]`.
         floor_cos: f32,
@@ -567,7 +571,7 @@ fn validate(d: &ProjectileDesc) -> Result<(), SpawnError> {
             if !(0.0..=1.0).contains(&friction) {
                 return bad("response.friction");
             }
-            if !(rest_speed.is_finite() && rest_speed >= 0.0) {
+            if !(rest_speed.is_finite() && rest_speed > 0.0) {
                 return bad("response.rest_speed");
             }
             if !(0.0..=1.0).contains(&floor_cos) {

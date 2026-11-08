@@ -324,7 +324,7 @@ fn churned_gibs() -> (ProjectilePool, StepEvents) {
     let mut pool = ProjectilePool::with_capacity(64);
     let mut events = StepEvents::with_capacity(64, 64);
     let mut n = 0;
-    for tick in 0..40u32 {
+    for tick in 0..70u32 {
         if tick.is_multiple_of(4) {
             for _ in 0..3 {
                 let _ = pool.spawn(gib(n));

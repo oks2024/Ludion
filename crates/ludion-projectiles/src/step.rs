@@ -420,7 +420,10 @@ fn sweep_slot(
                 w.spin = scale(w.spin, 1.0 - friction);
                 w.pos = add(centre, scale(normal, skin_at(centre)));
                 w.bounces = w.bounces.saturating_add(1);
-                if normal[1] >= floor_cos && dot(w.vel, w.vel) < rest_speed * rest_speed {
+                if from_world
+                    && normal[1] >= floor_cos
+                    && dot(w.vel, w.vel) < rest_speed * rest_speed
+                {
                     w.vel = [0.0; 3];
                     w.spin = [0.0; 3];
                     w.parked = true;

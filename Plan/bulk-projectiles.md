@@ -66,7 +66,10 @@
 18. **Settle semantics.** It parks on `n.y >= floor_cos` (+Y up, default 45°) rather than against
     gravity, because gravity can be zero or scaled negative per shot. Walls never park and bounces
     are uncapped: only a floor contact is a rest, so a gib that hits a wall keeps bouncing instead
-    of freezing mid-air. A rest is final: no push, no
+    of freezing mid-air. Only a physics-world contact parks: an index target (a `SpatialVolume`) is
+    not ground, so a gib lands on it as on a wall, and the gib rests where the world is. `rest_speed`
+    must be `> 0` and well above the resting re-bounce, about `restitution·|g|·dt/(1+restitution)`
+    per tick, or the gib jitters. A rest is final: no push, no
     re-wake, expiry as usual. No new `HitOutcome`: `Reflected` / `Stopped` keep every consumer's
     match and the event codec unchanged.
 19. **Per-shot `targets` only.** The index mask is what a gib needs to ignore actors; `ignore_layers`
@@ -80,8 +83,10 @@
     and draws nothing. Skinned assets draw at bind pose.
 21. **The Voxel look.** `size` is metres per voxel and the model document's own `scale` is ignored,
     so a tag's size means one thing across looks. The model pivots on the centre of its occupied
-    voxels, so it tumbles and rests about its middle rather than the mesher's bottom-centre origin;
-    the pivot is applied only when non-zero, keeping Mesh looks bit-identical. Assemblies are not a
+    voxels, so it tumbles and rests about its middle rather than the mesher's bottom-centre origin.
+    The Mesh look pivots the same way, on its asset's bounding-box centre (one code path), so
+    every asset look tumbles and rests around the sweep point; a pivot of zero is skipped.
+    Assemblies are not a
     look: they are several models.
 22. **The gib bench rows.** `bulk_gibs_bench` runs 1,000 settling, spinning gibs beside 5,000 shots,
     after an untimed 300-tick pre-roll so the window holds flying, bouncing and parked gibs with
@@ -113,6 +118,10 @@ and per-shot `targets` (r2211, sim); the Mesh look with `scale`, `cast_shadows`,
 and L4033 (r2215); the Voxel look (r2216). Gallery `projectile-gibs`, `projectile-gibs-settle` and
 `projectile-gibs-voxel`, macOS blessed on the unpinned M5. This arc adds the gib bench rows, the
 `ludion docs projectiles` coverage and `ludion devdocs ludion-projectiles`.
+
+Review fixes (12e): Settle parks only on physics-world contacts (index targets bounce); the Mesh look
+pivots on its bounding-box centre like Voxel (the committed gib goldens did not move: the crystal is
+centred); `rest_speed` must be `> 0`, with the resting re-bounce documented.
 
 Gib bench (release, unpinned M5 laptop, 2026-11-08, indicative only): 5,000 shots + 1,000 gibs,
 `step + digest` 1.92 ms at 1 thread (step 1.82, digest 0.10) and 0.51 ms at 8 threads, about 389 of
