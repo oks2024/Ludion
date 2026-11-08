@@ -598,6 +598,7 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: [1.0, 1.0],
             uv_offset: [0.0, 0.0],
+            medium: 1.0,
         }
     }
 
@@ -902,6 +903,7 @@ mod tests {
             additive: false,
             lit: false,
             viewmodel: false,
+            medium: 1.0,
         }
     }
 

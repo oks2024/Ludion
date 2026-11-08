@@ -3792,6 +3792,16 @@
         "format": "uint64",
         "minimum": 0,
         "default": 0
+      },
+      "medium": {
+        "description": "Scale in `[0, 1]` on the medium's optical depth along the view ray to this emitter's particles (default none,\nmeaning `1.0`, today's look): `0` shows no air between the eye and the particles. Render-only.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
       }
     },
     "$defs": {
@@ -5028,6 +5038,16 @@
           0.0,
           0.0
         ]
+      },
+      "medium": {
+        "description": "Scale in `[0, 1]` on the medium's optical depth along the view ray to this sprite (default none,\nmeaning `1.0`, today's look): `0` shows no air between the eye and the sprite. Render-only.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
       }
     },
     "$defs": {

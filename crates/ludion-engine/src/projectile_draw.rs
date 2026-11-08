@@ -58,6 +58,9 @@ pub struct ProjectileVisual {
     /// Draw new shots of this tag leaving [`ProjectileVisuals::muzzle`] and converge them; `false`
     /// (default) draws them at their simulated position — enemy shots, for example.
     pub from_muzzle: bool,
+    /// Scale in `[0, 1]` on the medium's optical depth along the view ray to this shot (default
+    /// `1.0`, today's look): `0` shows no air between the eye and the shot. Render-only.
+    pub medium: f32,
 }
 
 impl Default for ProjectileVisual {
@@ -70,6 +73,7 @@ impl Default for ProjectileVisual {
             emissive: 4.0,
             additive: true,
             from_muzzle: false,
+            medium: 1.0,
         }
     }
 }
@@ -136,7 +140,7 @@ impl ProjectileVisuals {
     ///
     /// # Errors
     /// `L4028` for a non-finite or non-positive `size`, a negative or non-finite `stretch`,
-    /// `color`, `emissive` or `converge_distance`, or a `softness` outside `[0, 1]`; the path names
+    /// `color`, `emissive` or `converge_distance`, or a `softness` or `medium` outside `[0, 1]`; the path names
     /// the field (`/tags/3/size`, `/fallback/color`).
     pub fn validate(&self) -> Result<(), Diagnostic> {
         self.fallback.validate("/fallback")?;
@@ -199,6 +203,12 @@ impl ProjectileVisual {
                 "not a finite number >= 0",
             )?;
         }
+        field(
+            "medium",
+            self.medium,
+            (0.0..=1.0).contains(&self.medium),
+            "outside 0..=1",
+        )?;
         if let ProjectileLook::Billboard { softness } = self.look {
             field(
                 "look/softness",
@@ -371,7 +381,7 @@ pub(crate) fn extract_projectiles(
                     cast_shadows: false,
                     viewmodel: false,
                     rim: [0.0; 4],
-                    medium: 1.0,
+                    medium: visual.medium,
                 });
             }
             ProjectileLook::Billboard { softness } => {
@@ -403,6 +413,7 @@ pub(crate) fn extract_projectiles(
                     additive: visual.additive,
                     lit: false,
                     viewmodel: false,
+                    medium: visual.medium,
                 });
             }
         }
@@ -474,6 +485,7 @@ entities:
             emissive: 3.0,
             additive: true,
             from_muzzle: false,
+            medium: 1.0,
         }
     }
 
@@ -545,6 +557,48 @@ entities:
         assert_eq!(p.color, [1.5, 0.75, 3.0, 1.0]);
         assert_eq!(p.softness, 0.5);
         assert!(!p.lit);
+    }
+
+    #[test]
+    fn a_tags_medium_reaches_its_billboard_and_its_mesh() {
+        for (look, scene_has_it) in [
+            (ProjectileLook::Billboard { softness: 0.5 }, true),
+            (ProjectileLook::Cube, false),
+        ] {
+            let mut visuals = ProjectileVisuals::default();
+            visuals.tags.insert(
+                1,
+                ProjectileVisual {
+                    medium: 0.25,
+                    ..visual(look)
+                },
+            );
+            let mut engine = engine(true, visuals);
+            fire(&mut engine, [0.0, 50.0, 0.0], 1);
+            let (scene, _) = engine.extract_present_scene().unwrap();
+            if scene_has_it {
+                assert_eq!(scene.particles.last().unwrap().medium, 0.25);
+            } else {
+                assert_eq!(scene.meshes.last().unwrap().medium, 0.25);
+            }
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_medium_is_refused_with_its_pointer() {
+        for bad in [-0.1, 1.5, f32::NAN] {
+            let mut visuals = ProjectileVisuals::default();
+            visuals.tags.insert(
+                2,
+                ProjectileVisual {
+                    medium: bad,
+                    ..ProjectileVisual::default()
+                },
+            );
+            let error = visuals.validate().unwrap_err();
+            assert_eq!(error.code, code::PROJECTILE_VISUALS_INVALID);
+            assert_eq!(error.path.as_deref(), Some("/tags/2/medium"));
+        }
     }
 
     #[test]

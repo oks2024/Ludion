@@ -1059,6 +1059,7 @@ fn needs_gpu_a_non_finite_scene_texel_never_darkens_the_bloom() {
             flash_color: [1.0; 3],
             uv_repeat: crate::scene::SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
+            medium: 1.0,
         }];
         let base = PostData {
             dither: false,

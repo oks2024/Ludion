@@ -867,6 +867,12 @@ pub struct PostChain {
     /// its fifth optional input. Content, so `masked` keeps it. A frame with no such mesh keeps the
     /// graph without either.
     pub mesh_medium: bool,
+    /// The medium is on **and** some sprite or non-viewmodel particle scales it below 1 (`Sprite.medium`,
+    /// `ParticleEmitter.medium`): with the transparent layer scheduled
+    /// ([`transparent_medium_scheduled`](PostChain::transparent_medium_scheduled)) the layer target is
+    /// `Rgba16Float` and carries the weighted medium scale in B. Content, so `masked` keeps it. Split from
+    /// [`mesh_medium`](PostChain::mesh_medium) because the two gate different resources.
+    pub transparent_medium: bool,
 }
 
 impl PostChain {
@@ -876,6 +882,12 @@ impl PostChain {
         self.mesh_medium && self.view().is_none()
     }
 
+    /// Whether the transparent layer carries the weighted medium in B: [`transparent_medium`](PostChain::transparent_medium)
+    /// on a frame that schedules the layer.
+    pub fn transparent_medium_scheduled(self) -> bool {
+        self.transparent_medium && self.transparent_depth_scheduled()
+    }
+
     /// The chain with the medium's in-scatter pass dropped: a probe face has no composite to add it to.
     pub(crate) fn without_medium(self) -> Self {
         Self {
@@ -883,6 +895,7 @@ impl PostChain {
             local_scatter: false,
             medium_gi: false,
             mesh_medium: false,
+            transparent_medium: false,
             ..self
         }
     }
@@ -989,6 +1002,12 @@ impl PostChain {
                 || !scene.texts.is_empty(),
             fog: scene.post.is_some_and(|post| post.fog_density > 0.0),
             mesh_medium: medium && scene.meshes.iter().any(|m| m.medium < 1.0),
+            transparent_medium: medium
+                && (scene.sprites.iter().any(|s| s.medium < 1.0)
+                    || scene
+                        .particles
+                        .iter()
+                        .any(|p| !p.viewmodel && p.medium < 1.0)),
             aa: AntiAliasing::Off,
         }
     }
@@ -1306,10 +1325,13 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // The transparent layer (only when a transparent is drawn under fog or depth of field, so every other frame's
     // resource list is exactly the layer-free graph's).
     let transparent_layer = chain.transparent_depth_scheduled().then(|| {
-        graph.transient(
-            pass::TRANSPARENT_DEPTH,
-            TextureDesc::layer_color(render_w, render_h),
-        )
+        // A fourth channel only when a transparent scales the medium: B holds the weighted scale.
+        let desc = if chain.transparent_medium_scheduled() {
+            TextureDesc::hdr_color(render_w, render_h)
+        } else {
+            TextureDesc::layer_color(render_w, render_h)
+        };
+        graph.transient(pass::TRANSPARENT_DEPTH, desc)
     });
     // The mesh medium mask (only when a mesh scales the medium below 1, so every other frame's resource
     // list is exactly the mask-free graph's).
@@ -2582,6 +2604,7 @@ mod tests {
                 transparent_cover: bits & 1 != 0,
                 fog: bits & 1 != 0,
                 mesh_medium: false,
+                transparent_medium: false,
                 // A client setting: no quality preset masks it, so it varies with `ui` and survives.
                 aa: if bits & 1 != 0 {
                     AntiAliasing::Smaa
@@ -5597,6 +5620,7 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: crate::scene::SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
+            medium: 1.0,
         }
     }
 
@@ -5611,6 +5635,7 @@ mod tests {
             additive: false,
             lit: false,
             viewmodel: false,
+            medium: 1.0,
         }
     }
 
@@ -5950,6 +5975,59 @@ mod tests {
         assert!(!viewed.mesh_medium_scheduled());
         let (graph, _) = build_frame_graph(size, viewed);
         assert!(!graph.resources().iter().any(|r| r.name == "scene_medium"));
+    }
+
+    /// `transparent_medium` needs the medium **and** a sprite or world-space particle scaling it below
+    /// 1; a viewmodel particle never reaches the layer. The layer is `Rgba16Float` exactly when it is
+    /// scheduled, and a debug view drops it.
+    #[test]
+    fn the_transparent_layer_gains_a_blue_channel_only_for_a_scaled_transparent() {
+        let fog = crate::scene::PostData {
+            fog_density: 0.05,
+            ..crate::scene::PostData::default()
+        };
+        let mut scene = RenderScene::empty((64, 64));
+        scene.sprites = vec![a_sprite()];
+        scene.particles = vec![a_particle()];
+        assert!(!PostChain::for_scene(&scene).transparent_medium, "no post");
+        scene.post = Some(crate::scene::PostData::default());
+        scene.sprites[0].medium = 0.0;
+        assert!(!PostChain::for_scene(&scene).transparent_medium, "no fog");
+        scene.post = Some(fog);
+        let chain = PostChain::for_scene(&scene);
+        assert!(chain.transparent_medium && chain.transparent_medium_scheduled());
+        scene.sprites[0].medium = 1.0;
+        assert!(!PostChain::for_scene(&scene).transparent_medium, "all at 1");
+        scene.particles[0].medium = 0.5;
+        scene.particles[0].viewmodel = true;
+        assert!(
+            !PostChain::for_scene(&scene).transparent_medium,
+            "viewmodel only"
+        );
+        scene.particles[0].viewmodel = false;
+        let chain = PostChain::for_scene(&scene);
+        assert!(chain.transparent_medium);
+
+        let layer_format = |chain: PostChain| {
+            let (graph, _) = build_frame_graph(FrameSize::native(64, 64), chain);
+            graph
+                .resources()
+                .iter()
+                .find(|r| r.name == pass::TRANSPARENT_DEPTH)
+                .map(|r| r.desc.format.as_str().to_string())
+        };
+        assert_eq!(layer_format(chain).as_deref(), Some("rgba16float"));
+        let plain = PostChain {
+            transparent_medium: false,
+            ..chain
+        };
+        assert_eq!(layer_format(plain).as_deref(), Some("rg16float"));
+        let viewed = PostChain {
+            probe_view: true,
+            ..chain
+        };
+        assert!(!viewed.transparent_medium_scheduled());
+        assert_eq!(layer_format(viewed), None);
     }
 
     // --- Depth of field (Plan/post-process-pipeline.md) ------------------------------------

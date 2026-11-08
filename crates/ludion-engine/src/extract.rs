@@ -866,6 +866,7 @@ fn extract_inner(
             flash_color: sprite.flash_color,
             uv_repeat,
             uv_offset,
+            medium: sprite.medium,
         });
     }
 
@@ -2440,6 +2441,7 @@ fn extract_volleys(
                 flash_color: [1.0; 3],
                 uv_repeat: SpriteInstance::NO_TILING,
                 uv_offset: [0.0; 2],
+                medium: 1.0,
             });
         }
     }
@@ -3184,6 +3186,8 @@ pub(crate) struct PlacedSprite<'w> {
     /// an offset against the frame's `SimTime`, so placement stays time-of-day free and
     /// `render.bounds` never has to care.
     pub(crate) uv_scroll: [f32; 2],
+    /// `Sprite.medium`, resolved to `1.0` when absent.
+    pub(crate) medium: f32,
 }
 
 /// [`place`], over a fresh [`AssetCache`] of its own — what a caller with no host cache wants
@@ -3532,6 +3536,7 @@ pub(crate) fn place<'w>(
                 flash_color: sprite.flash_color,
                 uv_repeat: sprite.uv_repeat,
                 uv_scroll: sprite.uv_scroll,
+                medium: sprite.medium.unwrap_or(1.0),
             });
         }
 
@@ -3580,6 +3585,7 @@ pub(crate) fn place<'w>(
                         flash_color: [1.0; 3],
                         uv_repeat: SpriteInstance::NO_TILING,
                         uv_scroll: [0.0; 2],
+                        medium: 1.0,
                     });
                 }
             }

@@ -4013,6 +4013,45 @@ fn medium_reaches_the_instance_inherits_and_a_childs_own_wins() {
     );
 }
 
+/// `Sprite.medium` reaches `SpriteInstance.medium` (absent is 1.0); `ParticleEmitter.medium` reaches
+/// every `ParticleInstance` it draws.
+#[test]
+fn sprite_and_emitter_medium_reach_their_instances() {
+    let scene_of = |world: &World| {
+        extract(
+            world,
+            (320, 180),
+            ludion_assets::AssetRoot::content(Path::new(".")),
+        )
+        .unwrap()
+    };
+    let sprite = |medium| Sprite {
+        medium,
+        ..Sprite::default()
+    };
+    assert_eq!(
+        scene_of(&scroll_world(sprite(Some(0.25)))).sprites[0].medium,
+        0.25
+    );
+    assert_eq!(scene_of(&scroll_world(sprite(None))).sprites[0].medium, 1.0);
+
+    let mut world = World::new();
+    let emitter = world.spawn();
+    world.insert(emitter, Transform::default()).unwrap();
+    world
+        .insert(
+            emitter,
+            ParticleEmitter {
+                medium: Some(0.0),
+                ..ParticleEmitter::default()
+            },
+        )
+        .unwrap();
+    let particles = scene_of(&world).particles;
+    assert!(!particles.is_empty(), "an endless emitter draws at tick 0");
+    assert!(particles.iter().all(|p| p.medium == 0.0));
+}
+
 /// A skinned (`bone_offset != 0`) character instance carries its medium.
 #[test]
 fn a_skinned_instance_carries_its_medium() {

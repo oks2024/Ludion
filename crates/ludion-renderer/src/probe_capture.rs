@@ -1064,6 +1064,7 @@ pub(crate) mod tests {
             flash_color: [1.0; 3],
             uv_repeat: SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
+            medium: 1.0,
         }];
         let box_to_world = Mat4::from_scale(Vec3::splat(4.0));
         scene.decals = vec![DecalInstance {

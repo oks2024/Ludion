@@ -37,6 +37,8 @@ struct VsIn {
     @location(6) flash: vec4<f32>,
     // Tiling/scroll (repeat.x, repeat.y, offset.x, offset.y), read only under FLAG_WRAP.
     @location(7) uv_tile: vec4<f32>,
+    // Sprite.medium: the scale on the medium's optical depth to this quad, read by `fs_depth` only.
+    @location(8) medium: f32,
 };
 
 struct VsOut {
@@ -52,6 +54,7 @@ struct VsOut {
     @location(6) unit_uv: vec2<f32>,
     @location(7) @interpolate(flat) rect: vec4<f32>,
     @location(8) @interpolate(flat) uv_tile: vec4<f32>,
+    @location(9) @interpolate(flat) medium: f32,
 };
 
 @vertex
@@ -72,6 +75,7 @@ fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
     out.unit_uv = unit_uv;
     out.rect = in.uv;
     out.uv_tile = in.uv_tile;
+    out.medium = in.medium;
     return out;
 }
 
@@ -124,5 +128,5 @@ fn fs_depth(in: VsOut) -> @location(0) vec4<f32> {
         rgb = mix(rgb, in.flash.rgb * alpha, clamp(in.flash.a, 0.0, 1.0));
         weight = alpha * min(1.0, max(rgb.r, max(rgb.g, rgb.b)));
     }
-    return transparent_layer(in.world_pos, weight);
+    return transparent_layer(in.world_pos, weight, in.medium);
 }

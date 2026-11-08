@@ -161,6 +161,9 @@ pub struct SpriteInstance {
     /// `ludion-engine`'s extract evaluates the sprite's scroll rate against sim time, so the
     /// renderer never reads a clock.
     pub uv_offset: [f32; 2],
+    /// Scale in `[0, 1]` on the medium's optical depth to this quad's pixels; `1.0` renders today's
+    /// frame.
+    pub medium: f32,
 }
 
 impl SpriteInstance {
@@ -197,6 +200,9 @@ pub struct ParticleInstance {
     /// Camera-local, drawn through the viewmodel lens and depth slice; see
     /// [`ViewmodelParticle`](crate::ViewmodelParticle).
     pub viewmodel: bool,
+    /// Scale in `[0, 1]` on the medium's optical depth to this quad's pixels; `1.0` renders today's
+    /// frame.
+    pub medium: f32,
 }
 
 /// The world-space Y offset every ground marker is lifted by, so a marker lying on a floor never

@@ -133,6 +133,8 @@ struct SpriteInstanceRaw {
     /// `(1, 1, 0, 0)`). Read at `@location(7)`, and only under `FLAG_WRAP` — which is set from
     /// exactly this lane, so the default can never leave the clamping path.
     uv_tile: [f32; 4],
+    /// `Sprite.medium`, read at `@location(8)` and passed to the layer's depth pass.
+    medium: f32,
 }
 
 /// One ground-marker instance: the rigid model matrix, the linear HDR colour, and the footprint
@@ -168,6 +170,8 @@ struct ParticleInstanceRaw {
     /// `(size, softness, additive, lit)` — diameter in world units, the falloff shape in `[0, 1]`,
     /// `1.0` for an additive particle and `1.0` for a lit one.
     params: [f32; 4],
+    /// `ParticleEmitter.medium`, read at `@location(5)` and passed to the layer's depth pass.
+    medium: f32,
 }
 
 /// One end of a debug line. Matches `debug_line.wgsl`'s `VsIn`.
@@ -952,11 +956,19 @@ impl Renderer {
     }
 
     /// The transparent layer twin of a sprite, particle or text pipeline.
-    fn transparent_depth_pipeline(&self, id: ShaderId) -> &wgpu::RenderPipeline {
-        self.pipelines[id as usize]
-            .transparent_depth
-            .as_ref()
-            .unwrap_or_else(|| panic!("{} has no transparent layer twin", id.label()))
+    /// The `Rgba16Float` twin when the layer `format` is that (it carries the weighted medium in blue).
+    fn transparent_depth_pipeline(
+        &self,
+        id: ShaderId,
+        format: ludion_render_graph::TextureFormat,
+    ) -> &wgpu::RenderPipeline {
+        let pipelines = &self.pipelines[id as usize];
+        let twin = if format == ludion_render_graph::TextureFormat::Rgba16Float {
+            pipelines.transparent_medium.as_ref()
+        } else {
+            pipelines.transparent_depth.as_ref()
+        };
+        twin.unwrap_or_else(|| panic!("{} has no transparent layer twin", id.label()))
     }
 
     /// A hash of the shader code a probe capture runs: every registry shader as composed now (so a
@@ -2100,6 +2112,7 @@ impl Renderer {
             scatter_views,
             has_dof: chain.dof,
             has_transparent_depth: chain.transparent_depth_scheduled(),
+            has_transparent_medium: chain.transparent_medium_scheduled(),
             has_smaa: chain.smaa_scheduled(),
             resample_owns_output: chain.resample_owns_output(size),
             ssr_view: chain.ssr.zip(chain.ssr_view).map(|(scale, view)| {
@@ -2514,6 +2527,7 @@ impl Renderer {
                         s.uv_offset[0],
                         s.uv_offset[1],
                     ],
+                    medium: s.medium,
                 });
                 i += 1;
             }
@@ -3377,6 +3391,7 @@ fn particle_raws(view: &Mat4, particles: &[ParticleInstance]) -> Vec<ParticleIns
                     if p.additive { 1.0 } else { 0.0 },
                     if p.lit { 1.0 } else { 0.0 },
                 ],
+                medium: p.medium,
             }
         })
         .collect()
@@ -3505,6 +3520,9 @@ struct FrameRecorder<'a> {
     /// Picks the composite's optional `transparent_depth_tex` (the layer target against the 1×1
     /// fallback), sets its uniform flag, and mirrors the pass's presence.
     has_transparent_depth: bool,
+    /// Whether that layer carries the weighted medium in blue ([`PostChain::transparent_medium_scheduled`]);
+    /// sets the composite's `medium_gi.z`.
+    has_transparent_medium: bool,
     /// Whether this frame runs the SMAA passes. The composite then runs with its grain and dither
     /// zeroed, because `smaa_blend` applies them after the blend (unless a resample follows).
     has_smaa: bool,
@@ -3713,7 +3731,7 @@ impl PassRecorder for FrameRecorder<'_> {
                     medium_gi: [
                         u32::from(self.has_medium_gi),
                         u32::from(self.has_mesh_medium),
-                        0,
+                        u32::from(self.has_transparent_medium),
                         0,
                     ],
                 };
@@ -5271,6 +5289,8 @@ impl FrameRecorder<'_> {
             .depth
             .expect("the transparent layer pass declares a depth attachment");
         let target = pass.colors()[0].view;
+        // The recorded attachment's format picks the layer twin: B is only there when the graph says so.
+        let format = pass.colors()[0].format;
 
         let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("transparent_depth"),
@@ -5297,7 +5317,7 @@ impl FrameRecorder<'_> {
             multiview_mask: None,
         });
 
-        rp.set_pipeline(self.r.transparent_depth_pipeline(ShaderId::Sprite));
+        rp.set_pipeline(self.r.transparent_depth_pipeline(ShaderId::Sprite, format));
         rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
         rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
         for draw in &self.sprite_draws {
@@ -5307,7 +5327,10 @@ impl FrameRecorder<'_> {
         }
 
         if let Some(particles) = &self.particle_draw {
-            rp.set_pipeline(self.r.transparent_depth_pipeline(ShaderId::Particle));
+            rp.set_pipeline(
+                self.r
+                    .transparent_depth_pipeline(ShaderId::Particle, format),
+            );
             rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
             rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
             rp.set_vertex_buffer(0, particles.instances.slice(..));
@@ -5317,7 +5340,7 @@ impl FrameRecorder<'_> {
         }
 
         for text in &self.text_draws {
-            rp.set_pipeline(self.r.transparent_depth_pipeline(ShaderId::Text));
+            rp.set_pipeline(self.r.transparent_depth_pipeline(ShaderId::Text, format));
             rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
             rp.set_bind_group(ATLAS_TEX_GROUP, &text.tex_bg, &[]);
             rp.set_vertex_buffer(0, text.verts.slice(..));
@@ -7801,6 +7824,9 @@ struct ShaderPipelines {
     /// The sprite, particle and text shaders' twin that draws into the `Rg16Float` transparent layer
     /// (entries `fs_depth`, and `vs_depth` where the vertex stage differs).
     transparent_depth: Option<wgpu::RenderPipeline>,
+    /// [`transparent_depth`](ShaderPipelines::transparent_depth)'s `Rgba16Float` twin, which also writes the
+    /// weighted medium scale to blue; drawn only when the layer carries it.
+    transparent_medium: Option<wgpu::RenderPipeline>,
 }
 
 impl ShaderPipelines {
@@ -7860,6 +7886,7 @@ fn build_pipeline(
             lit: None,
             hdr: None,
             transparent_depth: None,
+            transparent_medium: None,
         }
     };
     let main = match id {
@@ -7945,6 +7972,7 @@ fn build_pipeline(
                 lit: None,
                 hdr: None,
                 transparent_depth: None,
+                transparent_medium: None,
             };
         }
         ShaderId::SsrBlend => build_reflections_pipeline(device, label, src, &layout),
@@ -7974,6 +8002,7 @@ fn build_pipeline(
                 lit: Some(lit),
                 hdr: None,
                 transparent_depth: None,
+                transparent_medium: None,
             };
         }
         ShaderId::Projector => {
@@ -7990,6 +8019,7 @@ fn build_pipeline(
                 lit: None,
                 hdr: None,
                 transparent_depth: None,
+                transparent_medium: None,
             };
         }
     };
@@ -8007,55 +8037,61 @@ fn build_pipeline(
         decal: None,
         lit: None,
         hdr,
-        transparent_depth: match id {
-            ShaderId::Sprite => Some(build_layer_pipeline(
+        transparent_depth: layer_draw(id).map(|draw| {
+            build_layer_pipeline(
                 device,
                 label,
                 src,
                 &layout,
-                LayerDraw {
-                    vertex_entry: "vs_main",
-                    buffer: wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<SpriteInstanceRaw>() as u64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &SPRITE_INSTANCE_ATTRS,
-                    },
-                    depth_compare: wgpu::CompareFunction::LessEqual,
-                },
-            )),
-            ShaderId::Particle => Some(build_layer_pipeline(
+                draw,
+                wgpu::TextureFormat::Rg16Float,
+            )
+        }),
+        transparent_medium: layer_draw(id).map(|draw| {
+            build_layer_pipeline(
                 device,
                 label,
                 src,
                 &layout,
-                LayerDraw {
-                    vertex_entry: "vs_depth",
-                    buffer: wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<ParticleInstanceRaw>() as u64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &PARTICLE_INSTANCE_ATTRS,
-                    },
-                    depth_compare: wgpu::CompareFunction::LessEqual,
-                },
-            )),
-            ShaderId::Text => Some(build_layer_pipeline(
-                device,
-                label,
-                src,
-                &layout,
-                LayerDraw {
-                    vertex_entry: "vs_depth",
-                    buffer: wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<TextVertexRaw>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &TEXT_VERTEX_ATTRS,
-                    },
-                    depth_compare: wgpu::CompareFunction::Always,
-                },
-            )),
-            _ => None,
-        },
+                draw,
+                wgpu::TextureFormat::Rgba16Float,
+            )
+        }),
     }
+}
+
+/// The vertex side of a transparent kind's layer pipelines, `None` for a shader that has none.
+fn layer_draw(id: ShaderId) -> Option<LayerDraw<'static>> {
+    Some(match id {
+        ShaderId::Sprite => LayerDraw {
+            vertex_entry: "vs_main",
+            buffer: wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<SpriteInstanceRaw>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &SPRITE_INSTANCE_ATTRS,
+            },
+            depth_compare: wgpu::CompareFunction::LessEqual,
+        },
+        ShaderId::Particle => LayerDraw {
+            vertex_entry: "vs_depth",
+            buffer: wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<ParticleInstanceRaw>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &PARTICLE_INSTANCE_ATTRS,
+            },
+            depth_compare: wgpu::CompareFunction::LessEqual,
+        },
+        ShaderId::Text => LayerDraw {
+            vertex_entry: "vs_depth",
+            buffer: wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<TextVertexRaw>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &TEXT_VERTEX_ATTRS,
+            },
+            depth_compare: wgpu::CompareFunction::Always,
+        },
+        _ => return None,
+    })
 }
 
 fn alpha_blend() -> wgpu::BlendState {
@@ -8124,11 +8160,11 @@ const MESH_INSTANCE_ATTRS: [wgpu::VertexAttribute; 14] = wgpu::vertex_attr_array
 /// the rounded-box SDF's `(half_extent, radius, pad)` lane 5.
 const GROUND_MARKER_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
 /// Sprite per-instance attributes (`SpriteInstanceRaw`: center/right/up/color, then the UV rect, the
-/// flags lane, the hit-flash lane, and the tiling/scroll lane), locations 0-7.
-const SPRITE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4, 5 => Uint32, 6 => Float32x4, 7 => Float32x4];
+/// flags lane, the hit-flash lane, the tiling/scroll lane, and the medium scale), locations 0-8.
+const SPRITE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4, 5 => Uint32, 6 => Float32x4, 7 => Float32x4, 8 => Float32];
 /// Particle per-instance attributes (`ParticleInstanceRaw`: center/right/up/color, then the
 /// `(size, softness, additive, lit)` lane), locations 0-4.
-const PARTICLE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4];
+const PARTICLE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4, 5 => Float32];
 /// Text per-vertex attributes (`TextVertexRaw`: position/uv/color/sdf), locations 0-3.
 const TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 4] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x4, 3 => Float32];
@@ -8729,14 +8765,16 @@ struct LayerDraw<'a> {
     depth_compare: wgpu::CompareFunction,
 }
 
-/// The twin of a transparent kind's pipeline that writes the `Rg16Float` transparent layer: the same
-/// module and layout, entry `fs_depth`, premultiplied blending on both channels, red and green only.
+/// The twin of a transparent kind's pipeline that writes the transparent layer: the same module and
+/// layout, entry `fs_depth`, premultiplied blending. `Rg16Float` writes red and green; `Rgba16Float`
+/// (the layer that carries the weighted medium) adds blue and leaves alpha alone.
 fn build_layer_pipeline(
     device: &wgpu::Device,
     label: &str,
     src: &str,
     layout: &wgpu::PipelineLayout,
     draw: LayerDraw<'_>,
+    format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     let shader = module(device, label, src);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -8752,9 +8790,13 @@ fn build_layer_pipeline(
             module: &shader,
             entry_point: Some("fs_depth"),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rg16Float,
+                format,
                 blend: Some(premultiplied_blend()),
-                write_mask: wgpu::ColorWrites::RED | wgpu::ColorWrites::GREEN,
+                write_mask: if format == wgpu::TextureFormat::Rgba16Float {
+                    wgpu::ColorWrites::RED | wgpu::ColorWrites::GREEN | wgpu::ColorWrites::BLUE
+                } else {
+                    wgpu::ColorWrites::RED | wgpu::ColorWrites::GREEN
+                },
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
@@ -9314,6 +9356,7 @@ mod tests {
     mod shaft_layer;
     mod skin_bounds;
     mod transparent_dof;
+    mod transparent_medium;
     mod viewmodel;
 
     /// The decision-16 mapping-drift guard: the string this crate composes and compiles for every
@@ -10858,6 +10901,7 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: crate::scene::SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
+            medium: 1.0,
         }];
         // Behind the camera, so it is never drawn, yet between the sun and the sprite.
         scene.meshes = vec![cube(
@@ -20820,6 +20864,7 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: crate::scene::SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
+            medium: 1.0,
         }
     }
 
@@ -21733,6 +21778,7 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: crate::scene::SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
+            medium: 1.0,
         }];
 
         let unlit = renderer.render(&scene, size).expect("unlit sprite render");
@@ -21927,6 +21973,7 @@ mod tests {
                 flash_color: [1.0; 3],
                 uv_repeat: crate::scene::SpriteInstance::NO_TILING,
                 uv_offset: [0.0; 2],
+                medium: 1.0,
             }];
 
             let unlit = renderer
@@ -22132,6 +22179,7 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: crate::scene::SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
+            medium: 1.0,
         }];
         let unlit = renderer.render(&scene, size).expect("spot-free sprite");
 
@@ -22336,6 +22384,7 @@ mod tests {
             additive: false,
             lit: false,
             viewmodel: false,
+            medium: 1.0,
         }
     }
 
@@ -22478,6 +22527,7 @@ mod tests {
             flash_color: [1.0; 3],
             uv_repeat: SpriteInstance::NO_TILING,
             uv_offset: [0.0; 2],
+            medium: 1.0,
         }
     }
 
@@ -22705,6 +22755,7 @@ mod tests {
                 flash_color: [1.0; 3],
                 uv_repeat: crate::scene::SpriteInstance::NO_TILING,
                 uv_offset: [0.0; 2],
+                medium: 1.0,
             }];
             let sprite = renderer.render(&scene, size).expect("sprite render");
             scene.sprites.clear();

@@ -270,7 +270,8 @@ struct Composite {
     // camera. Fog measures distance along it there rather than along the per-pixel ray.
     view_forward: vec4<f32>,
     // `.x` is nonzero when the local-light pass also carries the GI-scaled ambient in its alpha
-    // (`medium_scatter.wgsl`); `.y` nonzero when `scene_medium_tex` is real; the other lanes are pad.
+    // (`medium_scatter.wgsl`); `.y` nonzero when `scene_medium_tex` is real; `.z` nonzero when the
+    // transparent layer carries a coverage-weighted medium scale in B; `.w` is pad.
     medium_gi: vec4<u32>,
 };
 @group(0) @binding(9) var<uniform> composite: Composite;
@@ -728,10 +729,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // whatever the opaque pass left behind it.
         var coverage = 0.0;
         var layer_t = 0.0;
+        var layer_m = 1.0;
         if (composite.transparent_depth != 0u) {
             let layer = textureLoad(transparent_depth_tex, vec2<i32>(in.pos.xy), 0);
             coverage = layer.g;
             layer_t = layer.r / max(layer.g, 1e-4);
+            if (composite.medium_gi.z != 0u) {
+                layer_m = layer.b / max(layer.g, 1e-4);
+            }
         }
         // The mesh's medium scale, loaded beside the layer for the same byte-identity reason.
         var m = 1.0;
@@ -794,7 +799,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     back = bm;
                 }
             }
-            let extinguished = mix(back, fog_factor(layer_world(in.uv, layer_t)), coverage);
+            var layer_e = fog_factor(layer_world(in.uv, layer_t));
+            if (composite.medium_gi.z != 0u) {
+                // The layer's own medium scale, and the shafts/scatter scale mixed by the same
+                // coverage the extinction is: each ratio is the scaled over the full extinguished
+                // fraction (the scale itself where that is ~0), 1.0 where nothing scales.
+                let lem = medium_scaled(layer_e, layer_m);
+                let layer_ratio = select(layer_m, lem / layer_e, layer_e > 1e-6);
+                layer_e = lem;
+                ray_scale = mix(ray_scale, layer_ratio, coverage);
+            }
+            let extinguished = mix(back, layer_e, coverage);
             if (composite.fog_albedo == 1.0) {
                 hdr = mix(hdr, ambient, extinguished);
             } else {

@@ -650,6 +650,7 @@ impl EmitterContext {
             additive: self.emitter.blend == ParticleBlend::Additive,
             lit: self.emitter.lit,
             viewmodel: false,
+            medium: self.emitter.medium.unwrap_or(1.0),
         })
     }
 }

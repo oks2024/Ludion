@@ -185,6 +185,7 @@ pub fn projectile_builder() -> EngineBuilder {
             emissive: 5.0,
             additive: true,
             from_muzzle: true,
+            medium: 1.0,
         },
     );
     visuals.tags.insert(
@@ -197,6 +198,7 @@ pub fn projectile_builder() -> EngineBuilder {
             emissive: 4.0,
             additive: false,
             from_muzzle: true,
+            medium: 1.0,
         },
     );
     Engine::builder()

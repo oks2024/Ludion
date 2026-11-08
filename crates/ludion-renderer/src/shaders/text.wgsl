@@ -53,5 +53,5 @@ fn fs_depth(in: DepthOut) -> @location(0) vec4<f32> {
     let w = max(fwidth(a), 1e-4) * 0.7;
     let sdf_cov = smoothstep(0.5 - w, 0.5 + w, a);
     let coverage = select(a, sdf_cov, in.sdf > 0.5);
-    return transparent_layer(in.world, in.color.a * coverage);
+    return transparent_layer(in.world, in.color.a * coverage, 1.0);
 }

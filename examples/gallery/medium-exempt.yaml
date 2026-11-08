@@ -1,0 +1,100 @@
+# Feature: medium on Mesh, Sprite and ParticleEmitter - a scale in [0, 1] on the fog's optical depth to a surface, so an emissive subject stays crisp inside a thick medium.
+# Two pairs 25 m out under thick fog (`fog_density` 0.05, about 70% of an ordinary pixel's colour fogged away). Left to
+# right: an emissive cube with no `medium` (fogged), the same cube with `Mesh.medium: 0.0` (reads as if there were no air
+# between it and the eye), then the same pair as untextured sprites (the second with `Sprite.medium: 0.0`).
+# Measured at the centre of each subject, 8-bit sRGB, against a copy of the scene with `fog_density: 0` (M5, 1920x1080):
+# the exempt cube reads (213, 153, 129) and the exempt sprite (210, 150, 126), both within one 8-bit step of the fog-free render;
+# their fogged twins read (161, 120, 120) and (159, 119, 120), against (212, 153, 129) and (211, 151, 127) fog-free.
+# ludion docs atmosphere.
+format: 1
+name: medium-exempt - Mesh.medium and Sprite.medium keep an emissive subject crisp inside thick fog
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 40.0
+      PostProcess:
+        fog_density: 0.05
+        fog_color:
+          - 0.05
+          - 0.07
+          - 0.12
+  - name: cube-fogged
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 0.0
+          - -25.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.2
+          - 0.1
+          - 1.0
+        emissive: 1.0
+  - name: cube-exempt
+    components:
+      Transform:
+        translation:
+          - -2.0
+          - 0.0
+          - -25.0
+        scale:
+          - 2.0
+          - 2.0
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.2
+          - 0.1
+          - 1.0
+        emissive: 1.0
+        medium: 0.0
+  - name: sprite-fogged
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 0.0
+          - -25.0
+      Sprite:
+        color:
+          - 0.8
+          - 0.2
+          - 0.1
+          - 1.0
+        size:
+          - 2.0
+          - 2.0
+  - name: sprite-exempt
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 0.0
+          - -25.0
+      Sprite:
+        color:
+          - 0.8
+          - 0.2
+          - 0.1
+          - 1.0
+        size:
+          - 2.0
+          - 2.0
+        medium: 0.0

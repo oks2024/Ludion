@@ -228,6 +228,11 @@ pub struct Sprite {
     /// [`uv_repeat`](Sprite::uv_repeat) does, with the same seam limit.
     #[serde(default)]
     pub uv_scroll: [f32; 2],
+    /// Scale in `[0, 1]` on the medium's optical depth along the view ray to this sprite (default none,
+    /// meaning `1.0`, today's look): `0` shows no air between the eye and the sprite. Render-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub medium: Option<f32>,
 }
 
 impl Default for Sprite {
@@ -248,6 +253,7 @@ impl Default for Sprite {
             flash_color: [1.0; 3],
             uv_repeat: [1.0; 2],
             uv_scroll: [0.0; 2],
+            medium: None,
         }
     }
 }
@@ -5358,6 +5364,11 @@ pub struct ParticleEmitter {
     /// pair of impacts meant to look different.
     #[serde(default)]
     pub seed: u64,
+    /// Scale in `[0, 1]` on the medium's optical depth along the view ray to this emitter's particles (default none,
+    /// meaning `1.0`, today's look): `0` shows no air between the eye and the particles. Render-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub medium: Option<f32>,
 }
 
 impl Default for ParticleEmitter {
@@ -5383,6 +5394,7 @@ impl Default for ParticleEmitter {
             softness: 0.5,
             lit: false,
             seed: 0,
+            medium: None,
         }
     }
 }
@@ -7614,6 +7626,58 @@ mod tests {
             assert!(refusals("Mesh", &format!("        medium: {ok}\n")).is_empty());
         }
         let value = serde_json::to_value(Mesh::default()).unwrap();
+        assert!(value.get("medium").is_none());
+    }
+
+    /// `Sprite.medium` rides its schema range (out of range `L1014`, non-finite `L1009`) and is absent when `None`.
+    #[test]
+    fn sprite_medium_is_bounded_and_absent_when_none() {
+        for bad in ["-0.1", "1.5", "1.0000001"] {
+            refused_with(
+                "Sprite",
+                &format!("        medium: {bad}\n"),
+                "L1014",
+                "/medium",
+            );
+        }
+        for bad in [".nan", ".inf", "-.inf"] {
+            refused_with(
+                "Sprite",
+                &format!("        medium: {bad}\n"),
+                "L1009",
+                "/medium",
+            );
+        }
+        for ok in ["0.0", "0.5", "1.0e-50"] {
+            assert!(refusals("Sprite", &format!("        medium: {ok}\n")).is_empty());
+        }
+        let value = serde_json::to_value(Sprite::default()).unwrap();
+        assert!(value.get("medium").is_none());
+    }
+
+    /// `ParticleEmitter.medium` rides its schema range (out of range `L1014`, non-finite `L1009`) and is absent when `None`.
+    #[test]
+    fn particle_emitter_medium_is_bounded_and_absent_when_none() {
+        for bad in ["-0.1", "1.5", "1.0000001"] {
+            refused_with(
+                "ParticleEmitter",
+                &format!("        medium: {bad}\n"),
+                "L1014",
+                "/medium",
+            );
+        }
+        for bad in [".nan", ".inf", "-.inf"] {
+            refused_with(
+                "ParticleEmitter",
+                &format!("        medium: {bad}\n"),
+                "L1009",
+                "/medium",
+            );
+        }
+        for ok in ["0.0", "0.5", "1.0e-50"] {
+            assert!(refusals("ParticleEmitter", &format!("        medium: {ok}\n")).is_empty());
+        }
+        let value = serde_json::to_value(ParticleEmitter::default()).unwrap();
         assert!(value.get("medium").is_none());
     }
 

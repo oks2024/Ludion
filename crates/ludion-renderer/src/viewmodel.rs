@@ -194,6 +194,7 @@ mod tests {
             additive: true,
             lit: false,
             viewmodel: true,
+            medium: 1.0,
         });
         scene.camera.view = camera_model.inverse();
         scene.camera.position = camera_model.w_axis.truncate();

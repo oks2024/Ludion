@@ -27,6 +27,8 @@ struct VsIn {
     // x = disc diameter in world units, y = softness in [0, 1], z = the additive flag (0 or 1),
     // w = the lit flag (0 or 1).
     @location(4) params: vec4<f32>,
+    // ParticleEmitter.medium: the scale on the medium's optical depth to this disc, read by `vs_depth` only.
+    @location(5) medium: f32,
 };
 
 struct VsOut {
@@ -90,6 +92,7 @@ struct DepthOut {
     @location(1) color: vec4<f32>,
     @location(2) @interpolate(flat) params: vec4<f32>,
     @location(3) world: vec3<f32>,
+    @location(4) @interpolate(flat) medium: f32,
 };
 
 @vertex
@@ -111,6 +114,7 @@ fn vs_depth(in: VsIn, @builtin(vertex_index) vi: u32) -> DepthOut {
     out.color = color;
     out.params = in.params;
     out.world = world;
+    out.medium = in.medium;
     return out;
 }
 
@@ -129,5 +133,5 @@ fn fs_depth(in: DepthOut) -> @location(0) vec4<f32> {
         let rgb = in.color.rgb * weight;
         weight = weight * min(1.0, max(rgb.r, max(rgb.g, rgb.b)));
     }
-    return transparent_layer(in.world, weight);
+    return transparent_layer(in.world, weight, in.medium);
 }
