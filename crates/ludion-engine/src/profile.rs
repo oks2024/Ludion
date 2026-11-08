@@ -1278,7 +1278,7 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 47] = [
+const KNOWN_PASS_NAMES: [&str; 49] = [
     ludion_renderer::graph::pass::CULL,
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::LOCAL_SHADOW,
@@ -1306,6 +1306,8 @@ const KNOWN_PASS_NAMES: [&str; 47] = [
     ludion_renderer::graph::pass::PROBE_RELIGHT,
     ludion_renderer::graph::pass::SHAFTS,
     ludion_renderer::graph::pass::SHAFTS_BLUR,
+    ludion_renderer::graph::pass::MEDIUM_SCATTER,
+    ludion_renderer::graph::pass::MEDIUM_SCATTER_BLUR,
     ludion_renderer::graph::pass::DOF_COC,
     ludion_renderer::graph::pass::DOF,
     ludion_renderer::graph::pass::BLOOM_THRESHOLD,
@@ -1349,7 +1351,7 @@ const KNOWN_PASS_NAMES: [&str; 47] = [
 ///
 /// `ssr` is the pyramids and the trace, not `reflections` (which runs every frame for the sky) and not
 /// the `ssr_debug` view.
-const POST_GROUPS: [(&str, &[&str]); 5] = [
+const POST_GROUPS: [(&str, &[&str]); 6] = [
     (
         "bloom",
         &[
@@ -1379,6 +1381,13 @@ const POST_GROUPS: [(&str, &[&str]); 5] = [
         &[
             ludion_renderer::graph::pass::SHAFTS,
             ludion_renderer::graph::pass::SHAFTS_BLUR,
+        ],
+    ),
+    (
+        "medium_scatter",
+        &[
+            ludion_renderer::graph::pass::MEDIUM_SCATTER,
+            ludion_renderer::graph::pass::MEDIUM_SCATTER_BLUR,
         ],
     ),
     (
@@ -3800,6 +3809,7 @@ gpu_frame_max_ms = 9.5
             sun_cascades: Some(4),
             ssao: true,
             shafts: true,
+            medium_scatter: true,
             dof: true,
             gi_inject: Some([4, 4, 4]),
             cull: Some(ludion_renderer::CullShape::for_counts(1000, 8, 4)),

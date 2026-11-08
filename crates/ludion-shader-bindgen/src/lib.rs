@@ -79,6 +79,8 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "hiz_seed.wgsl",
     "ibl.wgsl",
     "local_shadow_debug.wgsl",
+    "medium_scatter.wgsl",
+    "medium_scatter_blur.wgsl",
     "mesh.wgsl",
     "particle.wgsl",
     "prepass.wgsl",
@@ -237,6 +239,11 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ("bloom_down.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("bloom_up.wgsl", &["fullscreen_vs.wgsl", "hdr.wgsl"]),
     ("box_blur.wgsl", &["fullscreen_vs.wgsl"]),
+    (
+        "medium_scatter.wgsl",
+        &["fullscreen_vs.wgsl", "bayer.wgsl", "medium.wgsl"],
+    ),
+    ("medium_scatter_blur.wgsl", &["fullscreen_vs.wgsl"]),
     (
         "composite.wgsl",
         &[

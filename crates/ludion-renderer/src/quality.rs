@@ -494,6 +494,13 @@ mod tests {
                 "shafts.steps",
                 4,
             ),
+            // Two: the segment march reads the count as the loop bound and as the step's divisor.
+            (
+                "medium_scatter.wgsl",
+                include_str!("shaders/medium_scatter.wgsl"),
+                "scatter.steps",
+                2,
+            ),
             (
                 "dof.wgsl",
                 include_str!("shaders/dof.wgsl"),

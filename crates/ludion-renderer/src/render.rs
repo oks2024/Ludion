@@ -21,6 +21,7 @@ use ludion_render_graph::{
     StreamReadback, schedule,
 };
 
+mod medium_pass;
 mod mesh_batch;
 use crate::cache_eviction::CacheEviction;
 use crate::compressed::{self, CompressedUploadError};
@@ -1935,6 +1936,7 @@ impl Renderer {
         let local_shadow = chain
             .local_shadow_atlas
             .map(|edge| plan_local_shadows(scene, edge));
+        let scatter_lights = medium_pass::lanes_for(scene, chain.medium_scatter);
         debug_assert!(
             local_shadow
                 .as_ref()
@@ -2079,6 +2081,8 @@ impl Renderer {
             has_shadow_map: chain.shadow_map.is_some(),
             has_ao: chain.ssao,
             has_shafts: chain.shafts,
+            has_medium_scatter: chain.medium_scatter,
+            scatter_lights,
             has_dof: chain.dof,
             has_transparent_depth: chain.transparent_depth_scheduled(),
             has_smaa: chain.smaa_scheduled(),
@@ -3468,6 +3472,10 @@ struct FrameRecorder<'a> {
     /// Picks the composite's optional `shafts_tex` (the graph's `shafts_blur` against the 1×1
     /// fallback), sets its uniform flag, and mirrors the two passes' presence.
     has_shafts: bool,
+    /// Whether this frame runs the local-light in-scatter pair; mirrors [`PostChain::medium_scatter`].
+    has_medium_scatter: bool,
+    /// The selected scattering lights, ascending light-list order; empty unless `has_medium_scatter`.
+    scatter_lights: Vec<shader_gen::ScatterLight>,
     /// Whether this frame runs the depth-of-field chain. Picks the composite's optional `dof_tex` (the
     /// graph's `dof` target against the 1×1 fallback), sets its uniform flag, and mirrors the two
     /// passes' presence.
@@ -3584,6 +3592,8 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::PREPASS => self.record_prepass(pass),
             pass::SSAO => self.record_ssao(pass),
             pass::SHAFTS => self.record_shafts(pass),
+            pass::MEDIUM_SCATTER => self.record_medium_scatter(pass),
+            pass::MEDIUM_SCATTER_BLUR => self.record_medium_scatter_blur(pass),
             pass::DOF_COC => self.record_dof_coc(pass),
             pass::DOF => self.record_dof(pass),
             // Two pass names, one filter: the 4×4 box that cancels a `BAYER4` period, whichever
@@ -3676,7 +3686,7 @@ impl PassRecorder for FrameRecorder<'_> {
                     sky_ground: self.environment.map_or([0.0; 3], |env| env.sky_ground),
                     transparent_depth: u32::from(self.has_transparent_depth),
                     viewmodel_slice: self.viewmodel_slice,
-                    pad2: 0.0,
+                    medium_scatter: u32::from(self.has_medium_scatter),
                     inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
                     view_forward: self.view_forward,
                 };
@@ -3696,6 +3706,11 @@ impl PassRecorder for FrameRecorder<'_> {
                     OptionalInput {
                         binding: shader_gen::TRANSPARENT_DEPTH_TEX_BINDING,
                         present: self.has_transparent_depth,
+                        fallback: &self.r.fallback_hdr.view,
+                    },
+                    OptionalInput {
+                        binding: shader_gen::MEDIUM_SCATTER_TEX_BINDING,
+                        present: self.has_medium_scatter,
                         fallback: &self.r.fallback_hdr.view,
                     },
                 ];
@@ -3899,59 +3914,6 @@ impl FrameRecorder<'_> {
             pad0: 0.0,
         };
         self.fullscreen_effect(pass, ShaderId::Ssao, &[], bytemuck::bytes_of(&ssao));
-    }
-
-    /// The volumetric light-shaft march, at a fraction of the output extent, from the scene pass's
-    /// depth and the sun's shadow map (the pass's declared read order, which is also the shader's
-    /// binding order). The authored intensity is folded in here so the blurred result *is* the term
-    /// the composite tints and adds — the same posture `record_ssao` takes.
-    ///
-    /// The medium is the composite's: `fog_density` is the extinction the march integrates and
-    /// bounds its reach by, `fog_albedo` the scattering fraction it scales the estimate by, and
-    /// `fog_anisotropy` its phase asymmetry. `fog_start` / `fog_height` / `fog_height_falloff` carry
-    /// the medium's *shape* across too, so the march integrates the same optical depth the haze does.
-    /// `shafts` is a pure intensity on top of that.
-    fn record_shafts(&self, pass: &mut RecordedPass<'_>) {
-        let sun = self
-            .sun
-            .expect("the shafts pass is only scheduled for a scene with a sun");
-        let lanes = &self.sun_lanes;
-        let shafts = shader_gen::Shafts {
-            inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
-            light_space: sun.light_space.to_cols_array_2d(),
-            cam_pos: self.camera_position.to_array(),
-            density: self.post.fog_density,
-            sun_dir: sun.direction.to_array(),
-            intensity: self.post.shafts,
-            albedo: self.post.fog_albedo,
-            anisotropy: self.post.fog_anisotropy,
-            fog_start: self.post.fog_start,
-            fog_height: self.post.fog_height,
-            fog_height_falloff: self.post.fog_height_falloff,
-            steps: self.r.quality_params.shaft_steps,
-            transparent_depth: u32::from(self.has_transparent_depth),
-            pad1: 0.0,
-            cascade_space: lanes.space,
-            cascade_rect: lanes.rect,
-            cascade_far: lanes.params.map(|lane| lane[1]),
-            view_depth: lanes.view_depth,
-            cascade_count: lanes.count,
-            cascade_pad0: 0,
-            cascade_pad1: 0,
-            cascade_pad2: 0,
-            view_forward: self.view_forward,
-        };
-        let optional = [OptionalInput {
-            binding: shader_gen::SHAFTS_LAYER_BINDING,
-            present: self.has_transparent_depth,
-            fallback: &self.r.fallback_hdr.view,
-        }];
-        self.fullscreen_effect(
-            pass,
-            ShaderId::Shafts,
-            &optional,
-            bytemuck::bytes_of(&shafts),
-        );
     }
 
     /// The depth-of-field prefilter, at a fraction of the output extent, from the scene pass's
@@ -6673,6 +6635,8 @@ pub(crate) enum ShaderId {
     Text,
     Ssao,
     Shafts,
+    MediumScatter,
+    MediumScatterBlur,
     DofCoc,
     Dof,
     BoxBlur,
@@ -6727,7 +6691,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 40;
+const SHADER_COUNT: usize = 42;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -6887,6 +6851,20 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         // `medium.wgsl` the optical depth and local density the composite's haze reads from too.
         snippets: &[Snippet::FullscreenVs, Snippet::Bayer, Snippet::Medium],
         layouts: &[Some(LayoutId::Shafts)],
+    },
+    ShaderDesc {
+        id: ShaderId::MediumScatter,
+        file_name: "medium_scatter.wgsl",
+        body: include_str!("shaders/medium_scatter.wgsl"),
+        snippets: &[Snippet::FullscreenVs, Snippet::Bayer, Snippet::Medium],
+        layouts: &[Some(LayoutId::MediumScatter)],
+    },
+    ShaderDesc {
+        id: ShaderId::MediumScatterBlur,
+        file_name: "medium_scatter_blur.wgsl",
+        body: include_str!("shaders/medium_scatter_blur.wgsl"),
+        snippets: &[Snippet::FullscreenVs],
+        layouts: &[Some(LayoutId::MediumScatterBlur)],
     },
     ShaderDesc {
         id: ShaderId::DofCoc,
@@ -7480,6 +7458,8 @@ enum LayoutId {
     Upscale,
     Ssao,
     Shafts,
+    MediumScatter,
+    MediumScatterBlur,
     DofCoc,
     Dof,
     BoxBlur,
@@ -7512,7 +7492,7 @@ enum LayoutId {
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 42;
+const LAYOUT_COUNT: usize = 44;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -7588,7 +7568,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::Composite,
         create:
-            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_samp_composite_bgl,
+            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_samp_composite_bgl,
     },
     LayoutDesc {
         id: LayoutId::Resolve,
@@ -7605,6 +7585,14 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::Shafts,
         create: shader_gen::create_shafts_depth_shafts_shadow_shafts_layer_shafts_samp_shafts_bgl,
+    },
+    LayoutDesc {
+        id: LayoutId::MediumScatter,
+        create: shader_gen::create_scatter_depth_scatter_layer_scatter_samp_scatter_bgl,
+    },
+    LayoutDesc {
+        id: LayoutId::MediumScatterBlur,
+        create: shader_gen::create_scatter_blur_src_scatter_blur_samp_scatter_blur_params_bgl,
     },
     LayoutDesc {
         id: LayoutId::DofCoc,
@@ -7831,6 +7819,8 @@ fn build_pipeline(
         // *signed* circle of confusion it packs beside it.
         ShaderId::Ssao
         | ShaderId::Shafts
+        | ShaderId::MediumScatter
+        | ShaderId::MediumScatterBlur
         | ShaderId::DofCoc
         | ShaderId::Dof
         | ShaderId::BoxBlur
@@ -9209,6 +9199,7 @@ mod tests {
 
     mod gpu_cull;
     mod lit_additive;
+    mod medium_scatter;
     mod shaft_layer;
     mod skin_bounds;
     mod viewmodel;
@@ -9301,9 +9292,9 @@ mod tests {
             ],
             [0, 1, 2],
         );
-        // Six input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
-        // the blurred shaft term, blends the depth-of-field gather and loads the transparent layer —
-        // the first three in the graph pass's declared read order, and the last three the arc's
+        // Seven input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
+        // the blurred shaft term, blends the depth-of-field gather, loads the transparent layer and adds the local-light term —
+        // the first three in the graph pass's declared read order, and the last four the arc's
         // *optional* slots, whose bindings are fixed whether or not the scene enables them (see
         // `optional_inputs_hold_their_binding`).
         assert_eq!(
@@ -9314,10 +9305,11 @@ mod tests {
                 shader_gen::SHAFTS_TEX_BINDING,
                 shader_gen::DOF_TEX_BINDING,
                 shader_gen::TRANSPARENT_DEPTH_TEX_BINDING,
+                shader_gen::MEDIUM_SCATTER_TEX_BINDING,
                 shader_gen::SAMP_BINDING,
                 shader_gen::COMPOSITE_BINDING,
             ],
-            [0, 1, 2, 3, 4, 5, 6, 7],
+            [0, 1, 2, 3, 4, 5, 6, 7, 8],
         );
         // Three input textures: the depth-of-field prefilter samples the scene, loads its depth, in
         // the graph pass's declared read order, and loads the transparent layer in the *optional* slot

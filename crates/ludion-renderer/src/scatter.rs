@@ -29,8 +29,6 @@ pub(crate) const MAX_SCATTER_LIGHTS: usize = 64;
 const SCATTER_OPTICAL_CUTOFF: f32 = 3.0;
 
 /// Light-list indices (points `0..P`, then spots `P..`), ascending, at most [`MAX_SCATTER_LIGHTS`].
-// The frame graph gate consumes it.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn select_scatter(scene: &RenderScene) -> Vec<u32> {
     let Some(sigma) = scene
         .post

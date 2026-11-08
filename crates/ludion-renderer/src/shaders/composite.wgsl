@@ -134,7 +134,12 @@
 // `composite.transparent_depth` is zero, so the fog block below never reads it. With depth of field
 // alone the layer exists and the flag is one, but the fog block is still unreachable.
 @group(0) @binding(5) var transparent_depth_tex: texture_2d<f32>;
-@group(0) @binding(6) var samp: sampler;
+// The local-light in-scatter term (`medium_scatter_blur`): premultiplied radiance at a fraction of
+// the output extent — the fourth **optional** input, behind `transparent_depth_tex`. It exists when a
+// scattering light is selected in a medium; otherwise the recorder binds the same 1x1 stand-in and
+// `composite.medium_scatter` is zero, so the add below never reads it.
+@group(0) @binding(6) var medium_scatter_tex: texture_2d<f32>;
+@group(0) @binding(7) var samp: sampler;
 
 // The selector values `Composite.tonemap` carries, one per `PostProcess.tonemap` variant. The
 // shader-bindgen hoists integer consts into `shader_gen`, so the recorder maps its `TonemapOperator`
@@ -250,7 +255,8 @@ struct Composite {
     // the gun, which the defocus mix leaves alone.
     viewmodel_slice: f32,
     sky_ground: vec3<f32>,
-    pad2: f32,
+    // Nonzero when `medium_scatter_tex` is real; mirrors the graph's gate as `shafts` does.
+    medium_scatter: u32,
     // Inverse view-projection, for reconstructing a fragment's world position from its depth.
     // Inverted on the CPU, where the matrix already lives and the cost is once per frame.
     inv_view_proj: mat4x4<f32>,
@@ -258,7 +264,7 @@ struct Composite {
     // camera. Fog measures distance along it there rather than along the per-pixel ray.
     view_forward: vec4<f32>,
 };
-@group(0) @binding(7) var<uniform> composite: Composite;
+@group(0) @binding(8) var<uniform> composite: Composite;
 
 // Rec.709 luma weights: the grey axis the white balance normalizes against and the saturation mix
 // collapses toward. One definition, so "luminance-preserving" means the same thing in both steps.
@@ -792,6 +798,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (composite.shafts != 0u) {
         let shafts = textureSample(shafts_tex, samp, in.uv).r;
         hdr = hdr + composite.shafts_color * shafts;
+    }
+    // The local lights' directional term: already coloured and scaled by the march, so a plain add.
+    if (composite.medium_scatter != 0u) {
+        hdr = hdr + textureSample(medium_scatter_tex, samp, in.uv).rgb;
     }
     if (composite.exposure != 1.0) {
         hdr = hdr * composite.exposure;

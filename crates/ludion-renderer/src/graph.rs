@@ -308,6 +308,13 @@ pub mod pass {
     /// [`SSAO_BLUR`] over a different target — one filter, two pass names, because a budget and
     /// `--dump-timings` attribute cost to a pass. [`PostChain::shafts`](super::PostChain::shafts) only.
     pub const SHAFTS_BLUR: &str = "shafts_blur";
+    /// The local-light in-scatter march: each selected scattering light's bounding sphere marched
+    /// along the eye ray into a half-resolution term. Present only when
+    /// [`PostChain::medium_scatter`](super::PostChain::medium_scatter).
+    pub const MEDIUM_SCATTER: &str = "medium_scatter";
+    /// The 4×4 box blur that cancels [`MEDIUM_SCATTER`]'s per-pixel step offset, over all four
+    /// channels. [`PostChain::medium_scatter`](super::PostChain::medium_scatter) only.
+    pub const MEDIUM_SCATTER_BLUR: &str = "medium_scatter_blur";
     /// The depth-of-field prefilter: the scene at a fraction of the output extent with each texel's
     /// signed circle of confusion in its alpha channel. [`PostChain::dof`](super::PostChain::dof) only.
     pub const DOF_COC: &str = "dof_coc";
@@ -738,6 +745,15 @@ pub struct PostChain {
     /// derives `false` here and gets none of the passes, which is the component's standing "absence is
     /// meaningful" posture rather than an error.
     pub shafts: bool,
+    /// The scene authors a medium **and** at least one local light selected to scatter into it
+    /// ([`crate::scatter::select_scatter`]): the [`pass::MEDIUM_SCATTER`] and
+    /// [`pass::MEDIUM_SCATTER_BLUR`] passes are added behind the scene pass and `composite` gains its
+    /// fourth optional input.
+    ///
+    /// Independent of [`shafts`](PostChain::shafts): it needs no sun and no shadow map, and a scene
+    /// with a scattering light but no shaft strength still gets it. The shafts/medium quality switch
+    /// masks it.
+    pub medium_scatter: bool,
     /// The scene enables depth of field: the [`pass::DOF_COC`] and [`pass::DOF`] passes are added
     /// behind the scene pass and `composite` gains its second optional input. False leaves the graph
     /// with neither, which is what makes an in-focus frame byte-identical by construction rather than
@@ -886,6 +902,10 @@ impl PostChain {
                 .post
                 .is_some_and(|post| post.shafts > 0.0 && post.fog_density > 0.0)
                 && scene.sun.is_some(),
+            // The medium is the first half of the gate and the selection the second: `select_scatter`
+            // already returns nothing without extinction, so a lit-but-off-screen light derives false.
+            medium_scatter: scene.post.is_some_and(|post| post.fog_density > 0.0)
+                && !crate::scatter::select_scatter(scene).is_empty(),
             // `dof` is the far field's circle of confusion *and* the gate: at zero every pixel is in
             // focus, so the gather would return each pixel's own colour and the blend weight would be
             // zero everywhere — two passes to reproduce their own input.
@@ -1017,6 +1037,8 @@ impl PostChain {
             // for the shafts alone was the alternative and is worse: "shadows off" would then still
             // schedule the `shadow` pass, and masking would mean weakening rather than absence.
             shafts: self.shafts && quality.shafts && shadow_map.is_some(),
+            // Needs no shadow map: the unshadowed march reads only depth.
+            medium_scatter: self.medium_scatter && quality.shafts,
             dof: self.dof && quality.dof,
             // Off removes the trace and its pyramids; on re-sizes them to this machine's extent.
             ssr: self.ssr.filter(|_| quality.ssr).map(|_| params.ssr_scale),
@@ -1110,6 +1132,16 @@ struct ShaftTargets {
     /// The raw per-pixel in-scatter term, before the march's step offset is blurred out.
     raw: ResourceId,
     /// The blurred term `composite` tints with the sun's colour and adds.
+    blurred: ResourceId,
+}
+
+/// The local-light in-scatter targets, declared together when [`PostChain::medium_scatter`] is on.
+/// Both are **post**, at the shafts' half extent.
+#[derive(Clone, Copy)]
+struct MediumScatterTargets {
+    /// The raw per-pixel term, before the march's step offset is blurred out.
+    raw: ResourceId,
+    /// The blurred term `composite` adds untinted (the colour is already in it).
     blurred: ResourceId,
 }
 
@@ -1281,6 +1313,14 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     let dof = chain.dof.then(|| DofTargets {
         coc: graph.transient(pass::DOF_COC, TextureDesc::hdr_color(half_w, half_h)),
         gathered: graph.transient(pass::DOF, TextureDesc::hdr_color(half_w, half_h)),
+    });
+    // The local-light in-scatter pair, declared after the DoF targets and still before `final`.
+    let medium_scatter = chain.medium_scatter.then(|| MediumScatterTargets {
+        raw: graph.transient(pass::MEDIUM_SCATTER, TextureDesc::hdr_color(half_w, half_h)),
+        blurred: graph.transient(
+            pass::MEDIUM_SCATTER_BLUR,
+            TextureDesc::hdr_color(half_w, half_h),
+        ),
     });
     // The dynamic-light injection's output: a probe-lattice 3D volume, written whole by the one
     // compute pass every frame it exists and sampled by the scene pass. A transient like any other —
@@ -1681,6 +1721,23 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         graph.add_external_pass(pass::DOF, pass::DOF, vec![dof.coc], vec![dof.gathered]);
         dof.gathered
     });
+    // The local-light march reads the scene pass's depth and, when there is one, the transparent
+    // layer (the optional slot, last); its blur feeds `composite`.
+    let medium_scatter_term = medium_scatter.map(|targets| {
+        graph.add_external_pass(
+            pass::MEDIUM_SCATTER,
+            pass::MEDIUM_SCATTER,
+            [scene_depth].into_iter().chain(transparent_layer).collect(),
+            vec![targets.raw],
+        );
+        graph.add_external_pass(
+            pass::MEDIUM_SCATTER_BLUR,
+            pass::MEDIUM_SCATTER_BLUR,
+            vec![targets.raw],
+            vec![targets.blurred],
+        );
+        targets.blurred
+    });
 
     // The tail is a chain of at most three passes (six with SMAA), each writing the output directly
     // when it is the last one. Every edge below is derived by the scheduler from the next pass's
@@ -1704,6 +1761,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     composite_reads.extend(shafts_term);
     composite_reads.extend(dof_term);
     composite_reads.extend(transparent_layer);
+    composite_reads.extend(medium_scatter_term);
     // A debug view stands in for the whole composite: the tail after it is unchanged. Bloom, shafts
     // and dof still schedule with unread outputs — acceptable for a debug frame.
     match (chain.ssr_view, &ssr) {
@@ -1978,6 +2036,7 @@ pub(crate) fn build_probe_capture_graph(
             && chain.ssr.is_none()
             && chain.view().is_none()
             && !chain.shafts
+            && !chain.medium_scatter
             && !chain.dof
             && !chain.ui
             && !chain.debug_lines
@@ -2434,6 +2493,8 @@ mod tests {
                 shadow_map: (bits & 2 != 0).then_some(QualityParams::FULL.shadow_map_size),
                 ssao: bits & 4 != 0,
                 shafts: bits & 8 != 0,
+                // Rides with `shafts`: the same switch masks it, with or without a shadow map.
+                medium_scatter: bits & 8 != 0,
                 dof: bits & 16 != 0,
                 gi_inject: (bits & 32 != 0).then_some([4, 4, 4]),
                 cull: None,
@@ -2482,6 +2543,7 @@ mod tests {
                 PostChain {
                     ssao: false,
                     shafts: false,
+                    medium_scatter: false,
                     dof: false,
                     gi_inject: None,
                     shadow_map: None,
@@ -5129,6 +5191,119 @@ mod tests {
                 .unwrap();
             assert_eq!(composite.reads().len(), 3, "no optional input is declared");
         }
+    }
+
+    /// `medium_scatter` needs a medium **and** a selected light, and nothing else: no sun, no shaft
+    /// strength. A light that is off, off-frustum or outside the medium's reach is not selected.
+    #[test]
+    fn for_scene_gates_medium_scatter_on_a_medium_and_a_selected_light() {
+        use ludion_core::math::glam::{Mat4, Vec3};
+        let light = |position: Vec3, scatter: f32| crate::scene::PointLightData {
+            position,
+            color: Vec3::ONE,
+            intensity: 1.0,
+            range: 4.0,
+            dynamic: false,
+            shadow: None,
+            scatter,
+        };
+        let extent = (1920, 1080);
+        let mut scene = RenderScene::empty(extent);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(Vec3::ZERO, -Vec3::Z, Vec3::Y),
+            projection: Mat4::perspective_rh(
+                60.0_f32.to_radians(),
+                crate::scene::aspect_ratio(extent),
+                0.1,
+                1000.0,
+            ),
+            position: Vec3::ZERO,
+        };
+        let in_view = Vec3::new(0.0, 0.0, -6.0);
+        scene.lights.push(light(in_view, 1.0));
+        assert!(!PostChain::for_scene(&scene).medium_scatter, "no post");
+        let post = |fog_density| crate::scene::PostData {
+            fog_density,
+            ..crate::scene::PostData::default()
+        };
+        scene.post = Some(post(0.0));
+        assert!(!PostChain::for_scene(&scene).medium_scatter, "no medium");
+        scene.post = Some(post(0.02));
+        assert!(PostChain::for_scene(&scene).medium_scatter);
+        assert!(scene.sun.is_none(), "sunless still builds the term");
+        scene.lights[0].scatter = 0.0;
+        assert!(!PostChain::for_scene(&scene).medium_scatter, "scatter 0");
+        scene.lights[0] = light(Vec3::new(0.0, 0.0, 60.0), 1.0);
+        assert!(
+            !PostChain::for_scene(&scene).medium_scatter,
+            "behind the camera"
+        );
+    }
+
+    /// The Low preset's shafts switch drops the pair, and a machine with shadows off keeps it: the
+    /// unshadowed march reads no shadow map.
+    #[test]
+    fn masking_low_drops_medium_scatter_and_shadows_off_keeps_it() {
+        let chain = PostChain {
+            medium_scatter: true,
+            ..PostChain::default()
+        };
+        assert!(
+            chain
+                .masked(&Quality::FULL, &QualityParams::FULL)
+                .medium_scatter
+        );
+        assert!(
+            !chain
+                .masked(&Quality::LOW, &QualityParams::LOW)
+                .medium_scatter
+        );
+        let no_shadows = Quality {
+            shadows: false,
+            ..Quality::FULL
+        };
+        assert!(
+            chain
+                .masked(&no_shadows, &QualityParams::FULL)
+                .medium_scatter
+        );
+    }
+
+    /// With no scattering light the graph declares neither target nor pass, and `composite` reads
+    /// exactly the three inputs it always did.
+    #[test]
+    fn medium_scatter_off_declares_no_scatter_passes_or_resources() {
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), PostChain::default());
+        assert!(!resource_names(&graph).contains(&pass::MEDIUM_SCATTER));
+        assert!(!resource_names(&graph).contains(&pass::MEDIUM_SCATTER_BLUR));
+        assert!(!pass_names(&graph).contains(&pass::MEDIUM_SCATTER));
+        assert!(!pass_names(&graph).contains(&pass::MEDIUM_SCATTER_BLUR));
+
+        let on = PostChain {
+            medium_scatter: true,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), on);
+        let composite = graph
+            .passes()
+            .iter()
+            .find(|p| p.name == pass::COMPOSITE)
+            .unwrap();
+        assert_eq!(
+            composite.reads().len(),
+            4,
+            "the scatter term is the 4th read"
+        );
+        let scatter = graph
+            .passes()
+            .iter()
+            .find(|p| p.name == pass::MEDIUM_SCATTER)
+            .unwrap();
+        assert_eq!(
+            scatter.reads().len(),
+            1,
+            "scene_depth only, without a layer"
+        );
     }
 
     /// The shaft chain's exact shape: two transients after the bloom targets and still before
