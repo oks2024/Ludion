@@ -486,27 +486,45 @@ comes before 1.5/2b (question G7), and the persistent-buffer sizes.
 - `budget-horde` and the district budgets green, with `cull_ms` calibrated into the vigil budget
   file.
 
-### W2 — the graph learns buffers, the GPU cull lands (rung 2a)
+### W2 — the 0008 wave set: the graph learns buffers, the GPU cull lands (rung 2a)
 
-- `ludion-render-graph`: a buffer resource kind (size, usage set, lifetime), producer and consumer
-  edges scheduled like textures, a `--dump-graph` schema extension (snapshot updated deliberately),
-  still free of wgpu types.
-- Bindgen: read-write storage buffers.
-- `cull.wgsl` (camera and shadow views), the stable reduce-then-scan, per-bucket indirect args,
-  `draw_indexed_indirect` in scene, prepass and shadow.
-- GPU counters through the readback ring into the `culling` section.
-- `cull` joins `KNOWN_PASS_NAMES`.
-- The CPU mesh cull is deleted from the shipping path and kept as the test oracle. Sprites, particles
-  and markers keep their CPU cull: they are sorted or blended, and GPU compaction buys them nothing.
+Re-cut by decisions 7–20 below for the first real consumer, request 0008 (the M2 torture scene).
+There is no W1 CPU cull to compare against: the GPU cull ships first and the CPU `cull.rs` becomes
+the oracle. The steps, in order:
+
+- **Bench first.** An ignored release bench with the cull off records the "before" numbers, the
+  extract per-phase breakdown and the quad and decal costs (decision 20). The host off switch lands
+  here, unused until the cull does (decision 19).
+- **Graph and bindgen.** `ludion-render-graph`: a buffer resource kind (size, usage set, lifetime),
+  producer and consumer edges scheduled like textures, a `--dump-graph` schema extension (snapshot
+  updated deliberately), still free of wgpu types. Bindgen: read-write storage buffers. No aliasing
+  or sub-allocation.
+- **Bounds.** A local box table per mesh asset on the GPU, and the skinned world box (decisions 13,
+  14). `cull.rs` uses the same skinned bound, so it stays an exact oracle.
+- **5a, camera views.** `cull.wgsl`, multi-view by design: one `cull` node over all views, the stable
+  reduce-then-scan per view and bucket, per-bucket `draw_indexed_indirect` in the camera scene pass
+  and the AO prepass, against the exact camera of that render (decision 11). The viewmodel bypasses
+  it.
+- **5b, shadow views.** Spot shadows, the six point faces, the sun cascades and the legacy
+  single-sun `record_shadow` window become views of the same pass (decision 12). The CPU prologue
+  leaves the shipping path and stays as the oracle.
+- **6a, profile.** The `culling` section (per-view instances in and drawn, read back through the
+  ring) and `cull` in `KNOWN_PASS_NAMES`, with the indirect-validation cost measured.
+- **6b, debug surfaces.** `--debug-draw cull` and `render.view` `cull_from` (decision 18).
+
+Sprites, particles, billboard shots, decals and volleys keep their CPU path and are not culled
+(decision 16).
 
 **Gates:**
-- every golden byte-identical against W1 on the 3090, M4 queued;
-- a GPU-vs-CPU-oracle visibility-set comparison test over randomized fixtures, comparing bit masks
-  read back;
+- every golden byte-identical on the 3090, M4 queued;
+- a GPU-vs-CPU-oracle visibility-mask test over randomized fixtures, comparing bit masks read back;
 - a repeat-render identity test (same scene rendered 20 times, identical bytes), which catches any
   ordering nondeterminism;
-- the graph snapshot diff reviewed;
-- a `[passes] cull` line on both budget files, with indirect-validation cost measured and recorded.
+- `world_hash` unchanged;
+- the graph snapshot diff reviewed, and the wire schema snapshot moved once with 6b;
+- the bench "after" figures recorded in Status.
+
+The pinned `[passes] cull` budget lines are owed in `Plan/owed.md`, because the M5 box is unpinned.
 
 ### W3 — the persistent static scene (rung 2b)
 
@@ -602,7 +620,9 @@ Each carries the recommended answer; the user's rulings become the Decisions sec
   lookups) independent of any culling. Recommended: W0 measures the breakdown, and any obvious
   constant-factor fix lands inside W1. It is not a separate arc, and it does not replace 1.5/2b,
   because a 3× cut to a linear walk is still linear in the whole world.
-- **G8. Where does the cull live in W1: extract or the renderer's prologue?** Recommended: extract.
+- **G8. Where does the cull live in W1: extract or the renderer's prologue?** *Superseded by
+  decision 11: the cull runs on the GPU at render time, and extract does no camera-based skipping.*
+  Recommended: extract.
   That is where the skipped work is (posing, skinning, resolution). It calls a pure function owned
   by `ludion-renderer` so the W2 GPU shader has a single oracle. The renderer-prologue alternative
   (the cluster-build precedent) keeps extract "what exists" pure, but saves nothing on the CPU.
@@ -642,7 +662,11 @@ Each carries the recommended answer; the user's rulings become the Decisions sec
 
 ## Decisions
 
-Rung 0 decisions, amended by the owner (Clockout 0030); the rest of the grilling is still to come.
+Decisions 1–6 are rung 0, amended by the owner (Clockout 0030). Decisions 7–20 were ruled on
+2026-11-07 for request 0008, GPU frustum culling for the M2 torture scene (500 enemies, ragdoll parts
+and 5,000 projectiles in a room of about 40 m, 5.0 ms render budget). They cover only what 0008
+needs: G6 (the static marker), rung 2b (the persistent scene), the world-streaming coupling, G7 and
+G11 stay open with their recommendations as defaults.
 
 1. Rung 0 ships ahead of the grilling.
 2. G3 is settled as option 0a, the `Visibility` component.
@@ -650,10 +674,24 @@ Rung 0 decisions, amended by the owner (Clockout 0030); the rest of the grilling
 4. The flag covers point and spot lights, decals, `DropShadow`, ground markers, particles, volleys, prepasses, every shadow pass and probe captures.
 5. G4 as recommended: the static GI bake ignores the flag, dynamic injection honours it.
 6. Q3 reversal: `visible: false, cast_shadows: true` is **not** a shadow-only proxy, because `visible: false` always wins. Revisit when a consumer asks for a shadow-only proxy: add an explicit mode, never a reinterpretation.
+7. **Scope.** Only what 0008 needs. The rest of the ladder stays open, with its recommendations as defaults.
+8. **Rung.** 2a straight away. There is no shipping CPU camera cull, because GPU culling is the long-term path. The CPU `cull.rs` becomes the **test oracle only**.
+9. **Rung 3a rejected** as a shipping mode (G12): it puts temporal state in the image. **Rung 3b** (same-frame occluder) stays behind a trigger: an eye-level slice whose scene pass is measured as dominated by hidden geometry.
+10. **Rungs 4 and 5 rejected**, with the falsifiers already recorded above: meshes over about 50k triangles measured as vertex-bound (rung 4); dense scanned assets plus a reopened forward/deferred decision (rung 5).
+11. **Where and when.** At render time, per rendered frame, against the exact camera of that render: `late_latch`, `present_interpolation` re-renders and `render.view` included. Extract does **no camera-based skipping**, because the presenter re-renders an extracted scene with a newer camera and an extract cull would pop on flicks. This supersedes G8.
+12. **One way.** The GPU cull serves every per-frame mesh view: the camera scene pass, the AO prepass, spot shadows, the six point faces, the sun cascades and the legacy single-sun `record_shadow` ortho window (uncull today). Probe-capture faces and the `decal_receivers` redraw are not included; they join only on a measurement.
+13. **Skinned bounds.** The union of the palette's posed joint origins, inflated by a per-mesh radius (the max bind-pose vertex distance from its joint, computed once at load). This covers `SkinBone` ragdolls.
+14. **Bounds upload.** A local box per mesh asset, transformed on the GPU by the instance model (Arvo, as in `cull.rs`). Skinned instances carry a CPU-computed world-box override. This is the shape rung 2b will need.
+15. **Dispatch.** One `cull` pass over all views writes a visibility bit per view, then a **stable** reduce-then-scan compaction runs per view and bucket: no atomic append, no decoupled look-back. Per-bucket `draw_indexed_indirect` calls follow, with CPU-known offsets and GPU-written counts. Core WebGPU only, identical on Metal and iOS. One node in `--dump-graph` and one `[passes] cull` line; the pinned budget lines are owed (the M5 box is unpinned).
+16. **Coverage.** Meshes only, projectile mesh looks included. Sprites, particles, billboard shots, decals and volleys are not culled. The bench reports their cost, and they are culled (CPU, per G9) only if they show up. The viewmodel (`MeshInstance.viewmodel`) never enters the world cull.
+17. **Extract.** Measured, not changed. The bench records the per-phase breakdown. A constant-factor fix or an animation-visibility (palette) skip becomes a trigger, acted on only when the budget is breached.
+18. **Agent surfaces.** A profile `culling` section (per-view instances in and drawn, read back through the ring, medians); a `--debug-draw cull` category (kept green, culled red, from the CPU oracle) that shows the **rendered camera view only**; and on `render.view`, `cull_from: view | game | frozen`, default `view`. `game` culls from the live game camera; `frozen` captures the cull camera on the command that sets it. These are debug and editor surfaces only: a game never issues `render.view`. The wire schema hash moves once.
+19. **Off switch.** A host render setting (the `RenderSettings` pattern), not on the wire and not a quality axis. Shipping is always on. The oracle tests and the bench's "before" numbers use it.
+20. **Measurement.** An ignored release bench in `ludion-engine`, built in code (the nav-bench precedent): 500 skinned enemies, voxel-ragdoll parts, a pool of 5,000 shots, decals, AO on, a room of about 40 m. It reports extract and GPU scene, prepass and cull with the camera facing a wall and facing the crowd, cull off and on. Its budget is about 3× the median on the unpinned box; pinned figures are owed.
 
 ## Status
 
-Design written 2026-09-30. Rung 0 shipped (Clockout 0030; `Visibility`, `examples/gallery/visibility.yaml`). Nothing else built. Awaiting the grilling.
+Design written 2026-09-30. Rung 0 shipped (Clockout 0030; `Visibility`, `examples/gallery/visibility.yaml`). Rung 2a is in flight as request 0008 (decisions 7–20; the W2 wave set above): nothing of the cull is built yet, and the "before" and "after" bench figures land here as the waves ship.
 
 **A real consumer exists (2026-10-02).** vigil's environment moves to Blender-authored mesh kits
 (a private plan). The first dressed set, a 40 × 42 m walled square, draws 605 mesh
