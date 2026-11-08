@@ -642,12 +642,13 @@ const CULL_INSTANCE_BINDING_MAX: u64 = 128 << 20;
 impl CullShape {
     /// The smallest shape holding `instances` and `buckets` for `views` views: each capacity rounds up
     /// to a power of two, with floors of 256 instances and 16 buckets so small scenes share a shape.
-    /// `views` is clamped (to at least one) so [`instance_bytes`](CullShape::instance_bytes) fits one storage
-    /// binding; a view past the clamp is not culled and draws every caster directly.
+    /// `views` is clamped so [`instance_bytes`](CullShape::instance_bytes) fits one storage binding; a
+    /// view past the clamp is not culled and draws every caster directly. When not even one view fits,
+    /// `views` is zero and the caller must not cull at all.
     pub fn for_counts(instances: usize, buckets: usize, views: usize) -> CullShape {
         let cap = |n: usize, floor: u32| (n.max(floor as usize).next_power_of_two()) as u32;
         let instances = cap(instances, 256);
-        let fit = (CULL_INSTANCE_BINDING_MAX / (u64::from(instances) * 192)).max(1);
+        let fit = CULL_INSTANCE_BINDING_MAX / (u64::from(instances) * 192);
         CullShape {
             instances,
             buckets: cap(buckets, 16),
@@ -687,8 +688,9 @@ impl CullShape {
 /// world mesh.
 fn cull_shape(scene: &RenderScene, shadow_views: usize) -> Option<CullShape> {
     let world = scene.meshes.iter().filter(|m| !m.viewmodel).count();
-    (world > 0)
-        .then(|| CullShape::for_counts(world, 2 * (3 + scene.mesh_assets.len()), 1 + shadow_views))
+    let shape = CullShape::for_counts(world, 2 * (3 + scene.mesh_assets.len()), 1 + shadow_views);
+    // A scene too big for even the camera view under the binding cap draws everything direct.
+    (world > 0 && shape.views > 0).then_some(shape)
 }
 
 /// What a scene's content requires of the graph's *structure* — everything but the resolution.
@@ -2304,8 +2306,8 @@ mod tests {
         }
     }
 
-    /// The compacted-instance buffer stays within one storage binding: the view count clamps, never
-    /// below one.
+    /// The compacted-instance buffer stays within one storage binding: the view count clamps, and
+    /// reaches zero (no cull) when not even the camera view fits.
     #[test]
     fn the_cull_view_count_clamps_to_one_storage_binding() {
         assert_eq!(
@@ -2318,9 +2320,14 @@ mod tests {
         assert_eq!(shape.views, 42);
         assert!(shape.instance_bytes() <= CULL_INSTANCE_BINDING_MAX);
         assert_eq!(
-            CullShape::for_counts(1_000_000, 6, 7).views,
+            CullShape::for_counts(524_288, 6, 7).views,
             1,
-            "never below one"
+            "the last size that fits"
+        );
+        assert_eq!(
+            CullShape::for_counts(524_289, 6, 7).views,
+            0,
+            "not even the camera view fits: no cull"
         );
         assert_eq!(CullShape::for_counts(256, 6, 7).views, 7);
     }

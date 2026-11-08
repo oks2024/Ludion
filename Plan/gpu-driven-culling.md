@@ -729,3 +729,15 @@ fastest of five rounds per run, validation off then on: Wall 2.84, 3.04, 2.77 ms
 Crowd 3.71, 3.43, 3.24 ms against 3.32, 3.67, 3.42 ms. `cull` is 0.06 to 0.12 ms, `scene` 0.5 to 1.2 ms,
 `prepass` 0.07 to 0.23 ms in every run. The validation delta is below the M5's noise floor of ~0.3 ms
 (run-to-run spread of the same arm). Pinned figures are owed.
+
+**The torture bench, cull off then on (rung 2a, unpinned M5, 2026-11-08).** `CULLING_BENCH_CULL=off|on`, same
+bench and caveats as above; the M5's power state swings these by about 2×, so they are indicative only.
+Wall, full: GPU scene 2.81 → 1.60 ms, prepass 0.52 → 0.17, frame 5.71 → 5.22, `cull` pass 0.23. Crowd, full:
+scene 0.97 → 1.79, frame 2.96 → 5.11 (power-state noise dominates), `cull` pass 0.12. Extract stays about
+0.9–1.2 ms both ways, unchanged by design (decision 17), no breach.
+- The CPU caster cull left the shipping path, so "cull off" draws every caster in every shadow view. The
+  off/on delta therefore overstates the gain over the pre-0008 engine for shadow passes; the "before" figures
+  above predate that change.
+- Owed: pinned before/after figures, the `[passes] cull` budget lines, the pinned indirect-validation figure
+  and M4/3090 golden byte-identity (`Plan/owed.md`).
+- **Shipped:** the W2 wave set (rung 2a) for request 0008; the agent doc is `docs/culling.md`.

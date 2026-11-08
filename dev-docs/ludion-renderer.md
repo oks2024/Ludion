@@ -24,7 +24,11 @@ description: The render pipeline: passes, GPU resources, and deterministic PNG o
 - `crates/ludion-renderer/src/render.rs` — `Renderer`, the `SHADERS` registry, per-frame upload, and `FrameRecorder` (the `PassRecorder` impl). `from_gpu` builds one on a `Gpu` the caller already has (the surface-chosen context; `new()` is that over a headless `Gpu::request`), and `render_frame` is the general form of `render_streamed` — same frame, `FrameSinks` naming where its finished texture goes. Also owns the per-draw material `@group(4)` (five texture slots + sampler + `MeshMaterial` uniform) and its content-hash-keyed texture cache (`Renderer::uploads()` counts every cache-miss upload: textures, mesh maps, mesh assets) — `ludion devdocs renderer-shading` has the shading side.
 - `crates/ludion-renderer/src/local_shadow.rs` — the per-frame local-light shadow plan: candidates, camera-distance rank, the 8×8-cell atlas budget (pure CPU).
 - `crates/ludion-renderer/src/sun_cascade.rs` — the sun's cascades: the pure camera fit (`fit_sun_cascades`), the atlas grid and `sun_cascade_casters`.
-- `crates/ludion-renderer/src/cull.rs` — reusable bounds, frustum and sphere tests, shared by per-view culling.
+- `crates/ludion-renderer/src/cull.rs` — the CPU oracle for the GPU cull: bounds, frustum and sphere tests (tests, `--debug-draw cull`, cascade caster counts).
+- `crates/ludion-renderer/src/gpu_cull.rs` — the GPU cull's buffers, bind groups and per-frame dispatch (`ludion docs culling`).
+- `crates/ludion-renderer/src/cull_stats.rs` — the non-blocking readback ring behind the profile `culling` section.
+- `crates/ludion-renderer/src/render/mesh_batch.rs` — world-mesh batching: instance and bucket layout the cull and indirect draws consume.
+- `crates/ludion-renderer/src/shaders/cull.wgsl` — the reduce-then-scan cull compute shader.
 - `crates/ludion-renderer/src/ibl.rs` — the sky prefilter and its cache (`ludion devdocs renderer-ibl`).
 - `crates/ludion-renderer/src/mesh.rs` — procedural cube/plane/sphere geometry, non-indexed triangle lists.
 - `crates/ludion-renderer/src/compressed.rs` — the cooked-map (BC7/ASTC 4×4) wgpu format mapping and `CompressedUploadError` validation; the upload itself is in `render.rs`.

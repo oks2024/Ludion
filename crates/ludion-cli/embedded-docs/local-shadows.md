@@ -67,7 +67,7 @@ at their defaults saves and hashes exactly as before.
 - **Quality scales only the atlas edge.** `local_shadow_atlas_size` is 4096 at `full` and `high`,
   2048 at `medium` (`ludion docs quality`). Which lamps cast never depends on the machine. `low` turns
   the sun's and the local shadows off together.
-- **Each granted view draws only what it can see,** culled on the CPU; skinned meshes are always drawn.
+- **Each granted view draws only what it can see,** culled by the GPU cull (`ludion docs culling`); skinned meshes cull against their posed-joint bounds.
   A frame that grants nothing keeps its previous frame graph exactly.
 - **Keeping every framing in budget** is a profile check: a game that wants all its lamps shadowed
   asserts `local_shadows.skipped == 0` over the camera poses it ships; a `shadow_distance` chosen so

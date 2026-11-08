@@ -44,6 +44,11 @@ always on; tests and the culling bench use it to compare. With it off the `cull`
 - **Images are byte-identical with culling on or off**, and across repeat renders; a difference is a bug.
 - **Output cap 128 MiB** (the WebGPU binding floor): views fill in order camera, sun, local, and a view past
   the cap draws uncull. `culling.over_cap_views` counts them; the image is the same, only the saving is lost.
+  With every view over the cap (a scene too big for even the camera view), nothing is culled.
+- **`--debug-draw cull` uses the tick's camera.** Under `late_latch`/`present_interpolation` an edge mesh can be
+  marked differently from what the GPU, culling against the latched camera, keeps.
+- **Cascade caster counts appear twice:** `sun_cascades.cascades[].casters` (CPU oracle) and
+  `culling.views[cascade_N].drawn_median` (GPU). They agree except for rounding at a plane.
 
 ## Next
 - `ludion docs debug-draw` — the `cull` category.
