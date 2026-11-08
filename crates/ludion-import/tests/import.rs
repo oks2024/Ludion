@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ludion_import::{ExternalFiles, Import, import};
+use ludion_import::{ExternalFiles, Import, ImportOptions, import};
 use ludion_scene::TextureWrap;
 
 fn fixture_dir() -> PathBuf {
@@ -21,7 +21,7 @@ fn import_fixture_lossy() -> Import {
     import(
         &fixture_bytes(),
         ExternalFiles::Beside(&fixture_dir()),
-        true,
+        &ImportOptions::lossy(true),
     )
     .expect("lossy import of the fixture succeeds")
 }
@@ -40,7 +40,7 @@ fn default_mode_fails_on_the_blend_material_naming_it() {
     let errors = import(
         &fixture_bytes(),
         ExternalFiles::Beside(&fixture_dir()),
-        false,
+        &ImportOptions::lossy(false),
     )
     .expect_err("the fixture's `stone` is alpha-blended, so a non-lossy import must fail");
     assert_eq!(
@@ -209,7 +209,7 @@ fn lossy_messages(json: &str) -> Vec<String> {
     match import(
         json.as_bytes(),
         ExternalFiles::Beside(Path::new(".")),
-        false,
+        &ImportOptions::lossy(false),
     ) {
         Ok(_) => Vec::new(),
         Err(diagnostics) => diagnostics
@@ -255,7 +255,12 @@ fn a_node_matrix_that_shears_is_l1202_naming_the_node() {
         "{messages:?}"
     );
 
-    let import = import(json.as_bytes(), ExternalFiles::Refused, true).expect("lossy imports");
+    let import = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(true),
+    )
+    .expect("lossy imports");
     assert_eq!(import.warnings.len(), 1, "{:?}", import.warnings);
     assert_eq!(import.warnings[0].code.as_str(), "L1202");
 }
@@ -264,7 +269,12 @@ fn a_node_matrix_that_shears_is_l1202_naming_the_node() {
 fn a_node_matrix_without_shear_imports_clean() {
     // Column-major: uniform scale 2, translation (1, 2, 3) in the last column.
     let json = matrix_node("[2,0,0,0, 0,2,0,0, 0,0,2,0, 1,2,3,1]");
-    let import = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports strict");
+    let import = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .expect("imports strict");
     assert!(import.warnings.is_empty(), "{:?}", import.warnings);
     let transform = component(&import, 0, "Transform").unwrap();
     assert_eq!(transform["translation"], serde_json::json!([1.0, 2.0, 3.0]));
@@ -274,7 +284,12 @@ fn a_node_matrix_without_shear_imports_clean() {
 #[test]
 fn a_slash_in_a_node_name_never_reaches_a_part_name() {
     let json = r#"{"asset":{"version":"2.0"},"nodes":[{"name":"a/b"},{"name":"a_b"}]}"#;
-    let import = import(json.as_bytes(), ExternalFiles::Refused, false).unwrap();
+    let import = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .unwrap();
     let names: Vec<&str> = import
         .prefab
         .entities
@@ -332,7 +347,12 @@ fn a_spot_light_maps_to_spot_light_with_degrees_and_a_world_direction() {
         None,
         Some(Y_90),
     );
-    let import = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports strict");
+    let import = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .expect("imports strict");
     assert!(component(&import, 0, "PointLight").is_none());
     let light = component(&import, 0, "SpotLight").unwrap();
     assert_eq!(light["color"], serde_json::json!([1.0, 0.5, 0.25]));
@@ -352,7 +372,12 @@ fn a_spot_light_maps_to_spot_light_with_degrees_and_a_world_direction() {
 #[test]
 fn a_parented_spot_light_direction_composes_the_whole_chain() {
     let json = spot_gltf(r#"{"outerConeAngle":0.5}"#, Some(Y_90), Some(Y_90));
-    let import = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports strict");
+    let import = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .expect("imports strict");
     let light = component(&import, 1, "SpotLight").unwrap();
     // Two quarter turns about Y: local -Z becomes world +Z.
     assert_direction(light, [0.0, 0.0, 1.0]);
@@ -361,7 +386,12 @@ fn a_parented_spot_light_direction_composes_the_whole_chain() {
 #[test]
 fn an_unrotated_spot_light_points_down_local_minus_z_with_gltf_default_cone() {
     let json = spot_gltf("{}", None, None);
-    let import = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports strict");
+    let import = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .expect("imports strict");
     let light = component(&import, 0, "SpotLight").unwrap();
     assert_direction(light, [0.0, 0.0, -1.0]);
     assert_eq!(light["inner_angle"], 0.0);
@@ -380,7 +410,12 @@ fn a_spot_cone_gltf_allows_but_the_engine_refuses_is_clamped_valid() {
         None,
         None,
     );
-    let import = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports strict");
+    let import = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .expect("imports strict");
     let light = component(&import, 0, "SpotLight").unwrap();
     let inner = light["inner_angle"].as_f64().unwrap();
     let outer = light["outer_angle"].as_f64().unwrap();
@@ -479,7 +514,7 @@ fn import_clean(json: &str) -> Import {
     import(
         json.as_bytes(),
         ExternalFiles::Beside(Path::new(".")),
-        false,
+        &ImportOptions::lossy(false),
     )
     .expect("this document has a Ludion mapping")
 }
@@ -670,8 +705,12 @@ fn a_textured_primitive_without_texcoord_0_is_l1202() {
         "{messages:?}"
     );
     // The geometry still imports; only the maps drop (`--allow-lossy` is per-feature).
-    let import = import(json.as_bytes(), ExternalFiles::Beside(Path::new(".")), true)
-        .expect("lossy mode imports the rest");
+    let import = import(
+        json.as_bytes(),
+        ExternalFiles::Beside(Path::new(".")),
+        &ImportOptions::lossy(true),
+    )
+    .expect("lossy mode imports the rest");
     assert_eq!(only_mesh(&import).textures.base_color, None);
     assert_eq!(only_mesh(&import).vertex_count(), 3);
 }
@@ -775,7 +814,12 @@ fn normal_texture_without_tangent_computes_them() {
 fn the_generated_frame_matches_the_fixtures_authored_tangent() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/import-textured");
     let bytes = std::fs::read(dir.join("scene.gltf")).unwrap();
-    let import = import(&bytes, ExternalFiles::Beside(&dir), false).unwrap();
+    let import = import(
+        &bytes,
+        ExternalFiles::Beside(&dir),
+        &ImportOptions::lossy(false),
+    )
+    .unwrap();
     let tangents_of = |name: &str| {
         import
             .meshes
@@ -846,7 +890,7 @@ fn a_blend_material_is_l1202_naming_blend_and_pointing_at_mask() {
     let errors = import(
         json.as_bytes(),
         ExternalFiles::Beside(Path::new(".")),
-        false,
+        &ImportOptions::lossy(false),
     )
     .expect_err("BLEND has no mapping");
     let blend = errors
@@ -882,7 +926,7 @@ fn emissive_factor_exactly_proportional_to_base_color_maps_cleanly() {
     let import = import(
         json.as_bytes(),
         ExternalFiles::Beside(Path::new(".")),
-        false,
+        &ImportOptions::lossy(false),
     )
     .expect("an exact scalar multiple of baseColorFactor must import cleanly");
     let mesh = component(&import, 0, "Mesh").unwrap();
@@ -956,7 +1000,7 @@ fn an_unmapped_required_extension_aborts_once_without_l1239() {
     let errors = import(
         json.as_bytes(),
         ExternalFiles::Beside(Path::new(".")),
-        false,
+        &ImportOptions::lossy(false),
     )
     .expect_err("a required extension with no mapping aborts the import");
     assert_eq!(errors.len(), 1, "{errors:?}");
@@ -1103,8 +1147,12 @@ fn an_emissive_channel_over_a_zero_base_channel_is_l1202_naming_the_material() {
             .any(|m| m.contains("emissiveFactor red") && m.contains("mismatched")),
         "{messages:?}"
     );
-    let import = import(json.as_bytes(), ExternalFiles::Beside(Path::new(".")), true)
-        .expect("lossy mode imports the rest of the material");
+    let import = import(
+        json.as_bytes(),
+        ExternalFiles::Beside(Path::new(".")),
+        &ImportOptions::lossy(true),
+    )
+    .expect("lossy mode imports the rest of the material");
     assert_eq!(import.warnings.len(), 1);
     let mesh = component(&import, 0, "Mesh").unwrap();
     assert_eq!(mesh["emissive"], 0.0);
@@ -1144,8 +1192,12 @@ fn a_tinted_emissive_without_texcoord_0_is_l1202_naming_the_material() {
             .any(|m| m.contains("TEXCOORD_0") && m.contains("tinted")),
         "{messages:?}"
     );
-    let import = import(json.as_bytes(), ExternalFiles::Beside(Path::new(".")), true)
-        .expect("lossy mode imports the rest of the material");
+    let import = import(
+        json.as_bytes(),
+        ExternalFiles::Beside(Path::new(".")),
+        &ImportOptions::lossy(true),
+    )
+    .expect("lossy mode imports the rest of the material");
     assert_eq!(import.warnings.len(), 1, "{:?}", import.warnings);
     assert_eq!(component(&import, 0, "Mesh").unwrap()["emissive"], 0.0);
     assert!(import.textures.is_empty());
@@ -1156,7 +1208,7 @@ fn unreadable_gltf_is_l1201() {
     let errors = import(
         b"this is not glTF at all",
         ExternalFiles::Beside(Path::new(".")),
-        false,
+        &ImportOptions::lossy(false),
     )
     .unwrap_err();
     assert_eq!(errors[0].code.as_str(), "L1201");
@@ -1194,7 +1246,11 @@ fn import_beside(
     json: &str,
     dir: &Path,
 ) -> Result<Import, Vec<ludion_core::diagnostics::Diagnostic>> {
-    import(json.as_bytes(), ExternalFiles::Beside(dir), false)
+    import(
+        json.as_bytes(),
+        ExternalFiles::Beside(dir),
+        &ImportOptions::lossy(false),
+    )
 }
 
 fn assert_refused(result: Result<Import, Vec<ludion_core::diagnostics::Diagnostic>>, what: &str) {
@@ -1297,7 +1353,7 @@ fn refused_files_accepts_no_external_source_even_when_it_is_there() {
     let result = import(
         external_buffer_gltf("bin/tri.bin").as_bytes(),
         ExternalFiles::Refused,
-        false,
+        &ImportOptions::lossy(false),
     );
     assert_refused(result, "an external buffer under `Refused`");
 }
@@ -1346,7 +1402,7 @@ fn malformed_message(json: &str) -> String {
     let errors = import(
         json.as_bytes(),
         ExternalFiles::Beside(Path::new(".")),
-        false,
+        &ImportOptions::lossy(false),
     )
     .expect_err("malformed data must be refused");
     assert_eq!(errors[0].code.as_str(), "L1201", "{errors:?}");
@@ -1359,7 +1415,7 @@ fn mesh_problem_message(json: &str) -> String {
     let errors = import(
         json.as_bytes(),
         ExternalFiles::Beside(Path::new(".")),
-        false,
+        &ImportOptions::lossy(false),
     )
     .expect_err("an inconsistent mesh must be refused");
     let first = &errors[0];
@@ -1555,8 +1611,12 @@ fn a_sparse_normal_accessor_is_l1202() {
 
 /// Imports `bytes`, asserts the first diagnostic is an `L1201`, and returns its message.
 fn l1201_message(bytes: &[u8]) -> String {
-    let diagnostics = import(bytes, ExternalFiles::Beside(Path::new(".")), false)
-        .expect_err("a structurally incomplete document must be refused");
+    let diagnostics = import(
+        bytes,
+        ExternalFiles::Beside(Path::new(".")),
+        &ImportOptions::lossy(false),
+    )
+    .expect_err("a structurally incomplete document must be refused");
     let first = diagnostics.into_iter().next().expect("one diagnostic");
     assert_eq!(first.code.as_str(), "L1201", "{}", first.message);
     first.message
@@ -1609,8 +1669,12 @@ fn an_out_of_range_index_is_l1201() {
 /// Imports `bytes`, asserts the first diagnostic is an `L1201` at `pointer` whose help names the
 /// forest rule, and returns its message.
 fn forest_refusal(bytes: &[u8], pointer: &str) -> String {
-    let diagnostics = import(bytes, ExternalFiles::Beside(Path::new(".")), false)
-        .expect_err("a node graph that is not a forest must be refused");
+    let diagnostics = import(
+        bytes,
+        ExternalFiles::Beside(Path::new(".")),
+        &ImportOptions::lossy(false),
+    )
+    .expect_err("a node graph that is not a forest must be refused");
     let first = diagnostics.into_iter().next().expect("one diagnostic");
     assert_eq!(first.code.as_str(), "L1201", "{}", first.message);
     assert_eq!(first.path.as_deref(), Some(pointer), "{}", first.message);
@@ -1776,7 +1840,7 @@ fn a_bad_wrap_extra_is_refused_naming_the_material() {
         let errors = import(
             json.as_bytes(),
             ExternalFiles::Beside(Path::new(".")),
-            false,
+            &ImportOptions::lossy(false),
         )
         .unwrap_err();
         assert!(

@@ -180,6 +180,10 @@ ctt-astcenc = "=0.6.0"
 # glTF 2.0 parser for `ludion-import`. `default-features = false` drops the `import` feature (and
 # the `image` crate it pulls in); buffers and images are resolved by hand.
 gltf = { version = "1", default-features = false, features = ["utils", "names", "extras", "KHR_lights_punctual", "KHR_materials_emissive_strength"] }
+# meshoptimizer (vendored C++) for `ludion-import`'s generated mesh LOD levels. Only `ludion-import`
+# uses it; pinned with `=` because a generated level must be byte-identical across machines and
+# versions. `.cargo/config.toml` turns off FMA contraction in its C++ on Apple targets.
+meshopt = "=0.7.0"
 # Software BCn/ASTC decoders, for `ludion-cook`'s round-trip tests only.
 texture2ddecoder = "0.1"
 # KTX2 container: `ludion-assets` reads cooked maps, `ludion-cook` writes them (header, level index

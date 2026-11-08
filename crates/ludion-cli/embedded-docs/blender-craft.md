@@ -50,6 +50,7 @@ an unreferenced file is swept. `[[import]] max_texture_size` caps a kit's map si
 the sync (`L1270`) but never the import.
 Trees the sync does not derive (a `ludion import` tree, a hand-placed or `mesh apply` one) cook with `[cook] roots = ["scenes/assets"]`: every `*.mesh.yaml` below a root (dot entries skipped) is read and its maps cook uncapped, beside the import trees, with no `[[import]]` table. A root overlapping an `[[import]] to` is refused (`L0023`), an absent root or a link under it is `L1324`, and a map leaving its root is not cooked (`L1325`).
 A second sync of the same root waits for the first, saying so on stderr, and a sync killed midway recovers on the next run.
+`[[import]] lod = [{ screen_size = 0.25, ratio = 0.5 }, { screen_size = 0.1, ratio = 0.25 }]` (or `ludion import --lod 0.25:0.5 --lod 0.1:0.25`) chains up to three coarser mesh levels, `meshes/<name>.lod<n>.mesh.yaml`, listed in the base's `lods`: each is the base simplified to that fraction of its triangles (meshoptimizer; skin weights carry over exactly), drawing below that `screen_size`. With no `ratio`, the glTF's own `<name>_LOD1` .. `<name>_LOD3` sibling nodes (the base is `<name>` or `<name>_LOD0`) supply the levels, at `0.5^n` unless the entries give the thresholds; authored levels plus a `ratio` is refused (`L1395`), a level that differs from its base in material or skin `L1396`. Changing `lod` re-imports.
 
 ## The script skeleton
 

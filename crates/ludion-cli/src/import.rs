@@ -30,6 +30,7 @@ pub fn run(
     input: &Path,
     out: &Path,
     allow_lossy: bool,
+    lods: Vec<ludion_import::LodSpec>,
     quantize: Option<usize>,
     name: Option<String>,
 ) -> ExitCode {
@@ -44,6 +45,11 @@ pub fn run(
                  what it cost",
             );
         }
+        if !lods.is_empty() {
+            return diagnostic::usage_error(
+                "--lod writes mesh levels for a glTF import and means nothing for a PNG",
+            );
+        }
         return run_png(input, out, quantize, name);
     }
     if quantize.is_some() || name.is_some() {
@@ -52,7 +58,7 @@ pub fn run(
              neither (its names come from the glTF's own nodes)",
         );
     }
-    run_gltf(input, out, allow_lossy)
+    run_gltf(input, out, allow_lossy, lods)
 }
 
 /// Imports a PNG as a `kind: sprite` document.
@@ -164,8 +170,14 @@ fn file_stem(path: &Path) -> String {
 }
 
 /// Imports a glTF as a `kind: prefab` plus its mesh, clip and texture assets.
-fn run_gltf(input: &Path, out: &Path, allow_lossy: bool) -> ExitCode {
-    match ludion_import::import_gltf(input, out, allow_lossy) {
+fn run_gltf(
+    input: &Path,
+    out: &Path,
+    allow_lossy: bool,
+    lods: Vec<ludion_import::LodSpec>,
+) -> ExitCode {
+    let options = ludion_import::ImportOptions { allow_lossy, lods };
+    match ludion_import::import_gltf(input, out, &options) {
         Ok(imported) => {
             for warning in &imported.warnings {
                 diagnostic::print(warning);

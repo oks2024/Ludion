@@ -55,7 +55,8 @@ ludion-font            → assets(bake), core, scene  [harfrust(bake), skrifa(ba
     dev: assets
 ludion-gen             → assets, core, ecs, font, import, scene  [serde, serde_json, tungstenite,
       ureq]
-ludion-import          → assets, components, core, scene  [base64, glam, gltf, ryu, serde_json]
+ludion-import          → assets, components, core, scene  [base64, glam, gltf, meshopt, ryu,
+      serde_json]
     dev: (none)  [xxhash-rust]
     build: (none)  [serde_json, xxhash-rust]
 ludion-mcp             → client, core, protocol  [serde_json]

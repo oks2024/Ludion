@@ -83,6 +83,26 @@ use std::path::PathBuf;
 use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
 
 /// The `--aa` value parser: the names of [`ludion_engine::AntiAliasing::ALL`], clap refusing the rest.
+/// Parses `--lod <screen>[:<ratio>]`.
+fn parse_lod_spec(text: &str) -> Result<ludion_import::LodSpec, String> {
+    let number = |part: &str, what: &str| {
+        part.parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| format!("`{part}` is not a number: {what}"))
+    };
+    let (screen, ratio) = match text.split_once(':') {
+        Some((screen, ratio)) => (screen, Some(ratio)),
+        None => (text, None),
+    };
+    Ok(ludion_import::LodSpec {
+        screen_size: number(screen, "the screen size, e.g. `0.25`")?,
+        ratio: ratio
+            .map(|ratio| number(ratio, "the triangle ratio after `:`, e.g. `0.25:0.5`"))
+            .transpose()?,
+    })
+}
+
 fn aa_value_parser() -> impl clap::builder::TypedValueParser<Value = ludion_engine::AntiAliasing> {
     use clap::builder::TypedValueParser;
     clap::builder::PossibleValuesParser::new(
@@ -859,6 +879,19 @@ enum Command {
         /// maps.
         #[arg(long, conflicts_with_all = ["quantize", "name"])]
         allow_lossy: bool,
+        /// glTF only: write a mesh LOD level, `<screen>[:<ratio>]`, repeatable up to three times,
+        /// finest first (`--lod 0.25:0.5 --lod 0.1:0.25`). `<screen>` is the fraction of the viewport
+        /// height the mesh covers below which the level draws; `<ratio>` simplifies each mesh to
+        /// that fraction of its triangles (meshoptimizer) into `meshes/<name>.lod<n>.mesh.yaml`,
+        /// listed in the base's `lods`. Without a ratio the level comes from the glTF's authored
+        /// `<name>_LOD<n>` node (no `--lod` at all keeps those at `0.5^n`).
+        #[arg(
+            long = "lod",
+            value_name = "SCREEN[:RATIO]",
+            value_parser = parse_lod_spec,
+            conflicts_with_all = ["quantize", "name"]
+        )]
+        lod: Vec<ludion_import::LodSpec>,
         /// PNG only: merge the image's colours down to at most N palette entries by deterministic
         /// median-cut, instead of refusing (`L4014`) when they outnumber the glyph budget. The loss
         /// is reported as an `L4015` warning.
@@ -2275,9 +2308,10 @@ fn main() -> std::process::ExitCode {
             input,
             out,
             allow_lossy,
+            lod,
             quantize,
             name,
-        } => import::run(&input, &out, allow_lossy, quantize, name),
+        } => import::run(&input, &out, allow_lossy, lod, quantize, name),
         Command::Sync {
             project,
             json,

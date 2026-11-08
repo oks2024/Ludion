@@ -28,14 +28,14 @@ pub struct GltfImported {
 /// let imported = ludion_import::import_gltf(
 ///     Path::new("art/crate.glb"),
 ///     Path::new("assets/crate"),
-///     false,
+///     &ludion_import::ImportOptions::default(),
 /// );
 /// assert!(imported.is_ok());
 /// ```
 pub fn import_gltf(
     input: &Path,
     out: &Path,
-    allow_lossy: bool,
+    options: &crate::ImportOptions,
 ) -> Result<GltfImported, Vec<Diagnostic>> {
     let clips_dir = out.join(crate::CLIP_DIR);
     let bytes = std::fs::read(input).map_err(|error| {
@@ -49,7 +49,7 @@ pub fn import_gltf(
     })?;
     let base_dir = input.parent().unwrap_or(Path::new("."));
 
-    let mut import = crate::import(&bytes, crate::ExternalFiles::Beside(base_dir), allow_lossy)?;
+    let mut import = crate::import(&bytes, crate::ExternalFiles::Beside(base_dir), options)?;
 
     // The importer sees bytes, not paths: the provenance marker is the input relative to the prefab.
     import.prefab.generated_from = Some(

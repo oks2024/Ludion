@@ -134,6 +134,43 @@ fn assert_trees_identical(expected: &Path, actual: &Path) {
     }
 }
 
+/// A table's `lod` is part of what its record names: adding, changing or dropping it re-imports every
+/// kit, and the level files appear and disappear with it.
+#[test]
+fn changing_a_tables_lod_reimports_its_kits() {
+    let dir = project("lod-freshness");
+    let manifest = dir.join("ludion.toml");
+    let plain = std::fs::read_to_string(&manifest).unwrap();
+    let has_levels = || {
+        collect_files(&dir.join("assets/derived/a"))
+            .iter()
+            .any(|path| path.to_string_lossy().contains(".lod1.mesh.yaml"))
+    };
+    let (ok, first, _) = sync(&dir);
+    assert!(ok && !has_levels());
+    assert_eq!(stems(&first, "imported"), ["a", "b"]);
+    let (_, second, _) = sync(&dir);
+    assert_eq!(stems(&second, "skipped"), ["a", "b"]);
+
+    std::fs::write(
+        &manifest,
+        format!("{plain}lod = [{{ screen_size = 0.2, ratio = 0.5 }}]\n"),
+    )
+    .unwrap();
+    let (ok, third, stderr) = sync(&dir);
+    assert!(ok, "{stderr}");
+    assert_eq!(stems(&third, "imported"), ["a", "b"]);
+    assert!(has_levels());
+    let (_, fourth, _) = sync(&dir);
+    assert_eq!(stems(&fourth, "skipped"), ["a", "b"]);
+
+    std::fs::write(&manifest, plain).unwrap();
+    let (ok, fifth, _) = sync(&dir);
+    assert!(ok);
+    assert_eq!(stems(&fifth, "imported"), ["a", "b"]);
+    assert!(!has_levels());
+}
+
 #[test]
 fn sync_imports_skips_reimports_changed_and_removes_vanished() {
     let dir = project("sync-lifecycle");

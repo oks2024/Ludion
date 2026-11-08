@@ -288,9 +288,12 @@ fn accept_mesh(
         ))]
     })?;
     // A generated `.glb` is self-contained, and the run folder is not a source tree.
-    let mut import =
-        ludion_import::import(&bytes, ludion_import::ExternalFiles::Refused, allow_lossy)
-            .map_err(|diagnostics| readdress_lossy(diagnostics, allow_lossy))?;
+    let mut import = ludion_import::import(
+        &bytes,
+        ludion_import::ExternalFiles::Refused,
+        &ludion_import::ImportOptions::lossy(allow_lossy),
+    )
+    .map_err(|diagnostics| readdress_lossy(diagnostics, allow_lossy))?;
     for mesh in &mut import.meshes {
         mesh.doc.origin = Some(origin.clone());
         // ComfyUI's `SaveGLB` flags every material double-sided, and a closed remesh wants culling.

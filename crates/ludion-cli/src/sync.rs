@@ -107,6 +107,8 @@ type ImportResult = Result<(Vec<Diagnostic>, Vec<String>), Vec<Diagnostic>>;
 /// One table after discovery and the refusal checks.
 struct Table {
     to: PathBuf,
+    /// The table's `lod` entries, as import options.
+    lods: Vec<ludion_import::LodSpec>,
     found: Vec<Entry>,
     /// Read under the lock, after discovery.
     previous: Option<Record>,
@@ -685,13 +687,38 @@ fn discover(root: &Path, section: &ImportSection) -> Result<Table, Diagnostic> {
     }
     Ok(Table {
         to,
+        lods: section
+            .lod
+            .iter()
+            .map(|entry| ludion_import::LodSpec {
+                screen_size: entry.screen_size,
+                ratio: entry.ratio,
+            })
+            .collect(),
         found,
         previous: None,
     })
 }
 
+/// The importer fingerprint plus the table's LOD options, which shape the tree as the importer does.
+fn table_importer(importer: &str, lods: &[ludion_import::LodSpec]) -> String {
+    if lods.is_empty() {
+        return importer.to_string();
+    }
+    let levels: Vec<String> = lods
+        .iter()
+        .map(|lod| match lod.ratio {
+            Some(ratio) => format!("{}:{ratio}", lod.screen_size),
+            None => lod.screen_size.to_string(),
+        })
+        .collect();
+    format!("{importer}+lod[{}]", levels.join(","))
+}
+
 /// Applies one table's plan: removals, then parallel imports, then the record.
 fn sync_table(root: &Path, table: &Table, importer: &str, outcome: &mut Outcome) {
+    // The record's importer also names the table's import options, so changing `lod` re-imports.
+    let importer = &table_importer(importer, &table.lods);
     let plan = plan(
         &table.found,
         table.previous.as_ref(),
@@ -777,7 +804,7 @@ fn sync_table(root: &Path, table: &Table, importer: &str, outcome: &mut Outcome)
                     loop {
                         let index = next.fetch_add(1, Ordering::Relaxed);
                         let Some(entry) = jobs.get(index) else { break };
-                        done.push((index, import_entry(root, &table.to, entry)));
+                        done.push((index, import_entry(root, table, entry)));
                     }
                     done
                 })
@@ -879,12 +906,20 @@ fn record_entry(entry: &Entry, outputs: Vec<String>) -> RecordEntry {
 
 /// Imports into `<to>/.sync-<stem>` (a sibling, so `generated_from` paths match a hand import) and
 /// swaps it in; a failed import never touches the live tree.
-fn import_entry(root: &Path, to: &Path, entry: &Entry) -> ImportResult {
+fn import_entry(root: &Path, table: &Table, entry: &Entry) -> ImportResult {
+    let to = &table.to;
     let staging = to.join(format!(".sync-{}", entry.stem));
     let dest = to.join(&entry.stem);
     let old = to.join(format!(".old-{}", entry.stem));
     remove_dir(&staging).map_err(|failure| vec![failure])?;
-    let imported = match import_gltf(&root.join(&entry.source), &staging, false) {
+    let imported = match import_gltf(
+        &root.join(&entry.source),
+        &staging,
+        &ludion_import::ImportOptions {
+            allow_lossy: false,
+            lods: table.lods.clone(),
+        },
+    ) {
         Ok(imported) => imported,
         Err(diagnostics) => {
             let _ = remove_dir(&staging);

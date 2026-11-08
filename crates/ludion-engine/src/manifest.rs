@@ -72,6 +72,21 @@ pub struct ImportSection {
     /// Halve every cooked map of this table until neither side exceeds this many texels; absent
     /// keeps the source size. Part of the cooked map's key.
     pub max_texture_size: Option<u32>,
+    /// The coarser mesh levels every imported mesh of this table gets, finest first (`ludion import
+    /// --lod`); empty writes no chain. Part of what a sync records, so changing it re-imports.
+    #[serde(default)]
+    pub lod: Vec<LodEntry>,
+}
+
+/// One `[[import]] lod` entry.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LodEntry {
+    /// The screen size (fraction of viewport height) under which the level draws.
+    pub screen_size: f64,
+    /// The fraction of the base's triangles to simplify to, in (0, 1); absent takes the level from
+    /// the glTF's authored `<name>_LOD<n>` node. Every entry has one or none does.
+    pub ratio: Option<f64>,
 }
 
 /// The `[ios]` table.
@@ -108,7 +123,7 @@ pub fn load(project_dir: &Path) -> Result<Manifest, Diagnostic> {
         invalid(
             format!("`{}` is not a valid manifest: {err}", path.display()),
             "the keys are `name`, `default_scene`, the `[ios]` table's `bundle_id` and `quality`, and \
-             each `[[import]]` table's `from`, `to` and `max_texture_size`, the `[cook]` table's \
+             each `[[import]]` table's `from`, `to`, `max_texture_size` and `lod`, the `[cook]` table's \
              `targets`, `textures`, `meshes` and `roots`, and the `[audio]` table's `voices_per_sound` and \
              `voices_total`",
         )
@@ -155,11 +170,47 @@ pub fn load(project_dir: &Path) -> Result<Manifest, Diagnostic> {
             message,
             "`[cook]` is `targets = [\"desktop\", \"ios\"]`, `textures = true` and \
              `roots = [\"scenes/assets\"]` (project-relative, none overlapping an `[[import]] to`); \
-             `[[import]] max_texture_size` is a texel count of at least 4",
+             `[[import]] max_texture_size` is a texel count of at least 4; `[[import]] lod` is up to three \
+             `{ screen_size, ratio }` entries, finest first, screen sizes strictly decreasing and ratios in (0, 1)",
         )
     })?;
     manifest.voice_caps()?;
     Ok(manifest)
+}
+
+/// The `lod` rules `ludion_import` enforces on `--lod`, for the manifest's own readable error.
+fn validate_lod(lod: &[LodEntry]) -> Result<(), String> {
+    if lod.len() > 3 {
+        return Err(format!(
+            "{} levels listed; a mesh chains at most 3",
+            lod.len()
+        ));
+    }
+    let mut previous = f64::INFINITY;
+    for (index, entry) in lod.iter().enumerate() {
+        let n = index + 1;
+        if !(entry.screen_size.is_finite()
+            && entry.screen_size > 0.0
+            && entry.screen_size < previous)
+        {
+            return Err(format!(
+                "level {n} has `screen_size` = {}; screen sizes must be finite, above zero and strictly decreasing",
+                entry.screen_size
+            ));
+        }
+        previous = entry.screen_size;
+        if let Some(ratio) = entry.ratio.filter(|ratio| !(*ratio > 0.0 && *ratio < 1.0)) {
+            return Err(format!(
+                "level {n} has `ratio` = {ratio}; use a fraction of the triangles in (0, 1)"
+            ));
+        }
+    }
+    if lod.iter().any(|entry| entry.ratio.is_some())
+        && lod.iter().any(|entry| entry.ratio.is_none())
+    {
+        return Err("give every level a `ratio` (generated levels) or none (thresholds for authored `_LOD<n>` nodes)".to_string());
+    }
+    Ok(())
 }
 
 fn validate_cook(manifest: &Manifest) -> Result<(), String> {
@@ -170,6 +221,10 @@ fn validate_cook(manifest: &Manifest) -> Result<(), String> {
                 index + 1
             ));
         }
+    }
+    for (index, table) in manifest.imports.iter().enumerate() {
+        validate_lod(&table.lod)
+            .map_err(|why| format!("`[[import]]` #{} `lod`: {why}", index + 1))?;
     }
     let Some(cook) = &manifest.cook else {
         return Ok(());
@@ -591,6 +646,56 @@ mod tests {
             assert!(err.message.contains("overlaps"), "{to}: {}", err.message);
         }
         assert!(parse(&with_table("assets/other")).is_ok());
+    }
+
+    #[test]
+    fn an_import_lod_list_loads_and_a_bad_one_is_refused() {
+        let table = |extra: &str| {
+            format!(
+                "name = \"a\"\ndefault_scene = \"s/a.yaml\"\n[[import]]\nfrom = \"k/*.gltf\"\nto = \"out\"\n{extra}"
+            )
+        };
+        assert!(parse(&table("")).unwrap().imports[0].lod.is_empty());
+        let chain = parse(&table(
+            "lod = [{ screen_size = 0.25, ratio = 0.5 }, { screen_size = 0.1, ratio = 0.25 }]\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            chain.imports[0].lod,
+            [
+                LodEntry {
+                    screen_size: 0.25,
+                    ratio: Some(0.5)
+                },
+                LodEntry {
+                    screen_size: 0.1,
+                    ratio: Some(0.25)
+                },
+            ]
+        );
+        assert!(parse(&table("lod = [{ screen_size = 0.3 }]\n")).is_ok());
+        for (bad, needle) in [
+            ("lod = [{ screen_size = 0.0 }]\n", "strictly decreasing"),
+            (
+                "lod = [{ screen_size = 0.1 }, { screen_size = 0.2 }]\n",
+                "strictly decreasing",
+            ),
+            ("lod = [{ screen_size = 0.2, ratio = 1.0 }]\n", "(0, 1)"),
+            (
+                "lod = [{ screen_size = 0.2, ratio = 0.5 }, { screen_size = 0.1 }]\n",
+                "every level",
+            ),
+            (
+                "lod = [{ screen_size = 0.8 }, { screen_size = 0.6 }, { screen_size = 0.4 }, { screen_size = 0.2 }]\n",
+                "at most 3",
+            ),
+        ] {
+            let err = parse(&table(bad)).unwrap_err();
+            assert_eq!(err.code, MANIFEST_INVALID, "{bad}");
+            assert!(err.message.contains(needle), "{bad}: {}", err.message);
+        }
+        let err = parse(&table("lod = [{ size = 0.2 }]\n")).unwrap_err();
+        assert_eq!(err.code, MANIFEST_INVALID);
     }
 
     #[test]

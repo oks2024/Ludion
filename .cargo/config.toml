@@ -1,0 +1,7 @@
+# meshoptimizer's C++ (built by the `cc` crate, which reads these) must not contract `a*b+c` into
+# FMA: clang does on aarch64 by default and x86 does not, so a generated mesh LOD level would differ
+# between the pinned platforms. Target-scoped, so MSVC never sees the flag.
+[env]
+CXXFLAGS_aarch64_apple_darwin = "-ffp-contract=off"
+CXXFLAGS_aarch64_apple_ios = "-ffp-contract=off"
+CXXFLAGS_aarch64_apple_ios_sim = "-ffp-contract=off"

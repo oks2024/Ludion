@@ -1,7 +1,7 @@
 //! The importer's skin mapping: the committed skinned fixtures, then hand-built one-triangle
 //! documents for the weight rules and every refusal.
 
-use ludion_import::{ExternalFiles, Import, import};
+use ludion_import::{ExternalFiles, Import, ImportOptions, import};
 use ludion_scene::{MESH_JOINT_LIMIT, MeshDocument, check_mesh, emit_mesh};
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -10,7 +10,12 @@ fn fixture(name: &str) -> Vec<u8> {
 }
 
 fn import_fixture(name: &str) -> Import {
-    import(&fixture(name), ExternalFiles::Refused, false).expect("the fixture imports clean")
+    import(
+        &fixture(name),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .expect("the fixture imports clean")
 }
 
 fn skin_of(import: &Import) -> &ludion_scene::MeshSkin {
@@ -194,7 +199,11 @@ impl Spec {
     }
 
     fn import(&self, lossy: bool) -> Result<Import, Vec<ludion_core::diagnostics::Diagnostic>> {
-        import(self.gltf().as_bytes(), ExternalFiles::Refused, lossy)
+        import(
+            self.gltf().as_bytes(),
+            ExternalFiles::Refused,
+            &ImportOptions::lossy(lossy),
+        )
     }
 
     /// The single `L1202` a strict import fails with: its message.

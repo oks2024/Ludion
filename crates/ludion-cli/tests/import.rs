@@ -760,6 +760,84 @@ fn skinned_mannequin_imports_clean() {
     );
 }
 
+/// `--lod` writes a generated chain beside the base: two level files the base lists, which
+/// `check-scene` validates through the loader's rules, byte-identical on a second import.
+#[test]
+fn lod_flags_write_a_generated_chain_that_checks_and_reproduces() {
+    let glb = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../ludion-import/tests/fixtures/skin-mannequin.glb");
+    let import = |name: &str| {
+        let out = scratch(name);
+        let output = run_ludion(&[
+            "import",
+            glb.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--lod",
+            "0.25:0.5",
+            "--lod",
+            "0.1:0.25",
+        ]);
+        assert!(
+            output.status.success(),
+            "import failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        out
+    };
+    let out = import("skin-mannequin-lod-a");
+    let base = out.join("meshes/skin-mannequin.mesh.yaml");
+    let text = std::fs::read_to_string(&base).unwrap();
+    assert!(
+        text.contains("skin-mannequin.lod1.mesh.yaml")
+            && text.contains("skin-mannequin.lod2.mesh.yaml"),
+        "the base lists both levels:\n{text}"
+    );
+    for rel in [
+        "meshes/skin-mannequin.mesh.yaml",
+        "meshes/skin-mannequin.lod1.mesh.yaml",
+        "meshes/skin-mannequin.lod2.mesh.yaml",
+    ] {
+        let output = run_ludion(&["check-scene", out.join(rel).to_str().unwrap()]);
+        assert!(
+            output.status.success(),
+            "check-scene failed for {rel}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let again = import("skin-mannequin-lod-b");
+    for rel in [
+        "meshes/skin-mannequin.mesh.yaml",
+        "meshes/skin-mannequin.lod1.mesh.yaml",
+        "meshes/skin-mannequin.lod2.mesh.yaml",
+    ] {
+        assert_eq!(
+            std::fs::read(out.join(rel)).unwrap(),
+            std::fs::read(again.join(rel)).unwrap(),
+            "{rel} must reproduce byte for byte"
+        );
+    }
+}
+
+/// A malformed `--lod` is a readable usage error, not a panic.
+#[test]
+fn a_malformed_lod_flag_is_a_readable_usage_error() {
+    let glb = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../ludion-import/tests/fixtures/skin-mannequin.glb");
+    let out = scratch("skin-mannequin-lod-bad");
+    let output = run_ludion(&[
+        "import",
+        glb.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+        "--lod",
+        "far:half",
+    ]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("is not a number"), "{stderr}");
+}
+
 /// **Skeletal Animation W3 mesh drift gate.** `examples/gallery/meshes/skin-mannequin.mesh.yaml` (the
 /// `ragdoll-skinned` gallery scene's mesh asset) is a straight copy of a fresh import — a fresh
 /// `skin-mannequin.glb` import must reproduce it byte for byte.

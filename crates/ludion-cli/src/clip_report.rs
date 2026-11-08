@@ -238,7 +238,7 @@ fn derived_source(
     let import = match ludion_import::import(
         &bytes,
         ExternalFiles::Beside(src.parent().unwrap_or(Path::new(""))),
-        true,
+        &ludion_import::ImportOptions::lossy(true),
     ) {
         Ok(import) => import,
         Err(diagnostics) => {

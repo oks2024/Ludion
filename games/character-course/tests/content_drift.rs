@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use ludion_import::{ExternalFiles, import};
+use ludion_import::{ExternalFiles, ImportOptions, import};
 use ludion_scene::{check_path, emit_mesh, emit_path};
 
 const REGENERATE: &str = "re-run `blender -b --factory-startup --python scenes/blender/build.py -- \
@@ -28,7 +28,7 @@ fn files_in(dir: &str, suffix: &str) -> Vec<String> {
 #[test]
 fn committed_meshes_are_what_the_glb_imports_to() {
     let bytes = std::fs::read(scenes().join("blender/course.glb")).expect("course.glb reads");
-    let imported = import(&bytes, ExternalFiles::Refused, false)
+    let imported = import(&bytes, ExternalFiles::Refused, &ImportOptions::lossy(false))
         .unwrap_or_else(|diags| panic!("course.glb imports: {diags:?}"));
     let mut expected = Vec::new();
     for artifact in &imported.meshes {

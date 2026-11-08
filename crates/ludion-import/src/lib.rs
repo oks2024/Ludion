@@ -107,6 +107,7 @@ mod animation;
 mod convert;
 mod diagnostics;
 mod document;
+mod lod;
 mod provenance;
 mod skin;
 mod sources;
@@ -126,6 +127,7 @@ use diagnostics::{
     unsupported, unweighted_vertices,
 };
 use document::check_structure;
+pub use lod::simplify_level;
 pub use provenance::relative_to;
 use skin::{SkinBinding, bind_skin, map_weights};
 use sources::{Buffers, resolve_image};
@@ -314,6 +316,37 @@ pub enum ExternalFiles<'a> {
     Refused,
 }
 
+/// How an import runs: the lossy-feature mode and the mesh LOD chain to write.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ImportOptions {
+    /// Compile the supported subset of a glTF that uses unsupported features, reporting each as a
+    /// warning, instead of refusing it (`L1202`).
+    pub allow_lossy: bool,
+    /// The coarser levels every imported mesh gets, finest first; empty writes no chain.
+    pub lods: Vec<LodSpec>,
+}
+
+impl ImportOptions {
+    /// Options with `allow_lossy` set as given and no LOD chain.
+    #[must_use]
+    pub fn lossy(allow_lossy: bool) -> Self {
+        Self {
+            allow_lossy,
+            lods: Vec::new(),
+        }
+    }
+}
+
+/// One coarser mesh level an import writes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LodSpec {
+    /// The screen size under which the level draws (`MeshLodRef::screen_size`).
+    pub screen_size: f64,
+    /// The fraction of the base's triangles to simplify to, in (0, 1); `None` takes the level from
+    /// the glTF's authored `<name>_LOD<n>` node.
+    pub ratio: Option<f64>,
+}
+
 /// Compiles the glTF in `bytes` (a `.gltf` or `.glb`) into an [`Import`] plan. `external` says
 /// where external buffer/image URIs may be read from: [`ExternalFiles::Beside`] resolves relative
 /// URIs at or below the input file's directory, regular files of at most 512 MiB.
@@ -325,26 +358,28 @@ pub enum ExternalFiles<'a> {
 /// - `L1111` for a compiled mesh whose data is inconsistent.
 /// - `L1204` if an external URI leaves the allowed directory (absolute, prefixed, `..`), names a
 ///   non-regular or oversized file, or `external` is [`ExternalFiles::Refused`].
-/// - `L1202`(s) if the document uses unsupported features **and** `allow_lossy` is false — the
+/// - `L1202`(s) if the document uses unsupported features **and** `options.allow_lossy` is false — the
 ///   returned vector names every offender. With `allow_lossy` true these become
 ///   [`Import::warnings`] instead and the supported subset compiles.
 ///
 /// # Example
 /// ```
 /// use std::path::Path;
-/// use ludion_import::{ExternalFiles, import};
+/// use ludion_import::{ExternalFiles, ImportOptions, import};
 ///
 /// // A one-node glTF (an identity transform, no mesh) compiles to a single part.
 /// let gltf = br#"{"asset":{"version":"2.0"},"nodes":[{"name":"root"}]}"#;
-/// let plan = import(gltf, ExternalFiles::Beside(Path::new(".")), false).unwrap();
+/// let options = ImportOptions::default();
+/// let plan = import(gltf, ExternalFiles::Beside(Path::new(".")), &options).unwrap();
 /// assert_eq!(plan.prefab.entities.len(), 1);
 /// assert!(plan.warnings.is_empty());
 /// ```
 pub fn import(
     bytes: &[u8],
     external: ExternalFiles<'_>,
-    allow_lossy: bool,
+    options: &ImportOptions,
 ) -> Result<Import, Vec<Diagnostic>> {
+    let allow_lossy = options.allow_lossy;
     let gltf::Gltf { document, blob } = gltf::Gltf::from_slice_without_validation(bytes)
         .map_err(|error| vec![invalid_gltf(format!("could not parse glTF: {error}"))])?;
     check_structure(document.as_json()).map_err(|d| vec![d])?;
@@ -385,7 +420,18 @@ pub fn import(
         buffers: &buffers,
         external,
     };
-    let (entities, bindings, part_names) = build_entities(document, &inputs, &mut state)?;
+    lod::validate_specs(&options.lods).map_err(|d| vec![d])?;
+    let (entities, bindings, part_names) =
+        build_entities(document, &inputs, &options.lods, &mut state)?;
+    if !state.authored_levels && options.lods.iter().any(|spec| spec.ratio.is_some()) {
+        state.meshes = lod::generate_levels(std::mem::take(&mut state.meshes), &options.lods)?;
+    } else if !state.authored_levels && !options.lods.is_empty() {
+        return Err(vec![Diagnostic::new(
+            ludion_core::codes::code::MESH_LOD_CHAIN,
+            "LOD thresholds without a ratio set the glTF's authored `_LOD<n>` levels, and this glTF has none",
+        )
+        .with_help("add a ratio (`--lod 0.25:0.5`) to generate the levels, or author `<name>_LOD1` nodes")]);
+    }
     let clips = match animation::import_animations(
         document,
         &bindings,
@@ -454,6 +500,8 @@ struct State {
     /// by several nodes resolves once, so each of its diagnostics is reported exactly once.
     primitives: BTreeMap<(usize, usize), Option<MeshRef>>,
     meshes: Vec<MeshArtifact>,
+    /// Whether the glTF authors `_LOD<n>` level nodes (they, not generation, supply the chains).
+    authored_levels: bool,
     /// Every glTF image's outcome, keyed by image index: the emitted texture's output-relative path,
     /// or `None` for an image no mesh document can reference (a JPEG, already reported).
     image_paths: BTreeMap<usize, Option<String>>,
@@ -500,6 +548,7 @@ fn part_clip_bindings(clips: &[ClipArtifact]) -> Vec<AssemblyClip> {
 fn build_entities(
     document: &gltf::Document,
     inputs: &Inputs,
+    lods: &[LodSpec],
     state: &mut State,
 ) -> Result<Built, Vec<Diagnostic>> {
     let nodes: Vec<gltf::Node> = document.nodes().collect();
@@ -513,7 +562,25 @@ fn build_entities(
     }
 
     let bindings = bind_skins(&nodes, &parent_of, inputs, state)?;
-    let emitted = emitted_nodes(&nodes, &parent_of, &bindings, state);
+    let mut emitted = emitted_nodes(&nodes, &parent_of, &bindings, state);
+    // Authored LOD levels are no parts: their meshes become level documents of their bases.
+    let levels = lod::authored_levels(&nodes)?;
+    state.authored_levels = !levels.is_empty();
+    if let Some(generated) = lods.iter().find(|spec| spec.ratio.is_some())
+        && !levels.is_empty()
+    {
+        return Err(vec![Diagnostic::new(
+            ludion_core::codes::code::MESH_LOD_CHAIN,
+            format!(
+                "the glTF authors `_LOD<n>` levels and a generated level (ratio {}) was also requested",
+                generated.ratio.unwrap_or_default()
+            ),
+        )
+        .with_help("a chain has one source: drop the ratios to keep the authored levels, or rename the `_LOD<n>` nodes")]);
+    }
+    for level in &levels {
+        emitted[level.node] = false;
+    }
     let mut entity_of: Vec<Option<usize>> = vec![None; nodes.len()];
     for (position, index) in (0..nodes.len()).filter(|&i| emitted[i]).enumerate() {
         entity_of[index] = Some(position);
@@ -624,6 +691,7 @@ fn build_entities(
         });
     }
 
+    lod::attach_authored_levels(&nodes, &levels, &bindings, lods, inputs, state)?;
     node_entities.extend(child_entities);
     let part_names = (0..nodes.len())
         .map(|index| emitted[index].then(|| entity_names[index].clone()))

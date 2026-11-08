@@ -2,7 +2,7 @@
 //! (`root` → `spine` → `head`, node indices 1–3) under a skinned one-triangle mesh (node 0).
 
 use ludion_core::diagnostics::Diagnostic;
-use ludion_import::{ClipArtifact, ExternalFiles, Import, import};
+use ludion_import::{ClipArtifact, ExternalFiles, Import, ImportOptions, import};
 use ludion_scene::{Ease, check_animation, emit_animation, sample_rotation};
 
 const ROOT: usize = 1;
@@ -166,7 +166,11 @@ fn gltf_with_nodes(animations: &[Animation], nodes: &str, skins: &str) -> String
 }
 
 fn run(animations: &[Animation], lossy: bool) -> Result<Import, Vec<Diagnostic>> {
-    import(gltf(animations).as_bytes(), ExternalFiles::Refused, lossy)
+    import(
+        gltf(animations).as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(lossy),
+    )
 }
 
 fn clip_of(animations: &[Animation]) -> ClipArtifact {
@@ -669,7 +673,12 @@ fn a_rotation_on_a_pivot_node_imports_as_a_part_clip() {
         &[quat([1.0, 0.0, 0.0], 0.0), quat([1.0, 0.0, 0.0], -100.0)],
     );
     let json = gltf_with_nodes(&[animation(vec![spin])], &nodes, SKINS);
-    let plan = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports");
+    let plan = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .expect("imports");
 
     let clip = &plan.clips[0];
     assert!(clip.binds_parts);
@@ -747,7 +756,12 @@ fn part_tracks_are_parent_first_whatever_the_document_order() {
     );
     let reach = translation(4, vec![0.0, 1.0], &[[1.0, 0.0, 0.0], [1.0, 1.0, 0.0]]);
     let json = gltf_with_nodes(&[animation(vec![reach, turn])], &nodes, SKINS);
-    let plan = import(json.as_bytes(), ExternalFiles::Refused, false).expect("imports");
+    let plan = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .expect("imports");
 
     let targets: Vec<&str> = plan.clips[0]
         .doc
@@ -772,7 +786,12 @@ fn a_channel_on_a_node_under_a_skin_joint_is_l1202() {
     let nodes = format!(r#"{nodes},{{"name":"hat"}}"#);
     let on_hat = translation(4, vec![0.0, 1.0], &[[0.0; 3], [1.0, 0.0, 0.0]]);
     let json = gltf_with_nodes(&[animation(vec![on_hat])], &nodes, SKINS);
-    let errors = import(json.as_bytes(), ExternalFiles::Refused, false).expect_err("refused");
+    let errors = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .expect_err("refused");
     assert!(
         errors
             .iter()
@@ -791,8 +810,12 @@ fn a_channel_on_a_folded_joint_is_l1202() {
     let animations = [animation(vec![moving(3), moving(4)])];
     let json = gltf_with_nodes(&animations, nodes, skins);
 
-    let errors =
-        import(json.as_bytes(), ExternalFiles::Refused, false).expect_err("strict refuses");
+    let errors = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .expect_err("strict refuses");
     assert!(
         errors
             .iter()
@@ -802,7 +825,12 @@ fn a_channel_on_a_folded_joint_is_l1202() {
         "{errors:?}"
     );
 
-    let import = import(json.as_bytes(), ExternalFiles::Refused, true).expect("lossy imports");
+    let import = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(true),
+    )
+    .expect("lossy imports");
     assert!(
         import.warnings.iter().any(|w| w.code.as_str() == "L1202"
             && w.message.contains("j1")
