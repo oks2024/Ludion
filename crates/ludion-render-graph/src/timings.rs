@@ -231,7 +231,7 @@ impl Gpu {
         let frame = self.allocate_physicals(schedule);
         // Reference `output` so a caller can't misroute the target; the timing run renders the same
         // graph the image path would.
-        let _ = &frame[schedule.aliasing.assignment[output.index()]];
+        let _ = &frame.textures[schedule.aliasing.assignment[output.index()]];
 
         let mut encoder = self
             .device
@@ -239,7 +239,7 @@ impl Gpu {
                 label: Some("ludion-render-graph timing frame"),
             });
         match recorder {
-            None => self.record_passes(schedule, &frame, &mut encoder, Some(&query_set)),
+            None => self.record_passes(schedule, &frame.textures, &mut encoder, Some(&query_set)),
             Some(recorder) => {
                 self.record_external_passes(
                     schedule,

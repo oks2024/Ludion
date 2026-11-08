@@ -3,7 +3,9 @@
 //! The output is built entirely from ordered `Vec`s and `serde` structs (no hash maps), so field
 //! order and content are fixed byte-for-byte given the same graph — suitable for snapshot testing
 //! without a GPU. It records every pass (name, kind, reads, writes), every virtual resource (its
-//! descriptor), the derived execution order, and the transient-aliasing assignment.
+//! descriptor), the derived execution order, and the transient-aliasing assignment. Graph buffers add a
+//! top-level `buffers` array and per-pass `buffer_reads`/`buffer_writes`, each omitted when empty so
+//! a graph without buffers dumps the bytes it dumped before buffers existed.
 
 use serde::Serialize;
 
@@ -14,6 +16,8 @@ use crate::schedule::Schedule;
 struct GraphDump<'a> {
     passes: Vec<PassDump<'a>>,
     resources: Vec<ResourceDump<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    buffers: Vec<BufferDump<'a>>,
     schedule: Vec<&'a str>,
     aliasing: AliasingDump<'a>,
 }
@@ -24,6 +28,17 @@ struct PassDump<'a> {
     kind: &'a str,
     reads: Vec<String>,
     writes: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    buffer_reads: Vec<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    buffer_writes: Vec<&'a str>,
+}
+
+#[derive(Serialize)]
+struct BufferDump<'a> {
+    name: &'a str,
+    size: u64,
+    usages: Vec<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -126,6 +141,16 @@ impl Schedule {
                         .iter()
                         .map(|&w| handle_str(resources, w))
                         .collect(),
+                    buffer_reads: pass
+                        .buffer_reads
+                        .iter()
+                        .map(|b| self.buffers[b.index()].name.as_str())
+                        .collect(),
+                    buffer_writes: pass
+                        .buffer_writes
+                        .iter()
+                        .map(|b| self.buffers[b.index()].name.as_str())
+                        .collect(),
                 }
             })
             .collect();
@@ -144,6 +169,16 @@ impl Schedule {
                 depth: r.desc.depth_slices,
                 mips: r.desc.mip_levels,
                 usages: usage_strs(&r.desc.usages),
+            })
+            .collect();
+
+        let buffer_dumps = self
+            .buffers
+            .iter()
+            .map(|b| BufferDump {
+                name: &b.name,
+                size: b.desc.size,
+                usages: b.desc.usages.iter().map(|u| u.as_str()).collect(),
             })
             .collect();
 
@@ -186,6 +221,7 @@ impl Schedule {
         let dump = GraphDump {
             passes,
             resources: resource_dumps,
+            buffers: buffer_dumps,
             schedule,
             aliasing: AliasingDump {
                 physical_texture_count: self.aliasing.physicals.len(),

@@ -3,8 +3,8 @@
 
 //! `ludion-render-graph` — the engine's one rendering abstraction: a wgpu frame graph.
 //!
-//! A frame is described *declaratively* — virtual resources (transient textures + the final target)
-//! and passes that declare what they read and write — and the graph derives everything else: a
+//! A frame is described *declaratively* — virtual resources (transient textures, graph-owned buffers, and the final
+//! target) and passes that declare what they read and write — and the graph derives everything else: a
 //! deterministic execution order from the dependency edges, and transient aliasing (reusing one
 //! physical texture for virtual resources whose lifetimes do not overlap). Only then does the
 //! [`execute`] layer touch wgpu, resolving the plan onto a device that always draws into an
@@ -72,11 +72,14 @@ pub use execute::{
     ColorTarget, Gpu, MAX_TEXTURE_DIMENSION_2D, PassRecorder, RecordedPass, RenderedImage,
     compressed_format_supported, engine_limits,
 };
-pub use graph::{PassDecl, PassKind, RenderGraph, ResourceDecl, ResourceKind};
+pub use graph::{BufferDecl, PassDecl, PassId, PassKind, RenderGraph, ResourceDecl, ResourceKind};
 pub use pass_timing::PassTimingRing;
 pub use present::{PresentOutcome, PresentSize, PresentTarget};
 pub use readback::{FrameSinks, StreamReadback};
-pub use resource::{Extent2d, ResourceId, TextureDesc, TextureFormat, TextureUsage};
+pub use resource::{
+    BufferDesc, BufferId, BufferUsage, Extent2d, ResourceId, TextureDesc, TextureFormat,
+    TextureUsage,
+};
 pub use schedule::{Aliasing, PhysicalTexture, Schedule, schedule};
 pub use timings::{FrameTiming, PassTiming};
 

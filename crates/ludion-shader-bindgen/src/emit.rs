@@ -11,9 +11,11 @@
 //! Emitted, in order: hoisted scalar consts, buffer-backed structs (with synthesized `_padN` byte
 //! fields wherever the layout has a gap, so the POD is `Pod`-safe and the offsets hold),
 //! binding-index consts + BGL descriptors, reflected vertex-input lists, and compute workgroup sizes.
-//! A bind group whose every member is compute-only gets its binding consts but no BGL: compute
-//! pipelines bind through auto-derived layouts (per-entry-point subsets, use-derived texture
-//! filterability) that one unified BGL cannot express. The [`Emitter`] is a plain line accumulator,
+//! A bind group whose every member is compute-only and holds a texture or sampler gets its binding
+//! consts but no BGL: compute pipelines bind through auto-derived layouts (per-entry-point subsets,
+//! use-derived texture filterability) that one unified BGL cannot express. A compute-only group of
+//! buffers only has no such ambiguity and gets its BGL, so several entry points can share one bind
+//! group. The [`Emitter`] is a plain line accumulator,
 //! so a new section slots in without restructuring.
 
 use crate::model::{
@@ -34,14 +36,19 @@ pub fn emit(reflection: &Reflection) -> String {
     }
     e.binding_indices(reflection);
     for g in &reflection.bind_groups {
-        // Compute pipelines keep their auto-derived layouts (see the module docs), so a group only
-        // compute entry points touch has no BGL to generate.
+        // Compute pipelines keep their auto-derived layouts (see the module docs), so a compute-only
+        // group with a non-buffer member has no BGL to generate.
         let compute_only = g.members.iter().all(|m| {
             reflection
                 .binding_named(m)
                 .is_some_and(|b| b.visibility == [ShaderStage::Compute])
         });
-        if !compute_only {
+        let all_buffers = g.members.iter().all(|m| {
+            reflection
+                .binding_named(m)
+                .is_some_and(|b| matches!(b.kind, BindingKind::Buffer { .. }))
+        });
+        if !compute_only || all_buffers {
             e.bind_group_layout(reflection, g);
         }
     }

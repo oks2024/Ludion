@@ -791,7 +791,8 @@ impl Gpu {
             FramePlan::Skip => None,
             _ => Some(stamp.clone()),
         };
-        let output_texture = &frame_resources[schedule.aliasing.assignment[output.index()]].texture;
+        let output_texture =
+            &frame_resources.textures[schedule.aliasing.assignment[output.index()]].texture;
         ring.last_output = Some(output_texture.clone());
         if sinks.readback {
             self.stream_track(ring, slot, output_texture, encoder, stamp);
@@ -897,7 +898,8 @@ impl Gpu {
     ) -> Result<Vec<RenderedImage>, Diagnostic> {
         let mut ring: StreamReadback<usize> = self.new_stream_readback(schedule, output);
         let frame_resources = self.allocate_physicals(schedule);
-        let output_physical = &frame_resources[schedule.aliasing.assignment[output.index()]];
+        let output_physical =
+            &frame_resources.textures[schedule.aliasing.assignment[output.index()]];
 
         let mut results: Vec<Option<RenderedImage>> = (0..count).map(|_| None).collect();
 
@@ -915,7 +917,7 @@ impl Gpu {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("ludion-render-graph ring frame"),
                 });
-            self.record_passes(schedule, &frame_resources, &mut encoder, None);
+            self.record_passes(schedule, &frame_resources.textures, &mut encoder, None);
             self.stream_track(&mut ring, slot, &output_physical.texture, encoder, frame);
         }
 

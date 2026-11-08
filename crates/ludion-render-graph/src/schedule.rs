@@ -11,8 +11,41 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 
-use crate::graph::{PassDecl, RenderGraph, ResourceDecl, ResourceKind};
-use crate::resource::{Extent2d, TextureDesc, TextureFormat, TextureUsage};
+use crate::graph::{BufferDecl, PassDecl, RenderGraph, ResourceDecl, ResourceKind};
+use crate::resource::{BufferId, Extent2d, ResourceId, TextureDesc, TextureFormat, TextureUsage};
+
+/// One scheduled access: a texture (subresource) or a whole buffer. The scheduler's edges are
+/// computed over these, so buffers order exactly like textures; only the mip logic is texture-only.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Access {
+    Texture(ResourceId),
+    Buffer(BufferId),
+}
+
+impl Access {
+    /// Whether two accesses touch common data: textures by [`ResourceId::overlaps`], buffers by id.
+    fn overlaps(self, other: Access) -> bool {
+        match (self, other) {
+            (Access::Texture(a), Access::Texture(b)) => a.overlaps(b),
+            (Access::Buffer(a), Access::Buffer(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl PassDecl {
+    fn accessed_reads(&self) -> Vec<Access> {
+        let mut all: Vec<Access> = self.reads.iter().copied().map(Access::Texture).collect();
+        all.extend(self.buffer_reads.iter().copied().map(Access::Buffer));
+        all
+    }
+
+    fn accessed_writes(&self) -> Vec<Access> {
+        let mut all: Vec<Access> = self.writes().into_iter().map(Access::Texture).collect();
+        all.extend(self.buffer_writes.iter().copied().map(Access::Buffer));
+        all
+    }
+}
 
 /// One physical texture the executor will allocate, and the virtual resources bound to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +84,7 @@ pub struct Aliasing {
 #[derive(Clone, Debug)]
 pub struct Schedule {
     pub(crate) resources: Vec<ResourceDecl>,
+    pub(crate) buffers: Vec<BufferDecl>,
     pub(crate) passes: Vec<PassDecl>,
     /// Pass indices (into `passes`) in execution order.
     pub(crate) order: Vec<usize>,
@@ -109,13 +143,14 @@ pub fn schedule(graph: &RenderGraph) -> Result<Schedule, Diagnostic> {
     let resources = graph.resources();
     let passes = graph.passes();
 
-    validate_reads(resources, passes)?;
+    validate_reads(resources, graph.buffers(), passes)?;
     let order = topo_order(passes)?;
     let lifetimes = lifetimes(resources.len(), passes, &order);
     let aliasing = alias(resources, &lifetimes);
 
     Ok(Schedule {
         resources: resources.to_vec(),
+        buffers: graph.buffers().to_vec(),
         passes: passes.to_vec(),
         order,
         aliasing,
@@ -125,13 +160,13 @@ pub fn schedule(graph: &RenderGraph) -> Result<Schedule, Diagnostic> {
 /// The passes whose writes overlap `read`, when the read is **contested**: at least two distinct
 /// passes write subresources that overlap the read *and* each other. Disjoint mip writers are not
 /// contested, so a whole read of a mip pyramid stays order-free. `None` for an uncontested read.
-fn contested_writers(passes: &[PassDecl], read: crate::resource::ResourceId) -> Option<Vec<usize>> {
-    let writers: Vec<(usize, Vec<crate::resource::ResourceId>)> = passes
+fn contested_writers(passes: &[PassDecl], read: Access) -> Option<Vec<usize>> {
+    let writers: Vec<(usize, Vec<Access>)> = passes
         .iter()
         .enumerate()
         .filter_map(|(index, pass)| {
             let hits: Vec<_> = pass
-                .writes()
+                .accessed_writes()
                 .into_iter()
                 .filter(|w| w.overlaps(read))
                 .collect();
@@ -148,15 +183,28 @@ fn contested_writers(passes: &[PassDecl], read: crate::resource::ResourceId) -> 
 
 /// The passes writing what `read` reads, split into one group per mip the read overlaps (one group
 /// when the read and every write are unmipped). A whole-resource write belongs to every group.
-fn writer_groups(passes: &[PassDecl], read: crate::resource::ResourceId) -> Vec<Vec<usize>> {
-    let hits: Vec<(usize, crate::resource::ResourceId)> = passes
+fn writer_groups(passes: &[PassDecl], read: Access) -> Vec<Vec<usize>> {
+    let hits: Vec<(usize, Access)> = passes
         .iter()
         .enumerate()
         .flat_map(|(index, pass)| {
-            pass.writes()
+            pass.accessed_writes()
                 .into_iter()
                 .filter(|w| w.overlaps(read))
                 .map(move |w| (index, w))
+        })
+        .collect();
+    let Access::Texture(read) = read else {
+        // A buffer has no mips: its one group is every writer.
+        let mut group: Vec<usize> = hits.iter().map(|(index, _)| *index).collect();
+        group.dedup();
+        return vec![group];
+    };
+    let hits: Vec<(usize, ResourceId)> = hits
+        .into_iter()
+        .filter_map(|(index, w)| match w {
+            Access::Texture(t) => Some((index, t)),
+            Access::Buffer(_) => None,
         })
         .collect();
     let mut mips: Vec<Option<u32>> = hits
@@ -170,7 +218,7 @@ fn writer_groups(passes: &[PassDecl], read: crate::resource::ResourceId) -> Vec<
     }
     mips.into_iter()
         .map(|mip| {
-            let probe = crate::resource::ResourceId {
+            let probe = ResourceId {
                 index: read.index(),
                 mip,
             };
@@ -189,14 +237,21 @@ fn writer_groups(passes: &[PassDecl], read: crate::resource::ResourceId) -> Vec<
 /// overlapping that mip; a whole read of a mipped resource needs every mip covered. A contested
 /// read (several passes write what it reads) also needs a writer declared before the reader, since
 /// declaration order is the write order.
-fn validate_reads(resources: &[ResourceDecl], passes: &[PassDecl]) -> Result<(), Diagnostic> {
+fn validate_reads(
+    resources: &[ResourceDecl],
+    buffers: &[BufferDecl],
+    passes: &[PassDecl],
+) -> Result<(), Diagnostic> {
     let writes: Vec<_> = passes.iter().flat_map(PassDecl::writes).collect();
     for (consumer, pass) in passes.iter().enumerate() {
-        for read in pass.reads() {
-            if let Some(writers) = contested_writers(passes, read)
+        for access in pass.accessed_reads() {
+            let name = match access {
+                Access::Texture(read) => &resources[read.index()].name,
+                Access::Buffer(buffer) => &buffers[buffer.index()].name,
+            };
+            if let Some(writers) = contested_writers(passes, access)
                 && writers.iter().all(|&w| w >= consumer)
             {
-                let name = &resources[read.index()].name;
                 return Err(Diagnostic::new(
                     code::RENDER_GRAPH_UNWRITTEN_READ,
                     format!(
@@ -210,6 +265,25 @@ fn validate_reads(resources: &[ResourceDecl], passes: &[PassDecl]) -> Result<(),
                      pass that writes this resource before the pass that reads it",
                 ));
             }
+            let read = match access {
+                Access::Texture(read) => read,
+                Access::Buffer(buffer) => {
+                    if passes.iter().any(|p| p.buffer_writes.contains(&buffer)) {
+                        continue;
+                    }
+                    return Err(Diagnostic::new(
+                        code::RENDER_GRAPH_UNWRITTEN_READ,
+                        format!(
+                            "pass `{}` reads buffer `{name}`, but no pass writes it",
+                            pass.name
+                        ),
+                    )
+                    .with_help(
+                        "add a compute pass that writes this buffer before the pass that reads \
+                         it; graph buffers hold no contents across frames",
+                    ));
+                }
+            };
             let levels = resources[read.index()].desc.mip_levels;
             let wanted: Vec<Option<u32>> = match read.mip_level() {
                 Some(level) => vec![Some(level)],
@@ -217,7 +291,7 @@ fn validate_reads(resources: &[ResourceDecl], passes: &[PassDecl]) -> Result<(),
                 None => vec![None],
             };
             let missing = wanted.into_iter().find(|&mip| {
-                let probe = crate::resource::ResourceId {
+                let probe = ResourceId {
                     index: read.index(),
                     mip,
                 };
@@ -275,7 +349,7 @@ fn topo_order(passes: &[PassDecl]) -> Result<Vec<usize>, Diagnostic> {
         }
     }
     for (consumer, pass) in passes.iter().enumerate() {
-        for read in pass.reads() {
+        for read in pass.accessed_reads() {
             // Contention is judged per overlapping mip: writers of different mips never order each
             // other, so a read of a pyramid orders against the latest earlier writer of each mip.
             for group in writer_groups(passes, read) {
@@ -300,10 +374,11 @@ fn topo_order(passes: &[PassDecl]) -> Result<Vec<usize>, Diagnostic> {
     }
     for (later, pass) in passes.iter().enumerate() {
         for (earlier, other) in passes.iter().enumerate().take(later) {
+            let others = other.accessed_writes();
             let overlap = pass
-                .writes()
+                .accessed_writes()
                 .iter()
-                .any(|w| other.writes().iter().any(|e| e.overlaps(*w)));
+                .any(|w| others.iter().any(|e| e.overlaps(*w)));
             if overlap {
                 add(&mut deps, later, earlier);
             }
@@ -473,7 +548,75 @@ impl PhysicalTexture {
 #[cfg(test)]
 mod tests {
     use crate::graph::{PassKind, RenderGraph};
-    use crate::resource::{ResourceId, TextureDesc};
+    use crate::resource::{BufferDesc, BufferUsage, ResourceId, TextureDesc};
+
+    fn buf(graph: &mut RenderGraph, name: &str) -> crate::resource::BufferId {
+        graph.buffer(
+            name,
+            BufferDesc::new(16, &[BufferUsage::Storage, BufferUsage::Indirect]),
+        )
+    }
+
+    #[test]
+    fn a_buffer_consumer_declared_first_still_runs_after_its_producer() {
+        let mut graph = RenderGraph::new();
+        let args = buf(&mut graph, "args");
+        let out = graph.output("final", TextureDesc::present_target(8, 8));
+        let draw = graph.add_external_pass("draw", "draw", vec![], vec![out]);
+        graph.read_buffers(draw, &[args]);
+        graph.add_external_buffer_compute_pass("cull", "cull", vec![], vec![args]);
+        let schedule = super::schedule(&graph).unwrap();
+        assert_eq!(schedule.order_names(), ["cull", "draw"]);
+    }
+
+    #[test]
+    fn an_unwritten_buffer_read_is_rejected_by_name() {
+        let mut graph = RenderGraph::new();
+        let args = buf(&mut graph, "args");
+        let out = graph.output("final", TextureDesc::present_target(8, 8));
+        let draw = graph.add_external_pass("draw", "draw", vec![], vec![out]);
+        graph.read_buffers(draw, &[args]);
+        let error = super::schedule(&graph).unwrap_err();
+        assert_eq!(error.code.as_str(), "L2002");
+        assert!(error.message.contains("buffer `args`"), "{}", error.message);
+    }
+
+    #[test]
+    fn two_buffer_writers_run_in_declaration_order() {
+        let mut graph = RenderGraph::new();
+        let args = buf(&mut graph, "args");
+        let scratch = buf(&mut graph, "scratch");
+        // `second` is declared last but also writes `scratch`, which `first` writes: write-after-write.
+        graph.add_external_buffer_compute_pass("first", "first", vec![], vec![args, scratch]);
+        graph.add_external_buffer_compute_pass("second", "second", vec![], vec![scratch]);
+        let schedule = super::schedule(&graph).unwrap();
+        assert_eq!(schedule.order_names(), ["first", "second"]);
+    }
+
+    #[test]
+    fn a_buffer_cycle_is_rejected() {
+        let mut graph = RenderGraph::new();
+        let x = buf(&mut graph, "x");
+        let y = buf(&mut graph, "y");
+        let a = graph.add_external_buffer_compute_pass("pA", "pA", vec![], vec![x]);
+        let b = graph.add_external_buffer_compute_pass("pB", "pB", vec![], vec![y]);
+        graph.read_buffers(a, &[y]);
+        graph.read_buffers(b, &[x]);
+        let error = super::schedule(&graph).unwrap_err();
+        assert_eq!(error.code.as_str(), "L2001");
+    }
+
+    #[test]
+    fn buffers_leave_texture_aliasing_unchanged() {
+        let (plain, _) = crate::build_graph(64, 64);
+        let (mut with_buffers, _) = crate::build_graph(64, 64);
+        let args = buf(&mut with_buffers, "args");
+        let _ = args;
+        let a = super::schedule(&plain).unwrap();
+        let b = super::schedule(&with_buffers).unwrap();
+        assert_eq!(a.aliasing, b.aliasing);
+        assert_eq!(a.order_names(), b.order_names());
+    }
 
     /// Resolves `physical id backing this resource` after scheduling.
     fn physical_of(schedule: &super::Schedule, resource: ResourceId) -> usize {

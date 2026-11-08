@@ -219,6 +219,115 @@ impl TextureUsage {
     }
 }
 
+/// A handle to a graph-owned buffer in a [`RenderGraph`](crate::RenderGraph)'s buffer table.
+///
+/// A separate type from [`ResourceId`]: a buffer can never be attached or sampled as a texture.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct BufferId(pub(crate) usize);
+
+impl BufferId {
+    /// The raw table index behind this handle.
+    pub fn index(self) -> usize {
+        self.0
+    }
+}
+
+/// One intended use of a graph buffer; a buffer declares a set of these.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BufferUsage {
+    /// Bound as a storage buffer (read or read-write) by a compute or render pass.
+    Storage,
+    /// Bound as a vertex or instance buffer.
+    Vertex,
+    /// The source of an indirect draw or dispatch.
+    Indirect,
+    /// The source of a copy.
+    CopySrc,
+    /// The destination of a copy or `clear_buffer`.
+    CopyDst,
+}
+
+impl BufferUsage {
+    /// The lower-case token used in `dump-graph` JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BufferUsage::Storage => "storage",
+            BufferUsage::Vertex => "vertex",
+            BufferUsage::Indirect => "indirect",
+            BufferUsage::CopySrc => "copy_src",
+            BufferUsage::CopyDst => "copy_dst",
+        }
+    }
+
+    fn to_wgpu(self) -> wgpu::BufferUsages {
+        match self {
+            BufferUsage::Storage => wgpu::BufferUsages::STORAGE,
+            BufferUsage::Vertex => wgpu::BufferUsages::VERTEX,
+            BufferUsage::Indirect => wgpu::BufferUsages::INDIRECT,
+            BufferUsage::CopySrc => wgpu::BufferUsages::COPY_SRC,
+            BufferUsage::CopyDst => wgpu::BufferUsages::COPY_DST,
+        }
+    }
+}
+
+/// A graph buffer's description: byte size and usage set.
+///
+/// A graph buffer is frame-transient and graph-owned: the executor allocates it, it never aliases
+/// another buffer, and every read needs a writer in the graph. The executor caches the allocation
+/// across frames, keyed by the description, so **round capacities up** (for example to a power of
+/// two): a size change reallocates. A reused buffer **keeps the previous frame's bytes**; a consumer
+/// that needs zeros clears the buffer in its own pass (`encoder.clear_buffer`, which needs
+/// [`BufferUsage::CopyDst`]).
+///
+/// # Example
+/// ```
+/// use ludion_render_graph::{BufferDesc, BufferUsage};
+///
+/// let indirect_args = BufferDesc::new(20, &[BufferUsage::Storage, BufferUsage::Indirect]);
+/// let instances = BufferDesc::new(64 * 1024, &[BufferUsage::Vertex, BufferUsage::Storage]);
+/// let counter = BufferDesc::new(4, &[BufferUsage::Storage, BufferUsage::CopySrc]);
+/// assert_eq!(instances.usages, [BufferUsage::Storage, BufferUsage::Vertex]);
+/// assert_eq!((indirect_args.size, counter.size), (20, 4));
+/// ```
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BufferDesc {
+    /// Size in bytes; a non-zero multiple of 4.
+    pub size: u64,
+    /// The usages, sorted and deduplicated so `dump-graph` output is stable.
+    pub usages: Vec<BufferUsage>,
+}
+
+impl BufferDesc {
+    /// A buffer of `size` bytes with the given usages.
+    ///
+    /// # Panics
+    /// If `size` is zero or not a multiple of 4 (the WebGPU copy and storage alignment), or `usages`
+    /// is empty.
+    pub fn new(size: u64, usages: &[BufferUsage]) -> Self {
+        assert!(size != 0, "a graph buffer cannot be zero bytes");
+        assert!(
+            size.is_multiple_of(4),
+            "graph buffer size {size} is not a multiple of 4 (the WebGPU copy and storage alignment)",
+        );
+        assert!(
+            !usages.is_empty(),
+            "a graph buffer must declare at least one BufferUsage",
+        );
+        let mut usages = usages.to_vec();
+        usages.sort();
+        usages.dedup();
+        BufferDesc { size, usages }
+    }
+
+    /// The union of the usages as wgpu flags. The single crossing point into the backend.
+    pub(crate) fn wgpu_usages(&self) -> wgpu::BufferUsages {
+        self.usages
+            .iter()
+            .fold(wgpu::BufferUsages::empty(), |acc, u| acc | u.to_wgpu())
+    }
+}
+
 /// A virtual texture's full description: size, dimensionality, format, and the set of usages it
 /// participates in.
 ///

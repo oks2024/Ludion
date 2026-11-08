@@ -543,10 +543,10 @@ impl Gpu {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("ludion-render-graph frame"),
                 });
-            self.record_passes(schedule, &frame, &mut encoder, None);
+            self.record_passes(schedule, &frame.textures, &mut encoder, None);
             self.queue.submit([encoder.finish()]);
 
-            let output_view = &frame[schedule.aliasing.assignment[output.index()]];
+            let output_view = &frame.textures[schedule.aliasing.assignment[output.index()]];
             readback::read_texture_to_image(
                 self,
                 &output_view.texture,
@@ -561,23 +561,36 @@ impl Gpu {
         &self,
         schedule: &Schedule,
         cache: &'a mut Option<PhysicalCache>,
-    ) -> &'a [PhysicalGpuTexture] {
-        let reusable = cache
-            .as_ref()
-            .is_some_and(|cached| cached.aliasing == schedule.aliasing);
+    ) -> &'a FrameResources {
+        let reusable = cache.as_ref().is_some_and(|cached| {
+            cached.aliasing == schedule.aliasing && cached.buffer_descs == buffer_descs(schedule)
+        });
         if !reusable {
             *cache = Some(PhysicalCache {
                 aliasing: schedule.aliasing.clone(),
-                textures: self.allocate_physicals(schedule),
+                buffer_descs: buffer_descs(schedule),
+                frame: self.allocate_physicals(schedule),
             });
         }
-        &cache.as_ref().expect("just ensured").textures
+        &cache.as_ref().expect("just ensured").frame
     }
 
-    /// Allocates one wgpu texture (and view) per physical texture the aliaser assigned. Indexed by
-    /// physical id.
-    pub(crate) fn allocate_physicals(&self, schedule: &Schedule) -> Vec<PhysicalGpuTexture> {
-        schedule
+    /// Allocates one wgpu texture (and view) per physical texture the aliaser assigned, indexed by
+    /// physical id, and one wgpu buffer per declared graph buffer, indexed by buffer id.
+    pub(crate) fn allocate_physicals(&self, schedule: &Schedule) -> FrameResources {
+        let buffers = schedule
+            .buffers
+            .iter()
+            .map(|decl| {
+                self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&decl.name),
+                    size: decl.desc.size,
+                    usage: decl.desc.wgpu_usages(),
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
+        let textures = schedule
             .aliasing
             .physicals
             .iter()
@@ -624,7 +637,8 @@ impl Gpu {
                     mip_views,
                 }
             })
-            .collect()
+            .collect();
+        FrameResources { textures, buffers }
     }
 
     /// Records every pass into `encoder` in scheduled order, resolving virtual resources to physical
@@ -768,7 +782,7 @@ impl Gpu {
             self.record_external_passes(schedule, &frame, &mut encoder, recorder, None);
             self.queue.submit([encoder.finish()]);
 
-            let output_view = &frame[schedule.aliasing.assignment[output.index()]];
+            let output_view = &frame.textures[schedule.aliasing.assignment[output.index()]];
             readback::read_texture_to_image(
                 self,
                 &output_view.texture,
@@ -841,7 +855,7 @@ impl Gpu {
                 });
             self.record_external_passes(schedule, &frame, &mut encoder, recorder, None);
             for (output, dest) in copies {
-                let output_view = &frame[schedule.aliasing.assignment[output.index()]];
+                let output_view = &frame.textures[schedule.aliasing.assignment[output.index()]];
                 let extent = schedule.resource(*output).desc().extent;
                 encoder.copy_texture_to_texture(
                     output_view.texture.as_image_copy(),
@@ -866,7 +880,7 @@ impl Gpu {
     pub(crate) fn record_external_passes(
         &self,
         schedule: &Schedule,
-        frame: &[PhysicalGpuTexture],
+        frame: &FrameResources,
         encoder: &mut wgpu::CommandEncoder,
         recorder: &dyn PassRecorder,
         query_set: Option<&wgpu::QuerySet>,
@@ -875,24 +889,37 @@ impl Gpu {
             let pass = &schedule.passes[pass_idx];
             // A depth-only pass (the shadow map) carries no color targets — the recorder drives its
             // own depth-only render pass from `depth`.
+            let textures = &frame.textures[..];
             let colors: Vec<ColorTarget> = pass
                 .color_targets()
                 .iter()
                 .map(|&c| {
                     let desc = &schedule.resources[c.index()].desc;
                     ColorTarget {
-                        view: view_of(schedule, frame, c),
+                        view: view_of(schedule, textures, c),
                         format: desc.format,
                         extent: desc.mip_extent(c.mip_level().unwrap_or(0)),
                     }
                 })
                 .collect();
-            let depth_view = pass.depth_target().map(|d| view_of(schedule, frame, d));
-            let storage_view = pass.storage_target().map(|s| view_of(schedule, frame, s));
+            let depth_view = pass.depth_target().map(|d| view_of(schedule, textures, d));
+            let storage_view = pass
+                .storage_target()
+                .map(|s| view_of(schedule, textures, s));
             let inputs: Vec<&wgpu::TextureView> = pass
                 .reads
                 .iter()
-                .map(|&r| view_of(schedule, frame, r))
+                .map(|&r| view_of(schedule, textures, r))
+                .collect();
+            let buffer_reads: Vec<&wgpu::Buffer> = pass
+                .buffer_reads
+                .iter()
+                .map(|b| &frame.buffers[b.index()])
+                .collect();
+            let buffer_writes: Vec<&wgpu::Buffer> = pass
+                .buffer_writes
+                .iter()
+                .map(|b| &frame.buffers[b.index()])
                 .collect();
 
             let mut recorded = RecordedPass {
@@ -903,6 +930,8 @@ impl Gpu {
                 depth: depth_view,
                 storage: storage_view,
                 inputs: &inputs,
+                buffer_reads: &buffer_reads,
+                buffer_writes: &buffer_writes,
                 device: &self.device,
                 encoder,
                 timestamps: query_set.map(|set| PassTimestamps {
@@ -970,8 +999,9 @@ pub struct ColorTarget<'a> {
 /// from [`depth`](RecordedPass::depth).
 ///
 /// A **compute** pass ([`is_compute`](RecordedPass::is_compute)) has no attachments at all: it opens
-/// [`begin_compute`](RecordedPass::begin_compute), binds [`storage`](RecordedPass::storage) as its
-/// writable output, and issues its own dispatch — the graph never sees a workgroup count.
+/// [`begin_compute`](RecordedPass::begin_compute), binds [`storage`](RecordedPass::storage) (or, for a
+/// buffer compute pass, [`buffer_writes`](RecordedPass::buffer_writes)) as its writable output, and
+/// issues its own dispatch — the graph never sees a workgroup count.
 ///
 /// # Timing contract
 ///
@@ -1005,6 +1035,12 @@ pub struct RecordedPass<'a> {
     pub storage: Option<&'a wgpu::TextureView>,
     /// The resolved input views this pass samples, in declared-reads order.
     pub inputs: &'a [&'a wgpu::TextureView],
+    /// The graph buffers this pass reads (vertex, indirect or storage source), in the order
+    /// [`read_buffers`](crate::RenderGraph::read_buffers) declared them.
+    pub buffer_reads: &'a [&'a wgpu::Buffer],
+    /// The graph buffers a buffer compute pass writes, in declared order. Buffers keep the previous
+    /// frame's bytes: clear what must start at zero.
+    pub buffer_writes: &'a [&'a wgpu::Buffer],
     /// The device, for a recorder that needs to allocate its own per-pass resources (e.g. a bind
     /// group over its inputs).
     pub device: &'a wgpu::Device,
@@ -1140,6 +1176,18 @@ fn physical_usages(phys: &crate::schedule::PhysicalTexture) -> wgpu::TextureUsag
     }
 }
 
+/// The buffer descriptions of a schedule: the second half of the [`PhysicalCache`] key.
+fn buffer_descs(schedule: &Schedule) -> Vec<crate::resource::BufferDesc> {
+    schedule.buffers.iter().map(|b| b.desc.clone()).collect()
+}
+
+/// One frame's GPU resources: the physical textures (indexed by physical id) and the graph buffers
+/// (indexed by buffer id).
+pub(crate) struct FrameResources {
+    pub(crate) textures: Vec<PhysicalGpuTexture>,
+    pub(crate) buffers: Vec<wgpu::Buffer>,
+}
+
 /// One physical texture plus its default view.
 pub(crate) struct PhysicalGpuTexture {
     pub(crate) texture: wgpu::Texture,
@@ -1163,7 +1211,8 @@ pub(crate) struct PhysicalGpuTexture {
 /// pass a texture built for something else.
 pub(crate) struct PhysicalCache {
     aliasing: Aliasing,
-    textures: Vec<PhysicalGpuTexture>,
+    buffer_descs: Vec<crate::resource::BufferDesc>,
+    frame: FrameResources,
 }
 
 impl Schedule {

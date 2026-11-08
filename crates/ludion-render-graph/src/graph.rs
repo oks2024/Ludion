@@ -4,7 +4,7 @@
 //! an executable, dumpable [`Schedule`](crate::schedule::Schedule); the schedule is what
 //! [`crate::execute`] runs on the GPU and what [`crate::dump`] serializes.
 
-use crate::resource::{ResourceId, TextureDesc, TextureUsage};
+use crate::resource::{BufferDesc, BufferId, BufferUsage, ResourceId, TextureDesc, TextureUsage};
 
 /// Whether a resource is an internal scratch texture the graph fully owns, or the external
 /// presentation target read back at the end of the frame.
@@ -29,6 +29,20 @@ pub struct ResourceDecl {
     /// Whether the resource is transient or the output target.
     pub kind: ResourceKind,
 }
+
+/// A declared graph buffer: its name and description. See [`BufferDesc`] for the lifetime rules.
+#[derive(Clone, Debug)]
+pub struct BufferDecl {
+    /// The buffer's stable, human-readable name (also its `dump-graph` key and wgpu label).
+    pub name: String,
+    /// The buffer's size and usages.
+    pub desc: BufferDesc,
+}
+
+/// A handle to a declared pass, returned by every `add_*` so buffer reads can be attached with
+/// [`RenderGraph::read_buffers`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PassId(usize);
 
 /// What a pass actually draws. Plain data — the executor ([`crate::execute`]) matches on it to pick
 /// a pipeline and bindings. Keeping the *work* as a data enum (rather than a wgpu closure) is what
@@ -62,7 +76,7 @@ pub enum PassKind {
         label: &'static str,
     },
     /// A pass that dispatches **compute** work instead of drawing: no color target and no depth
-    /// attachment, one storage-texture write, and reads resolved exactly as a render pass's are. Its
+    /// attachment, one storage write (a texture, or buffers), and reads resolved exactly as a render pass's are. Its
     /// GPU work is recorded by the same external [`PassRecorder`](crate::PassRecorder), which opens
     /// the compute pass with [`RecordedPass::begin_compute`](crate::RecordedPass::begin_compute) and
     /// issues its own dispatch — the graph stays ignorant of workgroup shapes.
@@ -104,7 +118,8 @@ impl PassKind {
 /// A declared pass: a name, the work it does, and the resources it writes.
 ///
 /// A pass writes any number of color targets (one extent between them and the depth attachment), at
-/// most one depth attachment, and at most one storage texture. All are optional so the graph can
+/// most one depth attachment, and at most one storage texture; a compute pass may instead write graph
+/// buffers. All are optional so the graph can
 /// express every shape the engine needs: a color-only post pass ([`color`](PassDecl::color) set),
 /// the scene pass (color + depth), a multi-target pass (several colors), a depth-only shadow pass
 /// (only `depth`), and a compute pass (only [`storage`](PassDecl::storage)). Its reads are stored on
@@ -130,6 +145,12 @@ pub struct PassDecl {
     /// The storage texture this pass writes, if any — set only by [`PassKind::Compute`]. A storage
     /// write is not an attachment: it is bound into the recorder's own bind group.
     pub storage: Option<ResourceId>,
+    /// The graph buffers this pass reads (vertex, indirect or storage source), set only through
+    /// [`RenderGraph::read_buffers`].
+    pub buffer_reads: Vec<BufferId>,
+    /// The graph buffers this pass writes — set only by
+    /// [`RenderGraph::add_external_buffer_compute_pass`].
+    pub buffer_writes: Vec<BufferId>,
 }
 
 impl PassDecl {
@@ -188,6 +209,7 @@ impl PassDecl {
 #[derive(Clone, Debug, Default)]
 pub struct RenderGraph {
     resources: Vec<ResourceDecl>,
+    buffers: Vec<BufferDecl>,
     passes: Vec<PassDecl>,
 }
 
@@ -338,7 +360,12 @@ impl RenderGraph {
     ///
     /// # Panics
     /// If `target` is not attachable (a 3D resource, or a mipped one without a mip).
-    pub fn add_pass(&mut self, name: impl Into<String>, kind: PassKind, target: ResourceId) {
+    pub fn add_pass(
+        &mut self,
+        name: impl Into<String>,
+        kind: PassKind,
+        target: ResourceId,
+    ) -> PassId {
         self.require_attachable(target, "color target");
         let reads = kind.intrinsic_reads();
         self.passes.push(PassDecl {
@@ -348,7 +375,10 @@ impl RenderGraph {
             color: vec![target],
             depth: None,
             storage: None,
+            buffer_reads: Vec::new(),
+            buffer_writes: Vec::new(),
         });
+        PassId(self.passes.len() - 1)
     }
 
     /// Declares an externally-recorded pass ([`PassKind::External`]): it samples `reads` and writes
@@ -369,13 +399,13 @@ impl RenderGraph {
         label: &'static str,
         reads: Vec<ResourceId>,
         colors: Vec<ResourceId>,
-    ) {
+    ) -> PassId {
         let name = name.into();
         assert!(
             !colors.is_empty(),
             "pass `{name}` declares no color target; a depth-only pass uses add_external_pass_with_depth",
         );
-        self.push_external(name, label, reads, colors, None);
+        self.push_external(name, label, reads, colors, None)
     }
 
     /// Declares an externally-recorded pass that writes `colors` and a `depth` attachment (the
@@ -393,8 +423,8 @@ impl RenderGraph {
         reads: Vec<ResourceId>,
         colors: Vec<ResourceId>,
         depth: ResourceId,
-    ) {
-        self.push_external(name.into(), label, reads, colors, Some(depth));
+    ) -> PassId {
+        self.push_external(name.into(), label, reads, colors, Some(depth))
     }
 
     fn push_external(
@@ -404,7 +434,7 @@ impl RenderGraph {
         reads: Vec<ResourceId>,
         colors: Vec<ResourceId>,
         depth: Option<ResourceId>,
-    ) {
+    ) -> PassId {
         for color in &colors {
             self.require_attachable(*color, "color target");
         }
@@ -420,7 +450,10 @@ impl RenderGraph {
             color: colors,
             depth,
             storage: None,
+            buffer_reads: Vec::new(),
+            buffer_writes: Vec::new(),
         });
+        PassId(self.passes.len() - 1)
     }
 
     /// Declares an externally-recorded **compute** pass ([`PassKind::Compute`]): it samples `reads`,
@@ -454,7 +487,7 @@ impl RenderGraph {
         label: &'static str,
         reads: Vec<ResourceId>,
         storage: ResourceId,
-    ) {
+    ) -> PassId {
         self.require_storage(storage);
         self.require_valid_reads(&reads);
         self.passes.push(PassDecl {
@@ -464,12 +497,107 @@ impl RenderGraph {
             color: Vec::new(),
             depth: None,
             storage: Some(storage),
+            buffer_reads: Vec::new(),
+            buffer_writes: Vec::new(),
         });
+        PassId(self.passes.len() - 1)
+    }
+
+    /// Declares a graph buffer and returns its handle. The executor allocates it (see
+    /// [`BufferDesc`] for the lifetime and capacity rules); a pass writes it through
+    /// [`add_external_buffer_compute_pass`](RenderGraph::add_external_buffer_compute_pass) and any
+    /// pass reads it through [`read_buffers`](RenderGraph::read_buffers).
+    pub fn buffer(&mut self, name: impl Into<String>, desc: BufferDesc) -> BufferId {
+        self.buffers.push(BufferDecl {
+            name: name.into(),
+            desc,
+        });
+        BufferId(self.buffers.len() - 1)
+    }
+
+    /// Declares an externally-recorded **compute** pass that writes graph buffers: it samples
+    /// `reads`, writes every buffer in `buffer_writes`, and has no attachments or storage texture.
+    /// The recorder receives the buffers in declared order on
+    /// [`RecordedPass::buffer_writes`](crate::RecordedPass::buffer_writes).
+    ///
+    /// # Panics
+    /// If `buffer_writes` is empty, lists a buffer twice, or names a buffer without
+    /// [`BufferUsage::Storage`].
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_render_graph::{BufferDesc, BufferUsage, RenderGraph, TextureDesc};
+    ///
+    /// let mut graph = RenderGraph::new();
+    /// let args = graph.buffer("args", BufferDesc::new(16, &[BufferUsage::Storage, BufferUsage::Indirect]));
+    /// let out = graph.output("final", TextureDesc::present_target(16, 16));
+    /// graph.add_external_buffer_compute_pass("cull", "cull", vec![], vec![args]);
+    /// let draw = graph.add_external_pass("draw", "draw", vec![], vec![out]);
+    /// graph.read_buffers(draw, &[args]);
+    ///
+    /// let schedule = ludion_render_graph::schedule(&graph).unwrap();
+    /// assert_eq!(schedule.order_names(), ["cull", "draw"]);
+    /// ```
+    pub fn add_external_buffer_compute_pass(
+        &mut self,
+        name: impl Into<String>,
+        label: &'static str,
+        reads: Vec<ResourceId>,
+        buffer_writes: Vec<BufferId>,
+    ) -> PassId {
+        let name = name.into();
+        assert!(
+            !buffer_writes.is_empty(),
+            "buffer compute pass `{name}` writes no buffer",
+        );
+        for (i, buffer) in buffer_writes.iter().enumerate() {
+            let decl = &self.buffers[buffer.index()];
+            assert!(
+                !buffer_writes[..i].contains(buffer),
+                "buffer compute pass `{name}` lists buffer `{}` twice",
+                decl.name,
+            );
+            assert!(
+                decl.desc.usages.contains(&BufferUsage::Storage),
+                "buffer compute pass `{name}` writes buffer `{}`, which does not declare \
+                 BufferUsage::Storage; add the usage",
+                decl.name,
+            );
+        }
+        self.require_valid_reads(&reads);
+        self.passes.push(PassDecl {
+            name,
+            kind: PassKind::Compute { label },
+            reads,
+            color: Vec::new(),
+            depth: None,
+            storage: None,
+            buffer_reads: Vec::new(),
+            buffer_writes,
+        });
+        PassId(self.passes.len() - 1)
+    }
+
+    /// Declares that `pass` (render or compute) reads `buffers`: the one way a pass names a buffer
+    /// read. Appends, skipping buffers already declared. The scheduler orders the pass after the
+    /// buffers' writers.
+    pub fn read_buffers(&mut self, pass: PassId, buffers: &[BufferId]) {
+        let reads = &mut self.passes[pass.0].buffer_reads;
+        for buffer in buffers {
+            if !reads.contains(buffer) {
+                reads.push(*buffer);
+            }
+        }
     }
 
     /// The declared resources, in declaration order.
     pub fn resources(&self) -> &[ResourceDecl] {
         &self.resources
+    }
+
+    /// The declared buffers, in declaration order.
+    pub fn buffers(&self) -> &[BufferDecl] {
+        &self.buffers
     }
 
     /// The declared passes, in declaration order.
@@ -486,7 +614,90 @@ impl RenderGraph {
 #[cfg(test)]
 mod tests {
     use super::{PassKind, RenderGraph};
-    use crate::resource::TextureDesc;
+    use crate::resource::{BufferDesc, BufferUsage, TextureDesc};
+
+    fn storage(size: u64) -> BufferDesc {
+        BufferDesc::new(size, &[BufferUsage::Storage, BufferUsage::Indirect])
+    }
+
+    #[test]
+    #[should_panic(expected = "zero bytes")]
+    fn a_buffer_cannot_be_empty() {
+        BufferDesc::new(0, &[BufferUsage::Storage]);
+    }
+
+    #[test]
+    #[should_panic(expected = "not a multiple of 4")]
+    fn a_buffer_size_must_be_word_aligned() {
+        BufferDesc::new(6, &[BufferUsage::Storage]);
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one BufferUsage")]
+    fn a_buffer_needs_a_usage() {
+        BufferDesc::new(4, &[]);
+    }
+
+    #[test]
+    fn buffer_usages_are_sorted_and_deduplicated() {
+        let desc = BufferDesc::new(
+            4,
+            &[
+                BufferUsage::Vertex,
+                BufferUsage::Storage,
+                BufferUsage::Vertex,
+            ],
+        );
+        assert_eq!(desc.usages, [BufferUsage::Storage, BufferUsage::Vertex]);
+    }
+
+    #[test]
+    #[should_panic(expected = "does not declare BufferUsage::Storage")]
+    fn a_written_buffer_must_be_storage() {
+        let mut graph = RenderGraph::new();
+        let vertex = graph.buffer("v", BufferDesc::new(16, &[BufferUsage::Vertex]));
+        graph.add_external_buffer_compute_pass("cull", "cull", vec![], vec![vertex]);
+    }
+
+    #[test]
+    #[should_panic(expected = "writes no buffer")]
+    fn a_buffer_compute_pass_writes_a_buffer() {
+        let mut graph = RenderGraph::new();
+        graph.add_external_buffer_compute_pass("cull", "cull", vec![], vec![]);
+    }
+
+    #[test]
+    #[should_panic(expected = "lists buffer `a` twice")]
+    fn a_buffer_is_written_once_per_pass() {
+        let mut graph = RenderGraph::new();
+        let a = graph.buffer("a", storage(16));
+        graph.add_external_buffer_compute_pass("cull", "cull", vec![], vec![a, a]);
+    }
+
+    #[test]
+    fn a_buffer_compute_pass_writes_only_its_buffers() {
+        let mut graph = RenderGraph::new();
+        let a = graph.buffer("a", storage(16));
+        let b = graph.buffer("b", storage(16));
+        graph.add_external_buffer_compute_pass("cull", "cull", vec![], vec![a, b]);
+        let pass = &graph.passes()[0];
+        assert_eq!(pass.buffer_writes, vec![a, b]);
+        assert!(pass.writes().is_empty());
+        assert!(pass.kind.is_compute());
+        assert_eq!(graph.buffers().len(), 2);
+    }
+
+    #[test]
+    fn read_buffers_appends_without_duplicates() {
+        let mut graph = RenderGraph::new();
+        let a = graph.buffer("a", storage(16));
+        let b = graph.buffer("b", storage(16));
+        let out = graph.output("final", TextureDesc::present_target(8, 8));
+        let draw = graph.add_external_pass("draw", "draw", vec![], vec![out]);
+        graph.read_buffers(draw, &[a, b]);
+        graph.read_buffers(draw, &[b, a]);
+        assert_eq!(graph.passes()[0].buffer_reads, vec![a, b]);
+    }
 
     /// A compute pass writes its storage texture, so the pass's `writes` — the scheduler's and the
     /// dump's single source of truth — names it, with no color or depth attachment beside it.

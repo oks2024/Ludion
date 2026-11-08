@@ -981,6 +981,32 @@ mod tests {
     }
 
     #[test]
+    fn a_compute_only_buffer_group_emits_a_bgl() {
+        let r = reflect_one(
+            r#"
+            struct P { n: u32 };
+            @group(0) @binding(0) var<uniform> p: P;
+            @group(0) @binding(1) var<storage, read> src: array<vec4<f32>>;
+            @group(0) @binding(2) var<storage, read_write> dst: array<vec4<f32>>;
+            @compute @workgroup_size(64)
+            fn cs(@builtin(global_invocation_id) gid: vec3<u32>) {
+                if (gid.x < p.n) { dst[gid.x] = src[gid.x]; }
+            }
+            "#,
+        );
+        let out = emit(&r);
+        assert!(out.contains("_bgl"), "{out}");
+        assert!(out.contains("Storage { read_only: false }"), "{out}");
+        assert!(out.contains("Storage { read_only: true }"), "{out}");
+        assert!(out.contains("ShaderStages::COMPUTE"), "{out}");
+        assert!(out.contains("min_binding_size"), "{out}");
+        assert!(
+            out.contains("min_binding_size: wgpu::BufferSize::new(16)"),
+            "{out}"
+        );
+    }
+
+    #[test]
     fn a_runtime_sized_struct_member_is_rejected() {
         let err = reflect(&[ShaderUnit::new(
             "t.wgsl",

@@ -1,0 +1,136 @@
+{
+  "passes": [
+    {
+      "name": "cull",
+      "kind": "cull",
+      "reads": [],
+      "writes": [],
+      "buffer_writes": [
+        "visibility",
+        "instances_out",
+        "indirect_args"
+      ]
+    },
+    {
+      "name": "prepass",
+      "kind": "prepass",
+      "reads": [],
+      "writes": [
+        "depth"
+      ],
+      "buffer_reads": [
+        "instances_out",
+        "indirect_args"
+      ]
+    },
+    {
+      "name": "scene",
+      "kind": "scene",
+      "reads": [],
+      "writes": [
+        "final",
+        "depth"
+      ],
+      "buffer_reads": [
+        "instances_out",
+        "indirect_args"
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "name": "depth",
+      "kind": "transient",
+      "format": "depth32_float",
+      "width": 64,
+      "height": 64,
+      "usages": [
+        "render_attachment",
+        "texture_binding"
+      ]
+    },
+    {
+      "name": "final",
+      "kind": "output",
+      "format": "rgba8unorm_srgb",
+      "width": 64,
+      "height": 64,
+      "usages": [
+        "render_attachment",
+        "copy_src"
+      ]
+    }
+  ],
+  "buffers": [
+    {
+      "name": "visibility",
+      "size": 4096,
+      "usages": [
+        "storage",
+        "copy_dst"
+      ]
+    },
+    {
+      "name": "instances_out",
+      "size": 65536,
+      "usages": [
+        "storage",
+        "vertex"
+      ]
+    },
+    {
+      "name": "indirect_args",
+      "size": 20,
+      "usages": [
+        "storage",
+        "indirect"
+      ]
+    }
+  ],
+  "schedule": [
+    "cull",
+    "prepass",
+    "scene"
+  ],
+  "aliasing": {
+    "physical_texture_count": 2,
+    "physical_textures": [
+      {
+        "id": 0,
+        "format": "rgba8unorm_srgb",
+        "width": 64,
+        "height": 64,
+        "usages": [
+          "render_attachment",
+          "copy_src"
+        ],
+        "resources": [
+          "final"
+        ]
+      },
+      {
+        "id": 1,
+        "format": "depth32_float",
+        "width": 64,
+        "height": 64,
+        "usages": [
+          "render_attachment",
+          "texture_binding"
+        ],
+        "resources": [
+          "depth"
+        ]
+      }
+    ],
+    "assignment": [
+      {
+        "resource": "depth",
+        "physical": 1
+      },
+      {
+        "resource": "final",
+        "physical": 0
+      }
+    ]
+  }
+}

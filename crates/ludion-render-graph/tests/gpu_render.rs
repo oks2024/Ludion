@@ -6,8 +6,9 @@
 //! byte-identical pixels.
 
 use ludion_render_graph::{
-    Extent2d, FrameTiming, Gpu, PassKind, PassRecorder, PassTiming, PassTimingRing, RecordedPass,
-    RenderGraph, ResourceId, Schedule, TextureDesc, build_graph, schedule,
+    BufferDesc, BufferUsage, Extent2d, FrameTiming, Gpu, PassKind, PassRecorder, PassTiming,
+    PassTimingRing, RecordedPass, RenderGraph, ResourceId, Schedule, TextureDesc, build_graph,
+    schedule,
 };
 
 /// Records every pass of the proving graph as a bare clear of its color target.
@@ -834,4 +835,125 @@ fn needs_gpu_multi_target_pass_and_mip_attachments_validate() {
         gpu.take_fault().is_none(),
         "wgpu rejected the multi-target or mip attachments"
     );
+}
+
+/// A buffer compute pass writes draw-indirect args; a render pass reads that graph buffer as its
+/// indirect source. Non-black output proves the compute ran first, the buffer carried
+/// `Storage | Indirect`, and the executor handed it to both recorders (also across reused frames).
+struct IndirectRecorder;
+
+impl PassRecorder for IndirectRecorder {
+    fn record(&self, pass: &mut RecordedPass<'_>) {
+        let device = pass.device;
+        match pass.kind {
+            "args" => {
+                let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("args"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        "@group(0) @binding(0) var<storage, read_write> args: array<u32, 4>;
+                         @compute @workgroup_size(1) fn main() {
+                             args[0] = 3u; args[1] = 1u; args[2] = 0u; args[3] = 0u;
+                         }"
+                        .into(),
+                    ),
+                });
+                let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("args"),
+                    layout: None,
+                    module: &module,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("args"),
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: pass.buffer_writes[0].as_entire_binding(),
+                    }],
+                });
+                let mut compute = pass.begin_compute();
+                compute.set_pipeline(&pipeline);
+                compute.set_bind_group(0, &bind, &[]);
+                compute.dispatch_workgroups(1, 1, 1);
+            }
+            "draw" => {
+                let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("draw"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        "@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+                             let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+                             return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+                         }
+                         @fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }"
+                            .into(),
+                    ),
+                });
+                let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+                let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("draw"),
+                    layout: None,
+                    vertex: wgpu::VertexState {
+                        module: &module,
+                        entry_point: Some("vs"),
+                        compilation_options: Default::default(),
+                        buffers: &[],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &module,
+                        entry_point: Some("fs"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(format.into())],
+                    }),
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    multiview_mask: None,
+                    cache: None,
+                });
+                let args = pass.buffer_reads[0];
+                let mut render = pass.begin_clear(wgpu::Color::BLACK);
+                render.set_pipeline(&pipeline);
+                render.draw_indirect(args, 0);
+            }
+            other => panic!("unexpected pass `{other}`"),
+        }
+    }
+}
+
+#[test]
+fn needs_gpu_buffer_compute_pass_feeds_an_indirect_draw() {
+    let Some(gpu) = gpu_or_skip("buffer_compute_pass_feeds_an_indirect_draw") else {
+        return;
+    };
+    let mut graph = RenderGraph::new();
+    let args = graph.buffer(
+        "args",
+        BufferDesc::new(16, &[BufferUsage::Storage, BufferUsage::Indirect]),
+    );
+    let out = graph.output("final", TextureDesc::present_target(8, 8));
+    // The consumer is declared first: only the buffer edge orders the compute pass ahead of it.
+    let draw = graph.add_external_pass("draw", "draw", vec![], vec![out]);
+    graph.read_buffers(draw, &[args]);
+    graph.add_external_buffer_compute_pass("args", "args", vec![], vec![args]);
+    let scheduled = schedule(&graph).unwrap();
+    assert_eq!(scheduled.order_names(), ["args", "draw"]);
+
+    let image = gpu.execute(&scheduled, out, &IndirectRecorder).unwrap();
+    assert!(
+        image.rgba.chunks_exact(4).any(|px| px[..3] != [0, 0, 0]),
+        "the indirect draw produced a black frame: the args buffer was not written before the draw",
+    );
+
+    // Reused buffers across streamed frames still validate and draw.
+    let mut ring = gpu.new_stream_readback(&scheduled, out);
+    for frame in 0..4usize {
+        gpu.render_streamed(&scheduled, out, &IndirectRecorder, &mut ring, frame, None)
+            .unwrap();
+    }
+    gpu.device()
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+    assert!(gpu.take_fault().is_none(), "a reused graph buffer faulted");
 }
