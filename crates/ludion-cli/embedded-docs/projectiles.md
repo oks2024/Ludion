@@ -143,3 +143,4 @@ unprimed, so shots in flight draw at their simulated position.
 - `ludion docs viewmodel` — the first-person gun a muzzle names.
 - `ludion docs patterns` — 2D bullet volleys (a separate system).
 - `ludion docs nav` — walkability grid, shared flow fields and `NavAgent` steering (feeds the motor).
+- `ludion docs culling` — projectile mesh looks are GPU frustum culled.

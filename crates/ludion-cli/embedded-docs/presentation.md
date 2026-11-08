@@ -133,3 +133,4 @@ A window draws from a presenter thread at the display's refresh rate; the sim ne
 - `ludion docs systems` — writing systems and the determinism rules.
 - `ludion docs scene-format` — the scene file the key lives in.
 - `ludion docs components-fx` — particles, the other presentation-shaped effect.
+- `ludion docs culling` — the GPU frustum cull each render runs against its own camera.
