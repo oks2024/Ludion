@@ -49,8 +49,16 @@ frame_total_ms = 0.5
 # bandwidth at 1080p. The ceiling keeps the 1.2x posture (0.075 -> 0.1). `reflections` is the
 # full-screen pass that resolves the sky's specular every frame: measured 0.0256 all four runs,
 # ceiling ~2x. `transparents` (~0.001 ms here, nothing transparent in the scene) is not gated.
+#
+# `scene` moved 0.0819 -> 0.1004 through intended features whose cost was never written here, found
+# by a bisect over 120-frame release runs: local-light shadows (0.0819 -> 0.0901), a creep to 0.0922,
+# the cascade-view debug branch (-> 0.0983; about 0.001 ms of it today, too little for a pipeline
+# constant), back to 0.0952 by later work, then the rim light and medium-scale lanes (-> 0.1004).
+# The gun's shading branches cost 0.018 ms on their own as a uniform read and are now the `VIEWMODEL`
+# pipeline constant, so world meshes do not pay for them. The ceiling keeps the 1.2x posture
+# (0.1 -> 0.12).
 [passes]
-scene           = 0.1
+scene           = 0.12
 reflections     = 0.05
 composite       = 0.08
 
