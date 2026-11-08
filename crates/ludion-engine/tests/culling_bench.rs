@@ -1,6 +1,6 @@
-//! The culling torture scene, cull off: a 40 x 40 m room of 500 animated enemies, 100 SkinBone
-//! voxel-ragdoll corpses, 60 decals, 200 sprites, 16 particle emitters and 5,000 frozen shots, with
-//! SSAO on, measured with the camera facing a wall and facing the crowd. Every number is the
+//! The culling torture scene, cull off by default (`CULLING_BENCH_CULL=on` schedules the GPU cull):
+//! a 40 x 40 m room of 500 animated enemies, 100 SkinBone voxel-ragdoll corpses, 60 decals, 200
+//! sprites, 16 particle emitters and 5,000 frozen shots, with SSAO on, measured with the camera facing a wall and facing the crowd. Every number is the
 //! "before" for the GPU cull: extract median and its per-phase breakdown, GPU `scene`, `prepass` and
 //! frame total, and the cost of sprites, particles, shots and decals by ablation.
 //!
@@ -9,6 +9,10 @@
 //! ```text
 //! cargo test -p ludion-engine --release --test it -- culling_bench --ignored --nocapture
 //! ```
+//!
+//! `CULLING_BENCH_CULL=on` measures the same arms with the cull scheduled; combine it with
+//! `WGPU_VALIDATION_INDIRECT_CALL=0` to see the indirect-validation cost. Without the variable the
+//! arms are the cull-off "before" figures.
 //!
 //! There is deliberately no `budgets/*.toml` entry: those files gate `ProfileReport` keys, and the
 //! per-phase extract breakdown is bench-only (it rides `ExtractObserver`, not the wire). The
@@ -341,6 +345,12 @@ fn gallery() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery")
 }
 
+/// `CULLING_BENCH_CULL=on` measures with the GPU cull scheduled; anything else (the default) is the
+/// cull-off "before" arm. Bench-only: no sim reads it.
+fn cull_on() -> bool {
+    std::env::var("CULLING_BENCH_CULL").is_ok_and(|v| v == "on")
+}
+
 fn engine(facing: Facing, mix: Mix, shots: bool) -> Engine {
     let mut engine = Engine::builder()
         .project_root(gallery())
@@ -351,7 +361,7 @@ fn engine(facing: Facing, mix: Mix, shots: bool) -> Engine {
         .projectile_visuals(visuals())
         .build()
         .expect("boots");
-    engine.set_frustum_culling(false);
+    engine.set_frustum_culling(cull_on());
     engine
         .load_inline_scene(&scene(facing, mix))
         .expect("the torture scene loads");
@@ -530,7 +540,8 @@ fn print_arm(arm: &Arm) {
             .map_or("n/a".to_string(), |v| format!("{v:.3} ms"))
     };
     println!(
-        "gpu: scene {} | prepass {} | ssao {} | transparents {} | decals_lit {} | projector {} | frame {}",
+        "gpu: cull {} | scene {} | prepass {} | ssao {} | transparents {} | decals_lit {} | projector {} | frame {}",
+        show(pass::CULL),
         show(pass::SCENE),
         show(pass::PREPASS),
         show(pass::SSAO),

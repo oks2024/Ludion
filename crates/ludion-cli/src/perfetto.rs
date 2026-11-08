@@ -285,6 +285,7 @@ mod tests {
             decals: None,
             load: None,
             probes: None,
+            culling: None,
             samples: Some(ProfileSamples {
                 frames: vec![10, 11],
                 system_names: vec!["bump".to_string()],

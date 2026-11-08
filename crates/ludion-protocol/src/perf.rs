@@ -155,9 +155,36 @@ pub struct ProfileReport {
     /// scene without probes. Filled offline and by a live capture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probes: Option<ProbeProfile>,
+    /// The GPU frustum cull's per-view counts, the median over the measured frames. Absent for a
+    /// scene without a world mesh, with culling off, and for a live capture, for `cluster`'s reason:
+    /// the counts come back through a readback ring only the **offline** driver arms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub culling: Option<CullingProfile>,
     /// The measured frames' raw per-frame columns, present when the request asked for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<ProfileSamples>,
+}
+
+/// What the GPU frustum cull kept, per view, read back from its indirect args.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CullingProfile {
+    /// Frames whose counts were read back; a full readback ring skips a frame rather than wait.
+    pub sampled_frames: u64,
+    /// Views past the 128 MiB cull-output cap: they draw every caster and are not in `views`.
+    pub over_cap_views: u64,
+    /// One entry per cull view, in cull order.
+    pub views: Vec<CullViewProfile>,
+}
+
+/// One cull view's counts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CullViewProfile {
+    /// `camera | sun | cascade_N | local_N`.
+    pub name: String,
+    /// Median over the sampled frames of the instances the view tested.
+    pub instances_median: f64,
+    /// Median over the sampled frames of the instances the view kept to draw.
+    pub drawn_median: f64,
 }
 
 /// The last reflection-probe resolve: probes loaded from the store versus captured.
@@ -709,6 +736,7 @@ impl ProfileWindowData {
             decals: None,
             load: None,
             probes: None,
+            culling: None,
             samples: include_samples.then_some(self.samples),
         }
     }
@@ -717,6 +745,36 @@ impl ProfileWindowData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn culling_section_round_trips_and_is_optional() {
+        let mut report = window().into_report("scene".to_string(), false);
+        assert!(report.culling.is_none());
+        report.culling = Some(CullingProfile {
+            sampled_frames: 3,
+            over_cap_views: 1,
+            views: vec![CullViewProfile {
+                name: "camera".into(),
+                instances_median: 10.0,
+                drawn_median: 4.0,
+            }],
+        });
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["culling"]["views"][0]["drawn_median"], 4.0);
+        assert_eq!(
+            serde_json::from_value::<ProfileReport>(json).unwrap(),
+            report
+        );
+        report.culling = None;
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json.get("culling").is_none());
+        assert!(
+            serde_json::from_value::<ProfileReport>(json)
+                .unwrap()
+                .culling
+                .is_none()
+        );
+    }
 
     #[test]
     fn load_section_round_trips_and_is_optional() {

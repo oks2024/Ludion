@@ -26,11 +26,13 @@ use crate::cache_eviction::CacheEviction;
 use crate::compressed::{self, CompressedUploadError};
 use crate::compute_shader::ComputeShader;
 use crate::cull::{AssetBounds, CullVolume, bounds_table, instance_bounds};
+use crate::cull_stats::{CullStatsRing, CullViewCount, SampleMeta};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
 use crate::gpu_cull::{
-    CullFrame, CullPipelines, CullTargets, WorldBucket, WorldCullInput, cull_views, world_cull,
+    CullFrame, CullPipelines, CullTargets, WorldBucket, WorldCullInput, cull_view_names,
+    cull_views, world_cull,
 };
 use crate::graph::{
     AntiAliasing, FrameSize, PostChain, build_frame_graph, build_probe_capture_graph, pass,
@@ -517,6 +519,8 @@ pub struct Renderer {
     /// ([`cull_over_cap_views`](Renderer::cull_over_cap_views)); `Cell` because the render entry
     /// points take `&self`.
     cull_over_cap: std::cell::Cell<u32>,
+    /// The cull's counts readback ring, while armed ([`set_cull_stats`](Renderer::set_cull_stats)).
+    cull_stats: std::cell::RefCell<Option<CullStatsRing>>,
 }
 
 impl Renderer {
@@ -692,6 +696,7 @@ impl Renderer {
             #[cfg(test)]
             sun_cascade_override: std::cell::Cell::new(None),
             cull_over_cap: std::cell::Cell::new(0),
+            cull_stats: std::cell::RefCell::new(None),
         })
     }
 
@@ -1077,6 +1082,24 @@ impl Renderer {
     /// the count is deterministic; 0 with culling off.
     pub fn cull_over_cap_views(&self) -> u32 {
         self.cull_over_cap.get()
+    }
+
+    /// Arms or disarms the cull's counts readback: armed, each frame's cull copies its indirect args
+    /// into a three-deep ring and skips the sample when the ring is full (see
+    /// [`collect_cull_stats`](Renderer::collect_cull_stats)). Disarmed costs one `Option` test per
+    /// frame. Arming discards any earlier samples.
+    pub fn set_cull_stats(&self, armed: bool) {
+        *self.cull_stats.borrow_mut() = armed.then(CullStatsRing::new);
+    }
+
+    /// The finished samples of the armed ring, one `Vec` per sampled frame; empty when disarmed.
+    /// `wait` blocks until every filed sample has finished, so it is for after a measured loop and
+    /// never inside a frame; without it, only samples the GPU already completed come back.
+    pub fn collect_cull_stats(&self, wait: bool) -> Vec<Vec<CullViewCount>> {
+        self.cull_stats
+            .borrow_mut()
+            .as_mut()
+            .map_or_else(Vec::new, |ring| ring.collect(self.gpu.device(), wait))
     }
 
     /// The post chain a main-frame scene runs: the scene's authored effects, masked by the machine's
@@ -1949,6 +1972,17 @@ impl Renderer {
         let (cull_views, over_cap) = chain.cull.map_or_else(Default::default, |shape| {
             cull_views(view_proj, &sun_maps, local_frusta, shape)
         });
+        let stats = self.cull_stats.borrow().is_some();
+        let cull_names = if stats {
+            cull_view_names(
+                sun_maps.len(),
+                sun_cascades.is_some(),
+                local_shadow.as_ref().map_or(0, |plan| plan.views.len()),
+                cull_views.len(),
+            )
+        } else {
+            Vec::new()
+        };
         if chain.cull.is_some() || matches!(eviction, CacheEviction::Evict) {
             self.cull_over_cap.set(over_cap);
         }
@@ -1990,6 +2024,8 @@ impl Renderer {
                         bounds: &caster_bounds,
                         buckets: &buckets,
                         views: &cull_views,
+                        stats,
+                        names: cull_names,
                         bounds_table: &cull_bounds_buf,
                         shape,
                     },
@@ -3976,19 +4012,38 @@ impl FrameRecorder<'_> {
         let [scratch, instances, args] = pass.buffer_writes else {
             unreachable!("the cull pass declares three buffers");
         };
-        let mut compute = pass.begin_compute();
-        let Some(cull) = self.cull.as_ref() else {
-            return;
-        };
-        cull.encode(
-            &self.r.cull_pipelines,
-            &mut compute,
-            CullTargets {
-                scratch,
-                instances,
+        {
+            let mut compute = pass.begin_compute();
+            let Some(cull) = self.cull.as_ref() else {
+                return;
+            };
+            cull.encode(
+                &self.r.cull_pipelines,
+                &mut compute,
+                CullTargets {
+                    scratch,
+                    instances,
+                    args,
+                },
+            );
+        }
+        if let (Some(ring), Some(cull)) = (
+            self.r.cull_stats.borrow_mut().as_mut(),
+            self.cull.as_ref().filter(|cull| !cull.names().is_empty()),
+        ) {
+            ring.file(
+                pass.device,
+                pass.encoder,
                 args,
-            },
-        );
+                SampleMeta {
+                    names: cull.names().to_vec(),
+                    tested: cull.tested().to_vec(),
+                    buckets: cull.buckets(),
+                    bucket_cap: cull.shape().buckets,
+                },
+                cull.is_empty(),
+            );
+        }
     }
 
     /// The dynamic-light injection: the frame graph's one compute pass, writing this frame's

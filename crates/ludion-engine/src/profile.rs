@@ -32,7 +32,10 @@ use ludion_core::suggest;
 use ludion_ecs::ScheduleObserver;
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
-use ludion_protocol::perf::{AssetLoadCounters, LoadProfile, ProfileSamples};
+use ludion_protocol::perf::{
+    AssetLoadCounters, CullViewProfile, CullingProfile, LoadProfile, ProfileSamples,
+};
+use ludion_renderer::CullViewCount;
 use ludion_sim::RunState;
 use serde::Deserialize;
 
@@ -169,7 +172,7 @@ pub fn profile_engine(
     let local_shadows = profile_local_shadows(engine).map_err(|d| vec![d])?;
     let sun_cascades = profile_sun_cascades(engine).map_err(|d| vec![d])?;
     let decals = profile_decals(engine).map_err(|d| vec![d])?;
-    let gpu = profile_gpu(engine, frames, warmup).map_err(|d| vec![d])?;
+    let (gpu, culling) = profile_gpu(engine, frames, warmup).map_err(|d| vec![d])?;
 
     Ok(ProfileReport {
         scene,
@@ -190,6 +193,7 @@ pub fn profile_engine(
         decals,
         load,
         probes: engine.probe_profile(),
+        culling,
         samples: Some(samples),
     })
 }
@@ -780,6 +784,7 @@ pub(crate) fn profile_replay_engine(
         decals: None,
         load: None,
         probes: None,
+        culling: None,
         samples: Some(samples),
     };
     Ok((report, engine))
@@ -995,7 +1000,14 @@ fn profile_sun_cascades(engine: &mut Engine) -> Result<SunCascadeProfile, Diagno
 
 /// Collects GPU per-pass timings by rendering the extracted scene `warmup` + `frames` times and
 /// taking the per-pass median. Returns `available: false` (never an error) when there is no adapter.
-fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfile, Diagnostic> {
+///
+/// The cull's per-view counts ride the same renders through the renderer's readback ring: `None`
+/// without an adapter, without a world mesh, or with culling off.
+fn profile_gpu(
+    engine: &mut Engine,
+    frames: u64,
+    warmup: u64,
+) -> Result<(GpuProfile, Option<CullingProfile>), Diagnostic> {
     let (width, height) = PROFILE_SIZE;
     let size = engine.frame_size(width, height)?;
     let scene = engine
@@ -1006,13 +1018,14 @@ fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfi
         Ok(renderer) => renderer,
         // A headless host with no adapter is not a profiling failure — the sim section still stands.
         Err(diag) if diag.code == code::RENDER_NO_ADAPTER => {
-            return Ok(GpuProfile {
+            let gpu = GpuProfile {
                 available: false,
                 timestamps_supported: false,
                 passes: Vec::new(),
                 frame_median_ms: None,
                 frame_tail: None,
-            });
+            };
+            return Ok((gpu, None));
         }
         Err(diag) => return Err(diag),
     };
@@ -1021,6 +1034,8 @@ fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfi
         let _ = renderer.dump_timings_json(&scene, size)?;
     }
 
+    renderer.set_cull_stats(true);
+    let mut cull_samples: Vec<Vec<CullViewCount>> = Vec::new();
     let mut timestamps_supported = true;
     let mut names: Vec<String> = Vec::new();
     let mut per_pass: Vec<Vec<f64>> = Vec::new();
@@ -1039,6 +1054,7 @@ fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfi
                     "report this as a renderer bug: `dump_timings_json` must emit its schema",
                 )
             })?;
+        cull_samples.extend(renderer.collect_cull_stats(false));
         timestamps_supported = raw.timestamps_supported;
         if let Some(span) = raw.frame_gpu_time_ms {
             spans.push(span);
@@ -1059,6 +1075,10 @@ fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfi
         }
     }
 
+    cull_samples.extend(renderer.collect_cull_stats(true));
+    renderer.set_cull_stats(false);
+    let culling = reduce_culling(&cull_samples, u64::from(renderer.cull_over_cap_views()));
+
     let passes = names
         .into_iter()
         .zip(per_pass)
@@ -1074,12 +1094,45 @@ fn profile_gpu(engine: &mut Engine, frames: u64, warmup: u64) -> Result<GpuProfi
 
     let frame_tail = tail(&spans, &span_positions);
     let frame_median_ms = (!spans.is_empty()).then(|| median_f64(&mut spans));
-    Ok(GpuProfile {
+    let gpu = GpuProfile {
         available: true,
         timestamps_supported,
         passes,
         frame_median_ms,
         frame_tail,
+    };
+    Ok((gpu, culling))
+}
+
+/// The per-view median of the sampled frames' cull counts, views in first-seen order; `None` when no
+/// frame was sampled (culling off, or no world mesh).
+fn reduce_culling(samples: &[Vec<CullViewCount>], over_cap_views: u64) -> Option<CullingProfile> {
+    if samples.is_empty() {
+        return None;
+    }
+    let mut columns: Vec<(&str, Vec<f64>, Vec<f64>)> = Vec::new();
+    for view in samples.iter().flatten() {
+        let column = match columns.iter().position(|(name, ..)| *name == view.name) {
+            Some(column) => column,
+            None => {
+                columns.push((&view.name, Vec::new(), Vec::new()));
+                columns.len() - 1
+            }
+        };
+        columns[column].1.push(f64::from(view.instances));
+        columns[column].2.push(f64::from(view.drawn));
+    }
+    Some(CullingProfile {
+        sampled_frames: samples.len() as u64,
+        over_cap_views,
+        views: columns
+            .into_iter()
+            .map(|(name, mut instances, mut drawn)| CullViewProfile {
+                name: name.to_string(),
+                instances_median: median_f64(&mut instances),
+                drawn_median: median_f64(&mut drawn),
+            })
+            .collect(),
     })
 }
 
@@ -1220,11 +1273,13 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// point light, `drop_shadow_occlusion` only for a scene with a drop shadow, `projector` for a drop
 /// shadow or a `multiply`/`add` decal, `decals_lit` only for an `alpha` or `coat` decal, `decal_receivers`
 /// only for a decal that lists receiver meshes, `transparent_depth` only for a scene with a
-/// sprite, particle or world text under fog or depth of field).
+/// sprite, particle or world text under fog or depth of field, `cull` only for a scene with a world
+/// mesh and culling on).
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 46] = [
+const KNOWN_PASS_NAMES: [&str; 47] = [
+    ludion_renderer::graph::pass::CULL,
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::LOCAL_SHADOW,
     ludion_renderer::graph::pass::PREPASS,
@@ -2412,6 +2467,7 @@ entities:
             decals: None,
             load: None,
             probes: None,
+            culling: None,
             samples: None,
         };
 
@@ -2782,6 +2838,32 @@ entities:
         }
     }
 
+    /// The offline driver fills `culling` for a mesh scene — the camera tests no more than it draws
+    /// from — and the same engine with culling off reports none.
+    #[test]
+    fn needs_gpu_profile_engine_fills_the_culling_section() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/meshes.yaml");
+        let mut engine = Engine::with_project_root(path.parent().unwrap());
+        engine.observe_load();
+        engine
+            .load_inline_scene(&std::fs::read_to_string(&path).unwrap())
+            .unwrap();
+        let report = profile_engine(&mut engine, "meshes".to_string(), 3, 1).unwrap();
+        if !report.gpu.available {
+            return;
+        }
+        let culling = report.culling.expect("a mesh scene with culling on");
+        assert!(culling.sampled_frames >= 1);
+        let camera = &culling.views[0];
+        assert_eq!(camera.name, "camera");
+        assert!(camera.instances_median > 0.0);
+        assert!(camera.drawn_median <= camera.instances_median);
+
+        engine.set_frustum_culling(false);
+        let report = profile_engine(&mut engine, "meshes".to_string(), 3, 1).unwrap();
+        assert!(report.culling.is_none());
+    }
+
     /// A quality that masks shadows draws none: the panel still counts what the camera sees, and
     /// reports that none of it was granted.
     #[test]
@@ -3015,6 +3097,7 @@ entities:
             decals: None,
             load: None,
             probes: None,
+            culling: None,
             samples: None,
         }
     }
@@ -3719,7 +3802,7 @@ gpu_frame_max_ms = 9.5
             shafts: true,
             dof: true,
             gi_inject: Some([4, 4, 4]),
-            cull: None,
+            cull: Some(ludion_renderer::CullShape::for_counts(1000, 8, 4)),
             debug_lines: true,
             ssr: Some(0.5),
             ssr_view: Some(DebugView::SsrConfidence),

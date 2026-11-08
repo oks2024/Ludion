@@ -734,3 +734,125 @@ fn needs_gpu_views_past_the_cull_capacity_draw_directly_and_change_nothing() {
     let off = renderer.render(&scene, size).expect("direct render");
     assert_eq!(on.rgba, off.rgba, "the cap changed the image");
 }
+
+/// The oracle's `(tested, kept)` for a view that `volume` bounds: the casters-only views test only
+/// the world meshes that cast, the camera view every world mesh.
+fn oracle_counts(scene: &RenderScene, volume: &CullVolume, casters_only: bool) -> (u32, u32) {
+    let assets: Vec<AssetBounds> = scene
+        .mesh_assets
+        .iter()
+        .map(|m| AssetBounds::of_mesh(m))
+        .collect();
+    let bounds = instance_bounds(&scene.meshes, &assets, &scene.bone_palette);
+    let tested =
+        |i: usize| !scene.meshes[i].viewmodel && (!casters_only || scene.meshes[i].cast_shadows);
+    let total = (0..scene.meshes.len()).filter(|&i| tested(i)).count() as u32;
+    let kept = cull(&bounds, volume)
+        .iter()
+        .filter(|&&i| tested(i as usize))
+        .count() as u32;
+    (total, kept)
+}
+
+/// **The profile's counts are the oracle's.** With the ring armed, one render yields one sample whose
+/// camera entry tests every world mesh and draws what the CPU cull keeps; with a sun and its shadowed
+/// lights the entries follow the cull's view order and each shadow view tests the casters and draws
+/// what its own volume keeps.
+#[test]
+fn needs_gpu_cull_stats_match_the_oracle() {
+    let Some(renderer) = skip_or_renderer("cull_stats_match_the_oracle") else {
+        return;
+    };
+    let size = FrameSize::native(96, 96);
+    renderer.set_cull_stats(true);
+
+    let mut scene = onoff_scene((96, 96));
+    scene.camera.projection = Mat4::perspective_rh(
+        60.0_f32.to_radians(),
+        crate::scene::aspect_ratio((96, 96)),
+        0.1,
+        1000.0,
+    );
+    renderer.render(&scene, size).expect("render");
+    let samples = renderer.collect_cull_stats(true);
+    assert_eq!(samples.len(), 1);
+    let camera = &samples[0][0];
+    let (seen, world) = visible_world(&scene);
+    assert_eq!(camera.name, "camera");
+    assert_eq!(
+        (camera.instances as usize, camera.drawn as usize),
+        (world, seen)
+    );
+
+    for cascades in [false, true] {
+        let scene = shadow_scene(cascades);
+        renderer.render(&scene, size).expect("render");
+        let samples = renderer.collect_cull_stats(true);
+        assert_eq!(samples.len(), 1, "cascades {cascades}");
+        let views = &samples[0];
+        let recorder = renderer.prepare_frame(&scene, size, None).unwrap();
+        let plan = recorder.local_shadow.as_ref().expect("local views");
+        let suns = if cascades { 3 } else { 1 };
+        assert_eq!(
+            views.len(),
+            1 + suns + plan.views.len(),
+            "cascades {cascades}"
+        );
+        let (seen, world) = visible_world(&scene);
+        assert_eq!(
+            (
+                views[0].name.as_str(),
+                views[0].instances as usize,
+                views[0].drawn as usize
+            ),
+            ("camera", world, seen)
+        );
+        for (i, view) in views[1..1 + suns].iter().enumerate() {
+            let expected = if cascades {
+                format!("cascade_{i}")
+            } else {
+                "sun".into()
+            };
+            assert_eq!(view.name, expected);
+            let casters = scene
+                .meshes
+                .iter()
+                .filter(|m| !m.viewmodel && m.cast_shadows)
+                .count() as u32;
+            assert_eq!(view.instances, casters, "{expected} tests the casters");
+            assert!(view.drawn <= view.instances, "{expected}");
+        }
+        for (i, (view, planned)) in views[1 + suns..].iter().zip(&plan.views).enumerate() {
+            assert_eq!(view.name, format!("local_{i}"));
+            let (tested, kept) = oracle_counts(&scene, &planned.cull, true);
+            assert_eq!((view.instances, view.drawn), (tested, kept), "local_{i}");
+        }
+    }
+}
+
+/// **A full ring skips rather than blocks.** Five frames rendered without collecting leave at most
+/// three samples, all of the same scene so all equal; a disarmed renderer collects nothing.
+#[test]
+fn needs_gpu_cull_stats_skip_rather_than_block() {
+    let Some(renderer) = skip_or_renderer("cull_stats_skip_rather_than_block") else {
+        return;
+    };
+    let size = FrameSize::native(96, 96);
+    let scene = onoff_scene((96, 96));
+    renderer.render(&scene, size).expect("render");
+    assert!(renderer.collect_cull_stats(true).is_empty(), "disarmed");
+
+    renderer.set_cull_stats(true);
+    for _ in 0..5 {
+        renderer.render(&scene, size).expect("render");
+    }
+    let samples = renderer.collect_cull_stats(true);
+    assert!(
+        (1..=3).contains(&samples.len()),
+        "{} samples",
+        samples.len()
+    );
+    assert!(samples.windows(2).all(|pair| pair[0] == pair[1]));
+    renderer.set_cull_stats(false);
+    assert!(renderer.collect_cull_stats(true).is_empty());
+}

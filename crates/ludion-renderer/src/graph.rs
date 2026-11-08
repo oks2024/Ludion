@@ -1308,7 +1308,11 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             "cull_args",
             BufferDesc::new(
                 shape.args_bytes(),
-                &[BufferUsage::Storage, BufferUsage::Indirect],
+                &[
+                    BufferUsage::Storage,
+                    BufferUsage::Indirect,
+                    BufferUsage::CopySrc,
+                ],
             ),
         );
         (scratch, instances, args)

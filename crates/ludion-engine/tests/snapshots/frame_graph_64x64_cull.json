@@ -374,7 +374,8 @@
       "size": 320,
       "usages": [
         "storage",
-        "indirect"
+        "indirect",
+        "copy_src"
       ]
     }
   ],

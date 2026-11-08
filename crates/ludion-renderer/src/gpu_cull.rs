@@ -60,6 +60,29 @@ pub(crate) fn cull_views(
     (views, over)
 }
 
+/// The names of the first `kept` cull views, in `cull_views` order: `camera`; `cascade_i` per sun
+/// map when the sun is cascaded, else `sun`; then `local_i` per local view.
+pub(crate) fn cull_view_names(
+    sun_maps: usize,
+    cascaded: bool,
+    local: usize,
+    kept: usize,
+) -> Vec<String> {
+    let sun = (0..sun_maps).map(|i| {
+        if cascaded {
+            format!("cascade_{i}")
+        } else {
+            "sun".to_string()
+        }
+    });
+    let local = (0..local).map(|i| format!("local_{i}"));
+    std::iter::once("camera".to_string())
+        .chain(sun)
+        .chain(local)
+        .take(kept)
+        .collect()
+}
+
 /// The cull item of `mesh` in `bucket`, from its entry `bound` in `cull::instance_bounds`: the item
 /// rule that makes the GPU's visible set the oracle's, "unknown, or admitted".
 pub(crate) fn cull_item(mesh: &MeshInstance, bucket: u32, bound: Option<Aabb>) -> CullItem {
@@ -155,6 +178,10 @@ pub(crate) struct WorldCullInput<'a> {
     pub(crate) buckets: &'a [WorldBucket<'a>],
     /// The views in order: the camera (the one view-projection its uniform uses), then the shadow views.
     pub(crate) views: &'a [CullViewSpec],
+    /// Whether the stats ring is armed: names and tested counts are built only then.
+    pub(crate) stats: bool,
+    /// One name per view in `views`, for the stats readback.
+    pub(crate) names: Vec<String>,
     pub(crate) bounds_table: &'a wgpu::Buffer,
     pub(crate) shape: CullShape,
 }
@@ -171,6 +198,8 @@ pub(crate) fn world_cull(
         bounds,
         buckets,
         views,
+        stats,
+        names,
         bounds_table,
         shape,
     } = input;
@@ -194,7 +223,21 @@ pub(crate) fn world_cull(
             pad0: 0,
         })
         .collect();
-    CullFrame::prepare(
+    // A casters-only view tests only the items that cast; the camera view tests every item.
+    let tested = if stats {
+        views
+            .iter()
+            .map(|v| {
+                items
+                    .iter()
+                    .filter(|item| !v.casters_only || item.casts != 0)
+                    .count() as u32
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut frame = CullFrame::prepare(
         device,
         pipelines,
         CullInput {
@@ -205,7 +248,10 @@ pub(crate) fn world_cull(
             bounds_table,
             shape,
         },
-    )
+    );
+    frame.names = if stats { names } else { Vec::new() };
+    frame.tested = tested;
+    frame
 }
 
 /// What a frame's cull reads.
@@ -237,6 +283,8 @@ pub(crate) struct CullFrame {
     instances: u32,
     buckets: u32,
     views: u32,
+    names: Vec<String>,
+    tested: Vec<u32>,
 }
 
 impl CullFrame {
@@ -308,7 +356,29 @@ impl CullFrame {
             instances: input.items.len() as u32,
             buckets: input.buckets.len() as u32,
             views: input.views.len() as u32,
+            names: Vec::new(),
+            tested: Vec::new(),
         }
+    }
+
+    /// The live buckets: the first `buckets()` args slots of each view are written.
+    pub(crate) fn buckets(&self) -> u32 {
+        self.buckets
+    }
+
+    /// Whether the frame culls nothing: [`encode`](CullFrame::encode) writes no args.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.instances == 0
+    }
+
+    /// Each live view's name (`camera`, `sun`, `cascade_N`, `local_N`).
+    pub(crate) fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    /// Each live view's tested instance count.
+    pub(crate) fn tested(&self) -> &[u32] {
+        &self.tested
     }
 
     /// The shape whose strides place each view's slices of the output.

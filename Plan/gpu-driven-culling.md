@@ -720,3 +720,12 @@ ablated): extract decals 0.01 to 0.04 ms, sprites 0.02 to 0.04, particles 0.03 t
 GPU frame: decals 0.6 to 1.1 ms, sprites -0.2 to 0.8, particles 0.1 to 0.6, shots -0.1 to 0.2. The GPU
 deltas move by half a millisecond between runs, so only the decals cost and the shots' extract cost are
 clear of the noise.
+
+**Indirect-validation cost (6a, unpinned M5, 2026-11-08).** wgpu validates every indirect draw with a
+compute dispatch outside the timed passes, so the GPU frame span is the figure that shows it. Method:
+`CULLING_BENCH_CULL=on cargo test -p ludion-engine --release --test it -- culling_bench::needs_gpu_culling_torture_bench --ignored --nocapture`,
+run three times with `WGPU_VALIDATION_INDIRECT_CALL=0` and three times without, interleaved. GPU frame,
+fastest of five rounds per run, validation off then on: Wall 2.84, 3.04, 2.77 ms against 2.83, 2.91, 3.00 ms;
+Crowd 3.71, 3.43, 3.24 ms against 3.32, 3.67, 3.42 ms. `cull` is 0.06 to 0.12 ms, `scene` 0.5 to 1.2 ms,
+`prepass` 0.07 to 0.23 ms in every run. The validation delta is below the M5's noise floor of ~0.3 ms
+(run-to-run spread of the same arm). Pinned figures are owed.

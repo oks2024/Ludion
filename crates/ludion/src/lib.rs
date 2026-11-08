@@ -2610,6 +2610,7 @@ mod budget_quality_tests {
             decals: None,
             load: None,
             probes: None,
+            culling: None,
             samples: None,
         }
     }
