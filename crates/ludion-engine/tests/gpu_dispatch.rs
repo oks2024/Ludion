@@ -99,7 +99,11 @@ fn needs_gpu_dump_timings_over_dispatch() {
     match body {
         ResponseBody::TimingsDump { timings } => {
             let passes = timings["passes"].as_array().expect("passes array");
-            assert_eq!(passes.len(), 15, "one entry per scheduled pass");
+            assert_eq!(passes.len(), 16, "one entry per scheduled pass");
+            assert!(
+                passes.iter().any(|p| p["name"] == "cull"),
+                "a world-mesh scene schedules the cull pass",
+            );
         }
         other => panic!("{other:?}"),
     }

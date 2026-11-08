@@ -88,6 +88,7 @@ fn needs_gpu_dump_timings_json_has_one_entry_per_pass() {
     assert_eq!(
         names,
         [
+            "cull",
             "scene",
             "reflections",
             "transparents",
