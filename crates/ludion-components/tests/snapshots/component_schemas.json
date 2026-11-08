@@ -192,6 +192,26 @@
         "type": "number",
         "format": "float",
         "default": 1000.0
+      },
+      "lod_bias": {
+        "description": "Mesh LOD bias added to the machine's quality bias (default none, meaning `0`): each unit\nhalves every switch distance, so `+1` picks coarser levels sooner and `-1` holds fine levels\nlonger. Finite, within `-4..=4` (`L1397`). Render-only; see `ludion docs culling`. A free\n`render.view` camera takes the game camera's value.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": -4.0,
+        "maximum": 4.0
+      },
+      "shadow_bias_levels": {
+        "description": "Levels a shadow draws coarser than the camera's own pick (default none, meaning `0`), at\nmost 3 (`L1397`). Render-only; see `ludion docs culling`.",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint32",
+        "minimum": 0,
+        "maximum": 3
       }
     },
     "$defs": {

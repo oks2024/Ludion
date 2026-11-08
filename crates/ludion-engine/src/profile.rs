@@ -1110,28 +1110,40 @@ fn reduce_culling(samples: &[Vec<CullViewCount>], over_cap_views: u64) -> Option
     if samples.is_empty() {
         return None;
     }
-    let mut columns: Vec<(&str, Vec<f64>, Vec<f64>)> = Vec::new();
+    // Per view: instances, drawn, and one column per LOD level (empty without a chain).
+    type Column<'a> = (&'a str, Vec<f64>, Vec<f64>, Vec<Vec<f64>>);
+    let mut columns: Vec<Column> = Vec::new();
     for view in samples.iter().flatten() {
         let column = match columns.iter().position(|(name, ..)| *name == view.name) {
             Some(column) => column,
             None => {
-                columns.push((&view.name, Vec::new(), Vec::new()));
+                columns.push((&view.name, Vec::new(), Vec::new(), Vec::new()));
                 columns.len() - 1
             }
         };
         columns[column].1.push(f64::from(view.instances));
         columns[column].2.push(f64::from(view.drawn));
+        let levels = &mut columns[column].3;
+        if levels.len() < view.levels_drawn.len() {
+            levels.resize_with(view.levels_drawn.len(), Vec::new);
+        }
+        for (level, count) in view.levels_drawn.iter().enumerate() {
+            levels[level].push(f64::from(*count));
+        }
     }
     Some(CullingProfile {
         sampled_frames: samples.len() as u64,
         over_cap_views,
         views: columns
             .into_iter()
-            .map(|(name, mut instances, mut drawn)| CullViewProfile {
-                name: name.to_string(),
-                instances_median: median_f64(&mut instances),
-                drawn_median: median_f64(&mut drawn),
-            })
+            .map(
+                |(name, mut instances, mut drawn, mut levels)| CullViewProfile {
+                    name: name.to_string(),
+                    instances_median: median_f64(&mut instances),
+                    drawn_median: median_f64(&mut drawn),
+                    levels_drawn_median: levels.iter_mut().map(|l| median_f64(l)).collect(),
+                },
+            )
             .collect(),
     })
 }
@@ -2845,6 +2857,31 @@ entities:
                 .expect("a frame that grants a view times the local_shadow pass");
             assert!(pass.median_ms.is_some());
         }
+    }
+
+    /// A view's per-level medians come from the frames that drew a chain; a view that never did
+    /// reports none.
+    #[test]
+    fn reduce_culling_reports_per_level_medians_only_for_chained_frames() {
+        let count = |name: &str, levels: &[u32]| CullViewCount {
+            name: name.to_string(),
+            instances: 10,
+            drawn: levels.iter().sum(),
+            levels_drawn: if levels.len() > 1 {
+                levels.to_vec()
+            } else {
+                Vec::new()
+            },
+        };
+        let samples = vec![
+            vec![count("camera", &[6, 2, 1]), count("sun", &[9])],
+            vec![count("camera", &[4, 4, 1]), count("sun", &[9])],
+            vec![count("camera", &[5, 3, 1]), count("sun", &[9])],
+        ];
+        let culling = reduce_culling(&samples, 0).unwrap();
+        assert_eq!(culling.views[0].levels_drawn_median, vec![5.0, 3.0, 1.0]);
+        assert_eq!(culling.views[0].drawn_median, 9.0);
+        assert!(culling.views[1].levels_drawn_median.is_empty());
     }
 
     /// The offline driver fills `culling` for a mesh scene — the camera tests no more than it draws

@@ -45,12 +45,12 @@ form — anything that is not a preset name is read as a path.
 Names are case-insensitive. Only `low` changes *which* effects are drawn; `medium` and `high` keep
 every effect and make each work less hard:
 
-| preset | `ssao_samples` | `shaft_steps` | `dof_taps` | `shadow_map_size` | `local_shadow_atlas_size` | `sun_cascades` | `pcf` | `gi_rays` | `gi_probe_scale` | `render_scale` | `particle_density` |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `low` | (effects off) | (effects off) | (effects off) | (shadows off) | (shadows off) | (shadows off) | (shadows off) | 16 | 2.0 | 0.75 | 0.25 |
-| `medium` | 8 | 16 | 12 | 1024 | 2048 | 2 | 3 | 32 | 1.5 | 1.0 | 1.0 |
-| `high` | 12 | 24 | 20 | 2048 | 4096 | 3 | 3 | 48 | 1.0 | 1.0 | 1.0 |
-| `full` (default) | 16 | 32 | 32 | 2048 | 4096 | 4 | 3 | 64 | 1.0 | 1.0 | 1.0 |
+| preset | `ssao_samples` | `shaft_steps` | `dof_taps` | `shadow_map_size` | `local_shadow_atlas_size` | `sun_cascades` | `pcf` | `gi_rays` | `gi_probe_scale` | `render_scale` | `particle_density` | `lod_bias` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `low` | (effects off) | (effects off) | (effects off) | (shadows off) | (shadows off) | (shadows off) | (shadows off) | 16 | 2.0 | 0.75 | 0.25 | 1.0 |
+| `medium` | 8 | 16 | 12 | 1024 | 2048 | 2 | 3 | 32 | 1.5 | 1.0 | 1.0 | 0.5 |
+| `high` | 12 | 24 | 20 | 2048 | 4096 | 3 | 3 | 48 | 1.0 | 1.0 | 1.0 | 0.0 |
+| `full` (default) | 16 | 32 | 32 | 2048 | 4096 | 4 | 3 | 64 | 1.0 | 1.0 | 1.0 | 0.0 |
 
 A lower count is a coarser estimate of the same picture. `shadows` off keeps the sun lighting and only
 stops it casting.
@@ -71,6 +71,10 @@ coarser). More than native is supersampling — the host's `--scale` — so `1.0
 `ParticleEmitter`'s `rate` and `burst` at extract time — population only; sizes, colours, speeds,
 lifetimes, `seed` and motion are untouched. Cheaper is smaller, `1.0` is the ceiling and the identity
 (goldens and budgets are captured at `full`).
+
+**`lod_bias`** reads upward like `gi_probe_scale`: cheaper is larger, `full`'s `0.0` is the floor. It adds to every
+`Camera.lod_bias`, so each unit halves every mesh LOD switch distance (`ludion docs culling`); a mesh without a `lods:`
+chain is untouched. The profile's `quality` descriptor carries it.
 
 **The two GI axes still cost at `low`.** `gi_dynamic: false` removes the per-frame injection, not the
 bake, so a scene with a `GiVolume` bakes sky visibility and bounce at every preset, and both axes land

@@ -3210,6 +3210,18 @@ pub struct Camera {
     /// Far clip plane distance, must exceed `near` (`L1264`; default `1000.0`).
     #[serde(default = "far_default")]
     pub far: f32,
+    /// Mesh LOD bias added to the machine's quality bias (default none, meaning `0`): each unit
+    /// halves every switch distance, so `+1` picks coarser levels sooner and `-1` holds fine levels
+    /// longer. Finite, within `-4..=4` (`L1397`). Render-only; see `ludion docs culling`. A free
+    /// `render.view` camera takes the game camera's value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = -4.0, max = 4.0))]
+    pub lod_bias: Option<f32>,
+    /// Levels a shadow draws coarser than the camera's own pick (default none, meaning `0`), at
+    /// most 3 (`L1397`). Render-only; see `ludion docs culling`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = 3))]
+    pub shadow_bias_levels: Option<u32>,
 }
 
 impl Default for Camera {
@@ -3218,6 +3230,8 @@ impl Default for Camera {
             projection: Projection::default(),
             near: 0.1,
             far: 1000.0,
+            lod_bias: None,
+            shadow_bias_levels: None,
         }
     }
 }
@@ -3252,6 +3266,44 @@ impl SemanticValidate for Camera {
     /// not authored); `near > 0` rides the schema (`L1014`). An absent bound compares as its
     /// default, so `near: 2000` alone is caught.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut found = Self::validate_lod(value);
+        found.extend(Self::validate_depth(value));
+        found
+    }
+}
+
+impl Camera {
+    /// `lod_bias` finite within `-4..=4` and `shadow_bias_levels` at most 3 (`L1397`).
+    fn validate_lod(value: &Value) -> Vec<Diagnostic> {
+        let mut found = Vec::new();
+        if let Some(bias) = value.get("lod_bias").and_then(Value::as_f64)
+            && !(-4.0..=4.0).contains(&bias)
+        {
+            found.push(
+                Diagnostic::new(
+                    code::CAMERA_LOD_INVALID,
+                    format!("the `Camera` `lod_bias` {bias} is outside -4 to 4"),
+                )
+                .with_path("/lod_bias".to_string())
+                .with_help("use a bias in -4..=4; each unit halves every LOD switch distance"),
+            );
+        }
+        if let Some(levels) = value.get("shadow_bias_levels").and_then(Value::as_u64)
+            && levels > 3
+        {
+            found.push(
+                Diagnostic::new(
+                    code::CAMERA_LOD_INVALID,
+                    format!("the `Camera` `shadow_bias_levels` {levels} is above 3"),
+                )
+                .with_path("/shadow_bias_levels".to_string())
+                .with_help("use 0 to 3; a mesh chain has at most four levels"),
+            );
+        }
+        found
+    }
+
+    fn validate_depth(value: &Value) -> Vec<Diagnostic> {
         let default = Camera::default();
         let near = value.get("near").and_then(Value::as_f64);
         let far = value.get("far").and_then(Value::as_f64);
@@ -7807,6 +7859,44 @@ mod tests {
         refused_with("Camera", "        near: 2000.0\n", "L1264", "/near");
         assert!(refusals("Camera", "        near: 0.5\n        far: 50.0\n").is_empty());
         assert!(refusals("Camera", "        near: 0.1\n        far: 1000.0\n").is_empty());
+    }
+
+    /// The LOD knobs are range-checked, absent when unauthored, and round-trip when present.
+    #[test]
+    fn camera_lod_knobs_are_bounded_and_absent_when_none() {
+        for bad in ["-4.5", "4.5"] {
+            let found = refusals("Camera", &format!("        lod_bias: {bad}\n"));
+            assert!(
+                found.iter().any(|(_, p)| p == "/lod_bias"),
+                "{bad}: {found:?}"
+            );
+        }
+        let found = refusals("Camera", "        shadow_bias_levels: 4\n");
+        assert!(
+            found.iter().any(|(_, p)| p == "/shadow_bias_levels"),
+            "{found:?}"
+        );
+        assert!(
+            refusals(
+                "Camera",
+                "        lod_bias: -4.0\n        shadow_bias_levels: 3\n"
+            )
+            .is_empty()
+        );
+        let direct = Camera::validate_semantics(
+            &serde_json::json!({"lod_bias": 9.0, "shadow_bias_levels": 7}),
+        );
+        assert_eq!(direct.len(), 2);
+        assert!(direct.iter().all(|d| d.code == code::CAMERA_LOD_INVALID));
+        let value = serde_json::to_value(Camera::default()).unwrap();
+        assert!(value.get("lod_bias").is_none() && value.get("shadow_bias_levels").is_none());
+        let set = Camera {
+            lod_bias: Some(1.5),
+            shadow_bias_levels: Some(2),
+            ..Camera::default()
+        };
+        let back: Camera = serde_json::from_value(serde_json::to_value(set).unwrap()).unwrap();
+        assert_eq!(back, set);
     }
 
     /// A `CameraOffset` field that narrows to a non-finite `f32` is `L1332` at its pointer; finite

@@ -80,7 +80,7 @@ pub fn render_probe_dump(
         size,
         overrides,
         0,
-        quality.params.particle_density,
+        &quality.params,
         &DebugCategories::None,
     )?;
     let mut renderer = Renderer::new().map_err(|d| vec![d])?;

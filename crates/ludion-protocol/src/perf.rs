@@ -185,6 +185,10 @@ pub struct CullViewProfile {
     pub instances_median: f64,
     /// Median over the sampled frames of the instances the view kept to draw.
     pub drawn_median: f64,
+    /// Median over the sampled frames of the instances drawn at each mesh LOD level, level 0
+    /// first; `drawn_median` is their sum. Empty when the frame drew no `lods:` chain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels_drawn_median: Vec<f64>,
 }
 
 /// The last reflection-probe resolve: probes loaded from the store versus captured.
@@ -272,6 +276,11 @@ pub struct QualityProfile {
     pub render_scale: f32,
     /// The SSR trace's extent as a fraction of the **output** extent, independent of `render_scale`.
     pub ssr_scale: f32,
+    /// Octaves added to every camera's mesh LOD bias; `0.0` leaves a chain's own thresholds, `1.0`
+    /// halves every switch distance. A coarser pick draws fewer triangles, so two reports at
+    /// different biases are not comparable.
+    #[serde(default)]
+    pub lod_bias: f32,
     /// Edge length of a face of the sky's specular cube, in texels.
     pub ibl_specular_size: u32,
     /// The anti-aliasing mode the frames were drawn with (`off` or `smaa`), as the host resolved it.
@@ -757,6 +766,7 @@ mod tests {
                 name: "camera".into(),
                 instances_median: 10.0,
                 drawn_median: 4.0,
+                levels_drawn_median: vec![3.0, 1.0],
             }],
         });
         let json = serde_json::to_value(&report).unwrap();
@@ -1032,6 +1042,7 @@ mod tests {
             gi_probe_scale: 1.0,
             render_scale: 1.0,
             ssr_scale: 0.5,
+            lod_bias: 0.0,
             ibl_specular_size: 256,
             anti_aliasing: "smaa".into(),
         };

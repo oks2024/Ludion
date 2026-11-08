@@ -24,6 +24,18 @@ Each mesh asset has a local box, transformed by the instance's model on the GPU.
 of its posed joint origins inflated by a per-mesh skin radius, so ragdolls on `SkinBone` parts stay visible.
 Bounds are conservative: a mesh may be kept when off screen, never dropped when visible.
 
+## Mesh LOD
+A mesh asset with a `lods:` chain (`ludion docs materials`) draws the level its bounding sphere's screen size
+selects, chosen in the same cull pass: stateless, from distance (turning never changes a level). Knobs, all
+render-only and none hashed:
+- `Camera.lod_bias` (`-4..=4`, absent is `0`) adds octaves to the pick: each unit halves every switch distance, so `+1`
+  goes coarser sooner. `Camera.shadow_bias_levels` (`0..=3`) makes shadow views draw that many levels coarser than the
+  camera would. Out of range is `L1397`. A free `render.view` camera takes the game camera's values.
+- `lod_bias` in the machine quality (`ludion docs quality`: `0` at `full`/`high`, `0.5` `medium`, `1.0` `low`) adds to the
+  camera's, so a quality only ever coarsens. `render --sweep /entities/N/components/Camera/lod_bias=0,2` compares biases;
+  a sweep does not apply `--quality`.
+- A mesh without a chain is unaffected by every knob.
+
 ## Off switch
 `Engine::set_frustum_culling(false)` — a host setting, not on the wire and not a quality axis. Shipping is
 always on; tests and the culling bench use it to compare. With it off the `cull` pass is absent from
@@ -31,10 +43,11 @@ always on; tests and the culling bench use it to compare. With it off the `cull`
 
 ## Observing it
 - `ludion profile` JSON `culling`: per view (`camera`, `sun`, `cascade_N`, `local_N`) the median instances
-  tested and drawn, read back through a non-blocking ring that skips a frame rather than stall. Offline
+  tested and drawn (`levels_drawn_median`: the drawn count per LOD level when the frame drew a chain), read back through a non-blocking ring that skips a frame rather than stall. Offline
   profiles only; absent with culling off, a live capture or a scene with no world mesh.
 - `[passes] cull` in `--dump-timings` and the profile pass list.
-- `--debug-draw cull`: each mesh's box in the rendered camera view, green kept, red culled (the CPU oracle).
+- `--debug-draw cull`: each mesh's box in the rendered camera view, green kept, red culled (the CPU oracle); a kept mesh with a `lods:` chain is tinted by its level: green 0,
+  yellow 1, orange 2, magenta 3.
 - `render.view` `cull_from: view | game | frozen`: fly a free camera while the player's frustum culls;
   `frozen` holds the cull camera captured when the command is sent.
 

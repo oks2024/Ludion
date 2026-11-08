@@ -3113,6 +3113,11 @@ export interface CullViewProfile {
    */
   instances_median: number;
   /**
+   * Median over the sampled frames of the instances drawn at each mesh LOD level, level 0
+   * first; `drawn_median` is their sum. Empty when the frame drew no `lods:` chain.
+   */
+  levels_drawn_median?: number[];
+  /**
    * `camera | sun | cascade_N | local_N`.
    */
   name: string;
@@ -3387,6 +3392,12 @@ export interface QualityProfile {
    * view count, so only resolution follows this.
    */
   local_shadow_atlas_size: number;
+  /**
+   * Octaves added to every camera's mesh LOD bias; `0.0` leaves a chain's own thresholds, `1.0`
+   * halves every switch distance. A coarser pick draws fewer triangles, so two reports at
+   * different biases are not comparable.
+   */
+  lod_bias?: number;
   /**
    * Edge length of the shadow map's PCF kernel, in taps (`3` is a 3×3 average).
    */

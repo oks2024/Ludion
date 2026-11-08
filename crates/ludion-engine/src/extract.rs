@@ -29,6 +29,7 @@ use ludion_core::par;
 use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
 use ludion_ecs::World;
 use ludion_protocol::command::ViewPose;
+use ludion_renderer::LodSettings;
 use ludion_renderer::{
     BlendData, CameraBlend, DebugSegment, DecalBlend, DecalInstance, DecalMaps, DecalReceivers,
     DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
@@ -1485,7 +1486,7 @@ fn extract_inner(
     let mut scene = RenderScene {
         camera,
         cull_camera: None,
-        lod: Default::default(),
+        lod: scene_lod(world, &ids),
         ambient,
         textures,
         mesh_assets,
@@ -4189,6 +4190,21 @@ pub(crate) fn single_camera(
     }
 }
 
+/// The mesh LOD knobs of the scene's camera ([`Camera::lod_bias`], [`Camera::shadow_bias_levels`]);
+/// the defaults when the scene has no single camera. A free `render.view` camera takes them too, so
+/// a flown view selects levels as the player's camera would.
+fn scene_lod(world: &World, ids: &[EntityId]) -> LodSettings {
+    let camera = single_camera(world, ids)
+        .ok()
+        .flatten()
+        .and_then(|id| get::<Camera>(world, id).copied())
+        .unwrap_or_default();
+    LodSettings {
+        bias: camera.lod_bias.filter(|b| b.is_finite()).unwrap_or(0.0),
+        shadow_levels: camera.shadow_bias_levels.unwrap_or(0).min(3),
+    }
+}
+
 /// Finds the single camera and builds a [`RenderCamera`]; zero cameras → default framing.
 ///
 /// `view` is the host's [`render.view`](crate::render_view) override when one is in force. It
@@ -6241,6 +6257,7 @@ mod tests {
                             projection,
                             near,
                             far,
+                            ..Camera::default()
                         },
                     )
                     .unwrap();
@@ -8106,6 +8123,45 @@ mod tests {
 
         /// The skip report counts each reason: dynamic, skinned, cutout and unsupported sources, with
         /// the entity index of the first; asset meshes it rasterizes are not counted.
+        /// The camera's LOD knobs reach `RenderScene.lod`, and `Camera.lod_bias: 2` turns a chained
+        /// instance's mid-distance pick coarser; a world without the knobs gets the defaults.
+        #[test]
+        fn the_camera_lod_knobs_reach_the_scene_and_coarsen_the_pick() {
+            let lod_of = |camera: crate::components::Camera| {
+                let mut world = World::new();
+                let id = world.spawn();
+                world.insert(id, camera).unwrap();
+                let ids: Vec<_> = world.entities().collect();
+                scene_lod(&world, &ids)
+            };
+            assert_eq!(
+                lod_of(crate::components::Camera::default()),
+                LodSettings::default()
+            );
+            let biased = lod_of(crate::components::Camera {
+                lod_bias: Some(2.0),
+                shadow_bias_levels: Some(1),
+                ..crate::components::Camera::default()
+            });
+            assert_eq!(
+                biased,
+                LodSettings {
+                    bias: 2.0,
+                    shadow_levels: 1
+                }
+            );
+            let level = |bias: f32| {
+                let size = ludion_renderer::lod_size(
+                    1.0,
+                    6.0,
+                    2.0 * ludion_core::math::exp2(-bias),
+                    false,
+                );
+                ludion_renderer::lod_level(size, &[0.5, 0.25, 0.125], 0)
+            };
+            assert!(level(biased.bias) > level(0.0));
+        }
+
         #[test]
         fn the_skip_report_counts_what_was_left_out() {
             let dir = project_with_a_prop("skips", 0.0);

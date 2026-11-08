@@ -4834,9 +4834,10 @@ impl Engine {
                 };
             }
             if self.debug_draw.enables(crate::debug_draw::CULL) {
-                scene
-                    .debug_lines
-                    .extend(ludion_renderer::cull_marks(&scene));
+                scene.debug_lines.extend(ludion_renderer::cull_marks(
+                    &scene,
+                    self.quality.params.lod_bias,
+                ));
             }
             if self.debug_draw.enables(crate::debug_draw::LOCAL_SHADOWS) {
                 let edge = self.quality.local_shadow_edge();

@@ -2029,7 +2029,7 @@ impl Renderer {
         let (cull_views, over_cap) = chain.cull.map_or_else(Default::default, |shape| {
             let lod = LodView::of_camera(
                 scene.cull_camera.as_ref().unwrap_or(&scene.camera),
-                scene.lod.bias,
+                scene.lod.bias + self.quality_params.lod_bias,
             );
             cull_views(
                 scene.cull_view_proj(),

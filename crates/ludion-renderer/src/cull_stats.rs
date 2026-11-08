@@ -17,6 +17,8 @@ pub struct CullViewCount {
     pub instances: u32,
     /// Instances the view kept to draw: the sum of its buckets' visible counts over every level.
     pub drawn: u32,
+    /// Instances drawn at each LOD level, level 0 first; empty when the frame drew no `lods:` chain.
+    pub levels_drawn: Vec<u32>,
 }
 
 /// What a filed copy needs to be read back.
@@ -35,17 +37,23 @@ impl SampleMeta {
     }
 
     fn zeros(&self) -> Vec<CullViewCount> {
-        self.counts(|_| 0)
+        self.counts(|_, _| 0)
     }
 
-    fn counts(&self, drawn: impl Fn(usize) -> u32) -> Vec<CullViewCount> {
+    /// `drawn(view, level)` is the instances a view kept at one level.
+    fn counts(&self, drawn: impl Fn(usize, usize) -> u32) -> Vec<CullViewCount> {
+        let levels = self.levels as usize;
         self.names
             .iter()
             .enumerate()
-            .map(|(v, name)| CullViewCount {
-                name: name.clone(),
-                instances: self.tested[v],
-                drawn: drawn(v),
+            .map(|(v, name)| {
+                let per_level: Vec<u32> = (0..levels).map(|l| drawn(v, l)).collect();
+                CullViewCount {
+                    name: name.clone(),
+                    instances: self.tested[v],
+                    drawn: per_level.iter().sum(),
+                    levels_drawn: if levels > 1 { per_level } else { Vec::new() },
+                }
             })
             .collect()
     }
@@ -176,13 +184,9 @@ impl CullStatsRing {
                         let words: &[u32] = bytemuck::cast_slice(&range);
                         let stride = meta.bucket_cap as usize * 5;
                         let levels = meta.levels as usize;
-                        out.push(meta.counts(|v| {
-                            (0..levels)
-                                .flat_map(|l| {
-                                    (0..meta.buckets as usize)
-                                        .map(move |b| (v * levels + l) * stride + b * 5 + 1)
-                                })
-                                .map(|at| words[at])
+                        out.push(meta.counts(|v, l| {
+                            (0..meta.buckets as usize)
+                                .map(|b| words[(v * levels + l) * stride + b * 5 + 1])
                                 .sum()
                         }));
                     }

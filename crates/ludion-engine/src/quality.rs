@@ -180,6 +180,7 @@ impl QualitySetting {
             gi_probe_scale: params.gi_probe_scale,
             render_scale: params.render_scale,
             ssr_scale: params.ssr_scale,
+            lod_bias: params.lod_bias,
             ibl_specular_size: params.ibl_specular_size,
             anti_aliasing: anti_aliasing.name().to_string(),
         }
@@ -1029,6 +1030,7 @@ mod tests {
                 render_scale: 0.5,
                 particle_density: 0.5,
                 ssr_scale: QualityParams::FULL.ssr_scale,
+                lod_bias: QualityParams::FULL.lod_bias,
             },
             "every axis at once — the table names them all",
         );

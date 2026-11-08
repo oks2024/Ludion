@@ -4045,6 +4045,14 @@
             "format": "double",
             "type": "number"
           },
+          "levels_drawn_median": {
+            "description": "Median over the sampled frames of the instances drawn at each mesh LOD level, level 0\nfirst; `drawn_median` is their sum. Empty when the frame drew no `lods:` chain.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
           "name": {
             "description": "`camera | sun | cascade_N | local_N`.",
             "type": "string"
@@ -4847,6 +4855,12 @@
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
+          },
+          "lod_bias": {
+            "default": 0.0,
+            "description": "Octaves added to every camera's mesh LOD bias; `0.0` leaves a chain's own thresholds, `1.0`\nhalves every switch distance. A coarser pick draws fewer triangles, so two reports at\ndifferent biases are not comparable.",
+            "format": "float",
+            "type": "number"
           },
           "pcf": {
             "description": "Edge length of the shadow map's PCF kernel, in taps (`3` is a 3×3 average).",
@@ -6495,6 +6509,14 @@
             "format": "double",
             "type": "number"
           },
+          "levels_drawn_median": {
+            "description": "Median over the sampled frames of the instances drawn at each mesh LOD level, level 0\nfirst; `drawn_median` is their sum. Empty when the frame drew no `lods:` chain.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
           "name": {
             "description": "`camera | sun | cascade_N | local_N`.",
             "type": "string"
@@ -7297,6 +7319,12 @@
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
+          },
+          "lod_bias": {
+            "default": 0.0,
+            "description": "Octaves added to every camera's mesh LOD bias; `0.0` leaves a chain's own thresholds, `1.0`\nhalves every switch distance. A coarser pick draws fewer triangles, so two reports at\ndifferent biases are not comparable.",
+            "format": "float",
+            "type": "number"
           },
           "pcf": {
             "description": "Edge length of the shadow map's PCF kernel, in taps (`3` is a 3×3 average).",

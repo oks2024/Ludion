@@ -179,6 +179,9 @@ impl Default for Quality {
 /// // It is also the only preset that thins the particle population, on the same reading.
 /// assert_eq!(QualityParams::LOW.particle_density, 0.25);
 /// assert_eq!(QualityParams::MEDIUM.particle_density, 1.0);
+/// // Mesh LOD reads upward: cheaper is a larger bias, and `full`'s 0 is the floor.
+/// assert_eq!(QualityParams::FULL.lod_bias, 0.0);
+/// assert_eq!(QualityParams::LOW.lod_bias, 1.0);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct QualityParams {
@@ -282,6 +285,15 @@ pub struct QualityParams {
     /// structure ([`PostChain::ssr`](crate::PostChain)). Cheaper is *smaller* and `full`'s value is the
     /// **ceiling**: a quality setting only ever spends less than the scene's authoring implies.
     pub ssr_scale: f32,
+    /// Added to every camera's mesh LOD bias ([`LodSettings::bias`](crate::LodSettings)), in octaves
+    /// of switch distance: `1.0` halves every switch distance, so meshes with a `lods:` chain drop to
+    /// coarser levels sooner.
+    ///
+    /// **Reads upward, like [`gi_probe_scale`](QualityParams::gi_probe_scale)**: cheaper is *larger*,
+    /// and `full`'s `0.0` is the **floor**, because a machine's setting may only coarsen what the
+    /// chain's own thresholds pick, never hold a finer level than they imply. A mesh without a chain
+    /// is untouched at every preset.
+    pub lod_bias: f32,
 }
 
 impl QualityParams {
@@ -311,6 +323,7 @@ impl QualityParams {
         render_scale: 1.0,
         particle_density: 1.0,
         ssr_scale: 0.5,
+        lod_bias: 0.0,
     };
 
     /// A modest discount on the three modulated axes. Each estimator pairs a count-free *direction*
@@ -344,6 +357,7 @@ impl QualityParams {
         render_scale: QualityParams::FULL.render_scale,
         particle_density: QualityParams::FULL.particle_density,
         ssr_scale: QualityParams::FULL.ssr_scale,
+        lod_bias: QualityParams::FULL.lod_bias,
     };
 
     /// Roughly half of [`FULL`](QualityParams::FULL) on every modulated axis — the cheapest the
@@ -370,6 +384,7 @@ impl QualityParams {
         render_scale: QualityParams::FULL.render_scale,
         particle_density: QualityParams::FULL.particle_density,
         ssr_scale: QualityParams::FULL.ssr_scale,
+        lod_bias: 0.5,
     };
 
     /// [`Quality::LOW`] turns ambient occlusion, light shafts, depth of field and the sun's shadows
@@ -398,6 +413,7 @@ impl QualityParams {
         gi_probe_scale: 2.0,
         render_scale: 0.75,
         particle_density: 0.25,
+        lod_bias: 1.0,
         ..QualityParams::MEDIUM
     };
 
@@ -695,6 +711,10 @@ mod tests {
             assert!(
                 low.ssr_scale <= high.ssr_scale,
                 "a cheaper preset must never trace more pixels ({cheaper} vs {dearer})",
+            );
+            assert!(
+                low.lod_bias >= high.lod_bias,
+                "a cheaper preset must never hold finer mesh levels ({cheaper} vs {dearer})",
             );
             assert!(
                 low.particle_density <= high.particle_density,

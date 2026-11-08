@@ -1670,6 +1670,10 @@ pub mod code {
     /// loader.
     pub const MESH_LOD_LEVEL_MISMATCH: DiagnosticCode = DiagnosticCode::new("L1396");
 
+    /// `L1397` — a `Camera`'s `lod_bias` is not a finite number in `[-4, 4]`, or its
+    /// `shadow_bias_levels` is above 3. Raised by `Camera`'s semantic validator.
+    pub const CAMERA_LOD_INVALID: DiagnosticCode = DiagnosticCode::new("L1397");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -8290,6 +8294,17 @@ Fix: make the level document agree with the base on the named key (re-run `ludio
 generated level), or drop the level from `lods`.",
     },
     CodeEntry {
+        code: code::CAMERA_LOD_INVALID,
+        severity: Severity::Error,
+        title: "camera LOD knob out of range",
+        explanation: "\
+A `Camera`'s `lod_bias` must be a finite number in `-4..=4` (each unit halves, or at a negative
+value doubles, every mesh LOD switch distance) and its `shadow_bias_levels` at most 3 (the longest
+chain has four levels). The JSON Pointer names the offending field.
+
+Fix: bring the value into range, or drop the field to keep the chain's own thresholds.",
+    },
+    CodeEntry {
         code: code::CAMERA_OFFSET_DUPLICATE,
         severity: Severity::Error,
         title: "more than one camera offset",
@@ -11436,6 +11451,7 @@ mod tests {
         code::PATTERN_SYSTEM_NOT_RUN,
         code::MESH_LOD_CHAIN,
         code::MESH_LOD_LEVEL_MISMATCH,
+        code::CAMERA_LOD_INVALID,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

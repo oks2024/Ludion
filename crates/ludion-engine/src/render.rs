@@ -140,7 +140,7 @@ pub fn render_scene_with_registry(
         size,
         overrides,
         frames,
-        quality.params.particle_density,
+        &quality.params,
         debug,
     )?;
     render_scene.debug_view = view;
@@ -331,7 +331,7 @@ pub fn dump_scene_graph_json(
         size,
         &[],
         0,
-        QualityParams::FULL.particle_density,
+        &QualityParams::FULL,
         &DebugCategories::None,
     )?;
     ludion_renderer::dump_frame_graph_json(
@@ -431,7 +431,7 @@ pub(crate) fn scene_file_driver(
 /// is the same either way, but screen-space UI is authored in output pixels and drawn by the overlay
 /// pass after the resolve.
 ///
-/// `particle_density` is the caller's own, exactly as `quality` is: only the path that renders
+/// `quality` is the caller's own (its `particle_density` and `lod_bias` are read): only the path that renders
 /// pixels for a machine passes that machine's value, so `ludion render --quality low` draws the
 /// thinned population while the graph dump and the voxel sheets stay at
 /// [`QualityParams::FULL`]'s — an instrument compared across boxes must not move with one.
@@ -445,7 +445,7 @@ pub(crate) fn extract_scene_file(
     size: FrameSize,
     overrides: &[SceneOverride],
     frames: u64,
-    particle_density: f32,
+    quality: &QualityParams,
     debug: &DebugCategories,
 ) -> Result<ExtractedScene, Vec<Diagnostic>> {
     let (driver, applied_overrides) = scene_file_driver(registry, path, overrides, frames, debug)?;
@@ -455,11 +455,11 @@ pub(crate) fn extract_scene_file(
         size.output,
         ludion_assets::AssetRoot::content(project_root),
         driver.time(),
-        particle_density,
+        quality.particle_density,
     )?;
     render_scene.debug_lines = crate::debug_draw::segments(driver.world(), debug);
     if debug.enables(crate::debug_draw::CULL) {
-        let marks = ludion_renderer::cull_marks(&render_scene);
+        let marks = ludion_renderer::cull_marks(&render_scene, quality.lod_bias);
         render_scene.debug_lines.extend(marks);
     }
     let drawn = crate::debug_draw::drawn(driver.world());
@@ -493,7 +493,7 @@ mod tests {
             FrameSize::native(64, 64),
             &[],
             0,
-            QualityParams::FULL.particle_density,
+            &QualityParams::FULL,
             &DebugCategories::None,
         )
         .expect("the instance entry expands");

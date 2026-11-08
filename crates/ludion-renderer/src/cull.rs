@@ -149,7 +149,6 @@ impl LodView {
     }
 }
 
-#[cfg(test)]
 /// The level of an instance with world box `bound` in `view`, chosen from `thresholds`; 0 for an
 /// instance whose bounds are unknown.
 pub(crate) fn instance_level(bound: Option<Aabb>, thresholds: &[f32], view: &LodView) -> u32 {
@@ -414,6 +413,14 @@ pub(crate) fn cull(bounds: &[Option<Aabb>], volume: &CullVolume) -> Vec<u32> {
 
 const KEPT: [f32; 4] = [0.2, 1.0, 0.2, 1.0];
 const CULLED: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
+/// The tint of a kept mesh by the LOD level the camera view selects: level 0 is [`KEPT`] green, then
+/// yellow, orange, magenta.
+const LEVEL_TINTS: [[f32; 4]; 4] = [
+    KEPT,
+    [1.0, 1.0, 0.2, 1.0],
+    [1.0, 0.55, 0.1, 1.0],
+    [1.0, 0.2, 1.0, 1.0],
+];
 const CULL_FRUSTUM: [f32; 4] = [1.0, 0.85, 0.1, 1.0];
 const UNBOUNDED_HALF: f32 = 0.25;
 
@@ -455,12 +462,14 @@ fn box_edges(corners: &[Vec3; 8], color: [f32; 4], out: &mut Vec<DebugSegment>) 
 /// The camera cull view's verdict on every world mesh, as debug lines: the mesh's world box in green
 /// when the cull keeps it and red when it culls it, a green cross for a mesh whose bounds are
 /// unknown (always drawn). Viewmodel meshes never enter the world cull and are not marked. When the
-/// frame culls against a `cull_camera`, that camera's frustum is outlined in yellow.
+/// frame culls against a `cull_camera`, that camera's frustum is outlined in yellow. A kept mesh
+/// whose asset carries a `lods:` chain is tinted by the level the camera view selects
+/// ([`LEVEL_TINTS`]); `quality_lod_bias` is the machine's `QualityParams::lod_bias`.
 ///
 /// Computed by the CPU oracle over the same bounds the GPU table is built from, so the marks are
 /// the set the GPU keeps. It is the source of the `cull` debug-draw category: the verdict depends on
 /// the camera, so the engine appends these to the extracted scene's lines.
-pub fn cull_marks(scene: &RenderScene) -> Vec<DebugSegment> {
+pub fn cull_marks(scene: &RenderScene, quality_lod_bias: f32) -> Vec<DebugSegment> {
     let view_proj = scene.cull_view_proj();
     let frustum = Frustum::from_view_proj(view_proj);
     let assets: Vec<AssetBounds> = scene
@@ -469,6 +478,10 @@ pub fn cull_marks(scene: &RenderScene) -> Vec<DebugSegment> {
         .map(|mesh| AssetBounds::of_mesh(mesh))
         .collect();
     let bounds = instance_bounds(&scene.meshes, &assets, &scene.bone_palette);
+    let lod_view = LodView::of_camera(
+        scene.cull_camera.as_ref().unwrap_or(&scene.camera),
+        scene.lod.bias + quality_lod_bias,
+    );
     let mut out = Vec::new();
     for (mesh, bound) in scene.meshes.iter().zip(&bounds) {
         if mesh.viewmodel {
@@ -477,7 +490,16 @@ pub fn cull_marks(scene: &RenderScene) -> Vec<DebugSegment> {
         match bound {
             Some(b) => {
                 let color = if frustum.intersects_aabb(b) {
-                    KEPT
+                    let thresholds: Vec<f32> = match mesh.shape {
+                        MeshShape::Asset(i) => {
+                            scene.mesh_assets.get(i).map_or_else(Vec::new, |m| {
+                                m.lods.iter().map(|lod| lod.screen_size).collect()
+                            })
+                        }
+                        _ => Vec::new(),
+                    };
+                    let level = instance_level(Some(*b), &thresholds, &lod_view);
+                    LEVEL_TINTS[(level as usize).min(LEVEL_TINTS.len() - 1)]
                 } else {
                     CULLED
                 };
@@ -536,6 +558,23 @@ pub(crate) fn casting_ranges(
 mod tests {
     use super::*;
     use ludion_core::math::glam::{Mat3, Quat};
+
+    /// The machine's quality bias coarsens a pick: `LOW`'s bias selects a coarser level than `FULL`'s
+    /// for the same instance, and the camera's own bias adds to it.
+    #[test]
+    fn a_cheaper_quality_bias_selects_a_coarser_level() {
+        use crate::quality::QualityParams;
+        let thresholds = [0.5, 0.25, 0.125];
+        let (radius, k) = (1.0_f32, 2.0_f32);
+        let level = |bias: f32| {
+            let size = lod_size(radius, 6.0, k * ludion_core::math::exp2(-bias), false);
+            lod_level(size, &thresholds, 0)
+        };
+        let full = level(QualityParams::FULL.lod_bias);
+        let low = level(QualityParams::LOW.lod_bias);
+        assert!(low > full, "low {low} vs full {full}");
+        assert!(level(QualityParams::LOW.lod_bias + 1.0) >= low);
+    }
 
     #[test]
     fn lod_level_walks_the_thresholds_and_clamps_the_offset() {
@@ -682,24 +721,66 @@ mod tests {
     #[test]
     fn cull_marks_paint_kept_green_and_culled_red_and_skip_the_viewmodel() {
         let scene = marks_scene(vec![cube_instance(-10.0), cube_instance(10.0)]);
-        let marks = cull_marks(&scene);
+        let marks = cull_marks(&scene, 0.0);
         assert_eq!((count(&marks, KEPT), count(&marks, CULLED)), (12, 12));
 
         let mut gun = cube_instance(-2.0);
         gun.viewmodel = true;
         let scene = marks_scene(vec![gun]);
-        assert!(cull_marks(&scene).is_empty());
+        assert!(cull_marks(&scene, 0.0).is_empty());
+    }
+
+    /// A kept mesh with a chain is tinted by its level (green, then yellow, orange, magenta); a
+    /// mesh without one stays green at any distance, and the machine's bias coarsens the tint.
+    #[test]
+    fn cull_marks_tint_kept_meshes_by_lod_level() {
+        use crate::scene::MeshLod;
+        let level_mesh = |hash: u64| {
+            let mut mesh = skin_mesh(vec![0.0; 3], vec![], vec![], &[]);
+            mesh.hash = hash;
+            Arc::new(mesh)
+        };
+        let mut base = skin_mesh(vec![-0.5, -0.5, -0.5, 0.5, 0.5, 0.5], vec![], vec![], &[]);
+        base.lods = [0.3, 0.1, 0.03]
+            .iter()
+            .enumerate()
+            .map(|(k, &screen_size)| MeshLod {
+                mesh: level_mesh(k as u64 + 1),
+                screen_size,
+            })
+            .collect();
+        let asset = |z: f32| {
+            instance(
+                MeshShape::Asset(0),
+                Mat4::from_translation(Vec3::new(0.0, 0.0, z)),
+            )
+        };
+        let mut scene = marks_scene(vec![asset(-2.0), asset(-8.0), asset(-20.0), asset(-60.0)]);
+        scene.mesh_assets = vec![Arc::new(base)];
+        scene.camera.position = Vec3::ZERO;
+        let marks = cull_marks(&scene, 0.0);
+        for (tint, expected) in LEVEL_TINTS.iter().enumerate() {
+            assert_eq!(count(&marks, *expected), 12, "level {tint}");
+        }
+        // A bias of 1 halves every switch distance: each instance moves one level coarser.
+        let marks = cull_marks(&scene, 1.0);
+        assert_eq!(count(&marks, KEPT), 0);
+        assert_eq!(count(&marks, LEVEL_TINTS[3]), 24);
+        // No chain: green however far.
+        let mut plain = marks_scene(vec![cube_instance(-90.0)]);
+        plain.lod.bias = 3.0;
+        assert_eq!(count(&cull_marks(&plain, 0.0), KEPT), 12);
     }
 
     #[test]
     fn a_cull_camera_decides_admission_and_outlines_its_frustum() {
         let mut scene = marks_scene(vec![cube_instance(-10.0)]);
-        assert_eq!(count(&cull_marks(&scene), CULL_FRUSTUM), 0);
+        assert_eq!(count(&cull_marks(&scene, 0.0), CULL_FRUSTUM), 0);
         // Looking the other way, the cube is behind the cull camera.
         let mut turned = scene.camera;
         turned.view = Mat4::look_at_rh(Vec3::ZERO, Vec3::Z, Vec3::Y);
         scene.cull_camera = Some(turned);
-        let marks = cull_marks(&scene);
+        let marks = cull_marks(&scene, 0.0);
         assert_eq!((count(&marks, KEPT), count(&marks, CULLED)), (0, 12));
         assert_eq!(count(&marks, CULL_FRUSTUM), 12);
     }

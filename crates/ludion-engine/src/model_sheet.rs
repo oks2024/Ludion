@@ -3729,6 +3729,7 @@ fn synthesize_scene(
                 },
                 near: NEAR,
                 far: FAR,
+                ..Camera::default()
             },
         ),
     ]));
