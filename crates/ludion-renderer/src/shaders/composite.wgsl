@@ -849,7 +849,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // an already-blurred, deliberately low-frequency field.
     if (composite.shafts != 0u) {
         var shafts = textureSample(shafts_tex, samp, in.uv).r;
-        if (composite.medium_gi.y != 0u) {
+        if (composite.medium_gi.y != 0u || composite.medium_gi.z != 0u) {
             shafts = shafts * ray_scale;
         }
         hdr = hdr + composite.shafts_color * shafts;
@@ -857,7 +857,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // The local lights' directional term: already coloured and scaled by the march, so a plain add.
     if (composite.medium_scatter != 0u) {
         var scatter = textureSample(medium_scatter_tex, samp, in.uv).rgb;
-        if (composite.medium_gi.y != 0u) {
+        if (composite.medium_gi.y != 0u || composite.medium_gi.z != 0u) {
             scatter = scatter * ray_scale;
         }
         hdr = hdr + scatter;

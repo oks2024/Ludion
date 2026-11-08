@@ -2,6 +2,7 @@
 //! channel and the composite's per-pixel scale on it.
 
 use super::*;
+use crate::scene::PointLightData;
 
 const PX: u32 = 128;
 /// Optical depth of the quads' ray: `0.05 · 30 = 1.5`, so about 78% of a quad's colour is fogged away.
@@ -188,5 +189,70 @@ fn needs_gpu_an_exempt_half_covering_sprite_over_a_fogged_mesh_lands_between() {
     assert!(
         (0..3).all(between) && gap(exempt_px, fogged_px) > 2,
         "exempt {exempt_px:?} between fogged {fogged_px:?} and clear {clear_px:?}"
+    );
+}
+
+/// An exempt sprite on a frame where no mesh is below 1 takes no in-scatter from a scattering light.
+/// Skips with no GPU.
+#[test]
+fn needs_gpu_an_exempt_sprite_takes_no_local_in_scatter() {
+    let Some(renderer) = skip_or_renderer("an_exempt_sprite_takes_no_local_in_scatter") else {
+        return;
+    };
+    let mut scene = sprite_twins(0.0, 1.0);
+    scene.lights.push(PointLightData {
+        position: Vec3::new(0.0, 0.0, -10.0),
+        color: Vec3::ONE,
+        intensity: 4.0,
+        range: 40.0,
+        dynamic: false,
+        shadow: None,
+        scatter: 1.0,
+    });
+    let chain = PostChain::for_scene(&scene);
+    assert!(chain.local_scatter && !chain.mesh_medium_scheduled());
+    let scattered = render(&renderer, &scene);
+    let clear = render(&renderer, &without_medium(&scene));
+    assert_close(
+        pixel(&scattered, LEFT),
+        pixel(&clear, LEFT),
+        "exempt sprite under a scattering light",
+    );
+    let (twin, clear_twin) = (pixel(&scattered, RIGHT), pixel(&clear, RIGHT));
+    assert!(
+        gap(twin, clear_twin) > 40,
+        "the twin takes the fog and glow: {twin:?} vs {clear_twin:?}"
+    );
+}
+
+/// An exempt sprite on a frame where no mesh is below 1 takes no sun shafts. Skips with no GPU.
+#[test]
+fn needs_gpu_an_exempt_sprite_takes_no_shafts() {
+    let Some(renderer) = skip_or_renderer("an_exempt_sprite_takes_no_shafts") else {
+        return;
+    };
+    let mut scene = sprite_twins(0.0, 1.0);
+    scene.sun = Some(test_sun(
+        Vec3::new(0.0, -0.3, 1.0).normalize(),
+        Vec3::ONE,
+        0.002,
+    ));
+    scene.post = Some(PostData {
+        shafts: 0.17,
+        ..fog_post()
+    });
+    let chain = PostChain::for_scene(&scene);
+    assert!(chain.shafts && !chain.mesh_medium_scheduled());
+    let shafted = render(&renderer, &scene);
+    let clear = render(&renderer, &without_medium(&scene));
+    assert_close(
+        pixel(&shafted, LEFT),
+        pixel(&clear, LEFT),
+        "exempt sprite under shafts",
+    );
+    let (twin, clear_twin) = (pixel(&shafted, RIGHT), pixel(&clear, RIGHT));
+    assert!(
+        gap(twin, clear_twin) > 40,
+        "the twin is fogged: {twin:?} vs {clear_twin:?}"
     );
 }
