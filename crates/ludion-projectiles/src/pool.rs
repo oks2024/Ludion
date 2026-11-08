@@ -494,6 +494,11 @@ impl ProjectilePool {
         self.slot(id).map(|i| self.cols.orient[i])
     }
 
+    /// Seconds left before the shot expires.
+    pub fn life(&self, id: ProjectileId) -> Option<f32> {
+        self.slot(id).map(|i| self.cols.life[i])
+    }
+
     /// The per-shot target layer mask; the outer `None` is a stale id, the inner `None` means the
     /// pool's mask.
     pub fn targets(&self, id: ProjectileId) -> Option<Option<u32>> {

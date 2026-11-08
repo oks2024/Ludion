@@ -1,0 +1,211 @@
+# Feature: projectile gibs — 1,000 debris shots (asset-mesh and cube looks, tumbling, scaled per
+# axis, casting shadows, shrinking over their last seconds) thrown into a walled room settle on the
+# floor. This file is the empty room; the driven golden `projectile-gibs-settle` throws them
+# (`crates/ludion-testkit/tests/gallery.rs`).
+format: 1
+name: projectile-gibs - debris thrown into a room settles on its floor
+seed: 1
+physics:
+  space: free
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 10.0
+          - 8.0
+        rotation:
+          - -55.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: sun
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.4
+          - -0.8
+          - -0.45
+        color:
+          - 1.0
+          - 0.96
+          - 0.88
+        intensity: 2.6
+        shadow_extent: 16.0
+        shadow_near: 1.0
+        shadow_far: 40.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 12.0
+          - 1.0
+          - 12.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.52
+          - 0.5
+          - 1.0
+        roughness: 0.85
+  - name: floor-collider
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 6.0
+              - 0.5
+              - 6.0
+        body: static
+  - name: wall-west
+    components:
+      Transform:
+        translation:
+          - -6.25
+          - 1.0
+          - 0.0
+        scale:
+          - 0.5
+          - 2.0
+          - 13.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.34
+          - 0.3
+          - 1.0
+        roughness: 0.85
+  - name: wall-west-collider
+    components:
+      Transform:
+        translation:
+          - -6.25
+          - 1.0
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.25
+              - 1.0
+              - 6.5
+        body: static
+  - name: wall-east
+    components:
+      Transform:
+        translation:
+          - 6.25
+          - 1.0
+          - 0.0
+        scale:
+          - 0.5
+          - 2.0
+          - 13.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.34
+          - 0.3
+          - 1.0
+        roughness: 0.85
+  - name: wall-east-collider
+    components:
+      Transform:
+        translation:
+          - 6.25
+          - 1.0
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.25
+              - 1.0
+              - 6.5
+        body: static
+  - name: wall-north
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - -6.25
+        scale:
+          - 12.0
+          - 2.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.34
+          - 0.3
+          - 1.0
+        roughness: 0.85
+  - name: wall-north-collider
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - -6.25
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 6.0
+              - 1.0
+              - 0.25
+        body: static
+  - name: wall-south
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 6.25
+        scale:
+          - 12.0
+          - 2.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.34
+          - 0.3
+          - 1.0
+        roughness: 0.85
+  - name: wall-south-collider
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 6.25
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 6.0
+              - 1.0
+              - 0.25
+        body: static

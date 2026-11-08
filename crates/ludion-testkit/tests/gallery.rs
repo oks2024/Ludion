@@ -1278,3 +1278,61 @@ fn needs_gpu_projectile_muzzle_shot_matches_committed_golden() {
         &scratch_dir("projectile_muzzle_shot_out"),
     );
 }
+
+/// The `projectile-gibs` room driven to tick 150: a thousand debris shots (asset-mesh and oriented
+/// cube looks, one tag fading) have settled on the floor. The bare discovered `projectile-gibs.png`
+/// is the empty room.
+#[test]
+fn needs_gpu_projectile_gibs_settle_matches_committed_golden() {
+    let mut engine = common::gib_builder()
+        .load_scene_file(&gallery_dir().join("projectile-gibs.yaml"))
+        .expect("the scene loads");
+    for _ in 0..common::GIB_GOLDEN_TICK {
+        assert!(engine.advance_live(), "the sim ticks");
+        engine.extract_present_scene().expect("extracts");
+    }
+    ludion_testkit::check_engine_golden(
+        &mut engine,
+        gallery_dir().join("goldens"),
+        "projectile-gibs-settle",
+        &scratch_dir("projectile_gibs_settle_out"),
+    );
+}
+
+/// The same drive without a GPU: by tick 150 nearly every live gib is parked above the floor, and
+/// after the longest lifetime (counted from the last throw) every one has expired exactly once.
+#[test]
+fn projectile_gibs_settle_on_the_floor_and_all_expire() {
+    use ludion_engine::Projectiles;
+    let mut engine = common::gib_builder()
+        .load_scene_file(&gallery_dir().join("projectile-gibs.yaml"))
+        .expect("the scene loads");
+    let mut expired = 0usize;
+    let end = common::GIB_THROW_TICKS + (common::GIB_LIFETIME * 60.0) as u64 + 2;
+    for tick in 1..=end {
+        assert!(engine.advance_live(), "the sim ticks");
+        let res = engine.world().resource::<Projectiles>().unwrap();
+        expired += res.events().expired.len();
+        if tick == common::GIB_GOLDEN_TICK {
+            let pool = res.pool();
+            let ids: Vec<_> = pool.ids().collect();
+            assert!(!ids.is_empty());
+            let parked = ids
+                .iter()
+                .filter(|&&id| pool.is_parked(id) == Some(true))
+                .count();
+            assert!(
+                parked * 10 >= ids.len() * 9,
+                "{parked} of {} gibs parked",
+                ids.len()
+            );
+            for &id in &ids {
+                let y = pool.position(id).unwrap()[1];
+                assert!(y >= -0.05, "a gib sank to y = {y}");
+            }
+        }
+    }
+    let res = engine.world().resource::<Projectiles>().unwrap();
+    assert!(res.pool().is_empty(), "every gib has expired");
+    assert_eq!(expired, common::GIB_COUNT as usize);
+}

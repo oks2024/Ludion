@@ -1039,6 +1039,7 @@ impl EngineBuilder {
         }
         if let Some(visuals) = &self.projectile_visuals {
             visuals.validate()?;
+            visuals.check_assets(&project_root)?;
         }
         let mut registry = builtin_registry();
         registry

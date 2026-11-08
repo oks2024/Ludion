@@ -2308,6 +2308,11 @@ pub mod code {
     /// and by `nav_update` for an unknown layer name.
     pub const NAV_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L4032");
 
+    /// `L4033` — a `ProjectileLook::Mesh` asset cannot be drawn: at `build` the file does not
+    /// exist (an **error**, refused with a nearest-name suggestion); at extract it failed to load
+    /// or parse (reported once per asset; that tag draws nothing and the frame continues).
+    pub const PROJECTILE_LOOK_ASSET: DiagnosticCode = DiagnosticCode::new("L4033");
+
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
     /// `L5001` — no audio output device is available, so the playback sink cannot open a stream.
@@ -10786,6 +10791,20 @@ for that (reported once; the grid keeps its last build until the name is fixed).
 Fix: correct the field the message names.",
     },
     CodeEntry {
+        code: code::PROJECTILE_LOOK_ASSET,
+        severity: Severity::Error,
+        title: "projectile look mesh cannot be drawn",
+        explanation: "\
+A `ProjectileLook::Mesh { asset }` names a mesh document the engine cannot draw.
+
+- At `Engine::builder().build()` the file `asset` (relative to the project root) does not exist; the
+  build is refused and the help names the nearest asset.
+- At extract the file exists but failed to load or parse. The diagnostic is reported once per asset,
+  that tag draws nothing, and the frame continues.
+
+Fix: point `asset` at an existing `*.mesh.yaml`, or repair the document the message names.",
+    },
+    CodeEntry {
         code: code::AUDIO_DEVICE_UNAVAILABLE,
         severity: Severity::Warning,
         title: "no audio output device available",
@@ -11492,6 +11511,7 @@ mod tests {
         code::PROJECTILE_STEP_NOT_RUN,
         code::PROJECTILE_RESTORE_CAPACITY,
         code::NAV_CONFIG_INVALID,
+        code::PROJECTILE_LOOK_ASSET,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,

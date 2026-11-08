@@ -1539,13 +1539,24 @@ fn extract_inner(
                 draw,
                 degraded,
             );
-            crate::projectile_draw::extract_projectiles(&mut scene, world, draw, muzzle)
+            crate::projectile_draw::extract_projectiles(
+                &mut scene,
+                world,
+                draw,
+                muzzle,
+                assets,
+                &mut mesh_path_index,
+                degraded,
+            )
         }
         None => crate::projectile_draw::extract_projectiles(
             &mut scene,
             world,
             &mut ProjectileDraw::default(),
             None,
+            assets,
+            &mut mesh_path_index,
+            degraded,
         ),
     };
     assets.extract_end(ExtractPhase::Projectiles);
@@ -1575,7 +1586,9 @@ fn extract_inner(
                     .chain(
                         projectile_keys
                             .iter()
-                            .filter(|(_, item)| matches!(item, ProjectileItem::Mesh(_)))
+                            .filter(|(_, item)| {
+                                matches!(item, ProjectileItem::Mesh(_) | ProjectileItem::Posed(_))
+                            })
                             .map(|_| None),
                     )
                     .collect(),
@@ -4087,7 +4100,7 @@ pub(crate) fn doc_rim_lane(doc: &ludion_scene::DocRim) -> [f32; 4] {
 
 /// The lane a mesh instance draws with: its document's rim when it authors one, else the entity's
 /// resolved (own or inherited) lane. Primitives have no document, so `asset` is `None` for them.
-fn resolve_rim_lane(
+pub(crate) fn resolve_rim_lane(
     mesh_assets: &[Arc<MeshData>],
     asset: Option<usize>,
     entity: [f32; 4],

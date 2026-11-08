@@ -101,6 +101,12 @@ impl Diagnostics {
         self.latched.entry(code).or_default().insert(key)
     }
 
+    /// The diagnostics reported since the last boundary drain.
+    #[cfg(test)]
+    pub(crate) fn pending(&self) -> &[Diagnostic] {
+        &self.pending
+    }
+
     /// Whether `(code, key)` has already been reported this session. Allocation-free.
     pub(crate) fn is_latched(&self, code: DiagnosticCode, key: &str) -> bool {
         self.latched

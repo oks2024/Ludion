@@ -186,6 +186,7 @@ pub fn projectile_builder() -> EngineBuilder {
             additive: true,
             from_muzzle: true,
             medium: 1.0,
+            ..ProjectileVisual::default()
         },
     );
     visuals.tags.insert(
@@ -199,6 +200,7 @@ pub fn projectile_builder() -> EngineBuilder {
             additive: false,
             from_muzzle: true,
             medium: 1.0,
+            ..ProjectileVisual::default()
         },
     );
     Engine::builder()
@@ -212,5 +214,125 @@ pub fn projectile_builder() -> EngineBuilder {
             >,
         )
         .system("fire_shots", fire_shots)
+        .system("projectiles_step", ludion_engine::projectiles_step)
+}
+
+/// **projectile-gibs** — [`throw_gibs`] throws [`GIB_COUNT`] debris shots (ten ticks of a hundred)
+/// from above the middle of a walled room; they bounce, tumble and settle on its floor.
+pub const GIB_COUNT: u64 = 1000;
+/// Ticks of throwing.
+pub const GIB_THROW_TICKS: u64 = 10;
+/// The tick the gibs golden is rendered at: every gib has settled, the fading tag is nearly gone.
+pub const GIB_GOLDEN_TICK: u64 = 150;
+/// Seconds the longest-lived gib lives.
+pub const GIB_LIFETIME: f32 = 6.0;
+
+/// A splitmix64 step: an index to a well-mixed word, so the throw needs no RNG resource.
+fn mix(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+/// A word to a float in `[lo, hi)`.
+fn unit(word: u64, lo: f32, hi: f32) -> f32 {
+    lo + (hi - lo) * ((word >> 40) as f32 / (1u64 << 24) as f32)
+}
+
+pub fn throw_gibs(world: &mut World, ctx: &SystemCtx) {
+    let tick = ctx.frame.as_u64();
+    if tick >= GIB_THROW_TICKS {
+        return;
+    }
+    for n in 0..GIB_COUNT / GIB_THROW_TICKS {
+        let i = tick * (GIB_COUNT / GIB_THROW_TICKS) + n;
+        let h = |k: u64| mix(i.wrapping_mul(16).wrapping_add(k));
+        let (sin, cos) = ludion_core::math::sin_cos(unit(h(0), 0.0, std::f32::consts::TAU));
+        let speed = unit(h(1), 0.5, 3.5);
+        let mut desc = ludion::prelude::projectiles::ProjectileDesc::new(
+            [0.0, 2.5, 0.0],
+            [cos * speed, unit(h(2), 3.0, 6.0), sin * speed],
+        );
+        desc.gravity_scale = 1.0;
+        desc.lifetime = if i % 3 == 2 { 3.0 } else { GIB_LIFETIME };
+        desc.tag = (i % 3) as u32;
+        desc.response = ludion::prelude::projectiles::Response::settle(0.35, 0.4, 1.0);
+        desc.targets = Some(0);
+        desc.spin = [
+            unit(h(3), -12.0, 12.0),
+            unit(h(4), -12.0, 12.0),
+            unit(h(5), -12.0, 12.0),
+        ];
+        desc.orientation = [
+            unit(h(6), -1.0, 1.0),
+            unit(h(7), -1.0, 1.0),
+            unit(h(8), -1.0, 1.0),
+            unit(h(9), 0.1, 1.0),
+        ];
+        ludion_engine::spawn_projectile(world, desc);
+    }
+}
+
+/// The gibs scene's engine: a pool of 1,024, three looks (asset mesh, oriented cube, a fading
+/// asset mesh), all shadow-casting.
+pub fn gib_builder() -> EngineBuilder {
+    use ludion_engine::{ProjectileLook, ProjectileVisual, ProjectileVisuals};
+    let crystal = || ProjectileLook::Mesh {
+        asset: "meshes/crystal.mesh.yaml".to_string(),
+    };
+    let mut visuals = ProjectileVisuals::default();
+    for (tag, look, size, scale, color, fade_out) in [
+        (
+            0,
+            crystal(),
+            0.35,
+            [1.0, 1.4, 0.8],
+            [0.9, 0.55, 0.25, 1.0],
+            0.0,
+        ),
+        (
+            1,
+            ProjectileLook::Cube,
+            0.2,
+            [1.6, 0.5, 1.0],
+            [0.25, 0.7, 0.75, 1.0],
+            0.0,
+        ),
+        (
+            2,
+            crystal(),
+            0.3,
+            [1.0, 1.0, 1.0],
+            [0.6, 0.35, 0.85, 1.0],
+            1.5,
+        ),
+    ] {
+        visuals.tags.insert(
+            tag,
+            ProjectileVisual {
+                look,
+                size,
+                scale,
+                color,
+                emissive: 0.0,
+                additive: false,
+                cast_shadows: true,
+                fade_out,
+                ..ProjectileVisual::default()
+            },
+        );
+    }
+    Engine::builder()
+        .projectiles(ludion_engine::ProjectileConfig::default())
+        .projectile_visuals(visuals)
+        .system(
+            "spatial3d_rebuild",
+            ludion::prelude::spatial3d::rebuild::<
+                ludion_engine::Transform,
+                ludion_engine::TransformHierarchy,
+            >,
+        )
+        .system("throw_gibs", throw_gibs)
         .system("projectiles_step", ludion_engine::projectiles_step)
 }

@@ -14,18 +14,23 @@
 //! neither a component nor a document kind and adds nothing to the wire schema.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use ludion_core::codes::code;
+use ludion_core::collections::StableMap;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::{Mat4, Quat, Vec3};
 use ludion_ecs::World;
 use ludion_projectiles::ProjectileId;
 use ludion_renderer::{MeshInstance, MeshShape, ParticleInstance, ProjectileItem, RenderScene};
 
+use ludion_assets::AssetRoot;
+
+use crate::extract::SceneAssets;
 use crate::particles::CameraBasis;
 
 /// How one kind of shot is drawn.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ProjectileLook {
     /// A soft glowing disc stretched along the heading (a particle instance).
     Billboard {
@@ -36,6 +41,15 @@ pub enum ProjectileLook {
     Cube,
     /// A unit sphere scaled to `size × size × length` and aimed along the heading.
     Sphere,
+    /// A `*.mesh.yaml` asset (path relative to the project root), drawn with the shot's simulated
+    /// orientation: the identity is the asset's authored pose. Extents are
+    /// `size × `[`scale`](ProjectileVisual::scale), with no heading stretch. A skinned asset draws
+    /// at its bind pose. A missing file is refused at `build` (`L4033`); one that fails to load
+    /// draws nothing, with `L4033`.
+    Mesh {
+        /// Project-relative path of the mesh document.
+        asset: String,
+    },
     /// Not drawn (a pure-logic shot such as a hitscan marker).
     Hidden,
 }
@@ -61,6 +75,15 @@ pub struct ProjectileVisual {
     /// Scale in `[0, 1]` on the medium's optical depth along the view ray to this shot (default
     /// `1.0`, today's look): `0` shows no air between the eye and the shot. Render-only.
     pub medium: f32,
+    /// Per-axis multiplier on the drawn extents of a `Cube`, `Sphere` or `Mesh` look, each finite
+    /// and > 0 (default `[1.0; 3]`). A heading-aimed shot draws `(size·x, size·y, length·z)`; an
+    /// oriented draw or a `Mesh` look draws `size·scale`. Billboards ignore it.
+    pub scale: [f32; 3],
+    /// Whether a `Cube`, `Sphere` or `Mesh` shot casts a shadow (default `false`: tracers do not).
+    pub cast_shadows: bool,
+    /// Seconds before expiry over which the drawn extents shrink linearly to nothing; `0`
+    /// (default) is off. Opaque and scale only.
+    pub fade_out: f32,
 }
 
 impl Default for ProjectileVisual {
@@ -74,6 +97,9 @@ impl Default for ProjectileVisual {
             additive: true,
             from_muzzle: false,
             medium: 1.0,
+            scale: [1.0; 3],
+            cast_shadows: false,
+            fade_out: 0.0,
         }
     }
 }
@@ -140,8 +166,9 @@ impl ProjectileVisuals {
     ///
     /// # Errors
     /// `L4028` for a non-finite or non-positive `size`, a negative or non-finite `stretch`,
-    /// `color`, `emissive` or `converge_distance`, or a `softness` or `medium` outside `[0, 1]`; the path names
-    /// the field (`/tags/3/size`, `/fallback/color`).
+    /// `color`, `emissive`, `fade_out` or `converge_distance`, a non-positive or non-finite `scale`
+    /// component, an empty `Mesh` asset, or a `softness` or `medium` outside `[0, 1]`; the path
+    /// names the field (`/tags/3/size`, `/fallback/color`).
     pub fn validate(&self) -> Result<(), Diagnostic> {
         self.fallback.validate("/fallback")?;
         for (tag, visual) in &self.tags {
@@ -155,6 +182,36 @@ impl ProjectileVisuals {
                     self.converge_distance
                 ),
             ));
+        }
+        Ok(())
+    }
+
+    /// Checks that every `Mesh` look names a file under `root`.
+    ///
+    /// # Errors
+    /// `L4033` at `/tags/<t>/look/asset` (or `/fallback/look/asset`), with the nearest existing
+    /// name as the help when there is one.
+    pub(crate) fn check_assets(&self, root: &Path) -> Result<(), Diagnostic> {
+        let mut sites = vec![("/fallback".to_string(), &self.fallback)];
+        sites.extend(self.tags.iter().map(|(t, v)| (format!("/tags/{t}"), v)));
+        for (at, visual) in sites {
+            let ProjectileLook::Mesh { asset } = &visual.look else {
+                continue;
+            };
+            let root = AssetRoot::content(root);
+            if ludion_assets::resolve(root, asset).is_ok_and(|p| p.is_file()) {
+                continue;
+            }
+            let help = match crate::extract::suggest_asset(root, asset) {
+                Some(near) => format!("did you mean `{near}`?"),
+                None => "point `asset` at an existing `*.mesh.yaml` under the project root".into(),
+            };
+            return Err(Diagnostic::new(
+                code::PROJECTILE_LOOK_ASSET,
+                format!("projectile look mesh `{asset}` is not a file under the project root"),
+            )
+            .with_path(format!("{at}/look/asset"))
+            .with_help(help));
         }
         Ok(())
     }
@@ -209,13 +266,34 @@ impl ProjectileVisual {
             (0.0..=1.0).contains(&self.medium),
             "outside 0..=1",
         )?;
-        if let ProjectileLook::Billboard { softness } = self.look {
+        field(
+            "fade_out",
+            self.fade_out,
+            self.fade_out >= 0.0,
+            "not a finite number >= 0",
+        )?;
+        for (i, c) in self.scale.iter().enumerate() {
             field(
-                "look/softness",
-                softness,
-                (0.0..=1.0).contains(&softness),
-                "outside 0..=1",
+                &format!("scale/{i}"),
+                *c,
+                *c > 0.0,
+                "not a finite number > 0",
             )?;
+        }
+        match &self.look {
+            ProjectileLook::Billboard { softness } => field(
+                "look/softness",
+                *softness,
+                (0.0..=1.0).contains(softness),
+                "outside 0..=1",
+            )?,
+            ProjectileLook::Mesh { asset } if asset.is_empty() => {
+                return Err(invalid(
+                    &format!("{at}/look/asset"),
+                    "projectile mesh look `asset` is empty".into(),
+                ));
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -310,6 +388,9 @@ pub(crate) fn extract_projectiles(
     world: &World,
     draw: &mut ProjectileDraw,
     muzzle: Option<Vec3>,
+    assets: &mut dyn SceneAssets,
+    mesh_path_index: &mut StableMap<String, usize>,
+    degraded: &mut Vec<(String, Diagnostic)>,
 ) -> Vec<(u64, ProjectileItem)> {
     let Some(res) = world.resource::<crate::Projectiles>() else {
         draw.reset_convergence();
@@ -323,6 +404,7 @@ pub(crate) fn extract_projectiles(
     if pool.is_empty() {
         return Vec::new();
     }
+    let looks = resolve_mesh_looks(&draw.visuals, scene, assets, mesh_path_index, degraded);
     let eye = scene.camera.position;
     let camera_basis = CameraBasis::from_view(scene.camera.view);
     let mut keys = Vec::with_capacity(pool.len());
@@ -348,29 +430,89 @@ pub(crate) fn extract_projectiles(
             visual.size
         };
         let key = (u64::from(id.index) << 32) | u64::from(id.generation);
-        match visual.look {
+        let mesh_look = matches!(
+            visual.look,
+            ProjectileLook::Cube | ProjectileLook::Sphere | ProjectileLook::Mesh { .. }
+        );
+        // A mesh-instanced look draws its simulated orientation when the shot has any.
+        let oriented = mesh_look && {
+            let spin = pool.spin(id).unwrap_or([0.0; 3]);
+            let orient = pool.orientation(id).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            spin.map(f32::to_bits) != [0; 3] || orient.map(f32::to_bits) != IDENTITY_BITS
+        };
+        let fade = if visual.fade_out > 0.0 {
+            (pool.life(id).unwrap_or(0.0) / visual.fade_out).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let posed = |oriented: bool| oriented || visual.fade_out > 0.0;
+        let sim_rotation = || {
+            let [x, y, z, w] = pool.orientation(id).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            Quat::from_xyzw(x, y, z, w).normalize()
+        };
+        let [sx, sy, sz] = visual.scale;
+        match &visual.look {
             ProjectileLook::Hidden => {}
-            ProjectileLook::Cube | ProjectileLook::Sphere => {
-                let rotation = if speed > 0.0 {
-                    Quat::from_rotation_arc(Vec3::Z, dir)
-                } else {
-                    Quat::IDENTITY
+            _ if mesh_look && fade <= 0.0 => {}
+            ProjectileLook::Cube | ProjectileLook::Sphere | ProjectileLook::Mesh { .. } => {
+                let (shape, authored, rim, rotation, extents) = match &visual.look {
+                    ProjectileLook::Mesh { asset } => {
+                        let Some(&Some(index)) = looks.get(asset) else {
+                            continue;
+                        };
+                        (
+                            MeshShape::Asset(index),
+                            scene.mesh_assets[index].authored_material,
+                            crate::extract::resolve_rim_lane(
+                                &scene.mesh_assets,
+                                Some(index),
+                                [0.0; 4],
+                            ),
+                            sim_rotation(),
+                            Vec3::new(visual.size * sx, visual.size * sy, visual.size * sz),
+                        )
+                    }
+                    look => {
+                        let shape = if *look == ProjectileLook::Cube {
+                            MeshShape::Cube
+                        } else {
+                            MeshShape::Sphere
+                        };
+                        let (rotation, extents) = if oriented {
+                            (
+                                sim_rotation(),
+                                Vec3::new(visual.size * sx, visual.size * sy, visual.size * sz),
+                            )
+                        } else {
+                            let rotation = if speed > 0.0 {
+                                Quat::from_rotation_arc(Vec3::Z, dir)
+                            } else {
+                                Quat::IDENTITY
+                            };
+                            (
+                                rotation,
+                                Vec3::new(visual.size * sx, visual.size * sy, length * sz),
+                            )
+                        };
+                        (shape, false, [0.0; 4], rotation, extents)
+                    }
                 };
-                let scale = Vec3::new(visual.size, visual.size, length);
+                let scale = extents * fade;
                 let model = Mat4::from_scale_rotation_translation(scale, rotation, position);
-                let shape = if visual.look == ProjectileLook::Cube {
-                    MeshShape::Cube
+                let item = if posed(oriented || matches!(visual.look, ProjectileLook::Mesh { .. }))
+                {
+                    ProjectileItem::Posed(scene.meshes.len() as u32)
                 } else {
-                    MeshShape::Sphere
+                    ProjectileItem::Mesh(scene.meshes.len() as u32)
                 };
-                keys.push((key, ProjectileItem::Mesh(scene.meshes.len() as u32)));
+                keys.push((key, item));
                 scene.meshes.push(MeshInstance {
                     shape,
                     model,
                     normal_matrix: crate::extract::normal_matrix(model, scale.to_array()),
                     color: visual.color,
                     material: [0.5, 0.0, visual.emissive],
-                    use_vertex_material: false,
+                    use_vertex_material: authored,
                     fade: 1.0,
                     fade_height_min: -f32::MAX,
                     flash: 0.0,
@@ -378,13 +520,14 @@ pub(crate) fn extract_projectiles(
                     wrap: 0.0,
                     scatter_color: [1.0; 3],
                     bone_offset: 0,
-                    cast_shadows: false,
+                    cast_shadows: visual.cast_shadows,
                     viewmodel: false,
-                    rim: [0.0; 4],
+                    rim,
                     medium: visual.medium,
                 });
             }
             ProjectileLook::Billboard { softness } => {
+                let softness = *softness;
                 let (right, up) = if speed > 0.0 {
                     let view = (position - eye).normalize_or_zero();
                     let up = dir.cross(view);
@@ -422,11 +565,70 @@ pub(crate) fn extract_projectiles(
     keys
 }
 
+const IDENTITY_BITS: [u32; 4] = [0, 0, 0, 0x3f80_0000];
+
+/// The `mesh_assets` index of each distinct `Mesh` look in the table (`None` when it failed to
+/// load, latched in `degraded` once per asset). Resolved once per extract, before the shot loop,
+/// through the same path index entity meshes use, so a shared asset uploads once.
+fn resolve_mesh_looks(
+    visuals: &ProjectileVisuals,
+    scene: &mut RenderScene,
+    assets: &mut dyn SceneAssets,
+    mesh_path_index: &mut StableMap<String, usize>,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) -> BTreeMap<String, Option<usize>> {
+    let mut out = BTreeMap::new();
+    let sites = std::iter::once(("/fallback".to_string(), &visuals.fallback)).chain(
+        visuals
+            .tags
+            .iter()
+            .map(|(tag, visual)| (format!("/tags/{tag}"), visual)),
+    );
+    for (at, visual) in sites {
+        let ProjectileLook::Mesh { asset } = &visual.look else {
+            continue;
+        };
+        if out.contains_key(asset) {
+            continue;
+        }
+        let index = if let Some(&index) = mesh_path_index.as_inner().get(asset.as_str()) {
+            Some(index)
+        } else {
+            match assets.mesh(asset) {
+                Ok(mesh) => {
+                    let index = scene.mesh_assets.len();
+                    scene.mesh_assets.push(mesh);
+                    mesh_path_index.insert(asset.clone(), index);
+                    Some(index)
+                }
+                Err(diagnostics) => {
+                    let first = diagnostics.into_iter().next();
+                    let reason = first.map_or_else(String::new, |d| format!(": {}", d.message));
+                    degraded.push((
+                        format!("projectile-mesh/{asset}"),
+                        Diagnostic::new(
+                            code::PROJECTILE_LOOK_ASSET,
+                            format!("projectile look mesh `{asset}` cannot be drawn{reason}"),
+                        )
+                        .with_path(format!("{at}/look/asset"))
+                        .with_help("repair the mesh document or point the look at another asset"),
+                    ));
+                    None
+                }
+            }
+        };
+        out.insert(asset.clone(), index);
+    }
+    out
+}
+
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // assertions on render-side instance data
 mod tests {
     use super::*;
     use crate::{Engine, ProjectileConfig, Projectiles};
     use ludion_projectiles::ProjectileDesc;
+    use std::path::Path;
 
     const SCENE: &str = "\
 format: 1
@@ -486,6 +688,7 @@ entities:
             additive: true,
             from_muzzle: false,
             medium: 1.0,
+            ..ProjectileVisual::default()
         }
     }
 
@@ -822,5 +1025,205 @@ entities:
                 "{name}: L4029 latched once"
             );
         }
+    }
+
+    const CRYSTAL: &str = include_str!("../../../examples/gallery/meshes/crystal.mesh.yaml");
+
+    fn project_with(name: &str, mesh: Option<&str>) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ludion-gibs-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        if let Some(text) = mesh {
+            std::fs::write(dir.join("meshes/gib.mesh.yaml"), text).unwrap();
+        }
+        dir
+    }
+
+    fn gib_engine(root: &Path, visuals: ProjectileVisuals) -> Engine {
+        let mut engine = Engine::builder()
+            .project_root(root)
+            .projectiles(ProjectileConfig {
+                capacity: 8,
+                ..ProjectileConfig::default()
+            })
+            .projectile_visuals(visuals)
+            .build()
+            .expect("boots");
+        engine.load_inline_scene(SCENE).unwrap();
+        engine
+    }
+
+    fn gib(tag_look: ProjectileLook) -> ProjectileVisual {
+        ProjectileVisual {
+            scale: [1.0, 2.0, 3.0],
+            cast_shadows: true,
+            ..visual(tag_look)
+        }
+    }
+
+    fn mesh_look() -> ProjectileLook {
+        ProjectileLook::Mesh {
+            asset: "meshes/gib.mesh.yaml".into(),
+        }
+    }
+
+    fn spin_shot(engine: &mut Engine, tag: u32, spin: [f32; 3], orientation: [f32; 4], life: f32) {
+        let mut desc = ProjectileDesc::new([1.0, 2.0, 0.0], [0.0; 3]);
+        desc.tag = tag;
+        desc.spin = spin;
+        desc.orientation = orientation;
+        desc.lifetime = life;
+        engine
+            .world_mut()
+            .resource_mut::<Projectiles>()
+            .unwrap()
+            .spawn(desc)
+            .unwrap();
+    }
+
+    #[test]
+    fn an_unoriented_cube_draws_exactly_as_before() {
+        let mut visuals = ProjectileVisuals::default();
+        visuals.tags.insert(1, visual(ProjectileLook::Cube));
+        let mut engine = engine(true, visuals);
+        fire(&mut engine, [100.0, 0.0, 0.0], 1);
+        let (scene, blend) = engine.extract_present_scene().unwrap();
+        let rotation = Quat::from_rotation_arc(Vec3::Z, Vec3::X);
+        let scale = Vec3::new(0.1, 0.1, 1.0);
+        let model =
+            Mat4::from_scale_rotation_translation(scale, rotation, Vec3::new(1.0, 2.0, 0.0));
+        assert_eq!(scene.meshes[1].model, model);
+        assert!(!scene.meshes[1].cast_shadows);
+        assert!(matches!(blend.projectiles[0].1, ProjectileItem::Mesh(1)));
+    }
+
+    #[test]
+    fn a_mesh_look_draws_the_sim_orientation_per_axis_and_shares_its_asset() {
+        let root = project_with("look", Some(CRYSTAL));
+        let mut visuals = ProjectileVisuals::default();
+        visuals.tags.insert(1, gib(mesh_look()));
+        visuals.tags.insert(2, gib(mesh_look()));
+        let mut engine = gib_engine(&root, visuals);
+        let q = Quat::from_rotation_y(1.0);
+        spin_shot(&mut engine, 1, [0.0; 3], q.to_array(), 5.0);
+        spin_shot(&mut engine, 2, [0.0; 3], Quat::IDENTITY.to_array(), 5.0);
+        let (scene, blend) = engine.extract_present_scene().unwrap();
+        assert_eq!(scene.mesh_assets.len(), 1);
+        let m = &scene.meshes[1];
+        assert_eq!(m.shape, MeshShape::Asset(0));
+        assert!(m.cast_shadows);
+        let (s, r, t) = m.model.to_scale_rotation_translation();
+        assert!((s - Vec3::new(0.1, 0.2, 0.3)).abs().max_element() < 1e-5);
+        assert!(r.dot(q).abs() > 0.99999);
+        assert_eq!(t, Vec3::new(1.0, 2.0, 0.0));
+        assert_eq!(scene.meshes[2].shape, MeshShape::Asset(0));
+        assert!(
+            blend
+                .projectiles
+                .iter()
+                .all(|(_, item)| matches!(item, ProjectileItem::Posed(_)))
+        );
+        assert_eq!(blend.meshes.len(), scene.meshes.len());
+    }
+
+    #[test]
+    fn a_spun_cube_draws_its_orientation_and_an_unspun_one_faces_its_heading() {
+        let mut visuals = ProjectileVisuals::default();
+        visuals.tags.insert(1, gib(ProjectileLook::Cube));
+        let mut engine = engine(true, visuals);
+        let q = Quat::from_rotation_x(0.8);
+        spin_shot(&mut engine, 1, [0.0, 2.0, 0.0], q.to_array(), 5.0);
+        fire(&mut engine, [100.0, 0.0, 0.0], 1);
+        let (scene, blend) = engine.extract_present_scene().unwrap();
+        let (s, r, _) = scene.meshes[1].model.to_scale_rotation_translation();
+        assert!((s - Vec3::new(0.1, 0.2, 0.3)).abs().max_element() < 1e-5);
+        assert!(r.dot(q).abs() > 0.99999);
+        assert!(matches!(blend.projectiles[0].1, ProjectileItem::Posed(1)));
+        let (s, r, _) = scene.meshes[2].model.to_scale_rotation_translation();
+        assert!(r.dot(Quat::from_rotation_arc(Vec3::Z, Vec3::X)).abs() > 0.99999);
+        assert!(
+            (s.z - 3.0).abs() < 1e-5,
+            "heading stretch keeps length * scale.z"
+        );
+        assert!(matches!(blend.projectiles[1].1, ProjectileItem::Mesh(2)));
+    }
+
+    #[test]
+    fn fade_out_shrinks_the_last_seconds() {
+        let mut visuals = ProjectileVisuals::default();
+        visuals.tags.insert(
+            1,
+            ProjectileVisual {
+                fade_out: 2.0,
+                ..visual(ProjectileLook::Cube)
+            },
+        );
+        let mut engine = engine(true, visuals);
+        spin_shot(&mut engine, 1, [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0], 1.0);
+        spin_shot(&mut engine, 1, [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0], 5.0);
+        let (scene, _) = engine.extract_present_scene().unwrap();
+        assert!((scene.meshes[1].model.x_axis.length() - 0.05).abs() < 1e-5);
+        assert!((scene.meshes[2].model.x_axis.length() - 0.1).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_new_fields_are_validated_with_their_pointers() {
+        let at = |v: ProjectileVisual| {
+            let mut visuals = ProjectileVisuals::default();
+            visuals.tags.insert(4, v);
+            visuals.validate().unwrap_err()
+        };
+        for bad in [0.0, f32::NAN, -1.0] {
+            let e = at(ProjectileVisual {
+                scale: [1.0, bad, 1.0],
+                ..ProjectileVisual::default()
+            });
+            assert_eq!(e.code, code::PROJECTILE_VISUALS_INVALID);
+            assert_eq!(e.path.as_deref(), Some("/tags/4/scale/1"));
+        }
+        let e = at(ProjectileVisual {
+            fade_out: -0.5,
+            ..ProjectileVisual::default()
+        });
+        assert_eq!(e.path.as_deref(), Some("/tags/4/fade_out"));
+        let e = at(ProjectileVisual {
+            look: ProjectileLook::Mesh {
+                asset: String::new(),
+            },
+            ..ProjectileVisual::default()
+        });
+        assert_eq!(e.path.as_deref(), Some("/tags/4/look/asset"));
+    }
+
+    #[test]
+    fn a_missing_mesh_file_is_refused_at_build_and_a_broken_one_degrades() {
+        let root = project_with("missing", None);
+        let mut visuals = ProjectileVisuals::default();
+        visuals.tags.insert(7, gib(mesh_look()));
+        let error = Engine::builder()
+            .project_root(&root)
+            .projectile_visuals(visuals.clone())
+            .build()
+            .err()
+            .expect("missing asset is refused");
+        assert_eq!(error.code, code::PROJECTILE_LOOK_ASSET);
+        assert_eq!(error.path.as_deref(), Some("/tags/7/look/asset"));
+
+        let root = project_with("broken", Some("format: 1\nkind: mesh\npositions: nope\n"));
+        let mut engine = gib_engine(&root, visuals);
+        spin_shot(&mut engine, 7, [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0], 5.0);
+        for _ in 0..2 {
+            let (scene, blend) = engine.extract_present_scene().unwrap();
+            assert_eq!(scene.meshes.len(), 1, "nothing drawn for the broken tag");
+            assert!(blend.projectiles.is_empty());
+        }
+        let sink = engine.world().resource::<crate::Diagnostics>().unwrap();
+        assert_eq!(sink.reported(code::PROJECTILE_LOOK_ASSET).count(), 1);
+        let pending: Vec<_> = sink
+            .pending()
+            .iter()
+            .filter(|d| d.code == code::PROJECTILE_LOOK_ASSET)
+            .collect();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].path.as_deref(), Some("/tags/7/look/asset"));
     }
 }

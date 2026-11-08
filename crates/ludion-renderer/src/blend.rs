@@ -59,6 +59,11 @@ pub struct BlendData {
 pub enum ProjectileItem {
     /// An index into [`RenderScene::meshes`].
     Mesh(u32),
+    /// An index into [`RenderScene::meshes`] for a shot drawn with its own orientation or scale
+    /// (an oriented draw, an asset-mesh look, a fading tag). It blends the whole transform —
+    /// translation and scale lerped, rotation slerped — and rebuilds the normal matrix; a
+    /// [`Mesh`](Self::Mesh) shot only lerps its translation.
+    Posed(u32),
     /// An index into [`RenderScene::particles`].
     Particle(u32),
 }
@@ -449,7 +454,7 @@ fn blend_projectiles(
 ) {
     let in_range = |list: &[(u64, ProjectileItem)], meshes: usize, particles: usize| {
         list.iter().all(|(_, item)| match *item {
-            ProjectileItem::Mesh(i) => (i as usize) < meshes,
+            ProjectileItem::Mesh(i) | ProjectileItem::Posed(i) => (i as usize) < meshes,
             ProjectileItem::Particle(i) => (i as usize) < particles,
         })
     };
@@ -474,10 +479,27 @@ fn blend_projectiles(
             std::cmp::Ordering::Greater => j += 1,
             std::cmp::Ordering::Equal => {
                 match (a, b) {
-                    (ProjectileItem::Mesh(a), ProjectileItem::Mesh(b)) => {
+                    (
+                        ProjectileItem::Mesh(a) | ProjectileItem::Posed(a),
+                        ProjectileItem::Mesh(b),
+                    ) => {
                         let from = prev_scene.meshes[a as usize].model.w_axis;
                         let o = &mut out.meshes[b as usize].model.w_axis;
                         *o = from.lerp(*o, alpha);
+                    }
+                    (
+                        ProjectileItem::Mesh(a) | ProjectileItem::Posed(a),
+                        ProjectileItem::Posed(b),
+                    ) => {
+                        let next = &mut out.meshes[b as usize];
+                        let model =
+                            trs_lerp(prev_scene.meshes[a as usize].model, next.model, alpha);
+                        let (scale, rotation, _) = model.to_scale_rotation_translation();
+                        if model.is_finite() && scale.abs().min_element() >= 1e-12 {
+                            next.model = model;
+                            next.normal_matrix =
+                                Mat3::from_quat(rotation) * Mat3::from_diagonal(scale.recip());
+                        }
                     }
                     (ProjectileItem::Particle(a), ProjectileItem::Particle(b)) => {
                         let from = prev_scene.particles[a as usize].center;
@@ -982,6 +1004,39 @@ mod tests {
         assert_eq!(out.particles[1].center.x, 2.0);
         assert_eq!(out.meshes[2], ns.meshes[2]);
         assert_eq!(out.particles[2], ns.particles[2]);
+    }
+
+    #[test]
+    fn a_posed_shot_slerps_rotation_and_lerps_scale_while_a_mesh_shot_only_moves() {
+        let posed = |yaw: f32, scale: f32| {
+            let m = Mat4::from_scale_rotation_translation(
+                Vec3::splat(scale),
+                Quat::from_rotation_y(yaw),
+                Vec3::ZERO,
+            );
+            let mut s = RenderScene::empty((64, 64));
+            s.meshes.push(mesh(m));
+            s.meshes.push(mesh(m));
+            let d = BlendData {
+                epoch: 1,
+                meshes: vec![None, None],
+                projectiles: vec![(1, ProjectileItem::Posed(0)), (2, ProjectileItem::Mesh(1))],
+                ..BlendData::default()
+            };
+            (s, d)
+        };
+        let (ps, pd) = posed(0.0, 1.0);
+        let (ns, nd) = posed(std::f32::consts::FRAC_PI_2, 3.0);
+        let out = blend(&ps, &pd, &ns, &nd, 0.5);
+        let (scale, rotation, _) = out.meshes[0].model.to_scale_rotation_translation();
+        assert!((scale.x - 2.0).abs() < 1e-5);
+        assert!(
+            rotation
+                .dot(Quat::from_rotation_y(std::f32::consts::FRAC_PI_4))
+                .abs()
+                > 0.99999
+        );
+        assert_eq!(out.meshes[1].model.x_axis, ns.meshes[1].model.x_axis);
     }
 
     #[test]
