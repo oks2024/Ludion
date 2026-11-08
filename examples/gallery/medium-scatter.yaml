@@ -1,0 +1,276 @@
+# Feature: PointLight/SpotLight scatter - local lights in-scatter into the fog medium. A closed room with no sun: a
+# cluster of four warm candles on an altar glows in the air, a pillar between the camera and the altar leaves a dark
+# wedge of air in its shadow (the brightest candle casts shadows, so the gap is the shadowed scatter), and a magenta
+# shadowed spot telegraph throws a visible cone down onto the floor. No Environment: the lights are the look.
+# Every value came off a `render --sweep` contact sheet at 1920x1080.
+# `fog_density` 0.06: swept 0.03/0.06/0.09/0.14 - 0.03 leaves the glow a faint halo and the spot cone barely there, 0.14
+# fogs the far wall into the dark and the pillar's gap starts to fill; 0.06 keeps the room legible with the cone and
+# the glow both clear. `fog_color` is near black-warm, never black, so the unlit air is not a void.
+# `fog_anisotropy` 0.5 is milder than the 0.7 default: the camera sees the candles side-on, so a strong forward lobe
+# would dim the glow.
+# `scatter` 1.0 on every light: swept 0/0.5/1/2 on the brightest candle - the glow around the altar grows with it and
+# the pillar's shadowed wedge stays dark at every value; 2 starts to blow the altar out.
+# Candle intensities 2.0-3.0 and the dark walls (0.12): at 5.0 on pale walls the room washes to flat beige and the
+# glow loses its edge.
+format: 1
+name: "medium-scatter - local lights scatter into the fog: a candle altar behind a pillar, and a spot telegraph"
+seed: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.7
+          - 6.5
+        rotation:
+          - -4.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 55.0
+      PostProcess:
+        fog_density: 0.06
+        fog_color:
+          - 0.02
+          - 0.016
+          - 0.014
+        fog_albedo: 1.0
+        fog_anisotropy: 0.5
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        scale:
+          - 14.0
+          - 1.0
+          - 17.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.12
+          - 0.11
+          - 0.1
+          - 1.0
+        roughness: 0.9
+  - name: back-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.1
+          - -8.5
+        scale:
+          - 14.0
+          - 4.2
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.12
+          - 0.11
+          - 0.1
+          - 1.0
+        roughness: 0.9
+  - name: left-wall
+    components:
+      Transform:
+        translation:
+          - -7.0
+          - 2.1
+          - 0.0
+        scale:
+          - 0.4
+          - 4.2
+          - 17.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.12
+          - 0.11
+          - 0.1
+          - 1.0
+        roughness: 0.9
+  - name: right-wall
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 2.1
+          - 0.0
+        scale:
+          - 0.4
+          - 4.2
+          - 17.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.12
+          - 0.11
+          - 0.1
+          - 1.0
+        roughness: 0.9
+  - name: front-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.1
+          - 8.5
+        scale:
+          - 14.0
+          - 4.2
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.12
+          - 0.11
+          - 0.1
+          - 1.0
+        roughness: 0.9
+  - name: ceiling
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.3
+          - 0.0
+        scale:
+          - 14.0
+          - 0.4
+          - 17.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.12
+          - 0.11
+          - 0.1
+          - 1.0
+        roughness: 0.9
+  - name: altar
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 0.5
+          - -4.5
+        scale:
+          - 2.2
+          - 1.0
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.22
+          - 0.2
+          - 0.19
+          - 1.0
+        roughness: 0.9
+  - name: pillar
+    components:
+      Transform:
+        translation:
+          - 1.2
+          - 2.1
+          - -2.0
+        scale:
+          - 0.5
+          - 4.2
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.34
+          - 0.32
+          - 0.31
+          - 1.0
+        roughness: 0.9
+  - name: candle-main
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 1.5
+          - -4.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.62
+          - 0.28
+        intensity: 3.0
+        range: 9.0
+        cast_shadows: true
+        scatter: 1.0
+  - name: candle-b
+    components:
+      Transform:
+        translation:
+          - 1.4
+          - 1.15
+          - -4.3
+      PointLight:
+        color:
+          - 1.0
+          - 0.62
+          - 0.28
+        intensity: 2.0
+        range: 9.0
+        scatter: 1.0
+  - name: candle-c
+    components:
+      Transform:
+        translation:
+          - 2.6
+          - 1.2
+          - -4.7
+      PointLight:
+        color:
+          - 1.0
+          - 0.62
+          - 0.28
+        intensity: 2.0
+        range: 9.0
+        scatter: 1.0
+  - name: candle-d
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 1.1
+          - -4.1
+      PointLight:
+        color:
+          - 1.0
+          - 0.62
+          - 0.28
+        intensity: 1.5
+        range: 9.0
+        scatter: 1.0
+  - name: telegraph
+    components:
+      Transform:
+        translation:
+          - -3.5
+          - 3.8
+          - -3.0
+      SpotLight:
+        color:
+          - 1.0
+          - 0.1
+          - 0.8
+        intensity: 14.0
+        range: 9.0
+        direction:
+          - 0.25
+          - -1.0
+          - 0.1
+        inner_angle: 10.0
+        outer_angle: 20.0
+        cast_shadows: true
+        scatter: 1.0
