@@ -40,7 +40,7 @@
 use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::math::powf;
 
-use crate::cull::{Aabb, CullVolume, Frustum, cull, instance_bounds};
+use crate::cull::{Aabb, AssetBounds, CullVolume, Frustum, cull, instance_bounds};
 use crate::graph::PostChain;
 use crate::quality::{MAX_SUN_CASCADES, Quality, QualityParams};
 use crate::scene::{RenderCamera, RenderScene, SunCascadeConfig};
@@ -249,12 +249,12 @@ pub fn sun_cascade_stats(
             ..SunCascadeStats::default()
         };
     };
-    let asset_bounds: Vec<Option<Aabb>> = scene
+    let asset_bounds: Vec<AssetBounds> = scene
         .mesh_assets
         .iter()
-        .map(|asset| Aabb::of_positions(&asset.positions))
+        .map(|asset| AssetBounds::of_mesh(asset))
         .collect();
-    let caster_bounds = instance_bounds(&scene.meshes, &asset_bounds);
+    let caster_bounds = instance_bounds(&scene.meshes, &asset_bounds, &scene.bone_palette);
     let casters = sun_cascade_casters(&fit, &caster_bounds);
     SunCascadeStats {
         authored,
@@ -719,7 +719,7 @@ mod tests {
                 assert!(stat.far > stat.near);
             }
         }
-        let bounds = instance_bounds(&scene.meshes, &[]);
+        let bounds = instance_bounds(&scene.meshes, &[], &[]);
         let want = sun_cascade_casters(&fit, &bounds);
         let got: Vec<u32> = stats.cascades.iter().map(|s| s.casters).collect();
         assert_eq!(got, want.iter().map(|k| k.len() as u32).collect::<Vec<_>>());

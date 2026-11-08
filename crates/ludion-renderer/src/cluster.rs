@@ -21,7 +21,7 @@
 use bytemuck::Zeroable;
 use ludion_core::math::glam::{Mat4, Vec3};
 
-use crate::cull::{Aabb, instance_bounds};
+use crate::cull::{Aabb, AssetBounds, instance_bounds};
 use crate::probe::{MAX_PROBES, ProbeData, ProbeVolume};
 use crate::scene::{MeshInstance, MeshShape, RenderCamera, RenderScene};
 use crate::shader_gen::{CLUSTER_SLICES, CLUSTER_TILES_X, CLUSTER_TILES_Y, Light, LightHeader};
@@ -240,14 +240,15 @@ pub(crate) fn build_lights(
 fn viewmodel_bounds(scene: &RenderScene) -> Option<Option<Aabb>> {
     scene.viewmodel.as_ref()?;
     // Only the assets the gun references are measured; the rest stay `None` and are never read.
-    let mut asset_bounds: Vec<Option<Aabb>> = vec![None; scene.mesh_assets.len()];
+    // `skin` stays `None`: a skinned gun is unknown, so every light reaches it.
+    let mut asset_bounds: Vec<AssetBounds> = vec![AssetBounds::default(); scene.mesh_assets.len()];
     let mut measured = vec![false; scene.mesh_assets.len()];
     for mesh in scene.meshes.iter().filter(|m| m.viewmodel) {
         if let MeshShape::Asset(i) = mesh.shape
             && i < measured.len()
             && !std::mem::replace(&mut measured[i], true)
         {
-            asset_bounds[i] = Aabb::of_positions(&scene.mesh_assets[i].positions);
+            asset_bounds[i].local = Aabb::of_positions(&scene.mesh_assets[i].positions);
         }
     }
     let gun: Vec<MeshInstance> = scene
@@ -257,7 +258,7 @@ fn viewmodel_bounds(scene: &RenderScene) -> Option<Option<Aabb>> {
         .cloned()
         .collect();
     let mut union: Option<Aabb> = None;
-    for bound in instance_bounds(&gun, &asset_bounds) {
+    for bound in instance_bounds(&gun, &asset_bounds, &[]) {
         let Some(bound) = bound else {
             return Some(None);
         };

@@ -24,7 +24,9 @@ use ludion_render_graph::{
 use crate::cache_eviction::CacheEviction;
 use crate::compressed::{self, CompressedUploadError};
 use crate::compute_shader::ComputeShader;
-use crate::cull::{Aabb, cull, instance_bounds, local_bounds, visible_ranges};
+use crate::cull::{
+    Aabb, AssetBounds, bounds_table, cull, instance_bounds, local_bounds, visible_ranges,
+};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
@@ -341,8 +343,9 @@ struct MeshAssetGpu {
     indices: wgpu::Buffer,
     vertex_count: u32,
     index_count: u32,
-    /// The object-space box of the vertices, cached with the upload for per-view shadow culling.
-    bounds: Option<Aabb>,
+    /// The object-space box of the vertices and, for a skinned asset, its posed-bounds data, cached
+    /// with the upload for per-view shadow culling.
+    bounds: AssetBounds,
     /// Whether the mesh draws through the cull-none variant, with its back faces shaded.
     double_sided: bool,
     /// Whether the material is `alpha_mode: mask`, which the shadow casters draw through the cutout
@@ -437,6 +440,9 @@ pub struct Renderer {
     /// upload-on-miss / reference-retain-evict policy as [`Renderer::texture_cache`], for the second
     /// asset kind. One cache policy, textures and meshes both honoring `scene.rs`'s documented hash key.
     mesh_asset_cache: RefCell<HashMap<u64, MeshAssetGpu>>,
+    /// The GPU cull's object-space box table ([`crate::cull::bounds_table`]), keyed by the content
+    /// hashes of `scene.mesh_assets` in order: rebuilt only when the asset list changes.
+    cull_bounds_table: RefCell<Option<(Vec<u64>, wgpu::Buffer)>>,
     /// Uploaded mesh material maps, keyed on `(`[`TextureImage::hash`]`, sRGB)` — the same
     /// upload-on-miss / retain-referenced-evict policy as [`Renderer::texture_cache`], with the colour
     /// space in the key so one PNG bound as sRGB by one material and linear by another cannot alias
@@ -667,6 +673,7 @@ impl Renderer {
             atlas,
             texture_cache: RefCell::new(HashMap::new()),
             mesh_asset_cache: RefCell::new(HashMap::new()),
+            cull_bounds_table: RefCell::new(None),
             mesh_texture_cache: RefCell::new(HashMap::new()),
             uploads: Cell::new(GpuUploads::default()),
             mipgen,
@@ -1702,7 +1709,7 @@ impl Renderer {
 
         // Resolve each unique texture the scene references through the content-hash cache: upload on a
         // miss, reuse the cached GPU texture on a hit (see [`Renderer::texture_cache`]).
-        let (textures, mesh_assets, resolved_env, sky_bg) =
+        let (textures, mesh_assets, cull_bounds_buf, resolved_env, sky_bg) =
             self.observed_phase(&mut observer, FramePhase::Upload, || {
                 let textures = self.resolve_textures(scene, eviction);
 
@@ -1714,6 +1721,7 @@ impl Renderer {
                 // Resolve each unique asset mesh through the content-hash cache (same policy as
                 // textures), then group instances by asset index for indexed instanced draws.
                 let mesh_assets = self.resolve_mesh_assets(scene, eviction);
+                let cull_bounds_buf = self.resolve_cull_bounds(scene, &mesh_assets);
 
                 // IBL environment (mesh group 3): prefilter (cache-keyed) when a scene has an
                 // `Environment`, else the 1×1 fallback cubes + flag off. The group's bind group is
@@ -1728,7 +1736,7 @@ impl Renderer {
                     .environment
                     .as_ref()
                     .map(|env| self.sky_bind_group(device, scene, env));
-                (textures, mesh_assets, resolved_env, sky_bg)
+                (textures, mesh_assets, cull_bounds_buf, resolved_env, sky_bg)
             });
 
         // The voxelizer's grid, uploaded to its content-hash-cached holder (`voxel_bake.rs`), then
@@ -1886,9 +1894,11 @@ impl Renderer {
             "the graph schedules local_shadow exactly when a light is granted a view",
         );
         let caster_bounds = if local_shadow.is_some() || sun_cascades.is_some() {
-            let asset_bounds: Vec<Option<Aabb>> =
-                mesh_assets.iter().map(|asset| asset.bounds).collect();
-            instance_bounds(&scene.meshes, &asset_bounds)
+            let asset_bounds: Vec<AssetBounds> = mesh_assets
+                .iter()
+                .map(|asset| asset.bounds.clone())
+                .collect();
+            instance_bounds(&scene.meshes, &asset_bounds, &scene.bone_palette)
         } else {
             Vec::new()
         };
@@ -1976,6 +1986,7 @@ impl Renderer {
             sun_cascade_casters,
             sun_tile: chain.shadow_map.unwrap_or_default(),
             caster_bounds,
+            cull_bounds_buf,
             casts,
             ground_marker_draw,
             debug_line_draw,
@@ -2064,6 +2075,28 @@ impl Renderer {
                     .clone()
             })
             .collect()
+    }
+
+    /// The persistent cull box table for `scene.mesh_assets`: the cached buffer while the asset
+    /// hash list is unchanged, else a rebuilt one.
+    fn resolve_cull_bounds(&self, scene: &RenderScene, meshes: &[MeshAssetGpu]) -> wgpu::Buffer {
+        let key: Vec<u64> = scene.mesh_assets.iter().map(|m| m.hash).collect();
+        let mut cached = self.cull_bounds_table.borrow_mut();
+        if let Some((cached_key, buffer)) = cached.as_ref()
+            && *cached_key == key
+        {
+            return buffer.clone();
+        }
+        let assets: Vec<AssetBounds> = meshes.iter().map(|m| m.bounds.clone()).collect();
+        let buffer = init_buffer(
+            self.gpu.device(),
+            wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            bytemuck::cast_slice(&bounds_table(&assets)),
+        );
+        *cached = Some((key, buffer.clone()));
+        buffer
     }
 
     /// Uploads every material map the scene's asset meshes reference through the
@@ -2344,8 +2377,9 @@ impl Renderer {
         meshes: &[MeshAssetGpu],
     ) -> Vec<MeshAssetDraw> {
         let mut draws = Vec::new();
+        let asset_bounds: Vec<AssetBounds> =
+            meshes.iter().map(|asset| asset.bounds.clone()).collect();
         for (viewmodel, mirrored) in [(false, false), (false, true), (true, false), (true, true)] {
-            let asset_bounds: Vec<Option<Aabb>> = meshes.iter().map(|asset| asset.bounds).collect();
             let (buckets, sources) =
                 bucket_asset_instances(scene, meshes.len(), &asset_bounds, mirrored, viewmodel);
             for ((mesh, raws), sources) in meshes.iter().zip(buckets.iter()).zip(sources) {
@@ -3549,6 +3583,9 @@ struct FrameRecorder<'a> {
     /// The sun atlas's tile edge, the chain's `shadow_map`.
     sun_tile: u32,
     caster_bounds: Vec<Option<Aabb>>,
+    /// The persistent object-space box table, one row per [`crate::cull::bounds_slot`].
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by the cull compute pass"))]
+    cull_bounds_buf: wgpu::Buffer,
     /// Per scene mesh, whether it writes shadow maps; empty when every instance does.
     casts: Vec<bool>,
     /// The scene's ground markers, or `None` when it authors none — in which case the scene pass
@@ -4369,8 +4406,8 @@ impl FrameRecorder<'_> {
     /// The local-light shadow pass (present only when a light is granted a view): each granted view
     /// drawn depth-only (plus the cutout caster for mask meshes) into its tile of the graph-owned
     /// atlas, with the sun shadow's pipelines and instance buffers. Casters are culled per view; a
-    /// skinned instance is always drawn. Clears depth to 1.0, so an ungranted tile reads as
-    /// unoccluded. The sun's pass is untouched.
+    /// skinned instance by its posed joint bounds, or drawn always when its asset has none. Clears
+    /// depth to 1.0, so an ungranted tile reads as unoccluded. The sun's pass is untouched.
     fn record_local_shadow(&self, pass: &mut RecordedPass<'_>) {
         let depth_view = pass
             .depth
@@ -4507,8 +4544,8 @@ impl FrameRecorder<'_> {
 
     /// The sun pass of a cascaded frame: each fitted cascade drawn into its tile of the atlas,
     /// row-major, depth-only (plus the cutout caster for mask meshes), with its own matrix and casters
-    /// culled to its box (a skinned instance is always drawn). Clears depth to 1.0, so a tile no
-    /// cascade fills reads as unoccluded.
+    /// culled to its box (a skinned instance by its posed joint bounds). Clears depth to 1.0, so a
+    /// tile no cascade fills reads as unoccluded.
     fn record_sun_cascades(&self, pass: &mut RecordedPass<'_>, cascades: &SunCascades) {
         let depth_view = pass
             .depth
@@ -6299,7 +6336,7 @@ fn instance_flash(m: &MeshInstance) -> [f32; 4] {
 /// `Mat4::from_mat3`'s bytes. Every write goes through here, every read through `wrap_lanes` in
 /// `mesh.wgsl`. Everything written is finite: `n3.xyz` is multiplied by `0.0`, so a NaN there would
 /// poison the normal.
-fn instance_normal_lanes(m: &MeshInstance, asset_bounds: &[Option<Aabb>]) -> [[f32; 4]; 4] {
+fn instance_normal_lanes(m: &MeshInstance, asset_bounds: &[AssetBounds]) -> [[f32; 4]; 4] {
     let mut lanes = Mat4::from_mat3(m.normal_matrix).to_cols_array_2d();
     if m.wrap.is_nan() || m.wrap <= 0.0 {
         return lanes;
@@ -6330,7 +6367,7 @@ fn instance_normal_lanes(m: &MeshInstance, asset_bounds: &[Option<Aabb>]) -> [[f
 fn bucket_asset_instances(
     scene: &RenderScene,
     asset_count: usize,
-    asset_bounds: &[Option<Aabb>],
+    asset_bounds: &[AssetBounds],
     mirrored: bool,
     viewmodel: bool,
 ) -> (Vec<Vec<MeshInstanceRaw>>, Vec<Vec<u32>>) {
@@ -6429,7 +6466,7 @@ fn upload_mesh_asset(
         indices: index_buffer,
         vertex_count: vertex_count as u32,
         index_count: mesh.indices.len() as u32,
-        bounds: Aabb::of_positions(&mesh.positions),
+        bounds: AssetBounds::of_mesh(mesh),
         double_sided: mesh.double_sided,
         cutout: mesh
             .textures
@@ -9193,6 +9230,7 @@ mod tests {
 
     mod lit_additive;
     mod shaft_layer;
+    mod skin_bounds;
     mod viewmodel;
 
     /// The decision-16 mapping-drift guard: the string this crate composes and compiles for every
