@@ -165,6 +165,61 @@ fn mesh_out_of_range_colour_reports_pointer() {
     assert_eq!(diags[0].path.as_deref(), Some("/rim/color/1"));
 }
 
+/// Diagnostics from parsing then validating `source`, whichever stage rejects it.
+fn refusals(
+    source: &str,
+    parse: fn(&str) -> Result<DocRimHolder, Vec<ludion_core::diagnostics::Diagnostic>>,
+) -> Vec<ludion_core::diagnostics::Diagnostic> {
+    match parse(source) {
+        Err(diags) => diags,
+        Ok(holder) => holder.diagnostics,
+    }
+}
+
+struct DocRimHolder {
+    diagnostics: Vec<ludion_core::diagnostics::Diagnostic>,
+}
+
+fn voxel_refusals(s: &str) -> Result<DocRimHolder, Vec<ludion_core::diagnostics::Diagnostic>> {
+    parse_voxel(s).map(|d| DocRimHolder {
+        diagnostics: validate_voxel(&d),
+    })
+}
+
+fn sculpt_refusals(s: &str) -> Result<DocRimHolder, Vec<ludion_core::diagnostics::Diagnostic>> {
+    parse_sculpt(s).map(|d| DocRimHolder {
+        diagnostics: validate_sculpt(&d),
+    })
+}
+
+fn mesh_refusals(s: &str) -> Result<DocRimHolder, Vec<ludion_core::diagnostics::Diagnostic>> {
+    parse_mesh(s).map(|d| DocRimHolder {
+        diagnostics: validate_mesh(&d),
+    })
+}
+
+/// Values that are valid `f64`s but not valid stored `f32`s are rejected at their pointer.
+#[test]
+fn narrowing_to_f32_is_validated_on_every_kind() {
+    type Parse = fn(&str) -> Result<DocRimHolder, Vec<ludion_core::diagnostics::Diagnostic>>;
+    let kinds: [(&str, &str, Parse, &str); 3] = [
+        ("voxel", VOXEL, voxel_refusals, "L1114"),
+        ("sculpt", SCULPT, sculpt_refusals, "L1157"),
+        ("mesh", MESH, mesh_refusals, "L1111"),
+    ];
+    for (kind, template, parse, code) in kinds {
+        for (rim, pointer) in [
+            ("rim:\n  power: 1.0e-50\n", "/rim/power"),
+            ("rim:\n  strength: 1.0e+39\n", "/rim/strength"),
+        ] {
+            let diags = refusals(&with(template, rim), parse);
+            assert_eq!(diags.len(), 1, "{kind} {rim}: {diags:?}");
+            assert_eq!(diags[0].code.as_str(), code, "{kind} {rim}");
+            assert_eq!(diags[0].path.as_deref(), Some(pointer), "{kind} {rim}");
+        }
+    }
+}
+
 #[test]
 fn unknown_rim_key_is_a_structure_error() {
     let diags = parse_voxel(&with(VOXEL, "rim:\n  glow: 1.0\n")).unwrap_err();

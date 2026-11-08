@@ -308,7 +308,7 @@ or a black `color` renders the same bytes as a scene without it.
   `Mesh`-less root cannot carry one: put the rim on the root's `Mesh`, or on every part.
 - **Documents.** A `kind: voxel`, `kind: sculpt` or `kind: mesh` document may carry one top-level
   `rim:` with the same keys (in a voxel or sculpt document after `budget_exempt` and before `palette`; in a `.mesh.yaml` after `double_sided`). Precedence: the document's
-  rim, then `Mesh.rim`, then the inherited one. There is no per-palette-entry rim. Assembly parts are
+  rim, then `Mesh.rim`, then the inherited one. There is no per-palette-entry rim. A sculpt `voxel`/`mesh` part's source document `rim:` is ignored; only the sculpt's own applies. Assembly parts are
   `kind: part` documents with no `rim` key, so an assembly takes its entity's `Mesh.rim`. A bad value
   is `L1114` (voxel), `L1157` (sculpt) or `L1111` (mesh).
 - **Where it applies.** Viewmodel meshes take it, with the drawn camera as the eye; skinned meshes use

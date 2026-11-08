@@ -115,7 +115,8 @@ at every `resolution`. Bury it, or use the spike/horn/tooth idiom — a tapered 
 
 A `voxel` or `mesh` part reads another document's own shape as its field instead of describing a
 primitive — `voxel` an occupancy, `mesh` a triangle soup — so existing or generated content blends,
-bevels and carves like any other part. Their keys, placement, override pointers and diagnostics are
+bevels and carves like any other part. The source document's own `rim:` is ignored; only the
+sculpt's top-level `rim:` applies. Their keys, placement, override pointers and diagnostics are
 `ludion docs sculpt-format-sources`.
 
 Shared keys: `at` (centre, default `[0,0,0]`; refused on a `capsule`, which is placed by `from`/

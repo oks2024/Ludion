@@ -40,6 +40,9 @@ per-light cost for a per-mesh effect and was not taken.
   an assembly. Needs a vertex attribute slot or a per-model table first.
 - **Light linking.** Trigger: a look that must rim only against one light's side; a per-light cost.
 - **Sprite and particle rim.** Trigger: a sprite kit that needs the edge and cannot bake it in the art.
+- **One `Parent` walk in extract.** Extract walks `Parent` twice for a parented mesh (`inherited_rim`
+  beside `inherited_fade`). Trigger: the M2 500-enemy horde — measure extract there and fuse the two
+  walks into one if it shows.
 
 ## Status — request 0010
 

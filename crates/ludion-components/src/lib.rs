@@ -7565,7 +7565,21 @@ mod tests {
             "L1014",
             "/rim",
         );
+        refused_with(
+            "Mesh",
+            "        rim:\n          power: 1.0e-50\n",
+            "L1014",
+            "/rim",
+        );
+        refused_with(
+            "Mesh",
+            "        rim:\n          strength: 1.0e+39\n",
+            "L1014",
+            "/rim",
+        );
         assert!(refusals("Mesh", "        rim:\n          strength: 2.0\n").is_empty());
+        assert!(refusals("Mesh", "        rim:\n          strength: 0.0\n").is_empty());
+        assert!(refusals("Mesh", "        rim:\n          power: 0.5\n").is_empty());
         let value = serde_json::to_value(Mesh::default()).unwrap();
         assert!(value.get("rim").is_none());
     }

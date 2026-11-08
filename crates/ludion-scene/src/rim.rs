@@ -163,7 +163,7 @@ fn parse_color(
 pub(crate) fn validate_rim(rim: &DocRim, pointer: &str, code: DiagnosticCode) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for (i, channel) in rim.color.iter().enumerate() {
-        if !(channel.is_finite() && *channel >= 0.0) {
+        if !((*channel as f32).is_finite() && *channel >= 0.0) {
             out.push(
                 Diagnostic::new(
                     code,
@@ -174,12 +174,12 @@ pub(crate) fn validate_rim(rim: &DocRim, pointer: &str, code: DiagnosticCode) ->
             );
         }
     }
-    if !(rim.strength.is_finite() && rim.strength >= 0.0) {
+    if !((rim.strength as f32).is_finite() && rim.strength >= 0.0) {
         out.push(
             Diagnostic::new(
                 code,
                 format!(
-                    "`rim.strength` is {}; it must be finite and `>= 0`",
+                    "`rim.strength` is {}; it must be finite after narrowing to f32 and `>= 0`",
                     rim.strength
                 ),
             )
@@ -187,11 +187,14 @@ pub(crate) fn validate_rim(rim: &DocRim, pointer: &str, code: DiagnosticCode) ->
             .with_help("strength scales the rim colour; `0` renders as no rim, 1.0 is the default"),
         );
     }
-    if !(rim.power.is_finite() && rim.power > 0.0) {
+    if !ludion_core::number::positive_f32(rim.power) {
         out.push(
             Diagnostic::new(
                 code,
-                format!("`rim.power` is {}; it must be finite and `> 0`", rim.power),
+                format!(
+                    "`rim.power` is {}; it must be finite and `> 0` after narrowing to f32",
+                    rim.power
+                ),
             )
             .with_path(format!("{pointer}/power"))
             .with_help("power is the falloff exponent (default 3.0); higher hugs the silhouette"),
