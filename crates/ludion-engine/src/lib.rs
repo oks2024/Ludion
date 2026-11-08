@@ -55,6 +55,8 @@ mod docs;
 pub mod egress;
 mod engine;
 mod extract;
+#[doc(hidden)]
+pub mod extract_observer;
 mod field_diff;
 mod font_sheet;
 pub mod fonts;

@@ -336,6 +336,10 @@ pub struct Engine {
     /// The host's explicit mode ([`set_anti_aliasing`](Engine::set_anti_aliasing)), if it named one.
     /// Same status as `anti_aliasing_default`.
     anti_aliasing_override: Option<AntiAliasing>,
+    /// Whether the renderer culls meshes against the camera ([`set_frustum_culling`](Engine::set_frustum_culling)).
+    /// Host setting: render-only, never hashed, snapshotted or on the wire, and not a quality axis.
+    /// Oracle tests and the "before" bench turn it off; a game cannot request it.
+    frustum_culling: bool,
     /// The mode the game's own systems last requested through
     /// [`RenderSettings`](crate::RenderSettings), the strongest source. Lives here rather than in the
     /// world so a district switch or restore does not forget it; same status as the others.
@@ -811,6 +815,7 @@ impl Engine {
             late_latch: false,
             look_motion: None,
             anti_aliasing_override: None,
+            frustum_culling: true,
             anti_aliasing_game: None,
             cursor_lock_game: None,
             cursor_lock_sender: None,
@@ -1010,6 +1015,29 @@ impl Engine {
     /// host may call them in either order and gets the same frame.
     pub fn render_scale(&self) -> RenderScale {
         crate::resolve_render_scale(self.render_scale_override, &self.quality)
+    }
+
+    /// Turns frustum culling on or off for this host. On by default; survives scene loads.
+    ///
+    /// A host switch, not a protocol command and not a game request: it changes what the renderer
+    /// skips, never the sim.
+    pub fn set_frustum_culling(&mut self, on: bool) {
+        self.frustum_culling = on;
+    }
+
+    /// Whether frustum culling is on.
+    pub fn frustum_culling(&self) -> bool {
+        self.frustum_culling
+    }
+
+    /// Attaches (or detaches) an [`ExtractObserver`](crate::extract_observer::ExtractObserver) that
+    /// sees every extract phase boundary. Pure observation: it never changes the scene or the hash.
+    #[doc(hidden)]
+    pub fn set_extract_observer(
+        &mut self,
+        observer: Option<Box<dyn crate::extract_observer::ExtractObserver>>,
+    ) {
+        self.asset_cache.set_extract_observer(observer);
     }
 
     /// Sets this host's anti-aliasing mode, beating the game's packaged default from

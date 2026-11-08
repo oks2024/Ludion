@@ -51,6 +51,7 @@ use crate::components::{
     SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText,
 };
 use crate::docs::DocStore;
+use crate::extract_observer::ExtractPhase;
 use crate::fonts::FontLibrary;
 use crate::hierarchy::{FrameVisibility, WorldAffines, level_trs};
 use crate::load_observer::LoadPhase;
@@ -133,6 +134,10 @@ pub(crate) trait SceneAssets {
     fn observe_begin(&mut self, _phase: LoadPhase) {}
     /// The load phase last begun ends.
     fn observe_end(&mut self, _phase: LoadPhase) {}
+    /// An extract phase starts. A loader with no extract observer ignores it.
+    fn extract_begin(&mut self, _phase: ExtractPhase) {}
+    /// The extract phase last begun ends.
+    fn extract_end(&mut self, _phase: ExtractPhase) {}
 }
 
 /// The cached loader: each asset resolves **through** the [`AssetCache`] (miss = load + decode once,
@@ -200,6 +205,16 @@ impl SceneAssets for CachedAssets<'_> {
     }
     fn observe_end(&mut self, phase: LoadPhase) {
         if let Some(observer) = self.cache.observer_mut() {
+            observer.end(phase);
+        }
+    }
+    fn extract_begin(&mut self, phase: ExtractPhase) {
+        if let Some(observer) = self.cache.extract_observer_mut() {
+            observer.begin(phase);
+        }
+    }
+    fn extract_end(&mut self, phase: ExtractPhase) {
+        if let Some(observer) = self.cache.extract_observer_mut() {
             observer.end(phase);
         }
     }
@@ -707,6 +722,7 @@ fn extract_inner(
     blend: Option<&mut BlendData>,
     projectiles: Option<&mut ProjectileDraw>,
 ) -> Result<RenderScene, Vec<Diagnostic>> {
+    assets.extract_begin(ExtractPhase::Place);
     // Gameplay time, read once: every closed form below — a volley's bullets, a particle emitter's
     // live window, a clip's phase — measures `now − started`, so reading the world's `GameClock`
     // here is what freezes the picture while a game is held. A world with no clock (a one-shot
@@ -753,7 +769,9 @@ fn extract_inner(
     placed
         .spot_lights
         .retain(|light| !visibility.hidden(light.0));
+    assets.extract_end(ExtractPhase::Place);
 
+    assets.extract_begin(ExtractPhase::Sprites);
     // Resolve sprite textures in first-encounter (entity) order, collecting every load error before
     // giving up. Geometry is already fixed above — only the path→index mapping and its IO live here.
     // `textures` is the output list and the *only* thing iterated; `path_index` is a lookup index
@@ -900,7 +918,9 @@ fn extract_inner(
             sprite.center.y = (sprite.center.y / texel).round() * texel;
         }
     }
+    assets.extract_end(ExtractPhase::Sprites);
 
+    assets.extract_begin(ExtractPhase::Ui);
     // Resolve UI elements (Phase 14): screen-space, no world placement, so — unlike sprites/meshes/
     // text — they are resolved directly here rather than through `place()`/`Placed`. `render.bounds`
     // reports only world-space renderables (a rect projected from a real camera), and a screen-space
@@ -1076,7 +1096,9 @@ fn extract_inner(
             run
         })
         .collect();
+    assets.extract_end(ExtractPhase::Ui);
 
+    assets.extract_begin(ExtractPhase::Meshes);
     // Resolve asset meshes, voxel models, sculpts, and assemblies in the same first-encounter (entity)
     // order, deduplicated by path — so two `Mesh` components pointing at the same document produce one
     // `mesh_assets` entry (one run of entries for an assembly, one per part), and two extractions of
@@ -1320,7 +1342,9 @@ fn extract_inner(
             viewmodel_emitters,
         )
     });
+    assets.extract_end(ExtractPhase::Meshes);
 
+    assets.extract_begin(ExtractPhase::Decals);
     let (decals, decal_ids) = extract_decals(
         world,
         &ids,
@@ -1332,6 +1356,7 @@ fn extract_inner(
         assets,
         &mut errors,
     );
+    assets.extract_end(ExtractPhase::Decals);
 
     // A `MeshGrid` places one mesh per cell, so a legend entry that fails to load fails once per
     // cell, identically; report each exact (code, pointer, message) once.
@@ -1348,6 +1373,7 @@ fn extract_inner(
         return Err(errors);
     }
 
+    assets.extract_begin(ExtractPhase::Gi);
     // The scene's `Environment` (if any) is the one lighting surface: its authored `ambient`
     // supersedes the historical constant. Absent ⇒ `AMBIENT` byte-for-byte. The default
     // `Environment.ambient` is zero, not `AMBIENT`: under an `Environment` the sky's IBL is the ambient.
@@ -1384,7 +1410,9 @@ fn extract_inner(
             (voxel, gi)
         }
     };
+    assets.extract_end(ExtractPhase::Gi);
 
+    assets.extract_begin(ExtractPhase::Lights);
     let (ground_markers, ground_marker_ids) =
         extract_ground_markers(world, &ids, &visibility, &mut poses);
     let (drop_shadows, drop_shadow_ids) =
@@ -1397,8 +1425,29 @@ fn extract_inner(
     } else {
         (Vec::new(), Vec::new())
     };
+    assets.extract_end(ExtractPhase::Lights);
 
     let mut particle_keys: Vec<InstanceKey> = Vec::new();
+    assets.extract_begin(ExtractPhase::Particles);
+    let particles = extract_particles(
+        world,
+        &ids,
+        &visibility,
+        &mut poses,
+        now,
+        particle_density,
+        CameraBasis::from_view(camera.view),
+        viewmodel_camera.map(|cam| (&viewmodel_frame, crate::viewmodel::camera_frame(world, cam))),
+        collect.then_some(&mut particle_keys),
+    );
+    assets.extract_end(ExtractPhase::Particles);
+    assets.extract_begin(ExtractPhase::Lights);
+    let lights = extract_lights(placed.lights);
+    let spot_lights = extract_spot_lights(placed.spot_lights);
+    let probes = extract_probes(world, &ids, &mut poses);
+    let sun = extract_sun(world, &ids);
+    let post = extract_post(world, &ids);
+    assets.extract_end(ExtractPhase::Lights);
     let mut scene = RenderScene {
         camera,
         ambient,
@@ -1411,25 +1460,14 @@ fn extract_inner(
         decals,
         debug_lines: Vec::new(),
         debug_view: None,
-        particles: extract_particles(
-            world,
-            &ids,
-            &visibility,
-            &mut poses,
-            now,
-            particle_density,
-            CameraBasis::from_view(camera.view),
-            viewmodel_camera
-                .map(|cam| (&viewmodel_frame, crate::viewmodel::camera_frame(world, cam))),
-            collect.then_some(&mut particle_keys),
-        ),
-        lights: extract_lights(placed.lights),
-        spot_lights: extract_spot_lights(placed.spot_lights),
-        probes: extract_probes(world, &ids, &mut poses),
+        particles,
+        lights,
+        spot_lights,
+        probes,
         probe_world: None,
-        sun: extract_sun(world, &ids),
+        sun,
         environment,
-        post: extract_post(world, &ids),
+        post,
         texts,
         ui,
         voxel,
@@ -1453,6 +1491,7 @@ fn extract_inner(
     }
     // Appended last among the world's lists so decals and drop shadows never land on a shot and GI
     // never sees one; `None` draws with the default table.
+    assets.extract_begin(ExtractPhase::Projectiles);
     let projectile_keys = match projectiles {
         Some(draw) => {
             let muzzle = muzzle_point(
@@ -1474,6 +1513,7 @@ fn extract_inner(
             None,
         ),
     };
+    assets.extract_end(ExtractPhase::Projectiles);
     if let (Some(cam), Some(_)) = (viewmodel_camera, &scene.viewmodel) {
         ludion_renderer::compose_viewmodel(&mut scene, drawn_camera_model(world, &ids, cam));
     }

@@ -699,3 +699,24 @@ instances and 614k triangles with no culling: 1.67 ms GPU at 1080p on the 3090, 
 Its static dressing is now presentation entities and its ground can be one `MeshGrid`, so the sim
 side is nearly free and the cost left is extract plus draws. A city of such maps, or a bigger one
 after the map-size sitting, is the workload this plan's rungs should be measured against.
+
+**The torture bench, cull off (2026-11-07).** `crates/ludion-engine/tests/culling_bench.rs`, ignored, release:
+`cargo test -p ludion-engine --release --test it -- culling_bench --ignored --nocapture`. The 40 × 40 m room
+holds 500 animated enemies, 100 SkinBone corpses (1,100 parts, the voxel ragdoll on each bone but the
+pelvis, drawn at the assembly's own scale), 60 decals, 200 sprites, 16 emitters and 5,000 frozen shots, with
+SSAO on; the bench turns `Engine::set_frustum_culling` off. The per-phase extract breakdown rides
+`ExtractObserver` (`extract_observer.rs`) and is bench output only. Figures are on an unpinned M5
+laptop, 1080p, not authoritative; pinned M4 / RTX 3090 figures are owed.
+
+| View | extract | top extract phases | GPU scene | prepass | GPU frame |
+| --- | --- | --- | --- | --- | --- |
+| Wall | 0.92 ms | place 0.29, meshes 0.20, shots 0.14 | 0.9 to 2.7 ms | 0.2 to 0.5 ms | 2.8 to 5.9 ms |
+| Crowd | 0.94 ms | the same, to the hundredth | 1.0 to 2.7 ms | 0.2 to 0.5 ms | 3.1 to 6.3 ms |
+
+Extract does the same work from either camera, as decision 17 says. The GPU figures are ranges because the
+laptop GPU flips power state between runs (the same arm reads 3.4 or 6.3 ms); each arm keeps its fastest of
+five rounds and the inline budgets are about 3× those. Costs by ablation at the crowd view (full minus
+ablated): extract decals 0.01 to 0.04 ms, sprites 0.02 to 0.04, particles 0.03 to 0.06, shots 0.15 to 0.16.
+GPU frame: decals 0.6 to 1.1 ms, sprites -0.2 to 0.8, particles 0.1 to 0.6, shots -0.1 to 0.2. The GPU
+deltas move by half a millisecond between runs, so only the decals cost and the shots' extract cost are
+clear of the noise.

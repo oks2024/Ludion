@@ -74,6 +74,7 @@ use crate::assembly_mesh::AssemblyData;
 use crate::character::CharacterData;
 use crate::cooked_maps::{CookLookup, CookMiss, CookRole};
 use crate::extract::{AtlasAsset, load_texture};
+use crate::extract_observer::ExtractObserver;
 use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
 use crate::prefab_clips::{PartRests, PrefabClipData};
 use crate::voxel_mesh::VoxelStaticGrid;
@@ -328,6 +329,8 @@ pub(crate) struct AssetCache {
     /// [`reset_voxelization`](AssetCache::reset_voxelization) leaves it alone — the scene load is the
     /// very event it measures.
     observer: Option<Box<dyn LoadObserver>>,
+    /// Extract instrumentation a host attached. Host state like `observer`.
+    extract_observer: Option<Box<dyn ExtractObserver>>,
 }
 
 impl AssetCache {
@@ -355,6 +358,7 @@ impl AssetCache {
             gi_hold: false,
             gi_stale: false,
             observer: None,
+            extract_observer: None,
         }
     }
 
@@ -442,6 +446,19 @@ impl AssetCache {
             .iter()
             .map(|((path, _), miss)| (path.clone(), miss.clone()))
             .collect()
+    }
+
+    /// Attaches (or detaches) the extract observer.
+    pub(crate) fn set_extract_observer(&mut self, observer: Option<Box<dyn ExtractObserver>>) {
+        self.extract_observer = observer;
+    }
+
+    /// The attached extract observer, if any.
+    pub(crate) fn extract_observer_mut(&mut self) -> Option<&mut (dyn ExtractObserver + '_)> {
+        match self.extract_observer.as_mut() {
+            Some(observer) => Some(observer.as_mut()),
+            None => None,
+        }
     }
 
     /// Detaches and returns the load observer.

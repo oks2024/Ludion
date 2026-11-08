@@ -22,6 +22,7 @@ mod character_motor_state;
 mod collision_plane;
 mod command_panic;
 mod cooked_textures;
+mod culling_bench;
 mod debug_draw;
 mod dispatch;
 mod doc_text;
