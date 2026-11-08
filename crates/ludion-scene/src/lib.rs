@@ -180,10 +180,10 @@ pub use map::{
     MarkerCell, MeshSpec, generate, generate_traced, parse_map, parse_map_kit,
 };
 pub use mesh::{
-    AlphaMode, DEFAULT_ALPHA_CUTOFF, DEGENERATE_VECTOR_LENGTH_SQUARED, JointRest,
-    MESH_FORMAT_VERSION, MESH_JOINT_LIMIT, MESH_VERTEX_BUDGET, MeshDocument, MeshJoint, MeshSkin,
-    MeshTextures, SKIN_WEIGHT_SUM_TOLERANCE, TextureRef, TextureWrap, read_mesh_joints,
-    rest_model_matrices,
+    AlphaMode, DEFAULT_ALPHA_CUTOFF, DEGENERATE_VECTOR_LENGTH_SQUARED, JointRest, MAX_MESH_LODS,
+    MESH_FORMAT_VERSION, MESH_JOINT_LIMIT, MESH_VERTEX_BUDGET, MeshDocument, MeshJoint, MeshLodRef,
+    MeshSkin, MeshTextures, SKIN_WEIGHT_SUM_TOLERANCE, TextureRef, TextureWrap, check_lod_level,
+    read_mesh_joints, rest_model_matrices,
 };
 pub use mesh_edit::{
     MESH_EDIT_FORMAT_VERSION, MeshEditDocument, MeshEditKey, MeshEditMap, MeshEditOp,

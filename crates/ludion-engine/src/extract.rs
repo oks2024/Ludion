@@ -7213,6 +7213,7 @@ mod tests {
                 double_sided: false,
                 indices: Vec::new(),
                 hash: 0,
+                lods: Vec::new(),
             })
         }
 

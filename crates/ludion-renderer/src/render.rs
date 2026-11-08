@@ -9659,6 +9659,7 @@ mod tests {
             double_sided: false,
             indices: vec![0, 1, 2],
             hash,
+            lods: Vec::new(),
         }
     }
 
@@ -9716,6 +9717,7 @@ mod tests {
             double_sided: false,
             indices: vec![0, 1, 2],
             hash: 0,
+            lods: Vec::new(),
         };
         let vertex_count = mesh.positions.len() / 3;
         let vertices: Vec<MeshVertex> = (0..vertex_count)
@@ -10504,6 +10506,7 @@ mod tests {
             double_sided: false,
             indices: vec![],
             hash: 0xE0E0,
+            lods: Vec::new(),
         };
         let size = FrameSize::native(64, 64);
 
@@ -11809,6 +11812,7 @@ mod tests {
             double_sided: false,
             indices: vec![0, 1, 2, 0, 2, 3],
             hash,
+            lods: Vec::new(),
         }
     }
 
@@ -13849,6 +13853,7 @@ mod tests {
             double_sided: false,
             indices: vec![0, 1, 2, 0, 2, 3],
             hash,
+            lods: Vec::new(),
         }
     }
 

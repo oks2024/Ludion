@@ -18,7 +18,7 @@ use ludion_core::collections::StableMap;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::{DMat4, DQuat, DVec3, Mat4, Quat, Vec3};
 use ludion_renderer::{
-    MapImage, MeshData, MeshTexture, MeshTextures, SkinJoint, TextureImage, TextureWrap,
+    MapImage, MeshData, MeshLod, MeshTexture, MeshTextures, SkinJoint, TextureImage, TextureWrap,
 };
 use ludion_scene::{AlphaMode, MeshDocument, MeshSkin, TextureRef};
 
@@ -49,9 +49,10 @@ pub(crate) fn load(
     rel: &str,
 ) -> Result<MeshData, Vec<Diagnostic>> {
     let (doc, hash) = read_document(root, rel)?;
+    let levels = read_levels(root, rel, &doc)?;
     // One decode per path whatever the roles asking for it.
     let mut decoded: StableMap<String, Arc<TextureImage>> = StableMap::new();
-    assemble(rel, &doc, hash, &mut |path, _, _| {
+    assemble(rel, &doc, hash, &levels, &mut |path, _, _| {
         let path = path.to_string();
         if !decoded.contains_key(&path) {
             decoded.insert(path.clone(), decode_map(root, &path)?);
@@ -70,13 +71,105 @@ pub(crate) fn load(
 pub(crate) type MapResolver<'a> =
     dyn FnMut(&str, ColorSpace, Option<f32>) -> Result<(MapImage, u64), Diagnostic> + 'a;
 
+/// One coarser level of a mesh's chain, read and checked against its base but not yet decoded.
+pub(crate) struct LevelSource {
+    /// The level document's `root`-relative path.
+    pub(crate) rel: String,
+    pub(crate) doc: MeshDocument,
+    pub(crate) hash: u64,
+    pub(crate) screen_size: f32,
+}
+
+/// Reads every level `doc` (the mesh at `rel`) chains, resolving each path against `rel`'s directory
+/// as a texture path is, and checks it against `doc` ([`ludion_scene::check_lod_level`]). Empty
+/// for a mesh without `lods`.
+///
+/// # Errors
+/// Every level's failure, re-pointed at `/lods/N/mesh` and naming the level: the read errors
+/// (`L1101`, `L1110`, `L1111`) of its file, `L1395` for a level that chains further, `L1396`
+/// for one that does not match its base.
+pub(crate) fn read_levels(
+    root: ludion_assets::AssetRoot<'_>,
+    rel: &str,
+    doc: &MeshDocument,
+) -> Result<Vec<LevelSource>, Vec<Diagnostic>> {
+    let mut levels = Vec::with_capacity(doc.lods.len());
+    let mut errors = Vec::new();
+    for (index, lod) in doc.lods.iter().enumerate() {
+        let level_rel = ludion_core::paths::sibling(rel, &lod.mesh);
+        let pointer = format!("/lods/{index}/mesh");
+        match read_document(root, &level_rel) {
+            Ok((level, hash)) => {
+                let found = ludion_scene::check_lod_level(doc, &level, index);
+                if found.is_empty() {
+                    levels.push(LevelSource {
+                        rel: level_rel,
+                        doc: level,
+                        hash,
+                        screen_size: lod.screen_size as f32,
+                    });
+                } else {
+                    errors.extend(found);
+                }
+            }
+            Err(faults) => errors.extend(faults.into_iter().map(|mut fault| {
+                fault.message = format!(
+                    "level {} of `{rel}` (`{level_rel}`): {}",
+                    index + 1,
+                    fault.message
+                );
+                fault.with_path(pointer.clone())
+            })),
+        }
+    }
+    if errors.is_empty() {
+        Ok(levels)
+    } else {
+        Err(errors)
+    }
+}
+
 /// Builds a document's [`MeshData`] — [`decode`], its texture maps bound through `resolve`, and the
 /// map identities folded into [`MeshData::hash`] so an edited PNG, or a switch between a map and its
 /// cooked copy, re-keys the GPU mesh (and its material bind group) even when the document is
 /// untouched — and **every file it read** with its content hash: the mesh document first, then each
 /// distinct texture PNG, as `root`-relative paths. That list is the mesh's reload dependency set
 /// ([`crate::asset_cache`]).
+///
+/// `levels` are the chain's coarser levels ([`read_levels`]), each built the same way and attached as
+/// [`MeshData::lods`]; their files join the dependency set and their hashes the base's, so an edit to
+/// a level re-keys the base.
 pub(crate) fn assemble(
+    rel: &str,
+    doc: &MeshDocument,
+    doc_hash: u64,
+    levels: &[LevelSource],
+    resolve: &mut MapResolver<'_>,
+) -> Result<(MeshData, SourceFiles), Vec<Diagnostic>> {
+    let (mut data, mut sources) = assemble_one(rel, doc, doc_hash, resolve)?;
+    if levels.is_empty() {
+        return Ok((data, sources));
+    }
+    let mut hashes = Vec::with_capacity(levels.len());
+    for level in levels {
+        let (built, files) = assemble_one(&level.rel, &level.doc, level.hash, resolve)?;
+        hashes.push(built.hash);
+        for file in files {
+            if !sources.contains(&file) {
+                sources.push(file);
+            }
+        }
+        data.lods.push(MeshLod {
+            mesh: Arc::new(built),
+            screen_size: level.screen_size,
+        });
+    }
+    data.hash = fold_source_hashes(data.hash, &hashes);
+    Ok((data, sources))
+}
+
+/// [`assemble`] for one document, without its chain.
+fn assemble_one(
     rel: &str,
     doc: &MeshDocument,
     doc_hash: u64,
@@ -422,6 +515,7 @@ pub(crate) fn decode(doc: &MeshDocument, hash: u64) -> MeshData {
         double_sided: doc.double_sided,
         indices,
         hash,
+        lods: Vec::new(),
     }
 }
 
@@ -886,5 +980,109 @@ mod tests {
             ..doc
         };
         assert!(decode(&both, 0).double_sided);
+    }
+
+    fn write_levels(dir: &std::path::Path, files: &[(&str, String)]) {
+        for (name, text) in files {
+            std::fs::write(dir.join("meshes").join(name), text).unwrap();
+        }
+    }
+
+    const CHAIN: &str = "lods:\n  - mesh: x.lod1.mesh.yaml\n    screen_size: 0.25\n  \
+                         - mesh: x.lod2.mesh.yaml\n    screen_size: 0.1\n";
+
+    #[test]
+    fn load_attaches_the_levels_of_a_chain() {
+        let dir = project("lods", &textured_doc(CHAIN), &[]);
+        write_levels(
+            &dir,
+            &[
+                ("x.lod1.mesh.yaml", textured_doc("")),
+                ("x.lod2.mesh.yaml", textured_doc("")),
+            ],
+        );
+        let data = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "meshes/x.mesh.yaml",
+        )
+        .expect("a chain loads");
+        assert_eq!(data.lods.len(), 2);
+        assert_eq!(data.lods[0].screen_size, 0.25);
+        assert_eq!(data.lods[1].screen_size, 0.1);
+        assert!(data.lods.iter().all(|lod| lod.mesh.lods.is_empty()));
+        // The chain re-keys the base: editing a level changes the base's hash.
+        let before = data.hash;
+        write_levels(
+            &dir,
+            &[(
+                "x.lod2.mesh.yaml",
+                textured_doc("").replacen("  - 1.0\n", "  - 2.0\n", 1),
+            )],
+        );
+        let edited = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "meshes/x.mesh.yaml",
+        )
+        .expect("the edited chain loads");
+        assert_ne!(edited.hash, before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn load_errors(test: &str, base: &str, files: &[(&str, String)]) -> Vec<Diagnostic> {
+        let dir = project(test, base, &[]);
+        write_levels(&dir, files);
+        let errors = load(
+            ludion_assets::AssetRoot::content(&dir),
+            "meshes/x.mesh.yaml",
+        )
+        .expect_err("the chain is refused");
+        let _ = std::fs::remove_dir_all(&dir);
+        errors
+    }
+
+    #[test]
+    fn a_missing_level_is_reported_with_its_path() {
+        let errors = load_errors(
+            "lod-missing",
+            &textured_doc(CHAIN),
+            &[("x.lod1.mesh.yaml", textured_doc(""))],
+        );
+        assert!(errors.iter().any(|d| d.message.contains("level 2 of")
+            && d.message.contains("x.lod2.mesh.yaml")
+            && d.path.as_deref() == Some("/lods/1/mesh")));
+    }
+
+    #[test]
+    fn a_mismatched_level_names_the_key() {
+        let level = textured_doc("double_sided: true\n");
+        let errors = load_errors(
+            "lod-mismatch",
+            &textured_doc(CHAIN),
+            &[
+                ("x.lod1.mesh.yaml", level),
+                ("x.lod2.mesh.yaml", textured_doc("")),
+            ],
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|d| d.code == code::MESH_LOD_LEVEL_MISMATCH
+                    && d.message.contains("double_sided")
+                    && d.message.contains("x.lod1.mesh.yaml"))
+        );
+    }
+
+    #[test]
+    fn a_nested_chain_is_refused() {
+        let nested = textured_doc("lods:\n  - mesh: x.lod2.mesh.yaml\n    screen_size: 0.1\n");
+        let errors = load_errors(
+            "lod-nested",
+            &textured_doc(CHAIN),
+            &[
+                ("x.lod1.mesh.yaml", nested),
+                ("x.lod2.mesh.yaml", textured_doc("")),
+            ],
+        );
+        assert!(errors.iter().any(|d| d.code == code::MESH_LOD_CHAIN));
     }
 }

@@ -583,6 +583,7 @@ mod tests {
             double_sided: false,
             indices: vec![0, 1, 2],
             hash,
+            lods: Vec::new(),
         }
     }
 

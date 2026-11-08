@@ -912,10 +912,16 @@ impl AssetCache {
     ) -> Result<SourceFiles, Vec<Diagnostic>> {
         if kind == AssetKind::Mesh {
             let (doc, hash) = crate::mesh_asset::read_document(project_root, rel)?;
-            let (mesh, sources) =
-                crate::mesh_asset::assemble(rel, &doc, hash, &mut |path, space, alpha_cutoff| {
+            let levels = crate::mesh_asset::read_levels(project_root, rel, &doc)?;
+            let (mesh, sources) = crate::mesh_asset::assemble(
+                rel,
+                &doc,
+                hash,
+                &levels,
+                &mut |path, space, alpha_cutoff| {
                     self.load_map(project_root, path, space, alpha_cutoff)
-                })?;
+                },
+            )?;
             self.meshes.insert(key.to_string(), Arc::new(mesh));
             return Ok(sources);
         }
@@ -1198,19 +1204,35 @@ impl AssetCache {
         }
         self.begin(LoadPhase::Mesh);
         let read = ludion_core::par::par_map_chunks(&todo, 1, |_, chunk| {
-            crate::mesh_asset::read_document(project_root, chunk[0])
+            crate::mesh_asset::read_document(project_root, chunk[0]).and_then(|(doc, hash)| {
+                let levels = crate::mesh_asset::read_levels(project_root, chunk[0], &doc)?;
+                Ok((doc, hash, levels))
+            })
         });
         self.end(LoadPhase::Mesh);
-        let docs: Vec<(&String, MeshDocument, u64)> = todo
+        let docs: Vec<(
+            &String,
+            MeshDocument,
+            u64,
+            Vec<crate::mesh_asset::LevelSource>,
+        )> = todo
             .into_iter()
             .zip(read)
-            .filter_map(|(key, read)| read.ok().map(|(doc, hash)| (key, doc, hash)))
+            .filter_map(|(key, read)| {
+                read.ok()
+                    .map(|(doc, hash, levels)| (key, doc, hash, levels))
+            })
             .collect();
 
         // Stage 3: the maps those documents bind and the decals name, then the loose textures.
         let mut maps: BTreeSet<(String, MapRole)> = BTreeSet::new();
-        for (key, doc, _) in &docs {
-            for (path, space, alpha_cutoff) in crate::mesh_asset::map_paths(key, doc) {
+        for (key, doc, _, levels) in &docs {
+            let paths = crate::mesh_asset::map_paths(key, doc).into_iter().chain(
+                levels
+                    .iter()
+                    .flat_map(|level| crate::mesh_asset::map_paths(&level.rel, &level.doc)),
+            );
+            for (path, space, alpha_cutoff) in paths {
                 let path = normalize_key(&path);
                 let role = self.role(&path, space, alpha_cutoff);
                 if self.mesh_maps.contains_key(&(path.clone(), role)) {
@@ -1243,9 +1265,13 @@ impl AssetCache {
 
         // Stage 4: assemble serially, so a map that failed above fails its meshes the same way.
         self.begin(LoadPhase::Mesh);
-        for (key, doc, hash) in &docs {
-            let assembled =
-                crate::mesh_asset::assemble(key, doc, *hash, &mut |path, space, alpha_cutoff| {
+        for (key, doc, hash, levels) in &docs {
+            let assembled = crate::mesh_asset::assemble(
+                key,
+                doc,
+                *hash,
+                levels,
+                &mut |path, space, alpha_cutoff| {
                     let path_key = normalize_key(path);
                     self.held_map(&path_key, self.role(&path_key, space, alpha_cutoff))
                         .ok_or_else(|| {
@@ -1254,7 +1280,8 @@ impl AssetCache {
                                 format!("mesh map `{path}` did not decode"),
                             )
                         })
-                });
+                },
+            );
             if let Ok((mesh, sources)) = assembled {
                 self.meshes.insert((*key).clone(), Arc::new(mesh));
                 self.report_decoded(project_root, AssetKind::Mesh, key, &sources);

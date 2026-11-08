@@ -1659,6 +1659,17 @@ pub mod code {
     /// A lint raised once, at runtime, after a tick.
     pub const PATTERN_SYSTEM_NOT_RUN: DiagnosticCode = DiagnosticCode::new("L1394");
 
+    /// `L1395` — a mesh asset's `lods:` chain is malformed: more than three levels, a `screen_size`
+    /// that is not finite, positive and strictly decreasing, a level path that is not a
+    /// `*.mesh.yaml` file inside the project, or a level document that carries its own `lods`.
+    /// Raised by `ludion-scene` and the engine's mesh loader.
+    pub const MESH_LOD_CHAIN: DiagnosticCode = DiagnosticCode::new("L1395");
+
+    /// `L1396` — a mesh LOD level does not match its base mesh's draw key (alpha mode, cutoff,
+    /// `double_sided`, `rim`, the set of texture slots) or skeleton. Raised by the engine's mesh
+    /// loader.
+    pub const MESH_LOD_LEVEL_MISMATCH: DiagnosticCode = DiagnosticCode::new("L1396");
+
     // --- L2xxx: render (raised by `ludion-render-graph`, `ludion-renderer`) ---
 
     /// `L2001` — a render graph has a dependency cycle: some pass (transitively) reads a resource it
@@ -8241,6 +8252,44 @@ Known limit: a wrapper that calls `play_patterns` only behind its own guard, suc
 warns until its first call.",
     },
     CodeEntry {
+        code: code::MESH_LOD_CHAIN,
+        severity: Severity::Error,
+        title: "mesh LOD chain is malformed",
+        explanation: "\
+A mesh asset's `lods:` list is not a valid level-of-detail chain. A chain lists up to three coarser
+levels after the base mesh, each `- {mesh: <path>, screen_size: <number>}`.
+
+Specifically, one of:
+
+  - more than three entries (four levels in all);
+  - a `screen_size` that is not finite, not above zero, or not strictly smaller than the previous
+    level's (a level takes over when the mesh covers less than its `screen_size` of the viewport
+    height, so the sizes fall as the levels get coarser);
+  - a `mesh` path that does not end in `.mesh.yaml`, is absolute, or names a drive or reserved device;
+  - a level document that carries its own `lods` (chains do not nest).
+
+Fix: write the levels coarsest-last with falling sizes, e.g.
+
+  lods:
+    - mesh: crate.lod1.mesh.yaml
+      screen_size: 0.25
+    - mesh: crate.lod2.mesh.yaml
+      screen_size: 0.08",
+    },
+    CodeEntry {
+        code: code::MESH_LOD_LEVEL_MISMATCH,
+        severity: Severity::Error,
+        title: "mesh LOD level does not match its base",
+        explanation: "\
+A level listed in a mesh's `lods:` draws through the base mesh's pipeline and bone palette, so it
+must match the base: the same `alpha_mode`, `alpha_cutoff`, `double_sided` and `rim`, the same set of
+texture slots, and either no skin on both or an identical `joints` list (names, parents, rest
+transforms and inverse binds). The message names the level file and the first key that differs.
+
+Fix: make the level document agree with the base on the named key (re-run `ludion import` for a
+generated level), or drop the level from `lods`.",
+    },
+    CodeEntry {
         code: code::CAMERA_OFFSET_DUPLICATE,
         severity: Severity::Error,
         title: "more than one camera offset",
@@ -11385,6 +11434,8 @@ mod tests {
         code::GENERATION_JOBS_UNKNOWN,
         code::ENTITY_REF_IN_COLLECTION,
         code::PATTERN_SYSTEM_NOT_RUN,
+        code::MESH_LOD_CHAIN,
+        code::MESH_LOD_LEVEL_MISMATCH,
         // --- L2xxx: render ---
         code::RENDER_GRAPH_CYCLE,
         code::RENDER_GRAPH_UNWRITTEN_READ,

@@ -397,6 +397,7 @@ pub(crate) fn mesh(doc: &VoxelDocument, hash: u64) -> MeshData {
         double_sided: false,
         indices,
         hash,
+        lods: Vec::new(),
     }
 }
 
@@ -484,6 +485,7 @@ mod tests {
             double_sided: false,
             indices,
             hash,
+            lods: Vec::new(),
         }
     }
 

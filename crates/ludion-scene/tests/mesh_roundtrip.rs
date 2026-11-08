@@ -166,6 +166,7 @@ fn mesh_doc() -> impl Strategy<Value = MeshDocument> {
                         skin: None,
                         indices,
                         rim: None,
+                        lods: Vec::new(),
                     };
                     // The two cross-key requirements are satisfied here rather than by conditioning
                     // the texture strategy on the vertex lists: a texture needs UVs to sample at,
@@ -730,6 +731,7 @@ fn vertex_budget_warning_does_not_fail_validation() {
         skin: None,
         indices: vec![0, 1, 2],
         rim: None,
+        lods: Vec::new(),
     };
     assert!(validate_mesh(&doc).is_empty());
     let warning = ludion_scene::mesh_budget_warning(&doc).expect("expected a budget warning");

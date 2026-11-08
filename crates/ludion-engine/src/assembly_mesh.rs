@@ -591,6 +591,7 @@ mod tests {
             double_sided: false,
             indices,
             hash,
+            lods: Vec::new(),
         }
     }
 

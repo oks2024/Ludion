@@ -1559,6 +1559,7 @@ mod tests {
             double_sided: false,
             indices: vec![0, 1, 2],
             hash: 1,
+            lods: Vec::new(),
         };
         let instance = |mesh: &MeshData| Instance {
             model: Mat4::IDENTITY,

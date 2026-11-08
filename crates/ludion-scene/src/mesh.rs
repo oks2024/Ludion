@@ -83,7 +83,7 @@ pub enum AlphaMode {
     },
 }
 
-const MESH_KEYS: [&str; 25] = [
+const MESH_KEYS: [&str; 26] = [
     "format",
     "kind",
     "name",
@@ -108,8 +108,14 @@ const MESH_KEYS: [&str; 25] = [
     "joints",
     "weights",
     "bone_indices",
+    "lods",
     "indices",
 ];
+
+const LOD_KEYS: [&str; 2] = ["mesh", "screen_size"];
+
+/// The most coarser levels a mesh may chain after its own (four levels in all).
+pub const MAX_MESH_LODS: usize = 3;
 
 /// A parsed, structurally valid mesh asset document.
 ///
@@ -164,8 +170,21 @@ pub struct MeshDocument {
     /// The skeleton and per-vertex skin weights of a skinned mesh. `None` for every unskinned mesh,
     /// which is every mesh authored before skins existed.
     pub skin: Option<MeshSkin>,
+    /// Coarser levels of detail, finest first; empty for every mesh without a chain. The base is
+    /// level 0.
+    pub lods: Vec<MeshLodRef>,
     /// Triangle list: flat vertex indices, 3 per triangle.
     pub indices: Vec<u32>,
+}
+
+/// One coarser level of a mesh's chain: a level document and the screen size under which it draws.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshLodRef {
+    /// The level's `*.mesh.yaml`, **relative to the base document's own directory**.
+    pub mesh: String,
+    /// The level takes over when the mesh's bounding sphere covers less than this fraction of the
+    /// viewport height. Finite, above zero, strictly decreasing along the chain.
+    pub screen_size: f64,
 }
 
 /// The skeleton a skinned mesh binds to and its per-vertex influences — glTF's skin, flattened to
@@ -423,6 +442,7 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
     let mut joints: Option<Vec<MeshJoint>> = None;
     let mut weights: Option<Vec<f64>> = None;
     let mut bone_indices: Option<Vec<u32>> = None;
+    let mut lods: Vec<MeshLodRef> = Vec::new();
     let mut alpha_mode_seen = false;
     let mut alpha_mask = false;
     let mut alpha_cutoff: Option<f64> = None;
@@ -645,6 +665,11 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
                 );
                 bone_indices_seen = true;
             }
+            "lods" => {
+                if let Some(parsed) = parse_lods(&entry.node, &mut diagnostics) {
+                    lods = parsed;
+                }
+            }
             "indices" => {
                 indices_seen = true;
                 if let Some(values) = expect_index_list(
@@ -709,6 +734,8 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
             .with_help("add `alpha_mode: mask`, or remove `alpha_cutoff`"),
         );
     }
+
+    doc.lods = lods;
 
     if let Some(first) = skin_first {
         let absent: Vec<&str> = [
@@ -925,6 +952,71 @@ fn line_offsets(text: &str) -> impl Iterator<Item = (usize, &str)> {
         let at = offset;
         offset += line.len() + 1;
         (at, line)
+    })
+}
+
+/// Parses `lods`: a sequence of `{mesh, screen_size}` mappings. Returns `None` if any entry has a
+/// shape error (a diagnostic is already pushed for each).
+fn parse_lods(node: &Node, diagnostics: &mut Vec<Diagnostic>) -> Option<Vec<MeshLodRef>> {
+    let items = expect_sequence(node, "/lods", "lods", diagnostics)?;
+    let before = diagnostics.len();
+    let lods: Vec<MeshLodRef> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| parse_lod(item, index, diagnostics))
+        .collect();
+    (diagnostics.len() == before).then_some(lods)
+}
+
+fn parse_lod(node: &Node, index: usize, diagnostics: &mut Vec<Diagnostic>) -> Option<MeshLodRef> {
+    let pointer = format!("/lods/{index}");
+    let entries = expect_mapping(node, &pointer, "a level of `lods`", diagnostics)?;
+    let before = diagnostics.len();
+    let mut mesh = None;
+    let mut screen_size = None;
+    for entry in entries {
+        let field = format!("{pointer}/{}", entry.key);
+        match entry.key.as_str() {
+            "mesh" => {
+                mesh = envelope::expect_string(
+                    &entry.node,
+                    &field,
+                    "a level's `mesh` path",
+                    code::MESH_LOD_CHAIN,
+                    diagnostics,
+                );
+            }
+            "screen_size" => {
+                screen_size = expect_number(&entry.node, &field, "screen_size", diagnostics);
+            }
+            unknown => diagnostics.push(envelope::unknown_key(
+                unknown,
+                entry,
+                &pointer,
+                "a level of `lods`",
+                LOD_KEYS,
+                code::MESH_LOD_CHAIN,
+            )),
+        }
+    }
+    for key in LOD_KEYS {
+        if !entries.iter().any(|entry| entry.key == key) {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::MESH_LOD_CHAIN,
+                    format!("a level of `lods` is missing its required `{key}`"),
+                )
+                .with_path(pointer.clone())
+                .with_help(format!("add `{key}:` to it")),
+            );
+        }
+    }
+    if diagnostics.len() != before {
+        return None;
+    }
+    Some(MeshLodRef {
+        mesh: mesh?,
+        screen_size: screen_size?,
     })
 }
 
@@ -1393,6 +1485,180 @@ fn expect_number(
     }
 }
 
+/// Checks that level `index` of `base.lods` (0-based, so level `index + 1` of the chain) draws through
+/// the base's pipeline and bone palette (`L1396`): the same `alpha_mode`, `double_sided` and `rim`,
+/// the same set of texture slots, and a skin on both with identical joints or on neither. A pure
+/// function of two parsed documents; the loader that reads the level file calls it. A level that
+/// carries its own `lods` is a chain error (`L1395`).
+#[must_use]
+pub fn check_lod_level(base: &MeshDocument, level: &MeshDocument, index: usize) -> Vec<Diagnostic> {
+    let path = base.lods.get(index).map_or("?", |lod| lod.mesh.as_str());
+    let mismatch = |key: &str, what: String| {
+        Diagnostic::new(
+            code::MESH_LOD_LEVEL_MISMATCH,
+            format!(
+                "level {} `{path}` of this mesh differs from the base in `{key}`: {what}",
+                index + 1
+            ),
+        )
+        .with_path(format!("/lods/{index}/mesh"))
+        .with_help(format!(
+            "make `{key}` in `{path}` match the base mesh, or drop the level from `lods`"
+        ))
+    };
+    if !level.lods.is_empty() {
+        return vec![
+            Diagnostic::new(
+                code::MESH_LOD_CHAIN,
+                format!(
+                    "level {} `{path}` has its own `lods`; chains do not nest",
+                    index + 1
+                ),
+            )
+            .with_path(format!("/lods/{index}/mesh"))
+            .with_help("list every level in the base document and remove `lods` from the level"),
+        ];
+    }
+    let mut out = Vec::new();
+    if base.alpha_mode != level.alpha_mode {
+        out.push(mismatch(
+            "alpha_mode",
+            format!("{:?} against {:?}", base.alpha_mode, level.alpha_mode),
+        ));
+    }
+    if base.double_sided != level.double_sided {
+        out.push(mismatch(
+            "double_sided",
+            format!("{} against {}", base.double_sided, level.double_sided),
+        ));
+    }
+    if base.rim != level.rim {
+        out.push(mismatch("rim", "the rim highlights differ".to_string()));
+    }
+    for (b, l) in base
+        .textures
+        .slots()
+        .iter()
+        .zip(level.textures.slots().iter())
+    {
+        if b.reference.is_some() != l.reference.is_some() {
+            let (has, lacks) = if b.reference.is_some() {
+                ("the base", "the level")
+            } else {
+                ("the level", "the base")
+            };
+            out.push(mismatch(
+                b.key,
+                format!("{has} sets it and {lacks} does not"),
+            ));
+        }
+    }
+    match (&base.skin, &level.skin) {
+        (None, None) => {}
+        (Some(_), None) => out.push(mismatch(
+            "joints",
+            "the base is skinned and the level is not".into(),
+        )),
+        (None, Some(_)) => out.push(mismatch(
+            "joints",
+            "the level is skinned and the base is not".into(),
+        )),
+        (Some(b), Some(l)) => {
+            if b.joints != l.joints {
+                let first = b
+                    .joints
+                    .iter()
+                    .zip(&l.joints)
+                    .position(|(x, y)| x != y)
+                    .map_or_else(
+                        || format!("{} joints against {}", b.joints.len(), l.joints.len()),
+                        |at| format!("joint {at} (`{}`) differs", b.joints[at].name),
+                    );
+                out.push(mismatch("joints", first));
+            }
+        }
+    }
+    out
+}
+
+/// Checks the structure of a `lods` chain (`L1395`): at most [`MAX_MESH_LODS`] levels, each path a
+/// relative `*.mesh.yaml` that stays inside the project, each `screen_size` finite, above zero and
+/// strictly below the previous level's.
+fn validate_lods(lods: &[MeshLodRef], diagnostics: &mut Vec<Diagnostic>) {
+    if lods.len() > MAX_MESH_LODS {
+        diagnostics.push(
+            Diagnostic::new(
+                code::MESH_LOD_CHAIN,
+                format!(
+                    "`lods` lists {} levels; a mesh chains at most {MAX_MESH_LODS} coarser levels \
+                     after its own",
+                    lods.len()
+                ),
+            )
+            .with_path("/lods")
+            .with_help(format!(
+                "keep the first {MAX_MESH_LODS} levels, or merge two"
+            )),
+        );
+    }
+    let mut previous = f64::INFINITY;
+    for (index, lod) in lods.iter().enumerate() {
+        let pointer = format!("/lods/{index}");
+        if !lod.mesh.ends_with(".mesh.yaml") {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::MESH_LOD_CHAIN,
+                    format!(
+                        "level {} path `{}` is not a `*.mesh.yaml` file",
+                        index + 1,
+                        lod.mesh
+                    ),
+                )
+                .with_path(format!("{pointer}/mesh"))
+                .with_help("point `mesh` at a mesh document, e.g. `crate.lod1.mesh.yaml`"),
+            );
+        }
+        if let Some(refusal) = ludion_core::paths::sibling_refusal(&lod.mesh) {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::MESH_LOD_CHAIN,
+                    format!(
+                        "level {} path `{}` {}; a level is written relative to this document",
+                        index + 1,
+                        lod.mesh,
+                        refusal.describe()
+                    ),
+                )
+                .with_path(format!("{pointer}/mesh"))
+                .with_help("write the level as a relative path, e.g. `crate.lod1.mesh.yaml`"),
+            );
+        }
+        if !lod.screen_size.is_finite() || lod.screen_size <= 0.0 || lod.screen_size >= previous {
+            let rule = if index == 0 {
+                "finite and above zero"
+            } else {
+                "finite, above zero and strictly below the previous level's"
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::MESH_LOD_CHAIN,
+                    format!(
+                        "level {} `screen_size` {} must be {rule}",
+                        index + 1,
+                        lod.screen_size
+                    ),
+                )
+                .with_path(format!("{pointer}/screen_size"))
+                .with_help(
+                    "a coarser level takes over at a smaller screen size, e.g. 0.25 then 0.08",
+                ),
+            );
+        } else {
+            previous = lod.screen_size;
+        }
+    }
+}
+
 /// Validates data-consistency invariants of an already-parsed [`MeshDocument`] (`L1111`): flat-list
 /// counts are the right multiple, cross-list counts agree, every index is in range, and every
 /// float is finite.
@@ -1417,6 +1683,7 @@ pub(crate) fn validate(doc: &MeshDocument) -> Vec<Diagnostic> {
             code::MESH_DATA_CONSISTENCY,
         ));
     }
+    validate_lods(&doc.lods, &mut diagnostics);
     check_finite(&doc.positions, "positions", &mut diagnostics);
     if !doc.positions.len().is_multiple_of(3) {
         diagnostics.push(
@@ -2109,6 +2376,16 @@ pub(crate) fn emit(doc: &MeshDocument) -> String {
         write_joints(&mut out, &skin.joints);
         write_float_list(&mut out, "weights", &skin.weights);
         write_index_list(&mut out, "bone_indices", &skin.bone_indices);
+    }
+    if !doc.lods.is_empty() {
+        out.push_str("lods:\n");
+        for lod in &doc.lods {
+            out.push_str("  - mesh: ");
+            out.push_str(&scalar_string(&lod.mesh));
+            out.push_str("\n    screen_size: ");
+            out.push_str(&format_float(lod.screen_size));
+            out.push('\n');
+        }
     }
     write_index_list(&mut out, "indices", &doc.indices);
     out
@@ -2837,5 +3114,165 @@ indices:
             child.abs_diff_eq(want, 1e-12),
             "child {palette:?}, want T(0,1,0)"
         );
+    }
+
+    const LODS_BLOCK: &str = "\
+lods:
+  - mesh: crate.lod1.mesh.yaml
+    screen_size: 0.25
+  - mesh: lods/crate.lod2.mesh.yaml
+    screen_size: 0.08
+";
+
+    fn with_lods(block: &str) -> String {
+        CUBE_TRI.replace("indices:", &format!("{block}indices:"))
+    }
+
+    fn lod_joint(name: &str) -> MeshJoint {
+        MeshJoint {
+            name: name.into(),
+            parent: None,
+            rest: JointRest {
+                translation: [0.0; 3],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            },
+            inverse_bind: [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+        }
+    }
+
+    #[test]
+    fn lods_round_trip_as_a_fixed_point() {
+        let source = with_lods(LODS_BLOCK);
+        let doc = parse(&source).expect("mesh should parse");
+        assert_eq!(doc.lods.len(), 2);
+        assert_eq!(doc.lods[1].mesh, "lods/crate.lod2.mesh.yaml");
+        assert_eq!(doc.lods[1].screen_size, 0.08);
+        assert!(validate(&doc).is_empty());
+        assert_eq!(emit(&doc), source);
+        let again = parse(&emit(&doc)).expect("emitted mesh should parse");
+        assert_eq!(again, doc);
+    }
+
+    #[test]
+    fn a_mesh_without_lods_emits_no_lods_key() {
+        let doc = parse(CUBE_TRI).expect("mesh should parse");
+        assert!(doc.lods.is_empty());
+        assert!(!emit(&doc).contains("lods"));
+    }
+
+    #[test]
+    fn a_bad_lod_chain_reports_l1395() {
+        let too_many = "lods:\n".to_string()
+            + &(1..=4)
+                .map(|n| {
+                    format!(
+                        "  - mesh: c.lod{n}.mesh.yaml\n    screen_size: {}\n",
+                        0.5 / f64::from(n)
+                    )
+                })
+                .collect::<String>();
+        for bad in [
+            too_many.as_str(),
+            "lods:\n  - mesh: a.mesh.yaml\n    screen_size: 0.0\n",
+            "lods:\n  - mesh: a.mesh.yaml\n    screen_size: -1.0\n",
+            "lods:\n  - mesh: a.mesh.yaml\n    screen_size: 0.2\n  - mesh: b.mesh.yaml\n    screen_size: 0.2\n",
+            "lods:\n  - mesh: a.mesh.yaml\n    screen_size: 0.2\n  - mesh: b.mesh.yaml\n    screen_size: 0.4\n",
+            "lods:\n  - mesh: a.png\n    screen_size: 0.2\n",
+            "lods:\n  - mesh: C:/a.mesh.yaml\n    screen_size: 0.2\n",
+            "lods:\n  - mesh: /a.mesh.yaml\n    screen_size: 0.2\n",
+        ] {
+            let source = with_lods(bad);
+            let diagnostics = match parse(&source) {
+                Ok(doc) => validate(&doc),
+                Err(diagnostics) => diagnostics,
+            };
+            assert!(
+                diagnostics.iter().any(|d| d.code == code::MESH_LOD_CHAIN),
+                "{bad}: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lod_entry_with_an_unknown_or_missing_key_is_structural() {
+        for bad in [
+            "lods:\n  - mesh: a.mesh.yaml\n",
+            "lods:\n  - mesh: a.mesh.yaml\n    screen_size: 0.2\n    ratio: 0.5\n",
+        ] {
+            let diagnostics = parse(&with_lods(bad)).expect_err(bad);
+            assert!(
+                diagnostics.iter().any(|d| d.code == code::MESH_LOD_CHAIN),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn check_lod_level_accepts_a_matching_level_and_names_each_mismatch() {
+        let mut base = parse(CUBE_TRI).expect("mesh should parse");
+        base.lods = vec![MeshLodRef {
+            mesh: "c.lod1.mesh.yaml".into(),
+            screen_size: 0.25,
+        }];
+        let level = parse(CUBE_TRI).expect("mesh should parse");
+        assert!(check_lod_level(&base, &level, 0).is_empty());
+
+        let skin = |joint: &str| MeshSkin {
+            joints: vec![lod_joint(joint)],
+            weights: [1.0, 0.0, 0.0, 0.0].repeat(3),
+            bone_indices: vec![0; 12],
+        };
+        let mut masked = level.clone();
+        masked.alpha_mode = AlphaMode::Mask { cutoff: 0.5 };
+        let mut double = level.clone();
+        double.double_sided = true;
+        let mut rimmed = level.clone();
+        rimmed.rim = Some(crate::rim::DocRim {
+            color: [1.0, 1.0, 1.0],
+            strength: 1.0,
+            power: 2.0,
+        });
+        let mut textured = level.clone();
+        textured.textures.base_color = Some(TextureRef::new("t.png"));
+        let mut skinned = level.clone();
+        skinned.skin = Some(skin("root"));
+        let mut skinned_base = base.clone();
+        skinned_base.skin = Some(skin("root"));
+        let mut renamed = level.clone();
+        renamed.skin = Some(skin("other"));
+
+        let cases = [
+            ("alpha_mode", &base, masked),
+            ("double_sided", &base, double),
+            ("rim", &base, rimmed),
+            ("base_color_texture", &base, textured),
+            ("joints", &base, skinned),
+            ("joints", &skinned_base, renamed),
+        ];
+        for (key, against, bad) in &cases {
+            let found = check_lod_level(against, bad, 0);
+            assert!(
+                found.iter().any(|d| d.code == code::MESH_LOD_LEVEL_MISMATCH
+                    && d.message.contains(key)
+                    && d.message.contains("c.lod1.mesh.yaml")),
+                "{key}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn check_lod_level_refuses_a_nested_chain() {
+        let mut base = parse(CUBE_TRI).expect("mesh should parse");
+        base.lods = vec![MeshLodRef {
+            mesh: "c.lod1.mesh.yaml".into(),
+            screen_size: 0.25,
+        }];
+        let mut level = base.clone();
+        level.lods = base.lods.clone();
+        let found = check_lod_level(&base, &level, 0);
+        assert!(found.iter().any(|d| d.code == code::MESH_LOD_CHAIN));
     }
 }

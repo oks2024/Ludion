@@ -372,13 +372,20 @@ fn read_docs<'a>(
 fn read_one(root: AssetRoot<'_>, doc: Doc, rel: &str) -> Read {
     let mut read = Read::default();
     let outcome = match doc {
-        Doc::Mesh => crate::mesh_asset::read_document(root, rel).map(|(document, _)| {
+        Doc::Mesh => crate::mesh_asset::read_document(root, rel).and_then(|(document, _)| {
+            let levels = crate::mesh_asset::read_levels(root, rel, &document)?;
             read.maps = crate::mesh_asset::map_paths(rel, &document)
                 .into_iter()
+                .chain(
+                    levels
+                        .iter()
+                        .flat_map(|level| crate::mesh_asset::map_paths(&level.rel, &level.doc)),
+                )
                 .map(|(path, _, _)| path)
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect();
+            Ok(())
         }),
         Doc::Voxel => crate::voxel_mesh::read_document(root, rel).map(|_| ()),
         Doc::Sculpt => crate::sculpt_mesh::read_document(root, rel).map(|_| ()),

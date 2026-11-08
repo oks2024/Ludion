@@ -927,6 +927,20 @@ pub struct MeshData {
     /// (`fold_source_hashes`, set by the engine's mesh loader). It keys the renderer's mesh cache and
     /// per-mesh material bind group, so an edit that changes only a texture must still change it.
     pub hash: u64,
+    /// Coarser levels of detail, finest first; empty for every mesh without a chain. Each level
+    /// matches this mesh's draw key and skeleton, so it draws through the same pipeline and bone
+    /// palette.
+    pub lods: Vec<MeshLod>,
+}
+
+/// One coarser level of a [`MeshData`] chain.
+#[derive(Clone, PartialEq, Debug)]
+pub struct MeshLod {
+    /// The level's geometry, decoded like any mesh; it carries no chain of its own.
+    pub mesh: Arc<MeshData>,
+    /// The fraction of viewport height under which this level takes over; strictly decreasing along
+    /// the chain.
+    pub screen_size: f32,
 }
 
 /// One joint of a [`MeshData::skin_joints`] skin, in the mesh document's own units (model space,

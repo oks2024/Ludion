@@ -170,6 +170,7 @@ fn mesh_data(mesh: SculptMesh, rim: Option<&ludion_scene::DocRim>, hash: u64) ->
         double_sided: false,
         indices: mesh.indices,
         hash,
+        lods: Vec::new(),
     }
 }
 

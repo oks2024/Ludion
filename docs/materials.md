@@ -104,6 +104,16 @@ as it did before textures existed (`ludion devdocs renderer-shading`). Voxel mod
 and primitives (`cube`/`plane`/`sphere`) carry no UVs and so cannot reference a texture at all —
 voxel texturing is a recorded deferred possibility, not a current surface. To mark a UV-less mesh, project a texture onto it with a `Decal` (`ludion docs decals`).
 
+## Level-of-detail chain
+
+A `.mesh.yaml` may list up to three coarser levels, written before `indices` and finest first:
+`lods: [{mesh: crate.lod1.mesh.yaml, screen_size: 0.25}, ...]`. Paths are relative to this document;
+`screen_size` is the fraction of viewport height under which the level takes over, finite, above zero
+and strictly decreasing. A level is an ordinary mesh document with no `lods`, and must match the base's
+`alpha_mode`, `alpha_cutoff`, `double_sided`, `rim`, texture slots and (if skinned) identical `joints`,
+so it draws through the base's pipeline and bone palette. A bad chain is `L1395`, a mismatched level
+`L1396`; selection ships with the cull (`ludion docs culling`), so a chain does not change a frame yet.
+
 ## Cutout and double-sided
 
 An asset mesh document carries three optional keys after its maps, none written at its default, so a

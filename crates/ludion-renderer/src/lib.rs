@@ -123,10 +123,11 @@ pub use scene::{
     CookedMap, DEFAULT_AMBIENT, DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment, DecalBlend,
     DecalInstance, DecalMaps, DecalReceivers, DropShadowInstance, EnvironmentData, FontDraw,
     GROUND_MARKER_LIFT, GiData, GroundMarkerInstance, GroundMarkerShape, LocalShadowData,
-    MAX_GI_TEXTURE_AXIS, MapImage, MeshData, MeshInstance, MeshShape, MeshTexture, MeshTextures,
-    ParticleInstance, PointLightData, PostData, ProbeWorld, RenderCamera, RenderScene, SkinJoint,
-    SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap,
-    TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
+    MAX_GI_TEXTURE_AXIS, MapImage, MeshData, MeshInstance, MeshLod, MeshShape, MeshTexture,
+    MeshTextures, ParticleInstance, PointLightData, PostData, ProbeWorld, RenderCamera,
+    RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun,
+    TextureImage, TextureWrap, TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio,
+    drop_shadow_fade,
 };
 pub use shader_reload::{check_shader_reload, is_renderer_shader};
 pub use sun_cascade::{
