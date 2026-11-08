@@ -1,8 +1,13 @@
 //! The local-light scatter bench: a 30 x 30 m room with a medium and N scattering lights on a jittered
-//! grid in front of the camera, at 1920x1080. Arms: `off` (the same 16 lights with `scatter: 0`, so
-//! the pass is not scheduled), 1, 16 and 64 scattering point lights, 16 shadow-casting spots, and a
-//! `GiVolume` with no scattering light (the GI term alone). Each prints the GPU medians of
-//! `medium_scatter` and `medium_scatter_blur` plus the frame.
+//! grid in front of the camera, at 1920x1080. Every arm is paired with an identical twin whose lights
+//! all have `scatter: 0` (or, for the GI arm, a `GiVolume` at zero strengths), so the scatter pass is
+//! not scheduled: 1, 16 and 64 scattering point lights, 16 shadow-casting spots (the twin keeps the
+//! shadow maps, isolating scatter from them), and a `GiVolume` with no scattering light.
+//!
+//! The headline is the **delta of `gpu.frame_median_ms`** against the twin: the GPU frame span is the
+//! number to read for frame cost. Per-pass medians overlap on adjacent passes (the M5 especially), so
+//! the table prints `medium_scatter` and `medium_scatter_blur` for orientation but never sums them.
+//! A delta that comes out negative or within noise is printed as measured, not clamped.
 //!
 //! Ignored by default so CI stays fast; run it explicitly, in release:
 //!
@@ -11,7 +16,7 @@
 //! ```
 //!
 //! There is deliberately no `budgets/*.toml` entry: pinned figures are owed, and the target
-//! (`scatter + blur <= 0.5 ms` at 16 lights) is reported as `OVER TARGET`, never failed on. The
+//! (a frame delta `<= 0.5 ms` at 16 lights) is reported as `OVER TARGET`, never failed on. The
 //! precedent is `culling_bench.rs`: inline budgets, each arm keeps its fastest of five rounds, and a
 //! box with no adapter prints and skips.
 
@@ -21,14 +26,13 @@ use ludion_core::rng::DeterministicRng;
 use ludion_engine::{Engine, ProfileReport, profile_engine};
 use ludion_renderer::graph::pass;
 
-/// `medium_scatter` + `medium_scatter_blur` at 16 lights, in milliseconds: the request's target.
+/// The frame delta at 16 lights, in milliseconds: the request's target.
 const TARGET_MS: f64 = 0.5;
-/// Median GPU time of the two scatter passes at 16 lights, in milliseconds. About 3x the release
-/// median on an unpinned M5 laptop (not authoritative), 2026-11-08, rounded up. Pinned figures are
-/// owed.
-const SIXTEEN_BUDGET_MS: f64 = 4.5;
-/// Median GPU time of the two scatter passes at 64 lights, same provenance.
-const SIXTY_FOUR_BUDGET_MS: f64 = 19.0;
+/// Frame delta at 16 lights, in milliseconds. About 3x the release delta on an unpinned M5 laptop
+/// (not authoritative), 2026-11-08, rounded up. Pinned figures are owed.
+const SIXTEEN_BUDGET_MS: f64 = 1.0;
+/// Frame delta at 64 lights, same provenance.
+const SIXTY_FOUR_BUDGET_MS: f64 = 5.5;
 
 const WARMUP: u64 = 10;
 const MEASURED: u64 = 60;
@@ -41,6 +45,14 @@ enum Kind {
     Spot,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Gi {
+    None,
+    On,
+    /// The same volume at zero strengths: everything else identical, the GI term off.
+    Zero,
+}
+
 #[derive(Clone, Copy)]
 struct Arm {
     label: &'static str,
@@ -48,31 +60,14 @@ struct Arm {
     kind: Kind,
     scatter: f32,
     shadows: bool,
-    gi: bool,
+    gi: Gi,
 }
 
-const ARMS: [Arm; 6] = [
-    Arm::point("off", 16, 0.0),
-    Arm::point("1", 1, 1.0),
-    Arm::point("16", 16, 1.0),
-    Arm::point("64", 64, 1.0),
-    Arm {
-        label: "16-shadowed",
-        lights: 16,
-        kind: Kind::Spot,
-        scatter: 1.0,
-        shadows: true,
-        gi: false,
-    },
-    Arm {
-        label: "gi-only",
-        lights: 0,
-        kind: Kind::Point,
-        scatter: 0.0,
-        shadows: false,
-        gi: true,
-    },
-];
+/// An arm and its scatter-off twin.
+struct Pair {
+    on: Arm,
+    twin: Arm,
+}
 
 impl Arm {
     const fn point(label: &'static str, lights: usize, scatter: f32) -> Arm {
@@ -82,10 +77,55 @@ impl Arm {
             kind: Kind::Point,
             scatter,
             shadows: false,
-            gi: false,
+            gi: Gi::None,
+        }
+    }
+
+    const fn spots(label: &'static str, scatter: f32) -> Arm {
+        Arm {
+            label,
+            lights: 16,
+            kind: Kind::Spot,
+            scatter,
+            shadows: true,
+            gi: Gi::None,
+        }
+    }
+
+    const fn gi(label: &'static str, gi: Gi) -> Arm {
+        Arm {
+            label,
+            lights: 0,
+            kind: Kind::Point,
+            scatter: 0.0,
+            shadows: false,
+            gi,
         }
     }
 }
+
+const PAIRS: [Pair; 5] = [
+    Pair {
+        on: Arm::point("1", 1, 1.0),
+        twin: Arm::point("off-1", 1, 0.0),
+    },
+    Pair {
+        on: Arm::point("16", 16, 1.0),
+        twin: Arm::point("off-16", 16, 0.0),
+    },
+    Pair {
+        on: Arm::point("64", 64, 1.0),
+        twin: Arm::point("off-64", 64, 0.0),
+    },
+    Pair {
+        on: Arm::spots("16-shadowed", 1.0),
+        twin: Arm::spots("16-shadowed-off", 0.0),
+    },
+    Pair {
+        on: Arm::gi("gi-only", Gi::On),
+        twin: Arm::gi("gi-off", Gi::Zero),
+    },
+];
 
 fn vec3(indent: usize, key: &str, v: [f32; 3]) -> String {
     let pad = " ".repeat(indent);
@@ -130,11 +170,18 @@ fn scene(arm: Arm) -> String {
     wall(&mut text, "wall-s", [0.0, 2.0, 15.0], [30.0, 4.0, 0.4]);
     wall(&mut text, "wall-w", [-15.0, 2.0, 0.0], [0.4, 4.0, 30.0]);
     wall(&mut text, "wall-e", [15.0, 2.0, 0.0], [0.4, 4.0, 30.0]);
-    if arm.gi {
+    if arm.gi != Gi::None {
+        let strength = if arm.gi == Gi::On {
+            "        sky_visibility: 1.0\n"
+        } else {
+            "        sky_visibility: 0.0\n        bounce: 0.0\n"
+        };
         entity(
             &mut text,
             "gi-volume",
-            "      GiVolume:\n        cell_size: 0.5\n        probe_spacing: 1.0\n        sky_visibility: 1.0\n",
+            &format!(
+                "      GiVolume:\n        cell_size: 0.5\n        probe_spacing: 1.0\n{strength}"
+            ),
         );
     }
 
@@ -218,12 +265,12 @@ fn measure(arm: Arm) -> Measured {
 
 #[test]
 fn bench_scenes_load() {
-    for arm in ARMS {
+    for arm in PAIRS.iter().flat_map(|p| [p.on, p.twin]) {
         let mut engine = Engine::builder().build().expect("boots");
         engine
             .load_inline_scene(&scene(arm))
             .expect("the bench scene loads");
-        let expected = 1 + 6 + usize::from(arm.gi) + arm.lights;
+        let expected = 1 + 6 + usize::from(arm.gi != Gi::None) + arm.lights;
         assert_eq!(engine.world().entity_count(), expected, "{}", arm.label);
     }
 }
@@ -231,53 +278,63 @@ fn bench_scenes_load() {
 #[test]
 #[ignore = "release-mode benchmark; run explicitly (see the module docs)"]
 fn needs_gpu_scatter_bench() {
-    let arms: Vec<Measured> = ARMS.into_iter().map(measure).collect();
-    if ludion_core::require_gpu::skip_no_adapter(!arms[0].report.gpu.available) {
+    let pairs: Vec<(Measured, Measured)> = PAIRS
+        .into_iter()
+        .map(|p| (measure(p.on), measure(p.twin)))
+        .collect();
+    if ludion_core::require_gpu::skip_no_adapter(!pairs[0].0.report.gpu.available) {
         return;
     }
-    let show = |v: Option<f64>| v.map_or("      n/a".to_string(), |v| format!("{v:>8.3}"));
+    let show = |v: Option<f64>| v.map_or("     n/a".to_string(), |v| format!("{v:>8.3}"));
     println!(
-        "\n{:<12} {:>8} {:>8} {:>8} {:>8}",
-        "arm", "scatter", "blur", "sum", "frame"
+        "\n{:<12} {:>8} {:>10} {:>8}   pass medians (overlap; not additive)",
+        "arm", "frame", "twin frame", "delta"
     );
-    for m in &arms {
-        let (s, b) = (
-            m.pass(pass::MEDIUM_SCATTER),
-            m.pass(pass::MEDIUM_SCATTER_BLUR),
-        );
-        let sum = s.unwrap_or(0.0) + b.unwrap_or(0.0);
+    println!(
+        "{:<12} {:>8} {:>10} {:>8}   {:>8} {:>8}",
+        "", "ms", "ms", "ms", "scatter", "blur"
+    );
+    for (on, twin) in &pairs {
         println!(
-            "{:<12} {} {} {:>8.3} {:>8.3}",
-            m.arm.label,
-            show(s),
-            show(b),
-            sum,
-            m.frame()
+            "{:<12} {:>8.3} {:>10.3} {:>8.3}   {} {}",
+            on.arm.label,
+            on.frame(),
+            twin.frame(),
+            on.frame() - twin.frame(),
+            show(on.pass(pass::MEDIUM_SCATTER)),
+            show(on.pass(pass::MEDIUM_SCATTER_BLUR)),
         );
     }
-    for m in &arms {
-        let present = m.pass(pass::MEDIUM_SCATTER).is_some();
-        match m.arm.label {
-            "off" => assert!(!present, "medium_scatter ran with every light at scatter 0"),
+    println!("deltas are printed as measured: negative or near-zero means within noise");
+    for (on, twin) in &pairs {
+        let (present, twin_present) = (
+            on.pass(pass::MEDIUM_SCATTER).is_some(),
+            twin.pass(pass::MEDIUM_SCATTER).is_some(),
+        );
+        assert!(
+            !twin_present,
+            "{}: medium_scatter ran in the scatter-off twin",
+            twin.arm.label
+        );
+        match on.arm.label {
             "gi-only" => println!("gi-only: medium_scatter present = {present}"),
             label => assert!(present, "{label}: medium_scatter missing"),
         }
     }
-    let sum = |m: &Measured| {
-        m.pass(pass::MEDIUM_SCATTER).unwrap_or(0.0)
-            + m.pass(pass::MEDIUM_SCATTER_BLUR).unwrap_or(0.0)
-    };
-    let sixteen = sum(&arms[2]);
+    let delta = |i: usize| pairs[i].0.frame() - pairs[i].1.frame();
+    let sixteen = delta(1);
     if sixteen > TARGET_MS {
-        println!("OVER TARGET: 16 lights cost {sixteen:.3} ms against the {TARGET_MS} ms target");
+        println!(
+            "OVER TARGET: 16 lights cost {sixteen:.3} ms of frame against the {TARGET_MS} ms target"
+        );
     } else {
-        println!("16 lights cost {sixteen:.3} ms, inside the {TARGET_MS} ms target");
+        println!("16 lights cost {sixteen:.3} ms of frame, inside the {TARGET_MS} ms target");
     }
     assert!(
         sixteen <= SIXTEEN_BUDGET_MS,
         "16 lights: {sixteen:.3} ms over {SIXTEEN_BUDGET_MS} ms"
     );
-    let sixty_four = sum(&arms[3]);
+    let sixty_four = delta(2);
     assert!(
         sixty_four <= SIXTY_FOUR_BUDGET_MS,
         "64 lights: {sixty_four:.3} ms over {SIXTY_FOUR_BUDGET_MS} ms"
