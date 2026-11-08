@@ -124,6 +124,8 @@ surface with no light within `range` reads near-black. Two consequences worth kn
   intended — that overflow is what feeds the bloom pass. Don't start at `intensity: 0.5` for a room
   the size of a Sokoban level; you'll under-light it and spend bless rounds discovering that.
 
+A light can also glow in fog: `scatter` (default `0`) opts it into the medium (`ludion docs atmosphere`).
+
 The cost is proportional to the lights **near each pixel**, not to how many the scene holds. The
 renderer divides the frame into cells and a fragment iterates only the lights whose `range` sphere
 reaches its own cell, so a light on the far side of the district is free to the pixels it does not
@@ -168,7 +170,7 @@ A `SpotLight` is a point light with an axis: `color`, `intensity`, `range` as a 
   by writing `direction` from a system (hashed state, like any component).
 - **Calibrate it as a point light** (the shading is the same, times the cone factor). A narrow cone
   costs less than a point light of the same `range`; past 45° it bins like one.
-- **Limits:** shadows are opt-in (`ludion docs local-shadows`), no global illumination, no visible shaft — the lit pool is the look.
+- **Limits:** shadows are opt-in (`ludion docs local-shadows`), no global illumination; a visible beam is opt-in: `scatter` (`ludion docs atmosphere`).
 
 ## Local-light shadows
 

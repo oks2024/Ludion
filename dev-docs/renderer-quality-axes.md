@@ -47,6 +47,9 @@ description: Quality axes: uniform sample counts, gi_rays, gi_probe_scale, and w
   beams alone would make "shadows off" still schedule the `shadow` pass — weakening, not absence.
   `sun_cascades` is a resource-sizing axis: it reaches the graph through `PostChain::sun_cascades` (the
   count) beside `shadow_map` (the tile edge), and is masked with the map.
+- **`medium_scatter`'s steps derive from `shaft_steps / 4` (min 2)**, read at every site that uses
+  them (`record_medium_scatter`) and pinned by the quality test row. `Quality.shafts` masks the whole
+  pass (local scatter and GI haze); masked local shadows leave the lights unshadowed, not absent.
 - **A field added to `Quality` must land in four homes in one change**: the struct plus every preset
   const and the `masked` site (`ludion-renderer`), the `Effects` TOML struct (`ludion-engine`,
   `deny_unknown_fields` — miss it and a file naming the new knob is an `L0016`), `describe`'s

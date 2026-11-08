@@ -363,6 +363,31 @@ dimming and colour are all governed by the fog they live in.
 8. **With a cascaded sun the shafts march the cascades,** which cover the `3/fog_density` reach (Clockout 0011,
    `Plan/shadow-mapping.md` decisions 15 and 17). Owner approval 2026-10-29.
 
+**Request 0009 (local-light scatter and GI in the haze; proxy-approved 2026-11-08, GI by the owner).**
+
+9. **A per-pixel segment march, not froxels.** `medium_scatter` marches each eye ray over each
+   selected light's sphere only, Bayer-jittered and blurred 4×4; no temporal accumulation, no volume
+   texture. It is one pass beside the shafts with the same medium functions, so the three terms cannot
+   drift, and it met the cost target (below). Steps per segment are `max(shaft_steps / 4, 2)`.
+10. **`scatter` is an opt-in `f32` on `PointLight` and `SpotLight`** (default `0`, absent is
+    byte-identical). `1.0` is the physical amount for the shared medium (σ_t, α, g, height and start
+    are the medium's). A scene with fog and no scattering light is unchanged.
+11. **At most 64 scattering lights per frame, heaviest first** by `scatter·intensity·max(color)·range·
+    e^(−σd)`, ties to the lower light-list index (points, then spots); the survivors sum in list
+    order. Past 64 the cost no longer scales as the bench's 16-light arm.
+12. **The existing shafts/medium quality axis gates it** (no new axis). `Quality.shafts` masks local
+    scatter and GI in the haze together; steps derive from `shaft_steps`.
+13. **Shadowed scatter reads the local-shadow atlas, one exact texel per step.** A light that holds a
+    grant is shadowed; one without scatters as an unshadowed glow. Scatter never changes who is
+    granted.
+14. **GI in the haze is default-on.** The same pass reads the `GiVolume` DC terms: the ambient is
+    scaled by the in-scatter-weighted mean sky visibility (alpha), and the bounce is in-scattered,
+    scaled by `GiVolume.bounce`. Strength 0, or no volume, is the off switch and byte-identical. It
+    moves vigil's `GiVolume` + fog goldens and budgets; their pinned re-bless is owed.
+15. **A viewmodel gun light may scatter**, at its render pose. Transparents match today's sun-shaft
+    behaviour. No wire or replay move: `scatter` is a component field with a default, and the schema
+    snapshot absorbs it.
+
 ## Waves
 
 ### Wave 1 — one medium: shared σ_t, albedo, anisotropy (the merge)
@@ -428,20 +453,39 @@ dimming and colour are all governed by the fog they live in.
   answering the opening question, judged against a committed `--sweep` sheet over
   `fog_density` × `shafts` (and a second over `fog_albedo` × `fog_anisotropy`).
 
+## Status — request 0009
+
+Local-light scatter and GI in the haze shipped (`medium_scatter`, `medium_scatter_blur`, composite
+binding 6; gallery `examples/gallery/medium-scatter.yaml`; bench
+`crates/ludion-engine/tests/scatter_bench.rs`). Pinned M4/3090 figures, blesses and the vigil
+re-bless are owed (`Plan/owed.md`).
+
+GPU frame-time delta against an identical scatter-off twin, **unpinned M5**, release, 1080p, three
+runs (ranges). Not authoritative; per-pass medians overlap on a tiled GPU and are not summed
+(`ludion devdocs profiling`).
+
+| Arm | Delta (ms) |
+|---|---|
+| 1 light | 0.18–0.21 |
+| 16 lights | 0.18–0.30 (meets the 0.5 ms target) |
+| 64 lights | 1.82–1.83 |
+| 16 shadowed spots | 0.39–0.75 |
+| GI only | 0.22–0.26 |
+
 ## Deferred, with triggers
 
-- **Multiple / area lights scattering into the medium.** Only the sun scatters (it is the only light
-  with a shadow map). Trigger: shadowed point/spot lights (their own deferred feature) — the march
-  would sum a directional term per shadow-casting light.
+- **Multiple / area lights scattering into the medium.** **Fired — request 0009**: point and spot
+  lights scatter (decisions 9–15), shadowed when granted. Area lights remain unbuilt.
 - **~~Per-pixel cube IBL in-scatter~~ — retired, not deferred.** This was the fallback for the
   low-frequency SH/average ambient Wave 3 planned, and its trigger was "the approximation reads wrong
   against a sharp sky feature". Wave 3 took neither: the procedural sky's gradient is evaluated in
   closed form, so there is no approximation to read wrong and nothing to escalate to. It comes back
   only if the sky ever stops being analytic — which `CLAUDE.md` forecloses.
 - **A froxel (volume-texture) medium** — the march is per-eye-ray single-scatter; a froxel volume
-  buys multiple lights, transparency-correct ordering and temporal amortisation. Trigger: the march's
-  per-pixel cost bites, or multi-light scattering lands. Rejected as premature now: one sun and one
-  march is the vertical slice's whole demand.
+  buys multiple lights, transparency-correct ordering and temporal amortisation. Trigger: temporal
+  amortisation is wanted, more than 64 scattering lights, or GI in-scatter needs more than the per-ray
+  DC march (L1 bands, per-froxel irradiance); a froxel volume makes GI/irradiance-volume in-scatter
+  nearly free.
 - **Multiple scattering / a dual-lobe phase.** Single-scatter is the model; a second HG lobe or a
   cheap multi-scatter approximation is the next fidelity step. Trigger: a look verdict that thick fog
   reads too dark (single-scatter under-fills dense media).

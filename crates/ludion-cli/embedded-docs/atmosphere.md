@@ -1,22 +1,25 @@
 ---
-description: Fog and light shafts as one participating medium: the nine fog fields, the traps, the sweep loop
+description: Fog, sun shafts, local-light scatter and GI haze as one medium: the fog fields, traps, sweep loop
 ---
 
 # Fog and light as one medium
 
-**Scope:** The nine `PostProcess` `fog_*`/`shafts` fields, the single-scattering model behind them,
-and the contact-sheet loop for tuning them. The rest of the imaging chain is
+**Scope:** The nine `PostProcess` `fog_*`/`shafts` fields, the per-light `scatter` field, the
+single-scattering model behind them, and the contact-sheet loop for tuning them. The rest of the imaging chain is
 `ludion docs post-processing`; the sky the medium can in-scatter is `ludion docs environment`.
 
-Fog and the light shafts are not two effects that happen to look related. They are the two
-in-scatter terms of one **single-scattering participating medium**, and every `fog_*` field
+Fog, the sun's shafts and the glow around lamps are not separate effects that happen to look related.
+They are the in-scatter terms of one **single-scattering participating medium**, and every `fog_*` field
 describes that medium rather than a haze. For an eye ray reaching a surface at distance `d`, with
 transmittance `T(t) = exp(−∫₀ᵗ σ_t ds)`:
 
 ```text
-L = T(d)·surface  +  ∫₀ᵈ σ_s·T(t)·[ L_ambient + p(θ)·V(t)·L_sun ] dt
-    └ extinction ┘    └───────── in-scatter along the ray ────────┘
+L = T(d)·surface  +  ∫₀ᵈ σ_s·T(t)·[ L_ambient + p(θ)·V(t)·L_sun + Σ p(θ_l)·V_l(t)·scatter_l·E_l(t) ] dt
+    └ extinction ┘    └──────────────── in-scatter along the ray ─────────────────────┘
 ```
+
+`E_l(t)` is light `l`'s radiance at the sample (its falloff and spot cone) and `V_l` its shadow
+visibility. `L_ambient` carries the `GiVolume` sky visibility and bounce when the scene has one.
 
 ## Rules
 
@@ -54,6 +57,19 @@ L = T(d)·surface  +  ∫₀ᵈ σ_s·T(t)·[ L_ambient + p(θ)·V(t)·L_sun ] d
   sky(view_ray), fog_sky)`. At `fog_sky: 0` the haze is one authored slab; at `1.0` it is the
   `Environment` sky along that ray, blue toward the zenith and warm in the horizon band.
 
+- **Local in-scatter is opt-in per light.** `scatter` on a `PointLight` or `SpotLight` (default `0`,
+  absent is byte-identical; `1.0` is the physical amount for this medium) lets the light scatter into
+  the air. It shares the medium's σ_t, α, `fog_anisotropy`, height and `fog_start`, so the same fog
+  fields thicken the glow and the sun's beams alike. A light that holds a local-shadow grant
+  (`ludion docs local-shadows`) is shadowed — a pillar leaves a dark wedge of air behind it; one that
+  does not is a soft unshadowed glow. At most 64 lights scatter per frame, the heaviest by
+  `scatter·intensity·max(color)·range·e^(−σd)`, ties to light order. A viewmodel gun light may scatter
+  (`ludion docs viewmodel`). Scatter never changes which lights cast shadows. It needs no sun.
+- **GI reaches the haze.** In a scene with a `GiVolume`, the ambient term is scaled by the sky
+  visibility averaged along the ray (weighted by in-scatter), so an enclosed room no longer hazes as
+  if under open sky, and the baked bounce light is in-scattered too, scaled by `GiVolume.bounce`.
+  Only the volume's DC terms are read. No `GiVolume`, or both strengths `0`, changes nothing
+  (`ludion docs global-illumination`).
 - **Sprites, particles and world text take fog and beams at their own distance,** not the wall or sky
   behind them: a character in front of a far hill is fogged as far as it stands, and one crossing the
   horizon has no seam. Depth of field does the same (`ludion docs post-processing`). The mechanism and
@@ -71,6 +87,7 @@ haze *is* the sky along that ray and the two agree by construction.
 | Fog, no beams | any | any | `0` (or no sun) | — | taste |
 | Dark absorbing smoke | high | low | `0` | — | `0` (a slab reads as smoke) |
 | Beams in a thin haze | small | high | large | high | taste |
+| Glow around lamps | small–moderate | high | any | any | taste; set `scatter: 1.0` on the lights |
 | Haze that becomes the sky | any | any | any | — | `1.0` (needs an `Environment`) |
 
 ## Gotchas
@@ -84,6 +101,10 @@ haze *is* the sky along that ray and the two agree by construction.
   <file>` is how you see it: a working shaft frame lists a `shafts` and a `shafts_blur` pass, and a
   scene missing the sun or the medium lists neither. So "beams without fog" is a **thin** medium and
   a strong `shafts`, never `fog_density: 0`.
+- **`scatter` without a medium renders nothing.** The same silence as `shafts`: with `fog_density: 0`
+  or no `PostProcess` the light still lights surfaces and scatters nowhere. `ludion dump-graph --scene
+  <file>` lists a `medium_scatter` pass when it is working.
+- **`Quality` `low` drops the shafts, local scatter and GI in the haze together** (`ludion docs quality`).
 - **Shafts only see what the sun's map covers.** With the default anchored box, air outside the box is
   lit: anchor the box over the shafts, or use `cascades`. With a cascaded sun the march samples the
   cascades, and the last one reaches the march's `3/fog_density`, so an occluder anywhere within the
@@ -113,6 +134,11 @@ ludion render --scene examples/gallery/post-full.yaml --out density.png \
 ludion render --scene examples/gallery/post-full.yaml --out beams.png \
   --set /entities/0/components/PostProcess/fog_sky=1.0 \
   --sweep /entities/0/components/PostProcess/shafts=0.0,0.02,0.06,0.15
+```
+
+```
+ludion render --scene examples/gallery/medium-scatter.yaml --out scatter.png \
+  --sweep /entities/9/components/PointLight/scatter=0.0,0.5,1.0,2.0
 ```
 
 Judge the sheet, then commit the chosen value into the scene. A sheet is a judging instrument, never

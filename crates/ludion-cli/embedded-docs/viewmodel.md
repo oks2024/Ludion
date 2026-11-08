@@ -99,6 +99,8 @@ construction; put it on a world emitter. `ludion docs particles`.
   error is invisible at authored densities (`σ ≤ 0.1`).
 - A flash writes no depth, so DoF and fog over it follow what lies behind it.
 - A `lit` viewmodel particle's shading reads the screen tile; flashes are additive and unlit.
+- A gun light with `scatter` scatters like any light, positioned at its render pose, not the
+  late-latched camera.
 - A skinned gun is unproven.
 
 ## Next

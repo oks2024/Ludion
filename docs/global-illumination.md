@@ -125,6 +125,9 @@ profile` (`ludion docs running`), not in the rendered image.
   `GiVolume` — including content shipped before `bounce` existed — must stay byte-identical until it
   opts in. `bounce: 0.0` costs nothing: the bounce bake is skipped entirely (no volumes allocated, no
   extra ray work, no shader branch taken), not merely zeroed out after the fact.
+- **The fog medium reads the volume.** With fog, the haze's ambient term takes the sky visibility
+  averaged along the ray and gains the baked bounce in-scatter, both from the DC terms and scaled by
+  the same two strengths; zero strengths change nothing (`ludion docs atmosphere`).
 - **An unmarked light re-bakes the volume every frame it moves; a `GiDynamic`-marked one never does.**
   A system that moves, recolours, or re-intensifies an unmarked point light invalidates the cached
   bake on the very next frame. Mark it `GiDynamic` instead and its motion reaches neither the bake's

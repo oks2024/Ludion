@@ -165,6 +165,10 @@ four labelled lanes and no overlap warnings.
 
 - **A pass with a `null` median while `timestamps_supported` is true means the graph exceeded `PassTimingRing::MAX_PASSES`:** its passes are named and untimed. A budget with GPU lines fails `L4019` on such a run, and `sampled_frames` counts timed frames only.
 - **Windowed present left the sim thread.** A window is drawn by the presenter thread on its own renderer; the profile report and `--dump-timings` measure the sim-side renderer (the stream's), never the window's.
+- **On a tiled GPU, adjacent passes' timestamps overlap, so per-pass medians split shared time and
+  must not be summed.** Seen on the M5 (unpinned) on `shafts`/`shafts_blur`: 0.747/0.738 ms in
+  `post-full`. Read a feature's cost from `gpu.frame_median_ms` deltas against a matching off arm,
+  as `crates/ludion-engine/tests/scatter_bench.rs` does.
 - **Debug-build numbers are not comparable to a release budget.** QOI encode in particular is an
   order of magnitude slower unoptimized (see `frame-streaming`). Profile in `--release`, on the
   hardware the budget was calibrated on, at the scale it was calibrated at.
