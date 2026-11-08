@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_scene::{MAX_MESH_LODS, MeshDocument, MeshLodRef, MeshSkin, check_lod_level};
-use meshopt::{SimplifyOptions, VertexDataAdapter, simplify, typed_to_bytes};
+use meshopt::{SimplifyOptions, VertexDataAdapter, simplify, simplify_sloppy, typed_to_bytes};
 
 use crate::skin::SkinBinding;
 use crate::{Inputs, LodSpec, MeshArtifact, State, mesh_reference};
@@ -14,53 +14,77 @@ use crate::{Inputs, LodSpec, MeshArtifact, State, mesh_reference};
 /// Recorded here because it shapes every generated level.
 pub const SIMPLIFY_TARGET_ERROR: f32 = 1e-2;
 
+/// The relative error the sloppy fallback may spend: loose enough that a coarse level reaches its
+/// target on a mesh the plain pass cannot collapse.
+pub const SLOPPY_TARGET_ERROR: f32 = 1.0;
+
 /// Simplifies `base` to about `ratio` of its triangles (`ratio` in (0, 1), exclusive) and returns the
 /// level as a document with no `lods`.
 ///
-/// Vertices are kept by reference — meshoptimizer only rewrites the index list — so every
-/// per-vertex attribute (normals, uvs, tangents, emissive, metallic, roughness, skin weights and
-/// bone indices) of a surviving vertex is the source vertex's, bit for bit, and `joints` are the
-/// base's. Vertices no index references are dropped; the survivors keep their original order. The
-/// result may sit above the target when the simplifier cannot reach it within
-/// [`SIMPLIFY_TARGET_ERROR`], and is empty only for a base with no triangles.
+/// Vertices at one position are welded for the simplifier (a faceted mesh gives every corner its own
+/// normal, which would pin every edge), and `simplify_sloppy` takes over when the plain pass leaves
+/// more than 10% above the target. The level is faceted: every output triangle owns three vertices
+/// (`indices` is `0..n`), `normals` is absent so the loader computes flat ones, and each corner takes
+/// the uv, tangent, emissive, metallic, roughness, skin weights and bone indices of the first base
+/// vertex at its position, so a texture may smear along a UV seam. `joints` are the base's. The
+/// result may sit above the target when neither pass reaches it, and is empty only for a base with
+/// no triangles.
 #[must_use]
 pub fn simplify_level(base: &MeshDocument, ratio: f64) -> MeshDocument {
     let vertex_count = base.positions.len() / 3;
     let positions: Vec<f32> = base.positions.iter().map(|&p| p as f32).collect();
     let target = ((ratio * base.indices.len() as f64).round() as usize / 3 * 3).max(3);
-    let kept = match VertexDataAdapter::new(typed_to_bytes(&positions), 12, 0) {
-        Ok(adapter) => simplify(
-            &base.indices,
-            &adapter,
-            target,
-            SIMPLIFY_TARGET_ERROR,
-            SimplifyOptions::None,
-            None,
-        ),
-        Err(_) => base.indices.clone(),
-    };
 
-    let mut used = vec![false; vertex_count];
-    for &index in &kept {
-        used[index as usize] = true;
-    }
-    let mut remap = vec![u32::MAX; vertex_count];
-    let mut survivors: Vec<usize> = Vec::new();
-    for (vertex, &is_used) in used.iter().enumerate() {
-        if is_used {
-            remap[vertex] = survivors.len() as u32;
-            survivors.push(vertex);
+    let mut first_at: BTreeMap<[u32; 3], u32> = BTreeMap::new();
+    let canonical: Vec<u32> = (0..vertex_count)
+        .map(|v| {
+            let key = [
+                positions[v * 3].to_bits(),
+                positions[v * 3 + 1].to_bits(),
+                positions[v * 3 + 2].to_bits(),
+            ];
+            *first_at.entry(key).or_insert(v as u32)
+        })
+        .collect();
+    let shadow: Vec<u32> = base
+        .indices
+        .iter()
+        .map(|&index| canonical[index as usize])
+        .collect();
+
+    let kept = match VertexDataAdapter::new(typed_to_bytes(&positions), 12, 0) {
+        Ok(adapter) => {
+            let plain = simplify(
+                &shadow,
+                &adapter,
+                target,
+                SIMPLIFY_TARGET_ERROR,
+                SimplifyOptions::None,
+                None,
+            );
+            if plain.len() > target + target / 10 {
+                simplify_sloppy(&shadow, &adapter, target, SLOPPY_TARGET_ERROR, None)
+            } else {
+                plain
+            }
         }
-    }
+        Err(_) => shadow,
+    };
+    let corners: Vec<usize> = kept
+        .chunks_exact(3)
+        .filter(|tri| tri[0] != tri[1] && tri[1] != tri[2] && tri[0] != tri[2])
+        .flatten()
+        .map(|&index| index as usize)
+        .collect();
 
     let gather_f64 = |values: &Option<Vec<f64>>, width: usize| {
         values
             .as_ref()
-            .map(|values| gather(values, &survivors, width))
+            .map(|values| gather(values, &corners, width))
     };
     MeshDocument {
-        positions: gather(&base.positions, &survivors, 3),
-        normals: gather_f64(&base.normals, 3),
+        positions: gather(&base.positions, &corners, 3),
+        normals: None,
         uvs: gather_f64(&base.uvs, 2),
         tangents: gather_f64(&base.tangents, 4),
         emissive: gather_f64(&base.emissive, 1),
@@ -68,11 +92,11 @@ pub fn simplify_level(base: &MeshDocument, ratio: f64) -> MeshDocument {
         roughness: gather_f64(&base.roughness, 1),
         skin: base.skin.as_ref().map(|skin| MeshSkin {
             joints: skin.joints.clone(),
-            weights: gather(&skin.weights, &survivors, 4),
-            bone_indices: gather(&skin.bone_indices, &survivors, 4),
+            weights: gather(&skin.weights, &corners, 4),
+            bone_indices: gather(&skin.bone_indices, &corners, 4),
         }),
         lods: Vec::new(),
-        indices: kept.iter().map(|&index| remap[index as usize]).collect(),
+        indices: (0..corners.len() as u32).collect(),
         ..base.clone()
     }
 }
@@ -526,24 +550,51 @@ mod tests {
         ludion_scene::check_mesh(&ludion_scene::emit_mesh(&level)).expect("a valid level");
     }
 
+    /// The grid with every triangle given its own three vertices (a faceted base).
+    fn faceted(base: &MeshDocument) -> MeshDocument {
+        let rows: Vec<usize> = base.indices.iter().map(|&i| i as usize).collect();
+        let skin = base.skin.as_ref().unwrap();
+        MeshDocument {
+            positions: gather(&base.positions, &rows, 3),
+            normals: None,
+            uvs: base.uvs.as_ref().map(|v| gather(v, &rows, 2)),
+            tangents: base.tangents.as_ref().map(|v| gather(v, &rows, 4)),
+            emissive: base.emissive.as_ref().map(|v| gather(v, &rows, 1)),
+            metallic: base.metallic.as_ref().map(|v| gather(v, &rows, 1)),
+            roughness: base.roughness.as_ref().map(|v| gather(v, &rows, 1)),
+            skin: Some(MeshSkin {
+                joints: skin.joints.clone(),
+                weights: gather(&skin.weights, &rows, 4),
+                bone_indices: gather(&skin.bone_indices, &rows, 4),
+            }),
+            indices: (0..rows.len() as u32).collect(),
+            ..base.clone()
+        }
+    }
+
     #[test]
-    fn a_skinned_level_keeps_the_joints_and_each_surviving_vertexs_data() {
-        let base = grid(16);
+    fn a_faceted_base_reaches_its_target_with_unshared_corners() {
+        let base = faceted(&grid(16));
+        let level = simplify_level(&base, 0.25);
+        assert!(level.indices.len() as f64 <= base.indices.len() as f64 * 0.3);
+        assert!(!level.indices.is_empty() && level.indices.len().is_multiple_of(3));
+        let expected: Vec<u32> = (0..level.indices.len() as u32).collect();
+        assert_eq!(level.indices, expected);
+        assert!(level.normals.is_none());
+        ludion_scene::check_mesh(&ludion_scene::emit_mesh(&level)).expect("a valid level");
+    }
+
+    #[test]
+    fn a_skinned_corner_carries_its_canonical_source_vertexs_data() {
+        let base = faceted(&grid(16));
         let level = simplify_level(&base, 0.25);
         let (base_skin, skin) = (base.skin.as_ref().unwrap(), level.skin.as_ref().unwrap());
         assert_eq!(skin.joints, base_skin.joints);
         let (base_uvs, uvs) = (base.uvs.as_ref().unwrap(), level.uvs.as_ref().unwrap());
-        let (base_rough, rough) = (
-            base.roughness.as_ref().unwrap(),
-            level.roughness.as_ref().unwrap(),
-        );
-        // Survivors keep their order, so each is the next base vertex with the same position.
-        let mut from = 0;
         for (v, position) in level.positions.chunks(3).enumerate() {
-            let source = (from..base.positions.len() / 3)
+            let source = (0..base.positions.len() / 3)
                 .find(|&s| base.positions[s * 3..s * 3 + 3] == *position)
-                .expect("a survivor is a base vertex, in order");
-            from = source + 1;
+                .expect("a corner sits at a base position");
             assert_eq!(
                 skin.weights[v * 4..v * 4 + 4],
                 base_skin.weights[source * 4..source * 4 + 4]
@@ -553,8 +604,15 @@ mod tests {
                 base_skin.bone_indices[source * 4..source * 4 + 4]
             );
             assert_eq!(uvs[v * 2..v * 2 + 2], base_uvs[source * 2..source * 2 + 2]);
-            assert_eq!(rough[v], base_rough[source]);
         }
+    }
+
+    #[test]
+    fn the_sloppy_fallback_reaches_a_target_the_plain_pass_cannot() {
+        let base = faceted(&grid(16));
+        let level = simplify_level(&base, 0.02);
+        let target = (0.02 * base.indices.len() as f64) as usize;
+        assert!(level.indices.len() <= target + target / 10 + 3 * 4);
     }
 
     #[test]

@@ -28,7 +28,7 @@ Bounds are conservative: a mesh may be kept when off screen, never dropped when 
 A mesh asset with a `lods:` chain draws the coarser level its screen size selects, chosen in the same cull pass.
 - **Asset.** Up to three levels, each a sibling mesh document that matches its base's draw key and joints
   (`ludion docs materials`, `L1395`/`L1396`). `ludion import --lod <screen>[:<ratio>]` writes one (`ludion docs
-  blender-craft`); the gallery `meshes/lod/` is a three-level mannequin.
+  blender-craft`); the gallery `meshes/lod/` is a three-level mannequin. Generated levels are faceted (flat normals) and take each corner's uv from the first vertex at its position.
 - **Selection** is stateless and rotation-invariant: the fraction of viewport height the bounding sphere covers
   from the drawn camera's eye, against each `screen_size`, so turning never changes a level. Shadow views take the
   camera's eye, never their own frustum, so a shadow is never finer than its mesh.
