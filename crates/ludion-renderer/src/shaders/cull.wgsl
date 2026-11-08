@@ -28,8 +28,13 @@ struct CullParams {
 }
 
 // Six inward-facing normalized planes `(n, d)`.
+// `casters_only` (shadow views) rejects items that cast no shadow.
 struct CullView {
     planes: array<vec4<f32>, 6>,
+    casters_only: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 
 // A `MeshInstanceRaw` (192 bytes), copied whole; only `model` is read.
@@ -39,11 +44,16 @@ struct CullInstance {
 }
 
 // `slot` indexes `cull_boxes`, or is SLOT_OVERRIDE (min/max is the world box) or SLOT_ALWAYS.
+// `casts` is 0 for a mesh with `cast_shadows: false`.
 struct CullItem {
     min: vec3<f32>,
     slot: u32,
     max: vec3<f32>,
     bucket: u32,
+    casts: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 
 // `known == 0` marks an unknown box: always visible.
@@ -91,6 +101,9 @@ fn block_count() -> u32 {
 // except for fused-multiply-add rounding exactly at a plane.
 fn admitted(view: u32, i: u32) -> bool {
     let item = cull_items[i];
+    if cull_views[view].casters_only != 0u && item.casts == 0u {
+        return false;
+    }
     if item.slot == SLOT_ALWAYS {
         return true;
     }

@@ -214,22 +214,22 @@ pub(super) fn bucket_asset_instances(
 }
 
 /// The byte range of a draw's instances inside the packed buffer.
-fn instance_range(first: u32, count: u32) -> std::ops::Range<u64> {
+fn instance_range(first: u64, count: u32) -> std::ops::Range<u64> {
     let stride = std::mem::size_of::<MeshInstanceRaw>() as u64;
-    u64::from(first) * stride..u64::from(first + count) * stride
+    first * stride..(first + u64::from(count)) * stride
 }
 
 impl MeshDraw {
     /// This draw's bytes of the packed instance buffer.
     pub(super) fn instance_bytes(&self) -> std::ops::Range<u64> {
-        instance_range(self.first, self.count)
+        instance_range(u64::from(self.first), self.count)
     }
 }
 
 impl MeshAssetDraw {
     /// This draw's bytes of the packed instance buffer.
     pub(super) fn instance_bytes(&self) -> std::ops::Range<u64> {
-        instance_range(self.first, self.count)
+        instance_range(u64::from(self.first), self.count)
     }
 }
 
@@ -411,47 +411,102 @@ fn pending_assets(scene: &RenderScene, meshes: &[MeshAssetGpu]) -> Vec<AssetPend
     out
 }
 
-/// The cull pass's two outputs a draw can read, `(compacted instances, indirect args)`, from a
-/// pass's buffer reads. `None` when the pass declares no read, which is every direct draw.
+/// What the cull pass wrote and a draw can read: the compacted instances and indirect args of its
+/// views, with the shape that places view `v`'s slices.
+#[derive(Clone, Copy)]
+pub(super) struct Culled<'a> {
+    instances: &'a wgpu::Buffer,
+    args: &'a wgpu::Buffer,
+    shape: crate::graph::CullShape,
+    /// The live views: a draw for a later view reads its own buffer directly.
+    views: u32,
+}
+
+/// The cull pass's outputs from a pass's buffer reads, placed by the frame's `cull`. `None` when the
+/// pass declares no read, which is every direct draw.
 pub(super) fn culled_buffers<'a>(
     reads: &'a [&'a wgpu::Buffer],
-) -> Option<(&'a wgpu::Buffer, &'a wgpu::Buffer)> {
-    match reads {
-        [instances, args] => Some((instances, args)),
+    cull: Option<&crate::gpu_cull::CullFrame>,
+) -> Option<Culled<'a>> {
+    match (reads, cull) {
+        ([instances, args], Some(cull)) => Some(Culled {
+            instances,
+            args,
+            shape: cull.shape(),
+            views: cull.views(),
+        }),
         _ => None,
     }
+}
+
+/// The cull view the sun's first shadow map is: view 0 is the camera.
+pub(super) const SUN_CULL_VIEW: u32 = 1;
+
+/// Every instance of a draw: `sources` is parallel to the instance buffer.
+pub(super) fn all_ranges(sources: &[u32]) -> Vec<std::ops::Range<u32>> {
+    std::iter::once(0..sources.len() as u32).collect()
 }
 
 /// Bytes per indirect-args slot (`DrawIndexedIndirectArgs`).
 const ARGS_STRIDE: u64 = 20;
 
+/// Where one draw's instances come from: a buffer and the byte range of it, plus the indirect args
+/// when the cull wrote them.
+pub(super) struct DrawSource<'a> {
+    pub(super) instances: &'a wgpu::Buffer,
+    pub(super) bytes: std::ops::Range<u64>,
+    pub(super) indirect: Option<(&'a wgpu::Buffer, u64)>,
+}
+
+/// Bucket `bucket` (instances `[first, first + count)` of the packed buffer) as view `view` sees it:
+/// the cull's compacted slice and args when it culled that view, else the draw's own packed range.
 fn source_of<'a>(
     own: &'a wgpu::Buffer,
+    (first, count): (u32, u32),
     bucket: Option<u32>,
-    culled: Option<(&'a wgpu::Buffer, &'a wgpu::Buffer)>,
-) -> (&'a wgpu::Buffer, Option<(&'a wgpu::Buffer, u64)>) {
+    culled: Option<Culled<'a>>,
+    view: u32,
+) -> DrawSource<'a> {
     match (culled, bucket) {
-        (Some((instances, args)), Some(b)) => (instances, Some((args, u64::from(b) * ARGS_STRIDE))),
-        _ => (own, None),
+        (Some(c), Some(b)) if view < c.views => {
+            let base = u64::from(view) * u64::from(c.shape.instances) + u64::from(first);
+            let slot = u64::from(view) * u64::from(c.shape.buckets) + u64::from(b);
+            DrawSource {
+                instances: c.instances,
+                bytes: instance_range(base, count),
+                indirect: Some((c.args, slot * ARGS_STRIDE)),
+            }
+        }
+        _ => DrawSource {
+            instances: own,
+            bytes: instance_range(u64::from(first), count),
+            indirect: None,
+        },
     }
 }
 
 impl MeshDraw {
-    /// Where this draw's instances come from and, when culled, its indirect args.
-    pub(super) fn source<'a>(
-        &'a self,
-        culled: Option<(&'a wgpu::Buffer, &'a wgpu::Buffer)>,
-    ) -> (&'a wgpu::Buffer, Option<(&'a wgpu::Buffer, u64)>) {
-        source_of(&self.instances, self.bucket, culled)
+    /// Where this draw's instances come from in `view` (0 is the camera) and, when culled, its indirect args.
+    pub(super) fn source<'a>(&'a self, culled: Option<Culled<'a>>, view: u32) -> DrawSource<'a> {
+        source_of(
+            &self.instances,
+            (self.first, self.count),
+            self.bucket,
+            culled,
+            view,
+        )
     }
 }
 
 impl MeshAssetDraw {
     /// As [`MeshDraw::source`].
-    pub(super) fn source<'a>(
-        &'a self,
-        culled: Option<(&'a wgpu::Buffer, &'a wgpu::Buffer)>,
-    ) -> (&'a wgpu::Buffer, Option<(&'a wgpu::Buffer, u64)>) {
-        source_of(&self.instances, self.bucket, culled)
+    pub(super) fn source<'a>(&'a self, culled: Option<Culled<'a>>, view: u32) -> DrawSource<'a> {
+        source_of(
+            &self.instances,
+            (self.first, self.count),
+            self.bucket,
+            culled,
+            view,
+        )
     }
 }

@@ -336,23 +336,6 @@ pub(crate) fn cull(bounds: &[Option<Aabb>], volume: &CullVolume) -> Vec<u32> {
         .collect()
 }
 
-/// The instance-position ranges of a mesh draw whose `sources` (ascending `scene.meshes` indices,
-/// one per instance) are `visible`, adjacent positions coalesced into one range.
-pub(crate) fn visible_ranges(sources: &[u32], visible: &[bool]) -> Vec<Range<u32>> {
-    let mut ranges: Vec<Range<u32>> = Vec::new();
-    for (position, &source) in sources.iter().enumerate() {
-        if !visible[source as usize] {
-            continue;
-        }
-        let position = position as u32;
-        match ranges.last_mut() {
-            Some(last) if last.end == position => last.end += 1,
-            _ => ranges.push(position..position + 1),
-        }
-    }
-    ranges
-}
-
 /// `ranges` (instance positions of a draw whose `sources` are ascending `scene.meshes` indices) with
 /// every position whose source does not cast (`casts[source]` false) removed, survivors re-coalesced.
 pub(crate) fn casting_ranges(
@@ -398,15 +381,6 @@ mod tests {
             casting_ranges(vec![0..3, 4..6], &sources, &casts),
             vec![0..2, 4..6]
         );
-    }
-
-    #[test]
-    fn visible_ranges_coalesce_runs_and_skip_gaps() {
-        let sources = [0, 2, 3, 5, 6, 7];
-        let visible = [true, false, true, false, false, true, true, false];
-        assert_eq!(visible_ranges(&sources, &visible), vec![0..2, 3..5]);
-        assert_eq!(visible_ranges(&sources, &[true; 8]), vec![0..6]);
-        assert!(visible_ranges(&sources, &[false; 8]).is_empty());
     }
 
     fn instance(shape: MeshShape, model: Mat4) -> MeshInstance {

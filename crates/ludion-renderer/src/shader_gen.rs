@@ -414,12 +414,20 @@ pub struct CullItem {
     pub slot: u32,
     pub max: [f32; 3],
     pub bucket: u32,
+    pub casts: u32,
+    pub pad0: u32,
+    pub pad1: u32,
+    pub pad2: u32,
 }
-const _: () = assert!(core::mem::size_of::<CullItem>() == 32);
+const _: () = assert!(core::mem::size_of::<CullItem>() == 48);
 const _: () = assert!(core::mem::offset_of!(CullItem, min) == 0);
 const _: () = assert!(core::mem::offset_of!(CullItem, slot) == 12);
 const _: () = assert!(core::mem::offset_of!(CullItem, max) == 16);
 const _: () = assert!(core::mem::offset_of!(CullItem, bucket) == 28);
+const _: () = assert!(core::mem::offset_of!(CullItem, casts) == 32);
+const _: () = assert!(core::mem::offset_of!(CullItem, pad0) == 36);
+const _: () = assert!(core::mem::offset_of!(CullItem, pad1) == 40);
+const _: () = assert!(core::mem::offset_of!(CullItem, pad2) == 44);
 
 /// WGSL `struct CullParams`.
 ///
@@ -453,9 +461,17 @@ const _: () = assert!(core::mem::offset_of!(CullParams, pad0) == 28);
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct CullView {
     pub planes: [[f32; 4]; 6],
+    pub casters_only: u32,
+    pub pad0: u32,
+    pub pad1: u32,
+    pub pad2: u32,
 }
-const _: () = assert!(core::mem::size_of::<CullView>() == 96);
+const _: () = assert!(core::mem::size_of::<CullView>() == 112);
 const _: () = assert!(core::mem::offset_of!(CullView, planes) == 0);
+const _: () = assert!(core::mem::offset_of!(CullView, casters_only) == 96);
+const _: () = assert!(core::mem::offset_of!(CullView, pad0) == 100);
+const _: () = assert!(core::mem::offset_of!(CullView, pad1) == 104);
+const _: () = assert!(core::mem::offset_of!(CullView, pad2) == 108);
 
 /// WGSL `struct DebugView`.
 ///
@@ -2440,7 +2456,7 @@ pub fn create_cull_params_cull_views_cull_in_cull_items_cull_boxes_cull_buckets_
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(96),
+                    min_binding_size: wgpu::BufferSize::new(112),
                 },
                 count: None,
             },
@@ -2460,7 +2476,7 @@ pub fn create_cull_params_cull_views_cull_in_cull_items_cull_boxes_cull_buckets_
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(32),
+                    min_binding_size: wgpu::BufferSize::new(48),
                 },
                 count: None,
             },

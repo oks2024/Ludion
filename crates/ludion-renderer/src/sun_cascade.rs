@@ -180,8 +180,8 @@ pub fn fit_sun_cascades(
 /// The caster indices each fitted cascade's box keeps, nearest cascade first, by culling
 /// `caster_bounds` (per instance, as `cull::instance_bounds` returns them) against the box.
 ///
-/// The frame's shadow pass and [`sun_cascade_stats`] both call this, so the profile panel and the
-/// draw cannot disagree about which casters a cascade keeps.
+/// [`sun_cascade_stats`] calls this for the profile panel, and it is the oracle the GPU cull's cascade
+/// views are tested against: the draw and the panel keep the same casters.
 pub(crate) fn sun_cascade_casters(
     fit: &SunCascades,
     caster_bounds: &[Option<Aabb>],

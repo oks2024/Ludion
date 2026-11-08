@@ -25,6 +25,41 @@ const _: () = assert!(
 const _: () =
     assert!(std::mem::size_of::<CullBoundsRaw>() == std::mem::size_of::<shader_gen::CullBox>());
 
+/// One view of the cull: its frustum, and whether it admits only shadow casters (every shadow view does).
+#[derive(Clone, Copy)]
+pub(crate) struct CullViewSpec {
+    pub(crate) frustum: Frustum,
+    pub(crate) casters_only: bool,
+}
+
+/// The cull's views in the order the shadow passes address them: the camera, one casters-only view
+/// per sun map, then one per granted local view; and how many views past `shape.views` were dropped.
+/// A dropped view is not culled and draws every caster directly.
+pub(crate) fn cull_views(
+    camera: Mat4,
+    sun_maps: &[Mat4],
+    local: impl Iterator<Item = Frustum>,
+    shape: CullShape,
+) -> (Vec<CullViewSpec>, u32) {
+    let shadow = |frustum| CullViewSpec {
+        frustum,
+        casters_only: true,
+    };
+    let mut views = vec![CullViewSpec {
+        frustum: Frustum::from_view_proj(camera),
+        casters_only: false,
+    }];
+    views.extend(
+        sun_maps
+            .iter()
+            .map(|&map| shadow(Frustum::from_view_proj(map))),
+    );
+    views.extend(local.map(shadow));
+    let over = (views.len() as u32).saturating_sub(shape.views);
+    views.truncate(shape.views as usize);
+    (views, over)
+}
+
 /// The cull item of `mesh` in `bucket`, from its entry `bound` in `cull::instance_bounds`: the item
 /// rule that makes the GPU's visible set the oracle's, "unknown, or admitted".
 pub(crate) fn cull_item(mesh: &MeshInstance, bucket: u32, bound: Option<Aabb>) -> CullItem {
@@ -38,6 +73,10 @@ pub(crate) fn cull_item(mesh: &MeshInstance, bucket: u32, bound: Option<Aabb>) -
         slot,
         max,
         bucket,
+        casts: mesh.cast_shadows as u32,
+        pad0: 0,
+        pad1: 0,
+        pad2: 0,
     }
 }
 
@@ -114,8 +153,8 @@ pub(crate) struct WorldCullInput<'a> {
     /// `cull::instance_bounds` of `meshes`.
     pub(crate) bounds: &'a [Option<Aabb>],
     pub(crate) buckets: &'a [WorldBucket<'a>],
-    /// The one view-projection the camera uniform uses.
-    pub(crate) view_proj: Mat4,
+    /// The views in order: the camera (the one view-projection its uniform uses), then the shadow views.
+    pub(crate) views: &'a [CullViewSpec],
     pub(crate) bounds_table: &'a wgpu::Buffer,
     pub(crate) shape: CullShape,
 }
@@ -131,7 +170,7 @@ pub(crate) fn world_cull(
         meshes,
         bounds,
         buckets,
-        view_proj,
+        views,
         bounds_table,
         shape,
     } = input;
@@ -162,7 +201,7 @@ pub(crate) fn world_cull(
             instances,
             items: &items,
             buckets: &cull_buckets,
-            views: &[Frustum::from_view_proj(view_proj)],
+            views,
             bounds_table,
             shape,
         },
@@ -177,7 +216,8 @@ pub(crate) struct CullInput<'a> {
     pub(crate) items: &'a [CullItem],
     /// One entry per bucket: its `[first, first + count)` range and draw element count.
     pub(crate) buckets: &'a [CullBucket],
-    pub(crate) views: &'a [Frustum],
+    /// At most `shape.views` of them: the live views.
+    pub(crate) views: &'a [CullViewSpec],
     /// The persistent `cull::bounds_table` buffer.
     pub(crate) bounds_table: &'a wgpu::Buffer,
     pub(crate) shape: CullShape,
@@ -196,6 +236,7 @@ pub(crate) struct CullFrame {
     shape: CullShape,
     instances: u32,
     buckets: u32,
+    views: u32,
 }
 
 impl CullFrame {
@@ -207,11 +248,11 @@ impl CullFrame {
         let shape = input.shape;
         debug_assert!(input.items.len() <= shape.instances as usize);
         debug_assert!(input.buckets.len() <= shape.buckets as usize);
-        debug_assert_eq!(input.views.len(), shape.views as usize);
+        debug_assert!(input.views.len() <= shape.views as usize);
         let params = CullParams {
             instance_count: input.items.len() as u32,
             bucket_count: input.buckets.len() as u32,
-            view_count: shape.views,
+            view_count: input.views.len() as u32,
             instance_cap: shape.instances,
             bucket_cap: shape.buckets,
             word_cap: shape.words(),
@@ -221,8 +262,12 @@ impl CullFrame {
         let views: Vec<CullView> = input
             .views
             .iter()
-            .map(|f| CullView {
-                planes: f.planes().map(|p| p.to_array()),
+            .map(|v| CullView {
+                planes: v.frustum.planes().map(|p| p.to_array()),
+                casters_only: v.casters_only as u32,
+                pad0: 0,
+                pad1: 0,
+                pad2: 0,
             })
             .collect();
         let storage = |label: &str, bytes: &[u8]| {
@@ -262,7 +307,18 @@ impl CullFrame {
             shape,
             instances: input.items.len() as u32,
             buckets: input.buckets.len() as u32,
+            views: input.views.len() as u32,
         }
+    }
+
+    /// The shape whose strides place each view's slices of the output.
+    pub(crate) fn shape(&self) -> CullShape {
+        self.shape
+    }
+
+    /// The live views: the first `views()` slices of the output are written.
+    pub(crate) fn views(&self) -> u32 {
+        self.views
     }
 
     /// Runs the five dispatches in order into an open compute pass; nothing when there is no instance.
@@ -288,7 +344,7 @@ impl CullFrame {
             });
         pass.set_bind_group(shader_gen::CULL_PARAMS_GROUP, &self.inputs, &[]);
         pass.set_bind_group(shader_gen::CULL_SCRATCH_GROUP, &outputs, &[]);
-        let views = self.shape.views;
+        let views = self.views;
         let words = self.instances.div_ceil(32);
         let blocks = self.instances.div_ceil(256);
         let wg = |n: u32, size: [u32; 3]| n.div_ceil(size[0]);

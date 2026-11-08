@@ -635,15 +635,23 @@ pub struct CullShape {
     pub views: u32,
 }
 
+/// The largest storage binding the compacted-instance buffer may need: WebGPU's guaranteed
+/// `max_storage_buffer_binding_size`, which `engine_limits()` keeps.
+const CULL_INSTANCE_BINDING_MAX: u64 = 128 << 20;
+
 impl CullShape {
     /// The smallest shape holding `instances` and `buckets` for `views` views: each capacity rounds up
     /// to a power of two, with floors of 256 instances and 16 buckets so small scenes share a shape.
+    /// `views` is clamped (to at least one) so [`instance_bytes`](CullShape::instance_bytes) fits one storage
+    /// binding; a view past the clamp is not culled and draws every caster directly.
     pub fn for_counts(instances: usize, buckets: usize, views: usize) -> CullShape {
         let cap = |n: usize, floor: u32| (n.max(floor as usize).next_power_of_two()) as u32;
+        let instances = cap(instances, 256);
+        let fit = (CULL_INSTANCE_BINDING_MAX / (u64::from(instances) * 192)).max(1);
         CullShape {
-            instances: cap(instances, 256),
+            instances,
             buckets: cap(buckets, 16),
-            views: views as u32,
+            views: u64::from(views as u32).min(fit) as u32,
         }
     }
 
@@ -673,12 +681,14 @@ impl CullShape {
     }
 }
 
-/// The cull's capacities for `scene`: one view, a bucket per world draw at most (a primitive shape
-/// and a mirror twin, or an asset and its twin, each unmirrored and mirrored), and an instance per
-/// world mesh. `None` without a world mesh.
-fn cull_shape(scene: &RenderScene) -> Option<CullShape> {
+/// The cull's capacities for `scene`: the camera view plus `shadow_views` (the sun's maps, then the
+/// granted local views), a bucket per world draw at most (a primitive shape and a mirror twin, or an
+/// asset and its twin, each unmirrored and mirrored), and an instance per world mesh. `None` without a
+/// world mesh.
+fn cull_shape(scene: &RenderScene, shadow_views: usize) -> Option<CullShape> {
     let world = scene.meshes.iter().filter(|m| !m.viewmodel).count();
-    (world > 0).then(|| CullShape::for_counts(world, 2 * (3 + scene.mesh_assets.len()), 1))
+    (world > 0)
+        .then(|| CullShape::for_counts(world, 2 * (3 + scene.mesh_assets.len()), 1 + shadow_views))
 }
 
 /// What a scene's content requires of the graph's *structure* — everything but the resolution.
@@ -834,14 +844,12 @@ impl PostChain {
     /// what a given scene draws.
     pub fn for_scene(scene: &RenderScene) -> Self {
         // Grants do not depend on the edge, so the scene-implied ceiling answers "any granted?".
-        let local_shadow_atlas = {
-            let edge = QualityParams::FULL.local_shadow_atlas_size;
-            (crate::local_shadow::plan_local_shadows(scene, edge)
-                .stats
-                .granted
-                > 0)
-            .then_some(edge)
-        };
+        let local_plan = crate::local_shadow::plan_local_shadows(
+            scene,
+            QualityParams::FULL.local_shadow_atlas_size,
+        );
+        let local_shadow_atlas =
+            (local_plan.stats.granted > 0).then_some(QualityParams::FULL.local_shadow_atlas_size);
         let sun_cascades = scene
             .sun
             .as_ref()
@@ -849,6 +857,12 @@ impl PostChain {
             .and_then(|config| QualityParams::FULL.sun_cascade_count(Some(config.count)))
             // The fit refuses a degenerate camera; the chain must say no cascades there too.
             .filter(|_| crate::sun_cascade::cascade_camera(&scene.camera).is_some());
+        // The sun's shadow views: a map per cascade, else the one legacy map, else none.
+        let sun_views = match (&scene.sun, sun_cascades) {
+            (Some(_), Some(count)) => count as usize,
+            (Some(_), None) => 1,
+            (None, _) => 0,
+        };
         Self {
             ui: !scene.ui.is_empty(),
             // A sun draws a shadow map, at the extent the scene's own authoring implies. Lowering it
@@ -878,7 +892,7 @@ impl PostChain {
             // implements it, so the graph and the recorder read one function rather than two copies
             // of a conjunction.
             gi_inject: crate::gi_inject::scheduled_lattice(scene),
-            cull: cull_shape(scene),
+            cull: cull_shape(scene, sun_views + local_plan.views.len()),
             debug_lines: !scene.debug_lines.is_empty(),
             // `ssr` is a strength *and* the gate: at zero the blend takes the sky fill alone, so
             // tracing would be work with no output. Machines scale it down in `masked`.
@@ -1018,6 +1032,15 @@ impl PostChain {
                 .filter(|_| quality.gi_dynamic)
                 .map(|count| crate::gi_bake::scaled_probe_count(count, params.gi_probe_scale)),
             local_shadow_atlas: masked_atlas,
+            // Without any shadow pass only the camera view remains; otherwise the ceiling stays and a
+            // lower cascade cap leaves some slices unused.
+            cull: self.cull.map(|shape| {
+                if shadow_map.is_none() && masked_atlas.is_none() {
+                    CullShape { views: 1, ..shape }
+                } else {
+                    shape
+                }
+            }),
             ..self
         }
     }
@@ -1379,26 +1402,8 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // entry is conditional, so the recorder indexes by which flags are set rather than by a fixed
     // slot.
     let mut scene_reads = Vec::new();
-    // The depth-only shadow pass writes the shadow map with no reads; the scene pass then samples it
-    // (the read edge orders scene after shadow, `depth_only_pass_orders_before_a_later_sampler`).
-    if let Some(shadow_map) = shadow_map {
-        graph.add_external_pass_with_depth(pass::SHADOW, pass::SHADOW, vec![], vec![], shadow_map);
-        scene_reads.push(shadow_map);
-    }
-    // The local-light atlas is drawn beside the sun's map; the scene pass reads it last, so every
-    // other scene input keeps its index.
-    if let Some(atlas) = local_shadow_atlas {
-        graph.add_external_pass_with_depth(
-            pass::LOCAL_SHADOW,
-            pass::LOCAL_SHADOW,
-            vec![],
-            vec![],
-            atlas,
-        );
-    }
-    // Prepass → ssao → blur, each ordered by the next one's read, and the scene pass's read of the
-    // blurred factor is what puts the whole chain in front of it.
-    // The cull has no texture edges: its buffer edges schedule it ahead of the prepass and the scene.
+    // The cull has no texture edges: it is declared first so its buffer edges schedule it ahead of
+    // every reader: the shadow passes, the prepass and the scene.
     if let Some((scratch, instances, args)) = cull {
         graph.add_external_buffer_compute_pass(
             pass::CULL,
@@ -1407,6 +1412,39 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             vec![scratch, instances, args],
         );
     }
+    // The depth-only shadow pass writes the shadow map with no reads; the scene pass then samples it
+    // (the read edge orders scene after shadow, `depth_only_pass_orders_before_a_later_sampler`).
+    // The casters are drawn from the cull's compacted slices, so both shadow passes read its buffers
+    // and the cull schedules ahead of them.
+    if let Some(shadow_map) = shadow_map {
+        let shadow = graph.add_external_pass_with_depth(
+            pass::SHADOW,
+            pass::SHADOW,
+            vec![],
+            vec![],
+            shadow_map,
+        );
+        if let Some((_, instances, args)) = cull {
+            graph.read_buffers(shadow, &[instances, args]);
+        }
+        scene_reads.push(shadow_map);
+    }
+    // The local-light atlas is drawn beside the sun's map; the scene pass reads it last, so every
+    // other scene input keeps its index.
+    if let Some(atlas) = local_shadow_atlas {
+        let local = graph.add_external_pass_with_depth(
+            pass::LOCAL_SHADOW,
+            pass::LOCAL_SHADOW,
+            vec![],
+            vec![],
+            atlas,
+        );
+        if let Some((_, instances, args)) = cull {
+            graph.read_buffers(local, &[instances, args]);
+        }
+    }
+    // Prepass → ssao → blur, each ordered by the next one's read, and the scene pass's read of the
+    // blurred factor is what puts the whole chain in front of it.
     if let Some(ao) = ao {
         let prepass = graph.add_external_pass_with_depth(
             pass::PREPASS,
@@ -2158,6 +2196,129 @@ mod tests {
         assert!(!pass_names(&bare).contains(&"cull") && bare.buffers().is_empty());
         let (capture, _, _) = build_probe_capture_graph(64, PostChain::default());
         assert!(!pass_names(&capture).contains(&"cull") && capture.buffers().is_empty());
+    }
+
+    fn cull_shadow_scene() -> RenderScene {
+        use crate::scene::{RenderCamera, SunData, aspect_ratio};
+        use ludion_core::math::glam::{Mat4, Vec3};
+        let mut scene = RenderScene::empty((64, 64));
+        scene.camera = RenderCamera {
+            view: Mat4::look_at_rh(Vec3::ZERO, -Vec3::Z, Vec3::Y),
+            projection: Mat4::perspective_rh(1.0, aspect_ratio((64, 64)), 0.1, 100.0),
+            position: Vec3::ZERO,
+        };
+        scene.meshes.push(cull_mesh(false));
+        scene.sun = Some(SunData {
+            direction: -Vec3::Y,
+            color: Vec3::ONE,
+            light_space: Mat4::IDENTITY,
+            bias: 0.0,
+            angular_radius: 0.0,
+            cascades: None,
+        });
+        scene
+    }
+
+    fn with_point_light(scene: &mut RenderScene) {
+        use crate::scene::{LocalShadowData, PointLightData};
+        use ludion_core::math::glam::Vec3;
+        scene.lights.push(PointLightData {
+            position: Vec3::new(0.0, 0.0, -5.0),
+            color: Vec3::ONE,
+            intensity: 1.0,
+            range: 3.0,
+            dynamic: false,
+            shadow: Some(LocalShadowData {
+                bias: 0.05,
+                near: 0.1,
+                distance: None,
+                fade: 0.0,
+            }),
+        });
+    }
+
+    /// The cull has one view for the camera plus one per shadow view: one for a legacy sun map, one
+    /// per cascade, six for a point light; masking every shadow off leaves the camera alone.
+    #[test]
+    fn the_cull_counts_the_camera_and_every_shadow_view() {
+        let mut scene = cull_shadow_scene();
+        let views = |scene: &RenderScene| PostChain::for_scene(scene).cull.unwrap().views;
+        assert_eq!(views(&scene), 2, "camera + the legacy sun map");
+        scene.sun.as_mut().unwrap().cascades = Some(crate::scene::SunCascadeConfig {
+            count: 3,
+            shadow_distance: 20.0,
+            splits: None,
+            shadow_near: 10.0,
+            shadow_far: 10.0,
+        });
+        let chain = PostChain::for_scene(&scene);
+        assert_eq!(chain.sun_cascades, Some(3));
+        assert_eq!(chain.cull.unwrap().views, 4, "camera + 3 cascades");
+        scene.sun.as_mut().unwrap().cascades = None;
+        with_point_light(&mut scene);
+        let chain = PostChain::for_scene(&scene);
+        assert!(chain.local_shadow_atlas.is_some());
+        assert_eq!(chain.cull.unwrap().views, 1 + 1 + 6);
+
+        let off = Quality {
+            shadows: false,
+            ..Quality::FULL
+        };
+        let masked = chain.masked(&off, &QualityParams::FULL);
+        assert!(masked.shadow_map.is_none() && masked.local_shadow_atlas.is_none());
+        assert_eq!(masked.cull.unwrap().views, 1);
+        let on = chain.masked(&Quality::FULL, &QualityParams::FULL);
+        assert_eq!(on.cull, chain.cull);
+    }
+
+    /// `shadow` and `local_shadow` read the cull's buffers, so the cull schedules ahead of both.
+    #[test]
+    fn the_shadow_passes_read_the_cull_and_schedule_after_it() {
+        let mut scene = cull_shadow_scene();
+        with_point_light(&mut scene);
+        let chain = PostChain::for_scene(&scene);
+        let (graph, _) = build_frame_graph(FrameSize::native(64, 64), chain);
+        let names = pass_names(&graph);
+        let at = |n: &str| names.iter().position(|p| *p == n).unwrap();
+        assert!(
+            at("cull") < at("shadow") && at("cull") < at("local_shadow"),
+            "{names:?}"
+        );
+        for name in ["shadow", "local_shadow"] {
+            let pass = graph.passes().iter().find(|p| p.name == name).unwrap();
+            assert_eq!(pass.buffer_reads.len(), 2, "{name} reads instances + args");
+        }
+        let (without, _) = build_frame_graph(
+            FrameSize::native(64, 64),
+            PostChain {
+                cull: None,
+                ..chain
+            },
+        );
+        for p in without.passes() {
+            assert!(p.buffer_reads.is_empty(), "{}", p.name);
+        }
+    }
+
+    /// The compacted-instance buffer stays within one storage binding: the view count clamps, never
+    /// below one.
+    #[test]
+    fn the_cull_view_count_clamps_to_one_storage_binding() {
+        assert_eq!(
+            CULL_INSTANCE_BINDING_MAX,
+            ludion_render_graph::engine_limits().max_storage_buffer_binding_size,
+            "the WebGPU floor engine_limits keeps"
+        );
+        // 16 384 instances are 3 MiB a view: 128 MiB holds 42 of them, and 60 are requested.
+        let shape = CullShape::for_counts(16_384, 6, 60);
+        assert_eq!(shape.views, 42);
+        assert!(shape.instance_bytes() <= CULL_INSTANCE_BINDING_MAX);
+        assert_eq!(
+            CullShape::for_counts(1_000_000, 6, 7).views,
+            1,
+            "never below one"
+        );
+        assert_eq!(CullShape::for_counts(256, 6, 7).views, 7);
     }
 
     /// The scene pass writes the capture's fourth, emissive target, and the face pass copies it out

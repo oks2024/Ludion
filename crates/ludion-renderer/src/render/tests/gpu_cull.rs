@@ -6,12 +6,14 @@ use wgpu::util::DeviceExt;
 use super::skin_bounds::bounded_skin_quad;
 use super::*;
 use crate::cull::{Aabb, CullVolume, Frustum, bounds_table, cull, instance_bounds};
-use crate::gpu_cull::{CullFrame, CullInput, CullPipelines, CullTargets, cull_item};
+use crate::gpu_cull::{CullFrame, CullInput, CullPipelines, CullTargets, CullViewSpec, cull_item};
 use crate::graph::CullShape;
 use crate::shader_gen::{CullBucket, CullItem};
 
 const INSTANCE_BYTES: usize = std::mem::size_of::<MeshInstanceRaw>();
 const VIEWS: usize = 3;
+/// The view that admits casters only, as every shadow view does.
+const CASTERS_ONLY_VIEW: usize = 2;
 
 struct Lcg(u64);
 
@@ -150,6 +152,7 @@ fn fixture(seed: u64, n: usize) -> Fixture {
                 let model = random_model(&mut rng);
                 let mut mesh = skin_instance(model, 0);
                 mesh.shape = shape;
+                mesh.cast_shadows = rng.below(4) != 0;
                 let mut pose = None;
                 let kind = match shape {
                     MeshShape::Asset(1) if rng.below(8) == 0 => {
@@ -216,7 +219,12 @@ fn read_back(renderer: &Renderer, buffer: &wgpu::Buffer) -> Vec<u8> {
 }
 
 /// Runs the kernel on fresh buffers and returns `(compacted instances, args words)`.
-fn run_cull(renderer: &Renderer, fx: &Fixture, assets: &[AssetBounds]) -> (Vec<u8>, Vec<u32>) {
+fn run_cull(
+    renderer: &Renderer,
+    fx: &Fixture,
+    assets: &[AssetBounds],
+    live: usize,
+) -> (Vec<u8>, Vec<u32>) {
     let device = renderer.gpu.device();
     let bounds = instance_bounds(&fx.meshes, assets, &fx.palette);
     let items: Vec<CullItem> = fx
@@ -238,6 +246,16 @@ fn run_cull(renderer: &Renderer, fx: &Fixture, assets: &[AssetBounds]) -> (Vec<u
         })
         .collect();
     let shape = CullShape::for_counts(fx.meshes.len(), buckets.len(), VIEWS);
+    let views: Vec<CullViewSpec> = fx
+        .views
+        .iter()
+        .enumerate()
+        .map(|(v, &frustum)| CullViewSpec {
+            frustum,
+            casters_only: v == CASTERS_ONLY_VIEW,
+        })
+        .take(live)
+        .collect();
     let storage = |bytes: &[u8]| {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
@@ -268,7 +286,7 @@ fn run_cull(renderer: &Renderer, fx: &Fixture, assets: &[AssetBounds]) -> (Vec<u
             instances: &instances,
             items: &items,
             buckets: &buckets,
-            views: &fx.views,
+            views: &views,
             bounds_table: &table,
             shape,
         },
@@ -298,9 +316,10 @@ fn run_cull(renderer: &Renderer, fx: &Fixture, assets: &[AssetBounds]) -> (Vec<u
     (read_back(renderer, &out), args)
 }
 
-/// **The GPU cull is the CPU oracle, compacted stably.** Per seed and view: every args slot is
+/// **The GPU cull is the CPU oracle, compacted stably.** Per seed and live view: every args slot is
 /// `[elements, visible, 0, 0, 0]`, and each bucket's compacted range is the oracle's survivors in
-/// input order, byte for byte; a second run on fresh buffers reads back the same bytes.
+/// input order, byte for byte; a casters-only view also drops every non-caster. A second run on fresh
+/// buffers reads back the same bytes, and one seed runs fewer live views than the shape holds.
 #[test]
 fn needs_gpu_the_cull_pass_matches_the_cpu_oracle_and_compacts_in_input_order() {
     let Some(renderer) = skip_or_renderer("the_cull_pass_matches_the_cpu_oracle") else {
@@ -309,7 +328,8 @@ fn needs_gpu_the_cull_pass_matches_the_cpu_oracle_and_compacts_in_input_order() 
     let assets = assets();
     let sizes = [1usize, 31, 32, 33, 255, 256, 257, 3000];
     let mut seen = std::collections::BTreeSet::new();
-    for seed in 0..33u64 {
+    let mut flag_culled = false;
+    for seed in 0..34u64 {
         let n = match seed {
             0..=7 => sizes[seed as usize],
             32 => 70_000,
@@ -317,15 +337,20 @@ fn needs_gpu_the_cull_pass_matches_the_cpu_oracle_and_compacts_in_input_order() 
         };
         let fx = fixture(seed, n);
         let shape = CullShape::for_counts(n, SHAPES.len(), VIEWS);
-        let (out, args) = run_cull(&renderer, &fx, &assets);
+        let live = if seed == 33 { VIEWS - 1 } else { VIEWS };
+        let (out, args) = run_cull(&renderer, &fx, &assets, live);
         let bounds = instance_bounds(&fx.meshes, &assets, &fx.palette);
-        for (v, frustum) in fx.views.iter().enumerate() {
+        for (v, frustum) in fx.views.iter().enumerate().take(live) {
             let mut mask = vec![false; n];
             for i in cull(&bounds, &CullVolume::Frustum(*frustum)) {
                 mask[i as usize] = true;
             }
             for (i, kind) in fx.kinds.iter().enumerate() {
                 seen.insert((*kind as u8, mask[i]));
+                if v == CASTERS_ONLY_VIEW && !fx.meshes[i].cast_shadows {
+                    flag_culled |= mask[i];
+                    mask[i] = false;
+                }
             }
             for (b, &(first, count)) in fx.buckets.iter().enumerate() {
                 let survivors: Vec<&MeshInstanceRaw> = (first..first + count)
@@ -350,7 +375,7 @@ fn needs_gpu_the_cull_pass_matches_the_cpu_oracle_and_compacts_in_input_order() 
                 );
             }
         }
-        let (again_out, again_args) = run_cull(&renderer, &fx, &assets);
+        let (again_out, again_args) = run_cull(&renderer, &fx, &assets, live);
         assert!(
             again_out == out && again_args == args,
             "seed {seed}: a rerun reads back different bytes"
@@ -365,6 +390,10 @@ fn needs_gpu_the_cull_pass_matches_the_cpu_oracle_and_compacts_in_input_order() 
         }
     }
     assert!(seen.contains(&(Kind::Always as u8, true)));
+    assert!(
+        flag_culled,
+        "no non-caster the frustum admits was culled by the casters-only view"
+    );
 }
 
 /// The on/off fixture: primitives, a rigid asset, a skinned asset, mirrored copies, a viewmodel gun,
@@ -502,4 +531,206 @@ fn needs_gpu_the_frame_chain_follows_the_culling_switch() {
     let mut gun_only = scene.clone();
     gun_only.meshes.retain(|m| m.viewmodel);
     assert!(renderer.frame_chain(&gun_only).cull.is_none());
+}
+
+fn casting_light() -> Option<crate::scene::LocalShadowData> {
+    Some(crate::scene::LocalShadowData {
+        bias: 0.05,
+        near: 0.1,
+        distance: None,
+        fade: 0.0,
+    })
+}
+
+/// The shadow fixture: the on/off row (primitives, a rigid and a skinned asset, mirrored copies, a
+/// gun) over a ground, with a shadowed spot and a shadowed point light, and a sun that is either the
+/// one anchored map or three cascades. One caster inside the point light's range casts no shadow.
+fn shadow_scene(cascades: bool) -> RenderScene {
+    let mut scene = onoff_scene((96, 96));
+    scene.camera.projection = Mat4::perspective_rh(
+        60.0_f32.to_radians(),
+        crate::scene::aspect_ratio((96, 96)),
+        0.1,
+        1000.0,
+    );
+    scene.meshes.push(ground(80.0));
+    scene.meshes[10].cast_shadows = false;
+    let sun = scene.sun.as_mut().unwrap();
+    if cascades {
+        sun.cascades = Some(crate::scene::SunCascadeConfig {
+            count: 3,
+            shadow_distance: 40.0,
+            splits: None,
+            shadow_near: -60.0,
+            shadow_far: 60.0,
+        });
+    }
+    let mut spot = spot_light(
+        Vec3::new(2.0, 6.0, -12.0),
+        Vec3::NEG_Y,
+        30.0,
+        14.0,
+        20.0,
+        40.0,
+    );
+    spot.shadow = casting_light();
+    scene.spot_lights.push(spot);
+    let mut point = point_light(Vec3::new(-11.0, 2.0, -13.0), 30.0, 9.0);
+    point.shadow = casting_light();
+    scene.lights.push(point);
+    scene
+}
+
+/// The oracle's culled counts for a prepared frame: the most casters any cascade drops, and the
+/// most any local view drops, so a test can prove it exercises both.
+fn shadow_culls(renderer: &Renderer, scene: &RenderScene) -> (usize, usize) {
+    let recorder = renderer
+        .prepare_frame(scene, FrameSize::native(96, 96), None)
+        .expect("prepares");
+    let assets: Vec<AssetBounds> = scene
+        .mesh_assets
+        .iter()
+        .map(|m| AssetBounds::of_mesh(m))
+        .collect();
+    let bounds = instance_bounds(&scene.meshes, &assets, &scene.bone_palette);
+    let dropped = |kept: usize| scene.meshes.len() - kept;
+    let cascade = recorder.sun_cascades.as_ref().map_or(0, |fit| {
+        crate::sun_cascade::sun_cascade_casters(fit, &bounds)
+            .iter()
+            .map(|kept| dropped(kept.len()))
+            .max()
+            .unwrap_or(0)
+    });
+    let local = recorder.local_shadow.as_ref().map_or(0, |plan| {
+        plan.views
+            .iter()
+            .map(|v| dropped(cull(&bounds, &v.cull).len()))
+            .max()
+            .unwrap_or(0)
+    });
+    (cascade, local)
+}
+
+/// **Shadow views cull on the GPU without changing a byte.** A legacy sun and three cascades, each
+/// with a spot and a point light, at two cameras: the frame with the one `cull` node feeding the
+/// shadow passes equals the direct-draw frame. The oracle confirms a cascade view and a local view
+/// each really drop a caster, and the graph confirms the cull spans the camera, sun and local views.
+#[test]
+fn needs_gpu_shadow_culling_on_and_off_render_identical_bytes() {
+    let Some(mut renderer) = skip_or_renderer("shadow_culling_on_and_off_identical") else {
+        return;
+    };
+    let size = FrameSize::native(96, 96);
+    for cascades in [false, true] {
+        let near = shadow_scene(cascades);
+        let mut far = near.clone();
+        second_camera(&mut far);
+        for (name, scene) in [("origin", &near), ("side", &far)] {
+            let label = format!("cascades {cascades} camera {name}");
+            let (cascade_drops, local_drops) = shadow_culls(&renderer, scene);
+            assert!(local_drops > 0, "{label}: no local view culls anything");
+            assert!(
+                !cascades || cascade_drops > 0,
+                "{label}: no cascade culls anything"
+            );
+            renderer.set_frustum_culling(true);
+            let shape = renderer.frame_chain(scene).cull.expect("culled");
+            let local = renderer
+                .prepare_frame(scene, size, None)
+                .unwrap()
+                .local_shadow
+                .map_or(0, |plan| plan.views.len());
+            assert_eq!(
+                shape.views as usize,
+                1 + if cascades { 3 } else { 1 } + local,
+                "{label}"
+            );
+            assert_eq!(renderer.cull_over_cap_views(), 0, "{label}");
+            let on = renderer.render(scene, size).expect("culled render");
+            renderer.set_frustum_culling(false);
+            let off = renderer.render(scene, size).expect("direct render");
+            assert_eq!(renderer.cull_over_cap_views(), 0);
+            assert_eq!(on.rgba, off.rgba, "{label}: culling changed the image");
+        }
+    }
+}
+
+/// The culled shadow render is stable over 20 repeats, for both sun shapes.
+#[test]
+fn needs_gpu_the_culled_shadow_render_repeats_identically() {
+    let Some(renderer) = skip_or_renderer("the_culled_shadow_render_repeats_identically") else {
+        return;
+    };
+    let size = FrameSize::native(96, 96);
+    for cascades in [false, true] {
+        let scene = shadow_scene(cascades);
+        let first = renderer.render(&scene, size).expect("first render");
+        for run in 1..20 {
+            let again = renderer.render(&scene, size).expect("repeat render");
+            assert_eq!(
+                first.rgba, again.rgba,
+                "cascades {cascades}: repeat {run} differs"
+            );
+        }
+    }
+}
+
+/// **Crossing the capacity cap changes no byte.** More than 16 384 small instances make each view's
+/// slice of the compacted buffer large, and ten shadowed point lights ask for sixty local views, so
+/// the views requested exceed what one 128 MiB storage binding holds. The shape clamps, the frame
+/// reports exactly the views past it, and the views past the cap draw directly: the image equals the
+/// direct-draw frame.
+#[test]
+fn needs_gpu_views_past_the_cull_capacity_draw_directly_and_change_nothing() {
+    let Some(mut renderer) = skip_or_renderer("views_past_the_cull_capacity") else {
+        return;
+    };
+    let size = FrameSize::native(96, 96);
+    let mut scene = shadow_scene(false);
+    scene.meshes.clear();
+    scene.meshes.push(ground(80.0));
+    for i in 0..16_384usize {
+        let (x, z) = (
+            (i % 128) as f32 * 0.25 - 16.0,
+            -8.0 - (i / 128) as f32 * 0.25,
+        );
+        scene
+            .meshes
+            .push(slab(Vec3::new(x, -0.9, z), 0.15, [0.4, 0.3, 0.2]));
+    }
+    scene.spot_lights.clear();
+    scene.lights.clear();
+    for i in 0..10usize {
+        let mut point = point_light(
+            Vec3::new(-9.0 + 2.0 * i as f32, 0.5, -10.0 - (i % 3) as f32),
+            20.0,
+            4.0,
+        );
+        point.shadow = casting_light();
+        scene.lights.push(point);
+    }
+    renderer.set_frustum_culling(true);
+    let chain = renderer.frame_chain(&scene);
+    let shape = chain.cull.expect("culled");
+    let requested = 1
+        + 1
+        + renderer
+            .prepare_frame(&scene, size, None)
+            .unwrap()
+            .local_shadow
+            .map_or(0, |plan| plan.views.len());
+    assert!(
+        requested > shape.views as usize,
+        "the scene must ask for more views ({requested}) than the cap holds ({})",
+        shape.views
+    );
+    assert!(shape.instance_bytes() <= 128 << 20);
+    let on = renderer.render(&scene, size).expect("capped render");
+    assert_eq!(
+        renderer.cull_over_cap_views() as usize,
+        requested - shape.views as usize
+    );
+    renderer.set_frustum_culling(false);
+    let off = renderer.render(&scene, size).expect("direct render");
+    assert_eq!(on.rgba, off.rgba, "the cap changed the image");
 }

@@ -158,8 +158,8 @@ fn a_particle_scene_dumps_the_unchanged_minimal_graph() {
     );
 }
 
-/// A scene carrying a sun dumps its real six-pass shape: the depth-only `shadow` pass first, with
-/// the `shadow_map` resource the scene pass samples.
+/// A scene carrying a sun dumps its real shape: the `cull` first, then the depth-only `shadow` pass it
+/// feeds, with the `shadow_map` resource the scene pass samples.
 #[test]
 fn a_sun_scene_dumps_the_shadow_pass() {
     let json = ludion_engine::dump_scene_graph_json(
@@ -172,8 +172,8 @@ fn a_sun_scene_dumps_the_shadow_pass() {
     assert_eq!(
         scheduled_passes(&json),
         [
-            "shadow",
             "cull",
+            "shadow",
             "scene",
             "reflections",
             "transparents",

@@ -25,12 +25,12 @@ mod mesh_batch;
 use crate::cache_eviction::CacheEviction;
 use crate::compressed::{self, CompressedUploadError};
 use crate::compute_shader::ComputeShader;
-use crate::cull::{Aabb, AssetBounds, bounds_table, cull, instance_bounds, visible_ranges};
+use crate::cull::{AssetBounds, CullVolume, bounds_table, instance_bounds};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
 use crate::gpu_cull::{
-    CullFrame, CullPipelines, CullTargets, WorldBucket, WorldCullInput, world_cull,
+    CullFrame, CullPipelines, CullTargets, WorldBucket, WorldCullInput, cull_views, world_cull,
 };
 use crate::graph::{
     AntiAliasing, FrameSize, PostChain, build_frame_graph, build_probe_capture_graph, pass,
@@ -60,7 +60,10 @@ use crate::sun_cascade::{
 };
 use crate::voxel_bake::VoxelBake;
 pub(crate) use mesh_batch::MeshInstanceRaw;
-use mesh_batch::{MeshAssetDraw, MeshBatch, MeshDraw, build_mesh_batch, culled_buffers};
+use mesh_batch::{
+    Culled, DrawSource, MeshAssetDraw, MeshBatch, MeshDraw, SUN_CULL_VIEW, all_ranges,
+    build_mesh_batch, culled_buffers,
+};
 #[cfg(test)]
 use mesh_batch::{
     bucket_asset_instances, instance_fade, instance_flash, instance_material, instance_normal_lanes,
@@ -510,6 +513,10 @@ pub struct Renderer {
     /// draw and sample a hand-built cascade. It does not exist outside `cfg(test)`.
     #[cfg(test)]
     sun_cascade_override: std::cell::Cell<Option<SunCascades>>,
+    /// The shadow views the last prepared main frame asked of the cull beyond its capacity
+    /// ([`cull_over_cap_views`](Renderer::cull_over_cap_views)); `Cell` because the render entry
+    /// points take `&self`.
+    cull_over_cap: std::cell::Cell<u32>,
 }
 
 impl Renderer {
@@ -684,6 +691,7 @@ impl Renderer {
             cluster_build: std::cell::Cell::new(ClusterBuild::Culled),
             #[cfg(test)]
             sun_cascade_override: std::cell::Cell::new(None),
+            cull_over_cap: std::cell::Cell::new(0),
         })
     }
 
@@ -1061,6 +1069,14 @@ impl Renderer {
     /// Whether the frame culls on the GPU.
     pub fn frustum_culling(&self) -> bool {
         self.frustum_culling
+    }
+
+    /// How many views the last prepared main frame wanted culled beyond the cull's capacity (the
+    /// instance buffer must fit one storage binding). Those views draw every caster directly, so the
+    /// image is unchanged and only the saving is lost. Views fill in the order camera, sun, local, so
+    /// the count is deterministic; 0 with culling off.
+    pub fn cull_over_cap_views(&self) -> u32 {
+        self.cull_over_cap.get()
     }
 
     /// The post chain a main-frame scene runs: the scene's authored effects, masked by the machine's
@@ -1498,7 +1514,13 @@ impl Renderer {
         let chain = PostChain::for_scene(face_scene).masked(&self.quality, &self.quality_params);
         let (graph, output, emissive) = build_probe_capture_graph(face_size, chain);
         let schedule = schedule(&graph).expect("the probe capture graph schedules");
-        let recorder = self.prepare_frame_with(face_scene, size, None, CacheEviction::Keep)?;
+        // The capture graph declares no cull, so the face prepares none and its shadow pass draws directly.
+        let chain = PostChain {
+            cull: None,
+            ..self.frame_chain(face_scene)
+        };
+        let recorder =
+            self.prepare_frame_with(face_scene, size, None, CacheEviction::Keep, chain)?;
         self.gpu.execute_into(
             &schedule,
             &recorder,
@@ -1577,26 +1599,28 @@ impl Renderer {
         size: FrameSize,
         observer: Option<&mut dyn FrameObserver>,
     ) -> Result<FrameRecorder<'_>, Diagnostic> {
-        self.prepare_frame_with(scene, size, observer, CacheEviction::Evict)
+        self.prepare_frame_with(
+            scene,
+            size,
+            observer,
+            CacheEviction::Evict,
+            self.frame_chain(scene),
+        )
     }
 
-    /// [`prepare_frame`](Self::prepare_frame) with the cache policy named: a probe capture passes
-    /// [`CacheEviction::Keep`] so its derived scene, which leaves out decals and reads a frozen
-    /// world, cannot evict what the main frame holds.
+    /// [`prepare_frame`](Self::prepare_frame) with the cache policy and the chain named: a probe
+    /// capture passes [`CacheEviction::Keep`] so its derived scene, which leaves out decals and reads a
+    /// frozen world, cannot evict what the main frame holds, and a chain without a cull.
     fn prepare_frame_with(
         &self,
         scene: &RenderScene,
         size: FrameSize,
         mut observer: Option<&mut dyn FrameObserver>,
         eviction: CacheEviction,
+        chain: PostChain,
     ) -> Result<FrameRecorder<'_>, Diagnostic> {
         let device = self.gpu.device();
         self.probes.resolve(self, scene, &mut observer)?;
-        // The one place "which conditional passes does this scene need" is answered, shared with the
-        // graph the executor is about to build — masking included, so a recorder can never disagree
-        // with it about which inputs a pass was handed.
-        let chain = self.frame_chain(scene);
-
         // Camera uniform.
         let view_proj = scene.depth_view_proj();
         let camera_raw = Camera {
@@ -1894,16 +1918,40 @@ impl Renderer {
                 .is_none_or(|plan| !plan.views.is_empty()),
             "the graph schedules local_shadow exactly when a light is granted a view",
         );
-        let caster_bounds =
-            if local_shadow.is_some() || sun_cascades.is_some() || chain.cull.is_some() {
-                let asset_bounds: Vec<AssetBounds> = mesh_assets
-                    .iter()
-                    .map(|asset| asset.bounds.clone())
-                    .collect();
-                instance_bounds(&scene.meshes, &asset_bounds, &scene.bone_palette)
-            } else {
-                Vec::new()
-            };
+        // Only the cull reads the bounds; a frame without one draws its casters directly.
+        let caster_bounds = if chain.cull.is_some() {
+            let asset_bounds: Vec<AssetBounds> = mesh_assets
+                .iter()
+                .map(|asset| asset.bounds.clone())
+                .collect();
+            instance_bounds(&scene.meshes, &asset_bounds, &scene.bone_palette)
+        } else {
+            Vec::new()
+        };
+        // The sun's shadow maps, in the order the shadow passes address them: each cascade, else the
+        // one anchored map.
+        let sun_maps: Vec<Mat4> = match (&sun_cascades, chain.shadow_map, &scene.sun) {
+            (Some(fit), _, _) => fit.cascades[..fit.count as usize]
+                .iter()
+                .map(|cascade| cascade.light_space)
+                .collect(),
+            (None, Some(_), Some(sun)) => vec![sun.light_space],
+            _ => Vec::new(),
+        };
+        let local_cull_base = 1 + sun_maps.len() as u32;
+        let local_frusta = local_shadow
+            .iter()
+            .flat_map(|plan| &plan.views)
+            .map(|view| {
+                let CullVolume::Frustum(frustum) = view.cull;
+                frustum
+            });
+        let (cull_views, over_cap) = chain.cull.map_or_else(Default::default, |shape| {
+            cull_views(view_proj, &sun_maps, local_frusta, shape)
+        });
+        if chain.cull.is_some() || matches!(eviction, CacheEviction::Evict) {
+            self.cull_over_cap.set(over_cap);
+        }
         // A scene whose only world meshes draw nothing (an empty or unknown asset) packs no
         // instances: the pass is still scheduled, and records as an empty compute pass.
         let cull = chain
@@ -1941,7 +1989,7 @@ impl Renderer {
                         meshes: &scene.meshes,
                         bounds: &caster_bounds,
                         buckets: &buckets,
-                        view_proj,
+                        views: &cull_views,
                         bounds_table: &cull_bounds_buf,
                         shape,
                     },
@@ -1952,10 +2000,6 @@ impl Renderer {
         } else {
             scene.meshes.iter().map(|m| m.cast_shadows).collect()
         };
-        let sun_cascade_casters: Vec<Vec<u32>> =
-            sun_cascades.as_ref().map_or_else(Vec::new, |fit| {
-                crate::sun_cascade::sun_cascade_casters(fit, &caster_bounds)
-            });
         let (local_views, light_shadow) = local_shadow_tables(
             local_shadow.as_ref(),
             scene.lights.len() + scene.spot_lights.len(),
@@ -2030,9 +2074,8 @@ impl Renderer {
             local_shadow,
             sun_cascades,
             sun_lanes,
-            sun_cascade_casters,
+            local_cull_base,
             sun_tile: chain.shadow_map.unwrap_or_default(),
-            caster_bounds,
             casts,
             ground_marker_draw,
             debug_line_draw,
@@ -3472,11 +3515,11 @@ struct FrameRecorder<'a> {
     sun_cascades: Option<SunCascades>,
     /// The fit packed for the mesh `Sun` uniform and the shafts march; count 0 without a fit.
     sun_lanes: SunCascadeLanes,
-    /// Per fitted cascade, the caster indices inside its box (empty without a fit).
-    sun_cascade_casters: Vec<Vec<u32>>,
+    /// The cull view of the first granted local shadow view: view 0 is the camera and the sun's maps
+    /// follow it.
+    local_cull_base: u32,
     /// The sun atlas's tile edge, the chain's `shadow_map`.
     sun_tile: u32,
-    caster_bounds: Vec<Option<Aabb>>,
     /// The persistent object-space box table, one row per [`crate::cull::bounds_slot`]; the cull
     /// binds it, and the table tests read it back.
     #[cfg_attr(not(test), expect(dead_code, reason = "the cull binds it at prepare"))]
@@ -3666,6 +3709,7 @@ impl FrameRecorder<'_> {
         if let Some(cascades) = &self.sun_cascades {
             return self.record_sun_cascades(pass, cascades);
         }
+        let culled = culled_buffers(pass.buffer_reads, self.cull.as_ref());
         let depth_view = pass
             .depth
             .expect("the shadow pass declares a depth attachment");
@@ -3699,10 +3743,10 @@ impl FrameRecorder<'_> {
         let mut bound = CasterPipeline::default();
         rp.set_pipeline(self.caster_pipeline(bound));
         rp.set_bind_group(SHADOW_VIEW_GROUP, &shadow_view_bg, &[]);
-        // Every instance of every draw: `sources` is parallel to the instance buffer.
         self.draw_casters(
             &mut rp,
-            |s| std::iter::once(0..s.len() as u32).collect(),
+            all_ranges,
+            culled.map(|c| (c, SUN_CULL_VIEW)),
             &mut bound,
         );
     }
@@ -3728,7 +3772,7 @@ impl FrameRecorder<'_> {
     /// the same restriction.
     fn record_prepass(&self, pass: &mut RecordedPass<'_>) {
         // The graph schedules the cull ahead of this pass exactly when it declares the read.
-        let culled = culled_buffers(pass.buffer_reads);
+        let culled = culled_buffers(pass.buffer_reads, self.cull.as_ref());
         let depth_view = pass.depth.expect("the prepass declares a depth attachment");
         let target = pass.colors()[0].view;
 
@@ -3771,8 +3815,12 @@ impl FrameRecorder<'_> {
             }
             let mb = self.r.mesh_of(draw.shape);
             rp.set_vertex_buffer(0, mb.buffer.slice(..));
-            let (instances, indirect) = draw.source(culled);
-            rp.set_vertex_buffer(1, instances.slice(draw.instance_bytes()));
+            let DrawSource {
+                instances,
+                bytes,
+                indirect,
+            } = draw.source(culled, 0);
+            rp.set_vertex_buffer(1, instances.slice(bytes));
             match indirect {
                 Some((args, at)) => rp.draw_indirect(args, at),
                 None => rp.draw(0..mb.vertex_count, 0..draw.count),
@@ -3785,8 +3833,12 @@ impl FrameRecorder<'_> {
             }
             rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
-            let (instances, indirect) = draw.source(culled);
-            rp.set_vertex_buffer(1, instances.slice(draw.instance_bytes()));
+            let DrawSource {
+                instances,
+                bytes,
+                indirect,
+            } = draw.source(culled, 0);
+            rp.set_vertex_buffer(1, instances.slice(bytes));
             rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
             match indirect {
                 Some((args, at)) => rp.draw_indexed_indirect(args, at),
@@ -4064,7 +4116,7 @@ impl FrameRecorder<'_> {
         // because `composite` reads this buffer on every frame — exactly as it owns the color
         // target's clear color.
         // The graph schedules the cull ahead of this pass exactly when it declares the read.
-        let culled = culled_buffers(pass.buffer_reads);
+        let culled = culled_buffers(pass.buffer_reads, self.cull.as_ref());
         let depth_view = pass
             .depth
             .expect("the scene pass declares a depth attachment");
@@ -4144,8 +4196,12 @@ impl FrameRecorder<'_> {
             // binds the all-defaults group whose zero `flags` keep the shader on its untextured path.
             rp.set_bind_group(MATERIAL_GROUP, &self.r.default_material_bg, &[]);
             rp.set_vertex_buffer(0, mb.buffer.slice(..));
-            let (instances, indirect) = draw.source(culled);
-            rp.set_vertex_buffer(1, instances.slice(draw.instance_bytes()));
+            let DrawSource {
+                instances,
+                bytes,
+                indirect,
+            } = draw.source(culled, 0);
+            rp.set_vertex_buffer(1, instances.slice(bytes));
             match indirect {
                 Some((args, at)) => rp.draw_indirect(args, at),
                 None => rp.draw(0..mb.vertex_count, 0..draw.count),
@@ -4165,8 +4221,12 @@ impl FrameRecorder<'_> {
             }
             rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
-            let (instances, indirect) = draw.source(culled);
-            rp.set_vertex_buffer(1, instances.slice(draw.instance_bytes()));
+            let DrawSource {
+                instances,
+                bytes,
+                indirect,
+            } = draw.source(culled, 0);
+            rp.set_vertex_buffer(1, instances.slice(bytes));
             rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
             match indirect {
                 Some((args, at)) => rp.draw_indexed_indirect(args, at),
@@ -4336,16 +4396,18 @@ impl FrameRecorder<'_> {
             rp.set_viewport(x as f32, y as f32, tile as f32, tile as f32, 0.0, 1.0);
             rp.set_scissor_rect(x, y, tile, tile);
             rp.set_bind_group(SHADOW_VIEW_GROUP, view_bg, &[]);
-            self.draw_casters(&mut rp, |s| kept_ranges(s, &ds.exclude), &mut bound);
+            self.draw_casters(&mut rp, |s| kept_ranges(s, &ds.exclude), None, &mut bound);
         }
     }
 
     /// The local-light shadow pass (present only when a light is granted a view): each granted view
     /// drawn depth-only (plus the cutout caster for mask meshes) into its tile of the graph-owned
-    /// atlas, with the sun shadow's pipelines and instance buffers. Casters are culled per view; a
-    /// skinned instance by its posed joint bounds, or drawn always when its asset has none. Clears
-    /// depth to 1.0, so an ungranted tile reads as unoccluded. The sun's pass is untouched.
+    /// atlas, with the sun shadow's pipelines and instance buffers. The GPU cull compacts the casters of
+    /// each view (a skinned instance by its posed joint bounds, always when its asset has none); a view
+    /// past the cull's capacity draws every caster. Clears depth to 1.0, so an ungranted tile reads as
+    /// unoccluded. The sun's pass is untouched.
     fn record_local_shadow(&self, pass: &mut RecordedPass<'_>) {
+        let culled = culled_buffers(pass.buffer_reads, self.cull.as_ref());
         let depth_view = pass
             .depth
             .expect("the local shadow pass declares a depth attachment");
@@ -4377,8 +4439,7 @@ impl FrameRecorder<'_> {
 
         let mut bound = CasterPipeline::default();
         rp.set_pipeline(self.caster_pipeline(bound));
-        let mut visible = vec![false; self.caster_bounds.len()];
-        for (view, view_bg) in plan.views.iter().zip(&view_bgs) {
+        for (index, (view, view_bg)) in plan.views.iter().zip(&view_bgs).enumerate() {
             let rect = view.rect;
             rp.set_viewport(
                 rect.x as f32,
@@ -4390,11 +4451,12 @@ impl FrameRecorder<'_> {
             );
             rp.set_scissor_rect(rect.x, rect.y, rect.size, rect.size);
             rp.set_bind_group(SHADOW_VIEW_GROUP, view_bg, &[]);
-            visible.fill(false);
-            for index in cull(&self.caster_bounds, &view.cull) {
-                visible[index as usize] = true;
-            }
-            self.draw_casters(&mut rp, |s| visible_ranges(s, &visible), &mut bound);
+            self.draw_casters(
+                &mut rp,
+                all_ranges,
+                culled.map(|c| (c, self.local_cull_base + index as u32)),
+                &mut bound,
+            );
         }
     }
 
@@ -4434,17 +4496,32 @@ impl FrameRecorder<'_> {
     }
 
     /// The one caster loop behind all four shadow passes. `ranges` maps a draw's `sources` to the
-    /// instance ranges to draw; `bound` tracks which caster pipeline is bound across calls. Primitives
-    /// first, then assets; a mask asset binds its own material before each draw.
+    /// instance ranges a direct draw covers; `cull` is the cull pass's output and the view this pass
+    /// draws, which replaces `ranges` for a world draw (the GPU cull already dropped what the view
+    /// misses and the non-casters). A viewmodel draw, a view past the cull's capacity and a pass
+    /// without a cull draw directly. `bound` tracks which caster pipeline is bound across calls.
+    /// Primitives first, then assets; a mask asset binds its own material before each draw.
     fn draw_casters(
         &self,
         rp: &mut wgpu::RenderPass<'_>,
         ranges: impl Fn(&[u32]) -> Vec<std::ops::Range<u32>>,
+        cull: Option<(Culled<'_>, u32)>,
         bound: &mut CasterPipeline,
     ) {
+        let (culled, view) = cull.map_or((None, 0), |(culled, view)| (Some(culled), view));
+        // The ranges a direct draw covers, `None` when it has none; an indirect draw needs no list.
+        let direct = |sources: &[u32], indirect: bool| {
+            let kept = if indirect {
+                Vec::new()
+            } else {
+                self.casting(sources, &ranges)
+            };
+            (indirect || !kept.is_empty()).then_some(kept)
+        };
         for draw in &self.mesh_draws {
-            let kept = self.casting(&draw.sources, &ranges);
-            if kept.is_empty() {
+            let source = draw.source(culled, view);
+            let kept = direct(&draw.sources, source.indirect.is_some());
+            if kept.is_none() {
                 continue;
             }
             if draw.caster() != *bound {
@@ -4453,14 +4530,20 @@ impl FrameRecorder<'_> {
             }
             let mb = self.r.mesh_of(draw.shape);
             rp.set_vertex_buffer(0, mb.buffer.slice(..));
-            rp.set_vertex_buffer(1, draw.instances.slice(draw.instance_bytes()));
-            for range in kept {
-                rp.draw(0..mb.vertex_count, range);
+            rp.set_vertex_buffer(1, source.instances.slice(source.bytes));
+            match source.indirect {
+                Some((args, at)) => rp.draw_indirect(args, at),
+                None => {
+                    for range in kept.into_iter().flatten() {
+                        rp.draw(0..mb.vertex_count, range);
+                    }
+                }
             }
         }
         for draw in &self.mesh_asset_draws {
-            let kept = self.casting(&draw.sources, &ranges);
-            if kept.is_empty() {
+            let source = draw.source(culled, view);
+            let kept = direct(&draw.sources, source.indirect.is_some());
+            if kept.is_none() {
                 continue;
             }
             if draw.caster() != *bound {
@@ -4471,19 +4554,25 @@ impl FrameRecorder<'_> {
                 rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
             }
             rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
-            rp.set_vertex_buffer(1, draw.instances.slice(draw.instance_bytes()));
+            rp.set_vertex_buffer(1, source.instances.slice(source.bytes));
             rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            for range in kept {
-                rp.draw_indexed(0..draw.mesh.index_count, 0, range);
+            match source.indirect {
+                Some((args, at)) => rp.draw_indexed_indirect(args, at),
+                None => {
+                    for range in kept.into_iter().flatten() {
+                        rp.draw_indexed(0..draw.mesh.index_count, 0, range);
+                    }
+                }
             }
         }
     }
 
     /// The sun pass of a cascaded frame: each fitted cascade drawn into its tile of the atlas,
-    /// row-major, depth-only (plus the cutout caster for mask meshes), with its own matrix and casters
-    /// culled to its box (a skinned instance by its posed joint bounds). Clears depth to 1.0, so a
-    /// tile no cascade fills reads as unoccluded.
+    /// row-major, depth-only (plus the cutout caster for mask meshes), with its own matrix and the casters
+    /// the GPU cull keeps for its box (a skinned instance by its posed joint bounds). Clears depth to
+    /// 1.0, so a tile no cascade fills reads as unoccluded.
     fn record_sun_cascades(&self, pass: &mut RecordedPass<'_>, cascades: &SunCascades) {
+        let culled = culled_buffers(pass.buffer_reads, self.cull.as_ref());
         let depth_view = pass
             .depth
             .expect("the shadow pass declares a depth attachment");
@@ -4510,7 +4599,6 @@ impl FrameRecorder<'_> {
 
         let mut bound = CasterPipeline::default();
         rp.set_pipeline(self.caster_pipeline(bound));
-        let mut visible = vec![false; self.caster_bounds.len()];
         let tile = self.sun_tile;
         for (index, view_bg) in view_bgs.iter().enumerate() {
             let (column, row) = sun_atlas_tile(cascades.count, index as u32);
@@ -4518,11 +4606,12 @@ impl FrameRecorder<'_> {
             rp.set_viewport(x as f32, y as f32, tile as f32, tile as f32, 0.0, 1.0);
             rp.set_scissor_rect(x, y, tile, tile);
             rp.set_bind_group(SHADOW_VIEW_GROUP, view_bg, &[]);
-            visible.fill(false);
-            for &caster in &self.sun_cascade_casters[index] {
-                visible[caster as usize] = true;
-            }
-            self.draw_casters(&mut rp, |s| visible_ranges(s, &visible), &mut bound);
+            self.draw_casters(
+                &mut rp,
+                all_ranges,
+                culled.map(|c| (c, SUN_CULL_VIEW + index as u32)),
+                &mut bound,
+            );
         }
     }
 
@@ -15996,7 +16085,7 @@ mod tests {
         scene
     }
 
-    /// Renders `scene`'s sun pass and reads the shadow atlas back, with the frame's per-cascade
+    /// Renders `scene`'s sun pass and reads the shadow atlas back, with the oracle's per-cascade
     /// caster lists.
     fn render_sun_atlas(
         renderer: &Renderer,
@@ -16048,11 +16137,12 @@ mod tests {
                 )],
             )
             .expect("the frame renders");
-        (
-            read_depth32(renderer, &copy),
-            extent,
-            recorder.sun_cascade_casters.clone(),
-        )
+        // The CPU oracle: the GPU cull keeps the casters this lists per cascade.
+        let casters = recorder.sun_cascades.as_ref().map_or_else(Vec::new, |fit| {
+            let bounds = instance_bounds(&scene.meshes, &[], &scene.bone_palette);
+            crate::sun_cascade::sun_cascade_casters(fit, &bounds)
+        });
+        (read_depth32(renderer, &copy), extent, casters)
     }
 
     /// Whether every one of the four tiles of the `tile`-edge atlas holds a drawn texel.
@@ -16170,7 +16260,7 @@ mod tests {
             PostChain::for_scene(&scene).masked(&renderer.quality, &renderer.quality_params);
         assert_eq!(chain.sun_cascades, None);
         let recorder = renderer.prepare_frame(&scene, size, None).unwrap();
-        assert!(recorder.sun_cascades.is_none() && recorder.sun_cascade_casters.is_empty());
+        assert!(recorder.sun_cascades.is_none());
         let (graph, _) = build_frame_graph(size, chain);
         let map = graph
             .resources()
