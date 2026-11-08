@@ -39,6 +39,11 @@ A mesh asset with a `lods:` chain draws the coarser level its screen size select
   camera's, so a quality only ever coarsens. All knobs are render-only and none hashed.
 - **Level 0 always:** a mesh without a chain, views past the output cap, probe captures, the decal-receiver redraw,
   the viewmodel, and every instance on an adapter without `INDIRECT_FIRST_INSTANCE` (the profile says so).
+- **Voxel models** chain too: `lods: [{screen_size}]` on the `kind: voxel` document (`ludion docs voxel-format`),
+  up to three levels, each a 2× majority downsample generated at load. Selection, knobs and observing are the
+  mesh chain's; sculpt and assembly parts are not chained. `examples/gallery/voxel-horde.yaml` draws four levels:
+  `ludion render --scene examples/gallery/voxel-horde.yaml --sweep /entities/0/components/Camera/lod_bias=-1,0,1,2
+  --out sheet.png`.
 - **Compare:** `ludion render --scene examples/gallery/lod-hall.yaml --sweep /entities/0/components/Camera/lod_bias=-1,0,1,2
   --out sheet.png` (500 figures down a hall; a sweep does not apply `--quality`).
 

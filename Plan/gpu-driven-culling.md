@@ -548,7 +548,7 @@ The pinned `[passes] cull` budget lines are owed in `Plan/owed.md`, because the 
   pass measures dominated by hidden geometry.
 - **Distance cutoff** as a scalability axis, off at `full` so goldens never see it. It rides
   `Plan/scalability.md` when a low preset needs it.
-- **Voxel LOD selection in the cull shader** rides world-streaming W5, into the same selection (decisions 21–29).
+- **Voxel LOD selection in the cull shader** shipped as decisions 30–35: the same selection, voxel models chained at load.
 
 ## Risks
 
@@ -694,9 +694,15 @@ G11 stay open with their recommendations as defaults.
 24. **Shadow views** take the camera's eye and `k`, never their own frustum, with `Camera.shadow_bias_levels` (`0..=3`) as the level offset, so a shadow is never finer than its mesh. `render.view` takes the game camera's values.
 25. **Knobs.** `Camera.lod_bias` (`-4..=4`) and `Camera.shadow_bias_levels`, both optional and omitted when absent so scenes and `WorldHash` are unchanged (the wire schema hash moved once); `QualityParams.lod_bias` (0 at `full`/`high`, 0.5 `medium`, 1 `low`) only coarsens. The camera field is what `render --sweep` reaches.
 26. **Off switch with a chain.** `set_frustum_culling(false)` keeps the pass when the frame draws a chain, with the frustum test skipped, so culling on and off stay byte-identical. Over-cap views, probe captures, the decal-receiver redraw and the viewmodel draw level 0.
-27. **Generation.** `ludion import --lod <screen>[:<ratio>]` (repeatable; an `[[import]]` `lod` list): a ratio runs meshoptimizer's simplify on the base with vertices kept by reference, so skin weights carry over; without one the glTF's `<name>_LOD<n>` sibling nodes supply the level. Files are `meshes/<base>.lod<n>.mesh.yaml`, derived and write-only. The pool's Mesh looks select levels the same way. Animation LOD is out (the level index is exposed in the profile and the debug tint); voxel LOD is out and plugs in as another bucket kind (`Plan/world-streaming.md` W5).
+27. **Generation.** `ludion import --lod <screen>[:<ratio>]` (repeatable; an `[[import]]` `lod` list): a ratio runs meshoptimizer's simplify on the base with vertices kept by reference, so skin weights carry over; without one the glTF's `<name>_LOD<n>` sibling nodes supply the level. Files are `meshes/<base>.lod<n>.mesh.yaml`, derived and write-only. The pool's Mesh looks select levels the same way. Animation LOD is out (the level index is exposed in the profile and the debug tint); voxel LOD is out and plugs in as another bucket kind (`Plan/world-streaming.md` W5) (superseded for voxel models by decision 30).
 28. **Dither or crossfade between levels** is deferred until popping is visible in the game's horde golden or the `lod-hall` sweep.
 29. **Exposure.** `ludion_renderer::lod_level` is the one pure selection function: the CPU oracle uses it, and a later animation LOD keys on the same level index (animation LOD is out of scope). Observability is the profile's `levels_drawn_median` and the `--debug-draw cull` level tint.
+30. **Voxel LOD generated at load, not by a verb (request 0013).** A voxel mesh is already derived at load and never committed, so a `kind: voxel` document's `lods:` levels are built beside the greedy mesh, ride the same `Arc<MeshData>`, and are cached and hot-reloaded with the model. A committed level file would be a second source of truth for what the downsample rule already determines.
+31. **Authoring.** `lods:` is a list of up to three maps with exactly `screen_size` (same threshold rules as a mesh chain: finite, above 0, strictly falling); level n is the 2× downsample of level n−1. A malformed chain is `L1395`, broadened to "LOD chain malformed": one concept, one code.
+32. **Pinned downsample rule.** Coarse cell `(X,Y,Z)` covers fine cells `2X..2X+1` per axis, extent `ceil(n/2)`, out-of-bounds cells empty. It is solid when at least 4 of its 8 cells are (ties keep thin walls) and takes the most frequent palette index among its solid cells, ties to the lowest. Integer-only, so there is no cross-arch item.
+33. **Base frame, odd-extent overhang.** Level n meshes with step `2^n` against the base size's bottom-centre offset, so silhouettes stay aligned; an odd extent overhangs the base by under one coarse cell toward +X/+Y/+Z.
+34. **Chain-union bounds.** `AssetBounds::of_mesh` takes the union of the base box and every level's box, so an overhang is never frustum-culled early and culling on/off stays byte-identical. A meshoptimizer chain's levels lie inside the base, so its bounds, and every existing golden, are unchanged.
+35. **Not chained:** sculpt `shape: voxel` parts (they read the document and ignore `lods`), assembly parts, the GI voxelizer and the static grid (level 0 only). The pool's Voxel looks select levels like its Mesh looks.
 
 ## Status
 
@@ -759,3 +765,5 @@ a chainless frame. Bench, `CULLING_BENCH_LOD=off|on`, the crowd view, fastest of
 (unpinned M5, 2026-11-08, indicative): chain off `shadow` 0.117, `prepass` 0.195, `scene` 1.000 ms, no `cull` pass;
 chain on `cull` 0.071, `shadow` 0.135, `prepass` 0.197, `scene` 1.049 ms. The mannequin is only 512, 256 and 200 triangles across its three levels, so 500 of them are a few hundred
 thousand triangles at most and the chain is a wash here: the saving is for the game's horde of heavier meshes, which the game re-measures (`Plan/owed.md`).
+
+**Voxel LOD (request 0013).** Shipped as decisions 30–35; the acceptance scene is `examples/gallery/voxel-horde.yaml` (500 figures down the hall on `voxels/horde-figure-lod.voxel.yaml`, a 24×40×10 upscale of `rim-figure` with a three-threshold chain, so all four levels draw at `lod_bias 0`: 33/65/150/253 in the camera view). Gallery tests: the golden, culling on/off byte-identical, and a chain whose thresholds can never fire byte-identical to the chainless `horde-figure`; no committed document but the new one gains `lods`, so every other voxel golden is untouched. Bench, `CULLING_BENCH_LOD=voxel-off|voxel-on`, crowd view, GPU pass medians (unpinned M5, 2026-11-08, indicative): chain off `shadow` 0.111, `prepass` 0.189, `scene` 0.850 ms, no `cull` pass; chain on `cull` 0.058, `shadow` 0.082, `prepass` 0.129, `scene` 0.527 ms. The 60-triangle base is cheap, so most of the saving is draw and vertex work on the far ranks.

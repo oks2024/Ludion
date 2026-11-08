@@ -1393,3 +1393,79 @@ fn needs_gpu_lod_hall_renders_identically_with_culling_on_and_off() {
     let off = engine.render_png(640, 360).expect("renders");
     assert!(on == off, "culling off changed the hall's bytes");
 }
+
+/// The `voxel-horde` scene (500 voxel figures, a four-level chain) against its committed golden.
+#[test]
+fn needs_gpu_voxel_horde_matches_committed_golden() {
+    let mut engine = ludion_engine::Engine::builder()
+        .load_scene_file(&gallery_dir().join("voxel-horde.yaml"))
+        .expect("the scene loads");
+    ludion_testkit::check_engine_golden(
+        &mut engine,
+        gallery_dir().join("goldens"),
+        "voxel-horde",
+        &scratch_dir("voxel_horde_out"),
+    );
+}
+
+/// **Culling on or off, the voxel horde renders the same bytes.** The coarse levels of an odd
+/// extent overhang their base; the chain-union bounds keep the frustum test from culling the
+/// overhang, so selection, and so the image, is identical.
+#[test]
+fn needs_gpu_voxel_horde_renders_identically_with_culling_on_and_off() {
+    let mut engine = ludion_engine::Engine::builder()
+        .load_scene_file(&gallery_dir().join("voxel-horde.yaml"))
+        .expect("the scene loads");
+    let on = match engine.render_png(640, 360) {
+        Ok(png) => png,
+        Err(d) if is_no_adapter(std::slice::from_ref(&d)) => {
+            eprintln!(
+                "SKIPPED voxel_horde_renders_identically_with_culling_on_and_off: no GPU adapter"
+            );
+            return;
+        }
+        Err(d) => panic!("render failed: {d}"),
+    };
+    engine.set_frustum_culling(false);
+    let off = engine.render_png(640, 360).expect("renders");
+    assert!(on == off, "culling off changed the voxel horde's bytes");
+}
+
+/// **A chain that never fires draws the chainless path's bytes.** The horde on
+/// `horde-figure-lod` with thresholds no figure can fall under renders level 0 only, through the
+/// chained draw path; it must equal the same horde on the chainless `horde-figure`.
+#[test]
+fn needs_gpu_voxel_horde_with_an_unreachable_chain_matches_the_chainless_model() {
+    let gallery = gallery_dir();
+    let render = |model: &str, tag: &str| -> Option<Vec<u8>> {
+        let dir = scratch_dir(&format!("voxel_horde_nochain_{tag}"));
+        std::fs::create_dir_all(dir.join("voxels")).unwrap();
+        let base = std::fs::read_to_string(gallery.join("voxels/horde-figure.voxel.yaml")).unwrap();
+        std::fs::write(dir.join("voxels/horde-figure.voxel.yaml"), &base).unwrap();
+        let lod = std::fs::read_to_string(gallery.join("voxels/horde-figure-lod.voxel.yaml"))
+            .unwrap()
+            .replace("screen_size: 0.3\n", "screen_size: 1.0e-6\n")
+            .replace("screen_size: 0.12\n", "screen_size: 1.0e-7\n")
+            .replace("screen_size: 0.05\n", "screen_size: 1.0e-8\n");
+        std::fs::write(dir.join("voxels/horde-figure-lod.voxel.yaml"), lod).unwrap();
+        let scene = std::fs::read_to_string(gallery.join("voxel-horde.yaml"))
+            .unwrap()
+            .replace("voxels/horde-figure-lod.voxel.yaml", model);
+        let scene_path = dir.join("voxel-horde.yaml");
+        std::fs::write(&scene_path, scene).unwrap();
+        let mut engine = ludion_engine::Engine::builder()
+            .load_scene_file(&scene_path)
+            .expect("the scene loads");
+        match engine.render_png(640, 360) {
+            Ok(png) => Some(png),
+            Err(d) if is_no_adapter(std::slice::from_ref(&d)) => None,
+            Err(d) => panic!("render failed: {d}"),
+        }
+    };
+    let Some(chained) = render("voxels/horde-figure-lod.voxel.yaml", "lod") else {
+        eprintln!("SKIPPED voxel_horde_unreachable_chain: no GPU adapter");
+        return;
+    };
+    let plain = render("voxels/horde-figure.voxel.yaml", "plain").expect("renders");
+    assert!(chained == plain, "an unreachable chain changed the bytes");
+}

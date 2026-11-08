@@ -145,8 +145,9 @@ row makes it visible.
   baked from the neighbour's geometry, measured, not assumed.
 - **Voxel LOD**: a model's LOD chain is a 2× voxel downsample (majority palette index per block)
   re-meshed by the same greedy mesher, generated at asset load, deterministic and cached with the
-  model. Extract picks the level from distance under a scalability axis. Impostors are deferred until
-  a measurement shows the chain is not enough.
+  model. The downsample chain shipped under `Plan/gpu-driven-culling.md` decisions 30–35, selected by
+  screen size in the GPU cull with `Camera.lod_bias`, not by distance in extract. Impostors are deferred
+  until a measurement shows the chain is not enough.
 - **Persistent instance buffers per region** replace the per-frame rebuild only if W0 shows the
   rebuild on the profile; otherwise the rebuild stays.
 
@@ -218,7 +219,8 @@ per region with the border margin measured on vigil's densest pair of neighbours
 
 ### W5 — voxel LOD
 
-The downsample chain, the distance axis, a `voxel-lod` golden at three distances, and a
+The downsample chain shipped (`Plan/gpu-driven-culling.md` decisions 30–35: selection by screen size in the
+GPU cull, the `voxel-horde` gallery golden); W5 keeps the impostors-on-trigger and a
 `city-stress` budget on both boxes: the fourteen-district world with a horde, the first budget that
 names an instance count.
 

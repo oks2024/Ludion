@@ -16,6 +16,8 @@
 //!
 //! `CULLING_BENCH_LOD=on` swaps the 500 enemies to the three-level `mannequin-lod` character, so the
 //! geometry passes (`shadow`, `prepass`, `scene`, `cull`) read chain off (default) against chain on.
+//! `voxel-off` / `voxel-on` swap them to the chainless `horde-figure` / four-level `horde-figure-lod`
+//! voxel model instead.
 //! The chain draws through the cull pass, so `CULLING_BENCH_CULL` does not change which levels draw.
 //!
 //! There is deliberately no `budgets/*.toml` entry: those files gate `ProfileReport` keys, and the
@@ -223,17 +225,22 @@ fn scene(facing: Facing, mix: Mix) -> String {
     for i in 0..ENEMIES {
         let (col, row) = ((i % 25) as f32, (i / 25) as f32);
         let at = [(col - 12.0) * 1.2, 0.0, (row - 9.5) * 1.2];
-        let mut enemy = transform(at, [0.0, rng.next_f32() * 360.0, 0.0], None);
-        enemy.push_str(&format!(
-            "      Mesh:\n        shape:\n          character: characters/{}.character.yaml\n",
-            if lod_on() {
-                "mannequin-lod"
-            } else {
-                "mannequin"
-            }
-        ));
+        let look = enemy_look();
+        let voxel = matches!(look, EnemyLook::VoxelPlain | EnemyLook::VoxelLod);
+        let scale = voxel.then_some([0.045; 3]);
+        let mut enemy = transform(at, [0.0, rng.next_f32() * 360.0, 0.0], scale);
+        let shape = match look {
+            EnemyLook::Mannequin => "character: characters/mannequin.character.yaml",
+            EnemyLook::MannequinLod => "character: characters/mannequin-lod.character.yaml",
+            EnemyLook::VoxelPlain => "voxel: voxels/horde-figure.voxel.yaml",
+            EnemyLook::VoxelLod => "voxel: voxels/horde-figure-lod.voxel.yaml",
+        };
+        enemy.push_str(&format!("      Mesh:\n        shape:\n          {shape}\n"));
         enemy.push_str(&color(8, "color", [0.6, 0.45, 0.35, 1.0]));
-        enemy.push_str("        roughness: 0.8\n      Animation:\n        clip: idle\n");
+        enemy.push_str("        roughness: 0.8\n");
+        if !voxel {
+            enemy.push_str("      Animation:\n        clip: idle\n");
+        }
         doc.entity(&format!("enemy-{i}"), &enemy);
     }
 
@@ -362,9 +369,22 @@ fn cull_on() -> bool {
     std::env::var("CULLING_BENCH_CULL").is_ok_and(|v| v == "on")
 }
 
-/// `CULLING_BENCH_LOD=on` draws the enemies through the LOD chain. Bench-only.
-fn lod_on() -> bool {
-    std::env::var("CULLING_BENCH_LOD").is_ok_and(|v| v == "on")
+/// Which enemy asset `CULLING_BENCH_LOD` picks: `on` the mesh chain, `voxel-off` / `voxel-on` the
+/// voxel model without / with its chain, anything else the chainless mannequin. Bench-only.
+enum EnemyLook {
+    Mannequin,
+    MannequinLod,
+    VoxelPlain,
+    VoxelLod,
+}
+
+fn enemy_look() -> EnemyLook {
+    match std::env::var("CULLING_BENCH_LOD").as_deref() {
+        Ok("on") => EnemyLook::MannequinLod,
+        Ok("voxel-off") => EnemyLook::VoxelPlain,
+        Ok("voxel-on") => EnemyLook::VoxelLod,
+        _ => EnemyLook::Mannequin,
+    }
 }
 
 fn engine(facing: Facing, mix: Mix, shots: bool) -> Engine {
