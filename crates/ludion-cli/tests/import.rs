@@ -869,6 +869,46 @@ fn the_committed_gallery_skin_mannequin_mesh_matches_a_fresh_import() {
     );
 }
 
+/// The committed LOD chain under `examples/gallery/meshes/lod/` (the `lod-hall` scene's asset) is
+/// a straight copy of a fresh `--lod 0.3:0.5 --lod 0.12:0.2` import of `skin-mannequin.glb`.
+#[test]
+fn the_committed_gallery_lod_chain_matches_a_fresh_import() {
+    let glb = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../ludion-import/tests/fixtures/skin-mannequin.glb");
+    let out = scratch("skin-mannequin-lod-gallery-drift");
+    let output = run_ludion(&[
+        "import",
+        glb.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+        "--lod",
+        "0.3:0.5",
+        "--lod",
+        "0.12:0.2",
+    ]);
+    assert!(
+        output.status.success() && output.stderr.is_empty(),
+        "import must be clean, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for name in [
+        "skin-mannequin.mesh.yaml",
+        "skin-mannequin.lod1.mesh.yaml",
+        "skin-mannequin.lod2.mesh.yaml",
+    ] {
+        let fresh = std::fs::read_to_string(out.join("meshes").join(name)).expect("fresh level");
+        let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/gallery/meshes/lod")
+            .join(name);
+        let committed = std::fs::read_to_string(&committed).expect("committed level");
+        assert_eq!(
+            fresh, committed,
+            "examples/gallery/meshes/lod/{name} has drifted from a fresh --lod 0.3:0.5 --lod \
+             0.12:0.2 import of skin-mannequin.glb; re-copy the fresh import's meshes/ files"
+        );
+    }
+}
+
 /// **Animation Clips W1 clip drift gate.** `examples/gallery/clips/*.anim.yaml` are straight copies
 /// of a fresh import of `skin-mannequin-clips.glb`, and each still names that glb as its source.
 /// To refresh after re-keying: import the glb into `target/mannequin-clips` (the same depth as

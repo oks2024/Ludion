@@ -1354,3 +1354,42 @@ fn projectile_gibs_settle_on_the_floor_and_all_expire() {
     assert!(res.pool().is_empty(), "every gib has expired");
     assert_eq!(expired, common::GIB_COUNT as usize);
 }
+
+/// The `lod-hall` scene (500 skinned figures, a three-level chain) against its committed golden.
+/// The all-scenes golden covers it too; this names the LOD proof.
+#[test]
+fn needs_gpu_lod_hall_matches_committed_golden() {
+    let mut engine = ludion_engine::Engine::builder()
+        .load_scene_file(&gallery_dir().join("lod-hall.yaml"))
+        .expect("the scene loads");
+    ludion_testkit::check_engine_golden(
+        &mut engine,
+        gallery_dir().join("goldens"),
+        "lod-hall",
+        &scratch_dir("lod_hall_out"),
+    );
+}
+
+/// **Culling on or off, the hall renders the same bytes.** Turning culling off keeps the cull pass
+/// for a chained frame with the frustum test skipped, so level selection, and so the image, is
+/// identical. A scene with no chain keeps every existing gallery golden untouched (the all-scenes
+/// golden above), and `CullShape.levels == 1` for it (`graph.rs`'s chain tests).
+#[test]
+fn needs_gpu_lod_hall_renders_identically_with_culling_on_and_off() {
+    let mut engine = ludion_engine::Engine::builder()
+        .load_scene_file(&gallery_dir().join("lod-hall.yaml"))
+        .expect("the scene loads");
+    let on = match engine.render_png(640, 360) {
+        Ok(png) => png,
+        Err(d) if is_no_adapter(std::slice::from_ref(&d)) => {
+            eprintln!(
+                "SKIPPED lod_hall_renders_identically_with_culling_on_and_off: no GPU adapter"
+            );
+            return;
+        }
+        Err(d) => panic!("render failed: {d}"),
+    };
+    engine.set_frustum_culling(false);
+    let off = engine.render_png(640, 360).expect("renders");
+    assert!(on == off, "culling off changed the hall's bytes");
+}

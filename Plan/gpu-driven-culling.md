@@ -345,7 +345,7 @@ golden, on both boxes**, the clustered-forward wave-2 proof shape.
 - The cull pass runs over both. Extract never touches a static entity again.
 - **LOD selection** slots in naturally: the cull shader picks a bucket per instance from camera
   distance, so each LOD level is its own bucket. world-streaming W5's voxel downsample chain rides
-  this.
+  this. Mesh LOD shipped in the rung-2a pass instead (decisions 21–29).
 
 - **Buys:** the same as 1.5, plus culling cost that scales on the GPU, where 40 k tests are about
   0.02 ms. It also scales further than 1.5's cell ranges without growing the draw count, and it is
@@ -548,7 +548,7 @@ The pinned `[passes] cull` budget lines are owed in `Plan/owed.md`, because the 
   pass measures dominated by hidden geometry.
 - **Distance cutoff** as a scalability axis, off at `full` so goldens never see it. It rides
   `Plan/scalability.md` when a low preset needs it.
-- **Voxel LOD selection in the cull shader** rides world-streaming W5.
+- **Voxel LOD selection in the cull shader** rides world-streaming W5, into the same selection (decisions 21–29).
 
 ## Risks
 
@@ -688,6 +688,15 @@ G11 stay open with their recommendations as defaults.
 18. **Agent surfaces.** A profile `culling` section (per-view instances in and drawn, read back through the ring, medians); a `--debug-draw cull` category (kept green, culled red, from the CPU oracle) that shows the **rendered camera view only**; and on `render.view`, `cull_from: view | game | frozen`, default `view`. `game` culls from the live game camera; `frozen` captures the cull camera on the command that sets it. These are debug and editor surfaces only: a game never issues `render.view`. The wire schema hash moves once.
 19. **Off switch.** A host render setting (the `RenderSettings` pattern), not on the wire and not a quality axis. Shipping is always on. The oracle tests and the bench's "before" numbers use it.
 20. **Measurement.** An ignored release bench in `ludion-engine`, built in code (the nav-bench precedent): 500 skinned enemies, voxel-ragdoll parts, a pool of 5,000 shots, decals, AO on, a room of about 40 m. It reports extract and GPU scene, prepass and cull with the camera facing a wall and facing the crowd, cull off and on. Its budget is about 3× the median on the unpinned box; pinned figures are owed.
+21. **LOD asset (request 0013).** A base `*.mesh.yaml` carries an optional `lods:` list of up to three coarser sibling mesh documents, each with a finite, positive, strictly decreasing `screen_size`. A level must match the base's draw key (alpha mode and cutoff, `double_sided`, `rim`, texture slots) and, when skinned, its exact joint list, so it draws through the base's pipeline, bucket and bone palette. `L1395` is a malformed chain, `L1396` a mismatched level.
+22. **Screen size.** The fraction of viewport height covered by the instance's bounding sphere (centre and half-diagonal of the world box the cull already computes). Perspective `size = r·k / max(d, r)`, orthographic `r·k`, `k = proj[1][1]·2^-lod_bias`. The level is the count of thresholds above `size`, plus the view's level offset, clamped. Stateless, and from distance, not depth, so turning never changes a level. `cull::lod_level` is the CPU oracle the GPU result is tested against.
+23. **Draw layout.** Survivors stay in their bucket's region of each view's slice, ordered by level, one `draw_indexed_indirect` per level whose GPU-written `first_instance` starts that level's run, so the instance stride (224 B) and the view cap do not move. The device requests `INDIRECT_FIRST_INSTANCE` when the adapter offers it (both pinned boxes do); without it every instance draws level 0. The cull dispatches one lane per (view, level), and with no chain in the frame every buffer, dispatch and draw is today's. Rejected: a per-level worst-case region (breaks the view cap) and degenerate-vertex draws (wastes coarse vertex work on fine instances).
+24. **Shadow views** take the camera's eye and `k`, never their own frustum, with `Camera.shadow_bias_levels` (`0..=3`) as the level offset, so a shadow is never finer than its mesh. `render.view` takes the game camera's values.
+25. **Knobs.** `Camera.lod_bias` (`-4..=4`) and `Camera.shadow_bias_levels`, both optional and omitted when absent so scenes and `WorldHash` are unchanged (the wire schema hash moved once); `QualityParams.lod_bias` (0 at `full`/`high`, 0.5 `medium`, 1 `low`) only coarsens. The camera field is what `render --sweep` reaches.
+26. **Off switch with a chain.** `set_frustum_culling(false)` keeps the pass when the frame draws a chain, with the frustum test skipped, so culling on and off stay byte-identical. Over-cap views, probe captures, the decal-receiver redraw and the viewmodel draw level 0.
+27. **Generation.** `ludion import --lod <screen>[:<ratio>]` (repeatable; an `[[import]]` `lod` list): a ratio runs meshoptimizer's simplify on the base with vertices kept by reference, so skin weights carry over; without one the glTF's `<name>_LOD<n>` sibling nodes supply the level. Files are `meshes/<base>.lod<n>.mesh.yaml`, derived and write-only. The pool's Mesh looks select levels the same way. Animation LOD is out (the level index is exposed in the profile and the debug tint); voxel LOD is out and plugs in as another bucket kind (`Plan/world-streaming.md` W5).
+28. **Dither or crossfade between levels** is deferred until popping is visible in the game's horde golden or the `lod-hall` sweep.
+29. **Exposure.** `ludion_renderer::lod_level` is the one pure selection function: the CPU oracle uses it, and a later animation LOD keys on the same level index (animation LOD is out of scope). Observability is the profile's `levels_drawn_median` and the `--debug-draw cull` level tint.
 
 ## Status
 
@@ -741,3 +750,12 @@ scene 0.97 → 1.79, frame 2.96 → 5.11 (power-state noise dominates), `cull` p
 - Owed: pinned before/after figures, the `[passes] cull` budget lines, the pinned indirect-validation figure
   and M4/3090 golden byte-identity (`Plan/owed.md`).
 - **Shipped:** the W2 wave set (rung 2a) for request 0008; the agent doc is `docs/culling.md`.
+
+**LOD (request 0013).** Shipped as decisions 21–29; the acceptance scene is `examples/gallery/lod-hall.yaml` (500
+skinned figures down a 130 m hall on `meshes/lod/`, a three-level mannequin imported with `--lod 0.3:0.5 --lod
+0.12:0.2`, held by a drift gate in `ludion-cli/tests/import.rs`). Gallery tests: the hall's golden, and culling on or
+off byte-identical; no-chain identity is every other gallery golden staying untouched plus `CullShape.levels == 1` for
+a chainless frame. Bench, `CULLING_BENCH_LOD=off|on`, the crowd view, fastest of five rounds, GPU pass medians
+(unpinned M5, 2026-11-08, indicative): chain off `shadow` 0.117, `prepass` 0.195, `scene` 1.000 ms, no `cull` pass;
+chain on `cull` 0.071, `shadow` 0.135, `prepass` 0.197, `scene` 1.049 ms. The mannequin is only 512, 256 and 200 triangles across its three levels, so 500 of them are a few hundred
+thousand triangles at most and the chain is a wash here: the saving is for the game's horde of heavier meshes, which the game re-measures (`Plan/owed.md`).

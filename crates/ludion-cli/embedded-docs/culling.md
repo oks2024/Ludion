@@ -4,7 +4,7 @@ description: GPU frustum culling of mesh views — what is culled, against which
 
 # GPU frustum culling
 
-**Scope:** what the engine drops before drawing a mesh, so a game never culls by hand. Always on; nothing to author.
+**Scope:** what the engine drops, and which mesh level it draws, before drawing a mesh, so a game never culls or picks LODs by hand. Always on; a mesh chain is the only authoring.
 The debug surfaces are `ludion docs debug-draw` (`cull`) and `ludion docs wire-render` (`cull_from`).
 
 ## What is culled
@@ -25,21 +25,28 @@ of its posed joint origins inflated by a per-mesh skin radius, so ragdolls on `S
 Bounds are conservative: a mesh may be kept when off screen, never dropped when visible.
 
 ## Mesh LOD
-A mesh asset with a `lods:` chain (`ludion docs materials`) draws the level its bounding sphere's screen size
-selects, chosen in the same cull pass: stateless, from distance (turning never changes a level). Knobs, all
-render-only and none hashed:
+A mesh asset with a `lods:` chain draws the coarser level its screen size selects, chosen in the same cull pass.
+- **Asset.** Up to three levels, each a sibling mesh document that matches its base's draw key and joints
+  (`ludion docs materials`, `L1395`/`L1396`). `ludion import --lod <screen>[:<ratio>]` writes one (`ludion docs
+  blender-craft`); the gallery `meshes/lod/` is a three-level mannequin.
+- **Selection** is stateless and rotation-invariant: the fraction of viewport height the bounding sphere covers
+  from the drawn camera's eye, against each `screen_size`, so turning never changes a level. Shadow views take the
+  camera's eye, never their own frustum, so a shadow is never finer than its mesh.
 - `Camera.lod_bias` (`-4..=4`, absent is `0`) adds octaves to the pick: each unit halves every switch distance, so `+1`
-  goes coarser sooner. `Camera.shadow_bias_levels` (`0..=3`) makes shadow views draw that many levels coarser than the
-  camera would. Out of range is `L1397`. A free `render.view` camera takes the game camera's values.
+  goes coarser sooner. `Camera.shadow_bias_levels` (`0..=3`) makes shadow views draw that many levels coarser.
+  Out of range is `L1397`. A free `render.view` camera takes the game camera's values.
 - `lod_bias` in the machine quality (`ludion docs quality`: `0` at `full`/`high`, `0.5` `medium`, `1.0` `low`) adds to the
-  camera's, so a quality only ever coarsens. `render --sweep /entities/N/components/Camera/lod_bias=0,2` compares biases;
-  a sweep does not apply `--quality`.
-- A mesh without a chain is unaffected by every knob.
+  camera's, so a quality only ever coarsens. All knobs are render-only and none hashed.
+- **Level 0 always:** a mesh without a chain, views past the output cap, probe captures, the decal-receiver redraw,
+  the viewmodel, and every instance on an adapter without `INDIRECT_FIRST_INSTANCE` (the profile says so).
+- **Compare:** `ludion render --scene examples/gallery/lod-hall.yaml --sweep /entities/0/components/Camera/lod_bias=-1,0,1,2
+  --out sheet.png` (500 figures down a hall; a sweep does not apply `--quality`).
 
 ## Off switch
 `Engine::set_frustum_culling(false)` — a host setting, not on the wire and not a quality axis. Shipping is
 always on; tests and the culling bench use it to compare. With it off the `cull` pass is absent from
-`--dump-graph`.
+`--dump-graph`, unless the frame draws a LOD chain: the pass then stays with the frustum test skipped, so levels
+and the image are unchanged.
 
 ## Observing it
 - `ludion profile` JSON `culling`: per view (`camera`, `sun`, `cascade_N`, `local_N`) the median instances

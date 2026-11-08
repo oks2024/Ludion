@@ -1,0 +1,19 @@
+format: 1
+kind: character
+name: mannequin-lod
+mesh: "../meshes/lod/skin-mannequin.mesh.yaml"
+clips:
+  idle:
+    clip: "../clips/idle.anim.yaml"
+  jump:
+    clip: "../clips/jump.anim.yaml"
+  run:
+    clip: "../clips/run.anim.yaml"
+    speed: 1.2
+    events:
+      - t: 0.1
+        name: foot_l
+      - t: 0.4
+        name: foot_r
+  spin:
+    clip: "../clips/spin.anim.yaml"

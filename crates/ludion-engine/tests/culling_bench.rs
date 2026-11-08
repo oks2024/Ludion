@@ -14,6 +14,10 @@
 //! `WGPU_VALIDATION_INDIRECT_CALL=0` to see the indirect-validation cost. Without the variable the
 //! arms are the cull-off "before" figures.
 //!
+//! `CULLING_BENCH_LOD=on` swaps the 500 enemies to the three-level `mannequin-lod` character, so the
+//! geometry passes (`shadow`, `prepass`, `scene`, `cull`) read chain off (default) against chain on.
+//! The chain draws through the cull pass, so `CULLING_BENCH_CULL` does not change which levels draw.
+//!
 //! There is deliberately no `budgets/*.toml` entry: those files gate `ProfileReport` keys, and the
 //! per-phase extract breakdown is bench-only (it rides `ExtractObserver`, not the wire). The
 //! precedent is `nav_bench.rs`: inline budgets. The wall-clock spans are observation-only and never
@@ -220,7 +224,14 @@ fn scene(facing: Facing, mix: Mix) -> String {
         let (col, row) = ((i % 25) as f32, (i / 25) as f32);
         let at = [(col - 12.0) * 1.2, 0.0, (row - 9.5) * 1.2];
         let mut enemy = transform(at, [0.0, rng.next_f32() * 360.0, 0.0], None);
-        enemy.push_str("      Mesh:\n        shape:\n          character: characters/mannequin.character.yaml\n");
+        enemy.push_str(&format!(
+            "      Mesh:\n        shape:\n          character: characters/{}.character.yaml\n",
+            if lod_on() {
+                "mannequin-lod"
+            } else {
+                "mannequin"
+            }
+        ));
         enemy.push_str(&color(8, "color", [0.6, 0.45, 0.35, 1.0]));
         enemy.push_str("        roughness: 0.8\n      Animation:\n        clip: idle\n");
         doc.entity(&format!("enemy-{i}"), &enemy);
@@ -349,6 +360,11 @@ fn gallery() -> std::path::PathBuf {
 /// cull-off "before" arm. Bench-only: no sim reads it.
 fn cull_on() -> bool {
     std::env::var("CULLING_BENCH_CULL").is_ok_and(|v| v == "on")
+}
+
+/// `CULLING_BENCH_LOD=on` draws the enemies through the LOD chain. Bench-only.
+fn lod_on() -> bool {
+    std::env::var("CULLING_BENCH_LOD").is_ok_and(|v| v == "on")
 }
 
 fn engine(facing: Facing, mix: Mix, shots: bool) -> Engine {
@@ -540,8 +556,9 @@ fn print_arm(arm: &Arm) {
             .map_or("n/a".to_string(), |v| format!("{v:.3} ms"))
     };
     println!(
-        "gpu: cull {} | scene {} | prepass {} | ssao {} | transparents {} | decals_lit {} | projector {} | frame {}",
+        "gpu: cull {} | shadow {} | scene {} | prepass {} | ssao {} | transparents {} | decals_lit {} | projector {} | frame {}",
         show(pass::CULL),
+        show(pass::SHADOW),
         show(pass::SCENE),
         show(pass::PREPASS),
         show(pass::SSAO),

@@ -112,7 +112,7 @@ A `.mesh.yaml` may list up to three coarser levels, written before `indices` and
 and strictly decreasing. A level is an ordinary mesh document with no `lods`, and must match the base's
 `alpha_mode`, `alpha_cutoff`, `double_sided`, `rim`, texture slots and (if skinned) identical `joints`,
 so it draws through the base's pipeline and bone palette. A bad chain is `L1395`, a mismatched level
-`L1396`; selection ships with the cull (`ludion docs culling`), so a chain does not change a frame yet.
+`L1396`; the cull pass picks the level per instance and view (`ludion docs culling`).
 
 ## Cutout and double-sided
 
