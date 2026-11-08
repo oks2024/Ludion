@@ -26,7 +26,9 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::Vec3;
-use ludion_renderer::MeshData;
+use std::sync::Arc;
+
+use ludion_renderer::{MeshData, MeshLod};
 use ludion_scene::VoxelDocument;
 
 /// The pinned face-direction sweep order: `(axis, positive)` for −X, +X, −Y, +Y, −Z, +Z. Emission
@@ -119,6 +121,35 @@ impl Grid {
         }
     }
 
+    /// The next coarser LOD grid: coarse cell `(X, Y, Z)` covers fine cells `2X..=2X+1` per axis
+    /// and the extent is `ceil(n / 2)`. Out-of-bounds fine cells count as empty. A coarse cell is
+    /// solid iff at least 4 of its 8 fine cells are (ties keep thin walls); its palette index is
+    /// the most frequent among them, ties to the lowest index. Pure integer logic.
+    fn downsample(&self) -> Grid {
+        let size = self.size.map(|n| (n + 1) / 2);
+        let mut cells = Vec::with_capacity((size[0] * size[1] * size[2]) as usize);
+        for z in 0..size[2] {
+            for y in 0..size[1] {
+                for x in 0..size[0] {
+                    let mut solid = [0_u8; 8];
+                    let mut count = 0;
+                    for dz in 0..2 {
+                        for dy in 0..2 {
+                            for dx in 0..2 {
+                                if let Some(pi) = self.at([2 * x + dx, 2 * y + dy, 2 * z + dz]) {
+                                    solid[count] = pi;
+                                    count += 1;
+                                }
+                            }
+                        }
+                    }
+                    cells.push((count >= 4).then(|| majority(&solid[..count])));
+                }
+            }
+        }
+        Grid { size, cells }
+    }
+
     /// The palette index of cell `c`, or `None` for an empty or out-of-bounds cell. Out-of-bounds
     /// reads as empty deliberately.
     fn at(&self, c: [i64; 3]) -> Option<u8> {
@@ -130,6 +161,18 @@ impl Grid {
         let flat = x as usize + sx as usize * (y as usize + sy as usize * z as usize);
         self.cells[flat]
     }
+}
+
+/// The most frequent index in `indices` (non-empty); ties go to the lowest index.
+fn majority(indices: &[u8]) -> u8 {
+    let mut best = (0_usize, u8::MAX);
+    for &candidate in indices {
+        let votes = indices.iter().filter(|&&i| i == candidate).count();
+        if votes > best.0 || (votes == best.0 && candidate < best.1) {
+            best = (votes, candidate);
+        }
+    }
+    best.1
 }
 
 /// One occupied cell's renderer-relevant data — the D15 accessor's per-cell payload
@@ -256,17 +299,61 @@ pub(crate) fn grid_box(size: [u32; 3]) -> (Vec3, Vec3) {
 /// Greedily meshes `doc` into [`MeshData`], per the pinned order documented on the module. `hash` is
 /// the source bytes' content hash (the GPU mesh-cache key), threaded through unchanged.
 ///
+/// A document with `lods` also carries its coarser levels: each is the previous grid downsampled 2x
+/// ([`Grid::downsample`]) and meshed the same way in the base's model frame, so silhouettes stay
+/// aligned (an odd extent overhangs by under one coarse cell toward +X/+Y/+Z). Level `n` meshes
+/// with `step = 2^n` and keys on the base hash folded with `n`.
+///
 /// Pure and exact: the same document always yields a byte-identical vertex stream.
 pub(crate) fn mesh(doc: &VoxelDocument, hash: u64) -> MeshData {
     let grid = Grid::from_doc(doc);
     // Bottom-center origin: X and Z are centered (offset = half the extent), Y sits on the ground.
     let offset = [doc.size[0] as f32 * 0.5, 0.0, doc.size[2] as f32 * 0.5];
-    let to_model = |axis: usize, coord: i64| coord as f32 - offset[axis];
     let (colors, materials) = palette_channels(doc);
     let authored_material = doc.palette.iter().any(|entry| {
         entry.roughness.is_some() || entry.metallic.is_some() || entry.emissive.is_some()
     });
+    let frame = Frame {
+        offset,
+        colors: &colors,
+        materials: &materials,
+        authored_material,
+        rim: doc.rim.as_ref().map(crate::extract::doc_rim_lane),
+    };
+    let mut data = mesh_grid(&grid, 1, &frame, hash);
+    let mut coarse = grid;
+    for (index, lod) in doc.lods.iter().enumerate() {
+        coarse = coarse.downsample();
+        let level = index as u32 + 1;
+        let level_hash = crate::asset_cache::fold_source_hashes(hash, &[u64::from(level)]);
+        data.lods.push(MeshLod {
+            mesh: Arc::new(mesh_grid(&coarse, 1_i64 << level, &frame, level_hash)),
+            screen_size: lod.screen_size as f32,
+        });
+    }
+    data
+}
 
+/// What every level of one document shares: the base's model-frame offset and its palette channels.
+struct Frame<'a> {
+    offset: [f32; 3],
+    colors: &'a [[f32; 4]],
+    materials: &'a [[f32; 3]],
+    authored_material: bool,
+    rim: Option<[f32; 4]>,
+}
+
+/// Greedily meshes one grid whose cells are `step` base voxels wide: a grid coordinate `c` lands at
+/// `c * step - offset`, so for `step = 1` this is the base mesh.
+fn mesh_grid(grid: &Grid, step: i64, frame: &Frame<'_>, hash: u64) -> MeshData {
+    let Frame {
+        offset,
+        colors,
+        materials,
+        authored_material,
+        rim,
+    } = frame;
+    let to_model = |axis: usize, coord: i64| (coord * step) as f32 - offset[axis];
     let mut positions: Vec<f32> = Vec::new();
     let mut normals: Vec<f32> = Vec::new();
     let mut vertex_colors: Vec<f32> = Vec::new();
@@ -391,9 +478,9 @@ pub(crate) fn mesh(doc: &VoxelDocument, hash: u64) -> MeshData {
         bone_indices: vec![0; vertex_count * 4],
         skin_joints: Vec::new(),
         textures: None,
-        authored_material,
+        authored_material: *authored_material,
         base_color_mean: [1.0; 4],
-        rim: doc.rim.as_ref().map(crate::extract::doc_rim_lane),
+        rim: *rim,
         double_sided: false,
         indices,
         hash,
@@ -434,6 +521,7 @@ mod tests {
                 .map(|layer| layer.iter().map(|r| r.to_string()).collect())
                 .collect(),
             rim: None,
+            lods: Vec::new(),
         }
     }
 
@@ -871,6 +959,7 @@ mod tests {
             palette: vec![entry("A", RED)],
             slices: vec![layer(0), layer(1), layer(2)],
             rim: None,
+            lods: Vec::new(),
         };
         let data = mesh(&model, 0);
         assert_eq!(
@@ -879,6 +968,145 @@ mod tests {
             "14 isolated cells, no culling, no merging"
         );
         assert!((total_area(&data) - 84.0).abs() < 1e-4);
+    }
+
+    /// A solid `n`³ cube of one palette entry, with `lods` thresholds.
+    fn cube_with_lods(n: u32, lods: &[f64]) -> VoxelDocument {
+        let row = "A".repeat(n as usize);
+        let mut model = doc([n, n, n], vec![entry("A", RED)], &[]);
+        model.slices = vec![vec![row; n as usize]; n as usize];
+        model.lods = lods
+            .iter()
+            .map(|&screen_size| ludion_scene::VoxelLod { screen_size })
+            .collect();
+        model
+    }
+
+    fn aabb(data: &MeshData) -> ([f32; 3], [f32; 3]) {
+        let mut lo = [f32::MAX; 3];
+        let mut hi = [f32::MIN; 3];
+        for p in data.positions.chunks_exact(3) {
+            for axis in 0..3 {
+                lo[axis] = lo[axis].min(p[axis]);
+                hi[axis] = hi[axis].max(p[axis]);
+            }
+        }
+        (lo, hi)
+    }
+
+    fn grid_of(size: [i64; 3], cells: &[(i64, i64, i64, u8)]) -> Grid {
+        let mut grid = Grid {
+            size,
+            cells: vec![None; (size[0] * size[1] * size[2]) as usize],
+        };
+        for &(x, y, z, pi) in cells {
+            grid.cells[(x + size[0] * (y + size[1] * z)) as usize] = Some(pi);
+        }
+        grid
+    }
+
+    #[test]
+    fn a_chainless_document_has_no_levels() {
+        assert!(mesh(&cube_with_lods(4, &[]), 0).lods.is_empty());
+    }
+
+    #[test]
+    fn downsample_keeps_a_cell_at_four_of_eight_and_drops_it_at_three() {
+        let mut cells = vec![(0, 0, 0, 0)];
+        for (x, y, z) in [(1, 0, 0), (0, 1, 0), (1, 1, 0)] {
+            cells.push((x, y, z, 0));
+        }
+        let four = grid_of([2, 2, 2], &cells).downsample();
+        assert_eq!(four.size, [1, 1, 1]);
+        assert_eq!(four.cells, vec![Some(0)]);
+        cells.pop();
+        assert_eq!(grid_of([2, 2, 2], &cells).downsample().cells, vec![None]);
+        let all: Vec<_> = (0..8).map(|i| (i & 1, (i >> 1) & 1, i >> 2, 0)).collect();
+        assert_eq!(grid_of([2, 2, 2], &all).downsample().cells, vec![Some(0)]);
+    }
+
+    #[test]
+    fn downsample_takes_the_majority_colour_and_breaks_ties_low() {
+        let majority_of_three = [(0, 0, 0, 2), (1, 0, 0, 1), (0, 1, 0, 1), (1, 1, 0, 1)];
+        assert_eq!(
+            grid_of([2, 2, 2], &majority_of_three).downsample().cells,
+            vec![Some(1)]
+        );
+        let tie = [(0, 0, 0, 3), (1, 0, 0, 3), (0, 1, 0, 1), (1, 1, 0, 1)];
+        assert_eq!(grid_of([2, 2, 2], &tie).downsample().cells, vec![Some(1)]);
+    }
+
+    #[test]
+    fn downsample_rounds_the_extent_up_and_reads_outside_as_empty() {
+        let grid = grid_of([5, 5, 5], &[]);
+        assert_eq!(grid.downsample().size, [3, 3, 3]);
+        // A fine row of 5: the last coarse cell holds one fine cell, so it is empty.
+        let edge: Vec<_> = (0..5).map(|x| (x, 0, 0, 0)).collect();
+        let coarse = grid_of([5, 1, 1], &edge).downsample();
+        assert_eq!(coarse.size, [3, 1, 1]);
+        // 2 of 8 fine cells at most per coarse cell in a 1-high row: nothing reaches 4.
+        assert!(coarse.cells.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_two_level_chain_on_a_4_cube_spans_the_base_box() {
+        let data = mesh(&cube_with_lods(4, &[0.25, 0.08]), 7);
+        assert_eq!(data.lods.len(), 2);
+        assert_eq!(data.lods[0].screen_size, 0.25);
+        assert_eq!(data.lods[1].screen_size, 0.08);
+        let base = aabb(&data);
+        assert_eq!(base, ([-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]));
+        let level1 = &data.lods[0].mesh;
+        assert_eq!(
+            aabb(level1),
+            base,
+            "level 1 is a 2x2x2 cube over the base box"
+        );
+        assert_eq!(level1.positions.len() / 3, 24, "one box, six quads");
+        // Level 2 is a single cell of step 4 — again the base box.
+        let level2 = &data.lods[1].mesh;
+        assert_eq!(aabb(level2), base);
+        assert_eq!(level2.positions.len() / 3, 24);
+        assert!(level1.lods.is_empty() && level2.lods.is_empty());
+        assert_ne!(level1.hash, data.hash);
+        assert_ne!(level1.hash, level2.hash);
+        assert_eq!(data.hash, 7);
+    }
+
+    #[test]
+    fn triangle_counts_shrink_down_the_chain() {
+        // A 4x4 chequered-height plate: the finest level keeps every step, the coarse one folds them.
+        let mut model = cube_with_lods(4, &[0.25]);
+        model.slices = vec![
+            vec!["AAAA".to_string(); 4],
+            vec![
+                "A.A.".to_string(),
+                "....".into(),
+                "A.A.".into(),
+                "....".into(),
+            ],
+            vec!["....".to_string(); 4],
+            vec!["....".to_string(); 4],
+        ];
+        let data = mesh(&model, 0);
+        assert!(data.lods[0].mesh.indices.len() < data.indices.len());
+    }
+
+    #[test]
+    fn an_odd_extent_overhangs_toward_plus_x_y_z_only() {
+        let data = mesh(&cube_with_lods(5, &[0.25]), 0);
+        let (lo, hi) = aabb(&data);
+        assert_eq!((lo, hi), ([-2.5, 0.0, -2.5], [2.5, 5.0, 2.5]));
+        // 5 -> 3 cells of 2: the box runs to 6 on each axis, one voxel past the base.
+        let (level_lo, level_hi) = aabb(&data.lods[0].mesh);
+        assert_eq!(level_lo, lo);
+        assert_eq!(level_hi, [3.5, 6.0, 3.5]);
+    }
+
+    #[test]
+    fn a_chained_document_meshes_deterministically() {
+        let model = cube_with_lods(5, &[0.25, 0.08]);
+        assert_eq!(mesh(&model, 3), mesh(&model, 3));
     }
 
     /// The mesher is pure: the same document meshed twice yields a byte-identical stream.
@@ -1064,6 +1292,7 @@ mod tests {
                     palette: palette.clone(),
                     slices,
                     rim: None,
+                    lods: Vec::new(),
                 }
             })
         })

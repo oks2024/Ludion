@@ -3870,6 +3870,42 @@ parts:
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A voxel document with a `lods` chain loads through the cache with its levels attached, and
+    /// an edit to the chain (only a threshold) reloads it.
+    #[test]
+    fn a_voxel_chain_loads_with_its_levels_and_reloads_on_edit() {
+        let dir = revalidation_dir("voxel-chain");
+        let rel = "voxels/v.voxel.yaml";
+        let chain = |tail: &str| {
+            format!(
+                "format: 1\nkind: voxel\nsize:\n  - 4\n  - 4\n  - 4\nlods:\n  - screen_size: 0.25\n  - screen_size: {tail}\npalette:\n  A:\n    color:\n      - 1.0\n      - 0.5\n      - 0.2\n      - 1.0\nslices:\n{}",
+                "  -\n    - \"AAAA\"\n    - \"AAAA\"\n    - \"AAAA\"\n    - \"AAAA\"\n".repeat(4)
+            )
+        };
+        write_file(&dir, rel, &chain("0.08"));
+        let mut cache = AssetCache::new();
+        let mesh = cache
+            .load_voxel(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap()
+            .clone();
+        assert_eq!(mesh.lods.len(), 2);
+        assert_eq!(mesh.lods[0].screen_size, 0.25);
+        assert_eq!(mesh.lods[1].screen_size, 0.08);
+
+        write_file(&dir, rel, &chain("0.05"));
+        let refs = AssetRefs {
+            voxels: named(rel),
+            ..AssetRefs::default()
+        };
+        cache.retain_referenced(ludion_assets::AssetRoot::content(&dir), &refs);
+        let edited = cache
+            .load_voxel(ludion_assets::AssetRoot::content(&dir), rel)
+            .unwrap();
+        assert_eq!(edited.lods[1].screen_size, 0.05);
+        assert_ne!(edited.hash, mesh.hash);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn revalidation_drops_an_edited_voxel_and_its_grid() {
         let dir = revalidation_dir("voxel");

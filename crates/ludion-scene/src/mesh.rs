@@ -115,7 +115,7 @@ const MESH_KEYS: [&str; 26] = [
 const LOD_KEYS: [&str; 2] = ["mesh", "screen_size"];
 
 /// The most coarser levels a mesh may chain after its own (four levels in all).
-pub const MAX_MESH_LODS: usize = 3;
+pub const MAX_MESH_LODS: usize = crate::lod::MAX_LODS;
 
 /// A parsed, structurally valid mesh asset document.
 ///
@@ -1585,22 +1585,7 @@ pub fn check_lod_level(base: &MeshDocument, level: &MeshDocument, index: usize) 
 /// relative `*.mesh.yaml` that stays inside the project, each `screen_size` finite, above zero and
 /// strictly below the previous level's.
 fn validate_lods(lods: &[MeshLodRef], diagnostics: &mut Vec<Diagnostic>) {
-    if lods.len() > MAX_MESH_LODS {
-        diagnostics.push(
-            Diagnostic::new(
-                code::MESH_LOD_CHAIN,
-                format!(
-                    "`lods` lists {} levels; a mesh chains at most {MAX_MESH_LODS} coarser levels \
-                     after its own",
-                    lods.len()
-                ),
-            )
-            .with_path("/lods")
-            .with_help(format!(
-                "keep the first {MAX_MESH_LODS} levels, or merge two"
-            )),
-        );
-    }
+    crate::lod::check_count(lods.len(), "a mesh", diagnostics);
     let mut previous = f64::INFINITY;
     for (index, lod) in lods.iter().enumerate() {
         let pointer = format!("/lods/{index}");
@@ -1633,29 +1618,7 @@ fn validate_lods(lods: &[MeshLodRef], diagnostics: &mut Vec<Diagnostic>) {
                 .with_help("write the level as a relative path, e.g. `crate.lod1.mesh.yaml`"),
             );
         }
-        if !lod.screen_size.is_finite() || lod.screen_size <= 0.0 || lod.screen_size >= previous {
-            let rule = if index == 0 {
-                "finite and above zero"
-            } else {
-                "finite, above zero and strictly below the previous level's"
-            };
-            diagnostics.push(
-                Diagnostic::new(
-                    code::MESH_LOD_CHAIN,
-                    format!(
-                        "level {} `screen_size` {} must be {rule}",
-                        index + 1,
-                        lod.screen_size
-                    ),
-                )
-                .with_path(format!("{pointer}/screen_size"))
-                .with_help(
-                    "a coarser level takes over at a smaller screen size, e.g. 0.25 then 0.08",
-                ),
-            );
-        } else {
-            previous = lod.screen_size;
-        }
+        crate::lod::check_screen_size(index, lod.screen_size, &mut previous, diagnostics);
     }
 }
 

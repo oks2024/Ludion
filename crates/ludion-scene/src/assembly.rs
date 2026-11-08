@@ -1779,6 +1779,7 @@ pub(crate) fn part_voxel(
         rim: None,
         palette: assembly.palette.clone(),
         slices,
+        lods: Vec::new(),
     }
 }
 
@@ -1925,6 +1926,7 @@ pub(crate) fn assembled_grid(assembly: &AssemblyDocument, parts: &[PartDocument]
             rim: None,
             palette: assembly.palette.clone(),
             slices,
+            lods: Vec::new(),
         },
         owners,
     }
@@ -2032,6 +2034,7 @@ fn connected_clusters(size: [u32; 3], cells: &[[u32; 3]]) -> Vec<Vec<[u32; 3]>> 
             roughness: None,
         }],
         slices,
+        lods: Vec::new(),
     };
     marked
         .connectivity_components()

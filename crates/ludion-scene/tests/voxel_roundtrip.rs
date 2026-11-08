@@ -137,6 +137,7 @@ fn voxel_doc() -> impl Strategy<Value = VoxelDocument> {
                     palette,
                     slices,
                     rim: None,
+                    lods: Vec::new(),
                 }
             },
         )
@@ -318,6 +319,7 @@ fn budget_exempt_suppresses_the_cell_budget_warning() {
         palette: Vec::new(),
         slices: vec![layer; sy as usize],
         rim: None,
+        lods: Vec::new(),
     };
     assert!(voxel_budget_warning(&doc).is_some());
     doc.budget_exempt = Some(true);
@@ -398,6 +400,7 @@ fn minimal_model_uses_flow_empties() {
         palette: Vec::new(),
         slices: Vec::new(),
         rim: None,
+        lods: Vec::new(),
     };
     assert_eq!(
         emit_voxel(&doc),
@@ -693,6 +696,7 @@ fn duplicate_palette_glyph_is_l1114() {
         ],
         slices: vec![vec![".".into()]],
         rim: None,
+        lods: Vec::new(),
     };
     assert!(has_l1114_at(&validate_voxel(&doc), "/palette/A"));
 }
@@ -716,6 +720,7 @@ fn non_finite_color_is_l1114() {
         }],
         slices: vec![vec!["A".into()]],
         rim: None,
+        lods: Vec::new(),
     };
     assert!(has_l1114_at(&validate_voxel(&doc), "/palette/A/color/0"));
 }
@@ -834,6 +839,7 @@ fn non_finite_material_scalar_is_l1114() {
         }],
         slices: vec![vec!["A".into()]],
         rim: None,
+        lods: Vec::new(),
     };
     let diagnostics = validate_voxel(&doc);
     assert!(has_l1114_at(&diagnostics, "/palette/A/emissive"));
@@ -860,6 +866,7 @@ fn cell_budget_warning_does_not_fail_validation() {
         palette: Vec::new(),
         slices: vec![layer; sy as usize],
         rim: None,
+        lods: Vec::new(),
     };
     assert!(validate_voxel(&doc).is_empty());
     let warning = voxel_budget_warning(&doc).expect("expected a budget warning");
@@ -879,6 +886,80 @@ fn cell_budget_warning_does_not_fail_validation() {
         palette: Vec::new(),
         slices: vec![vec!["....".into(); 4]; 4],
         rim: None,
+        lods: Vec::new(),
     };
     assert!(voxel_budget_warning(&small).is_none());
+}
+
+// --- `lods` (the generated-at-load LOD chain, `L1395`) -----------------------------------------------
+
+const LODS_BASE: &str = "format: 1\nkind: voxel\nsize:\n  - 2\n  - 1\n  - 1\n";
+const LODS_TAIL: &str = "palette:\n  A:\n    color:\n      - 1.0\n      - 0.0\n      - 0.0\n      - 1.0\nslices:\n  -\n    - \"AA\"\n";
+
+fn with_lods(block: &str) -> String {
+    format!("{LODS_BASE}{block}{LODS_TAIL}")
+}
+
+#[test]
+fn lods_round_trip_as_a_fixed_point() {
+    let source = with_lods("lods:\n  - screen_size: 0.25\n  - screen_size: 0.08\n");
+    let doc = check_voxel(&source).expect("a chain checks clean");
+    assert_eq!(doc.lods.len(), 2);
+    assert_eq!(doc.lods[1].screen_size, 0.08);
+    let text = emit_voxel(&doc);
+    assert_eq!(text, source, "the canonical spelling is the authored one");
+    assert_eq!(emit_voxel(&check_voxel(&text).unwrap()), text);
+}
+
+#[test]
+fn a_chainless_document_emits_no_lods_key() {
+    let doc = check_voxel(&with_lods("")).unwrap();
+    assert!(doc.lods.is_empty());
+    assert!(!emit_voxel(&doc).contains("lods"));
+}
+
+#[test]
+fn a_malformed_chain_reports_l1395_with_a_pointer() {
+    let cases: [(&str, &str); 5] = [
+        (
+            "lods:\n  - screen_size: 0.4\n  - screen_size: 0.3\n  - screen_size: 0.2\n  - screen_size: 0.1\n",
+            "/lods",
+        ),
+        ("lods:\n  - screen_size: 0\n", "/lods/0/screen_size"),
+        (
+            "lods:\n  - screen_size: 0.2\n  - screen_size: 0.2\n",
+            "/lods/1/screen_size",
+        ),
+        (
+            "lods:\n  - screen_size: 0.2\n    mesh: a.mesh.yaml\n",
+            "/lods/0/mesh",
+        ),
+        ("lods:\n  - {}\n", "/lods/0"),
+    ];
+    for (block, pointer) in cases {
+        let diagnostics = check_voxel(&with_lods(block)).expect_err(block);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.code.as_str() == "L1395" && d.path.as_deref() == Some(pointer)),
+            "{block:?} should report L1395 at {pointer}, got {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn a_non_finite_threshold_is_l1395() {
+    // The YAML layer refuses `.nan`/`.inf` text, so only a built document reaches the validator.
+    let mut doc = check_voxel(&with_lods("")).unwrap();
+    for bad in [f64::NAN, f64::INFINITY] {
+        doc.lods = vec![ludion_scene::VoxelLod { screen_size: bad }];
+        let diagnostics = validate_voxel(&doc);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.code.as_str() == "L1395"
+                    && d.path.as_deref() == Some("/lods/0/screen_size")),
+            "{bad} should report L1395, got {diagnostics:?}"
+        );
+    }
 }

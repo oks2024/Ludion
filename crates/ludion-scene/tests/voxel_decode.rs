@@ -154,6 +154,7 @@ fn decoded_cells_match_palette_index_on_a_wide_mixed_model() {
             vec![row[..7].to_string(), row.clone()],
         ],
         rim: None,
+        lods: Vec::new(),
     };
 
     let cells = assert_decode_matches("wide", &doc);

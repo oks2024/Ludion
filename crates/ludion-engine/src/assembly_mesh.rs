@@ -817,6 +817,7 @@ mod tests {
                 .map(|layer| layer.iter().map(|row| row.to_string()).collect())
                 .collect(),
             rim: None,
+            lods: Vec::new(),
         };
         assert_eq!(
             *data.parts[0].mesh,

@@ -16,7 +16,7 @@ one file describes one model.
 
 ## Format
 
-Ten keys, in this order:
+Eleven keys, in this order:
 
 | key | meaning |
 | --- | --- |
@@ -28,6 +28,7 @@ Ten keys, in this order:
 | `generated_from:` | optional — the generator script that owns this model; its presence makes the file **write-only** and enrols it in the `voxel-drift` gate (`ludion docs voxel-generation`) |
 | `budget_exempt:` | optional, only ever `true` — this model is deliberately over the `L1115` cell budget (`ludion docs voxel-ops`) |
 | `rim:` | optional `{ color, strength, power }` — one view-angle edge for the whole model; wins over `Mesh.rim` (`ludion docs materials`) |
+| `lods:` | optional, up to 3 `{ screen_size }` entries (finite, above 0, strictly falling; `L1395`) — each coarser level is a 2× majority downsample generated at load and drawn by the mesh LOD selection (`ludion docs culling`) |
 | `palette:` | map from a **single glyph** to `{ color: [r, g, b, a] }` |
 | `slices:` | the grid — `y` layers, each a list of `z` row-strings of exactly `x` characters |
 
@@ -224,6 +225,11 @@ are **not** connected.
   (`.`), or duplicate glyph; a non-finite color component; or an authored `emissive`/`metallic`/
   `roughness` that is non-finite or outside its range (`emissive < 0`, or `metallic`/`roughness`
   outside `[0, 1]`).
+- **`L1395` — a malformed `lods:`:** more than three levels, a `screen_size` that is not finite, above
+  zero and below the previous level's, or a level key other than `screen_size`. A level is generated,
+  so it names no file. An odd extent rounds up when halved, so a coarse level overhangs the base by
+  under one coarse cell toward +X/+Y/+Z. A sculpt `shape: voxel` part and an assembly part ignore the
+  chain.
 - **`L1113` — structure:** a missing key, a wrong `kind`, a non-integer `size`, or an unknown key
   (reported with a nearest-match suggestion).
 - **Block scalars are rejected (`L1006`).** The strict-YAML subset forbids `|` and `>`, so a layer

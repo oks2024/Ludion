@@ -370,7 +370,11 @@ pub fn restore_snapshot(data: &[u8]) {
 /// Target 10 — the glTF/GLB importer never panics on arbitrary bytes; external files are refused,
 /// so the fuzzer never reads the filesystem.
 pub fn gltf_import(data: &[u8]) {
-    let _ = ludion_import::import(data, ExternalFiles::Refused, &ludion_import::ImportOptions::lossy(false));
+    let _ = ludion_import::import(
+        data,
+        ExternalFiles::Refused,
+        &ludion_import::ImportOptions::lossy(false),
+    );
 }
 
 /// Target 11 — the font bake never panics on arbitrary face bytes, as an SDF face and as a bitmap

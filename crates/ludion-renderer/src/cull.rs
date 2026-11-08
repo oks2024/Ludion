@@ -50,6 +50,13 @@ impl Aabb {
     pub(crate) fn is_finite(&self) -> bool {
         self.min.is_finite() && self.max.is_finite()
     }
+
+    fn union(self, other: Aabb) -> Aabb {
+        Aabb {
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
+        }
+    }
 }
 
 /// Six inward-facing, normalized planes `(n, d)`; a point is inside a plane when `n·p + d ≥ 0`.
@@ -311,9 +318,19 @@ pub(crate) struct AssetBounds {
 }
 
 impl AssetBounds {
+    /// The local box is the union of the base and every level of its chain, so a level that reaches
+    /// past the base (a voxel level on an odd extent overhangs it) is never culled early. A level
+    /// whose vertices are a subset of the base's (a decimated one) leaves the box unchanged.
     pub(crate) fn of_mesh(mesh: &MeshData) -> AssetBounds {
+        let local = mesh
+            .lods
+            .iter()
+            .filter_map(|lod| Aabb::of_positions(&lod.mesh.positions))
+            .fold(Aabb::of_positions(&mesh.positions), |bounds, level| {
+                Some(bounds.map_or(level, |b| b.union(level)))
+            });
         AssetBounds {
-            local: Aabb::of_positions(&mesh.positions),
+            local,
             skin: SkinBounds::of_mesh(mesh).map(Arc::new),
         }
     }
@@ -1095,6 +1112,45 @@ mod tests {
         let meshes = [skinned_instance(far, 1), skinned_instance(far, 5)];
         assert_eq!(instance_bounds(&meshes, &assets, &short), vec![None, None]);
         assert_eq!(instance_bounds(&meshes, &[], &[]), vec![None, None]);
+    }
+
+    fn plain_mesh(positions: Vec<f32>) -> MeshData {
+        let n = positions.len() / 3;
+        skin_mesh(
+            positions,
+            [1.0, 0.0, 0.0, 0.0].repeat(n),
+            vec![0; n * 4],
+            &[],
+        )
+    }
+
+    fn with_level(mut base: MeshData, level: MeshData) -> MeshData {
+        base.lods.push(crate::scene::MeshLod {
+            mesh: Arc::new(level),
+            screen_size: 0.25,
+        });
+        base
+    }
+
+    #[test]
+    fn asset_bounds_are_the_union_of_the_base_and_every_level() {
+        let base = plain_mesh(vec![-1.0, 0.0, -1.0, 1.0, 2.0, 1.0]);
+        let alone = AssetBounds::of_mesh(&base).local.expect("a box");
+        // A level that overhangs +X/+Y/+Z grows the box on exactly those sides.
+        let level = plain_mesh(vec![-1.0, 0.0, -1.0, 2.0, 3.0, 2.0]);
+        let chained = AssetBounds::of_mesh(&with_level(base.clone(), level))
+            .local
+            .expect("a box");
+        assert_eq!(
+            (chained.min, chained.max),
+            (alone.min, Vec3::new(2.0, 3.0, 2.0))
+        );
+        // A decimated level (a subset of the base's vertices) leaves the box exactly as it was.
+        let subset = plain_mesh(vec![-1.0, 0.0, -1.0, 1.0, 2.0, 1.0]);
+        let decimated = AssetBounds::of_mesh(&with_level(base, subset))
+            .local
+            .expect("a box");
+        assert_eq!((decimated.min, decimated.max), (alone.min, alone.max));
     }
 
     #[test]

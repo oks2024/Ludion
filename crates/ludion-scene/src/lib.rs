@@ -121,6 +121,7 @@ mod generation;
 mod instance;
 mod instantiate;
 mod kinds;
+mod lod;
 mod map;
 mod mesh;
 mod mesh_edit;
@@ -216,7 +217,7 @@ pub use validate::HierarchyCycle;
 pub use voxel::{
     ConnectivityComponent, ConnectivityGap, EmissiveFaces, ExposureReport, ExposureView,
     GAME_VIEW_PITCH_DEG, GameViewFaces, GlyphExposure, MirrorRegion, PaletteEntry,
-    VOXEL_CELL_BUDGET, VOXEL_FORMAT_VERSION, VOXEL_MAX_CELLS, VoxelDocument,
+    VOXEL_CELL_BUDGET, VOXEL_FORMAT_VERSION, VOXEL_MAX_CELLS, VoxelDocument, VoxelLod,
     apply_assembly_palette_overrides, apply_palette_overrides,
 };
 pub use voxel_edit::{

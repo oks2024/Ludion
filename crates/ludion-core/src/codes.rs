@@ -1659,10 +1659,11 @@ pub mod code {
     /// A lint raised once, at runtime, after a tick.
     pub const PATTERN_SYSTEM_NOT_RUN: DiagnosticCode = DiagnosticCode::new("L1394");
 
-    /// `L1395` — a mesh asset's `lods:` chain is malformed: more than three levels, a `screen_size`
-    /// that is not finite, positive and strictly decreasing, a level path that is not a
-    /// `*.mesh.yaml` file inside the project, or a level document that carries its own `lods`.
-    /// Raised by `ludion-scene` and the engine's mesh loader.
+    /// `L1395` — a mesh or voxel document's `lods:` chain is malformed: more than three levels, a
+    /// `screen_size` that is not finite, positive and strictly decreasing, a mesh level path that is
+    /// not a `*.mesh.yaml` file inside the project, a mesh level document that carries its own
+    /// `lods`, or a voxel level with a key other than `screen_size`. Raised by `ludion-scene` and
+    /// the engine's mesh loader.
     pub const MESH_LOD_CHAIN: DiagnosticCode = DiagnosticCode::new("L1395");
 
     /// `L1396` — a mesh LOD level does not match its base mesh's draw key (alpha mode, cutoff,
@@ -8258,10 +8259,12 @@ warns until its first call.",
     CodeEntry {
         code: code::MESH_LOD_CHAIN,
         severity: Severity::Error,
-        title: "mesh LOD chain is malformed",
+        title: "LOD chain is malformed",
         explanation: "\
-A mesh asset's `lods:` list is not a valid level-of-detail chain. A chain lists up to three coarser
-levels after the base mesh, each `- {mesh: <path>, screen_size: <number>}`.
+A mesh asset's or voxel model's `lods:` list is not a valid level-of-detail chain. A chain lists up
+to three coarser levels after the base, each `- {mesh: <path>, screen_size: <number>}` on a mesh. A
+voxel level is generated at load as a 2x downsample of the previous one, so it carries only
+`- screen_size: <number>`.
 
 Specifically, one of:
 
@@ -8270,7 +8273,8 @@ Specifically, one of:
     level's (a level takes over when the mesh covers less than its `screen_size` of the viewport
     height, so the sizes fall as the levels get coarser);
   - a `mesh` path that does not end in `.mesh.yaml`, is absolute, or names a drive or reserved device;
-  - a level document that carries its own `lods` (chains do not nest).
+  - a level document that carries its own `lods` (chains do not nest);
+  - a voxel level with a key besides `screen_size`, or none.
 
 Fix: write the levels coarsest-last with falling sizes, e.g.
 

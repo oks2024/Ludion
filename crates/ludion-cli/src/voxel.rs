@@ -70,6 +70,7 @@ pub fn run_new(
         palette,
         slices: vec![vec![".".repeat(sx as usize); sz as usize]; sy as usize],
         rim: None,
+        lods: Vec::new(),
     };
     let comments = scaffold_comments(name.as_deref(), size, scale);
     let text = ludion_scene::emit_voxel_with_comments(&doc, &comments);

@@ -987,6 +987,7 @@ fn emit_with_comments_works_on_a_built_document() {
         palette: Vec::new(),
         slices: vec![vec![".".into()]],
         rim: None,
+        lods: Vec::new(),
     };
     let mut comments = VoxelComments::default();
     comments.header.push("a stub".into());
@@ -1266,4 +1267,35 @@ fn emit_voxel_quotes_letter_led_rows() {
     let source = TOTEM.replace("    - AAAA\n", "    - AB..\n");
     let doc = check_voxel(&source).expect("valid");
     assert!(emit_voxel(&doc).contains("    - \"AB..\"\n"));
+}
+
+/// A `lods` chain survives the surgical patch, a re-emitting reshape and `upscale`.
+#[test]
+fn write_verbs_keep_the_lods_chain() {
+    let model = TOTEM.replace(
+        "palette:\n",
+        "lods:\n  - screen_size: 0.25\n  - screen_size: 0.08\npalette:\n",
+    );
+    let set = apply(&model, "  - op: set\n    at: \"1,0,1\"\n    glyph: B\n");
+    assert!(set.surgical);
+    assert_eq!(set.doc.lods.len(), 2);
+    assert!(
+        set.text
+            .contains("lods:\n  - screen_size: 0.25\n  - screen_size: 0.08\n")
+    );
+
+    let shifted = apply(
+        &model,
+        "  - op: grow\n    low: \"0,0,0\"\n    high: \"2,0,0\"\n",
+    );
+    assert!(!shifted.surgical);
+    assert_eq!(shifted.doc.lods.len(), 2);
+    assert!(shifted.text.contains("lods:\n  - screen_size: 0.25\n"));
+
+    let up = upscale_voxel(&model, 2, None).expect("2 is in range");
+    assert_eq!(up.doc.lods.len(), 2);
+    assert!(
+        up.text
+            .contains("lods:\n  - screen_size: 0.25\n  - screen_size: 0.08\n")
+    );
 }

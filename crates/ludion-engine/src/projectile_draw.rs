@@ -1337,6 +1337,25 @@ slices:
     }
 
     #[test]
+    fn a_voxel_look_with_lods_hands_its_levels_to_the_cull() {
+        let root = project_with("voxel-chain", Some(CRYSTAL));
+        let chained = VOXEL_GIB.replace("palette:", "lods:\n  - screen_size: 0.2\npalette:");
+        assert_ne!(chained, VOXEL_GIB);
+        std::fs::write(root.join("voxels/gib.voxel.yaml"), chained).unwrap();
+        let mut visuals = ProjectileVisuals::default();
+        visuals.tags.insert(1, gib(voxel_look()));
+        let mut engine = gib_engine(&root, visuals);
+        spin_shot(&mut engine, 1, [0.0; 3], Quat::IDENTITY.to_array(), 5.0);
+        let (scene, _) = engine.extract_present_scene().unwrap();
+        assert_eq!(scene.mesh_assets[0].lods.len(), 1);
+        let shape = ludion_renderer::PostChain::for_scene(&scene).cull.unwrap();
+        assert_eq!(
+            shape.levels, 2,
+            "the pool's voxel look selects levels like any asset"
+        );
+    }
+
+    #[test]
     fn a_spun_cube_draws_its_orientation_and_an_unspun_one_faces_its_heading() {
         let mut visuals = ProjectileVisuals::default();
         visuals.tags.insert(1, gib(ProjectileLook::Cube));

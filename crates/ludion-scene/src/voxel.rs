@@ -50,7 +50,7 @@ pub const VOXEL_MAX_CELLS: u64 = 16_777_216;
 /// The reserved glyph meaning "empty cell". It can never name a palette entry.
 const EMPTY_GLYPH: char = '.';
 
-const VOXEL_KEYS: [&str; 10] = [
+const VOXEL_KEYS: [&str; 11] = [
     "format",
     "kind",
     "name",
@@ -59,6 +59,7 @@ const VOXEL_KEYS: [&str; 10] = [
     "generated_from",
     "budget_exempt",
     "rim",
+    "lods",
     "palette",
     "slices",
 ];
@@ -198,6 +199,14 @@ pub struct ExposureReport {
     pub emissive: Vec<EmissiveFaces>,
 }
 
+/// One coarser level of a voxel model's LOD chain (`L1395` on a malformed chain).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VoxelLod {
+    /// The fraction of viewport height at which this level takes over; finite, above zero and
+    /// strictly below the previous level's.
+    pub screen_size: f64,
+}
+
 /// A parsed, structurally valid voxel model document.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct VoxelDocument {
@@ -235,6 +244,9 @@ pub struct VoxelDocument {
     /// One rim highlight for the whole model. It wins over the entity's `Mesh.rim` and any
     /// inherited one. Ranges are `L1114`.
     pub rim: Option<crate::rim::DocRim>,
+    /// Coarser levels of detail, finest first; empty means no chain. Each level is generated at
+    /// load as a 2x downsample of the previous one, so only its switch threshold is authored.
+    pub lods: Vec<VoxelLod>,
     /// Palette entries, in sorted-glyph order (the canonical order [`crate::emit_voxel`] writes).
     pub palette: Vec<PaletteEntry>,
     /// Slice layers, bottom-up (`slices[y]`), each a sequence of row strings (`slices[y][z]`); the
@@ -953,6 +965,11 @@ pub(crate) fn parse(source: &str) -> Result<VoxelDocument, Vec<Diagnostic>> {
                     &mut diagnostics,
                 );
             }
+            "lods" => {
+                if let Some(parsed) = crate::lod::parse_voxel_lods(&entry.node, &mut diagnostics) {
+                    doc.lods = parsed;
+                }
+            }
             "palette" => {
                 palette_seen = true;
                 doc.palette =
@@ -1441,6 +1458,8 @@ pub(crate) fn validate(doc: &VoxelDocument) -> Vec<Diagnostic> {
             code::VOXEL_DATA_CONSISTENCY,
         ));
     }
+
+    crate::lod::validate_voxel_lods(&doc.lods, &mut diagnostics);
 
     // `budget_exempt` exists only to suppress `L1115`; `false` suppresses nothing, so it is a
     // no-op key that reads like an assertion the budget was honoured. Say so instead.
@@ -2152,6 +2171,8 @@ pub(crate) fn emit_with_comments(doc: &VoxelDocument, comments: &VoxelComments) 
     if let Some(rim) = &doc.rim {
         crate::rim::emit_rim(&mut out, rim);
     }
+
+    crate::lod::emit_voxel_lods(&mut out, &doc.lods);
 
     emit_palette(&mut out, &doc.palette);
 
