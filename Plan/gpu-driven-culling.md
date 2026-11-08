@@ -691,7 +691,7 @@ G11 stay open with their recommendations as defaults.
 
 ## Status
 
-Design written 2026-09-30. Rung 0 shipped (Clockout 0030; `Visibility`, `examples/gallery/visibility.yaml`). Rung 2a is in flight as request 0008 (decisions 7–20; the W2 wave set above): nothing of the cull is built yet, and the "before" and "after" bench figures land here as the waves ship.
+Design written 2026-09-30. Rung 0 shipped (Clockout 0030; `Visibility`, `examples/gallery/visibility.yaml`). Rung 2a shipped for request 0008 (decisions 7–20; the W2 wave set above); the bench figures are below.
 
 **A real consumer exists (2026-10-02).** vigil's environment moves to Blender-authored mesh kits
 (a private plan). The first dressed set, a 40 × 42 m walled square, draws 605 mesh
