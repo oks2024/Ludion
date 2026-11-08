@@ -339,6 +339,7 @@ fn binding_kind(
         naga::AddressSpace::Uniform => BindingKind::Buffer {
             address_space: BufferSpace::Uniform,
             min_size: layouter[gv.ty].size,
+            atomic: reaches_atomic(module, gv.ty),
         },
         // `min_size` for a runtime-sized array is one element's stride: naga's Layouter sizes a
         // dynamically-sized array as exactly one element, which is also what wgpu's
@@ -348,6 +349,7 @@ fn binding_kind(
                 read_only: !access.contains(naga::StorageAccess::STORE),
             },
             min_size: layouter[gv.ty].size,
+            atomic: reaches_atomic(module, gv.ty),
         },
         naga::AddressSpace::Handle => match &module.types[gv.ty].inner {
             naga::TypeInner::Image {
@@ -389,6 +391,20 @@ fn binding_kind(
             });
         }
     })
+}
+
+/// Whether `ty` is, or holds through arrays and struct members, an `atomic<…>`.
+fn reaches_atomic(module: &naga::Module, ty: naga::Handle<naga::Type>) -> bool {
+    match &module.types[ty].inner {
+        naga::TypeInner::Atomic(_) => true,
+        naga::TypeInner::Array { base, .. } | naga::TypeInner::BindingArray { base, .. } => {
+            reaches_atomic(module, *base)
+        }
+        naga::TypeInner::Struct { members, .. } => {
+            members.iter().any(|m| reaches_atomic(module, m.ty))
+        }
+        _ => false,
+    }
 }
 
 fn texture_dim(

@@ -4,7 +4,7 @@ use super::*;
 
 /// A skinned quad whose single joint has an identity inverse bind, so the shadow cull bounds it
 /// by its posed palette.
-fn bounded_skin_quad(hash: u64) -> MeshData {
+pub(super) fn bounded_skin_quad(hash: u64) -> MeshData {
     let mut quad = skin_quad([1.0, 0.0, 0.0, 0.0], [0, 0, 0, 0], hash);
     quad.skin_joints = vec![crate::scene::SkinJoint {
         name: "root".into(),

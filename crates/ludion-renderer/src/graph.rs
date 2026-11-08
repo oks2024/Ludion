@@ -606,6 +606,67 @@ impl FrameSize {
     }
 }
 
+/// The capacities of one GPU frustum cull (`cull.wgsl`): how many instances, draw buckets and views
+/// its buffers hold. Capacities, not live counts, so the graph's buffer cache rarely reallocates;
+/// plain `Copy` data, so it can ride in [`PostChain`].
+///
+/// ```
+/// use ludion_renderer::CullShape;
+///
+/// let shape = CullShape::for_counts(1000, 5, 1);
+/// assert_eq!((shape.instances, shape.buckets, shape.views), (1024, 16, 1));
+/// assert_eq!(shape.instance_bytes(), 1024 * 192);
+/// assert_eq!(shape.args_bytes(), 16 * 20);
+/// assert_eq!(shape.scratch_bytes(), (32 + 4 + 1) * 4);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CullShape {
+    /// The instance capacity, a power of two of at least 256.
+    pub instances: u32,
+    /// The bucket (indirect draw) capacity, a power of two of at least 16.
+    pub buckets: u32,
+    /// The view count.
+    pub views: u32,
+}
+
+impl CullShape {
+    /// The smallest shape holding `instances` and `buckets` for `views` views: each capacity rounds up
+    /// to a power of two, with floors of 256 instances and 16 buckets so small scenes share a shape.
+    pub fn for_counts(instances: usize, buckets: usize, views: usize) -> CullShape {
+        let cap = |n: usize, floor: u32| (n.max(floor as usize).next_power_of_two()) as u32;
+        CullShape {
+            instances: cap(instances, 256),
+            buckets: cap(buckets, 16),
+            views: views as u32,
+        }
+    }
+
+    /// Visibility words per view: one bit per instance.
+    pub fn words(&self) -> u32 {
+        self.instances / 32
+    }
+
+    /// Scan blocks per view: 256 instances each.
+    pub fn blocks(&self) -> u32 {
+        self.instances / 256
+    }
+
+    /// The scratch buffer: per view the visibility words, the block counts and the total.
+    pub fn scratch_bytes(&self) -> u64 {
+        u64::from(self.views) * u64::from(self.words() + self.blocks() + 1) * 4
+    }
+
+    /// The compacted-instance buffer: `views` copies of `instances` 192-byte instances.
+    pub fn instance_bytes(&self) -> u64 {
+        u64::from(self.views) * u64::from(self.instances) * 192
+    }
+
+    /// The indirect-args buffer: one 20-byte slot per (view, bucket).
+    pub fn args_bytes(&self) -> u64 {
+        u64::from(self.views) * u64::from(self.buckets) * 20
+    }
+}
+
 /// What a scene's content requires of the graph's *structure* — everything but the resolution.
 ///
 /// Plain `Copy` data, so [`build_frame_graph`] stays a pure function of its arguments: no GPU, no

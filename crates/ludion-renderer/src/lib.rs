@@ -54,6 +54,11 @@ mod frame_observer;
 mod gi_bake;
 mod gi_bin;
 mod gi_inject;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired into the frame by the cull pass")
+)]
+mod gpu_cull;
 pub mod graph;
 mod ibl;
 mod lobe;
@@ -90,7 +95,8 @@ pub use debug_view::{DebugView, PROBE_VIEW_PALETTE, SUN_CASCADE_VIEW_PALETTE};
 pub use frame_observer::{FrameObserver, FramePhase};
 pub use gi_bake::{GiReadback, max_gi_probes};
 pub use graph::{
-    AntiAliasing, FrameSize, PostChain, RenderScale, build_frame_graph, dump_frame_graph_json,
+    AntiAliasing, CullShape, FrameSize, PostChain, RenderScale, build_frame_graph,
+    dump_frame_graph_json,
 };
 pub use local_shadow::{
     LocalShadowStats, is_valid_atlas_edge, local_shadow_marks, local_shadow_stats,

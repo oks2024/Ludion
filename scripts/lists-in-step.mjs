@@ -176,6 +176,7 @@ const GPU_FILE_EXEMPT = new Map([
   ['crates/ludion-renderer/src/render/tests/lit_additive.rs', 'skip_or_renderer in render.rs puts the device up'],
   ['crates/ludion-renderer/src/render/tests/shaft_layer.rs','skip_or_renderer in render.rs puts the device up'],
   ['crates/ludion-renderer/src/render/tests/skin_bounds.rs','skip_or_renderer in render.rs puts the device up'],
+  ['crates/ludion-renderer/src/render/tests/gpu_cull.rs', 'skip_or_renderer in render.rs puts the device up'],
   ['crates/ludion-renderer/src/render/tests/viewmodel.rs','skip_or_renderer in render.rs puts the device up'],
 ]);
 

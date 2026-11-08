@@ -11,6 +11,7 @@ use crate::render::{Snippet, compose_builtin};
 /// A compute shader and its composition.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ComputeShader {
+    Cull,
     GiBake,
     GiInject,
     Ibl,
@@ -19,7 +20,8 @@ pub(crate) enum ComputeShader {
 
 impl ComputeShader {
     /// Every compute shader, in the order of `ludion_shader_bindgen::COMPUTE_SHADERS` (sorted).
-    pub(crate) const ALL: [ComputeShader; 4] = [
+    pub(crate) const ALL: [ComputeShader; 5] = [
+        ComputeShader::Cull,
         ComputeShader::GiBake,
         ComputeShader::GiInject,
         ComputeShader::Ibl,
@@ -29,6 +31,7 @@ impl ComputeShader {
     /// The body's file name under `shaders/`.
     pub(crate) fn file_name(self) -> &'static str {
         match self {
+            ComputeShader::Cull => "cull.wgsl",
             ComputeShader::GiBake => "gi_bake.wgsl",
             ComputeShader::GiInject => "gi_inject.wgsl",
             ComputeShader::Ibl => "ibl.wgsl",
@@ -41,13 +44,14 @@ impl ComputeShader {
         match self {
             ComputeShader::Ibl => &[Snippet::Math, Snippet::Dfg, Snippet::SkyGradient],
             ComputeShader::GiBake | ComputeShader::GiInject => &[Snippet::Math, Snippet::GiRays],
-            ComputeShader::ProbeRelight => &[],
+            ComputeShader::Cull | ComputeShader::ProbeRelight => &[],
         }
     }
 
     /// The compiled-in body, minus the snippets.
     pub(crate) fn body_source(self) -> &'static str {
         match self {
+            ComputeShader::Cull => include_str!("shaders/cull.wgsl"),
             ComputeShader::GiBake => include_str!("shaders/gi_bake.wgsl"),
             ComputeShader::GiInject => include_str!("shaders/gi_inject.wgsl"),
             ComputeShader::Ibl => include_str!("shaders/ibl.wgsl"),

@@ -97,7 +97,7 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct MeshInstanceRaw {
+pub(crate) struct MeshInstanceRaw {
     model: [[f32; 4]; 4],
     color: [f32; 4],
     /// `(roughness, metallic, emissive, use_vertex_material)`. `w` is the branch-free selection
@@ -9228,6 +9228,7 @@ mod tests {
     use super::*;
     use crate::scene::{MeshInstance, RenderScene};
 
+    mod gpu_cull;
     mod lit_additive;
     mod shaft_layer;
     mod skin_bounds;

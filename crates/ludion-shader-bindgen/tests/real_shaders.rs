@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 use ludion_shader_bindgen::{
     BindingKind, BufferSpace, COMPUTE_SHADERS, RENDER_GRAPH_SHADERS, RENDERER_SHADERS, ShaderStage,
-    StorageAccess, StorageFormat, TextureDim, check_unfilterable, load_units, reflect,
+    StorageAccess, StorageFormat, TextureDim, check_atomic_free, check_unfilterable, load_units,
+    reflect,
 };
 
 fn workspace() -> PathBuf {
@@ -61,6 +62,7 @@ fn shader_lists_match_the_shader_dirs() {
 fn all_repo_shaders_reflect_and_unify() {
     let reflection = reflect(&units()).expect("every repo shader should reflect without error");
     check_unfilterable(&reflection).expect("every unfilterable name is a reflected float texture");
+    check_atomic_free(&reflection).expect("atomic-free units bind no atomic");
 
     // Camera is copy-pasted across mesh/sprite/text — it must unify into exactly one struct.
     assert_eq!(
@@ -97,6 +99,7 @@ fn all_repo_shaders_reflect_and_unify() {
         BindingKind::Buffer {
             address_space: BufferSpace::Uniform,
             min_size: 112,
+            ..
         }
     ));
     assert_eq!(
@@ -176,10 +179,10 @@ fn all_repo_shaders_reflect_and_unify() {
     // normal + depth group, and the probe relight kernel's, and the SSR blend's fill + normal +
     // specular + depth + trace group, and the local-shadow atlas debug view's, and the decal
     // projector's map group, the receiver-id pass's draw group and the lit decal pass's group, and the
-    // three SMAA passes' groups (edges, weights, blend). Of
-    // them exactly four are compute-only (gi_bake, gi_inject, probe_relight, the IBL prefilter trio): the emitter
-    // skips their BGLs because compute pipelines keep auto-derived layouts.
-    assert_eq!(reflection.bind_groups.len(), 46);
+    // three SMAA passes' groups (edges, weights, blend), and the cull's two buffer groups (inputs, outputs). Of
+    // them exactly six are compute-only (gi_bake, gi_inject, probe_relight, the IBL prefilter trio, the cull's pair): the emitter
+    // skips the BGLs of the texture-bearing ones because their compute pipelines keep auto-derived layouts.
+    assert_eq!(reflection.bind_groups.len(), 48);
     let mut compute_only: Vec<&str> = reflection
         .bind_groups
         .iter()
@@ -194,6 +197,8 @@ fn all_repo_shaders_reflect_and_unify() {
     assert_eq!(
         compute_only,
         [
+            "cull.wgsl",
+            "cull.wgsl",
             "gi_bake.wgsl",
             "gi_inject.wgsl",
             "ibl.wgsl",
@@ -237,6 +242,7 @@ fn all_repo_shaders_reflect_and_unify() {
         BindingKind::Buffer {
             address_space: BufferSpace::Storage { read_only: false },
             min_size: 4,
+            atomic: false,
         }
     );
     let probes_out = reflection.binding_named("probes_out").unwrap();

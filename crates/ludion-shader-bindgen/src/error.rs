@@ -45,6 +45,8 @@ pub enum ReflectError {
     },
     /// An [`UNFILTERABLE_TEXTURES`](crate::UNFILTERABLE_TEXTURES) entry names no reflected float texture.
     UnfilterableNotFound { name: String },
+    /// A buffer binding of an [`ATOMIC_FREE_UNITS`](crate::ATOMIC_FREE_UNITS) unit reaches an `atomic<…>`.
+    AtomicInAtomicFreeUnit { unit: String, binding: String },
 }
 
 impl fmt::Display for ReflectError {
@@ -104,6 +106,12 @@ impl fmt::Display for ReflectError {
                 "`UNFILTERABLE_TEXTURES` lists `{name}`, but no reflected shader binds a float texture \
                  by that name. Rename the entry with its binding, or delete it. Otherwise the renamed \
                  binding silently becomes filterable."
+            ),
+            ReflectError::AtomicInAtomicFreeUnit { unit, binding } => write!(
+                f,
+                "`{unit}` binds `{binding}` with an `atomic<…>` type, but its compaction must be stable \
+                 (survivors keep input order): an atomic append orders them by thread timing. Count \
+                 with a per-block scan instead (Plan/gpu-driven-culling.md decision 15)."
             ),
         }
     }

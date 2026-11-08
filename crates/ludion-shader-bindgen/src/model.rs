@@ -211,6 +211,8 @@ pub enum BindingKind {
         /// `var<storage, read> xs: array<T>` binding reports one element's stride: the smallest
         /// buffer the shader can legally read, which is what `min_binding_size` means.
         min_size: u32,
+        /// The bound type reaches an `atomic<…>` through arrays and struct members.
+        atomic: bool,
     },
     Texture {
         dim: TextureDim,

@@ -78,6 +78,10 @@ impl Frustum {
         }
     }
 
+    pub(crate) fn planes(&self) -> [Vec4; 6] {
+        self.planes
+    }
+
     pub(crate) fn intersects_sphere(&self, center: Vec3, radius: f32) -> bool {
         self.planes
             .iter()
@@ -294,7 +298,6 @@ pub(crate) struct CullBoundsRaw {
     pub(crate) _pad: u32,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "read by the cull compute pass"))]
 /// A shape's row in [`bounds_table`]: the three primitives first, then each mesh asset.
 pub(crate) fn bounds_slot(shape: MeshShape) -> u32 {
     match shape {

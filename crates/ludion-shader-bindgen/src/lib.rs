@@ -66,6 +66,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "bloom_up.wgsl",
     "box_blur.wgsl",
     "composite.wgsl",
+    "cull.wgsl",
     "debug_line.wgsl",
     "decal_lit.wgsl",
     "decal_receiver.wgsl",
@@ -142,6 +143,30 @@ fn check_unfilterable_names(reflection: &Reflection, names: &[&str]) -> Result<(
     Ok(())
 }
 
+/// Units whose bindings must not reach an `atomic<…>`: the GPU cull compacts survivors in input
+/// order with a scan, so an atomic append would make draw order depend on thread timing.
+pub const ATOMIC_FREE_UNITS: &[&str] = &["cull.wgsl"];
+
+/// No binding of an [`ATOMIC_FREE_UNITS`] unit may reach an `atomic<…>` through arrays or struct members.
+pub fn check_atomic_free(reflection: &Reflection) -> Result<(), ReflectError> {
+    check_atomic_free_units(reflection, ATOMIC_FREE_UNITS)
+}
+
+fn check_atomic_free_units(reflection: &Reflection, units: &[&str]) -> Result<(), ReflectError> {
+    for binding in &reflection.bindings {
+        if !matches!(binding.kind, BindingKind::Buffer { atomic: true, .. }) {
+            continue;
+        }
+        if let Some(unit) = binding.units.iter().find(|u| units.contains(&u.as_str())) {
+            return Err(ReflectError::AtomicInAtomicFreeUnit {
+                unit: unit.clone(),
+                binding: binding.name.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The render graph's reflected shaders (files under `crates/ludion-render-graph/src/shaders/`).
 pub const RENDER_GRAPH_SHADERS: &[&str] = &["gradient.wgsl", "vignette.wgsl", "window_blit.wgsl"];
 
@@ -150,6 +175,7 @@ pub const RENDER_GRAPH_SHADERS: &[&str] = &["gradient.wgsl", "vignette.wgsl", "w
 /// together equal to [`RENDERER_SHADERS`]. The renderer's `ComputeShader::ALL` lists the same names in
 /// the same order, which a renderer test pins.
 pub const COMPUTE_SHADERS: &[&str] = &[
+    "cull.wgsl",
     "gi_bake.wgsl",
     "gi_inject.wgsl",
     "ibl.wgsl",
@@ -455,6 +481,44 @@ mod tests {
     }
 
     #[test]
+    fn atomic_free_units_reject_atomics_through_arrays_and_structs() {
+        let array = reflect_one(
+            r#"
+            @group(0) @binding(0) var<storage, read_write> counters: array<atomic<u32>>;
+            @compute @workgroup_size(1) fn cs() { atomicAdd(&counters[0], 1u); }
+            "#,
+        );
+        let in_struct = reflect_one(
+            r#"
+            struct C { n: atomic<u32>, pad: u32 };
+            @group(0) @binding(0) var<storage, read_write> counter: C;
+            @compute @workgroup_size(1) fn cs() { atomicAdd(&counter.n, 1u); }
+            "#,
+        );
+        let plain = reflect_one(
+            r#"
+            @group(0) @binding(0) var<storage, read_write> counters: array<u32>;
+            @compute @workgroup_size(1) fn cs() { counters[0] = 1u; }
+            "#,
+        );
+        for (r, binding) in [(&array, "counters"), (&in_struct, "counter")] {
+            assert_eq!(
+                check_atomic_free_units(r, &["test.wgsl"]),
+                Err(ReflectError::AtomicInAtomicFreeUnit {
+                    unit: "test.wgsl".into(),
+                    binding: binding.into()
+                })
+            );
+            assert_eq!(check_atomic_free_units(r, &["cull.wgsl"]), Ok(()));
+        }
+        assert_eq!(check_atomic_free_units(&plain, &["test.wgsl"]), Ok(()));
+        let message = check_atomic_free_units(&array, &["test.wgsl"])
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("stable"), "{message}");
+    }
+
+    #[test]
     fn three_row_matrices_and_vec3_arrays_spell_four_lanes() {
         let r = reflect_one(
             r#"
@@ -641,6 +705,7 @@ mod tests {
             BindingKind::Buffer {
                 address_space: BufferSpace::Uniform,
                 min_size: 80,
+                atomic: false,
             }
         );
         assert_eq!(cam.visibility, vec![ShaderStage::Vertex]);
@@ -663,6 +728,7 @@ mod tests {
                 address_space: BufferSpace::Storage { read_only: true },
                 // One `Light`, not zero and not the whole buffer.
                 min_size: 32,
+                atomic: false,
             }
         );
         // The element struct is reachable only through the storage array, and must still be emitted
@@ -841,6 +907,7 @@ mod tests {
             BindingKind::Buffer {
                 address_space: BufferSpace::Storage { read_only: false },
                 min_size: 4,
+                atomic: false,
             }
         );
         assert_eq!(counters.visibility, vec![ShaderStage::Compute]);

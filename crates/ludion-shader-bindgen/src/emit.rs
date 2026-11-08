@@ -234,6 +234,7 @@ impl Emitter {
             BindingKind::Buffer {
                 address_space,
                 min_size,
+                ..
             } => self.buffer_ty(ind, *address_space, *min_size),
             BindingKind::Texture {
                 dim,
