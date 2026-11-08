@@ -76,11 +76,11 @@ pub fn engine_limits() -> wgpu::Limits {
     wgpu::Limits {
         // The renderer binds `@group(4)` (`shaders/mesh.wgsl`); the floor is 4 groups.
         max_bind_groups: 5,
-        // The mesh pass's vertex input takes 21 attributes: six per-vertex (position, normal, color,
+        // The mesh pass's vertex input takes 22 attributes: six per-vertex (position, normal, color,
         // material, uv, tangent at locations 0-5), two more per-vertex (skin `weights` 18, `bones`
-        // 19), and thirteen per-instance (model rows 6-9, color 10, material 11, normal-matrix rows
-        // 12-15, occlusion `fade` 16, hit-`flash` 17, `rim` 20 — `shaders/mesh.wgsl`). The floor is 16.
-        max_vertex_attributes: 21,
+        // 19), and fourteen per-instance (model rows 6-9, color 10, material 11, normal-matrix rows
+        // 12-15, occlusion `fade` 16, hit-`flash` 17, `rim` 20, `medium` 21 — `shaders/mesh.wgsl`). The floor is 16.
+        max_vertex_attributes: 22,
         ..wgpu::Limits::default()
     }
 }
@@ -1535,7 +1535,7 @@ mod tests {
         let floor = wgpu::Limits::default();
         assert_eq!(limits.max_texture_dimension_2d, MAX_TEXTURE_DIMENSION_2D);
         assert_eq!(limits.max_bind_groups, 5);
-        assert_eq!(limits.max_vertex_attributes, 21);
+        assert_eq!(limits.max_vertex_attributes, 22);
         assert_eq!(
             wgpu::Limits {
                 max_bind_groups: floor.max_bind_groups,

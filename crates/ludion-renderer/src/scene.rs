@@ -110,6 +110,8 @@ pub struct MeshInstance {
     /// Rim lane `(color·strength rgb, power)`: the shader adds `rgb · (1 − n·v)^power` unlit, like
     /// emissive. `[0.0; 4]` is no rim and renders byte-identically to a rim-free frame.
     pub rim: [f32; 4],
+    /// Scale on the medium's optical depth to this mesh's pixels; `1.0` renders today's frame.
+    pub medium: f32,
 }
 
 /// A single sprite/billboard: a textured, tinted quad in world space.

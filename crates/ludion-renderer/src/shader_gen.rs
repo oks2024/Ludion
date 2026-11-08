@@ -405,9 +405,9 @@ const _: () = assert!(core::mem::offset_of!(CullBucket, pad0) == 12);
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct CullInstance {
     pub model: [[f32; 4]; 4],
-    pub rest: [[f32; 4]; 9],
+    pub rest: [[f32; 4]; 10],
 }
-const _: () = assert!(core::mem::size_of::<CullInstance>() == 208);
+const _: () = assert!(core::mem::size_of::<CullInstance>() == 224);
 const _: () = assert!(core::mem::offset_of!(CullInstance, model) == 0);
 const _: () = assert!(core::mem::offset_of!(CullInstance, rest) == 64);
 
@@ -2602,7 +2602,7 @@ pub fn create_cull_params_cull_views_cull_in_cull_items_cull_boxes_cull_buckets_
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(208),
+                    min_binding_size: wgpu::BufferSize::new(224),
                 },
                 count: None,
             },
@@ -2661,7 +2661,7 @@ pub fn create_cull_scratch_cull_out_cull_args_bgl(device: &wgpu::Device) -> wgpu
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: false },
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(208),
+                    min_binding_size: wgpu::BufferSize::new(224),
                 },
                 count: None,
             },
@@ -4592,6 +4592,7 @@ pub const DECAL_RECEIVER_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (18, wgpu::VertexFormat::Float32x4),
     (19, wgpu::VertexFormat::Uint32x4),
     (20, wgpu::VertexFormat::Float32x4),
+    (21, wgpu::VertexFormat::Float32),
 ];
 
 /// `ground_marker.wgsl`'s `vs_main` `@location` inputs, in location order.
@@ -4627,6 +4628,7 @@ pub const MESH_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (18, wgpu::VertexFormat::Float32x4),
     (19, wgpu::VertexFormat::Uint32x4),
     (20, wgpu::VertexFormat::Float32x4),
+    (21, wgpu::VertexFormat::Float32),
 ];
 
 /// `particle.wgsl`'s `vs_depth` `@location` inputs, in location order.
@@ -4670,6 +4672,7 @@ pub const PREPASS_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (18, wgpu::VertexFormat::Float32x4),
     (19, wgpu::VertexFormat::Uint32x4),
     (20, wgpu::VertexFormat::Float32x4),
+    (21, wgpu::VertexFormat::Float32),
 ];
 
 /// `shadow.wgsl`'s `vs_main` `@location` inputs, in location order.
@@ -4707,6 +4710,7 @@ pub const SHADOW_CUTOUT_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (18, wgpu::VertexFormat::Float32x4),
     (19, wgpu::VertexFormat::Uint32x4),
     (20, wgpu::VertexFormat::Float32x4),
+    (21, wgpu::VertexFormat::Float32),
 ];
 
 /// `sprite.wgsl`'s `vs_main` `@location` inputs, in location order.

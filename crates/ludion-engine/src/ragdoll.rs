@@ -214,6 +214,7 @@ pub fn switch_to_ragdoll(
                     wrap: root_mesh.wrap,
                     scatter_color: root_mesh.scatter_color,
                     rim: root_mesh.rim,
+                    medium: root_mesh.medium,
                 },
             )
             .expect("just spawned");

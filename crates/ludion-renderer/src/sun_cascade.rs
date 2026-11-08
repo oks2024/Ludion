@@ -679,6 +679,7 @@ mod tests {
 
     fn cube(model: Mat4) -> crate::scene::MeshInstance {
         crate::scene::MeshInstance {
+            medium: 1.0,
             shape: crate::scene::MeshShape::Cube,
             model,
             normal_matrix: ludion_core::math::glam::Mat3::IDENTITY,

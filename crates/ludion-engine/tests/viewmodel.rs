@@ -153,6 +153,15 @@ fn the_flag_does_not_move_the_world_hash() {
     }
 }
 
+/// A viewmodel mesh keeps its `Mesh.medium` through the camera composition.
+#[test]
+fn a_viewmodel_mesh_keeps_its_medium() {
+    let medium_gun = format!("{GUN}        medium: 0.25\n");
+    let text = scene("", FLAG, "").replace(GUN, &medium_gun);
+    let (flagged, _) = extract_both(&mut engine_for(&text));
+    assert_eq!(gun(&flagged).medium, 0.25);
+}
+
 #[test]
 fn flagged_items_cast_no_shadow_and_leave_the_world_alone() {
     let (flagged, blend) = extract_both(&mut engine_for(&scene("", FLAG, "")));

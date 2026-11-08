@@ -24,7 +24,7 @@ pub(crate) struct MeshInstanceRaw {
     ///
     /// The lanes that product never reads are **repurposed** to carry the wrap-diffuse data, so this
     /// struct needs no extra attribute (see [`instance_normal_lanes`]). Any further per-instance
-    /// value gets its own attribute (as `rim` does), not more packing here.
+    /// value gets its own attribute (as `rim` and `medium` do), not more packing here.
     pub(super) normal: [[f32; 4]; 4],
     /// `(fade, height_min, bone_offset, handedness)`. Read at `@location(16)`: the first two lanes by
     /// the mesh shader's Bayer-dither discard (from the entity's `Fade` component, defaults
@@ -39,6 +39,9 @@ pub(crate) struct MeshInstanceRaw {
     pub(super) flash: [f32; 4],
     /// Per-instance rim lane `(color·strength rgb, power)` at `@location(20)`; all-zero is no rim.
     pub(super) rim: [f32; 4],
+    /// Per-instance medium lane at `@location(21)`: `.x` is the scale, `yzw` are spare zeros
+    /// (a whole `vec4` keeps the stride a multiple of 16 for `cull.wgsl`).
+    pub(super) medium: [f32; 4],
 }
 
 pub(super) struct MeshDraw {
@@ -211,6 +214,7 @@ pub(super) fn bucket_asset_instances(
             fade: instance_fade(m),
             flash: instance_flash(m),
             rim: m.rim,
+            medium: [m.medium, 0.0, 0.0, 0.0],
         });
     }
     (buckets, sources)
@@ -371,6 +375,7 @@ fn pending_primitives(scene: &RenderScene) -> Vec<PrimPending> {
                         fade: instance_fade(m),
                         flash: instance_flash(m),
                         rim: m.rim,
+                        medium: [m.medium, 0.0, 0.0, 0.0],
                     },
                 )
             })

@@ -563,6 +563,7 @@ mod tests {
 
     fn mesh(model: Mat4) -> MeshInstance {
         MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Cube,
             model,
             normal_matrix: Mat3::from_mat4(model),

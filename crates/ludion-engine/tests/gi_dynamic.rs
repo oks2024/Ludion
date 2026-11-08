@@ -527,6 +527,7 @@ fn point_light(
 /// same split).
 fn floor_instance() -> MeshInstance {
     MeshInstance {
+        medium: 1.0,
         shape: MeshShape::Plane,
         model: Mat4::from_scale(Vec3::new(7.0, 1.0, 7.0)),
         normal_matrix: Mat3::IDENTITY,

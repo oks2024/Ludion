@@ -449,6 +449,12 @@ pub struct Mesh {
     /// nearest `Parent` ancestor's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rim: Option<Rim>,
+    /// Scale in `[0, 1]` on the medium's optical depth along the view ray to this mesh (default none,
+    /// meaning `1.0`, today's look): `0` shows no air between the eye and the mesh. Render-only. A mesh
+    /// without its own value takes its nearest `Parent` ancestor's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub medium: Option<f32>,
 }
 
 /// A rim term on a [`Mesh`]: adds `color · strength · (1 − n·v)^power` to the shaded colour. Unlit
@@ -499,6 +505,7 @@ impl Default for Mesh {
             wrap: 0.0,
             scatter_color: [1.0; 3],
             rim: None,
+            medium: None,
         }
     }
 }
@@ -7582,6 +7589,32 @@ mod tests {
         assert!(refusals("Mesh", "        rim:\n          power: 0.5\n").is_empty());
         let value = serde_json::to_value(Mesh::default()).unwrap();
         assert!(value.get("rim").is_none());
+    }
+
+    /// `Mesh.medium` rides its schema range (out of range `L1014`, non-finite `L1009`) and is absent when `None`.
+    #[test]
+    fn mesh_medium_is_bounded_and_absent_when_none() {
+        for bad in ["-0.1", "1.5", "1.0000001"] {
+            refused_with(
+                "Mesh",
+                &format!("        medium: {bad}\n"),
+                "L1014",
+                "/medium",
+            );
+        }
+        for bad in [".nan", ".inf", "-.inf"] {
+            refused_with(
+                "Mesh",
+                &format!("        medium: {bad}\n"),
+                "L1009",
+                "/medium",
+            );
+        }
+        for ok in ["0.0", "0.5", "1.0e-50"] {
+            assert!(refusals("Mesh", &format!("        medium: {ok}\n")).is_empty());
+        }
+        let value = serde_json::to_value(Mesh::default()).unwrap();
+        assert!(value.get("medium").is_none());
     }
 
     /// A non-finite `wrap` (YAML `.nan`, `.inf`, `-.inf`) is refused as `L1009` at the field.

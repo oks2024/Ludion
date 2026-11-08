@@ -22,7 +22,7 @@ use ludion_ecs::{ChildMap, PRESENTATION_BASE, Parent, World, is_presentation};
 use ludion_renderer::DebugSegment;
 use ludion_spatial::{Body, Collider, ParentPose};
 
-use crate::components::{Fade, Mesh, Rim, Transform, Visibility};
+use crate::components::{Fade, Mesh, Transform, Visibility};
 
 /// The most ancestors a chain may have before the entity is treated as a root.
 pub const MAX_HIERARCHY_DEPTH: usize = 64;
@@ -118,20 +118,22 @@ pub(crate) fn inherited_fade(world: &World, entity: EntityId) -> Fade {
         .unwrap_or_default()
 }
 
-/// `own` (the entity's own `Mesh.rim`) when set, else the nearest `Parent` ancestor's `Mesh.rim`,
-/// else `None`. An unparented entity costs one presence check and no chain walk.
-pub(crate) fn inherited_rim(world: &World, entity: EntityId, own: Option<Rim>) -> Option<Rim> {
+/// `own` (the entity's own `Mesh` field) when set, else the nearest `Parent` ancestor's `Some` for
+/// the same field, else `None`. An unparented entity costs one presence check and no chain walk.
+pub(crate) fn inherited_mesh_field<T: Copy>(
+    world: &World,
+    entity: EntityId,
+    own: Option<T>,
+    field: impl Fn(&Mesh) -> Option<T>,
+) -> Option<T> {
     if own.is_some() || !world.has::<Parent>(entity) {
         return own;
     }
     let (up, _) = chain(world, entity);
-    up.iter().rev().skip(1).find_map(|&ancestor| {
-        world
-            .get::<Mesh>(ancestor)
-            .ok()
-            .flatten()
-            .and_then(|mesh| mesh.rim)
-    })
+    up.iter()
+        .rev()
+        .skip(1)
+        .find_map(|&ancestor| world.get::<Mesh>(ancestor).ok().flatten().and_then(&field))
 }
 
 /// `entity`'s effective [`Visibility`]: the AND of its own and every `Parent` ancestor's (a hidden

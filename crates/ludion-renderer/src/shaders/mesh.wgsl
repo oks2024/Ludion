@@ -57,6 +57,8 @@ struct VsIn {
     @location(19) bones: vec4<u32>,
     // Per-instance rim (color·strength rgb, power); all-zero rgb is no rim.
     @location(20) rim: vec4<f32>,
+    // Per-instance scale on the medium's optical depth to this mesh (1.0 = today's frame).
+    @location(21) medium: f32,
 };
 
 struct VsOut {

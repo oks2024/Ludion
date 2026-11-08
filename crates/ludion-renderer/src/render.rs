@@ -8065,8 +8065,8 @@ fn module(device: &wgpu::Device, label: &str, src: &str) -> wgpu::ShaderModule {
 /// are declared last in `MeshVertex`, right after `tangent`).
 const MESH_VERTEX_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x3, 4 => Float32x2, 5 => Float32x4, 18 => Float32x4, 19 => Uint32x4];
 /// Mesh per-instance attributes (`MeshInstanceRaw`): model rows 6-9, color 10, material 11,
-/// normal-matrix rows 12-15, occlusion-fade lane 16, hit-flash lane 17, rim lane 20.
-const MESH_INSTANCE_ATTRS: [wgpu::VertexAttribute; 13] = wgpu::vertex_attr_array![6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x4, 13 => Float32x4, 14 => Float32x4, 15 => Float32x4, 16 => Float32x4, 17 => Float32x4, 20 => Float32x4];
+/// normal-matrix rows 12-15, occlusion-fade lane 16, hit-flash lane 17, rim lane 20, medium lane 21 (`.x`).
+const MESH_INSTANCE_ATTRS: [wgpu::VertexAttribute; 14] = wgpu::vertex_attr_array![6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x4, 13 => Float32x4, 14 => Float32x4, 15 => Float32x4, 16 => Float32x4, 17 => Float32x4, 20 => Float32x4, 21 => Float32];
 /// Ground-marker per-instance attributes (`GroundMarkerInstanceRaw`): model columns 0-3, color 4,
 /// the rounded-box SDF's `(half_extent, radius, pad)` lane 5.
 const GROUND_MARKER_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
@@ -9756,6 +9756,7 @@ mod tests {
                     .iter()
                     .filter(|m| m.shape == MeshShape::Asset(index))
                     .map(|m| MeshInstanceRaw {
+                        medium: [1.0, 0.0, 0.0, 0.0],
                         model: m.model.to_cols_array_2d(),
                         color: m.color,
                         material: instance_material(m),
@@ -9779,6 +9780,7 @@ mod tests {
     #[test]
     fn bucketing_asset_instances_preserves_the_refiltered_draw_order() {
         let asset = |index: usize, x: f32| MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Asset(index),
             model: Mat4::from_translation(Vec3::new(x, 0.0, 0.0)),
             normal_matrix: Mat3::from_diagonal(Vec3::splat(x + 1.0)),
@@ -9854,12 +9856,15 @@ mod tests {
     fn instance_layout_carries_material_and_selection_flag() {
         assert_eq!(
             std::mem::size_of::<MeshInstanceRaw>(),
-            (16 + 4 + 4 + 16 + 4 + 4 + 4) * std::mem::size_of::<f32>(),
-            "MeshInstanceRaw is model + color + material + normal matrix + fade + flash + rim lanes, \
-             tightly packed",
+            (16 + 4 + 4 + 16 + 4 + 4 + 4 + 4) * std::mem::size_of::<f32>(),
+            "MeshInstanceRaw is model + color + material + normal matrix + fade + flash + rim + medium \
+             lanes, tightly packed",
         );
+        assert_eq!(std::mem::size_of::<MeshInstanceRaw>(), 224);
+        assert_eq!(std::mem::offset_of!(MeshInstanceRaw, medium), 208);
 
         let base = MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Cube,
             model: Mat4::IDENTITY,
             normal_matrix: Mat3::IDENTITY,
@@ -9908,6 +9913,7 @@ mod tests {
 
     fn wrap_probe(wrap: f32, scatter: [f32; 3]) -> MeshInstance {
         MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Cube,
             model: Mat4::from_scale(Vec3::new(2.0, 4.0, 6.0)),
             normal_matrix: Mat3::from_diagonal(Vec3::new(0.5, 0.25, 1.0 / 6.0)),
@@ -10293,6 +10299,7 @@ mod tests {
         // Two instances of the same asset (index 0) at different transforms.
         for tx in [-1.0_f32, 1.0] {
             scene.meshes.push(MeshInstance {
+                medium: 1.0,
                 shape: MeshShape::Asset(0),
                 model: Mat4::from_translation(Vec3::new(tx, 0.0, 0.0)),
                 normal_matrix: Mat3::IDENTITY,
@@ -10420,6 +10427,7 @@ mod tests {
             Err(d) => panic!("renderer init failed: {d:?}"),
         };
         let instance = |index: usize| MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Asset(index),
             model: Mat4::IDENTITY,
             normal_matrix: Mat3::IDENTITY,
@@ -10521,6 +10529,7 @@ mod tests {
     /// A large ground plane (`scale` × 1 × `scale`) at the origin, mid-grey, facing +Y.
     fn ground(scale: f32) -> MeshInstance {
         MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Plane,
             model: Mat4::from_scale(Vec3::new(scale, 1.0, scale)),
             normal_matrix: Mat3::IDENTITY,
@@ -10543,6 +10552,7 @@ mod tests {
     /// A unit cube scaled `size` at `pos`.
     fn cube(pos: Vec3, size: Vec3, color: [f32; 4]) -> MeshInstance {
         MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Cube,
             model: Mat4::from_translation(pos) * Mat4::from_scale(size),
             normal_matrix: Mat3::IDENTITY,
@@ -10833,6 +10843,7 @@ mod tests {
             ground(20.0),
             // A near-mirror metal sphere — the surface IBL affects most (it reflects the sky).
             MeshInstance {
+                medium: 1.0,
                 shape: MeshShape::Sphere,
                 model: Mat4::from_translation(Vec3::new(0.0, 1.2, 0.0)),
                 normal_matrix: Mat3::IDENTITY,
@@ -10876,6 +10887,7 @@ mod tests {
     /// A unit-radius sphere at the origin with the given material and hit-flash amount.
     fn reflective_sphere(material: [f32; 3], flash: f32) -> MeshInstance {
         MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Sphere,
             model: Mat4::from_scale(Vec3::splat(2.0)),
             normal_matrix: Mat3::IDENTITY,
@@ -10998,6 +11010,7 @@ mod tests {
         cast: bool,
     ) -> MeshInstance {
         MeshInstance {
+            medium: 1.0,
             shape,
             model,
             normal_matrix: Mat3::from_mat4(model.inverse().transpose()),
@@ -11647,6 +11660,7 @@ mod tests {
         // An emissive cube spanning y ∈ [−1, 1] at the origin — bright regardless of lighting, so its
         // pixels are unambiguously distinct from the clear color and the Bayer holes read clearly.
         let make = |fade: f32, height_min: f32| MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Cube,
             model: Mat4::from_scale(Vec3::splat(2.0)),
             normal_matrix: Mat3::IDENTITY,
@@ -11759,6 +11773,7 @@ mod tests {
     /// `bone_offset`, referencing asset index 0.
     fn skin_instance(model: Mat4, bone_offset: u32) -> MeshInstance {
         MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Asset(0),
             model,
             normal_matrix: Mat3::IDENTITY,
@@ -12027,6 +12042,7 @@ mod tests {
     fn flat_diamond_scene(w: u32, h: u32) -> RenderScene {
         let mut scene = RenderScene::empty((w, h));
         scene.meshes = vec![MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Cube,
             model: Mat4::from_rotation_z(std::f32::consts::FRAC_PI_4)
                 * Mat4::from_scale(Vec3::splat(2.0)),
@@ -12304,6 +12320,7 @@ mod tests {
         let mut scene = RenderScene::empty((w, h));
         scene.ambient = [0.0, 0.0, 0.0];
         scene.meshes = vec![MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Cube,
             model: Mat4::from_scale(Vec3::splat(4.0)),
             normal_matrix: Mat3::IDENTITY,
@@ -13290,6 +13307,7 @@ mod tests {
     /// `color`, so any difference between two of them is what the composite did and nothing else.
     fn slab(center: Vec3, size: f32, color: [f32; 3]) -> MeshInstance {
         MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Cube,
             model: Mat4::from_translation(center) * Mat4::from_scale(Vec3::splat(size)),
             normal_matrix: Mat3::IDENTITY,
@@ -13902,6 +13920,7 @@ mod tests {
         scene.ambient = [0.8, 0.8, 0.8];
         scene.mesh_assets.push(Arc::new(quad));
         scene.meshes.push(MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Asset(0),
             model: Mat4::IDENTITY,
             normal_matrix: Mat3::IDENTITY,
@@ -19154,6 +19173,7 @@ mod tests {
     /// fixture built out of these measures the medium and nothing else.
     fn dark_box(center: Vec3, size: Vec3) -> MeshInstance {
         MeshInstance {
+            medium: 1.0,
             shape: MeshShape::Cube,
             model: Mat4::from_translation(center) * Mat4::from_scale(size),
             normal_matrix: Mat3::IDENTITY,

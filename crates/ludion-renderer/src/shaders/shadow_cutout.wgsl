@@ -39,6 +39,8 @@ struct VsIn {
     @location(19) bones: vec4<u32>,
     // Declared to match the shared `MeshInstanceRaw` layout (the mesh pass's rim lane); unread here.
     @location(20) rim: vec4<f32>,
+    // Declared to match the shared `MeshInstanceRaw` layout (the mesh pass's medium lane); unread here.
+    @location(21) medium: f32,
 };
 
 struct VsOut {

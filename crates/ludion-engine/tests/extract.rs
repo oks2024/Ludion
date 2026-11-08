@@ -3963,6 +3963,111 @@ fn a_skinned_instance_carries_its_rim() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `Mesh.medium` reaches `MeshInstance.medium`: absent is 1.0, an own value and every assembly part
+/// carry it, a child inherits its nearest ancestor's, and a child's explicit value wins.
+#[test]
+fn medium_reaches_the_instance_inherits_and_a_childs_own_wins() {
+    let dir = assembly_dir("medium");
+    let mut world = World::new();
+    let mut spawn =
+        |parent: Option<ludion_core::ids::EntityId>, shape: MeshSource, medium: Option<f32>| {
+            let e = world.spawn();
+            world.insert(e, Transform::default()).unwrap();
+            if let Some(parent) = parent {
+                world.insert(e, ludion_ecs::Parent(parent)).unwrap();
+            }
+            world
+                .insert(
+                    e,
+                    Mesh {
+                        shape,
+                        medium,
+                        ..Mesh::default()
+                    },
+                )
+                .unwrap();
+            e
+        };
+    spawn(None, MeshSource::Cube, None);
+    spawn(None, MeshSource::Cube, Some(0.25));
+    let root = spawn(None, MeshSource::Cube, Some(0.0));
+    spawn(Some(root), MeshSource::Cube, None);
+    spawn(Some(root), MeshSource::Cube, Some(1.0));
+    spawn(
+        None,
+        MeshSource::Assembly("models/fixture.assembly.yaml".to_string()),
+        Some(0.5),
+    );
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
+    let lanes: Vec<f32> = scene.meshes.iter().map(|m| m.medium).collect();
+    assert_eq!(lanes.len(), 7, "four cubes, the root, and two parts");
+    assert_eq!(
+        lanes[..5],
+        [1.0, 0.25, 0.0, 0.0, 1.0],
+        "default, own, root, inherited, own wins"
+    );
+    assert_eq!(
+        lanes[5..],
+        [0.5, 0.5],
+        "assembly parts take their entity's value"
+    );
+}
+
+/// A skinned (`bone_offset != 0`) character instance carries its medium.
+#[test]
+fn a_skinned_instance_carries_its_medium() {
+    use ludion_scene::{JointRest, MeshDocument as SceneMeshDocument, MeshJoint, MeshSkin};
+
+    let dir = std::env::temp_dir().join(format!("ludion-extract-skinmed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("meshes")).unwrap();
+    let mut identity = [0.0; 16];
+    for i in 0..4 {
+        identity[i * 5] = 1.0;
+    }
+    let doc = SceneMeshDocument {
+        positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        skin: Some(MeshSkin {
+            joints: vec![MeshJoint {
+                name: "root".to_string(),
+                parent: None,
+                rest: JointRest {
+                    translation: [0.0; 3],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0; 3],
+                },
+                inverse_bind: identity,
+            }],
+            weights: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            bone_indices: vec![0; 12],
+        }),
+        indices: vec![0, 1, 2],
+        ..SceneMeshDocument::default()
+    };
+    std::fs::write(
+        dir.join("meshes/skinned.mesh.yaml"),
+        ludion_scene::emit_mesh(&doc),
+    )
+    .unwrap();
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, Transform::default()).unwrap();
+    world
+        .insert(
+            e,
+            Mesh {
+                shape: MeshSource::Asset("meshes/skinned.mesh.yaml".to_string()),
+                medium: Some(0.25),
+                ..Mesh::default()
+            },
+        )
+        .unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
+    assert_ne!(scene.meshes[0].bone_offset, 0);
+    assert_eq!(scene.meshes[0].medium, 0.25);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 const SCULPT_BALL: &str = "format: 1\nkind: sculpt\nresolution: 16\ntriangles: 200\n@RIM@palette:\n  S:\n    \
     color:\n      - 0.5\n      - 0.5\n      - 0.5\n      - 1.0\nbones:\n  - name: root\nparts:\n  - name: \
     ball\n    shape: sphere\n    radius: 0.5\n    material: S\n";

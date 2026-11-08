@@ -485,6 +485,7 @@ mod tests {
 
     fn instance(shape: MeshShape, model: Mat4) -> MeshInstance {
         MeshInstance {
+            medium: 1.0,
             shape,
             model,
             normal_matrix: Mat3::IDENTITY,

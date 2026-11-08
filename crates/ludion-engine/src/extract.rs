@@ -1145,14 +1145,25 @@ fn extract_inner(
                 fade
             }
         };
-        // Rim resolves like `Fade`: the mesh's own, else its nearest ancestor's `Mesh.rim`. The
-        // inheritance walk is keyed on the entity, so a grid's cells or an assembly's parts share it.
-        let rim = match last_rim {
-            Some((id, rim)) if id == mesh.id => rim,
+        // Rim and medium resolve like `Fade`: the mesh's own, else its nearest ancestor's `Mesh`
+        // value. The inheritance walk is keyed on the entity, so a grid's cells or an assembly's parts
+        // share it.
+        let (rim, medium) = match last_rim {
+            Some((id, rim, medium)) if id == mesh.id => (rim, medium),
             _ => {
-                let rim = rim_lane(crate::hierarchy::inherited_rim(world, mesh.id, mesh.rim));
-                last_rim = Some((mesh.id, rim));
-                rim
+                let rim = rim_lane(crate::hierarchy::inherited_mesh_field(
+                    world,
+                    mesh.id,
+                    mesh.rim,
+                    |m| m.rim,
+                ));
+                let medium =
+                    crate::hierarchy::inherited_mesh_field(world, mesh.id, mesh.medium, |m| {
+                        m.medium
+                    })
+                    .unwrap_or(1.0);
+                last_rim = Some((mesh.id, rim, medium));
+                (rim, medium)
             }
         };
         let cast_shadows = visibility.casts(mesh.id);
@@ -1264,6 +1275,7 @@ fn extract_inner(
                         cast_shadows,
                         viewmodel: false,
                         rim: resolve_rim_lane(&mesh_assets, Some(index), rim),
+                        medium,
                     });
                 }
                 continue;
@@ -1332,6 +1344,7 @@ fn extract_inner(
                     },
                     rim,
                 ),
+                medium,
             });
         }
     }
@@ -2880,6 +2893,8 @@ pub(crate) struct PlacedMesh<'w> {
     pub(crate) scatter_color: [f32; 3],
     /// The `Mesh` component's own rim; inheritance down `Parent` is resolved at instance build.
     pub(crate) rim: Option<Rim>,
+    /// The `Mesh` component's own medium scale; inheritance down `Parent` is resolved at instance build.
+    pub(crate) medium: Option<f32>,
     /// The normal matrix (object→world for normals): the model's upper-3×3 for a uniform scale, its
     /// inverse-transpose otherwise. See [`normal_matrix`].
     pub(crate) normal_matrix: Mat3,
@@ -3399,6 +3414,7 @@ pub(crate) fn place<'w>(
                 wrap: mesh.wrap,
                 scatter_color: mesh.scatter_color,
                 rim: mesh.rim,
+                medium: mesh.medium,
                 source: placed_source(&mesh.shape),
                 dynamic,
             });
@@ -3433,6 +3449,7 @@ pub(crate) fn place<'w>(
                         wrap: mesh.wrap,
                         scatter_color: mesh.scatter_color,
                         rim: mesh.rim,
+                        medium: mesh.medium,
                         source: placed_source(&mesh.shape),
                         dynamic,
                     });

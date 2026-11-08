@@ -650,6 +650,7 @@ pub(crate) mod tests {
         material: [f32; 3],
     ) -> MeshInstance {
         MeshInstance {
+            medium: 1.0,
             shape,
             model,
             normal_matrix: Mat3::IDENTITY,

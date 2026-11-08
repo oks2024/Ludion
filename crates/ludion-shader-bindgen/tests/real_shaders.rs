@@ -134,14 +134,14 @@ fn all_repo_shaders_reflect_and_unify() {
     assert_eq!(reflection.const_value("CLUSTER_TILES_Y"), Some(9));
     assert_eq!(reflection.const_value("CLUSTER_SLICES"), Some(16));
 
-    // Mesh's vertex entry point carries all 21 @location inputs (per-vertex 0-5, per-instance 6-15,
-    // the occlusion-fade lane at 16, the hit-flash lane at 17, the skin weights/bones at 18-19, and the rim lane at 20).
+    // Mesh's vertex entry point carries all 22 @location inputs (per-vertex 0-5, per-instance 6-15,
+    // the occlusion-fade lane at 16, the hit-flash lane at 17, the skin weights/bones at 18-19, the rim lane at 20, and the medium lane at 21).
     let mesh_vs = reflection
         .entry_points
         .iter()
         .find(|e| e.unit == "mesh.wgsl" && e.stage == ShaderStage::Vertex)
         .unwrap();
-    assert_eq!(mesh_vs.inputs.len(), 21);
+    assert_eq!(mesh_vs.inputs.len(), 22);
     assert_eq!(mesh_vs.inputs[0].location, 0);
     assert_eq!(mesh_vs.inputs[19].location, 19);
 
