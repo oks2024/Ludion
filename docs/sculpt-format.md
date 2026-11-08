@@ -16,8 +16,8 @@ the mesher turns the field into a triangle mesh at load, deterministically, on e
 
 ## Format
 
-Nine keys, in this order: `format`, `kind`, `name`, `resolution`, `triangles`, `budget_exempt`,
-`palette`, `bones`, `parts`.
+Ten keys, in this order: `format`, `kind`, `name`, `resolution`, `triangles`, `budget_exempt`,
+`rim`, `palette`, `bones`, `parts`.
 
 | key | meaning |
 | --- | --- |
@@ -27,6 +27,7 @@ Nine keys, in this order: `format`, `kind`, `name`, `resolution`, `triangles`, `
 | `resolution:` | grid cells per world unit, integer `4..=128` (default `48`) |
 | `triangles:` | decimation target triangle count, integer `>= 12` (default `5000`; a hero earns `10000`) |
 | `budget_exempt:` | optional, only ever `true` — opts the meshed result out of the `L1112` vertex-budget warning |
+| `rim:` | optional `{ color, strength, power }` — one view-angle edge for the whole model; wins over `Mesh.rim` (`ludion docs materials`) |
 | `palette:` | the voxel palette shape (`ludion docs voxel-format`), one-glyph keys |
 | `bones:` | the bone tree; `bones[0]` is the root and has no `parent` |
 | `parts:` | named primitives, evaluated in file order |

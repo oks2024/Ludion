@@ -31,7 +31,7 @@ floats/vertex: `xyz` + handedness `w` ∈ {−1, 1}), optional per-vertex `emiss
 `base_color_texture`/`metallic_roughness_texture`/`normal_texture`/`occlusion_texture`/
 `emissive_texture`, each `{ path, wrap?, scale?/strength? }` with `path` relative to the document's
 own directory — then optional `alpha_mode` (`opaque`/`mask`), `alpha_cutoff` and `double_sided`, each
-omitted at its default (`opaque`, `0.5`, `false`) — optional skin keys `joints` (each `name`, `parent?`, `rest: { t, r, s }`,
+omitted at its default (`opaque`, `0.5`, `false`) — optional `rim` (`{ color, strength, power }`, shared with voxel and sculpt via `ludion-scene`'s `rim` module; `L1111` on a bad value) — optional skin keys `joints` (each `name`, `parent?`, `rest: { t, r, s }`,
 `inverse_bind` — 16 floats, column-major; parent-first order, at most 256), `weights` and
 `bone_indices` (4 per vertex each), all three or none — and a required `indices` triangle list. It mirrors the scene pipeline (`parse` →
 `validate` → `check` → canonical `emit`) and takes **no** registry, because a mesh document is

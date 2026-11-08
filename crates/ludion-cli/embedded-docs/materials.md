@@ -1,5 +1,5 @@
 ---
-description: Material scalars, author surfaces, precedence, texture maps, cutout, double-sided, emissive bloom
+description: Material scalars, author surfaces, precedence, texture maps, cutout, emissive, wrap, rim light
 ---
 
 # Materials
@@ -41,6 +41,9 @@ The same three fields exist in four places, always named and ranged identically:
    selection — so a smoothed seam between two glowing and matte parts fades rather than snaps. See
    `ludion docs sculpt-format`.
 
+One exception: `rim` (see `## Rim light`) is a single document-level block on a voxel, sculpt or
+`.mesh.yaml` document, not a per-palette or per-vertex value.
+
 ## Precedence: selection, not blending
 
 **A mesh that authors any of its own material — any palette-entry field, any mesh-doc material
@@ -52,7 +55,8 @@ material `1.0/0.0/0.0`, not the component's values). Unlike `color`, which alway
 metallic's default (`0.0`) is multiplication's absorbing element, so multiplying would make either a
 component-driven sweep or a palette-driven metal inexpressible. Pick **one** surface per mesh and author the whole material there. (A sculpt's own palette surface blends *within*
 itself, across its parts, as noted above — that blend is internal to the one surface a sculpt
-authors, not a mix with `Mesh`'s fields.)
+authors, not a mix with `Mesh`'s fields.) `rim` is the exception: a document's `rim:` wins over
+`Mesh.rim`, which wins over an ancestor's.
 
 ## Texture maps
 
@@ -269,6 +273,49 @@ bytes as a scene without the field.
   (three numbers `>= 0`) land on the part's `Mesh`; a wrong type or range is an import error
   naming the material. `examples/gallery/wrap-diffuse.yaml` shows wrap 0 / 0.5 / 1, tints, a
   shaded band and the shadow limit.
+
+## Rim light
+
+`Mesh.rim` adds an unlit view-angle edge, for keeping a figure readable against a dark wall without
+lighting the room: `color * strength * (1 - n·v)^power`, with `n·v` clamped to `0..=1`. Fields:
+`color` (linear RGB, `>= 0`, default white), `strength` (`>= 0`, default `1.0`), `power` (`> 0`,
+default `3.0`; higher hugs the silhouette). A colour channel below `0` is `L1263`. Absent, `strength: 0`
+or a black `color` renders the same bytes as a scene without it.
+
+```yaml
+- name: figure
+  components:
+    Transform:
+      translation:
+        - 0.0
+        - 1.0
+        - 0.0
+    Mesh:
+      shape: cube
+      rim:
+        color:
+          - 0.9
+          - 0.8
+          - 0.7
+        strength: 0.6
+        power: 3.0
+```
+
+- **Unlit and authored.** It is added to the colour where `emissive` is, not scaled by ambient or
+  haze, so the game tunes it per kit. It rides the medium like emissive: fog and haze treat it the
+  same way. Keep the colour a dim neutral; a saturated hue reads as a glow.
+- **Inherited down `Parent`.** A mesh without its own `Mesh.rim` takes its nearest ancestor's. A
+  `Mesh`-less root cannot carry one: put the rim on the root's `Mesh`, or on every part.
+- **Documents.** A `kind: voxel`, `kind: sculpt` or `kind: mesh` document may carry one top-level
+  `rim:` with the same keys (in a voxel or sculpt document after `budget_exempt` and before `palette`; in a `.mesh.yaml` after `double_sided`). Precedence: the document's
+  rim, then `Mesh.rim`, then the inherited one. There is no per-palette-entry rim. Assembly parts are
+  `kind: part` documents with no `rim` key, so an assembly takes its entity's `Mesh.rim`. A bad value
+  is `L1114` (voxel), `L1157` (sculpt) or `L1111` (mesh).
+- **Where it applies.** Viewmodel meshes take it, with the drawn camera as the eye; skinned meshes use
+  their skinned normals. Sprites, particles and text have none. Probe captures leave it out: a probe's
+  eye is not the player's.
+- **Cost.** One instance lane (`@location(20)`); a mesh without a rim pays one branch.
+- `examples/gallery/rim-light.yaml` shows the four paths against a dark wall, with its sweeps.
 
 ## Next
 

@@ -16,7 +16,7 @@ one file describes one model.
 
 ## Format
 
-Nine keys, in this order:
+Ten keys, in this order:
 
 | key | meaning |
 | --- | --- |
@@ -27,6 +27,7 @@ Nine keys, in this order:
 | `scale:` | optional, positive — the world scale the model was *drawn for*; metadata only |
 | `generated_from:` | optional — the generator script that owns this model; its presence makes the file **write-only** and enrols it in the `voxel-drift` gate (`ludion docs voxel-generation`) |
 | `budget_exempt:` | optional, only ever `true` — this model is deliberately over the `L1115` cell budget (`ludion docs voxel-ops`) |
+| `rim:` | optional `{ color, strength, power }` — one view-angle edge for the whole model; wins over `Mesh.rim` (`ludion docs materials`) |
 | `palette:` | map from a **single glyph** to `{ color: [r, g, b, a] }` |
 | `slices:` | the grid — `y` layers, each a list of `z` row-strings of exactly `x` characters |
 

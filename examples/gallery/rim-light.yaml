@@ -1,0 +1,384 @@
+# Feature: Mesh.rim and the document-level rim - a view-angle edge that keeps grey figures readable against a dark wall.
+# A low-key room: a near-black wall (0.05) behind four mid-grey figures (0.15) under one dim front-side key light, with
+# thin fog (`fog_density` 0.03) so the rim is seen riding the medium like emissive. Left to right: a control with no
+# rim (it merges into the wall), `voxels/figure.assembly.yaml` with `Mesh.rim` on its entity, a primitive figure whose
+# body carries `Mesh.rim` and whose sphere head, arms and legs inherit it down `Parent`, and
+# `voxels/rim-figure.voxel.yaml` whose own document-level `rim:` applies with no `Mesh.rim`.
+# Rim colour [0.9, 0.8, 0.7], a dim warm neutral: a saturated hue reads as a glow, not an edge.
+# `strength` 1.0: swept 0/0.5/1/2 on the assembly figure (`--sweep /entities/10/components/Mesh/rim/strength=0,0.5,1,2`) -
+# 0 is the unlit figure, 0.5 is a thin edge that only just separates the arms from the wall, 1 reads clearly on every
+# figure, 2 starts to glow off the silhouette.
+# `power` 2.0: swept 1.5/2/3/5 (`.../rim/power=1.5,2,3,5`) - 1.5 and 2 give the sphere head a soft ring, 3 and 5 thin the
+# edge to the silhouette so the flat cube faces keep only a hairline; 2 keeps the box figures' edges visible.
+# The cube faces facing the camera have n.v near 1 and take almost no rim, so the edge sits on side faces and the sphere.
+# ludion docs materials.
+format: 1
+name: "rim-light - Mesh.rim and a document rim keep grey figures readable against a dark wall"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0
+          - 1.2
+          - 8
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 40.0
+      PostProcess:
+        fog_density: 0.03
+        fog_color:
+          - 0.02
+          - 0.02
+          - 0.025
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 3.0
+          - 5.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.9
+          - 0.8
+        intensity: 0.5
+        range: 14.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0
+          - -0.5
+          - 0
+        scale:
+          - 14
+          - 1
+          - 10
+      Mesh:
+        shape: cube
+        color:
+          - 0.05
+          - 0.05
+          - 0.05
+          - 1.0
+        roughness: 0.9
+  - name: wall
+    components:
+      Transform:
+        translation:
+          - 0
+          - 2.5
+          - -2.0
+        scale:
+          - 14
+          - 6
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.05
+          - 0.05
+          - 0.05
+          - 1.0
+        roughness: 0.9
+  - name: control-body
+    components:
+      Transform:
+        translation:
+          - -3.6
+          - 1.0
+          - 0
+        scale:
+          - 0.8
+          - 0.8
+          - 0.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+  - name: control-head
+    components:
+      Parent:
+        index: 4
+        generation: 0
+      Transform:
+        translation:
+          - 0
+          - 0.8125
+          - 0
+        scale:
+          - 0.6875
+          - 0.6875
+          - 0.6875
+      Mesh:
+        shape: sphere
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+  - name: control-arm-l
+    components:
+      Parent:
+        index: 4
+        generation: 0
+      Transform:
+        translation:
+          - -0.6875
+          - 0
+          - 0
+        scale:
+          - 0.25
+          - 1.0
+          - 0.3125
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+  - name: control-arm-r
+    components:
+      Parent:
+        index: 4
+        generation: 0
+      Transform:
+        translation:
+          - 0.6875
+          - 0
+          - 0
+        scale:
+          - 0.25
+          - 1.0
+          - 0.3125
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+  - name: control-leg-l
+    components:
+      Parent:
+        index: 4
+        generation: 0
+      Transform:
+        translation:
+          - -0.25
+          - -0.875
+          - 0
+        scale:
+          - 0.3125
+          - 0.75
+          - 0.375
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+  - name: control-leg-r
+    components:
+      Parent:
+        index: 4
+        generation: 0
+      Transform:
+        translation:
+          - 0.25
+          - -0.875
+          - 0
+        scale:
+          - 0.3125
+          - 0.75
+          - 0.375
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+  - name: assembly-figure
+    components:
+      Transform:
+        translation:
+          - -1.2
+          - 0
+          - 0
+        scale:
+          - 0.25
+          - 0.25
+          - 0.25
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.4
+          - 0.4
+          - 0.4
+          - 1.0
+        rim:
+          color:
+            - 0.9
+            - 0.8
+            - 0.7
+          strength: 1.0
+          power: 2.0
+  - name: inherit-body
+    components:
+      Transform:
+        translation:
+          - 1.2
+          - 1.0
+          - 0
+        scale:
+          - 0.8
+          - 0.8
+          - 0.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+        rim:
+          color:
+            - 0.9
+            - 0.8
+            - 0.7
+          strength: 1.0
+          power: 2.0
+  - name: inherit-head
+    components:
+      Parent:
+        index: 11
+        generation: 0
+      Transform:
+        translation:
+          - 0
+          - 0.8125
+          - 0
+        scale:
+          - 0.6875
+          - 0.6875
+          - 0.6875
+      Mesh:
+        shape: sphere
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+  - name: inherit-arm-l
+    components:
+      Parent:
+        index: 11
+        generation: 0
+      Transform:
+        translation:
+          - -0.6875
+          - 0
+          - 0
+        scale:
+          - 0.25
+          - 1.0
+          - 0.3125
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+  - name: inherit-arm-r
+    components:
+      Parent:
+        index: 11
+        generation: 0
+      Transform:
+        translation:
+          - 0.6875
+          - 0
+          - 0
+        scale:
+          - 0.25
+          - 1.0
+          - 0.3125
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+  - name: inherit-leg-l
+    components:
+      Parent:
+        index: 11
+        generation: 0
+      Transform:
+        translation:
+          - -0.25
+          - -0.875
+          - 0
+        scale:
+          - 0.3125
+          - 0.75
+          - 0.375
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+  - name: inherit-leg-r
+    components:
+      Parent:
+        index: 11
+        generation: 0
+      Transform:
+        translation:
+          - 0.25
+          - -0.875
+          - 0
+        scale:
+          - 0.3125
+          - 0.75
+          - 0.375
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.15
+          - 0.15
+          - 1.0
+  - name: document-figure
+    components:
+      Transform:
+        translation:
+          - 3.6
+          - 0
+          - 0
+        scale:
+          - 0.1
+          - 0.1
+          - 0.1
+      Mesh:
+        shape:
+          voxel: voxels/rim-figure.voxel.yaml
+        color:
+          - 1
+          - 1
+          - 1
+          - 1.0
