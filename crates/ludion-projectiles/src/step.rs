@@ -122,6 +122,8 @@ pub(crate) struct Work {
     fate: Fate,
     pos: [f32; 3],
     vel: [f32; 3],
+    spin: [f32; 3],
+    orient: [f32; 4],
     life: f32,
     bounces: u16,
     pierces: u16,
@@ -151,6 +153,8 @@ impl Work {
             fate: Fate::Live,
             pos: [0.0; 3],
             vel: [0.0; 3],
+            spin: [0.0; 3],
+            orient: [0.0, 0.0, 0.0, 1.0],
             life: 0.0,
             bounces: 0,
             pierces: 0,
@@ -240,6 +244,8 @@ pub fn step(
                 let c = &mut pool.cols;
                 c.pos[slot] = w.pos;
                 c.vel[slot] = w.vel;
+                c.spin[slot] = w.spin;
+                c.orient[slot] = w.orient;
                 c.life[slot] = w.life;
                 c.bounces[slot] = w.bounces;
                 c.pierces[slot] = w.pierces;
@@ -297,6 +303,8 @@ fn sweep_slot(
     w.active = true;
     w.pos = c.pos[slot];
     w.vel = c.vel[slot];
+    w.spin = c.spin[slot];
+    w.orient = c.orient[slot];
     w.life = c.life[slot];
     w.bounces = c.bounces[slot];
     w.pierces = c.pierces[slot];
@@ -326,7 +334,7 @@ fn sweep_slot(
     let radius = c.radius[slot];
     let owner = c.owner[slot];
     let owner_entity = owner.and_then(|o| o.as_entity());
-    let mut filter = Filter::new(cfg.targets);
+    let mut filter = Filter::new(c.targets[slot].unwrap_or(cfg.targets));
     if let Some(o) = owner {
         filter = filter.owned_by(o);
     }
@@ -398,6 +406,30 @@ fn sweep_slot(
                 w.parked = true;
                 outcome = HitOutcome::Stopped;
             }
+            Response::Settle {
+                restitution,
+                friction,
+                rest_speed,
+                floor_cos,
+            } => {
+                let vn = dot(w.vel, normal);
+                for (v, n) in w.vel.iter_mut().zip(normal) {
+                    let tangent = *v - vn * n;
+                    *v = tangent * (1.0 - friction) - restitution * vn * n;
+                }
+                w.spin = scale(w.spin, 1.0 - friction);
+                w.pos = add(centre, scale(normal, skin_at(centre)));
+                w.bounces = w.bounces.saturating_add(1);
+                if normal[1] >= floor_cos && dot(w.vel, w.vel) < rest_speed * rest_speed {
+                    w.vel = [0.0; 3];
+                    w.spin = [0.0; 3];
+                    w.parked = true;
+                    outcome = HitOutcome::Stopped;
+                } else {
+                    outcome = HitOutcome::Reflected;
+                    keep_going = true;
+                }
+            }
         }
         w.hits[w.hit_count] = HitEvent {
             id,
@@ -419,7 +451,27 @@ fn sweep_slot(
         elapsed += t * remaining;
         remaining *= 1.0 - t;
     }
+    if !w.parked && w.fate == Fate::Live && w.spin.map(f32::to_bits) != [0u32; 3] {
+        w.orient = integrate_orientation(w.orient, w.spin, dt);
+    }
     w
+}
+
+/// `q += 0.5·dt·(ω,0)⊗q`, renormalised; `ω` is in world space.
+fn integrate_orientation(q: [f32; 4], w: [f32; 3], dt: f32) -> [f32; 4] {
+    let dq = [
+        w[0] * q[3] + w[1] * q[2] - w[2] * q[1],
+        w[1] * q[3] + w[2] * q[0] - w[0] * q[2],
+        w[2] * q[3] + w[0] * q[1] - w[1] * q[0],
+        -(w[0] * q[0] + w[1] * q[1] + w[2] * q[2]),
+    ];
+    let h = 0.5 * dt;
+    crate::pool::normalize([
+        q[0] + h * dq[0],
+        q[1] + h * dq[1],
+        q[2] + h * dq[2],
+        q[3] + h * dq[3],
+    ])
 }
 
 /// The minimum by `(t, handle)`; on a full tie the world hit wins.

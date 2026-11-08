@@ -59,7 +59,37 @@ fn desc(rng: &mut Lcg) -> ProjectileDesc {
     d
 }
 
+fn gib_desc(rng: &mut Lcg) -> ProjectileDesc {
+    let mut d = desc(rng);
+    if rng.next().is_multiple_of(3) {
+        d.response = Response::settle(0.5, 0.4, 0.8);
+        d.spin = [
+            rng.range(-6.0, 6.0),
+            rng.range(-6.0, 6.0),
+            rng.range(-6.0, 6.0),
+        ];
+        d.orientation = [
+            rng.range(-1.0, 1.0),
+            rng.range(-1.0, 1.0),
+            rng.range(-1.0, 1.0),
+            1.0,
+        ];
+        d.targets = Some(0);
+        d.gravity_scale = 1.0;
+    }
+    d
+}
+
 fn trace() -> (Vec<u64>, Vec<u32>) {
+    trace_with(desc).0
+}
+
+fn trace_gibs() -> ((Vec<u64>, Vec<u32>), usize) {
+    trace_with(gib_desc)
+}
+
+/// The traces plus how many shots were parked on the last tick.
+fn trace_with(desc: fn(&mut Lcg) -> ProjectileDesc) -> ((Vec<u64>, Vec<u32>), usize) {
     let mut boxes = Vec::new();
     for i in 0..5 {
         for j in 0..5 {
@@ -127,7 +157,11 @@ fn trace() -> (Vec<u64>, Vec<u32>) {
         events.hits.len() + bits.len() > 1_000,
         "the scene must exercise the step"
     );
-    (digests, bits)
+    let parked = pool
+        .ids()
+        .filter(|&id| pool.is_parked(id) == Some(true))
+        .count();
+    ((digests, bits), parked)
 }
 
 #[test]
@@ -142,6 +176,16 @@ fn digest_and_events_are_identical_at_any_thread_count_and_across_runs() {
         assert_eq!(par::with_threads(n, trace), base, "{n} threads");
     }
     assert_eq!(par::with_threads(1, trace), base, "second run");
+}
+
+#[test]
+fn gib_digest_and_events_are_identical_at_any_thread_count_and_across_runs() {
+    let base = par::with_threads(1, trace_gibs);
+    assert!(base.1 > 0, "some shots end parked");
+    for n in [3, 8] {
+        assert_eq!(par::with_threads(n, trace_gibs), base, "{n} threads");
+    }
+    assert_eq!(par::with_threads(1, trace_gibs), base, "second run");
 }
 
 #[test]

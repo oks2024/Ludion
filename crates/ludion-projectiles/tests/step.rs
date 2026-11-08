@@ -499,3 +499,219 @@ fn a_reflect_shot_touching_a_wall_and_moving_away_has_no_event() {
     assert!(events.hits.is_empty());
     assert_eq!(pool.bounces(id), Some(0));
 }
+
+fn floor() -> (ludion_ecs::World, Vec<EntityId>) {
+    // The plane y = 0, solid below it.
+    box_world(&[([0.0, -1.0, 0.0], [50.0, 1.0, 50.0])])
+}
+
+#[test]
+fn settle_parks_on_the_floor_and_expires() {
+    let (world, _) = floor();
+    let physics = physics_ref(&world);
+    let mut cfg = config(physics);
+    cfg.gravity = [0.0, -9.8, 0.0];
+    let index = Index3d::new();
+    let mut pool = ProjectilePool::with_capacity(2);
+    let mut d = ProjectileDesc::new([0.0, 2.0, 0.0], [3.0, 0.0, 0.0]);
+    d.gravity_scale = 1.0;
+    d.response = Response::settle(0.4, 0.5, 0.5);
+    d.spin = [1.0, 2.0, 3.0];
+    d.lifetime = 4.0;
+    let id = one(&mut pool, d);
+    let mut parked_at = None;
+    let mut expired = 0;
+    for tick in 0..250 {
+        let ev = run(&mut pool, physics, &index, DT, &cfg);
+        expired += ev.expired.len();
+        if parked_at.is_some() {
+            assert!(
+                ev.hits.is_empty(),
+                "a parked shot emits no hits (tick {tick})"
+            );
+            if pool.contains(id) {
+                assert_eq!(pool.position(id), parked_at);
+            }
+        } else if pool.is_parked(id) == Some(true) {
+            assert!(ev.hits.iter().any(|h| h.outcome == HitOutcome::Stopped));
+            parked_at = pool.position(id);
+        }
+    }
+    let at = parked_at.expect("the gib came to rest");
+    assert!(
+        at[1] > 0.0 && at[1] < 0.01,
+        "rests just above the floor: {at:?}"
+    );
+    assert_eq!(expired, 1);
+    assert!(!pool.contains(id));
+}
+
+#[test]
+fn settle_parks_with_zero_velocity_and_spin_and_keeps_its_orientation() {
+    let (world, _) = floor();
+    let physics = physics_ref(&world);
+    let mut cfg = config(physics);
+    cfg.gravity = [0.0, -9.8, 0.0];
+    let index = Index3d::new();
+    let mut pool = ProjectilePool::with_capacity(2);
+    let mut d = ProjectileDesc::new([0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+    d.gravity_scale = 1.0;
+    d.response = Response::settle(0.3, 0.6, 1.0);
+    d.spin = [0.0, 4.0, 5.0];
+    let id = one(&mut pool, d);
+    for _ in 0..200 {
+        run(&mut pool, physics, &index, DT, &cfg);
+        if pool.is_parked(id) == Some(true) {
+            break;
+        }
+    }
+    assert_eq!(pool.is_parked(id), Some(true));
+    assert_eq!(pool.spin(id), Some([0.0; 3]));
+    assert_eq!(pool.velocity(id), Some([0.0; 3]));
+    let q = pool.orientation(id).unwrap();
+    for _ in 0..10 {
+        run(&mut pool, physics, &index, DT, &cfg);
+        assert_eq!(
+            pool.orientation(id).unwrap().map(f32::to_bits),
+            q.map(f32::to_bits)
+        );
+    }
+}
+
+#[test]
+fn settle_bounces_off_a_wall_without_parking() {
+    let (world, _) = wall_x();
+    let physics = physics_ref(&world);
+    let cfg = config(physics);
+    let mut pool = ProjectilePool::with_capacity(2);
+    let mut d = ProjectileDesc::new([0.0; 3], [2.0, 0.0, 0.0]);
+    d.response = Response::settle(0.5, 0.0, 10.0);
+    let id = one(&mut pool, d);
+    let ev = run(&mut pool, physics, &Index3d::new(), 5.0, &cfg);
+    assert_eq!(ev.hits.len(), 1);
+    assert_eq!(ev.hits[0].outcome, HitOutcome::Reflected);
+    assert_eq!(pool.is_parked(id), Some(false));
+    assert!(pool.velocity(id).unwrap()[0] < 0.0);
+    assert!(pool.position(id).unwrap()[0] < 5.0);
+    assert_eq!(pool.bounces(id), Some(1));
+}
+
+#[test]
+fn settle_has_no_bounce_cap() {
+    let (world, _) = box_world(&[
+        ([6.0, 0.0, 0.0], [1.0, 50.0, 50.0]),
+        ([-6.0, 0.0, 0.0], [1.0, 50.0, 50.0]),
+    ]);
+    let physics = physics_ref(&world);
+    let cfg = config(physics);
+    let mut pool = ProjectilePool::with_capacity(2);
+    let mut d = ProjectileDesc::new([0.0; 3], [300.0, 0.0, 0.0]);
+    d.response = Response::settle(1.0, 0.0, 0.1);
+    let id = one(&mut pool, d);
+    for _ in 0..60 {
+        run(&mut pool, physics, &Index3d::new(), DT, &cfg);
+    }
+    assert!(pool.bounces(id).unwrap() > 20);
+    assert!(pool.contains(id));
+    assert_eq!(pool.is_parked(id), Some(false));
+}
+
+#[test]
+fn spin_integrates_about_the_world_axis_and_stays_a_unit_quaternion() {
+    let physics = empty_physics();
+    let cfg = config(&physics);
+    let mut pool = ProjectilePool::with_capacity(2);
+    let mut d = ProjectileDesc::new([0.0; 3], [0.0; 3]);
+    d.spin = [0.0, std::f32::consts::PI, 0.0];
+    let id = one(&mut pool, d);
+    for _ in 0..30 {
+        run(&mut pool, &physics, &Index3d::new(), DT, &cfg);
+    }
+    let q = pool.orientation(id).unwrap();
+    let h = std::f32::consts::FRAC_1_SQRT_2;
+    assert!(
+        (q[0].abs() + q[2].abs() < 1e-2) && (q[1] - h).abs() < 1e-2 && (q[3] - h).abs() < 1e-2,
+        "{q:?}"
+    );
+    let n = q.iter().map(|c| c * c).sum::<f32>();
+    assert!((n - 1.0).abs() < 1e-5);
+}
+
+#[test]
+fn a_shot_without_spin_keeps_the_identity_orientation_bit_exactly() {
+    let physics = empty_physics();
+    let cfg = config(&physics);
+    let mut pool = ProjectilePool::with_capacity(2);
+    let id = one(&mut pool, ProjectileDesc::new([0.0; 3], [1.0, 0.0, 0.0]));
+    for _ in 0..5 {
+        run(&mut pool, &physics, &Index3d::new(), DT, &cfg);
+    }
+    assert_eq!(
+        pool.orientation(id).unwrap().map(f32::to_bits),
+        [0.0f32, 0.0, 0.0, 1.0].map(f32::to_bits)
+    );
+}
+
+#[test]
+fn per_shot_targets_override_the_pool_mask() {
+    let physics = empty_physics();
+    let index = index_of(&[sphere(Handle::slot(7, 0), [5.0, 0.0, 0.0], 1.0, 1)]);
+    for (pool_mask, shot_mask, hits) in [(1, Some(0), 0), (0, Some(1), 1), (1, None, 1)] {
+        let mut cfg = config(&physics);
+        cfg.targets = pool_mask;
+        let mut pool = ProjectilePool::with_capacity(2);
+        let mut d = ProjectileDesc::new([0.0; 3], [600.0, 0.0, 0.0]);
+        d.targets = shot_mask;
+        one(&mut pool, d);
+        let ev = run(&mut pool, &physics, &index, DT, &cfg);
+        assert_eq!(ev.hits.len(), hits, "pool {pool_mask} shot {shot_mask:?}");
+    }
+}
+
+#[test]
+fn invalid_gib_fields_name_the_field() {
+    use ludion_projectiles::SpawnError::InvalidDesc;
+    let base = ProjectileDesc::new([0.0; 3], [1.0, 0.0, 0.0]);
+    let mut pool = ProjectilePool::with_capacity(1);
+    type Edit = Box<dyn Fn(&mut ProjectileDesc)>;
+    let cases: [(&str, Edit); 8] = [
+        ("spin", Box::new(|d| d.spin = [f32::NAN, 0.0, 0.0])),
+        ("orientation", Box::new(|d| d.orientation = [0.0; 4])),
+        (
+            "orientation",
+            Box::new(|d| d.orientation = [f32::INFINITY, 0.0, 0.0, 1.0]),
+        ),
+        (
+            "response.restitution",
+            Box::new(|d| d.response = Response::settle(1.5, 0.5, 0.5)),
+        ),
+        (
+            "response.friction",
+            Box::new(|d| d.response = Response::settle(0.5, -0.1, 0.5)),
+        ),
+        (
+            "response.rest_speed",
+            Box::new(|d| d.response = Response::settle(0.5, 0.5, -1.0)),
+        ),
+        (
+            "response.rest_speed",
+            Box::new(|d| d.response = Response::settle(0.5, 0.5, f32::NAN)),
+        ),
+        (
+            "response.floor_cos",
+            Box::new(|d| {
+                d.response = Response::Settle {
+                    restitution: 0.5,
+                    friction: 0.5,
+                    rest_speed: 0.5,
+                    floor_cos: 2.0,
+                }
+            }),
+        ),
+    ];
+    for (field, f) in cases {
+        let mut d = base;
+        f(&mut d);
+        assert_eq!(pool.spawn(d), Err(InvalidDesc(field)), "{field}");
+    }
+}

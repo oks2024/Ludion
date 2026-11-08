@@ -3,7 +3,7 @@
 use ludion_spatial::spatial3d::{Handle, HandleKind};
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::pool::{PIERCE_MEMORY, ProjectilePool, Response};
+use crate::pool::{PIERCE_MEMORY, ProjectilePool, Response, has_ext};
 
 const DOMAIN: &[u8] = b"ludion.projectiles.v2";
 /// Canonical NaN: x86 and ARM disagree on the default NaN bits.
@@ -11,7 +11,7 @@ const NAN_BITS: u32 = 0x7fc0_0000;
 
 /// A fixed stack buffer one slot is encoded into.
 struct Buf {
-    bytes: [u8; 192],
+    bytes: [u8; 256],
     len: usize,
 }
 
@@ -50,7 +50,9 @@ impl ProjectilePool {
     /// free list in the order it will be reused, and the generation of every dead slot below the
     /// high-water mark) and, for each live slot in ascending order, its index, generation and every
     /// field as little-endian bits (NaN canonicalised, `-0.0` distinct). Covering the allocation
-    /// state means a divergence shows at once, not at the next spawn.
+    /// state means a divergence shows at once, not at the next spawn. A slot with non-default spin,
+    /// orientation or per-shot targets adds them after its parked byte (bit 1 flags them), so a pool
+    /// without any hashes as before.
     ///
     /// # Example
     /// ```
@@ -77,7 +79,7 @@ impl ProjectilePool {
         }
         for i in (0..self.high_water).filter(|&i| c.alive[i]) {
             let mut b = Buf {
-                bytes: [0; 192],
+                bytes: [0; 256],
                 len: 0,
             };
             b.u32(i as u32);
@@ -111,13 +113,37 @@ impl ProjectilePool {
                     b.u16(max);
                 }
                 Response::Stop => b.u8(3),
+                Response::Settle {
+                    restitution,
+                    friction,
+                    rest_speed,
+                    floor_cos,
+                } => {
+                    b.u8(4);
+                    b.f32(restitution);
+                    b.f32(friction);
+                    b.f32(rest_speed);
+                    b.f32(floor_cos);
+                }
             }
             b.u16(c.bounces[i]);
             b.u16(c.pierces[i]);
             for h in &c.pierced[i][..(c.pierces[i] as usize).min(PIERCE_MEMORY)] {
                 b.handle(*h);
             }
-            b.u8(c.parked[i] as u8);
+            let ext = has_ext(c, i);
+            b.u8(c.parked[i] as u8 | (ext as u8) << 1);
+            if ext {
+                b.f32x3(c.spin[i]);
+                c.orient[i].iter().for_each(|&v| b.f32(v));
+                match c.targets[i] {
+                    None => b.u8(0),
+                    Some(m) => {
+                        b.u8(1);
+                        b.u32(m);
+                    }
+                }
+            }
             hasher.update(&b.bytes[..b.len]);
         }
         hasher.digest()
@@ -194,6 +220,31 @@ mod tests {
             pool.digest()
         };
         assert_ne!(drained([0, 2]), drained([2, 0]));
+    }
+
+    #[test]
+    fn each_new_field_changes_the_digest() {
+        let digest = |f: &dyn Fn(&mut ProjectileDesc)| {
+            let mut d = ProjectileDesc::new([1.0, 2.0, 3.0], [1.0, 0.0, 0.0]);
+            d.response = Response::settle(0.4, 0.5, 0.5);
+            f(&mut d);
+            let mut p = ProjectilePool::with_capacity(2);
+            p.spawn(d).unwrap();
+            p.digest()
+        };
+        let base = digest(&|_| {});
+        assert_ne!(base, digest(&|d| d.spin = [0.0, 1.0, 0.0]));
+        assert_ne!(base, digest(&|d| d.orientation = [1.0, 0.0, 0.0, 0.0]));
+        assert_ne!(base, digest(&|d| d.targets = Some(0)));
+        assert_ne!(
+            digest(&|d| d.targets = Some(0)),
+            digest(&|d| d.targets = Some(1))
+        );
+        assert_ne!(
+            base,
+            digest(&|d| d.response = Response::settle(0.4, 0.6, 0.5))
+        );
+        assert_ne!(base, digest(&|d| d.response = Response::Stop));
     }
 
     #[test]

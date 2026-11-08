@@ -476,3 +476,106 @@ fn an_unstepped_live_pool_warns_once() {
     trace(&mut stepped, 20);
     assert!(reported(&stepped).is_empty());
 }
+
+const ROOM: &str = "\
+format: 1
+seed: 5
+physics:
+  space: free
+entities:
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 10.0
+          - -1.0
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 30.0
+              - 1.0
+              - 30.0
+        body: static
+  - name: wall
+    components:
+      Transform:
+        translation:
+          - 14.0
+          - 3.0
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 4.0
+              - 30.0
+        body: static
+";
+
+/// A few Settle gibs with spin and a per-shot target mask every five ticks.
+fn fire_gibs(world: &mut World, ctx: &SystemCtx) {
+    let frame = ctx.frame.as_u64();
+    if !frame.is_multiple_of(5) {
+        return;
+    }
+    for k in 0..3u32 {
+        let f = k as f32;
+        let mut d = ProjectileDesc::new(
+            [0.0, 0.5 + 0.2 * f, -2.0 + 2.0 * f],
+            [5.0 + f * 2.0, 1.0, 0.5 * f - 0.5],
+        );
+        d.gravity_scale = 1.0;
+        d.lifetime = 1.5;
+        d.tag = k;
+        d.response = Response::settle(0.4, 0.5, 2.0);
+        d.spin = [2.0 + f, 5.0, -3.0];
+        d.orientation = [0.1 * f, 0.2, 0.0, 1.0];
+        d.targets = Some(0);
+        spawn_projectile(world, d);
+    }
+}
+
+fn room_engine() -> Engine {
+    let mut engine = base()
+        .projectiles(ProjectileConfig {
+            capacity: 128,
+            ..ProjectileConfig::default()
+        })
+        .system(
+            "spatial3d_rebuild",
+            spatial3d::rebuild::<Transform, TransformHierarchy>,
+        )
+        .system("fire_gibs", fire_gibs)
+        .system("projectiles_step", projectiles_step)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(ROOM).unwrap();
+    engine
+}
+
+#[test]
+fn settling_gibs_restore_mid_flight_bit_identically() {
+    let mut uninterrupted = room_engine();
+    let reference = trace(&mut uninterrupted, 80);
+
+    let mut first = room_engine();
+    trace(&mut first, 50);
+    let pool = first.world().resource::<Projectiles>().unwrap().pool();
+    assert!(
+        pool.ids().any(|id| pool.is_parked(id) == Some(true)),
+        "a gib has come to rest"
+    );
+    assert!(
+        pool.ids().any(|id| pool.is_parked(id) == Some(false)),
+        "a gib is still flying"
+    );
+    assert!(pool.ids().any(|id| pool.spin(id) != Some([0.0; 3])));
+    let snapshot = snapshot_of(&mut first);
+
+    let mut resumed = room_engine();
+    restore(&mut resumed, snapshot).unwrap();
+    assert_eq!(trace(&mut resumed, 30), reference[50..], "ticks 51..80");
+}

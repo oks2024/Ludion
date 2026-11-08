@@ -4,7 +4,7 @@ use std::fmt;
 
 use ludion_spatial::spatial3d::{Handle, HandleKind};
 
-use crate::pool::{Cols, PIERCE_MEMORY, ProjectileId, ProjectilePool, Response};
+use crate::pool::{Cols, PIERCE_MEMORY, ProjectileId, ProjectilePool, Response, has_ext};
 use crate::step::{Expired, HitEvent, HitOutcome, StepEvents};
 
 const POOL_MAGIC: &[u8; 4] = b"LPRJ";
@@ -81,6 +81,17 @@ fn put_response(out: &mut Vec<u8>, r: Response) {
             out.extend_from_slice(&max.to_le_bytes());
         }
         Response::Stop => out.push(3),
+        Response::Settle {
+            restitution,
+            friction,
+            rest_speed,
+            floor_cos,
+        } => {
+            out.push(4);
+            for v in [restitution, friction, rest_speed, floor_cos] {
+                put_u32(out, v.to_bits());
+            }
+        }
     }
 }
 
@@ -149,6 +160,12 @@ impl Reader<'_, '_> {
             },
             2 => Response::Pierce { max: self.u16()? },
             3 => Response::Stop,
+            4 => Response::Settle {
+                restitution: self.f32()?,
+                friction: self.f32()?,
+                rest_speed: self.f32()?,
+                floor_cos: self.f32()?,
+            },
             _ => return Err(DecodeError("bad response tag")),
         })
     }
@@ -171,7 +188,9 @@ const SLOT_BYTES: usize = 12 + 12 + 4 * 3 + 1 + 4 + 4 + 1 + 2 + 2 + PIERCE_MEMOR
 impl ProjectilePool {
     /// Appends the whole pool: every column of every slot below the high-water mark, the free
     /// list (order matters: it decides the next ids) and the live count. Floats are raw bits, so
-    /// NaN and `-0.0` survive. [`ProjectilePool::decode`] is the inverse.
+    /// NaN and `-0.0` survive. A slot whose spin, orientation or per-shot targets are not at their
+    /// defaults sets bit 1 of its parked byte and appends them; every other slot writes the
+    /// original bytes. [`ProjectilePool::decode`] is the inverse.
     ///
     /// # Example
     /// ```
@@ -206,7 +225,19 @@ impl ProjectilePool {
             out.extend_from_slice(&c.bounces[i].to_le_bytes());
             out.extend_from_slice(&c.pierces[i].to_le_bytes());
             c.pierced[i].iter().for_each(|&h| put_handle(out, h));
-            out.push(c.parked[i] as u8);
+            let ext = has_ext(c, i);
+            out.push(c.parked[i] as u8 | (ext as u8) << 1);
+            if ext {
+                put_f32x3(out, c.spin[i]);
+                c.orient[i].iter().for_each(|v| put_u32(out, v.to_bits()));
+                match c.targets[i] {
+                    None => out.push(0),
+                    Some(m) => {
+                        out.push(1);
+                        put_u32(out, m);
+                    }
+                }
+            }
             put_u32(out, c.generation[i]);
             out.push(c.alive[i] as u8);
         }
@@ -255,7 +286,16 @@ impl ProjectilePool {
             for k in 0..PIERCE_MEMORY {
                 c.pierced[i][k] = r.handle()?;
             }
-            c.parked[i] = r.flag()?;
+            let state = r.u8()?;
+            if state > 3 {
+                return Err(DecodeError("bad parked byte"));
+            }
+            c.parked[i] = state & 1 == 1;
+            if state & 2 != 0 {
+                c.spin[i] = r.f32x3()?;
+                c.orient[i] = [r.f32()?, r.f32()?, r.f32()?, r.f32()?];
+                c.targets[i] = if r.flag()? { Some(r.u32()?) } else { None };
+            }
             c.generation[i] = r.u32()?;
             c.alive[i] = r.flag()?;
         }

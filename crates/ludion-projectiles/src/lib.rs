@@ -31,10 +31,16 @@
 //!   hits on a pierced entity are skipped too. Any other physics (world) hit despawns a piercing
 //!   projectile.
 //! - **Stop** parks the projectile at the contact: live, motionless, still aging.
+//! - **Settle** is the gib: it bounces off every surface, damping tangential speed and spin by
+//!   `friction` and normal speed by `restitution`, and parks (spin zeroed, orientation kept) on a
+//!   floor (`n.y >= floor_cos`, +Y up) once slower than `rest_speed`. Walls bounce without a cap.
+//!   A shot with `spin` also integrates an `orientation` quaternion; `targets` overrides the
+//!   pool's index mask for that shot.
 //!
 //! # Determinism
 //!
-//! The step uses only `+ - * /` (no transcendental, no `sqrt`), integrates semi-implicitly
+//! The step uses only `+ - * /` (no transcendental; the one `sqrt`, `ludion_core::math::sqrt`,
+//! normalises orientation quaternions), integrates semi-implicitly
 //! (gravity, then drag as `v *= 1 / (1 + drag·dt)`, then the sweep), fans the per-projectile work
 //! out over [`ludion_core::par`] in fixed chunks and applies results serially in ascending slot
 //! order. Results, events and ids are therefore identical at any thread count. After warm-up a step at
@@ -64,7 +70,10 @@ mod pool;
 mod step;
 
 pub use codec::{DecodeError, MAX_DECODE_CAPACITY};
-pub use pool::{PIERCE_MEMORY, ProjectileDesc, ProjectileId, ProjectilePool, Response, SpawnError};
+pub use pool::{
+    DEFAULT_FLOOR_COS, PIERCE_MEMORY, ProjectileDesc, ProjectileId, ProjectilePool, Response,
+    SpawnError,
+};
 pub use step::{
     Expired, HitEvent, HitOutcome, MAX_HITS_PER_TICK, SKIN, StepConfig, StepEvents, step,
 };

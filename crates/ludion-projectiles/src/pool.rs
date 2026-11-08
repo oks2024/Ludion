@@ -46,6 +46,82 @@ pub enum Response {
     },
     /// Parks at the contact.
     Stop,
+    /// A gib: bounces off any surface, loses speed and spin to friction, and parks on a floor.
+    ///
+    /// At a contact with normal `n`: `v' = v_t·(1 − friction) − restitution·(v·n)·n` with
+    /// `v_t = v − (v·n)n`, the spin is scaled by `1 − friction`, and `bounces` counts up with no
+    /// cap. The up axis is **+Y**, the engine's up (not the gravity direction: pool gravity can be
+    /// zero and `gravity_scale` negative): a contact is a floor when `n.y >= floor_cos`. On a floor,
+    /// when `|v'|² < rest_speed²` the shot parks with zero velocity and spin and keeps its
+    /// orientation; the outcome is [`HitOutcome::Stopped`](crate::HitOutcome::Stopped). Walls and
+    /// ceilings never park: they report `Reflected`. A parked shot keeps aging and expires at its
+    /// lifetime.
+    Settle {
+        /// Normal-velocity scale in `[0, 1]`.
+        restitution: f32,
+        /// Tangential speed and spin lost per contact, in `[0, 1]`.
+        friction: f32,
+        /// Speed in m/s under which a floor contact parks the shot, `>= 0`.
+        rest_speed: f32,
+        /// Minimum `n.y` for a contact to count as a floor, in `[0, 1]`.
+        floor_cos: f32,
+    },
+}
+
+/// The default floor slope for [`Response::Settle`]: surfaces within 45° of flat count as a floor.
+pub const DEFAULT_FLOOR_COS: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
+impl Response {
+    /// A [`Response::Settle`] with the [`DEFAULT_FLOOR_COS`] floor.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_projectiles::{DEFAULT_FLOOR_COS, Response};
+    ///
+    /// assert_eq!(
+    ///     Response::settle(0.4, 0.5, 0.5),
+    ///     Response::Settle {
+    ///         restitution: 0.4,
+    ///         friction: 0.5,
+    ///         rest_speed: 0.5,
+    ///         floor_cos: DEFAULT_FLOOR_COS,
+    ///     }
+    /// );
+    /// ```
+    pub fn settle(restitution: f32, friction: f32, rest_speed: f32) -> Self {
+        Response::Settle {
+            restitution,
+            friction,
+            rest_speed,
+            floor_cos: DEFAULT_FLOOR_COS,
+        }
+    }
+}
+
+/// The identity orientation, `[x, y, z, w]`.
+pub(crate) const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+fn bits3(v: [f32; 3]) -> [u32; 3] {
+    v.map(f32::to_bits)
+}
+
+fn bits4(v: [f32; 4]) -> [u32; 4] {
+    v.map(f32::to_bits)
+}
+
+/// Whether slot `i` carries any field that is not at its legacy default, so the codec and the
+/// digest write the ext block. Compared by bits, so `-0.0` survives.
+pub(crate) fn has_ext(c: &Cols, i: usize) -> bool {
+    bits3(c.spin[i]) != bits3([0.0; 3])
+        || bits4(c.orient[i]) != bits4(IDENTITY)
+        || c.targets[i].is_some()
+}
+
+/// `q / |q|`, with the one correctly rounded sqrt.
+pub(crate) fn normalize(q: [f32; 4]) -> [f32; 4] {
+    let n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+    let inv = 1.0 / ludion_core::math::sqrt(n2);
+    q.map(|x| x * inv)
 }
 
 /// Everything [`ProjectilePool::spawn`] needs.
@@ -69,6 +145,14 @@ pub struct ProjectileDesc {
     pub tag: u32,
     /// What a hit does.
     pub response: Response,
+    /// Angular velocity in world space, rad/s. Integrated into [`orientation`](Self::orientation)
+    /// each tick; [`Response::Settle`] damps it per contact and zeroes it at rest.
+    pub spin: [f32; 3],
+    /// Starting orientation as a quaternion `[x, y, z, w]`, normalised at spawn.
+    pub orientation: [f32; 4],
+    /// Layer mask of the target index for this shot, replacing [`StepConfig::targets`](crate::StepConfig::targets);
+    /// `None` uses the pool's.
+    pub targets: Option<u32>,
 }
 
 impl ProjectileDesc {
@@ -84,6 +168,9 @@ impl ProjectileDesc {
             lifetime: 10.0,
             tag: 0,
             response: Response::Despawn,
+            spin: [0.0; 3],
+            orientation: IDENTITY,
+            targets: None,
         }
     }
 }
@@ -128,6 +215,9 @@ pub(crate) struct Cols {
     pub(crate) pierces: Vec<u16>,
     pub(crate) pierced: Vec<[Handle; PIERCE_MEMORY]>,
     pub(crate) parked: Vec<bool>,
+    pub(crate) spin: Vec<[f32; 3]>,
+    pub(crate) orient: Vec<[f32; 4]>,
+    pub(crate) targets: Vec<Option<u32>>,
     pub(crate) generation: Vec<u32>,
     pub(crate) alive: Vec<bool>,
 }
@@ -180,6 +270,9 @@ impl ProjectilePool {
             pierces: vec![0; capacity],
             pierced: vec![[NO_HANDLE; PIERCE_MEMORY]; capacity],
             parked: vec![false; capacity],
+            spin: vec![[0.0; 3]; capacity],
+            orient: vec![IDENTITY; capacity],
+            targets: vec![None; capacity],
             generation: vec![0; capacity],
             alive: vec![false; capacity],
         };
@@ -229,6 +322,9 @@ impl ProjectilePool {
         c.pierces.resize(capacity, 0);
         c.pierced.resize(capacity, [NO_HANDLE; PIERCE_MEMORY]);
         c.parked.resize(capacity, false);
+        c.spin.resize(capacity, [0.0; 3]);
+        c.orient.resize(capacity, IDENTITY);
+        c.targets.resize(capacity, None);
         c.generation.resize(capacity, 0);
         c.alive.resize(capacity, false);
         self.scratch.resize(capacity, Work::empty());
@@ -291,6 +387,9 @@ impl ProjectilePool {
         c.pierces[slot] = 0;
         c.pierced[slot] = [NO_HANDLE; PIERCE_MEMORY];
         c.parked[slot] = false;
+        c.spin[slot] = desc.spin;
+        c.orient[slot] = normalize(desc.orientation);
+        c.targets[slot] = desc.targets;
         c.alive[slot] = true;
         self.live += 1;
         Ok(ProjectileId {
@@ -373,7 +472,35 @@ impl ProjectilePool {
         self.slot(id).map(|i| self.cols.response[i])
     }
 
-    /// Whether the projectile stopped (a [`Response::Stop`] hit).
+    /// Angular velocity in world space, rad/s.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_projectiles::{ProjectileDesc, ProjectilePool};
+    ///
+    /// let mut pool = ProjectilePool::with_capacity(1);
+    /// let mut desc = ProjectileDesc::new([0.0; 3], [1.0, 0.0, 0.0]);
+    /// desc.spin = [0.0, 3.0, 0.0];
+    /// let id = pool.spawn(desc).unwrap();
+    /// assert_eq!(pool.spin(id), Some([0.0, 3.0, 0.0]));
+    /// assert_eq!(pool.orientation(id), Some([0.0, 0.0, 0.0, 1.0]));
+    /// ```
+    pub fn spin(&self, id: ProjectileId) -> Option<[f32; 3]> {
+        self.slot(id).map(|i| self.cols.spin[i])
+    }
+
+    /// Current orientation, a unit quaternion `[x, y, z, w]`.
+    pub fn orientation(&self, id: ProjectileId) -> Option<[f32; 4]> {
+        self.slot(id).map(|i| self.cols.orient[i])
+    }
+
+    /// The per-shot target layer mask; the outer `None` is a stale id, the inner `None` means the
+    /// pool's mask.
+    pub fn targets(&self, id: ProjectileId) -> Option<Option<u32>> {
+        self.slot(id).map(|i| self.cols.targets[i])
+    }
+
+    /// Whether the projectile stopped (a [`Response::Stop`] hit or a [`Response::Settle`] rest).
     pub fn is_parked(&self, id: ProjectileId) -> Option<bool> {
         self.slot(id).map(|i| self.cols.parked[i])
     }
@@ -410,10 +537,39 @@ fn validate(d: &ProjectileDesc) -> Result<(), SpawnError> {
     if !(d.lifetime.is_finite() && d.lifetime > 0.0) {
         return bad("lifetime");
     }
-    if let Response::Reflect { restitution, .. } = d.response
-        && !(0.0..=1.0).contains(&restitution)
+    if !finite3(&d.spin) {
+        return bad("spin");
+    }
+    let q = d.orientation;
+    if !(q.iter().all(|c| c.is_finite())
+        && q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3] > 1e-12)
     {
-        return bad("response.restitution");
+        return bad("orientation");
+    }
+    match d.response {
+        Response::Reflect { restitution, .. } if !(0.0..=1.0).contains(&restitution) => {
+            return bad("response.restitution");
+        }
+        Response::Settle {
+            restitution,
+            friction,
+            rest_speed,
+            floor_cos,
+        } => {
+            if !(0.0..=1.0).contains(&restitution) {
+                return bad("response.restitution");
+            }
+            if !(0.0..=1.0).contains(&friction) {
+                return bad("response.friction");
+            }
+            if !(rest_speed.is_finite() && rest_speed >= 0.0) {
+                return bad("response.rest_speed");
+            }
+            if !(0.0..=1.0).contains(&floor_cos) {
+                return bad("response.floor_cos");
+            }
+        }
+        _ => {}
     }
     Ok(())
 }

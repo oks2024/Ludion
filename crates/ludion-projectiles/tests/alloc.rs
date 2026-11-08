@@ -78,12 +78,17 @@ fn a_warm_step_does_not_allocate() {
         );
         d.radius = 0.05;
         d.lifetime = 0.5;
-        d.response = match seed % 3 {
+        d.response = match seed % 4 {
             0 => Response::Reflect {
                 restitution: 0.8,
                 max_bounces: 4,
             },
             1 => Response::Pierce { max: 3 },
+            2 => {
+                d.spin = [3.0, -2.0, 1.0];
+                d.targets = Some(1);
+                Response::settle(0.5, 0.4, 0.5)
+            }
             _ => Response::Despawn,
         };
         let _ = pool.spawn(d);
