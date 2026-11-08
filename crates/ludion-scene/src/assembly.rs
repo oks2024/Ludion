@@ -1776,6 +1776,7 @@ pub(crate) fn part_voxel(
         scale: None,
         generated_from: None,
         budget_exempt: None,
+        rim: None,
         palette: assembly.palette.clone(),
         slices,
     }
@@ -1921,6 +1922,7 @@ pub(crate) fn assembled_grid(assembly: &AssemblyDocument, parts: &[PartDocument]
             scale: None,
             generated_from: None,
             budget_exempt: None,
+            rim: None,
             palette: assembly.palette.clone(),
             slices,
         },
@@ -2021,6 +2023,7 @@ fn connected_clusters(size: [u32; 3], cells: &[[u32; 3]]) -> Vec<Vec<[u32; 3]>> 
         scale: None,
         generated_from: None,
         budget_exempt: None,
+        rim: None,
         palette: vec![PaletteEntry {
             glyph: MARKER.to_string(),
             color: [1.0, 1.0, 1.0, 1.0],

@@ -418,6 +418,7 @@ pub(crate) fn decode(doc: &MeshDocument, hash: u64) -> MeshData {
         textures: None,
         authored_material,
         base_color_mean: [1.0; 4],
+        rim: doc.rim.as_ref().map(crate::extract::doc_rim_lane),
         double_sided: doc.double_sided,
         indices,
         hash,

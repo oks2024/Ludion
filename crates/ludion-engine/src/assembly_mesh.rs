@@ -587,6 +587,7 @@ mod tests {
             textures: None,
             authored_material: false,
             base_color_mean: [1.0; 4],
+            rim: None,
             double_sided: false,
             indices,
             hash,
@@ -814,6 +815,7 @@ mod tests {
                 .iter()
                 .map(|layer| layer.iter().map(|row| row.to_string()).collect())
                 .collect(),
+            rim: None,
         };
         assert_eq!(
             *data.parts[0].mesh,

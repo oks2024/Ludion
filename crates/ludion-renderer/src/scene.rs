@@ -907,6 +907,10 @@ pub struct MeshData {
     /// white (`[1.0; 4]`) when no map is bound or no mean is stored. Extract/voxelizer input only — the
     /// renderer never reads it.
     pub base_color_mean: [f32; 4],
+    /// The source document's `rim:` packed as an instance rim lane `(color·strength, power)`, or
+    /// `None` when the document authors none. Extract input only, like `authored_material`: it wins
+    /// over the entity's own and inherited `Mesh.rim`.
+    pub rim: Option<[f32; 4]>,
     /// Draws unculled, back faces shaded with a flipped normal — per-draw pipeline state.
     pub double_sided: bool,
     /// Triangle list: flat vertex indices, 3 per triangle.

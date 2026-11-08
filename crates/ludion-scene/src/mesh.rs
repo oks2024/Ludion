@@ -83,7 +83,7 @@ pub enum AlphaMode {
     },
 }
 
-const MESH_KEYS: [&str; 24] = [
+const MESH_KEYS: [&str; 25] = [
     "format",
     "kind",
     "name",
@@ -104,6 +104,7 @@ const MESH_KEYS: [&str; 24] = [
     "alpha_mode",
     "alpha_cutoff",
     "double_sided",
+    "rim",
     "joints",
     "weights",
     "bone_indices",
@@ -157,6 +158,9 @@ pub struct MeshDocument {
     pub alpha_mode: AlphaMode,
     /// Whether the mesh draws unculled, back faces shaded with a flipped normal. Render-only.
     pub double_sided: bool,
+    /// One rim highlight for the whole mesh. It wins over the entity's `Mesh.rim` and any
+    /// inherited one. Ranges are `L1111`.
+    pub rim: Option<crate::rim::DocRim>,
     /// The skeleton and per-vertex skin weights of a skinned mesh. `None` for every unskinned mesh,
     /// which is every mesh authored before skins existed.
     pub skin: Option<MeshSkin>,
@@ -605,6 +609,14 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
                         .with_help("write `double_sided: true`, or omit it"),
                     );
                 }
+            }
+            "rim" => {
+                doc.rim = crate::rim::parse_rim(
+                    &entry.node,
+                    "/rim",
+                    code::MESH_DOCUMENT_STRUCTURE,
+                    &mut diagnostics,
+                );
             }
             "joints" => {
                 skin_first.get_or_insert("/joints");
@@ -1398,6 +1410,13 @@ pub(crate) fn validate(doc: &MeshDocument) -> Vec<Diagnostic> {
             &mut diagnostics,
         );
     }
+    if let Some(rim) = &doc.rim {
+        diagnostics.extend(crate::rim::validate_rim(
+            rim,
+            "/rim",
+            code::MESH_DATA_CONSISTENCY,
+        ));
+    }
     check_finite(&doc.positions, "positions", &mut diagnostics);
     if !doc.positions.len().is_multiple_of(3) {
         diagnostics.push(
@@ -2082,6 +2101,9 @@ pub(crate) fn emit(doc: &MeshDocument) -> String {
     }
     if doc.double_sided {
         out.push_str("double_sided: true\n");
+    }
+    if let Some(rim) = &doc.rim {
+        crate::rim::emit_rim(&mut out, rim);
     }
     if let Some(skin) = &doc.skin {
         write_joints(&mut out, &skin.joints);

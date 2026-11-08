@@ -3962,3 +3962,202 @@ fn a_skinned_instance_carries_its_rim() {
     assert_eq!(scene.meshes[0].rim, [1.0, 1.0, 1.0, 3.0]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const SCULPT_BALL: &str = "format: 1\nkind: sculpt\nresolution: 16\ntriangles: 200\n@RIM@palette:\n  S:\n    \
+    color:\n      - 0.5\n      - 0.5\n      - 0.5\n      - 1.0\nbones:\n  - name: root\nparts:\n  - name: \
+    ball\n    shape: sphere\n    radius: 0.5\n    material: S\n";
+
+const MESH_TRI: &str = "format: 1\nkind: mesh\npositions:\n  - 0.0\n  - 0.0\n  - 0.0\n  - 1.0\n  - 0.0\n  \
+    - 0.0\n  - 0.0\n  - 1.0\n  - 0.0\n@RIM@indices:\n  - 0\n  - 1\n  - 2\n";
+
+const DOC_RIM: &str =
+    "rim:\n  color:\n    - 0.0\n    - 1.0\n    - 0.0\n  strength: 2.0\n  power: 5.0\n";
+const DOC_LANE: [f32; 4] = [0.0, 2.0, 0.0, 5.0];
+
+/// Extracts one entity showing `shape`, optionally under a parent whose `Mesh.rim` is
+/// `parent_rim`, with the entity's own `Mesh.rim` = `own`, returning its instance's lane.
+fn doc_rim_lane_of(
+    files: &[(&str, String)],
+    shape: MeshSource,
+    own: Option<ludion_engine::components::Rim>,
+    parent_rim: Option<ludion_engine::components::Rim>,
+) -> [f32; 4] {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "ludion-extract-docrim-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    for (rel, text) in files {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, Transform::default()).unwrap();
+    world
+        .insert(
+            e,
+            Mesh {
+                shape,
+                rim: own,
+                ..Mesh::default()
+            },
+        )
+        .unwrap();
+    if let Some(rim) = parent_rim {
+        let parent = world.spawn();
+        world.insert(parent, Transform::default()).unwrap();
+        world
+            .insert(
+                parent,
+                Mesh {
+                    rim: Some(rim),
+                    ..Mesh::default()
+                },
+            )
+            .unwrap();
+        world.insert(e, ludion_ecs::Parent(parent)).unwrap();
+    }
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    scene
+        .meshes
+        .iter()
+        .find(|m| matches!(m.shape, MeshShape::Asset(_)))
+        .expect("one asset instance")
+        .rim
+}
+
+/// A document `rim:` reaches the instance for a voxel, a sculpt and a mesh document, beats the
+/// entity's own `Mesh.rim` and an inherited ancestor's, and a document without one falls back to
+/// the own rim, then the ancestor's.
+#[test]
+fn doc_rim_beats_own_and_inherited_rim_on_voxel_sculpt_and_mesh() {
+    use ludion_engine::components::Rim;
+    let own = Rim {
+        strength: 3.0,
+        ..Rim::default()
+    };
+    let anc = Rim {
+        strength: 1.5,
+        ..Rim::default()
+    };
+    let voxel = |rim: &str| VOXEL_ONE_CELL.replace("palette:", &format!("{rim}palette:"));
+    type DocFn = Box<dyn Fn(&str) -> String>;
+    let kinds: [(&str, MeshSource, DocFn); 3] = [
+        (
+            "voxels/v.voxel.yaml",
+            MeshSource::Voxel("voxels/v.voxel.yaml".to_string()),
+            Box::new(voxel),
+        ),
+        (
+            "sculpts/s.sculpt.yaml",
+            MeshSource::Sculpt("sculpts/s.sculpt.yaml".to_string()),
+            Box::new(|rim| SCULPT_BALL.replace("@RIM@", rim)),
+        ),
+        (
+            "meshes/m.mesh.yaml",
+            MeshSource::Asset("meshes/m.mesh.yaml".to_string()),
+            Box::new(|rim| MESH_TRI.replace("@RIM@", rim)),
+        ),
+    ];
+    for (path, shape, doc) in &kinds {
+        let with = [(*path, doc(DOC_RIM))];
+        let without = [(*path, doc(""))];
+        assert_eq!(
+            doc_rim_lane_of(&with, shape.clone(), None, None),
+            DOC_LANE,
+            "{path}: doc rim reaches the instance"
+        );
+        assert_eq!(
+            doc_rim_lane_of(&with, shape.clone(), Some(own), Some(anc)),
+            DOC_LANE,
+            "{path}: doc rim beats own and inherited"
+        );
+        assert_eq!(
+            doc_rim_lane_of(&without, shape.clone(), Some(own), Some(anc)),
+            [3.0, 3.0, 3.0, 3.0],
+            "{path}: no doc rim falls back to own"
+        );
+        assert_eq!(
+            doc_rim_lane_of(&without, shape.clone(), None, Some(anc)),
+            [1.5, 1.5, 1.5, 3.0],
+            "{path}: then to the ancestor"
+        );
+        assert_eq!(
+            doc_rim_lane_of(&without, shape.clone(), None, None),
+            [0.0; 4]
+        );
+    }
+}
+
+/// A document rim and an equal `Mesh.rim` produce the identical lane.
+#[test]
+fn doc_rim_and_equal_mesh_rim_give_identical_lanes() {
+    use ludion_engine::components::Rim;
+    let equal = Rim {
+        color: [0.1, 0.7, 0.3],
+        strength: 1.3,
+        power: 2.2,
+    };
+    let rim = "rim:\n  color:\n    - 0.1\n    - 0.7\n    - 0.3\n  strength: 1.3\n  power: 2.2\n";
+    let shape = MeshSource::Asset("meshes/m.mesh.yaml".to_string());
+    let from_doc = doc_rim_lane_of(
+        &[("meshes/m.mesh.yaml", MESH_TRI.replace("@RIM@", rim))],
+        shape.clone(),
+        None,
+        None,
+    );
+    let from_mesh = doc_rim_lane_of(
+        &[("meshes/m.mesh.yaml", MESH_TRI.replace("@RIM@", ""))],
+        shape,
+        Some(equal),
+        None,
+    );
+    assert_eq!(from_doc.map(f32::to_bits), from_mesh.map(f32::to_bits));
+}
+
+/// A skinned (character) mesh document's rim reaches the skinned instance.
+#[test]
+fn a_skinned_mesh_documents_rim_reaches_the_instance() {
+    use ludion_scene::{JointRest, MeshDocument as SceneMeshDocument, MeshJoint, MeshSkin};
+    let mut identity = [0.0; 16];
+    for i in 0..4 {
+        identity[i * 5] = 1.0;
+    }
+    let doc = SceneMeshDocument {
+        positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        skin: Some(MeshSkin {
+            joints: vec![MeshJoint {
+                name: "root".to_string(),
+                parent: None,
+                rest: JointRest {
+                    translation: [0.0; 3],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0; 3],
+                },
+                inverse_bind: identity,
+            }],
+            weights: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            bone_indices: vec![0; 12],
+        }),
+        rim: Some(ludion_scene::DocRim {
+            color: [0.0, 1.0, 0.0],
+            strength: 2.0,
+            power: 5.0,
+        }),
+        indices: vec![0, 1, 2],
+        ..SceneMeshDocument::default()
+    };
+    let lane = doc_rim_lane_of(
+        &[("meshes/skinned.mesh.yaml", ludion_scene::emit_mesh(&doc))],
+        MeshSource::Asset("meshes/skinned.mesh.yaml".to_string()),
+        None,
+        None,
+    );
+    assert_eq!(lane, DOC_LANE);
+}

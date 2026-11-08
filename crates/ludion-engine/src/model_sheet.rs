@@ -2541,6 +2541,7 @@ fn phase_report(
             roughness: None,
         }],
         slices,
+        rim: None,
     };
 
     // The same analysis `check-scene` runs over the rest pose — never a second implementation.
@@ -5185,6 +5186,7 @@ entities:
             budget_exempt: None,
             palette: Vec::new(),
             slices: Vec::new(),
+            rim: None,
         };
         let (min, max) = voxel_aabb(&doc);
         assert_eq!(min, [-2.0, 0.0, -1.0]);

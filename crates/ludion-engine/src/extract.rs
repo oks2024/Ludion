@@ -1263,7 +1263,7 @@ fn extract_inner(
                         bone_offset: 0,
                         cast_shadows,
                         viewmodel: false,
-                        rim,
+                        rim: resolve_rim_lane(&mesh_assets, Some(index), rim),
                     });
                 }
                 continue;
@@ -1324,7 +1324,14 @@ fn extract_inner(
                 bone_offset,
                 cast_shadows,
                 viewmodel: false,
-                rim,
+                rim: resolve_rim_lane(
+                    &mesh_assets,
+                    match shape {
+                        MeshShape::Asset(idx) => Some(idx),
+                        _ => None,
+                    },
+                    rim,
+                ),
             });
         }
     }
@@ -4043,6 +4050,28 @@ fn rim_lane(rim: Option<Rim>) -> [f32; 4] {
         ],
         None => [0.0; 4],
     }
+}
+
+/// A document's `rim:` packed as an instance rim lane — the arithmetic of `Mesh.rim`, so a document
+/// rim and an equal `Mesh.rim` produce identical lanes.
+pub(crate) fn doc_rim_lane(doc: &ludion_scene::DocRim) -> [f32; 4] {
+    rim_lane(Some(Rim {
+        color: doc.color.map(|c| c as f32),
+        strength: doc.strength as f32,
+        power: doc.power as f32,
+    }))
+}
+
+/// The lane a mesh instance draws with: its document's rim when it authors one, else the entity's
+/// resolved (own or inherited) lane. Primitives have no document, so `asset` is `None` for them.
+fn resolve_rim_lane(
+    mesh_assets: &[Arc<MeshData>],
+    asset: Option<usize>,
+    entity: [f32; 4],
+) -> [f32; 4] {
+    asset
+        .and_then(|index| mesh_assets[index].rim)
+        .unwrap_or(entity)
 }
 
 /// The normal matrix for a mesh: the transform that carries object-space normals to world space.
@@ -7144,6 +7173,7 @@ mod tests {
                 textures: None,
                 authored_material: false,
                 base_color_mean: [1.0; 4],
+                rim: None,
                 double_sided: false,
                 indices: Vec::new(),
                 hash: 0,

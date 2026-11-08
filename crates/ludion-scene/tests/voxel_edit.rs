@@ -986,6 +986,7 @@ fn emit_with_comments_works_on_a_built_document() {
         budget_exempt: None,
         palette: Vec::new(),
         slices: vec![vec![".".into()]],
+        rim: None,
     };
     let mut comments = VoxelComments::default();
     comments.header.push("a stub".into());

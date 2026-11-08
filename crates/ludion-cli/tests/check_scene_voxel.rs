@@ -504,3 +504,20 @@ fn voxel_codes_are_explainable() {
         );
     }
 }
+
+/// A document `rim:` out of range fails with the voxel data code at the offending `/rim` pointer.
+#[test]
+fn out_of_range_rim_power_reports_l1114_at_the_pointer() {
+    let source = std::fs::read_to_string(fixture("good_voxel.voxel.yaml")).unwrap();
+    let source = source.replace("palette:", "rim:\n  power: 0\npalette:");
+    let dir = std::env::temp_dir().join(format!("ludion-check-rim-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("rim.voxel.yaml");
+    std::fs::write(&path, source).unwrap();
+    let output = run_check_scene(&path);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1114"), "stderr was: {stderr}");
+    assert!(stderr.contains("/rim/power"), "stderr was: {stderr}");
+}

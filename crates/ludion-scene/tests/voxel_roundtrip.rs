@@ -136,6 +136,7 @@ fn voxel_doc() -> impl Strategy<Value = VoxelDocument> {
                     budget_exempt,
                     palette,
                     slices,
+                    rim: None,
                 }
             },
         )
@@ -316,6 +317,7 @@ fn budget_exempt_suppresses_the_cell_budget_warning() {
         budget_exempt: None,
         palette: Vec::new(),
         slices: vec![layer; sy as usize],
+        rim: None,
     };
     assert!(voxel_budget_warning(&doc).is_some());
     doc.budget_exempt = Some(true);
@@ -395,6 +397,7 @@ fn minimal_model_uses_flow_empties() {
         budget_exempt: None,
         palette: Vec::new(),
         slices: Vec::new(),
+        rim: None,
     };
     assert_eq!(
         emit_voxel(&doc),
@@ -689,6 +692,7 @@ fn duplicate_palette_glyph_is_l1114() {
             },
         ],
         slices: vec![vec![".".into()]],
+        rim: None,
     };
     assert!(has_l1114_at(&validate_voxel(&doc), "/palette/A"));
 }
@@ -711,6 +715,7 @@ fn non_finite_color_is_l1114() {
             roughness: None,
         }],
         slices: vec![vec!["A".into()]],
+        rim: None,
     };
     assert!(has_l1114_at(&validate_voxel(&doc), "/palette/A/color/0"));
 }
@@ -828,6 +833,7 @@ fn non_finite_material_scalar_is_l1114() {
             roughness: Some(f64::NEG_INFINITY),
         }],
         slices: vec![vec!["A".into()]],
+        rim: None,
     };
     let diagnostics = validate_voxel(&doc);
     assert!(has_l1114_at(&diagnostics, "/palette/A/emissive"));
@@ -853,6 +859,7 @@ fn cell_budget_warning_does_not_fail_validation() {
         budget_exempt: None,
         palette: Vec::new(),
         slices: vec![layer; sy as usize],
+        rim: None,
     };
     assert!(validate_voxel(&doc).is_empty());
     let warning = voxel_budget_warning(&doc).expect("expected a budget warning");
@@ -871,6 +878,7 @@ fn cell_budget_warning_does_not_fail_validation() {
         budget_exempt: None,
         palette: Vec::new(),
         slices: vec![vec!["....".into(); 4]; 4],
+        rim: None,
     };
     assert!(voxel_budget_warning(&small).is_none());
 }

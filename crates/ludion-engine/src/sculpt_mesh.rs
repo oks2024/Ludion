@@ -75,7 +75,7 @@ pub(crate) fn load_with_sources(
     let read = std::iter::once((rel.to_string(), doc_hash))
         .chain(files)
         .collect();
-    Ok((mesh_data(mesh, hash), read))
+    Ok((mesh_data(mesh, doc.rim.as_ref(), hash), read))
 }
 
 /// Reads the document behind every `shape: voxel` and `shape: mesh` part of `doc`, the sculpt at
@@ -151,7 +151,7 @@ pub(crate) fn read_sculpt_sources_with_files(
 /// no channel for them. An implicit surface has no parameterization, so every vertex takes the
 /// unmapped default UV `(0, 0)` and the placeholder tangent frame `(+X, +1)`. `hash` is the folded
 /// content hash of the document and every part file it read (the GPU mesh-cache key).
-fn mesh_data(mesh: SculptMesh, hash: u64) -> MeshData {
+fn mesh_data(mesh: SculptMesh, rim: Option<&ludion_scene::DocRim>, hash: u64) -> MeshData {
     let vertex_count = mesh.positions.len() / 3;
     MeshData {
         positions: mesh.positions,
@@ -166,6 +166,7 @@ fn mesh_data(mesh: SculptMesh, hash: u64) -> MeshData {
         textures: None,
         authored_material: true,
         base_color_mean: [1.0; 4],
+        rim: rim.map(crate::extract::doc_rim_lane),
         double_sided: false,
         indices: mesh.indices,
         hash,

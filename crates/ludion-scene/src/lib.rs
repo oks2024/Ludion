@@ -133,6 +133,7 @@ mod physics;
 mod physics_layers;
 mod prefab;
 mod profile;
+mod rim;
 mod scalar;
 mod schema;
 mod sculpt;
@@ -198,6 +199,7 @@ pub use physics::{ScenePhysics, ScenePhysicsSpace, validate_physics};
 pub use physics_layers::{DEFAULT_LAYER, LayerMatrix, MAX_LAYERS, SceneLayer};
 pub use prefab::{PREFAB_FORMAT_VERSION, PrefabDocument};
 pub use profile::ProfileEnvelope;
+pub use rim::DocRim;
 pub use sculpt::{
     SCULPT_DEFAULT_RESOLUTION, SCULPT_DEFAULT_TRIANGLES, SCULPT_FORMAT_VERSION, SCULPT_MAX_REPEAT,
     SCULPT_MAX_RESOLUTION, SCULPT_MIN_RESOLUTION, SCULPT_MIN_TRIANGLES, SculptAxis, SculptBone,

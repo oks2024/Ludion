@@ -153,6 +153,7 @@ fn decoded_cells_match_palette_index_on_a_wide_mixed_model() {
             // empty past their end, in both decodes.
             vec![row[..7].to_string(), row.clone()],
         ],
+        rim: None,
     };
 
     let cells = assert_decode_matches("wide", &doc);

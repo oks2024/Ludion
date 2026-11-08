@@ -724,6 +724,7 @@ mod tests {
             textures: None,
             authored_material: false,
             base_color_mean: [1.0; 4],
+            rim: None,
             double_sided: false,
             indices: Vec::new(),
             hash: 0,

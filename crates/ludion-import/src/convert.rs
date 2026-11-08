@@ -148,6 +148,7 @@ pub(crate) fn mesh_document(
         double_sided: false,
         skin: None,
         indices,
+        rim: None,
     }
 }
 

@@ -60,13 +60,14 @@ const STRUCTURE: ludion_core::diagnostics::DiagnosticCode = code::SCULPT_DOCUMEN
 const DATA: ludion_core::diagnostics::DiagnosticCode = code::SCULPT_DOCUMENT_DATA;
 const BONES: ludion_core::diagnostics::DiagnosticCode = code::SCULPT_BONE_TREE;
 
-const SCULPT_KEYS: [&str; 9] = [
+const SCULPT_KEYS: [&str; 10] = [
     "format",
     "kind",
     "name",
     "resolution",
     "triangles",
     "budget_exempt",
+    "rim",
     "palette",
     "bones",
     "parts",
@@ -131,6 +132,9 @@ pub struct SculptDocument {
     /// `Some(true)` opts the meshed result out of the vertex-budget warning; `Some(false)` is an
     /// `L1157` (the key only means something as `true`).
     pub budget_exempt: Option<bool>,
+    /// One rim highlight for the whole model. It wins over the entity's `Mesh.rim` and any
+    /// inherited one. Ranges are `L1157`.
+    pub rim: Option<crate::rim::DocRim>,
     /// Palette entries in sorted-glyph order — the voxel palette shape, one-glyph keys.
     pub palette: Vec<PaletteEntry>,
     /// The bone tree in authored order; `bones[0]` is the root.
@@ -146,6 +150,7 @@ impl Default for SculptDocument {
             resolution: SCULPT_DEFAULT_RESOLUTION,
             triangles: SCULPT_DEFAULT_TRIANGLES,
             budget_exempt: None,
+            rim: None,
             palette: Vec::new(),
             bones: Vec::new(),
             parts: Vec::new(),
@@ -526,6 +531,9 @@ pub(crate) fn parse(source: &str) -> Result<SculptDocument, Vec<Diagnostic>> {
                     "budget_exempt",
                     &mut diagnostics,
                 );
+            }
+            "rim" => {
+                doc.rim = crate::rim::parse_rim(&entry.node, "/rim", STRUCTURE, &mut diagnostics);
             }
             "palette" => doc.palette = voxel::parse_palette(entry, STRUCTURE, &mut diagnostics),
             "bones" => doc.bones = parse_bones(&entry.node, &mut diagnostics),
@@ -1401,6 +1409,9 @@ pub(crate) fn validate(doc: &SculptDocument) -> Vec<Diagnostic> {
             )),
         );
     }
+    if let Some(rim) = &doc.rim {
+        diagnostics.extend(crate::rim::validate_rim(rim, "/rim", DATA));
+    }
     if doc.budget_exempt == Some(false) {
         diagnostics.push(
             Diagnostic::new(
@@ -1956,6 +1967,9 @@ pub(crate) fn emit(doc: &SculptDocument) -> String {
     out.push_str(&format!("triangles: {}\n", doc.triangles));
     if let Some(exempt) = doc.budget_exempt {
         out.push_str(&format!("budget_exempt: {exempt}\n"));
+    }
+    if let Some(rim) = &doc.rim {
+        crate::rim::emit_rim(&mut out, rim);
     }
     voxel::emit_palette(&mut out, &doc.palette);
 

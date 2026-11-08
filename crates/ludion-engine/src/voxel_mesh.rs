@@ -393,6 +393,7 @@ pub(crate) fn mesh(doc: &VoxelDocument, hash: u64) -> MeshData {
         textures: None,
         authored_material,
         base_color_mean: [1.0; 4],
+        rim: doc.rim.as_ref().map(crate::extract::doc_rim_lane),
         double_sided: false,
         indices,
         hash,
@@ -431,6 +432,7 @@ mod tests {
                 .iter()
                 .map(|layer| layer.iter().map(|r| r.to_string()).collect())
                 .collect(),
+            rim: None,
         }
     }
 
@@ -478,6 +480,7 @@ mod tests {
             textures: None,
             authored_material: false,
             base_color_mean: [1.0; 4],
+            rim: None,
             double_sided: false,
             indices,
             hash,
@@ -865,6 +868,7 @@ mod tests {
             budget_exempt: None,
             palette: vec![entry("A", RED)],
             slices: vec![layer(0), layer(1), layer(2)],
+            rim: None,
         };
         let data = mesh(&model, 0);
         assert_eq!(
@@ -1057,6 +1061,7 @@ mod tests {
                     budget_exempt: None,
                     palette: palette.clone(),
                     slices,
+                    rim: None,
                 }
             })
         })

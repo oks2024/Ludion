@@ -50,7 +50,7 @@ pub const VOXEL_MAX_CELLS: u64 = 16_777_216;
 /// The reserved glyph meaning "empty cell". It can never name a palette entry.
 const EMPTY_GLYPH: char = '.';
 
-const VOXEL_KEYS: [&str; 9] = [
+const VOXEL_KEYS: [&str; 10] = [
     "format",
     "kind",
     "name",
@@ -58,6 +58,7 @@ const VOXEL_KEYS: [&str; 9] = [
     "scale",
     "generated_from",
     "budget_exempt",
+    "rim",
     "palette",
     "slices",
 ];
@@ -231,6 +232,9 @@ pub struct VoxelDocument {
     /// only meaning is "suppress" says nothing when set to `false`, and silently accepting it would
     /// invite the reading that the budget had been *asserted*.
     pub budget_exempt: Option<bool>,
+    /// One rim highlight for the whole model. It wins over the entity's `Mesh.rim` and any
+    /// inherited one. Ranges are `L1114`.
+    pub rim: Option<crate::rim::DocRim>,
     /// Palette entries, in sorted-glyph order (the canonical order [`crate::emit_voxel`] writes).
     pub palette: Vec<PaletteEntry>,
     /// Slice layers, bottom-up (`slices[y]`), each a sequence of row strings (`slices[y][z]`); the
@@ -941,6 +945,14 @@ pub(crate) fn parse(source: &str) -> Result<VoxelDocument, Vec<Diagnostic>> {
             "budget_exempt" => {
                 doc.budget_exempt = parse_budget_exempt(entry, &mut diagnostics);
             }
+            "rim" => {
+                doc.rim = crate::rim::parse_rim(
+                    &entry.node,
+                    "/rim",
+                    code::VOXEL_DOCUMENT_STRUCTURE,
+                    &mut diagnostics,
+                );
+            }
             "palette" => {
                 palette_seen = true;
                 doc.palette =
@@ -1420,6 +1432,14 @@ pub(crate) fn validate(doc: &VoxelDocument) -> Vec<Diagnostic> {
                  key to declare no intended scale",
             ),
         );
+    }
+
+    if let Some(rim) = &doc.rim {
+        diagnostics.extend(crate::rim::validate_rim(
+            rim,
+            "/rim",
+            code::VOXEL_DATA_CONSISTENCY,
+        ));
     }
 
     // `budget_exempt` exists only to suppress `L1115`; `false` suppresses nothing, so it is a
@@ -2127,6 +2147,10 @@ pub(crate) fn emit_with_comments(doc: &VoxelDocument, comments: &VoxelComments) 
         } else {
             "budget_exempt: false\n"
         });
+    }
+
+    if let Some(rim) = &doc.rim {
+        crate::rim::emit_rim(&mut out, rim);
     }
 
     emit_palette(&mut out, &doc.palette);

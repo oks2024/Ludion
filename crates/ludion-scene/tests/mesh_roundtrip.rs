@@ -165,6 +165,7 @@ fn mesh_doc() -> impl Strategy<Value = MeshDocument> {
                         double_sided,
                         skin: None,
                         indices,
+                        rim: None,
                     };
                     // The two cross-key requirements are satisfied here rather than by conditioning
                     // the texture strategy on the vertex lists: a texture needs UVs to sample at,
@@ -728,6 +729,7 @@ fn vertex_budget_warning_does_not_fail_validation() {
         double_sided: false,
         skin: None,
         indices: vec![0, 1, 2],
+        rim: None,
     };
     assert!(validate_mesh(&doc).is_empty());
     let warning = ludion_scene::mesh_budget_warning(&doc).expect("expected a budget warning");
