@@ -305,10 +305,11 @@ impl Gpu {
         );
         let timestamps_supported = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let compression = adapter.features() & COMPRESSION_FEATURES;
+        let first_instance = adapter.features() & wgpu::Features::INDIRECT_FIRST_INSTANCE;
         let required_features = if timestamps_supported {
-            wgpu::Features::TIMESTAMP_QUERY | compression
+            wgpu::Features::TIMESTAMP_QUERY | compression | first_instance
         } else {
-            compression
+            compression | first_instance
         };
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -495,6 +496,21 @@ impl Gpu {
     /// ```
     pub fn supports_compressed(&self, format: CompressedFormat) -> bool {
         compressed_format_supported(self.compression, format)
+    }
+
+    /// Whether indirect draws may carry a `first_instance`, which the cull's LOD levels need: an
+    /// indirect args slot places each level's run inside its bucket. Without it the renderer draws
+    /// level 0 only.
+    ///
+    /// # Example (requires a GPU adapter)
+    /// ```no_run
+    /// let gpu = ludion_render_graph::Gpu::request().unwrap();
+    /// let _levels = gpu.supports_indirect_first_instance();
+    /// ```
+    pub fn supports_indirect_first_instance(&self) -> bool {
+        self.device
+            .features()
+            .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
     }
 
     /// The preferred cook target this device samples: the head of [`Gpu::cook_targets`], so

@@ -27,17 +27,18 @@ mod mesh_pipeline;
 use crate::cache_eviction::CacheEviction;
 use crate::compressed::{self, CompressedUploadError};
 use crate::compute_shader::ComputeShader;
-use crate::cull::{AssetBounds, CullVolume, bounds_table, instance_bounds};
+use crate::cull::{AssetBounds, CullVolume, LodView, bounds_table, instance_bounds};
 use crate::cull_stats::{CullStatsRing, CullViewCount, SampleMeta};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
 use crate::gpu_cull::{
-    CullFrame, CullPipelines, CullTargets, WorldBucket, WorldCullInput, cull_view_names,
+    Chain, CullFrame, CullPipelines, CullTargets, WorldBucket, WorldCullInput, cull_view_names,
     cull_views, world_cull,
 };
 use crate::graph::{
-    AntiAliasing, FrameSize, PostChain, build_frame_graph, build_probe_capture_graph, pass,
+    AntiAliasing, CullShape, FrameSize, PostChain, build_frame_graph, build_probe_capture_graph,
+    pass,
 };
 use crate::ibl::{Ibl, ResolvedEnv};
 use crate::local_shadow::{LocalShadowPlan, LocalShadowView, UNSHADOWED, plan_local_shadows};
@@ -348,6 +349,11 @@ struct MeshAssetGpu {
     /// Built with the upload because the cache key ([`MeshData::hash`]) moves whenever the document
     /// does, so one bind group per upload can never describe a stale material.
     material_bg: wgpu::BindGroup,
+    /// The coarser levels of the mesh's LOD chain, finest first; empty without one. Each is a full
+    /// upload with its own buffers and material bind group (the base's draw key, its own maps).
+    levels: Vec<MeshAssetGpu>,
+    /// `screen_size` of each of [`levels`](Self::levels), strictly decreasing.
+    screen: Vec<f32>,
 }
 
 /// The 1×1 textures bound wherever a material group's slot carries no map. They keep every bind group
@@ -1145,7 +1151,19 @@ impl Renderer {
         let chain = PostChain::for_scene(scene).masked(&self.quality, &self.quality_params);
         PostChain {
             aa: self.anti_aliasing,
-            cull: chain.cull.filter(|_| self.frustum_culling),
+            // A chain keeps the pass with the frustum test off, so levels select identically on and
+            // off; a device that cannot place a level run draws level 0 only.
+            cull: chain
+                .cull
+                .map(|shape| CullShape {
+                    levels: if self.gpu.supports_indirect_first_instance() {
+                        shape.levels
+                    } else {
+                        1
+                    },
+                    ..shape
+                })
+                .filter(|shape| self.frustum_culling || shape.levels > 1),
             ..chain
         }
     }
@@ -2009,7 +2027,19 @@ impl Renderer {
                 frustum
             });
         let (cull_views, over_cap) = chain.cull.map_or_else(Default::default, |shape| {
-            cull_views(scene.cull_view_proj(), &sun_maps, local_frusta, shape)
+            let lod = LodView::of_camera(
+                scene.cull_camera.as_ref().unwrap_or(&scene.camera),
+                scene.lod.bias,
+            );
+            cull_views(
+                scene.cull_view_proj(),
+                &sun_maps,
+                local_frusta,
+                lod,
+                scene.lod.shadow_levels,
+                self.frustum_culling,
+                shape,
+            )
         });
         let stats = self.cull_stats.borrow().is_some();
         let cull_names = if stats {
@@ -2038,20 +2068,25 @@ impl Renderer {
                             d.count,
                             self.mesh_of(d.shape).vertex_count,
                             &d.sources,
+                            Chain::NONE,
                         )
                     });
-                    let assets = mesh_asset_draws
-                        .iter()
-                        .filter(|d| !d.viewmodel)
-                        .map(|d| (d.first, d.count, d.mesh.index_count, &d.sources));
+                    let assets = mesh_asset_draws.iter().filter(|d| !d.viewmodel).map(|d| {
+                        let indices: Vec<u32> = std::iter::once(d.mesh.index_count)
+                            .chain(d.mesh.levels.iter().map(|l| l.index_count))
+                            .collect();
+                        let chain = Chain::of(&d.mesh.screen, &indices, shape.levels);
+                        (d.first, d.count, d.mesh.index_count, &d.sources, chain)
+                    });
                     prims.chain(assets)
                 };
                 let buckets: Vec<WorldBucket<'_>> = world()
-                    .map(|(first, count, elements, sources)| WorldBucket {
+                    .map(|(first, count, elements, sources, chain)| WorldBucket {
                         first,
                         count,
                         elements,
                         sources,
+                        chain,
                     })
                     .collect();
                 world_cull(
@@ -2235,12 +2270,18 @@ impl Renderer {
                     .entry(m.hash)
                     .or_insert_with(|| {
                         self.count_upload(|u| u.mesh_assets += 1);
-                        let material_bg = self.material_bind_group(
-                            self.gpu.device(),
-                            m.textures.as_ref(),
-                            m.double_sided,
-                        );
-                        upload_mesh_asset(self.gpu.device(), m, material_bg)
+                        let upload = |mesh: &MeshData| {
+                            let material_bg = self.material_bind_group(
+                                self.gpu.device(),
+                                mesh.textures.as_ref(),
+                                mesh.double_sided,
+                            );
+                            upload_mesh_asset(self.gpu.device(), mesh, material_bg)
+                        };
+                        let mut asset = upload(m);
+                        asset.levels = m.lods.iter().map(|lod| upload(&lod.mesh)).collect();
+                        asset.screen = m.lods.iter().map(|lod| lod.screen_size).collect();
+                        asset
                     })
                     .clone()
             })
@@ -3963,18 +4004,24 @@ impl FrameRecorder<'_> {
                 variant = draw.variant();
                 rp.set_pipeline(self.mesh_pipeline(ShaderId::Prepass, variant));
             }
-            rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
-            rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
-            let DrawSource {
-                instances,
-                bytes,
-                indirect,
-            } = draw.source(culled, 0);
-            rp.set_vertex_buffer(1, instances.slice(bytes));
-            rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            match indirect {
-                Some((args, at)) => rp.draw_indexed_indirect(args, at),
-                None => rp.draw_indexed(0..draw.mesh.index_count, 0, 0..draw.count),
+            for level in 0..draw.level_count(culled, 0) {
+                let mesh = draw.level(level);
+                if mesh.index_count == 0 {
+                    continue;
+                }
+                rp.set_bind_group(MATERIAL_GROUP, &mesh.material_bg, &[]);
+                rp.set_vertex_buffer(0, mesh.vertices.slice(..));
+                let DrawSource {
+                    instances,
+                    bytes,
+                    indirect,
+                } = draw.source(culled, 0, level);
+                rp.set_vertex_buffer(1, instances.slice(bytes));
+                rp.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                match indirect {
+                    Some((args, at)) => rp.draw_indexed_indirect(args, at),
+                    None => rp.draw_indexed(0..mesh.index_count, 0, 0..draw.count),
+                }
             }
         }
     }
@@ -4083,6 +4130,7 @@ impl FrameRecorder<'_> {
                     tested: cull.tested().to_vec(),
                     buckets: cull.buckets(),
                     bucket_cap: cull.shape().buckets,
+                    levels: cull.shape().levels,
                 },
                 cull.is_empty(),
             );
@@ -4334,18 +4382,24 @@ impl FrameRecorder<'_> {
                 (variant, viewmodel) = (draw.variant(), draw.viewmodel);
                 rp.set_pipeline(mesh_pipeline(variant, viewmodel));
             }
-            rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
-            rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
-            let DrawSource {
-                instances,
-                bytes,
-                indirect,
-            } = draw.source(culled, 0);
-            rp.set_vertex_buffer(1, instances.slice(bytes));
-            rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            match indirect {
-                Some((args, at)) => rp.draw_indexed_indirect(args, at),
-                None => rp.draw_indexed(0..draw.mesh.index_count, 0, 0..draw.count),
+            for level in 0..draw.level_count(culled, 0) {
+                let mesh = draw.level(level);
+                if mesh.index_count == 0 {
+                    continue;
+                }
+                rp.set_bind_group(MATERIAL_GROUP, &mesh.material_bg, &[]);
+                rp.set_vertex_buffer(0, mesh.vertices.slice(..));
+                let DrawSource {
+                    instances,
+                    bytes,
+                    indirect,
+                } = draw.source(culled, 0, level);
+                rp.set_vertex_buffer(1, instances.slice(bytes));
+                rp.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                match indirect {
+                    Some((args, at)) => rp.draw_indexed_indirect(args, at),
+                    None => rp.draw_indexed(0..mesh.index_count, 0, 0..draw.count),
+                }
             }
         }
     }
@@ -4656,26 +4710,32 @@ impl FrameRecorder<'_> {
             }
         }
         for draw in &self.mesh_asset_draws {
-            let source = draw.source(culled, view);
-            let kept = direct(&draw.sources, source.indirect.is_some());
-            if kept.is_none() {
-                continue;
-            }
-            if draw.caster() != *bound {
-                *bound = draw.caster();
-                rp.set_pipeline(self.caster_pipeline(*bound));
-            }
-            if bound.cutout {
-                rp.set_bind_group(MATERIAL_GROUP, &draw.mesh.material_bg, &[]);
-            }
-            rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
-            rp.set_vertex_buffer(1, source.instances.slice(source.bytes));
-            rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            match source.indirect {
-                Some((args, at)) => rp.draw_indexed_indirect(args, at),
-                None => {
-                    for range in kept.into_iter().flatten() {
-                        rp.draw_indexed(0..draw.mesh.index_count, 0, range);
+            for level in 0..draw.level_count(culled, view) {
+                let mesh = draw.level(level);
+                if mesh.index_count == 0 {
+                    continue;
+                }
+                let source = draw.source(culled, view, level);
+                let kept = direct(&draw.sources, source.indirect.is_some());
+                if kept.is_none() {
+                    continue;
+                }
+                if draw.caster() != *bound {
+                    *bound = draw.caster();
+                    rp.set_pipeline(self.caster_pipeline(*bound));
+                }
+                if bound.cutout {
+                    rp.set_bind_group(MATERIAL_GROUP, &mesh.material_bg, &[]);
+                }
+                rp.set_vertex_buffer(0, mesh.vertices.slice(..));
+                rp.set_vertex_buffer(1, source.instances.slice(source.bytes));
+                rp.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                match source.indirect {
+                    Some((args, at)) => rp.draw_indexed_indirect(args, at),
+                    None => {
+                        for range in kept.into_iter().flatten() {
+                            rp.draw_indexed(0..mesh.index_count, 0, range);
+                        }
                     }
                 }
             }
@@ -6529,6 +6589,8 @@ fn upload_mesh_asset(
             .as_ref()
             .is_some_and(|t| t.alpha_cutoff.is_some()),
         material_bg,
+        levels: Vec::new(),
+        screen: Vec::new(),
     }
 }
 

@@ -3816,7 +3816,7 @@ gpu_frame_max_ms = 9.5
             transparent_medium: true,
             dof: true,
             gi_inject: Some([4, 4, 4]),
-            cull: Some(ludion_renderer::CullShape::for_counts(1000, 8, 4)),
+            cull: Some(ludion_renderer::CullShape::for_counts(1000, 8, 4, 1)),
             debug_lines: true,
             ssr: Some(0.5),
             ssr_view: Some(DebugView::SsrConfidence),

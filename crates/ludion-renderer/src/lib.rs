@@ -89,7 +89,7 @@ pub use blend::{BlendData, CameraBlend, InstanceKey, ProjectileItem, blend, latc
 pub use camera_latch::CameraLatch;
 pub use cluster::{ClusterStats, cluster_stats};
 pub use compressed::{CompressedUploadError, check_compressed};
-pub use cull::cull_marks;
+pub use cull::{cull_marks, lod_level, lod_size};
 pub use cull_stats::CullViewCount;
 pub use debug_view::{DebugView, PROBE_VIEW_PALETTE, SUN_CASCADE_VIEW_PALETTE};
 pub use frame_observer::{FrameObserver, FramePhase};
@@ -123,10 +123,10 @@ pub use scene::{
     CookedMap, DEFAULT_AMBIENT, DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment, DecalBlend,
     DecalInstance, DecalMaps, DecalReceivers, DropShadowInstance, EnvironmentData, FontDraw,
     GROUND_MARKER_LIFT, GiData, GroundMarkerInstance, GroundMarkerShape, LocalShadowData,
-    MAX_GI_TEXTURE_AXIS, MapImage, MeshData, MeshInstance, MeshLod, MeshShape, MeshTexture,
-    MeshTextures, ParticleInstance, PointLightData, PostData, ProbeWorld, RenderCamera,
-    RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun,
-    TextureImage, TextureWrap, TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio,
+    LodSettings, MAX_GI_TEXTURE_AXIS, MapImage, MeshData, MeshInstance, MeshLod, MeshShape,
+    MeshTexture, MeshTextures, ParticleInstance, PointLightData, PostData, ProbeWorld,
+    RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, SunCascadeConfig, SunData,
+    TextRun, TextureImage, TextureWrap, TonemapOperator, UiInstance, WorldVoxelGrid, aspect_ratio,
     drop_shadow_fade,
 };
 pub use shader_reload::{check_shader_reload, is_renderer_shader};

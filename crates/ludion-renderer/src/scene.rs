@@ -1289,6 +1289,17 @@ impl PartialEq for ProbeWorld {
     }
 }
 
+/// The knobs of mesh level-of-detail selection (`ludion_renderer::lod_level`); the defaults pick the
+/// chain's own thresholds.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct LodSettings {
+    /// Scales every screen size by `exp2(-bias)`: a bias of 1 halves every switch distance.
+    pub bias: f32,
+    /// Levels a shadow view draws coarser than the camera would, so a shadow never uses a finer
+    /// level than the mesh it belongs to.
+    pub shadow_levels: u32,
+}
+
 /// Everything the renderer needs to draw one frame — plain data, no ECS, no paths.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RenderScene {
@@ -1297,6 +1308,8 @@ pub struct RenderScene {
     /// The camera the camera cull view tests against when it is not the drawn one; `None` culls
     /// against `camera`. A debug surface: the image is still drawn through `camera`.
     pub cull_camera: Option<RenderCamera>,
+    /// How the world cull picks mesh levels of detail.
+    pub lod: LodSettings,
     /// Small constant ambient light added to every lit surface (linear RGB).
     pub ambient: [f32; 3],
     /// Unique decoded textures, referenced by index from [`SpriteInstance::texture`]. Their colour
@@ -1401,6 +1414,7 @@ impl RenderScene {
         RenderScene {
             camera: RenderCamera::default_framing(viewport),
             cull_camera: None,
+            lod: LodSettings::default(),
             ambient: DEFAULT_AMBIENT,
             textures: Vec::new(),
             mesh_assets: Vec::new(),

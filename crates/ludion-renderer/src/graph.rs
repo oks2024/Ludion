@@ -626,11 +626,15 @@ impl FrameSize {
 /// ```
 /// use ludion_renderer::CullShape;
 ///
-/// let shape = CullShape::for_counts(1000, 5, 1);
-/// assert_eq!((shape.instances, shape.buckets, shape.views), (1024, 16, 1));
+/// let shape = CullShape::for_counts(1000, 5, 1, 1);
+/// assert_eq!((shape.instances, shape.buckets, shape.views, shape.levels), (1024, 16, 1, 1));
 /// assert_eq!(shape.instance_bytes(), 1024 * 224);
 /// assert_eq!(shape.args_bytes(), 16 * 20);
 /// assert_eq!(shape.scratch_bytes(), (32 + 4 + 1) * 4);
+/// // A frame drawing a two-level chain doubles the lanes, never the instance buffer.
+/// let chained = CullShape::for_counts(1000, 5, 1, 2);
+/// assert_eq!(chained.args_bytes(), 2 * shape.args_bytes());
+/// assert_eq!(chained.instance_bytes(), shape.instance_bytes());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CullShape {
@@ -640,6 +644,9 @@ pub struct CullShape {
     pub buckets: u32,
     /// The view count.
     pub views: u32,
+    /// The levels per view (1 + the longest LOD chain drawn, 1 with none): the cull runs `views ×
+    /// levels` lanes.
+    pub levels: u32,
 }
 
 /// The largest storage binding the compacted-instance buffer may need: WebGPU's guaranteed
@@ -652,7 +659,7 @@ impl CullShape {
     /// `views` is clamped so [`instance_bytes`](CullShape::instance_bytes) fits one storage binding; a
     /// view past the clamp is not culled and draws every caster directly. When not even one view fits,
     /// `views` is zero and the caller must not cull at all.
-    pub fn for_counts(instances: usize, buckets: usize, views: usize) -> CullShape {
+    pub fn for_counts(instances: usize, buckets: usize, views: usize, levels: usize) -> CullShape {
         let cap = |n: usize, floor: u32| (n.max(floor as usize).next_power_of_two()) as u32;
         let instances = cap(instances, 256);
         let fit = CULL_INSTANCE_BINDING_MAX / (u64::from(instances) * 224);
@@ -660,6 +667,7 @@ impl CullShape {
             instances,
             buckets: cap(buckets, 16),
             views: u64::from(views as u32).min(fit) as u32,
+            levels: levels.clamp(1, 4) as u32,
         }
     }
 
@@ -673,9 +681,14 @@ impl CullShape {
         self.instances / 256
     }
 
-    /// The scratch buffer: per view the visibility words, the block counts and the total.
+    /// The lanes the cull dispatches: one per (view, level).
+    pub fn lanes(&self) -> u32 {
+        self.views * self.levels
+    }
+
+    /// The scratch buffer: per lane the visibility words, the block counts and the total.
     pub fn scratch_bytes(&self) -> u64 {
-        u64::from(self.views) * u64::from(self.words() + self.blocks() + 1) * 4
+        u64::from(self.lanes()) * u64::from(self.words() + self.blocks() + 1) * 4
     }
 
     /// The compacted-instance buffer: `views` copies of `instances` 224-byte instances.
@@ -683,19 +696,35 @@ impl CullShape {
         u64::from(self.views) * u64::from(self.instances) * 224
     }
 
-    /// The indirect-args buffer: one 20-byte slot per (view, bucket).
+    /// The indirect-args buffer: one 20-byte slot per (lane, bucket).
     pub fn args_bytes(&self) -> u64 {
-        u64::from(self.views) * u64::from(self.buckets) * 20
+        u64::from(self.lanes()) * u64::from(self.buckets) * 20
     }
 }
 
 /// The cull's capacities for `scene`: the camera view plus `shadow_views` (the sun's maps, then the
 /// granted local views), a bucket per world draw at most (a primitive shape and a mirror twin, or an
-/// asset and its twin, each unmirrored and mirrored), and an instance per world mesh. `None` without a
-/// world mesh.
+/// asset and its twin, each unmirrored and mirrored), and an instance per world mesh; its levels are 1
+/// plus the longest LOD chain among the world instances drawn. `None` without a world mesh.
 fn cull_shape(scene: &RenderScene, shadow_views: usize) -> Option<CullShape> {
     let world = scene.meshes.iter().filter(|m| !m.viewmodel).count();
-    let shape = CullShape::for_counts(world, 2 * (3 + scene.mesh_assets.len()), 1 + shadow_views);
+    let chain = scene
+        .meshes
+        .iter()
+        .filter(|m| !m.viewmodel)
+        .filter_map(|m| match m.shape {
+            crate::scene::MeshShape::Asset(i) => scene.mesh_assets.get(i),
+            _ => None,
+        })
+        .map(|asset| asset.lods.len())
+        .max()
+        .unwrap_or(0);
+    let shape = CullShape::for_counts(
+        world,
+        2 * (3 + scene.mesh_assets.len()),
+        1 + shadow_views,
+        1 + chain,
+    );
     // A scene too big for even the camera view under the binding cap draws everything direct.
     (world > 0 && shape.views > 0).then_some(shape)
 }
@@ -2305,7 +2334,7 @@ mod tests {
         );
         scene.meshes.push(cull_mesh(false));
         let chain = PostChain::for_scene(&scene);
-        assert_eq!(chain.cull, Some(CullShape::for_counts(1, 6, 1)));
+        assert_eq!(chain.cull, Some(CullShape::for_counts(1, 6, 1, 1)));
         let masked = chain.masked(&Quality::LOW, &QualityParams::LOW);
         assert_eq!(masked.cull, chain.cull, "content: masking keeps it");
 
@@ -2458,20 +2487,20 @@ mod tests {
             "the WebGPU floor engine_limits keeps"
         );
         // 16 384 instances are 3.5 MiB a view: 128 MiB holds 36 of them, and 60 are requested.
-        let shape = CullShape::for_counts(16_384, 6, 60);
+        let shape = CullShape::for_counts(16_384, 6, 60, 1);
         assert_eq!(shape.views, 36);
         assert!(shape.instance_bytes() <= CULL_INSTANCE_BINDING_MAX);
         assert_eq!(
-            CullShape::for_counts(524_288, 6, 7).views,
+            CullShape::for_counts(524_288, 6, 7, 1).views,
             1,
             "the last size that fits"
         );
         assert_eq!(
-            CullShape::for_counts(524_289, 6, 7).views,
+            CullShape::for_counts(524_289, 6, 7, 1).views,
             0,
             "not even the camera view fits: no cull"
         );
-        assert_eq!(CullShape::for_counts(256, 6, 7).views, 7);
+        assert_eq!(CullShape::for_counts(256, 6, 7, 1).views, 7);
     }
 
     /// The scene pass writes the capture's fourth, emissive target, and the face pass copies it out

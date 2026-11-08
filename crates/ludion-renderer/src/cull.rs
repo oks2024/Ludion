@@ -101,6 +101,82 @@ impl Frustum {
     }
 }
 
+/// The fraction of viewport height an instance's bounding sphere covers (`Plan/gpu-driven-culling.md`
+/// LOD decision): `radius` is the half-diagonal of its world box, `distance` the span from the LOD eye
+/// to the box centre and `k` the projection's `proj[1][1]` scaled by the bias. Orthographic ignores
+/// distance. Rotation-invariant, so turning the camera never changes a level.
+pub fn lod_size(radius: f32, distance: f32, k: f32, ortho: bool) -> f32 {
+    if ortho {
+        radius * k
+    } else {
+        radius * k / distance.max(radius)
+    }
+}
+
+/// The level a `size` selects from a chain whose `thresholds[i]` is the screen size under which level
+/// `i + 1` takes over (strictly decreasing): the count of thresholds above `size`, plus `offset`,
+/// clamped to the last level. The one selection function; `cull.wgsl`'s `select_level` mirrors it.
+///
+/// ```
+/// assert_eq!(ludion_renderer::lod_level(0.2, &[0.5, 0.1], 0), 1);
+/// assert_eq!(ludion_renderer::lod_level(0.2, &[0.5, 0.1], 5), 2);
+/// ```
+pub fn lod_level(size: f32, thresholds: &[f32], offset: u32) -> u32 {
+    let base = thresholds.iter().filter(|&&t| size < t).count() as u32;
+    (base + offset).min(thresholds.len() as u32)
+}
+
+/// One view's LOD inputs: the eye, `k` (see [`lod_size`]), whether the projection is orthographic and
+/// the level offset (`shadow_levels` for a shadow view, 0 for the camera).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct LodView {
+    pub(crate) eye: Vec3,
+    pub(crate) k: f32,
+    pub(crate) ortho: bool,
+    pub(crate) offset: u32,
+}
+
+impl LodView {
+    /// The camera's LOD inputs: `projection[1][1] * exp2(-bias)` and the eye of `position`; a shadow
+    /// view copies them with its own `offset`.
+    pub(crate) fn of_camera(camera: &crate::scene::RenderCamera, bias: f32) -> LodView {
+        LodView {
+            eye: camera.position,
+            k: camera.projection.y_axis.y * ludion_core::math::exp2(-bias),
+            ortho: camera.projection.w_axis.w == 1.0,
+            offset: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+/// The level of an instance with world box `bound` in `view`, chosen from `thresholds`; 0 for an
+/// instance whose bounds are unknown.
+pub(crate) fn instance_level(bound: Option<Aabb>, thresholds: &[f32], view: &LodView) -> u32 {
+    let Some(b) = bound else {
+        return 0;
+    };
+    let center = (b.min + b.max) * 0.5;
+    let radius = ((b.max - b.min) * 0.5).length();
+    let size = lod_size(radius, (center - view.eye).length(), view.k, view.ortho);
+    lod_level(size, thresholds, view.offset)
+}
+
+#[cfg(test)]
+/// The CPU oracle of the GPU level selection: each instance's level in `view`, where `chains[i]` is
+/// instance `i`'s thresholds (empty for an instance with no chain, which is always level 0).
+pub(crate) fn instance_levels(
+    bounds: &[Option<Aabb>],
+    chains: &[&[f32]],
+    view: &LodView,
+) -> Vec<u32> {
+    bounds
+        .iter()
+        .zip(chains)
+        .map(|(&bound, thresholds)| instance_level(bound, thresholds, view))
+        .collect()
+}
+
 /// What a shadow view can see.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum CullVolume {
@@ -460,6 +536,71 @@ pub(crate) fn casting_ranges(
 mod tests {
     use super::*;
     use ludion_core::math::glam::{Mat3, Quat};
+
+    #[test]
+    fn lod_level_walks_the_thresholds_and_clamps_the_offset() {
+        let t = [0.5, 0.25, 0.1];
+        assert_eq!(lod_level(0.9, &t, 0), 0);
+        assert_eq!(
+            lod_level(0.5, &t, 0),
+            0,
+            "a size equal to a threshold stays finer"
+        );
+        assert_eq!(lod_level(0.4, &t, 0), 1);
+        assert_eq!(lod_level(0.2, &t, 0), 2);
+        assert_eq!(lod_level(0.01, &t, 0), 3);
+        assert_eq!(lod_level(0.9, &t, 1), 1);
+        assert_eq!(
+            lod_level(0.2, &t, 9),
+            3,
+            "the offset clamps to the last level"
+        );
+        assert_eq!(lod_level(0.0, &[], 3), 0, "no chain is level 0");
+    }
+
+    #[test]
+    fn lod_size_is_inside_sphere_stable_and_scales_with_bias() {
+        // Inside the bounding sphere the distance floors at the radius: size is `k`.
+        assert_eq!(lod_size(2.0, 0.5, 1.5, false), 1.5);
+        assert_eq!(lod_size(2.0, 2.0, 1.5, false), 1.5);
+        // Beyond it, size falls as 1/distance.
+        assert_eq!(lod_size(1.0, 10.0, 2.0, false), 0.2);
+        assert_eq!(lod_size(1.0, 20.0, 2.0, false), 0.1);
+        // Orthographic ignores distance.
+        assert_eq!(lod_size(1.0, 99.0, 2.0, true), 2.0);
+        // A bias of 1 halves k, which halves every switch distance.
+        let camera = |bias| {
+            let projection = Mat4::perspective_rh(90.0_f32.to_radians(), 1.0, 0.1, 100.0);
+            LodView::of_camera(
+                &crate::scene::RenderCamera {
+                    view: Mat4::IDENTITY,
+                    projection,
+                    position: Vec3::ZERO,
+                },
+                bias,
+            )
+        };
+        assert!((camera(1.0).k * 2.0 - camera(0.0).k).abs() < 1e-6);
+        assert!(!camera(0.0).ortho);
+    }
+
+    #[test]
+    fn instance_levels_recede_and_unknown_bounds_stay_fine() {
+        let view = LodView {
+            eye: Vec3::ZERO,
+            k: 1.0,
+            ortho: false,
+            offset: 0,
+        };
+        let thresholds: &[f32] = &[0.25, 0.1];
+        let at = |z: f32| Some(cube_at(Vec3::new(0.0, 0.0, -z)));
+        let bounds = [at(3.0), at(5.0), at(40.0), None];
+        let chains = [thresholds; 4];
+        let levels = instance_levels(&bounds, &chains, &view);
+        assert_eq!(levels, vec![0, 1, 2, 0]);
+        let shadow = LodView { offset: 1, ..view };
+        assert_eq!(instance_levels(&bounds, &chains, &shadow), vec![1, 2, 2, 0]);
+    }
 
     #[test]
     fn casting_ranges_split_drop_and_recoalesce() {

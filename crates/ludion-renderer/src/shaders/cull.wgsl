@@ -1,6 +1,8 @@
 // The GPU frustum cull for mesh draws (Plan/gpu-driven-culling.md decisions 11-16).
 //
-// Five passes over every (view, instance), in one compute pass, each dispatched `(ceil(x / WG), views, 1)`:
+// Five passes over every (lane, instance), in one compute pass, each dispatched `(ceil(x / WG), lanes, 1)`.
+// A lane is a (view, level) pair, `lane = view * levels + level` with `levels` = `CullParams.levels`
+// (1 + the frame's longest LOD chain; 1 with no chain, which is the cull without levels):
 //   cs_test     one thread per visibility word: tests its 32 instances, writes the whole word.
 //   cs_reduce   one thread per block of 256 instances: the popcount of its 8 words.
 //   cs_scan     one workgroup per view: an exclusive scan of the block counts, the total in the last slot.
@@ -8,9 +10,14 @@
 //   cs_args     one thread per bucket: the indirect-draw args.
 //
 // No atomics, on purpose: survivors keep input order, so draw order never depends on thread timing
-// (`ATOMIC_FREE_UNITS` in the bindgen rejects an `atomic<...>` binding here). Core WebGPU only.
+// (`ATOMIC_FREE_UNITS` in the bindgen rejects an `atomic<...>` binding here). Core WebGPU only, except that
+// a chain's level runs are drawn with a `first_instance` and so need INDIRECT_FIRST_INSTANCE.
 //
-// Scratch layout, per view v at `v * (word_cap + block_cap + 1)`: `word_cap` visibility words (bit
+// A lane's visibility bit is `admitted(view, i) && select_level(view, i) == level`. Survivors of a bucket
+// stay inside its `[first, first + count)` region of the view's slice, ordered level 0, then 1, ..., input
+// order within a level; each level's args slot carries its run's start as `first_instance`.
+//
+// Scratch layout, per lane at `lane * (word_cap + block_cap + 1)`: `word_cap` visibility words (bit
 // `i % 32` of word `i / 32`), then `block_cap + 1` block slots.
 
 const SLOT_OVERRIDE: u32 = 0xFFFFFFFEu;
@@ -24,17 +31,20 @@ struct CullParams {
     bucket_cap: u32,
     word_cap: u32,
     block_cap: u32,
-    pad0: u32,
+    levels: u32,
 }
 
 // Six inward-facing normalized planes `(n, d)`.
-// `casters_only` (shadow views) rejects items that cast no shadow.
+// `casters_only` (shadow views) rejects items that cast no shadow. `frustum == 0` admits every item
+// the casters rule keeps. `lod_eye.xyz` is the LOD eye and `lod_eye.w` is `k`; `lod_ortho` is 1 for an
+// orthographic projection and `lod_offset` is the shadow views' level offset.
 struct CullView {
     planes: array<vec4<f32>, 6>,
     casters_only: u32,
-    pad0: u32,
-    pad1: u32,
-    pad2: u32,
+    frustum: u32,
+    lod_ortho: u32,
+    lod_offset: u32,
+    lod_eye: vec4<f32>,
 }
 
 // A `MeshInstanceRaw` (224 bytes), copied whole; only `model` is read.
@@ -64,12 +74,16 @@ struct CullBox {
     pad0: u32,
 }
 
-// `elements` is the index count (asset) or the vertex count (primitive).
+// `elements` is the index count (asset) or the vertex count (primitive), and level 0's of
+// `level_elements`, which holds the index counts of levels 0..3. `levels` is the chain length (1 with
+// none); `screen[i]` is the screen size under which level `i + 1` takes over.
 struct CullBucket {
     first: u32,
     count: u32,
     elements: u32,
-    pad0: u32,
+    levels: u32,
+    screen: vec4<f32>,
+    level_elements: vec4<u32>,
 }
 
 @group(0) @binding(0) var<uniform> cull_params: CullParams;
@@ -85,8 +99,8 @@ struct CullBucket {
 
 var<workgroup> scan_sums: array<u32, 256>;
 
-fn scratch_base(view: u32) -> u32 {
-    return view * (cull_params.word_cap + cull_params.block_cap + 1u);
+fn scratch_base(lane: u32) -> u32 {
+    return lane * (cull_params.word_cap + cull_params.block_cap + 1u);
 }
 
 fn word_count() -> u32 {
@@ -97,41 +111,58 @@ fn block_count() -> u32 {
     return (cull_params.instance_count + 255u) / 256u;
 }
 
-// Mirrors `Aabb::transformed` then `Frustum::intersects_aabb`, so the CPU oracle and this agree
-// except for fused-multiply-add rounding exactly at a plane.
+struct WorldBox {
+    lo: vec3<f32>,
+    known: u32,
+    hi: vec3<f32>,
+    pad0: u32,
+}
+
+// The instance's world box, `known == 0` when it cannot be known. Mirrors `Aabb::transformed`, so the
+// CPU oracle and this agree except for fused-multiply-add rounding exactly at a plane.
+fn world_box(i: u32) -> WorldBox {
+    let item = cull_items[i];
+    if item.slot == SLOT_ALWAYS {
+        return WorldBox(vec3<f32>(0.0), 0u, vec3<f32>(0.0), 0u);
+    }
+    if item.slot == SLOT_OVERRIDE {
+        return WorldBox(item.min, 1u, item.max, 0u);
+    }
+    if item.slot >= arrayLength(&cull_boxes) {
+        return WorldBox(vec3<f32>(0.0), 0u, vec3<f32>(0.0), 0u);
+    }
+    let local = cull_boxes[item.slot];
+    if local.known == 0u {
+        return WorldBox(vec3<f32>(0.0), 0u, vec3<f32>(0.0), 0u);
+    }
+    let model = cull_in[i].model;
+    let c = (local.min + local.max) * 0.5;
+    let e = (local.max - local.min) * 0.5;
+    let center = model[0].xyz * c.x + model[1].xyz * c.y + model[2].xyz * c.z + model[3].xyz;
+    let extent = abs(model[0].xyz) * e.x + abs(model[1].xyz) * e.y + abs(model[2].xyz) * e.z;
+    return WorldBox(center - extent, 1u, center + extent, 0u);
+}
+
+// Mirrors `Frustum::intersects_aabb`.
 fn admitted(view: u32, i: u32) -> bool {
     let item = cull_items[i];
     if cull_views[view].casters_only != 0u && item.casts == 0u {
         return false;
     }
-    if item.slot == SLOT_ALWAYS {
+    if cull_views[view].frustum == 0u {
         return true;
     }
-    var lo = item.min;
-    var hi = item.max;
-    if item.slot != SLOT_OVERRIDE {
-        if item.slot >= arrayLength(&cull_boxes) {
-            return true;
-        }
-        let local = cull_boxes[item.slot];
-        if local.known == 0u {
-            return true;
-        }
-        let model = cull_in[i].model;
-        let c = (local.min + local.max) * 0.5;
-        let e = (local.max - local.min) * 0.5;
-        let center = model[0].xyz * c.x + model[1].xyz * c.y + model[2].xyz * c.z + model[3].xyz;
-        let extent = abs(model[0].xyz) * e.x + abs(model[1].xyz) * e.y + abs(model[2].xyz) * e.z;
-        lo = center - extent;
-        hi = center + extent;
+    let box = world_box(i);
+    if box.known == 0u {
+        return true;
     }
     for (var p = 0u; p < 6u; p = p + 1u) {
         let plane = cull_views[view].planes[p];
         let n = plane.xyz;
         let far = vec3<f32>(
-            select(lo.x, hi.x, n.x >= 0.0),
-            select(lo.y, hi.y, n.y >= 0.0),
-            select(lo.z, hi.z, n.z >= 0.0),
+            select(box.lo.x, box.hi.x, n.x >= 0.0),
+            select(box.lo.y, box.hi.y, n.y >= 0.0),
+            select(box.lo.z, box.hi.z, n.z >= 0.0),
         );
         if dot(n, far) + plane.w < 0.0 {
             return false;
@@ -140,9 +171,35 @@ fn admitted(view: u32, i: u32) -> bool {
     return true;
 }
 
-// The visible count in `[0, i)` for `i` in `[0, instance_count]`.
-fn prefix(view: u32, i: u32) -> u32 {
-    let base = scratch_base(view);
+// The level `view` draws instance `i` at; mirrors `cull::lod_level` over `cull::lod_size`.
+fn select_level(view: u32, i: u32) -> u32 {
+    let bucket = cull_buckets[cull_items[i].bucket];
+    if bucket.levels <= 1u {
+        return 0u;
+    }
+    let box = world_box(i);
+    if box.known == 0u {
+        return 0u;
+    }
+    let v = cull_views[view];
+    let center = (box.lo + box.hi) * 0.5;
+    let radius = length((box.hi - box.lo) * 0.5);
+    var size = radius * v.lod_eye.w;
+    if v.lod_ortho == 0u {
+        size = size / max(length(center - v.lod_eye.xyz), radius);
+    }
+    var level = v.lod_offset;
+    for (var k = 0u; k + 1u < bucket.levels; k = k + 1u) {
+        if size < bucket.screen[k] {
+            level = level + 1u;
+        }
+    }
+    return min(level, bucket.levels - 1u);
+}
+
+// The visible count in `[0, i)` of lane `lane`, for `i` in `[0, instance_count]`.
+fn prefix(lane: u32, i: u32) -> u32 {
+    let base = scratch_base(lane);
     let blocks = base + cull_params.word_cap;
     var count = cull_scratch[blocks + i / 256u];
     for (var w = (i / 256u) * 8u; w < i / 32u; w = w + 1u) {
@@ -160,15 +217,16 @@ fn cs_test(@builtin(global_invocation_id) gid: vec3<u32>) {
     if word >= word_count() {
         return;
     }
-    let view = gid.y;
+    let view = gid.y / cull_params.levels;
+    let level = gid.y % cull_params.levels;
     var bits = 0u;
     for (var k = 0u; k < 32u; k = k + 1u) {
         let i = word * 32u + k;
-        if i < cull_params.instance_count && admitted(view, i) {
+        if i < cull_params.instance_count && admitted(view, i) && select_level(view, i) == level {
             bits = bits | (1u << k);
         }
     }
-    cull_scratch[scratch_base(view) + word] = bits;
+    cull_scratch[scratch_base(gid.y) + word] = bits;
 }
 
 @compute @workgroup_size(64)
@@ -223,19 +281,38 @@ fn cs_scan(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) 
     }
 }
 
+// The visible count of bucket `b` at `level` in `view`.
+fn level_count(view: u32, level: u32, b: u32) -> u32 {
+    let lane = view * cull_params.levels + level;
+    let bucket = cull_buckets[b];
+    return prefix(lane, bucket.first + bucket.count) - prefix(lane, bucket.first);
+}
+
+// The visible count of bucket `b` at levels finer than `level` in `view`: where `level`'s run starts.
+fn finer_count(view: u32, level: u32, b: u32) -> u32 {
+    var total = 0u;
+    for (var l = 0u; l < level; l = l + 1u) {
+        total = total + level_count(view, l, b);
+    }
+    return total;
+}
+
 @compute @workgroup_size(64)
 fn cs_scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if i >= cull_params.instance_count {
         return;
     }
-    let view = gid.y;
-    let visible = (cull_scratch[scratch_base(view) + i / 32u] >> (i % 32u)) & 1u;
+    let lane = gid.y;
+    let view = lane / cull_params.levels;
+    let level = lane % cull_params.levels;
+    let visible = (cull_scratch[scratch_base(lane) + i / 32u] >> (i % 32u)) & 1u;
     if visible == 0u {
         return;
     }
-    let first = cull_buckets[cull_items[i].bucket].first;
-    let slot = prefix(view, i) - prefix(view, first);
+    let b = cull_items[i].bucket;
+    let first = cull_buckets[b].first;
+    let slot = finer_count(view, level, b) + prefix(lane, i) - prefix(lane, first);
     cull_out[view * cull_params.instance_cap + first + slot] = cull_in[i];
 }
 
@@ -245,12 +322,14 @@ fn cs_args(@builtin(global_invocation_id) gid: vec3<u32>) {
     if b >= cull_params.bucket_count {
         return;
     }
-    let view = gid.y;
+    let lane = gid.y;
+    let view = lane / cull_params.levels;
+    let level = lane % cull_params.levels;
     let bucket = cull_buckets[b];
-    let at = (view * cull_params.bucket_cap + b) * 5u;
-    cull_args[at] = bucket.elements;
-    cull_args[at + 1u] = prefix(view, bucket.first + bucket.count) - prefix(view, bucket.first);
+    let at = (lane * cull_params.bucket_cap + b) * 5u;
+    cull_args[at] = bucket.level_elements[level];
+    cull_args[at + 1u] = level_count(view, level, b);
     cull_args[at + 2u] = 0u;
     cull_args[at + 3u] = 0u;
-    cull_args[at + 4u] = 0u;
+    cull_args[at + 4u] = finer_count(view, level, b);
 }

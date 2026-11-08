@@ -388,13 +388,17 @@ pub struct CullBucket {
     pub first: u32,
     pub count: u32,
     pub elements: u32,
-    pub pad0: u32,
+    pub levels: u32,
+    pub screen: [f32; 4],
+    pub level_elements: [u32; 4],
 }
-const _: () = assert!(core::mem::size_of::<CullBucket>() == 16);
+const _: () = assert!(core::mem::size_of::<CullBucket>() == 48);
 const _: () = assert!(core::mem::offset_of!(CullBucket, first) == 0);
 const _: () = assert!(core::mem::offset_of!(CullBucket, count) == 4);
 const _: () = assert!(core::mem::offset_of!(CullBucket, elements) == 8);
-const _: () = assert!(core::mem::offset_of!(CullBucket, pad0) == 12);
+const _: () = assert!(core::mem::offset_of!(CullBucket, levels) == 12);
+const _: () = assert!(core::mem::offset_of!(CullBucket, screen) == 16);
+const _: () = assert!(core::mem::offset_of!(CullBucket, level_elements) == 32);
 
 /// WGSL `struct CullInstance`.
 ///
@@ -447,7 +451,7 @@ pub struct CullParams {
     pub bucket_cap: u32,
     pub word_cap: u32,
     pub block_cap: u32,
-    pub pad0: u32,
+    pub levels: u32,
 }
 const _: () = assert!(core::mem::size_of::<CullParams>() == 32);
 const _: () = assert!(core::mem::offset_of!(CullParams, instance_count) == 0);
@@ -457,7 +461,7 @@ const _: () = assert!(core::mem::offset_of!(CullParams, instance_cap) == 12);
 const _: () = assert!(core::mem::offset_of!(CullParams, bucket_cap) == 16);
 const _: () = assert!(core::mem::offset_of!(CullParams, word_cap) == 20);
 const _: () = assert!(core::mem::offset_of!(CullParams, block_cap) == 24);
-const _: () = assert!(core::mem::offset_of!(CullParams, pad0) == 28);
+const _: () = assert!(core::mem::offset_of!(CullParams, levels) == 28);
 
 /// WGSL `struct CullView`.
 ///
@@ -467,16 +471,18 @@ const _: () = assert!(core::mem::offset_of!(CullParams, pad0) == 28);
 pub struct CullView {
     pub planes: [[f32; 4]; 6],
     pub casters_only: u32,
-    pub pad0: u32,
-    pub pad1: u32,
-    pub pad2: u32,
+    pub frustum: u32,
+    pub lod_ortho: u32,
+    pub lod_offset: u32,
+    pub lod_eye: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<CullView>() == 112);
+const _: () = assert!(core::mem::size_of::<CullView>() == 128);
 const _: () = assert!(core::mem::offset_of!(CullView, planes) == 0);
 const _: () = assert!(core::mem::offset_of!(CullView, casters_only) == 96);
-const _: () = assert!(core::mem::offset_of!(CullView, pad0) == 100);
-const _: () = assert!(core::mem::offset_of!(CullView, pad1) == 104);
-const _: () = assert!(core::mem::offset_of!(CullView, pad2) == 108);
+const _: () = assert!(core::mem::offset_of!(CullView, frustum) == 100);
+const _: () = assert!(core::mem::offset_of!(CullView, lod_ortho) == 104);
+const _: () = assert!(core::mem::offset_of!(CullView, lod_offset) == 108);
+const _: () = assert!(core::mem::offset_of!(CullView, lod_eye) == 112);
 
 /// WGSL `struct DebugView`.
 ///
@@ -2594,7 +2600,7 @@ pub fn create_cull_params_cull_views_cull_in_cull_items_cull_boxes_cull_buckets_
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(112),
+                    min_binding_size: wgpu::BufferSize::new(128),
                 },
                 count: None,
             },
@@ -2634,7 +2640,7 @@ pub fn create_cull_params_cull_views_cull_in_cull_items_cull_boxes_cull_buckets_
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(16),
+                    min_binding_size: wgpu::BufferSize::new(48),
                 },
                 count: None,
             },

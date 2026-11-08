@@ -5,8 +5,12 @@ use wgpu::util::DeviceExt;
 
 use super::skin_bounds::bounded_skin_quad;
 use super::*;
-use crate::cull::{Aabb, CullVolume, Frustum, bounds_table, cull, instance_bounds};
-use crate::gpu_cull::{CullFrame, CullInput, CullPipelines, CullTargets, CullViewSpec, cull_item};
+use crate::cull::{
+    Aabb, CullVolume, Frustum, LodView, bounds_table, cull, instance_bounds, instance_levels,
+};
+use crate::gpu_cull::{
+    Chain, CullFrame, CullInput, CullPipelines, CullTargets, CullViewSpec, cull_item,
+};
 use crate::graph::CullShape;
 use crate::shader_gen::{CullBucket, CullItem};
 
@@ -242,10 +246,12 @@ fn run_cull(
             first,
             count,
             elements: 100 + b as u32 * 7,
-            pad0: 0,
+            levels: 1,
+            screen: [0.0; 4],
+            level_elements: [100 + b as u32 * 7, 0, 0, 0],
         })
         .collect();
-    let shape = CullShape::for_counts(fx.meshes.len(), buckets.len(), VIEWS);
+    let shape = CullShape::for_counts(fx.meshes.len(), buckets.len(), VIEWS, 1);
     let views: Vec<CullViewSpec> = fx
         .views
         .iter()
@@ -253,6 +259,13 @@ fn run_cull(
         .map(|(v, &frustum)| CullViewSpec {
             frustum,
             casters_only: v == CASTERS_ONLY_VIEW,
+            test_frustum: true,
+            lod: crate::cull::LodView {
+                eye: Vec3::ZERO,
+                k: 1.0,
+                ortho: false,
+                offset: 0,
+            },
         })
         .take(live)
         .collect();
@@ -336,7 +349,7 @@ fn needs_gpu_the_cull_pass_matches_the_cpu_oracle_and_compacts_in_input_order() 
             _ => 1 + (seed as usize * 211) % 2000,
         };
         let fx = fixture(seed, n);
-        let shape = CullShape::for_counts(n, SHAPES.len(), VIEWS);
+        let shape = CullShape::for_counts(n, SHAPES.len(), VIEWS, 1);
         let live = if seed == 33 { VIEWS - 1 } else { VIEWS };
         let (out, args) = run_cull(&renderer, &fx, &assets, live);
         let bounds = instance_bounds(&fx.meshes, &assets, &fx.palette);
@@ -855,4 +868,395 @@ fn needs_gpu_cull_stats_skip_rather_than_block() {
     assert!(samples.windows(2).all(|pair| pair[0] == pair[1]));
     renderer.set_cull_stats(false);
     assert!(renderer.collect_cull_stats(true).is_empty());
+}
+
+/// Screen sizes under which levels 1 and 2 of the test chain take over.
+const THRESHOLDS: [f32; 2] = [0.3, 0.08];
+/// The index counts of the test chain's three levels.
+const LEVEL_ELEMENTS: [u32; 3] = [300, 200, 100];
+
+/// A camera at the origin looking down -Z, 60° vertical field of view.
+fn lod_camera() -> crate::scene::RenderCamera {
+    crate::scene::RenderCamera {
+        view: Mat4::look_at_rh(Vec3::ZERO, -Vec3::Z, Vec3::Y),
+        projection: Mat4::perspective_rh(60.0_f32.to_radians(), 1.0, 0.1, 1000.0),
+        position: Vec3::ZERO,
+    }
+}
+
+/// A fan of unit-box instances of one chained asset receding down -Z, at scales that keep every
+/// instance's screen size well away from a threshold and spread sideways so none hides another.
+fn lod_row(n: usize) -> Vec<MeshInstance> {
+    (0..n)
+        .map(|i| {
+            let mut mesh = slab(Vec3::ZERO, 1.0, [0.5; 3]);
+            mesh.shape = MeshShape::Asset(0);
+            let scale = 1.0 + 0.25 * (i % 3) as f32;
+            let z = -4.0 - 3.1 * i as f32;
+            let x = ((i % 5) as f32 - 2.0) * -0.18 * z;
+            mesh.model =
+                Mat4::from_translation(Vec3::new(x, 0.0, z)) * Mat4::from_scale(Vec3::splat(scale));
+            mesh.cast_shadows = i % 5 != 4;
+            mesh
+        })
+        .collect()
+}
+
+/// Runs the cull over `meshes` as one chained bucket seen by two views — the camera and a casters-only
+/// shadow view whose level offset is `shadow_levels` — and returns `(compacted instances, args words)`.
+fn run_lod_cull(
+    renderer: &Renderer,
+    meshes: &[MeshInstance],
+    shadow_levels: u32,
+    cull_on: bool,
+) -> (Vec<u8>, Vec<u32>) {
+    let device = renderer.gpu.device();
+    let assets = [AssetBounds {
+        local: Some(Aabb {
+            min: Vec3::splat(-1.0),
+            max: Vec3::splat(1.0),
+        }),
+        skin: None,
+    }];
+    let bounds = instance_bounds(meshes, &assets, &[]);
+    let raws: Vec<MeshInstanceRaw> = meshes
+        .iter()
+        .enumerate()
+        .map(|(i, mesh)| {
+            let mut raw: MeshInstanceRaw = bytemuck::Zeroable::zeroed();
+            raw.model = mesh.model.to_cols_array_2d();
+            raw.color = [i as f32, 0.0, 0.0, 1.0];
+            raw
+        })
+        .collect();
+    let items: Vec<CullItem> = meshes
+        .iter()
+        .zip(&bounds)
+        .map(|(mesh, bound)| cull_item(mesh, 0, *bound))
+        .collect();
+    let chain = Chain::of(&THRESHOLDS, &LEVEL_ELEMENTS, 3);
+    let buckets = [CullBucket {
+        first: 0,
+        count: meshes.len() as u32,
+        elements: LEVEL_ELEMENTS[0],
+        levels: chain.levels,
+        screen: [chain.screen[0], chain.screen[1], chain.screen[2], 0.0],
+        level_elements: chain.indices,
+    }];
+    let shape = CullShape::for_counts(meshes.len(), 1, 2, 3);
+    let lod = LodView::of_camera(&lod_camera(), 0.0);
+    let frustum = Frustum::from_view_proj(lod_camera().projection * lod_camera().view);
+    let views = [
+        CullViewSpec {
+            frustum,
+            casters_only: false,
+            test_frustum: cull_on,
+            lod,
+        },
+        CullViewSpec {
+            frustum,
+            casters_only: true,
+            test_frustum: cull_on,
+            lod: LodView {
+                offset: shadow_levels,
+                ..lod
+            },
+        },
+    ];
+    let storage = |bytes: &[u8]| {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytes,
+            usage: wgpu::BufferUsages::STORAGE,
+        })
+    };
+    let instances = storage(bytemuck::cast_slice(&raws));
+    let table = storage(bytemuck::cast_slice(&bounds_table(&assets)));
+    let target = |size: u64| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        })
+    };
+    let (scratch, out, args) = (
+        target(shape.scratch_bytes()),
+        target(shape.instance_bytes()),
+        target(shape.args_bytes()),
+    );
+    let pipelines = CullPipelines::new(device);
+    let frame = CullFrame::prepare(
+        device,
+        &pipelines,
+        CullInput {
+            instances: &instances,
+            items: &items,
+            buckets: &buckets,
+            views: &views,
+            bounds_table: &table,
+            shape,
+        },
+    );
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("lod cull test"),
+            timestamp_writes: None,
+        });
+        frame.encode(
+            &pipelines,
+            &mut pass,
+            CullTargets {
+                scratch: &scratch,
+                instances: &out,
+                args: &args,
+            },
+        );
+    }
+    renderer.gpu.queue().submit(Some(encoder.finish()));
+    let args = read_back(renderer, &args)
+        .chunks_exact(4)
+        .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+        .collect();
+    (read_back(renderer, &out), args)
+}
+
+/// **The cull selects levels as the oracle does, level-major.** A row of a chained asset receding from
+/// the camera: per view and level, the args slot is `[level index count, count, 0, 0, start of the
+/// level's run]`, and the bucket's compacted range is the oracle's survivors ordered level 0, 1, 2 with
+/// input order inside a level. A shadow view with `shadow_levels = 1` sits one level coarser than the
+/// camera's selection, clamped at the last level; with the frustum test off every instance the casters
+/// rule keeps is still placed.
+#[test]
+fn needs_gpu_the_cull_selects_levels_as_the_oracle_and_compacts_level_major() {
+    let Some(renderer) = skip_or_renderer("the_cull_selects_levels_as_the_oracle") else {
+        return;
+    };
+    let meshes = lod_row(24);
+    let bucket_cap = 16;
+    let assets = [AssetBounds {
+        local: Some(Aabb {
+            min: Vec3::splat(-1.0),
+            max: Vec3::splat(1.0),
+        }),
+        skin: None,
+    }];
+    let bounds = instance_bounds(&meshes, &assets, &[]);
+    let camera = LodView::of_camera(&lod_camera(), 0.0);
+    let chains = vec![&THRESHOLDS[..]; meshes.len()];
+    for cull_on in [true, false] {
+        let mut camera_counts = [0usize; 3];
+        let mut shadow_counts = [0usize; 3];
+        for shadow_levels in [0u32, 1] {
+            let (out, args) = run_lod_cull(&renderer, &meshes, shadow_levels, cull_on);
+            for (v, (casters_only, offset)) in
+                [(false, 0), (true, shadow_levels)].into_iter().enumerate()
+            {
+                let levels = instance_levels(&bounds, &chains, &LodView { offset, ..camera });
+                let mut start = 0u32;
+                for level in 0..3u32 {
+                    let survivors: Vec<usize> = (0..meshes.len())
+                        .filter(|&i| {
+                            levels[i] == level && (!casters_only || meshes[i].cast_shadows)
+                        })
+                        .collect();
+                    let lane = v * 3 + level as usize;
+                    let slot = lane * bucket_cap * 5;
+                    assert_eq!(
+                        args[slot..slot + 5],
+                        [
+                            LEVEL_ELEMENTS[level as usize],
+                            survivors.len() as u32,
+                            0,
+                            0,
+                            start
+                        ],
+                        "cull {cull_on} view {v} offset {offset} level {level}: args"
+                    );
+                    let base = (v * 256 + start as usize) * INSTANCE_BYTES;
+                    for (k, &i) in survivors.iter().enumerate() {
+                        let at = base + k * INSTANCE_BYTES;
+                        let color: [f32; 4] = *bytemuck::from_bytes(&out[at + 64..at + 80]);
+                        assert_eq!(
+                            color[0] as usize, i,
+                            "cull {cull_on} view {v} level {level} slot {k}"
+                        );
+                    }
+                    if cull_on {
+                        if v == 0 {
+                            camera_counts[level as usize] = survivors.len();
+                        } else if shadow_levels == 1 {
+                            shadow_counts[level as usize] = survivors.len();
+                        }
+                    }
+                    start += survivors.len() as u32;
+                }
+            }
+        }
+        if cull_on {
+            assert!(
+                camera_counts.iter().all(|&n| n > 0),
+                "the row must exercise every level: {camera_counts:?}"
+            );
+            assert!(
+                shadow_counts[0] == 0 && shadow_counts[2] > camera_counts[2] / 2,
+                "shadow_levels = 1 moves the sun view coarser: {shadow_counts:?} vs {camera_counts:?}"
+            );
+        }
+    }
+}
+
+/// A level mesh: the unit box scaled to `scale`, a distinct asset hash so it uploads on its own.
+fn scaled_box(hash: u64, scale: f32) -> MeshData {
+    let mut mesh = box_asset(hash, false);
+    for p in &mut mesh.positions {
+        *p *= scale;
+    }
+    mesh
+}
+
+/// A chained box asset: the full box, then half-size boxes, switching at the test thresholds.
+fn chained_asset() -> Arc<MeshData> {
+    let mut base = box_asset(0x10D_0001, false);
+    base.lods = THRESHOLDS
+        .iter()
+        .enumerate()
+        .map(|(k, &screen_size)| crate::scene::MeshLod {
+            mesh: Arc::new(scaled_box(0x10D_0002 + k as u64, 0.5)),
+            screen_size,
+        })
+        .collect();
+    base.hash = 0x10D_00FF;
+    Arc::new(base)
+}
+
+fn lod_scene(chained: bool) -> RenderScene {
+    let mut scene = fog_scene(96, 96);
+    scene.camera.view = lod_camera().view;
+    scene.camera.projection = lod_camera().projection;
+    scene.camera.position = Vec3::ZERO;
+    scene.meshes = lod_row(24);
+    scene.sun = Some(test_sun(
+        Vec3::new(0.4, -1.0, 0.3),
+        Vec3::new(3.0, 3.0, 3.0),
+        0.002,
+    ));
+    let mut asset = chained_asset();
+    if !chained {
+        let mut flat = (*asset).clone();
+        flat.lods.clear();
+        asset = Arc::new(flat);
+    }
+    scene.mesh_assets = vec![asset];
+    scene
+}
+
+/// **A chain draws its levels, and culling on or off renders the same bytes.** The row recedes through
+/// all three levels: the chained frame differs from the same row without a chain, a frame with a
+/// chain keeps the cull pass with the frustum test off (`levels` 3 both ways) and renders the same
+/// bytes as with it on, and a frame with no chain is `levels == 1`.
+#[test]
+fn needs_gpu_a_chain_draws_its_levels_and_cull_on_and_off_render_identical_bytes() {
+    let Some(mut renderer) = skip_or_renderer("a_chain_draws_its_levels") else {
+        return;
+    };
+    if !renderer.gpu.supports_indirect_first_instance() {
+        return;
+    }
+    let size = FrameSize::native(96, 96);
+    let chained = lod_scene(true);
+    renderer.set_frustum_culling(true);
+    assert_eq!(renderer.frame_chain(&chained).cull.unwrap().levels, 3);
+    let on = renderer.render(&chained, size).expect("culled render");
+    renderer.set_frustum_culling(false);
+    assert_eq!(
+        renderer
+            .frame_chain(&chained)
+            .cull
+            .map(|shape| shape.levels),
+        Some(3),
+        "a chain keeps the pass with the frustum test off"
+    );
+    let off = renderer.render(&chained, size).expect("unculled render");
+    assert_eq!(on.rgba, off.rgba, "culling changed a chained image");
+
+    let flat = lod_scene(false);
+    renderer.set_frustum_culling(true);
+    let shape = renderer.frame_chain(&flat).cull.unwrap();
+    assert_eq!(shape.levels, 1);
+    assert_eq!(
+        (shape.args_bytes(), shape.scratch_bytes()),
+        (
+            u64::from(shape.views) * u64::from(shape.buckets) * 20,
+            u64::from(shape.views) * u64::from(shape.words() + shape.blocks() + 1) * 4
+        ),
+        "no chain, no extra lanes"
+    );
+    renderer.set_frustum_culling(false);
+    assert!(renderer.frame_chain(&flat).cull.is_none());
+    let level0 = renderer.render(&flat, size).expect("level 0 render");
+    assert_ne!(on.rgba, level0.rgba, "the chain never drew a coarser level");
+}
+
+/// The shape of a chain-free frame is today's, and a chain adds lanes but not instance bytes.
+#[test]
+fn a_chain_adds_lanes_never_instance_bytes() {
+    let flat = CullShape::for_counts(16_384, 6, 60, 1);
+    let chained = CullShape::for_counts(16_384, 6, 60, 4);
+    assert_eq!((flat.views, chained.views), (36, 36));
+    assert_eq!(chained.instance_bytes(), flat.instance_bytes());
+    assert_eq!(chained.args_bytes(), 4 * flat.args_bytes());
+    assert_eq!(chained.scratch_bytes(), 4 * flat.scratch_bytes());
+    assert_eq!(
+        flat.instance_bytes(),
+        36 * 16_384 * 224,
+        "the 224-byte stride and the 36-view cap at 16384 instances"
+    );
+}
+
+/// **A chained frame's stats sum a view's lanes.** The camera's drawn count is the oracle's kept count
+/// (every level together) and the sun view reads its own lanes, not the camera's.
+#[test]
+fn needs_gpu_cull_stats_sum_each_views_levels() {
+    let Some(renderer) = skip_or_renderer("cull_stats_sum_each_views_levels") else {
+        return;
+    };
+    if !renderer.gpu.supports_indirect_first_instance() {
+        return;
+    }
+    renderer.set_cull_stats(true);
+    let scene = lod_scene(true);
+    renderer
+        .render(&scene, FrameSize::native(96, 96))
+        .expect("render");
+    let samples = renderer.collect_cull_stats(true);
+    assert_eq!(samples.len(), 1);
+    let views = &samples[0];
+    assert_eq!(views[0].name, "camera");
+    let (seen, world) = visible_world(&scene);
+    assert_eq!(
+        (views[0].instances as usize, views[0].drawn as usize),
+        (world, seen)
+    );
+    let casters = scene.meshes.iter().filter(|m| m.cast_shadows).count();
+    assert!(views.len() > 1 && views[1].name == "sun");
+    assert_eq!(views[1].instances as usize, casters);
+    let assets: Vec<AssetBounds> = scene
+        .mesh_assets
+        .iter()
+        .map(|m| AssetBounds::of_mesh(m))
+        .collect();
+    let bounds = instance_bounds(&scene.meshes, &assets, &scene.bone_palette);
+    let sun = Frustum::from_view_proj(scene.sun.as_ref().unwrap().light_space);
+    let kept = cull(&bounds, &CullVolume::Frustum(sun))
+        .into_iter()
+        .filter(|&i| scene.meshes[i as usize].cast_shadows)
+        .count();
+    assert!(kept > 0 && kept < casters + 1);
+    assert_eq!(
+        views[1].drawn as usize, kept,
+        "the sun view reads its own lanes"
+    );
 }

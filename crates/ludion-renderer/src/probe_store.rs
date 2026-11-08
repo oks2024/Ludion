@@ -97,6 +97,8 @@ pub(crate) fn world_key(
         // a debug-only frustum for the camera cull view; probe capture prepares no cull and draws
         // through its own face cameras, so it must never move a key (as `camera` above)
         cull_camera: _,
+        // probe capture runs no cull, so every mesh draws level 0 whatever the knobs say
+        lod: _,
         ambient,
         // only sprites, particles, text and the UI index it, and the face scene has none
         textures: _,

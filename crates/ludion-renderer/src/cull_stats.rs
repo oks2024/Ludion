@@ -15,7 +15,7 @@ pub struct CullViewCount {
     pub name: String,
     /// Instances the view tested.
     pub instances: u32,
-    /// Instances the view kept to draw: the sum of its buckets' visible counts.
+    /// Instances the view kept to draw: the sum of its buckets' visible counts over every level.
     pub drawn: u32,
 }
 
@@ -25,11 +25,13 @@ pub(crate) struct SampleMeta {
     pub(crate) tested: Vec<u32>,
     pub(crate) buckets: u32,
     pub(crate) bucket_cap: u32,
+    /// Lanes per view: a view's args are `levels` consecutive slot rows, one per LOD level.
+    pub(crate) levels: u32,
 }
 
 impl SampleMeta {
     fn bytes(&self) -> u64 {
-        self.names.len() as u64 * u64::from(self.bucket_cap) * ARGS_SLOT
+        self.names.len() as u64 * u64::from(self.levels) * u64::from(self.bucket_cap) * ARGS_SLOT
     }
 
     fn zeros(&self) -> Vec<CullViewCount> {
@@ -173,9 +175,14 @@ impl CullStatsRing {
                     if let Ok(range) = buffer.slice(..meta.bytes()).get_mapped_range() {
                         let words: &[u32] = bytemuck::cast_slice(&range);
                         let stride = meta.bucket_cap as usize * 5;
+                        let levels = meta.levels as usize;
                         out.push(meta.counts(|v| {
-                            (0..meta.buckets as usize)
-                                .map(|b| words[v * stride + b * 5 + 1])
+                            (0..levels)
+                                .flat_map(|l| {
+                                    (0..meta.buckets as usize)
+                                        .map(move |b| (v * levels + l) * stride + b * 5 + 1)
+                                })
+                                .map(|at| words[at])
                                 .sum()
                         }));
                     }

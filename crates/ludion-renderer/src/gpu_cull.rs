@@ -5,13 +5,15 @@
 //! Two invariants carry the design. The compaction is a scan, never an atomic append, so survivors
 //! keep input order and a frame draws identically however the threads interleave. And the args slot
 //! `[elements, visible, 0, 0, 0]` reads as a `DrawIndexedIndirectArgs` and, as its first four words, a
-//! `DrawIndirectArgs`; `first_instance` stays 0, so the draw binds `cull_out` at the bucket's offset
-//! instead of needing `INDIRECT_FIRST_INSTANCE`.
+//! `DrawIndirectArgs`. With no LOD chain in the frame (`CullShape::levels == 1`) `first_instance` stays
+//! 0 and the draw binds `cull_out` at the bucket's offset. A chain adds one lane per level: the lane's
+//! slot writes its level's index count and its run's start as `first_instance`, so the draw needs
+//! `INDIRECT_FIRST_INSTANCE`, and the cull is `views × levels` lanes.
 
 use ludion_core::math::glam::Mat4;
 use wgpu::util::DeviceExt;
 
-use crate::cull::{Aabb, CullBoundsRaw, Frustum, bounds_slot};
+use crate::cull::{Aabb, CullBoundsRaw, Frustum, LodView, bounds_slot};
 use crate::graph::CullShape;
 use crate::render::MeshInstanceRaw;
 use crate::scene::MeshInstance;
@@ -30,24 +32,39 @@ const _: () =
 pub(crate) struct CullViewSpec {
     pub(crate) frustum: Frustum,
     pub(crate) casters_only: bool,
+    /// Whether the frustum rejects anything: false keeps every item the casters rule keeps, so a
+    /// chain still selects levels with frustum culling switched off.
+    pub(crate) test_frustum: bool,
+    pub(crate) lod: LodView,
 }
 
 /// The cull's views in the order the shadow passes address them: the camera, one casters-only view
 /// per sun map, then one per granted local view; and how many views past `shape.views` were dropped.
-/// A dropped view is not culled and draws every caster directly.
+/// A dropped view is not culled and draws every caster directly. Every view selects levels from the
+/// camera's `lod`; a shadow view adds `shadow_levels`, so it never draws a finer level than its mesh.
 pub(crate) fn cull_views(
     camera: Mat4,
     sun_maps: &[Mat4],
     local: impl Iterator<Item = Frustum>,
+    lod: LodView,
+    shadow_levels: u32,
+    test_frustum: bool,
     shape: CullShape,
 ) -> (Vec<CullViewSpec>, u32) {
     let shadow = |frustum| CullViewSpec {
         frustum,
         casters_only: true,
+        test_frustum,
+        lod: LodView {
+            offset: shadow_levels,
+            ..lod
+        },
     };
     let mut views = vec![CullViewSpec {
         frustum: Frustum::from_view_proj(camera),
         casters_only: false,
+        test_frustum,
+        lod,
     }];
     views.extend(
         sun_maps
@@ -167,6 +184,45 @@ pub(crate) struct WorldBucket<'a> {
     pub(crate) count: u32,
     pub(crate) elements: u32,
     pub(crate) sources: &'a [u32],
+    /// The LOD chain this draw selects from; `Chain::NONE` for a primitive or an unchained asset.
+    pub(crate) chain: Chain,
+}
+
+/// A bucket's LOD chain as the cull reads it: the `screen_size` under which level `i + 1` takes over
+/// and every level's index count (level 0's is the bucket's `elements`).
+#[derive(Clone, Copy)]
+pub(crate) struct Chain {
+    pub(crate) levels: u32,
+    pub(crate) screen: [f32; 3],
+    pub(crate) indices: [u32; 4],
+}
+
+impl Chain {
+    pub(crate) const NONE: Chain = Chain {
+        levels: 1,
+        screen: [0.0; 3],
+        indices: [0; 4],
+    };
+
+    /// The chain of a mesh with `thresholds` and per-level `indices` (level 0 first), at most `cap`
+    /// levels deep: a frame whose device cannot place a level run draws level 0 only (`cap == 1`).
+    pub(crate) fn of(thresholds: &[f32], indices: &[u32], cap: u32) -> Chain {
+        let levels = (1 + thresholds.len() as u32).min(cap).min(4);
+        let mut chain = Chain::NONE;
+        chain.levels = levels;
+        for (k, slot) in chain
+            .screen
+            .iter_mut()
+            .enumerate()
+            .take(levels as usize - 1)
+        {
+            *slot = thresholds[k];
+        }
+        for (slot, &n) in chain.indices.iter_mut().zip(indices).take(levels as usize) {
+            *slot = n;
+        }
+        chain
+    }
 }
 
 /// What [`world_cull`] reads.
@@ -216,11 +272,20 @@ pub(crate) fn world_cull(
         .collect();
     let cull_buckets: Vec<CullBucket> = buckets
         .iter()
-        .map(|bucket| CullBucket {
-            first: bucket.first,
-            count: bucket.count,
-            elements: bucket.elements,
-            pad0: 0,
+        .map(|bucket| {
+            let chain = bucket.chain;
+            CullBucket {
+                first: bucket.first,
+                count: bucket.count,
+                elements: bucket.elements,
+                levels: chain.levels,
+                screen: [chain.screen[0], chain.screen[1], chain.screen[2], 0.0],
+                level_elements: if chain.levels > 1 {
+                    chain.indices
+                } else {
+                    [bucket.elements, 0, 0, 0]
+                },
+            }
         })
         .collect();
     // A casters-only view tests only the items that cast; the camera view tests every item.
@@ -305,7 +370,7 @@ impl CullFrame {
             bucket_cap: shape.buckets,
             word_cap: shape.words(),
             block_cap: shape.blocks(),
-            pad0: 0,
+            levels: shape.levels,
         };
         let views: Vec<CullView> = input
             .views
@@ -313,9 +378,10 @@ impl CullFrame {
             .map(|v| CullView {
                 planes: v.frustum.planes().map(|p| p.to_array()),
                 casters_only: v.casters_only as u32,
-                pad0: 0,
-                pad1: 0,
-                pad2: 0,
+                frustum: v.test_frustum as u32,
+                lod_ortho: v.lod.ortho as u32,
+                lod_offset: v.lod.offset,
+                lod_eye: [v.lod.eye.x, v.lod.eye.y, v.lod.eye.z, v.lod.k],
             })
             .collect();
         let storage = |label: &str, bytes: &[u8]| {
@@ -438,7 +504,7 @@ impl CullFrame {
             ),
         ] {
             pass.set_pipeline(pipeline);
-            pass.dispatch_workgroups(groups, views, 1);
+            pass.dispatch_workgroups(groups, views * self.shape.levels, 1);
         }
     }
 }

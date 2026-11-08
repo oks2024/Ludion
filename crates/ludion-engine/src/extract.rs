@@ -1485,6 +1485,7 @@ fn extract_inner(
     let mut scene = RenderScene {
         camera,
         cull_camera: None,
+        lod: Default::default(),
         ambient,
         textures,
         mesh_assets,

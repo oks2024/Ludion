@@ -469,17 +469,22 @@ pub(super) struct DrawSource<'a> {
 
 /// Bucket `bucket` (instances `[first, first + count)` of the packed buffer) as view `view` sees it:
 /// the cull's compacted slice and args when it culled that view, else the draw's own packed range.
+///
+/// `level` picks the lane of the view's chain: the args slot of (view, level) holds that level's index
+/// count and its run's `first_instance`; level 0 of a frame without a chain is the view's one slot.
 fn source_of<'a>(
     own: &'a wgpu::Buffer,
     (first, count): (u32, u32),
     bucket: Option<u32>,
     culled: Option<Culled<'a>>,
     view: u32,
+    level: u32,
 ) -> DrawSource<'a> {
     match (culled, bucket) {
         (Some(c), Some(b)) if view < c.views => {
             let base = u64::from(view) * u64::from(c.shape.instances) + u64::from(first);
-            let slot = u64::from(view) * u64::from(c.shape.buckets) + u64::from(b);
+            let lane = u64::from(view) * u64::from(c.shape.levels) + u64::from(level);
+            let slot = lane * u64::from(c.shape.buckets) + u64::from(b);
             DrawSource {
                 instances: c.instances,
                 bytes: instance_range(base, count),
@@ -503,19 +508,46 @@ impl MeshDraw {
             self.bucket,
             culled,
             view,
+            0,
         )
     }
 }
 
 impl MeshAssetDraw {
-    /// As [`MeshDraw::source`].
-    pub(super) fn source<'a>(&'a self, culled: Option<Culled<'a>>, view: u32) -> DrawSource<'a> {
+    /// As [`MeshDraw::source`], for `level` of the chain.
+    pub(super) fn source<'a>(
+        &'a self,
+        culled: Option<Culled<'a>>,
+        view: u32,
+        level: u32,
+    ) -> DrawSource<'a> {
         source_of(
             &self.instances,
             (self.first, self.count),
             self.bucket,
             culled,
             view,
+            level,
         )
+    }
+
+    /// How many levels the draw issues in `view`: one per chain level the cull wrote a lane for when
+    /// the cull places this view's runs, else just level 0 (a direct draw, a viewmodel or a view past
+    /// the cull's capacity).
+    pub(super) fn level_count(&self, culled: Option<Culled<'_>>, view: u32) -> u32 {
+        match (culled, self.bucket) {
+            (Some(c), Some(_)) if view < c.views => {
+                (1 + self.mesh.levels.len() as u32).min(c.shape.levels)
+            }
+            _ => 1,
+        }
+    }
+
+    /// The GPU buffers of `level`: 0 is the mesh itself.
+    pub(super) fn level(&self, level: u32) -> &MeshAssetGpu {
+        match level.checked_sub(1) {
+            None => &self.mesh,
+            Some(k) => &self.mesh.levels[k as usize],
+        }
     }
 }
