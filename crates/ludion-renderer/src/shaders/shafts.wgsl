@@ -171,8 +171,6 @@ const SHAFT_OPTICAL_CUTOFF: f32 = 3.0;
 // the `σ_s` factor in the integral still takes the result to zero.
 const SHAFT_MIN_DENSITY: f32 = 1e-4;
 
-const FOUR_PI: f32 = 12.5663706143592;
-
 // The world-space position of the pixel at `uv` whose stored device depth is `depth`. wgpu's clip
 // space is xy in [-1, 1] with +y up and z in [0, 1] near→far; `uv.y` runs top-down (the fullscreen
 // triangle flips it), which is the one sign to get right. The same reconstruction as
@@ -247,15 +245,6 @@ fn sun_visibility(world_pos: vec3<f32>) -> f32 {
     return sun_visibility_cascaded(world_pos);
 }
 
-fn henyey_greenstein(cos_theta: f32) -> f32 {
-    let g = shafts.anisotropy;
-    let g2 = g * g;
-    let denom = 1.0 + g2 - 2.0 * g * cos_theta;
-    // The floor is defence in depth against a *validating* `g` close enough to ±1 that the exact
-    // backscatter ray takes the denominator below f32 resolution; the component rejects ±1 itself.
-    return (1.0 - g2) / (FOUR_PI * pow(max(denom, 1e-4), 1.5));
-}
-
 // A coverage at or above this stops the march outright: an opaque stack blended in half-float may land
 // just under 1.
 const SHAFT_FULL_COVERAGE: f32 = 0.999;
@@ -314,7 +303,7 @@ fn layered_march(source_uv: vec2<f32>, depth: f32, coverage: f32, layer_t: f32, 
         }
         visible = visible + sample;
     }
-    let phase = henyey_greenstein(dot(ray, -shafts.sun_dir));
+    let phase = henyey_greenstein(shafts.anisotropy, dot(ray, -shafts.sun_dir));
     return visible * dt * shafts.albedo * shafts.density * phase * shafts.intensity;
 }
 
@@ -377,7 +366,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         visible = visible + sun_visibility(shafts.cam_pos + ray * t) * transmittance * local;
     }
 
-    let phase = henyey_greenstein(dot(ray, -shafts.sun_dir));
+    let phase = henyey_greenstein(shafts.anisotropy, dot(ray, -shafts.sun_dir));
     // σ_s = α·σ_t is the coefficient of the in-scatter, so an absorbing medium (α → 0) buries the
     // surfaces behind it without glowing. It is the medium's *nominal* coefficient and stays out here
     // because each sample already carries its own height ratio; the two multiply to the local σ_s.

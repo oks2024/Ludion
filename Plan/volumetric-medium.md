@@ -486,6 +486,9 @@ runs (ranges). Not authoritative; per-pass medians overlap on a tiled GPU and ar
   amortisation is wanted, more than 64 scattering lights, or GI in-scatter needs more than the per-ray
   DC march (L1 bands, per-froxel irradiance); a froxel volume makes GI/irradiance-volume in-scatter
   nearly free.
+- **An anisotropic GI in-scatter (`g`·L1).** Under HG the L1 band contributes `g·(L1·ray)`, a
+  refinement once the haze's ambient term itself becomes anisotropic. Trigger: a look where
+  forward-scattered bounce visibly matters.
 - **Multiple scattering / a dual-lobe phase.** Single-scatter is the model; a second HG lobe or a
   cheap multi-scatter approximation is the next fidelity step. Trigger: a look verdict that thick fog
   reads too dark (single-scatter under-fills dense media).

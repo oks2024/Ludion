@@ -1,8 +1,8 @@
 // A 4×4 box filter over all four channels of the local-light in-scatter term — `box_blur.wgsl`'s
 // kernel, which averages one full `BAYER4` period so the march's step offset cancels exactly. That
 // shader broadcasts a scalar from `.r`; this term is an RGB radiance (and the alpha the march writes
-// is a constant 1, which a mean preserves exactly), so it keeps its own copy rather than widening the
-// scalar blur, whose bytes are blessed.
+// is the GI ambient scale V̄, 1 when the GI branch is off; the composite reads its 4×4 mean), so it
+// keeps its own copy rather than widening the scalar blur, whose bytes are blessed.
 //
 // `VsOut` + `vs_main` come from `shaders/snippets/fullscreen_vs.wgsl`.
 

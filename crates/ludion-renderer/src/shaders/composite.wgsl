@@ -136,7 +136,8 @@
 @group(0) @binding(5) var transparent_depth_tex: texture_2d<f32>;
 // The local-light in-scatter term (`medium_scatter_blur`): premultiplied radiance at a fraction of
 // the output extent — the fourth **optional** input, behind `transparent_depth_tex`. It exists when a
-// scattering light is selected in a medium; otherwise the recorder binds the same 1x1 stand-in and
+// scattering light is selected in a medium or the haze reads a `GiVolume` (`medium_gi`); its alpha
+// carries the GI ambient scale V̄. Otherwise the recorder binds the same 1x1 stand-in and
 // `composite.medium_scatter` is zero, so the add below never reads it.
 @group(0) @binding(6) var medium_scatter_tex: texture_2d<f32>;
 @group(0) @binding(7) var samp: sampler;

@@ -95,3 +95,14 @@ fn medium_density_ratio(
     );
     return exp(exponent);
 }
+
+const FOUR_PI: f32 = 12.5663706143592;
+
+// The Henyey–Greenstein phase at asymmetry `g`.
+fn henyey_greenstein(g: f32, cos_theta: f32) -> f32 {
+    let g2 = g * g;
+    let denom = 1.0 + g2 - 2.0 * g * cos_theta;
+    // The floor is defence in depth against a *validating* `g` close enough to ±1 that the exact
+    // backscatter ray takes the denominator below f32 resolution; the component rejects ±1 itself.
+    return (1.0 - g2) / (FOUR_PI * pow(max(denom, 1e-4), 1.5));
+}

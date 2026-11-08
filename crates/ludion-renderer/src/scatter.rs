@@ -41,6 +41,7 @@ pub(crate) fn select_scatter(scene: &RenderScene) -> Vec<u32> {
     let reach = SCATTER_OPTICAL_CUTOFF / sigma;
     let frustum = Frustum::from_view_proj(scene.camera.projection * scene.camera.view);
     let camera = scene.camera.position;
+    let forward = scene.camera.view_forward_lane();
     let point_count = scene.lights.len();
 
     let mut candidates: Vec<(f32, u32)> = Vec::new();
@@ -55,7 +56,15 @@ pub(crate) fn select_scatter(scene: &RenderScene) -> Vec<u32> {
             let touches = center.is_finite()
                 && radius.is_finite()
                 && frustum.intersects_sphere(center, radius);
-            let d = ((camera - center).length() - radius).max(0.0);
+            // Perspective rays start at the eye; orthographic ones on the camera plane, so
+            // distance runs along the view forward.
+            let to_center = center - camera;
+            let along = if forward[3] == 1.0 {
+                to_center.dot(Vec3::new(forward[0], forward[1], forward[2]))
+            } else {
+                to_center.length()
+            };
+            let d = (along - radius).max(0.0);
             let w = scatter * intensity * peak * range * ludion_core::math::exp(-sigma * d);
             if touches && d < reach && w.is_finite() && w > 0.0 {
                 candidates.push((w, index as u32));
@@ -185,6 +194,18 @@ mod tests {
             point(Vec3::new(0.0, 0.0, -31.5), 2.0, 1.0, 1.0),
         ];
         assert_eq!(select_scatter(&scene), vec![1]);
+    }
+
+    #[test]
+    fn ortho_reach_is_measured_along_the_view() {
+        let mut scene = scene_at_origin(0.1);
+        scene.camera.projection = Mat4::orthographic_rh(-50.0, 50.0, -50.0, 50.0, 0.1, 1000.0);
+        // Radial distance 41 m exceeds the 30 m reach, the along-view distance (10 m) does not.
+        scene.lights = vec![
+            point(Vec3::new(40.0, 0.0, -10.0), 2.0, 1.0, 1.0),
+            point(Vec3::new(0.0, 0.0, -40.0), 2.0, 1.0, 1.0),
+        ];
+        assert_eq!(select_scatter(&scene), vec![0]);
     }
 
     #[test]

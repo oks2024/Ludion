@@ -44,8 +44,8 @@
 //
 // `w = T·local` is the in-scatter weight of the ambient closed form (`σ_t·T·local`, up to the constant
 // the mean cancels), `vis` the volume's baked DC sky visibility and `B` its bounce DC plus the injected
-// dynamic DC. The medium is isotropic, so only the DC term (`n = 0` in `mesh_shading.wgsl`'s `sh_l1`)
-// is read, with the mesh pass's clamps. Outside the volume `vis = 1` and `B = 0`: no leak past the
+// dynamic DC. The haze's ambient in-scatter is integrated without the phase function, so only the
+// DC term (`n = 0` in `mesh_shading.wgsl`'s `sh_l1`) is consistent with it and read, with the mesh pass's clamps. Outside the volume `vis = 1` and `B = 0`: no leak past the
 // lattice. With the flag off alpha is exactly 1.
 //
 // `VsOut` + `vs_main` come from `shaders/snippets/fullscreen_vs.wgsl`, `BAYER4` from
@@ -130,19 +130,11 @@ const SCATTER_OPTICAL_CUTOFF: f32 = 3.0;
 const SCATTER_MIN_DENSITY: f32 = 1e-4;
 const SCATTER_FULL_COVERAGE: f32 = 0.999;
 const SCATTER_UNSHADOWED: u32 = 0xFFFFFFFFu;
-const FOUR_PI: f32 = 12.5663706143592;
 
 fn world_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
     let ndc = vec3<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
     let world = scatter.inv_view_proj * vec4<f32>(ndc, 1.0);
     return world.xyz / world.w;
-}
-
-fn henyey_greenstein(cos_theta: f32) -> f32 {
-    let g = scatter.anisotropy;
-    let g2 = g * g;
-    let denom = 1.0 + g2 - 2.0 * g * cos_theta;
-    return (1.0 - g2) / (FOUR_PI * pow(max(denom, 1e-4), 1.5));
 }
 
 // A spot's cone factor for the unit vector `l` from the sample toward the light: 1 inside the inner
@@ -296,7 +288,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 t,
             );
             var weight = cone_factor(light, l) * scatter_visibility(light, p, l) * atten * atten
-                * henyey_greenstein(dot(ray, l)) * transmittance * local;
+                * henyey_greenstein(scatter.anisotropy, dot(ray, l)) * transmittance * local;
             if (coverage > 0.0 && t > layer_t) {
                 weight = weight * past;
             }
