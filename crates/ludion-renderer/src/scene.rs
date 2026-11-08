@@ -107,6 +107,9 @@ pub struct MeshInstance {
     /// drawn camera (see [`RenderScene::viewmodel`]). CPU-only like `cast_shadows`: it never reaches
     /// the GPU instance data.
     pub viewmodel: bool,
+    /// Rim lane `(color·strength rgb, power)`: the shader adds `rgb · (1 − n·v)^power` unlit, like
+    /// emissive. `[0.0; 4]` is no rim and renders byte-identically to a rim-free frame.
+    pub rim: [f32; 4],
 }
 
 /// A single sprite/billboard: a textured, tinted quad in world space.

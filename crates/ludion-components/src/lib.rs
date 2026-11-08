@@ -445,6 +445,45 @@ pub struct Mesh {
     /// receives some wrapped light near the terminator. Inert while [`wrap`](Mesh::wrap) is `0`.
     #[serde(default = "white3", skip_serializing_if = "is_white3")]
     pub scatter_color: [f32; 3],
+    /// An unlit Fresnel edge (default none): see [`Rim`]. A mesh without its own `rim` takes its
+    /// nearest `Parent` ancestor's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rim: Option<Rim>,
+}
+
+/// A rim term on a [`Mesh`]: adds `color · strength · (1 − n·v)^power` to the shaded colour. Unlit
+/// and emissive-like — not scaled by ambient or haze at the surface, fogged by distance like
+/// emissive — and inherited down `Parent` by meshes that author no `rim`. Strength `0` or a black
+/// colour renders identically to no rim.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct Rim {
+    /// Linear RGB rim colour (default white), HDR-capable.
+    #[serde(default = "white3")]
+    pub color: [f32; 3],
+    /// Intensity multiplier, validated `>= 0` (default `1.0`).
+    #[serde(default = "one")]
+    #[schemars(range(min = 0.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 4.0]))]
+    pub strength: f32,
+    /// Falloff exponent, validated `> 0` (default `3.0`); higher hugs the silhouette.
+    #[serde(default = "rim_power_default")]
+    #[schemars(extend("exclusiveMinimum" = 0.0))]
+    #[schemars(extend("x-ui-range" = [0.5, 8.0]))]
+    pub power: f32,
+}
+
+fn rim_power_default() -> f32 {
+    3.0
+}
+
+impl Default for Rim {
+    fn default() -> Self {
+        Rim {
+            color: [1.0; 3],
+            strength: 1.0,
+            power: 3.0,
+        }
+    }
 }
 
 impl Default for Mesh {
@@ -459,16 +498,27 @@ impl Default for Mesh {
             flash_color: [1.0; 3],
             wrap: 0.0,
             scatter_color: [1.0; 3],
+            rim: None,
         }
     }
 }
 
 impl SemanticValidate for Mesh {
-    /// `color`, `flash_color` and `scatter_color` are colours (`L1263`); the scalars ride their schemars bounds.
+    /// `color`, `flash_color`, `scatter_color` and `rim.color` are colours (`L1263`); the scalars ride their schemars bounds.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = value_color_diagnostics("Mesh", value, "color");
         out.extend(value_color_diagnostics("Mesh", value, "flash_color"));
         out.extend(value_color_diagnostics("Mesh", value, "scatter_color"));
+        if let Some(rim) = value.get("rim").filter(|rim| rim.is_object()) {
+            out.extend(
+                value_color_diagnostics("Mesh", rim, "color")
+                    .into_iter()
+                    .map(|mut d| {
+                        d.path = d.path.map(|p| format!("/rim{p}"));
+                        d
+                    }),
+            );
+        }
         out
     }
 }
@@ -7492,6 +7542,32 @@ mod tests {
         .unwrap();
         assert_eq!(wrapped["wrap"], 0.5);
         assert!(wrapped.get("scatter_color").is_some());
+    }
+
+    /// `Mesh.rim` validates its colour at `/rim/color`, rides its schema bounds, and is absent when `None`.
+    #[test]
+    fn mesh_rim_is_validated_and_absent_when_none() {
+        refused_with(
+            "Mesh",
+            "        rim:\n          color:\n            - 1.0\n            - -0.5\n            - 1.0\n",
+            "L1263",
+            "/rim/color/1",
+        );
+        refused_with(
+            "Mesh",
+            "        rim:\n          power: 0.0\n",
+            "L1014",
+            "/rim",
+        );
+        refused_with(
+            "Mesh",
+            "        rim:\n          strength: -1.0\n",
+            "L1014",
+            "/rim",
+        );
+        assert!(refusals("Mesh", "        rim:\n          strength: 2.0\n").is_empty());
+        let value = serde_json::to_value(Mesh::default()).unwrap();
+        assert!(value.get("rim").is_none());
     }
 
     /// A non-finite `wrap` (YAML `.nan`, `.inf`, `-.inf`) is refused as `L1009` at the field.

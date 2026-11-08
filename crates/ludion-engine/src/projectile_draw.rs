@@ -370,6 +370,7 @@ pub(crate) fn extract_projectiles(
                     bone_offset: 0,
                     cast_shadows: false,
                     viewmodel: false,
+                    rim: [0.0; 4],
                 });
             }
             ProjectileLook::Billboard { softness } => {

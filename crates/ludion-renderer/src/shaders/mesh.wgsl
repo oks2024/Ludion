@@ -55,6 +55,8 @@ struct VsIn {
     @location(18) weights: vec4<f32>,
     // Per-vertex bone indices into the instance's slice of the bone palette. The default (0, 0, 0, 0).
     @location(19) bones: vec4<u32>,
+    // Per-instance rim (color·strength rgb, power); all-zero rgb is no rim.
+    @location(20) rim: vec4<f32>,
 };
 
 struct VsOut {
@@ -76,6 +78,8 @@ struct VsOut {
     // Per-instance wrap diffuse `(scatter.rgb, wrap)` and world half-extents, flat like `flash`.
     @location(8) @interpolate(flat) wrap: vec4<f32>,
     @location(9) @interpolate(flat) wrap_extent: vec3<f32>,
+    // Per-instance rim `(color·strength rgb, power)`, flat like `flash`.
+    @location(10) @interpolate(flat) rim: vec4<f32>,
 };
 
 struct WrapLanes {
@@ -123,6 +127,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.fade = in.fade.xy;
     // Carry the hit-flash lane to the fragment stage.
     out.flash = in.flash;
+    out.rim = in.rim;
     let wrap = wrap_lanes(in);
     out.wrap = wrap.wrap;
     out.wrap_extent = wrap.extent;
@@ -152,13 +157,13 @@ struct CaptureOut {
 
 @fragment
 fn fs_main(in: VsOut, @builtin(front_facing) front_facing: bool) -> FsOut {
-    let c = shade_fragment(in, front_facing);
+    let c = shade_fragment(in, front_facing, true);
     return FsOut(c.color, c.normal_roughness, c.specular);
 }
 
 @fragment
 fn fs_capture(in: VsOut, @builtin(front_facing) front_facing: bool) -> CaptureOut {
-    return shade_fragment(in, front_facing);
+    return shade_fragment(in, front_facing, false);
 }
 
 // The diffuse a wrapped term adds past plain Lambert, per channel; never negative, zero at n·l = 1.
@@ -244,7 +249,7 @@ fn wrap_band(
     return sum * diffuse * direct_ao;
 }
 
-fn shade_fragment(in: VsOut, front_facing: bool) -> CaptureOut {
+fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
     // Screen-door occlusion fade (opaque pipeline — no blend, no depth-write change; discard is the
     // whole mechanism). `height_min` (fade.y) gates by world height: only fragments strictly ABOVE it
     // fade, so the top-fade-stories case leaves the lower body fully opaque; at or below it the
@@ -333,6 +338,13 @@ fn shade_fragment(in: VsOut, front_facing: bool) -> CaptureOut {
         emissive = emissive * textureSample(emissive_tex, material_samp, in.uv).rgb;
     }
     lit = lit + emissive;
+    // Rim: an unlit Fresnel edge, added like emissive so the composite's medium treats them alike.
+    // A probe capture leaves it out: its eye is not the player's.
+    if (with_rim && any(in.rim.rgb > vec3<f32>(0.0))) {
+        let v = normalize(view_to_eye(camera.cam_pos.xyz - in.world_pos, camera.view_forward));
+        let edge = 1.0 - clamp(dot(shaded.n, v), 0.0, 1.0);
+        lit = lit + in.rim.rgb * pow(edge, in.rim.a);
+    }
     // Hit-flash: lerp the shaded colour toward flash_color by the amount. amount 0 mixes nothing —
     // render-identical by construction.
     lit = mix(lit, in.flash.rgb, clamp(in.flash.a, 0.0, 1.0));

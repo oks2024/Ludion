@@ -3802,3 +3802,163 @@ fn wrap_reaches_the_mesh_instance_for_a_mesh_and_assembly_parts() {
         assert_eq!((part.wrap, part.scatter_color), (0.4, [0.2, 0.9, 0.2]));
     }
 }
+
+/// `Mesh.rim` reaches `MeshInstance.rim` premultiplied by strength for a plain mesh and every
+/// assembly part; a rim-free mesh carries the all-zero lane.
+#[test]
+fn rim_reaches_the_mesh_instance_for_a_mesh_and_assembly_parts() {
+    use ludion_engine::components::Rim;
+    let dir = assembly_dir("rim");
+    let mut world = World::new();
+    let plain = world.spawn();
+    world.insert(plain, Transform::default()).unwrap();
+    world.insert(plain, Mesh::default()).unwrap();
+    let rimmed = world.spawn();
+    world.insert(rimmed, Transform::default()).unwrap();
+    let rim = Rim {
+        color: [1.0, 0.5, 0.25],
+        strength: 2.0,
+        power: 4.0,
+    };
+    world
+        .insert(
+            rimmed,
+            Mesh {
+                rim: Some(rim),
+                ..Mesh::default()
+            },
+        )
+        .unwrap();
+    let assembly = world.spawn();
+    world.insert(assembly, Transform::default()).unwrap();
+    world
+        .insert(
+            assembly,
+            Mesh {
+                shape: MeshSource::Assembly("models/fixture.assembly.yaml".to_string()),
+                rim: Some(rim),
+                ..Mesh::default()
+            },
+        )
+        .unwrap();
+
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
+    assert_eq!(scene.meshes.len(), 4, "one plain, one rimmed, two parts");
+    assert_eq!(scene.meshes[0].rim, [0.0; 4]);
+    assert_eq!(scene.meshes[1].rim, [2.0, 1.0, 0.5, 4.0]);
+    for part in &scene.meshes[2..] {
+        assert_eq!(part.rim, [2.0, 1.0, 0.5, 4.0]);
+    }
+}
+
+/// A mesh with no `rim` takes its nearest `Parent` ancestor's `Mesh.rim`; its own wins.
+#[test]
+fn rim_inherits_down_parent_and_a_childs_own_wins() {
+    use ludion_engine::components::Rim;
+    let mut world = World::new();
+    let root = world.spawn();
+    world.insert(root, Transform::default()).unwrap();
+    world
+        .insert(
+            root,
+            Mesh {
+                rim: Some(Rim {
+                    strength: 1.5,
+                    ..Rim::default()
+                }),
+                ..Mesh::default()
+            },
+        )
+        .unwrap();
+    let inheriting = world.spawn();
+    let own = world.spawn();
+    for (child, rim) in [
+        (inheriting, None),
+        (
+            own,
+            Some(Rim {
+                color: [0.0, 1.0, 0.0],
+                strength: 1.0,
+                power: 2.0,
+            }),
+        ),
+    ] {
+        world.insert(child, Transform::default()).unwrap();
+        world.insert(child, ludion_ecs::Parent(root)).unwrap();
+        world
+            .insert(
+                child,
+                Mesh {
+                    rim,
+                    ..Mesh::default()
+                },
+            )
+            .unwrap();
+    }
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
+    assert_eq!(scene.meshes.len(), 3);
+    assert_eq!(scene.meshes[0].rim, [1.5, 1.5, 1.5, 3.0]);
+    assert_eq!(scene.meshes[1].rim, [1.5, 1.5, 1.5, 3.0], "inherited");
+    assert_eq!(scene.meshes[2].rim, [0.0, 1.0, 0.0, 2.0], "own wins");
+}
+
+/// A skinned (`bone_offset != 0`) character instance carries its rim.
+#[test]
+fn a_skinned_instance_carries_its_rim() {
+    use ludion_engine::components::Rim;
+    use ludion_scene::{JointRest, MeshDocument as SceneMeshDocument, MeshJoint, MeshSkin};
+
+    let dir = std::env::temp_dir().join(format!("ludion-extract-skinrim-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("meshes")).unwrap();
+    let mut identity = [0.0; 16];
+    for i in 0..4 {
+        identity[i * 5] = 1.0;
+    }
+    let doc = SceneMeshDocument {
+        positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        skin: Some(MeshSkin {
+            joints: vec![MeshJoint {
+                name: "root".to_string(),
+                parent: None,
+                rest: JointRest {
+                    translation: [0.0; 3],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0; 3],
+                },
+                inverse_bind: identity,
+            }],
+            weights: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            bone_indices: vec![0; 12],
+        }),
+        indices: vec![0, 1, 2],
+        ..SceneMeshDocument::default()
+    };
+    std::fs::write(
+        dir.join("meshes/skinned.mesh.yaml"),
+        ludion_scene::emit_mesh(&doc),
+    )
+    .unwrap();
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, Transform::default()).unwrap();
+    world
+        .insert(
+            e,
+            Mesh {
+                shape: MeshSource::Asset("meshes/skinned.mesh.yaml".to_string()),
+                rim: Some(Rim::default()),
+                ..Mesh::default()
+            },
+        )
+        .unwrap();
+    let scene = extract(&world, (320, 180), ludion_assets::AssetRoot::content(&dir)).unwrap();
+    assert_ne!(scene.meshes[0].bone_offset, 0);
+    assert_eq!(scene.meshes[0].rim, [1.0, 1.0, 1.0, 3.0]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

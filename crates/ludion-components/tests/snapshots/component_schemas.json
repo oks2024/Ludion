@@ -2934,6 +2934,17 @@
         },
         "minItems": 3,
         "maxItems": 3
+      },
+      "rim": {
+        "description": "An unlit Fresnel edge (default none): see [`Rim`]. A mesh without its own `rim` takes its\nnearest `Parent` ancestor's.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Rim"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "$defs": {
@@ -3059,6 +3070,49 @@
             "additionalProperties": false
           }
         ]
+      },
+      "Rim": {
+        "description": "A rim term on a [`Mesh`]: adds `color · strength · (1 − n·v)^power` to the shaded colour. Unlit\nand emissive-like — not scaled by ambient or haze at the surface, fogged by distance like\nemissive — and inherited down `Parent` by meshes that author no `rim`. Strength `0` or a black\ncolour renders identically to no rim.",
+        "type": "object",
+        "properties": {
+          "color": {
+            "description": "Linear RGB rim colour (default white), HDR-capable.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "strength": {
+            "description": "Intensity multiplier, validated `>= 0` (default `1.0`).",
+            "type": "number",
+            "format": "float",
+            "minimum": 0.0,
+            "default": 1.0,
+            "x-ui-range": [
+              0.0,
+              4.0
+            ]
+          },
+          "power": {
+            "description": "Falloff exponent, validated `> 0` (default `3.0`); higher hugs the silhouette.",
+            "type": "number",
+            "format": "float",
+            "default": 3.0,
+            "exclusiveMinimum": 0.0,
+            "x-ui-range": [
+              0.5,
+              8.0
+            ]
+          }
+        }
       }
     }
   },
@@ -3189,6 +3243,17 @@
             },
             "minItems": 3,
             "maxItems": 3
+          },
+          "rim": {
+            "description": "An unlit Fresnel edge (default none): see [`Rim`]. A mesh without its own `rim` takes its\nnearest `Parent` ancestor's.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Rim"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -3314,6 +3379,49 @@
             "additionalProperties": false
           }
         ]
+      },
+      "Rim": {
+        "description": "A rim term on a [`Mesh`]: adds `color · strength · (1 − n·v)^power` to the shaded colour. Unlit\nand emissive-like — not scaled by ambient or haze at the surface, fogged by distance like\nemissive — and inherited down `Parent` by meshes that author no `rim`. Strength `0` or a black\ncolour renders identically to no rim.",
+        "type": "object",
+        "properties": {
+          "color": {
+            "description": "Linear RGB rim colour (default white), HDR-capable.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "strength": {
+            "description": "Intensity multiplier, validated `>= 0` (default `1.0`).",
+            "type": "number",
+            "format": "float",
+            "minimum": 0.0,
+            "default": 1.0,
+            "x-ui-range": [
+              0.0,
+              4.0
+            ]
+          },
+          "power": {
+            "description": "Falloff exponent, validated `> 0` (default `3.0`); higher hugs the silhouette.",
+            "type": "number",
+            "format": "float",
+            "default": 3.0,
+            "exclusiveMinimum": 0.0,
+            "x-ui-range": [
+              0.5,
+              8.0
+            ]
+          }
+        }
       }
     }
   },

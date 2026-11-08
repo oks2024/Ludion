@@ -628,7 +628,7 @@ impl FrameSize {
 ///
 /// let shape = CullShape::for_counts(1000, 5, 1);
 /// assert_eq!((shape.instances, shape.buckets, shape.views), (1024, 16, 1));
-/// assert_eq!(shape.instance_bytes(), 1024 * 192);
+/// assert_eq!(shape.instance_bytes(), 1024 * 208);
 /// assert_eq!(shape.args_bytes(), 16 * 20);
 /// assert_eq!(shape.scratch_bytes(), (32 + 4 + 1) * 4);
 /// ```
@@ -655,7 +655,7 @@ impl CullShape {
     pub fn for_counts(instances: usize, buckets: usize, views: usize) -> CullShape {
         let cap = |n: usize, floor: u32| (n.max(floor as usize).next_power_of_two()) as u32;
         let instances = cap(instances, 256);
-        let fit = CULL_INSTANCE_BINDING_MAX / (u64::from(instances) * 192);
+        let fit = CULL_INSTANCE_BINDING_MAX / (u64::from(instances) * 208);
         CullShape {
             instances,
             buckets: cap(buckets, 16),
@@ -678,9 +678,9 @@ impl CullShape {
         u64::from(self.views) * u64::from(self.words() + self.blocks() + 1) * 4
     }
 
-    /// The compacted-instance buffer: `views` copies of `instances` 192-byte instances.
+    /// The compacted-instance buffer: `views` copies of `instances` 208-byte instances.
     pub fn instance_bytes(&self) -> u64 {
-        u64::from(self.views) * u64::from(self.instances) * 192
+        u64::from(self.views) * u64::from(self.instances) * 208
     }
 
     /// The indirect-args buffer: one 20-byte slot per (view, bucket).
@@ -2225,6 +2225,7 @@ mod tests {
     fn cull_mesh(viewmodel: bool) -> crate::scene::MeshInstance {
         use ludion_core::math::glam::{Mat3, Mat4};
         crate::scene::MeshInstance {
+            rim: [0.0; 4],
             shape: crate::scene::MeshShape::Cube,
             model: Mat4::IDENTITY,
             normal_matrix: Mat3::IDENTITY,
@@ -2410,9 +2411,9 @@ mod tests {
             ludion_render_graph::engine_limits().max_storage_buffer_binding_size,
             "the WebGPU floor engine_limits keeps"
         );
-        // 16 384 instances are 3 MiB a view: 128 MiB holds 42 of them, and 60 are requested.
+        // 16 384 instances are 3.25 MiB a view: 128 MiB holds 39 of them, and 60 are requested.
         let shape = CullShape::for_counts(16_384, 6, 60);
-        assert_eq!(shape.views, 42);
+        assert_eq!(shape.views, 39);
         assert!(shape.instance_bytes() <= CULL_INSTANCE_BINDING_MAX);
         assert_eq!(
             CullShape::for_counts(524_288, 6, 7).views,

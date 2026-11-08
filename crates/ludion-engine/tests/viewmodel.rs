@@ -446,3 +446,15 @@ fn a_scaled_camera_draws_its_child_gun_at_the_extracted_world_pose() {
         assert!(parallel(a, b), "{a:?} vs {b:?}");
     }
 }
+
+/// A viewmodel mesh keeps its rim lane through `viewmodel::apply`.
+#[test]
+fn the_gun_keeps_its_rim() {
+    let rimmed = GUN.replace(
+        "shape: cube\n",
+        "shape: cube\n        rim:\n          strength: 2.0\n",
+    );
+    let document = scene("", FLAG, "").replace(GUN, &rimmed);
+    let scene = extract(&mut engine_for(&document));
+    assert_eq!(gun(&scene).rim, [2.0, 2.0, 2.0, 3.0]);
+}

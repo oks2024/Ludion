@@ -37,10 +37,10 @@ struct CullView {
     pad2: u32,
 }
 
-// A `MeshInstanceRaw` (192 bytes), copied whole; only `model` is read.
+// A `MeshInstanceRaw` (208 bytes), copied whole; only `model` is read.
 struct CullInstance {
     model: mat4x4<f32>,
-    rest: array<vec4<f32>, 8>,
+    rest: array<vec4<f32>, 9>,
 }
 
 // `slot` indexes `cull_boxes`, or is SLOT_OVERRIDE (min/max is the world box) or SLOT_ALWAYS.

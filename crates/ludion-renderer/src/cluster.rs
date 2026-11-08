@@ -1339,6 +1339,7 @@ mod tests {
             bone_offset: 0,
             cast_shadows: false,
             viewmodel: true,
+            rim: [0.0; 4],
         });
         scene.viewmodel = Some(crate::viewmodel::ViewmodelData {
             fov_y_deg: 55.0,

@@ -694,6 +694,7 @@ mod tests {
             bone_offset: 0,
             cast_shadows: true,
             viewmodel: false,
+            rim: [0.0; 4],
         }
     }
 

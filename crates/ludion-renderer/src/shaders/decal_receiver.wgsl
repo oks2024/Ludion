@@ -35,6 +35,8 @@ struct VsIn {
     @location(17) flash: vec4<f32>,
     @location(18) weights: vec4<f32>,
     @location(19) bones: vec4<u32>,
+    // Declared to match the shared `MeshInstanceRaw` layout (the mesh pass's rim lane); unread here.
+    @location(20) rim: vec4<f32>,
 };
 
 // Where this draw's instances start in `recv_ids`.

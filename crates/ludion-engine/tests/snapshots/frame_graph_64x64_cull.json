@@ -363,7 +363,7 @@
     },
     {
       "name": "cull_instances",
-      "size": 49152,
+      "size": 53248,
       "usages": [
         "storage",
         "vertex"

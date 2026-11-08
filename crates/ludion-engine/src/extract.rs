@@ -47,8 +47,8 @@ use crate::components::{
     Animation, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
     GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, ParentJoint, ParticleEmitter,
-    PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, SkinBone, SpotLight, Sprite,
-    SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText,
+    PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Rim, SkinBone, SpotLight,
+    Sprite, SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText,
 };
 use crate::docs::DocStore;
 use crate::extract_observer::ExtractPhase;
@@ -1125,6 +1125,7 @@ fn extract_inner(
     let mut bone_palette: Vec<Mat4> = Vec::new();
     let mut palette_scratch: Vec<Mat4> = Vec::new();
     let mut last_fade = None;
+    let mut last_rim = None;
     for mesh in &placed.meshes {
         // Hidden meshes stay in `placed` for the voxelizer (the static GI bake ignores `Visibility`)
         // but are never resolved, skinned or drawn.
@@ -1142,6 +1143,16 @@ fn extract_inner(
                 let fade = crate::hierarchy::inherited_fade(world, mesh.id);
                 last_fade = Some((mesh.id, fade));
                 fade
+            }
+        };
+        // Rim resolves like `Fade`: the mesh's own, else its nearest ancestor's `Mesh.rim`. The
+        // inheritance walk is keyed on the entity, so a grid's cells or an assembly's parts share it.
+        let rim = match last_rim {
+            Some((id, rim)) if id == mesh.id => rim,
+            _ => {
+                let rim = rim_lane(crate::hierarchy::inherited_rim(world, mesh.id, mesh.rim));
+                last_rim = Some((mesh.id, rim));
+                rim
             }
         };
         let cast_shadows = visibility.casts(mesh.id);
@@ -1252,6 +1263,7 @@ fn extract_inner(
                         bone_offset: 0,
                         cast_shadows,
                         viewmodel: false,
+                        rim,
                     });
                 }
                 continue;
@@ -1312,6 +1324,7 @@ fn extract_inner(
                 bone_offset,
                 cast_shadows,
                 viewmodel: false,
+                rim,
             });
         }
     }
@@ -2858,6 +2871,8 @@ pub(crate) struct PlacedMesh<'w> {
     /// The `Mesh` component's wrap diffuse amount and scatter tint. `wrap == 0.0` is render-identical.
     pub(crate) wrap: f32,
     pub(crate) scatter_color: [f32; 3],
+    /// The `Mesh` component's own rim; inheritance down `Parent` is resolved at instance build.
+    pub(crate) rim: Option<Rim>,
     /// The normal matrix (object→world for normals): the model's upper-3×3 for a uniform scale, its
     /// inverse-transpose otherwise. See [`normal_matrix`].
     pub(crate) normal_matrix: Mat3,
@@ -3376,6 +3391,7 @@ pub(crate) fn place<'w>(
                 flash_color: mesh.flash_color,
                 wrap: mesh.wrap,
                 scatter_color: mesh.scatter_color,
+                rim: mesh.rim,
                 source: placed_source(&mesh.shape),
                 dynamic,
             });
@@ -3409,6 +3425,7 @@ pub(crate) fn place<'w>(
                         flash_color: mesh.flash_color,
                         wrap: mesh.wrap,
                         scatter_color: mesh.scatter_color,
+                        rim: mesh.rim,
                         source: placed_source(&mesh.shape),
                         dynamic,
                     });
@@ -4013,6 +4030,19 @@ fn blended_joint_pose(
         translation: lerp3(from.translation, to.translation, joint.rest_translation),
         scale: lerp3(from.scale, to.scale, joint.rest_scale),
     })
+}
+
+/// The instance rim lane `(color·strength, power)` for a resolved rim; all-zero is no rim.
+fn rim_lane(rim: Option<Rim>) -> [f32; 4] {
+    match rim {
+        Some(r) => [
+            r.color[0] * r.strength,
+            r.color[1] * r.strength,
+            r.color[2] * r.strength,
+            r.power,
+        ],
+        None => [0.0; 4],
+    }
 }
 
 /// The normal matrix for a mesh: the transform that carries object-space normals to world space.

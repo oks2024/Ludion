@@ -23,8 +23,8 @@ pub(crate) struct MeshInstanceRaw {
     /// matrix then *is* the model's upper-3×3, and the `w` column is annihilated by the `0`).
     ///
     /// The lanes that product never reads are **repurposed** to carry the wrap-diffuse data, so this
-    /// struct needs no extra attribute (see [`instance_normal_lanes`]). The next per-instance value
-    /// gets a real lane of its own, not more packing here.
+    /// struct needs no extra attribute (see [`instance_normal_lanes`]). Rim took the next real lane;
+    /// the next per-instance value gets one too, not more packing here.
     pub(super) normal: [[f32; 4]; 4],
     /// `(fade, height_min, bone_offset, handedness)`. Read at `@location(16)`: the first two lanes by
     /// the mesh shader's Bayer-dither discard (from the entity's `Fade` component, defaults
@@ -37,6 +37,8 @@ pub(crate) struct MeshInstanceRaw {
     /// (default `(1, 1, 1, 0)`). Read at `@location(17)`; the mesh shader lerps the shaded colour
     /// toward `flash_color` by `amount`, and `amount == 0` can never change a pixel.
     pub(super) flash: [f32; 4],
+    /// Per-instance rim lane `(color·strength rgb, power)` at `@location(20)`; all-zero is no rim.
+    pub(super) rim: [f32; 4],
 }
 
 pub(super) struct MeshDraw {
@@ -142,6 +144,11 @@ pub(super) fn instance_flash(m: &MeshInstance) -> [f32; 4] {
     [r, g, b, m.flash]
 }
 
+/// The per-instance rim vec4 `(color·strength rgb, power)`; all-zero rgb is no rim.
+pub(super) fn instance_rim(m: &MeshInstance) -> [f32; 4] {
+    m.rim
+}
+
 /// The instance's normal-matrix lanes, which also carry the wrap-diffuse data. The shader reads the
 /// matrix only as `(normal_mat * vec4(n, 0.0)).xyz`, so the `w` row (`n0.w`, `n1.w`, `n2.w`) and the
 /// column multiplied by `0.0` (`n3`) reach no result. A wrapped instance (`wrap > 0`) stores there:
@@ -208,6 +215,7 @@ pub(super) fn bucket_asset_instances(
             normal: instance_normal_lanes(m, asset_bounds),
             fade: instance_fade(m),
             flash: instance_flash(m),
+            rim: instance_rim(m),
         });
     }
     (buckets, sources)
@@ -367,6 +375,7 @@ fn pending_primitives(scene: &RenderScene) -> Vec<PrimPending> {
                         normal: instance_normal_lanes(m, &[]),
                         fade: instance_fade(m),
                         flash: instance_flash(m),
+                        rim: instance_rim(m),
                     },
                 )
             })
