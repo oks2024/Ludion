@@ -387,6 +387,21 @@ dimming and colour are all governed by the fog they live in.
 15. **A viewmodel gun light may scatter**, at its render pose. Transparents match today's sun-shaft
     behaviour. No wire or replay move: `scatter` is a component field with a default, and the schema
     snapshot absorbs it.
+16. **A per-object medium scale amends the uniform-medium model.** `medium` in `[0, 1]` on `Mesh`,
+    `Sprite`, `ParticleEmitter` and `ProjectileVisual` exempts an object from the haze so gameplay hues
+    survive it (owner-proxy approved 2026-11-08, Serious Isaac 0011).
+17. **Whole-ray semantics: transmittance becomes `T^m`.** The composite scales the shafts and local
+    in-scatter by the exact ratio of the scaled to the full extinguished fraction, at full
+    resolution; the marches are untouched. Why: exempt silhouettes stay crisp and the marches need no
+    extra bindings. Exact at `m = 0` and `m = 1` for a homogeneous medium.
+18. **Storage: a mesh instance lane at `@location(21)` plus a gated `R8Unorm` `scene_medium` target;
+    transparents carry the weighted medium in the layer's B channel.** Two gates (`mesh_medium`,
+    `transparent_medium`) keep frames with nothing below `1.0` byte-identical in graph, pipelines and
+    composite arithmetic.
+19. **Inheritance on meshes only** (the nearest `Parent` ancestor's `Mesh.medium`, walked with the rim);
+    sprites and particles take no parent's value. A `ProjectileVisual` value validates with `L4028`.
+20. **Limits:** probe captures and the GI bake ignore it, `Text` has none, and a document-level
+    (`kind: voxel`, `sculpt`, `mesh`) medium does not exist.
 
 ## Waves
 
@@ -471,6 +486,15 @@ runs (ranges). Not authoritative; per-pass medians overlap on a tiled GPU and ar
 | 64 lights | 1.82–1.83 |
 | 16 shadowed spots | 0.39–0.75 |
 | GI only | 0.22–0.26 |
+
+## Status — request 0011
+
+The per-object medium scale shipped in r2206 (`Mesh.medium` data path, instance lane 21), r2207
+(`scene_medium` target and composite) and r2208 (`Sprite`, `ParticleEmitter` and `ProjectileVisual`
+medium, the `Rgba16Float` transparent layer). Acceptance scene: `examples/gallery/medium-exempt.yaml`,
+whose exempt pair lands within one 8-bit step of its fog-free colour. Owed (`Plan/owed.md`): the pinned
+golden blesses (the macOS one is an unpinned M5 bless), the GPU tests on both pinned boxes, and
+byte-identity of the other gallery goldens.
 
 ## Deferred, with triggers
 

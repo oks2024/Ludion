@@ -114,6 +114,7 @@ for hit in projectiles.events().hits.clone() {
 | `emissive` | `4` | mesh emissive strength or billboard RGB multiplier |
 | `additive` | `true` | billboard only |
 | `from_muzzle` | `false` | draw this tag's new shots from the muzzle and converge them |
+| `medium` | `1.0` | fog medium scale in `[0, 1]` (`L4028`); `0` keeps the shot's hue in haze (`ludion docs atmosphere`) |
 
 Shots join the scene pass's existing instanced draws; there is no new pass. Under
 `present_interpolation` they interpolate between ticks. `muzzle: Some("gun")` names a `Viewmodel`

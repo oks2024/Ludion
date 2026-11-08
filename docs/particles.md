@@ -64,6 +64,7 @@ ParticleEmitter:
   softness: 0.8                      # 0 = hard circle, 1 = gaussian smudge (default 0.5, [0,1]: L1014)
   lit: false                         # true: colour is albedo x the light at the particle's centre (default false; omitted from text when false)
   seed: 101                          # names this emitter's random stream (default 0)
+  medium: 1.0                        # fog medium scale, [0,1] (default 1.0; L1014; `ludion docs atmosphere`)
 ```
 
 An empty `ParticleEmitter: {}` is a live, endless white plume — every field defaults to something

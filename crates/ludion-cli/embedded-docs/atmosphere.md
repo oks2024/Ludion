@@ -23,8 +23,8 @@ visibility. `L_ambient` carries the `GiVolume` sky visibility and bounce when th
 
 ## Rules
 
-- **`fog_density` is the extinction σ_t** — one number for the whole medium, and the gate for all of
-  it. There is deliberately no second density for the beams: the reach of an exponential medium is a
+- **`fog_density` is the extinction σ_t** — one number for the whole medium (an object can scale it
+  for its own pixels: `## Exempting an object from the medium`), and the gate for all of it. There is deliberately no second density for the beams: the reach of an exponential medium is a
   function of its extinction, so the march runs to `3/fog_density` world units (past that the
   transmittance is under 5% and the rest cannot reach an output step). Thickening the fog therefore
   hazes the frame *and* brightens the beams — and dims them, because they travel back through the
@@ -89,6 +89,23 @@ haze *is* the sky along that ray and the two agree by construction.
 | Beams in a thin haze | small | high | large | high | taste |
 | Glow around lamps | small–moderate | high | any | any | taste; set `scatter: 1.0` on the lights |
 | Haze that becomes the sky | any | any | any | — | `1.0` (needs an `Environment`) |
+
+## Exempting an object from the medium
+
+`medium` is a scale in `[0, 1]` (default `1`) on `Mesh`, `Sprite`, `ParticleEmitter` and a
+`ProjectileVisual` tag. It scales the optical depth of the **whole view ray** to that object's pixels:
+extinction, sun scatter, shafts, local in-scatter and the GI haze alike. `0` means no air between the
+eye and the object, so it keeps its authored colour at any distance; `0.5` lands between. Use it for
+gameplay hues that must survive haze (a bullet, a pickup, a player marker).
+
+- **Meshes inherit.** A `Mesh` without its own `medium` takes its nearest `Parent` ancestor's. Sprites
+  and particles do not inherit a parent's value.
+- **Render-only.** It changes no sim state. Out of range is `L1014`, non-finite `L1009`, and a
+  `ProjectileVisual` value is checked with `L4028`.
+- **Limits.** Probe captures and the GI bake ignore it; `Text` has none; `kind: voxel`, `sculpt` and
+  `mesh` documents carry none (set it on the entity's `Mesh`).
+- **Cost.** A frame with no value below `1` is byte-identical to one without the field.
+- `examples/gallery/medium-exempt.yaml` shows exempt and fogged pairs 25 m away in `fog_density: 0.05`.
 
 ## Gotchas
 

@@ -317,6 +317,9 @@ or a black `color` renders the same bytes as a scene without it.
 - **Cost.** One instance lane (`@location(20)`); a mesh without a rim pays one branch.
 - `examples/gallery/rim-light.yaml` shows the four paths against a dark wall, with its sweeps.
 
+`Mesh.medium` (`[0, 1]`, default `1`, inherited down `Parent`) exempts a mesh from the fog medium:
+`ludion docs atmosphere --section "Exempting an object from the medium"`.
+
 ## Next
 
 - `ludion docs environment` — the sky and image-based lighting.
