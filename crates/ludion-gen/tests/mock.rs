@@ -568,40 +568,6 @@ inputs:
     );
 }
 
-#[test]
-fn two_runs_of_one_graph_in_one_second_get_two_folders() {
-    let mock = Mock::start(MockConfig::default());
-    // The stamp has one-second resolution; a pair straddling a tick is retried in a fresh project,
-    // so an earlier attempt's folders cannot take a suffix.
-    let stamp =
-        |report: &ludion_gen::RunReport| report.run_id.split('-').next().unwrap().to_string();
-    let (a, b) = (0..5)
-        .find_map(|attempt| {
-            let project = project(
-                &format!("same-second-{attempt}"),
-                "txt2img.json",
-                TXT2IMG_RECIPE,
-            );
-            let resolved = resolved(&project);
-            let run = || {
-                ludion_gen::run::run(&resolved, &options(&mock.url))
-                    .unwrap_or_else(|d| panic!("the run succeeds:\n{}", joined(&d.diagnostics)))
-            };
-            let (a, b) = (run(), run());
-            (stamp(&a) == stamp(&b)).then_some((a, b))
-        })
-        .expect("two runs land in one second within five tries");
-
-    assert_eq!(b.run_id, format!("{}-2", a.run_id), "the second takes `-2`");
-    assert_ne!(a.dir, b.dir);
-    assert!(b.dir.ends_with(&b.run_id), "the run id is the folder name");
-    let read = ludion_gen::run::read_report(&a.dir).expect("the first run's report");
-    assert_eq!(
-        read.prompt_ids, a.prompt_ids,
-        "the second run did not overwrite the first's report"
-    );
-}
-
 // --- One case per code ----------------------------------------------------------------------
 
 #[test]

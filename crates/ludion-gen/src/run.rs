@@ -1282,6 +1282,28 @@ mod tests {
     }
 
     #[test]
+    fn a_second_run_with_one_base_takes_the_next_suffix_and_leaves_the_first() {
+        let parent =
+            std::env::temp_dir().join(format!("ludion-gen-run-collide-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&parent);
+        let base = "20261008T120000Z-1a2b3c4d";
+        let (first, first_id) = create_run_dir(&parent, base).expect("the first folder");
+        std::fs::write(first.join("report.json"), b"first").expect("the first report");
+        let (second, second_id) = create_run_dir(&parent, base).expect("the second folder");
+        let (third, third_id) = create_run_dir(&parent, base).expect("the third folder");
+        let kept = std::fs::read(first.join("report.json")).expect("the first report survives");
+        let _ = std::fs::remove_dir_all(&parent);
+        assert_eq!(first_id, base);
+        assert_eq!(second_id, format!("{base}-2"));
+        assert_eq!(third_id, format!("{base}-3"));
+        assert!(
+            second.ends_with(&second_id) && third.ends_with(&third_id),
+            "the id is the folder name"
+        );
+        assert_eq!(kept, b"first");
+    }
+
+    #[test]
     fn run_ids_order_by_base_then_numeric_attempt() {
         let base = "20261008T120000Z-1a2b3c4d";
         let older = "20261007T120000Z-ffffffff-30";
