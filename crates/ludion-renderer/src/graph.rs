@@ -1721,13 +1721,18 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         graph.add_external_pass(pass::DOF, pass::DOF, vec![dof.coc], vec![dof.gathered]);
         dof.gathered
     });
-    // The local-light march reads the scene pass's depth and, when there is one, the transparent
-    // layer (the optional slot, last); its blur feeds `composite`.
+    // The local-light march reads the scene pass's depth and, when there are any, the transparent
+    // layer and the local-shadow atlas (the optional slots, in binding order); its blur feeds
+    // `composite`.
     let medium_scatter_term = medium_scatter.map(|targets| {
         graph.add_external_pass(
             pass::MEDIUM_SCATTER,
             pass::MEDIUM_SCATTER,
-            [scene_depth].into_iter().chain(transparent_layer).collect(),
+            [scene_depth]
+                .into_iter()
+                .chain(transparent_layer)
+                .chain(local_shadow_atlas)
+                .collect(),
             vec![targets.raw],
         );
         graph.add_external_pass(
@@ -5304,6 +5309,36 @@ mod tests {
             1,
             "scene_depth only, without a layer"
         );
+    }
+
+    /// The march reads the local-shadow atlas exactly when the chain has one (the optional slot, after
+    /// `scene_depth`), and never declares it otherwise.
+    #[test]
+    fn medium_scatter_reads_the_local_shadow_atlas_exactly_when_present() {
+        let reads = |chain: PostChain| {
+            let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+            let scatter = graph
+                .passes()
+                .iter()
+                .find(|p| p.name == pass::MEDIUM_SCATTER)
+                .map(|p| p.reads().len());
+            (
+                scatter,
+                resource_names(&graph).contains(&"local_shadow_atlas"),
+            )
+        };
+        let chain = |atlas: Option<u32>| PostChain {
+            medium_scatter: true,
+            local_shadow_atlas: atlas,
+            ..PostChain::default()
+        };
+        assert_eq!(reads(chain(None)), (Some(1), false));
+        assert_eq!(reads(chain(Some(2048))), (Some(2), true));
+        let atlas_only = PostChain {
+            local_shadow_atlas: Some(2048),
+            ..PostChain::default()
+        };
+        assert_eq!(reads(atlas_only), (None, true));
     }
 
     /// The shaft chain's exact shape: two transients after the bloom targets and still before

@@ -266,3 +266,208 @@ fn the_scatter_shaders_bind_their_own_layouts() {
         LayoutId::MediumScatterBlur
     );
 }
+
+fn shadow_data() -> Option<crate::scene::LocalShadowData> {
+    Some(crate::scene::LocalShadowData {
+        bias: 0.05,
+        near: 0.1,
+        distance: None,
+        fade: 0.0,
+    })
+}
+
+/// A black box of the given edge lengths that casts.
+fn pillar(center: Vec3, size: Vec3) -> MeshInstance {
+    let mut mesh = slab(center, 1.0, [0.0; 3]);
+    mesh.model = Mat4::from_translation(center) * Mat4::from_scale(size);
+    mesh
+}
+
+fn sum_at(frame: &RenderedImage, x: u32, y: u32) -> i32 {
+    let i = ((y * frame.width + x) * 4) as usize;
+    sum([frame.rgba[i], frame.rgba[i + 1], frame.rgba[i + 2]])
+}
+
+/// The same scene with every light's shadow request dropped.
+fn unshadowed(scene: &RenderScene) -> RenderScene {
+    let mut off = scene.clone();
+    off.lights.iter_mut().for_each(|l| l.shadow = None);
+    off.spot_lights.iter_mut().for_each(|l| l.shadow = None);
+    off
+}
+
+/// A light at `(3, 0, -8)` and a thin wall at `x = 1.5` (z from -12 to -6) between it and the view's
+/// centre line: the wall's shadow covers the centre column from 4 to 16 units out, and the lit side
+/// (column 110, `x` above 2.4 at 6 units) never meets it.
+const GAP: (u32, u32) = (64, 64);
+const CLEAR: (u32, u32) = (110, 64);
+
+fn pillar_scene() -> RenderScene {
+    let mut scene = scatter_scene();
+    scene.meshes = vec![pillar(Vec3::new(1.5, 0.0, -9.0), Vec3::new(0.3, 6.0, 6.0))];
+    scene
+}
+
+fn pillar_point() -> PointLightData {
+    PointLightData {
+        shadow: shadow_data(),
+        range: 12.0,
+        ..point(Vec3::new(3.0, 0.0, -8.0), Vec3::splat(1.5), 12.0, 1.0)
+    }
+}
+
+fn pillar_spot() -> SpotLightData {
+    SpotLightData {
+        position: Vec3::new(3.0, 0.0, -8.0),
+        direction: Vec3::NEG_X,
+        color: Vec3::splat(3.0),
+        intensity: 4.0,
+        range: 12.0,
+        cos_inner: 30.0_f32.to_radians().cos(),
+        cos_outer: 40.0_f32.to_radians().cos(),
+        shadow: shadow_data(),
+        scatter: 1.0,
+    }
+}
+
+/// The dark gap behind `scene`'s pillar against the `shadow: None` render, and a clear pixel that
+/// must not move.
+fn assert_gap(renderer: &Renderer, scene: &RenderScene) {
+    let lit = renderer.render(&unshadowed(scene), size()).expect("lit");
+    let shaded = renderer.render(scene, size()).expect("shaded");
+    let (gap_lit, gap_shaded) = (sum_at(&lit, GAP.0, GAP.1), sum_at(&shaded, GAP.0, GAP.1));
+    let none = renderer
+        .render(&without_scatter(scene), size())
+        .expect("none");
+    eprintln!(
+        "gap lit {gap_lit}, shaded {gap_shaded}, none {}",
+        sum_at(&none, GAP.0, GAP.1)
+    );
+    assert!(
+        gap_shaded + 20 < gap_lit,
+        "the pillar's shadow darkens the gap: {gap_shaded} against {gap_lit}"
+    );
+    assert_eq!(
+        sum_at(&lit, CLEAR.0, CLEAR.1),
+        sum_at(&shaded, CLEAR.0, CLEAR.1),
+        "a ray clear of the pillar's shadow is unmoved"
+    );
+}
+
+/// A shadowed point light's glow has a dark gap behind a pillar. Skips with no GPU.
+#[test]
+fn needs_gpu_a_pillar_casts_a_dark_gap_in_the_glow() {
+    let Some(renderer) = skip_or_renderer("a_pillar_casts_a_dark_gap_in_the_glow") else {
+        return;
+    };
+    let mut scene = pillar_scene();
+    scene.lights = vec![pillar_point()];
+    assert_gap(&renderer, &scene);
+}
+
+/// The same for a spot's beam. Skips with no GPU.
+#[test]
+fn needs_gpu_a_shadowed_spot_beam_is_cut_by_an_occluder() {
+    let Some(renderer) = skip_or_renderer("a_shadowed_spot_beam_is_cut_by_an_occluder") else {
+        return;
+    };
+    let mut scene = pillar_scene();
+    scene.spot_lights = vec![pillar_spot()];
+    assert_gap(&renderer, &scene);
+}
+
+/// With the quality's shadows off the light has no grant, so the scatter is the unshadowed one.
+/// Skips with no GPU.
+#[test]
+fn needs_gpu_shadows_masked_by_quality_scatter_unshadowed() {
+    let Some(mut renderer) = skip_or_renderer("shadows_masked_by_quality_scatter_unshadowed")
+    else {
+        return;
+    };
+    renderer.set_quality(
+        Quality {
+            shadows: false,
+            ..Quality::FULL
+        },
+        QualityParams::FULL,
+    );
+    let mut scene = pillar_scene();
+    scene.lights = vec![pillar_point()];
+    let masked = renderer.render(&scene, size()).expect("masked");
+    let lit = renderer.render(&unshadowed(&scene), size()).expect("lit");
+    assert_eq!(sum_at(&masked, GAP.0, GAP.1), sum_at(&lit, GAP.0, GAP.1));
+}
+
+/// Seventeen shadowed spots overflow the sixteen-tile budget: the skipped one scatters unshadowed
+/// whatever its request says. Skips with no GPU.
+#[test]
+fn needs_gpu_a_budget_skipped_light_scatters_unshadowed() {
+    let Some(renderer) = skip_or_renderer("a_budget_skipped_light_scatters_unshadowed") else {
+        return;
+    };
+    let mut scene = pillar_scene();
+    scene.spot_lights = (0..17)
+        .map(|i| SpotLightData {
+            position: Vec3::new(3.0, 0.0, -8.0 + 0.01 * i as f32),
+            ..pillar_spot()
+        })
+        .collect();
+    let plan = crate::local_shadow::plan_local_shadows(
+        &scene,
+        QualityParams::FULL.local_shadow_atlas_size,
+    );
+    assert_eq!(plan.skipped.len(), 1, "one spot misses the budget");
+    let skipped = plan.skipped[0] as usize - scene.lights.len();
+    let shaded = renderer.render(&scene, size()).expect("shaded");
+    let mut dropped = scene.clone();
+    dropped.spot_lights[skipped].shadow = None;
+    let dropped = renderer.render(&dropped, size()).expect("dropped");
+    assert_eq!(
+        shaded.rgba, dropped.rgba,
+        "the skipped light's request changes nothing"
+    );
+    let mut absent = scene.clone();
+    absent.spot_lights[skipped].scatter = 0.0;
+    let absent = renderer.render(&absent, size()).expect("absent");
+    assert!(
+        sum_at(&shaded, GAP.0, GAP.1) > sum_at(&absent, GAP.0, GAP.1),
+        "the skipped light still glows in the gap"
+    );
+}
+
+/// A cube light between four pillars on ±X and ±Z, seen from above: the pixel beyond each pillar is
+/// darker than unshadowed, so no cube face is mis-picked. Skips with no GPU.
+#[test]
+fn needs_gpu_cube_faces_cover_every_direction() {
+    let Some(renderer) = skip_or_renderer("cube_faces_cover_every_direction") else {
+        return;
+    };
+    let mut scene = scatter_scene();
+    let eye = Vec3::new(0.0, 20.0, 0.0);
+    scene.camera.view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::NEG_Z);
+    scene.camera.position = eye;
+    scene.meshes = [
+        Vec3::new(3.0, 0.0, 0.0),
+        Vec3::new(-3.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 3.0),
+        Vec3::new(0.0, 0.0, -3.0),
+    ]
+    .map(|c| pillar(c, Vec3::new(0.6, 6.0, 0.6)))
+    .to_vec();
+    scene.lights = vec![PointLightData {
+        shadow: shadow_data(),
+        ..point(Vec3::ZERO, Vec3::splat(4.0), 10.0, 1.0)
+    }];
+    let lit = renderer.render(&unshadowed(&scene), size()).expect("lit");
+    let shaded = renderer.render(&scene, size()).expect("shaded");
+    for (name, x, y) in [
+        ("+x", 97, 64),
+        ("-x", 31, 64),
+        ("+z", 64, 97),
+        ("-z", 64, 31),
+    ] {
+        let (a, b) = (sum_at(&lit, x, y), sum_at(&shaded, x, y));
+        eprintln!("{name}: lit {a}, shaded {b}");
+        assert!(b + 20 < a, "{name}: shaded {b} against lit {a}");
+    }
+}

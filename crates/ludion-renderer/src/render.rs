@@ -1936,7 +1936,8 @@ impl Renderer {
         let local_shadow = chain
             .local_shadow_atlas
             .map(|edge| plan_local_shadows(scene, edge));
-        let scatter_lights = medium_pass::lanes_for(scene, chain.medium_scatter);
+        let (scatter_lights, scatter_views) =
+            medium_pass::lanes_for(scene, chain.medium_scatter, local_shadow.as_ref());
         debug_assert!(
             local_shadow
                 .as_ref()
@@ -2083,6 +2084,7 @@ impl Renderer {
             has_shafts: chain.shafts,
             has_medium_scatter: chain.medium_scatter,
             scatter_lights,
+            scatter_views,
             has_dof: chain.dof,
             has_transparent_depth: chain.transparent_depth_scheduled(),
             has_smaa: chain.smaa_scheduled(),
@@ -3476,6 +3478,8 @@ struct FrameRecorder<'a> {
     has_medium_scatter: bool,
     /// The selected scattering lights, ascending light-list order; empty unless `has_medium_scatter`.
     scatter_lights: Vec<shader_gen::ScatterLight>,
+    /// The shadow views those lanes index, compacted (`medium_pass::scatter_views`).
+    scatter_views: Vec<shader_gen::LocalView>,
     /// Whether this frame runs the depth-of-field chain. Picks the composite's optional `dof_tex` (the
     /// graph's `dof` target against the 1×1 fallback), sets its uniform flag, and mirrors the two
     /// passes' presence.
@@ -7588,7 +7592,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::MediumScatter,
-        create: shader_gen::create_scatter_depth_scatter_layer_scatter_samp_scatter_bgl,
+        create: shader_gen::create_scatter_depth_scatter_layer_scatter_atlas_scatter_samp_scatter_bgl,
     },
     LayoutDesc {
         id: LayoutId::MediumScatterBlur,

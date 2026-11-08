@@ -4,7 +4,10 @@
 use bytemuck::Zeroable;
 use ludion_core::math::glam::Vec3;
 
-use super::{FrameRecorder, OptionalInput, RecordedPass, ShaderId, UNSHADOWED, target_texel};
+use super::{
+    FrameRecorder, OptionalInput, RecordedPass, ShaderId, UNSHADOWED, local_view_gpu, target_texel,
+};
+use crate::local_shadow::LocalShadowPlan;
 use crate::scene::RenderScene;
 use crate::shader_gen;
 
@@ -69,6 +72,8 @@ impl FrameRecorder<'_> {
     pub(super) fn record_medium_scatter(&self, pass: &mut RecordedPass<'_>) {
         let mut lights = [shader_gen::ScatterLight::zeroed(); crate::scatter::MAX_SCATTER_LIGHTS];
         lights[..self.scatter_lights.len()].copy_from_slice(&self.scatter_lights);
+        let mut views = [shader_gen::LocalView::zeroed(); crate::scatter::MAX_SCATTER_LIGHTS];
+        views[..self.scatter_views.len()].copy_from_slice(&self.scatter_views);
         let scatter = shader_gen::MediumScatter {
             inv_view_proj: self.inv_view_proj.to_cols_array_2d(),
             cam_pos: self.camera_position.to_array(),
@@ -83,12 +88,20 @@ impl FrameRecorder<'_> {
             transparent_depth: u32::from(self.has_transparent_depth),
             view_forward: self.view_forward,
             lights,
+            views,
         };
-        let optional = [OptionalInput {
-            binding: shader_gen::SCATTER_LAYER_BINDING,
-            present: self.has_transparent_depth,
-            fallback: &self.r.fallback_hdr.view,
-        }];
+        let optional = [
+            OptionalInput {
+                binding: shader_gen::SCATTER_LAYER_BINDING,
+                present: self.has_transparent_depth,
+                fallback: &self.r.fallback_hdr.view,
+            },
+            OptionalInput {
+                binding: shader_gen::SCATTER_ATLAS_BINDING,
+                present: self.local_shadow.is_some(),
+                fallback: &self.r.fallback_shadow.view,
+            },
+        ];
         self.fullscreen_effect(
             pass,
             ShaderId::MediumScatter,
@@ -164,12 +177,118 @@ pub(super) fn scatter_light_lanes(
         .collect()
 }
 
-/// The frame's scatter lanes: the [`crate::scatter::select_scatter`] selection when the graph
-/// scheduled the pair, otherwise none.
-pub(super) fn lanes_for(scene: &RenderScene, scheduled: bool) -> Vec<shader_gen::ScatterLight> {
-    if scheduled {
-        scatter_light_lanes(scene, &crate::scatter::select_scatter(scene))
-    } else {
-        Vec::new()
+/// The shadow views the selected lights hold this frame, compacted: a granted light's one (spot) or
+/// six (cube) views land consecutively in the next free slots, and its lane's `shadow` becomes
+/// `(first_slot, view_count, 0, 0)`. A light with no grant keeps `(UNSHADOWED, 0, 0, 0)`. The order
+/// follows `selected`. The plan's light indices are the selection's (points, then spots). At most 64
+/// slots are used: the atlas holds at most `ATLAS_CELLS²` views.
+pub(super) fn scatter_views(
+    plan: &LocalShadowPlan,
+    selected: &[u32],
+) -> (Vec<shader_gen::LocalView>, Vec<[u32; 4]>) {
+    let mut views = Vec::new();
+    let mut lanes = Vec::with_capacity(selected.len());
+    for &light in selected {
+        let first = plan.light_first_view[light as usize];
+        if first == UNSHADOWED {
+            lanes.push([UNSHADOWED, 0, 0, 0]);
+            continue;
+        }
+        let count = plan.views.iter().filter(|v| v.light == light).count() as u32;
+        lanes.push([views.len() as u32, count, 0, 0]);
+        for view in &plan.views[first as usize..(first + count) as usize] {
+            views.push(local_view_gpu(view, plan.stats.atlas_edge, count));
+        }
+    }
+    (views, lanes)
+}
+
+/// The frame's scatter lanes and shadow views: the [`crate::scatter::select_scatter`] selection when
+/// the graph scheduled the pair, otherwise none. Lights the frame's `plan` granted shadow their scatter.
+pub(super) fn lanes_for(
+    scene: &RenderScene,
+    scheduled: bool,
+    plan: Option<&LocalShadowPlan>,
+) -> (Vec<shader_gen::ScatterLight>, Vec<shader_gen::LocalView>) {
+    if !scheduled {
+        return (Vec::new(), Vec::new());
+    }
+    let selected = crate::scatter::select_scatter(scene);
+    let mut lanes = scatter_light_lanes(scene, &selected);
+    let Some(plan) = plan else {
+        return (lanes, Vec::new());
+    };
+    let (views, shadow) = scatter_views(plan, &selected);
+    for (lane, shadow) in lanes.iter_mut().zip(shadow) {
+        lane.shadow = shadow;
+    }
+    (lanes, views)
+}
+
+#[cfg(test)]
+mod tests {
+    use ludion_core::math::glam::Vec3;
+
+    use super::*;
+    use crate::local_shadow::{ATLAS_CELLS, plan_local_shadows};
+    use crate::scene::{LocalShadowData, PointLightData, SpotLightData};
+
+    fn data() -> Option<LocalShadowData> {
+        Some(LocalShadowData {
+            bias: 0.05,
+            near: 0.1,
+            distance: None,
+            fade: 0.0,
+        })
+    }
+
+    fn point(x: f32, shadow: Option<LocalShadowData>) -> PointLightData {
+        PointLightData {
+            position: Vec3::new(x, 0.0, 0.0),
+            color: Vec3::ONE,
+            intensity: 1.0,
+            range: 10.0,
+            dynamic: false,
+            shadow,
+            scatter: 1.0,
+        }
+    }
+
+    fn spot(x: f32, shadow: Option<LocalShadowData>) -> SpotLightData {
+        SpotLightData {
+            position: Vec3::new(x, 0.0, 0.0),
+            direction: Vec3::NEG_Z,
+            color: Vec3::ONE,
+            intensity: 1.0,
+            range: 10.0,
+            cos_inner: 0.95,
+            cos_outer: 0.9,
+            shadow,
+            scatter: 1.0,
+        }
+    }
+
+    #[test]
+    fn the_atlas_never_holds_more_views_than_the_uniform_array() {
+        assert!((ATLAS_CELLS * ATLAS_CELLS) as usize <= crate::scatter::MAX_SCATTER_LIGHTS);
+    }
+
+    /// Points then spots in the light list: a cube takes six consecutive slots, a spot one, an
+    /// ungranted light keeps `UNSHADOWED`, and the slots follow the selected order.
+    #[test]
+    fn scatter_views_compacts_in_selected_order() {
+        let mut scene = RenderScene::empty((16, 16));
+        scene.lights = vec![point(0.0, data()), point(1.0, None)];
+        scene.spot_lights = vec![spot(2.0, data())];
+        let plan = plan_local_shadows(&scene, 2048);
+        // Light-list indices: 0, 1 points, 2 the spot. Select the spot first.
+        let (views, lanes) = scatter_views(&plan, &[2, 1, 0]);
+        assert_eq!(views.len(), 7);
+        assert_eq!(
+            lanes,
+            vec![[0, 1, 0, 0], [UNSHADOWED, 0, 0, 0], [1, 6, 0, 0]]
+        );
+        assert_eq!(views[0].params[2], 1.0);
+        assert!(views[1..].iter().all(|v| v.params[2] == 6.0));
     }
 }

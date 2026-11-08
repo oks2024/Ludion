@@ -131,6 +131,11 @@ pub const NO_OCCLUSION: u32 = 4294967295;
 /// Declared in `gi_bake.wgsl`.
 pub const PUSH_OUT_RADIUS: i32 = 2;
 
+/// `SCATTER_UNSHADOWED`, hoisted from WGSL `const SCATTER_UNSHADOWED: u32`.
+///
+/// Declared in `medium_scatter.wgsl`.
+pub const SCATTER_UNSHADOWED: u32 = 4294967295;
+
 /// `SLOT_ALWAYS`, hoisted from WGSL `const SLOT_ALWAYS: u32`.
 ///
 /// Declared in `cull.wgsl`.
@@ -686,7 +691,7 @@ const _: () = assert!(core::mem::offset_of!(LocalShadowDebug, cells) == 16);
 
 /// WGSL `struct LocalView`.
 ///
-/// Declared in `decal_lit.wgsl`, `mesh.wgsl`.
+/// Declared in `decal_lit.wgsl`, `medium_scatter.wgsl`, `mesh.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct LocalView {
@@ -718,8 +723,9 @@ pub struct MediumScatter {
     pub transparent_depth: u32,
     pub view_forward: [f32; 4],
     pub lights: [ScatterLight; 64],
+    pub views: [LocalView; 64],
 }
-const _: () = assert!(core::mem::size_of::<MediumScatter>() == 5248);
+const _: () = assert!(core::mem::size_of::<MediumScatter>() == 11392);
 const _: () = assert!(core::mem::offset_of!(MediumScatter, inv_view_proj) == 0);
 const _: () = assert!(core::mem::offset_of!(MediumScatter, cam_pos) == 64);
 const _: () = assert!(core::mem::offset_of!(MediumScatter, density) == 76);
@@ -733,6 +739,7 @@ const _: () = assert!(core::mem::offset_of!(MediumScatter, light_count) == 104);
 const _: () = assert!(core::mem::offset_of!(MediumScatter, transparent_depth) == 108);
 const _: () = assert!(core::mem::offset_of!(MediumScatter, view_forward) == 112);
 const _: () = assert!(core::mem::offset_of!(MediumScatter, lights) == 128);
+const _: () = assert!(core::mem::offset_of!(MediumScatter, views) == 5248);
 
 /// WGSL `struct MeshMaterial`.
 ///
@@ -1667,13 +1674,13 @@ pub const RELIGHT_SAMP_BINDING: u32 = 2;
 pub const RESOLVE_PARAMS_GROUP: u32 = 0;
 pub const RESOLVE_PARAMS_BINDING: u32 = 2;
 
+/// `scatter_atlas` — `@group(0) @binding(2)`, in `medium_scatter.wgsl`.
+pub const SCATTER_ATLAS_GROUP: u32 = 0;
+pub const SCATTER_ATLAS_BINDING: u32 = 2;
+
 /// `scatter_blur_params` — `@group(0) @binding(2)`, in `medium_scatter_blur.wgsl`.
 pub const SCATTER_BLUR_PARAMS_GROUP: u32 = 0;
 pub const SCATTER_BLUR_PARAMS_BINDING: u32 = 2;
-
-/// `scatter_samp` — `@group(0) @binding(2)`, in `medium_scatter.wgsl`.
-pub const SCATTER_SAMP_GROUP: u32 = 0;
-pub const SCATTER_SAMP_BINDING: u32 = 2;
 
 /// `scene_depth_tex` — `@group(0) @binding(2)`, in `composite.wgsl`.
 pub const SCENE_DEPTH_TEX_GROUP: u32 = 0;
@@ -1751,9 +1758,9 @@ pub const REFL_SKY_CUBE_BINDING: u32 = 3;
 pub const RELIGHT_VIS_GROUP: u32 = 0;
 pub const RELIGHT_VIS_BINDING: u32 = 3;
 
-/// `scatter` — `@group(0) @binding(3)`, in `medium_scatter.wgsl`.
-pub const SCATTER_GROUP: u32 = 0;
-pub const SCATTER_BINDING: u32 = 3;
+/// `scatter_samp` — `@group(0) @binding(3)`, in `medium_scatter.wgsl`.
+pub const SCATTER_SAMP_GROUP: u32 = 0;
+pub const SCATTER_SAMP_BINDING: u32 = 3;
 
 /// `shafts_samp` — `@group(0) @binding(3)`, in `shafts.wgsl`.
 pub const SHAFTS_SAMP_GROUP: u32 = 0;
@@ -1830,6 +1837,10 @@ pub const REFL_BRDF_LUT_BINDING: u32 = 4;
 /// `relight_bounce_r` — `@group(0) @binding(4)`, in `probe_relight.wgsl`.
 pub const RELIGHT_BOUNCE_R_GROUP: u32 = 0;
 pub const RELIGHT_BOUNCE_R_BINDING: u32 = 4;
+
+/// `scatter` — `@group(0) @binding(4)`, in `medium_scatter.wgsl`.
+pub const SCATTER_GROUP: u32 = 0;
+pub const SCATTER_BINDING: u32 = 4;
 
 /// `shafts` — `@group(0) @binding(4)`, in `shafts.wgsl`.
 pub const SHAFTS_GROUP: u32 = 0;
@@ -3659,12 +3670,12 @@ pub fn create_scatter_blur_src_scatter_blur_samp_scatter_blur_params_bgl(
     })
 }
 
-/// Bind group layout `scatter_depth_scatter_layer_scatter_samp_scatter` (@group 0), from `medium_scatter.wgsl`.
-pub fn create_scatter_depth_scatter_layer_scatter_samp_scatter_bgl(
+/// Bind group layout `scatter_depth_scatter_layer_scatter_atlas_scatter_samp_scatter` (@group 0), from `medium_scatter.wgsl`.
+pub fn create_scatter_depth_scatter_layer_scatter_atlas_scatter_samp_scatter_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("scatter_depth_scatter_layer_scatter_samp_scatter"),
+        label: Some("scatter_depth_scatter_layer_scatter_atlas_scatter_samp_scatter"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: SCATTER_DEPTH_BINDING,
@@ -3687,6 +3698,16 @@ pub fn create_scatter_depth_scatter_layer_scatter_samp_scatter_bgl(
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
+                binding: SCATTER_ATLAS_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
                 binding: SCATTER_SAMP_BINDING,
                 visibility: wgpu::ShaderStages::empty(),
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
@@ -3698,7 +3719,7 @@ pub fn create_scatter_depth_scatter_layer_scatter_samp_scatter_bgl(
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(5248),
+                    min_binding_size: wgpu::BufferSize::new(11392),
                 },
                 count: None,
             },

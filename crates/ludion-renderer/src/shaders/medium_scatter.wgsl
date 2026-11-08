@@ -18,8 +18,9 @@
 //
 // The light's contribution is zero outside its bounding sphere (`cluster::light_sphere`: the range
 // sphere, or a spot's cone sphere), so the march clips the ray to that sphere and spends its
-// `scatter.steps` samples there alone. A light is unshadowed here: the air in front of a wall glows
-// whether or not the light's own geometry would shade it.
+// `scatter.steps` samples there alone. A light that holds a local-shadow grant this frame shadows its
+// own in-scatter: each step tests one exact atlas texel (`scatter_visibility`), so the air behind a
+// pillar stays dark. A light without a grant scatters unshadowed.
 //
 // # The march's end and the transparent layer
 //
@@ -36,6 +37,16 @@
 // `VsOut` + `vs_main` come from `shaders/snippets/fullscreen_vs.wgsl`, `BAYER4` from
 // `shaders/snippets/bayer.wgsl`, the medium functions from `shaders/snippets/medium.wgsl`.
 
+// Field-for-field `mesh_shading.wgsl`'s `LocalView`: one shadow view of the local-shadow atlas.
+struct LocalView {
+    light_space: mat4x4<f32>,
+    // xy = the tile's UV origin in the atlas, z = its UV edge, w = one atlas texel in UV.
+    rect: vec4<f32>,
+    // x = depth bias in world units, y = tile texel per unit distance, z = views of this light,
+    // w = distance-fade strength.
+    params: vec4<f32>,
+};
+
 struct ScatterLight {
     // xyz = apex, w = range (the CPU floors it at 1e-3, as `light_sphere` does).
     position: vec4<f32>,
@@ -45,7 +56,7 @@ struct ScatterLight {
     axis: vec4<f32>,
     // The bounding sphere: xyz centre, w radius.
     sphere: vec4<f32>,
-    // x = first shadow view or 0xFFFFFFFF, y = view count; always unshadowed here.
+    // x = this light's first slot in `views` or SCATTER_UNSHADOWED, y = its view count (1 or 6).
     shadow: vec4<u32>,
 };
 
@@ -71,6 +82,8 @@ struct MediumScatter {
     // `.xyz` is the unit view direction and `.w` is 1 under an orthographic camera.
     view_forward: vec4<f32>,
     lights: array<ScatterLight, 64>,
+    // The granted lights' views, compacted: each light's views are consecutive from `shadow.x`.
+    views: array<LocalView, 64>,
 };
 
 // The scene pass's depth; every fetch is a `textureLoad` (unfilterable depth, shared filtering sampler).
@@ -78,12 +91,16 @@ struct MediumScatter {
 // The transparent layer (weighted distance in R, coverage in G): the **optional** input. Otherwise a
 // 1x1 stand-in is bound and `scatter.transparent_depth` is zero, so the fetch never reads it.
 @group(0) @binding(1) var scatter_layer: texture_2d<f32>;
-@group(0) @binding(2) var scatter_samp: sampler;
-@group(0) @binding(3) var<uniform> scatter: MediumScatter;
+// The local-shadow atlas: the **optional** input. A light's `shadow.x` is SCATTER_UNSHADOWED whenever
+// the frame has no atlas, so the 1x1 stand-in is never read.
+@group(0) @binding(2) var scatter_atlas: texture_depth_2d;
+@group(0) @binding(3) var scatter_samp: sampler;
+@group(0) @binding(4) var<uniform> scatter: MediumScatter;
 
 const SCATTER_OPTICAL_CUTOFF: f32 = 3.0;
 const SCATTER_MIN_DENSITY: f32 = 1e-4;
 const SCATTER_FULL_COVERAGE: f32 = 0.999;
+const SCATTER_UNSHADOWED: u32 = 0xFFFFFFFFu;
 const FOUR_PI: f32 = 12.5663706143592;
 
 fn world_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
@@ -117,6 +134,52 @@ fn cone_factor(light: ScatterLight, l: vec3<f32>) -> f32 {
     }
     let t = (cos_angle - cos_outer) / (cos_inner - cos_outer);
     return t * t * (3.0 - 2.0 * t);
+}
+
+// 1.0 lit. `l` is the unit vector from the sample toward the light. A free-space point: one exact
+// texel, no PCF and no normal offset (as the shafts' `sun_visibility`). The cube face is picked by the
+// major axis of -l, ties X then Y then Z, +axis first: `mesh_shading.wgsl::local_shadow`'s table.
+fn scatter_visibility(light: ScatterLight, p: vec3<f32>, l: vec3<f32>) -> f32 {
+    if (light.shadow.x == SCATTER_UNSHADOWED) {
+        return 1.0;
+    }
+    let cube = light.shadow.y > 1u;
+    var vi = light.shadow.x;
+    if (cube) {
+        let a = abs(-l);
+        if (a.x >= a.y && a.x >= a.z) {
+            vi = vi + select(1u, 0u, -l.x > 0.0);
+        } else if (a.y >= a.z) {
+            vi = vi + select(3u, 2u, -l.y > 0.0);
+        } else {
+            vi = vi + select(5u, 4u, -l.z > 0.0);
+        }
+    }
+    let view = scatter.views[vi];
+    let clip = view.light_space * vec4<f32>(p + l * view.params.x, 1.0);
+    if (clip.w <= 0.0) {
+        return 1.0;
+    }
+    let ndc = clip.xyz / clip.w;
+    if (ndc.z < 0.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+    if (!cube && (abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0)) {
+        return 1.0;
+    }
+    // The tile in texels; the texel is clamped inside it so a cube seam never reads the neighbour.
+    let dims = vec2<f32>(textureDimensions(scatter_atlas));
+    let origin = view.rect.xy * dims;
+    let size = view.rect.z * dims;
+    let local = clamp(vec2<f32>(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5), vec2<f32>(0.0), vec2<f32>(1.0));
+    let texel = clamp(
+        vec2<i32>(origin + local * size),
+        vec2<i32>(origin),
+        vec2<i32>(origin + size) - vec2<i32>(1),
+    );
+    let lit = select(0.0, 1.0, ndc.z <= textureLoad(scatter_atlas, texel, 0));
+    // `select`, not a bare `mix`: strength 1 returns the texel bit for bit.
+    return select(mix(1.0, lit, view.params.w), lit, view.params.w >= 1.0);
 }
 
 @fragment
@@ -203,8 +266,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 ray.y,
                 t,
             );
-            var weight = cone_factor(light, l) * atten * atten * henyey_greenstein(dot(ray, l))
-                * transmittance * local;
+            var weight = cone_factor(light, l) * scatter_visibility(light, p, l) * atten * atten
+                * henyey_greenstein(dot(ray, l)) * transmittance * local;
             if (coverage > 0.0 && t > layer_t) {
                 weight = weight * past;
             }
