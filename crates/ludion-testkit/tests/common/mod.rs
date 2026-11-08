@@ -277,12 +277,11 @@ pub fn throw_gibs(world: &mut World, ctx: &SystemCtx) {
 /// The gibs scene's engine: a pool of 1,024, three looks (asset mesh, oriented cube, a fading
 /// asset mesh), all shadow-casting.
 pub fn gib_builder() -> EngineBuilder {
-    use ludion_engine::{ProjectileLook, ProjectileVisual, ProjectileVisuals};
+    use ludion_engine::ProjectileLook;
     let crystal = || ProjectileLook::Mesh {
         asset: "meshes/crystal.mesh.yaml".to_string(),
     };
-    let mut visuals = ProjectileVisuals::default();
-    for (tag, look, size, scale, color, fade_out) in [
+    gib_builder_with(&[
         (
             0,
             crystal(),
@@ -307,7 +306,44 @@ pub fn gib_builder() -> EngineBuilder {
             [0.6, 0.35, 0.85, 1.0],
             1.5,
         ),
-    ] {
+    ])
+}
+
+/// The gibs scene with the beacon voxel model on all three tags: tag 0 untinted (the palette
+/// exactly), tag 1 tinted and stretched, tag 2 fading.
+pub fn voxel_gib_builder() -> EngineBuilder {
+    use ludion_engine::ProjectileLook;
+    let beacon = || ProjectileLook::Voxel {
+        model: "voxels/beacon.voxel.yaml".to_string(),
+    };
+    gib_builder_with(&[
+        (0, beacon(), 0.05, [1.0; 3], [1.0; 4], 0.0),
+        (
+            1,
+            beacon(),
+            0.05,
+            [1.4, 0.6, 1.0],
+            [0.9, 0.55, 0.25, 1.0],
+            0.0,
+        ),
+        (2, beacon(), 0.05, [1.0; 3], [1.0; 4], 1.5),
+    ])
+}
+
+/// Visual rows: `(tag, look, size, scale, color, fade_out)`; every tag casts a shadow.
+type GibRow = (
+    u32,
+    ludion_engine::ProjectileLook,
+    f32,
+    [f32; 3],
+    [f32; 4],
+    f32,
+);
+
+fn gib_builder_with(rows: &[GibRow]) -> EngineBuilder {
+    use ludion_engine::{ProjectileVisual, ProjectileVisuals};
+    let mut visuals = ProjectileVisuals::default();
+    for (tag, look, size, scale, color, fade_out) in rows.iter().cloned() {
         visuals.tags.insert(
             tag,
             ProjectileVisual {

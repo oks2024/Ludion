@@ -1299,6 +1299,24 @@ fn needs_gpu_projectile_gibs_settle_matches_committed_golden() {
     );
 }
 
+/// The gibs room with `kind: voxel` models as the three looks, driven to the same tick.
+#[test]
+fn needs_gpu_projectile_gibs_voxel_matches_committed_golden() {
+    let mut engine = common::voxel_gib_builder()
+        .load_scene_file(&gallery_dir().join("projectile-gibs.yaml"))
+        .expect("the scene loads");
+    for _ in 0..common::GIB_GOLDEN_TICK {
+        assert!(engine.advance_live(), "the sim ticks");
+        engine.extract_present_scene().expect("extracts");
+    }
+    ludion_testkit::check_engine_golden(
+        &mut engine,
+        gallery_dir().join("goldens"),
+        "projectile-gibs-voxel",
+        &scratch_dir("projectile_gibs_voxel_out"),
+    );
+}
+
 /// The same drive without a GPU: by tick 150 nearly every live gib is parked above the floor, and
 /// after the longest lifetime (counted from the last throw) every one has expired exactly once.
 #[test]
