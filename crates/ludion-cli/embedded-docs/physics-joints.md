@@ -172,6 +172,9 @@ part:
   (or a dead root), or when the part lacks the named pose, the part carries **no** motor: it goes
   limp and can settle and sleep. A held non-zero blend short of its target keeps the bodies awake
   (see Motors). The blend owns the motor of a part carrying `JointPoses`; do not hand-write one.
+  A part that loses `JointPoses` (or its group) while the weight is non-zero keeps its last written
+  `JointMotor`: set the weight to 0 (or remove the `JointMotor`) before stripping `JointPoses`, e.g.
+  in a pool reset.
 - **Write on change.** The system writes only when the result differs from what the part carries, so
   a steady weight never wakes a body.
 - **Rest-relative.** Poses are measured from the joint's captured zero, like `target`.

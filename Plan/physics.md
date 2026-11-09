@@ -244,7 +244,7 @@ Two hashed, sim-only components beside `JointMotor` (in `ludion-spatial`): `Join
 - **`L4035`** warns once per (group, pose) when a `PoseBlend` above weight 0 names a pose none of its parts carries; weight 0 never warns.
 - **Later addition:** a pose from a clip (`clip at t` through the sim-side sampler).
 - **Out of scope:** a contact-material blend; engine-driven weight ramps.
-- **Voxel settle.** Free voxel ragdoll hulls can jitter awake indefinitely depending on placement: the `ragdoll-pose-blend` gallery figure at x=-0.5 never slept in 2400 ticks with no `PoseBlend` at all, so a limp blend does not guarantee sleep. 0017's age fallback still retires such a corpse.
+- **Voxel settle.** Free voxel ragdoll hulls can jitter awake indefinitely depending on placement: with no `PoseBlend` the `ragdoll-pose-blend` gallery figure at x=-0.5 never sleeps in 2400 ticks (the skin sleeps from tick 551, the wall-pinned figure from 72), while the held-then-zero blend settles all three groups by tick 349. A limp blend therefore does not guarantee sleep in general; 0017's age fallback still retires a corpse that stays awake.
 
 ## Decisions
 

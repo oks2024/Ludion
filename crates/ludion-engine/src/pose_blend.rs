@@ -71,12 +71,18 @@ fn desired_motor(poses: &JointPoses, blend: Option<&PoseBlend>) -> Option<JointM
         return None;
     }
     let pose = poses.poses.get(&blend.pose)?;
-    Some(JointMotor {
+    let motor = JointMotor {
         target: pose.iter().map(|t| t * w).collect(),
         stiffness: poses.stiffness * w,
         damping: poses.damping * w,
         max_force: poses.max_force,
-    })
+    };
+    // A NaN would compare unequal to itself every tick: rewrite and keep the body awake forever.
+    let finite = motor.target.iter().all(|t| t.is_finite())
+        && motor.stiffness.is_finite()
+        && motor.damping.is_finite()
+        && motor.max_force.is_none_or(f32::is_finite);
+    finite.then_some(motor)
 }
 
 /// Every `JointPoses` part whose desired motor differs from the one it carries, in ascending
@@ -259,6 +265,35 @@ mod tests {
                 max_force: Some(200.0),
             })
         );
+    }
+
+    #[test]
+    fn a_non_finite_value_resolves_to_no_motor_and_writes_nothing() {
+        for bad in ["target", "stiffness", "damping", "max_force"] {
+            let mut set = poses(&[("curl", &[60.0])]);
+            match bad {
+                "target" => set.poses.insert("curl".to_string(), vec![f32::NAN]),
+                "stiffness" => {
+                    set.stiffness = f32::INFINITY;
+                    None
+                }
+                "damping" => {
+                    set.damping = f32::NAN;
+                    None
+                }
+                _ => {
+                    set.max_force = Some(f32::NAN);
+                    None
+                }
+            };
+            let (mut world, _, part) = rig(set, "curl", 1.0);
+            assert!(
+                plan_writes(&mut world).is_empty(),
+                "{bad}: nothing to write"
+            );
+            pose_blend(&mut world, &ctx());
+            assert_eq!(motor(&world, part), None, "{bad}: no motor");
+        }
     }
 
     #[test]
