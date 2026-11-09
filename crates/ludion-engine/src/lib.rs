@@ -208,7 +208,7 @@ pub use perf_live::{
     ProfileSamples, ProfileWindowData,
 };
 pub use player_profile::{Profile, ProfileSaveEntry};
-pub use prefab::{PrefabInstance, spawn_prefab};
+pub use prefab::{PrefabInstance, despawn_instance, spawn_prefab};
 pub use prefab_clips::{
     PrefabClipData, load as load_prefab_clips, prefab_clip_target_diagnostics, prefab_part_names,
 };

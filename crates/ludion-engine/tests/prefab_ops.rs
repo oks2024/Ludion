@@ -990,6 +990,31 @@ entities:
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn apply_refuses_a_map_generated_prefab_naming_generate_map() {
+        let root = root("apply-map-generated");
+        let generated = PAIR.replace(
+            "name: pair\n",
+            "name: pair\ngenerated_from: rooms/crypt.map.yaml --seed 3\n",
+        );
+        std::fs::write(root.join(PAIR_FILE), &generated).unwrap();
+        let mut engine = loaded(
+            &root,
+            "format: 1\nname: s\nentities:\n  - name: pair-1\n    prefab: pair.prefab.yaml\n",
+        );
+        let ids = index(engine.world_mut());
+        set_pose(&mut engine, ids["pair-1/arm"], 3.0);
+        let found = engine.apply_prefab(ids["pair-1/arm"], None).unwrap_err();
+        assert_eq!(found[0].code, code::PREFAB_APPLY, "{}", found[0].message);
+        assert!(
+            found[0].message.contains("generate-map"),
+            "{}",
+            found[0].message
+        );
+        assert_eq!(file(&root, PAIR_FILE), generated);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     const SPLIT_FILE: &str = "split.prefab.yaml";
 
     const SPLIT: &str = "\

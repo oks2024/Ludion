@@ -1759,6 +1759,7 @@ impl Engine {
     /// A quit requested in the same frame as a switch wins: the world the switch would rebuild is the
     /// one the host is about to tear down, and the rebuild would only wipe the pending quit.
     fn drain_frame_boundary(&mut self, frame: FrameIndex) -> bool {
+        crate::prefab::sweep_presentation_parts(self.driver.world_mut());
         self.drain_prefab_texts();
         self.drain_debug_draw();
         if self.drain_system_panic() {

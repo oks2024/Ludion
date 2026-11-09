@@ -17,7 +17,7 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::time::FrameIndex;
-use ludion_ecs::{Registry, World};
+use ludion_ecs::{Phase, Registry, World, is_presentation};
 use ludion_scene::{
     ExpandedScene, InstanceHooks, InstanceTransform, InstantiateOptions, ScenePhysics,
 };
@@ -75,6 +75,9 @@ pub(crate) struct PrefabLibrary {
     /// The size of `bound` plus `placements` after the last prune: the next one is due when they
     /// double it, so pruning stays amortized O(1) per spawn.
     pruned_len: usize,
+    /// Roots despawned from a sim system, whose non-parented presentation parts the next frame
+    /// boundary sweeps (a sim query cannot see them).
+    sweep: Vec<EntityId>,
 }
 
 /// The prefab texts a scene load or district switch reads, before the world it builds exists: the
@@ -190,6 +193,7 @@ impl PrefabLibrary {
             bound: BTreeMap::new(),
             placements: BTreeMap::new(),
             pruned_len: 0,
+            sweep: Vec::new(),
         }
     }
 
@@ -247,6 +251,12 @@ impl PrefabLibrary {
         self.bound.retain(|&root, _| alive(root));
         self.placements.retain(|&root, _| alive(root));
         self.pruned_len = self.bound.len() + self.placements.len();
+    }
+
+    /// Drops the records of the despawned instance rooted at `root`.
+    pub(crate) fn forget(&mut self, root: EntityId) {
+        self.bound.remove(&root);
+        self.placements.remove(&root);
     }
 
     /// The placement of the instance rooted at `root`, `None` when unknown (after a restore).
@@ -751,6 +761,102 @@ pub fn spawn_prefab(
     Ok(ids)
 }
 
+/// Despawns the prefab instance rooted at `root` (`ids[0]` of [`spawn_prefab`]) and returns its part
+/// ids in ascending order.
+///
+/// Every entity whose [`PrefabInstance`] names `root` goes, in ascending id order, presentation
+/// parts included; `Parent` descendants cascade as in [`World::despawn`]. From a sim system only sim
+/// parts are visible: presentation parts parented under a sim part go with it, and any other
+/// presentation part of the instance is swept at the next frame boundary. A sim system must declare
+/// `.query::<(&PrefabInstance,)>()`.
+///
+/// # Errors
+/// `L0002` if `root` is dead; `L1235` if it is not part of a prefab instance, or is a part other than
+/// the instance's root; `L0028` for a sim root despawned from a presentation system. Nothing is
+/// despawned on any error.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Engine, despawn_instance, spawn_prefab};
+///
+/// let root = std::env::temp_dir().join(format!("ludion-despawn-instance-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(&root).unwrap();
+/// std::fs::write(
+///     root.join("crate.prefab.yaml"),
+///     "format: 1\nkind: prefab\nname: crate\nentities:\n  - name: lid\n    components: {}\n",
+/// )
+/// .unwrap();
+///
+/// let mut engine = Engine::builder().project_root(&root).build().unwrap();
+/// let ids = spawn_prefab(engine.world_mut(), "crate.prefab.yaml", None, Some("crate-1"), false).unwrap();
+/// let gone = despawn_instance(engine.world_mut(), ids[0]).unwrap();
+/// assert_eq!(gone, ids);
+/// assert!(!engine.world_mut().is_alive(ids[0]));
+/// # std::fs::remove_dir_all(&root).ok();
+/// ```
+pub fn despawn_instance(world: &mut World, root: EntityId) -> Result<Vec<EntityId>, Diagnostic> {
+    match world.get::<PrefabInstance>(root)? {
+        None => {
+            return Err(Diagnostic::new(
+                code::PREFAB_NOT_INSTANCE,
+                format!("entity {root} is not part of a prefab instance"),
+            )
+            .with_help("pass the instance's root — `ids[0]` of `spawn_prefab`"));
+        }
+        Some(instance) if instance.root != root => {
+            return Err(Diagnostic::new(
+                code::PREFAB_NOT_INSTANCE,
+                format!(
+                    "entity {root} is a part of the instance rooted at {}, not its root",
+                    instance.root
+                ),
+            )
+            .with_help("pass the instance's root — `ids[0]` of `spawn_prefab`"));
+        }
+        Some(_) => {}
+    }
+    if world.phase() == Phase::Presentation && !is_presentation(root) {
+        return Err(world.despawn(root).unwrap_err());
+    }
+    let mut parts: Vec<EntityId> = world
+        .query_ids::<(&PrefabInstance,)>()
+        .filter(|(_, (instance,))| instance.root == root)
+        .map(|(id, _)| id)
+        .collect();
+    parts.sort_unstable();
+    for error in world.despawn_many(&parts) {
+        // A cascade from an earlier part already freed this one.
+        debug_assert!(error.code == code::DEAD_ENTITY, "{error:?}");
+    }
+    let in_sim = world.phase() == Phase::Sim;
+    if let Some(library) = world.resource_mut::<PrefabLibrary>() {
+        library.forget(root);
+        if in_sim {
+            library.sweep.push(root);
+        }
+    }
+    Ok(parts)
+}
+
+/// Despawns the presentation parts of instances a sim system despawned, which its queries could not
+/// see. Runs at the frame boundary, in Host phase.
+pub(crate) fn sweep_presentation_parts(world: &mut World) {
+    let Some(library) = world.resource_mut::<PrefabLibrary>() else {
+        return;
+    };
+    if library.sweep.is_empty() {
+        return;
+    }
+    let roots: BTreeSet<EntityId> = std::mem::take(&mut library.sweep).into_iter().collect();
+    let mut parts: Vec<EntityId> = world
+        .query_ids::<(&PrefabInstance,)>()
+        .filter(|(id, (instance,))| is_presentation(*id) && roots.contains(&instance.root))
+        .map(|(id, _)| id)
+        .collect();
+    parts.sort_unstable();
+    let _ = world.despawn_many(&parts);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1030,6 +1136,93 @@ mod tests {
         let errors =
             spawn_prefab(&mut World::new(), "nope.prefab.yaml", None, None, false).unwrap_err();
         assert_eq!(errors[0].code, code::PREFAB_UNRESOLVED);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    const THREE: &str = "  - name: a\n    components: {}\n  - name: b\n    components: {}\n  - name: c\n    components: {}\n";
+
+    fn spawn_three(world: &mut World) -> Vec<EntityId> {
+        spawn_prefab(world, "p.prefab.yaml", None, None, false).unwrap()
+    }
+
+    #[test]
+    fn despawning_an_instance_removes_exactly_its_parts_in_ascending_order() {
+        let root = root("despawn");
+        std::fs::write(root.join("p.prefab.yaml"), prefab(THREE)).unwrap();
+        let mut world = world(&root);
+        let first = spawn_three(&mut world);
+        let unrelated = world.spawn();
+        let second = spawn_three(&mut world);
+        let mut expected = first.clone();
+        expected.sort_unstable();
+        assert_eq!(despawn_instance(&mut world, first[0]).unwrap(), expected);
+        assert!(first.iter().all(|&id| !world.is_alive(id)));
+        assert!(second.iter().all(|&id| world.is_alive(id)));
+        assert!(world.is_alive(unrelated));
+        let library = world.resource::<PrefabLibrary>().unwrap();
+        assert!(!library.bound.contains_key(&first[0]));
+        assert!(library.bound.contains_key(&second[0]));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn spawn_despawn_spawn_is_deterministic_and_reuses_the_slots() {
+        let root = root("despawn-det");
+        std::fs::write(root.join("p.prefab.yaml"), prefab(THREE)).unwrap();
+        let run = || {
+            let mut world = world(&root);
+            let first = spawn_three(&mut world);
+            despawn_instance(&mut world, first[0]).unwrap();
+            let again = spawn_three(&mut world);
+            (first, again)
+        };
+        let (first, again) = run();
+        assert_eq!(run(), (first.clone(), again.clone()));
+        let slots = |ids: &[EntityId]| ids.iter().map(|id| id.index).collect::<BTreeSet<_>>();
+        assert_eq!(slots(&first), slots(&again));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn despawning_a_non_root_refuses_and_leaves_everything() {
+        let root = root("despawn-errors");
+        std::fs::write(root.join("p.prefab.yaml"), prefab(THREE)).unwrap();
+        let mut world = world(&root);
+        let ids = spawn_three(&mut world);
+        let plain = world.spawn();
+        let dead = world.spawn();
+        world.despawn(dead).unwrap();
+        let count = world.entity_count();
+
+        assert_eq!(
+            despawn_instance(&mut world, dead).unwrap_err().code,
+            code::DEAD_ENTITY
+        );
+        assert_eq!(
+            despawn_instance(&mut world, plain).unwrap_err().code,
+            code::PREFAB_NOT_INSTANCE
+        );
+        let part = despawn_instance(&mut world, ids[1]).unwrap_err();
+        assert_eq!(part.code, code::PREFAB_NOT_INSTANCE);
+        assert!(
+            part.message.contains(&ids[0].to_string()),
+            "{}",
+            part.message
+        );
+        assert_eq!(world.entity_count(), count);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_part_parented_under_another_part_goes_without_an_error() {
+        let root = root("despawn-parent");
+        let parts = "  - name: a\n    components: {}\n  - name: b\n    components:\n      Parent:\n        index: 0\n        generation: 0\n";
+        std::fs::write(root.join("p.prefab.yaml"), prefab(parts)).unwrap();
+        let mut world = world(&root);
+        let ids = spawn_prefab(&mut world, "p.prefab.yaml", None, None, false).unwrap();
+        let gone = despawn_instance(&mut world, ids[0]).unwrap();
+        assert_eq!(gone.len(), 2);
+        assert!(ids.iter().all(|&id| !world.is_alive(id)));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

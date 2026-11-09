@@ -7,12 +7,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use ludion_core::codes::code;
 use ludion_core::ids::EntityId;
 use ludion_core::time::FrameIndex;
 use ludion_ecs::{Parent, SystemCtx, World, is_presentation};
 use ludion_engine::hierarchy::world_transform;
 use ludion_engine::{
-    Engine, EngineBuilder, Name, PrefabInstance, builtin_registry, replay_hashes_with, spawn_prefab,
+    Engine, EngineBuilder, Name, PrefabInstance, builtin_registry, despawn_instance,
+    replay_hashes_with, spawn_prefab,
 };
 use ludion_protocol::command::{
     EngineRestoreParams, Placement, PrefabApplyParams, PrefabOverridesParams, PrefabRevertParams,
@@ -1123,4 +1125,72 @@ fn a_presentation_spawn_of_a_collider_part_is_l1320_and_spawns_nothing() {
     );
     assert_eq!(index(&mut engine).len(), before);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+const MIXED: &str = "\
+format: 1
+kind: prefab
+name: mixed
+entities:
+  - name: post
+    components:
+      Transform: {}
+  - name: bulb
+    presentation: true
+    components:
+      Transform: {}
+      Parent:
+        index: 0
+        generation: 0
+  - name: halo
+    presentation: true
+    components:
+      Transform: {}
+";
+
+#[derive(Default)]
+struct Target(Option<EntityId>);
+
+fn despawner(world: &mut World, _ctx: &SystemCtx) {
+    let Some(root) = world.resource_mut::<Target>().and_then(|t| t.0.take()) else {
+        return;
+    };
+    despawn_instance(world, root).expect("the root despawns");
+}
+
+#[test]
+fn a_sim_system_despawns_every_part_of_a_mixed_instance() {
+    let root = root("despawn", LAMP);
+    std::fs::write(root.join("mixed.prefab.yaml"), MIXED).unwrap();
+    let mut engine = game(&root)
+        .system("despawner", despawner)
+        .query::<(&PrefabInstance,)>()
+        .build()
+        .unwrap();
+    engine.load_inline_scene(EMPTY).unwrap();
+    let ids = spawn_prefab(
+        engine.world_mut(),
+        "mixed.prefab.yaml",
+        None,
+        Some("m"),
+        false,
+    )
+    .unwrap();
+    assert_eq!(ids.len(), 3);
+    assert_eq!(ids.iter().filter(|&&id| is_presentation(id)).count(), 2);
+    engine.world_mut().insert_resource(Target(Some(ids[0])));
+    let mut trace = Vec::new();
+    step(&mut engine, 1, &mut trace);
+    assert!(
+        ids.iter().all(|&id| !engine.world().is_alive(id)),
+        "{ids:?}"
+    );
+    let diagnostics = engine
+        .world()
+        .resource::<ludion_engine::Diagnostics>()
+        .unwrap();
+    for code in [code::QUERY_DRIFT_UNDECLARED, code::PRESENTATION_BOUNDARY] {
+        assert_eq!(diagnostics.reported(code).count(), 0, "{code}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
 }

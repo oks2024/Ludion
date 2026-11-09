@@ -766,13 +766,28 @@ pub(crate) fn apply(
     let old_text = read_prefab_text(&root, &source).map_err(one)?;
     let mut document = ludion_scene::parse_prefab(&old_text)?;
     if let Some(generated) = &document.generated_from {
-        return Err(apply_refusal(
-            format!(
-                "`{source}` is generated from `{generated}`; edit the source and re-import, or keep \
-                 the change as an instance override"
-            ),
-            "a generated prefab is write-only: the next import would overwrite the applied edit",
-        ));
+        let from_map = generated
+            .split_whitespace()
+            .next()
+            .is_some_and(|source| source.ends_with(".map.yaml"));
+        return Err(if from_map {
+            apply_refusal(
+                format!(
+                    "`{source}` is generated from `{generated}`; edit the map or its kit and rerun \
+                     `ludion generate-map` with the flags `generated_from` records, or keep the \
+                     change as an instance override"
+                ),
+                "a generated prefab is write-only: the next `generate-map` would overwrite the applied edit",
+            )
+        } else {
+            apply_refusal(
+                format!(
+                    "`{source}` is generated from `{generated}`; edit the source and re-import, or \
+                     keep the change as an instance override"
+                ),
+                "a generated prefab is write-only: the next import would overwrite the applied edit",
+            )
+        });
     }
     document
         .apply_instance(&overrides, &removed, &registry)

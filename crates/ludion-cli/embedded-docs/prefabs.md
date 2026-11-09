@@ -101,7 +101,7 @@ Everything else is the scene's own validation — `L1014` for a bad component va
 
 Every part carries `PrefabInstance { source, part, root }`: the path as passed to `spawn_prefab`, the part's name without the instance prefix, and the instance's first part. It is registered, hashed and saved like any component, and `root` is remapped on load and restore like `Joint.a`.
 
-Parts are not parented unless the prefab says so, so despawning an instance is despawning every entity whose `PrefabInstance.root` is the root — `entity.destroy` on the root alone removes only the root and its authored subtree.
+Parts are not parented unless the prefab says so, so `entity.destroy` on the root removes only the root and its authored subtree. `despawn_instance(world, root)` removes the whole instance: every part, presentation parts included, in ascending id order, and returns those ids; `root` is `ids[0]` of `spawn_prefab`. A system calling it declares `.query::<(&PrefabInstance,)>()`.
 
 ## Replays and reload
 
