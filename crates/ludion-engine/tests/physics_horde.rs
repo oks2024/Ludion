@@ -140,6 +140,23 @@ fn the_horde_holds_its_shape() {
     assert!(engine.world().resource::<PhysicsWorld>().is_some());
 }
 
+/// The horde's live count (500 motors, 1,320 ragdoll parts) is past the gated scale: `L4034`
+/// reports once, however many ticks follow.
+#[test]
+fn the_horde_warns_once_past_the_gated_scale() {
+    let mut engine = build();
+    for _ in 0..4 {
+        engine.advance_live();
+    }
+    let reported: Vec<_> = engine
+        .world()
+        .resource::<ludion_engine::Diagnostics>()
+        .unwrap()
+        .reported(ludion_core::codes::code::PHYSICS_SCALE_UNGATED)
+        .collect();
+    assert_eq!(reported, ["physics_scale"]);
+}
+
 #[test]
 fn two_in_process_runs_of_the_horde_are_identical() {
     assert_eq!(

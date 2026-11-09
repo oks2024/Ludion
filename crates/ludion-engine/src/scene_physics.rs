@@ -535,6 +535,32 @@ pub(crate) fn report_impulse_misses(world: &mut World) {
     }
 }
 
+/// Reports `L4034` once per session when the live non-static body count passes
+/// [`ludion_physics::GATED_BODIES`]. A warning only; a no-op on a world with no [`PhysicsWorld`].
+pub(crate) fn report_physics_scale(world: &mut World) {
+    if crate::diagnostics::is_latched(world, code::PHYSICS_SCALE_UNGATED, "physics_scale") {
+        return;
+    }
+    let Some(bodies) = world
+        .resource::<PhysicsWorld>()
+        .map(PhysicsWorld::non_static_body_count)
+    else {
+        return;
+    };
+    if bodies <= ludion_physics::GATED_BODIES {
+        return;
+    }
+    let diagnostic = Diagnostic::new(
+        code::PHYSICS_SCALE_UNGATED,
+        format!(
+            "{bodies} non-static physics bodies are live, past the gated scale of {}",
+            ludion_physics::GATED_BODIES
+        ),
+    )
+    .with_help(crate::scene_check::SCALE_HELP);
+    crate::diagnostics::report_full(world, "physics_scale", diagnostic);
+}
+
 /// Which of `joint`'s `a`/`b` is missing a body, its id, and whether it is dead (`true`) or merely
 /// alive with nothing claimed yet (`false`) — `None` if neither is missing, so the caller falls back
 /// to the unspecific message. Dead is checked first: a despawned entity can carry no `Collider`

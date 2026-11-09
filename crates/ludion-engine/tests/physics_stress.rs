@@ -277,6 +277,23 @@ fn the_stress_pile_holds_the_budgeted_rigid_body_count() {
     );
 }
 
+/// The stress pile is the gated scale itself, so `L4034` (past the scale) stays silent.
+#[test]
+fn the_stress_pile_is_the_gated_scale_and_does_not_warn() {
+    assert_eq!(RIGID_BODIES, ludion_physics::GATED_BODIES);
+    let mut engine = build();
+    for _ in 0..5 {
+        engine.advance_live();
+    }
+    let reported: Vec<_> = engine
+        .world()
+        .resource::<ludion_engine::Diagnostics>()
+        .unwrap()
+        .reported(ludion_core::codes::code::PHYSICS_SCALE_UNGATED)
+        .collect();
+    assert!(reported.is_empty(), "{reported:?}");
+}
+
 /// The committed `physics-stress.lrp` replay: a fresh in-process recording of the committed scene's
 /// 600-tick session reproduces the committed trace, and both the fresh bytes and the committed
 /// `.lrp` bytes replay to it — the same shape as `ragdoll_scene.rs`'s replay test. The 600 frames

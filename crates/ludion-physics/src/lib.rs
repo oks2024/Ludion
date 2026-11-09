@@ -171,6 +171,10 @@
 //! predicate that decides which. Springs and multibody joints are not offered either
 //! (`Plan/physics.md`).
 
+/// The non-static body count the pinned budgets cover (`physics-stress`); past it `L4034` warns.
+/// See `dev-docs/physics-pin.md`.
+pub const GATED_BODIES: usize = 512;
+
 mod contacts;
 mod impulse;
 mod joints;

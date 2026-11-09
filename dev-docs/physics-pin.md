@@ -55,6 +55,13 @@ and the stress replay's size ceiling (`REPLAY_MAX_BYTES`, `tests/physics_stress.
 keyframe's physics blob. When content needs more bodies: a new stress scene and a budget *measured*
 on each box — never a raised number.
 
+The second gated shape is `examples/gallery/physics-horde.yaml`: 500 `CharacterMotor`s, 120
+eleven-part ragdolls (1,320 bodies, 1,200 impulse joints, 24 pinned to the walls) and 5,000 pool
+shots, gated at 1/2/8 threads for trace, replay and snapshot restore (`tests/physics_horde.rs`).
+Its budgets `budgets/pinned-{apple-m4,rtx3090}-physics-horde.toml` are unmeasured; `horde_bench`
+checks them when present. `ludion_physics::GATED_BODIES` (512) drives `L4034`, which warns in
+`check-scene` and once live past it; the number rises only when a horde budget is measured on both boxes.
+
 ## The pin-upgrade ritual
 
 `node scripts/physics-pin-ritual.mjs [--to <x.y.z>] [--bless-traces]` runs the ritual on demand (not in

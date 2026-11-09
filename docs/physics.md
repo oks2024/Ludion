@@ -76,8 +76,7 @@ Any difference outside the in-place set rebuilds. `PhysicsWorld::gravity_scale`,
 To levitate a zone: `overlap`, edit each rigid hit's `Collider` to `0.0`, count ticks per entity
 in hashed state, edit it back to `1.0` (the doctest on `PhysicsWorld::gravity_scale`).
 
-**Scale.** Hundreds of rigid props are comfortable; 512 is the gated scale (`physics-stress`), a few
-thousand the wall (single-threaded solver).
+**Scale.** Hundreds of rigid props are comfortable; 512 non-static bodies is the gated scale, past it `L4034` warns: `ludion docs physics-scale`.
 
 **Forces and impulses.** There is no force accumulator. To set a velocity, write `Velocity`
 directly (a write also wakes a sleeping body). To push a body, queue an impulse (`N·s`, `mass * Δvelocity`)
@@ -192,7 +191,7 @@ the surface it starts on likewise. An invalid probe is `None`. The batch form is
 
 **Collision layers** — which pairs never meet, and query filtering: `ludion docs collision-layers`.
 
-**Diagnostics a physics author meets:** `L1033` — the `physics:` block itself is malformed (a bad
+**Diagnostics a physics author meets:** `L4034` — more than 512 non-static bodies, a warning only (`ludion docs physics-scale`); `L1033` — the `physics:` block itself is malformed (a bad
 `space`, a `gravity` triple of the wrong length, an iteration count outside `1..=64`); `L1116` — a
 collider size or a rigid body's `mass` is not strictly positive and finite; `L1181` — a `convex`
 hull's points are coincident, collinear or coplanar; `L1182` — a `heightfield` grid is ragged or
@@ -208,4 +207,5 @@ its `Collider` changes, reported once per offender. Rapier mapping: `ludion devd
 - `ludion docs collision-layers` — which pairs never meet, and query filters.
 - `ludion docs physics-joints` — the `Joint` and `JointMotor` components.
 - `ludion docs physics-time-scale` — `scale_time`, `freeze`, hit-stop.
+- `ludion docs physics-scale` — the gated scales, the horde shape, `L4034`.
 - `ludion docs projectiles` — pooled 3D shots swept against physics and the `spatial3d` index.

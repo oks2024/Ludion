@@ -722,6 +722,54 @@ pub fn scene_physics_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// The shared help of the scale warning, authored and live.
+pub(crate) const SCALE_HELP: &str = "nothing is dropped; measure it with `ludion profile` against a \
+     budget on each pinned box — `ludion docs physics-scale` names the gated scenes";
+
+/// `L4034` at `/physics` when the scene authors more non-static solver bodies (rigid and
+/// kinematic, character motors included) than [`ludion_physics::GATED_BODIES`]. A scene with no
+/// `physics:` block is reported by [`scene_physics_diagnostics`] instead.
+fn scene_physics_scale_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    if scene.physics.is_none() {
+        return Vec::new();
+    }
+    let has = |entity: &ludion_scene::SceneEntity, wanted: &str| {
+        entity.components.iter().any(|(name, _)| name == wanted)
+    };
+    let bodies = scene
+        .entities
+        .iter()
+        .filter(|entity| {
+            has(entity, "CharacterMotor")
+                || entity
+                    .components
+                    .iter()
+                    .find(|(name, _)| name == "Collider")
+                    .and_then(|(_, value)| {
+                        serde_json::from_value::<ludion_spatial::Collider>(value.clone()).ok()
+                    })
+                    .is_some_and(|collider| {
+                        ludion_physics::claims(&collider)
+                            && !matches!(collider.body, ludion_spatial::Body::Static(_))
+                    })
+        })
+        .count();
+    if bodies <= ludion_physics::GATED_BODIES {
+        return Vec::new();
+    }
+    vec![
+        Diagnostic::new(
+            code::PHYSICS_SCALE_UNGATED,
+            format!(
+                "the scene authors {bodies} non-static physics bodies, past the gated scale of {}",
+                ludion_physics::GATED_BODIES
+            ),
+        )
+        .with_path("/physics")
+        .with_help(SCALE_HELP),
+    ]
+}
+
 /// The diagnostics one component value's atlas reference reports; empty when it carries none (a
 /// loose `texture:` or an untextured quad has no atlas to resolve).
 fn atlas_reference(root: &Path, pointer: &str, value: &serde_json::Value) -> Vec<Diagnostic> {
@@ -920,7 +968,7 @@ pub fn scene_audio_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagno
 }
 
 /// Every engine pass over an expanded scene, in one list: atlas, font, collider layer, parented
-/// body, physics, preload, skin bone, mesh asset, audio and reflection probe diagnostics, errors and warnings together
+/// body, physics, physics scale, preload, skin bone, mesh asset, audio and reflection probe diagnostics, errors and warnings together
 /// (`severity` tells them apart). `ludion check-scene`, a game's `--check-scene` and `scene.check` all run exactly
 /// this, so no client answers "is this scene valid" differently.
 ///
@@ -947,6 +995,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_hierarchy_body_diagnostics(scene));
     diagnostics.extend(scene_physics_diagnostics(scene));
     diagnostics.extend(scene_motor_diagnostics(scene));
+    diagnostics.extend(scene_physics_scale_diagnostics(scene));
     diagnostics.extend(scene_camera_rig_diagnostics(scene));
     diagnostics.extend(scene_camera_offset_diagnostics(scene));
     diagnostics.extend(scene_sun_diagnostics(scene));
@@ -1355,6 +1404,50 @@ entities:
             "      LaneConstraint: {}\n      CharacterMotor: {}\n",
         );
         assert!(scene_motor_diagnostics(&scene).is_empty());
+    }
+
+    fn scale_scene(blocks: &[(usize, &str)]) -> Scene {
+        let mut source = String::from("format: 1\nseed: 1\nphysics:\n  space: free\nentities:\n");
+        for (count, components) in blocks {
+            for _ in 0..*count {
+                source.push_str("  - components:\n");
+                source.push_str(components);
+            }
+        }
+        ludion_scene::check(&source, &crate::builtin_registry())
+            .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"))
+    }
+
+    const RIGID_SPHERE: &str = "      Collider:\n        shape:\n          sphere:\n            radius: 0.5\n        body:\n          rigid:\n            mass: 1.0\n";
+    const MOTOR: &str = "      CharacterMotor: {}\n";
+
+    #[test]
+    fn past_the_gated_scale_warns_once() {
+        let scene = scale_scene(&[(513, RIGID_SPHERE)]);
+        let found = scene_physics_scale_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::PHYSICS_SCALE_UNGATED);
+        assert_eq!(found[0].path.as_deref(), Some("/physics"));
+        assert_eq!(found[0].help.as_deref(), Some(SCALE_HELP));
+    }
+
+    #[test]
+    fn the_gated_scale_itself_is_silent() {
+        let scene = scale_scene(&[(512, RIGID_SPHERE)]);
+        assert!(scene_physics_scale_diagnostics(&scene).is_empty());
+    }
+
+    #[test]
+    fn unclaimed_2d_kinematic_colliders_are_not_counted() {
+        let aabb = "      Collider:\n        shape:\n          aabb:\n            half_extents:\n              - 0.5\n              - 0.5\n        body: kinematic\n";
+        let scene = scale_scene(&[(600, aabb)]);
+        assert!(scene_physics_scale_diagnostics(&scene).is_empty());
+    }
+
+    #[test]
+    fn motors_count_with_rigid_bodies() {
+        let scene = scale_scene(&[(300, MOTOR), (213, RIGID_SPHERE)]);
+        assert_eq!(scene_physics_scale_diagnostics(&scene).len(), 1);
     }
 
     fn rig_scene(entities: &str) -> Scene {

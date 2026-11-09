@@ -135,3 +135,36 @@ fn sim_hash_matches_the_ragdoll_skinned_trace() {
          {tick}"
     );
 }
+
+/// `ludion check-scene` on `scene`: its exit code and stderr.
+fn check_scene(scene: &std::path::Path) -> (Option<i32>, String) {
+    let output = run_ludion(&["check-scene", scene.to_str().unwrap()]);
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// `L4034` warns past the gated scale and only warns; the gated gallery scenes stay silent.
+#[test]
+fn check_scene_warns_past_the_gated_scale_and_exits_zero() {
+    for gated in ["physics-stress.yaml", "physics-horde.yaml"] {
+        let (code, stderr) = check_scene(&scene_path(gated));
+        assert_eq!(code, Some(0), "{gated}: {stderr}");
+        assert!(!stderr.contains("L4034"), "{gated}: {stderr}");
+    }
+
+    let mut source = String::from("format: 1\nseed: 1\nphysics:\n  space: free\nentities:\n");
+    for _ in 0..513 {
+        source.push_str("  - components:\n      Collider:\n        shape:\n          sphere:\n            radius: 0.5\n        body:\n          rigid:\n            mass: 1.0\n");
+    }
+    let dir = std::env::temp_dir().join(format!("ludion-scale-warning-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene = dir.join("pile.yaml");
+    std::fs::write(&scene, source).unwrap();
+    let (code, stderr) = check_scene(&scene);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stderr.contains("warning[L4034]"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

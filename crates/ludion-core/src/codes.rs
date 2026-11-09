@@ -2346,6 +2346,12 @@ pub mod code {
     /// or parse (reported once per asset; that tag draws nothing and the frame continues).
     pub const PROJECTILE_LOOK_ASSET: DiagnosticCode = DiagnosticCode::new("L4033");
 
+    /// `L4034` — the scene has more non-static physics bodies (rigid and kinematic, character
+    /// motors included) than the gated scale of 512. A **warning**: nothing is dropped. Raised by
+    /// `ludion-engine`'s scene check (the authored count) and once per session by the post-tick
+    /// latch (the live count).
+    pub const PHYSICS_SCALE_UNGATED: DiagnosticCode = DiagnosticCode::new("L4034");
+
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
     /// `L5001` — no audio output device is available, so the playback sink cannot open a stream.
@@ -10969,6 +10975,26 @@ cannot draw.
 Fix: point `asset` at an existing `*.mesh.yaml` (or `model` at a `*.voxel.yaml`), or repair the document the message names.",
     },
     CodeEntry {
+        code: code::PHYSICS_SCALE_UNGATED,
+        severity: Severity::Warning,
+        title: "physics scale past the gated scale",
+        explanation: "\
+The scene has more non-static physics bodies than the gated scale of 512. The count is every rigid
+and kinematic solver body, character motors included; static bodies are never counted.
+
+512 is the scale of `physics-stress` (512 rigid bodies), the one scene with a pinned, measured budget
+on each box. `physics-horde` (500 character motors, 120 eleven-part ragdolls, 5,000 pool projectiles)
+is gated for determinism (trace, replay, restore, 1/2/8 threads) but has no budget yet, so it does
+not set the number. Past the gated scale the step cost is unmeasured on the pinned boxes.
+
+Raised by `check-scene` (and the wire `scene.check`) for the authored count, and once per session at
+runtime for the live count; `ludion profile` and `--profile` print it. It only warns: nothing is
+dropped and the exit code does not change.
+
+Fix: build a stress scene at the game's shape and measure it against a budget on each pinned box
+(`ludion devdocs physics-pin`, `ludion docs physics-scale`).",
+    },
+    CodeEntry {
         code: code::AUDIO_DEVICE_UNAVAILABLE,
         severity: Severity::Warning,
         title: "no audio output device available",
@@ -11683,6 +11709,7 @@ mod tests {
         code::PROJECTILE_RESTORE_CAPACITY,
         code::NAV_CONFIG_INVALID,
         code::PROJECTILE_LOOK_ASSET,
+        code::PHYSICS_SCALE_UNGATED,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,
@@ -11862,6 +11889,7 @@ mod tests {
             code::PROJECTILE_MUZZLE_UNRESOLVED,
             code::PROJECTILE_STEP_NOT_RUN,
             code::PROJECTILE_RESTORE_CAPACITY,
+            code::PHYSICS_SCALE_UNGATED,
             code::AUDIO_DEVICE_UNAVAILABLE,
             code::AUDIO_STREAM_FAILED,
             code::MUSIC_TRACK_UNPLAYABLE,

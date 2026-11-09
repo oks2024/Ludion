@@ -1837,6 +1837,7 @@ impl Engine {
         scene_physics::report_missing_joints(self.driver.world_mut());
         scene_physics::report_motor_mismatches(self.driver.world_mut());
         scene_physics::report_impulse_misses(self.driver.world_mut());
+        scene_physics::report_physics_scale(self.driver.world_mut());
         self.emit_pending_diagnostics();
     }
 

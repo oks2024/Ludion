@@ -970,6 +970,23 @@ impl PhysicsWorld {
         self.table.len()
     }
 
+    /// How many bodies are rigid or kinematic — every solver body but the `static` ones. Compared
+    /// against [`GATED_BODIES`](crate::GATED_BODIES) for `L4034`.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_physics::PhysicsWorld;
+    ///
+    /// assert_eq!(PhysicsWorld::new(TickRate::DEFAULT).non_static_body_count(), 0);
+    /// ```
+    pub fn non_static_body_count(&self) -> usize {
+        self.table
+            .iter()
+            .filter(|entry| entry.kind != BodyKind::Fixed)
+            .count()
+    }
+
     /// The entities that have a body, in creation order — the table's own order.
     pub fn entities(&self) -> impl Iterator<Item = EntityId> + '_ {
         self.table.iter().map(|entry| entry.entity)
