@@ -256,9 +256,11 @@ fn vs_decal(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) ->
 }
 
 // Whether the listed mesh visible at `pixel` lets decal `d` paint. No listed mesh there (id 0) is
-// "not in the list": an exclude list receives, an only list does not.
+// "not in the list": an exclude list receives, an only list does not. The texel is negative for a
+// skinned mesh, which an unskinned decal refuses; the lists match by magnitude.
 fn decal_receives(d: ProjectorDecal, pixel: vec2<i32>) -> bool {
-    let id = u32(textureLoad(proj_receivers, pixel, 0).x + 0.5);
+    let value = textureLoad(proj_receivers, pixel, 0).x;
+    let id = u32(abs(value) + 0.5);
     let wanted = id - 1u;
     var lo = 0u;
     var hi = select(0u, d.receivers.z, id != 0u);
@@ -271,7 +273,8 @@ fn decal_receives(d: ProjectorDecal, pixel: vec2<i32>) -> bool {
         }
     }
     let listed = id != 0u && lo < d.receivers.z && proj_receiver_ids[d.receivers.y + lo] == wanted;
-    return select(!listed, listed, d.receivers.x == 1u);
+    let in_list = select(!listed, listed, d.receivers.x == RECEIVERS_ONLY);
+    return select(in_list, value >= 0.0, d.receivers.x == RECEIVERS_UNSKINNED);
 }
 
 @fragment

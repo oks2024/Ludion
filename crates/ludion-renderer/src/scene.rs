@@ -372,9 +372,13 @@ pub enum DecalBlend {
     Coat,
 }
 
-/// Which meshes a [`DecalInstance`] paints, as ascending indices into [`RenderScene::meshes`].
+/// Which meshes a [`DecalInstance`] paints: ascending indices into [`RenderScene::meshes`], or
+/// every unskinned mesh.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum DecalReceivers {
+    /// Every unskinned mesh receives: the `all` receiver set. The receiver pass marks skinned
+    /// pixels, so the decal carries no list.
+    Unskinned,
     /// Every mesh but these receives.
     Exclude(Vec<u32>),
     /// Only these meshes receive.

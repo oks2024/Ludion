@@ -2061,9 +2061,9 @@ fn extract_drop_shadows(
 /// The box matrices come from the entity's composed world pose (the `Parent` chain and scale) times
 /// the authored `size`; a decal whose box is not invertible (a zero scale while animating out) covers
 /// nothing and is skipped. Receivers are indices into `meshes`, which `mesh_owners` parallels: `all`
-/// excludes the skinned instances, `hierarchy` admits only the unskinned meshes owned by the decal's
-/// hierarchy root and its descendants. The hierarchy's child map is built only when a `hierarchy`
-/// decal exists.
+/// is `Unskinned` (the receiver pass marks skinned pixels), `hierarchy` admits only the unskinned
+/// meshes owned by the decal's hierarchy root and its descendants. The hierarchy's child map is
+/// built only when a `hierarchy` decal exists.
 ///
 /// Maps resolve through `assets`, so they share the asset cache's entries (and its cooked role) with
 /// a mesh's maps. A map that fails to load pushes its diagnostic onto `errors`, pointed at the
@@ -2082,7 +2082,6 @@ fn extract_decals(
     errors: &mut Vec<Diagnostic>,
 ) -> (Vec<DecalInstance>, Vec<EntityId>) {
     let skinned = |index: usize| meshes.get(index).is_some_and(|mesh| mesh.bone_offset != 0);
-    let mut skinned_indices: Option<Vec<u32>> = None;
     let mut children = None;
     let mut decals: Vec<(i16, EntityId, DecalInstance)> = Vec::new();
     for (index, &id) in ids.iter().enumerate() {
@@ -2099,16 +2098,7 @@ fn extract_decals(
             continue;
         }
         let receivers = match decal.receivers {
-            DecalReceiverSet::All => DecalReceivers::Exclude(
-                skinned_indices
-                    .get_or_insert_with(|| {
-                        (0..meshes.len())
-                            .filter(|&index| skinned(index))
-                            .map(|index| index as u32)
-                            .collect()
-                    })
-                    .clone(),
-            ),
+            DecalReceiverSet::All => DecalReceivers::Unskinned,
             DecalReceiverSet::Hierarchy => {
                 let root = crate::hierarchy::hierarchy_root(world, id);
                 let children = children.get_or_insert_with(|| ludion_ecs::ChildMap::build(world));

@@ -17,12 +17,18 @@ struct ProjectorDecal {
     look: vec4<f32>,
     // xyz = the box's world +Y, normalized: the axis the angle fade measures a normal against.
     axis: vec4<f32>,
-    // x = 0 receives everywhere but the list (exclude) or 1 only the list, y = the list's offset in
-    // the receiver-id array, z = its length.
+    // x = the receiver mode: 0 receives everywhere but the list (exclude), 1 only the list, 2 every
+    // unskinned mesh (no list). y = the list's offset in the receiver-id array, z = its length.
+    // The receiver texel holds ±(mesh index + 1), negative for a skinned mesh: modes 0 and 1 read
+    // its magnitude, mode 2 its sign.
     receivers: vec4<u32>,
     // x = roughness, or -1 for the receiver's own, y = metallic, z = the normal map's scale, w = 0.
     surface: vec4<f32>,
 }
+
+// `ProjectorDecal.receivers.x` modes 1 and 2 (mode 0, exclude, is the default).
+const RECEIVERS_ONLY: u32 = 1u;
+const RECEIVERS_UNSKINNED: u32 = 2u;
 
 // A map gradient's longest length, as a share of the decal's uv-rect span. At a depth edge the
 // reconstructed world position jumps across the box, and an unclamped gradient would pick the

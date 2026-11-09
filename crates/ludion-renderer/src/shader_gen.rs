@@ -131,6 +131,16 @@ pub const NO_OCCLUSION: u32 = 4294967295;
 /// Declared in `gi_bake.wgsl`.
 pub const PUSH_OUT_RADIUS: i32 = 2;
 
+/// `RECEIVERS_ONLY`, hoisted from WGSL `const RECEIVERS_ONLY: u32`.
+///
+/// Declared in `decal_lit.wgsl`, `projector.wgsl`.
+pub const RECEIVERS_ONLY: u32 = 1;
+
+/// `RECEIVERS_UNSKINNED`, hoisted from WGSL `const RECEIVERS_UNSKINNED: u32`.
+///
+/// Declared in `decal_lit.wgsl`, `projector.wgsl`.
+pub const RECEIVERS_UNSKINNED: u32 = 2;
+
 /// `RECV_NONE`, hoisted from WGSL `const RECV_NONE: u32`.
 ///
 /// Declared in `decal_receiver.wgsl`.

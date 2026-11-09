@@ -1025,7 +1025,7 @@ impl PostChain {
                 .decals
                 .iter()
                 .any(|d| matches!(d.blend, DecalBlend::Alpha | DecalBlend::Coat)),
-            decal_receivers: !crate::projector::receiver_union(&scene.decals).is_empty(),
+            decal_receivers: !crate::projector::receiver_union(scene).is_empty(),
             transparent_cover: !scene.sprites.is_empty()
                 || !scene.particles.is_empty()
                 || !scene.texts.is_empty(),

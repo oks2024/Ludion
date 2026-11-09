@@ -76,7 +76,8 @@ fn vs_lit(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> L
 // Whether the listed mesh visible at `pixel` lets decal `d` paint: `projector.wgsl`'s test over this
 // pass's globals.
 fn lit_receives(d: ProjectorDecal, pixel: vec2<i32>) -> bool {
-    let id = u32(textureLoad(lit_receivers, pixel, 0).x + 0.5);
+    let value = textureLoad(lit_receivers, pixel, 0).x;
+    let id = u32(abs(value) + 0.5);
     let wanted = id - 1u;
     var lo = 0u;
     var hi = select(0u, d.receivers.z, id != 0u);
@@ -89,7 +90,8 @@ fn lit_receives(d: ProjectorDecal, pixel: vec2<i32>) -> bool {
         }
     }
     let listed = id != 0u && lo < d.receivers.z && lit_receiver_ids[d.receivers.y + lo] == wanted;
-    return select(!listed, listed, d.receivers.x == 1u);
+    let in_list = select(!listed, listed, d.receivers.x == RECEIVERS_ONLY);
+    return select(in_list, value >= 0.0, d.receivers.x == RECEIVERS_UNSKINNED);
 }
 
 // What the decal paints at one pixel.

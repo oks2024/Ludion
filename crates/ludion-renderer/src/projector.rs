@@ -145,15 +145,32 @@ pub fn occlusion_bias(ds: &DropShadowInstance, atlas: &OcclusionAtlas) -> f32 {
     (0.01 + 2.0 * texel_world) / (DROP_SHADOW_ANCHOR_TOLERANCE + ds.max_distance)
 }
 
-/// Every mesh index some decal's receiver list names, ascending and deduplicated: the meshes the
-/// receiver-id pass redraws. Empty means no decal needs the pass.
-pub(crate) fn receiver_union(decals: &[DecalInstance]) -> Vec<u32> {
-    let mut union: Vec<u32> = decals
+/// Every mesh index the receiver-id pass must redraw, ascending and deduplicated: those some decal's
+/// receiver list names, plus every skinned mesh when any decal is [`DecalReceivers::Unskinned`]
+/// (the pass marks them so that decal can refuse them). Empty means no decal needs the pass.
+pub(crate) fn receiver_union(scene: &RenderScene) -> Vec<u32> {
+    let mut union: Vec<u32> = scene
+        .decals
         .iter()
         .flat_map(|decal| match &decal.receivers {
             DecalReceivers::Exclude(list) | DecalReceivers::Only(list) => list.iter().copied(),
+            DecalReceivers::Unskinned => [].iter().copied(),
         })
         .collect();
+    if scene
+        .decals
+        .iter()
+        .any(|decal| decal.receivers == DecalReceivers::Unskinned)
+    {
+        union.extend(
+            scene
+                .meshes
+                .iter()
+                .enumerate()
+                .filter(|(_, mesh)| mesh.bone_offset != 0)
+                .map(|(index, _)| index as u32),
+        );
+    }
     union.sort_unstable();
     union.dedup();
     union
@@ -191,7 +208,7 @@ pub fn decal_stats(scene: &RenderScene) -> DecalStats {
     }
     stats.draws = (pack_decals(&scene.decals, DecalPass::Projector).2.len() as u32)
         + 2 * (stats.alpha + stats.coat);
-    stats.receiver_meshes = receiver_union(&scene.decals).len() as u32;
+    stats.receiver_meshes = receiver_union(scene).len() as u32;
     stats
 }
 
@@ -283,8 +300,12 @@ pub(crate) fn pack_decals(
             }),
         }
         instances.push(decal_instance(decal, blend, receiver_ids.len() as u32));
-        let (DecalReceivers::Exclude(list) | DecalReceivers::Only(list)) = &decal.receivers;
-        receiver_ids.extend_from_slice(list);
+        match &decal.receivers {
+            DecalReceivers::Exclude(list) | DecalReceivers::Only(list) => {
+                receiver_ids.extend_from_slice(list);
+            }
+            DecalReceivers::Unskinned => {}
+        }
     }
     (instances, receiver_ids, batches)
 }
@@ -308,9 +329,10 @@ fn decal_instance(
     let (cos_end, cos_start) = angle_cosines(decal.angle_fade);
     let mirrored = Mat3::from_mat4(decal.box_to_world).determinant() < 0.0;
     let axis = decal.box_to_world.y_axis.truncate().normalize_or_zero();
-    let (only, list) = match &decal.receivers {
+    let (mode, list): (u32, &[u32]) = match &decal.receivers {
         DecalReceivers::Exclude(list) => (0, list),
-        DecalReceivers::Only(list) => (1, list),
+        DecalReceivers::Only(list) => (shader_gen::RECEIVERS_ONLY, list),
+        DecalReceivers::Unskinned => (shader_gen::RECEIVERS_UNSKINNED, &[]),
     };
     shader_gen::ProjectorDecal {
         ids: [
@@ -330,7 +352,7 @@ fn decal_instance(
             if mirrored { -1.0 } else { 1.0 },
         ],
         axis: [axis.x, axis.y, axis.z, 0.0],
-        receivers: [only, receiver_offset, list.len() as u32, 0],
+        receivers: [mode, receiver_offset, list.len() as u32, 0],
         surface: [
             decal.roughness.unwrap_or(-1.0),
             decal.metallic,
@@ -762,9 +784,63 @@ mod tests {
         a.receivers = DecalReceivers::Exclude(vec![2, 5]);
         let mut b = decal(DecalBlend::Add);
         b.receivers = DecalReceivers::Only(vec![1, 5, 9]);
-        assert_eq!(receiver_union(&[a, b]), [1, 2, 5, 9]);
-        assert!(receiver_union(&[decal(DecalBlend::Multiply)]).is_empty());
-        assert!(receiver_union(&[]).is_empty());
+        let around = |decals: Vec<DecalInstance>| {
+            let mut scene = RenderScene::empty((64, 64));
+            scene.decals = decals;
+            scene
+        };
+        assert_eq!(receiver_union(&around(vec![a, b])), [1, 2, 5, 9]);
+        assert!(receiver_union(&around(vec![decal(DecalBlend::Multiply)])).is_empty());
+        assert!(receiver_union(&around(Vec::new())).is_empty());
+    }
+
+    fn mesh(bone_offset: u32) -> crate::scene::MeshInstance {
+        crate::scene::MeshInstance {
+            medium: 1.0,
+            shape: crate::scene::MeshShape::Cube,
+            model: Mat4::IDENTITY,
+            normal_matrix: Mat3::IDENTITY,
+            color: [1.0; 4],
+            material: [1.0, 0.0, 0.0],
+            use_vertex_material: false,
+            fade: 1.0,
+            fade_height_min: -f32::MAX,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
+            bone_offset,
+            cast_shadows: true,
+            viewmodel: false,
+            rim: [0.0; 4],
+        }
+    }
+
+    #[test]
+    fn an_all_decal_packs_no_ids_whatever_the_skinned_count() {
+        for skinned in [1usize, 50] {
+            let mut scene = RenderScene::empty((64, 64));
+            scene.meshes = (0..skinned + 3)
+                .map(|i| mesh(if i >= 3 { 1 } else { 0 }))
+                .collect();
+            let mut only = decal(DecalBlend::Multiply);
+            only.receivers = DecalReceivers::Only(vec![0]);
+            let mut all = decal(DecalBlend::Multiply);
+            all.receivers = DecalReceivers::Unskinned;
+            scene.decals = vec![all.clone(), all.clone(), only, all];
+            let (instances, ids, _) = pack_decals(&scene.decals, DecalPass::Projector);
+            assert_eq!(ids, [0], "{skinned} skinned: only the Only list packs ids");
+            for index in [0, 1, 3] {
+                assert_eq!(
+                    instances[index].receivers,
+                    [2, if index == 3 { 1 } else { 0 }, 0, 0]
+                );
+            }
+            let mut expected: Vec<u32> = vec![0];
+            expected.extend(3..(3 + skinned) as u32);
+            assert_eq!(receiver_union(&scene), expected);
+            assert_eq!(decal_stats(&scene).receiver_meshes as usize, expected.len());
+        }
     }
 
     #[test]

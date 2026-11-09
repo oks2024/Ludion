@@ -2269,7 +2269,7 @@ impl Renderer {
             lit_instances,
             lit_receiver_ids,
             lit_draws,
-            receivers: receiver_union(&scene.decals),
+            receivers: receiver_union(scene),
         }
     }
 
@@ -18293,6 +18293,62 @@ mod tests {
                     "{name}: the floor beside the plate is painted (x = {x})"
                 );
             }
+        }
+    }
+
+    /// **An `Unskinned` decal spares a skinned mesh exactly as `Exclude` of it does.** The plate
+    /// (mesh 1) is skinned at an identity pose, so the receiver pass marks its pixels negative; the
+    /// render equals the `Exclude(vec![1])` one byte for byte, unlit and lit, with the floor painted.
+    #[test]
+    fn needs_gpu_an_unskinned_decal_spares_a_skinned_mesh() {
+        let Some(renderer) = skip_or_renderer("an_unskinned_decal_spares_a_skinned_mesh") else {
+            return;
+        };
+        let (w, h) = (160u32, 120u32);
+        let mut scene = drop_shadow_fixture(w, h, true);
+        scene.meshes[1].bone_offset = 1;
+        scene.bone_palette = vec![Mat4::IDENTITY];
+        let (fx, fy) = pixel_of(&scene, Vec3::new(-1.5, 0.0, 0.5), w, h);
+        let (px, py) = pixel_of(&scene, Vec3::new(1.0, 0.51, 0.0), w, h);
+        for (name, blend) in [
+            ("multiply", crate::scene::DecalBlend::Multiply),
+            ("lit alpha", crate::scene::DecalBlend::Alpha),
+        ] {
+            let decal = |receivers| {
+                let mut d = decal_instance(blend, Vec3::new(6.0, 2.0, 6.0));
+                if blend == crate::scene::DecalBlend::Alpha {
+                    d.color = [0.7, 0.7, 0.7, 1.0];
+                }
+                d.receivers = receivers;
+                d
+            };
+            let (bare, unskinned) = decal_pair(
+                &renderer,
+                &scene,
+                (w, h),
+                vec![decal(crate::scene::DecalReceivers::Unskinned)],
+            );
+            let (_, excluded) = decal_pair(
+                &renderer,
+                &scene,
+                (w, h),
+                vec![decal(crate::scene::DecalReceivers::Exclude(vec![1]))],
+            );
+            assert_eq!(
+                unskinned.rgba, excluded.rgba,
+                "{name}: Unskinned equals Exclude of the skinned mesh"
+            );
+            assert_ne!(
+                pixel(&unskinned, fx, fy),
+                pixel(&bare, fx, fy),
+                "{name}: the floor is painted"
+            );
+            assert_pixels_within(
+                pixel(&unskinned, px, py),
+                pixel(&bare, px, py),
+                2,
+                &format!("{name}: the skinned plate is clean"),
+            );
         }
     }
 

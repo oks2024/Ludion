@@ -3549,8 +3549,8 @@ fn decals_extract_in_layer_then_descending_id_order() {
     assert_eq!(order, [3.0, 2.0, 1.0]);
 }
 
-/// `all` excludes exactly the skinned instances; `hierarchy` admits the unskinned meshes of the
-/// decal's root and descendants and no unrelated mesh.
+/// `all` is `Unskinned` (the receiver pass marks the skinned instances); `hierarchy` admits the
+/// unskinned meshes of the decal's root and descendants and no unrelated mesh.
 #[test]
 fn decal_receivers_follow_the_skin_and_the_hierarchy() {
     use ludion_scene::{JointRest, MeshDocument as SceneMeshDocument, MeshJoint, MeshSkin};
@@ -3621,7 +3621,7 @@ fn decal_receivers_follow_the_skin_and_the_hierarchy() {
     // Hierarchy decal has the lower id and so draws last.
     assert_eq!(scene.decals.len(), 2);
     assert_eq!(scene.decals[1].receivers, DecalReceivers::Only(vec![1, 2]));
-    assert_eq!(scene.decals[0].receivers, DecalReceivers::Exclude(vec![3]));
+    assert_eq!(scene.decals[0].receivers, DecalReceivers::Unskinned);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
