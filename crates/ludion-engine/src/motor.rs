@@ -97,8 +97,8 @@ pub fn move_character_with(
 /// pose, so a motor riding a motor is carried by its support's previous-tick motion), the serial
 /// equivalence and the duplicate rule. `out[i]` is the result for `moves[i]`.
 ///
-/// An entity with an active `LaneConstraint` (a path and a non-zero `blend` or `engaged`) is not
-/// moved: its slot is [`MotorError::LaneInBatch`]; call [`move_character`] for it. Like
+/// An entity whose `LaneConstraint` is gated active (a path and a non-zero `blend` or `engaged`,
+/// even if the path fails to load) is not moved: its slot is [`MotorError::LaneInBatch`]; call [`move_character`] for it. Like
 /// `move_character`, each moved motor draws the `motor` debug category, in slice order.
 ///
 /// ```no_run

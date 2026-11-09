@@ -5,6 +5,7 @@
 mod common;
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -20,17 +21,41 @@ static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 /// The counter is global, so the tests in this binary take turns.
 static SERIAL: Mutex<()> = Mutex::new(());
 
+thread_local! {
+    /// Set on the test thread around a measured window: allocations from the harness or from
+    /// other threads never count.
+    static COUNTING: Cell<bool> = const { Cell::new(false) };
+}
+
+fn counting() -> bool {
+    // `try_with`: the allocator runs during TLS teardown, when `with` would panic.
+    COUNTING.try_with(Cell::get).unwrap_or(false)
+}
+
+/// Runs `f` with this thread's allocations counted, returning how many there were.
+fn count_allocs(f: impl FnOnce()) -> usize {
+    ALLOCS.store(0, Ordering::Relaxed);
+    COUNTING.with(|c| c.set(true));
+    f();
+    COUNTING.with(|c| c.set(false));
+    ALLOCS.load(Ordering::Relaxed)
+}
+
 // SAFETY: forwards every call to `System` unchanged; it only counts.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        if counting() {
+            ALLOCS.fetch_add(1, Ordering::Relaxed);
+        }
         unsafe { System.alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        if counting() {
+            ALLOCS.fetch_add(1, Ordering::Relaxed);
+        }
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
@@ -87,14 +112,15 @@ fn sweeps_do_not_allocate() {
     par::with_threads(1, || physics.first_hits(&probes, &filter, &mut out));
     assert!(out.iter().any(Option::is_some));
 
-    ALLOCS.store(0, Ordering::Relaxed);
-    par::with_threads(1, || {
-        for probe in &probes {
-            let _ = physics.first_hit(probe, &filter);
-        }
-        physics.first_hits(&probes, &filter, &mut out);
+    let allocs = count_allocs(|| {
+        par::with_threads(1, || {
+            for probe in &probes {
+                let _ = physics.first_hit(probe, &filter);
+            }
+            physics.first_hits(&probes, &filter, &mut out);
+        });
     });
-    assert_eq!(ALLOCS.load(Ordering::Relaxed), 0);
+    assert_eq!(allocs, 0);
 }
 
 #[test]
@@ -150,12 +176,13 @@ fn sweeps_starting_in_contact_do_not_allocate() {
         })
         .collect();
     let _ = physics.first_hit(&probes[0], &filter);
-    ALLOCS.store(0, Ordering::Relaxed);
-    par::with_threads(1, || {
-        for probe in &probes {
-            let got = physics.first_hit(probe, &filter).expect("in contact");
-            assert_eq!(got.t, 0.0);
-        }
+    let allocs = count_allocs(|| {
+        par::with_threads(1, || {
+            for probe in &probes {
+                let got = physics.first_hit(probe, &filter).expect("in contact");
+                assert_eq!(got.t, 0.0);
+            }
+        });
     });
-    assert_eq!(ALLOCS.load(Ordering::Relaxed), 0);
+    assert_eq!(allocs, 0);
 }

@@ -36,8 +36,9 @@ struct Slot {
 /// **Duplicates.** An entity listed twice moves on its first entry only; later entries get
 /// [`MotorError::DuplicateInBatch`]. Merge the displacements instead.
 ///
-/// There is no [`MoveConstraint`](crate::MoveConstraint) in a batch: a motor that needs one (a
-/// lane) goes through `move_character_with`. Call it from a system registered **before**
+/// There is no [`MoveConstraint`](crate::MoveConstraint) in a batch: a motor that needs an explicit
+/// one goes through `move_character_with`; the engine's lane motors go through
+/// `ludion_engine::move_character`. Call it from a system registered **before**
 /// [`install`](crate::install)'s, as for `move_character`.
 ///
 /// # Panics

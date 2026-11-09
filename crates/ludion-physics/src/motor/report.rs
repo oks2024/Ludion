@@ -186,7 +186,8 @@ pub enum MotorError {
     NonFiniteFeet([f32; 3]),
     /// The entity appears more than once in one `move_characters` batch.
     DuplicateInBatch(EntityId),
-    /// The entity has an active `LaneConstraint`, which a batch does not apply.
+    /// The entity has a `LaneConstraint` gated active (even one whose path fails to load), which a
+    /// batch does not apply.
     LaneInBatch(EntityId),
 }
 
@@ -234,8 +235,8 @@ impl fmt::Display for MotorError {
             ),
             MotorError::LaneInBatch(entity) => write!(
                 f,
-                "{entity:?} has an active LaneConstraint, which move_characters does not apply; \
-                 call move_character for it"
+                "{entity:?} has an active LaneConstraint (a path and a non-zero blend or engaged), which \
+                 move_characters does not apply; call move_character for it"
             ),
         }
     }

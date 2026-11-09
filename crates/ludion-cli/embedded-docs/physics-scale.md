@@ -10,7 +10,7 @@ description: How many physics bodies the solver is gated for, the horde shape, m
 
 | scene | shape | gated for |
 | --- | --- | --- |
-| `examples/gallery/physics-stress.yaml` | 512 rigid bodies | a pinned `physics_step` budget on the RTX 3090 (`budgets/pinned-rtx3090-physics-stress.toml`), trace, replay, restore |
+| `examples/gallery/physics-stress.yaml` | 512 rigid bodies | a pinned `physics_step` budget on each box (`budgets/pinned-rtx3090-physics-stress.toml`, `budgets/pinned-apple-m4-physics-stress.toml`), trace, replay, restore |
 | `examples/gallery/physics-horde.yaml` | 500 `CharacterMotor`s, 120 eleven-part `SkinBone` ragdolls (24 pinned to the walls by runtime joints), 5,000 pool projectiles | determinism only: committed trace, replay, snapshot restore, 1/2/8-thread identity. **no pinned budget** |
 
 512 non-static bodies is the **gated scale**; the single-threaded solver's measured wall is about 2,000 rigid bodies. Past 512, the step cost is unmeasured on the pinned boxes: build a stress scene at your game's shape and measure it with `ludion profile` against a budget on each box.

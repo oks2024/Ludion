@@ -362,10 +362,10 @@ pub(crate) fn lane_active(world: &World, entity: EntityId) -> bool {
 /// Reads `entity`'s lane and loads its path; `None` when the lane is inert (absent, no path, fully
 /// off, a field out of range, or a path that fails to load — the last two reported once).
 fn resolve(world: &mut World, entity: EntityId) -> Option<Resolved> {
-    let lane = world.get::<LaneConstraint>(entity).ok().flatten()?.clone();
-    if lane.path.is_empty() || (lane.blend == 0.0 && !lane.engaged) {
+    if !lane_active(world, entity) {
         return None;
     }
+    let lane = world.get::<LaneConstraint>(entity).ok().flatten()?.clone();
     if let Some((field, rule)) = invalid_field(&lane) {
         let diagnostic = Diagnostic::new(
             code::LANE_CONSTRAINT_INVALID,

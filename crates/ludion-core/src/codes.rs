@@ -10982,10 +10982,8 @@ Fix: point `asset` at an existing `*.mesh.yaml` (or `model` at a `*.voxel.yaml`)
 The scene has more non-static physics bodies than the gated scale of 512. The count is every rigid
 and kinematic solver body, character motors included; static bodies are never counted.
 
-512 is the scale of `physics-stress` (512 rigid bodies), the one scene with a pinned, measured budget
-on each box. `physics-horde` (500 character motors, 120 eleven-part ragdolls, 5,000 pool projectiles)
-is gated for determinism (trace, replay, restore, 1/2/8 threads) but has no budget yet, so it does
-not set the number. Past the gated scale the step cost is unmeasured on the pinned boxes.
+512 is the scale the pinned budgets gate; `ludion docs physics-scale` lists which scene shapes are
+gated and how. Past the gated scale the step cost is unmeasured on the pinned boxes.
 
 Raised by `check-scene` (and the wire `scene.check`) for the authored count, and once per session at
 runtime for the live count; `ludion profile` and `--profile` print it. It only warns: nothing is

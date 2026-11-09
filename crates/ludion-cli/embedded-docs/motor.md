@@ -104,8 +104,8 @@ Category `motor` (`DebugCategories::parse("motor")`), drawn only by `ludion_engi
 
 - **Carry:** every support pose is read at the tick-start pose, so a motor riding another motor lags its carrier by one tick, whatever the slice order.
 - **Serial equivalence:** with no rider, the batch equals serial `move_character` calls tick for tick.
-- **Refusals:** a duplicate entity is `MotorError::DuplicateInBatch` (the first entry moves); a motor on an active lane is `MotorError::LaneInBatch` — the batch applies no lane constraints, so call `move_character` for it.
-- **When:** many motors per tick (500 motors: 3.7 ms serial, 1.2 ms batched at 8 threads, unpinned M5 — `ludion docs physics-scale`). A few motors, or any lane motor, use `move_character`.
+- **Refusals:** a duplicate entity is `MotorError::DuplicateInBatch` (the first entry moves); a motor with an active lane (a path and a non-zero `blend` or `engaged`) is `MotorError::LaneInBatch` — the batch applies no lane constraints, so call `move_character` for it. Any entity whose `LaneConstraint` is gated active is refused, one whose path fails to load included.
+- **When:** many motors per tick (figures: `ludion docs physics-scale`). A few motors, or any lane motor, use `move_character`.
 
 ## Diagnostics
 

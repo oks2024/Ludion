@@ -535,12 +535,32 @@ pub(crate) fn report_impulse_misses(world: &mut World) {
     }
 }
 
+/// The body-table length [`report_physics_scale`] last counted at. Not hashed and not snapshot
+/// state: a restore just recounts once.
+struct ScaleCheck {
+    last_len: usize,
+}
+
 /// Reports `L4034` once per session when the live non-static body count passes
 /// [`ludion_physics::GATED_BODIES`]. A warning only; a no-op on a world with no [`PhysicsWorld`].
 pub(crate) fn report_physics_scale(world: &mut World) {
     if crate::diagnostics::is_latched(world, code::PHYSICS_SCALE_UNGATED, "physics_scale") {
         return;
     }
+    let Some(len) = world
+        .resource::<PhysicsWorld>()
+        .map(PhysicsWorld::body_count)
+    else {
+        return;
+    };
+    // Recount only when the body table's length moved since the last check.
+    if world
+        .resource::<ScaleCheck>()
+        .is_some_and(|check| check.last_len == len)
+    {
+        return;
+    }
+    world.insert_resource(ScaleCheck { last_len: len });
     let Some(bodies) = world
         .resource::<PhysicsWorld>()
         .map(PhysicsWorld::non_static_body_count)
