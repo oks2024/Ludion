@@ -1,5 +1,5 @@
 ---
-description: Skinned characters: kind: character, imported clips, crossfade, AnimationEvents, the cycle example
+description: Skinned characters: kind: character, clips, crossfade, AnimationEvents, crowd posing cost
 ---
 
 # Character animation
@@ -38,15 +38,15 @@ clips:
   document is `L1199`.
 - **Playback.** An entity with `Animation.clip` naming a bound clip poses the skin from it: a track
   binds to the joint of the same name, a joint with no track stays at rest, and a channel a track
-  leaves out keeps its bind value. Rotation interpolates as a quaternion slerp (no gimbal flips), so
-  a segment turning 180° or more on an axis, or whose axes combine past half a circle, is
+  leaves out keeps its bind value. Rotation slerps, so
+  a segment turning 180° or more on an axis, or past half a circle combined, is
   `L1142`: split it. `scale` composes down the joint chain, and the binding's `speed` multiplies
   `Animation.speed`. An empty or unbound clip name draws the rest pose. The pose is never hashed or recorded, and sim code cannot read it; presentation code reads it through `posed_joint_world` (§Sockets). A skin with `SkinBone`
-  followers is posed by them instead. A running skin can leave its clip for a ragdoll with `switch_skin_to_ragdoll`, which drops `Animation` and poses from rest (`ludion docs physics-joints`). Lighting follows the pose: a joint with a non-uniform scale
-  bends the skin's normals the way it bends the surface.
+  followers is posed by them instead. A running skin can leave its clip for a ragdoll with `switch_skin_to_ragdoll`, which drops `Animation` and poses from rest (`ludion docs physics-joints`). Lighting follows the pose: a non-uniform joint scale
+  bends the skin's normals with the surface.
 - Editing the character, its mesh or any clip re-reads it (the pose; `AnimationEvents` picks up retimed events at the next load, restore or scene switch). `ludion check-scene <file>` loads and
   reports it, with a `contact <joint>: height min … max …` line per clip for each ground-contact
-  joint (a leaf joint whose vertices sit at the mesh's floor at rest — the feet), sampled at 30 Hz in
+  joint (a leaf joint at the mesh's floor at rest — the feet), sampled at 30 Hz in
   mesh units; `SkinBone` parts can name a character's skin.
 
 ## Clips
@@ -60,8 +60,7 @@ clips:
   `crates/ludion-import/tests/fixtures/skin-mannequin-clips.py` and its re-import recipe is the doc
   comment of `crates/ludion-cli/tests/import.rs`'s clip drift test.
 - **A pelvis scale rescales every joint under it.** A squash on the root lifts or sinks the feet by
-  `leg_length × (scale − 1)`; `check-scene <character>` reports each ground-contact joint's height
-  range per clip (`contact <joint>: height min … max …`) — a `min` below zero is a foot through the
+  `leg_length × (scale − 1)`; a `min` below zero in `check-scene <character>`'s `contact` lines is a foot through the
   floor. The mannequin's `jump` keeps `drop = 0.52 × (sy − 1) + air` for exactly this.
 
 ## Crossfade
@@ -85,27 +84,37 @@ clips:
   with the same `hold` changes pose on the same ticks, whenever its clip started.
 - The incoming clock, the outgoing clock and the crossfade weight step together, so a fade is stepped too.
 - Visual-only: `AnimationEvents` and the ragdoll pose keep the exact tick, and `set_clip_speed` between two
-  steps changes the pose only from the next step, even when called every tick (the grid does not drift).
+  steps changes the pose only from the next step (the grid does not drift). It lowers the visible cadence, not the cost: every skinned instance is sampled every extract (§Crowd posing).
 - A clip switched between steps shows its first pose at once; start clips on the grid or crossfade.
-- Review a stepped strip with `ludion render --model <x>.character.yaml --crossfade run:idle:0.5 --strip 8 --hold 5`: each phase snaps to the grid, so neighbouring phases repeat a pose, and the output name gains `-hold5`.
+- Review a stepped strip with `ludion render --model <x>.character.yaml --crossfade run:idle:0.5 --strip 8 --hold 5`: phases snap to the grid, so neighbours repeat a pose; the output name gains `-hold5`.
 - Stepping *inside* a clip is the clip's own `ease: step` keys (`ludion docs voxel-animation` §Format).
+
+## Crowd posing
+
+- **Parallel, deterministic.** Extract's `Skin` phase samples palettes in fixed chunks through
+  `ludion_core::par`, joined in order: byte-identical at any thread count. `hold` does not save sampling: every skinned instance is sampled every extract, a rest or `SkinBone`-followed skin excepted.
+- **Reading a profile.** `ludion profile` and a game's `--profile N` (`ludion docs running`) report
+  `ProfileReport.skin`, offline only: `pose_median_ms` (the `Skin` phase) and `<count>_median` for `instances`,
+  `palettes_sampled`, `palettes_reused`, `palettes_shared` (both reserved, always 0) and `joints_sampled`.
+  Per extract `instances = sampled + reused + shared`. Read the time beside `sim.threads`.
+- **Indicative figures** (RTX 3090 / 5950X, release): 500 figures, 5,500 joints: 0.37 ms at 1 thread, 0.32 ms at 8 or 32. The owner is `Plan/animation-clips.md` Status "Crowd posing".
+- Bench: `cargo test -p ludion-engine --release --test it -- skin_pose --ignored --nocapture`.
 
 ## AnimationEvents
 
 - Register `animation_events` **before** the system that reads the resource, declaring
-  `.query::<(&Animation, &Mesh)>()`, `.query::<(&Animation, &Sprite)>()` and `.query::<(&Animation, &PrefabInstance)>()` (the shape is observed even with no prefab in the world, so a missing declaration is `L1126`); a consumer reads
+  `.query::<(&Animation, &Mesh)>()`, `.query::<(&Animation, &Sprite)>()` and `.query::<(&Animation, &PrefabInstance)>()` (observed even with no prefab in the world; a missing one is `L1126`); a consumer reads
   `events.fired(entity, clip, name)` the same tick.
 - A one-shot clip emits an implicit `end`; a clip's own events come from the clip or the character's
   `events:` overlay (`L1198` for a malformed one, `L1200` for an overlay on a clip that has its own).
   Only the incoming clip of a crossfade emits.
-- A `t: 0` event fires once per clip start, never lost and never twice. A clip stamped by a system
-  registered before `animation_events` fires it on the start tick; one stamped by a later system (a
-  reaction to `end`) fires it on the next tick, together with that tick's first clip time.
+- A `t: 0` event fires once per clip start, never lost or doubled: on the start tick for a clip stamped by a system
+  registered before `animation_events`, on the next tick (with its first clip time) for a later one (a reaction to `end`).
 - **Consuming events makes clip timing sim input.** A retimed or re-imported clip moves the
   `WorldHash` and a replay's recorded run, and a replay root must hold the model files (`clips/`,
   `characters/`, the mesh) — a root without them plays no clip.
-- Write `Animation` only when the choice changes, and stamp with `ctx.game_frame`, never `ctx.frame`
-  (a held gameplay clock would restart the clip late).
+- Write `Animation` only when the choice changes, stamped with `ctx.game_frame`, never `ctx.frame`
+  (a held gameplay clock restarts the clip late).
 
 ## Sockets
 
@@ -137,35 +146,33 @@ clips:
   nearest) fire at load, `check-scene` and prefab spawn. A runtime miss composes as a plain `Parent`, silently.
 - Author a uniform skin scale: `WorldPose` is TRS, so a sheared pose is lossy. `reparent(.., Keep::World)`
   on a socket child keeps the rest-pose world, not the drawn one.
-- Example: `examples/gallery/character-socket.yaml` — three phases of `run`, a prop on each `lower_arm_l`;
-  `ludion render --scene examples/gallery/character-socket.yaml --frames 60 --out socket.png`.
+- Example (three phases of `run`, a prop on each `lower_arm_l`):
+  `ludion render --scene examples/gallery/character-socket.yaml --frames 60`.
 
 ## Strips
 
 `ludion render --model <x>.character.yaml --clip <name>` (or `--crossfade`) renders a strip without
-running a game; the flags are owned by `ludion docs voxel-animation`.
+a game; flags: `ludion docs voxel-animation`.
 
 ## Worked example
 
 `examples/gallery/character-cycle.yaml` is one mannequin; `crates/ludion-testkit/tests/common/mod.rs`
 is its whole game half: a transition table of `(clip, entered from, leaves on, next, fade)` driving
 idle → run → jump → run → spin → run → idle, one-shots leaving on `end`, the spin a hard cut. Its
-proofs are `crates/ludion-testkit/tests/character_cycle.rs` (the clip-switch log, the committed
-trace and replay) and the `character-cycle-driven` golden in `gallery.rs`.
+proofs: `crates/ludion-testkit/tests/character_cycle.rs` (switch log, trace, replay) and the
+`character-cycle-driven` golden in `gallery.rs`.
 
-The same driver is a runnable host, `crates/ludion-testkit/examples/character_cycle.rs`. From the
-repo root, watch it in a window, or replay-verify the committed recording:
+The same driver is a runnable host, `crates/ludion-testkit/examples/character_cycle.rs`; add `--window` to watch it or `--replay-verify examples/gallery/character-cycle.lrp` to verify the recording:
 
 ```text
 cargo run -p ludion-testkit --example character_cycle -- --scene examples/gallery/character-cycle.yaml --window
-cargo run -p ludion-testkit --example character_cycle -- --replay-verify examples/gallery/character-cycle.lrp --scene examples/gallery/character-cycle.yaml
 ```
 
 ## Next
 
 - `ludion docs hierarchy` — `Parent` and `ParentJoint` rules.
-- `ludion docs voxel-animation` — the clip strips (`--clip`, `--crossfade`) and rigid assemblies.
+- `ludion docs voxel-animation` — clip strips and rigid assemblies.
 - `ludion docs components` — the `Animation` component's fields and defaults.
-- `ludion docs sprite-animation` — the same component over a `Sprite`'s flipbook.
+- `ludion docs sprite-animation` — `Animation` over a `Sprite` flipbook.
 - `ludion docs blender-craft` — authoring the rig and clips in Blender.
 - `ludion docs prefab-animation` — rigid node clips on a prefab, no skin.

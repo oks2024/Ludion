@@ -713,6 +713,17 @@ G11 stay open with their recommendations as defaults.
 - (v) Byte-identity: culling on against off is byte-identical, a gallery `decals` golden test pins it, and `--dump-graph` is unchanged.
 - (vi) The bench gains a `CULLING_BENCH_CULL=on` room row.
 
+**Proposed (Serious Isaac 0019, owner approval owed). Animation LOD: a distance cadence keyed on the mesh level.** Ready to build once approved; it amends decisions 11, 27 and 29 here and decision 19 in `Plan/animation-clips.md`.
+
+- (i) **Key.** `lod_hold: [f0, f1, …]` on `kind: character`: one positive integer per mesh level, base included, at most chain length + 1 entries. The effective hold is `Animation.hold × lod_hold[level]` on decision 19's global grid (`ticks − ticks % h`). A cadence alone only changes the picture; its cost saving comes through reusing the held palette (piece 1, rejected at this rig size, `Plan/animation-clips.md`) or through sharing (piece 4: coarser grids collapse more keys), so it is built with or after piece 4 and passes the same gate in `skin_pose_bench`. Absent means factor 1 everywhere and byte-identical output. A malformed list (empty, a 0, a non-integer, too long) is a new `L1xxx` (next free after `L1405`; confirm at build); `check-scene` warns with the code after it when a character has `lod_hold` and its mesh has no `lods:`.
+- (ii) **Level source, amends decision 11.** A cadence is not a skip (every instance still gets a palette), but it is camera-dependent extract work. The level is picked once per extract from the extracted game camera: the eye, and `k` with `Camera.lod_bias` and `QualityParams.lod_bias`, offset 0 (decisions 22 and 25). It is rotation-invariant, so a flick never changes it. A presenter re-render keeps the extract's palettes; a level mismatch shows at most one stale held pose, never a geometry pop.
+- (iii) **Unposed bound, resolving the circularity.** The GPU level uses the posed world box, which needs the palette. The cadence level uses the instance's unposed bound instead: the mesh asset's bounding sphere radius × the `Transform`'s largest scale, centred on the skin root's world position. Near a threshold the CPU level may differ from the drawn mesh level; that is accepted and documented.
+- (iv) **One selection function.** Extract calls `ludion_renderer::lod_level` with `lod_size` (decision 29; `ludion-engine` already depends on `ludion-renderer`), so decision 27's "Animation LOD is out" is amended to "in, as a cadence only".
+- (v) **Exactness.** `AnimationEvents` and the ragdoll pose keep the exact tick (decision 19's rule). `posed_joint_world`, which has no camera, returns the entity-hold pose, not the cadenced one. The drawn socket child (`ParentJoint`) rides the drawn, cadenced pose: the socket pre-pass `posed_joint_model` takes the same effective hold.
+- (vi) **Quality bias.** An optional per-preset level offset for the cadence level, as `lod_bias` does for the mesh level; decide at build.
+- (vii) **Determinism and schema.** Nothing enters `WorldHash`. The wire schema does not move: a document key, not a component.
+- (viii) **Acceptance.** A `character-socket`-style golden with a socket child on a cadenced far figure; `world_hash` and the `AnimationEvents` stream unchanged with `lod_hold` on; sample counts fall by the expected factor in the `skin_pose_bench`; a scene without the key renders byte-identically.
+
 ## Status
 
 Design written 2026-09-30. Rung 0 shipped (Clockout 0030; `Visibility`, `examples/gallery/visibility.yaml`). Rung 2a shipped for request 0008 (decisions 7–20; the W2 wave set above); the bench figures are below.
@@ -746,6 +757,8 @@ deltas move by half a millisecond between runs, so only the decals cost and the 
 clear of the noise.
 
 **The decal room bench (Serious Isaac 0021, unpinned M5, 2026-11-09).** `cargo test -p ludion-engine --release --test it -- culling_bench::needs_gpu_decal_room_bench --ignored --nocapture`: 1,000 textured `multiply` scorches on the floor and two walls beside the torture room minus sprites, particles and shots (500 skinned enemies, 100 corpses), decals on then ablated. One projector draw, 600 receiver meshes (the skinned ones, once per frame). GPU frame on/off, three runs: crowd 2.42/2.22 ms (delta 0.19 to 0.24), wall 2.17/2.14 ms (delta 0.03). Passes on: `projector` 0.71 (crowd) and 0.44 to 0.45 ms (wall), `decal_receivers` 0.76 and 0.27 ms. Extract 0.99/0.65 ms (delta 0.35 ms, the `Decals` phase 0.17 ms). Per decal: about 0.2 µs GPU frame at the crowd view (0.03 µs at the wall), 0.35 µs extract. Run-to-run spread under 0.05 ms. The frame delta is far below the summed pass medians (tiled-GPU overlap). Pinned figures are owed.
+
+**Animation palette work (Serious Isaac 0019).** Decision 17's constant-factor fix shipped for request 0019: extract's `Skin` phase and parallel palette sampling. The palette skip was measured and rejected. Figures: `Plan/animation-clips.md` Status "Crowd posing".
 
 **Indirect-validation cost (6a, unpinned M5, 2026-11-08).** wgpu validates every indirect draw with a
 compute dispatch outside the timed passes, so the GPU frame span is the figure that shows it. Method:

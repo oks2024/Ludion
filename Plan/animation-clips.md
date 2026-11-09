@@ -83,6 +83,10 @@ Restart and scrub replay the blend). The Models view gets a Characters library
 same strip. Owed: the sitting (gallery feel in the window + the preview's live smoke,
 `Plan/editor-live-smoke.md`); its verdict is recorded as a decision and the Status collapses then.
 
+### Crowd posing (Serious Isaac 0019)
+
+Shipped: S1a r2272 (`ExtractPhase::Skin`, `SkinCounts`, palettes sampled in parallel through `ludion_core::par`); S1b r2273 (`ProfileReport.skin`, one schema move, the `.lrp` corpus re-recorded header-only); S2 r2275 (`examples/gallery/crowd-animation.yaml` with its Windows golden, `crates/ludion-engine/tests/skin_pose.rs`). Piece 1, the palette reuse cache, was built, measured and rejected (§Decisions, "Piece 1"). Bench, `cargo test -p ludion-engine --release --test it -- skin_pose --ignored --nocapture` (RTX 3090 / 5950X, release, `crowd-animation`, 500 figures, 5,500 joints): `Skin` median 0.374 ms at 1 thread, 0.315 at 8, 0.317 at the default 32. Pinned M4 figures are owed (`Plan/owed.md`). Pieces 3 (`lod_hold`) and 4 (pose sharing) are Proposed, not approved: see §Decisions and `Plan/gpu-driven-culling.md` §Decisions.
+
 ## Trigger
 
 `Plan/skeletal-animation.md` decision 1 kept glTF animations refused (`L1202`) "until a game asks for
@@ -196,6 +200,18 @@ the clip.
     stop-motion 'on twos' with crossfades included; per-entity only, no scene-wide resource. Rejected:
     `pose_hz` (not exact at 60 Hz), per-entity phase. `set_speed` between two steps
     stores the grid tick's clock in the anchor (`grid_ticks`), so the pose moves only on the grid.
+    *Proposed amendment (Serious Isaac 0019, not approved): a per-level cadence factor, `Plan/gpu-driven-culling.md` §Decisions "Proposed (Serious Isaac 0019 …)"*.
+
+**Proposed (Serious Isaac 0019, owner approval owed). Crowd pose sharing and palette reuse.** Ready to build once approved.
+
+- (0) **Piece 1, palette reuse: measured and rejected.** A cache copying a held palette (and a serial reuse pre-pass) was built and measured on `crowd-animation` (`Skin` median ms, reuse off/on): per-entry cache T1 .381/.298, T8 .324/.370, default .321/.409; serial pre-pass T1 .373/.250, T8 .370/.380, default .374/.378. The gate was a win or tie at both T=8 and the default thread count; it lost. Why: parallel posing already sits near the thread-spawn floor, so copying a held palette costs about what sampling it does. Re-measure on rigs above ~30 joints or a few-core target such as the iOS device.
+- (i) **Exact sharing.** A palette is in skin-model space, so two skinned instances with the same key have bit-identical palettes: the mesh `Arc`, character `Arc`, sampler identities, held clip time bits and fade weight bits (the key is new; none exists yet). Sharing points their `MeshInstance.bone_offset` at one range. A serial pass over the jobs in registration order computes each sampled job's key and assigns a first-occurrence owner through `ludion_core::collections::StableMap`; only owners are sampled, in parallel as before; the concatenation and every `bone_offset` are then a pure function of job order, the same at 1, 2 and 8 threads. A sharer counts `palettes_shared` and no joints. The output is identical, so it amends no decision and is the first item to build if approved.
+- (ii) **`bone_offset` audit.** Confirm at build that nothing writes into an instance's palette range after extract: grep the `bone_offset` consumers, the viewmodel and the skinned culling bounds first. The GPU bound (`Plan/gpu-driven-culling.md` decision 13) stays per instance, from the shared palette × its own model.
+- (iii) **`pose_buckets: N`.** Per mesh level on `kind: character`: snap clip time to `duration / N` at that level so more instances share. It changes the picture, so it is opt-in, built after exact sharing, and only if the bench's `palettes_shared` at the far levels shows it pays.
+- (iv) **Leaf-subtree hold at rest** (the request's third open question) is deferred until `joints_sampled` shows joint count, not instance count, is the cost.
+- (v) **Acceptance.** Goldens byte-identical with exact sharing on; palette bytes identical at 1, 2 and 8 threads; `palettes_shared` above 0 on `crowd-animation`.
+- (vi) Nothing enters `WorldHash`; the wire schema does not move.
+- (vii) **Gate.** Sharing and `lod_hold` cut sample work, unlike reuse, so they may pay, but each ships only if it wins or ties at T=8 and the default thread count in `skin_pose_bench`.
 
 ## The formats
 
