@@ -114,6 +114,7 @@ mod scatter_bench;
 mod scene_paths;
 mod shutdown;
 mod skin_bone;
+mod skin_pose;
 mod skin_ragdoll;
 mod socket_pose;
 mod spatial_snapshot;
