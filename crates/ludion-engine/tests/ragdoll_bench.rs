@@ -35,9 +35,11 @@ use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
     Budget, Engine, Mesh, MeshSource, ProfileReport, SkinBone, check_budget, load_budget,
-    move_character, profile_engine, switch_skin_to_ragdoll,
+    profile_engine, switch_skin_to_ragdoll,
 };
 use ludion_physics::{CharacterMotor, MIRROR, PhysicsWorld, STEP, WRITE};
+
+use crate::horde_driver::motor_walk;
 
 const PARTS: &str = "prefabs/mannequin-ragdoll.prefab.yaml";
 const MOTORS: usize = 500;
@@ -199,26 +201,6 @@ fn layout(world: &mut World) -> Layout {
         .collect();
     motors.sort();
     Layout { skins, motors }
-}
-
-/// Every motor, in id order, walks a few centimetres a tick; the direction flips every 60 ticks and
-/// alternates by index. Tick-derived, no transcendentals.
-fn motor_walk(world: &mut World, ctx: &SystemCtx) {
-    let mut motors: Vec<EntityId> = world
-        .query_ids::<(&CharacterMotor,)>()
-        .map(|(id, _)| id)
-        .collect();
-    motors.sort();
-    let phase = ctx.frame.as_u64() / 60;
-    for (i, id) in motors.into_iter().enumerate() {
-        let sign = if (i as u64 + phase).is_multiple_of(2) {
-            1.0
-        } else {
-            -1.0
-        };
-        // `NoPhysicsWorld` on tick 0 is expected.
-        let _ = move_character(world, id, [0.04 * sign, -0.1, 0.0]);
-    }
 }
 
 fn switch(world: &mut World, skin: EntityId) -> (EntityId, Vec<EntityId>) {

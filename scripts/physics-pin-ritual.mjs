@@ -31,10 +31,10 @@
 //                    vendor/rapier3d or vendor/parry3d exists: the pin carries vendored patches — port each
 //                    vendor/<crate>/LUDION-PATCH.md onto <x.y.z> first.
 //   --bless-traces   on the FIRST machine: run steps 3-4 unblessed; only on a MOVED verdict re-record
-//                    the five committed traces (LUDION_BLESS=1 on exactly the tests that write one)
+//                    the six committed traces (LUDION_BLESS=1 on exactly the tests that write one)
 //                    and re-run steps 3-4. (PASS: nothing needs blessing; FAIL: nothing is blessed.)
 //                    The replay tests then pass — they re-derive from scene + seed + inputs and
-//                    compare hashes to the trace, never bytes to the .lrp — but the two committed
+//                    compare hashes to the trace, never bytes to the .lrp — but the committed
 //                    .lrp files still carry the OLD pin's physics blob in their keyframes and are
 //                    stale until step 5 re-records them (the .lrp corpus last); the run lists them.
 //                    The candidate pin and traces go to the second machine, which runs this script
@@ -68,12 +68,15 @@ const COMMITTED_COMPARISONS = new Set([
   'physics_gallery::the_pile_matches_the_committed_cross_arch_trace',
   'physics_stress::the_stress_pile_matches_the_committed_cross_arch_trace',
   'ragdoll_scene::the_ragdoll_scene_matches_the_committed_cross_arch_trace',
+  'physics_horde::the_horde_matches_the_committed_cross_arch_trace',
   // snapshot restore continued against the committed trace
   'physics_stress::a_restored_stress_pile_reproduces_the_committed_trace_from_tick_300',
   'ragdoll_scene::a_restored_ragdoll_scene_reproduces_the_committed_trace_from_tick_300',
+  'physics_horde::a_restored_horde_reproduces_the_committed_trace_from_the_snapshot_tick',
   // the committed .lrp replays
   'physics_stress::the_committed_stress_replay_reproduces_the_committed_trace',
   'ragdoll_scene::the_committed_ragdoll_replay_reproduces_the_committed_trace',
+  'physics_horde::the_committed_horde_replay_reproduces_the_committed_trace',
   // `ludion sim-hash` against the committed traces
   'physics::sim_hash_matches_the_committed_trace_at_two_frame_counts',
   'physics::sim_hash_matches_the_stress_trace',
@@ -87,10 +90,15 @@ const BLESS_TRACE_TESTS = [
   'physics_gallery::the_pile_matches_the_committed_cross_arch_trace',
   'physics_stress::the_stress_pile_matches_the_committed_cross_arch_trace',
   'ragdoll_scene::the_ragdoll_scene_matches_the_committed_cross_arch_trace',
+  'physics_horde::the_horde_matches_the_committed_cross_arch_trace',
 ];
 
 // The committed replays whose keyframes hold the previous pin's physics blob after a blessed move.
-const STALE_REPLAYS = ['examples/gallery/physics-stress.lrp', 'examples/gallery/ragdoll.lrp'];
+const STALE_REPLAYS = [
+  'examples/gallery/physics-stress.lrp',
+  'examples/gallery/ragdoll.lrp',
+  'examples/gallery/physics-horde.lrp',
+];
 
 const GATE_FILTER =
   'package(ludion-physics) | (binary_id(=ludion-engine::it) & test(/^(physics_|ragdoll)/)) | (binary_id(=ludion-cli::it) & test(/^physics::/))';

@@ -6,6 +6,7 @@
 # this list against the tree; a pattern matching nothing over the line is itself a gate failure.
 
 examples/gallery/physics-stress.lrp     # committed replay of the 512-body stress pile; its keyframe carries the physics blob, size ceiling in crates/ludion-engine/tests/physics_stress.rs
+examples/gallery/physics-horde.lrp       # committed replay of the physics-horde scene (500 motors, 120 ragdolls, 5000 shots); size ceiling in crates/ludion-engine/tests/physics_horde.rs
 
 # Sweep evidence cited by a plan whose Status is still open; the entry and the image leave together
 # when that plan closes (the image stays in Lore history). New sweep images are downscaled instead.

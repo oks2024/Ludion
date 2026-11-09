@@ -330,3 +330,108 @@ fn a_corrupt_physics_blob_is_reported_as_l3033() {
         diagnostic.message
     );
 }
+
+/// Two overlapping `agents` motors on a layer that ignores itself, and a floor.
+const MOTOR_PAIR: &str = "format: 1
+seed: 3
+physics:
+  space: free
+  layers:
+    - name: agents
+      ignores:
+        - agents
+entities:
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 10.0
+              - 0.5
+              - 10.0
+        body: static
+  - name: a
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      CharacterMotor:
+        layer: agents
+  - name: b
+    components:
+      Transform:
+        translation:
+          - 0.5
+          - 0.0
+          - 0.0
+      CharacterMotor:
+        layer: agents
+";
+
+fn push_motors(world: &mut ludion_ecs::World, _ctx: &ludion_ecs::SystemCtx) {
+    let mut motors: Vec<_> = world
+        .query_ids::<(&ludion_physics::CharacterMotor,)>()
+        .map(|(id, _)| id)
+        .collect();
+    motors.sort();
+    // `NoPhysicsWorld` on tick 0 is expected.
+    let _ = ludion_engine::move_character(world, motors[0], [0.1, -0.1, 0.0]);
+}
+
+fn motor_pair(name: &str) -> Engine {
+    let mut engine = game(name)
+        .system("push_motors", push_motors)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(MOTOR_PAIR).unwrap();
+    engine
+}
+
+/// The restored solver carries its bodies' collision groups, but the layer table that
+/// `move_character` filters by must be back before the first game system runs, not only after the
+/// next physics write.
+#[test]
+fn a_motor_moved_on_the_first_tick_after_a_restore_still_honours_the_layers() {
+    let mut uninterrupted = motor_pair("layers-reference");
+    for _ in 0..4 {
+        uninterrupted.advance_live();
+    }
+    let mut first = motor_pair("layers-first");
+    for _ in 0..4 {
+        first.advance_live();
+    }
+    let document = snapshot_of(&mut first);
+    let mut resumed = motor_pair("layers-resumed");
+    restore(&mut resumed, document);
+
+    uninterrupted.advance_live();
+    resumed.advance_live();
+
+    let x_of = |engine: &mut Engine| {
+        let mut motors: Vec<_> = engine
+            .world_mut()
+            .query_ids::<(&ludion_physics::CharacterMotor,)>()
+            .map(|(id, _)| id)
+            .collect();
+        motors.sort();
+        engine
+            .world()
+            .get::<ludion_engine::Transform>(motors[0])
+            .unwrap()
+            .unwrap()
+            .translation
+    };
+    assert_eq!(x_of(&mut resumed), x_of(&mut uninterrupted));
+    assert_eq!(
+        resumed.world_hash().unwrap().as_u64(),
+        uninterrupted.world_hash().unwrap().as_u64()
+    );
+}

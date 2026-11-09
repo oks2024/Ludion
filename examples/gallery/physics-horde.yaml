@@ -1,0 +1,7304 @@
+# Feature: Serious Isaac's M2 physics shape (engine request 0020) - a closed room holding 500
+# `CharacterMotor`s, 120 skinned mannequins (the first 24 pinned) and 5,000 pool projectiles.
+#
+# The gallery's render harness ticks the built-in registry only (`check -> instantiate -> tick(0)
+# -> extract -> render`), so the golden shows the authored tick-0 layout: the skins stand in their
+# rest pose and the motors, which carry no mesh, are not drawn. The simulated horde lives in
+# `crates/ludion-engine/tests/horde_driver.rs`, driven by `physics_horde.rs` against the committed
+# trace (`physics-horde.trace.txt`) and replay (`physics-horde.lrp`): at tick 0 it switches every skin
+# (the entities carrying a `character` Mesh, in file order) to its SkinBone ragdoll through
+# `prefabs/mannequin-ragdoll.prefab.yaml` and pins the first 24 skins - the ones beside the long
+# walls - by a ball joint to a static anchor; every 30 ticks it re-throws a quarter of the rest.
+#
+# Layout: a 53 x 33 m room (walls 3 m tall) with 16 static pillars; the ragdoll half is west of
+# x = 0 (pinned skins 0.4 m off the long walls, then 96 on a 1.4 m grid); the motor half is east,
+# 25 x 20 on a 1.2 m grid, so the +-2.4 m scripted walk along x stays clear of the ragdolls and of
+# the east wall. The motors' `agents` layer ignores itself.
+#
+# Placement is deterministic (a throwaway generator, values baked in here), so this file IS the
+# fixture - re-running a generator is not a gate (the `physics-stress.yaml` precedent).
+format: 1
+name: "physics-horde - 500 motors, 120 skinned ragdolls and 5000 projectiles in a closed room"
+seed: 1
+physics:
+  space: free
+  layers:
+    - name: agents
+      ignores:
+        - agents
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 34.0
+          - 26.0
+        rotation:
+          - -62.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 16.0
+          - 0.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 90.0
+        range: 70.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - -0.5
+          - 0.0
+        scale:
+          - 55.0
+          - 1.0
+          - 34.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.42
+          - 0.44
+          - 0.46
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 27.5
+              - 0.5
+              - 17.0
+        body: static
+  - name: wall-west
+    components:
+      Transform:
+        translation:
+          - -25.5
+          - 1.5
+          - 0.0
+        scale:
+          - 1.0
+          - 3.0
+          - 34.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.52
+          - 0.56
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 1.5
+              - 17.0
+        body: static
+  - name: wall-east
+    components:
+      Transform:
+        translation:
+          - 28.5
+          - 1.5
+          - 0.0
+        scale:
+          - 1.0
+          - 3.0
+          - 34.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.52
+          - 0.56
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 1.5
+              - 17.0
+        body: static
+  - name: wall-north
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 1.5
+          - 16.5
+        scale:
+          - 55.0
+          - 3.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.52
+          - 0.56
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 27.5
+              - 1.5
+              - 0.5
+        body: static
+  - name: wall-south
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 1.5
+          - -16.5
+        scale:
+          - 55.0
+          - 3.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.52
+          - 0.56
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 27.5
+              - 1.5
+              - 0.5
+        body: static
+  - name: pillar0
+    components:
+      Transform:
+        translation:
+          - -23.0
+          - 0.75
+          - -10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar1
+    components:
+      Transform:
+        translation:
+          - -20.0
+          - 0.75
+          - -10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar2
+    components:
+      Transform:
+        translation:
+          - -17.0
+          - 0.75
+          - -10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar3
+    components:
+      Transform:
+        translation:
+          - -14.0
+          - 0.75
+          - -10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar4
+    components:
+      Transform:
+        translation:
+          - -11.0
+          - 0.75
+          - -10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar5
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 0.75
+          - -10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar6
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.75
+          - -10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar7
+    components:
+      Transform:
+        translation:
+          - -2.0
+          - 0.75
+          - -10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar8
+    components:
+      Transform:
+        translation:
+          - -23.0
+          - 0.75
+          - 10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar9
+    components:
+      Transform:
+        translation:
+          - -20.0
+          - 0.75
+          - 10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar10
+    components:
+      Transform:
+        translation:
+          - -17.0
+          - 0.75
+          - 10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar11
+    components:
+      Transform:
+        translation:
+          - -14.0
+          - 0.75
+          - 10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar12
+    components:
+      Transform:
+        translation:
+          - -11.0
+          - 0.75
+          - 10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar13
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 0.75
+          - 10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar14
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.75
+          - 10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pillar15
+    components:
+      Transform:
+        translation:
+          - -2.0
+          - 0.75
+          - 10.0
+        scale:
+          - 1.0
+          - 1.5
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.5
+          - 0.38
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.75
+              - 0.5
+        body: static
+  - name: pinned0
+    components:
+      Transform:
+        translation:
+          - -24.0
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned1
+    components:
+      Transform:
+        translation:
+          - -22.1
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned2
+    components:
+      Transform:
+        translation:
+          - -20.2
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned3
+    components:
+      Transform:
+        translation:
+          - -18.3
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned4
+    components:
+      Transform:
+        translation:
+          - -16.4
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned5
+    components:
+      Transform:
+        translation:
+          - -14.5
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned6
+    components:
+      Transform:
+        translation:
+          - -12.6
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned7
+    components:
+      Transform:
+        translation:
+          - -10.7
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned8
+    components:
+      Transform:
+        translation:
+          - -8.8
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned9
+    components:
+      Transform:
+        translation:
+          - -6.9
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned10
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned11
+    components:
+      Transform:
+        translation:
+          - -3.1
+          - 0.3
+          - -15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned12
+    components:
+      Transform:
+        translation:
+          - -24.0
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned13
+    components:
+      Transform:
+        translation:
+          - -22.1
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned14
+    components:
+      Transform:
+        translation:
+          - -20.2
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned15
+    components:
+      Transform:
+        translation:
+          - -18.3
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned16
+    components:
+      Transform:
+        translation:
+          - -16.4
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned17
+    components:
+      Transform:
+        translation:
+          - -14.5
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned18
+    components:
+      Transform:
+        translation:
+          - -12.6
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned19
+    components:
+      Transform:
+        translation:
+          - -10.7
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned20
+    components:
+      Transform:
+        translation:
+          - -8.8
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned21
+    components:
+      Transform:
+        translation:
+          - -6.9
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned22
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: pinned23
+    components:
+      Transform:
+        translation:
+          - -3.1
+          - 0.3
+          - 15.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll0
+    components:
+      Transform:
+        translation:
+          - -24.0
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll1
+    components:
+      Transform:
+        translation:
+          - -22.6
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll2
+    components:
+      Transform:
+        translation:
+          - -21.2
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll3
+    components:
+      Transform:
+        translation:
+          - -19.8
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll4
+    components:
+      Transform:
+        translation:
+          - -18.4
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll5
+    components:
+      Transform:
+        translation:
+          - -17.0
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll6
+    components:
+      Transform:
+        translation:
+          - -15.6
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll7
+    components:
+      Transform:
+        translation:
+          - -14.2
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll8
+    components:
+      Transform:
+        translation:
+          - -12.8
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll9
+    components:
+      Transform:
+        translation:
+          - -11.4
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll10
+    components:
+      Transform:
+        translation:
+          - -10.0
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll11
+    components:
+      Transform:
+        translation:
+          - -8.6
+          - 0.3
+          - -4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll12
+    components:
+      Transform:
+        translation:
+          - -24.0
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll13
+    components:
+      Transform:
+        translation:
+          - -22.6
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll14
+    components:
+      Transform:
+        translation:
+          - -21.2
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll15
+    components:
+      Transform:
+        translation:
+          - -19.8
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll16
+    components:
+      Transform:
+        translation:
+          - -18.4
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll17
+    components:
+      Transform:
+        translation:
+          - -17.0
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll18
+    components:
+      Transform:
+        translation:
+          - -15.6
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll19
+    components:
+      Transform:
+        translation:
+          - -14.2
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll20
+    components:
+      Transform:
+        translation:
+          - -12.8
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll21
+    components:
+      Transform:
+        translation:
+          - -11.4
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll22
+    components:
+      Transform:
+        translation:
+          - -10.0
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll23
+    components:
+      Transform:
+        translation:
+          - -8.6
+          - 0.3
+          - -3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll24
+    components:
+      Transform:
+        translation:
+          - -24.0
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll25
+    components:
+      Transform:
+        translation:
+          - -22.6
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll26
+    components:
+      Transform:
+        translation:
+          - -21.2
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll27
+    components:
+      Transform:
+        translation:
+          - -19.8
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll28
+    components:
+      Transform:
+        translation:
+          - -18.4
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll29
+    components:
+      Transform:
+        translation:
+          - -17.0
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll30
+    components:
+      Transform:
+        translation:
+          - -15.6
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll31
+    components:
+      Transform:
+        translation:
+          - -14.2
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll32
+    components:
+      Transform:
+        translation:
+          - -12.8
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll33
+    components:
+      Transform:
+        translation:
+          - -11.4
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll34
+    components:
+      Transform:
+        translation:
+          - -10.0
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll35
+    components:
+      Transform:
+        translation:
+          - -8.6
+          - 0.3
+          - -2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll36
+    components:
+      Transform:
+        translation:
+          - -24.0
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll37
+    components:
+      Transform:
+        translation:
+          - -22.6
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll38
+    components:
+      Transform:
+        translation:
+          - -21.2
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll39
+    components:
+      Transform:
+        translation:
+          - -19.8
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll40
+    components:
+      Transform:
+        translation:
+          - -18.4
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll41
+    components:
+      Transform:
+        translation:
+          - -17.0
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll42
+    components:
+      Transform:
+        translation:
+          - -15.6
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll43
+    components:
+      Transform:
+        translation:
+          - -14.2
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll44
+    components:
+      Transform:
+        translation:
+          - -12.8
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll45
+    components:
+      Transform:
+        translation:
+          - -11.4
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll46
+    components:
+      Transform:
+        translation:
+          - -10.0
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll47
+    components:
+      Transform:
+        translation:
+          - -8.6
+          - 0.3
+          - -0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll48
+    components:
+      Transform:
+        translation:
+          - -24.0
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll49
+    components:
+      Transform:
+        translation:
+          - -22.6
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll50
+    components:
+      Transform:
+        translation:
+          - -21.2
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll51
+    components:
+      Transform:
+        translation:
+          - -19.8
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll52
+    components:
+      Transform:
+        translation:
+          - -18.4
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll53
+    components:
+      Transform:
+        translation:
+          - -17.0
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll54
+    components:
+      Transform:
+        translation:
+          - -15.6
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll55
+    components:
+      Transform:
+        translation:
+          - -14.2
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll56
+    components:
+      Transform:
+        translation:
+          - -12.8
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll57
+    components:
+      Transform:
+        translation:
+          - -11.4
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll58
+    components:
+      Transform:
+        translation:
+          - -10.0
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll59
+    components:
+      Transform:
+        translation:
+          - -8.6
+          - 0.3
+          - 0.7
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll60
+    components:
+      Transform:
+        translation:
+          - -24.0
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll61
+    components:
+      Transform:
+        translation:
+          - -22.6
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll62
+    components:
+      Transform:
+        translation:
+          - -21.2
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll63
+    components:
+      Transform:
+        translation:
+          - -19.8
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll64
+    components:
+      Transform:
+        translation:
+          - -18.4
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll65
+    components:
+      Transform:
+        translation:
+          - -17.0
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll66
+    components:
+      Transform:
+        translation:
+          - -15.6
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll67
+    components:
+      Transform:
+        translation:
+          - -14.2
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll68
+    components:
+      Transform:
+        translation:
+          - -12.8
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll69
+    components:
+      Transform:
+        translation:
+          - -11.4
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll70
+    components:
+      Transform:
+        translation:
+          - -10.0
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll71
+    components:
+      Transform:
+        translation:
+          - -8.6
+          - 0.3
+          - 2.1
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll72
+    components:
+      Transform:
+        translation:
+          - -24.0
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll73
+    components:
+      Transform:
+        translation:
+          - -22.6
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll74
+    components:
+      Transform:
+        translation:
+          - -21.2
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll75
+    components:
+      Transform:
+        translation:
+          - -19.8
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll76
+    components:
+      Transform:
+        translation:
+          - -18.4
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll77
+    components:
+      Transform:
+        translation:
+          - -17.0
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll78
+    components:
+      Transform:
+        translation:
+          - -15.6
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll79
+    components:
+      Transform:
+        translation:
+          - -14.2
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll80
+    components:
+      Transform:
+        translation:
+          - -12.8
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll81
+    components:
+      Transform:
+        translation:
+          - -11.4
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll82
+    components:
+      Transform:
+        translation:
+          - -10.0
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll83
+    components:
+      Transform:
+        translation:
+          - -8.6
+          - 0.3
+          - 3.5
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll84
+    components:
+      Transform:
+        translation:
+          - -24.0
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll85
+    components:
+      Transform:
+        translation:
+          - -22.6
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll86
+    components:
+      Transform:
+        translation:
+          - -21.2
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll87
+    components:
+      Transform:
+        translation:
+          - -19.8
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll88
+    components:
+      Transform:
+        translation:
+          - -18.4
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll89
+    components:
+      Transform:
+        translation:
+          - -17.0
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll90
+    components:
+      Transform:
+        translation:
+          - -15.6
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll91
+    components:
+      Transform:
+        translation:
+          - -14.2
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll92
+    components:
+      Transform:
+        translation:
+          - -12.8
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll93
+    components:
+      Transform:
+        translation:
+          - -11.4
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll94
+    components:
+      Transform:
+        translation:
+          - -10.0
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: ragdoll95
+    components:
+      Transform:
+        translation:
+          - -8.6
+          - 0.3
+          - 4.9
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+  - name: motor0
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor1
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor2
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor3
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor4
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor5
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor6
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor7
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor8
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor9
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor10
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor11
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor12
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor13
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor14
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor15
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor16
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor17
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor18
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor19
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor20
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor21
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor22
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor23
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor24
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor25
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor26
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor27
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor28
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor29
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor30
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor31
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor32
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor33
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor34
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor35
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor36
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor37
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor38
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor39
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor40
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor41
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor42
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor43
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor44
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor45
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor46
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor47
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor48
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor49
+    components:
+      Transform:
+        translation:
+          - 3.4
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor50
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor51
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor52
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor53
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor54
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor55
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor56
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor57
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor58
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor59
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor60
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor61
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor62
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor63
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor64
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor65
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor66
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor67
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor68
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor69
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor70
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor71
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor72
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor73
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor74
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor75
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor76
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor77
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor78
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor79
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor80
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor81
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor82
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor83
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor84
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor85
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor86
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor87
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor88
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor89
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor90
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor91
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor92
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor93
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor94
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor95
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor96
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor97
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor98
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor99
+    components:
+      Transform:
+        translation:
+          - 5.8
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor100
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor101
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor102
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor103
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor104
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor105
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor106
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor107
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor108
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor109
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor110
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor111
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor112
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor113
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor114
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor115
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor116
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor117
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor118
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor119
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor120
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor121
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor122
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor123
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor124
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor125
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor126
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor127
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor128
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor129
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor130
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor131
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor132
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor133
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor134
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor135
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor136
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor137
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor138
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor139
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor140
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor141
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor142
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor143
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor144
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor145
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor146
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor147
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor148
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor149
+    components:
+      Transform:
+        translation:
+          - 8.2
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor150
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor151
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor152
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor153
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor154
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor155
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor156
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor157
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor158
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor159
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor160
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor161
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor162
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor163
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor164
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor165
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor166
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor167
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor168
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor169
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor170
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor171
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor172
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor173
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor174
+    components:
+      Transform:
+        translation:
+          - 9.4
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor175
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor176
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor177
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor178
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor179
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor180
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor181
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor182
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor183
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor184
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor185
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor186
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor187
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor188
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor189
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor190
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor191
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor192
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor193
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor194
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor195
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor196
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor197
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor198
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor199
+    components:
+      Transform:
+        translation:
+          - 10.6
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor200
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor201
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor202
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor203
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor204
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor205
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor206
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor207
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor208
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor209
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor210
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor211
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor212
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor213
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor214
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor215
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor216
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor217
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor218
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor219
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor220
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor221
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor222
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor223
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor224
+    components:
+      Transform:
+        translation:
+          - 11.8
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor225
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor226
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor227
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor228
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor229
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor230
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor231
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor232
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor233
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor234
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor235
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor236
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor237
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor238
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor239
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor240
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor241
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor242
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor243
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor244
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor245
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor246
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor247
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor248
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor249
+    components:
+      Transform:
+        translation:
+          - 13.0
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor250
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor251
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor252
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor253
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor254
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor255
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor256
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor257
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor258
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor259
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor260
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor261
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor262
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor263
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor264
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor265
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor266
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor267
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor268
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor269
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor270
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor271
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor272
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor273
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor274
+    components:
+      Transform:
+        translation:
+          - 14.2
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor275
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor276
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor277
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor278
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor279
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor280
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor281
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor282
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor283
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor284
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor285
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor286
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor287
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor288
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor289
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor290
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor291
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor292
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor293
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor294
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor295
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor296
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor297
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor298
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor299
+    components:
+      Transform:
+        translation:
+          - 15.4
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor300
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor301
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor302
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor303
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor304
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor305
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor306
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor307
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor308
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor309
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor310
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor311
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor312
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor313
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor314
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor315
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor316
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor317
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor318
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor319
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor320
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor321
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor322
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor323
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor324
+    components:
+      Transform:
+        translation:
+          - 16.6
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor325
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor326
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor327
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor328
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor329
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor330
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor331
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor332
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor333
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor334
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor335
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor336
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor337
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor338
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor339
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor340
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor341
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor342
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor343
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor344
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor345
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor346
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor347
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor348
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor349
+    components:
+      Transform:
+        translation:
+          - 17.8
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor350
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor351
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor352
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor353
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor354
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor355
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor356
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor357
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor358
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor359
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor360
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor361
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor362
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor363
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor364
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor365
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor366
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor367
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor368
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor369
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor370
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor371
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor372
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor373
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor374
+    components:
+      Transform:
+        translation:
+          - 19.0
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor375
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor376
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor377
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor378
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor379
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor380
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor381
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor382
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor383
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor384
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor385
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor386
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor387
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor388
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor389
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor390
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor391
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor392
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor393
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor394
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor395
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor396
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor397
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor398
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor399
+    components:
+      Transform:
+        translation:
+          - 20.2
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor400
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor401
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor402
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor403
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor404
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor405
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor406
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor407
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor408
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor409
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor410
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor411
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor412
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor413
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor414
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor415
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor416
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor417
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor418
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor419
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor420
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor421
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor422
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor423
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor424
+    components:
+      Transform:
+        translation:
+          - 21.4
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor425
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor426
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor427
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor428
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor429
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor430
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor431
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor432
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor433
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor434
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor435
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor436
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor437
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor438
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor439
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor440
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor441
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor442
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor443
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor444
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor445
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor446
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor447
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor448
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor449
+    components:
+      Transform:
+        translation:
+          - 22.6
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor450
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor451
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor452
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor453
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor454
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor455
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor456
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor457
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor458
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor459
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor460
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor461
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor462
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor463
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor464
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor465
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor466
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor467
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor468
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor469
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor470
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor471
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor472
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor473
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor474
+    components:
+      Transform:
+        translation:
+          - 23.8
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor475
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor476
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor477
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor478
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor479
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor480
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor481
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor482
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor483
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor484
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor485
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor486
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - -1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor487
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 0.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor488
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 1.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor489
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 2.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor490
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 3.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor491
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 4.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor492
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 6.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor493
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 7.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor494
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 8.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor495
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 9.6
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor496
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 10.8
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor497
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 12.0
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor498
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 13.2
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents
+  - name: motor499
+    components:
+      Transform:
+        translation:
+          - 25.0
+          - 0.8
+          - 14.4
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+        layer: agents

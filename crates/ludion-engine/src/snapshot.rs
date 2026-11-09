@@ -1060,7 +1060,13 @@ pub(crate) fn restore_into(
     // world; an absent field inserts nothing, and the world is new, so there is nothing stale to
     // remove.
     if let Some(blob) = &doc.physics {
-        world.insert_resource(restore_physics(blob, tick_rate)?);
+        let mut physics = restore_physics(blob, tick_rate)?;
+        // The decoded solver has no layer table until the next physics write; a game system that
+        // moves a character before then would ignore `physics.layers`.
+        if let Some(scene) = &scene_physics {
+            physics.apply_settings(&crate::scene_physics::settings(scene));
+        }
+        world.insert_resource(physics);
     }
     if let Some(walk) = doc.animation_walk.clone() {
         world.insert_resource(walk);
