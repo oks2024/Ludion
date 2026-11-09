@@ -9,7 +9,7 @@
 #[allow(dead_code)]
 mod example;
 
-use example::{GroupState, KILLS, RUN_TICKS, groups};
+use example::{ADMISSIONS_PER_FRAME, GroupState, KILLS, RUN_TICKS, groups};
 use ludion::prelude::*;
 use ludion_core::par;
 use ludion_protocol::command::EngineRestoreParams;
@@ -95,7 +95,8 @@ fn simulated_groups_never_exceed_the_cap() {
         let frame = tick as u64;
         assert!(
             rows.iter()
-                .all(|row| row.2 != GroupState::Simulated || frame - row.0 / 64 <= 300),
+                .all(|row| row.2 != GroupState::Simulated
+                    || frame - row.0 / ADMISSIONS_PER_FRAME <= 300),
             "tick {tick}: a group has been simulated past max_sim_ticks"
         );
         let in_solver = skins_in_the_solver(engine.world_mut());

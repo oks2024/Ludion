@@ -240,7 +240,7 @@ observe.
 **Proposed (Serious Isaac 0017, owner approval owed).** An engine ragdoll pool, ready to build once approved. The game-side reference is `crates/ludion/examples/ragdoll_budget.rs` (`ludion docs physics-joints` "Ragdoll budget"):
 
 - (i) A `RagdollPool` resource and a `RagdollGroup` handle, registered by `switch_to_ragdoll`/`switch_skin_to_ragdoll` in admission order (tick, then call order). Callers may ignore the handle.
-- (ii) A hashed `physics.ragdolls:` block: `max_simulated`, `max_retired`, `settle_ticks`, `max_sim_ticks`, `evict: oldest_unpinned`. The age fallback exists because the bench found 2–5% of parts never sleep. Unset is byte-identical to today; the schema moves.
+- (ii) A hashed `physics.ragdolls:` block: `max_simulated`, `max_retired`, `max_sim_ticks`, `evict: oldest_unpinned`. The age fallback exists because the bench found 2–5% of parts never sleep. Unset is byte-identical to today; the schema moves.
 - (iii) Retire drops the bodies and joints and keeps `Transform` + `SkinBone`; the pool state is snapshot-restored.
 - (iv) Over the cap: retire the oldest settled, then evict the oldest unpinned simulated group; a pinned group (a part jointed to a static body) goes last.
 - (v) `RagdollRetired { group, reason: Settled | Expired | Evicted }` and `RagdollDespawned { group }` in a per-tick resource, like `AnimationEvents`.

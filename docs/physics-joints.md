@@ -243,7 +243,8 @@ The runnable pool is `cargo run -p ludion --example ragdoll_budget`: a simulated
 settle-retire, oldest-unpinned eviction (pinned last) and a retired cap, its state in registered
 components so it hashes and restores. Copy its half above `main`.
 
-Measured ragdoll step cost lives in the physics budget files (`ludion devdocs budget-files`). The
+Measured ragdoll step cost comes from the ragdoll bench (`crates/ludion-engine/tests/ragdoll_bench.rs`),
+with its figures in `Plan/physics.md` (the "Ragdoll bench" Status entry). The
 idiom is pinned by `crates/ludion-testkit/tests/ragdoll_retire.rs`, with helpers in `tests/common`.
 
 ## Gotchas

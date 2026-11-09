@@ -15,8 +15,8 @@
 //! and body build but not a per-switch file read. Skins carry no `Animation`: the switch drops it.
 //!
 //! **Budget file.** The bench checks `budgets/pinned-<box>-ragdoll-stress.toml` when it exists
-//! (`apple-m4` on macOS, `rtx3090` on Windows) and skips the check when it does not; no file is
-//! committed until a pinned run writes one. Calibrate it at N = 120, phase (d) churn, beside the 500
+//! (`apple-m4` on macOS, `rtx3090` on Windows) and skips the check when it does not; the in-file
+//! ceilings stand until one exists. Calibrate it at N = 120, phase (d) churn, beside the 500
 //! motors, at `threads = 8`: a `threads = 8` line above the first table, `frame_total_ms`, and
 //! `[systems]` keys `physics_write`, `physics_step`, `physics_mirror`, `ragdoll_churn` and
 //! `motor_walk`, each about 2x the pinned median (`dev-docs/budget-files.md`). The same run command
@@ -55,16 +55,16 @@ const MOTOR_SLAB_X: f32 = 80.0;
 
 /// Median `physics_step` per tick, in milliseconds, for N = 120 ragdolls beside 500 motors at 8
 /// threads, phase (a) all awake: about 3x the release median on an unpinned M5 laptop (not
-/// authoritative), 2026-11-09, rounded up. Pinned figures are owed.
+/// authoritative), 2026-11-09, rounded up. A pinned budget file overrides it when present.
 const STEP_AWAKE_BUDGET_MS: f64 = 5.0;
 /// Phase (b) settled, N = 120: about 3x the release median on an unpinned M5 laptop (not
-/// authoritative), 2026-11-09, rounded up. Pinned figures are owed.
+/// authoritative), 2026-11-09, rounded up. A pinned budget file overrides it when present.
 const STEP_SETTLED_BUDGET_MS: f64 = 1.0;
 /// Phase (c) blast, N = 120: about 3x the release median on an unpinned M5 laptop (not
-/// authoritative), 2026-11-09, rounded up. Pinned figures are owed.
+/// authoritative), 2026-11-09, rounded up. A pinned budget file overrides it when present.
 const STEP_BLAST_BUDGET_MS: f64 = 3.0;
 /// Phase (d) churn, N = 120: about 3x the release median on an unpinned M5 laptop (not
-/// authoritative), 2026-11-09, rounded up. Pinned figures are owed.
+/// authoritative), 2026-11-09, rounded up. A pinned budget file overrides it when present.
 const STEP_CHURN_BUDGET_MS: f64 = 2.5;
 
 fn entity(name: &str, at: [f32; 3], rest: &str) -> String {

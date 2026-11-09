@@ -12,7 +12,7 @@
 //! **The pool is registered components**, never a resource: `RagdollBudget` (authored in the scene),
 //! `RagdollGroup` on each skin and `RagdollPin` on each pin carrier. They ride `WorldHash` and
 //! `engine.snapshot`, so a restored run continues the same admissions. Admission order is
-//! `frame * 64 + index in frame`, which needs no counter.
+//! `frame * ADMISSIONS_PER_FRAME + index in frame`, which needs no counter.
 //!
 //! Everything above the `main` divider is copyable into a real game. See `ludion docs physics-joints`
 //! "Ragdoll budget".
@@ -40,6 +40,8 @@ const SKIN_PATH: &str = "characters/mannequin.character.yaml";
 pub const KILLS: u64 = 300;
 /// Kills per second of gameplay time.
 pub const KILLS_PER_SECOND: u64 = 25;
+/// Admission slots per frame in the order key; `kill_enemies` asserts a frame stays under it.
+pub const ADMISSIONS_PER_FRAME: u64 = 1 << 16;
 /// Ticks the demo runs: all kills land by tick 720, the rest is settling and retiring.
 pub const RUN_TICKS: usize = 1200;
 
@@ -72,7 +74,7 @@ pub enum GroupState {
 /// On the skin of a switched enemy: its place in the pool.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct RagdollGroup {
-    /// `frame * 64 + index in frame`: admission order.
+    /// `frame * ADMISSIONS_PER_FRAME + index in frame`: admission order.
     pub admitted: u64,
     /// Whether the torso is joined to a static anchor; pinned groups are evicted and despawned last.
     pub pinned: bool,
@@ -177,7 +179,9 @@ fn retire_settled(world: &mut World, ctx: &SystemCtx) {
         }
         if all_asleep(world, parts) {
             retire(world, skin, parts, GroupState::Settled);
-        } else if frame.saturating_sub(group.admitted / 64) >= u64::from(budget.max_sim_ticks) {
+        } else if frame.saturating_sub(group.admitted / ADMISSIONS_PER_FRAME)
+            >= u64::from(budget.max_sim_ticks)
+        {
             retire(world, skin, parts, GroupState::Expired);
         }
     }
@@ -200,7 +204,11 @@ fn kill_enemies(world: &mut World, ctx: &SystemCtx) {
     let first = if frame == 0 { 0 } else { due(frame - 1) };
     for (index, kill) in (first..due(frame)).enumerate() {
         evict_for_room(world, &budget);
-        admit(world, kill, frame * 64 + index as u64);
+        assert!(
+            (index as u64) < ADMISSIONS_PER_FRAME,
+            "more than {ADMISSIONS_PER_FRAME} admissions in one frame"
+        );
+        admit(world, kill, frame * ADMISSIONS_PER_FRAME + index as u64);
     }
 }
 
@@ -260,7 +268,7 @@ fn admit(world: &mut World, kill: u64, admitted: u64) {
         Ok(parts) => parts,
         Err(diagnostics) => {
             for diagnostic in diagnostics {
-                eprintln!("{diagnostic}");
+                report_full_diagnostic(world, "ragdoll", diagnostic);
             }
             let _ = world.despawn(skin);
             return;
