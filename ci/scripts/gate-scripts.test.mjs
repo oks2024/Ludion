@@ -329,6 +329,34 @@ test('map-drift rechecks an override scene with its flags and rejects an unknown
   }
 });
 
+test('map-drift rechecks a map-generated prefab with --prefab', () => {
+  const root = scratchTree({
+    'games/v/plaza.map.yaml': 'kind: map\n',
+    'games/v/plaza.yaml': 'format: 1\ngenerated_from: plaza.map.yaml\n',
+    'games/v/rooms/a.prefab.yaml': 'format: 1\nkind: prefab\ngenerated_from: ../plaza.map.yaml\n',
+    'games/v/rooms/b.prefab.yaml': 'format: 1\nkind: prefab\ngenerated_from: ../plaza.map.yaml --mirror z\n',
+    'games/v/rooms/goblin.prefab.yaml': 'format: 1\nkind: prefab\ngenerated_from: goblin.gltf\n',
+  });
+  try {
+    const calls = [];
+    const ludion = stubLudion(calls, (args) => {
+      if (args[0] === 'map-check') return ok('seal: sealed from first marker `m` — no way out\n');
+      return args.includes('--out') ? ok('') : ok(`${args[1]}: up to date -> ${args[1].replace('.map.yaml', '.yaml')}`);
+    });
+    const { errors, overrideChecked } = mapGate({ root, ludion });
+    assert.equal(overrideChecked, 2);
+    const map = path.join(root, 'games/v/plaza.map.yaml');
+    const prefabCalls = calls.filter((c) => c.includes('--out'));
+    assert.deepEqual(prefabCalls, [
+      ['generate-map', map, '--out', path.join(root, 'games/v/rooms/a.prefab.yaml'), '--prefab', '--check'],
+      ['generate-map', map, '--out', path.join(root, 'games/v/rooms/b.prefab.yaml'), '--mirror', 'z', '--prefab', '--check'],
+    ]);
+    assert.equal(errors.length, 0, errors.join('\n'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('map-drift fails a map whose walker can leave it (L1040)', () => {
   const root = scratchTree({
     'games/v/open.map.yaml': 'kind: map\n',

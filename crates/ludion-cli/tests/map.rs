@@ -1331,3 +1331,129 @@ fn generate_map_mirror_with_fragments_is_l1399() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("L1399"));
 }
+
+// --- generate-map --prefab -------------------------------------------------------------------
+
+fn prefab_args<'a>(map: &'a str, out: &'a str, extra: &[&'a str]) -> Vec<&'a str> {
+    let mut args = vec!["generate-map", map, "--out", out];
+    args.extend_from_slice(extra);
+    args
+}
+
+fn prefab_scratch(name: &str) -> (PathBuf, String, String) {
+    let dir = override_scratch(name);
+    std::fs::create_dir_all(dir.join("rooms")).unwrap();
+    let map = dir.join("m.map.yaml").to_str().unwrap().to_string();
+    let out = dir
+        .join("rooms/r.prefab.yaml")
+        .to_str()
+        .unwrap()
+        .to_string();
+    (dir, map, out)
+}
+
+#[test]
+fn generate_map_prefab_usage_errors_write_nothing() {
+    let (dir, map, out) = prefab_scratch("prefab_usage");
+    let bare = dir.join("x.yaml").to_str().unwrap().to_string();
+    let cases: [Vec<&str>; 3] = [
+        vec!["generate-map", &map, "--prefab"],
+        prefab_args(&map, &bare, &["--prefab"]),
+        prefab_args(&map, &out, &[]),
+    ];
+    for args in cases {
+        let output = run_ludion(&args);
+        assert!(!output.status.success(), "{args:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("--"));
+    }
+    assert!(!dir.join("x.yaml").exists() && !dir.join("rooms/r.prefab.yaml").exists());
+}
+
+#[test]
+fn generate_map_prefab_writes_checks_and_drifts() {
+    let (_dir, map, out) = prefab_scratch("prefab_writes");
+    let wrote = run_ludion(&prefab_args(&map, &out, &["--prefab", "--seed", "9"]));
+    assert!(
+        wrote.status.success(),
+        "{}",
+        String::from_utf8_lossy(&wrote.stderr)
+    );
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(text.starts_with("format: 1\nkind: prefab\n"), "{text}");
+    assert!(
+        text.contains("generated_from: \"../m.map.yaml --seed 9\"\n"),
+        "{text}"
+    );
+    assert!(!text.lines().any(|l| l.starts_with("seed:")), "{text}");
+
+    let check = ["--prefab", "--seed", "9", "--check"];
+    let same = run_ludion(&prefab_args(&map, &out, &check));
+    assert!(
+        same.status.success(),
+        "{}",
+        String::from_utf8_lossy(&same.stderr)
+    );
+    assert!(String::from_utf8_lossy(&same.stdout).contains("up to date"));
+
+    let scene = run_ludion(&["check-scene", &out]);
+    assert!(
+        scene.status.success(),
+        "{}",
+        String::from_utf8_lossy(&scene.stderr)
+    );
+
+    std::fs::write(&out, format!("{text}\n")).unwrap();
+    let drift = run_ludion(&prefab_args(&map, &out, &check));
+    assert!(!drift.status.success());
+    assert!(String::from_utf8_lossy(&drift.stderr).contains("DRIFT"));
+}
+
+#[test]
+fn generate_map_prefab_refuses_what_a_prefab_cannot_carry() {
+    let (dir, map, out) = prefab_scratch("prefab_refusals");
+    let fail = |args: &[&str]| {
+        let output = run_ludion(args);
+        assert!(!output.status.success(), "{args:?}");
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+
+    let with_physics = format!(
+        "{}physics:\n  space: free\n",
+        map_text("k1.kit.yaml", Some(1), false)
+    );
+    std::fs::write(dir.join("p.map.yaml"), with_physics).unwrap();
+    let p_map = dir.join("p.map.yaml").to_str().unwrap().to_string();
+    let stderr = fail(&prefab_args(&p_map, &out, &["--prefab"]));
+    assert!(
+        stderr.contains("/physics") && stderr.contains("L1226"),
+        "{stderr}"
+    );
+
+    std::fs::write(
+        dir.join("frag.yaml"),
+        "format: 1\nentities:\n  - name: sun\n    components:\n      DirectionalLight: {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("m.map.yaml"),
+        map_text("k1.kit.yaml", Some(1), true),
+    )
+    .unwrap();
+    let stderr = fail(&prefab_args(&map, &out, &["--prefab"]));
+    assert!(
+        stderr.contains("L1229") && stderr.contains("frag.yaml"),
+        "{stderr}"
+    );
+
+    std::fs::write(
+        dir.join("frag.yaml"),
+        "format: 1\nentities:\n  - components: {}\n",
+    )
+    .unwrap();
+    let stderr = fail(&prefab_args(&map, &out, &["--prefab"]));
+    assert!(
+        stderr.contains("L1227") && stderr.contains("frag.yaml"),
+        "{stderr}"
+    );
+    assert!(!dir.join("rooms/r.prefab.yaml").exists());
+}

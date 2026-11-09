@@ -23,7 +23,8 @@
 // A scene compiled with overrides (`--kit`, `--seed`, `--mirror`) may live at any path: it records
 // them in `generated_from: <map> [--kit <k>] [--seed <n>] [--mirror x|z]`, and the gate rechecks it
 // with `generate-map <map> --out <scene> <flags> --check` (the kit resolved against the map's
-// directory). Such a scene never claims the map's default output.
+// directory). Such a scene never claims the map's default output. A `*.prefab.yaml` naming a map is
+// the same with `--prefab` added, flags or none; any other generated prefab is gated elsewhere.
 //
 // Cheap by construction: a file scan of `games/` and `examples/` only, not a whole-repo walk; each
 // scene is read only as far as its leading column-0 keys. Nothing is written.
@@ -121,7 +122,8 @@ export function runGate({ root = REPO_ROOT, scanRoots = SCAN_ROOTS, ludion = run
     const source = headGeneratedFrom(scene);
     if (!source) continue;
     const tokens = source.split(/\s+/);
-    if (tokens.length > 1 && tokens[0].endsWith('.map.yaml')) {
+    const isPrefab = scene.endsWith('.prefab.yaml');
+    if (tokens[0].endsWith('.map.yaml') && (tokens.length > 1 || isPrefab)) {
       overrideChecked += 1;
       const flags = [];
       let bad = null;
@@ -139,14 +141,14 @@ export function runGate({ root = REPO_ROOT, scanRoots = SCAN_ROOTS, ludion = run
       } else if (!existsSync(mapPath)) {
         errors.push(`${rel(scene)}: names map source \`${tokens[0]}\`, which does not exist beside it`);
       } else {
-        const run = ludion(['generate-map', mapPath, '--out', scene, ...flags, '--check'], { cwd: root });
+        const run = ludion(['generate-map', mapPath, '--out', scene, ...flags, ...(isPrefab ? ['--prefab'] : []), '--check'], { cwd: root });
         if (run.status !== 0) {
           errors.push(`${rel(scene)}: \`generate-map ${source} --check\` failed:\n${(run.stderr || run.stdout || '').trim()}`);
         }
       }
       continue;
     }
-    if (scene.endsWith('.prefab.yaml') && !source.endsWith('.mjs')) continue;
+    if (isPrefab && !source.endsWith('.mjs')) continue;
     const sourcePath = path.resolve(path.dirname(scene), source);
 
     if (source.endsWith('.rs')) {

@@ -223,10 +223,11 @@ fn run_one(map_path: &Path, options: &Options<'_>) -> ExitCode {
         Ok(loaded) => loaded,
         Err(diagnostics) => return diagnostic::report(map_path, &diagnostics),
     };
-    let scene = match generate_map::generate_checked(&loaded, &ludion_engine::builtin_registry()) {
-        Ok(scene) => scene,
-        Err(faults) => return generate_map::report_faults(map_path, faults),
-    };
+    let scene =
+        match generate_map::generate_checked(&loaded, &ludion_engine::builtin_registry(), None) {
+            Ok((scene, _)) => scene,
+            Err(faults) => return generate_map::report_faults(map_path, faults),
+        };
 
     // The walker resolves per map: the kit's `probe:` block is the content's own radius and speed, so
     // a report is quoted at the numbers the game actually walks with unless a flag overrides them.

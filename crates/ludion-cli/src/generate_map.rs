@@ -22,7 +22,7 @@ use ludion_core::atomic::write_atomic;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_ecs::Registry;
-use ludion_scene::{MapDoc, MapKit, MapOverrides, Mirror, Scene};
+use ludion_scene::{MapDoc, MapKit, MapOverrides, Mirror, PrefabDocument, Scene};
 
 /// The fully resolved inputs of a map source: the parsed doc (with `source` set), the parsed kit,
 /// and each fragment's `(path, parsed scene)` in `fragments:` order. Shared by `generate-map` and
@@ -97,6 +97,7 @@ pub fn run(
     kit: Option<&Path>,
     seed: Option<u64>,
     mirror: Option<&str>,
+    prefab: bool,
 ) -> ExitCode {
     let mirror = match mirror {
         Some("x") => Mirror::X,
@@ -107,6 +108,23 @@ pub fn run(
         return crate::diagnostic::usage_error(
             "--kit, --seed and --mirror need --out: an overridden room cannot take the map's \
              default output, which the drift gate pins to the plain compile",
+        );
+    }
+    let out_is_prefab = out.is_some_and(|out| file_name(out).ends_with(".prefab.yaml"));
+    if prefab && out.is_none() {
+        return crate::diagnostic::usage_error(
+            "--prefab needs --out naming a `.prefab.yaml`: a map prefab has no default output",
+        );
+    }
+    if prefab && !out_is_prefab {
+        return crate::diagnostic::usage_error(
+            "--prefab writes a `kind: prefab`: name --out `<name>.prefab.yaml`",
+        );
+    }
+    if !prefab && out_is_prefab {
+        return crate::diagnostic::usage_error(
+            "--out names a `.prefab.yaml` but writes a scene: pass --prefab to write a prefab, \
+             or name a different --out",
         );
     }
     if out.is_some() && maps.len() > 1 {
@@ -124,9 +142,9 @@ pub fn run(
             Err(code) => return code,
         };
         let code = if check {
-            check_one(map, out, &overrides)
+            check_one(map, out, &overrides, prefab)
         } else {
-            generate_one(map, out, &overrides)
+            generate_one(map, out, &overrides, prefab)
         };
         if code == ExitCode::FAILURE {
             failed = true;
@@ -168,7 +186,12 @@ fn resolve_overrides(
 }
 
 /// Generates one map and writes its canonical scene.
-fn generate_one(map_path: &Path, out: Option<&Path>, overrides: &MapOverrides) -> ExitCode {
+fn generate_one(
+    map_path: &Path,
+    out: Option<&Path>,
+    overrides: &MapOverrides,
+    prefab: bool,
+) -> ExitCode {
     let out_path = out
         .map(PathBuf::from)
         .unwrap_or_else(|| default_out(map_path));
@@ -187,7 +210,7 @@ fn generate_one(map_path: &Path, out: Option<&Path>, overrides: &MapOverrides) -
         );
         return ExitCode::FAILURE;
     }
-    let (scene, yaml) = match generate_yaml(map_path, &out_path, overrides) {
+    let (count, yaml) = match generate_yaml(map_path, &out_path, overrides, prefab) {
         Ok(pair) => pair,
         Err(code) => return code,
     };
@@ -203,7 +226,6 @@ fn generate_one(map_path: &Path, out: Option<&Path>, overrides: &MapOverrides) -
         return ExitCode::FAILURE;
     }
 
-    let count = scene.entities.len();
     println!(
         "{}: generated {count} entit{} -> {}",
         map_path.display(),
@@ -216,11 +238,16 @@ fn generate_one(map_path: &Path, out: Option<&Path>, overrides: &MapOverrides) -
 /// Regenerates one map in memory and compares it byte-for-byte against the committed scene at its
 /// output path — the mid-loop form of the CI drift gate. Writes nothing; exits non-zero on drift or
 /// if the target scene is missing/unreadable.
-fn check_one(map_path: &Path, out: Option<&Path>, overrides: &MapOverrides) -> ExitCode {
+fn check_one(
+    map_path: &Path,
+    out: Option<&Path>,
+    overrides: &MapOverrides,
+    prefab: bool,
+) -> ExitCode {
     let out_path = out
         .map(PathBuf::from)
         .unwrap_or_else(|| default_out(map_path));
-    let (_scene, yaml) = match generate_yaml(map_path, &out_path, overrides) {
+    let (_count, yaml) = match generate_yaml(map_path, &out_path, overrides, prefab) {
         Ok(pair) => pair,
         Err(code) => return code,
     };
@@ -274,7 +301,8 @@ fn check_one(map_path: &Path, out: Option<&Path>, overrides: &MapOverrides) -> E
 pub(crate) fn generate_checked(
     loaded: &LoadedMap,
     registry: &Registry,
-) -> Result<Scene, Vec<(Option<String>, Diagnostic)>> {
+    prefab: Option<PrefabTarget<'_>>,
+) -> Result<Generated, Vec<Fault>> {
     let (scene, origins) =
         ludion_scene::generate_traced(&loaded.doc, &loaded.kit, &loaded.fragments, registry)
             .map_err(|diagnostics| {
@@ -283,25 +311,142 @@ pub(crate) fn generate_checked(
                     .map(|d| (None, d))
                     .collect::<Vec<_>>()
             })?;
-    let faults: Vec<_> = ludion_scene::validate(&scene, registry)
+    let locate = |mut diagnostic: Diagnostic| {
+        let Some((entity, rest)) = entity_pointer(diagnostic.path.as_deref()) else {
+            return (None, diagnostic);
+        };
+        if let Some((path, local)) = fragment_entity(loaded, entity) {
+            diagnostic.path = Some(format!("/entities/{local}{rest}"));
+            return (Some(path.to_owned()), diagnostic);
+        }
+        diagnostic.path = origins.get(entity).cloned();
+        (None, diagnostic)
+    };
+    let mut faults: Vec<_> = ludion_scene::validate(&scene, registry)
         .into_iter()
         .filter(|d| d.code != code::SCENE_UNKNOWN_COMPONENT)
-        .map(|mut diagnostic| {
-            let Some((entity, rest)) = entity_pointer(diagnostic.path.as_deref()) else {
-                return (None, diagnostic);
-            };
-            if let Some((path, local)) = fragment_entity(loaded, entity) {
-                diagnostic.path = Some(format!("/entities/{local}{rest}"));
-                return (Some(path.to_owned()), diagnostic);
-            }
-            diagnostic.path = origins.get(entity).cloned();
-            (None, diagnostic)
-        })
+        .map(&locate)
         .collect();
+    let mut document = None;
+    if let Some(target) = prefab {
+        if loaded.doc.physics.is_some() {
+            faults.push((
+                None,
+                Diagnostic::new(
+                    code::PREFAB_DOCUMENT_STRUCTURE,
+                    "a prefab cannot carry a `physics:` block",
+                )
+                .with_path("/physics")
+                .with_help(
+                    "a prefab carries no physics: the scene that spawns it owns the block; drop \
+                     `physics:` from this map or generate a scene instead",
+                ),
+            ));
+        }
+        match prefab_document(&scene, target, registry) {
+            Ok((doc, found)) => {
+                faults.extend(found.into_iter().map(&locate));
+                document = Some(doc);
+            }
+            Err(diagnostic) => faults.push((None, diagnostic)),
+        }
+    }
     if faults.is_empty() {
-        Ok(scene)
+        Ok((scene, document))
     } else {
         Err(faults)
+    }
+}
+
+/// A generated scene, with its prefab document when one was asked for.
+type Generated = (Scene, Option<PrefabDocument>);
+
+/// A fault with the fragment file it was written in (`None`: the map).
+type Fault = (Option<String>, Diagnostic);
+
+/// Where a map prefab is written, for rewriting its paths: the map's directory and the prefab's.
+#[derive(Clone, Copy)]
+pub(crate) struct PrefabTarget<'a> {
+    pub map_dir: &'a Path,
+    pub out_dir: &'a Path,
+}
+
+/// The generated scene's entities as a [`PrefabDocument`] with its paths rewritten, plus the
+/// prefab-only faults (`L1227`/`L1228`/`L1226`/`L1036` from the parse, `L1229`, `L1221`/`L1222`),
+/// their pointers still into the generated body.
+fn prefab_document(
+    scene: &Scene,
+    target: PrefabTarget<'_>,
+    registry: &Registry,
+) -> Result<(PrefabDocument, Vec<Diagnostic>), Diagnostic> {
+    let mut doc = PrefabDocument {
+        name: scene.name.clone(),
+        generated_from: scene.generated_from.clone(),
+        clips: Vec::new(),
+        entities: scene.entities.clone(),
+    };
+    relativize_for_prefab(&mut doc, target, registry)?;
+    let text = ludion_scene::emit_prefab(&doc, registry);
+    let doc = match ludion_scene::parse_prefab(&text) {
+        Ok(doc) => doc,
+        Err(diagnostics) => return Ok((doc, diagnostics)),
+    };
+    let body = doc.to_scene();
+    let found = ludion_scene::validate_prefab(&doc, registry)
+        .into_iter()
+        .filter(|d| d.code != code::SCENE_UNKNOWN_COMPONENT)
+        .chain(ludion_engine::prefab_singleton_diagnostics(&body))
+        .chain(ludion_engine::scene_hierarchy_body_diagnostics(&body))
+        .filter(|d| d.severity.is_error())
+        .collect();
+    Ok((doc, found))
+}
+
+/// Rewrites every asset path from relative-to-the-map to relative-to-the-prefab: a scene's paths
+/// resolve against the scene file's directory, a prefab's against the prefab file. Components the
+/// registry does not know (a game's own) are copied as written.
+fn relativize_for_prefab(
+    doc: &mut PrefabDocument,
+    target: PrefabTarget<'_>,
+    registry: &Registry,
+) -> Result<(), Diagnostic> {
+    let mut failure = None;
+    for entity in &mut doc.entities {
+        rewrite_components(&mut entity.components, target, registry, &mut failure);
+        if let Some(instance) = entity.instance.as_deref_mut() {
+            rewrite_path(&mut instance.prefab, target, &mut failure);
+            for overrides in instance.overrides.values_mut() {
+                rewrite_components(overrides, target, registry, &mut failure);
+            }
+        }
+    }
+    failure.map_or(Ok(()), Err)
+}
+
+fn rewrite_components(
+    components: &mut [(String, serde_json::Value)],
+    target: PrefabTarget<'_>,
+    registry: &Registry,
+    failure: &mut Option<Diagnostic>,
+) {
+    for (name, value) in components {
+        if let Some(info) = registry.get(name) {
+            info.for_each_asset_path(value, &mut |_, path| rewrite_path(path, target, failure));
+        }
+    }
+}
+
+fn rewrite_path(path: &mut String, target: PrefabTarget<'_>, failure: &mut Option<Diagnostic>) {
+    if path.is_empty() || failure.is_some() {
+        return;
+    }
+    match ludion_import::relative_to(
+        target.out_dir,
+        &target.map_dir.join(&*path),
+        code::OUTPUT_IO,
+    ) {
+        Ok(relative) => *path = relative,
+        Err(diagnostic) => *failure = Some(diagnostic),
     }
 }
 
@@ -347,13 +492,15 @@ pub(crate) fn report_faults(
     ExitCode::FAILURE
 }
 
-/// Loads, generates, and canonically emits a map, running the parse→emit idempotence self-check.
-/// Shared by `generate_one` (which writes the YAML) and `check_one` (which compares it).
+/// Loads, generates, and canonically emits a map (or, with `prefab`, its `kind: prefab`), running
+/// the parse→emit idempotence self-check. Returns the entity count and the YAML. Shared by
+/// `generate_one` (which writes the YAML) and `check_one` (which compares it).
 fn generate_yaml(
     map_path: &Path,
     out_path: &Path,
     overrides: &MapOverrides,
-) -> Result<(Scene, String), ExitCode> {
+    prefab: bool,
+) -> Result<(usize, String), ExitCode> {
     let mut loaded = match load(map_path, overrides) {
         Ok(loaded) => loaded,
         Err(diagnostics) => return Err(report(map_path, &diagnostics)),
@@ -366,24 +513,39 @@ fn generate_yaml(
         Err(diagnostic) => return Err(report(map_path, &[diagnostic])),
     }
     let registry = ludion_engine::builtin_registry();
-    let scene = match generate_checked(&loaded, &registry) {
-        Ok(scene) => scene,
+    let target = prefab.then(|| PrefabTarget {
+        map_dir: map_path.parent().unwrap_or_else(|| Path::new(".")),
+        out_dir,
+    });
+    let (scene, document) = match generate_checked(&loaded, &registry, target) {
+        Ok(generated) => generated,
         Err(faults) => return Err(report_faults(map_path, faults)),
     };
-    let yaml = ludion_scene::emit(&scene, &registry);
-    if let Err(diagnostics) = self_check_idempotent(&yaml, &registry) {
+    let count = scene.entities.len();
+    let yaml = match &document {
+        Some(doc) => ludion_scene::emit_prefab(doc, &registry),
+        None => ludion_scene::emit(&scene, &registry),
+    };
+    if let Err(diagnostics) = self_check_idempotent(&yaml, prefab, &registry) {
         return Err(report(map_path, &diagnostics));
     }
-    Ok((scene, yaml))
+    Ok((count, yaml))
 }
 
 /// Re-parses the emitted YAML (scene structure only — never `check`, which the game components
 /// would fail as L1013) and asserts it re-emits byte-for-byte, proving the generator produced
 /// canonical output. Defensive: on a byte mismatch (or an unparseable emit) it returns a diagnostic
 /// rather than writing a non-idempotent file the drift gate would then reject.
-fn self_check_idempotent(yaml: &str, registry: &Registry) -> Result<(), Vec<Diagnostic>> {
-    let reparsed = ludion_scene::parse(yaml)?;
-    let reemitted = ludion_scene::emit(&reparsed, registry);
+fn self_check_idempotent(
+    yaml: &str,
+    prefab: bool,
+    registry: &Registry,
+) -> Result<(), Vec<Diagnostic>> {
+    let reemitted = if prefab {
+        ludion_scene::emit_prefab(&ludion_scene::parse_prefab(yaml)?, registry)
+    } else {
+        ludion_scene::emit(&ludion_scene::parse(yaml)?, registry)
+    };
     if reemitted != yaml {
         return Err(vec![
             Diagnostic::new(

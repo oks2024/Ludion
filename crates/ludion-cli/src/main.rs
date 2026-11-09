@@ -1112,6 +1112,12 @@ enum Command {
         /// it. Needs `--out` and a single map.
         #[arg(long, value_name = "x|z", value_parser = ["x", "z"])]
         mirror: Option<String>,
+        /// Write a `kind: prefab` instead of a scene, for `spawn_prefab`. Needs `--out` naming a
+        /// `.prefab.yaml` and a single map. Asset paths are rewritten relative to the prefab, except
+        /// inside game components, which are copied as written. The map's `physics:` is refused and
+        /// its `seed:` is not written. The first part is the instance root.
+        #[arg(long)]
+        prefab: bool,
     },
     /// Bake one or more `kind: atlas-source` or `kind: font-source` documents into their committed
     /// `<name>.png` + `<name>.atlas.yaml` / `<name>.font.yaml` pair — our text into our binary, the
@@ -2413,6 +2419,7 @@ fn main() -> std::process::ExitCode {
             kit,
             seed,
             mirror,
+            prefab,
         } => generate_map::run(
             &maps,
             out.as_deref(),
@@ -2420,6 +2427,7 @@ fn main() -> std::process::ExitCode {
             kit.as_deref(),
             seed,
             mirror.as_deref(),
+            prefab,
         ),
         Command::GenerateAtlas {
             sources,

@@ -33,6 +33,7 @@ mod import;
 mod import_sprite;
 mod import_unsupported_set;
 mod map;
+mod map_prefab;
 mod mesh;
 mod mesh_pick_camera;
 mod physics;
