@@ -60,7 +60,7 @@ green = image up = box −Z.
   the lowest EntityId draws last and wins. A `multiply` scorch therefore darkens paint even at a
   lower layer; the drop shadow darkens paint under the hero.
 - **Receivers.** Every opaque mesh kind. Never the sky, sprites, particles, text, ground markers or
-  skinned meshes (the default). An `all` decal carries no receiver list. Whenever an `all` decal
+  skinned meshes. An `all` decal carries no receiver list. Whenever an `all` decal
   shares a scene with skinned meshes, the `decal_receivers` id pass redraws each skinned mesh once per
   frame, so its cost grows with the skinned count, not with decals × skinned. `receivers: hierarchy`
   limits a decal to its own root and the root's descendants and adds its own meshes to that list. A
@@ -76,8 +76,14 @@ green = image up = box −Z.
 ## Cost and lifetime
 
 - **No frustum cull.** Every decal is packed and drawn each frame, on screen or not.
-- **Indicative cost** (unpinned M5): 1,000 multiply decals beside 500 skinned enemies add about
-  0.2 µs of GPU frame at the crowd view (0.03 µs facing a wall) and 0.35 µs of extract per decal.
+- **Indicative cost** (unpinned M5), two parts:
+  - *Fixed:* whenever any `all` decal shares the scene with skinned meshes, the `decal_receivers`
+    pass redraws every skinned mesh once per frame (about 0.76 ms pass median facing 600 skinned
+    meshes). It scales with the skinned count, not the decal count, so a lower decal cap does not
+    remove it.
+  - *Per decal:* 1,000 multiply decals beside 500 skinned enemies add about 0.2 µs of GPU frame at
+    the crowd view (0.03 µs facing a wall) and 0.35 µs of extract each.
+
   Figures and method: `Plan/gpu-driven-culling.md` Status, "The decal room bench".
 - **Lifetime recipe.** Kill decals are presentation entities, spawned and despawned by a
   *presentation* system (a sim system doing either is `L0028`; `ludion docs presentation`): the sim
