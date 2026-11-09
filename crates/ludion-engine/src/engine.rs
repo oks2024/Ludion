@@ -2352,13 +2352,24 @@ impl Engine {
         stamp: &crate::run_save::BuildStamp,
         request_frame: FrameIndex,
     ) {
-        let (frame, snapshot) = match crate::run_save::read_resume(path, stamp) {
-            Ok(read) => read,
+        // Consumed first: a failed delete after the restore cannot then give a second resume.
+        let parked = match crate::run_save::consume(path) {
+            Ok(parked) => parked,
             Err(reason) => {
-                self.refuse_resume(path, reason, path.exists());
+                self.refuse_resume(path, reason, false);
                 return;
             }
         };
+        let read_from = parked.as_deref().unwrap_or(path);
+        let (frame, snapshot) = match crate::run_save::read_resume(read_from, stamp) {
+            Ok(read) => read,
+            Err(reason) => {
+                self.refuse_consumed(path, parked.as_deref(), reason);
+                return;
+            }
+        };
+        // The host's pacing outlives the resume: a paused or stepping host stays so.
+        let host_state = (self.driver.run_state(), self.driver.speed());
         // Before the restore: `install_restored` mirrors this state into the fresh world.
         if let Some(state) = self.run_save.as_mut() {
             state.pending = None;
@@ -2367,9 +2378,16 @@ impl Engine {
         if let Err(diagnostic) =
             crate::snapshot::restore_into(self, &snapshot, crate::snapshot::DriftPolicy::Refuse)
         {
-            self.refuse_resume(path, diagnostic.message, true);
+            self.refuse_consumed(path, parked.as_deref(), diagnostic.message);
             return;
         }
+        let (run_state, speed) = host_state;
+        match run_state {
+            RunState::Running => self.driver.resume(),
+            RunState::Paused => self.driver.pause(),
+            RunState::Stepping { remaining } => self.driver.step(remaining),
+        }
+        self.driver.set_speed(speed);
         self.set_current_scene_path(None);
         self.push_event(Event::SceneChanged(SceneChangedData {
             kind: SceneChangeKind::Restore,
@@ -2381,9 +2399,35 @@ impl Engine {
             frame: request_frame,
             request: RunSaveRequest::Resume,
         });
-        match crate::run_save::remove_file(path) {
-            Ok(()) => self.session.run_save_error = None,
-            Err(message) => self.run_save_failed(message),
+        // Nothing was parked when the file was missing, and that read already refused above.
+        if let Some(parked) = parked {
+            match crate::run_save::remove_file(&parked) {
+                Ok(()) => self.session.run_save_error = None,
+                Err(message) => self.report_run_save_failure(
+                    message,
+                    "the run resumed; a stale `suspend.json.resuming` remains and the next \
+                     persisting boot backs it up",
+                ),
+            }
+        }
+    }
+
+    /// Refuses a resume whose file was parked by [`consume`](crate::run_save::consume): the file
+    /// goes back under its name and is backed up beside it, like any refusal.
+    fn refuse_consumed(&mut self, path: &Path, parked: Option<&Path>, reason: String) {
+        let Some(parked) = parked else {
+            self.refuse_resume(path, reason, false);
+            return;
+        };
+        match std::fs::rename(parked, path) {
+            Ok(()) => self.refuse_resume(path, reason, true),
+            Err(error) => {
+                let reason = format!(
+                    "{reason}; the file could not be restored for a backup ({error}), so it was left as `{}`",
+                    parked.display()
+                );
+                self.refuse_resume(path, reason, false);
+            }
         }
     }
 
@@ -2418,11 +2462,17 @@ impl Engine {
     /// Reports an `L1400` on both sinks (stderr and the `log` channel) and keeps it as the last
     /// run-save error.
     fn run_save_failed(&mut self, message: String) {
-        let diagnostic = Diagnostic::new(ludion_core::codes::code::RUN_SAVE_WRITE_FAILED, message)
-            .with_help(
-                "the run continues and a previous whole `suspend.json` stays on disk; \
+        self.report_run_save_failure(
+            message,
+            "the run continues and a previous whole `suspend.json` stays on disk; \
              the next `suspend()` retries; check the save location is writable",
-            );
+        );
+    }
+
+    /// [`run_save_failed`](Engine::run_save_failed) with its own help text.
+    fn report_run_save_failure(&mut self, message: String, help: &str) {
+        let diagnostic = Diagnostic::new(ludion_core::codes::code::RUN_SAVE_WRITE_FAILED, message)
+            .with_help(help);
         eprintln!("{diagnostic}");
         self.push_event(Event::Log(LogEvent::from_diagnostic(diagnostic.clone())));
         self.session.run_save_error = Some(diagnostic);
@@ -2434,11 +2484,16 @@ impl Engine {
         let stamp = crate::run_save::BuildStamp {
             engine_version: ENGINE_VERSION.to_string(),
             game_schema: crate::run_save::game_schema_hash(&self.registry, &self.doc_kinds),
+            projectiles: self
+                .projectile_config
+                .as_ref()
+                .map(crate::run_save::projectile_config_hash),
         };
         let mut pending = None;
         if self.profile_persistence && !self.profile_off_disk {
             let path = self.save_root().join(crate::run_save::RUN_SAVE_PATH);
             crate::player_profile::sweep_temps(&path);
+            crate::run_save::backup_stale_resuming(&path);
             pending = crate::run_save::read_pending(&path);
         }
         self.run_save = Some(RunSaveState {

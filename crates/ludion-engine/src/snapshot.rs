@@ -938,6 +938,13 @@ pub(crate) fn restore_into(
     // Captured before `scene_physics` moves into `RestoredWorld` below: solver state with nothing
     // to install the write/step/mirror triple from means physics silently stops stepping.
     let missing_settings = doc.physics.is_some() && scene_physics.is_none();
+    if missing_settings && policy == DriftPolicy::Refuse {
+        return Err(Diagnostic::new(
+            code::RUN_SAVE_RESUME_REFUSED,
+            "restoring would lose physics: the snapshot carries solver state but no scene physics \
+             settings, so physics would not step",
+        ));
+    }
 
     // Reconstruct the world's live entities exactly, then re-insert their components, migrating each
     // rather than hard-failing. The registry borrow is disjoint from the fresh local `world`.
@@ -1066,7 +1073,23 @@ pub(crate) fn restore_into(
             RestoredPool::Pool(pool) => {
                 world.insert_resource(*pool);
             }
+            RestoredPool::Dropped if policy == DriftPolicy::Refuse => {
+                return Err(Diagnostic::new(
+                    code::RUN_SAVE_RESUME_REFUSED,
+                    "restoring would lose the projectiles in flight: this build configures no \
+                     projectile pool",
+                ));
+            }
             RestoredPool::Dropped => {}
+            RestoredPool::Refused(warning) if policy == DriftPolicy::Refuse => {
+                return Err(Diagnostic::new(
+                    code::RUN_SAVE_RESUME_REFUSED,
+                    format!(
+                        "restoring would lose the projectiles in flight: {}",
+                        warning.message
+                    ),
+                ));
+            }
             RestoredPool::Refused(warning) => invalid.push(warning),
         }
     }

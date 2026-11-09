@@ -631,3 +631,91 @@ fn a_non_persisting_resume_only_logs() {
     assert_eq!(last_resume(&b), None);
     assert!(!dir.join("save").exists());
 }
+
+// --- the host's pacing and the consumed file ------------------------------------------------------
+
+use ludion_protocol::command::SimStepParams;
+use ludion_sim::RunState;
+
+fn resume_on_two(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == 2
+        && let Some(run) = world.resource_mut::<RunSave>()
+    {
+        run.resume();
+    }
+}
+
+fn sim_step(engine: &mut Engine, ticks: u64) {
+    engine
+        .execute(Command::SimStep(SimStepParams { ticks, hash: false }))
+        .unwrap();
+}
+
+#[test]
+fn a_resume_inside_sim_step_keeps_the_host_paused() {
+    let dir = fresh_dir("resume-paused");
+    suspended_run(&dir, false);
+
+    let mut b = boot_tally(tally_game(&dir, true).system("resume", resume_on_two));
+    b.execute(Command::SimPause).unwrap();
+    sim_step(&mut b, 5);
+
+    // Ticks 0..=2 ran before the resume rewound to the suspended frame; the 2 left ran after it.
+    assert_eq!(b.frame().as_u64(), SUSPEND_FRAME + 1 + 2);
+    assert_eq!(b.run_state(), RunState::Paused);
+    assert!(matches!(
+        last_resume(&b),
+        Some(ResumeOutcome::Resumed { .. })
+    ));
+}
+
+#[test]
+fn a_suspend_taken_mid_step_resumes_unstepped() {
+    let dir = fresh_dir("resume-mid-step");
+    let mut a = boot_tally(tally_game(&dir, true).system("suspend", suspend_on_two));
+    a.execute(Command::SimPause).unwrap();
+    sim_step(&mut a, 6);
+    assert!(dir.join("save/suspend.json").exists());
+    let stored = read_envelope(&dir);
+    assert_eq!(stored["snapshot"]["run_state"]["state"], "stepping");
+
+    let mut b = boot_tally(tally_game(&dir, true));
+    b.advance_live();
+    request_resume(&mut b);
+    b.advance_live();
+    assert!(matches!(
+        last_resume(&b),
+        Some(ResumeOutcome::Resumed { .. })
+    ));
+    assert_eq!(b.run_state(), RunState::Running);
+    let frame = b.frame();
+    b.advance_live();
+    assert_eq!(b.frame().as_u64(), frame.as_u64() + 1);
+}
+
+#[test]
+fn a_resume_consumes_the_file_and_a_crashed_resume_is_backed_up_at_boot() {
+    let dir = fresh_dir("resume-consumed");
+    suspended_run(&dir, false);
+    let mut b = boot_tally(tally_game(&dir, true));
+    request_resume(&mut b);
+    b.advance_live();
+    assert!(!dir.join("save/suspend.json").exists());
+    assert!(!dir.join("save/suspend.json.resuming").exists());
+    assert!(b.run_save_error().is_none());
+
+    // A resume that died between the rename and the delete left its parked file behind.
+    write(&dir, "save/suspend.json.resuming", "parked");
+    let c = boot_tally(tally_game(&dir, true));
+    assert!(pending(&c).is_none());
+    assert!(!dir.join("save/suspend.json.resuming").exists());
+    let kept = std::fs::read_dir(dir.join("save"))
+        .unwrap()
+        .filter(|entry| {
+            let name = entry.as_ref().unwrap().file_name();
+            name.to_string_lossy()
+                .starts_with("suspend.json.resuming.bak.")
+        })
+        .count();
+    assert_eq!(kept, 1);
+}

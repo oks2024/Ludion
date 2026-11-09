@@ -7,7 +7,7 @@
 //! stamp lives in the envelope, never in the snapshot document, so the replay content hash does not
 //! move. [`RunSave::pending`] reports the file read at boot.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ludion_core::time::FrameIndex;
 use ludion_ecs::Registry;
@@ -32,6 +32,15 @@ pub struct BuildStamp {
     pub engine_version: String,
     /// The hash of the game's registered component and data-doc schemas.
     pub game_schema: WireHash,
+    /// The hash of the builder's `ProjectileConfig`, `None` without a pool. A file without the
+    /// field reads as `None`, so a game that has a pool refuses it.
+    #[serde(default)]
+    pub projectiles: Option<WireHash>,
+}
+
+/// The hash of the builder's projectile pool config, for the [`BuildStamp`].
+pub(crate) fn projectile_config_hash(config: &crate::ProjectileConfig) -> WireHash {
+    WireHash::of_bytes(&serde_json::to_vec(config).expect("a config always serializes"))
 }
 
 /// The hash of every registered component schema and data-doc kind, in registration order, with
@@ -62,6 +71,11 @@ pub(crate) fn stamp_mismatch(saved: &BuildStamp, current: &BuildStamp) -> Option
     if saved.game_schema != current.game_schema {
         return Some(
             "the game's component or data schemas changed since this run was saved".to_string(),
+        );
+    }
+    if saved.projectiles != current.projectiles {
+        return Some(
+            "the game's projectile pool settings changed since this run was saved".to_string(),
         );
     }
     None
@@ -253,6 +267,35 @@ pub(crate) fn remove_file(path: &Path) -> Result<(), String> {
     }
 }
 
+/// Where a resume parks `path` while it restores: a sibling `suspend.json.resuming`.
+pub(crate) fn resuming_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".resuming");
+    path.with_file_name(name)
+}
+
+/// Consumes the suspended run: renames `path` to its [`resuming_path`] so a failed delete later
+/// cannot give a second resume. `Ok(None)` when there is no file; the `Err` is a refusal reason.
+pub(crate) fn consume(path: &Path) -> Result<Option<PathBuf>, String> {
+    let parked = resuming_path(path);
+    match std::fs::rename(path, &parked) {
+        Ok(()) => Ok(Some(parked)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!(
+            "the suspended run could not be set aside for the resume: {e}"
+        )),
+    }
+}
+
+/// Keeps a `suspend.json.resuming` a crashed resume left behind as a backup, so a run the player
+/// may still want is never deleted. Called at a persisting boot.
+pub(crate) fn backup_stale_resuming(path: &Path) {
+    let parked = resuming_path(path);
+    if parked.exists() {
+        let _ = crate::player_profile::backup_file(&parked);
+    }
+}
+
 /// Reads the suspended run at `path`. A missing, unreadable or unparsable file, or one written by a
 /// newer format, reads as `None` and is left in place.
 pub(crate) fn read_pending(path: &Path) -> Option<SuspendInfo> {
@@ -313,7 +356,42 @@ mod tests {
         BuildStamp {
             engine_version: version.to_string(),
             game_schema: WireHash::of_bytes(&schema.to_le_bytes()),
+            projectiles: None,
         }
+    }
+
+    #[test]
+    fn the_projectile_config_is_part_of_the_stamp() {
+        let a = stamp("0.1.0", 1);
+        let mut pooled = a.clone();
+        pooled.projectiles = Some(projectile_config_hash(&crate::ProjectileConfig::default()));
+        let reason = stamp_mismatch(&a, &pooled).unwrap();
+        assert!(reason.contains("projectile"), "{reason}");
+        assert_eq!(stamp_mismatch(&pooled, &pooled.clone()), None);
+
+        // An old file without the field reads as `None`, never a panic.
+        let old = r#"{"engine_version":"0.1.0","game_schema":"0000000000000000"}"#;
+        let parsed: BuildStamp = serde_json::from_str(old).unwrap();
+        assert_eq!(parsed.projectiles, None);
+        assert!(stamp_mismatch(&parsed, &pooled).is_some());
+    }
+
+    #[test]
+    fn consume_parks_the_file_and_a_second_consume_finds_none() {
+        let dir =
+            std::env::temp_dir().join(format!("ludion-runsave-consume-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("suspend.json");
+        assert_eq!(consume(&path), Ok(None));
+        std::fs::write(&path, "x").unwrap();
+        let parked = consume(&path).unwrap().unwrap();
+        assert!(!path.exists());
+        assert_eq!(parked, dir.join("suspend.json.resuming"));
+        assert_eq!(std::fs::read_to_string(&parked).unwrap(), "x");
+        assert!(read_pending(&path).is_none());
+        assert_eq!(consume(&path), Ok(None));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -424,6 +502,69 @@ mod tests {
         let err = read_resume(&path, &here).unwrap_err();
         assert!(err.contains("newer version"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A restore under `Refuse` into `target` fails with `L1401` and leaves the engine as it was.
+    fn assert_refused_untouched(target: &mut crate::Engine, snapshot: &Value, why: &str) {
+        use crate::snapshot::{DriftPolicy, restore_into};
+
+        let hash = target.world_hash().unwrap();
+        let frame = target.frame();
+        let error = restore_into(target, snapshot, DriftPolicy::Refuse).unwrap_err();
+        assert_eq!(error.code.as_str(), "L1401");
+        assert!(error.message.contains(why), "{}", error.message);
+        assert_eq!(target.world_hash().unwrap(), hash);
+        assert_eq!(target.frame(), frame);
+    }
+
+    fn pooled_source(capacity: u32) -> crate::Engine {
+        let mut source = crate::Engine::builder()
+            .projectiles(crate::ProjectileConfig {
+                capacity,
+                ..crate::ProjectileConfig::default()
+            })
+            .build()
+            .unwrap();
+        source.load_inline_scene("format: 1\nseed: 1\n").unwrap();
+        for _ in 0..4 {
+            let desc = ludion_projectiles::ProjectileDesc::new([0.0; 3], [1.0, 0.0, 0.0]);
+            crate::spawn_projectile(source.world_mut(), desc).unwrap();
+        }
+        source
+    }
+
+    #[test]
+    fn a_dropped_projectile_pool_refuses_under_refuse() {
+        let snapshot = crate::snapshot::capture(&pooled_source(16)).unwrap();
+        let mut bare = crate::Engine::new();
+        assert_refused_untouched(&mut bare, &snapshot, "no projectile pool");
+    }
+
+    #[test]
+    fn a_pool_too_small_for_the_snapshot_refuses_under_refuse() {
+        let snapshot = crate::snapshot::capture(&pooled_source(16)).unwrap();
+        let mut small = crate::Engine::builder()
+            .projectiles(crate::ProjectileConfig {
+                capacity: 2,
+                ..crate::ProjectileConfig::default()
+            })
+            .build()
+            .unwrap();
+        assert_refused_untouched(&mut small, &snapshot, "lose the projectiles");
+    }
+
+    #[test]
+    fn solver_state_without_settings_refuses_under_refuse() {
+        let mut source = crate::Engine::new();
+        source
+            .load_inline_scene("format: 1\nphysics:\n  space: free\nentities:\n  - name: floor\n    components:\n      Transform:\n        translation:\n          - 0.0\n          - -0.5\n          - 0.0\n      Collider:\n        shape:\n          box:\n            half_extents:\n              - 10.0\n              - 0.5\n              - 10.0\n        body: static\n")
+            .unwrap();
+        source.advance_live();
+        let mut snapshot = crate::snapshot::capture(&source).unwrap();
+        assert!(snapshot.get("physics").is_some());
+        snapshot.as_object_mut().unwrap().remove("scene_physics");
+        let mut target = crate::Engine::new();
+        assert_refused_untouched(&mut target, &snapshot, "lose physics");
     }
 
     #[test]

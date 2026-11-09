@@ -151,15 +151,23 @@ or just written, and `last_resume()` the `ResumeOutcome` (`Resumed` or `Refused`
   departing world.
 - **The file:** `save/suspend.json`, written crash-durably, an envelope (format, build stamp,
   request frame, scene name) around the untouched `engine.snapshot` document. The stamp is the
-  engine version plus a prose-stripped hash of the game's component and data-doc schemas.
+  engine *version*, a prose-stripped hash of the game's component and data-doc schemas, and a hash
+  of the builder's `ProjectileConfig` (none without a pool). Two engine revisions with the same
+  version and schema are not told apart.
 - **Strict resume:** a stamp mismatch, a newer envelope format, an unreadable file, a snapshot that
   would restore only with drift (dropped or migrated components), or no file refuses with `L1401`.
-  Nothing is restored, the file is renamed to `suspend.json.bak.<hash>`, `last_resume()` is
-  `Refused`, and the run continues.
+  Every loss refuses: a projectile pool the build cannot hold (none configured, or capacity below
+  the snapshot's high-water mark) and solver state without physics settings included. Nothing is
+  restored, the file is renamed to `suspend.json.bak.<hash>`, `last_resume()` is `Refused`, and the
+  run continues.
 - **A resume restores in place:** the world is rebuilt as on `engine.restore`, held keys and pending
   injected input are cleared (the next key-down is a fresh press edge), the file is deleted and
-  `pending()` is `None`: one suspend gives one resume. Music and loops stop as on any rebuild; the
-  game restarts them.
+  `pending()` is `None`: one suspend gives one resume. The file is renamed to
+  `suspend.json.resuming` before the restore, so a failed delete cannot give a second resume; a
+  `.resuming` left by a crash is kept as `suspend.json.resuming.bak.<hash>` at the next persisting
+  boot. The host's run state (paused, stepping) and speed are kept, so a resume inside `sim.step`
+  still ends after its ticks. A shutdown or scene switch requested in the same frame as a resume is
+  dropped with the title world. Music and loops stop as on any rebuild; the game restarts them.
 - **Persistence:** only a live host (`persist_profile`) reads, writes or deletes; a test or replay
   logs each request in `Engine::run_save_log` and a non-persisting resume changes nothing. A failed
   write or delete is `L1400` and the run continues.
