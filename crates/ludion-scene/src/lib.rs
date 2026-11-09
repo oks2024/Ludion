@@ -178,8 +178,8 @@ pub use instantiate::{InstanceHooks, InstantiateOptions};
 pub use kinds::{KINDS, KindCheck, KindEntry, KindSniff, kind_entry};
 pub use map::{
     ColliderSpec, KitPrimitive, MAP_FORMAT_VERSION, MapDoc, MapGrid, MapKit, MapMarker,
-    MapOverrides, MapProbe, MarkerCell, MeshSpec, Mirror, generate, generate_traced, parse_map,
-    parse_map_kit,
+    MapOverrides, MapProbe, MarkerCell, MeshSpec, Mirror, box_collider_name, generate,
+    generate_traced, parse_map, parse_map_kit,
 };
 pub use mesh::{
     AlphaMode, DEFAULT_ALPHA_CUTOFF, DEGENERATE_VECTOR_LENGTH_SQUARED, JointRest, MAX_MESH_LODS,

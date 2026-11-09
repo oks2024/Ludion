@@ -1545,3 +1545,29 @@ fn generate_map_prefab_refuses_what_a_prefab_cannot_carry() {
     );
     assert!(!dir.join("rooms/r.prefab.yaml").exists());
 }
+
+// --- map-check: a kit's own box-collider sibling is not foreign ----------------------------------
+
+/// A kit `kinds:` entry with a `box` collider generates a `<marker>-collider` sibling; a marker
+/// standing in it raises no `L1029` (it is the marker's own collider).
+#[test]
+fn map_check_kit_box_collider_sibling_is_not_foreign() {
+    let map = fixtures().join("door-collider.map.yaml");
+    let output = run_ludion(&["map-check", map.to_str().unwrap()]);
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("L1029"), "{stderr}");
+}
+
+/// The same door marker on a *foreign* box collider (a kit wall tile) still raises `L1029`.
+#[test]
+fn map_check_door_on_foreign_box_collider_is_still_l1029() {
+    let map = fixtures().join("door-foreign.map.yaml");
+    let output = run_ludion(&["map-check", map.to_str().unwrap()]);
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning[L1029]") && stderr.contains("door-exit"),
+        "{stderr}"
+    );
+}

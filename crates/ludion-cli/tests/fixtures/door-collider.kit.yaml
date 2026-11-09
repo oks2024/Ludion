@@ -1,0 +1,39 @@
+format: 1
+kind: map-kit
+name: door-collider-kit
+tiles:
+  ".":
+    - name: floor
+      shape: cube
+      y: -0.5
+      scale:
+        - 2.0
+        - 1.0
+        - 2.0
+  "#":
+    - name: wall
+      shape: cube
+      y: 1.0
+      scale:
+        - 2.0
+        - 2.0
+        - 2.0
+      collider:
+        box:
+          - 1.0
+          - 1.0
+          - 1.0
+kinds:
+  door:
+    - name: leaf
+      shape: cube
+      y: 1.6
+      scale:
+        - 2.0
+        - 3.2
+        - 0.2
+      collider:
+        box:
+          - 1.0
+          - 1.6
+          - 0.1

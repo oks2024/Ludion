@@ -1636,13 +1636,15 @@ fn name_lints(doc: &ludion_scene::MapDoc) -> Vec<Diagnostic> {
 
 /// Whether the world `point` is overlapped by a collider that does **not** belong to the marker named
 /// `owner` — i.e. blocked by someone else. The marker's own entities are named `owner` or `owner-p<n>`
-/// (its per-primitive suffix), so a passthrough building blocking its own cell is excluded.
+/// (its per-primitive suffix), plus the `<owner>-collider` sibling a kit `box` collider rides
+/// (`ludion_scene::box_collider_name`), so a passthrough building blocking its own cell is excluded.
 fn blocked_by_other(probe: &Probe, point: [f64; 2], owner: &str) -> bool {
     let own_suffix = format!("{owner}-p");
+    let own_sibling = ludion_scene::box_collider_name(owner);
     probe
         .overlap_names([point[0] as f32, point[1] as f32])
         .into_iter()
-        .any(|name| name != owner && !name.starts_with(&own_suffix))
+        .any(|name| name != owner && name != own_sibling && !name.starts_with(&own_suffix))
 }
 
 /// The `Gate` component's `to` target, if the marker carries one (a non-empty string).

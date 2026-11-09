@@ -122,7 +122,7 @@ moves a generated scene.
   the pair) — all three heuristics over the occupancy probe. `L1032` is structural, not a probe
   heuristic: a marker whose `components:` bag authors `Residue` has no explicit `name:`, so its `Name`
   is the index-derived fallback and re-binds to a different marker whenever one is inserted or
-  reordered above it. A marker blocked by its **own** collider is a footprint, not a bug, and never
+  reordered above it. A marker blocked by its **own** collider (including the `<name>-collider` sibling a kit `box` collider rides) is a footprint, not a bug, and never
   fires `L1029`. `L1031` fires with or without `--traverse`.
 
 ## Gotchas

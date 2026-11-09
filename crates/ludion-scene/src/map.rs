@@ -1973,6 +1973,11 @@ fn build_entity(
     entities
 }
 
+/// The name of the unit-scale sibling entity that carries the kit `box` collider of entity `name`.
+pub fn box_collider_name(name: &str) -> String {
+    format!("{name}-collider")
+}
+
 /// The unit-scale entity that carries a kit `box` collider beside its mesh entity.
 fn box_collider_entity(
     name: &str,
@@ -1983,7 +1988,7 @@ fn box_collider_entity(
 ) -> SceneEntity {
     SceneEntity {
         presentation: false,
-        name: Some(format!("{name}-collider")),
+        name: Some(box_collider_name(name)),
         components: vec![
             (
                 "Transform".to_string(),
