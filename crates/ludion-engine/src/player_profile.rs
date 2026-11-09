@@ -334,13 +334,13 @@ fn back_up_or_keep(path: &Path, reason: String, backup: bool) -> (String, String
 ///
 /// Never overwrites or deletes the player's bytes: it is a pure rename. `std::fs::rename` replaces
 /// atomically on both Windows and POSIX.
-fn backup_file(path: &Path) -> std::io::Result<String> {
+pub(crate) fn backup_file(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
     let hash = ludion_assets::content_hash(&bytes);
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("profile.yaml");
+        .unwrap_or("save");
     let backup_name = format!("{file_name}.bak.{hash:016x}");
     std::fs::rename(path, path.with_file_name(&backup_name))?;
     Ok(backup_name)

@@ -140,6 +140,34 @@ exactly. Disk writes happen in **exactly one mode** — a live host run (`ludion
 `--record`); a replay, `--check-docs`, `--profile`, or a test leaves persistence off, so none ever
 clobbers your real save.
 
+## Suspending a run
+
+`Engine::builder().run_save()` installs a `RunSave` resource. A system calls `suspend()`, `resume()`
+or `discard()`; `pending()` reports the `SuspendInfo` (frame, scene name, build stamp) read at boot
+or just written, and `last_resume()` the `ResumeOutcome` (`Resumed` or `Refused`).
+
+- **Drain order:** at the frame boundary, after the profile save and before a shutdown or scene
+  switch: discard, then suspend, then resume. A suspend in a quit or switch frame captures the
+  departing world.
+- **The file:** `save/suspend.json`, written crash-durably, an envelope (format, build stamp,
+  request frame, scene name) around the untouched `engine.snapshot` document. The stamp is the
+  engine version plus a prose-stripped hash of the game's component and data-doc schemas.
+- **Strict resume:** a stamp mismatch, a newer envelope format, an unreadable file, a snapshot that
+  would restore only with drift (dropped or migrated components), or no file refuses with `L1401`.
+  Nothing is restored, the file is renamed to `suspend.json.bak.<hash>`, `last_resume()` is
+  `Refused`, and the run continues.
+- **A resume restores in place:** the world is rebuilt as on `engine.restore`, held keys and pending
+  injected input are cleared (the next key-down is a fresh press edge), the file is deleted and
+  `pending()` is `None`: one suspend gives one resume. Music and loops stop as on any rebuild; the
+  game restarts them.
+- **Persistence:** only a live host (`persist_profile`) reads, writes or deletes; a test or replay
+  logs each request in `Engine::run_save_log` and a non-persisting resume changes nothing. A failed
+  write or delete is `L1400` and the run continues.
+- **Profile:** the resume installs the snapshot's profile (the restore rule), so do not write the
+  profile between a suspend and its resume; `discard()` when a new run starts.
+
+Example: `cargo run -p ludion --example run_save`.
+
 ## Non-goals (and their triggers)
 
 - **One slot.** There is a single `save/profile.yaml`, not save slots. Trigger to revisit: a second

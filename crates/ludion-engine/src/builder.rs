@@ -216,7 +216,8 @@ impl EngineBuilder {
     /// `engine.snapshot` document inside an envelope carrying a [`BuildStamp`](crate::BuildStamp).
     /// The file is read at boot (`RunSave::pending`) and written or deleted only when
     /// [`persist_profile`](EngineBuilder::persist_profile) is on, so a test or replay never touches
-    /// disk; the [log](Engine::run_save_log) fills either way.
+    /// disk; the [log](Engine::run_save_log) fills either way. `resume()` restores the file in place
+    /// (strictly: a changed build or schema is refused with `L1401`).
     #[must_use]
     pub fn run_save(mut self) -> Self {
         self.run_save = true;

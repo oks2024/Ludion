@@ -792,6 +792,15 @@ fn check_live_set(
 /// `last_keyframe + keyframe_interval`, which a frame near `u64::MAX` would overflow.
 const MAX_RESTORE_FRAME: u64 = u64::MAX / 2;
 
+/// What [`restore_into`] does with component-schema drift.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DriftPolicy {
+    /// Migrate over it and report it (the dev loop's `engine.restore`).
+    Migrate,
+    /// Refuse a snapshot that would restore only with drift (a resumed run).
+    Refuse,
+}
+
 /// Rebuilds the engine's sim state from a snapshot document, installing it into `engine`, and returns
 /// a [`RestoreReport`] of every component-schema drift the migration had to work around.
 ///
@@ -812,7 +821,8 @@ const MAX_RESTORE_FRAME: u64 = u64::MAX / 2;
 ///   range, and a restore must reproduce the live world — and each failure is reported into
 ///   `Diagnostics` with a path under `/entities/<i>/components/<Name>` (or `/presentation/<i>/…`).
 ///
-/// An empty report means a clean, lossless restore.
+/// An empty report means a clean, lossless restore. Under [`DriftPolicy::Refuse`] any report entry
+/// is instead an `L1401` error, raised before the engine is touched.
 ///
 /// # Errors
 /// `L3008` for a genuinely malformed snapshot document — a wrong envelope shape, an unparseable
@@ -824,6 +834,7 @@ const MAX_RESTORE_FRAME: u64 = u64::MAX / 2;
 pub(crate) fn restore_into(
     engine: &mut Engine,
     value: &Value,
+    policy: DriftPolicy,
 ) -> Result<RestoreReport, Diagnostic> {
     let mut doc: SnapshotDoc = serde_json::from_value(value.clone()).map_err(|error| {
         Diagnostic::new(
@@ -1022,6 +1033,17 @@ pub(crate) fn restore_into(
                 &mut invalid,
             );
         }
+    }
+    if policy == DriftPolicy::Refuse
+        && let Some(first) = entries.first()
+    {
+        return Err(Diagnostic::new(
+            code::RUN_SAVE_RESUME_REFUSED,
+            format!(
+                "restoring would change the run: {} schema drift(s), first: {first:?}",
+                entries.len()
+            ),
+        ));
     }
 
     // The tick rate the restored driver will run at, bound once so the solver's integration step and

@@ -14,7 +14,8 @@
 //!   `profile.save()` to request persistence.
 //! - **Suspended run** — [`RunSave`] (`EngineBuilder::run_save`): `suspend()` writes the running
 //!   game to `save/suspend.json`; `pending()` reports [`SuspendInfo`] read at boot, stamped with a
-//!   [`BuildStamp`]; [`ResumeOutcome`] reports a refused resume.
+//!   [`BuildStamp`]; `resume()` restores it in place (strict, held input cleared) and
+//!   [`ResumeOutcome`] reports the result.
 //! - **Built-in visual components** — [`Transform`], [`Sprite`] (+ [`SpriteBlend`], its `alpha` /
 //!   `additive` compositing flag), [`Mesh`] (+ [`MeshSource`]), [`PointLight`],
 //!   [`SpotLight`], [`ReflectionProbe`] (+ [`ProbeShape`]), [`DirectionalLight`] (the sun), [`Camera`] (+ [`Projection`]), [`Text`],

@@ -356,6 +356,8 @@ pub mod code {
     pub const MAP_MIRROR_FRAGMENTS: DiagnosticCode = DiagnosticCode::new("L1399");
     /// `L1400` — the suspended run (`save/suspend.json`) could not be written or removed.
     pub const RUN_SAVE_WRITE_FAILED: DiagnosticCode = DiagnosticCode::new("L1400");
+    /// `L1401` — the suspended run was refused on resume; nothing was restored.
+    pub const RUN_SAVE_RESUME_REFUSED: DiagnosticCode = DiagnosticCode::new("L1401");
 
     /// `L1027` — a map marker's cross-district gate (`Gate.to` + `anchor`) names a spawn anchor that
     /// resolves against no entity in the sibling district's generated scene, so the gate would fail
@@ -5431,6 +5433,25 @@ write is staged to a hidden `.tmp` sibling and renamed over it), and the next `s
 The message names the path and the underlying error.
 
 Fix: make sure the save location is writable and has free space.",
+    },
+    CodeEntry {
+        code: code::RUN_SAVE_RESUME_REFUSED,
+        severity: Severity::Warning,
+        title: "suspended run was refused",
+        explanation: "\
+A game system called `RunSave::resume()` and the engine refused the suspended run
+(`save/suspend.json`). Causes:
+
+  - it was written by another engine build or a changed game schema (the build stamp differs);
+  - its envelope `format` is newer than this build reads;
+  - the file or its snapshot is unreadable or unparsable;
+  - restoring it would only work with drift (dropped or migrated components, an unknown field);
+  - there is no suspended run.
+
+This is a **warning**: nothing is restored, the file is renamed to `suspend.json.bak.<hash>` (left in
+place if the rename fails), `RunSave::last_resume()` is `Refused { reason }`, and the run continues.
+
+Fix: start a new run. The backup can be inspected by hand.",
     },
     CodeEntry {
         code: code::PROFILE_SAVE_FAILED,
@@ -11345,6 +11366,7 @@ mod tests {
         code::PROFILE_LOAD_FAILED,
         code::PROFILE_SAVE_FAILED,
         code::RUN_SAVE_WRITE_FAILED,
+        code::RUN_SAVE_RESUME_REFUSED,
         code::DIRECTIONAL_LIGHT_INVALID_FRUSTUM,
         code::SCHEDULE_MODULE_CONCENTRATION,
         code::QUERY_DECL_UNKNOWN_COMPONENT,
@@ -11768,6 +11790,7 @@ mod tests {
             code::SCULPT_DISCONNECTED,
             code::PROFILE_LOAD_FAILED,
             code::RUN_SAVE_WRITE_FAILED,
+            code::RUN_SAVE_RESUME_REFUSED,
             code::PROFILE_SAVE_FAILED,
             code::SCHEDULE_MODULE_CONCENTRATION,
             code::QUERY_DRIFT_UNOBSERVED,

@@ -327,3 +327,307 @@ fn a_suspend_does_not_move_the_world_hash() {
     };
     assert_eq!(trace(false), trace(true));
 }
+
+// --- resume -------------------------------------------------------------------------------------
+
+use ludion_core::rng::DeterministicRng;
+use ludion_engine::ResumeOutcome;
+use ludion_protocol::command::InputInjectParams;
+use ludion_sim::{InputState, Key};
+use serde_json::json;
+
+/// A component whose value depends on the RNG and on input edges, so a wrong resume diverges.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+struct Tally {
+    sum: u64,
+    edges: u32,
+    held: u32,
+}
+
+const TALLY_HUB: &str = "format: 1\nname: hub\nseed: 5\nentities:\n  - name: t\n    components:\n      Tally:\n        sum: 0\n        edges: 0\n        held: 0\n";
+
+/// Frame at which the suspending run requests the save; the snapshot lands at the next frame.
+const SUSPEND_FRAME: u64 = 5;
+
+fn tally(world: &mut World, _ctx: &SystemCtx) {
+    let roll = world
+        .resource_mut::<DeterministicRng>()
+        .map(DeterministicRng::next_u32)
+        .unwrap_or(0);
+    let (held, edge) = {
+        let input = world.resource::<InputState>().unwrap();
+        (input.is_held(Key::W), input.was_pressed(Key::W))
+    };
+    let ids: Vec<_> = world.entities().collect();
+    for id in ids {
+        if let Ok(Some(t)) = world.get_mut::<Tally>(id) {
+            t.sum = t.sum.wrapping_add(u64::from(roll));
+            t.edges += u32::from(edge);
+            t.held += u32::from(held);
+        }
+    }
+}
+
+fn suspend_at_five(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == SUSPEND_FRAME
+        && let Some(run) = world.resource_mut::<RunSave>()
+    {
+        run.suspend();
+    }
+}
+
+fn tally_game(dir: &Path, persist: bool) -> EngineBuilder {
+    game(dir, persist)
+        .components(|registry| {
+            registry.register::<Tally>("Tally")?;
+            Ok(())
+        })
+        .system("tally", tally)
+}
+
+fn boot_tally(builder: EngineBuilder) -> Engine {
+    let mut engine = builder.build().expect("boots");
+    engine.load_inline_scene(TALLY_HUB).unwrap();
+    engine
+}
+
+fn inject(engine: &mut Engine, frame: Option<u64>, kind: &str) {
+    engine
+        .execute(Command::InputInject(InputInjectParams {
+            frame: frame.map(FrameIndex::new),
+            event: json!({ "kind": kind, "key": "W" }),
+        }))
+        .unwrap();
+}
+
+fn request_resume(engine: &mut Engine) {
+    engine
+        .world_mut()
+        .resource_mut::<RunSave>()
+        .unwrap()
+        .resume();
+}
+
+fn last_resume(engine: &Engine) -> Option<ResumeOutcome> {
+    engine
+        .world()
+        .resource::<RunSave>()
+        .unwrap()
+        .last_resume()
+        .cloned()
+}
+
+fn backups(dir: &Path) -> usize {
+    std::fs::read_dir(dir.join("save"))
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("suspend.json.bak.")
+        })
+        .count()
+}
+
+/// Runs the suspending game to the frame after `SUSPEND_FRAME`; `hold` leaves W down across it.
+fn suspended_run(dir: &Path, hold: bool) -> Engine {
+    let mut a = boot_tally(tally_game(dir, true).system("suspend", suspend_at_five));
+    inject(&mut a, Some(1), "key_down");
+    if !hold {
+        inject(&mut a, Some(3), "key_up");
+    }
+    for _ in 0..=SUSPEND_FRAME {
+        a.advance_live();
+    }
+    a
+}
+
+#[test]
+fn a_resumed_run_continues_the_uninterrupted_trace() {
+    let dir = fresh_dir("resume-trace");
+    let mut a = suspended_run(&dir, false);
+
+    let mut u = boot_tally(tally_game(&fresh_dir("resume-trace-u"), false));
+    inject(&mut u, Some(1), "key_down");
+    inject(&mut u, Some(3), "key_up");
+    for _ in 0..=SUSPEND_FRAME {
+        u.advance_live();
+    }
+    assert_eq!(a.world_hash().unwrap(), u.world_hash().unwrap());
+
+    let mut b = boot_tally(tally_game(&dir, true));
+    for _ in 0..3 {
+        b.advance_live();
+    }
+    request_resume(&mut b);
+    b.advance_live();
+    let n1 = SUSPEND_FRAME + 1;
+    assert_eq!(b.frame().as_u64(), n1);
+    assert_eq!(b.world_hash().unwrap(), u.world_hash().unwrap());
+    assert_eq!(
+        last_resume(&b),
+        Some(ResumeOutcome::Resumed {
+            frame: FrameIndex::new(n1)
+        })
+    );
+    assert_eq!(
+        b.run_save_log().back().unwrap().request,
+        RunSaveRequest::Resume
+    );
+    assert!(b.run_save_error().is_none());
+
+    for engine in [&mut b, &mut u] {
+        inject(engine, Some(10), "key_down");
+        inject(engine, Some(200), "key_up");
+    }
+    for tick in 0..300 {
+        b.advance_live();
+        u.advance_live();
+        assert_eq!(
+            b.world_hash().unwrap(),
+            u.world_hash().unwrap(),
+            "diverged {tick} ticks after the resume"
+        );
+    }
+}
+
+#[test]
+fn one_suspend_gives_one_resume() {
+    let dir = fresh_dir("resume-once");
+    suspended_run(&dir, false);
+
+    let mut b = boot_tally(tally_game(&dir, true));
+    assert!(pending(&b).is_some());
+    request_resume(&mut b);
+    b.advance_live();
+    assert!(!dir.join("save/suspend.json").exists());
+    assert!(pending(&b).is_none());
+
+    let c = boot_tally(tally_game(&dir, true));
+    assert!(pending(&c).is_none());
+
+    request_resume(&mut b);
+    b.advance_live();
+    assert!(matches!(
+        last_resume(&b),
+        Some(ResumeOutcome::Refused { .. })
+    ));
+    assert_eq!(b.run_save_error().unwrap().code.as_str(), "L1401");
+    assert_eq!(backups(&dir), 0, "there was no file to back up");
+}
+
+#[test]
+fn held_input_is_clear_after_resume() {
+    let dir = fresh_dir("resume-input");
+    let a = suspended_run(&dir, true);
+    assert!(a.world().resource::<InputState>().unwrap().is_held(Key::W));
+
+    let mut b = boot_tally(tally_game(&dir, true));
+    request_resume(&mut b);
+    b.advance_live();
+    let idle = b.world().resource::<InputState>().unwrap();
+    assert!(!idle.is_held(Key::W) && !idle.was_pressed(Key::W));
+
+    inject(&mut b, None, "key_down");
+    b.advance_live();
+    let input = b.world().resource::<InputState>().unwrap();
+    assert!(input.is_held(Key::W) && input.was_pressed(Key::W));
+    let edges: u32 = b
+        .world()
+        .entities()
+        .filter_map(|id| b.world().get::<Tally>(id).ok().flatten().map(|t| t.edges))
+        .sum();
+    assert_eq!(
+        edges, 2,
+        "A's own press, then the fresh one after the resume"
+    );
+}
+
+/// Boots B with a refusal-causing file already in place and checks every refusal invariant against
+/// a twin that never asked to resume.
+fn assert_refused(dir: &Path, reason_has: &str, mut b: Engine) {
+    let twin_dir = fresh_dir("resume-twin");
+    let mut twin = boot_tally(tally_game(&twin_dir, false));
+    for _ in 0..3 {
+        b.advance_live();
+        twin.advance_live();
+    }
+    request_resume(&mut b);
+    b.advance_live();
+    twin.advance_live();
+
+    let Some(ResumeOutcome::Refused { reason }) = last_resume(&b) else {
+        panic!("expected a refusal, got {:?}", last_resume(&b));
+    };
+    assert!(reason.contains(reason_has), "{reason}");
+    assert_eq!(b.run_save_error().unwrap().code.as_str(), "L1401");
+    assert!(!dir.join("save/suspend.json").exists());
+    assert_eq!(backups(dir), 1);
+    assert!(pending(&b).is_none());
+    assert_eq!(b.frame(), twin.frame());
+    assert_eq!(b.world_hash().unwrap(), twin.world_hash().unwrap());
+}
+
+#[test]
+fn a_changed_component_schema_refuses_with_l1401_and_a_backup() {
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Gear {
+        hp: u32,
+    }
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct WiderGear {
+        hp: u32,
+        mana: u32,
+    }
+
+    let dir = fresh_dir("resume-schema");
+    let mut a = boot_tally(
+        tally_game(&dir, true)
+            .components(|registry| {
+                registry.register::<Gear>("Gear")?;
+                Ok(())
+            })
+            .system("suspend", suspend_at_five),
+    );
+    for _ in 0..=SUSPEND_FRAME {
+        a.advance_live();
+    }
+    assert!(dir.join("save/suspend.json").exists());
+
+    let b = boot_tally(tally_game(&dir, true).components(|registry| {
+        registry.register::<WiderGear>("Gear")?;
+        Ok(())
+    }));
+    assert_refused(&dir, "schemas changed", b);
+}
+
+#[test]
+fn a_garbled_file_is_refused_and_backed_up() {
+    let dir = fresh_dir("resume-garbled");
+    write(&dir, "save/suspend.json", "{ not json");
+    let b = boot_tally(tally_game(&dir, true));
+    assert_refused(&dir, "unreadable", b);
+}
+
+#[test]
+fn a_non_persisting_resume_only_logs() {
+    let dir = fresh_dir("resume-log");
+    let mut b = boot_tally(tally_game(&dir, false));
+    let mut twin = boot_tally(tally_game(&fresh_dir("resume-log-twin"), false));
+    for _ in 0..3 {
+        b.advance_live();
+        twin.advance_live();
+    }
+    request_resume(&mut b);
+    b.advance_live();
+    twin.advance_live();
+    assert_eq!(
+        b.run_save_log().back().unwrap().request,
+        RunSaveRequest::Resume
+    );
+    assert_eq!(b.world_hash().unwrap(), twin.world_hash().unwrap());
+    assert_eq!(last_resume(&b), None);
+    assert!(!dir.join("save").exists());
+}

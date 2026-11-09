@@ -77,7 +77,9 @@ use crate::player_profile::{ProfileKind, ProfileSaveEntry};
 use crate::probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
 use crate::quality::QualitySetting;
 use crate::recording::{AppliedDocReload, Recorder};
-use crate::run_save::{RunSave, RunSaveEntry, RunSaveRequest, RunSaveState, SuspendInfo};
+use crate::run_save::{
+    ResumeOutcome, RunSave, RunSaveEntry, RunSaveRequest, RunSaveState, SuspendInfo,
+};
 use crate::scene_physics;
 use crate::tick_observer::TickObserver;
 
@@ -2249,11 +2251,14 @@ impl Engine {
 
     /// Drains the run-save requests at the frame boundary, straight after
     /// [`drain_profile`](Engine::drain_profile): a [`RunSave::discard`] runs before a
-    /// [`RunSave::suspend`], each pushing a frame-stamped [`RunSaveEntry`]. Only a persisting live
-    /// host touches disk: a suspend writes the snapshot envelope crash-durably, a discard removes the
-    /// file; elsewhere only `pending` changes. A failure is a non-fatal `L1400` on both sinks, the
-    /// previous whole file stays, and the next request retries. Runs before the shutdown and switch
-    /// drains, so a suspend in a quit or switch frame captures the departing world.
+    /// [`RunSave::suspend`], then a [`RunSave::resume`], each pushing a frame-stamped
+    /// [`RunSaveEntry`]. Only a persisting live host touches disk: a suspend writes the snapshot
+    /// envelope crash-durably, a discard removes the file, a resume restores it in place (strictly:
+    /// any refusal is an `L1401`, a backup and [`ResumeOutcome::Refused`], with the world untouched);
+    /// elsewhere only `pending` changes and a resume is only logged. A write failure is a non-fatal
+    /// `L1400` on both sinks, the previous whole file stays, and the next request retries. Runs before
+    /// the shutdown and switch drains, so a suspend in a quit or switch frame captures the departing
+    /// world.
     fn drain_run_save(&mut self, frame: FrameIndex) {
         let Some(state) = self.run_save.as_ref() else {
             return;
@@ -2263,7 +2268,8 @@ impl Engine {
         };
         let discard = std::mem::take(&mut resource.discard);
         let suspend = std::mem::take(&mut resource.suspend);
-        if !discard && !suspend {
+        let resume = std::mem::take(&mut resource.resume);
+        if !discard && !suspend && !resume {
             return;
         }
         let stamp = state.stamp.clone();
@@ -2273,6 +2279,7 @@ impl Engine {
         for (wanted, request) in [
             (discard, RunSaveRequest::Discard),
             (suspend, RunSaveRequest::Suspend),
+            (resume, RunSaveRequest::Resume),
         ] {
             if !wanted {
                 continue;
@@ -2284,6 +2291,8 @@ impl Engine {
                 .run_save_log
                 .push_back(RunSaveEntry { frame, request });
             let outcome = match request {
+                // Runs after the loop: it rebuilds the world.
+                RunSaveRequest::Resume => continue,
                 RunSaveRequest::Discard => {
                     let removed = if persisting {
                         crate::run_save::remove_file(&path)
@@ -2328,6 +2337,81 @@ impl Engine {
         }
         if let Some(resource) = self.driver.world_mut().resource_mut::<RunSave>() {
             resource.set_pending(pending);
+        }
+        if resume && persisting {
+            self.resume_run(&path, &stamp, frame);
+        }
+    }
+
+    /// Restores the suspended run at `path` in place, or refuses it. Runs last in
+    /// [`drain_run_save`](Engine::drain_run_save) because a restore replaces the world. Held and
+    /// pending input are cleared; on success the file is deleted and `pending` is `None`.
+    fn resume_run(
+        &mut self,
+        path: &Path,
+        stamp: &crate::run_save::BuildStamp,
+        request_frame: FrameIndex,
+    ) {
+        let (frame, snapshot) = match crate::run_save::read_resume(path, stamp) {
+            Ok(read) => read,
+            Err(reason) => {
+                self.refuse_resume(path, reason, path.exists());
+                return;
+            }
+        };
+        // Before the restore: `install_restored` mirrors this state into the fresh world.
+        if let Some(state) = self.run_save.as_mut() {
+            state.pending = None;
+            state.last_resume = Some(ResumeOutcome::Resumed { frame });
+        }
+        if let Err(diagnostic) =
+            crate::snapshot::restore_into(self, &snapshot, crate::snapshot::DriftPolicy::Refuse)
+        {
+            self.refuse_resume(path, diagnostic.message, true);
+            return;
+        }
+        self.set_current_scene_path(None);
+        self.push_event(Event::SceneChanged(SceneChangedData {
+            kind: SceneChangeKind::Restore,
+            path: None,
+            request_id: self.current_request(),
+        }));
+        // The restore adopted the snapshot's session and cleared the log; keep the request visible.
+        self.session.run_save_log.push_back(RunSaveEntry {
+            frame: request_frame,
+            request: RunSaveRequest::Resume,
+        });
+        match crate::run_save::remove_file(path) {
+            Ok(()) => self.session.run_save_error = None,
+            Err(message) => self.run_save_failed(message),
+        }
+    }
+
+    /// Reports an `L1401` on both sinks, optionally backs the file up beside itself, and records the
+    /// refusal; the world is untouched.
+    fn refuse_resume(&mut self, path: &Path, reason: String, backup: bool) {
+        let mut reason = reason;
+        if backup && let Err(error) = crate::player_profile::backup_file(path) {
+            reason = format!(
+                "{reason}; the file could not be backed up ({error}), so it was left in place"
+            );
+        }
+        let diagnostic = Diagnostic::new(
+            ludion_core::codes::code::RUN_SAVE_RESUME_REFUSED,
+            reason.clone(),
+        )
+        .with_help("start a new run; the original is kept as `suspend.json.bak.<hash>` beside it");
+        eprintln!("{diagnostic}");
+        self.push_event(Event::Log(LogEvent::from_diagnostic(diagnostic.clone())));
+        self.session.run_save_error = Some(diagnostic);
+        let outcome = ResumeOutcome::Refused { reason };
+        if let Some(state) = self.run_save.as_mut() {
+            state.pending = None;
+            state.last_resume = Some(outcome.clone());
+        }
+        if let Some(resource) = self.driver.world_mut().resource_mut::<RunSave>() {
+            resource.set_pending(None);
+            resource.set_last_resume(Some(outcome));
         }
     }
 
@@ -3656,8 +3740,8 @@ impl Engine {
         &self.session.run_save_log
     }
 
-    /// The most recent frame-boundary run-save failure (`L1400`), or `None` if the last write
-    /// succeeded or none was attempted (the [`profile_save_error`](Engine::profile_save_error) mold).
+    /// The most recent frame-boundary run-save failure (`L1400`) or refused resume (`L1401`), or
+    /// `None` if the last write or resume succeeded or none was attempted (the [`profile_save_error`](Engine::profile_save_error) mold).
     pub fn run_save_error(&self) -> Option<&Diagnostic> {
         self.session.run_save_error.as_ref()
     }
@@ -5440,7 +5524,7 @@ impl Engine {
         &mut self,
         value: &Value,
     ) -> Result<ludion_protocol::restore::RestoreReport, Diagnostic> {
-        crate::snapshot::restore_into(self, value)
+        crate::snapshot::restore_into(self, value, crate::snapshot::DriftPolicy::Migrate)
     }
 
     // --- Recording ------------------------------------------------------------------------------

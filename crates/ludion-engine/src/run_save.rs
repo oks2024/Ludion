@@ -52,10 +52,6 @@ pub(crate) fn game_schema_hash(registry: &Registry, doc_kinds: &[DocKind]) -> Wi
 
 /// `None` when `saved` was written by this build; otherwise a player-readable reason, the engine
 /// version first.
-#[allow(
-    dead_code,
-    reason = "the resume path compares stamps; unit tests cover it"
-)]
 pub(crate) fn stamp_mismatch(saved: &BuildStamp, current: &BuildStamp) -> Option<String> {
     if saved.engine_version != current.engine_version {
         return Some(format!(
@@ -82,10 +78,15 @@ pub struct SuspendInfo {
     pub saved_at_build: BuildStamp,
 }
 
-/// Why a resume did not happen.
+/// What the last [`RunSave::resume`] did.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResumeOutcome {
+    /// The saved run was restored in place.
+    Resumed {
+        /// The restored snapshot's frame, the frame the resumed run continues from.
+        frame: FrameIndex,
+    },
     /// The saved run was refused; `reason` is player-readable.
     Refused {
         /// Why the run was not resumed.
@@ -100,6 +101,8 @@ pub enum RunSaveRequest {
     Suspend,
     /// [`RunSave::discard`].
     Discard,
+    /// [`RunSave::resume`].
+    Resume,
 }
 
 /// One drained run-save request, stamped with the frame during which a system made it — the
@@ -121,11 +124,11 @@ pub(crate) struct RunSaveState {
     pub(crate) last_resume: Option<ResumeOutcome>,
 }
 
-/// The suspend/discard handle a game system holds, installed by
+/// The suspend/discard/resume handle a game system holds, installed by
 /// [`EngineBuilder::run_save`](crate::EngineBuilder::run_save).
 ///
 /// Requests are flags the engine drains at the frame boundary, so several calls in one frame
-/// collapse (a discard runs before a suspend). Like [`Profile`](crate::Profile) it is a resource
+/// collapse (discard, then suspend, then resume). Like [`Profile`](crate::Profile) it is a resource
 /// with no digest, invisible to the `WorldHash`. Only a live host writes the file; a test or replay
 /// fills the [log](crate::Engine::run_save_log) and updates [`pending`](RunSave::pending) without
 /// touching disk.
@@ -151,6 +154,7 @@ pub struct RunSave {
     last_resume: Option<ResumeOutcome>,
     pub(crate) suspend: bool,
     pub(crate) discard: bool,
+    pub(crate) resume: bool,
 }
 
 impl RunSave {
@@ -164,12 +168,20 @@ impl RunSave {
         self.discard = true;
     }
 
+    /// Requests that the suspended run be restored at the frame boundary, after any
+    /// [`discard`](RunSave::discard) and [`suspend`](RunSave::suspend). A persisting host restores
+    /// the world in place with held input cleared and deletes the file; a refusal is reported by
+    /// [`last_resume`](RunSave::last_resume). Without persistence the request is only logged.
+    pub fn resume(&mut self) {
+        self.resume = true;
+    }
+
     /// The suspended run read at boot, or the one the last [`suspend`](RunSave::suspend) wrote.
     pub fn pending(&self) -> Option<&SuspendInfo> {
         self.pending.as_ref()
     }
 
-    /// Why the last resume did not happen, if it did not.
+    /// The outcome of the last resume, if there was one.
     pub fn last_resume(&self) -> Option<&ResumeOutcome> {
         self.last_resume.as_ref()
     }
@@ -180,12 +192,18 @@ impl RunSave {
             last_resume: state.last_resume.clone(),
             suspend: false,
             discard: false,
+            resume: false,
         }
     }
 
     /// Updates the mirrored pending run in place.
     pub(crate) fn set_pending(&mut self, pending: Option<SuspendInfo>) {
         self.pending = pending;
+    }
+
+    /// Updates the mirrored resume outcome in place.
+    pub(crate) fn set_last_resume(&mut self, outcome: Option<ResumeOutcome>) {
+        self.last_resume = outcome;
     }
 }
 
@@ -248,6 +266,42 @@ pub(crate) fn read_pending(path: &Path) -> Option<SuspendInfo> {
         scene: file.scene,
         saved_at_build: file.build,
     })
+}
+
+/// Reads the suspended run for a resume: the snapshot to restore (with held and pending input
+/// removed, so the restore installs an idle input) and its frame. The `Err` is the player-readable
+/// refusal reason.
+pub(crate) fn read_resume(
+    path: &Path,
+    current: &BuildStamp,
+) -> Result<(FrameIndex, Value), String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err("there is no suspended run".to_string());
+        }
+        Err(e) => return Err(format!("the suspended run file is unreadable: {e}")),
+    };
+    let file: RunSaveFile = serde_json::from_str(&text)
+        .map_err(|e| format!("the suspended run file is unreadable: {e}"))?;
+    if file.format > RUN_SAVE_FORMAT {
+        return Err("the suspended run was written by a newer version".to_string());
+    }
+    if let Some(reason) = stamp_mismatch(&file.build, current) {
+        return Err(reason);
+    }
+    let mut snapshot = file.snapshot;
+    let frame = snapshot
+        .get("frame")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            "the suspended run file is unreadable: its snapshot has no frame".to_string()
+        })?;
+    if let Some(object) = snapshot.as_object_mut() {
+        object.remove("input");
+        object.remove("pending_input");
+    }
+    Ok((FrameIndex::new(frame), snapshot))
 }
 
 #[cfg(test)]
@@ -331,5 +385,75 @@ mod tests {
         assert!(read_pending(&path).is_none());
         assert!(path.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_resume_refuses_each_unreadable_or_foreign_file() {
+        let dir =
+            std::env::temp_dir().join(format!("ludion-runsave-resume-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("suspend.json");
+        let _ = std::fs::remove_file(&path);
+        let here = stamp("0.1.0", 1);
+        let err = read_resume(&path, &here).unwrap_err();
+        assert!(err.contains("no suspended run"), "{err}");
+
+        std::fs::write(&path, "not json").unwrap();
+        let err = read_resume(&path, &here).unwrap_err();
+        assert!(err.contains("unreadable"), "{err}");
+
+        let info = SuspendInfo {
+            frame: FrameIndex::new(7),
+            scene: None,
+            saved_at_build: here.clone(),
+        };
+        let snapshot = json!({ "frame": 8, "input": {"held": 1}, "pending_input": [1], "rng": 3 });
+        std::fs::write(&path, encode(&info, snapshot.clone())).unwrap();
+        let (frame, value) = read_resume(&path, &here).unwrap();
+        assert_eq!(frame, FrameIndex::new(8));
+        assert_eq!(value, json!({ "frame": 8, "rng": 3 }));
+
+        let err = read_resume(&path, &stamp("0.2.0", 1)).unwrap_err();
+        assert!(err.contains("saved by engine"), "{err}");
+
+        std::fs::write(&path, encode(&info, json!({ "rng": 3 }))).unwrap();
+        assert!(read_resume(&path, &here).unwrap_err().contains("no frame"));
+
+        let newer = encode(&info, snapshot).replacen("\"format\":1", "\"format\":2", 1);
+        std::fs::write(&path, newer).unwrap();
+        let err = read_resume(&path, &here).unwrap_err();
+        assert!(err.contains("newer version"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refusing_drift_leaves_the_engine_untouched() {
+        use crate::snapshot::{DriftPolicy, capture, restore_into};
+
+        let mut source = crate::Engine::builder()
+            .components(|registry| {
+                registry.register::<Plain>("Gear")?;
+                Ok(())
+            })
+            .build()
+            .unwrap();
+        source
+            .load_inline_scene(
+                "format: 1\nentities:\n  - name: g\n    components:\n      Gear:\n        hp: 3\n",
+            )
+            .unwrap();
+        let snapshot = capture(&source).unwrap();
+
+        let mut target = crate::Engine::new();
+        let hash = target.world_hash().unwrap();
+        let frame = target.frame();
+        let error = restore_into(&mut target, &snapshot, DriftPolicy::Refuse).unwrap_err();
+        assert_eq!(error.code.as_str(), "L1401");
+        assert!(error.message.contains("Gear"), "{}", error.message);
+        assert_eq!(target.world_hash().unwrap(), hash);
+        assert_eq!(target.frame(), frame);
+
+        let report = restore_into(&mut target, &snapshot, DriftPolicy::Migrate).unwrap();
+        assert_eq!(report.entries.len(), 1);
     }
 }
