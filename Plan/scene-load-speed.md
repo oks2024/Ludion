@@ -91,7 +91,7 @@ Three structural causes, all in `ludion-engine`:
   summary to stderr; `ludion docs`/`devdocs` topics (`profiling`, `ludion-cli`) updated.
 - Budget: an optional `load_total_ms` ceiling in the budget TOML schema (`Budget`, `check_budget`,
   `L4005` on breach). Calibrate the reference game's mesh districts in its pinned budget files on
-  the reference box. The M4 twin is owed (`Plan/owed.md`).
+  the reference box. The M4 twins are `pinned-apple-m4-district-{breach,plaza}.toml` (2026-11-08, rev 2231).
 - **Exit:** the plaza report attributes ≥ 90 % of `total` to named phases; a schema snapshot and
   CLAUDE.md hash refresh; the counters asserted in a test over a synthetic fixture (generated meshes
   + PNGs in a scratch dir).
@@ -189,8 +189,8 @@ Three structural causes, all in `ludion-engine`:
 - `load_total_ms` budget line (`L4005` on breach, `L4025` when the report has no load section), calibrated
   on vigil's mesh district: `games/vigil/budgets/pinned-rtx3090-district-breach.toml`. Three warm
   `--profile 30` runs of `district-breach`: 4409.8, 4355.6 and 4369.7 ms (median 4369.7; scene 303, mesh
-  1651, texture 1411, gpu upload 154, renderer init 798, first frame 36); ceiling 9000 ms. The M4 twin is
-  owed (`Plan/owed.md`).
+  1651, texture 1411, gpu upload 154, renderer init 798, first frame 36); ceiling 9000 ms. The M4 twins
+  (2026-11-08, rev 2231, cooked) read breach 509 ms and plaza 1982 ms, ceilings 1500 and 4000.
 - **Checkpoint:** CPU mesh and texture decode dominates the load; GPU upload plus GI bake is a small
   share. Wave 2 keeps its scope and gets no mip-encoder fix. Renderer device creation (about 0.8 s) is a
   fixed cost outside this plan.

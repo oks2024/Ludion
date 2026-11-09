@@ -56,8 +56,8 @@ plan (the `Plan/cooked-assets.md` Wave 0 precedent).
 17. **Anti-tiling in the spike is measured, not solved:** the tiling view and a periodicity
     validator expose repetition; bake-time macro variation on the kit piece covers it if needed.
 18. **Speed budget (~40-step recipe, feedback included):** ≤2 s at 512², ≤10 s at 1024²,
-    ≤40 s at 2048². Measured indicatively on a non-pinned dev machine during the spike; the
-    pinned-M4 measurement is owed (`Plan/owed.md`).
+    ≤40 s at 2048². Met on the pinned M4 (2026-11-08, rev 2231): `bench40` warm with `--preview` at
+    1.0 / 2.3 / 7.1 s.
 19. **Revisits `Plan/textured-pbr.md` decision 1 and its "no texture-authoring surface" fence.**
     A text recipe is diffable source with generated, drift-gated maps, which removes the fence's
     reason; both places carry an amendment line.
@@ -157,7 +157,7 @@ Wave 0 (the spike) — **Go**, 2026-10-24:
 - **Hard generators.** `tile_sampler`, `flood_fill`, `distance`, `ambient_occlusion`, `curvature` and the `image` op; `normal_from_height` uses a Sobel filter.
 - **`std:` library.** `op: input` and `inputs:` bindings let a sub-recipe receive images; five embedded macros (`edge_wear`, `cavity_grime`, `cobbles`, `planks`, `rust_spots`), `std:` references resolved from the binary.
 - **`ludion texture` verb.** `build`, `check` (the drift gate, `L1286`) and `vendor`; nine validators (seven PBR, two repetition) with a rules TOML (`L1287`–`L1289`); `kind: texture` is checked by the verb; `examples/textures/tiles.texture.yaml` is the worked example. Docs: `ludion docs texture-recipes`, `ludion docs texture-ops`, `ludion devdocs ludion-texgen`.
-- **Feedback loop.** `build --preview` writes the map sheet, step thumbnails, 2×2 tiling views and a Ludion-rendered preview (a generated scene with sphere, rounded cube and panel) into an ignored `.ludion/texture/<stem>/`; the `bench40` recipe measures speed: warm-run budget met on the M5, cold shader compile excluded, the M4 measurement owed.
+- **Feedback loop.** `build --preview` writes the map sheet, step thumbnails, 2×2 tiling views and a Ludion-rendered preview (a generated scene with sphere, rounded cube and panel) into an ignored `.ludion/texture/<stem>/`; the `bench40` recipe measures speed: warm-run budget met on the pinned M4 (decision 18), cold shader compile excluded.
 - **Reference materials.** `examples/textures/`: cobble, oak planks, painted iron and the hand-painted cobble restyle, each under the drift gate; the spike log below records the iterations and the missing ops.
 - **Kit piece.** The reference game's crate rebuilt from a generated set beside its node-material twin; details private.
 

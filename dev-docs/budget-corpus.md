@@ -88,7 +88,8 @@ vigil's E6 pair carry `threads = 8`; the rest state no worker count.
 - `games/vigil/budgets/pinned-rtx3090-district-breach.toml` — vigil's scene-load tripwire (private, Lore-only):
   one `load_total_ms` line over `scenes/district-breach.yaml`, checked by hand from `games/vigil/` with
   `--profile 30 --textures cooked --profile-check <file>` after a `ludion sync`; measured at `cooked`,
-  median 1764 ms (the plaza twin, 2427 ms, ceiling 5000); the M4 twin is owed (`Plan/owed.md`).
+  median 1764 ms (the plaza twin, 2427 ms, ceiling 5000). The `pinned-apple-m4-district-{breach,plaza}.toml`
+  twins read 509 / 1982 ms (ceilings 1500 / 4000); most of the gap is the 3090's ~945 ms `renderer_init`.
 - `games/vigil/budgets/stress-spatial-{rtx3090,apple-m4}-{1,2,8}t.json` (and the sibling
   `stress-baseline-*`/`stress-j1-*` files) — **not budget files.** No ceilings; each is a committed
   raw `ProfileReport` JSON dump (one per thread count) evidencing the deterministic-job-system's

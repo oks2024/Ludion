@@ -260,6 +260,9 @@ Everything in the section above, for `desktop`.
   tries the store before the YAML parse.
 - **Trigger:** the M4 or iOS `load` report after scene-load-speed Wave 2 shows mesh parsing above
   10 % of a district's load. Otherwise this wave closes as not needed.
+- **Trigger met on the M4 (2026-11-08, rev 2231):** the cooked-texture `load` reports put the `mesh` phase at
+  174 of 509 ms on `district-breach` (34 %) and 212 of 1982 ms on `district-plaza` (11 %), medians of three
+  warm runs (`games/vigil/budgets/pinned-apple-m4-district-*.toml`). The wave is due; it is not started.
 
 ## Traps
 
