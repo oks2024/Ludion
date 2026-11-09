@@ -4,7 +4,7 @@ description: Profiling capture surfaces: offline driver, live channel, profile.c
 
 # profiling-capture
 
-**Scope:** the capture half of `ludion devdocs profiling` (the hub: layers, report shape, arming rule, layout). Offline and live surfaces, the deferred capture reply, replay tails, the `cluster` section and the Perfetto export.
+**Scope:** the capture half of `ludion devdocs profiling` (the hub: layers, report shape, arming rule, layout). Offline and live surfaces, the deferred capture reply, replay tails, the `cluster`, `load` and `skin` sections and the Perfetto export.
 
 ## Dataflow
 
@@ -36,6 +36,12 @@ A render phase is absent when it never began (no adapter; `voxelize` and `gi_bak
 Ticks a game's `--frames N` runs between the scene load and the first frame sit in no phase, so they
 count as unattributed. The counters are deterministic. A game's `--render-out` attaches the same
 observer and prints the load as one stderr line.
+
+**The `skin` section.** A report may also carry `SkinProfile`: the median wall time of extract's `Skin`
+phase beside the medians of its five per-extract counters (instances; palettes sampled, reused and
+shared; joints sampled). Offline only, like `cluster`, and absent for a scene with no skinned
+instance. `profile_sim` attaches a `SkinClock` over the measured frames alone and restores the caller's
+extract observer. Posing is parallel, so read `pose_median_ms` beside `sim.threads`.
 
 **Offline: `ludion profile --scene <FILE> --frames N`.** Loads a scene, drives a warmup then N
 measured frames, medians them. It links no game code, so `sim.systems` holds only engine-registered

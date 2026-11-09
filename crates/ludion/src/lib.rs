@@ -2611,6 +2611,7 @@ mod budget_quality_tests {
             load: None,
             probes: None,
             culling: None,
+            skin: None,
             samples: None,
         }
     }

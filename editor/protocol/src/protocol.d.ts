@@ -3016,6 +3016,12 @@ export interface ProfileReport {
   scene: string;
   sim: SimProfile;
   /**
+   * What posing skinned meshes cost inside extract, and the shape of that work. Filled by the
+   * **offline** driver for a scene with skinned instances; absent otherwise and for a live
+   * capture, for `cluster`'s reason.
+   */
+  skin?: SkinProfile | null;
+  /**
    * Sun cascade planning: how many cascades the sun authored and the frame fitted, and each
    * one's depth range, texel size and caster count. Filled by the **offline** driver and absent
    * for a live capture, for `cluster`'s reason: the live host fits inside a frame a profiler
@@ -3549,6 +3555,45 @@ export interface SimProfile {
    * lives in its filename if anywhere. Any live or offline capture fills it.
    */
   threads?: number | null;
+  [k: string]: unknown;
+}
+/**
+ * Skin posing inside extract: wall time of the `Skin` phase and the per-extract work counters.
+ *
+ * The counters are deterministic shape, as `ClusterProfile`'s occupancy is; only `pose_median_ms`
+ * is a measurement. `instances = sampled + reused + shared`. `joints_sampled` counts both clips of
+ * a crossfade and nothing for a rest palette. Posing is parallel, so read the time beside
+ * `sim.threads`.
+ */
+export interface SkinProfile {
+  /**
+   * Median skinned instances per extract.
+   */
+  instances_median: number;
+  /**
+   * Median joints sampled per extract.
+   */
+  joints_sampled_median: number;
+  /**
+   * Median palettes reused from a previous frame per extract.
+   */
+  palettes_reused_median: number;
+  /**
+   * Median palettes sampled from clips per extract.
+   */
+  palettes_sampled_median: number;
+  /**
+   * Median palettes shared with another instance per extract.
+   */
+  palettes_shared_median: number;
+  /**
+   * Median wall time of the extract `Skin` phase.
+   */
+  pose_median_ms: number;
+  /**
+   * Measured extracts the medians are over.
+   */
+  sampled_frames: number;
   [k: string]: unknown;
 }
 /**

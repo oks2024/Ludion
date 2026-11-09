@@ -4679,6 +4679,17 @@
             "$ref": "#/$defs/SimProfile",
             "description": "Sim-side timings: per-system medians and the whole-frame median."
           },
+          "skin": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SkinProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What posing skinned meshes cost inside extract, and the shape of that work. Filled by the\n**offline** driver for a scene with skinned instances; absent otherwise and for a live\ncapture, for `cluster`'s reason."
+          },
           "sun_cascades": {
             "anyOf": [
               {
@@ -5971,6 +5982,57 @@
         ],
         "type": "object"
       },
+      "SkinProfile": {
+        "description": "Skin posing inside extract: wall time of the `Skin` phase and the per-extract work counters.\n\nThe counters are deterministic shape, as `ClusterProfile`'s occupancy is; only `pose_median_ms`\nis a measurement. `instances = sampled + reused + shared`. `joints_sampled` counts both clips of\na crossfade and nothing for a rest palette. Posing is parallel, so read the time beside\n`sim.threads`.",
+        "properties": {
+          "instances_median": {
+            "description": "Median skinned instances per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "joints_sampled_median": {
+            "description": "Median joints sampled per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "palettes_reused_median": {
+            "description": "Median palettes reused from a previous frame per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "palettes_sampled_median": {
+            "description": "Median palettes sampled from clips per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "palettes_shared_median": {
+            "description": "Median palettes shared with another instance per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "pose_median_ms": {
+            "description": "Median wall time of the extract `Skin` phase.",
+            "format": "double",
+            "type": "number"
+          },
+          "sampled_frames": {
+            "description": "Measured extracts the medians are over.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pose_median_ms",
+          "sampled_frames",
+          "instances_median",
+          "palettes_sampled_median",
+          "palettes_reused_median",
+          "palettes_shared_median",
+          "joints_sampled_median"
+        ],
+        "type": "object"
+      },
       "SubId": {
         "description": "A subscription id, minted by the server in the `stream.subscribe` response.",
         "format": "uint64",
@@ -7143,6 +7205,17 @@
             "$ref": "#/$defs/SimProfile",
             "description": "Sim-side timings: per-system medians and the whole-frame median."
           },
+          "skin": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SkinProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What posing skinned meshes cost inside extract, and the shape of that work. Filled by the\n**offline** driver for a scene with skinned instances; absent otherwise and for a live\ncapture, for `cluster`'s reason."
+          },
           "sun_cascades": {
             "anyOf": [
               {
@@ -7674,6 +7747,57 @@
           "systems",
           "sequential",
           "frame_total_median_ms"
+        ],
+        "type": "object"
+      },
+      "SkinProfile": {
+        "description": "Skin posing inside extract: wall time of the `Skin` phase and the per-extract work counters.\n\nThe counters are deterministic shape, as `ClusterProfile`'s occupancy is; only `pose_median_ms`\nis a measurement. `instances = sampled + reused + shared`. `joints_sampled` counts both clips of\na crossfade and nothing for a rest palette. Posing is parallel, so read the time beside\n`sim.threads`.",
+        "properties": {
+          "instances_median": {
+            "description": "Median skinned instances per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "joints_sampled_median": {
+            "description": "Median joints sampled per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "palettes_reused_median": {
+            "description": "Median palettes reused from a previous frame per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "palettes_sampled_median": {
+            "description": "Median palettes sampled from clips per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "palettes_shared_median": {
+            "description": "Median palettes shared with another instance per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "pose_median_ms": {
+            "description": "Median wall time of the extract `Skin` phase.",
+            "format": "double",
+            "type": "number"
+          },
+          "sampled_frames": {
+            "description": "Measured extracts the medians are over.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pose_median_ms",
+          "sampled_frames",
+          "instances_median",
+          "palettes_sampled_median",
+          "palettes_reused_median",
+          "palettes_shared_median",
+          "joints_sampled_median"
         ],
         "type": "object"
       },

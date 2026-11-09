@@ -18,12 +18,13 @@
 //! [`ScheduleObserver`] it attaches cannot mutate sim state, so a
 //! profiled run's [`WorldHash`](Engine::world_hash) is bit-identical to an unprofiled one (asserted
 //! by the `observer_does_not_change_world_hash` test below). The crate's clippy denylist bans
-//! [`std::time::Instant::now`] everywhere; the functions here that call it — and `LoadClock` and
-//! `SpanClock`, the implementors of the clock-free observers — scope an `allow` with that rationale,
+//! [`std::time::Instant::now`] everywhere; the functions here that call it — and `LoadClock`,
+//! `SpanClock` and `SkinClock`, the implementors of the clock-free observers — scope an `allow` with that rationale,
 //! exactly as `live.rs` does for the tick clock.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ludion_core::codes::code;
@@ -33,13 +34,14 @@ use ludion_ecs::ScheduleObserver;
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
 use ludion_protocol::perf::{
-    AssetLoadCounters, CullViewProfile, CullingProfile, LoadProfile, ProfileSamples,
+    AssetLoadCounters, CullViewProfile, CullingProfile, LoadProfile, ProfileSamples, SkinProfile,
 };
 use ludion_renderer::CullViewCount;
 use ludion_sim::RunState;
 use serde::Deserialize;
 
 use crate::commands::collapse;
+use crate::extract_observer::{ExtractObserver, ExtractPhase, SkinCounts};
 use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
 use crate::replay::{
     DriveHook, Keyframes, PlainDrive, drive_actions_with, prepare_replay, require_monotonic_frames,
@@ -167,7 +169,7 @@ pub fn profile_engine(
         ]);
     }
     let load = measure_load(engine)?;
-    let (sim, samples) = profile_sim(engine, frames, warmup);
+    let (sim, samples, skin) = profile_sim(engine, frames, warmup);
     let cluster = profile_cluster(engine, frames, warmup).map_err(|d| vec![d])?;
     let local_shadows = profile_local_shadows(engine).map_err(|d| vec![d])?;
     let sun_cascades = profile_sun_cascades(engine).map_err(|d| vec![d])?;
@@ -194,6 +196,7 @@ pub fn profile_engine(
         load,
         probes: engine.probe_profile(),
         culling,
+        skin,
         samples: Some(samples),
     })
 }
@@ -500,7 +503,11 @@ fn measure_sequential(engine: &mut Engine) -> [Duration; 3] {
 // Sanctioned wall-clock site: the frame-total `Instant::now` here measures observation only and
 // never feeds a tick (see the module docs).
 #[allow(clippy::disallowed_methods)]
-fn profile_sim(engine: &mut Engine, frames: u64, warmup: u64) -> (SimProfile, ProfileSamples) {
+fn profile_sim(
+    engine: &mut Engine,
+    frames: u64,
+    warmup: u64,
+) -> (SimProfile, ProfileSamples, Option<SkinProfile>) {
     let mut observer = TimingObserver::default();
 
     for _ in 0..warmup {
@@ -514,6 +521,11 @@ fn profile_sim(engine: &mut Engine, frames: u64, warmup: u64) -> (SimProfile, Pr
     let mut per_sequential: [Vec<Duration>; SEQUENTIAL_NAMES.len()] = Default::default();
     let mut frame_totals: Vec<Duration> = Vec::new();
     let mut frame_indices: Vec<u64> = Vec::new();
+
+    // The measured extracts only; the caller's observer, if any, is put back below.
+    let clock = SkinClock::default();
+    let previous = engine.take_extract_observer();
+    engine.set_extract_observer(Some(Box::new(clock.clone())));
 
     for _ in 0..frames {
         observer.frame.clear();
@@ -530,7 +542,81 @@ fn profile_sim(engine: &mut Engine, frames: u64, warmup: u64) -> (SimProfile, Pr
         systems.push(frame, &observer.frame);
     }
 
-    reduce_sim(systems, per_sequential, frame_totals, frame_indices)
+    engine.set_extract_observer(previous);
+    let skin = clock.into_profile();
+    let (sim, samples) = reduce_sim(systems, per_sequential, frame_totals, frame_indices);
+    (sim, samples, skin)
+}
+
+/// What a [`SkinClock`] collected: the `Skin` phase's wall time and counters per measured extract.
+#[derive(Default)]
+struct SkinSamples {
+    open: Option<Instant>,
+    pose: Vec<Duration>,
+    counts: Vec<SkinCounts>,
+}
+
+/// An [`ExtractObserver`] that times the `Skin` phase and keeps its counters, ignoring every other
+/// phase. Cloned so the profiler keeps a handle on what the engine's boxed copy collects.
+#[derive(Clone, Default)]
+struct SkinClock(Arc<Mutex<SkinSamples>>);
+
+impl SkinClock {
+    /// The medians over the collected extracts; `None` when none drew a skinned instance.
+    fn into_profile(self) -> Option<SkinProfile> {
+        let mut samples = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if samples.counts.iter().all(|c| c.instances == 0) {
+            return None;
+        }
+        let column = |f: fn(&SkinCounts) -> f64| -> f64 {
+            let mut values: Vec<f64> = samples.counts.iter().map(f).collect();
+            median_f64(&mut values)
+        };
+        let instances_median = column(|c| f64::from(c.instances));
+        let palettes_sampled_median = column(|c| f64::from(c.palettes_sampled));
+        let palettes_reused_median = column(|c| f64::from(c.palettes_reused));
+        let palettes_shared_median = column(|c| f64::from(c.palettes_shared));
+        let joints_sampled_median = column(|c| c.joints_sampled as f64);
+        let sampled_frames = samples.counts.len() as u64;
+        Some(SkinProfile {
+            pose_median_ms: median_ms(&mut samples.pose),
+            sampled_frames,
+            instances_median,
+            palettes_sampled_median,
+            palettes_reused_median,
+            palettes_shared_median,
+            joints_sampled_median,
+        })
+    }
+}
+
+impl ExtractObserver for SkinClock {
+    // Sanctioned wall-clock site (see the module docs).
+    #[allow(clippy::disallowed_methods)]
+    fn begin(&mut self, phase: ExtractPhase) {
+        if phase == ExtractPhase::Skin {
+            self.0.lock().unwrap_or_else(|e| e.into_inner()).open = Some(Instant::now());
+        }
+    }
+
+    // Sanctioned wall-clock site (see the module docs).
+    #[allow(clippy::disallowed_methods)]
+    fn end(&mut self, phase: ExtractPhase) {
+        if phase == ExtractPhase::Skin {
+            let mut samples = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(start) = samples.open.take() {
+                samples.pose.push(start.elapsed());
+            }
+        }
+    }
+
+    fn skin(&mut self, counts: SkinCounts) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .counts
+            .push(counts);
+    }
 }
 
 /// Per-system samples keyed by name, in first-appearance order: a schedule rebuilt mid-run (a switch
@@ -785,6 +871,7 @@ pub(crate) fn profile_replay_engine(
         load: None,
         probes: None,
         culling: None,
+        skin: None,
         samples: Some(samples),
     };
     Ok((report, engine))
@@ -2392,7 +2479,7 @@ entities:
 
         let mut profiled = counter_engine();
         profiled.load_inline_scene(SCENE).unwrap();
-        let (sim, samples) = profile_sim(&mut profiled, 40, 10);
+        let (sim, samples, _) = profile_sim(&mut profiled, 40, 10);
 
         assert_eq!(
             plain_hash,
@@ -2413,7 +2500,7 @@ entities:
     fn profiled_run_reports_the_sequential_section() {
         let mut engine = counter_engine();
         engine.load_inline_scene(SCENE).unwrap();
-        let (sim, _samples) = profile_sim(&mut engine, 8, 1);
+        let (sim, _samples, _) = profile_sim(&mut engine, 8, 1);
 
         let names: Vec<&str> = sim.sequential.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, SEQUENTIAL_NAMES);
@@ -2489,6 +2576,7 @@ entities:
             load: None,
             probes: None,
             culling: None,
+            skin: None,
             samples: None,
         };
 
@@ -2564,7 +2652,7 @@ entities:
         // here (see `profile_engine`'s end-to-end use); this is the sim-side driver unit.
         let mut engine = counter_engine();
         engine.load_inline_scene(SCENE).unwrap();
-        let (sim, samples) = profile_sim(&mut engine, 4, 1);
+        let (sim, samples, _) = profile_sim(&mut engine, 4, 1);
         let names: Vec<&str> = sim.systems.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["path_follow", "bump", "camera_rig"]);
         assert!(sim.frame_total_median_ms >= 0.0);
@@ -2583,7 +2671,7 @@ entities:
         engine
             .load_inline_scene(&source)
             .expect("the committed gallery scene validates");
-        let (sim, _samples) = profile_sim(&mut engine, 3, 1);
+        let (sim, _samples, _) = profile_sim(&mut engine, 3, 1);
         let names: Vec<&str> = sim.systems.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names,
@@ -2594,6 +2682,87 @@ entities:
                 ludion_physics::MIRROR,
                 "camera_rig",
             ]
+        );
+    }
+
+    const THREE_MANNEQUINS: &str = "format: 1
+seed: 1
+entities:
+  - name: runner
+    components:
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+      Animation:
+        clip: run
+  - name: jumper
+    components:
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+      Animation:
+        clip: jump
+  - name: rester
+    components:
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+";
+
+    fn skinned_engine() -> Engine {
+        let gallery = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
+        let mut engine = Engine::with_project_root(&gallery);
+        engine
+            .load_inline_scene(THREE_MANNEQUINS)
+            .expect("the inline skinned scene validates");
+        engine
+    }
+
+    #[test]
+    fn profile_sim_reports_the_skin_section_for_a_skinned_scene() {
+        let mut engine = skinned_engine();
+        let (_, _, skin) = profile_sim(&mut engine, 3, 1);
+        let skin = skin.expect("a scene with skinned instances reports a skin section");
+        assert_eq!(skin.sampled_frames, 3);
+        assert_eq!(skin.instances_median, 3.0);
+        assert_eq!(skin.palettes_sampled_median, 3.0);
+        assert_eq!(skin.palettes_reused_median, 0.0);
+        assert_eq!(skin.palettes_shared_median, 0.0);
+        // 11 joints for each of the two animated mannequins; the rest palette samples none.
+        assert_eq!(skin.joints_sampled_median, 22.0);
+        assert!(skin.pose_median_ms >= 0.0);
+    }
+
+    #[test]
+    fn profile_sim_has_no_skin_section_without_skins() {
+        let mut engine = counter_engine();
+        engine.load_inline_scene(SCENE).unwrap();
+        let (_, _, skin) = profile_sim(&mut engine, 3, 1);
+        assert!(skin.is_none());
+    }
+
+    #[test]
+    fn profile_sim_restores_a_callers_extract_observer() {
+        #[derive(Clone, Default)]
+        struct Counting(Arc<Mutex<u32>>);
+        impl ExtractObserver for Counting {
+            fn begin(&mut self, _phase: ExtractPhase) {
+                *self.0.lock().unwrap() += 1;
+            }
+            fn end(&mut self, _phase: ExtractPhase) {}
+        }
+        let mut engine = skinned_engine();
+        let counting = Counting::default();
+        engine.set_extract_observer(Some(Box::new(counting.clone())));
+        let _ = profile_sim(&mut engine, 2, 1);
+        // It sees the warmup extracts, then sits out the measured ones.
+        let after_profile = *counting.0.lock().unwrap();
+        let _ = profile_sim(&mut engine, 2, 0);
+        assert_eq!(*counting.0.lock().unwrap(), after_profile);
+        let _ = measure_sequential(&mut engine);
+        assert!(
+            *counting.0.lock().unwrap() > after_profile,
+            "the caller's observer is back"
         );
     }
 
@@ -2627,7 +2796,7 @@ entities:
             .unwrap();
         engine.load_inline_scene(SCENE).unwrap();
 
-        let (sim, samples) = profile_sim(&mut engine, 6, 1);
+        let (sim, samples, _) = profile_sim(&mut engine, 6, 1);
 
         assert_eq!(samples.frames.len(), 6);
         // Ascending and contiguous: the driver's own tick counter, one tick per measured frame.
@@ -3144,6 +3313,7 @@ entities:
             load: None,
             probes: None,
             culling: None,
+            skin: None,
             samples: None,
         }
     }

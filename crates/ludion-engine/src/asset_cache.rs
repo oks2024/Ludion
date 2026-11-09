@@ -453,6 +453,11 @@ impl AssetCache {
         self.extract_observer = observer;
     }
 
+    /// Detaches and returns the extract observer, so a caller can restore it after borrowing the slot.
+    pub(crate) fn take_extract_observer(&mut self) -> Option<Box<dyn ExtractObserver>> {
+        self.extract_observer.take()
+    }
+
     /// The attached extract observer, if any.
     pub(crate) fn extract_observer_mut(&mut self) -> Option<&mut (dyn ExtractObserver + '_)> {
         match self.extract_observer.as_mut() {

@@ -628,6 +628,7 @@ mod tests {
                 load: None,
                 probes: None,
                 culling: None,
+                skin: None,
                 samples: None,
             }),
         };

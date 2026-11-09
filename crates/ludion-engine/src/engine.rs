@@ -1125,6 +1125,14 @@ impl Engine {
         self.asset_cache.set_extract_observer(observer);
     }
 
+    /// Detaches and returns the extract observer, so a profiler can borrow the slot and restore it.
+    #[doc(hidden)]
+    pub fn take_extract_observer(
+        &mut self,
+    ) -> Option<Box<dyn crate::extract_observer::ExtractObserver>> {
+        self.asset_cache.take_extract_observer()
+    }
+
     /// Sets this host's anti-aliasing mode, beating the game's packaged default from
     /// [`EngineBuilder::anti_aliasing`](crate::EngineBuilder::anti_aliasing) but not the game's own
     /// runtime request through [`RenderSettings`](crate::RenderSettings).

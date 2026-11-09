@@ -160,9 +160,38 @@ pub struct ProfileReport {
     /// the counts come back through a readback ring only the **offline** driver arms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub culling: Option<CullingProfile>,
+    /// What posing skinned meshes cost inside extract, and the shape of that work. Filled by the
+    /// **offline** driver for a scene with skinned instances; absent otherwise and for a live
+    /// capture, for `cluster`'s reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skin: Option<SkinProfile>,
     /// The measured frames' raw per-frame columns, present when the request asked for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<ProfileSamples>,
+}
+
+/// Skin posing inside extract: wall time of the `Skin` phase and the per-extract work counters.
+///
+/// The counters are deterministic shape, as `ClusterProfile`'s occupancy is; only `pose_median_ms`
+/// is a measurement. `instances = sampled + reused + shared`. `joints_sampled` counts both clips of
+/// a crossfade and nothing for a rest palette. Posing is parallel, so read the time beside
+/// `sim.threads`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SkinProfile {
+    /// Median wall time of the extract `Skin` phase.
+    pub pose_median_ms: f64,
+    /// Measured extracts the medians are over.
+    pub sampled_frames: u64,
+    /// Median skinned instances per extract.
+    pub instances_median: f64,
+    /// Median palettes sampled from clips per extract.
+    pub palettes_sampled_median: f64,
+    /// Median palettes reused from a previous frame per extract.
+    pub palettes_reused_median: f64,
+    /// Median palettes shared with another instance per extract.
+    pub palettes_shared_median: f64,
+    /// Median joints sampled per extract.
+    pub joints_sampled_median: f64,
 }
 
 /// What the GPU frustum cull kept, per view, read back from its indirect args.
@@ -746,6 +775,7 @@ impl ProfileWindowData {
             load: None,
             probes: None,
             culling: None,
+            skin: None,
             samples: include_samples.then_some(self.samples),
         }
     }
@@ -782,6 +812,36 @@ mod tests {
             serde_json::from_value::<ProfileReport>(json)
                 .unwrap()
                 .culling
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn skin_section_round_trips_and_is_optional() {
+        let mut report = window().into_report("scene".to_string(), false);
+        assert!(report.skin.is_none());
+        report.skin = Some(SkinProfile {
+            pose_median_ms: 0.5,
+            sampled_frames: 3,
+            instances_median: 3.0,
+            palettes_sampled_median: 2.0,
+            palettes_reused_median: 1.0,
+            palettes_shared_median: 0.0,
+            joints_sampled_median: 22.0,
+        });
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["skin"]["joints_sampled_median"], 22.0);
+        assert_eq!(
+            serde_json::from_value::<ProfileReport>(json).unwrap(),
+            report
+        );
+        report.skin = None;
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json.get("skin").is_none());
+        assert!(
+            serde_json::from_value::<ProfileReport>(json)
+                .unwrap()
+                .skin
                 .is_none()
         );
     }
