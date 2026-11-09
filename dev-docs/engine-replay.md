@@ -14,7 +14,8 @@ driver, the snapshot document, keyframes, and divergence bisection. The `Engine`
 ## Dataflow
 
 **Arming.** `set_recording(sink)` writes the `ReplayHeader` — scene ref, seed, versions, the description-stripped
-schema hash, the replay content hash, the profile-at-start — plus an initial keyframe. Arm it right *after* loading the scene, before the
+schema hash, the replay content hash, the profile-at-start, and for run recordings the game identity (see
+[Game identity](#game-identity)) — plus an initial keyframe. Arm it right *after* loading the scene, before the
 first tick: it is refused with `L3047` at a frame other than 0 or with no scene loaded, since the header
 would not describe the state the recording starts from. The scene ref is the scene **text, inline**
 (`scene.load` stores `SceneRef::Inline`, never the path it read), which is what makes a recording
@@ -119,6 +120,19 @@ include the actions recorded at that frame, so they show the world the trace's h
 Both drives run in one process. The probed drives skip per-frame hashing (they exist only to reach the
 frame), and localization re-drives four times rather than holding a snapshot per system boundary, so
 memory stays one world regardless of schedule length.
+
+## Game identity
+
+A run recording's header carries `game: Some(GameIdentity { schema, version })`: the description-stripped hash of
+the registered component and data-doc schemas (`run_save::game_schema_hash`, built-in engine components included,
+so an engine component change also reads as a mismatch) and the `EngineBuilder::game_version` string, for changes
+the schema cannot see, such as balance. Session recordings (`set_recording`, `--record`) write none, so their
+headers keep their bytes: a session file is verified against an expected `WorldHash` trace, and an identity would
+refuse every committed corpus file on each game component edit, whereas a player file has no expected trace and
+would diverge silently. The gate (`replay_compat::check_game`, `L1404`) runs in `prepare_replay` right after the
+game engine is built, so `L3010` (engine) comes first and `L1404` (game) second, covering every replay entry. An
+absent field passes. `Engine::game_identity()` lets a replay menu compare a file's `header().game` without
+replaying it.
 
 ## Rules
 

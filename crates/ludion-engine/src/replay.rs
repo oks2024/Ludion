@@ -878,6 +878,7 @@ pub(crate) fn prepare_replay(
     let mut engine = builder
         .replay_profile()
         .build_at(project_root.as_ref().to_path_buf())?;
+    crate::replay_compat::check_game(reader.header(), &engine.game_identity())?;
     // The extent is sim input (a game unprojects the cursor through it), so it is installed before the
     // scene loads — with `render.size`'s validity check, which refuses a hostile header value, but not
     // the host's render-scale check. A header without one is a pre-field `.lrp`, recorded at the

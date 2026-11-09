@@ -362,6 +362,8 @@ pub mod code {
     pub const RUN_RECORDING_FAILED: DiagnosticCode = DiagnosticCode::new("L1402");
     /// `L1403` — the `run_recordings` builder config is invalid (zero keyframe interval, bad dir).
     pub const RUN_RECORDING_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1403");
+    /// `L1404` — a replay was recorded by a different game build (schema or version) and was refused.
+    pub const REPLAY_GAME_MISMATCH: DiagnosticCode = DiagnosticCode::new("L1404");
 
     /// `L1027` — a map marker's cross-district gate (`Gate.to` + `anchor`) names a spawn anchor that
     /// resolves against no entity in the sibling district's generated scene, so the gate would fail
@@ -5502,6 +5504,19 @@ The build fails with this error.
 
 Fix: use a `keyframe_every` of 1 or more (the default is 3600) and a relative `dir` such as
 `save/replays`.",
+    },
+    CodeEntry {
+        code: code::REPLAY_GAME_MISMATCH,
+        severity: Severity::Error,
+        title: "replay was recorded by a different build of the game",
+        explanation: "\
+A run recording's header carries the identity of the game build that recorded it: the hash of the
+game's registered component and data-doc schemas (engine built-ins included, so an engine component
+change also moves it) and the optional `EngineBuilder::game_version` string. Session recordings do not
+write it. This build's identity differs, so the replay was refused rather than played into a divergence.
+
+Fix: this file cannot be replayed by this build. A game lists it as recorded by an older version (or
+another build); a developer re-records it under the current build.",
     },
     CodeEntry {
         code: code::PROFILE_SAVE_FAILED,
@@ -11449,6 +11464,7 @@ mod tests {
         code::RUN_SAVE_RESUME_REFUSED,
         code::RUN_RECORDING_FAILED,
         code::RUN_RECORDING_CONFIG_INVALID,
+        code::REPLAY_GAME_MISMATCH,
         code::DIRECTIONAL_LIGHT_INVALID_FRUSTUM,
         code::SCHEDULE_MODULE_CONCENTRATION,
         code::QUERY_DECL_UNKNOWN_COMPONENT,

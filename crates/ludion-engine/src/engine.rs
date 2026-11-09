@@ -507,6 +507,8 @@ pub struct Engine {
     /// The run-recording state, `Some` once [`run_recordings`](crate::EngineBuilder::run_recordings)
     /// opted in. It lives here, not in `SessionState`, because a run's reset clears the session.
     run_recording: Option<RunRecordingState>,
+    /// The game's own version string (`EngineBuilder::game_version`), part of [`Engine::game_identity`].
+    game_version: Option<String>,
     /// True from build until the first world rebuild: the profile the build read is what that first
     /// `scene.load` carries instead of re-reading disk (see `commit_world`).
     pub(crate) boot_profile_pending: bool,
@@ -891,6 +893,7 @@ impl Engine {
             profile_off_disk: false,
             run_save: None,
             run_recording: None,
+            game_version: None,
             boot_profile_pending: false,
             replay_scene_text: None,
             replay_prefab_text: None,
@@ -2571,6 +2574,22 @@ impl Engine {
         }
     }
 
+    /// Records the game's version string for [`game_identity`](Engine::game_identity); called once at build.
+    pub(crate) fn set_game_version(&mut self, version: Option<String>) {
+        self.game_version = version;
+    }
+
+    /// The identity of this game build: the hash of the registered component and data-doc schemas
+    /// (engine built-ins included) and the [`game_version`](crate::EngineBuilder::game_version).
+    /// A replay menu compares it to `ReplayReader::header().game` to list a recording without
+    /// replaying it; `None` there means a session recording or a file from before the field.
+    pub fn game_identity(&self) -> ludion_protocol::replay::GameIdentity {
+        ludion_protocol::replay::GameIdentity {
+            schema: crate::run_save::game_schema_hash(&self.registry, &self.doc_kinds),
+            version: self.game_version.clone(),
+        }
+    }
+
     /// Installs the run-recording state; called once at build when
     /// [`run_recordings`](crate::EngineBuilder::run_recordings) is on. No disk I/O.
     pub(crate) fn init_run_recording(&mut self, config: crate::RunRecordingConfig) {
@@ -2747,7 +2766,8 @@ impl Engine {
                 .run_recording
                 .as_ref()
                 .map_or(1, |state| state.config.keyframe_every);
-            self.arm_recorder(Box::new(std::io::BufWriter::new(file)), interval)
+            let game = Some(self.game_identity());
+            self.arm_recorder(Box::new(std::io::BufWriter::new(file)), interval, game)
                 .map_err(|diagnostic| diagnostic.message)
         });
         match armed {
@@ -5947,7 +5967,7 @@ impl Engine {
             )
             .with_help("stop the run recording first (`RunRecording::stop`)"));
         }
-        self.arm_recorder(Box::new(sink), KEYFRAME_INTERVAL)
+        self.arm_recorder(Box::new(sink), KEYFRAME_INTERVAL, None)
     }
 
     /// Writes the header, initial docs and keyframe to `sink` and starts recording at the current
@@ -5956,8 +5976,10 @@ impl Engine {
         &mut self,
         sink: Box<dyn Write + Send>,
         keyframe_interval: u64,
+        game: Option<ludion_protocol::replay::GameIdentity>,
     ) -> Result<(), Diagnostic> {
-        let header = self.replay_header();
+        let mut header = self.replay_header();
+        header.game = game;
         let writer = ReplayWriter::new(sink, &header).map_err(io_to_diagnostic)?;
         let mut recorder = Recorder::new(writer, keyframe_interval, self.frame());
         crate::recording::write_inline_docs(&mut recorder, self.frame(), &self.doc_texts)
@@ -6040,6 +6062,7 @@ impl Engine {
                 height: self.render_size.1,
             }),
             replay_content_hash: Some(crate::replay_compat::replay_content_hash()),
+            game: None,
         }
     }
 
@@ -7270,6 +7293,7 @@ entities: []
             profile: None,
             render_extent: None,
             replay_content_hash: None,
+            game: None,
         };
         let error = ludion_protocol::replay::ReplayWriter::new(&mut sink, &header)
             .err()

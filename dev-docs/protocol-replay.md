@@ -11,7 +11,7 @@ determinism contract a replay proves is `ludion devdocs determinism`.
 
 ## Layout
 
-- `crates/ludion-protocol/src/replay.rs` — `ReplayHeader` (scene ref, seed, versions, and the additive `profile`-at-start text), `ReplayRecord` (the record-kind enum — `Command`/`Input`/`Keyframe`, plus the additive `DocReload` kind 3 and `SceneSwitch` kind 4, both carrying inline text within `LRP1`), `ReplayWriter`, `ReplayReader` (+`seek`).
+- `crates/ludion-protocol/src/replay.rs` — `ReplayHeader` (scene ref, seed, versions, the additive `profile`-at-start text, and the additive `game` identity that run recordings alone write), `ReplayRecord` (the record-kind enum — `Command`/`Input`/`Keyframe`, plus the additive `DocReload` kind 3 and `SceneSwitch` kind 4, both carrying inline text within `LRP1`), `ReplayWriter`, `ReplayReader` (+`seek`).
 
 ## Rules
 

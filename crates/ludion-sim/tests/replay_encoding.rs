@@ -34,6 +34,7 @@ fn header() -> ReplayHeader {
         profile: None,
         render_extent: None,
         replay_content_hash: None,
+        game: None,
     }
 }
 

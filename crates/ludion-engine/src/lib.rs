@@ -179,6 +179,7 @@ pub use ludion_camera::{
     add_look_counts, add_trauma, camera_relative, camera_relative_yaw, first_person_eye,
     look_from_counts, set_look, snap_rig,
 };
+pub use ludion_protocol::replay::GameIdentity;
 pub use ludion_scene::{
     PathDocument, PathFrame, PathInterpolation, PathMetric, PathSampler, check_path,
 };

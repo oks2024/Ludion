@@ -43,7 +43,8 @@
 //!
 //! The [`ReplayHeader`] grows the same way: its JSON is zstd'd, so a new `#[serde(default)]` field
 //! (the E5 `profile` profile-at-start, the `render_extent` at arm time) is additive with no framing
-//! change — every `.lrp` written before it decodes with the field defaulting to `None`.
+//! change — every `.lrp` written before it decodes with the field defaulting to `None`. The `game`
+//! identity is omitted when `None`, so a session header keeps its bytes.
 //!
 //! The `scene_load` kind (`5`) is additive the same way: every `.lrp` recorded before it holds a
 //! mid-session `scene.load` as a plain `command` record, which still decodes and replays.
@@ -122,6 +123,7 @@ pub enum SceneRef {
 ///     profile: None,
 ///     render_extent: None,
 ///     replay_content_hash: None,
+///     game: None,
 /// };
 /// assert_eq!(header.seed, 7);
 /// ```
@@ -161,6 +163,22 @@ pub struct ReplayHeader {
     /// [`REPLAY_FORMAT_VERSION`] `1`, no bump**, the same posture as `profile`.
     #[serde(default)]
     pub replay_content_hash: Option<WireHash>,
+    /// The identity of the game build that recorded the file; written by run recordings only, so
+    /// `None` for session recordings and for a `.lrp` from before the field. **Additive within
+    /// [`REPLAY_FORMAT_VERSION`] `1`, no bump**, the same posture as `profile`; omitted when `None`,
+    /// so a session header keeps its bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<GameIdentity>,
+}
+
+/// The game build a replay was recorded by, as carried in a [`ReplayHeader`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GameIdentity {
+    /// The description-stripped hash of the game's registered component and data-doc schemas.
+    pub schema: WireHash,
+    /// The game's own version string, for changes the schema cannot see (balance, content).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// A render extent in pixels, as recorded in a [`ReplayHeader`].
@@ -312,6 +330,7 @@ impl ReplayRecord {
 ///     profile: None,
 ///     render_extent: None,
 ///     replay_content_hash: None,
+///     game: None,
 /// };
 ///
 /// let mut buffer = Vec::new();
@@ -1242,6 +1261,7 @@ mod tests {
             profile: None,
             render_extent: None,
             replay_content_hash: None,
+            game: None,
         }
     }
 
@@ -2120,6 +2140,29 @@ mod tests {
 
             let reader = ReplayReader::new(&buffer).unwrap();
             assert_eq!(reader.header().render_extent, render_extent);
+            assert_eq!(reader.header(), &header);
+        }
+    }
+
+    #[test]
+    fn header_game_is_omitted_when_none_and_round_trips_when_some() {
+        let none = serde_json::to_value(header()).unwrap();
+        assert!(none.get("game").is_none());
+
+        for version in [None, Some("1.2".to_string())] {
+            let header = ReplayHeader {
+                game: Some(GameIdentity {
+                    schema: WireHash::from_u64(0x77),
+                    version,
+                }),
+                ..header()
+            };
+            let mut buffer = Vec::new();
+            ReplayWriter::new(&mut buffer, &header)
+                .unwrap()
+                .into_inner()
+                .unwrap();
+            let reader = ReplayReader::new(&buffer).unwrap();
             assert_eq!(reader.header(), &header);
         }
     }

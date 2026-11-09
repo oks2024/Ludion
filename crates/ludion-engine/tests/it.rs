@@ -105,6 +105,7 @@ mod reflection_parity;
 mod registry_serialized_default;
 mod render_extent_snapshot;
 mod render_view;
+mod replay_game_identity;
 mod replay_with;
 mod run_recording;
 mod run_save;

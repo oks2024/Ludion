@@ -8,13 +8,14 @@
 //! description-stripped wire hash ([`schema::replay_schema_hash`]).
 //!
 //! The gate refuses a replay whose protocol version, content hash or wire schema hash differs from
-//! this engine's, or whose header carries no content hash, all as `L3010`.
+//! this engine's, or whose header carries no content hash, all as `L3010`. The game half
+//! ([`check_game`]) runs after the game's engine is built, since it needs the game's registry.
 
 use std::sync::OnceLock;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
-use ludion_protocol::replay::ReplayHeader;
+use ludion_protocol::replay::{GameIdentity, ReplayHeader};
 use ludion_protocol::{PROTOCOL_VERSION, WireHash, schema};
 use ludion_sim::InputEvent;
 use serde_json::json;
@@ -106,6 +107,39 @@ fn compatibility(
     Ok(())
 }
 
+/// The game half of the gate: a header carrying a game identity that differs from the replaying
+/// build's, in schema or version, is refused with `L1404`. An absent identity (a session recording
+/// or an older file) passes.
+pub(crate) fn check_game(header: &ReplayHeader, current: &GameIdentity) -> Result<(), Diagnostic> {
+    let Some(recorded) = &header.game else {
+        return Ok(());
+    };
+    if recorded == current {
+        return Ok(());
+    }
+    let version = |v: &Option<String>| match v {
+        Some(v) => format!("game version {v}"),
+        None => "an unversioned game".to_string(),
+    };
+    Err(Diagnostic::new(
+        code::REPLAY_GAME_MISMATCH,
+        format!(
+            "replay was recorded by {} (schema {}, engine {}); this build is {} (schema {}, engine {})",
+            version(&recorded.version),
+            recorded.schema,
+            header.engine_version,
+            version(&current.version),
+            current.schema,
+            crate::ENGINE_VERSION,
+        ),
+    )
+    .with_help(
+        "this build cannot replay the file: list it as recorded by another version, or re-record \
+         it under this build (the schema covers engine built-ins too, so an engine component \
+         change also reads as a mismatch)",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +158,7 @@ mod tests {
             profile: None,
             render_extent: None,
             replay_content_hash: Some(replay_content_hash()),
+            game: None,
         }
     }
 
@@ -219,5 +254,53 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    fn identity(schema: u64, version: Option<&str>) -> GameIdentity {
+        GameIdentity {
+            schema: WireHash::from_u64(schema),
+            version: version.map(String::from),
+        }
+    }
+
+    fn with_game(game: Option<GameIdentity>) -> ReplayHeader {
+        ReplayHeader { game, ..header() }
+    }
+
+    #[test]
+    fn game_absent_or_equal_passes() {
+        let now = identity(1, Some("1.0"));
+        assert!(check_game(&with_game(None), &now).is_ok());
+        assert!(check_game(&with_game(Some(now.clone())), &now).is_ok());
+    }
+
+    #[test]
+    fn game_schema_difference_refuses_naming_both_hashes() {
+        let err = check_game(&with_game(Some(identity(1, None))), &identity(2, None)).unwrap_err();
+        assert_eq!(err.code, code::REPLAY_GAME_MISMATCH);
+        assert!(err.message.contains(&WireHash::from_u64(1).to_string()));
+        assert!(err.message.contains(&WireHash::from_u64(2).to_string()));
+    }
+
+    #[test]
+    fn game_version_difference_refuses_naming_both_versions() {
+        let err = check_game(
+            &with_game(Some(identity(1, Some("1.2")))),
+            &identity(1, Some("1.3")),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, code::REPLAY_GAME_MISMATCH);
+        assert!(err.message.contains("1.2") && err.message.contains("1.3"));
+    }
+
+    #[test]
+    fn game_version_against_none_refuses_as_unversioned() {
+        let err = check_game(
+            &with_game(Some(identity(1, Some("1.2")))),
+            &identity(1, None),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, code::REPLAY_GAME_MISMATCH);
+        assert!(err.message.contains("unversioned") && err.message.contains("1.2"));
     }
 }

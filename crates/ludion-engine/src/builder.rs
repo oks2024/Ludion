@@ -108,6 +108,7 @@ pub struct EngineBuilder {
     profile_off_disk: bool,
     run_save: bool,
     run_recordings: Option<crate::RunRecordingConfig>,
+    game_version: Option<String>,
     observe_load: bool,
     category_gains: CategoryGains,
     audio_distance: AudioDistance,
@@ -152,6 +153,7 @@ impl EngineBuilder {
             profile_off_disk: false,
             run_save: false,
             run_recordings: None,
+            game_version: None,
             observe_load: false,
             category_gains: CategoryGains::default(),
             audio_distance: AudioDistance::default(),
@@ -237,6 +239,22 @@ impl EngineBuilder {
     #[must_use]
     pub fn run_recordings(mut self, config: crate::RunRecordingConfig) -> Self {
         self.run_recordings = Some(config);
+        self
+    }
+
+    /// Names this build of the game in the identity a run recording carries
+    /// ([`Engine::game_identity`]). A replay recorded under a different version is refused with
+    /// `L1404`, so bump it for changes the component schemas cannot see, such as a balance pass.
+    ///
+    /// ```
+    /// use ludion_engine::Engine;
+    ///
+    /// let engine = Engine::builder().game_version("1.2").build().unwrap();
+    /// assert_eq!(engine.game_identity().version.as_deref(), Some("1.2"));
+    /// ```
+    #[must_use]
+    pub fn game_version(mut self, version: impl Into<String>) -> Self {
+        self.game_version = Some(version.into());
         self
     }
 
@@ -1163,6 +1181,7 @@ impl EngineBuilder {
             }
             engine.init_run_recording(config);
         }
+        engine.set_game_version(self.game_version.clone());
         engine.boot_profile_pending = true;
         if self.observe_load {
             engine.observe_load();
