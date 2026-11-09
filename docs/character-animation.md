@@ -92,7 +92,7 @@ clips:
 ## Crowd posing
 
 - **Parallel, deterministic.** Extract's `Skin` phase samples palettes in fixed chunks through
-  `ludion_core::par`, joined in order: byte-identical at any thread count. `hold` does not save sampling: every skinned instance is sampled every extract, a rest or `SkinBone`-followed skin excepted.
+  `ludion_core::par`, joined in order: byte-identical at any thread count. `hold` does not save sampling: a rest skin samples no joints; a `SkinBone`-followed skin is posed from its parts every extract and counts in `palettes_sampled`/`joints_sampled`; every other skinned instance is sampled every extract.
 - **Reading a profile.** `ludion profile` and a game's `--profile N` (`ludion docs running`) report
   `ProfileReport.skin`, offline only: `pose_median_ms` (the `Skin` phase) and `<count>_median` for `instances`,
   `palettes_sampled`, `palettes_reused`, `palettes_shared` (both reserved, always 0) and `joints_sampled`.
