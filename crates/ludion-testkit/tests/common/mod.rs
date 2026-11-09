@@ -8,14 +8,20 @@
 //! **ragdoll-skin-switch** — [`switch_skin`] turns the running mannequin into its `SkinBone` ragdoll at
 //! [`SWITCH_SKIN_TICK`]; the parts land at the rest pose (`ludion docs physics-joints`).
 //!
+//! **ragdoll-retire** — [`retire_settled`] drops a settled ragdoll's colliders, joints and velocities
+//! so its bodies leave the physics world while the skin stays posed (`ludion docs physics-joints`
+//! "Ragdoll budget").
+//!
 //! **camera-rig** — [`drive_rig`] swaps the rail camera to a side-on rig at [`SWITCH_TICK`] (a timed
 //! blend), cuts back with `snap_rig` at [`SNAP_TICK`] and pulses trauma at [`SHAKE_TICK`]
 //! (`ludion docs camera`).
 
 #![allow(dead_code)]
 
+use ludion::prelude::{Body, Collider, Joint, JointMotor, PhysicsWorld, Velocity};
 use ludion_core::ids::EntityId;
 use ludion_ecs::{SystemCtx, World};
+use ludion_engine::SkinBone;
 use ludion_engine::{
     Animation, AnimationEvents, Engine, EngineBuilder, Mesh, PrefabInstance, Sprite,
 };
@@ -111,6 +117,107 @@ pub fn switch_skin(world: &mut World, ctx: &SystemCtx) {
 /// The ragdoll-skin-switch engine: just the switching system.
 pub fn skin_switch_builder() -> EngineBuilder {
     Engine::builder().system("switch_skin", switch_skin)
+}
+
+/// Every entity whose `SkinBone` names `skin`, in ascending id order.
+pub fn skin_parts(world: &mut World, skin: EntityId) -> Vec<EntityId> {
+    let mut parts: Vec<EntityId> = world
+        .query_ids::<(&SkinBone,)>()
+        .filter(|(_, (bone,))| bone.skin == skin)
+        .map(|(id, _)| id)
+        .collect();
+    parts.sort();
+    parts
+}
+
+/// Whether `parts` is non-empty and every part's body is asleep (false without a `PhysicsWorld` or
+/// when a part has no body).
+pub fn group_settled(world: &World, parts: &[EntityId]) -> bool {
+    let Some(physics) = world.resource::<PhysicsWorld>() else {
+        return false;
+    };
+    !parts.is_empty()
+        && parts
+            .iter()
+            .all(|&part| physics.is_sleeping(part) == Some(true))
+}
+
+/// Whether a `Joint` ties a part of `parts` to a `Body::Static` collider outside the group.
+pub fn group_pinned(world: &mut World, parts: &[EntityId]) -> bool {
+    let joints: Vec<Joint> = world
+        .query_ids::<(&Joint,)>()
+        .map(|(_, (joint,))| joint.clone())
+        .collect();
+    joints.iter().any(|joint| {
+        let pinned_to = |part: EntityId, other: EntityId| {
+            parts.contains(&part)
+                && !parts.contains(&other)
+                && matches!(
+                    world.get::<Collider>(other),
+                    Ok(Some(Collider {
+                        body: Body::Static(_),
+                        ..
+                    }))
+                )
+        };
+        pinned_to(joint.a, joint.b) || pinned_to(joint.b, joint.a)
+    })
+}
+
+/// What [`retire_group`] took off one part: the input of [`readmit_group`].
+pub struct RetiredPart {
+    pub id: EntityId,
+    pub collider: Collider,
+    pub joint: Option<Joint>,
+}
+
+/// Retires `parts`: removes `Collider`, `Joint`, `JointMotor` and `Velocity` from each (keeping
+/// `Transform` and `SkinBone`) and returns what it took off.
+pub fn retire_group(world: &mut World, parts: &[EntityId]) -> Vec<RetiredPart> {
+    let mut retired = Vec::new();
+    for &id in parts {
+        let joint = world.remove::<Joint>(id).expect("a live part");
+        let _ = world.remove::<JointMotor>(id);
+        let _ = world.remove::<Velocity>(id);
+        if let Some(collider) = world.remove::<Collider>(id).expect("a live part") {
+            retired.push(RetiredPart {
+                id,
+                collider,
+                joint,
+            });
+        }
+    }
+    retired
+}
+
+/// Re-inserts the `Collider` and `Joint` that [`retire_group`] removed.
+pub fn readmit_group(world: &mut World, retired: &[RetiredPart]) {
+    for part in retired {
+        world
+            .insert(part.id, part.collider.clone())
+            .expect("a live part");
+        if let Some(joint) = &part.joint {
+            world.insert(part.id, joint.clone()).expect("a live part");
+        }
+    }
+}
+
+/// Retires the switched skin's parts once they have all fallen asleep.
+pub fn retire_settled(world: &mut World, _ctx: &SystemCtx) {
+    let parts: Vec<EntityId> = skin_parts(world, EntityId::new(3, 0))
+        .into_iter()
+        .filter(|&part| world.has::<Collider>(part))
+        .collect();
+    if group_settled(world, &parts) {
+        retire_group(world, &parts);
+    }
+}
+
+/// The ragdoll-retire engine: the switch, then the settle-driven retire.
+pub fn retire_builder() -> EngineBuilder {
+    Engine::builder()
+        .system("switch_skin", switch_skin)
+        .system("retire_settled", retire_settled)
 }
 
 /// The tick the rail camera blends to the side-on rig.

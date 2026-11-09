@@ -219,6 +219,27 @@ parts (a second switch, or a scene-rigged skin) is `L3036`, and nothing is spawn
 **The parts land at the bone rest pose, not the pose the clip shows on the switch tick; the posed
 switch is owed.**
 
+## Ragdoll budget
+
+A settled ragdoll stops costing physics when a game **retires** it: in one tick, remove `Collider`,
+`Joint`, `JointMotor` and `Velocity` from every part, keeping `Transform` and `SkinBone`. The bodies and
+joints leave `PhysicsWorld` on the next physics write (`body_count`, `joint_count` show it), the skin
+stays drawn in its settled pose, and the retired parts are ordinary hashed state that round-trips
+`engine.snapshot`/`engine.restore`. Drop the `Joint` in the same tick: one left on a part whose body is
+gone goes inert and is reported.
+
+- **Settle:** every part `PhysicsWorld::is_sleeping(part) == Some(true)`. Sleep is already debounced by
+  `sleep_after_ticks` and restored with the snapshot, so the retire system keeps no counter. A blast
+  wakes sleepers; retiring, not sleeping, bounds the cost.
+- **Pinned group:** a part joined to a `Body::Static` collider outside the group. Evict those last.
+- **Re-admission:** re-insert the removed `Collider` and `Joint` (plus a `Velocity` for the hit). Bodies
+  rebuild at the retired pose, and **joint zeros are re-captured there, so limits count from the
+  settled pose, not the rig rest**. Keeping the removed values across a restore is the game's job
+  (re-read them from the parts prefab in the same order).
+
+Measured ragdoll step cost lives in the physics budget files (`ludion devdocs budget-files`). The
+idiom is pinned by `crates/ludion-testkit/tests/ragdoll_retire.rs`, with helpers in `tests/common`.
+
 ## Gotchas
 
 - Editing a live `Joint`, or rebuilding a body it names (a `Collider` edit), re-captures the zero at
