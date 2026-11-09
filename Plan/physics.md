@@ -248,6 +248,17 @@ observe.
 - (vii) Re-admission is rest-zeroed: joint zeros are captured at the rig rest, not the retired pose (the 0017-01 caveat).
 - (viii) Mapping from the example: `RagdollBudget` → `ragdolls:`, `RagdollGroup.state` → the events' reasons, its three systems → the engine pass.
 
+**Proposed (Serious Isaac 0020, owner approval owed). A threaded step.** Ready to build once approved; the figures are in Status "Rapier parallel spike". The measured outcome is identical: every committed trace, replay and snapshot restore matched at every pool size.
+
+- (i) The workspace `rapier3d` entry gains `parallel` for every build (one build shape), and the `Cargo.toml` comment is rewritten.
+- (ii) `ludion-physics` gives rapier a dedicated pool sized `par::threads()` in `PhysicsWorld::new` and after every decode/restore, and never leaves it on rayon's global pool, so `LUDION_THREADS` and `--threads` govern both. A pool of 1 is built when `par::threads() == 1`, because a `parallel` build with no pool falls back to the global one.
+- (iii) `scripts/physics-features.mjs` gets a named carve-out: the expected rapier3d/parry3d feature sets gain `parallel`, and `rayon`/`rayon-core` may be reached only through `ludion-physics → rapier3d (→ parry3d)`. Any other path fails, with the path printed.
+- (iv) `Plan/deterministic-job-system.md` (the "no rayon … no external-scheduler carve-outs" line) gains its first named carve-out: rapier's internal scheduler, whose pool `ludion-physics` owns, gated by thread identity. Rayon types stay banned in our code.
+- (v) `Cargo.lock` and `fuzz/Cargo.lock` gain the rayon packages.
+- (vi) Gates on both pinned boxes: the features gate, `physics-pin-ritual.mjs` (expect PASS, not MOVED), the thread-identity tests, the cross-arch traces, snapshot resume, and the `.lrp` corpus.
+- (vii) Re-bless: no hash moves, so nothing re-records. Only the physics budgets (`pinned-*-physics-stress.toml`, the horde budgets) are re-measured, in the pin ritual's order.
+- (viii) The plan text it amends: the adopt-rapier decision's feature list, give-up 1, the W1 note on `parallel`, the W4 "no island parallelism" line, the non-goal, `dev-docs/physics-pin.md` §features and §ceiling. It also names the stale "`enhanced-determinism` and `parallel` are mutually exclusive" claim (`Plan/physics.md`, `dev-docs/physics-pin.md`, the root `Cargo.toml` comment) as the docs fix that adoption carries.
+
 ## Waves
 
 W0 and its extension are the measurement the decision was made from; Status carries the record.
@@ -941,6 +952,34 @@ pair that `active_collision_types` or a collision group rejects before it enters
 (`broad_phase_bvh/update.rs`), so motor-motor and motor-static pairs cost no narrow phase. All 1,320
 ragdoll parts stay awake in every measured tick. The motor casts dominate: `motor_walk` (3.8 ms) costs about twice the whole physics step (1.8 ms),
 of which the solver is half and the narrow phase a quarter, and `move_character` is serial.
+
+**Rapier parallel spike (Serious Isaac 0020), 2026-11-09 (M5, indicative).** Method: a scratch copy of the tree outside the repo (nothing committed, no Cargo, lock or source change in the checkout), `"parallel"` added to the workspace `rapier3d` entry, built beside `enhanced-determinism`, the horde bench and the physics gates run in it. The claim that `enhanced-determinism` and `parallel` are mutually exclusive (give-up 1, `dev-docs/physics-pin.md`, the root `Cargo.toml` comment) is false for rapier 0.35.3: the combination compiles, and the one `compile_error!` is `simd8` + `enhanced-determinism`. Upstream's `tests/parallel_path_parity.rs` passes with `parallel` on and off. Lock: `Cargo.lock` gains `rayon 1.12.0`, `rayon-core 1.13.0`, `crossbeam-deque 0.8.8`, `crossbeam-epoch 0.9.21` and the `rayon` edges of rapier3d/parry3d; no existing package moves (`fuzz/Cargo.lock` takes the same four). `scripts/physics-features.mjs` fails as designed: "rapier3d@0.35.3 resolved features do not match the pinned set. extra: parallel".
+
+Identity (gates: `ludion-physics`, `ludion-engine` `physics_*`/`ragdoll*`, `ludion-cli` `physics::`, `thread_identity` ignored, the CLI `replay::` corpus; a pass is bit-equal to the committed single-threaded traces and replays, including `horde_hashes_are_thread_count_invariant` at 1/2/8 `par` threads and the snapshot restores):
+
+| rapier pool | physics gates (434) | thread_identity (6) | replay (6) |
+|---|---|---|---|
+| global, `RAYON_NUM_THREADS=1` | 433 | 6 | 6 |
+| global, 2 | 434 | 6 | 6 |
+| global, 8 | 434 | 6 | 6 |
+| dedicated, sized `par::threads()` | 434 | 6 | 6 |
+
+The one miss is `sweep_alloc::sweeps_do_not_allocate` (allocation count 3, not 0). It also fails once in the off build in the same copy and passes on the other `parallel` runs, so it is an allocation-counter flake on this box, not a hash divergence. No hash diverged at any pool size, `RAYON_NUM_THREADS=1` included, so no `cfg(parallel)` path (the BVH refit among them) moves a result. Nothing to localize.
+
+Timing (horde bench, medians of three, `physics_step` at the 8t `par` column; stages are the 8t `step_breakdown`; off = the committed build):
+
+| build / rapier pool | step mean / p99 (ms) | solver | narrow phase | broad phase |
+|---|---|---|---|---|
+| off | 1.83 / 2.10 | 0.88 | 0.47 | 0.15 |
+| on, global 1 | 1.97 / 2.24 | 0.89 | 0.49 | 0.19 |
+| on, global 2 | 1.34 / 1.57 | 0.57 | 0.36 | 0.14 |
+| on, global 8 | 1.12 / 1.36 | 0.47 | 0.18 | 0.16 |
+| on, global 18 (the default: cores) | 1.61 / 1.91 | 0.52 | 0.20 | 0.32 |
+| on, dedicated 8 (`par::threads()`) | 1.06 / 1.32 | 0.46 | 0.17 | 0.13 |
+
+The step falls from 1.83 to 1.06 ms (1.7x) at 8 workers. Velocity resolution goes 0.82 → 0.39 ms and the narrow phase 0.47 → 0.17 ms. Beyond 8 workers it regresses: the default global pool sizes to the 18 cores and the broad-phase refit alone doubles (0.15 → 0.32 ms), so the pool must be sized, not left to rayon. A pool of 1 is 7% slower than off (the `parallel` paths run inline with their overhead); that row was measured as the global pool of 1, not as a dedicated pool of 1.
+
+Oversubscription: the same-run `motor_walk` batch at 8t is 1.25–1.31 ms in every `parallel` configuration against 1.27 off, and `projectiles_step` 0.223–0.226 ms against 0.224. Rapier's idle workers do not compete with `par` regions in the measured loop (the step is its own system, so the two never overlap in time). Thread-count facts: the global pool is a second un-governed knob (`RAYON_NUM_THREADS`, default cores), outside `LUDION_THREADS`/`--threads`, and a `parallel` build with no dedicated pool uses it; a dedicated pool is sized from `par::threads()` but its field is `serde(skip)`, so a decoded world has no pool until `ludion-physics` rebuilds it. The pinned-box runs are owed on the 3090 and M4: identity under `parallel`, the cross-arch traces, the `.lrp` corpus, then these timings.
 
 **W0 extension — snapshot resume and the write path** (detail in the private
 a private plan; pointer only). Reference box, on the spike:
