@@ -49,7 +49,7 @@ despawning on its first hit. Set fields after it:
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `gravity_scale`, `drag` | `0`, `0` | `v *= 1 / (1 + drag·dt)` per tick; `drag >= 0` |
-| `radius` | `0` | sweep radius; `0` is a ray |
+| `radius` | `0` | sweep radius; `0` is a ray; `set_radius` changes it live |
 | `owner` | `None` | a `Handle` this shot never hits (the shooter) |
 | `lifetime` | `10` | seconds, `> 0`; expiry emits an `Expired` event |
 | `tag` | `0` | opaque `u32`, echoed in every event |
@@ -80,6 +80,11 @@ despawning on its first hit. Set fields after it:
   keep `rest_speed` well above that or it jitters and raises a `Reflected` hit every tick. A rest is final: a parked gib is never pushed and expires with `Expired`. Events are
   `Reflected` / `Stopped`. `spin` integrates `orientation` each tick; a shot using none of
   `spin`, `orientation` or `targets` hashes exactly as before.
+- **Live edits:** `set_velocity`, `set_radius(id, r)` (finite, `>= 0`) and `set_tag(id, tag)` write a
+  live shot's columns and keep its id, age, bounces and pierces; each returns `false` for a stale id
+  or an invalid value. A new radius sweeps from the next step (no same-tick retest). A new tag changes
+  the next event's `tag` and the next extract's look; muzzle convergence is decided at the shot's
+  first extract, so a later `set_tag` does not start or stop it.
 - **Projectiles are not in the target index.** Shots never hit each other; put targets in the index
   with `SpatialVolume` (`ludion docs spatial-3d`).
 - **Events** (`HitEvent`: id, handle, point, normal, `t`, arrival velocity, tag, outcome; `Expired`)

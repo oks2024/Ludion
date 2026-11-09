@@ -188,6 +188,18 @@ mod tests {
     }
 
     #[test]
+    fn a_live_radius_or_tag_change_changes_the_digest() {
+        let mut pool = pool_with([1.0, 0.0, 0.0]);
+        let id = pool.ids().next().unwrap();
+        let base = pool.digest();
+        assert!(pool.set_radius(id, 0.5));
+        let grown = pool.digest();
+        assert_ne!(base, grown);
+        assert!(pool.set_tag(id, 4));
+        assert_ne!(grown, pool.digest());
+    }
+
+    #[test]
     fn identity_and_content_both_count() {
         // Same two contents; slot order differs, so the digest differs.
         let a = ProjectileDesc::new([0.0; 3], [1.0, 0.0, 0.0]);

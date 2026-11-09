@@ -466,6 +466,35 @@ impl ProjectilePool {
         self.slot(id).map(|i| self.cols.tag[i])
     }
 
+    /// Replaces the opaque tag; `false` for a stale id. Hit events and the draw table read the new
+    /// tag from the next step and extract on; the id and the bounce and pierce counters are kept.
+    pub fn set_tag(&mut self, id: ProjectileId, tag: u32) -> bool {
+        match self.slot(id) {
+            Some(i) => {
+                self.cols.tag[i] = tag;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The sweep radius.
+    pub fn radius(&self, id: ProjectileId) -> Option<f32> {
+        self.slot(id).map(|i| self.cols.radius[i])
+    }
+
+    /// Replaces the sweep radius (`0` is a ray); `false` for a stale id or a radius that is not
+    /// finite and `>= 0`. The next step sweeps with it; the current position is not retested.
+    pub fn set_radius(&mut self, id: ProjectileId, radius: f32) -> bool {
+        match self.slot(id) {
+            Some(i) if radius.is_finite() && radius >= 0.0 => {
+                self.cols.radius[i] = radius;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// The owner.
     pub fn owner(&self, id: ProjectileId) -> Option<Option<Handle>> {
         self.slot(id).map(|i| self.cols.owner[i])

@@ -95,6 +95,56 @@ fn despawn_on_a_world_hit_reports_handle_point_normal_tag() {
 }
 
 #[test]
+fn setters_refuse_stale_ids_and_bad_radii() {
+    let mut pool = ProjectilePool::with_capacity(2);
+    let mut d = ProjectileDesc::new([0.0; 3], [1.0, 0.0, 0.0]);
+    d.radius = 0.25;
+    let id = one(&mut pool, d);
+    for bad in [f32::NAN, f32::INFINITY, -0.1] {
+        assert!(!pool.set_radius(id, bad));
+        assert_eq!(pool.radius(id), Some(0.25));
+    }
+    assert!(pool.set_radius(id, 0.0));
+    assert!(pool.set_tag(id, 3));
+    assert_eq!((pool.radius(id), pool.tag(id)), (Some(0.0), Some(3)));
+    pool.despawn(id);
+    assert!(!pool.set_radius(id, 1.0));
+    assert!(!pool.set_tag(id, 1));
+    assert_eq!((pool.radius(id), pool.tag(id)), (None, None));
+}
+
+#[test]
+fn a_grown_radius_hits_on_the_next_step_only() {
+    let physics = empty_physics();
+    let target = Handle::slot(7, 3);
+    // The sphere is 1.0 off the path: a ray misses, a 0.5 sweep misses, a 1.5 sweep hits.
+    let index = index_of(&[sphere(target, [5.0, 1.0, 0.0], 0.2, 1)]);
+    let mut cfg = config(&physics);
+    cfg.targets = 1;
+    let mut pool = ProjectilePool::with_capacity(2);
+    let mut d = ProjectileDesc::new([0.0; 3], [100.0, 0.0, 0.0]);
+    d.radius = 0.5;
+    d.tag = 1;
+    let id = one(&mut pool, d);
+    assert!(run(&mut pool, &physics, &index, DT, &cfg).hits.is_empty());
+    let at = pool.position(id).unwrap();
+    assert!(pool.set_radius(id, 1.5));
+    assert!(pool.set_tag(id, 8));
+    assert_eq!(pool.position(id), Some(at));
+    assert!(pool.contains(id), "no same-tick retest");
+    // Keep sweeping until the target is reached.
+    let mut hits = Vec::new();
+    for _ in 0..60 {
+        hits = run(&mut pool, &physics, &index, DT, &cfg).hits.to_vec();
+        if !hits.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(hits.len(), 1);
+    assert_eq!((hits[0].handle, hits[0].tag), (target, 8));
+}
+
+#[test]
 fn despawn_on_a_target_hit() {
     let physics = empty_physics();
     let target = Handle::slot(7, 3);

@@ -93,6 +93,11 @@
     ongoing churn (about 39 % parked); gravity is set in the gib arm only so the shots-only row
     stays the run that produced the recorded figures. `extract_cost_of_1000_gibs` prices 1,000
     posed Mesh/Voxel gibs on top of 5,000 shots.
+23. **Live `set_radius` / `set_tag` (request 0027).** Per-slot column writes beside `set_velocity`, id
+    and counters kept; `set_radius` takes spawn's rule (finite, `>= 0`). A new radius sweeps from the
+    next step with no same-tick retest; both columns were already hashed, so no digest layout moves.
+    Muzzle convergence latches at a shot's first extract, so a later `set_tag` neither starts nor
+    stops it; the draw (size, look, fade) follows the live tag from the next extract.
 
 ## Status
 
