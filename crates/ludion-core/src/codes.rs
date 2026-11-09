@@ -2049,7 +2049,9 @@ pub mod code {
     /// `L3036` — `switch_to_ragdoll` or `switch_skin_to_ragdoll` refused to switch an entity: it is
     /// dead, has no `Transform`, its scale is not uniform, its `Mesh` is not an assembly (or not a
     /// skinned mesh), one of the assembly's part meshes is empty, a part's mass at that scale is zero
-    /// or not finite, or the skin's parts prefab breaks the `$skin` rules. Raised by `ludion-engine`'s
+    /// or not finite, or the skin's parts prefab breaks the `$skin` rules (not last, a part bound to another skin or another
+    /// reference to it, a different mesh, no `SkinBone` part). `switch_skin_to_ragdoll` also refuses a
+    /// presentation skin and a skin already driven by `SkinBone` parts. Raised by `ludion-engine`'s
     /// ragdoll helpers; the switch mutates nothing when this fires (all-or-nothing).
     pub const RAGDOLL_SWITCH_INVALID: DiagnosticCode = DiagnosticCode::new("L3036");
 

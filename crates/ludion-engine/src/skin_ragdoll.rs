@@ -107,6 +107,15 @@ pub fn switch_skin_to_ragdoll(
         ));
     }
     let named = crate::scene_physics::entity_label(world, skin);
+    if ludion_ecs::is_presentation(skin) {
+        return Err(refuse(
+            &named,
+            "is a presentation entity; the switch spawns sim parts, which would cross the \
+             sim/presentation boundary (L0028)"
+                .into(),
+            "switch a sim skin; a presentation skin has no ragdoll",
+        ));
+    }
     let Some(skin_transform) = crate::hierarchy::world_pose_transform(world, skin) else {
         return Err(refuse(
             &named,
@@ -245,6 +254,26 @@ pub fn switch_skin_to_ragdoll(
                 "give the `$skin` part the same skinned `Mesh` as the entity",
             );
         }
+    }
+
+    if !entities[..last]
+        .iter()
+        .any(|e| e.components.iter().any(|(name, _)| name == "SkinBone"))
+    {
+        return part_error(
+            "hold no `SkinBone` part besides `$skin`".into(),
+            "add at least one part with a `SkinBone` for the skin's bones to follow",
+        );
+    }
+    if world
+        .query_ids::<(&SkinBone,)>()
+        .any(|(_, (link,))| link.skin == skin)
+    {
+        return Err(refuse(
+            &named,
+            "is already driven by SkinBone parts".into(),
+            "switch once, on the transition tick, comparing the frame with `==` rather than `>=`",
+        ));
     }
 
     // --- Validated: every step below mutates the world. ---

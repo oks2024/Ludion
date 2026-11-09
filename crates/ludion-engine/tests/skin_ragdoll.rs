@@ -396,6 +396,9 @@ fn every_refusal_mutates_nothing() {
         &l3036,
     );
 
+    let bare = "format: 1\nkind: prefab\nname: parts\nentities:\n  - name: $skin\n    components:\n      Mesh:\n        shape:\n          asset: \"meshes/rig.mesh.yaml\"\n";
+    check("no-bone-part", &good, bare, PARTS, false, &l3036);
+
     let unknown = PARTS_TEXT.replace("bone: child", "bone: chld");
     check(
         "unknown-bone",
@@ -481,4 +484,32 @@ fn saving_a_switched_skin_is_refused_with_l1234_and_changes_nothing() {
     assert!(!dir.join("switched.yaml").exists(), "nothing is written");
     assert_eq!(engine.world().entity_count(), entities);
     assert_eq!(engine.world_hash().unwrap(), hash);
+}
+
+#[test]
+fn a_second_switch_on_the_same_skin_is_refused_and_changes_nothing() {
+    let dir = fixture("twice");
+    let mut engine = engine_with(&dir, &skin_scene(&format!("{MESH}{UNIT_TRANSFORM}")));
+    switch_skin_to_ragdoll(engine.world_mut(), skin_id(), PARTS).expect("switches");
+    let hash = engine.world_hash().unwrap();
+    let entities = engine.world().entity_count();
+    let errors =
+        switch_skin_to_ragdoll(engine.world_mut(), skin_id(), PARTS).expect_err("already driven");
+    assert_eq!(errors[0].code, code::RAGDOLL_SWITCH_INVALID);
+    assert!(errors[0].message.contains("already driven"), "{errors:?}");
+    assert_eq!(engine.world().entity_count(), entities);
+    assert_eq!(engine.world_hash().unwrap(), hash);
+}
+
+#[test]
+fn a_presentation_skin_is_refused_naming_the_phase() {
+    let dir = fixture("presentation");
+    let mut engine = engine_with(&dir, &skin_scene(&format!("{MESH}{UNIT_TRANSFORM}")));
+    let skin = engine.world_mut().spawn_presentation();
+    let count = engine.world().entity_count();
+    let errors =
+        switch_skin_to_ragdoll(engine.world_mut(), skin, PARTS).expect_err("a presentation skin");
+    assert_eq!(errors[0].code, code::RAGDOLL_SWITCH_INVALID);
+    assert!(errors[0].message.contains("presentation"), "{errors:?}");
+    assert_eq!(engine.world().entity_count(), count);
 }

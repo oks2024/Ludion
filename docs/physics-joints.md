@@ -209,9 +209,12 @@ the prefab's directory). `$skin` spawns nothing; `SkinBone.skin` on the parts po
 
 The skin keeps its id and `Mesh` and loses `Animation`, `Collider` and `Velocity`. Each rigid part gets
 the skin's linear velocity plus angular × (part origin − skin origin), and the skin's angular
-velocity. The switch is all-or-nothing: a dead skin, no `Transform`, a non-uniform or non-positive
-scale, a mesh that is not skinned or differs from the prefab's, or a missing or misplaced `$skin`
-is `L3036`, and nothing is spawned or changed. Call it on one tick (`ctx.game_frame == N`, never
+velocity; a part's own authored `Velocity` is replaced. A part's linear velocity is taken at its bone
+origin, not the body's centre of mass (exact when the skin does not spin). The switch is
+all-or-nothing: a dead or presentation skin, no `Transform`, a non-uniform or non-positive scale, a
+mesh that is not skinned or differs from the prefab's, a missing or misplaced `$skin`, a part bound
+to another skin or another ref to `$skin`, no `SkinBone` part, or a skin already driven by `SkinBone`
+parts (a second switch, or a scene-rigged skin) is `L3036`, and nothing is spawned or changed. Call it on one tick (`ctx.game_frame == N`, never
 `>=`). See `examples/gallery/ragdoll-skin-switch.yaml` and `prefabs/mannequin-ragdoll.prefab.yaml`.
 **The parts land at the bone rest pose, not the pose the clip shows on the switch tick; the posed
 switch is owed.**
