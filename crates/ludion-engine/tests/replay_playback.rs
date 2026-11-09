@@ -649,6 +649,9 @@ fn run_live_keeps_ticking_a_playback() {
         }),
     );
     playback(&mut engine).play("run", "hub.yaml");
+    // The play request applies at the end of a tick: start it before `run_live` drains any command.
+    engine.advance_live();
+    assert_eq!(engine.playing(), Some("run"));
 
     let (intake, intake_rx) = crossbeam_channel::unbounded();
     let (shutdown, shutdown_rx) = shutdown_channel();
