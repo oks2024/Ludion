@@ -116,6 +116,78 @@ grow the other two into the same value.
    `medium`/`high` differ from `full` by name only, which is stated in the type's own docs rather
    than papered over.
 
+## Decisions Proposed (0014, pending owner approval)
+
+Serious Isaac request 0014 (`engine-requests/0014-desktop-packaged-quality-default.md`). Two amendments, ready
+to build; neither moves a wire schema hash, a replay content hash, a `.lrp` or a `full` golden.
+
+**P1. A desktop packaged default, chosen by GPU class (amends decision 3).** Decision 3's last clause becomes:
+*a project manifest may name a **preset** per GPU class, never a file.* The `[ios] quality` precedent, on desktop.
+
+- **Manifest.** A `[quality]` table, `QualitySection { apple_silicon: Option<String> }` under
+  `deny_unknown_fields` (`crates/ludion-engine/src/manifest.rs`). An unknown key fails the manifest load with
+  `L0023`; toml's message names the expected key, and `load`'s help text gains the `[quality]` key. The value is
+  validated as `ios_quality` validates (`manifest.rs:510`): preset names only, `L0023` otherwise, a file path
+  included. One helper serves both keys. `Manifest::packaged_quality(class) -> Result<Option<&'static str>>`.
+- **Class detection.** `GpuClass { AppleSilicon, Other }` comes from the adapter's `wgpu::AdapterInfo`, at
+  runtime, with no `cfg(target_os)`. The rule: backend `Metal`, and a name starting with `Apple ` (the
+  `MTLDevice` name, such as `Apple M4 Pro`). Two other signals were rejected. On Metal, wgpu-hal 30 leaves
+  `vendor` at 0. `device_type` is `IntegratedGpu` on Intel Iris Macs too, and an Intel Mac must stay `Other`.
+  A software adapter is `Other`. The classifier is a pure function of (backend, name) in `ludion-render-graph`,
+  beside `Gpu::request` (`execute.rs`).
+- **Timing.** Quality resolves in `run_short_circuit` (`crates/ludion/src/lib.rs:626`), before any mode runs
+  and before any device exists. That stays. A new `probe_gpu_class()` asks for an adapter with `Gpu::request`'s
+  options (the headless tiers, `HighPerformance`), reads its info, and creates **no device**. It runs only
+  when nothing above it chose: no flag, no `LUDION_QUALITY`, and a manifest with a `[quality]` entry. A box
+  that sets either, and every project without the table, pays nothing and behaves as today. On a
+  `LUDION_FORBID_GPU` lane the probe is skipped and the class is `Other`. Headless and windowed hosts share
+  the probe. A windowed host later picks its adapter with a compatible surface, but Apple silicon has one
+  GPU, so only a dual-GPU Intel Mac could see a different adapter, and that machine is `Other` either way.
+- **One resolution.** `ludion::run` loads `<content>/ludion.toml` once when it exists (and reuses it for
+  `check_default_scene`). It computes the packaged value once and passes it to both resolution sites:
+  `run_short_circuit`'s `resolve_startup_quality`, and `StartOptions.packaged_quality` for hosting
+  (`embed.rs:406` already takes it). New behaviour: a malformed manifest now also refuses `run` with `L0023`,
+  as it already refuses `export` and `sync`.
+- **Scope.** The game host only: `ludion::run`, and `ludion dev` through it. iOS keeps `[ios] quality`
+  through `launch` and `ffi`; `[quality]` is never read there. The CLI instruments (`render`, `profile`,
+  `serve`) ignore it under decision 6, and goldens keep their explicit `FULL` pin under decision 5.
+- **Reporting.** `QualitySetting` gains `source: QualitySource { Default, Flag, Env, Packaged }`, the existing
+  private `Origin` promoted. `engine.describe`'s `quality` object gains `"source"`, plus `"gpu_class"` when the
+  source is packaged. The describe body is untyped JSON, so the schema hash does not move. The `--profile`
+  report's typed `QualityProfile` is in the wire schema, so it gets **no** new field: its `preset` already
+  names the preset that won. The host prints one stderr line when the packaged value wins (`quality: medium
+  (packaged, [quality] apple_silicon)`). A typed `source` in the report would move the schema hash once; it is
+  owed only if asked for.
+- **Tests.** Manifest units: a valid entry, a non-preset value (`L0023`), a file path (`L0023`), and an
+  unknown key refused with `apple_silicon` named. Classifier units: `Apple M4 Pro`/Metal → `AppleSilicon`;
+  Intel Iris/Metal, AMD Radeon Pro/Metal and NVIDIA/Vulkan → `Other`. A host-level test drives the packaged
+  helper over a temp manifest with an injected class: the class's entry is chosen, `Other` falls through to
+  `full`, and a flag and `LUDION_QUALITY` outrank it. The existing
+  `a_packaged_default_ranks_below_the_flag_and_the_environment` stays. A describe test checks `source`.
+- **Docs.** `ludion docs quality` §Rules: the key, its precedence slot and the class rule.
+  `ludion docs export` gets a one-line cross-reference.
+
+**P2. `ssr_scale` 0.25 at `medium` (amends the wave-2 preset table).** `QualityParams::MEDIUM.ssr_scale`
+becomes `0.25`, which equals `RenderScale::MIN`, the override file's floor. `high` and `full` keep `0.5`.
+
+- **Mechanism.** One constant (`crates/ludion-renderer/src/quality.rs:386`). The trace and pyramid extents
+  already read it (`ssr_pyramid::trace_extent`, `graph.rs:1134`), so no shader changes. `LOW` inherits it
+  through `..MEDIUM`, but `LOW` masks `ssr` off, so its descriptor reads `0.25` for a trace that never runs.
+  That is the "repeat `medium`'s" convention `LOW`'s doc already states.
+- **What moves.** Nothing at `full`: the goldens are pinned `FULL`, the `mirror-floor` budgets measure `full`,
+  and quality is never hashed or recorded (decision 4). At `medium` and `low`:
+  - the profile descriptor's `ssr_scale`;
+  - `probe_store::world_key`, which hashes `QualityParams` through `Debug`. Store entries keyed at those
+    presets miss and recapture, and none is committed. The face capture forces `post.ssr = 0`, so the
+    `medium` probe-bake pin's pixels stay put.
+  - vigil's iOS export (`[ios] quality = "medium"`), which traces SSR at 0.25 where a scene opts in.
+- **Tests.** In `quality.rs`, `MEDIUM.ssr_scale < HIGH.ssr_scale`; the monotonic test already covers it. A
+  graph test checks that the `hiz`/trace extent at `medium` is output × 0.25.
+- **Docs.** `ludion docs quality`'s `ssr_scale` row becomes `0.25` at `medium`/`low` and `0.5` at
+  `high`/`full`. `dev-docs/renderer-quality.md` and `renderer-ssr.md` get the same edit.
+- **Owed after it ships.** An M4 `profile --quality medium` on `mirror-floor` to record the saving, and a look
+  check of SSR at 0.25 (decision 9: preset values come from measurement).
+
 ## Waves
 
 ### Wave 1 — the value, the chain, and the toggles (LANDED)

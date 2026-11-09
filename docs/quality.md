@@ -125,6 +125,10 @@ ssao_samples = 4
   iOS turns SSR off, and the report's descriptor carries `ssr`, `ssr_scale` and `ibl_specular_size`). An explicit
   setting wins outright and lower sources are not read for validity, so a flag works on a box whose
   `LUDION_QUALITY` is malformed. Absent, empty or whitespace counts as not chosen.
+- **Desktop has no packaged default.** `[ios] quality` is the only one, so a desktop game runs at
+  `full` unless the player's flag or environment says otherwise. No preset lowers `ssr_scale`
+  either: a cheaper reflection trace needs a local override file (`[params] ssr_scale = 0.25`).
+  Both are proposed, not adopted (`Plan/scalability.md` §Decisions Proposed (0014)).
 - **An unresolvable setting refuses to start** — one `L0016` naming both interpretations (the preset
   list *and* the unreadable file), never a silent fall back to `full`. Unknown preset, unreadable
   path, malformed TOML, wrong-typed value and unknown key are all this code.
