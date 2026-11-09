@@ -52,7 +52,7 @@ use crate::components::{
     Sprite, SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText,
 };
 use crate::docs::DocStore;
-use crate::extract_observer::ExtractPhase;
+use crate::extract_observer::{ExtractPhase, SkinCounts};
 use crate::fonts::FontLibrary;
 use crate::hierarchy::{FrameVisibility, WorldAffines, level_trs};
 use crate::load_observer::LoadPhase;
@@ -139,6 +139,8 @@ pub(crate) trait SceneAssets {
     fn extract_begin(&mut self, _phase: ExtractPhase) {}
     /// The extract phase last begun ends.
     fn extract_end(&mut self, _phase: ExtractPhase) {}
+    /// The extract's skin counters, inside the `Skin` bracket.
+    fn extract_skin(&mut self, _counts: SkinCounts) {}
 }
 
 /// The cached loader: each asset resolves **through** the [`AssetCache`] (miss = load + decode once,
@@ -217,6 +219,11 @@ impl SceneAssets for CachedAssets<'_> {
     fn extract_end(&mut self, phase: ExtractPhase) {
         if let Some(observer) = self.cache.extract_observer_mut() {
             observer.end(phase);
+        }
+    }
+    fn extract_skin(&mut self, counts: SkinCounts) {
+        if let Some(observer) = self.cache.extract_observer_mut() {
+            observer.skin(counts);
         }
     }
 }
@@ -1118,14 +1125,14 @@ fn extract_inner(
     let mut meshes = Vec::with_capacity(placed.meshes.len());
     // The owning entity of each `meshes` entry, parallel to it: a drop shadow's caster exclusion.
     let mut mesh_owners: Vec<EntityId> = Vec::with_capacity(placed.meshes.len());
-    // Every skinned instance's bone palette, in extract order; the renderer prepends its own
-    // identity entry 0, so an instance's `bone_offset` into the combined buffer starts at 1. A joint
-    // a `SkinBone` part names takes that part's world pose every frame; every other joint keeps its
-    // rest pose relative to its parent (`posed_palette`); an instance with no followers plays its
-    // character's `Animation` clip (`sampled_palette`), or pushes its asset's joints' rest entries
-    // verbatim when there is none.
-    let mut bone_palette: Vec<Mat4> = Vec::new();
-    let mut palette_scratch: Vec<Mat4> = Vec::new();
+    // Every skinned instance's bone palette, in extract order (filled in the `Skin` block; the
+    // offsets are assigned here); the renderer prepends its own identity entry 0, so an instance's
+    // `bone_offset` into the combined buffer starts at 1. A joint a `SkinBone` part names takes that
+    // part's world pose every frame; every other joint keeps its rest pose relative to its parent
+    // (`posed_palette`); an instance with no followers plays its character's `Animation` clip
+    // (`sampled_palette`), or pushes its asset's joints' rest entries verbatim when there is none.
+    let mut skin_jobs: Vec<SkinJob> = Vec::new();
+    let mut skin_joints = 0usize;
     let mut last_fade = None;
     let mut last_rim = None;
     for mesh in &placed.meshes {
@@ -1305,18 +1312,17 @@ fn extract_inner(
             let bone_offset = match shape {
                 MeshShape::Asset(idx) if !mesh_assets[idx].skin_joints.is_empty() => {
                     // Entry 0 is the renderer's identity, so an asset's own entries start at 1.
-                    let offset = 1 + bone_palette.len() as u32;
-                    skin_palette(
-                        world,
-                        mesh.id,
-                        &mesh_assets[idx].skin_joints,
-                        character.as_deref(),
-                        mesh.model,
-                        placed.skin_followers.get(&mesh.id).map(Vec::as_slice),
-                        now,
-                        &mut palette_scratch,
-                        &mut bone_palette,
-                    );
+                    // The palette itself is posed in the `Skin` block; every path writes exactly
+                    // `skin_joints.len()` entries, so the offset is known here.
+                    let offset = 1 + skin_joints as u32;
+                    skin_joints += mesh_assets[idx].skin_joints.len();
+                    skin_jobs.push(SkinJob {
+                        skin: mesh.id,
+                        asset: idx,
+                        character: character.clone(),
+                        model: mesh.model,
+                        followed: placed.skin_followers.get(&mesh.id).map(Vec::as_slice),
+                    });
                     offset
                 }
                 _ => 0,
@@ -1378,6 +1384,12 @@ fn extract_inner(
         )
     });
     assets.extract_end(ExtractPhase::Meshes);
+
+    assets.extract_begin(ExtractPhase::Skin);
+    let (bone_palette, skin_counts) = pose_skins(world, &skin_jobs, &mesh_assets, now);
+    debug_assert_eq!(bone_palette.len(), skin_joints);
+    assets.extract_skin(skin_counts);
+    assets.extract_end(ExtractPhase::Skin);
 
     assets.extract_begin(ExtractPhase::Decals);
     let (decals, decal_ids) = extract_decals(
@@ -3740,9 +3752,9 @@ fn transform_matrix(xform: &Transform) -> Mat4 {
 /// Appends skin `skin`'s bone-palette entries for this frame to `out`: the `SkinBone` followers'
 /// pose when `followed` names any ([`posed_palette`]), else its character's `Animation` clip and
 /// crossfade at the held `now` ([`sampled_palette`]), else each joint's precomposed rest entry.
-/// Returns whether `scratch` then holds the joints' posed model matrices (false on the rest path).
-/// The mesh loop and the socket pre-pass both call it, so a socket child and the skin it rides can
-/// never read two evaluations of one pose.
+/// Returns the path taken; `scratch` holds the joints' posed model matrices unless it was
+/// [`PalettePath::Rest`]. The `Skin` block and the socket pre-pass both call it, so a socket child
+/// and the skin it rides can never read two evaluations of one pose.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn skin_palette(
     world: &World,
@@ -3754,24 +3766,119 @@ pub(crate) fn skin_palette(
     now: SimTime,
     scratch: &mut Vec<Mat4>,
     out: &mut Vec<Mat4>,
-) -> bool {
+) -> PalettePath {
     let (pose, crossfade) = character.map_or((None, None), |data| {
         character_pose(world, skin, data, held_for(world, skin, now))
     });
     match followed {
         Some(followed) if !followed.is_empty() => {
             posed_palette(joints, skin_model, followed, scratch, out);
-            true
+            PalettePath::Followed
         }
         _ if pose.is_none() && crossfade.is_none() => {
             out.extend(joints.iter().map(|joint| joint.rest));
-            false
+            PalettePath::Rest
         }
         _ => {
             sampled_palette(joints, pose, crossfade.as_ref(), scratch, out);
-            true
+            PalettePath::Sampled {
+                fading: crossfade.is_some(),
+            }
         }
     }
+}
+
+/// Which way [`skin_palette`] wrote a palette.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PalettePath {
+    /// Each joint's precomposed rest entry; nothing posed.
+    Rest,
+    /// `SkinBone` followers drove the bones.
+    Followed,
+    /// The character's clip was sampled; `fading` when a crossfade blended a second clip.
+    Sampled { fading: bool },
+}
+
+impl PalettePath {
+    /// Whether `scratch` holds posed model matrices.
+    fn posed(self) -> bool {
+        !matches!(self, PalettePath::Rest)
+    }
+}
+
+/// One skinned instance awaiting its palette in the `Skin` block.
+struct SkinJob<'a> {
+    skin: EntityId,
+    asset: usize,
+    character: Option<Arc<CharacterData>>,
+    model: Mat4,
+    followed: Option<&'a [(&'a str, Mat4)]>,
+}
+
+/// Skin jobs per parallel claim: instances are similar in size, so 16 keeps a 500-crowd at ~32 chunks.
+const SKIN_PAR_CHUNK: usize = 16;
+
+/// Below this many joints a frame poses on one thread: posing is ~70 ns a joint, so 2048 joints is
+/// ~0.15 ms of work against ~0.1 ms of scoped spawns.
+const SKIN_PAR_MIN_JOINTS: usize = 2048;
+
+/// Every job's bone palette, concatenated in job order, and the frame's [`SkinCounts`].
+///
+/// Jobs pose in parallel through [`par::par_map_chunks`] in fixed-size chunks whose results are
+/// concatenated in chunk order, so the palette is byte-identical at any thread count.
+fn pose_skins(
+    world: &World,
+    jobs: &[SkinJob],
+    mesh_assets: &[Arc<MeshData>],
+    now: SimTime,
+) -> (Vec<Mat4>, SkinCounts) {
+    let total: usize = jobs
+        .iter()
+        .map(|job| mesh_assets[job.asset].skin_joints.len())
+        .sum();
+    let evaluate = || {
+        par::par_map_chunks(jobs, SKIN_PAR_CHUNK, |_, chunk| {
+            let mut scratch = Vec::new();
+            let mut out = Vec::new();
+            let mut counts = SkinCounts::default();
+            for job in chunk {
+                let joints = &mesh_assets[job.asset].skin_joints;
+                let path = skin_palette(
+                    world,
+                    job.skin,
+                    joints,
+                    job.character.as_deref(),
+                    job.model,
+                    job.followed,
+                    now,
+                    &mut scratch,
+                    &mut out,
+                );
+                counts.instances += 1;
+                counts.palettes_sampled += 1;
+                counts.joints_sampled += match path {
+                    PalettePath::Rest => 0,
+                    PalettePath::Followed => joints.len() as u64,
+                    PalettePath::Sampled { fading } => {
+                        joints.len() as u64 * if fading { 2 } else { 1 }
+                    }
+                };
+            }
+            (out, counts)
+        })
+    };
+    let chunks = if total < SKIN_PAR_MIN_JOINTS {
+        par::with_threads(1, evaluate)
+    } else {
+        evaluate()
+    };
+    let mut palette = Vec::with_capacity(total);
+    let mut counts = SkinCounts::default();
+    for (out, chunk) in chunks {
+        palette.extend(out);
+        counts.add(chunk);
+    }
+    (palette, counts)
 }
 
 /// `joint`'s posed model matrix in skin `skin`'s model space (the space of the joint's rest model
@@ -3801,6 +3908,7 @@ pub(crate) fn posed_joint_model(
         &mut scratch,
         &mut out,
     )
+    .posed()
     .then(|| scratch[index])
 }
 

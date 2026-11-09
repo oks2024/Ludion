@@ -4,7 +4,8 @@
 //! has no clock — time is the implementor's to read — and the same rule as `LoadObserver` holds:
 //! observation never mutates, so an attached observer cannot change the scene or the world hash. A
 //! detached observer costs one `Option` test per boundary. A phase that is split in the walk is
-//! bracketed once per piece; the observer sums them. A failed extract may leave its last phase open.
+//! bracketed once per piece; the observer sums them. Counters ride beside the brackets (`skin`). A
+//! failed extract may leave its last phase open.
 
 /// A contiguous block of the extract walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -15,8 +16,10 @@ pub enum ExtractPhase {
     Sprites,
     /// UI elements and world text.
     Ui,
-    /// Mesh asset resolve, skin palettes and the viewmodel pass.
+    /// Mesh asset resolve and the viewmodel pass.
     Meshes,
+    /// Skin palettes: every skinned instance's bone palette.
+    Skin,
     /// Decals.
     Decals,
     /// The GI voxelizer and probe data.
@@ -31,11 +34,12 @@ pub enum ExtractPhase {
 
 impl ExtractPhase {
     /// Every phase, in walk order.
-    pub const ALL: [ExtractPhase; 9] = [
+    pub const ALL: [ExtractPhase; 10] = [
         ExtractPhase::Place,
         ExtractPhase::Sprites,
         ExtractPhase::Ui,
         ExtractPhase::Meshes,
+        ExtractPhase::Skin,
         ExtractPhase::Decals,
         ExtractPhase::Gi,
         ExtractPhase::Particles,
@@ -44,10 +48,39 @@ impl ExtractPhase {
     ];
 }
 
+/// What one extract's `Skin` phase did. A deterministic shape of the frame, not a measurement:
+/// `instances == palettes_sampled + palettes_reused + palettes_shared`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SkinCounts {
+    /// Skinned mesh instances drawn this extract.
+    pub instances: u32,
+    /// Palettes posed from scratch (rest, follower or clip sampling).
+    pub palettes_sampled: u32,
+    /// Palettes copied from an earlier frame's identical pose.
+    pub palettes_reused: u32,
+    /// Palettes shared with another instance of the same pose.
+    pub palettes_shared: u32,
+    /// Joint poses evaluated; a crossfade counts both clips, a rest palette none.
+    pub joints_sampled: u64,
+}
+
+impl SkinCounts {
+    /// Adds every field of `other`.
+    pub fn add(&mut self, other: SkinCounts) {
+        self.instances += other.instances;
+        self.palettes_sampled += other.palettes_sampled;
+        self.palettes_reused += other.palettes_reused;
+        self.palettes_shared += other.palettes_shared;
+        self.joints_sampled += other.joints_sampled;
+    }
+}
+
 /// Receives the extract walk's phase boundaries.
 pub trait ExtractObserver: Send {
     /// A phase starts.
     fn begin(&mut self, phase: ExtractPhase);
     /// The phase last begun ends.
     fn end(&mut self, phase: ExtractPhase);
+    /// The skin counters, once per extract, inside the `Skin` bracket (zeros included).
+    fn skin(&mut self, _counts: SkinCounts) {}
 }

@@ -11,9 +11,11 @@
 //! Runs over a scratch copy of the gallery mannequin in the system temp directory.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use ludion_core::math::glam::Mat4;
 use ludion_core::time::{SimTime, TickRate};
+use ludion_engine::extract_observer::{ExtractObserver, ExtractPhase, SkinCounts};
 use ludion_engine::{Engine, QualityParams, extract_at};
 use ludion_protocol::{Command, command};
 
@@ -450,5 +452,93 @@ fn a_hold_steps_the_skin_pose_on_a_global_grid() {
             "{name} must step at tick 15"
         );
     }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Records the last `SkinCounts` an extract reports.
+#[derive(Clone, Default)]
+struct SkinRecorder(Arc<Mutex<SkinCounts>>);
+
+impl ExtractObserver for SkinRecorder {
+    fn begin(&mut self, _phase: ExtractPhase) {}
+    fn end(&mut self, _phase: ExtractPhase) {}
+    fn skin(&mut self, counts: SkinCounts) {
+        *self.0.lock().unwrap() = counts;
+    }
+}
+
+#[test]
+fn skin_counts_report_instances_and_joint_samples() {
+    let root = fixture_project("skin-counts");
+    let scene = format!(
+        "{FADE_SCENE}  - name: rest\n    components:\n      Mesh:\n        shape:\n          character: characters/mannequin.character.yaml\n"
+    );
+    let mut engine = engine_at(&root, &scene);
+    let recorder = SkinRecorder::default();
+    engine.set_extract_observer(Some(Box::new(recorder.clone())));
+    engine.execute(step(10)).expect("steps");
+    engine.extract_present_scene().expect("extracts");
+    let counts = *recorder.0.lock().unwrap();
+    assert_eq!(
+        counts,
+        SkinCounts {
+            instances: 4,
+            palettes_sampled: 4,
+            palettes_reused: 0,
+            palettes_shared: 0,
+            joints_sampled: (JOINTS * (2 + 1 + 1)) as u64,
+        }
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 240 mannequins x 11 joints = 2640 joints, over `SKIN_PAR_MIN_JOINTS` (2048), so 2 and 8 threads
+/// really run in parallel.
+#[test]
+fn skin_palettes_are_byte_identical_at_1_2_8_threads() {
+    let root = fixture_project("skin-threads");
+    let mut scene = String::from("format: 1\nseed: 1\nentities:\n");
+    for i in 0..240 {
+        scene.push_str(&format!(
+            "  - name: m{i}\n    components:\n      Mesh:\n        shape:\n          character: characters/mannequin.character.yaml\n"
+        ));
+        match i % 4 {
+            0 => scene.push_str("      Animation:\n        clip: run\n"),
+            1 => scene.push_str("      Animation:\n        clip: jump\n"),
+            2 => scene.push_str(
+                "      Animation:\n        clip: run\n        from: jump\n        fade: 1.0\n",
+            ),
+            _ => {}
+        }
+    }
+    let mut engine = engine_at(&root, &scene);
+    engine.execute(step(10)).expect("steps");
+    let tick = 10;
+    let runs: Vec<(Vec<u32>, Vec<u32>)> = [1, 2, 8]
+        .into_iter()
+        .map(|n| {
+            ludion_core::par::with_threads(n, || {
+                let scene = extract_at(
+                    engine.world(),
+                    (320, 180),
+                    ludion_assets::AssetRoot::content(engine.project_root()),
+                    SimTime::from_ticks(tick, TickRate::DEFAULT),
+                    QualityParams::FULL.particle_density,
+                )
+                .expect("extracts");
+                let palette = scene
+                    .bone_palette
+                    .iter()
+                    .flat_map(|m| m.to_cols_array().map(f32::to_bits))
+                    .collect();
+                let offsets = scene.meshes.iter().map(|m| m.bone_offset).collect();
+                (palette, offsets)
+            })
+        })
+        .collect();
+    assert_eq!(runs[0], runs[1], "1 vs 2 threads");
+    assert_eq!(runs[0], runs[2], "1 vs 8 threads");
+    let expected: Vec<u32> = (0..240).map(|k| 1 + (k * JOINTS) as u32).collect();
+    assert_eq!(runs[0].1, expected);
     let _ = std::fs::remove_dir_all(&root);
 }

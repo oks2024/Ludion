@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ludion_core::rng::DeterministicRng;
-use ludion_engine::extract_observer::{ExtractObserver, ExtractPhase};
+use ludion_engine::extract_observer::{ExtractObserver, ExtractPhase, SkinCounts};
 use ludion_engine::{
     Engine, ProfileReport, ProjectileConfig, ProjectileLook, ProjectileVisual, ProjectileVisuals,
     Projectiles, profile_engine,
@@ -467,6 +467,7 @@ fn engine(facing: Facing, mix: Mix, shots: bool) -> Engine {
 struct PhaseTotals {
     open: Option<(ExtractPhase, Instant)>,
     call: BTreeMap<ExtractPhase, Duration>,
+    skin: SkinCounts,
 }
 
 /// The clock site: sums each phase's spans for the current `extract_present_scene` call.
@@ -495,6 +496,10 @@ impl ExtractObserver for PhaseClock {
             *totals.call.entry(phase).or_default() += lap(start);
         }
     }
+
+    fn skin(&mut self, counts: SkinCounts) {
+        self.0.lock().unwrap().skin = counts;
+    }
 }
 
 fn ms(d: Duration) -> f64 {
@@ -515,6 +520,7 @@ struct Arm {
     label: String,
     extract_total_ms: f64,
     phases: Vec<(ExtractPhase, f64)>,
+    skin: SkinCounts,
     report: ProfileReport,
 }
 
@@ -595,6 +601,7 @@ fn measure(label: &str, facing: Facing, mix: Mix, shots: bool) -> Arm {
         label: label.to_string(),
         extract_total_ms,
         phases,
+        skin: clock.0.lock().unwrap().skin,
         report: best_report.expect("at least one round"),
     }
 }
@@ -611,6 +618,15 @@ fn print_arm(arm: &Arm) {
     for (phase, took) in phases {
         println!("  {phase:<12?} {took:>8.3} ms");
     }
+    let skin = arm.skin;
+    println!(
+        "skin: instances {} | sampled {} | reused {} | shared {} | joints {}",
+        skin.instances,
+        skin.palettes_sampled,
+        skin.palettes_reused,
+        skin.palettes_shared,
+        skin.joints_sampled
+    );
     if !arm.report.gpu.available {
         println!("gpu: unavailable (no adapter)");
         return;
