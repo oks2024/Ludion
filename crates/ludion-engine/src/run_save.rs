@@ -173,6 +173,9 @@ pub struct RunSave {
 
 impl RunSave {
     /// Requests that the running game be written to `save/suspend.json` at the frame boundary.
+    /// A successful persisting suspend also finalizes an open
+    /// [`RunRecording`](crate::RunRecording) as a normal `stop()`: the file covers the run up to
+    /// the suspend frame, and the resumed rest of the run is not recorded.
     pub fn suspend(&mut self) {
         self.suspend = true;
     }
@@ -186,11 +189,17 @@ impl RunSave {
     /// [`discard`](RunSave::discard) and [`suspend`](RunSave::suspend). A persisting host restores
     /// the world in place with held input cleared and deletes the file; a refusal is reported by
     /// [`last_resume`](RunSave::last_resume). Without persistence the request is only logged.
+    /// While a [`RunRecording`](crate::RunRecording) is open the resume is refused (`L1401`) with
+    /// the save kept: `stop()` the recording first.
     pub fn resume(&mut self) {
         self.resume = true;
     }
 
     /// The suspended run read at boot, or the one the last [`suspend`](RunSave::suspend) wrote.
+    ///
+    /// This is disk input a replay never sees: it is `None` in every replay. Read it before
+    /// [`RunRecording::start`](crate::RunRecording::start) (on the title screen); a system that
+    /// branches on it during a recorded run diverges on replay.
     pub fn pending(&self) -> Option<&SuspendInfo> {
         self.pending.as_ref()
     }

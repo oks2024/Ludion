@@ -6,8 +6,8 @@ use ludion_core::rng::DeterministicRng;
 use ludion_core::time::FrameIndex;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
-    Engine, EngineBuilder, Profile, RunRecording, RunRecordingConfig, RunRecordingRequest,
-    replay_hashes_with,
+    Engine, EngineBuilder, Profile, ResumeOutcome, RunRecording, RunRecordingConfig,
+    RunRecordingRequest, RunSave, replay_hashes_with,
 };
 use ludion_protocol::replay::{ReplayReader, ReplayRecord};
 use ludion_protocol::{Command, command::InputInjectParams};
@@ -420,4 +420,95 @@ fn the_run_starts_from_the_live_profile_with_unsaved_writes() {
     assert!(header.contains("pending_run: 42"), "{header}");
     let replayed = replay_hashes_with(probe_game(&dir, false), &bytes, &dir).unwrap();
     assert_eq!(replayed, live);
+}
+
+fn run_save(engine: &mut Engine) -> &mut RunSave {
+    engine.world_mut().resource_mut::<RunSave>().unwrap()
+}
+
+#[test]
+fn a_suspend_finalizes_the_open_run_recording() {
+    let dir = fresh_dir("suspend-finalizes");
+    let mut engine = boot(game(&dir, true, 3600).run_save());
+    press(&mut engine, "key_down");
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+    start(&mut engine, "cut");
+    engine.advance_live();
+    let mut live: Trace = vec![sample(&mut engine)];
+    for _ in 0..4 {
+        engine.advance_live();
+        live.push(sample(&mut engine));
+    }
+    run_save(&mut engine).suspend();
+    engine.advance_live();
+    live.push(sample(&mut engine));
+
+    assert!(dir.join("save/suspend.json").is_file());
+    let path = engine.run_recording_path("cut");
+    assert!(path.is_file(), "{path:?}");
+    assert!(leftovers(&dir).is_empty(), "{:?}", leftovers(&dir));
+    let resource = engine.world().resource::<RunRecording>().unwrap();
+    assert_eq!(
+        (resource.active(), resource.last_finished()),
+        (None, Some("cut"))
+    );
+    assert_eq!(error_code(&engine), None);
+
+    let bytes = std::fs::read(&path).unwrap();
+    let replayed = replay_hashes_with(game(&dir, false, 3600), &bytes, &dir).unwrap();
+    assert_eq!(replayed, live);
+    engine.advance_live();
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "later ticks do not extend it"
+    );
+}
+
+#[test]
+fn a_resume_while_recording_is_refused_and_keeps_the_save() {
+    let dir = fresh_dir("resume-refused");
+    let mut engine = boot(game(&dir, true, 3600).run_save());
+    engine.advance_live();
+    run_save(&mut engine).suspend();
+    engine.advance_live();
+    let save = dir.join("save/suspend.json");
+    let before = std::fs::read(&save).unwrap();
+
+    start(&mut engine, "open");
+    engine.advance_live();
+    assert_eq!(
+        engine.world().resource::<RunRecording>().unwrap().active(),
+        Some("open")
+    );
+    run_save(&mut engine).resume();
+    engine.advance_live();
+
+    let resource = engine.world().resource::<RunSave>().unwrap();
+    assert!(matches!(
+        resource.last_resume(),
+        Some(ResumeOutcome::Refused { .. })
+    ));
+    assert!(resource.pending().is_some(), "the suspended run is kept");
+    assert_eq!(std::fs::read(&save).unwrap(), before);
+    let backups = std::fs::read_dir(dir.join("save"))
+        .unwrap()
+        .filter(|e| {
+            let name = e.as_ref().unwrap().file_name();
+            let name = name.to_string_lossy();
+            name.contains(".bak") || name.ends_with(".resuming")
+        })
+        .count();
+    assert_eq!(backups, 0);
+    assert_eq!(
+        engine.run_save_error().map(|d| d.code.as_str().to_string()),
+        Some("L1401".to_string())
+    );
+    assert_eq!(
+        engine.world().resource::<RunRecording>().unwrap().active(),
+        Some("open"),
+        "the recording stays open"
+    );
 }

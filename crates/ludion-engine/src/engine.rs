@@ -2290,6 +2290,7 @@ impl Engine {
         let persisting = self.profile_persistence && !self.profile_off_disk;
         let path = self.save_root().join(crate::run_save::RUN_SAVE_PATH);
         let mut pending = state.pending.clone();
+        let mut suspended = false;
         for (wanted, request) in [
             (discard, RunSaveRequest::Discard),
             (suspend, RunSaveRequest::Suspend),
@@ -2341,10 +2342,21 @@ impl Engine {
                     pending = new_pending;
                     if persisting {
                         self.session.run_save_error = None;
+                        suspended = suspended || request == RunSaveRequest::Suspend;
                     }
                 }
                 Err(message) => self.run_save_failed(message),
             }
+        }
+        // The recorder is still mid-batch here; `drain_run_recording` finalizes it after the tick.
+        if suspended
+            && self
+                .run_recording
+                .as_ref()
+                .is_some_and(|state| state.active.is_some())
+            && let Some(recording) = self.driver.world_mut().resource_mut::<RunRecording>()
+        {
+            recording.stop = true;
         }
         if let Some(state) = self.run_save.as_mut() {
             state.pending.clone_from(&pending);
@@ -2353,7 +2365,37 @@ impl Engine {
             resource.set_pending(pending);
         }
         if resume && persisting {
-            self.resume_run(&path, &stamp, frame);
+            let recording = self
+                .run_recording
+                .as_ref()
+                .is_some_and(|state| state.active.is_some());
+            if recording {
+                self.refuse_resume_kept(
+                    "a run recording is open: stop() it before resume()".to_string(),
+                );
+            } else {
+                self.resume_run(&path, &stamp, frame);
+            }
+        }
+    }
+
+    /// Refuses a resume without consuming anything: an `L1401` on both sinks and
+    /// [`ResumeOutcome::Refused`], with `pending` and the file untouched and no backup.
+    fn refuse_resume_kept(&mut self, reason: String) {
+        let diagnostic = Diagnostic::new(
+            ludion_core::codes::code::RUN_SAVE_RESUME_REFUSED,
+            reason.clone(),
+        )
+        .with_help("the suspended run is kept; call `RunRecording::stop()`, then `resume()` again");
+        eprintln!("{diagnostic}");
+        self.push_event(Event::Log(LogEvent::from_diagnostic(diagnostic.clone())));
+        self.session.run_save_error = Some(diagnostic);
+        let outcome = ResumeOutcome::Refused { reason };
+        if let Some(state) = self.run_save.as_mut() {
+            state.last_resume = Some(outcome.clone());
+        }
+        if let Some(resource) = self.driver.world_mut().resource_mut::<RunSave>() {
+            resource.set_last_resume(Some(outcome));
         }
     }
 
