@@ -105,7 +105,7 @@ fn check_target_element(value: f64, index: usize, out: &mut Vec<Diagnostic>) {
 
 /// Pushes an `L1188` when `field` is negative or non-finite (the same upstream note as
 /// [`check_target_element`]).
-fn check_non_negative(field: &str, value: f64, out: &mut Vec<Diagnostic>) {
+pub(crate) fn check_non_negative(field: &str, value: f64, out: &mut Vec<Diagnostic>) {
     if !value.is_finite() || value < 0.0 {
         out.push(motor_invalid(
             format!(
@@ -117,7 +117,7 @@ fn check_non_negative(field: &str, value: f64, out: &mut Vec<Diagnostic>) {
 }
 
 /// `L1188` — an invalid `JointMotor`.
-fn motor_invalid(message: String, pointer: &str) -> Diagnostic {
+pub(crate) fn motor_invalid(message: String, pointer: &str) -> Diagnostic {
     Diagnostic::new(code::JOINT_MOTOR_INVALID, message)
         .with_path(pointer.to_string())
         .with_help(

@@ -2506,21 +2506,22 @@ fn engine_describe_carries_the_physics_triple_after_game_systems() {
     match ok(&mut engine, Command::EngineDescribe) {
         ResponseBody::EngineDescription { description } => {
             let systems = description["systems"].as_array().unwrap();
-            assert_eq!(systems.len(), 7);
+            assert_eq!(systems.len(), 8);
             assert_eq!(systems[0]["name"], "path_follow");
             assert_eq!(systems[1]["name"], "first");
             assert_eq!(systems[2]["name"], "second");
-            assert_eq!(systems[3]["name"], "physics_write");
-            assert_eq!(systems[3]["order"], 3);
-            assert!(systems[3]["registered_at"].is_null());
-            assert_eq!(systems[4]["name"], "physics_step");
+            assert_eq!(systems[3]["name"], "pose_blend");
+            assert_eq!(systems[4]["name"], "physics_write");
             assert_eq!(systems[4]["order"], 4);
             assert!(systems[4]["registered_at"].is_null());
-            assert_eq!(systems[5]["name"], "physics_mirror");
+            assert_eq!(systems[5]["name"], "physics_step");
             assert_eq!(systems[5]["order"], 5);
             assert!(systems[5]["registered_at"].is_null());
-            assert_eq!(systems[6]["name"], "camera_rig");
-            let mirror_queries = systems[5]["queries"].as_array().unwrap();
+            assert_eq!(systems[6]["name"], "physics_mirror");
+            assert_eq!(systems[6]["order"], 6);
+            assert!(systems[6]["registered_at"].is_null());
+            assert_eq!(systems[7]["name"], "camera_rig");
+            let mirror_queries = systems[6]["queries"].as_array().unwrap();
             assert!(
                 mirror_queries.iter().any(|query| {
                     query["components"]

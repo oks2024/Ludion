@@ -1871,6 +1871,7 @@ impl Engine {
                     ludion_physics::WRITE
                     | ludion_physics::MIRROR
                     | crate::path_follow::SYSTEM_NAME
+                    | crate::pose_blend::SYSTEM_NAME
                     | crate::camera_rig::SYSTEM_NAME => (physics, game),
                     _ => (physics, true),
                 });
@@ -6217,6 +6218,8 @@ impl Engine {
                     })
                 } else if name == crate::path_follow::SYSTEM_NAME {
                     crate::path_follow::describe_entry()
+                } else if name == crate::pose_blend::SYSTEM_NAME {
+                    crate::pose_blend::describe_entry()
                 } else if name == crate::camera_rig::SYSTEM_NAME {
                     crate::camera_rig::describe_entry()
                 } else {

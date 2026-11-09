@@ -593,6 +593,7 @@ fn describe_lists_camera_rig_after_the_physics_triple_with_and_without_a_rig() {
         [
             "path_follow",
             "noop",
+            "pose_blend",
             ludion_physics::WRITE,
             ludion_physics::STEP,
             ludion_physics::MIRROR,
@@ -600,7 +601,7 @@ fn describe_lists_camera_rig_after_the_physics_triple_with_and_without_a_rig() {
         ]
     );
     let rig = systems.last().unwrap();
-    assert_eq!(rig["order"], 5);
+    assert_eq!(rig["order"], 6);
     assert!(rig["registered_at"].is_null());
     assert_eq!(rig["fn_path"], "ludion_engine::camera_rig");
 
@@ -632,6 +633,7 @@ fn describe_orders_a_presentation_system_after_the_engine_systems_it_runs_behind
         [
             "path_follow",
             "noop",
+            "pose_blend",
             ludion_physics::WRITE,
             ludion_physics::STEP,
             ludion_physics::MIRROR,
@@ -642,7 +644,7 @@ fn describe_orders_a_presentation_system_after_the_engine_systems_it_runs_behind
     for (i, system) in systems.iter().enumerate() {
         assert_eq!(system["order"], i, "{}", system["name"]);
     }
-    assert!(systems[6]["registered_at"]["line"].is_u64());
+    assert!(systems[7]["registered_at"]["line"].is_u64());
 }
 
 #[test]

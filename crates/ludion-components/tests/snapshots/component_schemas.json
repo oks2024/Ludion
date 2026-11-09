@@ -2777,6 +2777,72 @@
       "damping"
     ]
   },
+  "JointPoses": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "JointPoses",
+    "description": "A jointed part's named drive poses, carried beside its [`Joint`](crate::Joint). The engine's\n`pose_blend` system turns the pose its group's [`PoseBlend`] names into the part's\n[`JointMotor`](crate::JointMotor): `target = pose · w`, `stiffness · w`, `damping · w`,\n`max_force` unscaled (`w` is the blend `weight`). At `w == 0`, or when the part has no such pose,\nthe part carries no motor and goes limp.\n\nA part's group root is `group` if set, else its `SkinBone.skin`; a part with neither is inert.\nEach pose has the arity of the part's joint kind — one number for a hinge or slider, three for a\nball — and, like `JointMotor.target`, is measured from the joint's captured zero (the rig rest).\n\n```yaml\ncomponents:\n  JointPoses:\n    group: { index: 3, generation: 0 }\n    stiffness: 40.0\n    damping: 8.0\n    max_force: 200.0\n    poses:\n      curl: [60.0]\n      stand: [0.0]\n```",
+    "type": "object",
+    "properties": {
+      "group": {
+        "description": "The ragdoll group root whose [`PoseBlend`] drives this part (default unset: the part's\n`SkinBone.skin`).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "stiffness": {
+        "description": "The drive stiffness at weight 1 (see `JointMotor.stiffness`); zero or more.",
+        "type": "number",
+        "format": "float"
+      },
+      "damping": {
+        "description": "The drive damping at weight 1 (see `JointMotor.damping`); zero or more.",
+        "type": "number",
+        "format": "float"
+      },
+      "max_force": {
+        "description": "The largest torque or force the drive may apply per axis; never scaled by the weight\n(default unset: uncapped).",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float"
+      },
+      "poses": {
+        "description": "Named targets, in the units and arity of `JointMotor.target`, kept in sorted name order.",
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      }
+    },
+    "required": [
+      "stiffness",
+      "damping",
+      "poses"
+    ]
+  },
   "LaneConstraint": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "LaneConstraint",
@@ -4080,6 +4146,29 @@
         ]
       }
     }
+  },
+  "PoseBlend": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PoseBlend",
+    "description": "The active pose and its weight for a ragdoll group, carried by the group's root entity. Every\n[`JointPoses`] part of the group is driven toward `pose` at strength `weight`; a game writes\n`weight` each tick to ramp the group between limp (`0`) and fully posed (`1`).\n\n```yaml\ncomponents:\n  PoseBlend:\n    pose: curl\n    weight: 0.5\n```",
+    "type": "object",
+    "properties": {
+      "pose": {
+        "description": "The name of the pose every part of the group is driven toward.",
+        "type": "string"
+      },
+      "weight": {
+        "description": "The blend strength, `0` (limp, no motors) to `1` (full pose).",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      }
+    },
+    "required": [
+      "pose",
+      "weight"
+    ]
   },
   "PostProcess": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

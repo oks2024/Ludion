@@ -78,6 +78,7 @@ mod path_follow;
 pub mod patterns;
 pub mod perf_live;
 mod player_profile;
+mod pose_blend;
 mod prefab;
 mod prefab_clips;
 mod prefab_ops;

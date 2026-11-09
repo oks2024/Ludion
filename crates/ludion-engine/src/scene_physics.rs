@@ -101,13 +101,15 @@ pub(crate) fn settings(physics: &ScenePhysics) -> PhysicsSettings {
 /// loaded scene declared a `physics:` block — the only opt-in there is. Does nothing for `None`.
 pub(crate) fn install(schedule: &mut Schedule, physics: Option<&ScenePhysics>) {
     if let Some(physics) = physics {
+        crate::pose_blend::install(schedule);
         ludion_physics::install::<Transform, TransformHierarchy>(schedule, settings(physics));
     }
 }
 
 /// Builds a fresh [`Schedule`]: [`path_follow`](crate::path_follow) always first, so a rider reads
 /// this tick's platform pose; then the registered Sim `systems`, in registration order; then the
-/// physics triple when `physics` is `Some` — after every game system (`Plan/physics.md` W2) — then
+/// physics triple when `physics` is `Some` — after every game system (`Plan/physics.md` W2), preceded by
+/// [`pose_blend`](crate::pose_blend) so a weight a game writes this tick drives this tick's motor — then
 /// [`camera_rig`](crate::camera_rig) always, so the camera reads this tick's settled target pose;
 /// then the Presentation `systems`. Both engine systems are no-ops on an empty query, so every
 /// world rebuild yields the same schedule shape. The engine and the bare host share this one
@@ -617,6 +619,7 @@ mod tests {
             names,
             [
                 crate::path_follow::SYSTEM_NAME,
+                crate::pose_blend::SYSTEM_NAME,
                 WRITE,
                 STEP,
                 MIRROR,

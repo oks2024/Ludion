@@ -20,6 +20,10 @@ pure `Joint` → `GenericJoint` mapping, and the motor helpers `desired_motor`, 
 `joint_rows: StableMap<EntityId, usize>` (a lookup accelerator, iterated by nothing), plus
 `reconcile_joints`, `drive_joints`, `attach_joint`, `joint_bodies` and `collect_broken_joints`.
 
+`ludion-engine`'s `pose_blend.rs` is the `JointPoses`/`PoseBlend` resolver: a sim system installed by
+`scene_physics::install` immediately before the physics triple (physics scenes only), writing
+`JointMotor` on change.
+
 ## Dataflow
 
 `reconcile_joints` runs at the end of `systems.rs::write`, after the body loop, from a

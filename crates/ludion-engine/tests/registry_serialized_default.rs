@@ -21,6 +21,8 @@ fn fixtures(name: &str) -> Vec<Value> {
         "Name" => vec![json!("n")],
         "Parent" => vec![entity_ref()],
         "JointMotor" => vec![json!({ "target": [0.0], "stiffness": 0.0, "damping": 0.0 })],
+        "JointPoses" => vec![json!({ "stiffness": 0.0, "damping": 0.0, "poses": { "a": [0.0] } })],
+        "PoseBlend" => vec![json!({ "pose": "a", "weight": 0.0 })],
         "ParentJoint" => vec![json!({ "joint": "j" })],
         "PrefabInstance" => vec![json!({
             "source": "p.prefab.yaml",

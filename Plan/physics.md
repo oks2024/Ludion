@@ -235,6 +235,16 @@ shapes, the world, the step, joints, sleeping, the queries, schema and diagnosti
 `ludion-physics`; rapier is an implementation detail no game, no scene and no protocol payload can
 observe.
 
+## Joint-motor pose blends (Serious Isaac 0026)
+
+Two hashed, sim-only components beside `JointMotor` (in `ludion-spatial`): `JointPoses` on each jointed part (named poses in `JointMotor.target` units and arity, plus `stiffness`, `damping`, optional `max_force`) and `PoseBlend { pose, weight }` on the group root. The engine system `pose_blend` runs immediately before the physics triple (physics scenes only, after every game system) and writes each part's `JointMotor = { pose·w, stiffness·w, damping·w, max_force }` only when it differs from what the part carries, removing it at `w == 0` so a limp group can settle and sleep (`ludion docs physics-joints` "Pose blends").
+
+- **Group rule.** A part's group root is `JointPoses.group`, else `SkinBone.skin`; neither means the part is inert. Why: `switch_to_ragdoll` leaves no part-to-root link, and adding one would move the WorldHash of every existing voxel ragdoll, so a voxel game sets `group:` on the returned parts.
+- **Rest-relative targets.** Poses are measured from the joint's captured zero; `switch_skin_to_ragdoll` switches at the rest pose, so a pose's zero is the rig rest. Any future posed switch must keep rest-relative zeros.
+- **`L4035`** warns once per (group, pose) when a `PoseBlend` above weight 0 names a pose none of its parts carries; weight 0 never warns.
+- **Later addition:** a pose from a clip (`clip at t` through the sim-side sampler).
+- **Out of scope:** a contact-material blend; engine-driven weight ramps.
+
 ## Decisions
 
 **Proposed (Serious Isaac 0017, owner approval owed).** An engine ragdoll pool, ready to build once approved. The game-side reference is `crates/ludion/examples/ragdoll_budget.rs` (`ludion docs physics-joints` "Ragdoll budget"):
@@ -1027,3 +1037,5 @@ a private plan; pointer only). Reference box, on the spike:
   body re-poses the solver body; a `heightfield` on `rigid` is `L1211` like a mesh; the resolved-feature
   gate pins `glam`/`glamx` and denies `fast-math`/`core-simd`; `collect_contacts` computes a contact point
   only for a pair that just started.
+
+**Serious Isaac 0026 (pose blends), mechanized.** `JointPoses`, `PoseBlend`, the `pose_blend` system and `L4035` shipped; the schema hash moved, no WorldHash or replay hash did.

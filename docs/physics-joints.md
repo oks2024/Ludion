@@ -143,6 +143,46 @@ Those numbers are the tuning rule below for 1 kg at 0.5 m, 2 Hz.
   `L1188`; the joint stays passive until the `JointMotor` or `Joint` changes, reported once per offender (a prefab part, a named entity, or an unnamed entity's slot). A passive motor (stiffness and damping both 0) is not checked, so a mismatch reports
   when a system first makes it active. A `JointMotor` with no `Joint` (after a break, say) is silently inert.
 
+## Pose blends
+
+`JointPoses` (per jointed part) and `PoseBlend` (on the ragdoll group's root) drive a whole group
+between named poses by one weight, so a game writes one number a tick instead of a `JointMotor` per
+part:
+
+```yaml
+      PoseBlend:               # on the group root
+        pose: curl
+        weight: 0.5            # 0 limp .. 1 full pose
+      JointPoses:              # on each jointed part
+        group: { index: 3, generation: 0 }   # the root; omit on a skin part
+        stiffness: 40.0        # at weight 1
+        damping: 8.0
+        max_force: 200.0       # never scaled; omit: uncapped
+        poses:
+          curl: [60.0]         # JointMotor.target units and arity
+          stand: [0.0]
+```
+
+- **Group.** A part belongs to `JointPoses.group` if set, else its `SkinBone.skin` (so a skinned
+  ragdoll needs no `group:`). Voxel and other parts set `group:` to the root. A part with neither is
+  inert: the system never touches its motor.
+- **Resolution.** The `pose_blend` system runs just before the physics step, after every game system,
+  and gives each grouped part `JointMotor { target: pose·w, stiffness·w, damping·w, max_force }`,
+  with `w = weight` clamped to 0..1 (NaN counts as 0). At `w == 0`, with no `PoseBlend` on the root
+  (or a dead root), or when the part lacks the named pose, the part carries **no** motor: it goes
+  limp and can settle and sleep. A held non-zero blend short of its target keeps the bodies awake
+  (see Motors). The blend owns the motor of a part carrying `JointPoses`; do not hand-write one.
+- **Write on change.** The system writes only when the result differs from what the part carries, so
+  a steady weight never wakes a body.
+- **Rest-relative.** Poses are measured from the joint's captured zero, like `target`.
+  `switch_skin_to_ragdoll` switches at the rig's rest pose, so a pose's zero is the rest pose; any
+  posed switch must keep rest-relative zeros.
+- `L1188` rejects a pose that is not 1 or 3 numbers (`/poses/<name>`), a non-finite one, and a
+  negative `stiffness`, `damping` or `max_force`. A pose of the wrong arity for its joint reports
+  `L3037` as a motor would. `L4035` warns once per (group, pose) when a `PoseBlend` above weight 0
+  names a pose none of its parts carries; weight 0 never warns, so a root may hold a `PoseBlend`
+  before its parts exist.
+
 ## Rules
 
 - `a` and `b` must name two distinct bodies; every axis and the anchor must be finite; an axis must

@@ -277,8 +277,8 @@ pub use ludion_physics::{
 pub use ludion_projectiles as projectiles;
 pub use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, ContactMaterial, GroundPosition, Joint,
-    JointKind, JointMotor, NoParent, ParentPose, Plane, RigidBody, Shape, SpatialVolume, Velocity,
-    VolumeShape, WorldPosition, spatial, spatial3d,
+    JointKind, JointMotor, JointPoses, NoParent, ParentPose, Plane, PoseBlend, RigidBody, Shape,
+    SpatialVolume, Velocity, VolumeShape, WorldPosition, spatial, spatial3d,
 };
 
 pub use ludion_core::codes::code;

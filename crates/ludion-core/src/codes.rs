@@ -2360,6 +2360,11 @@ pub mod code {
     /// latch (the live count).
     pub const PHYSICS_SCALE_UNGATED: DiagnosticCode = DiagnosticCode::new("L4034");
 
+    /// `L4035` — a `PoseBlend` at weight above 0 names a pose that no part of its group carries. A
+    /// **warning**: the parts stay limp. Raised at runtime by `ludion-engine`'s `pose_blend` system,
+    /// once per (group, pose).
+    pub const POSE_BLEND_POSE_MISSING: DiagnosticCode = DiagnosticCode::new("L4035");
+
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
     /// `L5001` — no audio output device is available, so the playback sink cannot open a stream.
@@ -11089,6 +11094,21 @@ Fix: build a stress scene at the game's shape and measure it against a budget on
 (`ludion devdocs physics-pin`, `ludion docs physics-scale`).",
     },
     CodeEntry {
+        code: code::POSE_BLEND_POSE_MISSING,
+        severity: Severity::Warning,
+        title: "pose blend names a pose no part of its group carries",
+        explanation: "\nA `PoseBlend` on a ragdoll group root has a weight above 0, but none of the `JointPoses` parts grouped
+to that root has a pose of that name, so no part is driven: they all stay limp.
+
+A part is grouped to a root by `JointPoses.group`, else by its `SkinBone.skin`. Reported once per
+(group, pose) while the weight stays above 0; a weight of 0 never warns, so a root may carry a
+`PoseBlend` before its parts exist. It only warns: nothing is dropped and the exit code does not
+change.
+
+Fix: add the pose to the parts' `JointPoses.poses`, correct the `PoseBlend.pose` spelling, or check
+that the parts reach the root through `group:` or `SkinBone.skin`.",
+    },
+    CodeEntry {
         code: code::AUDIO_DEVICE_UNAVAILABLE,
         severity: Severity::Warning,
         title: "no audio output device available",
@@ -11824,6 +11844,7 @@ mod tests {
         code::NAV_CONFIG_INVALID,
         code::PROJECTILE_LOOK_ASSET,
         code::PHYSICS_SCALE_UNGATED,
+        code::POSE_BLEND_POSE_MISSING,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,
@@ -12007,6 +12028,7 @@ mod tests {
             code::PROJECTILE_STEP_NOT_RUN,
             code::PROJECTILE_RESTORE_CAPACITY,
             code::PHYSICS_SCALE_UNGATED,
+            code::POSE_BLEND_POSE_MISSING,
             code::AUDIO_DEVICE_UNAVAILABLE,
             code::AUDIO_STREAM_FAILED,
             code::MUSIC_TRACK_UNPLAYABLE,

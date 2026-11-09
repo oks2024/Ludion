@@ -32,6 +32,8 @@
 //! fields, and everything past that must
 //! still default. `JointMotor` is seeded the same way: its `target`, `stiffness` and `damping` are
 //! required (there is no honest default drive), `max_force` and anything added later must default.
+//! `JointPoses` and `PoseBlend` are seeded likewise: `stiffness`, `damping` and `poses`, and `pose` and
+//! `weight`, are required (no honest default pose or weight), and anything added later must default.
 //! `SkinBone` needs the same treatment: its `skin`/`bone` name a specific joint with no honest
 //! default, so it is seeded rather than exempted, and anything added later must default.
 //! `ParentJoint` is seeded for the same reason: its `joint` names a specific joint, and an empty
@@ -59,6 +61,8 @@ fn probe_seed(name: &str) -> Value {
             "kind": { "fixed": {} },
         }),
         "JointMotor" => json!({ "target": [0.0], "stiffness": 0.0, "damping": 0.0 }),
+        "JointPoses" => json!({ "stiffness": 0.0, "damping": 0.0, "poses": {} }),
+        "PoseBlend" => json!({ "pose": "p", "weight": 0.0 }),
         "SkinBone" => json!({ "skin": { "index": 0, "generation": 0 }, "bone": "b" }),
         "ParentJoint" => json!({ "joint": "j" }),
         "PrefabInstance" => json!({

@@ -32,7 +32,8 @@ use ludion_core::time::FrameIndex;
 use ludion_ecs::{Parent, Registry, SemanticValidate};
 use ludion_physics::PhysicsPose;
 use ludion_spatial::{
-    Collider, GroundPosition, Joint, JointMotor, Plane, SpatialVolume, Velocity, WorldPosition,
+    Collider, GroundPosition, Joint, JointMotor, JointPoses, Plane, PoseBlend, SpatialVolume,
+    Velocity, WorldPosition,
 };
 
 pub mod lane;
@@ -6051,7 +6052,13 @@ pub fn builtin_registry() -> Registry {
     registry
         .register::<NavSteering>("NavSteering")
         .expect("unique");
-    // Read only by a sim system: physics, path_follow, camera_rig.
+    // The pose-blend pair, appended after `NavSteering`: per-part named drive poses (validated like
+    // `JointMotor`) and the group root's active pose and weight, both read only by `pose_blend`.
+    registry
+        .register_validated::<JointPoses>("JointPoses")
+        .expect("unique");
+    registry.register::<PoseBlend>("PoseBlend").expect("unique");
+    // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
     }
@@ -6059,7 +6066,7 @@ pub fn builtin_registry() -> Registry {
 }
 
 /// The built-ins whose engine-owned consumer is a sim-phase system.
-const SIM_ONLY_COMPONENTS: [&str; 13] = [
+const SIM_ONLY_COMPONENTS: [&str; 15] = [
     "Collider",
     "Velocity",
     "Joint",
@@ -6073,6 +6080,8 @@ const SIM_ONLY_COMPONENTS: [&str; 13] = [
     "SpatialVolume",
     "NavAgent",
     "NavSteering",
+    "JointPoses",
+    "PoseBlend",
 ];
 
 #[cfg(test)]
@@ -6104,6 +6113,8 @@ mod tests {
             "SpatialVolume",
             "NavAgent",
             "NavSteering",
+            "JointPoses",
+            "PoseBlend",
         ];
         expected.sort_unstable();
         assert_eq!(marked, expected);
@@ -6494,12 +6505,14 @@ mod tests {
                 "SpatialVolume",
                 "NavAgent",
                 "NavSteering",
+                "JointPoses",
+                "PoseBlend",
             ]
         );
         assert_eq!(
             registry.len(),
-            50,
-            "appending NavAgent and NavSteering grows the registry to 50"
+            52,
+            "appending JointPoses and PoseBlend grows the registry to 52"
         );
     }
 

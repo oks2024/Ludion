@@ -2677,6 +2677,7 @@ entities:
             names,
             [
                 "path_follow",
+                "pose_blend",
                 ludion_physics::WRITE,
                 ludion_physics::STEP,
                 ludion_physics::MIRROR,
