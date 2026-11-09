@@ -34,11 +34,12 @@ use ludion_core::ids::EntityId;
 use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
-    Budget, Engine, Mesh, MeshSource, ProfileReport, SkinBone, check_budget, load_budget,
-    profile_engine, switch_skin_to_ragdoll,
+    Engine, Mesh, MeshSource, ProfileReport, SkinBone, check_budget, profile_engine,
+    switch_skin_to_ragdoll,
 };
 use ludion_physics::{CharacterMotor, MIRROR, PhysicsWorld, STEP, WRITE};
 
+use crate::bench_rows::{Row, platform_budget, row};
 use crate::horde_driver::motor_walk;
 
 const PARTS: &str = "prefabs/mannequin-ragdoll.prefab.yaml";
@@ -267,13 +268,6 @@ fn load(n: usize, reserve: usize) -> (Engine, Shared, Layout) {
     (engine, shared, layout)
 }
 
-#[derive(Clone, Copy, Default)]
-struct Row {
-    median: f64,
-    mean: f64,
-    p99: f64,
-}
-
 #[derive(Clone, Default)]
 struct Phase {
     write: Row,
@@ -284,30 +278,6 @@ struct Phase {
     awake_fraction: f64,
     hash: u64,
     settle_ticks: usize,
-}
-
-fn row(report: &ProfileReport, name: &str) -> Row {
-    let timing = report
-        .sim
-        .systems
-        .iter()
-        .find(|s| s.name == name)
-        .unwrap_or_else(|| panic!("no timing for `{name}`"));
-    let samples = report
-        .samples
-        .as_ref()
-        .expect("offline reports carry samples");
-    let at = samples
-        .system_names
-        .iter()
-        .position(|s| s == name)
-        .expect("a sampled system");
-    let column = &samples.system_ms[at];
-    Row {
-        median: timing.median_ms,
-        mean: column.iter().sum::<f64>() / column.len() as f64,
-        p99: timing.tail.as_ref().map_or(0.0, |t| t.p99_ms),
-    }
 }
 
 /// The fraction of every live part whose body is awake.
@@ -410,25 +380,6 @@ fn run_arm(n: usize, threads: usize) -> Arm {
     })
 }
 
-/// The pinned box name the budget file carries, `None` where no pinned box exists.
-fn pinned_box(platform: &str) -> Option<&'static str> {
-    match platform {
-        "macos" => Some("apple-m4"),
-        "windows" => Some("rtx3090"),
-        _ => None,
-    }
-}
-
-/// `dir/pinned-<box>-ragdoll-stress.toml` when it exists; a present but broken file panics.
-fn platform_budget(dir: &Path, platform: &str) -> Option<Budget> {
-    let name = pinned_box(platform)?;
-    let path = dir.join(format!("pinned-{name}-ragdoll-stress.toml"));
-    if !path.exists() {
-        return None;
-    }
-    Some(load_budget(&path).unwrap_or_else(|d| panic!("{}: {}", path.display(), d.message)))
-}
-
 #[test]
 fn ragdoll_bench_scene_switches() {
     let (mut engine, shared, layout) = load(4, 4);
@@ -456,16 +407,17 @@ fn platform_budget_skips_absent_and_reads_present() {
     let dir = std::env::temp_dir().join(format!("ludion-ragdoll-budget-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    assert!(platform_budget(&dir, "macos").is_none());
-    assert!(platform_budget(&dir, "windows").is_none());
+    assert!(platform_budget(&dir, "macos", "ragdoll-stress").is_none());
+    assert!(platform_budget(&dir, "windows", "ragdoll-stress").is_none());
     std::fs::write(
         dir.join("pinned-apple-m4-ragdoll-stress.toml"),
         "threads = 8\n\n[systems]\nphysics_step = 1.0\n",
     )
     .unwrap();
-    let budget = platform_budget(&dir, "macos").expect("the present file is read");
+    let budget =
+        platform_budget(&dir, "macos", "ragdoll-stress").expect("the present file is read");
     assert_eq!(budget.threads, Some(8));
-    assert!(platform_budget(&dir, "windows").is_none());
+    assert!(platform_budget(&dir, "windows", "ragdoll-stress").is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -547,7 +499,7 @@ fn ragdoll_bench() {
 
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../budgets");
     let budget = match ludion_testkit::platform_dir() {
-        Ok(platform) => platform_budget(&dir, platform),
+        Ok(platform) => platform_budget(&dir, platform, "ragdoll-stress"),
         Err(_) => {
             println!("no pinned platform here; the budget check is skipped");
             return;

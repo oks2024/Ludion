@@ -915,6 +915,31 @@ like-for-like figure. Does churn matter: at N = 120 the churn-phase step is
 `ragdoll_churn` system itself costs 0.11 ms mean and 0.31 ms p99 per tick (a median of 0, since it
 works on 25 ticks in 60). The pooling decision is owed, not made here.
 
+**Horde bench (Serious Isaac 0020), 2026-11-09 (M5, indicative).** `tests/horde_bench.rs` (ignored,
+release, `--features physics-profiler`; run: `cargo test -p ludion-engine --release --features
+physics-profiler --test it -- horde_bench --ignored --nocapture`) drives the committed
+`physics-horde` scene (500 motors, 120 ragdolls with 24 pinned to the walls, a quarter of the
+unpinned re-thrown every 30 ticks, 5,000 pool shots) for 240 ticks after 120 of warmup, medians of three runs, unpinned M5 (not
+authoritative). The `WorldHash` is equal at 1 and 8 threads.
+
+| system | 1t mean / p99 (ms) | 8t mean / p99 (ms) | speedup |
+|---|---|---|---|
+| `motor_walk` (500 `move_character`) | 3.76 / 3.99 | 3.76 / 3.99 | 1.0x |
+| `physics_step` | 1.78 / 2.08 | 1.79 / 2.08 | 1.0x |
+| `physics_write` | 0.62 / 0.65 | 0.59 / 0.65 | 1.05x |
+| `projectiles_step` | 0.68 / 0.90 | 0.26 / 0.30 | 2.6x |
+| `physics_mirror` | 0.14 / 0.16 | 0.14 / 0.16 | 1.0x |
+
+`motor_walk` is 7.5 us per motor. Step stages at 8t (ms, mean): solver 0.88 (velocity resolution
+0.81), collision detection 0.63 (narrow phase 0.46, broad phase 0.14), update 0.06, island and
+constraint upkeep under 0.03 each; 1,865 bodies, 1,820 awake, 406 active contact pairs, 1,224 impulse
+joints. Pair census (mean per tick, tracked / touching): rigid-rigid 3,422 / 177, rigid-static 386 /
+229; kinematic-static, kinematic-kinematic and rigid-kinematic 0 / 0. Rapier's broad phase drops a
+pair that `active_collision_types` or a collision group rejects before it enters the contact graph
+(`broad_phase_bvh/update.rs`), so motor-motor and motor-static pairs cost no narrow phase. All 1,320
+ragdoll parts stay awake in every measured tick. The motor casts dominate: `motor_walk` (3.8 ms) costs about twice the whole physics step (1.8 ms),
+of which the solver is half and the narrow phase a quarter, and `move_character` is serial.
+
 **W0 extension — snapshot resume and the write path** (detail in the private
 a private plan; pointer only). Reference box, on the spike:
 

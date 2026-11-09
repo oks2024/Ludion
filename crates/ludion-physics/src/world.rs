@@ -23,7 +23,7 @@ use rapier3d::prelude::{
     Array2, CoefficientCombineRule, Collider as RapierCollider, ColliderBuilder, ColliderHandle,
     ContactPair, Group, ImpulseJointHandle, InteractionGroups, InteractionTestMode, JointAxis,
     LockedAxes, NEW_CONTACT_BIT, PhysicsWorld as RapierWorld, Pose, Real, RigidBodyBuilder,
-    RigidBodyHandle, Rotation, ShapeType, SharedShape, TriMeshFlags, Vector,
+    RigidBodyHandle, RigidBodyType, Rotation, ShapeType, SharedShape, TriMeshFlags, Vector,
 };
 use serde::{Deserialize, Serialize};
 
@@ -362,6 +362,33 @@ struct SnapshotOwned {
     despawned: Vec<EntityId>,
     last_write_frame: Option<u64>,
     last_write_held: Option<u64>,
+}
+
+/// Contact pairs of one body-kind combination in the narrow phase's contact graph.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PairCount {
+    /// Pairs the broad phase tracks: overlapping bounding boxes, the broad-phase cost.
+    pub tracked: usize,
+    /// Pairs with an active contact: the narrow-phase and solver cost.
+    pub touching: usize,
+}
+
+/// The contact graph's pairs by body kind, as returned by [`PhysicsWorld::contact_pair_census`].
+/// A collider with no parent body counts as static; both kinematic body types count as kinematic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ContactPairCensus {
+    /// Static against static.
+    pub static_static: PairCount,
+    /// Kinematic against static.
+    pub kinematic_static: PairCount,
+    /// Kinematic against kinematic.
+    pub kinematic_kinematic: PairCount,
+    /// Rigid against static.
+    pub rigid_static: PairCount,
+    /// Rigid against kinematic.
+    pub rigid_kinematic: PairCount,
+    /// Rigid against rigid.
+    pub rigid_rigid: PairCount,
 }
 
 /// One step's solver timings (milliseconds, from rapier's profiler timers) and body counts, as
@@ -807,6 +834,54 @@ impl PhysicsWorld {
         {
             None
         }
+    }
+
+    /// The contact graph's pairs by body kind: `tracked` counts the overlapping pairs the broad
+    /// phase keeps, which are only those `active_collision_types` and the collision groups admit,
+    /// so under the defaults kinematic-kinematic and kinematic-static stay 0. `touching` counts
+    /// those with an active contact, which is what the narrow phase and the solver pay for.
+    /// Measurement only: it walks the graph read-only and never feeds the simulation.
+    ///
+    /// ```no_run
+    /// # use ludion_physics::PhysicsWorld;
+    /// # fn show(world: &PhysicsWorld) {
+    /// let census = world.contact_pair_census();
+    /// println!(
+    ///     "kinematic pairs: {} tracked, {} touching",
+    ///     census.kinematic_kinematic.tracked, census.kinematic_kinematic.touching
+    /// );
+    /// # }
+    /// ```
+    pub fn contact_pair_census(&self) -> ContactPairCensus {
+        let rank = |handle: ColliderHandle| match self
+            .rapier
+            .colliders
+            .get(handle)
+            .and_then(|collider| collider.parent())
+            .and_then(|body| self.rapier.bodies.get(body))
+            .map(|body| body.body_type())
+        {
+            None | Some(RigidBodyType::Fixed) => 0,
+            Some(RigidBodyType::Dynamic) => 2,
+            Some(_) => 1,
+        };
+        let mut census = ContactPairCensus::default();
+        for pair in self.rapier.narrow_phase.contact_pairs() {
+            let (one, other) = (rank(pair.collider1), rank(pair.collider2));
+            let slot = match (one.min(other), one.max(other)) {
+                (0, 0) => &mut census.static_static,
+                (0, 1) => &mut census.kinematic_static,
+                (1, 1) => &mut census.kinematic_kinematic,
+                (0, _) => &mut census.rigid_static,
+                (1, _) => &mut census.rigid_kinematic,
+                _ => &mut census.rigid_rigid,
+            };
+            slot.tracked += 1;
+            if pair.has_any_active_contact() {
+                slot.touching += 1;
+            }
+        }
+        census
     }
 
     /// `rapier`'s internal stabilization iteration count, as applied by the last
