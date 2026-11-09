@@ -2392,6 +2392,12 @@ pub mod code {
     /// the music). A **warning**: the queue plays that sound at gain 0 instead, so one bad volume
     /// never poisons the mix. Raised by `ludion-engine`, once per sound per session.
     pub const AUDIO_GAIN_NON_FINITE: DiagnosticCode = DiagnosticCode::new("L5005");
+
+    /// `L5006` — a stem of a music set cannot share the set's playhead: its sample rate or length
+    /// differs from the set's first playable stem, or the set names more than 8 stems. A
+    /// **warning**: the stem is left out and the rest of the set plays. Raised by `ludion-audio`,
+    /// at every set start.
+    pub const MUSIC_STEM_MISMATCHED: DiagnosticCode = DiagnosticCode::new("L5006");
 }
 
 /// One row of the diagnostic-code table: the code, its severity, a short title, and a long-form
@@ -11186,6 +11192,22 @@ distance falloff that divides by a zero radius, and clamp or guard it before it 
 verb.",
     },
     CodeEntry {
+        code: code::MUSIC_STEM_MISMATCHED,
+        severity: Severity::Warning,
+        title: "a music stem does not match its set",
+        explanation: "A music set named a stem that cannot share the set's playhead, so the sink left it out and played the rest.
+
+The stems of a set are decoded side by side and mixed from one sample counter, so they stay locked
+only while they are the same length at the same sample rate. The first stem that opens sets the
+reference; a later stem with another sample rate or another length (the last Ogg page's granule
+position) is dropped, and so is every stem past the eighth. This is a warning for the same reason
+as the rest of L5xxx: audio sits outside every determinism gate. It is raised at every set start,
+not once per file, because the set (not the file) is what is wrong.
+
+Fix: export all stems of a set from one session at one sample rate and one length (pad the shorter
+ones with silence), and keep a set to 8 stems or fewer.",
+    },
+    CodeEntry {
         code: code::PROTOCOL_CALL_TIMED_OUT,
         severity: Severity::Error,
         title: "a call timed out waiting for its reply",
@@ -11808,6 +11830,7 @@ mod tests {
         code::MUSIC_TRACK_UNPLAYABLE,
         code::AUDIO_VOICE_CAPS_INVALID,
         code::AUDIO_GAIN_NON_FINITE,
+        code::MUSIC_STEM_MISMATCHED,
     ];
 
     #[test]
@@ -11988,6 +12011,7 @@ mod tests {
             code::AUDIO_STREAM_FAILED,
             code::MUSIC_TRACK_UNPLAYABLE,
             code::AUDIO_GAIN_NON_FINITE,
+            code::MUSIC_STEM_MISMATCHED,
             code::SERVER_EVENTS_DROPPED,
         ];
         let registered: Vec<DiagnosticCode> = CODES

@@ -26,7 +26,8 @@
 //! **Music streams.** An Ogg Vorbis track (`AudioMessage::MusicPlay`) is decoded on the sink thread
 //! into a bounded ring of device-format chunks that the callback drains — never decoded up front,
 //! never decoded or allocated in the callback. Fades and the gapless loop seam are computed here;
-//! the music bus has its own master in [`CategoryGains`].
+//! the music bus has its own master in [`CategoryGains`]. An `AudioMessage::MusicSet` plays up to
+//! eight stems on one shared playhead, each with its own gain.
 //!
 //! A host owns the wiring: create the channel, hand the engine the sender
 //! (`Engine::set_audio_sender`), and hand this the receiver.
@@ -56,7 +57,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use ludion_assets::{AudioPcm, load_wav};
-use ludion_core::audio::{AudioCategory, AudioEvent, AudioMessage, LoopId};
+use ludion_core::audio::{AudioCategory, AudioEvent, AudioMessage, LoopId, MUSIC_STEMS_MAX};
 // The mixdown the sink applies. It lives in the shared core because the game authors it on the
 // engine builder and this crate consumes it; re-exported so a host names one type, not two.
 pub use ludion_core::audio::{CategoryGains, VoiceCaps};
@@ -436,11 +437,20 @@ enum VoiceCommand {
     MusicStart {
         generation: u32,
         gain: f32,
+        /// Each stem's starting gain; the first `count` are live.
+        stem_gains: [f32; MUSIC_STEMS_MAX],
+        count: usize,
         /// Device frames of linear fade-in (`0` starts at full level).
         fade_in: usize,
     },
     /// Re-gain the music already playing: the gain slews to the new one over the ramp.
     MusicGain(f32),
+    /// Slew one stem of the playing set to a new gain over `frames` device frames.
+    MusicStemGain {
+        index: usize,
+        gain: f32,
+        frames: usize,
+    },
     /// Fade the music out over this many device frames (`0` stops it now).
     MusicStop { fade_out: usize },
 }
@@ -1129,6 +1139,16 @@ impl Router {
                 looping,
                 fade_frames,
             } => self.feed.play(&track, gain, looping, fade_frames)?,
+            AudioMessage::MusicSet {
+                id,
+                stems,
+                fade_frames,
+            } => self.feed.set(&id, &stems, fade_frames)?,
+            AudioMessage::MusicStemGain {
+                stem,
+                gain,
+                fade_frames,
+            } => self.feed.stem_gain(&stem, gain, fade_frames)?,
             AudioMessage::MusicStop { fade_frames } => self.feed.stop(fade_frames),
         };
         Some(command)
@@ -1313,7 +1333,9 @@ fn skipped(diagnostic: Diagnostic, sound: &str) -> Diagnostic {
 /// A [`OneShot`](AudioMessage::OneShot) or [`LoopSync`](AudioMessage::LoopSync) must decode as a WAV
 /// under `content_root` (`L1101` unreadable, `L1104` undecodable); a
 /// [`MusicPlay`](AudioMessage::MusicPlay) must open as Ogg Vorbis (`L5003`, header-level: a failure
-/// mid-stream shows only on a device). Every other message is `Ok`. The file is read on every call;
+/// mid-stream shows only on a device); every stem of a [`MusicSet`](AudioMessage::MusicSet) must
+/// open too (`L5003`) and match the first one's sample rate and length (`L5006`, the first
+/// `L5003` winning). Every other message is `Ok`. The file is read on every call;
 /// the sink's own cache memoizes by file version.
 ///
 /// ```
@@ -1335,6 +1357,7 @@ pub fn check_message(content_root: &Path, message: &AudioMessage) -> Result<(), 
             load_wav(ludion_assets::AssetRoot::content(content_root), sound).map(drop)
         }
         AudioMessage::MusicPlay { track, .. } => music::check_track(content_root, track),
+        AudioMessage::MusicSet { id, stems, .. } => music::check_set(content_root, id, stems),
         _ => Ok(()),
     }
 }

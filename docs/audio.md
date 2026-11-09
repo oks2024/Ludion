@@ -164,7 +164,7 @@ queue.play_at("sounds/impact.wav", 1.0, impact_position, 12.0); // sound, gain, 
 
 ## Music
 
-`AudioQueue::music_play` streams an Ogg Vorbis track under the content root as the one music voice.
+`AudioQueue::music_play` streams an Ogg Vorbis track under the content root as the music; `music_set` plays several stems of one piece at once (see Stems).
 
 ```rust,ignore
 queue.music_play("music/theme.ogg", 0.8, 60); // track, gain, fade-in in ticks; loops gaplessly
@@ -174,8 +174,8 @@ queue.music_stop(90); // fade out over 90 ticks, then idle
 
 - **Streamed, not decoded up front.** The sink decodes a little ahead of the device from disk, so a
   long track costs no start-up stall and holds only a short ring (~0.7 s) in memory; a loop's seam is gapless (the encoder's tail padding is trimmed at the stream's last granule), a play-once track's tail always plays, a stereo track on a mono device is the mean of both channels, and a track re-exported in place at another rate or channel count is converted for its new format at the next wrap.
-- **One voice.** The track already playing (and not stopping) only takes the new gain, so resending
-  `music_play` every tick is harmless; a new gain slews in over 10 ms. Any other track hard-cuts the current one and fades in; there
+- **One music at a time.** The track already playing (and not stopping) only takes the new gain, so resending
+  `music_play` every tick is harmless; a new gain slews in over 10 ms. Any other track or set hard-cuts the current one and fades in; there
   is no crossfade.
 - **Fades are in sim ticks**, converted with the engine's tick rate; `0` is instant.
 - **A world rebuild stops the music** with a 10 ms fade-out (`scene.load`, a district switch, a
@@ -183,9 +183,30 @@ queue.music_stop(90); // fade out over 90 ticks, then idle
 - **A bad track is `L5003`** (missing, not Ogg Vorbis, Opus-in-Ogg, a sample rate below 8000 Hz, or a
   decode error): a warning, once per file version, and nothing plays. Encode with
   `ffmpeg -i in.wav -c:a libvorbis -q:a 5 out.ogg`.
-- **Verify it in text.** `audio_messages` shows `MusicPlay { track, gain, looping, fade_frames }` and
-  `MusicStop { fade_frames }` stamped with the frame, and `audio_stream` lists each play's track.
-  Its bus is the `music` field of `CategoryGains`.
+- **Verify it in text.** `audio_messages` shows `MusicPlay { track, gain, looping, fade_frames }`,
+  `MusicSet`, `MusicStemGain` and `MusicStop { fade_frames }` stamped with the frame, and `audio_stream`
+  lists each play's track. Its bus is the `music` field of `CategoryGains`.
+
+### Stems
+
+`music_set` plays up to 8 stems of one piece on a shared playhead, each at its own gain, so a game
+layers percussion over a base track and moves the mix with play.
+
+```rust,ignore
+let stems = [("music/base.ogg", 1.0), ("music/perc.ogg", 0.0)]; // path, starting gain
+queue.music_set("dungeon", &stems, 60); // id, stems, fade-in in ticks; loops gaplessly
+queue.music_stem_gain("music/perc.ogg", 1.0, 120); // raise the percussion over 120 ticks
+```
+
+- **One playhead.** The stems decode side by side and mix from one sample counter, so they loop
+  together and cannot drift. They must share a sample rate and length; the first that opens is the
+  reference, and one that differs (or is past the 8th) is left out with `L5006` at every set start
+  while the rest plays. Export all stems from one session at one rate and length.
+- **Resend freely.** `music_set` with the id already playing (and not stopping) is a no-op, so a
+  system may send it every tick; its starting gains apply only when the set starts. Move a stem
+  with `music_stem_gain`, which slews in ticks (`0` still slews ~10 ms, click-free) and is free to
+  resend. Another set or track hard-cuts; a set is not crossfaded.
+- **Cost.** Each stem is a streamed decoder outside the 64-voice cap.
 
 ## Category gains
 
@@ -193,7 +214,7 @@ Every message carries an `AudioCategory`: a `play()` or `play_at()` one-shot is 
 and `AudioEmitter`s are `ambient` by default. The category is a *tag* — the sink reads it, no system
 does.
 
-Music has its own bus, the `music` field, with no category tag: only `music_play` reaches it.
+Music has its own bus, the `music` field, with no category tag: only the music verbs reach it.
 
 The **game** names a per-bus master gain on its builder, and the sink multiplies each voice by its
 own bus's. `CategoryGains` is in the prelude:

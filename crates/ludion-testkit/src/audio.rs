@@ -76,20 +76,31 @@ impl SoundTap {
         SoundTap { messages }
     }
 
-    /// Drains what arrived since `install` (or the last call), checks each distinct sound and track
-    /// once through [`ludion_audio::check_message`] under `content_root`, and returns the distinct
-    /// names checked, so a test can assert coverage.
+    /// Drains what arrived since `install` (or the last call), checks each distinct sound, track and
+    /// music set once through [`ludion_audio::check_message`] under `content_root`, and returns the
+    /// distinct names checked (a set contributes each of its stems), so a test can assert coverage.
     ///
     /// # Panics
     /// Listing every sound or track that would not play, one `name: diagnostic` per line.
     pub fn assert_sounds_decode(&self, content_root: &Path) -> BTreeSet<String> {
         let mut seen = BTreeSet::new();
         let mut failures = Vec::new();
+        let mut sets = BTreeSet::new();
         while let Ok(message) = self.messages.try_recv() {
             let (name, is_track) = match &message {
                 AudioMessage::OneShot(event) => (event.sound.clone(), false),
                 AudioMessage::LoopSync { sound, .. } => (sound.clone(), false),
                 AudioMessage::MusicPlay { track, .. } => (track.clone(), true),
+                AudioMessage::MusicSet { id, stems, .. } => {
+                    let names: Vec<String> = stems.iter().map(|(stem, _)| stem.clone()).collect();
+                    seen.extend(names.iter().map(|stem| (stem.clone(), true)));
+                    if sets.insert((id.clone(), names))
+                        && let Err(diagnostic) = ludion_audio::check_message(content_root, &message)
+                    {
+                        failures.push(format!("{id}: {diagnostic}"));
+                    }
+                    continue;
+                }
                 _ => continue,
             };
             if !seen.insert((name.clone(), is_track)) {
@@ -210,6 +221,40 @@ entities:\n\
             !text.lines().any(|line| line.starts_with("ok.wav")),
             "{text}"
         );
+    }
+
+    /// A music set is checked once as a whole and contributes each stem's name.
+    #[test]
+    fn a_tap_checks_a_music_set_and_names_its_stems() {
+        let root = root_with_ok_wav("set");
+        let tone = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ludion-audio/testdata/tone-stereo-44k.ogg"
+        );
+        for name in ["a.ogg", "b.ogg"] {
+            std::fs::copy(tone, root.join(name)).unwrap();
+        }
+        let mut engine = engine();
+        let tap = SoundTap::install(&mut engine);
+        for _ in 0..2 {
+            queue(&mut engine).music_set("pair", &[("a.ogg", 1.0), ("b.ogg", 0.0)], 0);
+        }
+        queue(&mut engine).music_stem_gain("b.ogg", 1.0, 0);
+        engine.advance_live();
+        let names = tap.assert_sounds_decode(&root);
+        assert_eq!(
+            names,
+            BTreeSet::from(["a.ogg".to_string(), "b.ogg".to_string()])
+        );
+
+        queue(&mut engine).music_set("broken", &[("a.ogg", 1.0), ("gone.ogg", 1.0)], 0);
+        engine.advance_live();
+        let text = panic_text(catch_unwind(AssertUnwindSafe(|| {
+            tap.assert_sounds_decode(&root)
+        })));
+        for needle in ["broken", "gone.ogg", "L5003"] {
+            assert!(text.contains(needle), "{needle} missing from:\n{text}");
+        }
     }
 
     /// The tap's reason to exist: the engine log keeps only its last entries, the tap keeps all.

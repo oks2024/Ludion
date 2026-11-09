@@ -7,16 +7,21 @@
 //! linear gain ramp and sums, and never decodes or allocates. A chunk carries the *generation* of
 //! the play that produced it, so a hard cut to another track discards whatever the old one left in
 //! the ring.
+//!
+//! A *set* of up to [`MUSIC_STEMS_MAX`] stems plays on one playhead: each stem has its own decoder,
+//! converter and staging, and a chunk carries every stem's samples for the same device frames, so the
+//! stems cannot drift apart. The callback mixes them with a per-stem gain envelope.
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use lewton::inside_ogg::OggStreamReader;
 use lewton::samples::InterleavedSamples;
+use ludion_core::audio::MUSIC_STEMS_MAX;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 
@@ -29,11 +34,14 @@ pub(crate) const MUSIC_RING_CHUNKS: usize = 64;
 /// How often the sink thread tops the ring up while a track is feeding.
 pub(crate) const MUSIC_REFILL: std::time::Duration = std::time::Duration::from_millis(10);
 
-/// A run of whole device frames of one play's audio, ready to mix.
+/// A run of whole device frames of one play's audio, ready to mix: `count` stems' samples for the
+/// same frames. Inline so the callback never frees heap memory (about 32 KB a chunk, 2 MB a ring).
 pub(crate) struct MusicChunk {
     generation: u32,
+    /// Samples per stem.
     len: usize,
-    samples: [f32; MUSIC_CHUNK],
+    count: usize,
+    samples: [[f32; MUSIC_CHUNK]; MUSIC_STEMS_MAX],
 }
 
 /// Whether `a` is a later generation than `b` (wrapping).
@@ -56,6 +64,120 @@ fn unplayable(path: &Path, cause: &str) -> Diagnostic {
 /// failure shows only on the device path.
 pub(crate) fn check_track(content_root: &Path, name: &str) -> Result<(), Diagnostic> {
     Track::open(content_root.join(name)).map(drop)
+}
+
+fn mismatched(set: &str, stem: &str, why: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::MUSIC_STEM_MISMATCHED,
+        format!("music stem `{stem}` of set `{set}` is left out: {why}"),
+    )
+    .with_help(
+        "export all stems of a set from one session at one sample rate and length, \
+         and keep a set to 8 stems or fewer",
+    )
+}
+
+/// A file's length in frames: the granule position of its last Ogg page, read from the bytes.
+fn length_frames(path: &Path) -> Option<u64> {
+    const TAIL: u64 = 128 * 1024;
+    let mut file = File::open(path).ok()?;
+    let size = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(size.saturating_sub(TAIL))).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let page = bytes.windows(4).rposition(|w| w == b"OggS")?;
+    let granule = u64::from_le_bytes(bytes.get(page + 6..page + 14)?.try_into().ok()?);
+    (granule != u64::MAX).then_some(granule)
+}
+
+/// A stem that opened and matches the set.
+struct OpenedStem {
+    name: String,
+    track: Track,
+    gain: f32,
+}
+
+/// What opening a set found: the playable stems, and why each of the others was left out.
+struct OpenedSet {
+    stems: Vec<OpenedStem>,
+    /// `L5003`s, by stem name.
+    unplayable: Vec<(String, Diagnostic)>,
+    /// `L5006`s.
+    mismatched: Vec<Diagnostic>,
+}
+
+/// Opens each stem of set `id` under `content_root`: the one rule [`MusicFeed::set`] and
+/// [`check_set`] share. The first stem that opens sets the sample rate and length the rest must
+/// match; stems past [`MUSIC_STEMS_MAX`] are not opened. `skip` names stems already known to fail.
+fn open_set(
+    content_root: &Path,
+    id: &str,
+    stems: &[(String, f32)],
+    mut skip: impl FnMut(&str) -> bool,
+) -> OpenedSet {
+    let mut set = OpenedSet {
+        stems: Vec::new(),
+        unplayable: Vec::new(),
+        mismatched: Vec::new(),
+    };
+    let mut reference: Option<(u32, u64)> = None;
+    for (index, (name, gain)) in stems.iter().enumerate() {
+        if index >= MUSIC_STEMS_MAX {
+            let why = format!("a set plays at most {MUSIC_STEMS_MAX} stems");
+            set.mismatched.push(mismatched(id, name, &why));
+            continue;
+        }
+        if skip(name) {
+            continue;
+        }
+        let path = content_root.join(name);
+        let track = match Track::open(path.clone()) {
+            Ok(track) => track,
+            Err(diagnostic) => {
+                set.unplayable.push((name.clone(), diagnostic));
+                continue;
+            }
+        };
+        let Some(length) = length_frames(&path) else {
+            let diagnostic =
+                unplayable(&path, "its length could not be read from its last Ogg page");
+            set.unplayable.push((name.clone(), diagnostic));
+            continue;
+        };
+        let format = (track.rate(), length);
+        match reference {
+            None => reference = Some(format),
+            Some(first) if first != format => {
+                let why = format!(
+                    "it is {} Hz and {} frames long, but the set's first stem is {} Hz and {} frames",
+                    format.0, format.1, first.0, first.1
+                );
+                set.mismatched.push(mismatched(id, name, &why));
+                continue;
+            }
+            Some(_) => {}
+        }
+        set.stems.push(OpenedStem {
+            name: name.clone(),
+            track,
+            gain: *gain,
+        });
+    }
+    set
+}
+
+/// Whether set `id`'s every stem opens as Ogg Vorbis and matches the first one's rate and length:
+/// the first `L5003` if any, else the first `L5006`. Header-level, like [`check_track`].
+pub(crate) fn check_set(
+    content_root: &Path,
+    id: &str,
+    stems: &[(String, f32)],
+) -> Result<(), Diagnostic> {
+    let set = open_set(content_root, id, stems, |_| false);
+    match set.unplayable.into_iter().next() {
+        Some((_, diagnostic)) => Err(diagnostic),
+        None => set.mismatched.into_iter().next().map_or(Ok(()), Err),
+    }
 }
 
 /// An open Ogg Vorbis file, read packet by packet.
@@ -205,14 +327,29 @@ impl Converter {
     }
 }
 
-/// The track currently feeding the ring.
-struct Current {
+/// One stem of the music feeding the ring.
+struct Stem {
     name: String,
     track: Track,
     converter: Converter,
+    /// Converted samples not yet sent: whole device frames.
+    staging: Vec<f32>,
+    /// A once stem whose decoder reached its end; its staging is still to be sent.
+    ended: bool,
+}
+
+/// The music currently feeding the ring: a `MusicPlay` track is a one-stem set.
+struct Current {
+    /// The track (for a `MusicPlay`) or the set id.
+    id: String,
+    /// Whether it came from a `MusicSet`, so a track and a set sharing a name stay distinct.
+    is_set: bool,
+    stems: Vec<Stem>,
     looping: bool,
     /// The play's authored gain, kept so a reopened device can resume at it.
     gain: f32,
+    /// Each stem's latest gain, kept for the same reason.
+    stem_gains: Vec<f32>,
 }
 
 /// The sink-thread side: owns the decoder, keeps the ring full, and turns messages into the
@@ -225,8 +362,6 @@ pub(crate) struct MusicFeed {
     seconds_per_tick: f64,
     generation: u32,
     current: Option<Current>,
-    /// Converted samples not yet sent: whole device frames.
-    staging: Vec<f32>,
     /// Samples left to feed while a fade-out runs; at 0 the track is dropped.
     stop_after: Option<usize>,
     /// Files that failed, by the stamp they failed at: one warning per file version.
@@ -251,7 +386,6 @@ impl MusicFeed {
             seconds_per_tick,
             generation: 0,
             current: None,
-            staging: Vec::new(),
             stop_after: None,
             failed: HashMap::new(),
             recheck: STAMP_RECHECK,
@@ -265,7 +399,46 @@ impl MusicFeed {
     }
 
     pub(crate) fn is_feeding(&self) -> bool {
-        self.current.is_some() || !self.staging.is_empty()
+        self.current.is_some()
+    }
+
+    /// A stem's decoder and converter for the device format.
+    fn stem(&self, name: String, track: Track) -> Stem {
+        let converter = Converter::new(
+            track.rate(),
+            track.channels(),
+            self.out_rate,
+            self.out_channels,
+        );
+        Stem {
+            name,
+            track,
+            converter,
+            staging: Vec::new(),
+            ended: false,
+        }
+    }
+
+    /// Makes `current` the music: a new generation, nothing staged, no fade-out pending. Returns
+    /// the command that starts the player on it.
+    fn start(&mut self, current: Current, fade_frames: u32) -> VoiceCommand {
+        self.generation = self.generation.wrapping_add(1);
+        self.stop_after = None;
+        let (gain, stem_gains) = (current.gain, current.stem_gains.clone());
+        self.current = Some(current);
+        self.start_command(gain, &stem_gains, self.device_frames(fade_frames))
+    }
+
+    fn start_command(&self, gain: f32, stem_gains: &[f32], fade_in: usize) -> VoiceCommand {
+        let mut gains = [0.0; MUSIC_STEMS_MAX];
+        gains[..stem_gains.len()].copy_from_slice(stem_gains);
+        VoiceCommand::MusicStart {
+            generation: self.generation,
+            gain,
+            stem_gains: gains,
+            count: stem_gains.len(),
+            fade_in,
+        }
     }
 
     /// Records a failure and warns unless this file version already failed. Returns whether it warned.
@@ -292,7 +465,8 @@ impl MusicFeed {
     ) -> Option<VoiceCommand> {
         if self.stop_after.is_none()
             && let Some(current) = &mut self.current
-            && current.name == name
+            && !current.is_set
+            && current.id == name
         {
             current.looping = looping;
             current.gain = gain;
@@ -311,26 +485,84 @@ impl MusicFeed {
             }
         };
         self.failed.remove(name);
-        let converter = Converter::new(
-            track.rate(),
-            track.channels(),
-            self.out_rate,
-            self.out_channels,
-        );
-        self.generation = self.generation.wrapping_add(1);
-        self.staging.clear();
-        self.stop_after = None;
-        self.current = Some(Current {
-            name: name.to_string(),
-            track,
-            converter,
+        let current = Current {
+            id: name.to_string(),
+            is_set: false,
+            stems: vec![self.stem(name.to_string(), track)],
             looping,
             gain,
+            stem_gains: vec![1.0],
+        };
+        Some(self.start(current, fade_frames))
+    }
+
+    /// Starts the set `id` of `stems` (path, starting gain), or does nothing when that set already
+    /// plays and is not stopping — the initial gains apply only at a set's start. A stem that fails
+    /// to open warns `L5003`; one that does not match the first playable stem's rate and length, or
+    /// lies past the eighth, warns `L5006`. Both are left out, and `None` means none could play.
+    pub(crate) fn set(
+        &mut self,
+        id: &str,
+        stems: &[(String, f32)],
+        fade_frames: u32,
+    ) -> Option<VoiceCommand> {
+        if self.stop_after.is_none()
+            && self
+                .current
+                .as_ref()
+                .is_some_and(|current| current.is_set && current.id == id)
+        {
+            return None;
+        }
+        let (root, recheck) = (self.content_root.clone(), self.recheck);
+        let failed = &mut self.failed;
+        let opened = open_set(&root, id, stems, |name| {
+            failed
+                .get_mut(name)
+                .is_some_and(|stamped| stamped.is_current(&root, name, recheck))
         });
-        Some(VoiceCommand::MusicStart {
-            generation: self.generation,
+        for (name, diagnostic) in &opened.unplayable {
+            self.note_failure(name, diagnostic);
+        }
+        for diagnostic in &opened.mismatched {
+            eprintln!("{diagnostic}");
+        }
+        if opened.stems.is_empty() {
+            return None;
+        }
+        let mut stem_gains = Vec::new();
+        let mut playing = Vec::new();
+        for stem in opened.stems {
+            self.failed.remove(&stem.name);
+            stem_gains.push(stem.gain);
+            playing.push(self.stem(stem.name, stem.track));
+        }
+        let current = Current {
+            id: id.to_string(),
+            is_set: true,
+            stems: playing,
+            looping: true,
+            gain: 1.0,
+            stem_gains,
+        };
+        Some(self.start(current, fade_frames))
+    }
+
+    /// Slews stem `name` of the playing set to `gain`. `None` when it is not in the set.
+    pub(crate) fn stem_gain(
+        &mut self,
+        name: &str,
+        gain: f32,
+        fade_frames: u32,
+    ) -> Option<VoiceCommand> {
+        let frames = self.device_frames(fade_frames);
+        let current = self.current.as_mut()?;
+        let index = current.stems.iter().position(|stem| stem.name == name)?;
+        current.stem_gains[index] = gain;
+        Some(VoiceCommand::MusicStemGain {
+            index,
             gain,
-            fade_in: self.device_frames(fade_frames),
+            frames,
         })
     }
 
@@ -341,17 +573,19 @@ impl MusicFeed {
         self.out_rate = out_rate;
         self.out_channels = usize::from(out_channels.max(1));
         self.tx = tx;
-        self.staging.clear();
         if self.stop_after.take().is_some() {
             self.current = None;
         }
         if let Some(current) = &mut self.current {
-            current.converter = Converter::new(
-                current.track.rate(),
-                current.track.channels(),
-                out_rate,
-                self.out_channels,
-            );
+            for stem in &mut current.stems {
+                stem.staging.clear();
+                stem.converter = Converter::new(
+                    stem.track.rate(),
+                    stem.track.channels(),
+                    out_rate,
+                    self.out_channels,
+                );
+            }
         }
     }
 
@@ -359,20 +593,16 @@ impl MusicFeed {
     /// generation so the chunks sent since [`MusicFeed::retarget`] are the ones it mixes. `None`
     /// when no track is playing.
     pub(crate) fn resume(&mut self, fade_in: usize) -> Option<VoiceCommand> {
-        let gain = self.current.as_ref()?.gain;
+        let current = self.current.as_ref()?;
+        let (gain, stem_gains) = (current.gain, current.stem_gains.clone());
         self.generation = self.generation.wrapping_add(1);
-        Some(VoiceCommand::MusicStart {
-            generation: self.generation,
-            gain,
-            fade_in,
-        })
+        Some(self.start_command(gain, &stem_gains, fade_in))
     }
 
     pub(crate) fn stop(&mut self, fade_frames: u32) -> VoiceCommand {
         let fade_out = self.device_frames(fade_frames);
         if fade_out == 0 {
             self.current = None;
-            self.staging.clear();
             self.stop_after = None;
         } else if self.current.is_some() {
             self.stop_after = Some(fade_out * self.out_channels);
@@ -380,55 +610,59 @@ impl MusicFeed {
         VoiceCommand::MusicStop { fade_out }
     }
 
-    /// Decodes until `staging` holds a chunk's worth, or the track ends. Returns on a decode error
-    /// or an empty looping file after dropping the track.
+    /// Decodes each stem until its staging holds a chunk's worth, or it ends. A looping stem
+    /// reopens at its end; a once stem is marked ended. A decode error or an empty looping file
+    /// drops the whole set.
     fn stage(&mut self) {
-        while self.staging.len() < MUSIC_CHUNK {
-            let Some(current) = &mut self.current else {
-                return;
-            };
-            match current.track.next_packet() {
-                Ok(Some(packet)) => current.converter.convert(&packet, &mut self.staging),
-                Ok(None) => {
-                    let reopened = if current.looping && current.track.produced {
-                        current.track.reopen().inspect(|()| {
-                            let (rate, channels) = (current.track.rate(), current.track.channels());
-                            current.converter.retarget(rate, channels);
-                        })
-                    } else {
-                        // A once track, or a looping file with no samples at all, ends here.
-                        self.current = None;
-                        return;
-                    };
-                    if let Err(diagnostic) = reopened {
-                        self.fail_current(&diagnostic);
-                        return;
+        let Some(current) = &mut self.current else {
+            return;
+        };
+        let looping = current.looping;
+        let mut failure = None;
+        'stems: for stem in &mut current.stems {
+            while stem.staging.len() < MUSIC_CHUNK && !stem.ended {
+                match stem.track.next_packet() {
+                    Ok(Some(packet)) => stem.converter.convert(&packet, &mut stem.staging),
+                    Ok(None) if looping && stem.track.produced => {
+                        let reopened = stem.track.reopen().inspect(|()| {
+                            let (rate, channels) = (stem.track.rate(), stem.track.channels());
+                            stem.converter.retarget(rate, channels);
+                        });
+                        if let Err(diagnostic) = reopened {
+                            failure = Some((stem.name.clone(), diagnostic));
+                            break 'stems;
+                        }
                     }
-                }
-                Err(diagnostic) => {
-                    self.fail_current(&diagnostic);
-                    return;
+                    // A once stem, or a looping file with no samples at all, ends here.
+                    Ok(None) => stem.ended = true,
+                    Err(diagnostic) => {
+                        failure = Some((stem.name.clone(), diagnostic));
+                        break 'stems;
+                    }
                 }
             }
         }
-    }
-
-    fn fail_current(&mut self, diagnostic: &Diagnostic) {
-        if let Some(current) = self.current.take() {
-            self.note_failure(&current.name, diagnostic);
+        if let Some((name, diagnostic)) = failure {
+            self.current = None;
+            self.note_failure(&name, &diagnostic);
         }
     }
 
-    /// Tops the ring up with chunks until it is full or the track ends.
+    /// Tops the ring up with chunks until it is full or the music ends.
     pub(crate) fn refill(&mut self) {
         let max = (MUSIC_CHUNK / self.out_channels) * self.out_channels;
         // The feed is the ring's only producer, so `!is_full` guarantees the send finds room.
-        while self.current.is_some() || !self.staging.is_empty() {
+        while self.current.is_some() {
             if self.tx.is_full() {
                 return;
             }
             self.stage();
-            let mut len = self.staging.len().min(max);
+            let Some(current) = &mut self.current else {
+                return;
+            };
+            // Every stem contributes the same frames, so the shortest staging sets the chunk.
+            let shortest = current.stems.iter().map(|s| s.staging.len()).min();
+            let mut len = shortest.unwrap_or(0).min(max);
             len -= len % self.out_channels;
             if let Some(left) = self.stop_after.as_mut() {
                 len = len.min(*left);
@@ -438,22 +672,21 @@ impl MusicFeed {
                 let mut chunk = MusicChunk {
                     generation: self.generation,
                     len,
-                    samples: [0.0; MUSIC_CHUNK],
+                    count: current.stems.len(),
+                    samples: [[0.0; MUSIC_CHUNK]; MUSIC_STEMS_MAX],
                 };
-                chunk.samples[..len].copy_from_slice(&self.staging[..len]);
-                self.staging.drain(..len);
+                for (slot, stem) in chunk.samples.iter_mut().zip(&mut current.stems) {
+                    slot[..len].copy_from_slice(&stem.staging[..len]);
+                    stem.staging.drain(..len);
+                }
                 if self.tx.try_send(chunk).is_err() {
                     return;
                 }
             }
-            if self.stop_after == Some(0) {
+            // Nothing left to send: the fade-out is spent, or a stem ended with nothing staged.
+            if len == 0 || self.stop_after == Some(0) {
                 self.current = None;
-                self.staging.clear();
                 self.stop_after = None;
-            } else if len == 0 {
-                // Nothing staged and nothing fed: the track ended or failed.
-                self.staging.clear();
-                return;
             }
         }
     }
@@ -468,6 +701,9 @@ pub(crate) struct MusicPlayer {
     active: bool,
     /// The play's gain, slewing over `ramp_frames` when it changes mid-play.
     gain: Envelope,
+    /// Each stem's gain; the first `count` are live.
+    stems: [Envelope; MUSIC_STEMS_MAX],
+    count: usize,
     ramp_frames: usize,
     level: f32,
     target: f32,
@@ -488,6 +724,8 @@ impl MusicPlayer {
             generation: 0,
             active: false,
             gain: Envelope::at(1.0),
+            stems: [Envelope::at(1.0); MUSIC_STEMS_MAX],
+            count: 0,
             ramp_frames,
             level: 0.0,
             target: 0.0,
@@ -502,11 +740,15 @@ impl MusicPlayer {
             VoiceCommand::MusicStart {
                 generation,
                 gain,
+                stem_gains,
+                count,
                 fade_in,
             } => {
                 self.generation = generation;
                 self.active = true;
                 self.gain = Envelope::at(gain);
+                self.stems = stem_gains.map(Envelope::at);
+                self.count = count.min(MUSIC_STEMS_MAX);
                 self.target = 1.0;
                 self.level = if fade_in == 0 { 1.0 } else { 0.0 };
                 self.step = if fade_in == 0 {
@@ -517,6 +759,15 @@ impl MusicPlayer {
                 self.pos = 0;
             }
             VoiceCommand::MusicGain(gain) => self.gain.slew_to(gain, self.ramp_frames),
+            VoiceCommand::MusicStemGain {
+                index,
+                gain,
+                frames,
+            } => {
+                if let Some(stem) = self.stems.get_mut(index) {
+                    stem.slew_to(gain, frames.max(self.ramp_frames));
+                }
+            }
             VoiceCommand::MusicStop { fade_out } => {
                 if fade_out == 0 || self.level <= 0.0 {
                     self.stop_now();
@@ -585,12 +836,19 @@ impl MusicPlayer {
                 }
             }
             let scale = self.level * self.gain.next() * master;
+            let mut stem_gain = [0.0; MUSIC_STEMS_MAX];
+            for (gain, stem) in stem_gain.iter_mut().zip(&mut self.stems[..self.count]) {
+                *gain = stem.next();
+            }
             if let Some(chunk) = &self.chunk {
-                for (slot, sample) in frame
-                    .iter_mut()
-                    .zip(&chunk.samples[self.pos..self.pos + self.channels])
-                {
-                    *slot += sample * scale;
+                let live = chunk.count.min(self.count);
+                for (c, slot) in frame.iter_mut().enumerate() {
+                    let sum: f32 = chunk.samples[..live]
+                        .iter()
+                        .zip(&stem_gain)
+                        .map(|(stem, gain)| stem[self.pos + c] * gain)
+                        .sum();
+                    *slot += sum * scale;
                 }
             }
             self.pos += self.channels;
@@ -648,7 +906,7 @@ mod tests {
             feed.refill();
             let before = all.len();
             while let Ok(chunk) = rx.try_recv() {
-                all.extend_from_slice(&chunk.samples[..chunk.len]);
+                all.extend_from_slice(&chunk.samples[0][..chunk.len]);
             }
             if all.len() == before && !feed.is_feeding() {
                 break;
@@ -660,12 +918,7 @@ mod tests {
     /// The granule position of the file's last Ogg page, read from the bytes: the track's true
     /// length in frames, independent of the decoder.
     fn last_granule(path: &Path) -> u64 {
-        let bytes = std::fs::read(path).unwrap();
-        let page = bytes
-            .windows(4)
-            .rposition(|w| w == b"OggS")
-            .expect("an Ogg page");
-        u64::from_le_bytes(bytes[page + 6..page + 14].try_into().unwrap())
+        length_frames(path).expect("an Ogg page")
     }
 
     #[test]
@@ -716,11 +969,13 @@ mod tests {
     fn a_once_track_tail_is_fed_while_the_ring_is_full() {
         // The decoder hit the track's end with several chunks still staged and the ring full: the
         // feed must stay awake until the tail is sent, or the sink sleeps until the next message.
+        let (mut whole, rx) = feed(testdata(), 44100, 2);
+        whole.play(TONE, 1.0, false, 0).unwrap();
+        let expected = collect(&mut whole, &rx, usize::MAX).len();
+
         let (tx, rx) = crossbeam_channel::bounded(1);
         let mut feed = MusicFeed::new(testdata(), 44100, 2, 1.0 / 60.0, tx);
         feed.play(TONE, 1.0, false, 0).unwrap();
-        feed.current = None;
-        feed.staging = vec![0.25; 3 * MUSIC_CHUNK];
         let mut got = 0;
         while feed.is_feeding() {
             feed.refill();
@@ -728,7 +983,7 @@ mod tests {
                 got += chunk.len;
             }
         }
-        assert_eq!(got, 3 * MUSIC_CHUNK, "the tail was stranded");
+        assert_eq!(got, expected, "the tail was stranded");
     }
 
     #[test]
@@ -950,6 +1205,7 @@ mod tests {
             generation,
             gain,
             fade_in,
+            ..
         }) = feed.resume(480)
         else {
             panic!("a track is playing, so it resumes");
@@ -974,16 +1230,21 @@ mod tests {
         assert!(!feed.is_feeding());
     }
 
+    /// A one-stem chunk of `value`.
+    fn chunk(generation: u32, value: f32) -> MusicChunk {
+        MusicChunk {
+            generation,
+            len: MUSIC_CHUNK,
+            count: 1,
+            samples: [[value; MUSIC_CHUNK]; MUSIC_STEMS_MAX],
+        }
+    }
+
     /// A player over a ring, with `chunks` of `value` (one generation) already queued.
     fn player(generation: u32, chunks: usize, value: f32) -> (MusicPlayer, Sender<MusicChunk>) {
         let (tx, rx) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
         for _ in 0..chunks {
-            tx.send(MusicChunk {
-                generation,
-                len: MUSIC_CHUNK,
-                samples: [value; MUSIC_CHUNK],
-            })
-            .unwrap();
+            tx.send(chunk(generation, value)).unwrap();
         }
         (MusicPlayer::new(rx, 2, 4), tx)
     }
@@ -992,6 +1253,8 @@ mod tests {
         player.apply(VoiceCommand::MusicStart {
             generation,
             gain,
+            stem_gains: [1.0; MUSIC_STEMS_MAX],
+            count: 1,
             fade_in,
         });
     }
@@ -1049,12 +1312,7 @@ mod tests {
         player.mix_into(&mut out, 1.0);
         assert_eq!(out, vec![0.0; 4], "the old play's chunk is dropped");
         // A chunk of a play whose command has not arrived yet is held, not dropped.
-        tx.send(MusicChunk {
-            generation: 3,
-            len: MUSIC_CHUNK,
-            samples: [0.5; MUSIC_CHUNK],
-        })
-        .unwrap();
+        tx.send(chunk(3, 0.5)).unwrap();
         player.mix_into(&mut out, 1.0);
         assert_eq!(out, vec![0.0; 4]);
         start(&mut player, 3, 1.0, 0);
@@ -1069,12 +1327,7 @@ mod tests {
         let mut out = vec![0.0; 4];
         player.mix_into(&mut out, 1.0);
         assert_eq!(out, vec![0.0; 4], "an underrun is silence");
-        tx.send(MusicChunk {
-            generation: 1,
-            len: MUSIC_CHUNK,
-            samples: [0.5; MUSIC_CHUNK],
-        })
-        .unwrap();
+        tx.send(chunk(1, 0.5)).unwrap();
         player.mix_into(&mut out, 0.5);
         assert_eq!(out, vec![0.25; 4]);
     }
@@ -1091,5 +1344,271 @@ mod tests {
         let mut out = Vec::new();
         converter.convert(&[0.0, 1.0, 0.0], &mut out);
         assert_eq!(out, vec![0.0, 0.5, 1.0, 0.5]);
+    }
+
+    /// The tone with its last Ogg page's granule lowered by `by` frames, the page re-checksummed.
+    fn ogg_shorter(by: u64) -> Vec<u8> {
+        let mut bytes = std::fs::read(testdata().join(TONE)).unwrap();
+        let page = bytes
+            .windows(4)
+            .rposition(|w| w == b"OggS")
+            .expect("an Ogg page");
+        let lacing = usize::from(bytes[page + 26]);
+        let length = 27
+            + lacing
+            + bytes[page + 27..page + 27 + lacing]
+                .iter()
+                .map(|&n| usize::from(n))
+                .sum::<usize>();
+        let granule = u64::from_le_bytes(bytes[page + 6..page + 14].try_into().unwrap());
+        bytes[page + 6..page + 14].copy_from_slice(&(granule - by).to_le_bytes());
+        bytes[page + 22..page + 26].fill(0);
+        let crc = ogg_crc(&bytes[page..page + length]);
+        bytes[page + 22..page + 26].copy_from_slice(&crc.to_le_bytes());
+        bytes
+    }
+
+    /// Renders `blocks` blocks of 256 stereo frames through `player`, topping the ring up from
+    /// `feed` and running `before` ahead of each block.
+    fn render(
+        feed: &mut MusicFeed,
+        player: &mut MusicPlayer,
+        blocks: usize,
+        mut before: impl FnMut(usize, &mut MusicFeed, &mut MusicPlayer),
+    ) -> Vec<f32> {
+        let mut out = Vec::new();
+        for block in 0..blocks {
+            before(block, feed, player);
+            feed.refill();
+            let mut scratch = vec![0.0; 512];
+            player.mix_into(&mut scratch, 1.0);
+            out.extend(scratch);
+        }
+        out
+    }
+
+    fn set_of(names: &[&str]) -> Vec<(String, f32)> {
+        names.iter().map(|name| (name.to_string(), 1.0)).collect()
+    }
+
+    #[test]
+    fn two_stems_stay_sample_locked_across_loops_and_gain_moves() {
+        let root = scratch_root("stems-locked");
+        for name in ["a.ogg", "b.ogg"] {
+            std::fs::copy(testdata().join(TONE), root.join(name)).unwrap();
+        }
+        // One loop period (the stream's granule length), taken from a looping pass: a once pass
+        // drops its last frame to the converter's lookahead.
+        let tone = {
+            let (mut looped, rx) = feed(testdata(), 44100, 2);
+            looped.play(TONE, 1.0, true, 0).unwrap();
+            let period = 2 * last_granule(&testdata().join(TONE)) as usize;
+            let mut pass = collect(&mut looped, &rx, period + 1);
+            pass.truncate(period);
+            pass
+        };
+        let (mut feed, rx) = feed(root, 44100, 2);
+        let mut player = MusicPlayer::new(rx, 2, 4);
+        let stems = [("a.ogg".to_string(), 1.0), ("b.ogg".to_string(), 0.0)];
+        player.apply(feed.set("pair", &stems, 0).unwrap());
+
+        // (block, gain of b, fade in ticks): the last two overlap, retargeting a running slew.
+        let moves = [(5, 1.0, 1), (60, 0.25, 0), (120, 0.8, 2), (123, 0.3, 1)];
+        let blocks = tone.len() * 3 / 512 + 10;
+        let mut sent = Vec::new();
+        let out = render(&mut feed, &mut player, blocks, |block, feed, player| {
+            for &(at, gain, ticks) in &moves {
+                if at == block {
+                    let command = feed.stem_gain("b.ogg", gain, ticks).unwrap();
+                    let VoiceCommand::MusicStemGain { frames, .. } = command else {
+                        panic!("a stem gain command");
+                    };
+                    sent.push((block, gain, frames.max(4)));
+                    player.apply(command);
+                }
+            }
+        });
+
+        let mut b = Envelope::at(0.0);
+        for block in 0..blocks {
+            for &(at, gain, frames) in &sent {
+                if at == block {
+                    b.slew_to(gain, frames);
+                }
+            }
+            for frame in 0..256 {
+                let level = 1.0 + b.next();
+                for c in 0..2 {
+                    let i = (block * 256 + frame) * 2 + c;
+                    let want = level * tone[i % tone.len()];
+                    assert!(
+                        (out[i] - want).abs() < 1e-6,
+                        "sample {i} (loop {}): {} vs {want}",
+                        i / tone.len(),
+                        out[i]
+                    );
+                }
+            }
+        }
+        assert!(blocks * 512 > tone.len() * 3, "ran past three loops");
+    }
+
+    #[test]
+    fn two_stems_resampled_to_the_device_sum_like_one_stem() {
+        let root = scratch_root("stems-resampled");
+        for name in ["a.ogg", "b.ogg"] {
+            std::fs::copy(testdata().join(TONE), root.join(name)).unwrap();
+        }
+        let (mut feed, rx) = feed(root, 48000, 2);
+        let mut player = MusicPlayer::new(rx, 2, 4);
+        let stems = [("a.ogg".to_string(), 1.0), ("b.ogg".to_string(), 0.5)];
+        player.apply(feed.set("pair", &stems, 0).unwrap());
+        let both = render(&mut feed, &mut player, 300, |_, _, _| {});
+
+        let (mut one, rx) = feed_at(48000);
+        let mut single = MusicPlayer::new(rx, 2, 4);
+        single.apply(one.play(TONE, 1.5, true, 0).unwrap());
+        let reference = render(&mut one, &mut single, 300, |_, _, _| {});
+        for (i, (got, want)) in both.iter().zip(&reference).enumerate() {
+            assert!((got - want).abs() < 1e-6, "sample {i}: {got} vs {want}");
+        }
+        assert!(reference.iter().any(|&s| s.abs() > 0.1), "not silence");
+    }
+
+    /// A feed over the test data at `out_rate`, stereo.
+    fn feed_at(out_rate: u32) -> (MusicFeed, Receiver<MusicChunk>) {
+        feed(testdata(), out_rate, 2)
+    }
+
+    #[test]
+    fn a_stem_of_another_rate_or_length_or_past_the_eighth_is_left_out_with_l5006() {
+        let root = scratch_root("stems-mismatch");
+        std::fs::copy(testdata().join(TONE), root.join("a.ogg")).unwrap();
+        std::fs::copy(testdata().join(TONE), root.join("c.ogg")).unwrap();
+        std::fs::write(root.join("slow.ogg"), ogg_at_rate(22050)).unwrap();
+        std::fs::write(root.join("short.ogg"), ogg_shorter(100)).unwrap();
+        assert_eq!(
+            length_frames(&root.join("short.ogg")),
+            Some(last_granule(&root.join("a.ogg")) - 100)
+        );
+
+        let stems = set_of(&["a.ogg", "slow.ogg", "short.ogg", "c.ogg"]);
+        let opened = open_set(&root, "mix", &stems, |_| false);
+        let names: Vec<_> = opened.stems.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["a.ogg", "c.ogg"]);
+        assert!(opened.unplayable.is_empty());
+        assert_eq!(opened.mismatched.len(), 2);
+        assert!(
+            opened
+                .mismatched
+                .iter()
+                .all(|d| d.code == code::MUSIC_STEM_MISMATCHED && d.code.as_str() == "L5006")
+        );
+        assert_eq!(
+            check_set(&root, "mix", &stems).unwrap_err().code,
+            code::MUSIC_STEM_MISMATCHED
+        );
+
+        // The set still starts with the stems that match.
+        let (mut mix_feed, _rx) = feed(root.clone(), 44100, 2);
+        let Some(VoiceCommand::MusicStart { count, .. }) = mix_feed.set("mix", &stems, 0) else {
+            panic!("the matching stems play");
+        };
+        assert_eq!(count, 2);
+
+        // Nine stems: the ninth is dropped.
+        for n in 0..9 {
+            std::fs::copy(testdata().join(TONE), root.join(format!("s{n}.ogg"))).unwrap();
+        }
+        let nine: Vec<String> = (0..9).map(|n| format!("s{n}.ogg")).collect();
+        let nine = set_of(&nine.iter().map(String::as_str).collect::<Vec<_>>());
+        let opened = open_set(&root, "nine", &nine, |_| false);
+        assert_eq!(opened.stems.len(), MUSIC_STEMS_MAX);
+        assert_eq!(opened.mismatched.len(), 1);
+        assert_eq!(opened.mismatched[0].code, code::MUSIC_STEM_MISMATCHED);
+        assert!(opened.mismatched[0].message.contains("s8.ogg"));
+        let (mut nine_feed, _rx) = feed(root.clone(), 44100, 2);
+        let Some(VoiceCommand::MusicStart { count, .. }) = nine_feed.set("nine", &nine, 0) else {
+            panic!("eight stems play");
+        };
+        assert_eq!(count, MUSIC_STEMS_MAX);
+    }
+
+    #[test]
+    fn an_unopenable_stem_is_l5003_and_the_rest_play() {
+        let root = scratch_root("stems-missing");
+        std::fs::copy(testdata().join(TONE), root.join("b.ogg")).unwrap();
+        let stems = set_of(&["absent.ogg", "b.ogg"]);
+        assert_eq!(
+            check_set(&root, "gap", &stems).unwrap_err().code,
+            code::MUSIC_TRACK_UNPLAYABLE
+        );
+        let (mut feed, _rx) = feed(root, 44100, 2);
+        let Some(VoiceCommand::MusicStart {
+            count, stem_gains, ..
+        }) = feed.set("gap", &stems, 0)
+        else {
+            panic!("the openable stem plays");
+        };
+        assert_eq!((count, stem_gains[0]), (1, 1.0));
+        assert!(feed.set("none", &set_of(&["absent.ogg"]), 0).is_none());
+    }
+
+    #[test]
+    fn a_set_resend_is_a_no_op_and_a_stem_gain_names_a_stem_of_the_playing_set() {
+        let root = scratch_root("stems-idempotent");
+        for name in ["a.ogg", "b.ogg", "c.ogg"] {
+            std::fs::copy(testdata().join(TONE), root.join(name)).unwrap();
+        }
+        let (mut feed, _rx) = feed(root, 44100, 2);
+        let pair = [("a.ogg".to_string(), 1.0), ("b.ogg".to_string(), 0.0)];
+        let Some(VoiceCommand::MusicStart {
+            generation: first, ..
+        }) = feed.set("pair", &pair, 0)
+        else {
+            panic!("the first set starts");
+        };
+        assert!(feed.set("pair", &pair, 0).is_none(), "same id: a no-op");
+        assert!(feed.stem_gain("c.ogg", 1.0, 0).is_none(), "not in the set");
+        assert!(matches!(
+            feed.stem_gain("b.ogg", 0.7, 30),
+            Some(VoiceCommand::MusicStemGain { index: 1, gain, frames: 22050 }) if gain == 0.7
+        ));
+        // A resume carries the moved gain, not the initial one.
+        let Some(VoiceCommand::MusicStart {
+            generation,
+            stem_gains,
+            count,
+            ..
+        }) = feed.resume(0)
+        else {
+            panic!("a set is playing");
+        };
+        assert_eq!((generation, count), (first + 1, 2));
+        assert_eq!(&stem_gains[..2], &[1.0, 0.7]);
+
+        // Another set, or a track, hard-cuts under a new generation.
+        let Some(VoiceCommand::MusicStart {
+            generation: second, ..
+        }) = feed.set("other", &pair, 0)
+        else {
+            panic!("another set starts");
+        };
+        assert_eq!(second, generation + 1);
+        assert!(matches!(
+            feed.play("a.ogg", 1.0, true, 0),
+            Some(VoiceCommand::MusicStart { .. })
+        ));
+        assert!(
+            feed.stem_gain("b.ogg", 1.0, 0).is_none(),
+            "a track has one stem"
+        );
+        // While stopping, the same id starts over.
+        feed.set("pair", &pair, 0).unwrap();
+        feed.stop(30);
+        assert!(matches!(
+            feed.set("pair", &pair, 0),
+            Some(VoiceCommand::MusicStart { .. })
+        ));
     }
 }

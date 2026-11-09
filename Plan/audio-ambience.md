@@ -1,6 +1,15 @@
 # Plan: Audio Ambience — loops, positional emitters, category gains
 
-> Status: **Stereo pan + spatial distance SHIPPED (2026-11-01, r2013, Clockout 0035)** — two per-game builder
+> Status: **Adaptive multi-stem music SHIPPED (2026-11-09, Serious Isaac 0025, conservative)** — `AudioQueue::music_set(id,
+> stems, fade)` plays up to 8 Ogg stems (`MUSIC_STEMS_MAX`) on one shared playhead and
+> `music_stem_gain(stem, gain, fade)` slews one stem's gain in sim ticks. The sink decodes each stem with its
+> own decoder and converter but sends one chunk carrying every stem's samples for the same device frames, so
+> the stems cannot drift; a stem whose rate or length differs from the first (or past the 8th) is left out
+> with `L5006`. The same id again is a no-op (initial gains apply only at the set's start); a different set
+> hard-cuts. `music_play` keeps emitting today's `MusicPlay` (byte-identical stream) and plays as a one-stem
+> set. No wire, schema, replay or hash movement; no Cargo change. Crossfade is design only (§Decisions
+> Proposed (0025)). By-ear check on a stereo device is owed (`Plan/owed.md`).
+> Earlier: **Stereo pan + spatial distance SHIPPED (2026-11-01, r2013, Clockout 0035)** — two per-game builder
 > knobs, `EngineBuilder::audio_pan(AudioPan::{Centred, Stereo})` and
 > `audio_distance(AudioDistance::{Planar, Spatial})`, both defaulting to today's behaviour so every
 > existing game's stream is unchanged. Pan is **opt-in** and separate from the distance knob (the
@@ -116,8 +125,9 @@ vigil-specific; any spatial game wants "make this loop findable by ear."
   This plan keeps it that way.
 - **OGG/streaming music**: trigger recorded (`Plan/phase-8-assets-and-sound.md`, "music-length tracks
   making committed WAVs a repo-size problem"); declined for vigil at G7 (2026-07-23), then
-  **shipped 2026-10-03, rev 1106 (external shmup request 10)** — `docs/audio.md` §Music. Crossfades, Opus
-  and live music volume stay deferred.
+  **shipped 2026-10-03, rev 1106 (external shmup request 10)** — `docs/audio.md` §Music. Stems shipped
+  2026-11-09 (0025). Set-to-set crossfade is proposed (§Decisions Proposed (0025)); Opus and live music
+  volume stay deferred.
 - **Vigil's discipline** (`games/vigil/CLAUDE.md:66-78`): WAVs are generated
   (`node scripts/synth-sfx.mjs`), path+gain live as `pub const`s in `tunables.rs`, **gains stay
   ≤ ~0.8** since the mixer's soft knee starts there. New loop/emitter gains inherit this, unrelaxed.
@@ -184,6 +194,22 @@ a mixdown/output concern (which bus is how loud), same category as "which device
 gameplay state a replay must reproduce. **[USER CALL]** — a future volume slider naturally reads from
 a game's own `Profile<P>` (the established durable-setting vehicle) into a small `AudioSink`-side
 setter; recommend building that only once `Plan/ui-widgets.md` lands a settings surface, not now.
+
+## Decisions Proposed (0025)
+
+Owner ruling owed. Nothing below is built.
+
+**Set-to-set crossfade.** `music_set` and `music_play` hard-cut; a game that wants the old music to fade
+while the new rises has no verb. Design: two **set slots**, each with its own ring and generation (sets need
+no mutual alignment, so no chunk carries both). A crossfade starts the new set in the idle slot and fades
+the old slot out over the same ticks; a third set mid-crossfade hard-cuts the outgoing slot; at most 2 live
+sets (16 stems); a world rebuild stops both. The sink's per-callback cost is one more ring drain and
+mix.
+
+**API recommendation: a new verb `music_crossfade(id, stems, ticks)`**, so the shipped `music_set` keeps
+its hard cut — flipping `music_set` to crossfade would change the behaviour of games already calling it.
+Tests owed: both sets audible mid-fade, the old one silent after, a third set mid-fade cutting the
+outgoing slot, `audio_messages` showing the new message.
 
 ## Waves
 

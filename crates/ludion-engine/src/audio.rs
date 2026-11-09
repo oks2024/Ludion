@@ -15,8 +15,9 @@
 //! from a tick, a replayed session regenerates the exact same stream, and the `WorldHash` is
 //! unaffected (the queue is a resource, excluded from the hash).
 //!
-//! Music is two more messages ([`AudioQueue::music_play`], [`AudioQueue::music_stop`]); the sink
-//! streams the Ogg Vorbis track and times its fades.
+//! Music is a few more messages ([`AudioQueue::music_play`], [`AudioQueue::music_set`],
+//! [`AudioQueue::music_stem_gain`], [`AudioQueue::music_stop`]); the sink streams the Ogg Vorbis
+//! track or stems and times its fades.
 //!
 //! A loop's *playback* state lives only in the sink — the engine holds no table of what is sounding,
 //! and a world rebuild sends [`AudioMessage::StopAllLoops`] rather than diffing against one.
@@ -149,9 +150,10 @@ impl AudioQueue {
     /// Streams the Ogg Vorbis `track` (a content-root-relative path) as the music, looping
     /// gaplessly, fading in over `fade_frames` sim ticks (`0` starts at full `gain`).
     ///
-    /// Music is one voice. Playing the track already sounding (and not stopping) only updates its
-    /// gain, so resending it every tick is harmless; any other track hard-cuts the current one — no
-    /// crossfade — and fades the new one in. It plays until [`music_stop`](Self::music_stop) or a
+    /// Music is one voice: this plays as a one-stem set. Playing the track already sounding (and
+    /// not stopping) only updates its gain, so resending it every tick is harmless; any other track
+    /// or [set](Self::music_set) hard-cuts the current one — no crossfade — and fades the new one
+    /// in. It plays until [`music_stop`](Self::music_stop) or a
     /// world rebuild's blanket stop. The file streams from disk in the sink, never decoded up front;
     /// a missing or non-Vorbis file warns `L5003` and plays nothing.
     ///
@@ -175,6 +177,57 @@ impl AudioQueue {
     pub fn music_stop(&mut self, fade_frames: u32) {
         self.pending
             .push(Queued::Message(AudioMessage::MusicStop { fade_frames }));
+    }
+
+    /// Streams a **set** of Ogg Vorbis stems (content-root-relative paths with their starting
+    /// gains) on one shared playhead, looping together gaplessly, fading in over `fade_frames` sim
+    /// ticks. Stems must share a sample rate and length; one that does not is left out with `L5006`,
+    /// as is any stem past 8.
+    ///
+    /// The same `id` while it plays (and not stopping) is a no-op, so resending it every tick is
+    /// harmless — the initial stem gains apply only when the set starts. Move a stem afterwards with
+    /// [`music_stem_gain`](Self::music_stem_gain). Any other set or [track](Self::music_play)
+    /// hard-cuts the current music — no crossfade.
+    ///
+    /// ```
+    /// # use ludion_engine::AudioQueue;
+    /// let mut queue = AudioQueue::default();
+    /// queue.music_set(
+    ///     "dungeon",
+    ///     &[("music/base.ogg", 1.0), ("music/perc.ogg", 0.0)],
+    ///     60,
+    /// );
+    /// ```
+    pub fn music_set(&mut self, id: impl Into<String>, stems: &[(&str, f32)], fade_frames: u32) {
+        let stems = stems
+            .iter()
+            .map(|&(stem, gain)| (stem.to_string(), self.finite_gain(stem, gain)))
+            .collect();
+        self.pending.push(Queued::Message(AudioMessage::MusicSet {
+            id: id.into(),
+            stems,
+            fade_frames,
+        }));
+    }
+
+    /// Slews one stem of the playing set to `gain` over `fade_frames` sim ticks (`0` still slews
+    /// about 10 ms, so it never clicks). A stem not in the set is ignored, and resending the same
+    /// gain every tick is free.
+    ///
+    /// ```
+    /// # use ludion_engine::AudioQueue;
+    /// let mut queue = AudioQueue::default();
+    /// queue.music_stem_gain("music/perc.ogg", 1.0, 120);
+    /// ```
+    pub fn music_stem_gain(&mut self, stem: impl Into<String>, gain: f32, fade_frames: u32) {
+        let stem = stem.into();
+        let gain = self.finite_gain(&stem, gain);
+        self.pending
+            .push(Queued::Message(AudioMessage::MusicStemGain {
+                stem,
+                gain,
+                fade_frames,
+            }));
     }
 
     fn push_music(&mut self, track: String, gain: f32, looping: bool, fade_frames: u32) {
@@ -431,6 +484,8 @@ impl AudioLogEntry {
             AudioMessage::OneShot(event) => Some(&event.sound),
             AudioMessage::LoopSync { sound, .. } => Some(sound),
             AudioMessage::MusicPlay { track, .. } => Some(track),
+            AudioMessage::MusicSet { id, .. } => Some(id),
+            AudioMessage::MusicStemGain { stem, .. } => Some(stem),
             AudioMessage::LoopStop { .. }
             | AudioMessage::StopAllLoops
             | AudioMessage::MusicStop { .. } => None,
@@ -441,11 +496,12 @@ impl AudioLogEntry {
     pub fn gain(&self) -> Option<f32> {
         match &self.message {
             AudioMessage::OneShot(event) => Some(event.gain),
-            AudioMessage::LoopSync { gain, .. } | AudioMessage::MusicPlay { gain, .. } => {
-                Some(*gain)
-            }
+            AudioMessage::LoopSync { gain, .. }
+            | AudioMessage::MusicPlay { gain, .. }
+            | AudioMessage::MusicStemGain { gain, .. } => Some(*gain),
             AudioMessage::LoopStop { .. }
             | AudioMessage::StopAllLoops
+            | AudioMessage::MusicSet { .. }
             | AudioMessage::MusicStop { .. } => None,
         }
     }
@@ -490,6 +546,44 @@ mod tests {
         queue.music_play("e.ogg", 7.0, 0);
         assert_eq!(queued_gains(&mut queue), [0.25, -0.5, 7.0]);
         assert!(queue.take_non_finite().is_empty());
+    }
+
+    /// The set verbs guard every stem gain the same way.
+    #[test]
+    fn a_non_finite_stem_gain_is_queued_as_zero_and_recorded() {
+        let mut queue = AudioQueue::default();
+        queue.music_set("s", &[("a.ogg", f32::NAN), ("b.ogg", 0.5)], 0);
+        queue.music_stem_gain("b.ogg", f32::INFINITY, 0);
+        assert_eq!(queue.take_non_finite(), ["a.ogg", "b.ogg"]);
+        let messages = queue.take();
+        let [
+            Queued::Message(AudioMessage::MusicSet { stems, .. }),
+            Queued::Message(AudioMessage::MusicStemGain { gain, .. }),
+        ] = messages.as_slice()
+        else {
+            panic!("two music messages, got {messages:?}");
+        };
+        assert_eq!(
+            stems,
+            &[("a.ogg".to_string(), 0.0), ("b.ogg".to_string(), 0.5)]
+        );
+        assert_eq!(*gain, 0.0);
+        let entry = |message| AudioLogEntry {
+            frame: FrameIndex(0),
+            message,
+        };
+        let set = entry(AudioMessage::MusicSet {
+            id: "s".into(),
+            stems: vec![],
+            fade_frames: 0,
+        });
+        assert_eq!((set.sound(), set.gain()), (Some("s"), None));
+        let stem = entry(AudioMessage::MusicStemGain {
+            stem: "b.ogg".into(),
+            gain: 0.25,
+            fade_frames: 0,
+        });
+        assert_eq!((stem.sound(), stem.gain()), (Some("b.ogg"), Some(0.25)));
     }
 
     /// `play` is the sound-effect verb: what it queues rides the `Sfx` bus, whatever the sink's

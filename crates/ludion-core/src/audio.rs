@@ -106,8 +106,8 @@ pub struct CategoryGains {
     pub sfx: f32,
     /// The master gain of the ambient bus.
     pub ambient: f32,
-    /// The master gain of the music bus. Music only travels in [`AudioMessage::MusicPlay`], so its
-    /// bus is implied: there is no [`AudioCategory`] for it and [`gain_for`](Self::gain_for) never
+    /// The master gain of the music bus. Music only travels in [`AudioMessage::MusicPlay`],
+    /// [`AudioMessage::MusicSet`] and their companions, so its bus is implied: there is no [`AudioCategory`] for it and [`gain_for`](Self::gain_for) never
     /// returns it.
     pub music: f32,
 }
@@ -266,4 +266,30 @@ pub enum AudioMessage {
         /// The fade-out length in sim ticks.
         fade_frames: u32,
     },
+    /// Stream a **set** of up to [`MUSIC_STEMS_MAX`] Ogg stems on one shared playhead, looping, each
+    /// at its own gain. The same `id` again while it plays (not stopping) is a no-op, so resending
+    /// it every tick is harmless — the initial stem gains apply only when the set starts, and later
+    /// ones move through [`MusicStemGain`](AudioMessage::MusicStemGain). Any other set or track
+    /// hard-cuts the current music and fades the new one in.
+    MusicSet {
+        /// The set's identity: what makes a resend a no-op.
+        id: String,
+        /// Each stem's content-root-relative Ogg Vorbis path and its starting gain.
+        stems: Vec<(String, f32)>,
+        /// The fade-in length in sim ticks (`0` starts at full level).
+        fade_frames: u32,
+    },
+    /// Slew one stem of the playing set to `gain` over `fade_frames` sim ticks (`0` still slews
+    /// about 10 ms, click-free). A stem not in the set is ignored; resending the same gain is free.
+    MusicStemGain {
+        /// The stem's path, as named in the set.
+        stem: String,
+        /// The target linear gain.
+        gain: f32,
+        /// The slew length in sim ticks.
+        fade_frames: u32,
+    },
 }
+
+/// The most stems a [`AudioMessage::MusicSet`] plays; stems past it are dropped with `L5006`.
+pub const MUSIC_STEMS_MAX: usize = 8;

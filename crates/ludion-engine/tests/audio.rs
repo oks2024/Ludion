@@ -641,7 +641,10 @@ fn music_messages(engine: &Engine) -> Vec<(u64, AudioMessage)> {
         .filter(|entry| {
             matches!(
                 entry.message,
-                AudioMessage::MusicPlay { .. } | AudioMessage::MusicStop { .. }
+                AudioMessage::MusicPlay { .. }
+                    | AudioMessage::MusicStop { .. }
+                    | AudioMessage::MusicSet { .. }
+                    | AudioMessage::MusicStemGain { .. }
             )
         })
         .map(|entry| (entry.frame.as_u64(), entry.message.clone()))
@@ -724,6 +727,85 @@ fn music_never_affects_the_world_hash() {
             if push_audio {
                 queue(&mut engine).music_play("m.ogg", 1.0, 10);
                 queue(&mut engine).music_stop(5);
+            }
+            engine.advance_live();
+            hashes.push(engine.world_hash().unwrap().as_u64());
+        }
+        hashes
+    }
+    assert_eq!(run(true), run(false));
+}
+
+/// A game system that resends the set every tick and raises the perc stem at frame 3.
+fn adaptive_music(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+    let queue = world.resource_mut::<AudioQueue>().expect("AudioQueue");
+    queue.music_set(
+        "dungeon",
+        &[("music/base.ogg", 1.0), ("music/perc.ogg", 0.0)],
+        60,
+    );
+    if ctx.frame.as_u64() >= 3 {
+        queue.music_stem_gain("music/perc.ogg", 1.0, 30);
+    }
+}
+
+/// `music_set` resent every tick, with a stem raised later, logs frame-stamped `MusicSet` and
+/// `MusicStemGain` messages — the sink (not the log) makes the resend a no-op.
+#[test]
+fn an_adaptive_music_system_logs_the_set_and_the_stem_moves_by_frame() {
+    let mut engine = Engine::builder()
+        .system("adaptive_music", adaptive_music)
+        .build()
+        .expect("engine builds");
+    engine.load_inline_scene(SCENE).expect("scene loads");
+    for _ in 0..5 {
+        engine.advance_live();
+    }
+    let set = |frame| {
+        (
+            frame,
+            AudioMessage::MusicSet {
+                id: "dungeon".to_string(),
+                stems: vec![
+                    ("music/base.ogg".to_string(), 1.0),
+                    ("music/perc.ogg".to_string(), 0.0),
+                ],
+                fade_frames: 60,
+            },
+        )
+    };
+    let raise = |frame| {
+        (
+            frame,
+            AudioMessage::MusicStemGain {
+                stem: "music/perc.ogg".to_string(),
+                gain: 1.0,
+                fade_frames: 30,
+            },
+        )
+    };
+    assert_eq!(
+        music_messages(&engine),
+        vec![set(0), set(1), set(2), set(3), raise(3), set(4), raise(4)]
+    );
+    let log = engine.audio_log();
+    assert_eq!((log[0].sound(), log[0].gain()), (Some("dungeon"), None));
+    assert_eq!(
+        (log[4].sound(), log[4].gain()),
+        (Some("music/perc.ogg"), Some(1.0))
+    );
+}
+
+/// The set verbs never perturb the `WorldHash` either.
+#[test]
+fn music_sets_never_affect_the_world_hash() {
+    fn run(push_audio: bool) -> Vec<u64> {
+        let mut engine = engine();
+        let mut hashes = vec![engine.world_hash().unwrap().as_u64()];
+        for _ in 0..5 {
+            if push_audio {
+                queue(&mut engine).music_set("s", &[("a.ogg", 1.0), ("b.ogg", 0.0)], 10);
+                queue(&mut engine).music_stem_gain("b.ogg", 1.0, 5);
             }
             engine.advance_live();
             hashes.push(engine.world_hash().unwrap().as_u64());
