@@ -43,6 +43,8 @@ mod render_model;
 mod render_sprite;
 mod render_voxels;
 mod replay;
+mod room_assembly;
+mod room_assembly_bench;
 mod sculpt;
 mod serve;
 mod sim_hash;

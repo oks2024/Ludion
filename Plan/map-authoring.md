@@ -15,6 +15,8 @@
 > but also more blocked perimeter). M1 (protocol command + `ludion dev` hot loop) and M2 (GUI
 > painter) remain future, triggers below. macOS golden re-bless queued.
 >
+> **Room assembly (Serious Isaac 0022, 2026-11-09):** `generate-map` gained `--kit/--seed/--mirror` (L1399 for a mirror with fragments), `--prefab` (a `kind: prefab` room, `ids[0]` its handle) and `despawn_instance`; `crates/ludion-cli/tests/room_assembly*.rs` proves spawn/teardown/respawn hash-identical at 1 and 8 threads, replay without the prefab, map and kit, and a ~340-entity bench. **Decision:** conservative path, commit-output (a) intact; a runtime `spawn_map` is proposed, not approved (`Plan/owed.md`). **Finding:** kit colliders are 2D, so a generated room has no solver colliders and nav does not see it.
+>
 > Originally scheduled 2026-07-18 (user direction): the trigger fired early —
 > the queued human-gate batch's judgment calls are hard to judge on the current small scenes, so
 > full M0 — pipeline plus one scene rebuilt enlarged 2–4× — ran FIRST, and the gate batch plays once

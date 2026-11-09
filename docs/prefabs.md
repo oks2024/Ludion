@@ -103,6 +103,16 @@ Every part carries `PrefabInstance { source, part, root }`: the path as passed t
 
 Parts are not parented unless the prefab says so, so `entity.destroy` on the root removes only the root and its authored subtree. `despawn_instance(world, root)` removes the whole instance: every part, presentation parts included, in ascending id order, and returns those ids; `root` is `ids[0]` of `spawn_prefab`. A system calling it declares `.query::<(&PrefabInstance,)>()`.
 
+## Rooms from maps
+
+`ludion generate-map <map> --out rooms/x.prefab.yaml --prefab [--kit K] [--seed N] [--mirror x|z]` compiles a map into a `kind: prefab` room: one committed, drift-gated file per combination (`scripts/map-drift.mjs` rechecks it with the flags recorded in `generated_from`). There is no runtime map compile; every combination a game spawns is a committed prefab.
+
+- **Mirror** reflects every transform and negates yaw; scale is never negative, so pieces keep their handedness and colliders stay exact. Marker passthrough components are copied verbatim, so a game component holding a direction or offset is not mirrored. A mirror on a map with fragments is `L1399`.
+- **Paths and refusals.** `--prefab` rewrites asset paths relative to the prefab file, except inside game components, which are copied as written. The map's `physics:` is refused and its `seed:` is dropped.
+- **The handle.** `ids[0]` of `spawn_prefab` is the room's handle: `despawn_instance(world, ids[0])` tears the whole room down.
+- **`preload:`** the room prefabs a door may spawn, so the first spawn pays nothing.
+- **Nav does not see a room.** Kit colliders are 2D `aabb`/`circle`, so in a 3D physics world a generated room has no solver colliders.
+
 ## Replays and reload
 
 - **A recording carries the prefab text.** Each source read from disk is recorded inline — in-system spawns at the first load and at each reload, `prefab.spawn` with the command — and under replay the library never touches disk. A replay reproduces its hash trace after the prefab file changes or is deleted.

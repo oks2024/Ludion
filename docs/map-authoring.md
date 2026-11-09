@@ -19,6 +19,8 @@ ludion map-check scenes/district-plaza.map.yaml            # occupancy + reachab
 ludion generate-map scenes/district-plaza.map.yaml         # → scenes/district-plaza.yaml
 ludion generate-map scenes/*.map.yaml                      # both verbs batch over several sources
 ludion generate-map scenes/district-plaza.map.yaml --check # byte-compare against the committed scene, write nothing
+ludion generate-map a.map.yaml --kit k.kit.yaml --seed 3 --mirror x --out rooms/a.yaml   # overrides need --out
+ludion generate-map a.map.yaml --out rooms/a.prefab.yaml --prefab   # a room prefab for spawn_prefab
 ```
 
 Iterate **edit map → `map-check` → `generate-map`**. Never edit the generated scene: it is
@@ -178,7 +180,7 @@ so adding it never moves a generated scene (`ludion docs map-check`).
   or kit `L1021`; an invalid kit entry or marker `variant` `L1022`; a marker outside the grid
   `L1023`; an unknown marker `kind` `L1024`; a name collision `L1025`; a footprint run that does not
   divide evenly `L1026` (an 8-cell run tiles with `[4, 1]`, a 6-cell run does not); an IO failure
-  `L1015`; `generate-map --check` finding a scene that differs from its source `L1039`. `ludion explain L####` prints the full form of each. The placement lints `L1027`–`L1029`,
+  `L1015`; `generate-map --check` finding a scene that differs from its source `L1039`; `--mirror` on a map with fragments `L1399`. `ludion explain L####` prints the full form of each. The placement lints `L1027`–`L1029`,
   `L1031` and `L1032` are warnings raised by `map-check`, never by `generate-map`
   (`ludion docs map-check`). Both verbs also run the scene check on the generated entities' built-in
   components, so a kit value `check-scene` rejects (a collider extent `<= 0`, `L1116`) fails them too.
@@ -201,6 +203,7 @@ so adding it never moves a generated scene (`ludion docs map-check`).
 
 ## Next
 
+- `ludion docs prefabs` — rooms spawned at runtime.
 - `ludion docs map-check` — reading the report, `--traverse` sizing, and the placement lints.
 - `ludion docs scene-format` — the strict-YAML scene document the compiler emits.
 - `ludion docs scene-transitions` — the gates a map's `Gate` markers drive.
