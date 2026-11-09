@@ -147,6 +147,47 @@ pub fn move_character_with<P: PhysicsPose, R: ParentPose>(
     displacement: [f32; 3],
     constraint: Option<&mut dyn MoveConstraint>,
 ) -> Result<MoveReport, MotorError> {
+    let prepared = prepare::<P, R>(world, entity, displacement)?;
+    let (outcome, platform_now) = {
+        let physics = world
+            .resource::<PhysicsWorld>()
+            .ok_or(MotorError::NoPhysicsWorld)?;
+        let solver = Solver::new(physics, entity, &prepared.checked);
+        let outcome = solver.solve(
+            prepared.feet,
+            displacement,
+            prepared.was_grounded,
+            constraint,
+            prepared.carry.as_ref(),
+        );
+        let platform_now = platform_after::<P, R>(world, physics, &outcome);
+        (outcome, platform_now)
+    };
+    Ok(apply::<P>(
+        world,
+        entity,
+        prepared.tick,
+        outcome,
+        platform_now,
+    ))
+}
+
+/// Everything a call reads before it solves: the validated motor, the feet and the carry due.
+pub(super) struct Prepared {
+    pub(super) feet: [f32; 3],
+    pub(super) displacement: [f32; 3],
+    pub(super) checked: CharacterMotor,
+    pub(super) was_grounded: bool,
+    pub(super) carry: Option<CarryPlan>,
+    pub(super) tick: u64,
+}
+
+/// Reads and validates a call's inputs and plans its carry, in the order the errors are reported.
+pub(super) fn prepare<P: PhysicsPose, R: ParentPose>(
+    world: &World,
+    entity: EntityId,
+    displacement: [f32; 3],
+) -> Result<Prepared, MotorError> {
     let motor = world
         .get::<CharacterMotor>(entity)
         .ok()
@@ -175,26 +216,49 @@ pub fn move_character_with<P: PhysicsPose, R: ParentPose>(
             reason: format!("{pointer}: {reason}"),
         });
     }
-    let (outcome, tick, platform_now) = {
-        let physics = world
-            .resource::<PhysicsWorld>()
-            .ok_or(MotorError::NoPhysicsWorld)?;
-        let tick = physics.last_write_frame.map_or(0, |frame| frame + 1);
-        let carry = plan_carry::<P, R>(world, physics, state, tick);
-        let solver = Solver::new(physics, entity, &checked);
-        let outcome = solver.solve(feet, displacement, was_grounded, constraint, carry.as_ref());
-        let platform_now = outcome
-            .report
-            .ground
-            .filter(|_| outcome.report.grounded)
-            .filter(|hit| !physics.is_rigid(hit.entity))
-            .and_then(|hit| world_pose::<P, R>(world, hit.entity))
-            .map(|(translation, rotation)| PlatformPose {
-                translation,
-                rotation,
-            });
-        (outcome, tick, platform_now)
-    };
+    let physics = world
+        .resource::<PhysicsWorld>()
+        .ok_or(MotorError::NoPhysicsWorld)?;
+    let tick = physics.last_write_frame.map_or(0, |frame| frame + 1);
+    let carry = plan_carry::<P, R>(world, physics, state, tick);
+    Ok(Prepared {
+        feet,
+        displacement,
+        checked,
+        was_grounded,
+        carry,
+        tick,
+    })
+}
+
+/// The support pose the motor stands on after `outcome`, `None` unless it ended grounded on a
+/// non-rigid support with a pose.
+pub(super) fn platform_after<P: PhysicsPose, R: ParentPose>(
+    world: &World,
+    physics: &PhysicsWorld,
+    outcome: &Outcome,
+) -> Option<PlatformPose> {
+    outcome
+        .report
+        .ground
+        .filter(|_| outcome.report.grounded)
+        .filter(|hit| !physics.is_rigid(hit.entity))
+        .and_then(|hit| world_pose::<P, R>(world, hit.entity))
+        .map(|(translation, rotation)| PlatformPose {
+            translation,
+            rotation,
+        })
+}
+
+/// Writes a solved call: the pose `P`, the [`CharacterMotorState`] and the physics world's move
+/// report. Returns the report.
+pub(super) fn apply<P: PhysicsPose>(
+    world: &mut World,
+    entity: EntityId,
+    tick: u64,
+    outcome: Outcome,
+    platform_now: Option<PlatformPose>,
+) -> MoveReport {
     let frame = FrameIndex::new(tick);
 
     if let Ok(Some(pose)) = world.get_mut::<P>(entity) {
@@ -227,7 +291,7 @@ pub fn move_character_with<P: PhysicsPose, R: ParentPose>(
             .move_reports
             .insert(entity, (frame, outcome.report.clone()));
     }
-    Ok(outcome.report)
+    outcome.report
 }
 
 /// How far below the feet `move_character`'s ground probe looks: `snap_distance + skin_width` when
@@ -394,9 +458,9 @@ enum Class {
     Ceiling,
 }
 
-struct Outcome {
+pub(super) struct Outcome {
     feet: [f32; 3],
-    report: MoveReport,
+    pub(super) report: MoveReport,
     /// A carry was planned but the move was stuck, so it was not applied.
     carry_skipped: bool,
 }
@@ -413,14 +477,14 @@ struct Slide {
 
 /// The platform carry decided at the start of a call: the support, its pose then and now, and its
 /// surface displacement.
-struct CarryPlan {
+pub(super) struct CarryPlan {
     entity: EntityId,
     from: PlatformPose,
     to: PlatformPose,
     surface: [f32; 3],
 }
 
-struct Solver<'a> {
+pub(super) struct Solver<'a> {
     physics: &'a PhysicsWorld,
     filter: QueryFilter,
     capsule: Capsule,
@@ -434,7 +498,7 @@ struct Solver<'a> {
 }
 
 impl<'a> Solver<'a> {
-    fn new(physics: &'a PhysicsWorld, entity: EntityId, motor: &CharacterMotor) -> Self {
+    pub(super) fn new(physics: &'a PhysicsWorld, entity: EntityId, motor: &CharacterMotor) -> Self {
         Solver {
             physics,
             filter: motor_filter(physics, entity, motor),
@@ -598,7 +662,7 @@ impl<'a> Solver<'a> {
     /// displacement against everything (the support's end stop holds), then the rigid part with the
     /// support excluded (a rider moves rigidly with its support, whose collider casts see a tick
     /// late). A stuck move applies no carry.
-    fn solve(
+    pub(super) fn solve(
         &self,
         start: [f32; 3],
         displacement: [f32; 3],

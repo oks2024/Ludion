@@ -350,6 +350,15 @@ struct Resolved {
     centre: CentreLine,
 }
 
+/// Whether `entity` has a lane that `move_character` would apply: the gate of `resolve`.
+pub(crate) fn lane_active(world: &World, entity: EntityId) -> bool {
+    world
+        .get::<LaneConstraint>(entity)
+        .ok()
+        .flatten()
+        .is_some_and(|lane| !lane.path.is_empty() && (lane.blend != 0.0 || lane.engaged))
+}
+
 /// Reads `entity`'s lane and loads its path; `None` when the lane is inert (absent, no path, fully
 /// off, a field out of range, or a path that fails to load — the last two reported once).
 fn resolve(world: &mut World, entity: EntityId) -> Option<Resolved> {

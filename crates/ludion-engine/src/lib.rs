@@ -191,7 +191,7 @@ pub use model_sheet::{
 };
 pub use motor::{
     MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE,
-    MOTOR_STUCK, MOTOR_WALL, fits_character, move_character, move_character_with,
+    MOTOR_STUCK, MOTOR_WALL, fits_character, move_character, move_character_with, move_characters,
     probe_character_ground, resize_character, teleport_character,
 };
 pub use nav::{Nav, NavConfig, nav_steer, nav_update};

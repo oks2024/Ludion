@@ -87,7 +87,7 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
      and the lane eases on the gameplay `dt` from `PhysicsWorld::gameplay_dt`.
    - Gravity and velocity are the moveset's, not the motor's.
    - **Why:** the moveset needs the report in the same tick (landed means switch state). A function
-     keeps ordering in game Rust, the `move_and_slide` and `crossfade` idiom.
+     keeps ordering in game Rust, the `move_and_slide` and `crossfade` idiom (decision 25 adds a batch).
 5. **The character is a kinematic capsule body in rapier.** The motor excludes itself from its own
    casts. Other queries (line of sight, projectiles) hit it, and it pushes dynamic props (rapier's
    kinematic behavior). Dynamic bodies never push it. **Why:** one world answers every query, and
@@ -244,6 +244,22 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
       re-acquires globally) and keeps `blend`, as `set_path` does.
     - **Why:** the lateral removal must live inside collide-and-slide, which only the motor owns, and
       2.5D, rails and lane runners all share it.
+25. **Batch moves and the carry rule.** `move_characters(world, &[(entity, displacement)], &mut out)`
+    (physics generic over `P`/`R`, engine bound to `Transform`) moves a crowd with its casts run in
+    parallel over fixed chunks of 16 (`ludion_core::par`); results apply in slice order. `move_character`
+    stays the call for ordered, report-first game logic: its call order is still game order.
+    - **Tick-start support pose.** Every support pose a batch call reads (the carry due and the
+      `platform` it records) is the world as it was when the batch began. With no support moving during
+      the batch the result is bit-identical to serial `move_character` calls in slice order, at 1/2/8
+      threads, and independent of slice order. A motor standing on a motor is carried by the support's
+      previous-tick motion: a one-tick lag that loses no motion.
+    - A duplicate entity moves on its first entry; later ones get `MotorError::DuplicateInBatch`. An
+      entity with an active lane gets `MotorError::LaneInBatch` (the engine wrapper checks the
+      `resolve` gate); there is no `MoveConstraint` in a batch.
+    - **Why:** the 500-motor horde spends about twice the physics step in serial casts
+      (`Plan/physics.md` "Horde bench"); casts only read `&PhysicsWorld`, so they parallelise without
+      touching the sim's single-writer rule.
+    - Shipped under Serious Isaac 0020's conservative clause, not an owner amendment.
 
 ## The formats (sketch; exact key names settle in the wave that builds them)
 

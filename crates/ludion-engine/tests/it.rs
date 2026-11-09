@@ -56,6 +56,7 @@ mod local_shadow_fade;
 mod mesh_collider;
 mod mesh_grid;
 mod model_sheet;
+mod motor_batch;
 mod nav;
 mod nav_bench;
 mod parent_joint;

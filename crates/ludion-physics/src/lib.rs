@@ -194,7 +194,8 @@ pub use motor::{
     CharacterMotor, CharacterMotorState, GroundHit, GroundProbe, LaneEnd, LaneFrame, LaneReport,
     MotorError, MoveConstraint, MoveReport, PlatformCarry, PlatformPose, ResizeReport, SurfaceHit,
     SurfaceVelocity, fits_character, ground_probe_reach, height_in_force, move_character,
-    move_character_with, probe_character_ground, resize_character, teleport_character,
+    move_character_with, move_characters, probe_character_ground, resize_character,
+    teleport_character,
 };
 pub use pose::PhysicsPose;
 pub use queries::{QueryFilter, QueryHit};

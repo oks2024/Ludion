@@ -150,7 +150,7 @@
 //!   directions (`ludion docs path`).
 //! - **Character motor** — [`CharacterMotor`] gives an entity a kinematic capsule whose origin is the
 //!   character's feet; [`move_character`] (or [`move_character_with`], taking an explicit
-//!   constraint) moves it through the world. The `MOTOR_*` constants are the colours of the `motor`
+//!   constraint) moves it through the world, and [`move_characters`] moves a crowd with parallel casts. The `MOTOR_*` constants are the colours of the `motor`
 //!   debug-draw category (`ludion docs motor`). [`LaneConstraint`] holds a motor to a `kind: path`
 //!   lane; the `LANE_*` constants are the colours (and [`LANE_ERROR_FULL`], the error that reaches
 //!   the full off-lane colour) of the `lane` debug-draw category (`ludion docs lane`).
@@ -233,12 +233,12 @@ pub use ludion_engine::{
     animation_events, builtin_registry, bullet_age, bullet_is_alive, bullet_position,
     camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw, despawn_instance,
     first_person_eye, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
-    move_character, move_character_with, nav_steer, nav_update, path_follow, path_follower_motion,
-    play_patterns, play_sound, posed_joint_world, probe_character_ground, projectiles_step,
-    reparent, report_diagnostic, report_full_diagnostic, resize_character, revert_prefab,
-    set_clip_speed, set_look, snap_rig, spawn_prefab, spawn_projectile, switch_skin_to_ragdoll,
-    switch_to_ragdoll, teleport_character, unpack_prefab, validate_pattern_docs, volley_hits,
-    world_transform,
+    move_character, move_character_with, move_characters, nav_steer, nav_update, path_follow,
+    path_follower_motion, play_patterns, play_sound, posed_joint_world, probe_character_ground,
+    projectiles_step, reparent, report_diagnostic, report_full_diagnostic, resize_character,
+    revert_prefab, set_clip_speed, set_look, snap_rig, spawn_prefab, spawn_projectile,
+    switch_skin_to_ragdoll, switch_to_ragdoll, teleport_character, unpack_prefab,
+    validate_pattern_docs, volley_hits, world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;

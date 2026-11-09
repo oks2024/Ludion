@@ -15,9 +15,10 @@ use ludion_core::ids::EntityId;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
     Engine, EngineBuilder, Mesh, MeshSource, ProjectileConfig, Projectiles, SkinBone, Transform,
-    TransformHierarchy, move_character, projectiles_step, spawn_projectile, switch_skin_to_ragdoll,
+    TransformHierarchy, move_characters, projectiles_step, spawn_projectile,
+    switch_skin_to_ragdoll,
 };
-use ludion_physics::{CharacterMotor, PhysicsWorld};
+use ludion_physics::{CharacterMotor, MotorError, PhysicsWorld};
 use ludion_projectiles::{ProjectileDesc, Response};
 use ludion_spatial::spatial3d;
 use ludion_spatial::{Body, Collider, Joint, JointKind, Shape};
@@ -67,15 +68,21 @@ pub fn motor_walk(world: &mut World, ctx: &SystemCtx) {
         .collect();
     motors.sort();
     let phase = ctx.frame.as_u64() / 60;
-    for (i, id) in motors.into_iter().enumerate() {
-        let sign = if (i as u64 + phase).is_multiple_of(2) {
-            1.0
-        } else {
-            -1.0
-        };
-        // `NoPhysicsWorld` on tick 0 is expected.
-        let _ = move_character(world, id, [0.04 * sign, -0.1, 0.0]);
-    }
+    let moves: Vec<(EntityId, [f32; 3])> = motors
+        .into_iter()
+        .enumerate()
+        .map(|(i, id)| {
+            let sign = if (i as u64 + phase).is_multiple_of(2) {
+                1.0
+            } else {
+                -1.0
+            };
+            (id, [0.04 * sign, -0.1, 0.0])
+        })
+        .collect();
+    // `NoPhysicsWorld` on tick 0 is expected.
+    let mut out = vec![Err(MotorError::NoPhysicsWorld); moves.len()];
+    move_characters(world, &moves, &mut out);
 }
 
 /// The skins in id order, the scene's authoring order.

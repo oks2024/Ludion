@@ -92,6 +92,72 @@ pub fn move_character_with(
     Ok(report)
 }
 
+/// Moves many motors in one call, their casts run in parallel; see
+/// [`ludion_physics::move_characters`] for the carry rule (every support pose is the tick-start
+/// pose, so a motor riding a motor is carried by its support's previous-tick motion), the serial
+/// equivalence and the duplicate rule. `out[i]` is the result for `moves[i]`.
+///
+/// An entity with an active `LaneConstraint` (a path and a non-zero `blend` or `engaged`) is not
+/// moved: its slot is [`MotorError::LaneInBatch`]; call [`move_character`] for it. Like
+/// `move_character`, each moved motor draws the `motor` debug category, in slice order.
+///
+/// ```no_run
+/// # use ludion_core::ids::EntityId;
+/// # use ludion_engine::move_characters;
+/// # use ludion_physics::MotorError;
+/// # use ludion_ecs::{SystemCtx, World};
+/// fn walk(world: &mut World, _ctx: &SystemCtx, ids: &[EntityId]) {
+///     let moves: Vec<_> = ids.iter().map(|id| (*id, [0.05, -0.2, 0.0])).collect();
+///     let mut out = vec![Err(MotorError::NoPhysicsWorld); moves.len()];
+///     move_characters(world, &moves, &mut out);
+/// }
+/// ```
+///
+/// # Panics
+/// Panics if `moves` and `out` differ in length.
+pub fn move_characters(
+    world: &mut World,
+    moves: &[(EntityId, [f32; 3])],
+    out: &mut [Result<MoveReport, MotorError>],
+) {
+    assert_eq!(
+        moves.len(),
+        out.len(),
+        "move_characters: {} moves but {} output slots",
+        moves.len(),
+        out.len()
+    );
+    let grounded: Vec<bool> = moves
+        .iter()
+        .map(|(entity, _)| {
+            world
+                .get::<CharacterMotorState>(*entity)
+                .ok()
+                .flatten()
+                .is_some_and(|state| state.grounded)
+        })
+        .collect();
+    let mut index = Vec::with_capacity(moves.len());
+    let mut sub = Vec::with_capacity(moves.len());
+    for (i, &(entity, displacement)) in moves.iter().enumerate() {
+        if crate::lane::lane_active(world, entity) {
+            out[i] = Err(MotorError::LaneInBatch(entity));
+        } else {
+            index.push(i);
+            sub.push((entity, displacement));
+        }
+    }
+    let mut results = vec![Err(MotorError::NoPhysicsWorld); sub.len()];
+    ludion_physics::move_characters::<Transform, TransformHierarchy>(world, &sub, &mut results);
+    for (slot, result) in index.into_iter().zip(results) {
+        if let Ok(report) = &result {
+            let (entity, displacement) = moves[slot];
+            draw(world, entity, grounded[slot], displacement, report);
+        }
+        out[slot] = result;
+    }
+}
+
 /// Sets the capsule height in force; see [`ludion_physics::resize_character`].
 ///
 /// ```no_run
@@ -437,5 +503,101 @@ entities:
         assert!(!of(&drawn, MOTOR_STUCK).is_empty());
         assert!(of(&drawn, MOTOR_GROUNDED).is_empty());
         assert!(of(&drawn, MOTOR_AIRBORNE).is_empty());
+    }
+
+    fn mate(name: &str, x: f32) -> String {
+        let feet = block([x, 0.0, 0.0], "          ");
+        format!(
+            "  - name: {name}
+    components:
+      Transform:
+        translation:{feet}
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9
+"
+        )
+    }
+
+    fn motors(world: &mut World) -> Vec<EntityId> {
+        let mut ids: Vec<_> = world
+            .query_ids::<(&CharacterMotor,)>()
+            .map(|(entity, _)| entity)
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    thread_local! {
+        static BATCH: std::cell::RefCell<Vec<Result<MoveReport, MotorError>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Runs a batch of `[ids[0], ids[0], ids[1]]` on the second tick on, keeping the last results.
+    fn duplicate_batch(world: &mut World, _ctx: &SystemCtx) {
+        let ids = motors(world);
+        let moves = [(ids[0], [0.0, -0.1, 0.0]); 2]
+            .into_iter()
+            .chain([(ids[1], [0.0, -0.1, 0.0])])
+            .collect::<Vec<_>>();
+        let mut out = vec![Err(MotorError::NoPhysicsWorld); moves.len()];
+        move_characters(world, &moves, &mut out);
+        BATCH.with(|slot| *slot.borrow_mut() = out);
+    }
+
+    fn lane_batch(world: &mut World, _ctx: &SystemCtx) {
+        let ids = motors(world);
+        let lane = crate::lane::LaneConstraint {
+            path: "lane.path.yaml".into(),
+            engaged: true,
+            ..Default::default()
+        };
+        world.insert(ids[0], lane).unwrap();
+        let moves = ids
+            .iter()
+            .map(|id| (*id, [0.0, -0.1, 0.0]))
+            .collect::<Vec<_>>();
+        let mut out = vec![Err(MotorError::NoPhysicsWorld); moves.len()];
+        move_characters(world, &moves, &mut out);
+        BATCH.with(|slot| *slot.borrow_mut() = out);
+    }
+
+    fn batch_scene() -> String {
+        scene(0.0, &mate("mate", 3.0))
+    }
+
+    #[test]
+    fn a_batch_draws_one_capsule_per_moved_motor() {
+        BATCH.with(|slot| slot.borrow_mut().clear());
+        let drawn = drawn("batch", &batch_scene(), duplicate_batch, 3);
+        // Two moved motors; the duplicate entry draws nothing.
+        assert_eq!(of(&drawn, MOTOR_PROBE).len(), 2);
+    }
+
+    #[test]
+    fn a_duplicate_in_a_batch_is_refused_and_the_first_copy_moves() {
+        BATCH.with(|slot| slot.borrow_mut().clear());
+        drawn("batch-dup", &batch_scene(), duplicate_batch, 3);
+        BATCH.with(|slot| {
+            let out = slot.borrow();
+            assert!(out[0].is_ok(), "{:?}", out[0]);
+            assert!(matches!(out[1], Err(MotorError::DuplicateInBatch(_))));
+            assert!(out[2].is_ok());
+        });
+    }
+
+    #[test]
+    fn a_lane_entity_is_refused_in_a_batch() {
+        BATCH.with(|slot| slot.borrow_mut().clear());
+        drawn("batch-lane", &batch_scene(), lane_batch, 3);
+        BATCH.with(|slot| {
+            let out = slot.borrow();
+            assert!(
+                matches!(out[0], Err(MotorError::LaneInBatch(_))),
+                "{:?}",
+                out[0]
+            );
+            assert!(out[1].is_ok());
+        });
     }
 }

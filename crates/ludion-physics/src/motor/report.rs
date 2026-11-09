@@ -184,6 +184,10 @@ pub enum MotorError {
     },
     /// The probed feet position has a non-finite component.
     NonFiniteFeet([f32; 3]),
+    /// The entity appears more than once in one `move_characters` batch.
+    DuplicateInBatch(EntityId),
+    /// The entity has an active `LaneConstraint`, which a batch does not apply.
+    LaneInBatch(EntityId),
 }
 
 impl fmt::Display for MotorError {
@@ -224,6 +228,15 @@ impl fmt::Display for MotorError {
             MotorError::NonFiniteFeet(feet) => {
                 write!(f, "the probed feet {feet:?} are not finite")
             }
+            MotorError::DuplicateInBatch(entity) => write!(
+                f,
+                "{entity:?} is listed twice in one move_characters batch; merge the displacements"
+            ),
+            MotorError::LaneInBatch(entity) => write!(
+                f,
+                "{entity:?} has an active LaneConstraint, which move_characters does not apply; \
+                 call move_character for it"
+            ),
         }
     }
 }

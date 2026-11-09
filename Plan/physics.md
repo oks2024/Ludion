@@ -930,6 +930,8 @@ authoritative). The `WorldHash` is equal at 1 and 8 threads.
 | `projectiles_step` | 0.68 / 0.90 | 0.26 / 0.30 | 2.6x |
 | `physics_mirror` | 0.14 / 0.16 | 0.14 / 0.16 | 1.0x |
 
+**Batch (decision 25 of `Plan/character-controller.md`):** the `motor_walk` row above is the serial `move_character` figure; the driver now calls `move_characters`, and the same run gives 3.72 / 3.92 ms at 1t and 1.22 / 1.26 ms at 8t (3.05x, 7.5 and 2.4 us per motor), the 1t and 8t `WorldHash` equal and the committed trace unchanged.
+
 `motor_walk` is 7.5 us per motor. Step stages at 8t (ms, mean): solver 0.88 (velocity resolution
 0.81), collision detection 0.63 (narrow phase 0.46, broad phase 0.14), update 0.06, island and
 constraint upkeep under 0.03 each; 1,865 bodies, 1,820 awake, 406 active contact pairs, 1,224 impulse
