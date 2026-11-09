@@ -231,11 +231,17 @@ gone goes inert and is reported.
 - **Settle:** every part `PhysicsWorld::is_sleeping(part) == Some(true)`. Sleep is already debounced by
   `sleep_after_ticks` and restored with the snapshot, so the retire system keeps no counter. A blast
   wakes sleepers; retiring, not sleeping, bounds the cost.
+- **Never-sleepers:** some parts never fall asleep, so pair the settle retire with a max-age
+  force-retire (the example's `max_sim_ticks`), or those groups stay simulated forever.
 - **Pinned group:** a part joined to a `Body::Static` collider outside the group. Evict those last.
 - **Re-admission:** re-insert the removed `Collider` and `Joint` (plus a `Velocity` for the hit). Bodies
   rebuild at the retired pose, and **joint zeros are re-captured there, so limits count from the
   settled pose, not the rig rest**. Keeping the removed values across a restore is the game's job
   (re-read them from the parts prefab in the same order).
+
+The runnable pool is `cargo run -p ludion --example ragdoll_budget`: a simulated-group cap,
+settle-retire, oldest-unpinned eviction (pinned last) and a retired cap, its state in registered
+components so it hashes and restores. Copy its half above `main`.
 
 Measured ragdoll step cost lives in the physics budget files (`ludion devdocs budget-files`). The
 idiom is pinned by `crates/ludion-testkit/tests/ragdoll_retire.rs`, with helpers in `tests/common`.

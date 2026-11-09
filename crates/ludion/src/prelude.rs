@@ -132,8 +132,8 @@
 //!   components. [`AssemblyData`] (+ [`load_assembly`]) is the meshed model the switch reads —
 //!   whatever a game's asset cache already holds for the entity's `assembly` path.
 //!   [`switch_skin_to_ragdoll`] does the same for a skinned mesh: it spawns a parts prefab of
-//!   `SkinBone` bodies bound to the live skin (the prefab's last part, `$skin`, stands for it) at the
-//!   rest pose, with the skin's velocity.
+//!   [`SkinBone`] bodies bound to the live skin (the prefab's last part, `$skin`, stands for it) at the
+//!   rest pose, with the skin's velocity; a game finds a skin's parts by their [`SkinBone`].
 //! - **Projectile patterns** — [`Volley`] is one fired volley, a closed-form bullet field on the
 //!   entity that carries it; [`PatternPlayer`] plays a `kind: pattern` document's timeline, standing
 //!   a [`Volley`] up on each entry's frame. [`play_patterns`] and [`advance_volleys`] are the
@@ -225,8 +225,8 @@ pub use ludion_engine::{
     PrefabReverted, ProbeShape, Profile, ProjectileConfig, ProjectileLook, ProjectileVisual,
     ProjectileVisuals, Projectiles, Projection, RampSpec, ReflectionProbe, RenderExtent,
     RenderSettings, Residue, ResidueStore, ResumeOutcome, RigConfig, RigMode, RigState, RunSave,
-    SceneSwitch, ShakeConfig, Shutdown, SpotLight, Springs, Sprite, SpriteBlend, SuspendInfo,
-    SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
+    SceneSwitch, ShakeConfig, Shutdown, SkinBone, SpotLight, Springs, Sprite, SpriteBlend,
+    SuspendInfo, SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
     TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect, UiText, VOLLEY_MAX_BULLETS,
     VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Volley, VolleyCenter, VolleyShape,
     WorldPose, add_fov_kick, add_kick, add_look, add_look_counts, add_trauma, advance_volleys,
