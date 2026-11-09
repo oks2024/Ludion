@@ -24,13 +24,15 @@ Unpinned M5, 2026-11-09, medians of three runs — **indicative, not authoritati
 - The same 500 moves through `move_characters`: 3.72 ms at 1 thread, 1.22 ms at 8.
 - `projectiles_step` for 5,000 shots: 0.68 ms at 1 thread, 0.26 ms at 8.
 
-Reproduce: `cargo test -p ludion-engine --release --features physics-profiler --test it -- horde_bench --ignored --nocapture`. It checks `budgets/pinned-<box>-physics-horde.toml` when one exists for the platform.
+Reproduce: `cargo test -p ludion-engine --release --features physics-profiler --test it -- horde_bench --ignored --nocapture`. It checks `budgets/pinned-<box>-physics-horde.toml` when one exists for the platform. Its table (d) compares the dispersed walk with a converged arm, where every motor walks to one point and the crowd piles up.
 
 ## Crowds of motors
 
 Motor casts dominate a character crowd, not contacts. Move many motors per tick with `move_characters` (`ludion docs motor`, "Batch moves"): the casts run in parallel and the result does not depend on the thread count.
 
 **Pair prefilter.** Kinematic–kinematic and kinematic–static pairs never reach the contact graph, so a motor's capsule adds no contact pairs and no narrow-phase work (it still costs broad-phase work and its own casts). `PhysicsWorld::contact_pair_census` counts tracked and touching pairs per body-kind pairing: read it to see where pairs come from before blaming the solver.
+
+**Converged crowds.** A motor's casts visit every collider their bounds overlap, including colliders its layer ignores; each ignored one costs a bitmask test, not an exact test, but a crowd piled into one spot overlaps tens to hundreds of neighbours per query. A converged crowd therefore costs more per motor than a dispersed one, and its cost follows local density. The bench's converged arm measures it.
 
 ## L4034
 

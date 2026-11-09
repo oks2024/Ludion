@@ -6,6 +6,7 @@ use ludion_core::math::{cos, sqrt};
 use ludion_core::time::FrameIndex;
 use ludion_ecs::World;
 use ludion_spatial::ParentPose;
+use rapier3d::prelude::SharedShape;
 
 use super::carry::{rigid_carry, rotate, rotate_yaw};
 use super::component::{CharacterMotor, CharacterMotorState, PlatformPose, check, height_in_force};
@@ -14,6 +15,7 @@ use super::surface::SurfaceVelocity;
 use super::sweep::{Capsule, Contact};
 use crate::pose::PhysicsPose;
 use crate::queries::{QueryFilter, QueryHit};
+use crate::sweep::SweepFilter;
 use crate::world::PhysicsWorld;
 
 /// Depenetration passes before the motor gives up and reports `stuck`.
@@ -486,8 +488,12 @@ pub(super) struct CarryPlan {
 
 pub(super) struct Solver<'a> {
     physics: &'a PhysicsWorld,
-    filter: QueryFilter,
-    capsule: Capsule,
+    filter: SweepFilter,
+    /// The motor's capsule, the skin-inflated one `contacts` queries and the wider one `refine`
+    /// queries, each built once for the solve.
+    shape: SharedShape,
+    inflated: SharedShape,
+    wide: SharedShape,
     height: f32,
     radius: f32,
     skin: f32,
@@ -499,13 +505,28 @@ pub(super) struct Solver<'a> {
 
 impl<'a> Solver<'a> {
     pub(super) fn new(physics: &'a PhysicsWorld, entity: EntityId, motor: &CharacterMotor) -> Self {
+        let capsule = Capsule {
+            half_height: motor.half_height_for(motor.height),
+            radius: motor.radius,
+        };
+        let margin = 2.0 * motor.skin_width + 1e-3;
+        let filter = physics
+            .sweep_filter(&motor_filter(physics, entity, motor))
+            .expect("a motor's ignored layers come from the layer table");
         Solver {
             physics,
-            filter: motor_filter(physics, entity, motor),
-            capsule: Capsule {
-                half_height: motor.half_height_for(motor.height),
-                radius: motor.radius,
-            },
+            filter,
+            shape: capsule.built(physics),
+            inflated: Capsule {
+                radius: motor.radius + motor.skin_width,
+                ..capsule
+            }
+            .built(physics),
+            wide: Capsule {
+                radius: motor.radius + margin,
+                ..capsule
+            }
+            .built(physics),
             height: motor.height,
             radius: motor.radius,
             skin: motor.skin_width,
@@ -560,7 +581,7 @@ impl<'a> Solver<'a> {
         pushing: bool,
     ) -> Option<QueryHit> {
         self.physics.cast_capsule(
-            self.capsule,
+            &*self.shape,
             self.center(feet),
             direction,
             length,
@@ -583,13 +604,9 @@ impl<'a> Solver<'a> {
     /// back to the real gap. A rigid wall-class contact is dropped
     /// while its prop is free to be pushed away.
     fn contacts(&self, feet: [f32; 3]) -> Vec<Contact> {
-        let inflated = Capsule {
-            radius: self.radius + self.skin,
-            ..self.capsule
-        };
         let mut contacts =
             self.physics
-                .capsule_contacts(inflated, self.center(feet), 0.0, &self.filter);
+                .capsule_contacts(&*self.inflated, self.center(feet), 0.0, &self.filter);
         for contact in &mut contacts {
             contact.dist += self.skin;
         }
@@ -610,12 +627,8 @@ impl<'a> Solver<'a> {
         fallback: [f32; 3],
     ) -> [f32; 3] {
         let margin = 2.0 * self.skin + 1e-3;
-        let wide = Capsule {
-            radius: self.radius + margin,
-            ..self.capsule
-        };
         self.physics
-            .capsule_contacts(wide, self.center(feet), margin / 2.0, &self.filter)
+            .capsule_contacts(&*self.wide, self.center(feet), margin / 2.0, &self.filter)
             .into_iter()
             .find(|contact| {
                 contact.entity == entity && len(sub(contact.point, point)) <= self.radius / 4.0
@@ -802,8 +815,10 @@ impl<'a> Solver<'a> {
     /// This solver with `entity`'s collider ignored as well.
     fn without(&self, entity: EntityId) -> Solver<'a> {
         Solver {
-            filter: self.filter.clone().exclude_also(entity),
-            capsule: self.capsule,
+            filter: self.filter.exclude_also(entity),
+            shape: self.shape.clone(),
+            inflated: self.inflated.clone(),
+            wide: self.wide.clone(),
             ..*self
         }
     }

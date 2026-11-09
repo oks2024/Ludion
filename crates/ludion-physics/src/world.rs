@@ -2494,7 +2494,7 @@ impl PhysicsWorld {
     ) -> Result<impl Fn(EntityId) -> bool + 'a, PhysicsError> {
         self.check_layer_names(&filter.ignored_layers)?;
         Ok(move |entity: EntityId| {
-            if Some(entity) == filter.exclude || Some(entity) == filter.exclude_also {
+            if Some(entity) == filter.exclude {
                 return true;
             }
             if !filter.include_sensors && self.entry(entity).is_some_and(|e| e.source.sensor) {

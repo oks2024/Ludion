@@ -4,6 +4,9 @@
 //! rows at 1 and 8 threads, rapier's step stages, the contact-pair census by body kind, and the
 //! awake part count.
 //!
+//! A converged arm (`motor_converge`) walks every motor to one point so the crowd piles up, to
+//! measure what overlapping motor queries cost against the dispersed walk.
+//!
 //! Ignored by default so CI stays fast; run it explicitly, in release, with rapier's profiler
 //! timers on (without the feature the stage table is skipped):
 //!
@@ -22,16 +25,20 @@
 use std::path::Path;
 
 use ludion_core::par;
-use ludion_engine::{ProfileReport, SkinBone, check_budget, profile_engine};
+use ludion_engine::{Engine, ProfileReport, SkinBone, Transform, check_budget, profile_engine};
 use ludion_physics::{
-    ContactPairCensus, MIRROR, PairCount, PhysicsWorld, STEP, StepBreakdown, WRITE,
+    CharacterMotor, ContactPairCensus, MIRROR, PairCount, PhysicsWorld, STEP, StepBreakdown, WRITE,
 };
 
 use crate::bench_rows::{Row, platform_budget, row};
-use crate::horde_driver::{MOTORS, RAGDOLLS, RETHROW_EVERY, SHOTS, build};
+use crate::horde_driver::{
+    CONVERGE_POINT, MOTORS, RAGDOLLS, RETHROW_EVERY, SHOTS, build, build_converged,
+};
 
 /// Ticks before measuring: past the tick-0 switch and the first landing.
 const WARMUP: u64 = 120;
+/// Ticks the converged arm walks before measuring: the ~26 m motor half at 0.1 m a tick, plus slack.
+const CONVERGE_WARMUP: u64 = 360;
 /// Eight re-throw rounds.
 const MEASURED: u64 = 240;
 const THREADS: usize = 8;
@@ -71,11 +78,22 @@ fn stats(values: &[f64]) -> (f64, f64) {
 }
 
 /// `profile` adds the `profile_engine` pass, which needs a GPU device; the smoke test skips it.
-fn run_arm(threads: usize, warmup: u64, measured: u64, profile: bool) -> Arm {
+fn run_arm(threads: usize, warmup: u64, measured: u64, profile: bool, converged: bool) -> Arm {
     par::with_threads(threads, || {
-        let mut engine = build();
+        let mut engine = if converged {
+            build_converged()
+        } else {
+            build()
+        };
         for _ in 0..warmup {
             engine.advance_live();
+        }
+        if converged && warmup >= CONVERGE_WARMUP {
+            let median = median_motor_distance(&mut engine);
+            assert!(
+                median < 3.0,
+                "the converged arm measures a dispersed crowd: median motor distance {median:.2} m"
+            );
         }
         let report = profile.then(|| {
             profile_engine(&mut engine, "physics-horde".into(), measured, 0).expect("profiles")
@@ -115,6 +133,29 @@ fn run_arm(threads: usize, warmup: u64, measured: u64, profile: bool) -> Arm {
     })
 }
 
+/// Median horizontal distance of the motors to the convergence point.
+fn median_motor_distance(engine: &mut Engine) -> f32 {
+    let mut distances: Vec<f32> = engine
+        .world_mut()
+        .query_ids::<(&CharacterMotor, &Transform)>()
+        .map(|(_, (_, at))| {
+            let dx = at.translation[0] - CONVERGE_POINT[0];
+            let dz = at.translation[2] - CONVERGE_POINT[2];
+            ludion_core::math::sqrt(dx * dx + dz * dz)
+        })
+        .collect();
+    distances.sort_by(f32::total_cmp);
+    distances[distances.len() / 2]
+}
+
+fn motor_row(arm: &Arm) -> &Row {
+    &arm.rows
+        .iter()
+        .find(|(n, _)| *n == "motor_walk")
+        .expect("the motor row")
+        .1
+}
+
 fn mean_pair(
     census: &[ContactPairCensus],
     pick: fn(&ContactPairCensus) -> PairCount,
@@ -128,8 +169,9 @@ fn mean_pair(
 
 #[test]
 fn horde_bench_runs() {
-    let arm = run_arm(1, 2, 2, false);
+    let arm = run_arm(1, 2, 2, false, false);
     assert_eq!(arm.census.len(), 2);
+    assert_eq!(run_arm(1, 2, 2, false, true).census.len(), 2);
     let tracked: usize = arm
         .census
         .iter()
@@ -153,11 +195,17 @@ fn horde_bench_runs() {
 #[test]
 #[ignore = "release-mode benchmark; run explicitly (see the module docs)"]
 fn horde_bench() {
-    let one = run_arm(1, WARMUP, MEASURED, true);
-    let eight = run_arm(THREADS, WARMUP, MEASURED, true);
+    let one = run_arm(1, WARMUP, MEASURED, true, false);
+    let eight = run_arm(THREADS, WARMUP, MEASURED, true, false);
     assert_eq!(
         one.hash, eight.hash,
         "WorldHash differs between 1 and {THREADS} threads"
+    );
+    let converged_one = run_arm(1, CONVERGE_WARMUP, MEASURED, true, true);
+    let converged_eight = run_arm(THREADS, CONVERGE_WARMUP, MEASURED, true, true);
+    assert_eq!(
+        converged_one.hash, converged_eight.hash,
+        "the converged WorldHash differs between 1 and {THREADS} threads"
     );
     println!(
         "horde bench: {MOTORS} motors, {RAGDOLLS} ragdolls, {SHOTS} shots, re-throw every \
@@ -250,7 +298,30 @@ fn horde_bench() {
     }
 
     println!(
-        "\n(d) awake ragdoll parts at {THREADS}t: min {}, mean {:.1}",
+        "\n(d) motor_walk, dispersed vs converged (after {CONVERGE_WARMUP} warmup ticks), ms per tick"
+    );
+    println!(
+        "{:<10} | {:>8} {:>8} | {:>8} {:>8} | {:>9} {:>9}",
+        "arm", "1t mean", "p99", "8t mean", "p99", "1t us/mtr", "8t us/mtr"
+    );
+    for (name, a, b) in [
+        ("dispersed", &one, &eight),
+        ("converged", &converged_one, &converged_eight),
+    ] {
+        let (ra, rb) = (motor_row(a), motor_row(b));
+        println!(
+            "{name:<10} | {:>8.3} {:>8.3} | {:>8.3} {:>8.3} | {:>9.2} {:>9.2}",
+            ra.mean,
+            ra.p99,
+            rb.mean,
+            rb.p99,
+            ra.mean * 1000.0 / MOTORS as f64,
+            rb.mean * 1000.0 / MOTORS as f64
+        );
+    }
+
+    println!(
+        "\n(e) awake ragdoll parts at {THREADS}t: min {}, mean {:.1}",
         eight.min_awake, eight.mean_awake
     );
 

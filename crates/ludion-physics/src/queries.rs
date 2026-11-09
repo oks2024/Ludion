@@ -6,8 +6,10 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::sqrt;
 use ludion_spatial::Shape;
 use rapier3d::parry::query::ShapeCastOptions;
+use rapier3d::parry::shape::Shape as ParryShape;
 use rapier3d::prelude::{BoundingVolume, Ray};
 
+use crate::sweep::SweepFilter;
 use crate::world::{
     PhysicsError, PhysicsWorld, entity_from_bits, from_vector, shape_builder, to_pose, to_vector,
 };
@@ -126,6 +128,32 @@ fn reject_composite(shape: &Shape) -> Result<(), PhysicsError> {
     }
 }
 
+/// The input checks of [`PhysicsWorld::ray_cast`] in their documented order, then the normalized
+/// direction.
+pub(crate) fn check_ray(
+    origin: [f32; 3],
+    direction: [f32; 3],
+    max_distance: f32,
+) -> Result<[f32; 3], PhysicsError> {
+    check_finite("origin", &origin)?;
+    check_max_distance(max_distance)?;
+    check_direction(direction)
+}
+
+/// The input checks of [`PhysicsWorld::shape_cast`] in their documented order, then the normalized
+/// direction.
+pub(crate) fn check_cast(
+    translation: [f32; 3],
+    rotation: [f32; 4],
+    direction: [f32; 3],
+    max_distance: f32,
+) -> Result<[f32; 3], PhysicsError> {
+    check_finite("translation", &translation)?;
+    check_rotation(rotation)?;
+    check_max_distance(max_distance)?;
+    check_direction(direction)
+}
+
 /// `Err(QueryInput)` naming `direction`, or the normalized direction.
 fn check_direction(direction: [f32; 3]) -> Result<[f32; 3], PhysicsError> {
     unit(direction).ok_or_else(|| {
@@ -166,8 +194,6 @@ fn check_direction(direction: [f32; 3]) -> Result<[f32; 3], PhysicsError> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct QueryFilter {
     pub(crate) exclude: Option<EntityId>,
-    /// A second dropped entity: a motor's carry sweep also skips its platform.
-    pub(crate) exclude_also: Option<EntityId>,
     pub(crate) ignored_layers: Vec<String>,
     pub(crate) include_sensors: bool,
     pub(crate) only_fixed: bool,
@@ -182,12 +208,6 @@ impl QueryFilter {
     /// Drops `entity`'s hit, replacing any earlier excluded entity.
     pub fn exclude(mut self, entity: EntityId) -> Self {
         self.exclude = Some(entity);
-        self
-    }
-
-    /// Drops `entity`'s hit as well as the [`exclude`](QueryFilter::exclude)d one.
-    pub(crate) fn exclude_also(mut self, entity: EntityId) -> Self {
-        self.exclude_also = Some(entity);
         self
     }
 
@@ -253,10 +273,20 @@ impl PhysicsWorld {
         max_distance: f32,
         filter: &QueryFilter,
     ) -> Result<Vec<QueryHit>, PhysicsError> {
-        check_finite("origin", &origin)?;
-        check_max_distance(max_distance)?;
-        let unit_dir = check_direction(direction)?;
-        let drops = self.query_drops(filter)?;
+        let unit_dir = check_ray(origin, direction, max_distance)?;
+        let filter = self.sweep_filter(filter)?;
+        Ok(self.ray_hits(origin, unit_dir, max_distance, &filter))
+    }
+
+    /// [`ray_cast`](PhysicsWorld::ray_cast) past the input checks, with the filter already resolved
+    /// and `unit_dir` normalized.
+    pub(crate) fn ray_hits(
+        &self,
+        origin: [f32; 3],
+        unit_dir: [f32; 3],
+        max_distance: f32,
+        filter: &SweepFilter,
+    ) -> Vec<QueryHit> {
         let ray = Ray::new(to_vector(origin), to_vector(unit_dir));
         let mut hits: Vec<QueryHit> = self
             .rapier
@@ -264,7 +294,7 @@ impl PhysicsWorld {
             .intersect_ray(ray, max_distance, true)
             .filter_map(|(_, collider, hit)| {
                 let entity = entity_from_bits(collider.user_data);
-                if drops(entity) {
+                if filter.drops(self, entity, collider) {
                     return None;
                 }
                 Some(QueryHit {
@@ -276,7 +306,7 @@ impl PhysicsWorld {
             })
             .collect();
         sort_hits(&mut hits);
-        Ok(hits)
+        hits
     }
 
     /// Sweeps `shape` (authored the same way a `Collider` is, laid out on the world's plane if it
@@ -325,15 +355,54 @@ impl PhysicsWorld {
         max_distance: f32,
         filter: &QueryFilter,
     ) -> Result<Vec<QueryHit>, PhysicsError> {
-        check_finite("translation", &translation)?;
-        check_rotation(rotation)?;
-        check_max_distance(max_distance)?;
-        let unit_dir = check_direction(direction)?;
-        let drops = self.query_drops(filter)?;
+        let unit_dir = check_cast(translation, rotation, direction, max_distance)?;
+        let filter = self.sweep_filter(filter)?;
+        self.shape_cast_resolved(
+            shape,
+            translation,
+            rotation,
+            unit_dir,
+            max_distance,
+            &filter,
+        )
+    }
+
+    /// [`shape_cast`](PhysicsWorld::shape_cast) past the input checks and the layer names: builds
+    /// `shape` and casts it with the resolved `filter`.
+    pub(crate) fn shape_cast_resolved(
+        &self,
+        shape: &Shape,
+        translation: [f32; 3],
+        rotation: [f32; 4],
+        unit_dir: [f32; 3],
+        max_distance: f32,
+        filter: &SweepFilter,
+    ) -> Result<Vec<QueryHit>, PhysicsError> {
         reject_composite(shape)?;
         let built = shape_builder(shape, self.plane, None)
             .map_err(|(code, reason)| PhysicsError::QueryShape { code, reason })?;
-        let query_shape = built.shape;
+        Ok(self.shape_hits(
+            &*built.shape,
+            translation,
+            rotation,
+            unit_dir,
+            max_distance,
+            filter,
+        ))
+    }
+
+    /// [`shape_cast`](PhysicsWorld::shape_cast) past the input checks, with the filter resolved,
+    /// `unit_dir` normalized and `query_shape` already built (a motor builds each of its capsules
+    /// once per solve).
+    pub(crate) fn shape_hits(
+        &self,
+        query_shape: &dyn ParryShape,
+        translation: [f32; 3],
+        rotation: [f32; 4],
+        unit_dir: [f32; 3],
+        max_distance: f32,
+        filter: &SweepFilter,
+    ) -> Vec<QueryHit> {
         let start = to_pose(translation, rotation);
         let end = to_pose(advance(translation, unit_dir, max_distance), rotation);
         let swept = query_shape
@@ -344,7 +413,7 @@ impl PhysicsWorld {
         let mut hits = Vec::new();
         for (_, collider) in pipeline.intersect_aabb_conservative(swept) {
             let entity = entity_from_bits(collider.user_data);
-            if drops(entity) {
+            if filter.drops(self, entity, collider) {
                 continue;
             }
             let pose = collider.position();
@@ -352,7 +421,7 @@ impl PhysicsWorld {
                 &pose.inv_mul(&start),
                 pose.rotation.inverse() * to_vector(unit_dir),
                 collider.shape(),
-                &*query_shape,
+                query_shape,
                 options,
             ) else {
                 continue;
@@ -366,7 +435,7 @@ impl PhysicsWorld {
             });
         }
         sort_hits(&mut hits);
-        Ok(hits)
+        hits
     }
 
     /// Every entity whose collider overlaps `shape` at `translation`/`rotation`, sorted by entity

@@ -85,6 +85,37 @@ pub fn motor_walk(world: &mut World, ctx: &SystemCtx) {
     move_characters(world, &moves, &mut out);
 }
 
+/// The point every converged motor walks to: the centre of the motor half (x 2.2–25, z ±14.4) at
+/// the motors' spawn height.
+pub const CONVERGE_POINT: [f32; 3] = [13.6, 0.8, 0.0];
+
+/// Every motor, in id order, steps 0.1 m a tick toward [`CONVERGE_POINT`] (capped at the remaining
+/// distance), so the crowd piles up in one spot: the motors ignore each other, and their query
+/// bounds all overlap. Tick-derived, no transcendentals.
+pub fn motor_converge(world: &mut World, _ctx: &SystemCtx) {
+    let mut motors: Vec<(EntityId, [f32; 3])> = world
+        .query_ids::<(&CharacterMotor, &Transform)>()
+        .map(|(id, (_, at))| (id, at.translation))
+        .collect();
+    motors.sort_by_key(|(id, _)| *id);
+    let moves: Vec<(EntityId, [f32; 3])> = motors
+        .into_iter()
+        .map(|(id, at)| {
+            let (dx, dz) = (CONVERGE_POINT[0] - at[0], CONVERGE_POINT[2] - at[2]);
+            let dist = ludion_core::math::sqrt(dx * dx + dz * dz);
+            let step = dist.min(0.1);
+            let (sx, sz) = if dist > 0.0 {
+                (dx / dist * step, dz / dist * step)
+            } else {
+                (0.0, 0.0)
+            };
+            (id, [sx, -0.1, sz])
+        })
+        .collect();
+    let mut out = vec![Err(MotorError::NoPhysicsWorld); moves.len()];
+    move_characters(world, &moves, &mut out);
+}
+
 /// The skins in id order, the scene's authoring order.
 fn skins(world: &mut World) -> Vec<EntityId> {
     let mut skins: Vec<EntityId> = world
@@ -201,13 +232,23 @@ pub fn horde_shots(world: &mut World, ctx: &SystemCtx) {
 
 /// The horde engine builder: the projectile pool and the five systems, in order.
 pub fn horde_builder() -> EngineBuilder {
+    builder_with(motor_walk)
+}
+
+/// [`horde_builder`] with the motors converging on one point; the system keeps the name
+/// `"motor_walk"` so the bench's row list reads it.
+pub fn converge_builder() -> EngineBuilder {
+    builder_with(motor_converge)
+}
+
+fn builder_with(walk: fn(&mut World, &SystemCtx)) -> EngineBuilder {
     Engine::builder()
         .project_root(gallery_root())
         .projectiles(ProjectileConfig {
             capacity: SHOTS as u32,
             ..ProjectileConfig::default()
         })
-        .system("motor_walk", motor_walk)
+        .system("motor_walk", walk)
         .system("horde_ragdolls", horde_ragdolls)
         .system(
             "spatial3d_rebuild",
@@ -219,7 +260,16 @@ pub fn horde_builder() -> EngineBuilder {
 
 /// A fresh horde engine with the committed scene loaded.
 pub fn build() -> Engine {
-    let mut engine = horde_builder().build().expect("the horde engine builds");
+    load(horde_builder())
+}
+
+/// [`build`] with the converging motors.
+pub fn build_converged() -> Engine {
+    load(converge_builder())
+}
+
+fn load(builder: EngineBuilder) -> Engine {
+    let mut engine = builder.build().expect("the horde engine builds");
     engine
         .load_inline_scene(&std::fs::read_to_string(scene_path()).expect("the committed scene"))
         .expect("the committed scene loads");

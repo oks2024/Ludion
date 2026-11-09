@@ -8,7 +8,7 @@ use ludion_core::math::sqrt;
 use ludion_core::par;
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::parry::shape::{Ball, Shape as _};
-use rapier3d::prelude::{Aabb, BoundingVolume, Ray};
+use rapier3d::prelude::{Aabb, BoundingVolume, Collider, Ray};
 
 use crate::queries::{QueryFilter, advance, unit};
 use crate::world::{
@@ -87,6 +87,32 @@ pub struct SweepFilter {
     exclude_also: Option<EntityId>,
 }
 
+impl SweepFilter {
+    /// Drops `entity` the second time `self` names it, as well as the first.
+    pub(crate) fn exclude_also(mut self, entity: EntityId) -> Self {
+        self.exclude_also = Some(entity);
+        self
+    }
+
+    /// Whether the filter drops `entity`'s `collider`: an excluded entity, a sensor, an ignored
+    /// layer (a bitmask test on the collider's own groups) or, with `only_fixed`, a non-static body.
+    pub(crate) fn drops(
+        &self,
+        physics: &PhysicsWorld,
+        entity: EntityId,
+        collider: &Collider,
+    ) -> bool {
+        Some(entity) == self.exclude
+            || Some(entity) == self.exclude_also
+            || (!self.include_sensors && collider.is_sensor())
+            || collider.collision_groups().memberships.bits() & self.ignored != 0
+            || (self.only_fixed
+                && !physics
+                    .entry(entity)
+                    .is_some_and(|e| e.kind == BodyKind::Fixed))
+    }
+}
+
 /// The nearest hit of a [`Sweep`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -156,7 +182,7 @@ impl PhysicsWorld {
             include_sensors: filter.include_sensors,
             only_fixed: filter.only_fixed,
             exclude: filter.exclude,
-            exclude_also: filter.exclude_also,
+            exclude_also: None,
         })
     }
 
@@ -244,14 +270,7 @@ impl PhysicsWorld {
             let entity = entity_from_bits(collider.user_data);
             if Some(entity) == exclude
                 || skip.contains(&entity)
-                || Some(entity) == filter.exclude
-                || Some(entity) == filter.exclude_also
-                || (!filter.include_sensors && collider.is_sensor())
-                || collider.collision_groups().memberships.bits() & filter.ignored != 0
-                || (filter.only_fixed
-                    && !self
-                        .entry(entity)
-                        .is_some_and(|e| e.kind == BodyKind::Fixed))
+                || filter.drops(self, entity, collider)
             {
                 continue;
             }

@@ -3,9 +3,11 @@
 
 use ludion_core::ids::EntityId;
 use ludion_spatial::Shape;
-use rapier3d::prelude::BoundingVolume;
+use rapier3d::parry::shape::Shape as ParryShape;
+use rapier3d::prelude::{BoundingVolume, SharedShape};
 
-use crate::queries::{QueryFilter, QueryHit};
+use crate::queries::{QueryHit, check_cast, check_ray};
+use crate::sweep::SweepFilter;
 use crate::world::{PhysicsWorld, entity_from_bits, from_vector, shape_builder, to_pose};
 
 const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -38,11 +40,15 @@ pub(crate) struct Capsule {
 }
 
 impl Capsule {
-    fn shape(self) -> Shape {
-        Shape::Capsule {
+    /// The solver shape of this capsule, built once for a solve's many queries.
+    pub(crate) fn built(self, physics: &PhysicsWorld) -> SharedShape {
+        let shape = Shape::Capsule {
             half_height: self.half_height,
             radius: self.radius,
-        }
+        };
+        shape_builder(&shape, physics.plane, None)
+            .expect("a capsule always builds")
+            .shape
     }
 }
 
@@ -51,23 +57,15 @@ impl PhysicsWorld {
     /// that `skip` does not drop, or `None`.
     pub(crate) fn cast_capsule(
         &self,
-        capsule: Capsule,
+        capsule: &dyn ParryShape,
         center: [f32; 3],
         direction: [f32; 3],
         length: f32,
-        filter: &QueryFilter,
+        filter: &SweepFilter,
         skip: impl Fn(&QueryHit) -> bool,
     ) -> Option<QueryHit> {
-        let hits = self
-            .shape_cast(
-                &capsule.shape(),
-                center,
-                IDENTITY,
-                direction,
-                length,
-                filter,
-            )
-            .ok()?;
+        let unit_dir = check_cast(center, IDENTITY, direction, length).ok()?;
+        let hits = self.shape_hits(capsule, center, IDENTITY, unit_dir, length, filter);
         hits.into_iter().find(|hit| {
             let along = hit.normal[0] * direction[0]
                 + hit.normal[1] * direction[1]
@@ -80,32 +78,25 @@ impl PhysicsWorld {
     /// Composite shapes (a level mesh) report their single deepest contact.
     pub(crate) fn capsule_contacts(
         &self,
-        capsule: Capsule,
+        shape: &dyn ParryShape,
         center: [f32; 3],
         prediction: f32,
-        filter: &QueryFilter,
+        filter: &SweepFilter,
     ) -> Vec<Contact> {
-        let Ok(drops) = self.query_drops(filter) else {
-            return Vec::new();
-        };
-        let Ok(built) = shape_builder(&capsule.shape(), self.plane, None) else {
-            return Vec::new();
-        };
-        let shape = built.shape;
         let at = to_pose(center, IDENTITY);
         let aabb = shape.compute_aabb(&at).loosened(prediction);
         let pipeline = self.rapier.query_pipeline();
         let mut contacts = Vec::new();
         for (_, collider) in pipeline.intersect_aabb_conservative(aabb) {
             let entity = entity_from_bits(collider.user_data);
-            if drops(entity) {
+            if filter.drops(self, entity, collider) {
                 continue;
             }
             let pose = collider.position();
             let Ok(Some(contact)) = pipeline.dispatcher.contact(
                 &pose.inv_mul(&at),
                 collider.shape(),
-                &*shape,
+                shape,
                 prediction,
             ) else {
                 continue;
@@ -133,12 +124,16 @@ impl PhysicsWorld {
         prop: EntityId,
         direction: [f32; 3],
         limit: f32,
-        filter: &QueryFilter,
+        filter: &SweepFilter,
     ) -> f32 {
         let Some((shape, translation, rotation)) = self.shape_and_pose(prop) else {
             return limit;
         };
-        let Ok(hits) = self.shape_cast(&shape, translation, rotation, direction, limit, filter)
+        let Ok(unit_dir) = check_cast(translation, rotation, direction, limit) else {
+            return limit;
+        };
+        let Ok(hits) =
+            self.shape_cast_resolved(&shape, translation, rotation, unit_dir, limit, filter)
         else {
             return limit;
         };
@@ -158,11 +153,10 @@ impl PhysicsWorld {
         &self,
         origin: [f32; 3],
         length: f32,
-        filter: &QueryFilter,
+        filter: &SweepFilter,
     ) -> Option<QueryHit> {
-        let hits = self
-            .ray_cast(origin, [0.0, -1.0, 0.0], length, filter)
-            .ok()?;
+        let unit_dir = check_ray(origin, [0.0, -1.0, 0.0], length).ok()?;
+        let hits = self.ray_hits(origin, unit_dir, length, filter);
         hits.into_iter()
             .find(|hit| hit.normal[1] > 0.0 && hit.normal.iter().all(|c| c.is_finite()))
     }
