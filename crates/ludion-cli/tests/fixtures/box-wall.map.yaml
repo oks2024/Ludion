@@ -1,0 +1,17 @@
+format: 1
+kind: map
+name: box-wall
+kit: box-wall.kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "...#.."
+  - "...#.."
+  - "...#.."
+  - "...#.."
+markers:
+  - name: start
+    x: 1.0
+    z: 1.0

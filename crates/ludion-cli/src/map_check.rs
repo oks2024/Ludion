@@ -53,7 +53,9 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::time::{FrameIndex, TickRate};
 use ludion_ecs::{SystemCtx, World};
-use ludion_scene::{InstantiateOptions, MapGrid, MapMarker, Scene, instantiate_expanded};
+use ludion_scene::{
+    ExpandedScene, InstantiateOptions, MapGrid, MapMarker, Scene, instantiate_expanded,
+};
 use ludion_spatial::{Body, Collider, Shape};
 use serde_json::Value;
 
@@ -452,6 +454,74 @@ impl Lattice {
 
 // --- Occupancy ---------------------------------------------------------------------------------
 
+/// Whether a static 3D box of half-height `hy` centred at `y` blocks a walker: its top rises above
+/// the nav step height. A lower box is floor or a step.
+fn box_is_wall(y: f64, hy: f64) -> bool {
+    y + hy > f64::from(ludion_engine::NavConfig::default().max_step)
+}
+
+/// The XZ half-extents of a box with half-extents `[hx, hz]` turned by `yaw_deg` about Y: exact at
+/// multiples of 90 degrees, else the bounding rect.
+fn yawed_half_extents(hx: f64, hz: f64, yaw_deg: f64) -> [f64; 2] {
+    let quarter = yaw_deg / 90.0;
+    if quarter.fract() == 0.0 {
+        return if (quarter as i64) % 2 == 0 {
+            [hx, hz]
+        } else {
+            [hz, hx]
+        };
+    }
+    let (s, c) = ludion_core::math::f64::sin_cos(yaw_deg.to_radians());
+    [c.abs() * hx + s.abs() * hz, s.abs() * hx + c.abs() * hz]
+}
+
+/// The probe copy of the scene: the 2D index sees only `aabb`/`circle`, so each unparented static
+/// `box` wall becomes the `aabb` of its yawed XZ rect, and a lower one (floor or a step) loses its
+/// collider. A parented static gets no solver body, so it stays as it is. Returns how many boxes
+/// were handled this way.
+fn fold_static_boxes(mut scene: ExpandedScene) -> (ExpandedScene, usize) {
+    let mut folded = 0;
+    for entity in &mut scene.scene.entities {
+        let has = |name: &str| entity.components.iter().any(|(n, _)| n == name);
+        if has("Parent") {
+            continue;
+        }
+        let Some(transform) = entity
+            .components
+            .iter()
+            .find(|(n, _)| n == "Transform")
+            .map(|(_, v)| v.clone())
+        else {
+            continue;
+        };
+        let Some((_, collider)) = entity.components.iter_mut().find(|(n, _)| n == "Collider")
+        else {
+            continue;
+        };
+        let half = &collider["shape"]["box"]["half_extents"];
+        if collider["body"] != "static" || !half.is_array() {
+            continue;
+        }
+        let num = |v: &Value, i: usize| v.get(i).and_then(Value::as_f64).unwrap_or(0.0);
+        let (y, yaw) = (
+            num(&transform["translation"], 1),
+            num(&transform["rotation"], 1),
+        );
+        let (hx, hy, hz) = (num(half, 0), num(half, 1), num(half, 2));
+        folded += 1;
+        if box_is_wall(y, hy) {
+            let [ex, ez] = yawed_half_extents(hx, hz, yaw);
+            *collider = serde_json::json!({
+                "shape": { "aabb": { "half_extents": [ex, ez] } },
+                "body": "static",
+            });
+        } else {
+            entity.components.retain(|(n, _)| n != "Collider");
+        }
+    }
+    (scene, folded)
+}
+
 /// The static-collider occupancy of the generated scene as the game loads it: prefab instances
 /// expanded, `Parent` kept so a parented collider sits at its world pose. The probe world is kept
 /// for the marker lints and the `--at` query.
@@ -491,13 +561,16 @@ impl Probe {
             .filter_map(|e| e.components.iter().find(|(n, _)| n == "Collider"))
             .map(|(_, v)| v)
             .collect();
+        let stripped = placement::stripped(&expanded);
+        let (stripped, folded) = fold_static_boxes(stripped);
         let unprobed = colliders
             .iter()
             .filter(|v| {
                 serde_json::from_value::<Collider>((**v).clone())
                     .map_or(true, |c| c.is_solver_owned())
             })
-            .count();
+            .count()
+            - folded;
         let top_level = || expanded.instances.iter().filter(|i| i.depth == 0);
         let mut probe = Probe {
             world: World::new(),
@@ -511,7 +584,6 @@ impl Probe {
             unprobed,
         };
 
-        let stripped = placement::stripped(&expanded);
         let ids = instantiate_expanded(
             &mut probe.world,
             &stripped,
@@ -1291,7 +1363,12 @@ fn glyph_has_collider(kit: &ludion_scene::MapKit, glyph: &str) -> bool {
     kit.tiles
         .iter()
         .find(|(g, _)| g == glyph)
-        .map(|(_, prims)| prims.iter().any(|p| p.collider.is_some()))
+        .map(|(_, prims)| {
+            prims.iter().any(|p| match p.collider {
+                Some(ludion_scene::ColliderSpec::Box([_, hy, _])) => box_is_wall(p.y, hy),
+                other => other.is_some(),
+            })
+        })
         .unwrap_or(false)
 }
 

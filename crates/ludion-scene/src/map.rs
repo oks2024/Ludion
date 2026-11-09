@@ -81,7 +81,7 @@ const PRIMITIVE_KEYS: [&str; 9] = [
     "name", "shape", "voxel", "mesh", "color", "collider", "y", "scale", "variants",
 ];
 const PRIMITIVE_KEYS_EXTRA: [&str; 2] = ["merge", "footprint"];
-const COLLIDER_KEYS: [&str; 2] = ["aabb", "circle"];
+const COLLIDER_KEYS: [&str; 3] = ["aabb", "circle", "box"];
 
 // --- Data model --------------------------------------------------------------------------------
 
@@ -462,6 +462,8 @@ pub enum ColliderSpec {
     Aabb([f64; 2]),
     /// A circle of the given radius.
     Circle(f64),
+    /// A 3D box, `half_extents` `[x, y, z]`: the solver and nav see it, unlike the 2D shapes.
+    Box([f64; 3]),
 }
 
 // --- Parsing: map source (`kind: map`) ---------------------------------------------------------
@@ -1150,7 +1152,7 @@ fn parse_collider(
     let NodeValue::Mapping(entries) = &node.value else {
         diagnostics.push(
             structure(&format!(
-                "`collider` must be a mapping (`aabb: [x, z]` or `circle: r`), found {} (line {})",
+                "`collider` must be a mapping (`aabb: [x, z]`, `circle: r` or `box: [x, y, z]`), found {} (line {})",
                 node.value.type_phrase(),
                 node.line
             ))
@@ -1178,6 +1180,15 @@ fn parse_collider(
                     diagnostics,
                 )
                 .map(ColliderSpec::Circle);
+            }
+            "box" => {
+                spec = expect_number_array::<3>(
+                    &entry.node,
+                    &format!("{pointer}/box"),
+                    "box half-extents",
+                    diagnostics,
+                )
+                .map(ColliderSpec::Box);
             }
             unknown => diagnostics.push(envelope::unknown_key(
                 unknown,
@@ -1390,8 +1401,10 @@ pub fn generate_traced(
             emit_grid(&grid, kit, seed, &mut items, &mut diagnostics);
             items.sort_by_key(|item| (item.r0, item.c0, item.seq));
             for item in items {
-                entities.push(item.entity);
-                origins.push(item.origin);
+                for entity in item.entities {
+                    entities.push(entity);
+                    origins.push(item.origin.clone());
+                }
             }
         }
 
@@ -1502,7 +1515,7 @@ struct GridItem {
     r0: usize,
     c0: usize,
     seq: usize,
-    entity: SceneEntity,
+    entities: Vec<SceneEntity>,
     origin: Origin,
 }
 
@@ -1669,7 +1682,7 @@ fn emit_merged(
                 r0,
                 c0,
                 seq: items.len(),
-                entity,
+                entities: entity,
                 origin: src.origin(r0, c0),
             });
         }
@@ -1748,7 +1761,7 @@ fn emit_footprint(
                 r0,
                 c0,
                 seq: items.len(),
-                entity,
+                entities: entity,
                 origin: src.origin(r0, c0),
             });
         }
@@ -1788,7 +1801,7 @@ fn emit_per_cell(
                 r0: r,
                 c0: c,
                 seq: items.len(),
-                entity,
+                entities: entity,
                 origin: src.origin(r, c),
             });
         }
@@ -1894,7 +1907,7 @@ fn emit_marker(
             prim.collider,
             extra,
         );
-        entities.push(entity);
+        entities.extend(entity);
     }
 }
 
@@ -1917,7 +1930,8 @@ impl KitPrimitive {
 }
 
 /// Builds one entity with a `Transform`, a `Mesh` (variant-selected), an optional `Collider`, and
-/// any verbatim passthrough components appended.
+/// any verbatim passthrough components appended. A 3D `box` collider rides a second, unit-scale
+/// `<name>-collider` entity instead: a solver-owned collider on a scaled entity is `L1290`.
 #[allow(clippy::too_many_arguments)]
 fn build_entity(
     name: &str,
@@ -1929,7 +1943,7 @@ fn build_entity(
     variant: usize,
     collider: Option<ColliderSpec>,
     extra: &[(String, Value)],
-) -> SceneEntity {
+) -> Vec<SceneEntity> {
     let mut components = vec![
         (
             "Transform".to_string(),
@@ -1940,14 +1954,43 @@ fn build_entity(
             mesh_value(prim.candidate(variant), prim.color),
         ),
     ];
-    if let Some(collider) = collider {
-        components.push(("Collider".to_string(), collider_value(collider)));
+    let mut sibling = None;
+    match collider {
+        Some(collider @ ColliderSpec::Box(_)) => {
+            sibling = Some(box_collider_entity(name, center, y, rotation, collider));
+        }
+        Some(collider) => components.push(("Collider".to_string(), collider_value(collider))),
+        None => {}
     }
     components.extend(extra.iter().cloned());
-    SceneEntity {
+    let mut entities = vec![SceneEntity {
         presentation: false,
         name: Some(name.to_string()),
         components,
+        instance: None,
+    }];
+    entities.extend(sibling);
+    entities
+}
+
+/// The unit-scale entity that carries a kit `box` collider beside its mesh entity.
+fn box_collider_entity(
+    name: &str,
+    center: [f64; 2],
+    y: f64,
+    rotation: f64,
+    collider: ColliderSpec,
+) -> SceneEntity {
+    SceneEntity {
+        presentation: false,
+        name: Some(format!("{name}-collider")),
+        components: vec![
+            (
+                "Transform".to_string(),
+                transform_value(center, y, rotation, [1.0, 1.0, 1.0]),
+            ),
+            ("Collider".to_string(), collider_value(collider)),
+        ],
         instance: None,
     }
 }
@@ -2037,16 +2080,22 @@ fn collider_value(spec: ColliderSpec) -> Value {
             json!({ "aabb": { "half_extents": [f32_exact(x), f32_exact(z)] } })
         }
         ColliderSpec::Circle(r) => json!({ "circle": { "radius": f32_exact(r) } }),
+        ColliderSpec::Box([x, y, z]) => {
+            json!({ "box": { "half_extents": [f32_exact(x), f32_exact(y), f32_exact(z)] } })
+        }
     };
     json!({ "shape": shape, "body": "static" })
 }
 
 /// A merged rect's collider grows to cover the rect. [`validate_kit`] guarantees a merged primitive's
-/// collider is a cell-sized `aabb`, so the circle arm is never reached.
+/// collider is a cell-sized `aabb` or `box`, so the circle arm is never reached.
 fn scale_collider(spec: ColliderSpec, cols: f64, rows: f64, cell_size: f64) -> ColliderSpec {
     match spec {
         ColliderSpec::Aabb(_) => {
             ColliderSpec::Aabb([cols * cell_size / 2.0, rows * cell_size / 2.0])
+        }
+        ColliderSpec::Box([_, hy, _]) => {
+            ColliderSpec::Box([cols * cell_size / 2.0, hy, rows * cell_size / 2.0])
         }
         ColliderSpec::Circle(r) => ColliderSpec::Circle(r),
     }
@@ -2208,15 +2257,19 @@ fn validate_merged_collider(
                 {cell_size}, found [{}, {}]",
             h[0], h[1]
         ),
-        Some(ColliderSpec::Aabb(_)) => return,
+        Some(ColliderSpec::Box([hx, _, hz])) if [hx, hz] != [half, half] => format!(
+            "the `box` of a merged primitive must be one cell in x and z, [{half}, y, {half}] at \
+             `cell_size` {cell_size}, found [{hx}, y, {hz}]"
+        ),
+        Some(ColliderSpec::Aabb(_) | ColliderSpec::Box(_)) => return,
     };
     diagnostics.push(
         Diagnostic::new(code::MAP_KIT_INVALID, problem)
             .with_path(format!("{pointer}/collider"))
             .with_help(format!(
                 "a merged primitive (`merge: true`, or the map's `base` glyph) takes `aabb: \
-                    [{half}, {half}]`; its collider grows to the merged rect. Use a per-cell glyph for \
-                 other shapes"
+                    [{half}, {half}]` or `box: [{half}, hy, {half}]`; its collider grows to the \
+                 merged rect. Use a per-cell glyph for other shapes"
             )),
     );
 }
@@ -2279,6 +2332,7 @@ fn validate_primitive_list(
         let collider_finite = match prim.collider {
             Some(ColliderSpec::Aabb(half)) => half.iter().all(|v| v.is_finite()),
             Some(ColliderSpec::Circle(radius)) => radius.is_finite(),
+            Some(ColliderSpec::Box(half)) => half.iter().all(|v| v.is_finite()),
             None => true,
         };
         if !collider_finite {

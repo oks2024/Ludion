@@ -823,12 +823,13 @@ fn map_check(fixture: &str) -> (std::process::ExitStatus, String, String) {
 /// under a parent at (4,4) -> world (5,5) = (c2,r2); the instance at (9,1) -> (c4,r0). The `bar`
 /// instance is yawed +90 about Y, which carries its arm's local +X to world -Z: the arm sits at world
 /// (6,3) with its box *unrotated* (the 2D index ignores rotation), x 4.1-7.9 by z 2.1-3.9, which
-/// covers every sample of (c2,r1) and (c3,r1). The 3D box collider is the solver's: counted, not probed.
+/// covers every sample of (c2,r1) and (c3,r1). The 3D box collider (a static wall at (11,0,7)) is probed by its
+/// XZ rect, so it blocks (c5,r3) and is not left "not probed".
 #[test]
 fn map_check_probes_prefab_instances_and_parented_colliders() {
     let (status, out, err) = map_check("prefab-occupancy.map.yaml");
     assert!(status.success(), "{err}");
-    for row in ["0  ....#.", "   ..##..", "   ..#...", "   A....."] {
+    for row in ["0  ....#.", "   ..##..", "   ..#...", "   A....#"] {
         assert!(
             out.contains(&format!(
                 "
@@ -840,15 +841,39 @@ fn map_check_probes_prefab_instances_and_parented_colliders() {
         );
     }
     assert!(
-        out.contains("blocked 4  walkable 20  unreachable 0"),
+        out.contains("blocked 5  walkable 19  unreachable 0"),
         "{out}"
     );
     assert!(
-        out.contains(
-            "colliders 4, prefab instances 2 (3 parts), 1 not probed (3D or rigid — the physics solver's)"
-        ),
+        out.contains("colliders 4, prefab instances 2 (3 parts)\n"),
         "{out}"
     );
+    assert!(!out.contains("not probed"), "{out}");
+}
+
+/// A kit's 3D `box` colliders are probed: a wall column of tall boxes splits the room, so the far
+/// side is unreachable and the wall reads blocked, while the floor boxes (top at 0) count as floor.
+#[test]
+fn map_check_probes_static_box_walls_and_judges_low_boxes_floor() {
+    let (status, out, err) = map_check("box-wall.map.yaml");
+    assert!(status.success(), "{err}");
+    assert!(
+        out.contains("blocked 4  walkable 20  unreachable 8"),
+        "{out}"
+    );
+    assert!(!out.contains("not probed"), "{out}");
+    let map = fixtures().join("box-wall.map.yaml");
+    for (at, verdict) in [("7,3", "blocked"), ("3,3", "walkable")] {
+        let output = run_ludion(&["map-check", map.to_str().unwrap(), "--at", at]);
+        let out = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            out.contains(&format!(
+                "cell (c{},r1)  {verdict}",
+                if at == "7,3" { 3 } else { 1 }
+            )),
+            "{at}: {out}"
+        );
+    }
 }
 
 /// A prefab path that does not resolve is an expansion error in the *fragment* that instances it, so

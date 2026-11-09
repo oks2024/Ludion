@@ -1,6 +1,6 @@
 //! A generated room prefab, spawned and torn down from a sim system under nav: the same `WorldHash`
 //! trace at any thread count, and a recording that replays after the prefab, map and kit are deleted.
-//! The nav test is ignored until kit colliders can be 3D.
+//! The kit's `box` colliders are 3D statics, so nav picks the room up the tick after the spawn.
 
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcCommand;
@@ -33,7 +33,8 @@ tiles:
         - 2.0
       y: -1.0
       collider:
-        aabb:
+        box:
+          - 1.0
           - 1.0
           - 1.0
   \"#\":
@@ -45,7 +46,8 @@ tiles:
         - 2.0
       y: -1.0
       collider:
-        aabb:
+        box:
+          - 1.0
           - 1.0
           - 1.0
     - name: wall
@@ -56,7 +58,8 @@ tiles:
         - 2.0
       y: 1.0
       collider:
-        aabb:
+        box:
+          - 1.0
           - 1.0
           - 1.0
 ";
@@ -333,7 +336,6 @@ fn tick_to(engine: &mut Engine, frame: u64) {
 }
 
 #[test]
-#[ignore = "blocked: a kit `aabb` collider is 2D, so a generated room never enters the nav grid"]
 fn walkers_path_into_a_spawned_room_and_not_into_a_torn_down_one() {
     let root = room_root("room_assembly_nav");
     let mut engine = booted(&root);

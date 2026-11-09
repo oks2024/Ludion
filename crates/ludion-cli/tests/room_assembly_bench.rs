@@ -1,9 +1,9 @@
-//! The room-assembly benchmark: a ~340-entity generated room prefab spawned and torn down from a sim
+//! The room-assembly benchmark: a ~690-entity generated room prefab spawned and torn down from a sim
 //! system under nav, with 100 walkers heading for it. It times the sim tick around each event: the
 //! spawn tick, the tick after it, the teardown tick and the one after it.
 //!
-//! The room is invisible to nav: kit colliders are 2D `aabb`/`circle`, so in a 3D physics world a
-//! generated room has no solver colliders. The nav systems run, but no nav rebuild is in these ticks.
+//! The kit's colliders are 3D `box`es, each on its own unit-scale sibling entity, so the room carries
+//! solver colliders and the nav region rebuild lands in the tick after the spawn.
 //!
 //! Ignored by default so CI stays fast; run it explicitly, in release:
 //!
@@ -30,13 +30,13 @@ use ludion_spatial::spatial3d;
 use crate::room_assembly::{KIT, Spawned, generate, nav_config};
 
 /// Median tick time, in milliseconds, of the tick that spawns the room, at one thread. About 3x the
-/// release median (0.65 ms, 343 entities) on an unpinned M5, 2026-11-09, not authoritative; pinned
+/// release median (1.38 ms, 686 entities) on an unpinned M5, 2026-11-09, not authoritative; pinned
 /// figures owed.
-const ROOM_SPAWN_TICK_BUDGET_MS: f64 = 2.0;
+const ROOM_SPAWN_TICK_BUDGET_MS: f64 = 4.5;
 /// Median tick time, in milliseconds, of the tick after the spawn, at one thread. About 3x the
-/// release median (0.115 ms) on an unpinned M5, 2026-11-09, not authoritative; pinned figures owed.
-/// The room's 2D colliders do not reach the nav grid, so no region rebuild is in this figure.
-const ROOM_REBUILD_TICK_BUDGET_MS: f64 = 0.4;
+/// release median (1.02 ms) on an unpinned M5, 2026-11-09, not authoritative; pinned figures owed.
+/// The room's 3D box colliders reach the nav grid, so the region rebuild is in this figure.
+const ROOM_REBUILD_TICK_BUDGET_MS: f64 = 3.5;
 
 const CYCLES: u64 = 20;
 const PERIOD: u64 = 40;
@@ -254,7 +254,7 @@ fn room_spawn_and_teardown_under_nav() {
         "WorldHash traces differ between 1 and 8 threads"
     );
     assert!(
-        (280..=360).contains(&one.entities),
+        (620..=760).contains(&one.entities),
         "room entity count {}",
         one.entities
     );

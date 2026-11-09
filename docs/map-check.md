@@ -47,8 +47,9 @@ of its samples is free, *blocked* when all are, *reached* when any is. Prefab in
 and `Parent` is resolved, so a house placed as a prefab, or a collider parented to a moved entity,
 blocks its world cells, and `colliders` counts them (`, prefab instances K (P parts)` follows when
 there are any). A
-3D or rigid collider belongs to the physics solver and is absent from the 2D index the probe uses:
-the summary says how many (`, U not probed`). A prefab that fails to expand is an error — the scene
+static `box` with no `Parent` is probed by its yaw-turned XZ rect when its top is above nav's
+`max_step` (0.4), and otherwise counts as floor. Other 3D and rigid colliders belong to the physics
+solver and are absent from the 2D index the probe uses: the summary says how many (`, U not probed`). A prefab that fails to expand is an error — the scene
 would not load either; the error is reported against the fragment that instances it. Reachability is
 a 4-connected BFS over the free samples, started at the free sample nearest `--anchor <entity name>`
 (else the first marker, else the grid centre) among its cell and the four beside it — an anchor

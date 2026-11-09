@@ -111,7 +111,7 @@ Parts are not parented unless the prefab says so, so `entity.destroy` on the roo
 - **Paths and refusals.** `--prefab` rewrites asset paths relative to the prefab file, except inside game components, which are copied as written. The map's `physics:` is refused and its `seed:` is dropped.
 - **The handle.** `ids[0]` of `spawn_prefab` is the room's handle: `despawn_instance(world, ids[0])` tears the whole room down.
 - **`preload:`** the room prefabs a door may spawn, so the first spawn pays nothing.
-- **Nav does not see a room.** Kit colliders are 2D `aabb`/`circle`, so in a 3D physics world a generated room has no solver colliders.
+- **Nav and rooms.** A kit `box` collider is a 3D static, so physics blocks it and nav picks the room up the tick after the spawn; `aabb`/`circle` stay 2D and invisible to both.
 
 ## Replays and reload
 

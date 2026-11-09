@@ -1110,6 +1110,115 @@ fn a_cell_sized_merged_aabb_grows_to_the_rect() {
 }
 
 #[test]
+fn a_kit_box_collider_parses_and_emits_a_static_box_on_a_unit_scale_sibling() {
+    let kit = parse_map_kit(
+        "format: 1\nkind: map-kit\ntiles:\n  \"#\":\n    - shape: cube\n      scale:\n        - 2.0\n        - 2.0\n        - 2.0\n      collider:\n        box:\n          - 1.0\n          - 1.0\n          - 1.0\n",
+    )
+    .expect("the kit parses");
+    let map = parse_map(&TWO_BY_TWO_T.replace("  - \"TT\"\n  - \"TT\"\n", "  - \"#\"\n"))
+        .expect("the map parses");
+    let scene = generate(&map, &kit, &[], &Registry::new()).expect("generates");
+    assert_eq!(scene.entities.len(), 2);
+    let (mesh, sibling) = (&scene.entities[0], &scene.entities[1]);
+    assert!(mesh.components.iter().all(|(n, _)| n != "Collider"));
+    assert_eq!(
+        component(mesh, "Transform")["scale"],
+        serde_json::json!([2.0, 2.0, 2.0])
+    );
+    assert_eq!(
+        sibling.name.as_deref(),
+        Some(format!("{}-collider", mesh.name.as_deref().unwrap()).as_str())
+    );
+    assert_eq!(translation(sibling), translation(mesh));
+    assert_eq!(
+        component(sibling, "Transform")["scale"],
+        serde_json::json!([1.0, 1.0, 1.0])
+    );
+    assert!(sibling.components.iter().all(|(n, _)| n != "Mesh"));
+    let collider = component(sibling, "Collider");
+    assert_eq!(
+        collider["shape"]["box"]["half_extents"],
+        serde_json::json!([1.0, 1.0, 1.0])
+    );
+    assert_eq!(collider["body"], "static");
+}
+
+#[test]
+fn a_cell_sized_merged_box_grows_in_x_z_and_keeps_y() {
+    let kit = merged_kit("        box:\n          - 1.0\n          - 0.25\n          - 1.0\n");
+    let map = parse_map(TWO_BY_TWO_T).expect("the map parses");
+    let scene = generate(&map, &kit, &[], &Registry::new()).expect("generates");
+    let collider = component(&scene.entities[1], "Collider");
+    assert_eq!(
+        collider["shape"]["box"]["half_extents"],
+        serde_json::json!([2.0, 0.25, 2.0])
+    );
+}
+
+#[test]
+fn a_merged_box_that_is_not_one_cell_in_x_z_is_l1022() {
+    let kit = merged_kit("        box:\n          - 0.25\n          - 1.0\n          - 1.0\n");
+    let diagnostics = kit_errors(&kit, TWO_BY_TWO_T);
+    let d = diagnostics
+        .iter()
+        .find(|d| d.code == code::MAP_KIT_INVALID)
+        .expect("a kit diagnostic");
+    assert_eq!(d.path.as_deref(), Some("/tiles/T/0/collider"));
+    assert!(d.message.contains("[1, y, 1]"), "{}", d.message);
+    assert!(d.message.contains("[0.25, y, 1]"), "{}", d.message);
+    assert!(d.help.as_deref().unwrap().contains("box: [1, hy, 1]"));
+}
+
+#[test]
+fn a_non_finite_box_is_l1022() {
+    let kit_src = "format: 1\nkind: map-kit\ntiles:\n  \".\":\n    - shape: cube\n      collider:\n        box:\n          - 1e39\n          - 1.0\n          - 1.0\n";
+    let bad_kit = parse_map_kit(kit_src).expect("the kit parses structurally");
+    let map = parse_map(FLOOR_3X3).expect("map parses");
+    let diagnostics = generate(&map, &bad_kit, &[], &Registry::new()).unwrap_err();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code == code::MAP_KIT_INVALID
+                && d.path.as_deref() == Some("/tiles/./0/collider")),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn a_box_needs_three_half_extents_is_l1021() {
+    let kit_src = "format: 1\nkind: map-kit\ntiles:\n  \".\":\n    - shape: cube\n      collider:\n        box:\n          - 1.0\n          - 1.0\n";
+    let diagnostics = parse_map_kit(kit_src).unwrap_err();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code == code::MAP_DOCUMENT_STRUCTURE
+                && d.path.as_deref() == Some("/tiles/./0/collider/box")),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn a_mirrored_box_sibling_is_reflected_with_unit_scale() {
+    let kit = parse_map_kit(
+        "format: 1\nkind: map-kit\ntiles:\n  \"#\":\n    - shape: cube\n      scale:\n        - 2.0\n        - 2.0\n        - 2.0\n      collider:\n        box:\n          - 1.0\n          - 1.0\n          - 1.0\n",
+    )
+    .expect("the kit parses");
+    let src = "format: 1\nkind: map\nkit: kit.yaml\ncell_size: 2.0\norigin:\n  - 0.0\n  - 0.0\nrows:\n  - \"#   \"\n";
+    let generate_with = |mirror| {
+        let mut map = parse_map(src).unwrap();
+        map.mirror = mirror;
+        generate(&map, &kit, &[], &Registry::new()).expect("generates")
+    };
+    let (plain, flipped) = (generate_with(Mirror::None), generate_with(Mirror::X));
+    let (a, b) = (&plain.entities[1], &flipped.entities[1]);
+    assert_eq!(translation(b)[0], 8.0 - translation(a)[0]);
+    assert_eq!(
+        component(b, "Transform")["scale"],
+        serde_json::json!([1.0, 1.0, 1.0])
+    );
+}
+
+#[test]
 fn a_space_tile_key_is_l1020() {
     let kit = parse_map_kit("format: 1\nkind: map-kit\ntiles:\n  \" \":\n    - shape: cube\n")
         .expect("the kit parses");
