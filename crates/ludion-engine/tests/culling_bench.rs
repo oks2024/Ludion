@@ -2,12 +2,18 @@
 //! a 40 x 40 m room of 500 animated enemies, 100 SkinBone voxel-ragdoll corpses, 60 decals, 200
 //! sprites, 16 particle emitters and 5,000 frozen shots, with SSAO on, measured with the camera facing a wall and facing the crowd. Every number is the
 //! "before" for the GPU cull: extract median and its per-phase breakdown, GPU `scene`, `prepass` and
-//! frame total, and the cost of sprites, particles, shots and decals by ablation.
+//! frame total, and the cost of sprites, particles, shots and decals by ablation. A separate room
+//! arm (`needs_gpu_decal_room_bench`) puts 1,000 textured multiply decals on the floor and walls
+//! beside the skinned crowd, on then ablated.
 //!
 //! Ignored by default so CI stays fast; run it explicitly, in release:
 //!
 //! ```text
 //! cargo test -p ludion-engine --release --test it -- culling_bench --ignored --nocapture
+//! ```
+//!
+//! ```text
+//! cargo test -p ludion-engine --release --test it -- culling_bench::needs_gpu_decal_room_bench --ignored --nocapture
 //! ```
 //!
 //! `CULLING_BENCH_CULL=on` measures the same arms with the cull scheduled; combine it with
@@ -73,6 +79,7 @@ struct Mix {
     sprites: bool,
     particles: bool,
     decals: bool,
+    room_decals: bool,
 }
 
 impl Mix {
@@ -80,6 +87,20 @@ impl Mix {
         sprites: true,
         particles: true,
         decals: true,
+        room_decals: false,
+    };
+    /// Only the room decals, beside the crowd and corpses.
+    const ROOM: Mix = Mix {
+        sprites: false,
+        particles: false,
+        decals: false,
+        room_decals: true,
+    };
+    const ROOM_ABLATED: Mix = Mix {
+        sprites: false,
+        particles: false,
+        decals: false,
+        room_decals: false,
     };
 }
 
@@ -113,6 +134,7 @@ const CORPSE_PARTS: [Option<&str>; 11] = [
     Some("lower-leg-r"),
 ];
 const DECALS: usize = 60;
+const ROOM_DECALS: usize = 1_000;
 const SPRITES: usize = 200;
 const EMITTERS: usize = 16;
 const POINT_LIGHTS: usize = 4;
@@ -122,6 +144,7 @@ fn expected_entities(mix: Mix) -> usize {
     // camera, sun, lights, floor, four walls, enemies, corpse skins and parts.
     let base = 1 + 1 + POINT_LIGHTS + 1 + 4 + ENEMIES + CORPSES * (1 + CORPSE_BONES.len());
     base + if mix.decals { DECALS } else { 0 }
+        + if mix.room_decals { ROOM_DECALS } else { 0 }
         + if mix.sprites { SPRITES } else { 0 }
         + if mix.particles { EMITTERS } else { 0 }
 }
@@ -301,6 +324,27 @@ fn scene(facing: Facing, mix: Mix) -> String {
                 body.push_str(&color(8, "color", [0.15, 0.45, 0.85, 1.0]));
             }
             doc.entity(&format!("decal-{i}"), &body);
+        }
+    }
+    if mix.room_decals {
+        // Its own stream, so no other arm's scene text moves.
+        let mut room = DeterministicRng::new(21);
+        for i in 0..ROOM_DECALS {
+            let along = (room.next_f32() - 0.5) * 36.0;
+            let (at, rot) = if i % 3 == 0 {
+                ([along, 0.1, (room.next_f32() - 0.5) * 36.0], [0.0; 3])
+            } else {
+                let z = if i % 3 == 1 { 19.6 } else { -19.6 };
+                ([along, 0.3 + room.next_f32() * 2.4, z], [90.0, 0.0, 0.0])
+            };
+            let mut body = transform(at, rot, None);
+            body.push_str("      Decal:\n");
+            body.push_str(&vec3(8, "size", [1.2, 0.6, 1.2]));
+            body.push_str("        blend: multiply\n");
+            body.push_str(
+                "        base_color_texture:\n          path: assets/decal-scorch.png\n          wrap: clamp\n",
+            );
+            doc.entity(&format!("scorch-{i}"), &body);
         }
     }
     if mix.sprites {
@@ -575,8 +619,14 @@ fn print_arm(arm: &Arm) {
         arm.pass(name)
             .map_or("n/a".to_string(), |v| format!("{v:.3} ms"))
     };
+    if let Some(d) = &arm.report.decals {
+        println!(
+            "decals: multiply {} | draws {} | receiver_meshes {}",
+            d.multiply, d.draws, d.receiver_meshes
+        );
+    }
     println!(
-        "gpu: cull {} | shadow {} | scene {} | prepass {} | ssao {} | transparents {} | decals_lit {} | projector {} | frame {}",
+        "gpu: cull {} | shadow {} | scene {} | prepass {} | ssao {} | transparents {} | decals_lit {} | decal_receivers {} | projector {} | frame {}",
         show(pass::CULL),
         show(pass::SHADOW),
         show(pass::SCENE),
@@ -584,6 +634,7 @@ fn print_arm(arm: &Arm) {
         show(pass::SSAO),
         show(pass::TRANSPARENTS),
         show(pass::DECALS_LIT),
+        show(pass::DECAL_RECEIVERS),
         show(pass::PROJECTOR),
         arm.gpu_ms()
             .map_or("n/a".to_string(), |v| format!("{v:.3} ms")),
@@ -617,6 +668,8 @@ fn torture_scene_matches_its_counts() {
             decals: false,
             ..Mix::FULL
         },
+        Mix::ROOM,
+        Mix::ROOM_ABLATED,
     ] {
         let mut engine = Engine::builder()
             .project_root(gallery())
@@ -751,5 +804,53 @@ fn needs_gpu_culling_torture_bench() {
                 arm.label
             );
         }
+    }
+}
+
+#[test]
+#[ignore = "release-mode benchmark; run explicitly (see the module docs)"]
+fn needs_gpu_decal_room_bench() {
+    let arms = [
+        measure("Crowd / room decals", Facing::Crowd, Mix::ROOM, false),
+        measure(
+            "Crowd / room ablated",
+            Facing::Crowd,
+            Mix::ROOM_ABLATED,
+            false,
+        ),
+        measure("Wall / room decals", Facing::Wall, Mix::ROOM, false),
+        measure(
+            "Wall / room ablated",
+            Facing::Wall,
+            Mix::ROOM_ABLATED,
+            false,
+        ),
+    ];
+    for arm in &arms {
+        print_arm(arm);
+    }
+    println!("\n== ablation: room decals minus ablated ==");
+    for (facing, on, off) in [("Crowd", &arms[0], &arms[1]), ("Wall", &arms[2], &arms[3])] {
+        println!("{facing}:");
+        print_ablation("room decals", on, off);
+        let phase = |arm: &Arm| {
+            arm.phases
+                .iter()
+                .find(|(p, _)| *p == ExtractPhase::Decals)
+                .map_or(0.0, |(_, v)| *v)
+        };
+        println!("{:<14} extract Decals phase {:.3} ms", "", phase(on));
+    }
+
+    let gpu = !ludion_core::require_gpu::skip_no_adapter(!arms[0].report.gpu.available);
+    for on in [&arms[0], &arms[2]] {
+        let decals = on.report.decals.as_ref().expect("room decals are profiled");
+        assert_eq!(decals.multiply, ROOM_DECALS as u64);
+        if gpu {
+            assert_eq!(decals.receiver_meshes, (ENEMIES + CORPSES) as u64);
+        }
+    }
+    for off in [&arms[1], &arms[3]] {
+        assert!(off.report.decals.is_none());
     }
 }

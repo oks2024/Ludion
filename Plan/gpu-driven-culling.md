@@ -704,6 +704,15 @@ G11 stay open with their recommendations as defaults.
 34. **Chain-union bounds.** `AssetBounds::of_mesh` takes the union of the base box and every level's box, so an overhang is never frustum-culled early and culling on/off stays byte-identical. A meshoptimizer chain's levels lie inside the base, so its bounds, and every existing golden, are unchanged.
 35. **Not chained:** sculpt `shape: voxel` parts (they read the document and ignore `lods`), assembly parts, the GI voxelizer and the static grid (level 0 only). The pool's Voxel looks select levels like its Mesh looks.
 
+**Proposed (Serious Isaac 0021, owner approval owed). Decals join culling.** Ready to build once approved; it amends decisions 12 and 16. The trigger evidence is the decal room bench figure in Status.
+
+- (i) A CPU box-vs-frustum test per decal at render time, against the rendered camera. Extract stays camera-free per decision 11, so the test is not in extract. It is the G9 path, and `cull.rs`'s Arvo box transform does the test (the oracle already exists).
+- (ii) A culled decal is neither packed nor drawn. Layer order among survivors is unchanged.
+- (iii) `ProfileReport.decals.culled` counts them; it moves the wire schema hash once.
+- (iv) The `decal_receivers` redraw draws from the camera view's cull survivors (the decision 26 source-index path), instead of the full union.
+- (v) Byte-identity: culling on against off is byte-identical, a gallery `decals` golden test pins it, and `--dump-graph` is unchanged.
+- (vi) The bench gains a `CULLING_BENCH_CULL=on` room row.
+
 ## Status
 
 Design written 2026-09-30. Rung 0 shipped (Clockout 0030; `Visibility`, `examples/gallery/visibility.yaml`). Rung 2a shipped for request 0008 (decisions 7–20; the W2 wave set above); the bench figures are below.
@@ -735,6 +744,8 @@ ablated): extract decals 0.01 to 0.04 ms, sprites 0.02 to 0.04, particles 0.03 t
 GPU frame: decals 0.6 to 1.1 ms, sprites -0.2 to 0.8, particles 0.1 to 0.6, shots -0.1 to 0.2. The GPU
 deltas move by half a millisecond between runs, so only the decals cost and the shots' extract cost are
 clear of the noise.
+
+**The decal room bench (Serious Isaac 0021, unpinned M5, 2026-11-09).** `cargo test -p ludion-engine --release --test it -- culling_bench::needs_gpu_decal_room_bench --ignored --nocapture`: 1,000 textured `multiply` scorches on the floor and two walls beside the torture room minus sprites, particles and shots (500 skinned enemies, 100 corpses), decals on then ablated. One projector draw, 600 receiver meshes (the skinned ones, once per frame). GPU frame on/off, three runs: crowd 2.42/2.22 ms (delta 0.19 to 0.24), wall 2.17/2.14 ms (delta 0.03). Passes on: `projector` 0.71 (crowd) and 0.44 to 0.45 ms (wall), `decal_receivers` 0.76 and 0.27 ms. Extract 0.99/0.65 ms (delta 0.35 ms, the `Decals` phase 0.17 ms). Per decal: about 0.2 µs GPU frame at the crowd view (0.03 µs at the wall), 0.35 µs extract. Run-to-run spread under 0.05 ms. The frame delta is far below the summed pass medians (tiled-GPU overlap). Pinned figures are owed.
 
 **Indirect-validation cost (6a, unpinned M5, 2026-11-08).** wgpu validates every indirect draw with a
 compute dispatch outside the timed passes, so the GPU frame span is the figure that shows it. Method:

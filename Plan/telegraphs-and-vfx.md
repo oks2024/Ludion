@@ -234,6 +234,15 @@ pass/graph/extract-plumbing change.
     drop shadow, with (layer, EntityId) within each group. Rejected: drawing every mode before
     `reflections`, which would leave multiply missing SSR and let add feed it. This deviates from the
     request's single-slot Order paragraph; the orchestrator accepted it.
+  - *Proposed (Serious Isaac 0021, owner approval owed): skinned hierarchy receivers.* Ready to build once approved.
+    - (i) `Decal.skinned: bool`, default `false`, omitted from canonical text at its default, so scenes and goldens are unchanged. The wire schema hash moves once.
+    - (ii) With `receivers: hierarchy`, it admits the hierarchy's skinned meshes. The `extract.rs` `Hierarchy` arm stops filtering `!skinned` when the flag is set.
+    - (iii) `skinned: true` with `receivers: all` is error `L2113` (confirm free at build), next to `L2106`/`L2112`, raised by `check-scene`. A world decal across a moving crowd would only swim.
+    - (iv) The box follows the posed joint through `ParentJoint`. The projector reconstructs the posed depth. Swim near a bending joint is accepted for small marks.
+    - (v) The receivers survive `switch_skin_to_ragdoll`, because the skin keeps its id and `Mesh` (`skin_ragdoll.rs`).
+    - (vi) Bind-pose projection is deferred until a look test shows swim.
+    - (vii) The default ("skinned never") is unchanged.
+    - (viii) Acceptance: a 200-hierarchy-decal bench row, and a gallery golden with a scorch on a skinned joint that paints only its character while the clean skinned character stays clean.
 
 ## Risks / open questions
 

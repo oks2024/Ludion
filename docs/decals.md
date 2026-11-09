@@ -60,10 +60,11 @@ green = image up = box −Z.
   the lowest EntityId draws last and wins. A `multiply` scorch therefore darkens paint even at a
   lower layer; the drop shadow darkens paint under the hero.
 - **Receivers.** Every opaque mesh kind. Never the sky, sprites, particles, text, ground markers or
-  skinned meshes. `receivers: hierarchy` limits a decal to its own root and the root's descendants;
-  whenever any decal lists receiver meshes (an `all` decal in a scene with skinned meshes excludes
-  them, and any `hierarchy` decal lists its own), a `decal_receivers` id redraw runs, and a 1–2 px
-  contact rim can show.
+  skinned meshes (the default). An `all` decal carries no receiver list. Whenever an `all` decal
+  shares a scene with skinned meshes, the `decal_receivers` id pass redraws each skinned mesh once per
+  frame, so its cost grows with the skinned count, not with decals × skinned. `receivers: hierarchy`
+  limits a decal to its own root and the root's descendants and adds its own meshes to that list. A
+  1–2 px contact rim can show.
 - **Hash-neutral and graph-neutral.** Render-only. A scene with no `Decal` and no `DropShadow` keeps
   its exact graph; lit decals add `decals_lit` and the `lit_normal` transient; unlit ones ride
   `projector`.
@@ -71,6 +72,19 @@ green = image up = box −Z.
   batched `draws` and `receiver_meshes`; it is absent without decals. The gallery `decals` scene
   (RTX 3090, release): 11 alpha, 1 multiply, 1 add, 1 coat, 26 draws, 2 receiver meshes; the decal
   passes cost about 0.06 ms of a 0.56 ms pass sum.
+
+## Cost and lifetime
+
+- **No frustum cull.** Every decal is packed and drawn each frame, on screen or not.
+- **Indicative cost** (unpinned M5): 1,000 multiply decals beside 500 skinned enemies add about
+  0.2 µs of GPU frame at the crowd view (0.03 µs facing a wall) and 0.35 µs of extract per decal.
+  Figures and method: `Plan/gpu-driven-culling.md` Status, "The decal room bench".
+- **Lifetime recipe.** Kill decals are presentation entities, spawned and despawned by a
+  *presentation* system (a sim system doing either is `L0028`; `ludion docs presentation`): the sim
+  records the kill, the presentation system reads it and spawns the decal. Despawn them on room exit.
+  The game keeps its own oldest-first cap and picks the number from the cost line. The engine never
+  caps and never drops.
+- **The check.** `ProfileReport.decals` (`multiply`, `receiver_meshes`).
 
 ## Gotchas
 
