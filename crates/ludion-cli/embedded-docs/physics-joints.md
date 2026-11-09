@@ -183,6 +183,9 @@ part:
   names a pose none of its parts carries; weight 0 never warns, so a root may hold a `PoseBlend`
   before its parts exist.
 
+See `examples/gallery/ragdoll-pose-blend.yaml` (skinned, voxel and pinned ragdolls; driver in
+`crates/ludion-testkit/tests/common/mod.rs`).
+
 ## Rules
 
 - `a` and `b` must name two distinct bodies; every axis and the anchor must be finite; an axis must

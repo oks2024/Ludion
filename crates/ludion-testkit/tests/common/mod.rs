@@ -12,13 +12,20 @@
 //! so its bodies leave the physics world while the skin stays posed (`ludion docs physics-joints`
 //! "Ragdoll budget").
 //!
+//! **ragdoll-pose-blend** — [`pose_blend_builder`] switches a skinned and two voxel ragdolls at
+//! [`POSE_SWITCH_TICK`], gives every jointed part a `curl` pose ([`curl_poses`]), pins one voxel figure
+//! to the scene's stake, and drives each group's `PoseBlend.weight` per [`CurlDrive`]
+//! (`ludion docs physics-joints` "Pose blends").
+//!
 //! **camera-rig** — [`drive_rig`] swaps the rail camera to a side-on rig at [`SWITCH_TICK`] (a timed
 //! blend), cuts back with `snap_rig` at [`SNAP_TICK`] and pulses trauma at [`SHAKE_TICK`]
 //! (`ludion docs camera`).
 
 #![allow(dead_code)]
 
-use ludion::prelude::{Body, Collider, Joint, JointMotor, PhysicsWorld, Velocity};
+use ludion::prelude::{
+    Body, Collider, Joint, JointKind, JointMotor, JointPoses, PhysicsWorld, PoseBlend, Velocity,
+};
 use ludion_core::ids::EntityId;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::SkinBone;
@@ -26,9 +33,10 @@ use ludion_engine::{
     Animation, AnimationEvents, Engine, EngineBuilder, Mesh, PrefabInstance, Sprite,
 };
 use ludion_engine::{
-    BlendIn, CameraRig, RigConfig, RigMode, TrackRig, add_trauma, animation_events, crossfade,
-    snap_rig, switch_skin_to_ragdoll,
+    AssemblyData, BlendIn, CameraRig, RigConfig, RigMode, TrackRig, add_trauma, animation_events,
+    crossfade, load_assembly, snap_rig, switch_skin_to_ragdoll, switch_to_ragdoll,
 };
+use std::sync::Arc;
 
 /// Ticks the mannequin idles before its first run.
 pub const IDLE_TICKS: u64 = 60;
@@ -501,4 +509,170 @@ fn gib_builder_with(rows: &[GibRow]) -> EngineBuilder {
         )
         .system("throw_gibs", throw_gibs)
         .system("projectiles_step", ludion_engine::projectiles_step)
+}
+
+// --- ragdoll-pose-blend ------------------------------------------------------------------------
+
+/// The scene's entities by document position (`examples/gallery/ragdoll-pose-blend.yaml`).
+pub const POSE_STAKE: EntityId = EntityId::new(4, 0);
+pub const POSE_SKIN: EntityId = EntityId::new(5, 0);
+pub const POSE_FIGURE: EntityId = EntityId::new(6, 0);
+pub const POSE_PINNED: EntityId = EntityId::new(7, 0);
+/// The tick the three figures switch to ragdolls.
+pub const POSE_SWITCH_TICK: u64 = 0;
+/// [`CurlDrive::Ramp`] rises over 30 ticks from here and falls over the next 30.
+pub const RAMP_START: u64 = 30;
+/// [`CurlDrive::Hold`] holds [`HOLD_WEIGHT`] on `HOLD_START..HOLD_END`, then drops to zero.
+pub const HOLD_START: u64 = 30;
+pub const HOLD_END: u64 = 150;
+pub const HOLD_WEIGHT: f32 = 0.5;
+/// The curl pose's drive (the request's example numbers).
+pub const CURL_STIFFNESS: f32 = 40.0;
+pub const CURL_DAMPING: f32 = 8.0;
+pub const CURL_MAX_FORCE: f32 = 200.0;
+
+/// How [`pose_blend_builder`] drives each group's `PoseBlend.weight`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CurlDrive {
+    /// 0 -> 1 -> 0 as a triangle over the 60 ticks from [`RAMP_START`].
+    Ramp,
+    /// [`HOLD_WEIGHT`] on `HOLD_START..HOLD_END`, then 0.
+    Hold,
+    /// A `PoseBlend` that stays at weight 0.
+    Zero,
+    /// No `PoseBlend` at all (the parts still carry `JointPoses`).
+    Absent,
+}
+
+/// The `curl` pose for the part carrying `joint`: a hinge or ball target inside its limits (an
+/// unlimited joint gets 60 or 45 degrees); a slider or fixed joint takes no pose.
+pub fn curl_poses(joint: &Joint, group: Option<EntityId>) -> Option<JointPoses> {
+    let widest = |[lo, hi]: [f32; 2]| if lo.abs() > hi.abs() { lo } else { hi };
+    let target = match &joint.kind {
+        JointKind::Hinge { limits, .. } => vec![limits.map_or(60.0, |l| 0.75 * widest(l))],
+        JointKind::Ball { limits } => {
+            vec![limits.map_or(45.0, |l| 0.5 * widest(l[0])), 0.0, 0.0]
+        }
+        JointKind::Slider { .. } | JointKind::Fixed {} => return None,
+    };
+    Some(JointPoses {
+        group,
+        stiffness: CURL_STIFFNESS,
+        damping: CURL_DAMPING,
+        max_force: Some(CURL_MAX_FORCE),
+        poses: [("curl".to_string(), target)].into_iter().collect(),
+    })
+}
+
+fn pose_ramp_weight(tick: u64) -> f32 {
+    match tick.checked_sub(RAMP_START) {
+        Some(k) if k <= 30 => k as f32 / 30.0,
+        Some(k) if k <= 60 => (60 - k) as f32 / 30.0,
+        _ => 0.0,
+    }
+}
+
+/// Switches the three figures, poses their parts and pins the wall figure's torso to the stake.
+fn switch_ragdolls(
+    world: &mut World,
+    data: &AssemblyData,
+    drive: CurlDrive,
+    game_time: ludion_core::time::SimTime,
+) {
+    let skin_parts = switch_skin_to_ragdoll(world, POSE_SKIN, SKIN_SWITCH_PARTS)
+        .expect("the mannequin switches to its ragdoll");
+    let figure = switch_to_ragdoll(world, POSE_FIGURE, data, game_time)
+        .expect("the figure switches to its ragdoll");
+    let pinned = switch_to_ragdoll(world, POSE_PINNED, data, game_time)
+        .expect("the pinned figure switches to its ragdoll");
+    let groups = [
+        (skin_parts, None, POSE_SKIN),
+        (figure, Some(POSE_FIGURE), POSE_FIGURE),
+        (pinned.clone(), Some(POSE_PINNED), POSE_PINNED),
+    ];
+    for (parts, group, root) in groups {
+        for part in parts {
+            let joint = world.get::<Joint>(part).ok().flatten().cloned();
+            if let Some(poses) = joint.and_then(|joint| curl_poses(&joint, group)) {
+                world.insert(part, poses).expect("a live part");
+            }
+        }
+        if drive != CurlDrive::Absent {
+            let blend = PoseBlend {
+                pose: "curl".to_string(),
+                weight: 0.0,
+            };
+            world.insert(root, blend).expect("a live root");
+        }
+    }
+    // The torso is the assembly's first part.
+    let carrier = world.spawn();
+    let pin = Joint {
+        a: POSE_STAKE,
+        b: pinned[0],
+        kind: JointKind::Ball { limits: None },
+        anchor: [0.0; 3],
+        break_impulse: None,
+        collide: false,
+    };
+    world.insert(carrier, pin).expect("just spawned");
+}
+
+/// Writes every `PoseBlend.weight` for `tick` under `drive`, only when the value changes.
+fn drive_curl(world: &mut World, tick: u64, drive: CurlDrive) {
+    let weight = match drive {
+        CurlDrive::Ramp => pose_ramp_weight(tick),
+        CurlDrive::Hold if (HOLD_START..HOLD_END).contains(&tick) => HOLD_WEIGHT,
+        _ => 0.0,
+    };
+    let roots: Vec<EntityId> = world
+        .query_ids::<(&PoseBlend,)>()
+        .filter(|(_, (blend,))| blend.weight != weight)
+        .map(|(id, _)| id)
+        .collect();
+    for root in roots {
+        let mut blend = world.get::<PoseBlend>(root).unwrap().unwrap().clone();
+        blend.weight = weight;
+        world.insert(root, blend).expect("a live root");
+    }
+}
+
+/// The ragdoll-pose-blend engine: the switch on [`POSE_SWITCH_TICK`], then `drive` (none for
+/// `Zero` and `Absent`).
+pub fn pose_blend_builder(drive: CurlDrive) -> EngineBuilder {
+    let gallery =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
+    let data = Arc::new(
+        load_assembly(
+            ludion_assets::AssetRoot::content(&gallery),
+            "voxels/ragdoll.assembly.yaml",
+        )
+        .expect("the committed assembly loads"),
+    );
+    let builder = Engine::builder().system(
+        "switch_ragdolls",
+        move |world: &mut World, ctx: &SystemCtx| {
+            if ctx.game_frame.as_u64() == POSE_SWITCH_TICK {
+                switch_ragdolls(world, &data, drive, ctx.game_time);
+            }
+        },
+    );
+    match drive {
+        CurlDrive::Ramp | CurlDrive::Hold => {
+            builder.system("drive_curl", move |world: &mut World, ctx: &SystemCtx| {
+                drive_curl(world, ctx.game_frame.as_u64(), drive);
+            })
+        }
+        CurlDrive::Zero | CurlDrive::Absent => builder,
+    }
+}
+
+/// Every `JointPoses` part, in ascending id order.
+pub fn pose_blend_parts(world: &mut World) -> Vec<EntityId> {
+    let mut parts: Vec<EntityId> = world
+        .query_ids::<(&JointPoses,)>()
+        .map(|(id, _)| id)
+        .collect();
+    parts.sort();
+    parts
 }
