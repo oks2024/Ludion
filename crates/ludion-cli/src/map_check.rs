@@ -219,7 +219,7 @@ fn fragment_origin<'a>(
 
 /// Checks one map and prints its report.
 fn run_one(map_path: &Path, options: &Options<'_>) -> ExitCode {
-    let loaded = match generate_map::load(map_path) {
+    let loaded = match generate_map::load(map_path, &ludion_scene::MapOverrides::default()) {
         Ok(loaded) => loaded,
         Err(diagnostics) => return diagnostic::report(map_path, &diagnostics),
     };
@@ -1666,7 +1666,7 @@ fn resolve_target_names(dir: &Path, to: &str) -> Option<Vec<String>> {
     // the chain falls through to a committed scene.
     let map_path = dir.join(format!("{stem}.map.yaml"));
     if map_path.exists()
-        && let Ok(loaded) = generate_map::load(&map_path)
+        && let Ok(loaded) = generate_map::load(&map_path, &ludion_scene::MapOverrides::default())
         && let Ok(target) = ludion_scene::generate(
             &loaded.doc,
             &loaded.kit,

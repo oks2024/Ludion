@@ -1453,3 +1453,233 @@ fn a_fragment_instance_override_ref_outside_the_fragment_is_l1017() {
         d.message
     );
 }
+
+// --- Overrides and mirror ---------------------------------------------------------------------
+
+// A dyadic grid with a non-zero origin and an odd width: a merged floor, a per-cell collider wall, a
+// footprint post, a variant tree, an orb, and a rotated marker.
+const MIRROR_MAP: &str = "\
+format: 1
+kind: map
+kit: kit.yaml
+seed: 1
+cell_size: 2.0
+origin:
+  - -8.0
+  - -4.0
+rows:
+  - \"WWWW#\"
+  - \"..VO.\"
+  - \"#....\"
+markers:
+  - name: door
+    kind: gate
+    x: -3.0
+    z: 0.0
+    rotation: 30.0
+";
+
+/// The X and Z coordinate sums of the reflection lines of [`MIRROR_MAP`]'s grid.
+const LINE_SUM_X: f64 = -6.0;
+const LINE_SUM_Z: f64 = -2.0;
+
+fn mirrored(mirror: Mirror) -> Scene {
+    let mut map = parse_map(MIRROR_MAP).expect("the map parses");
+    MapOverrides {
+        mirror,
+        ..MapOverrides::default()
+    }
+    .apply(&mut map);
+    generate(&map, &kit(), &[], &Registry::new()).expect("the map generates cleanly")
+}
+
+fn translation(entity: &SceneEntity) -> Vec<f64> {
+    component(entity, "Transform")["translation"]
+        .as_array()
+        .expect("translation array")
+        .iter()
+        .map(|v| v.as_f64().expect("number"))
+        .collect()
+}
+
+fn collider_boxes(scene: &Scene) -> Vec<[f64; 4]> {
+    let mut boxes: Vec<[f64; 4]> = scene
+        .entities
+        .iter()
+        .filter(|e| e.components.iter().any(|(n, _)| n == "Collider"))
+        .map(|e| {
+            let t = translation(e);
+            let half = &component(e, "Collider")["shape"]["aabb"]["half_extents"];
+            let (hx, hz) = (half[0].as_f64().unwrap(), half[1].as_f64().unwrap());
+            [t[0] - hx, t[0] + hx, t[2] - hz, t[2] + hz]
+        })
+        .collect();
+    boxes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    boxes
+}
+
+#[test]
+fn seed_override_equals_a_map_with_that_seed() {
+    let registry = Registry::new();
+    let mut overridden = parse_map(MIRROR_MAP).unwrap();
+    MapOverrides {
+        seed: Some(7),
+        ..MapOverrides::default()
+    }
+    .apply(&mut overridden);
+    let edited = parse_map(&MIRROR_MAP.replace("seed: 1", "seed: 7")).unwrap();
+    assert_eq!(overridden, edited);
+    let a = generate(&overridden, &kit(), &[], &registry).unwrap();
+    let b = generate(&edited, &kit(), &[], &registry).unwrap();
+    assert_eq!(emit(&a, &registry), emit(&b, &registry));
+}
+
+#[test]
+fn kit_override_equals_a_map_with_that_kit() {
+    let mut overridden = parse_map(MIRROR_MAP).unwrap();
+    MapOverrides {
+        kit: Some("other/k.kit.yaml".to_string()),
+        ..MapOverrides::default()
+    }
+    .apply(&mut overridden);
+    let edited = parse_map(&MIRROR_MAP.replace("kit: kit.yaml", "kit: other/k.kit.yaml")).unwrap();
+    assert_eq!(overridden, edited);
+}
+
+#[test]
+fn mirror_reflects_every_transform_exactly() {
+    for (mirror, axis, line_sum) in [(Mirror::X, 0, LINE_SUM_X), (Mirror::Z, 2, LINE_SUM_Z)] {
+        let plain = mirrored(Mirror::None);
+        let flipped = mirrored(mirror);
+        assert_eq!(names(&plain), names(&flipped));
+        assert_eq!(plain.entities.len(), flipped.entities.len());
+        for (a, b) in plain.entities.iter().zip(&flipped.entities) {
+            assert_eq!(a.name, b.name);
+            let (ta, tb) = (translation(a), translation(b));
+            for i in 0..3 {
+                if i == axis {
+                    assert_eq!(tb[i], line_sum - ta[i], "{:?} axis", a.name);
+                } else {
+                    assert_eq!(tb[i], ta[i], "{:?} coordinate {i}", a.name);
+                }
+            }
+            let (ra, rb) = (
+                component(a, "Transform")["rotation"][1].as_f64().unwrap(),
+                component(b, "Transform")["rotation"][1].as_f64().unwrap(),
+            );
+            assert_eq!(rb, if ra == 0.0 { 0.0 } else { -ra });
+            assert!(rb.is_sign_positive() || rb != 0.0, "no -0.0 yaw");
+            assert_eq!(
+                component(a, "Transform")["scale"],
+                component(b, "Transform")["scale"]
+            );
+            assert!(
+                component(b, "Transform")["scale"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|s| s.as_f64().unwrap() >= 0.0)
+            );
+            assert_eq!(component(a, "Mesh"), component(b, "Mesh"));
+            assert_eq!(
+                a.components.iter().find(|(n, _)| n == "Collider"),
+                b.components.iter().find(|(n, _)| n == "Collider")
+            );
+        }
+    }
+}
+
+#[test]
+fn mirror_is_an_involution() {
+    for (mirror, line_sum) in [(Mirror::X, LINE_SUM_X), (Mirror::Z, LINE_SUM_Z)] {
+        let mut scene = mirrored(mirror);
+        for entity in &mut scene.entities {
+            mirror_entity(entity, mirror, line_sum);
+        }
+        assert_eq!(scene, mirrored(Mirror::None));
+    }
+}
+
+#[test]
+fn mirrored_collider_boxes_are_the_reflected_set() {
+    let plain = collider_boxes(&mirrored(Mirror::None));
+    assert!(!plain.is_empty());
+    let mut reflected_x: Vec<[f64; 4]> = plain
+        .iter()
+        .map(|b| [LINE_SUM_X - b[1], LINE_SUM_X - b[0], b[2], b[3]])
+        .collect();
+    reflected_x.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(collider_boxes(&mirrored(Mirror::X)), reflected_x);
+    let mut reflected_z: Vec<[f64; 4]> = plain
+        .iter()
+        .map(|b| [b[0], b[1], LINE_SUM_Z - b[3], LINE_SUM_Z - b[2]])
+        .collect();
+    reflected_z.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(collider_boxes(&mirrored(Mirror::Z)), reflected_z);
+}
+
+#[test]
+fn mirror_with_fragments_is_l1399() {
+    let fragment = Scene {
+        entities: vec![SceneEntity {
+            presentation: false,
+            name: Some("hand-placed".to_string()),
+            components: vec![],
+            instance: None,
+        }],
+        ..Scene::default()
+    };
+    let mut map = parse_map(MIRROR_MAP).unwrap();
+    map.fragments = vec!["frag.yaml".to_string()];
+    map.mirror = Mirror::Z;
+    let diagnostics = generate(
+        &map,
+        &kit(),
+        &[("frag.yaml".to_string(), fragment.clone())],
+        &Registry::new(),
+    )
+    .unwrap_err();
+    let d = diagnostics
+        .iter()
+        .find(|d| d.code == code::MAP_MIRROR_FRAGMENTS)
+        .expect("an L1399 diagnostic");
+    assert_eq!(d.path.as_deref(), Some("/fragments"));
+    map.mirror = Mirror::None;
+    assert!(
+        generate(
+            &map,
+            &kit(),
+            &[("frag.yaml".to_string(), fragment)],
+            &Registry::new()
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn mirror_none_is_byte_identical_to_today() {
+    let registry = Registry::new();
+    let mut map = parse_map(MIRROR_MAP).unwrap();
+    MapOverrides::default().apply(&mut map);
+    assert!(MapOverrides::default().is_empty());
+    assert_eq!(map, parse_map(MIRROR_MAP).unwrap());
+    let a = generate(&map, &kit(), &[], &registry).unwrap();
+    assert_eq!(emit(&a, &registry), emit(&gen_ok(MIRROR_MAP), &registry));
+}
+
+#[test]
+fn provenance_spelling() {
+    assert_eq!(
+        MapOverrides::default().provenance("a.map.yaml"),
+        "a.map.yaml"
+    );
+    let all = MapOverrides {
+        kit: Some("k/x.kit.yaml".to_string()),
+        seed: Some(7),
+        mirror: Mirror::Z,
+    };
+    assert_eq!(
+        all.provenance("a.map.yaml"),
+        "a.map.yaml --kit k/x.kit.yaml --seed 7 --mirror z"
+    );
+}

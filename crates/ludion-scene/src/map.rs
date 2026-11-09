@@ -114,6 +114,81 @@ pub struct MapDoc {
     /// The map source's file name, for [`Scene::generated_from`]. Not a YAML key — the CLI sets it
     /// before calling [`generate`]; the parser always leaves it `None`.
     pub source: Option<String>,
+    /// The reflection applied to the compiled grid and markers. Not a YAML key — the caller sets it
+    /// (see [`MapOverrides`]); the parser always leaves it [`Mirror::None`].
+    pub mirror: Mirror,
+}
+
+/// The axis a compiled map is reflected across: `X` flips the room left-right, `Z` front-back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mirror {
+    /// No reflection.
+    #[default]
+    None,
+    /// Reflect across the grid's centre line in X.
+    X,
+    /// Reflect across the grid's centre line in Z.
+    Z,
+}
+
+impl Mirror {
+    /// The CLI/provenance spelling, `None` when there is no mirror.
+    pub fn as_str(self) -> Option<&'static str> {
+        match self {
+            Mirror::None => None,
+            Mirror::X => Some("x"),
+            Mirror::Z => Some("z"),
+        }
+    }
+}
+
+/// Caller-side overrides of a map's kit, seed and mirror. Applied to the [`MapDoc`] before
+/// [`generate`], so an overridden compile equals compiling a map file carrying that kit and seed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MapOverrides {
+    /// Replaces `kit:` (relative to the map file, like the map's own value).
+    pub kit: Option<String>,
+    /// Replaces `seed:`.
+    pub seed: Option<u64>,
+    /// Reflects the compiled output.
+    pub mirror: Mirror,
+}
+
+impl MapOverrides {
+    /// Sets the doc's kit, seed and mirror from whichever overrides are present. Run it before the
+    /// kit is resolved.
+    pub fn apply(&self, doc: &mut MapDoc) {
+        if let Some(kit) = &self.kit {
+            doc.kit = kit.clone();
+        }
+        if let Some(seed) = self.seed {
+            doc.seed = Some(seed);
+        }
+        doc.mirror = self.mirror;
+    }
+
+    /// Whether no override is set.
+    pub fn is_empty(&self) -> bool {
+        self.kit.is_none() && self.seed.is_none() && self.mirror == Mirror::None
+    }
+
+    /// The one spelling `generated_from` records and `scripts/map-drift.mjs` parses: the map, then
+    /// ` --kit <k>`, ` --seed <n>` and ` --mirror x|z` for the fields that are set, in that order.
+    pub fn provenance(&self, map: &str) -> String {
+        let mut out = map.to_string();
+        if let Some(kit) = &self.kit {
+            out.push_str(" --kit ");
+            out.push_str(kit);
+        }
+        if let Some(seed) = self.seed {
+            out.push_str(&format!(" --seed {seed}"));
+        }
+        if let Some(axis) = self.mirror.as_str() {
+            out.push_str(" --mirror ");
+            out.push_str(axis);
+        }
+        out
+    }
 }
 
 impl MapDoc {
@@ -1217,6 +1292,20 @@ pub fn generate_traced(
     let extent = check_grid(map, kit, &mut diagnostics);
     validate_kit(kit, map, &mut diagnostics);
 
+    if map.mirror != Mirror::None && !map.fragments.is_empty() {
+        diagnostics.push(
+            Diagnostic::new(
+                code::MAP_MIRROR_FRAGMENTS,
+                "a mirrored map cannot carry `fragments:`; their transforms are not reflected",
+            )
+            .with_path("/fragments")
+            .with_help(
+                "move the fragment's entities onto markers (marker `components:` carry lights and \
+                 game components), or drop the mirror",
+            ),
+        );
+    }
+
     let mut entities: Vec<SceneEntity> = Vec::new();
 
     // 1. Fragments, verbatim, first, in order. Only their entities survive the merge, so a scene
@@ -1286,6 +1375,8 @@ pub fn generate_traced(
         }
     }
 
+    let fragment_count = entities.len();
+
     // Grid + marker passes only run when the grid is rectangular (a ragged grid has no
     // well-defined column count to place cells against).
     if let Some((width, height)) = extent {
@@ -1322,6 +1413,17 @@ pub fn generate_traced(
                     label: format!("marker {index}"),
                 },
             );
+        }
+
+        if map.mirror != Mirror::None {
+            let (origin, count) = match map.mirror {
+                Mirror::X => (map.origin[0], width),
+                _ => (map.origin[1], height),
+            };
+            let line_sum = 2.0 * origin + count as f64 * map.cell_size;
+            for entity in &mut entities[fragment_count..] {
+                mirror_entity(entity, map.mirror, line_sum);
+            }
         }
     }
 
@@ -1884,6 +1986,32 @@ fn transform_value(center: [f64; 2], y: f64, rotation: f64, scale: [f64; 3]) -> 
         "rotation": [0.0, f32_exact(rotation), 0.0],
         "scale": [f32_exact(scale[0]), f32_exact(scale[1]), f32_exact(scale[2])],
     })
+}
+
+/// Reflects an entity's `Transform` across the grid line whose coordinate sum is `line_sum`.
+/// Translation is mirrored and yaw negated while scale is kept, so a piece keeps its handedness and
+/// no scale goes negative; everything else on the entity is left as it is.
+fn mirror_entity(entity: &mut SceneEntity, mirror: Mirror, line_sum: f64) {
+    let axis = match mirror {
+        Mirror::None => return,
+        Mirror::X => 0,
+        Mirror::Z => 2,
+    };
+    let Some((_, transform)) = entity.components.iter_mut().find(|(n, _)| n == "Transform") else {
+        return;
+    };
+    if let Some(t) = transform
+        .get_mut("translation")
+        .and_then(Value::as_array_mut)
+        && let Some(v) = t.get(axis).and_then(Value::as_f64)
+    {
+        t[axis] = json!(f32_exact(line_sum - v));
+    }
+    if let Some(r) = transform.get_mut("rotation").and_then(Value::as_array_mut)
+        && let Some(yaw) = r.get(1).and_then(Value::as_f64)
+    {
+        r[1] = json!(if yaw == 0.0 { 0.0 } else { -yaw });
+    }
 }
 
 fn mesh_value(mesh: &MeshSpec, color: Option<[f64; 4]>) -> Value {

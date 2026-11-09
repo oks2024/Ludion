@@ -22,7 +22,7 @@ use ludion_core::atomic::write_atomic;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_ecs::Registry;
-use ludion_scene::{MapDoc, MapKit, Scene};
+use ludion_scene::{MapDoc, MapKit, MapOverrides, Mirror, Scene};
 
 /// The fully resolved inputs of a map source: the parsed doc (with `source` set), the parsed kit,
 /// and each fragment's `(path, parsed scene)` in `fragments:` order. Shared by `generate-map` and
@@ -39,9 +39,13 @@ pub(crate) struct LoadedMap {
 /// The map is parsed first (it names the kit/fragment paths); its parse errors return immediately.
 /// The kit and every fragment are then parsed with their diagnostics **accumulated across all
 /// files** — one run reports every broken reference, not just the first.
-pub(crate) fn load(map_path: &Path) -> Result<LoadedMap, Vec<Diagnostic>> {
+pub(crate) fn load(
+    map_path: &Path,
+    overrides: &MapOverrides,
+) -> Result<LoadedMap, Vec<Diagnostic>> {
     let source = read_file(map_path)?;
     let mut doc = ludion_scene::parse_map(&source)?;
+    overrides.apply(&mut doc);
     doc.source = Some(file_name(map_path));
 
     let dir = map_path.parent().unwrap_or_else(|| Path::new("."));
@@ -86,7 +90,25 @@ pub(crate) fn load(map_path: &Path) -> Result<LoadedMap, Vec<Diagnostic>> {
 /// the exit code (non-zero if any input fails). `--out` names a single input's destination, so it is
 /// a usage error with more than one map. `--check` regenerates in memory and compares against the
 /// committed scene instead of writing.
-pub fn run(maps: &[PathBuf], out: Option<&Path>, check: bool) -> ExitCode {
+pub fn run(
+    maps: &[PathBuf],
+    out: Option<&Path>,
+    check: bool,
+    kit: Option<&Path>,
+    seed: Option<u64>,
+    mirror: Option<&str>,
+) -> ExitCode {
+    let mirror = match mirror {
+        Some("x") => Mirror::X,
+        Some("z") => Mirror::Z,
+        _ => Mirror::None,
+    };
+    if (kit.is_some() || seed.is_some() || mirror != Mirror::None) && out.is_none() {
+        return crate::diagnostic::usage_error(
+            "--kit, --seed and --mirror need --out: an overridden room cannot take the map's \
+             default output, which the drift gate pins to the plain compile",
+        );
+    }
     if out.is_some() && maps.len() > 1 {
         return crate::diagnostic::usage_error(format_args!(
             "--out names a single output and cannot be used with {} input maps; drop --out \
@@ -97,10 +119,14 @@ pub fn run(maps: &[PathBuf], out: Option<&Path>, check: bool) -> ExitCode {
 
     let mut failed = false;
     for map in maps {
+        let overrides = match resolve_overrides(map, kit, seed, mirror) {
+            Ok(overrides) => overrides,
+            Err(code) => return code,
+        };
         let code = if check {
-            check_one(map, out)
+            check_one(map, out, &overrides)
         } else {
-            generate_one(map, out)
+            generate_one(map, out, &overrides)
         };
         if code == ExitCode::FAILURE {
             failed = true;
@@ -113,8 +139,36 @@ pub fn run(maps: &[PathBuf], out: Option<&Path>, check: bool) -> ExitCode {
     }
 }
 
+/// The overrides as `generated_from` records them: the kit is rewritten from the working directory
+/// to the map's directory, the same meaning as the map's own `kit:` value.
+fn resolve_overrides(
+    map_path: &Path,
+    kit: Option<&Path>,
+    seed: Option<u64>,
+    mirror: Mirror,
+) -> Result<MapOverrides, ExitCode> {
+    let kit = match kit {
+        Some(kit) => {
+            let dir = map_path.parent().unwrap_or_else(|| Path::new("."));
+            let relative = match ludion_import::relative_to(dir, kit, code::OUTPUT_IO) {
+                Ok(relative) => relative,
+                Err(diagnostic) => return Err(report(map_path, &[diagnostic])),
+            };
+            if relative.contains(char::is_whitespace) {
+                return Err(crate::diagnostic::usage_error(format_args!(
+                    "--kit `{relative}` contains whitespace, which `generated_from` cannot record; \
+                     rename the kit file or its directory"
+                )));
+            }
+            Some(relative)
+        }
+        None => None,
+    };
+    Ok(MapOverrides { kit, seed, mirror })
+}
+
 /// Generates one map and writes its canonical scene.
-fn generate_one(map_path: &Path, out: Option<&Path>) -> ExitCode {
+fn generate_one(map_path: &Path, out: Option<&Path>, overrides: &MapOverrides) -> ExitCode {
     let out_path = out
         .map(PathBuf::from)
         .unwrap_or_else(|| default_out(map_path));
@@ -133,7 +187,7 @@ fn generate_one(map_path: &Path, out: Option<&Path>) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    let (scene, yaml) = match generate_yaml(map_path, &out_path) {
+    let (scene, yaml) = match generate_yaml(map_path, &out_path, overrides) {
         Ok(pair) => pair,
         Err(code) => return code,
     };
@@ -162,11 +216,11 @@ fn generate_one(map_path: &Path, out: Option<&Path>) -> ExitCode {
 /// Regenerates one map in memory and compares it byte-for-byte against the committed scene at its
 /// output path — the mid-loop form of the CI drift gate. Writes nothing; exits non-zero on drift or
 /// if the target scene is missing/unreadable.
-fn check_one(map_path: &Path, out: Option<&Path>) -> ExitCode {
+fn check_one(map_path: &Path, out: Option<&Path>, overrides: &MapOverrides) -> ExitCode {
     let out_path = out
         .map(PathBuf::from)
         .unwrap_or_else(|| default_out(map_path));
-    let (_scene, yaml) = match generate_yaml(map_path, &out_path) {
+    let (_scene, yaml) = match generate_yaml(map_path, &out_path, overrides) {
         Ok(pair) => pair,
         Err(code) => return code,
     };
@@ -295,8 +349,12 @@ pub(crate) fn report_faults(
 
 /// Loads, generates, and canonically emits a map, running the parse→emit idempotence self-check.
 /// Shared by `generate_one` (which writes the YAML) and `check_one` (which compares it).
-fn generate_yaml(map_path: &Path, out_path: &Path) -> Result<(Scene, String), ExitCode> {
-    let mut loaded = match load(map_path) {
+fn generate_yaml(
+    map_path: &Path,
+    out_path: &Path,
+    overrides: &MapOverrides,
+) -> Result<(Scene, String), ExitCode> {
+    let mut loaded = match load(map_path, overrides) {
         Ok(loaded) => loaded,
         Err(diagnostics) => return Err(report(map_path, &diagnostics)),
     };
@@ -304,7 +362,7 @@ fn generate_yaml(map_path: &Path, out_path: &Path) -> Result<(Scene, String), Ex
     // name, an `--out` elsewhere names the map relative to it.
     let out_dir = out_path.parent().unwrap_or_else(|| Path::new("."));
     match ludion_import::relative_to(out_dir, map_path, code::OUTPUT_IO) {
-        Ok(source) => loaded.doc.source = Some(source),
+        Ok(source) => loaded.doc.source = Some(overrides.provenance(&source)),
         Err(diagnostic) => return Err(report(map_path, &[diagnostic])),
     }
     let registry = ludion_engine::builtin_registry();

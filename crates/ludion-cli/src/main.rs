@@ -1098,6 +1098,20 @@ enum Command {
         /// non-zero on drift. The mid-loop form of the CI drift gate.
         #[arg(long)]
         check: bool,
+        /// Compile against this kit instead of the map's `kit:` (a path from the working directory).
+        /// `generated_from` records it, relative to the map. Needs `--out` and a single map.
+        #[arg(long, value_name = "PATH")]
+        kit: Option<PathBuf>,
+        /// Compile with this seed instead of the map's `seed:`. `generated_from` records it. Needs
+        /// `--out` and a single map.
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Reflect the compiled room across the grid's centre line in X or Z: transforms are
+        /// mirrored and yaw negated, scale is kept. Passthrough marker components are copied
+        /// unreflected, and a map with `fragments:` is refused (`L1399`). `generated_from` records
+        /// it. Needs `--out` and a single map.
+        #[arg(long, value_name = "x|z", value_parser = ["x", "z"])]
+        mirror: Option<String>,
     },
     /// Bake one or more `kind: atlas-source` or `kind: font-source` documents into their committed
     /// `<name>.png` + `<name>.atlas.yaml` / `<name>.font.yaml` pair — our text into our binary, the
@@ -2392,9 +2406,21 @@ fn main() -> std::process::ExitCode {
             probes.as_deref() == Some("rebake"),
             aa,
         ),
-        Command::GenerateMap { maps, out, check } => {
-            generate_map::run(&maps, out.as_deref(), check)
-        }
+        Command::GenerateMap {
+            maps,
+            out,
+            check,
+            kit,
+            seed,
+            mirror,
+        } => generate_map::run(
+            &maps,
+            out.as_deref(),
+            check,
+            kit.as_deref(),
+            seed,
+            mirror.as_deref(),
+        ),
         Command::GenerateAtlas {
             sources,
             out_dir,

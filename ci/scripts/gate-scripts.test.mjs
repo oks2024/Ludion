@@ -292,6 +292,43 @@ test('map-drift checks a map with no scene without writing, and rejects a scene 
   }
 });
 
+test('map-drift rechecks an override scene with its flags and rejects an unknown flag', () => {
+  const root = scratchTree({
+    'games/v/plaza.map.yaml': 'kind: map\n',
+    'games/v/plaza.yaml': 'format: 1\ngenerated_from: plaza.map.yaml\n',
+    'games/v/rooms/r1.yaml': 'format: 1\ngenerated_from: ../plaza.map.yaml --kit kits/b.kit.yaml --seed 3 --mirror x\n',
+    'games/v/rooms/r2.yaml': 'format: 1\ngenerated_from: ../plaza.map.yaml --bogus 1\n',
+  });
+  try {
+    const calls = [];
+    const ludion = stubLudion(calls, (args) => {
+      if (args[0] === 'map-check') return ok('seal: sealed from first marker `m` — no way out\n');
+      return args.includes('--out') ? ok('') : ok(`${args[1]}: up to date -> ${args[1].replace('.map.yaml', '.yaml')}`);
+    });
+    const { errors, overrideChecked } = mapGate({ root, ludion });
+    assert.equal(overrideChecked, 2);
+    const call = calls.find((c) => c.includes('--out'));
+    assert.deepEqual(call, [
+      'generate-map',
+      path.join(root, 'games/v/plaza.map.yaml'),
+      '--out',
+      path.join(root, 'games/v/rooms/r1.yaml'),
+      '--kit',
+      path.join(root, 'games/v/kits/b.kit.yaml'),
+      '--seed',
+      '3',
+      '--mirror',
+      'x',
+      '--check',
+    ]);
+    assert.equal(calls.filter((c) => c.includes('--out')).length, 1, JSON.stringify(calls));
+    assert.equal(errors.length, 1, errors.join('\n'));
+    assert.match(errors[0], /games\/v\/rooms\/r2\.yaml.*--bogus/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('map-drift fails a map whose walker can leave it (L1040)', () => {
   const root = scratchTree({
     'games/v/open.map.yaml': 'kind: map\n',

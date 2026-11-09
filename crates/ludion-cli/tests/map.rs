@@ -1178,3 +1178,156 @@ fn map_check_refuses_a_lattice_past_the_ceiling() {
         "{stderr}"
     );
 }
+
+// --- generate-map overrides ------------------------------------------------------------------
+
+fn kit_text(y: &str) -> String {
+    format!(
+        "format: 1\nkind: map-kit\nname: k\ntiles:\n  \".\":\n    - name: floor\n      shape: cube\n      y: {y}\n      merge: true\nkinds:\n  gate:\n    - name: gate\n      shape: cube\n"
+    )
+}
+
+fn map_text(kit: &str, seed: Option<u64>, fragments: bool) -> String {
+    let mut text = format!(
+        "format: 1\nkind: map\nkit: {kit}\ncell_size: 2.0\norigin:\n  - -3.0\n  - 1.0\nrows:\n  - \"...\"\n  - \"...\"\n"
+    );
+    if let Some(seed) = seed {
+        text.push_str(&format!("seed: {seed}\n"));
+    }
+    text.push_str(
+        "markers:\n  - name: door\n    kind: gate\n    x: -2.0\n    z: 2.0\n    rotation: 30.0\n",
+    );
+    if fragments {
+        text.push_str("fragments:\n  - frag.yaml\n");
+    }
+    text
+}
+
+fn without_provenance(text: &str) -> String {
+    text.lines()
+        .filter(|l| !l.starts_with("generated_from:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn override_scratch(name: &str) -> PathBuf {
+    let dir = scratch(name);
+    std::fs::write(dir.join("k1.kit.yaml"), kit_text("0.0")).unwrap();
+    std::fs::write(dir.join("k2.kit.yaml"), kit_text("0.5")).unwrap();
+    std::fs::write(
+        dir.join("m.map.yaml"),
+        map_text("k1.kit.yaml", Some(1), false),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("copy.map.yaml"),
+        map_text("k2.kit.yaml", Some(9), false),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn generate_map_kit_and_seed_flags_equal_a_map_carrying_them() {
+    let dir = override_scratch("generate_overrides_equal");
+    let path = |n: &str| dir.join(n).to_str().unwrap().to_string();
+    let (map, kit, o1, o2) = (
+        path("m.map.yaml"),
+        path("k2.kit.yaml"),
+        path("o1.yaml"),
+        path("o2.yaml"),
+    );
+    let flagged = run_ludion(&[
+        "generate-map",
+        &map,
+        "--kit",
+        &kit,
+        "--seed",
+        "9",
+        "--out",
+        &o1,
+    ]);
+    assert!(
+        flagged.status.success(),
+        "{}",
+        String::from_utf8_lossy(&flagged.stderr)
+    );
+    let plain = run_ludion(&["generate-map", &path("copy.map.yaml"), "--out", &o2]);
+    assert!(
+        plain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let (a, b) = (
+        std::fs::read_to_string(&o1).unwrap(),
+        std::fs::read_to_string(&o2).unwrap(),
+    );
+    assert_eq!(without_provenance(&a), without_provenance(&b));
+    let from = a
+        .lines()
+        .find(|l| l.starts_with("generated_from:"))
+        .unwrap();
+    assert!(
+        from.contains("m.map.yaml --kit k2.kit.yaml --seed 9"),
+        "{from}"
+    );
+}
+
+#[test]
+fn generate_map_mirror_check_honours_the_flag() {
+    let dir = override_scratch("generate_overrides_mirror");
+    let path = |n: &str| dir.join(n).to_str().unwrap().to_string();
+    let (map, out) = (path("m.map.yaml"), path("o.yaml"));
+    let wrote = run_ludion(&["generate-map", &map, "--mirror", "x", "--out", &out]);
+    assert!(
+        wrote.status.success(),
+        "{}",
+        String::from_utf8_lossy(&wrote.stderr)
+    );
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(text.contains("m.map.yaml --mirror x"), "{text}");
+    let same = run_ludion(&[
+        "generate-map",
+        &map,
+        "--mirror",
+        "x",
+        "--out",
+        &out,
+        "--check",
+    ]);
+    assert!(
+        same.status.success(),
+        "{}",
+        String::from_utf8_lossy(&same.stderr)
+    );
+    let drift = run_ludion(&["generate-map", &map, "--out", &out, "--check"]);
+    assert!(!drift.status.success());
+    assert!(String::from_utf8_lossy(&drift.stderr).contains("L1039"));
+}
+
+#[test]
+fn generate_map_override_flags_need_out() {
+    let dir = override_scratch("generate_overrides_no_out");
+    let map = dir.join("m.map.yaml");
+    let output = run_ludion(&["generate-map", map.to_str().unwrap(), "--seed", "3"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--out"));
+}
+
+#[test]
+fn generate_map_mirror_with_fragments_is_l1399() {
+    let dir = override_scratch("generate_overrides_fragments");
+    std::fs::write(dir.join("frag.yaml"), "format: 1\nentities: []\n").unwrap();
+    std::fs::write(
+        dir.join("m.map.yaml"),
+        map_text("k1.kit.yaml", Some(1), true),
+    )
+    .unwrap();
+    let (map, out) = (
+        dir.join("m.map.yaml").to_str().unwrap().to_string(),
+        dir.join("o.yaml").to_str().unwrap().to_string(),
+    );
+    let output = run_ludion(&["generate-map", &map, "--mirror", "z", "--out", &out]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("L1399"));
+}

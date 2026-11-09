@@ -349,6 +349,12 @@ pub mod code {
     /// Pointer names the offending grid row.
     pub const MAP_FOOTPRINT_MISFIT: DiagnosticCode = DiagnosticCode::new("L1026");
 
+    /// `L1399` — `generate-map --mirror` was asked of a map that carries `fragments:`. The mirror
+    /// reflects the generated grid and markers; fragments are hand-authored scenes whose transforms
+    /// (parents, pitch/roll) the compiler does not reflect. Raised by `ludion-scene`'s map generator;
+    /// the JSON Pointer is `/fragments`.
+    pub const MAP_MIRROR_FRAGMENTS: DiagnosticCode = DiagnosticCode::new("L1399");
+
     /// `L1027` — a map marker's cross-district gate (`Gate.to` + `anchor`) names a spawn anchor that
     /// resolves against no entity in the sibling district's generated scene, so the gate would fail
     /// only at runtime (as `L3019`). **Reserved:** registered here for the map format, but the check
@@ -3550,6 +3556,20 @@ reports it rather than emit an overhanging or a gapped wall.
 The diagnostic's JSON Pointer names the offending grid row. Fix: make the glyph's runs a whole
 multiple of the footprint (add or remove cells), or choose a kit piece whose footprint divides the
 run.",
+    },
+    CodeEntry {
+        code: code::MAP_MIRROR_FRAGMENTS,
+        severity: Severity::Error,
+        title: "a mirrored map cannot carry fragments",
+        explanation: "\
+`generate-map --mirror` was asked of a map that carries `fragments:`.
+
+The mirror reflects the generated grid and markers across the grid's centre line. Fragments are
+hand-authored scenes whose transforms (parents, pitch/roll) the compiler does not reflect, so a
+mirrored map would leave them standing in the unreflected room.
+
+The diagnostic's JSON Pointer is `/fragments`. Fix: move the fragment's entities onto markers (a
+marker's `components:` carry lights and game components), or drop the mirror.",
     },
     CodeEntry {
         code: code::MAP_DANGLING_GATE_ANCHOR,
@@ -11230,6 +11250,7 @@ mod tests {
         code::MAP_UNKNOWN_KIND,
         code::MAP_NAME_COLLISION,
         code::MAP_FOOTPRINT_MISFIT,
+        code::MAP_MIRROR_FRAGMENTS,
         code::MAP_DANGLING_GATE_ANCHOR,
         code::MAP_GATE_SEALED,
         code::MAP_MARKER_BLOCKED,
