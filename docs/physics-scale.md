@@ -32,7 +32,7 @@ Motor casts dominate a character crowd, not contacts. Move many motors per tick 
 
 **Pair prefilter.** Kinematic–kinematic and kinematic–static pairs never reach the contact graph, so a motor's capsule adds no contact pairs and no narrow-phase work (it still costs broad-phase work and its own casts). `PhysicsWorld::contact_pair_census` counts tracked and touching pairs per body-kind pairing: read it to see where pairs come from before blaming the solver.
 
-**Converged crowds.** A motor's casts visit every collider their bounds overlap, including colliders its layer ignores; each ignored one costs a bitmask test, not an exact test, but a crowd piled into one spot overlaps tens to hundreds of neighbours per query. A converged crowd therefore costs more per motor than a dispersed one, and its cost follows local density. The bench's converged arm measures it.
+**Converged crowds.** A motor's move walks its neighbourhood once and answers its casts and contact queries from that short list, so the cost no longer multiplies by the number of queries; it is still the colliders near the motor, including ones its layer ignores (each costs a bitmask test, not an exact test), so a crowd piled into one spot costs more per motor than a dispersed one and the cost follows local density. The bench's converged arm measures it.
 
 ## L4034
 

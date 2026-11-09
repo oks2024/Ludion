@@ -4,6 +4,7 @@
 mod batch;
 mod carry;
 mod component;
+mod gather;
 mod mover;
 mod report;
 mod resize;
@@ -13,6 +14,7 @@ mod sweep;
 pub use batch::move_characters;
 pub use component::{CharacterMotor, CharacterMotorState, PlatformPose, height_in_force};
 pub(crate) use component::{check, motor_invalid};
+pub(crate) use gather::Gather;
 pub use mover::{
     MoveConstraint, ground_probe_reach, move_character, move_character_with, probe_character_ground,
 };

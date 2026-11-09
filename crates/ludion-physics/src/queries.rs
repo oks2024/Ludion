@@ -5,10 +5,12 @@
 use ludion_core::ids::EntityId;
 use ludion_core::math::sqrt;
 use ludion_spatial::Shape;
+use rapier3d::parry::query::RayCast as _;
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::parry::shape::Shape as ParryShape;
-use rapier3d::prelude::{BoundingVolume, Ray};
+use rapier3d::prelude::{Aabb, BoundingVolume, Collider, Ray, RayIntersection};
 
+use crate::motor::Gather;
 use crate::sweep::SweepFilter;
 use crate::world::{
     PhysicsError, PhysicsWorld, entity_from_bits, from_vector, shape_builder, to_pose, to_vector,
@@ -31,6 +33,11 @@ pub struct QueryHit {
     /// vector for a ray whose origin starts inside the shape.
     pub normal: [f32; 3],
 }
+
+/// Slack on a ray segment's box when deciding whether a gather covers it: the slab test rounds its
+/// own entry point, so a graze at the far end must not count as covered. Looser only means more
+/// fallbacks to the BVH.
+const RAY_COVER_MARGIN: f32 = 1e-3;
 
 /// Sorts hits `(distance, entity)` ascending — the wrapper's own tie-break, never rapier's BVH
 /// traversal order. Each entity has at most one collider, so the two keys together are unique.
@@ -275,7 +282,7 @@ impl PhysicsWorld {
     ) -> Result<Vec<QueryHit>, PhysicsError> {
         let unit_dir = check_ray(origin, direction, max_distance)?;
         let filter = self.sweep_filter(filter)?;
-        Ok(self.ray_hits(origin, unit_dir, max_distance, &filter))
+        Ok(self.ray_hits(origin, unit_dir, max_distance, &filter, None))
     }
 
     /// [`ray_cast`](PhysicsWorld::ray_cast) past the input checks, with the filter already resolved
@@ -286,25 +293,44 @@ impl PhysicsWorld {
         unit_dir: [f32; 3],
         max_distance: f32,
         filter: &SweepFilter,
+        gather: Option<&Gather>,
     ) -> Vec<QueryHit> {
         let ray = Ray::new(to_vector(origin), to_vector(unit_dir));
-        let mut hits: Vec<QueryHit> = self
-            .rapier
-            .query_pipeline()
-            .intersect_ray(ray, max_distance, true)
-            .filter_map(|(_, collider, hit)| {
-                let entity = entity_from_bits(collider.user_data);
-                if filter.drops(self, entity, collider) {
-                    return None;
-                }
-                Some(QueryHit {
-                    entity,
-                    distance: hit.time_of_impact,
-                    point: advance(origin, unit_dir, hit.time_of_impact),
-                    normal: from_vector(hit.normal),
-                })
+        let hit = |collider: &Collider, hit: RayIntersection| {
+            let entity = entity_from_bits(collider.user_data);
+            if filter.drops(self, entity, collider) {
+                return None;
+            }
+            Some(QueryHit {
+                entity,
+                distance: hit.time_of_impact,
+                point: advance(origin, unit_dir, hit.time_of_impact),
+                normal: from_vector(hit.normal),
             })
-            .collect();
+        };
+        let end = to_vector(advance(origin, unit_dir, max_distance));
+        let segment = Aabb::new(ray.origin.min(end), ray.origin.max(end));
+        let mut hits: Vec<QueryHit> =
+            match gather.filter(|g| g.covers(&segment.loosened(RAY_COVER_MARGIN))) {
+                Some(gather) => self
+                    .gathered(gather, |leaf| leaf.intersects_local_ray(&ray, max_distance))
+                    .filter_map(|collider| {
+                        let intersection = collider.shape().cast_ray_and_get_normal(
+                            collider.position(),
+                            &ray,
+                            max_distance,
+                            true,
+                        )?;
+                        hit(collider, intersection)
+                    })
+                    .collect(),
+                None => self
+                    .rapier
+                    .query_pipeline()
+                    .intersect_ray(ray, max_distance, true)
+                    .filter_map(|(_, collider, intersection)| hit(collider, intersection))
+                    .collect(),
+            };
         sort_hits(&mut hits);
         hits
     }
@@ -364,11 +390,13 @@ impl PhysicsWorld {
             unit_dir,
             max_distance,
             &filter,
+            None,
         )
     }
 
     /// [`shape_cast`](PhysicsWorld::shape_cast) past the input checks and the layer names: builds
     /// `shape` and casts it with the resolved `filter`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn shape_cast_resolved(
         &self,
         shape: &Shape,
@@ -377,6 +405,7 @@ impl PhysicsWorld {
         unit_dir: [f32; 3],
         max_distance: f32,
         filter: &SweepFilter,
+        gather: Option<&Gather>,
     ) -> Result<Vec<QueryHit>, PhysicsError> {
         reject_composite(shape)?;
         let built = shape_builder(shape, self.plane, None)
@@ -388,12 +417,14 @@ impl PhysicsWorld {
             unit_dir,
             max_distance,
             filter,
+            gather,
         ))
     }
 
     /// [`shape_cast`](PhysicsWorld::shape_cast) past the input checks, with the filter resolved,
     /// `unit_dir` normalized and `query_shape` already built (a motor builds each of its capsules
     /// once per solve).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn shape_hits(
         &self,
         query_shape: &dyn ParryShape,
@@ -402,6 +433,7 @@ impl PhysicsWorld {
         unit_dir: [f32; 3],
         max_distance: f32,
         filter: &SweepFilter,
+        gather: Option<&Gather>,
     ) -> Vec<QueryHit> {
         let start = to_pose(translation, rotation);
         let end = to_pose(advance(translation, unit_dir, max_distance), rotation);
@@ -411,10 +443,10 @@ impl PhysicsWorld {
         let options = ShapeCastOptions::with_max_time_of_impact(max_distance);
         let pipeline = self.rapier.query_pipeline();
         let mut hits = Vec::new();
-        for (_, collider) in pipeline.intersect_aabb_conservative(swept) {
+        self.visit(gather, swept, |collider| {
             let entity = entity_from_bits(collider.user_data);
             if filter.drops(self, entity, collider) {
-                continue;
+                return;
             }
             let pose = collider.position();
             let Ok(Some(hit)) = pipeline.dispatcher.cast_shapes(
@@ -424,7 +456,7 @@ impl PhysicsWorld {
                 query_shape,
                 options,
             ) else {
-                continue;
+                return;
             };
             let hit = hit.transform1_by(pose);
             hits.push(QueryHit {
@@ -433,7 +465,7 @@ impl PhysicsWorld {
                 point: from_vector(hit.witness1),
                 normal: from_vector(hit.normal1),
             });
-        }
+        });
         sort_hits(&mut hits);
         hits
     }

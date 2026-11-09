@@ -1,22 +1,26 @@
 //! [`move_character`]: depenetration, collide-and-slide, ground probe and ceiling for a
 //! [`CharacterMotor`](crate::CharacterMotor).
 
+use std::cell::OnceCell;
+use std::rc::Rc;
+
 use ludion_core::ids::EntityId;
 use ludion_core::math::{cos, sqrt};
 use ludion_core::time::FrameIndex;
 use ludion_ecs::World;
 use ludion_spatial::ParentPose;
-use rapier3d::prelude::SharedShape;
+use rapier3d::prelude::{BoundingVolume, SharedShape};
 
 use super::carry::{rigid_carry, rotate, rotate_yaw};
 use super::component::{CharacterMotor, CharacterMotorState, PlatformPose, check, height_in_force};
+use super::gather::Gather;
 use super::report::{GroundHit, GroundProbe, MotorError, MoveReport, PlatformCarry, SurfaceHit};
 use super::surface::SurfaceVelocity;
 use super::sweep::{Capsule, Contact};
 use crate::pose::PhysicsPose;
 use crate::queries::{QueryFilter, QueryHit};
 use crate::sweep::SweepFilter;
-use crate::world::PhysicsWorld;
+use crate::world::{PhysicsWorld, to_pose};
 
 /// Depenetration passes before the motor gives up and reports `stuck`.
 const DEPENETRATION_PASSES: usize = 4;
@@ -486,9 +490,15 @@ pub(super) struct CarryPlan {
     surface: [f32; 3],
 }
 
+/// Slack on the gather box beyond the move's own reach; a query outside the box falls back to the
+/// BVH, so it sets speed, never results.
+const GATHER_SLACK: f32 = 0.05;
+
 pub(super) struct Solver<'a> {
     physics: &'a PhysicsWorld,
     filter: SweepFilter,
+    /// The colliders around the solve's start, walked once; empty outside `solve`.
+    gather: OnceCell<Rc<Gather>>,
     /// The motor's capsule, the skin-inflated one `contacts` queries and the wider one `refine`
     /// queries, each built once for the solve.
     shape: SharedShape,
@@ -516,6 +526,7 @@ impl<'a> Solver<'a> {
         Solver {
             physics,
             filter,
+            gather: OnceCell::new(),
             shape: capsule.built(physics),
             inflated: Capsule {
                 radius: motor.radius + motor.skin_width,
@@ -535,6 +546,28 @@ impl<'a> Solver<'a> {
             max_slides: motor.max_slides,
             cos_limit: cos(motor.slope_limit_deg.to_radians()),
         }
+    }
+
+    /// The gather the solve's queries share, once `solve` has built it.
+    fn gathered(&self) -> Option<&Gather> {
+        self.gather.get().map(|gather| &**gather)
+    }
+
+    /// Walks the BVH once over the neighbourhood this move can reach from `start`.
+    fn gather_around(&self, start: [f32; 3], displacement: [f32; 3]) {
+        self.gather.get_or_init(|| {
+            let reach = len(displacement)
+                + self.radius
+                + self.step_height
+                + self.snap
+                + 4.0 * self.skin
+                + GATHER_SLACK;
+            let capsule = self
+                .shape
+                .compute_aabb(&to_pose(self.center(start), [0.0, 0.0, 0.0, 1.0]));
+            let bounds = capsule.loosened(reach);
+            Rc::new(self.physics.gather(bounds, &self.filter))
+        });
     }
 
     fn center(&self, feet: [f32; 3]) -> [f32; 3] {
@@ -557,7 +590,7 @@ impl<'a> Solver<'a> {
     fn pinned(&self, prop: EntityId, direction: [f32; 3], need: f32) -> bool {
         let limit = need + self.skin;
         self.physics
-            .prop_free_distance(prop, direction, limit, &self.filter)
+            .prop_free_distance(prop, direction, limit, &self.filter, self.gathered())
             < limit
     }
 
@@ -586,6 +619,7 @@ impl<'a> Solver<'a> {
             direction,
             length,
             &self.filter,
+            self.gathered(),
             |hit| pushing && self.is_pushable(hit, direction, length),
         )
     }
@@ -604,9 +638,13 @@ impl<'a> Solver<'a> {
     /// back to the real gap. A rigid wall-class contact is dropped
     /// while its prop is free to be pushed away.
     fn contacts(&self, feet: [f32; 3]) -> Vec<Contact> {
-        let mut contacts =
-            self.physics
-                .capsule_contacts(&*self.inflated, self.center(feet), 0.0, &self.filter);
+        let mut contacts = self.physics.capsule_contacts(
+            &*self.inflated,
+            self.center(feet),
+            0.0,
+            &self.filter,
+            self.gathered(),
+        );
         for contact in &mut contacts {
             contact.dist += self.skin;
         }
@@ -628,7 +666,13 @@ impl<'a> Solver<'a> {
     ) -> [f32; 3] {
         let margin = 2.0 * self.skin + 1e-3;
         self.physics
-            .capsule_contacts(&*self.wide, self.center(feet), margin / 2.0, &self.filter)
+            .capsule_contacts(
+                &*self.wide,
+                self.center(feet),
+                margin / 2.0,
+                &self.filter,
+                self.gathered(),
+            )
             .into_iter()
             .find(|contact| {
                 contact.entity == entity && len(sub(contact.point, point)) <= self.radius / 4.0
@@ -683,6 +727,7 @@ impl<'a> Solver<'a> {
         mut constraint: Option<&mut dyn MoveConstraint>,
         carry: Option<&CarryPlan>,
     ) -> Outcome {
+        self.gather_around(start, displacement);
         let (mut feet, mut stuck) = self.depenetrate(start);
         let rise_from = feet[1];
         let mut slide = Slide::default();
@@ -816,6 +861,7 @@ impl<'a> Solver<'a> {
     fn without(&self, entity: EntityId) -> Solver<'a> {
         Solver {
             filter: self.filter.exclude_also(entity),
+            gather: self.gather.clone(),
             shape: self.shape.clone(),
             inflated: self.inflated.clone(),
             wide: self.wide.clone(),
@@ -1014,7 +1060,7 @@ impl<'a> Solver<'a> {
         let origin = [feet[0], feet[1] + self.radius, feet[2]];
         let under = self
             .physics
-            .probe_down(origin, self.radius + reach, &self.filter)
+            .probe_down(origin, self.radius + reach, &self.filter, self.gathered())
             .filter(|under| under.entity == entity && under.normal[1] >= self.cos_limit)?;
         let up = normalize(under.normal)[1];
         let rest = under.point[1] + (self.radius + self.skin) / up - self.radius;
@@ -1040,7 +1086,7 @@ impl<'a> Solver<'a> {
             point[2] + away[2] * 1e-3,
         ];
         self.physics
-            .probe_down(origin, 2.0 * self.skin, &self.filter)
+            .probe_down(origin, 2.0 * self.skin, &self.filter, self.gathered())
             .filter(|under| under.entity == entity && under.normal[1] >= self.cos_limit)
             .map(|under| normalize(under.normal))
     }
@@ -1070,7 +1116,7 @@ impl<'a> Solver<'a> {
             let origin = [feet[0], feet[1] + self.radius, feet[2]];
             if let Some(under) = self
                 .physics
-                .probe_down(origin, under, &self.filter)
+                .probe_down(origin, under, &self.filter, self.gathered())
                 .filter(|under| under.entity == hit.entity && under.normal[1] >= self.cos_limit)
             {
                 normal = normalize(under.normal);

@@ -6,6 +6,7 @@ use ludion_spatial::Shape;
 use rapier3d::parry::shape::Shape as ParryShape;
 use rapier3d::prelude::{BoundingVolume, SharedShape};
 
+use crate::motor::Gather;
 use crate::queries::{QueryHit, check_cast, check_ray};
 use crate::sweep::SweepFilter;
 use crate::world::{PhysicsWorld, entity_from_bits, from_vector, shape_builder, to_pose};
@@ -55,6 +56,7 @@ impl Capsule {
 impl PhysicsWorld {
     /// The first hit along `direction` (unit) within `length` whose normal opposes the motion and
     /// that `skip` does not drop, or `None`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn cast_capsule(
         &self,
         capsule: &dyn ParryShape,
@@ -62,10 +64,11 @@ impl PhysicsWorld {
         direction: [f32; 3],
         length: f32,
         filter: &SweepFilter,
+        gather: Option<&Gather>,
         skip: impl Fn(&QueryHit) -> bool,
     ) -> Option<QueryHit> {
         let unit_dir = check_cast(center, IDENTITY, direction, length).ok()?;
-        let hits = self.shape_hits(capsule, center, IDENTITY, unit_dir, length, filter);
+        let hits = self.shape_hits(capsule, center, IDENTITY, unit_dir, length, filter, gather);
         hits.into_iter().find(|hit| {
             let along = hit.normal[0] * direction[0]
                 + hit.normal[1] * direction[1]
@@ -82,15 +85,16 @@ impl PhysicsWorld {
         center: [f32; 3],
         prediction: f32,
         filter: &SweepFilter,
+        gather: Option<&Gather>,
     ) -> Vec<Contact> {
         let at = to_pose(center, IDENTITY);
         let aabb = shape.compute_aabb(&at).loosened(prediction);
         let pipeline = self.rapier.query_pipeline();
         let mut contacts = Vec::new();
-        for (_, collider) in pipeline.intersect_aabb_conservative(aabb) {
+        self.visit(gather, aabb, |collider| {
             let entity = entity_from_bits(collider.user_data);
             if filter.drops(self, entity, collider) {
-                continue;
+                return;
             }
             let pose = collider.position();
             let Ok(Some(contact)) = pipeline.dispatcher.contact(
@@ -99,11 +103,11 @@ impl PhysicsWorld {
                 shape,
                 prediction,
             ) else {
-                continue;
+                return;
             };
             let normal = clean_normal(from_vector(pose.rotation * contact.normal1));
             if !contact.dist.is_finite() || !normal.iter().all(|c| c.is_finite()) {
-                continue;
+                return;
             }
             contacts.push(Contact {
                 entity,
@@ -111,7 +115,7 @@ impl PhysicsWorld {
                 normal,
                 point: from_vector(pose * contact.point1),
             });
-        }
+        });
         contacts.sort_unstable_by(|a, b| a.dist.total_cmp(&b.dist).then(a.entity.cmp(&b.entity)));
         contacts
     }
@@ -125,6 +129,7 @@ impl PhysicsWorld {
         direction: [f32; 3],
         limit: f32,
         filter: &SweepFilter,
+        gather: Option<&Gather>,
     ) -> f32 {
         let Some((shape, translation, rotation)) = self.shape_and_pose(prop) else {
             return limit;
@@ -132,9 +137,15 @@ impl PhysicsWorld {
         let Ok(unit_dir) = check_cast(translation, rotation, direction, limit) else {
             return limit;
         };
-        let Ok(hits) =
-            self.shape_cast_resolved(&shape, translation, rotation, unit_dir, limit, filter)
-        else {
+        let Ok(hits) = self.shape_cast_resolved(
+            &shape,
+            translation,
+            rotation,
+            unit_dir,
+            limit,
+            filter,
+            gather,
+        ) else {
             return limit;
         };
         hits.into_iter()
@@ -154,9 +165,10 @@ impl PhysicsWorld {
         origin: [f32; 3],
         length: f32,
         filter: &SweepFilter,
+        gather: Option<&Gather>,
     ) -> Option<QueryHit> {
         let unit_dir = check_ray(origin, [0.0, -1.0, 0.0], length).ok()?;
-        let hits = self.ray_hits(origin, unit_dir, length, filter);
+        let hits = self.ray_hits(origin, unit_dir, length, filter, gather);
         hits.into_iter()
             .find(|hit| hit.normal[1] > 0.0 && hit.normal.iter().all(|c| c.is_finite()))
     }
