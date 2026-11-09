@@ -78,8 +78,8 @@ use crate::probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
 use crate::quality::QualitySetting;
 use crate::recording::{AppliedDocReload, Recorder};
 use crate::replay_playback::{
-    ActivePlayback, PlaybackOutcome, PlaybackPlan, ReplayEntry, ReplayPlayback,
-    ReplayPlaybackState, SavedHost,
+    ActivePlayback, PlaybackControls, PlaybackHook, PlaybackInput, PlaybackOutcome, PlaybackPlan,
+    PlaybackSpeed, ReplayEntry, ReplayPlayback, ReplayPlaybackState, SavedHost,
 };
 use crate::run_recording::{
     ActiveRun, RUN_RECORDING_LOG_CAPACITY, RunRecording, RunRecordingEntry, RunRecordingRequest,
@@ -517,6 +517,9 @@ pub struct Engine {
     /// The playback in progress. Taken out of the engine while its cursor ticks, so the tick the
     /// cursor performs re-enters [`advance_live`](Engine::advance_live) as a plain tick.
     playback: Option<ActivePlayback>,
+    /// The playback-controls hook ([`EngineBuilder::playback_controls`](crate::EngineBuilder::playback_controls)).
+    /// Host state: never in the world, a hash or a snapshot.
+    pub(crate) playback_hook: Option<PlaybackHook>,
     /// The name of the recording playing, set for the whole playback (the cursor's absence while it
     /// ticks does not clear it).
     playback_name: Option<String>,
@@ -908,6 +911,7 @@ impl Engine {
             run_recording: None,
             replay_playback: None,
             playback: None,
+            playback_hook: None,
             playback_name: None,
             game_version: None,
             boot_profile_pending: false,
@@ -2855,7 +2859,8 @@ impl Engine {
     }
 
     /// Whether the live loop should idle: the sim is paused and no replay is playing. A replay's own
-    /// `sim.step`s leave the driver paused between ticks, so the loop must keep ticking through one.
+    /// `sim.step`s leave the driver paused between ticks, so the loop must keep ticking through one;
+    /// a paused playback keeps ticking too, so the controls hook runs each tick period.
     pub fn pacing_paused(&self) -> bool {
         self.playback_name.is_none() && self.driver.run_state() == RunState::Paused
     }
@@ -2871,6 +2876,44 @@ impl Engine {
             frame: self.frame(),
         };
         self.return_from_playback(playback, outcome);
+    }
+
+    /// Holds the playing replay at its frame. A no-op when nothing plays.
+    pub fn pause_playback(&mut self) {
+        if let Some(playback) = self.playback.as_mut() {
+            playback.paused = true;
+        }
+    }
+
+    /// Continues a paused playback. A no-op when nothing plays.
+    pub fn resume_playback(&mut self) {
+        if let Some(playback) = self.playback.as_mut() {
+            playback.paused = false;
+        }
+    }
+
+    /// Sets the pace of the playing replay at once. A no-op when nothing plays.
+    pub fn set_playback_speed(&mut self, speed: PlaybackSpeed) {
+        if let Some(playback) = self.playback.as_mut() {
+            playback.speed = speed;
+            self.apply_playback_speed(speed);
+        }
+    }
+
+    /// Whether the playing replay is held; `false` when nothing plays.
+    pub fn playback_paused(&self) -> bool {
+        self.playback.as_ref().is_some_and(|p| p.paused)
+    }
+
+    /// The pace of the playing replay, or `None` when nothing plays.
+    pub fn playback_speed(&self) -> Option<PlaybackSpeed> {
+        self.playback.as_ref().map(|p| p.speed)
+    }
+
+    fn apply_playback_speed(&mut self, speed: PlaybackSpeed) {
+        if let Ok(speed) = Speed::new(speed.factor()) {
+            self.driver.set_speed(speed);
+        }
     }
 
     /// Applies the replay-playback requests at the end of a free-running tick (see
@@ -3066,6 +3109,10 @@ impl Engine {
             cursor: crate::replay::ActionCursor::new(scan.actions),
             frames: 0,
             saved,
+            live_input: InputState::default(),
+            pending_live: Vec::new(),
+            paused: false,
+            speed: PlaybackSpeed::X1,
         };
         self.profile_off_disk = true;
         self.playback_name = Some(name.to_string());
@@ -3098,10 +3145,42 @@ impl Engine {
 
     /// One live tick of a playing replay: the cursor runs to the next tick of the shared driver.
     fn advance_playback(&mut self, mut playback: ActivePlayback) -> bool {
-        match playback
+        playback.live_input.begin_tick();
+        for event in std::mem::take(&mut playback.pending_live) {
+            playback.live_input.apply(event);
+        }
+        if let Some(mut hook) = self.playback_hook.take() {
+            let mut controls = PlaybackControls::new(playback.paused, playback.speed);
+            hook(&playback.live_input, &mut controls);
+            self.playback_hook = Some(hook);
+            if controls.stop_requested() {
+                let outcome = PlaybackOutcome::Stopped {
+                    name: playback.name.clone(),
+                    frame: self.frame(),
+                };
+                self.return_from_playback(playback, outcome);
+                return false;
+            }
+            playback.paused = controls.paused();
+            if controls.speed() != playback.speed {
+                playback.speed = controls.speed();
+                self.apply_playback_speed(playback.speed);
+            }
+        }
+        self.driver.world_mut().insert_resource(PlaybackInput {
+            input: playback.live_input.clone(),
+        });
+        if playback.paused {
+            self.playback = Some(playback);
+            return false;
+        }
+        let ticked = playback
             .cursor
-            .advance(self, &mut crate::replay::PlainDrive)
-        {
+            .advance(self, &mut crate::replay::PlainDrive);
+        if matches!(ticked, Ok(crate::replay::Advance::Ticked)) {
+            self.apply_playback_speed(playback.speed);
+        }
+        match ticked {
             Ok(crate::replay::Advance::Ticked) => {
                 playback.frames += 1;
                 self.playback = Some(playback);
@@ -4801,6 +4880,11 @@ impl Engine {
     /// # Errors
     /// Whatever the command's handler reports (see [`dispatch`](crate::dispatch)).
     pub fn execute(&mut self, command: ludion_protocol::Command) -> Result<Dispatched, Diagnostic> {
+        if self.playback.is_some()
+            && let Some(answer) = self.gate_live_command(&command)
+        {
+            return answer;
+        }
         // The frame at which the command is drained and applied (before it runs); a `sim.step`
         // advances the frame, so this is captured up front for the record stamp.
         let drain_frame = self.frame();
@@ -4830,6 +4914,68 @@ impl Engine {
             panicked_at,
         );
         applied.result
+    }
+
+    /// Answers a live command that arrives while a replay plays, or lets it through (`None`): input
+    /// goes to the live `InputState`, `render.size` is deferred to the return, and every other
+    /// command the recording would write (and a data-doc reload) is refused with `L1405`.
+    fn gate_live_command(
+        &mut self,
+        command: &ludion_protocol::Command,
+    ) -> Option<Result<Dispatched, Diagnostic>> {
+        use ludion_protocol::{Command, ResponseBody};
+        let body = match command {
+            Command::InputInject(params) => {
+                let event = match crate::commands::sim::parse_input_event(params) {
+                    Ok(event) => event,
+                    Err(diagnostic) => return Some(Err(diagnostic)),
+                };
+                self.playback.as_mut()?.pending_live.push(event);
+                ResponseBody::Ack
+            }
+            Command::RenderSize(params) => {
+                match crate::commands::render::requested_extent(params) {
+                    Ok(Some((width, height))) => {
+                        if let Err(diagnostic) = self.frame_size(width, height) {
+                            return Some(Err(diagnostic));
+                        }
+                        self.playback.as_mut()?.saved.render_size = (width, height);
+                        ResponseBody::RenderSize { width, height }
+                    }
+                    Ok(None) => return None,
+                    Err(diagnostic) => return Some(Err(diagnostic)),
+                }
+            }
+            Command::AssetReload(_) => {
+                return Some(Err(
+                    self.playback_refusal(command, "retry after the playback")
+                ));
+            }
+            _ if crate::recording::record_kind(command).is_some() => {
+                return Some(Err(self.playback_refusal(
+                    command,
+                    "use the playback controls (`Engine::pause_playback`, …) or stop the playback first",
+                )));
+            }
+            _ => return None,
+        };
+        Some(Ok(Dispatched {
+            body,
+            frame: self.frame(),
+            game_frame: self.game_frame(),
+        }))
+    }
+
+    fn playback_refusal(&self, command: &ludion_protocol::Command, help: &str) -> Diagnostic {
+        let name = self.playback_name.as_deref().unwrap_or("");
+        Diagnostic::new(
+            code::REPLAY_PLAYBACK_FAILED,
+            format!(
+                "`{}` is refused while replay `{name}` plays",
+                command.method()
+            ),
+        )
+        .with_help(help.to_string())
     }
 
     /// Notes, for the [`execute`](Engine::execute) that is running the handler, the form of the

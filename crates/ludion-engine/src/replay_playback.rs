@@ -185,12 +185,131 @@ pub(crate) struct SavedHost {
     pub(crate) fallback_text: Option<String>,
 }
 
+/// The wall-clock pace of a playing replay. It sets the live loop's pacing only; a tick's `dt` never
+/// changes, so the replayed trace is the same at every speed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlaybackSpeed {
+    /// Real time.
+    #[default]
+    X1,
+    /// Twice real time.
+    X2,
+    /// Four times real time.
+    X4,
+}
+
+impl PlaybackSpeed {
+    /// The pacing factor.
+    pub fn factor(self) -> f64 {
+        match self {
+            PlaybackSpeed::X1 => 1.0,
+            PlaybackSpeed::X2 => 2.0,
+            PlaybackSpeed::X4 => 4.0,
+        }
+    }
+}
+
+/// What a playback-controls hook may change, handed to
+/// [`EngineBuilder::playback_controls`](crate::EngineBuilder::playback_controls) at every live
+/// boundary while a replay plays. The engine has no key policy: the game maps keys to these calls.
+///
+/// # Example
+/// ```
+/// use ludion_engine::PlaybackControls;
+/// use ludion_sim::{InputState, Key};
+///
+/// fn hook(input: &InputState, c: &mut PlaybackControls) {
+///     if input.was_pressed(Key::Space) {
+///         if c.paused() { c.resume() } else { c.pause() }
+///     }
+/// }
+/// let mut controls = PlaybackControls::default();
+/// hook(&InputState::default(), &mut controls);
+/// assert!(!controls.paused());
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlaybackControls {
+    paused: bool,
+    speed: PlaybackSpeed,
+    stop: bool,
+}
+
+impl PlaybackControls {
+    pub(crate) fn new(paused: bool, speed: PlaybackSpeed) -> Self {
+        Self {
+            paused,
+            speed,
+            stop: false,
+        }
+    }
+
+    pub(crate) fn stop_requested(&self) -> bool {
+        self.stop
+    }
+
+    /// Holds the replay at its current frame.
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    /// Continues a paused replay.
+    pub fn resume(&mut self) {
+        self.paused = false;
+    }
+
+    /// Sets the pace.
+    pub fn set_speed(&mut self, speed: PlaybackSpeed) {
+        self.speed = speed;
+    }
+
+    /// Ends the playback and returns to the `return_to` scene.
+    pub fn stop(&mut self) {
+        self.stop = true;
+    }
+
+    /// Whether the replay is held.
+    pub fn paused(&self) -> bool {
+        self.paused
+    }
+
+    /// The pace in force.
+    pub fn speed(&self) -> PlaybackSpeed {
+        self.speed
+    }
+}
+
+/// The live input while a replay plays: what the player does on the real devices, which never
+/// reaches the replayed sim. It exists only during a playback.
+///
+/// Read it only in a `presentation_system`: the live recording never had it, so a sim system that
+/// reads it diverges the playback.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaybackInput {
+    pub(crate) input: ludion_sim::InputState,
+}
+
+impl PlaybackInput {
+    /// The live input state of this boundary.
+    pub fn input(&self) -> &ludion_sim::InputState {
+        &self.input
+    }
+}
+
+/// The host-side hook [`EngineBuilder::playback_controls`](crate::EngineBuilder::playback_controls)
+/// installs.
+pub(crate) type PlaybackHook =
+    Box<dyn FnMut(&ludion_sim::InputState, &mut PlaybackControls) + Send>;
+
 /// A playback in progress.
 pub(crate) struct ActivePlayback {
     pub(crate) name: String,
     pub(crate) cursor: ActionCursor,
     pub(crate) frames: u64,
     pub(crate) saved: SavedHost,
+    pub(crate) live_input: ludion_sim::InputState,
+    pub(crate) pending_live: Vec<ludion_sim::InputEvent>,
+    pub(crate) paused: bool,
+    pub(crate) speed: PlaybackSpeed,
 }
 
 /// What a start has verified before it may touch the world.

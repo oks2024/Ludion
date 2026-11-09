@@ -126,14 +126,9 @@ pub(crate) fn hash(engine: &mut Engine) -> Result<ResponseBody, Diagnostic> {
     })
 }
 
-/// `input.inject` — deserialize the value into a sim input event and inject it (`L3005` if the value
-/// is not a valid input event, an analog value is non-finite or out of range, or `frame` has
-/// already run).
-pub(crate) fn inject(
-    engine: &mut Engine,
-    params: InputInjectParams,
-) -> Result<ResponseBody, Diagnostic> {
-    let event: InputEvent = serde_json::from_value(params.event).map_err(|error| {
+/// The validated input event an `input.inject` carries (`L3005` if it is not one).
+pub(crate) fn parse_input_event(params: &InputInjectParams) -> Result<InputEvent, Diagnostic> {
+    let event: InputEvent = serde_json::from_value(params.event.clone()).map_err(|error| {
         Diagnostic::new(
             code::PROTOCOL_INVALID_INPUT,
             format!("input.inject event is not a valid input event: {error}"),
@@ -141,6 +136,17 @@ pub(crate) fn inject(
         .with_help("use e.g. {\"kind\": \"key_down\", \"key\": \"W\"} — see L3005 for the shape")
     })?;
     event.validate()?;
+    Ok(event)
+}
+
+/// `input.inject` — deserialize the value into a sim input event and inject it (`L3005` if the value
+/// is not a valid input event, an analog value is non-finite or out of range, or `frame` has
+/// already run).
+pub(crate) fn inject(
+    engine: &mut Engine,
+    params: InputInjectParams,
+) -> Result<ResponseBody, Diagnostic> {
+    let event = parse_input_event(&params)?;
     engine
         .driver_mut()
         .inject_input(params.frame, event)

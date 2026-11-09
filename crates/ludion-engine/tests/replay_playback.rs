@@ -5,15 +5,20 @@ use ludion_core::rng::DeterministicRng;
 use ludion_core::time::FrameIndex;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
-    Engine, EngineBuilder, PlaybackOutcome, Profile, ReplayPlayback, ReplayPlaybackConfig,
-    RunRecording, RunRecordingConfig, Shutdown, replay_hashes_with,
+    Engine, EngineBuilder, PlaybackInput, PlaybackOutcome, PlaybackSpeed, Profile, ReplayPlayback,
+    ReplayPlaybackConfig, RunRecording, RunRecordingConfig, Shutdown, replay_hashes_with,
 };
-use ludion_protocol::{Command, command::InputInjectParams};
+use ludion_protocol::{
+    Command, ResponseBody,
+    command::{InputInjectParams, RenderSizeParams},
+};
 use ludion_sim::{InputState, Key, WorldHash};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 type Trace = Vec<(FrameIndex, WorldHash)>;
 
@@ -411,4 +416,247 @@ fn a_replayed_quit_does_not_shut_the_host() {
     while host.advance_live() {}
     assert_eq!(host.playing(), None);
     assert!(!host.shutdown_requested(), "the replayed quit was dropped");
+}
+
+/// A presentation system that counts the ticks the live W key was held.
+fn probed(dir: &Path) -> (EngineBuilder, Arc<AtomicUsize>) {
+    let seen = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&seen);
+    let builder = game(dir, true, None).presentation_system("probe", move |world, _ctx| {
+        if let Some(input) = world.resource::<PlaybackInput>()
+            && input.input().is_held(Key::W)
+        {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    (builder, seen)
+}
+
+fn live_error(engine: &mut Engine, command: Command) -> String {
+    engine
+        .execute(command)
+        .expect_err("refused while a replay plays")
+        .code
+        .as_str()
+        .to_string()
+}
+
+fn start(engine: &mut Engine, name: &str) {
+    playback(engine).play(name, "hub.yaml");
+    engine.advance_live();
+    assert_eq!(engine.playing(), Some(name));
+}
+
+fn expected_trace(dir: &Path, name: &str) -> Trace {
+    let bytes = std::fs::read(dir.join(format!("save/replays/{name}.lrp"))).unwrap();
+    replay_hashes_with(game(dir, false, None), &bytes, dir).unwrap()
+}
+
+#[test]
+fn live_input_and_mutations_never_reach_the_replay() {
+    let dir = fresh_dir("flood");
+    record(&dir, "run", None);
+    let expected = expected_trace(&dir, "run");
+
+    let mut engine = boot(probed(&dir).0);
+    start(&mut engine, "run");
+    let mut played: Trace = vec![sample(&mut engine)];
+    loop {
+        press(&mut engine, "key_down");
+        press(&mut engine, "key_up");
+        press(&mut engine, "key_down");
+        assert_eq!(live_error(&mut engine, Command::SimPause), "L1405");
+        assert_eq!(live_error(&mut engine, Command::SimResume), "L1405");
+        let reply = engine
+            .execute(Command::RenderSize(RenderSizeParams {
+                width: Some(640),
+                height: Some(360),
+            }))
+            .unwrap();
+        assert_eq!(
+            reply.body,
+            ResponseBody::RenderSize {
+                width: 640,
+                height: 360
+            }
+        );
+        if !engine.advance_live() {
+            break;
+        }
+        played.push(sample(&mut engine));
+    }
+    assert_eq!(played, expected);
+    assert_eq!(engine.render_size(), (640, 360), "applied at the return");
+}
+
+#[test]
+fn presentation_systems_see_live_input() {
+    let dir = fresh_dir("presentation");
+    record(&dir, "run", None);
+    let (builder, seen) = probed(&dir);
+    let mut engine = boot(builder);
+    start(&mut engine, "run");
+    press(&mut engine, "key_down");
+    assert!(engine.advance_live());
+    assert_eq!(seen.load(Ordering::Relaxed), 1);
+    assert!(engine.advance_live());
+    assert_eq!(seen.load(Ordering::Relaxed), 2, "held until released");
+    while engine.advance_live() {}
+    assert!(engine.world().resource::<PlaybackInput>().is_none());
+}
+
+#[test]
+fn pause_holds_and_resume_continues_the_trace() {
+    let dir = fresh_dir("pause");
+    record(&dir, "run", None);
+    let expected = expected_trace(&dir, "run");
+
+    let mut engine = boot(game(&dir, true, None));
+    start(&mut engine, "run");
+    let mut played: Trace = vec![sample(&mut engine)];
+    for _ in 0..3 {
+        assert!(engine.advance_live());
+        played.push(sample(&mut engine));
+    }
+    engine.pause_playback();
+    assert!(engine.playback_paused());
+    let held = sample(&mut engine);
+    for _ in 0..5 {
+        assert!(!engine.advance_live());
+        assert_eq!(sample(&mut engine), held);
+        assert_eq!(engine.playing(), Some("run"));
+    }
+    engine.resume_playback();
+    while engine.advance_live() {
+        played.push(sample(&mut engine));
+    }
+    assert_eq!(played, expected);
+}
+
+#[test]
+fn the_hook_drives_the_controls() {
+    let dir = fresh_dir("hook");
+    record(&dir, "run", None);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&calls);
+    let builder = game(&dir, true, None).playback_controls(move |input, controls| {
+        counter.fetch_add(1, Ordering::Relaxed);
+        if input.was_pressed(Key::Space) {
+            if controls.paused() {
+                controls.resume();
+            } else {
+                controls.pause();
+            }
+        }
+        if input.was_pressed(Key::Escape) {
+            controls.stop();
+        }
+    });
+    let mut engine = boot(builder);
+    start(&mut engine, "run");
+    let key = |engine: &mut Engine, key: &str| {
+        engine
+            .execute(Command::InputInject(InputInjectParams {
+                frame: None,
+                event: json!({ "kind": "key_down", "key": key }),
+            }))
+            .unwrap();
+    };
+    key(&mut engine, "Space");
+    assert!(!engine.advance_live());
+    assert!(engine.playback_paused());
+    let at = engine.frame();
+    let before = calls.load(Ordering::Relaxed);
+    for _ in 0..3 {
+        assert!(!engine.advance_live());
+    }
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        before + 3,
+        "hook runs paused"
+    );
+    assert_eq!(engine.frame(), at);
+
+    engine
+        .execute(Command::InputInject(InputInjectParams {
+            frame: None,
+            event: json!({ "kind": "key_up", "key": "Space" }),
+        }))
+        .unwrap();
+    assert!(!engine.advance_live());
+    key(&mut engine, "Space");
+    assert!(engine.advance_live());
+    assert!(!engine.playback_paused());
+
+    key(&mut engine, "Escape");
+    assert!(!engine.advance_live());
+    assert_eq!(engine.playing(), None);
+    assert!(matches!(
+        outcome(&engine),
+        Some(PlaybackOutcome::Stopped { .. })
+    ));
+    assert_eq!(engine.frame(), FrameIndex::ZERO, "back at the hub");
+}
+
+#[test]
+fn speed_sets_the_driver_pacing_and_returns() {
+    let dir = fresh_dir("speed");
+    record(&dir, "run", None);
+    let mut engine = boot(game(&dir, true, None));
+    start(&mut engine, "run");
+    assert_eq!(engine.playback_speed(), Some(PlaybackSpeed::X1));
+    engine.set_playback_speed(PlaybackSpeed::X4);
+    assert_eq!(engine.speed().factor(), 4.0);
+    assert!(engine.advance_live());
+    assert_eq!(engine.speed().factor(), 4.0, "a tick keeps the pace");
+    engine.stop_playback();
+    assert_eq!(engine.speed().factor(), 1.0, "the saved speed is back");
+    assert_eq!(engine.playback_speed(), None);
+}
+
+#[test]
+fn run_live_keeps_ticking_a_playback() {
+    use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
+    use std::time::Duration;
+
+    let dir = fresh_dir("run-live");
+    record(&dir, "run", None);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&calls);
+    let mut engine = boot(
+        game(&dir, true, None).playback_controls(move |_, controls| {
+            let n = counter.fetch_add(1, Ordering::Relaxed);
+            if n == 5 {
+                controls.pause();
+            }
+        }),
+    );
+    playback(&mut engine).play("run", "hub.yaml");
+
+    let (intake, intake_rx) = crossbeam_channel::unbounded();
+    let (shutdown, shutdown_rx) = shutdown_channel();
+    let handle = std::thread::spawn(move || run_live(engine, intake_rx, shutdown_rx, None));
+    let send = |command: Command| {
+        let (stamped, reply) = StampedCommand::new(command);
+        intake.send(stamped).unwrap();
+        reply.recv_timeout(Duration::from_secs(5)).unwrap()
+    };
+
+    let deadline = crossbeam_channel::after(Duration::from_secs(10));
+    while calls.load(Ordering::Relaxed) < 40 {
+        assert!(
+            deadline.try_recv().is_err(),
+            "the hook stopped being called"
+        );
+        let ack = send(Command::InputInject(InputInjectParams {
+            frame: None,
+            event: json!({ "kind": "key_down", "key": "W" }),
+        }));
+        assert_eq!(ack.unwrap().body, ResponseBody::Ack);
+        let refused = send(Command::SimPause).expect_err("refused while it plays");
+        assert_eq!(refused.code.as_str(), "L1405");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    shutdown.signal();
+    handle.join().unwrap().unwrap();
 }

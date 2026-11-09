@@ -20,7 +20,9 @@
 //!   the run from the scene's text and records it to `<dir>/<name>.lrp`; `stop()` publishes it.
 //! - **Replay playback** — [`ReplayPlayback`] (`EngineBuilder::replay_playback`): `play(name, return_to)`
 //!   plays a recording in place and returns to a scene; `refresh()` / `delete(name)` manage the
-//!   [`ReplayEntry`] list; [`PlaybackOutcome`] reports how it ended.
+//!   [`ReplayEntry`] list; [`PlaybackOutcome`] reports how it ended. While one plays, live input
+//!   goes to a [`PlaybackInput`] resource (presentation systems only) and
+//!   `EngineBuilder::playback_controls` maps keys to [`PlaybackControls`] (pause, [`PlaybackSpeed`], stop).
 //! - **Built-in visual components** — [`Transform`], [`Sprite`] (+ [`SpriteBlend`], its `alpha` /
 //!   `additive` compositing flag), [`Mesh`] (+ [`MeshSource`]), [`PointLight`],
 //!   [`SpotLight`], [`ReflectionProbe`] (+ [`ProbeShape`]), [`DirectionalLight`] (the sun), [`Camera`] (+ [`Projection`]), [`Text`],
@@ -226,24 +228,25 @@ pub use ludion_engine::{
     MOTOR_STUCK, MOTOR_WALL, MapWrap, Mesh, MeshGrid, MeshSource, MotionSegment, Name, Nav,
     NavAgent, NavConfig, NavSteering, NoInterpolate, PARTICLE_MAX_LIVE_PER_EMITTER, ParticleBlend,
     ParticleEmitter, PathDocument, PathFollower, PathFrame, PathInterpolation, PathMetric,
-    PathMode, PathOrient, PathSampler, PatternDoc, PatternPlayer, PlaybackOutcome, PointLight,
-    PostProcess, PrefabApplied, PrefabInstance, PrefabReverted, ProbeShape, Profile,
-    ProjectileConfig, ProjectileLook, ProjectileVisual, ProjectileVisuals, Projectiles, Projection,
-    RampSpec, ReflectionProbe, RenderExtent, RenderSettings, ReplayEntry, ReplayPlayback,
-    ReplayPlaybackConfig, Residue, ResidueStore, ResumeOutcome, RigConfig, RigMode, RigState,
-    RunRecording, RunRecordingConfig, RunSave, SceneSwitch, ShakeConfig, Shutdown, SkinBone,
-    SpotLight, Springs, Sprite, SpriteBlend, SuspendInfo, SwitchTo, Text, TileAppearance, Tilemap,
-    TimelineEntry, TrackRig, Transform, TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect,
-    UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Volley,
-    VolleyCenter, VolleyShape, WorldPose, add_fov_kick, add_kick, add_look, add_look_counts,
-    add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
-    bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw,
-    despawn_instance, first_person_eye, fits_character, lane_error_colour, lane_frame,
-    lane_relative, load_assembly, move_character, move_character_with, move_characters, nav_steer,
-    nav_update, path_follow, path_follower_motion, play_patterns, play_sound, posed_joint_world,
-    probe_character_ground, projectiles_step, reparent, report_diagnostic, report_full_diagnostic,
-    resize_character, revert_prefab, set_clip_speed, set_look, snap_rig, spawn_prefab,
-    spawn_projectile, switch_skin_to_ragdoll, switch_to_ragdoll, teleport_character, unpack_prefab,
+    PathMode, PathOrient, PathSampler, PatternDoc, PatternPlayer, PlaybackControls, PlaybackInput,
+    PlaybackOutcome, PlaybackSpeed, PointLight, PostProcess, PrefabApplied, PrefabInstance,
+    PrefabReverted, ProbeShape, Profile, ProjectileConfig, ProjectileLook, ProjectileVisual,
+    ProjectileVisuals, Projectiles, Projection, RampSpec, ReflectionProbe, RenderExtent,
+    RenderSettings, ReplayEntry, ReplayPlayback, ReplayPlaybackConfig, Residue, ResidueStore,
+    ResumeOutcome, RigConfig, RigMode, RigState, RunRecording, RunRecordingConfig, RunSave,
+    SceneSwitch, ShakeConfig, Shutdown, SkinBone, SpotLight, Springs, Sprite, SpriteBlend,
+    SuspendInfo, SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
+    TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect, UiText, VOLLEY_MAX_BULLETS,
+    VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Volley, VolleyCenter, VolleyShape,
+    WorldPose, add_fov_kick, add_kick, add_look, add_look_counts, add_trauma, advance_volleys,
+    animation_events, builtin_registry, bullet_age, bullet_is_alive, bullet_position,
+    camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw, despawn_instance,
+    first_person_eye, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
+    move_character, move_character_with, move_characters, nav_steer, nav_update, path_follow,
+    path_follower_motion, play_patterns, play_sound, posed_joint_world, probe_character_ground,
+    projectiles_step, reparent, report_diagnostic, report_full_diagnostic, resize_character,
+    revert_prefab, set_clip_speed, set_look, snap_rig, spawn_prefab, spawn_projectile,
+    switch_skin_to_ragdoll, switch_to_ragdoll, teleport_character, unpack_prefab,
     validate_pattern_docs, volley_hits, world_transform,
 };
 

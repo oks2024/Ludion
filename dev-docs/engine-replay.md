@@ -155,6 +155,16 @@ becomes the replay in place.
 - **Return.** At the file's end or `stop_playback`, host state is restored, the replay maps disarmed, and
   `return_to` reloads carrying the profile saved before the play (a failed reload falls back to the
   pre-play scene, `L1405`). The outcome is `Finished`, `Stopped`, `Refused` or `Failed`.
+- **Live commands are gated at `Engine::execute`** (`gate_live_command`) while the cursor is parked in
+  `self.playback`; the cursor's own replayed commands run while it is taken, so they pass. `input.inject`
+  goes to the playback's live `InputState`, `render.size` is stored into the saved host and applies at the
+  return, and every other kind `record_kind` writes, plus `asset.reload`, is refused with `L1405`.
+- **Controls hook, no key policy.** `EngineBuilder::playback_controls` runs at every live boundary, paused
+  included (`pacing_paused` is false while playing), with the live input and `PlaybackControls`
+  (pause, resume, `PlaybackSpeed`, stop). The speed sets driver pacing only, and is re-applied after each
+  tick so a replayed `sim.set_speed` cannot change it. The hook is host state, never hashed or snapshotted.
+- **`PlaybackInput`** (the live `InputState`, inserted each boundary while playing) is for presentation
+  systems only: a sim system that reads it diverges the playback, since the recording never had it.
 - A quit the replayed game requests is dropped (`drain_shutdown`). No `Command`, record kind or snapshot
   field is involved, so no hash moves.
 

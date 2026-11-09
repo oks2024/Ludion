@@ -109,6 +109,7 @@ pub struct EngineBuilder {
     run_save: bool,
     run_recordings: Option<crate::RunRecordingConfig>,
     replay_playback: Option<crate::ReplayPlaybackConfig>,
+    playback_controls: Option<crate::replay_playback::PlaybackHook>,
     game_version: Option<String>,
     observe_load: bool,
     category_gains: CategoryGains,
@@ -155,6 +156,7 @@ impl EngineBuilder {
             run_save: false,
             run_recordings: None,
             replay_playback: None,
+            playback_controls: None,
             game_version: None,
             observe_load: false,
             category_gains: CategoryGains::default(),
@@ -255,6 +257,20 @@ impl EngineBuilder {
     #[must_use]
     pub fn replay_playback(mut self, config: crate::ReplayPlaybackConfig) -> Self {
         self.replay_playback = Some(config);
+        self
+    }
+
+    /// Installs the playback-controls hook: called at every live boundary while a replay plays,
+    /// paused included, with the live input and a [`PlaybackControls`](crate::PlaybackControls) to
+    /// pause, resume, change the pace or stop. It sees live input only and has no world access; the
+    /// game maps the keys, the engine has no key policy. A hook without
+    /// [`replay_playback`](EngineBuilder::replay_playback) is never called.
+    #[must_use]
+    pub fn playback_controls(
+        mut self,
+        f: impl FnMut(&ludion_sim::InputState, &mut crate::PlaybackControls) + Send + 'static,
+    ) -> Self {
+        self.playback_controls = Some(Box::new(f));
         self
     }
 
@@ -1082,7 +1098,7 @@ impl EngineBuilder {
     ///
     /// # Errors
     /// Any registration [`Diagnostic`], or an `L4018` for a duplicate or reserved system name.
-    pub fn build_at(self, project_root: PathBuf) -> Result<Engine, Diagnostic> {
+    pub fn build_at(mut self, project_root: PathBuf) -> Result<Engine, Diagnostic> {
         if let Some(at) = self.orphan_query {
             return Err(Diagnostic::new(
                 code::QUERY_DECL_NO_SYSTEM,
@@ -1213,6 +1229,7 @@ impl EngineBuilder {
             }
             engine.init_replay_playback(config);
         }
+        engine.playback_hook = self.playback_controls.take();
         engine.set_game_version(self.game_version.clone());
         engine.boot_profile_pending = true;
         if self.observe_load {
