@@ -40,6 +40,11 @@ export const SCRIPT_ROOTS = ['scripts', 'ci/scripts', 'games', 'examples'];
 
 export const ALLOWLIST = [
   {
+    file: 'crates/ludion-engine/src/engine.rs',
+    needle: 'File::create(&temp)',
+    reason: 'the streamed run recording temp, published by atomic::commit_durable',
+  },
+  {
     file: 'crates/ludion-cli/src/check_scene.rs',
     needle: 'File::create(record_path)',
     reason: 'replay recording sink, a streaming log (ledger trigger: the first L3010 truncated inside a record)',

@@ -358,6 +358,10 @@ pub mod code {
     pub const RUN_SAVE_WRITE_FAILED: DiagnosticCode = DiagnosticCode::new("L1400");
     /// `L1401` — the suspended run was refused on resume; nothing was restored.
     pub const RUN_SAVE_RESUME_REFUSED: DiagnosticCode = DiagnosticCode::new("L1401");
+    /// `L1402` — an in-game run recording could not start, be written or be finalized.
+    pub const RUN_RECORDING_FAILED: DiagnosticCode = DiagnosticCode::new("L1402");
+    /// `L1403` — the `run_recordings` builder config is invalid (zero keyframe interval, bad dir).
+    pub const RUN_RECORDING_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1403");
 
     /// `L1027` — a map marker's cross-district gate (`Gate.to` + `anchor`) names a spawn anchor that
     /// resolves against no entity in the sibling district's generated scene, so the gate would fail
@@ -5461,6 +5465,43 @@ This is a **warning**: nothing is restored, the file is renamed to `suspend.json
 place if the rename fails), `RunSave::last_resume()` is `Refused { reason }`, and the run continues.
 
 Fix: start a new run. The backup can be inspected by hand.",
+    },
+    CodeEntry {
+        code: code::RUN_RECORDING_FAILED,
+        severity: Severity::Warning,
+        title: "run recording could not start, be written or be finalized",
+        explanation: "\
+A game system called `RunRecording::start(name)` or `stop()`, and the engine could not carry it out
+at the frame boundary. Causes:
+
+  - the name is empty, longer than 128 characters, starts with `.` or holds a character outside
+    `[A-Za-z0-9._-]`;
+  - a session recording (`--record`, `set_recording`) is already running and wins;
+  - the current scene has no inline text to restart from;
+  - the replays directory or the recording file could not be created, written or renamed;
+  - the recording died mid-run (a write error stopped it).
+
+This is a **warning**: the run continues. A start refused before the reset changes nothing; a start
+that fails after the reset leaves the reset world and no recording (the message says so). A
+previous `<name>.lrp` is replaced only by a recording that finished.
+
+Fix: use a plain file-safe name, stop the session recording, and make sure the replays directory is
+writable with free space.",
+    },
+    CodeEntry {
+        code: code::RUN_RECORDING_CONFIG_INVALID,
+        severity: Severity::Error,
+        title: "run recording config is invalid",
+        explanation: "\
+`EngineBuilder::run_recordings` was given a config the engine cannot use:
+
+  - `keyframe_every` is 0 (a recording needs a keyframe interval of at least 1 tick);
+  - `dir` is not a relative path inside the save root (empty, absolute, or holding `..`).
+
+The build fails with this error.
+
+Fix: use a `keyframe_every` of 1 or more (the default is 3600) and a relative `dir` such as
+`save/replays`.",
     },
     CodeEntry {
         code: code::PROFILE_SAVE_FAILED,
@@ -11406,6 +11447,8 @@ mod tests {
         code::PROFILE_SAVE_FAILED,
         code::RUN_SAVE_WRITE_FAILED,
         code::RUN_SAVE_RESUME_REFUSED,
+        code::RUN_RECORDING_FAILED,
+        code::RUN_RECORDING_CONFIG_INVALID,
         code::DIRECTIONAL_LIGHT_INVALID_FRUSTUM,
         code::SCHEDULE_MODULE_CONCENTRATION,
         code::QUERY_DECL_UNKNOWN_COMPONENT,
@@ -11831,6 +11874,7 @@ mod tests {
             code::PROFILE_LOAD_FAILED,
             code::RUN_SAVE_WRITE_FAILED,
             code::RUN_SAVE_RESUME_REFUSED,
+            code::RUN_RECORDING_FAILED,
             code::PROFILE_SAVE_FAILED,
             code::SCHEDULE_MODULE_CONCENTRATION,
             code::QUERY_DRIFT_UNOBSERVED,

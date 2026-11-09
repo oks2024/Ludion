@@ -77,6 +77,10 @@ use crate::player_profile::{ProfileKind, ProfileSaveEntry};
 use crate::probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
 use crate::quality::QualitySetting;
 use crate::recording::{AppliedDocReload, Recorder};
+use crate::run_recording::{
+    ActiveRun, RUN_RECORDING_LOG_CAPACITY, RunRecording, RunRecordingEntry, RunRecordingRequest,
+    RunRecordingState,
+};
 use crate::run_save::{
     ResumeOutcome, RunSave, RunSaveEntry, RunSaveRequest, RunSaveState, SuspendInfo,
 };
@@ -500,6 +504,9 @@ pub struct Engine {
     /// The suspended-run state, `Some` once [`run_save`](crate::EngineBuilder::run_save) opted in.
     /// The [`RunSave`] resource mirrors it after every world rebuild.
     run_save: Option<RunSaveState>,
+    /// The run-recording state, `Some` once [`run_recordings`](crate::EngineBuilder::run_recordings)
+    /// opted in. It lives here, not in `SessionState`, because a run's reset clears the session.
+    run_recording: Option<RunRecordingState>,
     /// True from build until the first world rebuild: the profile the build read is what that first
     /// `scene.load` carries instead of re-reading disk (see `commit_world`).
     pub(crate) boot_profile_pending: bool,
@@ -883,6 +890,7 @@ impl Engine {
             profile_persistence: false,
             profile_off_disk: false,
             run_save: None,
+            run_recording: None,
             boot_profile_pending: false,
             replay_scene_text: None,
             replay_prefab_text: None,
@@ -1765,6 +1773,11 @@ impl Engine {
         if was_running && self.recorder.is_some() {
             self.record_free_run_tick();
         }
+        // After the tick is batched: a stop then ends the file on this tick, and a start's reset
+        // leaves no pending tick of the old run in the new recording.
+        if was_running {
+            self.drain_run_recording(frame);
+        }
     }
 
     /// The frame-boundary drains every tick primitive performs after the driver advances: the caught
@@ -2513,6 +2526,255 @@ impl Engine {
             self.driver
                 .world_mut()
                 .insert_resource(RunSave::mirror(state));
+        }
+    }
+
+    /// Installs the run-recording state; called once at build when
+    /// [`run_recordings`](crate::EngineBuilder::run_recordings) is on. No disk I/O.
+    pub(crate) fn init_run_recording(&mut self, config: crate::RunRecordingConfig) {
+        self.run_recording = Some(RunRecordingState {
+            config,
+            active: None,
+            last_finished: None,
+            log: VecDeque::new(),
+            error: None,
+        });
+        self.install_run_recording();
+    }
+
+    /// (Re)installs the [`RunRecording`] resource from the engine's state; a no-op without
+    /// [`run_recordings`](crate::EngineBuilder::run_recordings). Called after every world (re)build.
+    fn install_run_recording(&mut self) {
+        if let Some(state) = self.run_recording.as_ref() {
+            self.driver
+                .world_mut()
+                .insert_resource(RunRecording::mirror(state));
+        }
+    }
+
+    /// The frame-stamped run-recording requests drained so far, in request order, bounded to the most
+    /// recent entries. It outlives a run's reset.
+    pub fn run_recording_log(&self) -> Option<&VecDeque<RunRecordingEntry>> {
+        self.run_recording.as_ref().map(|state| &state.log)
+    }
+
+    /// The most recent run-recording failure (`L1402`), or `None` if the last request succeeded.
+    pub fn run_recording_error(&self) -> Option<&Diagnostic> {
+        self.run_recording.as_ref()?.error.as_ref()
+    }
+
+    /// Where the recording called `name` is published: `<save_root>/<dir>/<name>.lrp`.
+    pub fn run_recording_path(&self, name: &str) -> PathBuf {
+        let dir = self
+            .run_recording
+            .as_ref()
+            .map_or("", |state| state.config.dir.as_str());
+        self.save_root().join(dir).join(format!("{name}.lrp"))
+    }
+
+    /// The scene text a run recording restarts from: the inline document the session holds. Only
+    /// the [`Profile`](crate::Profile) and run-save state carry across the reset; entities,
+    /// resources, residue and doc reloads drop.
+    fn run_start_scene_text(&self) -> Option<String> {
+        self.current_scene_text()
+    }
+
+    /// Applies the run-recording requests at the end of a free-running tick (see
+    /// [`RunRecording`]): a stop publishes the file, then a start restarts the run from the scene
+    /// text at frame 0 and arms the ordinary recorder. Only a persisting host resets or touches
+    /// disk; elsewhere the requests are only logged. Every failure is a non-fatal `L1402`.
+    fn drain_run_recording(&mut self, frame: FrameIndex) {
+        if self.run_recording.is_none() {
+            return;
+        }
+        let Some(resource) = self.driver.world_mut().resource_mut::<RunRecording>() else {
+            return;
+        };
+        let stop = std::mem::take(&mut resource.stop);
+        let start = resource.start.take();
+        let persisting = self.profile_persistence && !self.profile_off_disk;
+        let died = self
+            .run_recording
+            .as_ref()
+            .is_some_and(|state| state.active.is_some())
+            && self.recorder.is_none();
+        if died {
+            let failure = self.recording_failure.take().unwrap_or_else(|| {
+                Diagnostic::new(code::RECORDING_STOPPED, "the recorder is gone")
+            });
+            self.publish_run(Some(&failure));
+        }
+        if !stop && start.is_none() {
+            if died {
+                self.install_run_recording();
+            }
+            return;
+        }
+        let mut requests = Vec::new();
+        if stop {
+            requests.push(RunRecordingRequest::Stop);
+        }
+        if let Some(name) = &start {
+            requests.push(RunRecordingRequest::Start(name.clone()));
+        }
+        if let Some(state) = self.run_recording.as_mut() {
+            for request in requests {
+                if state.log.len() >= RUN_RECORDING_LOG_CAPACITY {
+                    state.log.pop_front();
+                }
+                state.log.push_back(RunRecordingEntry { frame, request });
+            }
+        }
+        if persisting {
+            if stop
+                && self
+                    .run_recording
+                    .as_ref()
+                    .is_some_and(|s| s.active.is_some())
+            {
+                let closed = self.close_recorder();
+                self.publish_run(closed.as_ref().err());
+            }
+            if let Some(name) = start {
+                self.start_run_recording(&name);
+            }
+        }
+        self.install_run_recording();
+    }
+
+    /// The start half of [`drain_run_recording`](Engine::drain_run_recording).
+    fn start_run_recording(&mut self, name: &str) {
+        let active = self
+            .run_recording
+            .as_ref()
+            .is_some_and(|state| state.active.is_some());
+        if active {
+            let closed = self.close_recorder();
+            self.publish_run(closed.as_ref().err());
+        }
+        if let Err(reason) = crate::run_recording::validate_name(name) {
+            self.run_recording_failed(
+                format!("run recording not started: {reason}"),
+                "use a plain file-safe name; the run was not restarted",
+            );
+            return;
+        }
+        if self.recorder.is_some() {
+            self.run_recording_failed(
+                format!(
+                    "run recording `{name}` not started: a session recording is running and wins"
+                ),
+                "stop the `--record` session first; the run was not restarted",
+            );
+            return;
+        }
+        let Some(text) = self.run_start_scene_text() else {
+            self.run_recording_failed(
+                format!("run recording `{name}` not started: the scene has no inline text to restart from"),
+                "load the scene with `scene.load` or `load_inline_scene`; the run was not restarted",
+            );
+            return;
+        };
+        let path = self.run_recording_path(name);
+        let host_state = (self.current_scene_path.clone(), self.driver.speed());
+        if let Err(errors) = self.load_scene_carrying_profile(text) {
+            let detail = errors
+                .first()
+                .map_or_else(String::new, |d| d.message.clone());
+            self.run_recording_failed(
+                format!("run recording `{name}` not started: the scene did not reload: {detail}"),
+                "the run was not restarted",
+            );
+            return;
+        }
+        self.current_scene_path.clone_from(&host_state.0);
+        self.driver.set_speed(host_state.1);
+        self.push_event(Event::SceneChanged(SceneChangedData {
+            kind: SceneChangeKind::Load,
+            path: host_state.0,
+            request_id: None,
+        }));
+        let temp = ludion_core::atomic::temp_sibling(&path);
+        let opened = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::File::create(&temp))
+            .map_err(|error| format!("{}: {error}", temp.display()));
+        let armed = opened.and_then(|file| {
+            let interval = self
+                .run_recording
+                .as_ref()
+                .map_or(1, |state| state.config.keyframe_every);
+            self.arm_recorder(Box::new(std::io::BufWriter::new(file)), interval)
+                .map_err(|diagnostic| diagnostic.message)
+        });
+        match armed {
+            Ok(()) => {
+                if let Some(state) = self.run_recording.as_mut() {
+                    state.active = Some(ActiveRun {
+                        name: name.to_string(),
+                        temp,
+                        path,
+                    });
+                    state.error = None;
+                }
+            }
+            Err(message) => {
+                let _ = std::fs::remove_file(&temp);
+                self.run_recording_failed(
+                    format!(
+                        "run recording `{name}` could not be written: {message}; the run was restarted but is not recorded"
+                    ),
+                    "check the replays directory is writable and has free space",
+                );
+            }
+        }
+    }
+
+    /// Ends the active run's file: publishes it durably when `closed_with` is `None`, otherwise
+    /// removes the temp and reports why it did not finish.
+    fn publish_run(&mut self, closed_with: Option<&Diagnostic>) {
+        let Some(run) = self
+            .run_recording
+            .as_mut()
+            .and_then(|state| state.active.take())
+        else {
+            return;
+        };
+        let outcome = match closed_with {
+            Some(diagnostic) => Err(format!(
+                "the recording stopped early: {}: {}",
+                diagnostic.code.as_str(),
+                diagnostic.message
+            )),
+            None => ludion_core::atomic::commit_durable(&run.temp, &run.path)
+                .map_err(|error| format!("{}: {error}", run.path.display())),
+        };
+        match outcome {
+            Ok(()) => {
+                if let Some(state) = self.run_recording.as_mut() {
+                    state.last_finished = Some(run.name);
+                    state.error = None;
+                }
+            }
+            Err(message) => {
+                let _ = std::fs::remove_file(&run.temp);
+                self.run_recording_failed(
+                    format!("run recording `{}` did not finish: {message}", run.name),
+                    "no file was published; a previous recording of that name is untouched",
+                );
+            }
+        }
+    }
+
+    /// Reports an `L1402` on both sinks and keeps it as the last run-recording error.
+    fn run_recording_failed(&mut self, message: String, help: &str) {
+        let diagnostic =
+            Diagnostic::new(code::RUN_RECORDING_FAILED, message).with_help(help.to_string());
+        eprintln!("{diagnostic}");
+        self.push_event(Event::Log(LogEvent::from_diagnostic(diagnostic.clone())));
+        if let Some(state) = self.run_recording.as_mut() {
+            state.error = Some(diagnostic);
         }
     }
 
@@ -4218,7 +4480,22 @@ impl Engine {
     /// `Engine.authored`.
     pub(crate) fn load_scene_document(&mut self, document: String) -> Result<u32, Vec<Diagnostic>> {
         self.load_begin(LoadPhase::Scene);
-        let loaded = self.instantiate_and_commit(document);
+        let profile_text = if self.boot_profile_pending {
+            self.emit_profile_text()
+        } else {
+            None
+        };
+        let loaded = self.instantiate_and_commit(document, profile_text);
+        self.load_end(LoadPhase::Scene);
+        loaded
+    }
+
+    /// [`load_scene_document`](Engine::load_scene_document) that installs the live profile, unsaved
+    /// writes included, instead of re-reading the save from disk: a run's reset keeps the profile.
+    fn load_scene_carrying_profile(&mut self, document: String) -> Result<u32, Vec<Diagnostic>> {
+        self.load_begin(LoadPhase::Scene);
+        let profile_text = self.emit_profile_text();
+        let loaded = self.instantiate_and_commit(document, profile_text);
         self.load_end(LoadPhase::Scene);
         loaded
     }
@@ -4239,7 +4516,11 @@ impl Engine {
 
     /// The body of [`load_scene_document`](Engine::load_scene_document), bracketed by its caller so
     /// the scene phase closes on every error return too.
-    fn instantiate_and_commit(&mut self, document: String) -> Result<u32, Vec<Diagnostic>> {
+    fn instantiate_and_commit(
+        &mut self,
+        document: String,
+        profile_text: Option<String>,
+    ) -> Result<u32, Vec<Diagnostic>> {
         let mut reads = self.load_reads();
         let Instantiated {
             source,
@@ -4286,11 +4567,7 @@ impl Engine {
             kind: Rebuild::Load {
                 authored: authored_names(&scene),
                 source: Box::new(source),
-                profile_text: if self.boot_profile_pending {
-                    self.emit_profile_text()
-                } else {
-                    None
-                },
+                profile_text,
             },
         });
         Ok(count)
@@ -5617,10 +5894,30 @@ impl Engine {
             )
             .with_help(arm_help));
         }
+        if self
+            .run_recording
+            .as_ref()
+            .is_some_and(|state| state.active.is_some())
+        {
+            return Err(Diagnostic::new(
+                code::RECORDING_ARM_REFUSED,
+                "cannot arm a recording: a run recording is active",
+            )
+            .with_help("stop the run recording first (`RunRecording::stop`)"));
+        }
+        self.arm_recorder(Box::new(sink), KEYFRAME_INTERVAL)
+    }
+
+    /// Writes the header, initial docs and keyframe to `sink` and starts recording at the current
+    /// frame, with a keyframe every `keyframe_interval` ticks. The caller has checked the frame.
+    fn arm_recorder(
+        &mut self,
+        sink: Box<dyn Write + Send>,
+        keyframe_interval: u64,
+    ) -> Result<(), Diagnostic> {
         let header = self.replay_header();
-        let writer = ReplayWriter::new(Box::new(sink) as Box<dyn Write + Send>, &header)
-            .map_err(io_to_diagnostic)?;
-        let mut recorder = Recorder::new(writer, KEYFRAME_INTERVAL, self.frame());
+        let writer = ReplayWriter::new(sink, &header).map_err(io_to_diagnostic)?;
+        let mut recorder = Recorder::new(writer, keyframe_interval, self.frame());
         crate::recording::write_inline_docs(&mut recorder, self.frame(), &self.doc_texts)
             .map_err(io_to_diagnostic)?;
         let snapshot = crate::snapshot::capture(self)?;
@@ -5652,6 +5949,19 @@ impl Engine {
     /// `L3042` if the recording died early (the failure is returned once); a replay-format
     /// diagnostic if the final flush fails.
     pub fn stop_recording(&mut self) -> Result<(), Diagnostic> {
+        let closed = self.close_recorder();
+        if self
+            .run_recording
+            .as_ref()
+            .is_some_and(|state| state.active.is_some())
+        {
+            self.publish_run(closed.as_ref().err());
+        }
+        closed
+    }
+
+    /// The body of [`stop_recording`](Engine::stop_recording): closes the recorder and its sink.
+    fn close_recorder(&mut self) -> Result<(), Diagnostic> {
         if self.recorder.is_none()
             && let Some(failure) = self.recording_failure.take()
         {
@@ -6649,6 +6959,7 @@ impl Engine {
         // committed the departing scene's capture, so the arriving district reads what it just left.
         self.install_residue_store();
         self.install_run_save();
+        self.install_run_recording();
         self.commit_docs(docs);
         // A later load reads the persisted save; the boot load carries the profile the build read.
         // A restore is an exact continuation, so it installs the snapshot's embedded profile off-disk

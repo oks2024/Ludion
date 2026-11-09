@@ -99,6 +99,7 @@ mod render_view;
 mod replay;
 mod replay_compat;
 mod residue_store;
+mod run_recording;
 mod run_save;
 mod scene_check;
 mod scene_physics;
@@ -244,6 +245,7 @@ pub use replay::{
 };
 pub use replay_compat::replay_content_hash;
 pub use residue_store::ResidueStore;
+pub use run_recording::{RunRecording, RunRecordingConfig, RunRecordingEntry, RunRecordingRequest};
 pub use run_save::{BuildStamp, ResumeOutcome, RunSave, RunSaveEntry, RunSaveRequest, SuspendInfo};
 pub use scene_check::{
     expand_scene, font_table_faults, prefab_singleton_diagnostics, scene_atlas_diagnostics,

@@ -16,6 +16,8 @@
 //!   game to `save/suspend.json`; `pending()` reports [`SuspendInfo`] read at boot, stamped with a
 //!   [`BuildStamp`]; `resume()` restores it in place (strict, held input cleared) and
 //!   [`ResumeOutcome`] reports the result.
+//! - **Run recording** — [`RunRecording`] (`EngineBuilder::run_recordings`): `start(name)` restarts
+//!   the run from the scene's text and records it to `<dir>/<name>.lrp`; `stop()` publishes it.
 //! - **Built-in visual components** — [`Transform`], [`Sprite`] (+ [`SpriteBlend`], its `alpha` /
 //!   `additive` compositing flag), [`Mesh`] (+ [`MeshSource`]), [`PointLight`],
 //!   [`SpotLight`], [`ReflectionProbe`] (+ [`ProbeShape`]), [`DirectionalLight`] (the sun), [`Camera`] (+ [`Projection`]), [`Text`],
@@ -224,20 +226,20 @@ pub use ludion_engine::{
     PathSampler, PatternDoc, PatternPlayer, PointLight, PostProcess, PrefabApplied, PrefabInstance,
     PrefabReverted, ProbeShape, Profile, ProjectileConfig, ProjectileLook, ProjectileVisual,
     ProjectileVisuals, Projectiles, Projection, RampSpec, ReflectionProbe, RenderExtent,
-    RenderSettings, Residue, ResidueStore, ResumeOutcome, RigConfig, RigMode, RigState, RunSave,
-    SceneSwitch, ShakeConfig, Shutdown, SkinBone, SpotLight, Springs, Sprite, SpriteBlend,
-    SuspendInfo, SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
-    TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect, UiText, VOLLEY_MAX_BULLETS,
-    VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Volley, VolleyCenter, VolleyShape,
-    WorldPose, add_fov_kick, add_kick, add_look, add_look_counts, add_trauma, advance_volleys,
-    animation_events, builtin_registry, bullet_age, bullet_is_alive, bullet_position,
-    camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw, despawn_instance,
-    first_person_eye, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
-    move_character, move_character_with, move_characters, nav_steer, nav_update, path_follow,
-    path_follower_motion, play_patterns, play_sound, posed_joint_world, probe_character_ground,
-    projectiles_step, reparent, report_diagnostic, report_full_diagnostic, resize_character,
-    revert_prefab, set_clip_speed, set_look, snap_rig, spawn_prefab, spawn_projectile,
-    switch_skin_to_ragdoll, switch_to_ragdoll, teleport_character, unpack_prefab,
+    RenderSettings, Residue, ResidueStore, ResumeOutcome, RigConfig, RigMode, RigState,
+    RunRecording, RunRecordingConfig, RunSave, SceneSwitch, ShakeConfig, Shutdown, SkinBone,
+    SpotLight, Springs, Sprite, SpriteBlend, SuspendInfo, SwitchTo, Text, TileAppearance, Tilemap,
+    TimelineEntry, TrackRig, Transform, TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect,
+    UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Volley,
+    VolleyCenter, VolleyShape, WorldPose, add_fov_kick, add_kick, add_look, add_look_counts,
+    add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
+    bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw,
+    despawn_instance, first_person_eye, fits_character, lane_error_colour, lane_frame,
+    lane_relative, load_assembly, move_character, move_character_with, move_characters, nav_steer,
+    nav_update, path_follow, path_follower_motion, play_patterns, play_sound, posed_joint_world,
+    probe_character_ground, projectiles_step, reparent, report_diagnostic, report_full_diagnostic,
+    resize_character, revert_prefab, set_clip_speed, set_look, snap_rig, spawn_prefab,
+    spawn_projectile, switch_skin_to_ragdoll, switch_to_ragdoll, teleport_character, unpack_prefab,
     validate_pattern_docs, volley_hits, world_transform,
 };
 

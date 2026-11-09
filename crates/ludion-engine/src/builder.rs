@@ -107,6 +107,7 @@ pub struct EngineBuilder {
     profile_persistence: bool,
     profile_off_disk: bool,
     run_save: bool,
+    run_recordings: Option<crate::RunRecordingConfig>,
     observe_load: bool,
     category_gains: CategoryGains,
     audio_distance: AudioDistance,
@@ -150,6 +151,7 @@ impl EngineBuilder {
             profile_persistence: false,
             profile_off_disk: false,
             run_save: false,
+            run_recordings: None,
             observe_load: false,
             category_gains: CategoryGains::default(),
             audio_distance: AudioDistance::default(),
@@ -221,6 +223,20 @@ impl EngineBuilder {
     #[must_use]
     pub fn run_save(mut self) -> Self {
         self.run_save = true;
+        self
+    }
+
+    /// Installs a [`RunRecording`](crate::RunRecording) resource: a game system calls `start(name)`
+    /// and `stop()`, and the engine applies them at a free-running frame boundary. A start restarts
+    /// the run from the current scene's inline text (only the profile and run-save state carry over)
+    /// and records it to `<save_root>/<dir>/<name>.lrp`; a stop publishes it crash-durably. Like
+    /// [`run_save`](EngineBuilder::run_save) it touches disk only with
+    /// [`persist_profile`](EngineBuilder::persist_profile); elsewhere a request is only logged.
+    ///
+    /// `build` fails with `L1403` for a zero `keyframe_every` or a `dir` that is not a relative path.
+    #[must_use]
+    pub fn run_recordings(mut self, config: crate::RunRecordingConfig) -> Self {
+        self.run_recordings = Some(config);
         self
     }
 
@@ -1123,6 +1139,29 @@ impl EngineBuilder {
         engine.install_profile();
         if self.run_save {
             engine.init_run_save();
+        }
+        if let Some(config) = self.run_recordings.clone() {
+            if config.keyframe_every == 0 {
+                return Err(Diagnostic::new(
+                    code::RUN_RECORDING_CONFIG_INVALID,
+                    "run_recordings: `keyframe_every` is 0",
+                )
+                .with_help("use a keyframe interval of at least 1 tick; the default is 3600"));
+            }
+            if let Some(refusal) = ludion_core::paths::content_refusal(&config.dir) {
+                return Err(Diagnostic::new(
+                    code::RUN_RECORDING_CONFIG_INVALID,
+                    format!(
+                        "run_recordings: `dir` {:?} {}",
+                        config.dir,
+                        refusal.describe()
+                    ),
+                )
+                .with_help(
+                    "use a relative directory below the save root, such as `save/replays`",
+                ));
+            }
+            engine.init_run_recording(config);
         }
         engine.boot_profile_pending = true;
         if self.observe_load {

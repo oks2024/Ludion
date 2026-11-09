@@ -132,6 +132,33 @@ pub fn write_durable(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
     Ok(())
 }
 
+/// Publishes an already-written `temp` at `path` durably: the temp's data is fsynced, renamed over
+/// `path` (replacing it), and the directory fsynced. For a file streamed to disk first (a recording)
+/// that cannot be staged from memory like [`write_durable`]. On failure the temp is left for the caller.
+///
+/// ```
+/// use ludion_core::atomic::{commit_durable, temp_sibling};
+///
+/// let dir = std::env::temp_dir().join(format!("ludion-commit-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(&dir).unwrap();
+/// let target = dir.join("out.bin");
+/// let temp = temp_sibling(&target);
+/// std::fs::write(&temp, b"abc").unwrap();
+/// commit_durable(&temp, &target).unwrap();
+/// assert_eq!(std::fs::read(&target).unwrap(), b"abc");
+/// assert!(!temp.exists());
+/// std::fs::remove_dir_all(&dir).unwrap();
+/// ```
+pub fn commit_durable(temp: &Path, path: &Path) -> io::Result<()> {
+    fs::OpenOptions::new().write(true).open(temp)?.sync_all()?;
+    fs::rename(temp, path)?;
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    sync_dir(parent)
+}
+
 fn write_synced(temp: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = fs::File::create(temp)?;
     file.write_all(bytes)?;
@@ -411,6 +438,19 @@ mod tests {
         write_durable(&target, "second").unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "second");
         assert_eq!(entries(&dir.join("sub/deep")), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn commit_durable_replaces_the_target_and_leaves_no_temp() {
+        let dir = scratch("commit-durable");
+        let target = dir.join("a.txt");
+        fs::write(&target, "old").unwrap();
+        let temp = temp_sibling(&target);
+        fs::write(&temp, "new").unwrap();
+        commit_durable(&temp, &target).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+        assert_eq!(entries(&dir), 1);
         fs::remove_dir_all(&dir).unwrap();
     }
 
