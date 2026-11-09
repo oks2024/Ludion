@@ -77,6 +77,7 @@ use crate::player_profile::{ProfileKind, ProfileSaveEntry};
 use crate::probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
 use crate::quality::QualitySetting;
 use crate::recording::{AppliedDocReload, Recorder};
+use crate::run_save::{RunSave, RunSaveEntry, RunSaveRequest, RunSaveState, SuspendInfo};
 use crate::scene_physics;
 use crate::tick_observer::TickObserver;
 
@@ -494,6 +495,9 @@ pub struct Engine {
     /// `prepare_replay`, so every profile install (the build's, a mid-replay `scene.load` or restore
     /// without profile text) skips the developer's `save/profile.yaml`.
     pub(crate) profile_off_disk: bool,
+    /// The suspended-run state, `Some` once [`run_save`](crate::EngineBuilder::run_save) opted in.
+    /// The [`RunSave`] resource mirrors it after every world rebuild.
+    run_save: Option<RunSaveState>,
     /// True from build until the first world rebuild: the profile the build read is what that first
     /// `scene.load` carries instead of re-reading disk (see `commit_world`).
     pub(crate) boot_profile_pending: bool,
@@ -558,6 +562,9 @@ const AUDIO_LOG_CAPACITY: usize = 4096;
 /// [`AUDIO_LOG_CAPACITY`] bound, for the same reason: a long session must not grow it without limit.
 const PROFILE_SAVE_LOG_CAPACITY: usize = 4096;
 
+/// The most [`RunSaveEntry`]s the run-save log keeps, the oldest dropped first.
+const RUN_SAVE_LOG_CAPACITY: usize = 4096;
+
 /// What `engine.snapshot` captured, which the scene-session sidecar keeps describing.
 struct SceneSessionStamp {
     frame: u64,
@@ -593,6 +600,12 @@ struct SessionState {
     /// succeeded or none was attempted. A save write is atomic and non-fatal; this is how a host prints
     /// the warning and a test asserts it. Cleared on a successful write.
     profile_save_error: Option<Diagnostic>,
+    /// The frame-stamped run-save requests drained so far this session — the
+    /// [`profile_save_log`](SessionState::profile_save_log) mold. Bounded to
+    /// [`RUN_SAVE_LOG_CAPACITY`], oldest dropped first.
+    run_save_log: VecDeque<RunSaveEntry>,
+    /// The most recent frame-boundary run-save failure (`L1400`); cleared on a successful write.
+    run_save_error: Option<Diagnostic>,
     /// The most recent scene-switch warning: a rejection (`L3018` target unloadable / `L3019` anchor
     /// missing) or a succeeded-but-degraded switch (`L3020` — a dead carry id was skipped), or `None`
     /// if the last switch was fully clean or none was attempted (the
@@ -649,6 +662,8 @@ impl SessionState {
         self.audio_log.clear();
         self.profile_save_log.clear();
         self.profile_save_error = None;
+        self.run_save_log.clear();
+        self.run_save_error = None;
         self.last_transition_error = None;
         self.last_transition_report = None;
         self.last_system_panic = None;
@@ -865,6 +880,7 @@ impl Engine {
             audible_emitters: StableMap::new(),
             profile_persistence: false,
             profile_off_disk: false,
+            run_save: None,
             boot_profile_pending: false,
             replay_scene_text: None,
             replay_prefab_text: None,
@@ -1752,7 +1768,7 @@ impl Engine {
     /// The frame-boundary drains every tick primitive performs after the driver advances: the caught
     /// system panic — which short-circuits the rest, see
     /// [`drain_system_panic`](Engine::drain_system_panic) — then the game's own reported
-    /// [`Diagnostics`](crate::Diagnostics), audio, profile saves, a requested residue clear, a
+    /// [`Diagnostics`](crate::Diagnostics), audio, profile saves, run-save requests, a requested residue clear, a
     /// requested quit, and a pending scene switch. Returns whether a panic short-circuited the
     /// boundary.
     ///
@@ -1769,6 +1785,7 @@ impl Engine {
         self.drain_audio(frame);
         self.sync_audio_emitters(frame);
         self.drain_profile(frame);
+        self.drain_run_save(frame);
         self.drain_residue_clear();
         self.drain_render_settings();
         self.drain_cursor_lock();
@@ -2227,6 +2244,135 @@ impl Engine {
                 self.push_event(Event::Log(LogEvent::from_diagnostic(diagnostic.clone())));
                 self.session.profile_save_error = Some(diagnostic);
             }
+        }
+    }
+
+    /// Drains the run-save requests at the frame boundary, straight after
+    /// [`drain_profile`](Engine::drain_profile): a [`RunSave::discard`] runs before a
+    /// [`RunSave::suspend`], each pushing a frame-stamped [`RunSaveEntry`]. Only a persisting live
+    /// host touches disk: a suspend writes the snapshot envelope crash-durably, a discard removes the
+    /// file; elsewhere only `pending` changes. A failure is a non-fatal `L1400` on both sinks, the
+    /// previous whole file stays, and the next request retries. Runs before the shutdown and switch
+    /// drains, so a suspend in a quit or switch frame captures the departing world.
+    fn drain_run_save(&mut self, frame: FrameIndex) {
+        let Some(state) = self.run_save.as_ref() else {
+            return;
+        };
+        let Some(resource) = self.driver.world_mut().resource_mut::<RunSave>() else {
+            return;
+        };
+        let discard = std::mem::take(&mut resource.discard);
+        let suspend = std::mem::take(&mut resource.suspend);
+        if !discard && !suspend {
+            return;
+        }
+        let stamp = state.stamp.clone();
+        let persisting = self.profile_persistence && !self.profile_off_disk;
+        let path = self.save_root().join(crate::run_save::RUN_SAVE_PATH);
+        let mut pending = state.pending.clone();
+        for (wanted, request) in [
+            (discard, RunSaveRequest::Discard),
+            (suspend, RunSaveRequest::Suspend),
+        ] {
+            if !wanted {
+                continue;
+            }
+            if self.session.run_save_log.len() >= RUN_SAVE_LOG_CAPACITY {
+                self.session.run_save_log.pop_front();
+            }
+            self.session
+                .run_save_log
+                .push_back(RunSaveEntry { frame, request });
+            let outcome = match request {
+                RunSaveRequest::Discard => {
+                    let removed = if persisting {
+                        crate::run_save::remove_file(&path)
+                    } else {
+                        Ok(())
+                    };
+                    removed.map(|()| None)
+                }
+                RunSaveRequest::Suspend => {
+                    let info = SuspendInfo {
+                        frame,
+                        scene: self.scene_name().map(str::to_string),
+                        saved_at_build: stamp.clone(),
+                    };
+                    let written = if persisting {
+                        crate::snapshot::capture(self)
+                            .map_err(|error| {
+                                format!(
+                                    "the run could not be captured for `{}`: {error}",
+                                    path.display()
+                                )
+                            })
+                            .and_then(|snapshot| crate::run_save::write(&path, &info, snapshot))
+                    } else {
+                        Ok(())
+                    };
+                    written.map(|()| Some(info))
+                }
+            };
+            match outcome {
+                Ok(new_pending) => {
+                    pending = new_pending;
+                    if persisting {
+                        self.session.run_save_error = None;
+                    }
+                }
+                Err(message) => self.run_save_failed(message),
+            }
+        }
+        if let Some(state) = self.run_save.as_mut() {
+            state.pending.clone_from(&pending);
+        }
+        if let Some(resource) = self.driver.world_mut().resource_mut::<RunSave>() {
+            resource.set_pending(pending);
+        }
+    }
+
+    /// Reports an `L1400` on both sinks (stderr and the `log` channel) and keeps it as the last
+    /// run-save error.
+    fn run_save_failed(&mut self, message: String) {
+        let diagnostic = Diagnostic::new(ludion_core::codes::code::RUN_SAVE_WRITE_FAILED, message)
+            .with_help(
+                "the run continues and a previous whole `suspend.json` stays on disk; \
+             the next `suspend()` retries; check the save location is writable",
+            );
+        eprintln!("{diagnostic}");
+        self.push_event(Event::Log(LogEvent::from_diagnostic(diagnostic.clone())));
+        self.session.run_save_error = Some(diagnostic);
+    }
+
+    /// Computes the build stamp, reads the suspended run (persisting hosts only) and sweeps foreign
+    /// temps beside it; called once at build when [`run_save`](crate::EngineBuilder::run_save) is on.
+    pub(crate) fn init_run_save(&mut self) {
+        let stamp = crate::run_save::BuildStamp {
+            engine_version: ENGINE_VERSION.to_string(),
+            game_schema: crate::run_save::game_schema_hash(&self.registry, &self.doc_kinds),
+        };
+        let mut pending = None;
+        if self.profile_persistence && !self.profile_off_disk {
+            let path = self.save_root().join(crate::run_save::RUN_SAVE_PATH);
+            crate::player_profile::sweep_temps(&path);
+            pending = crate::run_save::read_pending(&path);
+        }
+        self.run_save = Some(RunSaveState {
+            stamp,
+            pending,
+            last_resume: None,
+        });
+        self.install_run_save();
+    }
+
+    /// (Re)installs the [`RunSave`] resource from the engine's state; a no-op without
+    /// [`run_save`](crate::EngineBuilder::run_save). Called after every world (re)build, since each
+    /// wipes the resources.
+    fn install_run_save(&mut self) {
+        if let Some(state) = self.run_save.as_ref() {
+            self.driver
+                .world_mut()
+                .insert_resource(RunSave::mirror(state));
         }
     }
 
@@ -3501,6 +3647,19 @@ impl Engine {
     /// warning; a test asserts on it. Cleared on a successful write and at every world reset.
     pub fn profile_save_error(&self) -> Option<&Diagnostic> {
         self.session.profile_save_error.as_ref()
+    }
+
+    /// The frame-stamped run-save requests drained so far this session, in request order — the
+    /// [`profile_save_log`](Engine::profile_save_log) mold, a pure function of the sim, reset at
+    /// every world reset and bounded to the most recent `RUN_SAVE_LOG_CAPACITY` entries.
+    pub fn run_save_log(&self) -> &VecDeque<RunSaveEntry> {
+        &self.session.run_save_log
+    }
+
+    /// The most recent frame-boundary run-save failure (`L1400`), or `None` if the last write
+    /// succeeded or none was attempted (the [`profile_save_error`](Engine::profile_save_error) mold).
+    pub fn run_save_error(&self) -> Option<&Diagnostic> {
+        self.session.run_save_error.as_ref()
     }
 
     /// The most recent scene-switch warning: a rejection (`L3018` target unloadable / `L3019` anchor
@@ -6349,6 +6508,7 @@ impl Engine {
         // After the session settles: the mirror copies its residue. On a switch `perform` has already
         // committed the departing scene's capture, so the arriving district reads what it just left.
         self.install_residue_store();
+        self.install_run_save();
         self.commit_docs(docs);
         // A later load reads the persisted save; the boot load carries the profile the build read.
         // A restore is an exact continuation, so it installs the snapshot's embedded profile off-disk

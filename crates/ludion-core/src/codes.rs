@@ -354,6 +354,8 @@ pub mod code {
     /// (parents, pitch/roll) the compiler does not reflect. Raised by `ludion-scene`'s map generator;
     /// the JSON Pointer is `/fragments`.
     pub const MAP_MIRROR_FRAGMENTS: DiagnosticCode = DiagnosticCode::new("L1399");
+    /// `L1400` — the suspended run (`save/suspend.json`) could not be written or removed.
+    pub const RUN_SAVE_WRITE_FAILED: DiagnosticCode = DiagnosticCode::new("L1400");
 
     /// `L1027` — a map marker's cross-district gate (`Gate.to` + `anchor`) names a spawn anchor that
     /// resolves against no entity in the sibling district's generated scene, so the gate would fail
@@ -5410,6 +5412,25 @@ triggers this code. The default-profile path is only taken when the file cannot 
 Fix: nothing is required — the game runs on a fresh default profile and the next save overwrites it.
 To recover the old values, open the `profile.yaml.bak.<hash>` sibling (or, when no backup was made,
 the untouched `profile.yaml`) and reconcile it by hand.",
+    },
+    CodeEntry {
+        code: code::RUN_SAVE_WRITE_FAILED,
+        severity: Severity::Warning,
+        title: "suspended run could not be written or removed",
+        explanation: "\
+A game system called `RunSave::suspend()` or `RunSave::discard()`, and the engine could not carry it
+out at the frame boundary. Causes:
+
+  - the run could not be captured as a snapshot (a component that does not serialize, such as a NaN
+    float, reports `L0007`);
+  - the save location is not writable, or the disk is full (`suspend`);
+  - the suspended file could not be deleted (`discard`).
+
+This is a **warning**: the run continues, a previous whole `save/suspend.json` stays on disk (the
+write is staged to a hidden `.tmp` sibling and renamed over it), and the next `suspend()` retries.
+The message names the path and the underlying error.
+
+Fix: make sure the save location is writable and has free space.",
     },
     CodeEntry {
         code: code::PROFILE_SAVE_FAILED,
@@ -11323,6 +11344,7 @@ mod tests {
         code::SCULPT_BONE_TREE,
         code::PROFILE_LOAD_FAILED,
         code::PROFILE_SAVE_FAILED,
+        code::RUN_SAVE_WRITE_FAILED,
         code::DIRECTIONAL_LIGHT_INVALID_FRUSTUM,
         code::SCHEDULE_MODULE_CONCENTRATION,
         code::QUERY_DECL_UNKNOWN_COMPONENT,
@@ -11745,6 +11767,7 @@ mod tests {
             code::SCULPT_PART_UNRESOLVED,
             code::SCULPT_DISCONNECTED,
             code::PROFILE_LOAD_FAILED,
+            code::RUN_SAVE_WRITE_FAILED,
             code::PROFILE_SAVE_FAILED,
             code::SCHEDULE_MODULE_CONCENTRATION,
             code::QUERY_DRIFT_UNOBSERVED,

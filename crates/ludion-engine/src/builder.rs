@@ -106,6 +106,7 @@ pub struct EngineBuilder {
     save_root: Option<PathBuf>,
     profile_persistence: bool,
     profile_off_disk: bool,
+    run_save: bool,
     observe_load: bool,
     category_gains: CategoryGains,
     audio_distance: AudioDistance,
@@ -148,6 +149,7 @@ impl EngineBuilder {
             save_root: None,
             profile_persistence: false,
             profile_off_disk: false,
+            run_save: false,
             observe_load: false,
             category_gains: CategoryGains::default(),
             audio_distance: AudioDistance::default(),
@@ -196,8 +198,9 @@ impl EngineBuilder {
         self
     }
 
-    /// Enables writing the profile to disk at the frame boundary (default off), and backing up an
-    /// unloadable save at build. The `set_audio_sender` host-side mold: only a live host
+    /// Enables writing the save root at the frame boundary (default off): the profile and, with
+    /// [`run_save`](EngineBuilder::run_save), the suspended run; it also backs up an unloadable
+    /// profile at build. The `set_audio_sender` host-side mold: only a live host
     /// (`ludion::run`) sets it; a replay, `--check-docs`, `--profile`, or a test leaves it off, so the
     /// [`profile_save_log`](Engine::profile_save_log) still fills but no disk write clobbers the
     /// machine's real save and no boot renames it (decision 5). The write target is the resolved
@@ -205,6 +208,18 @@ impl EngineBuilder {
     #[must_use]
     pub fn persist_profile(mut self) -> Self {
         self.profile_persistence = true;
+        self
+    }
+
+    /// Installs a [`RunSave`](crate::RunSave) resource: a game system calls `suspend()` and the
+    /// engine writes the running game to `<save_root>/save/suspend.json` at the frame boundary, the
+    /// `engine.snapshot` document inside an envelope carrying a [`BuildStamp`](crate::BuildStamp).
+    /// The file is read at boot (`RunSave::pending`) and written or deleted only when
+    /// [`persist_profile`](EngineBuilder::persist_profile) is on, so a test or replay never touches
+    /// disk; the [log](Engine::run_save_log) fills either way.
+    #[must_use]
+    pub fn run_save(mut self) -> Self {
+        self.run_save = true;
         self
     }
 
@@ -1105,6 +1120,9 @@ impl EngineBuilder {
         // Load the registered profile into the same initial world (or default it). Never fails the
         // build — an unloadable save is backed up and defaulted, reported via `profile_migration`.
         engine.install_profile();
+        if self.run_save {
+            engine.init_run_save();
+        }
         engine.boot_profile_pending = true;
         if self.observe_load {
             engine.observe_load();
