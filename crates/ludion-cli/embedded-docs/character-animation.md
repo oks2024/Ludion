@@ -42,7 +42,7 @@ clips:
   a segment turning 180° or more on an axis, or whose axes combine past half a circle, is
   `L1142`: split it. `scale` composes down the joint chain, and the binding's `speed` multiplies
   `Animation.speed`. An empty or unbound clip name draws the rest pose. The pose is never hashed or recorded, and sim code cannot read it; presentation code reads it through `posed_joint_world` (§Sockets). A skin with `SkinBone`
-  followers is posed by them instead. Lighting follows the pose: a joint with a non-uniform scale
+  followers is posed by them instead. A running skin can leave its clip for a ragdoll with `switch_skin_to_ragdoll`, which drops `Animation` and poses from rest (`ludion docs physics-joints`). Lighting follows the pose: a joint with a non-uniform scale
   bends the skin's normals the way it bends the surface.
 - Editing the character, its mesh or any clip re-reads it (the pose; `AnimationEvents` picks up retimed events at the next load, restore or scene switch). `ludion check-scene <file>` loads and
   reports it, with a `contact <joint>: height min … max …` line per clip for each ground-contact

@@ -122,6 +122,7 @@ the clip.
    never enter `WorldHash`. `Animation` (clip, start, speed, crossfade) is sim state. **Why:** the
    platformer's gameplay is capsules and spheres, and re-animating must never move replays. A
    sim-side one-bone query can be added later without redesign, because the sampler is pure.
+   *Proposed amendment (Serious Isaac 0016, not approved): see `Plan/skeletal-animation.md` §Decisions "Proposed"*.
 3. **Clips are authored in Blender and imported to canonical text.** A committed bpy script keys the
    actions (the `Plan/asset-pipeline-blender.md` contract), `ludion import` writes text clips, and
    the glb stays derived. **Why:** Pillar 4, and baked skeletal curves are impractical to hand-author.
@@ -308,6 +309,7 @@ clip file layout are settled in W1 and W2 and recorded in Status.
 - Morph targets (they stay `L1202`).
 - A sim-side bone query. **Trigger:** gameplay that must read a bone. `posed_joint_world` (Clockout 0028) is a presentation read, refused from sim with `L0028`, so it does not fire this trigger.
 - Switching a skin between clips and `SkinBone` at runtime (a death ragdoll).
+  *Proposed lift (Serious Isaac 0016, not approved): see `Plan/skeletal-animation.md` §Decisions "Proposed"*.
 - Quaternion storage (decision 8's trigger) and a compact keyframe spelling (decision 9's trigger).
 
 ## Risks

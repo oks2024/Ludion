@@ -187,6 +187,35 @@ coincidence (a vertical leg bone's local X stays world-lateral; an A-pose arm bo
 `examples/gallery/ragdoll-skinned.yaml` and `Plan/skeletal-animation.md` decision 8 for the worked
 case and its cost.
 
+### Switching a live skin
+
+A skin already playing a clip can become its ragdoll mid-run: `switch_skin_to_ragdoll(world, skin, parts)`
+(Rust only, no wire method) spawns a parts prefab bound to the live skin. The prefab is an ordinary
+`kind: prefab` of `SkinBone` parts and `Joint`s whose **last** entity is named `$skin` and carries only
+the skin's `Mesh`, spelled so it resolves to the same mesh document (a path in a prefab is relative to
+the prefab's directory). `$skin` spawns nothing; `SkinBone.skin` on the parts points at its position:
+
+```yaml
+  - name: lower_leg_l
+    components:
+      SkinBone: { skin: { index: 11, generation: 0 }, bone: lower_leg_l }
+      # Collider, Velocity, Joint ...
+  - name: "$skin"
+    components:
+      Mesh:
+        shape:
+          character: "../characters/mannequin.character.yaml"
+```
+
+The skin keeps its id and `Mesh` and loses `Animation`, `Collider` and `Velocity`. Each rigid part gets
+the skin's linear velocity plus angular × (part origin − skin origin), and the skin's angular
+velocity. The switch is all-or-nothing: a dead skin, no `Transform`, a non-uniform or non-positive
+scale, a mesh that is not skinned or differs from the prefab's, or a missing or misplaced `$skin`
+is `L3036`, and nothing is spawned or changed. Call it on one tick (`ctx.game_frame == N`, never
+`>=`). See `examples/gallery/ragdoll-skin-switch.yaml` and `prefabs/mannequin-ragdoll.prefab.yaml`.
+**The parts land at the bone rest pose, not the pose the clip shows on the switch tick; the posed
+switch is owed.**
+
 ## Gotchas
 
 - Editing a live `Joint`, or rebuilding a body it names (a `Collider` edit), re-captures the zero at
@@ -199,6 +228,11 @@ case and its cost.
   `Transform` times the bone's rest transform), so every `Joint`'s zero on it is captured at that rest
   pose — every `limits` pair is measured from the rig's authored rest, not from wherever the part might
   otherwise land, and a re-rig in Blender moves what every limit means.
+- A switched skin's joint zeros are captured at rest, as at load (the parts spawn there).
+- A skin whose scale is not 1 gives scaled parts, and the solver refuses their colliders with `L1290`
+  (`ludion explain L1290`): keep switched skins at scale 1.
+- `scene.save` of a switched skin is refused with `L1234` (the prefab re-expansion cannot drop
+  `$skin`): persist it with `engine.snapshot` / `engine.restore`.
 - Any entity may carry a `Joint`, including `a` or `b` itself: a ragdoll's convention is each child
   part carrying the joint back to its parent part; a runtime grab spawns a dedicated carrier instead.
   One `Joint` per carrier — a body that needs more than one joint takes a dedicated carrier per

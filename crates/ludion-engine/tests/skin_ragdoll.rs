@@ -454,3 +454,31 @@ fn trace(tag: &str) -> Vec<String> {
 fn a_switch_from_a_sim_system_is_deterministic() {
     assert_eq!(trace("sim-a"), trace("sim-b"));
 }
+
+/// `scene.save` of a switched skin is refused with `L1234`: the parts are prefab-instance members and
+/// the save's prefab re-expansion cannot drop `$skin`. The refusal writes no file and leaves the world
+/// untouched; `engine.snapshot` is how a switched skin persists.
+#[test]
+fn saving_a_switched_skin_is_refused_with_l1234_and_changes_nothing() {
+    let dir = fixture("save");
+    let mut engine = engine_with(
+        &dir,
+        &skin_scene(&format!("{MESH}{UNIT_TRANSFORM}{COLLIDER}")),
+    );
+    switch_skin_to_ragdoll(engine.world_mut(), skin_id(), PARTS).expect("switches");
+    let hash = engine.world_hash().unwrap();
+    let entities = engine.world().entity_count();
+
+    let refusal = engine
+        .execute(Command::SceneSave(
+            ludion_protocol::command::SceneSaveParams {
+                path: "switched.yaml".into(),
+                force: false,
+            },
+        ))
+        .expect_err("a switched skin does not save");
+    assert_eq!(refusal.code, code::PREFAB_INSTANCE_SAVE);
+    assert!(!dir.join("switched.yaml").exists(), "nothing is written");
+    assert_eq!(engine.world().entity_count(), entities);
+    assert_eq!(engine.world_hash().unwrap(), hash);
+}

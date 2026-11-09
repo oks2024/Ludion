@@ -52,6 +52,12 @@
 > not its clip-animated local, while the draw does follow it (a consumer); `reparent(Keep::World)` on a `ParentJoint` child keeps the rest world, not the
 > drawn pose (a detach that must keep the drawn pose; the idiom is `posed_joint_world` plus a fresh
 > presentation spawn).
+>
+> **Serious Isaac 0016 (2026-11-09):** `switch_skin_to_ragdoll(world, skin, parts)` turns a live skinned
+> mesh into its `SkinBone` ragdoll at the **rest** pose (`$skin` last part; velocity inherited), proven by the
+> `ragdoll-skin-switch` gallery scene (trace, restore, 1/2/8 threads, driven golden). The posed switch is
+> proposed below (§Decisions), not approved.
+>
 > Every claim of current-code fact below was read from the tree on 2026-09-26; file:line pointers are
 > of that date, so re-grep before editing.
 
@@ -156,6 +162,17 @@ The user moved the goblin mesh to the front of the Blender experiment, so the en
    helper (e.g. `--bounds` printing each joint's local X/Y/Z restated in model space, so a hinge axis
    choice is a lookup instead of a matrix multiply) is the concrete future win, triggered if a second
    rig needs off-axis hinges.
+
+**Proposed (Serious Isaac 0016, owner approval owed).** The posed switch, ready to build:
+
+- (i) Decision 5 gains a second spawn-pose source: the switch's posed pose. Scene load is unchanged.
+- (ii) The pose is sampled once, in sim, at the switch tick, through the libm sampler
+  (`ludion_scene::sample_rotation`/`slerp`, hand-normalized quats as in `ragdoll.rs:153-186`) over clip +
+  crossfade + speed + the `set_clip_speed` anchor; `hold` and the clip `scale` are ignored.
+  `posed_joint_world` stays presentation-only (`L0028`).
+- (iii) Joint limits still count from rest: the joint frame carries the rest-relative offset.
+- (iv) An opt-in clip bone velocity (a finite difference of two samples), default off.
+- (v) A `ragdoll:` key on `kind: character` names the parts prefab.
 
 ## The mesh document (additive, format stays 1)
 

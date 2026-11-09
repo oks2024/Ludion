@@ -517,6 +517,69 @@ fn needs_gpu_character_cycle_driven_matches_committed_golden_at_exactly_one() {
     }
 }
 
+/// The `ragdoll-skin-switch` scene driven by `common::skin_switch_builder` to the first frame after the
+/// switch (the 11 parts spawn on tick index `SWITCH_SKIN_TICK`; `ragdoll_skin_switch.rs` pins it): the
+/// mannequin stands in its rest A-pose, no longer mid-stride. The bare discovered
+/// `ragdoll-skin-switch.png` is the running pose at tick 0.
+fn ragdoll_skin_switch_driven_test() -> GoldenTest {
+    let gallery = gallery_dir();
+    let mut test = GoldenTest::new(
+        gallery.join("ragdoll-skin-switch.yaml"),
+        os_goldens().join("ragdoll-skin-switch-driven.png"),
+    )
+    .with_builder(common::skin_switch_builder)
+    .with_frames(common::SWITCH_SKIN_TICK + 1);
+    test.ssim_threshold = 1.0;
+    test
+}
+
+/// The driven `ragdoll-skin-switch` render compares clean against its committed golden at exactly SSIM
+/// 1.0. Under `LUDION_BLESS`, (re)writes the golden instead. Skips gracefully with no GPU adapter.
+#[test]
+fn needs_gpu_ragdoll_skin_switch_driven_matches_committed_golden_at_exactly_one() {
+    let test = ragdoll_skin_switch_driven_test();
+
+    if bless_requested() {
+        match test.bless() {
+            Ok(GoldenOutcome::Blessed { .. }) => {}
+            Ok(_) => unreachable!("bless() only ever returns Blessed"),
+            Err(diagnostics) if is_skip(&diagnostics) => {
+                eprintln!(
+                    "SKIPPED ragdoll_skin_switch_driven_matches_committed_golden_at_exactly_one                      (bless): {}",
+                    skip_note(&diagnostics)
+                );
+            }
+            Err(diagnostics) => {
+                panic!("blessing the ragdoll-skin-switch golden failed: {diagnostics:?}")
+            }
+        }
+        return;
+    }
+
+    let out_dir = scratch_dir("ragdoll_skin_switch_driven_out");
+    match test.run(&out_dir) {
+        Ok(GoldenOutcome::Passed { report }) => assert_eq!(
+            report.ssim,
+            Some(1.0),
+            "the driven ragdoll-skin-switch render must be byte-identical to its freshly-blessed golden"
+        ),
+        Ok(GoldenOutcome::Failed { report, .. }) => {
+            panic!(
+                "the driven ragdoll-skin-switch golden failed: {}",
+                report.summary
+            )
+        }
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diagnostics) if is_skip(&diagnostics) => {
+            eprintln!(
+                "SKIPPED ragdoll_skin_switch_driven_matches_committed_golden_at_exactly_one: {}",
+                skip_note(&diagnostics)
+            );
+        }
+        Err(diagnostics) => panic!("the driven ragdoll-skin-switch render failed: {diagnostics:?}"),
+    }
+}
+
 /// The `camera-rig` scene driven by `common::rig_builder` to the middle of the switch blend: the
 /// rail camera is half behind the hero, half side-on, with the `camera` debug category on. The bare
 /// discovered `camera-rig.png` is the authored pose at frame 0, before the rig's first tick.

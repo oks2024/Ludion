@@ -1,0 +1,89 @@
+# Feature: a game system switches a running skinned mannequin to its `SkinBone` ragdoll. Bare, this
+# scene shows the mannequin mid-run at tick 0; the game half is `crates/ludion-testkit/tests/common/mod.rs`,
+# which calls `switch_skin_to_ragdoll` at the switch tick with `prefabs/mannequin-ragdoll.prefab.yaml`.
+# The parts land at the bone rest pose and inherit the skin's forward velocity
+# (`ludion docs physics-joints`, "Switching a live skin").
+format: 1
+name: ragdoll-skin-switch - a running mannequin falls into its ragdoll under game code
+seed: 1
+physics:
+  space: free
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.9
+          - 0.7
+          - 3.6
+        rotation:
+          - -4.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 3.0
+          - 2.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 6.0
+        range: 20.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 4.0
+          - 1.0
+          - 4.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.57
+          - 0.6
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 4.0
+              - 0.5
+              - 4.0
+        body: static
+  - name: skin
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+        color:
+          - 0.6
+          - 0.45
+          - 0.35
+          - 1.0
+        roughness: 0.8
+      Animation:
+        clip: run
+      Velocity:
+        linear:
+          - 1.0
+          - 0.0
+          - 0.0

@@ -5,19 +5,23 @@
 //! jumps, runs, spins, runs and returns to idle, crossfading each switch and leaving the one-shots on
 //! their `end` events (`ludion docs character-animation`).
 //!
+//! **ragdoll-skin-switch** — [`switch_skin`] turns the running mannequin into its `SkinBone` ragdoll at
+//! [`SWITCH_SKIN_TICK`]; the parts land at the rest pose (`ludion docs physics-joints`).
+//!
 //! **camera-rig** — [`drive_rig`] swaps the rail camera to a side-on rig at [`SWITCH_TICK`] (a timed
 //! blend), cuts back with `snap_rig` at [`SNAP_TICK`] and pulses trauma at [`SHAKE_TICK`]
 //! (`ludion docs camera`).
 
 #![allow(dead_code)]
 
+use ludion_core::ids::EntityId;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
     Animation, AnimationEvents, Engine, EngineBuilder, Mesh, PrefabInstance, Sprite,
 };
 use ludion_engine::{
     BlendIn, CameraRig, RigConfig, RigMode, TrackRig, add_trauma, animation_events, crossfade,
-    snap_rig,
+    snap_rig, switch_skin_to_ragdoll,
 };
 
 /// Ticks the mannequin idles before its first run.
@@ -88,6 +92,25 @@ pub fn cycle_builder() -> EngineBuilder {
         .query::<(&Animation, &PrefabInstance)>()
         .system("cycle_character", cycle_character)
         .query::<(&mut Animation,)>()
+}
+
+/// The tick the running mannequin switches to its ragdoll.
+pub const SWITCH_SKIN_TICK: u64 = 40;
+/// The parts prefab the switch spawns, relative to the gallery root.
+pub const SKIN_SWITCH_PARTS: &str = "prefabs/mannequin-ragdoll.prefab.yaml";
+
+/// Switches the scene's skin (document position 3) to its ragdoll once, on [`SWITCH_SKIN_TICK`]; the
+/// equality keeps a world restored after the switch from firing it again.
+pub fn switch_skin(world: &mut World, ctx: &SystemCtx) {
+    if ctx.game_frame.as_u64() == SWITCH_SKIN_TICK {
+        switch_skin_to_ragdoll(world, EntityId::new(3, 0), SKIN_SWITCH_PARTS)
+            .expect("the mannequin switches to its ragdoll");
+    }
+}
+
+/// The ragdoll-skin-switch engine: just the switching system.
+pub fn skin_switch_builder() -> EngineBuilder {
+    Engine::builder().system("switch_skin", switch_skin)
 }
 
 /// The tick the rail camera blends to the side-on rig.
