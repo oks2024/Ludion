@@ -2031,29 +2031,96 @@ fn transform_value(center: [f64; 2], y: f64, rotation: f64, scale: [f64; 3]) -> 
     })
 }
 
-/// Reflects an entity's `Transform` across the grid line whose coordinate sum is `line_sum`.
-/// Translation is mirrored and yaw negated while scale is kept, so a piece keeps its handedness and
-/// no scale goes negative; everything else on the entity is left as it is.
+/// How a built-in world-space field reflects across the mirror plane.
+#[derive(Clone, Copy)]
+enum MirrorKind {
+    /// A direction: the mirrored axis component is negated.
+    Vector,
+    /// An axial vector (angular velocity): the two other components are negated.
+    Axial,
+    /// A world point: reflected across the grid line like a translation.
+    Point,
+}
+
+/// Built-in components whose fields hold world-space vectors or points. Game components are copied
+/// verbatim.
+const MIRRORED_FIELDS: &[(&str, &str, MirrorKind)] = &[
+    ("SpotLight", "direction", MirrorKind::Vector),
+    ("DirectionalLight", "direction", MirrorKind::Vector),
+    ("NavSteering", "velocity", MirrorKind::Vector),
+    ("Velocity", "linear", MirrorKind::Vector),
+    ("Velocity", "angular", MirrorKind::Axial),
+    ("NavAgent", "target", MirrorKind::Point),
+];
+
+/// Negates `v`, keeping zero as `+0.0`.
+fn negated(v: f64) -> f64 {
+    if v == 0.0 { 0.0 } else { -v }
+}
+
+/// Reflects an entity across the grid line whose coordinate sum is `line_sum`. Translation is
+/// mirrored while scale is kept, so a piece keeps its handedness and no scale goes negative. X
+/// negates yaw and Z maps it to 180-θ in (-180, 180], so the forward direction reflects too. The
+/// built-in world-space vectors in [`MIRRORED_FIELDS`] reflect with it; everything else is left as
+/// it is.
 fn mirror_entity(entity: &mut SceneEntity, mirror: Mirror, line_sum: f64) {
     let axis = match mirror {
         Mirror::None => return,
         Mirror::X => 0,
         Mirror::Z => 2,
     };
-    let Some((_, transform)) = entity.components.iter_mut().find(|(n, _)| n == "Transform") else {
-        return;
-    };
-    if let Some(t) = transform
-        .get_mut("translation")
-        .and_then(Value::as_array_mut)
-        && let Some(v) = t.get(axis).and_then(Value::as_f64)
-    {
-        t[axis] = json!(f32_exact(line_sum - v));
+    if let Some((_, transform)) = entity.components.iter_mut().find(|(n, _)| n == "Transform") {
+        if let Some(t) = transform
+            .get_mut("translation")
+            .and_then(Value::as_array_mut)
+            && let Some(v) = t.get(axis).and_then(Value::as_f64)
+        {
+            t[axis] = json!(f32_exact(line_sum - v));
+        }
+        if let Some(r) = transform.get_mut("rotation").and_then(Value::as_array_mut)
+            && let Some(yaw) = r.get(1).and_then(Value::as_f64)
+        {
+            r[1] = json!(if axis == 0 {
+                negated(yaw)
+            } else {
+                let mut wrapped = 180.0 - yaw;
+                if wrapped > 180.0 {
+                    wrapped -= 360.0;
+                }
+                if wrapped <= -180.0 {
+                    wrapped += 360.0;
+                }
+                let wrapped = f32_exact(wrapped);
+                if wrapped == 0.0 { 0.0 } else { wrapped }
+            });
+        }
     }
-    if let Some(r) = transform.get_mut("rotation").and_then(Value::as_array_mut)
-        && let Some(yaw) = r.get(1).and_then(Value::as_f64)
-    {
-        r[1] = json!(if yaw == 0.0 { 0.0 } else { -yaw });
+    for &(component, field, kind) in MIRRORED_FIELDS {
+        let Some((_, value)) = entity.components.iter_mut().find(|(n, _)| n == component) else {
+            continue;
+        };
+        let Some(obj) = value.as_object_mut() else {
+            continue;
+        };
+        if matches!(kind, MirrorKind::Point) && !obj.contains_key(field) {
+            obj.insert(field.to_string(), json!([0.0, 0.0, 0.0]));
+        }
+        let Some(v) = obj.get_mut(field).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        if v.len() != 3 || !v.iter().all(Value::is_number) {
+            continue;
+        }
+        for (i, slot) in v.iter_mut().enumerate() {
+            let n = slot.as_f64().unwrap_or(0.0);
+            let out = match kind {
+                MirrorKind::Vector if i == axis => negated(n),
+                MirrorKind::Axial if i != axis => negated(n),
+                MirrorKind::Point if i == axis => f32_exact(line_sum - n),
+                _ => continue,
+            };
+            *slot = json!(out);
+        }
     }
 }
 

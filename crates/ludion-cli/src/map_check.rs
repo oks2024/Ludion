@@ -97,8 +97,10 @@ fn resolve(flag: Option<f64>, kit: Option<f64>, default: f64) -> (f64, Source) {
     }
 }
 
-/// Runs `ludion map-check <maps>... [--anchor] [--radius] [--at] [--traverse] [--speed]`, one report
-/// per map, aggregating the exit code (non-zero if any map failed).
+/// Runs `ludion map-check <maps>... [--anchor] [--radius] [--at] [--traverse] [--speed] [--kit]
+/// [--seed] [--mirror]`, one report per map, aggregating the exit code (non-zero if any map
+/// failed). `--kit`, `--seed` and `--mirror` compile every listed map like `generate-map`'s flags.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     maps: &[PathBuf],
     anchor: Option<&str>,
@@ -106,7 +108,15 @@ pub fn run(
     at: Option<&str>,
     traverse: bool,
     speed: Option<f64>,
+    kit: Option<&Path>,
+    seed: Option<u64>,
+    mirror: Option<&str>,
 ) -> ExitCode {
+    let mirror = match mirror {
+        Some("x") => ludion_scene::Mirror::X,
+        Some("z") => ludion_scene::Mirror::Z,
+        _ => ludion_scene::Mirror::None,
+    };
     // `--at` parses once, up front: a bad value is a usage error for the whole invocation.
     let at = match at.map(parse_at).transpose() {
         Ok(at) => at,
@@ -143,7 +153,11 @@ pub fn run(
             traverse,
             speed,
         };
-        if run_one(map, &options) == ExitCode::FAILURE {
+        let overrides = match generate_map::resolve_overrides(map, kit, seed, mirror) {
+            Ok(overrides) => overrides,
+            Err(code) => return code,
+        };
+        if run_one(map, &options, &overrides) == ExitCode::FAILURE {
             failed = true;
         }
     }
@@ -220,8 +234,12 @@ fn fragment_origin<'a>(
 }
 
 /// Checks one map and prints its report.
-fn run_one(map_path: &Path, options: &Options<'_>) -> ExitCode {
-    let loaded = match generate_map::load(map_path, &ludion_scene::MapOverrides::default()) {
+fn run_one(
+    map_path: &Path,
+    options: &Options<'_>,
+    overrides: &ludion_scene::MapOverrides,
+) -> ExitCode {
+    let loaded = match generate_map::load(map_path, overrides) {
         Ok(loaded) => loaded,
         Err(diagnostics) => return diagnostic::report(map_path, &diagnostics),
     };

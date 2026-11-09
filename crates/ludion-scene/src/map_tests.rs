@@ -1676,7 +1676,19 @@ fn mirror_reflects_every_transform_exactly() {
                 component(a, "Transform")["rotation"][1].as_f64().unwrap(),
                 component(b, "Transform")["rotation"][1].as_f64().unwrap(),
             );
-            assert_eq!(rb, if ra == 0.0 { 0.0 } else { -ra });
+            let expected = if axis == 0 {
+                if ra == 0.0 { 0.0 } else { -ra }
+            } else {
+                let mut r = 180.0 - ra;
+                if r > 180.0 {
+                    r -= 360.0;
+                }
+                if r <= -180.0 {
+                    r += 360.0;
+                }
+                if r == 0.0 { 0.0 } else { r }
+            };
+            assert_eq!(rb, expected, "{:?} yaw", a.name);
             assert!(rb.is_sign_positive() || rb != 0.0, "no -0.0 yaw");
             assert_eq!(
                 component(a, "Transform")["scale"],
@@ -1695,6 +1707,160 @@ fn mirror_reflects_every_transform_exactly() {
                 b.components.iter().find(|(n, _)| n == "Collider")
             );
         }
+    }
+}
+
+/// The XZ forward of a yaw in degrees: local forward is -Z.
+fn forward(yaw: f64) -> [f64; 2] {
+    let (sin, cos) = ludion_core::math::f64::sin_cos(yaw.to_radians());
+    [-sin, -cos]
+}
+
+#[test]
+fn mirrored_forward_is_the_reflected_forward() {
+    for (mirror, axis) in [(Mirror::X, 0), (Mirror::Z, 1)] {
+        let plain = mirrored(Mirror::None);
+        let flipped = mirrored(mirror);
+        for (a, b) in plain.entities.iter().zip(&flipped.entities) {
+            let yaw = |e: &SceneEntity| component(e, "Transform")["rotation"][1].as_f64().unwrap();
+            let (fa, fb) = (forward(yaw(a)), forward(yaw(b)));
+            for i in 0..2 {
+                let expected = if i == axis { -fa[i] } else { fa[i] };
+                assert!(
+                    (fb[i] - expected).abs() < 1e-6,
+                    "{:?} {mirror:?} forward {i}: {} vs {expected}",
+                    a.name,
+                    fb[i]
+                );
+            }
+        }
+    }
+}
+
+// Dyadic values and a rotated marker; the grid spans 0..4 on both axes, so both line sums are 4.
+const VECTOR_MAP: &str = "\
+format: 1
+kind: map
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - \"..\"
+  - \"..\"
+markers:
+  - name: lamp
+    kind: gate
+    x: 1.0
+    z: 3.0
+    rotation: -150.0
+    components:
+      SpotLight:
+        direction:
+          - 0.5
+          - -1.0
+          - 0.25
+      Velocity:
+        linear:
+          - 1.0
+          - 2.0
+          - -4.0
+        angular:
+          - 0.5
+          - -0.25
+          - 2.0
+      NavAgent:
+        target:
+          - 1.0
+          - 0.0
+          - 3.0
+  - name: walker
+    kind: gate
+    x: 3.0
+    z: 1.0
+    components:
+      NavAgent: {}
+";
+
+fn mirrored_vectors(mirror: Mirror) -> Scene {
+    let mut map = parse_map(VECTOR_MAP).expect("the map parses");
+    MapOverrides {
+        mirror,
+        ..MapOverrides::default()
+    }
+    .apply(&mut map);
+    generate(&map, &kit(), &[], &Registry::new()).expect("the map generates cleanly")
+}
+
+fn vec3(entity: &SceneEntity, comp: &str, field: &str) -> Vec<f64> {
+    component(entity, comp)[field]
+        .as_array()
+        .unwrap_or_else(|| panic!("{comp}.{field} array"))
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect()
+}
+
+#[test]
+fn mirror_reflects_builtin_world_vectors() {
+    let line_sum = 4.0;
+    for (mirror, axis) in [(Mirror::X, 0), (Mirror::Z, 2)] {
+        let scene = mirrored_vectors(mirror);
+        let lamp = entity(&scene, "lamp");
+        let pick = |v: [f64; 3], f: fn(usize, usize) -> bool| -> Vec<f64> {
+            (0..3)
+                .map(|i| if f(i, axis) { -v[i] } else { v[i] })
+                .collect()
+        };
+        // A direction negates the mirrored axis; angular velocity is a pseudovector, so it keeps
+        // that component and negates the other two.
+        assert_eq!(
+            vec3(lamp, "SpotLight", "direction"),
+            pick([0.5, -1.0, 0.25], |i, a| i == a)
+        );
+        assert_eq!(
+            vec3(lamp, "Velocity", "linear"),
+            pick([1.0, 2.0, -4.0], |i, a| i == a)
+        );
+        assert_eq!(
+            vec3(lamp, "Velocity", "angular"),
+            pick([0.5, -0.25, 2.0], |i, a| i != a)
+        );
+        // A point reflects across the grid line like a translation.
+        let mut target = [1.0, 0.0, 3.0];
+        target[axis] = line_sum - target[axis];
+        assert_eq!(vec3(lamp, "NavAgent", "target"), target);
+        // A missing target is the origin, so it reflects to the line.
+        let walker = entity(&scene, "walker");
+        let mut origin = [0.0, 0.0, 0.0];
+        origin[axis] = line_sum;
+        assert_eq!(vec3(walker, "NavAgent", "target"), origin);
+        // -150 degrees yaw: Z gives 180 + 150 = 330, wrapped to -30.
+        let yaw = component(lamp, "Transform")["rotation"][1]
+            .as_f64()
+            .unwrap();
+        assert_eq!(yaw, if axis == 0 { 150.0 } else { -30.0 });
+    }
+}
+
+#[test]
+fn mirror_of_world_vectors_is_an_involution() {
+    for (mirror, line_sum) in [(Mirror::X, 4.0), (Mirror::Z, 4.0)] {
+        let mut scene = mirrored_vectors(mirror);
+        for entity in &mut scene.entities {
+            mirror_entity(entity, mirror, line_sum);
+        }
+        let mut plain = mirrored_vectors(Mirror::None);
+        // The absent target materialises as the origin on the first mirror and stays.
+        for e in &mut plain.entities {
+            if let Some((_, v)) = e.components.iter_mut().find(|(n, _)| n == "NavAgent")
+                && v.get("target").is_none()
+            {
+                v["target"] = serde_json::json!([0.0, 0.0, 0.0]);
+            }
+        }
+        assert_eq!(scene, plain);
     }
 }
 

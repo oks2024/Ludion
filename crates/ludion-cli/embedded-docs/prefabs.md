@@ -105,13 +105,13 @@ Parts are not parented unless the prefab says so, so `entity.destroy` on the roo
 
 ## Rooms from maps
 
-`ludion generate-map <map> --out rooms/x.prefab.yaml --prefab [--kit K] [--seed N] [--mirror x|z]` compiles a map into a `kind: prefab` room: one committed, drift-gated file per combination (`scripts/map-drift.mjs` rechecks it with the flags recorded in `generated_from`). There is no runtime map compile; every combination a game spawns is a committed prefab.
+`ludion generate-map <map> --out rooms/x.prefab.yaml --prefab [--kit K] [--seed N] [--mirror x|z]` compiles a map into a `kind: prefab` room: one committed, drift-gated file per combination (`scripts/map-drift.mjs` rechecks it with the flags recorded in `generated_from`, but scans only the engine's own `games/` and `examples/`; an external game gates its rooms with `generate-map … --check` and `map-check <map> --kit …` in its own CI). There is no runtime map compile; every combination a game spawns is a committed prefab.
 
-- **Mirror** reflects every transform and negates yaw; scale is never negative, so pieces keep their handedness and colliders stay exact. Marker passthrough components are copied verbatim, so a game component holding a direction or offset is not mirrored. A mirror on a map with fragments is `L1399`.
+- **Mirror** reflects every transform; scale is never negative, so pieces keep their handedness and colliders stay exact. X negates yaw and Z turns it to 180−θ, so a piece faces its reflected direction. Built-in world-space vectors reflect too (`SpotLight`/`DirectionalLight` `direction`, `Velocity`, `NavSteering`, `NavAgent.target`). Game components are copied verbatim, so one holding a world direction, point or offset is not mirrored. A mirror on a map with fragments is `L1399`.
 - **Paths and refusals.** `--prefab` rewrites asset paths relative to the prefab file, except inside game components, which are copied as written. The map's `physics:` is refused and its `seed:` is dropped.
 - **The handle.** `ids[0]` of `spawn_prefab` is the room's handle: `despawn_instance(world, ids[0])` tears the whole room down.
 - **`preload:`** the room prefabs a door may spawn, so the first spawn pays nothing.
-- **Nav and rooms.** A kit `box` collider is a 3D static, so physics blocks it and nav picks the room up the tick after the spawn; `aabb`/`circle` stay 2D and invisible to both.
+- **Nav and rooms.** A kit `box` collider is a 3D static, so physics blocks it and nav picks the room up the same tick when the spawning system runs before `nav_update`, else the next; `aabb`/`circle` stay 2D and invisible to both.
 
 ## Replays and reload
 

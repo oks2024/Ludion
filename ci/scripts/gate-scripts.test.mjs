@@ -322,8 +322,42 @@ test('map-drift rechecks an override scene with its flags and rejects an unknown
       '--check',
     ]);
     assert.equal(calls.filter((c) => c.includes('--out')).length, 1, JSON.stringify(calls));
+    // The override scene is sealed with the same flags, so a themed room is checked against its kit.
+    assert.deepEqual(calls.find((c) => c[0] === 'map-check' && c.includes('--kit')), [
+      'map-check',
+      path.join(root, 'games/v/plaza.map.yaml'),
+      '--kit',
+      path.join(root, 'games/v/kits/b.kit.yaml'),
+      '--seed',
+      '3',
+      '--mirror',
+      'x',
+    ]);
     assert.equal(errors.length, 1, errors.join('\n'));
     assert.match(errors[0], /games\/v\/rooms\/r2\.yaml.*--bogus/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('map-drift fails an override scene whose themed kit leaks (L1040)', () => {
+  const root = scratchTree({
+    'games/v/plaza.map.yaml': 'kind: map\n',
+    'games/v/plaza.yaml': 'format: 1\ngenerated_from: plaza.map.yaml\n',
+    'games/v/rooms/r1.yaml': 'format: 1\ngenerated_from: ../plaza.map.yaml --kit kits/b.kit.yaml\n',
+  });
+  try {
+    const ludion = stubLudion([], (args) => {
+      if (args[0] === 'map-check') {
+        return args.includes('--kit')
+          ? { status: 0, stdout: 'seal: LEAKS — warning L1040\n', stderr: 'warning[L1040]: the walker can leave the map: a walk reaches the edge\n' }
+          : ok('seal: sealed from first marker `m` — no way out\n');
+      }
+      return args.includes('--out') ? ok('') : ok(`${args[1]}: up to date -> ${args[1].replace('.map.yaml', '.yaml')}`);
+    });
+    const { errors } = mapGate({ root, ludion });
+    assert.equal(errors.length, 1, errors.join('\n'));
+    assert.match(errors[0], /games\/v\/rooms\/r1\.yaml: the walker can leave the map \(L1040\)/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

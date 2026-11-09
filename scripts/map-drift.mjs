@@ -23,7 +23,8 @@
 // A scene compiled with overrides (`--kit`, `--seed`, `--mirror`) may live at any path: it records
 // them in `generated_from: <map> [--kit <k>] [--seed <n>] [--mirror x|z]`, and the gate rechecks it
 // with `generate-map <map> --out <scene> <flags> --check` (the kit resolved against the map's
-// directory). Such a scene never claims the map's default output. A `*.prefab.yaml` naming a map is
+// directory) and `map-check <map> <flags>`, so a themed room must seal against the kit it ships with.
+// Such a scene never claims the map's default output. A `*.prefab.yaml` naming a map is
 // the same with `--prefab` added, flags or none; any other generated prefab is gated elsewhere.
 //
 // Cheap by construction: a file scan of `games/` and `examples/` only, not a whole-repo walk; each
@@ -59,6 +60,21 @@ const isScene = (name) => {
   return name.endsWith('.yaml') || name.endsWith('.yml');
 };
 
+// The error a `map-check` run earns the gate, or null when the map prints `seal: sealed`.
+function sealError(label, check) {
+  if (check.error || check.status !== 0) {
+    const detail = check.error?.message || (check.stderr || check.stdout || '').trim() || `exit ${check.status}`;
+    return `${label}: \`map-check\` failed:\n${detail}`;
+  }
+  const seal = (check.stdout ?? '').split('\n').find((l) => l.startsWith('seal: '));
+  if (seal?.startsWith('seal: sealed')) return null;
+  if (seal?.startsWith('seal: LEAKS')) {
+    const leak = (check.stderr ?? '').split('\n').filter((l) => l.includes('[L1040]'));
+    return `${label}: the walker can leave the map (L1040):\n${leak.join('\n')}`;
+  }
+  return `${label}: the seal was not checked: ${seal ?? 'map-check printed no seal line'}`;
+}
+
 export function runGate({ root = REPO_ROOT, scanRoots = SCAN_ROOTS, ludion = runLudion } = {}) {
   const rel = (p) => path.relative(root, p).replaceAll('\\', '/');
   const errors = [];
@@ -77,20 +93,8 @@ export function runGate({ root = REPO_ROOT, scanRoots = SCAN_ROOTS, ludion = run
       continue;
     }
     verified.set(map, paths.map((p) => path.resolve(root, p)));
-    const check = ludion(['map-check', map], { cwd: root });
-    if (check.error || check.status !== 0) {
-      const detail = check.error?.message || (check.stderr || check.stdout || '').trim() || `exit ${check.status}`;
-      errors.push(`${rel(map)}: \`map-check\` failed:\n${detail}`);
-      continue;
-    }
-    const seal = (check.stdout ?? '').split('\n').find((l) => l.startsWith('seal: '));
-    if (seal?.startsWith('seal: sealed')) continue;
-    if (seal?.startsWith('seal: LEAKS')) {
-      const leak = (check.stderr ?? '').split('\n').filter((l) => l.includes('[L1040]'));
-      errors.push(`${rel(map)}: the walker can leave the map (L1040):\n${leak.join('\n')}`);
-    } else {
-      errors.push(`${rel(map)}: the seal was not checked: ${seal ?? 'map-check printed no seal line'}`);
-    }
+    const sealFault = sealError(rel(map), ludion(['map-check', map], { cwd: root }));
+    if (sealFault) errors.push(sealFault);
   }
 
   const claims = [];
@@ -144,6 +148,10 @@ export function runGate({ root = REPO_ROOT, scanRoots = SCAN_ROOTS, ludion = run
         const run = ludion(['generate-map', mapPath, '--out', scene, ...flags, ...(isPrefab ? ['--prefab'] : []), '--check'], { cwd: root });
         if (run.status !== 0) {
           errors.push(`${rel(scene)}: \`generate-map ${source} --check\` failed:\n${(run.stderr || run.stdout || '').trim()}`);
+        } else {
+          // The recorded flags may swap the kit, so the seal is the themed room's own.
+          const sealFault = sealError(rel(scene), ludion(['map-check', mapPath, ...flags], { cwd: root }));
+          if (sealFault) errors.push(sealFault);
         }
       }
       continue;

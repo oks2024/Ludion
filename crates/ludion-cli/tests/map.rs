@@ -1330,6 +1330,69 @@ fn generate_map_mirror_check_honours_the_flag() {
     assert!(String::from_utf8_lossy(&drift.stderr).contains("L1039"));
 }
 
+/// `generated_from` is split on whitespace, so a map path that holds some is refused up front and
+/// nothing is written.
+#[test]
+fn generate_map_refuses_a_map_path_with_whitespace() {
+    let dir = override_scratch("generate_whitespace_path");
+    let spaced = dir.join("spaced dir");
+    std::fs::create_dir_all(&spaced).unwrap();
+    std::fs::copy(dir.join("k1.kit.yaml"), spaced.join("k1.kit.yaml")).unwrap();
+    std::fs::write(
+        spaced.join("m.map.yaml"),
+        map_text("k1.kit.yaml", Some(1), false),
+    )
+    .unwrap();
+    let out = dir.join("o.yaml");
+    let output = run_ludion(&[
+        "generate-map",
+        spaced.join("m.map.yaml").to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("contains whitespace") && stderr.contains("rename the map file"),
+        "{stderr}"
+    );
+    assert!(!out.exists(), "nothing is written");
+}
+
+/// A map that seals against its own kit leaks under a theme kit whose walls have no collider;
+/// `map-check --kit` sees the kit the room ships with.
+#[test]
+fn map_check_kit_flag_seals_against_the_theme_kit() {
+    let dir = scratch("map_check_kit_override");
+    std::fs::copy(fixtures().join("kit.yaml"), dir.join("kit.yaml")).unwrap();
+    std::fs::copy(fixtures().join("target.yaml"), dir.join("target.yaml")).unwrap();
+    std::fs::copy(
+        fixtures().join("lint-clean.map.yaml"),
+        dir.join("lint-clean.map.yaml"),
+    )
+    .unwrap();
+    let kit = std::fs::read_to_string(fixtures().join("kit.yaml")).unwrap();
+    let wall = "      collider:\n        aabb:\n          - 1.0\n          - 1.0\nkinds:";
+    assert!(kit.contains(wall), "the fixture kit's wall block moved");
+    std::fs::write(dir.join("leaky.kit.yaml"), kit.replace(wall, "kinds:")).unwrap();
+    let map = dir.join("lint-clean.map.yaml");
+    let map = map.to_str().unwrap();
+
+    let sealed = run_ludion(&["map-check", map]);
+    let out = String::from_utf8_lossy(&sealed.stdout);
+    assert!(sealed.status.success());
+    assert!(out.contains("seal: sealed"), "{out}");
+
+    let leaky = dir.join("leaky.kit.yaml");
+    let leaked = run_ludion(&["map-check", map, "--kit", leaky.to_str().unwrap()]);
+    let (out, err) = (
+        String::from_utf8_lossy(&leaked.stdout),
+        String::from_utf8_lossy(&leaked.stderr),
+    );
+    assert!(out.contains("seal: LEAKS"), "{out}");
+    assert!(err.contains("L1040"), "{err}");
+}
+
 #[test]
 fn generate_map_override_flags_need_out() {
     let dir = override_scratch("generate_overrides_no_out");

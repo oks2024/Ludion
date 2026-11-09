@@ -66,7 +66,7 @@ diagonal), asks whether a walker can go from the start to the grid edge. It is *
 misses a way out the walker fits — and may flag a gap up to twice the shrink narrower than the walker.
 The report prints `seal: sealed from …`, `seal: LEAKS` (warning `L1040`, with the edge point and where
 the walk leaves the grid's walkable area; a rerun at the full radius says *walker-wide* or *squeezes
-through a gap* the walker may fit) or `seal: not checked`. A gate's trigger never stops the walk, since
+through a gap* the walker may fit) or `seal: not checked`. The seal uses nav's default `max_step`, not the game's `NavConfig`, and tests only a box's top, so an overhead beam counts as a wall. `--kit <path>`, `--seed <n>` and `--mirror x|z` compile like `generate-map`'s flags, so a themed room is sealed against the kit it ships with. A gate's trigger never stops the walk, since
 a game may let a player pass one without crossing (a hold gate, a key held through an arrival): close
 every opening in the frame with a collider behind its gate.
 

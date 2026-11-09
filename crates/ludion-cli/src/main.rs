@@ -1107,9 +1107,10 @@ enum Command {
         #[arg(long)]
         seed: Option<u64>,
         /// Reflect the compiled room across the grid's centre line in X or Z: transforms are
-        /// mirrored and yaw negated, scale is kept. Passthrough marker components are copied
-        /// unreflected, and a map with `fragments:` is refused (`L1399`). `generated_from` records
-        /// it. Needs `--out` and a single map.
+        /// mirrored, scale is kept, and yaw is negated for X or turned to 180-θ in (-180, 180] for
+        /// Z, so forward reflects. Built-in world-space vectors reflect too; game components are
+        /// copied unreflected, and a map with `fragments:` is refused (`L1399`). `generated_from`
+        /// records it. Needs `--out` and a single map.
         #[arg(long, value_name = "x|z", value_parser = ["x", "z"])]
         mirror: Option<String>,
         /// Write a `kind: prefab` instead of a scene, for `spawn_prefab`. Needs `--out` naming a
@@ -1172,6 +1173,16 @@ enum Command {
         /// requires.
         #[arg(long, requires = "traverse")]
         speed: Option<f64>,
+        /// Compile against this kit instead of the map's `kit:`, like `generate-map --kit`, so a
+        /// themed room is sealed against the kit it ships with.
+        #[arg(long, value_name = "PATH")]
+        kit: Option<PathBuf>,
+        /// Compile with this seed instead of the map's `seed:`, like `generate-map --seed`.
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Reflect the compiled room in X or Z, like `generate-map --mirror`.
+        #[arg(long, value_name = "x|z", value_parser = ["x", "z"])]
+        mirror: Option<String>,
     },
     /// Runs the four `ImageStats` defect metrics (`banding_score`, `edge_aliasing`, `clipped_low`,
     /// `clipped_high` — see `ludion_testkit::ImageStats` for what each measures) over one or more
@@ -2441,6 +2452,9 @@ fn main() -> std::process::ExitCode {
             at,
             traverse,
             speed,
+            kit,
+            seed,
+            mirror,
         } => map_check::run(
             &maps,
             anchor.as_deref(),
@@ -2448,6 +2462,9 @@ fn main() -> std::process::ExitCode {
             at.as_deref(),
             traverse,
             speed,
+            kit.as_deref(),
+            seed,
+            mirror.as_deref(),
         ),
         Command::Voxel { command } => match command {
             VoxelCommand::New {

@@ -159,7 +159,7 @@ pub fn run(
 
 /// The overrides as `generated_from` records them: the kit is rewritten from the working directory
 /// to the map's directory, the same meaning as the map's own `kit:` value.
-fn resolve_overrides(
+pub(crate) fn resolve_overrides(
     map_path: &Path,
     kit: Option<&Path>,
     seed: Option<u64>,
@@ -509,6 +509,12 @@ fn generate_yaml(
     // name, an `--out` elsewhere names the map relative to it.
     let out_dir = out_path.parent().unwrap_or_else(|| Path::new("."));
     match ludion_import::relative_to(out_dir, map_path, code::OUTPUT_IO) {
+        Ok(source) if source.contains(char::is_whitespace) => {
+            return Err(crate::diagnostic::usage_error(format_args!(
+                "the map path `{source}` contains whitespace, which `generated_from` cannot \
+                 record; rename the map file or its directory"
+            )));
+        }
         Ok(source) => loaded.doc.source = Some(overrides.provenance(&source)),
         Err(diagnostic) => return Err(report(map_path, &[diagnostic])),
     }

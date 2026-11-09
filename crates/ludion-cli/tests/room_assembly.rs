@@ -203,7 +203,7 @@ fn mover(world: &mut World, ctx: &SystemCtx) {
     }
 }
 
-/// The spawner runs before the nav systems, so a spawn lands in the same tick's rebuild queue.
+/// The spawner runs before `nav_update`, so nav sees a spawned room the same tick.
 pub(crate) fn game(root: &Path) -> EngineBuilder {
     Engine::builder()
         .project_root(root)
