@@ -18,7 +18,7 @@ const DEFAULT_POWER: f64 = 3.0;
 /// A document's rim: a view-angle highlight colour, intensity and falloff exponent.
 ///
 /// One per document — it wins over the entity's `Mesh.rim` and any inherited one. Ranges (checked
-/// by [`validate_rim`]): colour channels and `strength` finite `>= 0`, `power` finite `> 0`.
+/// by `validate_rim`): colour channels and `strength` finite `>= 0`, `power` finite `> 0`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DocRim {
     /// Linear RGB rim colour (default white), HDR-capable.

@@ -775,7 +775,7 @@ pub struct PostChain {
     /// meaningful" posture rather than an error.
     pub shafts: bool,
     /// The scene authors a medium **and** at least one local light selected to scatter into it
-    /// ([`crate::scatter::select_scatter`]): the [`pass::MEDIUM_SCATTER`] and
+    /// (`scatter::select_scatter`): the [`pass::MEDIUM_SCATTER`] and
     /// [`pass::MEDIUM_SCATTER_BLUR`] passes are added behind the scene pass and `composite` gains its
     /// fourth optional input.
     ///

@@ -481,8 +481,8 @@ fn box_edges(corners: &[Vec3; 8], color: [f32; 4], out: &mut Vec<DebugSegment>) 
 /// unknown (always drawn). Viewmodel meshes never enter the world cull and are not marked. When the
 /// frame culls against a `cull_camera`, that camera's frustum is outlined in yellow. A kept mesh
 /// whose asset carries a `lods:` chain is tinted by the level the camera view selects
-/// ([`LEVEL_TINTS`]); `quality_lod_bias` is the machine's `QualityParams::lod_bias`. With
-/// `draws_levels` false (a device that cannot place a level run, [`Renderer::draws_lod_levels`]) every
+/// (`LEVEL_TINTS`); `quality_lod_bias` is the machine's `QualityParams::lod_bias`. With
+/// `draws_levels` false (a device that cannot place a level run, [`crate::Renderer::draws_lod_levels`]) every
 /// mesh is tinted as level 0, the level it draws.
 ///
 /// Computed by the CPU oracle over the same bounds the GPU table is built from, so the marks are

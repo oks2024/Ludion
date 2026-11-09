@@ -228,8 +228,9 @@ fn a_second_import_never_overwrites_the_document() {
     }
 }
 
-/// Both import codes are answerable, and `ludion explain` states which one stops a build: the
-/// refusal is an error, the reported merge only a warning.
+/// A file where `--out`'s parent folder belongs is an output I/O error (`L1038`), never the
+/// "document exists" refusal (`L0030`). The codes are asserted, not the wording: Windows reports
+/// this case as os error 183, whose own text says "already exists".
 #[test]
 fn a_file_where_a_parent_folder_belongs_is_not_reported_as_the_document_existing() {
     let dir = scratch("import_png_file_parent");
@@ -246,9 +247,12 @@ fn a_file_where_a_parent_folder_belongs_is_not_reported_as_the_document_existing
     ]);
     assert!(!result.status.success());
     let err = stderr(&result);
-    assert!(!err.contains("already exists"), "{err}");
+    assert!(err.contains("L1038"), "{err}");
+    assert!(!err.contains("L0030"), "{err}");
 }
 
+/// Both import codes are answerable, and `ludion explain` states which one stops a build: the
+/// refusal is an error, the reported merge only a warning.
 #[test]
 fn the_import_codes_explain_with_their_severities() {
     for (code, severity) in [("L4014", "error"), ("L4015", "warning")] {
