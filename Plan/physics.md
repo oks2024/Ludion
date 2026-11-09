@@ -215,7 +215,8 @@ The vehicle body waits for the open-world slice. What the choice pins on the eng
   `entity.spawn`/`entity.destroy`/`component.*` commands, not scene-only data.** The mid-flight grab
   creates a joint between two bodies during play.
 - **Sleeping and body counts are a budget.** A level holds hundreds of props; the `physics-stress`
-  scene and both boxes' budgets land in W2.
+  scene and both boxes' budgets land in W2. The jointed-ragdoll cost is in the ragdoll bench (Status,
+  Serious Isaac 0017); its budget file is owed to the pinned run.
 - **Ragdolls are the assembly plus a joint list**: each part a `rigid` body, joints with limits and
   a break impulse authored beside the `clips:` map. A posed clip and a ragdoll are the same parts
   under two owners; the switch is game code.
@@ -870,6 +871,36 @@ finds it).
 All three questions were answered and none settled build: (1) passes cross-arch, (3) is clean, (2) is
 about one percent. The adopt-or-build ruling was made from these numbers (Decision above), and the
 spike and its traces are deleted.
+
+**Ragdoll bench (Serious Isaac 0017), 2026-11-09 (M5, indicative).** `tests/ragdoll_bench.rs`
+(ignored, release): N mannequin ragdolls (the 0016 parts prefab, 11 parts and 10 joints each) switched
+in by `switch_skin_to_ragdoll`, beside 500 walking `CharacterMotor`s, 8 threads, 120 measured ticks per
+phase, medians of three runs, unpinned M5 (not authoritative). `switch_skin_to_ragdoll` loads the
+prefab once and reuses the cached copy, so no per-switch file read is in the figures.
+
+| N | phase | step med / mean / p99 (ms) | write med | asleep-part share at window end |
+|---|---|---|---|---|
+| 60 | all awake | 0.98 / 0.99 / 1.30 | 0.32 | 0% |
+| 60 | settled | 0.17 / 0.17 / 0.19 | 0.31 | 98% |
+| 60 | blast (40 groups) | 0.74 / 0.78 / 1.03 | 0.32 | 32% |
+| 60 | churn 25/s | 0.59 / 0.60 / 0.69 | 0.35 | 0% |
+| 120 | all awake | 1.63 / 1.72 / 2.67 | 0.57 | 14% |
+| 120 | settled | 0.32 / 0.32 / 0.44 | 0.58 | 97% |
+| 120 | blast (40 groups) | 0.93 / 0.94 / 1.31 | 0.59 | 63% |
+| 120 | churn 25/s | 0.79 / 0.79 / 0.95 | 0.63 | 41% |
+| 240 | all awake | 3.32 / 3.65 / 6.42 | 1.14 | 7% |
+| 240 | settled | 0.58 / 0.58 / 0.72 | 1.10 | 95% |
+| 240 | blast (40 groups) | 1.28 / 1.34 / 2.05 | 1.12 | 78% |
+| 240 | churn 25/s | 1.02 / 1.03 / 1.24 | 1.15 | 68% |
+
+Mirror is 0.05 / 0.12 / 0.23 ms at N = 60 / 120 / 240; `motor_walk` for the 500 motors is about 3.8 ms
+in every phase. The "settled" phase never fully slept within the 1 800-tick cap at any N: 2–5% of parts
+stay awake (the cap, not a pass, ended each wait). Run-to-run spread was a few percent, except one
+noisy run (N = 120 settled step 0.51 ms, N = 240 churn p99 3.1 ms), which the medians drop. Not comparable to the W0 2 000-body row (another machine); the pinned run gives the
+like-for-like figure. Does churn matter: at N = 120 the churn-phase step is
++0.47 ms and the write +0.05 ms over settled (the freshly spawned groups land awake), and the
+`ragdoll_churn` system itself costs 0.11 ms mean and 0.31 ms p99 per tick (a median of 0, since it
+works on 25 ticks in 60). The pooling decision is owed, not made here.
 
 **W0 extension — snapshot resume and the write path** (detail in the private
 a private plan; pointer only). Reference box, on the spike:

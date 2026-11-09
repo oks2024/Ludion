@@ -90,6 +90,7 @@ mod projectiles_extract_bench;
 mod quality;
 mod query_drift;
 mod ragdoll;
+mod ragdoll_bench;
 mod ragdoll_scene;
 mod ragdoll_skinned_scene;
 mod rebuild_transaction;
