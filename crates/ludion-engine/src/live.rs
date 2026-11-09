@@ -432,7 +432,7 @@ fn live_loop(
             next_tick = Instant::now() + tick_period(engine);
             rebase_pending = true;
         }
-        let paused = engine.run_state() == RunState::Paused;
+        let paused = engine.pacing_paused();
         if paused {
             rebase_pending = true;
         } else {
@@ -492,7 +492,7 @@ fn live_loop(
         }
 
         // 6. Park until the next command, the shutdown, or the tick deadline — never busy-spin.
-        let timeout = if engine.run_state() == RunState::Paused {
+        let timeout = if engine.pacing_paused() {
             PAUSED_POLL
         } else {
             next_tick.saturating_duration_since(Instant::now())

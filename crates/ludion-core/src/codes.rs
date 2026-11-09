@@ -364,6 +364,8 @@ pub mod code {
     pub const RUN_RECORDING_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1403");
     /// `L1404` — a replay was recorded by a different game build (schema or version) and was refused.
     pub const REPLAY_GAME_MISMATCH: DiagnosticCode = DiagnosticCode::new("L1404");
+    /// `L1405` — in-window replay playback could not start, run to the end, or be listed or deleted.
+    pub const REPLAY_PLAYBACK_FAILED: DiagnosticCode = DiagnosticCode::new("L1405");
 
     /// `L1027` — a map marker's cross-district gate (`Gate.to` + `anchor`) names a spawn anchor that
     /// resolves against no entity in the sibling district's generated scene, so the gate would fail
@@ -5517,6 +5519,29 @@ write it. This build's identity differs, so the replay was refused rather than p
 
 Fix: this file cannot be replayed by this build. A game lists it as recorded by an older version (or
 another build); a developer re-records it under the current build.",
+    },
+    CodeEntry {
+        code: code::REPLAY_PLAYBACK_FAILED,
+        severity: Severity::Warning,
+        title: "replay playback could not start, finish or be managed",
+        explanation: "\
+A game system called `ReplayPlayback::play(name, return_to)`, `refresh()` or `delete(name)`, or a
+replay in progress failed. Causes:
+
+  - the name is empty, longer than 128 characters, starts with `.` or holds a character outside
+    `[A-Za-z0-9._-]`;
+  - `<name>.lrp` is missing or unreadable in the replays directory;
+  - a recording is running (a session or run recording wins) or a replay is already playing;
+  - the `return_to` scene does not resolve or cannot be read;
+  - the replay hit a driver error mid-play (the outcome is `Failed`);
+  - a replay file could not be deleted;
+  - the `replay_playback` builder `dir` is not a relative path inside the save root (a build error).
+
+This is a **warning**: the run continues. A start refused before any change leaves the live world
+untouched. A host that does not persist its profile only logs the request.
+
+Fix: use a plain file-safe name of a recording that exists, stop the recording first, and name a
+scene file that exists as `return_to`.",
     },
     CodeEntry {
         code: code::PROFILE_SAVE_FAILED,
@@ -11465,6 +11490,7 @@ mod tests {
         code::RUN_RECORDING_FAILED,
         code::RUN_RECORDING_CONFIG_INVALID,
         code::REPLAY_GAME_MISMATCH,
+        code::REPLAY_PLAYBACK_FAILED,
         code::DIRECTIONAL_LIGHT_INVALID_FRUSTUM,
         code::SCHEDULE_MODULE_CONCENTRATION,
         code::QUERY_DECL_UNKNOWN_COMPONENT,
@@ -11891,6 +11917,7 @@ mod tests {
             code::RUN_SAVE_WRITE_FAILED,
             code::RUN_SAVE_RESUME_REFUSED,
             code::RUN_RECORDING_FAILED,
+            code::REPLAY_PLAYBACK_FAILED,
             code::PROFILE_SAVE_FAILED,
             code::SCHEDULE_MODULE_CONCENTRATION,
             code::QUERY_DRIFT_UNOBSERVED,

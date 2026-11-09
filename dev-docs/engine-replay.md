@@ -134,10 +134,35 @@ game engine is built, so `L3010` (engine) comes first and `L1404` (game) second,
 absent field passes. `Engine::game_identity()` lets a replay menu compare a file's `header().game` without
 replaying it.
 
+## In-window playback
+
+`ReplayPlayback` (`replay_playback.rs`, `EngineBuilder::replay_playback`) plays a recording on the game's
+own live engine. `ludion::run` takes one builder, so the host cannot build a second engine: the live one
+becomes the replay in place.
+
+- **Persisting hosts only.** A `play` / `refresh` / `delete` request drains at a free-running boundary
+  after `drain_run_recording`; elsewhere (and from the replayed world, which is `profile_off_disk`) it is
+  only dropped.
+- **Start checks everything first** (name, file, `check_compatible`, `scan_replay`, `check_game`, inline
+  docs, no recorder, not already playing, `return_to` readable), so a refusal (`L1405`, `L3010`,
+  `L1404`) leaves the world untouched. Then `install_replay` (the same setup `prepare_replay` runs on a
+  fresh engine) puts the engine at the replay's frame 0, with the recording's inline docs swapped into
+  `doc_texts`.
+- **One tick per live tick.** `advance_live` takes the `ActivePlayback` out of the engine and advances its
+  `ActionCursor` once; the cursor's `sim.step` re-enters `advance_live` as a plain tick, so
+  `playback_name` (not the taken cursor) is the "playing" flag. Each replayed step leaves the driver
+  `Paused`, so the live loop paces on `Engine::pacing_paused`.
+- **Return.** At the file's end or `stop_playback`, host state is restored, the replay maps disarmed, and
+  `return_to` reloads carrying the profile saved before the play (a failed reload falls back to the
+  pre-play scene, `L1405`). The outcome is `Finished`, `Stopped`, `Refused` or `Failed`.
+- A quit the replayed game requests is dropped (`drain_shutdown`). No `Command`, record kind or snapshot
+  field is involved, so no hash moves.
+
 ## Rules
 
 - **Recording and replay share one driver.** Any new stepping path goes through `drive_hashes` or
-  `drive_actions_with`, never a fresh loop.
+  `drive_actions_with`, never a fresh loop. `ActionCursor` is that driver: `drive_actions_with` loops it
+  and in-window playback advances it one tick at a time.
 - **Recording policy is one exhaustive predicate.** Adding a `Command` variant without deciding its
   `record_kind` is a compile error, by design.
 - **A recording is self-contained.** Anything a replay cannot regenerate from the sim must travel

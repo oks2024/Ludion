@@ -168,34 +168,124 @@ fn panic_not_reproduced(frame: FrameIndex) -> Diagnostic {
     )
 }
 
-/// Drives one `sim.step`'s ticks through `hook`. `expected_panic` is the frame a recording marks as
-/// panicking: the `L4007` of that step's last tick is the reproduction, and every other `L4007` — an
-/// earlier tick, an unmarked step, a live drive — propagates. Returns `None` to carry on, or the
-/// answer [`run_actions`] must return when a hook ended the drive.
-fn run_step(
-    engine: &mut Engine,
-    params: &SimStepParams,
+/// What one [`ActionCursor::advance`] did.
+pub(crate) enum Advance {
+    /// Exactly one tick ran; call again for the next.
+    Ticked,
+    /// The drive is over: the actions ran out, or a hook ended it at a tick or keyframe. A drive
+    /// announces one final settled frame.
+    Ended,
+    /// The settled hook asked to stop: the drive is over with no final settled frame.
+    Halted,
+}
+
+/// A `sim.step` partly driven: its remaining ticks.
+struct StepInFlight {
+    ticks: u64,
+    /// The frame a recording marks as panicking: the `L4007` of the step's last tick is the
+    /// reproduction, and every other `L4007` — an earlier tick, an unmarked step, a live drive —
+    /// propagates.
     expected_panic: Option<FrameIndex>,
-    hook: &mut dyn DriveHook,
-) -> Result<Option<bool>, Diagnostic> {
-    for tick in 0..params.ticks {
-        if !hook.settled(engine)? {
-            return Ok(Some(false));
-        }
-        let expected = expected_panic.filter(|_| tick + 1 == params.ticks);
-        match hook.tick(engine) {
-            // The hook ended the drive; it may not have ticked at all.
-            Ok(false) => return Ok(Some(true)),
-            Ok(true) => {
-                if let Some(frame) = expected {
-                    return Err(panic_not_reproduced(frame));
-                }
-            }
-            Err(diagnostic) if expected.is_some() && diagnostic.code == code::SYSTEM_PANICKED => {}
-            Err(diagnostic) => return Err(diagnostic),
+    done: u64,
+}
+
+/// The resumable drive loop: a `sim.step` decomposes into single ticks, every other action applies at
+/// the current frame. [`advance`](Self::advance) runs up to the next tick, so a caller can drive one
+/// tick per call ([`drive_actions_with`] loops it; in-window playback calls it once per live tick).
+pub(crate) struct ActionCursor {
+    actions: std::vec::IntoIter<ReplayAction>,
+    step: Option<StepInFlight>,
+}
+
+impl ActionCursor {
+    pub(crate) fn new(actions: Vec<ReplayAction>) -> Self {
+        Self {
+            actions: actions.into_iter(),
+            step: None,
         }
     }
-    Ok(None)
+
+    /// Applies actions until exactly one tick has run, or the drive ends.
+    pub(crate) fn advance(
+        &mut self,
+        engine: &mut Engine,
+        hook: &mut dyn DriveHook,
+    ) -> Result<Advance, Diagnostic> {
+        loop {
+            if let Some(step) = &mut self.step {
+                if step.done >= step.ticks {
+                    self.step = None;
+                    continue;
+                }
+                if !hook.settled(engine)? {
+                    return Ok(Advance::Halted);
+                }
+                let expected = step.expected_panic.filter(|_| step.done + 1 == step.ticks);
+                step.done += 1;
+                return match hook.tick(engine) {
+                    // The hook ended the drive; it may not have ticked at all.
+                    Ok(false) => Ok(Advance::Ended),
+                    Ok(true) => match expected {
+                        Some(frame) => Err(panic_not_reproduced(frame)),
+                        None => Ok(Advance::Ticked),
+                    },
+                    Err(diagnostic)
+                        if expected.is_some() && diagnostic.code == code::SYSTEM_PANICKED =>
+                    {
+                        Ok(Advance::Ticked)
+                    }
+                    Err(diagnostic) => Err(diagnostic),
+                };
+            }
+            let Some(action) = self.actions.next() else {
+                return Ok(Advance::Ended);
+            };
+            match action {
+                ReplayAction::Command(Command::SimStep(params)) => {
+                    self.step = Some(StepInFlight {
+                        ticks: params.ticks,
+                        expected_panic: None,
+                        done: 0,
+                    });
+                }
+                ReplayAction::PanickedStep { frame, params } => {
+                    self.step = Some(StepInFlight {
+                        ticks: params.ticks,
+                        expected_panic: Some(frame),
+                        done: 0,
+                    });
+                }
+                ReplayAction::Command(other) => {
+                    engine.execute(other)?;
+                }
+                ReplayAction::DocReload {
+                    kind,
+                    path,
+                    document,
+                } => {
+                    engine.apply_doc_reload_inline(&kind, &path, &document)?;
+                }
+                ReplayAction::PrefabReload { path, document } => {
+                    engine.apply_prefab_reload_inline(&path, &document)?;
+                }
+                ReplayAction::SceneLoad {
+                    frame,
+                    path,
+                    document,
+                } => {
+                    apply_scene_load(engine, frame, &path, &document)?;
+                }
+                ReplayAction::RenderSize { frame, params } => {
+                    apply_render_size(engine, frame, &params)?;
+                }
+                ReplayAction::Keyframe { frame, snapshot } => {
+                    if !hook.keyframe(engine, frame, &snapshot)? {
+                        return Ok(Advance::Ended);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The per-frame `WorldHash` drive behind [`drive_hashes`] and [`replay_hashes_with`]: the one drive
@@ -222,70 +312,25 @@ impl DriveHook for HashTrace {
     }
 }
 
-/// The single drive loop: a `sim.step` decomposes into single ticks, every other action applies at the
-/// current frame. `hook` decides what happens at each settled frame, keyframe and tick; the default
-/// hook is the plain replay, so an instrumented drive cannot step differently from a plain one.
+/// The single drive loop: an [`ActionCursor`] advanced to its end. `hook` decides what happens at each
+/// settled frame, keyframe and tick; the default hook is the plain replay, so an instrumented drive
+/// cannot step differently from a plain one.
 pub(crate) fn drive_actions_with(
     engine: &mut Engine,
     actions: Vec<ReplayAction>,
     hook: &mut dyn DriveHook,
 ) -> Result<(), Diagnostic> {
-    if run_actions(engine, actions, hook)? {
-        hook.settled(engine)?;
-    }
-    Ok(())
-}
-
-/// Runs the actions; returns `false` when the settled hook itself asked to stop (the drive has ended
-/// and must not announce a final settled frame again).
-fn run_actions(
-    engine: &mut Engine,
-    actions: Vec<ReplayAction>,
-    hook: &mut dyn DriveHook,
-) -> Result<bool, Diagnostic> {
-    for action in actions {
-        match action {
-            ReplayAction::Command(Command::SimStep(params)) => {
-                if let Some(done) = run_step(engine, &params, None, hook)? {
-                    return Ok(done);
-                }
+    let mut cursor = ActionCursor::new(actions);
+    loop {
+        match cursor.advance(engine, hook)? {
+            Advance::Ticked => {}
+            Advance::Ended => {
+                hook.settled(engine)?;
+                return Ok(());
             }
-            ReplayAction::PanickedStep { frame, params } => {
-                if let Some(done) = run_step(engine, &params, Some(frame), hook)? {
-                    return Ok(done);
-                }
-            }
-            ReplayAction::Command(other) => {
-                engine.execute(other)?;
-            }
-            ReplayAction::DocReload {
-                kind,
-                path,
-                document,
-            } => {
-                engine.apply_doc_reload_inline(&kind, &path, &document)?;
-            }
-            ReplayAction::PrefabReload { path, document } => {
-                engine.apply_prefab_reload_inline(&path, &document)?;
-            }
-            ReplayAction::SceneLoad {
-                frame,
-                path,
-                document,
-            } => {
-                apply_scene_load(engine, frame, &path, &document)?;
-            }
-            ReplayAction::RenderSize { frame, params } => {
-                apply_render_size(engine, frame, &params)?;
-            }
-            ReplayAction::Keyframe { frame, snapshot } => {
-                if !hook.keyframe(engine, frame, &snapshot)? {
-                    return Ok(true);
-                }
-            }
+            Advance::Halted => return Ok(()),
         }
     }
-    Ok(true)
 }
 
 /// Replays the recorded session in `bytes`, returning its per-frame `WorldHash` trace.
@@ -744,7 +789,38 @@ pub(crate) fn prepare_replay(
 ) -> Result<(Engine, Vec<ReplayAction>), Diagnostic> {
     let reader = ReplayReader::new(bytes)?;
     crate::replay_compat::check_compatible(reader.header())?;
+    let ReplayScan {
+        actions,
+        scene_text,
+        prefab_reads,
+        inline_docs,
+    } = scan_replay(&reader, keyframes)?;
+    for (path, document) in inline_docs {
+        builder = builder.doc_text(&path, &document);
+    }
+    let mut engine = builder
+        .replay_profile()
+        .build_at(project_root.as_ref().to_path_buf())?;
+    crate::replay_compat::check_game(reader.header(), &engine.game_identity())?;
+    install_replay(&mut engine, reader.header(), scene_text, prefab_reads)?;
+    Ok((engine, actions))
+}
 
+/// What a replay file holds, decoded and ready to install: the drive actions and the off-disk texts
+/// the replayed engine reads instead of its project tree.
+pub(crate) struct ReplayScan {
+    pub(crate) actions: Vec<ReplayAction>,
+    pub(crate) scene_text: BTreeMap<String, String>,
+    pub(crate) prefab_reads: crate::prefab::PrefabTextSource,
+    /// The builder `doc_text` docs the recorder wrote at arm time.
+    pub(crate) inline_docs: Vec<(String, String)>,
+}
+
+/// Decodes the records of `reader` into a [`ReplayScan`]. Touches no engine.
+pub(crate) fn scan_replay(
+    reader: &ReplayReader,
+    keyframes: Keyframes,
+) -> Result<ReplayScan, Diagnostic> {
     // Reconstruct the action list from the delta records; `Keep` also yields keyframe actions, the
     // verifier's alignment marker.
     // A `SceneLoad` record replays from its inline text, never its path. `SceneSwitch` records are
@@ -872,23 +948,32 @@ pub(crate) fn prepare_replay(
             ReplayRecord::PrefabText { .. } => {}
         }
     }
-    for (path, document) in inline_docs {
-        builder = builder.doc_text(&path, &document);
-    }
-    let mut engine = builder
-        .replay_profile()
-        .build_at(project_root.as_ref().to_path_buf())?;
-    crate::replay_compat::check_game(reader.header(), &engine.game_identity())?;
+    Ok(ReplayScan {
+        actions,
+        scene_text,
+        prefab_reads: prefabs.reads,
+        inline_docs,
+    })
+}
+
+/// Turns `engine` into the replay's frame 0: extent, off-disk texts, header scene, seed and profile,
+/// in that order. The same setup for a fresh replay engine and for a live engine playing in place.
+pub(crate) fn install_replay(
+    engine: &mut Engine,
+    header: &ReplayHeader,
+    scene_text: BTreeMap<String, String>,
+    prefab_reads: crate::prefab::PrefabTextSource,
+) -> Result<(), Diagnostic> {
     // The extent is sim input (a game unprojects the cursor through it), so it is installed before the
     // scene loads — with `render.size`'s validity check, which refuses a hostile header value, but not
     // the host's render-scale check. A header without one is a pre-field `.lrp`, recorded at the
     // default extent.
-    if let Some(extent) = &reader.header().render_extent {
+    if let Some(extent) = &header.render_extent {
         let params = RenderSizeParams {
             width: Some(extent.width),
             height: Some(extent.height),
         };
-        render::apply_recorded(&mut engine, &params).map_err(|mut diagnostic| {
+        render::apply_recorded(engine, &params).map_err(|mut diagnostic| {
             diagnostic.message = format!("replay header render_extent: {}", diagnostic.message);
             if let Some(path) = &diagnostic.path {
                 diagnostic.path = Some(path.replace("/params/", "/render_extent/"));
@@ -899,20 +984,20 @@ pub(crate) fn prepare_replay(
     engine.install_replay_scene_text(scene_text);
     // Always installed, even empty: a replay never reads a prefab off disk — the header scene's own
     // instances included, so the texts are armed before it loads.
-    engine.arm_replay_prefab_text(prefabs.reads);
+    engine.arm_replay_prefab_text(prefab_reads);
 
-    load_header_scene(&mut engine, reader.header())?;
-    engine.reseed(reader.header().seed);
+    load_header_scene(engine, header)?;
+    engine.reseed(header.seed);
 
     // Install the header's embedded profile-at-start, overriding whatever the boot disk-load put in
     // place — so a committed `.lrp` reproduces bit-exactly on a machine whose `save/profile.yaml`
     // differs or is absent (Phase 16 / E5, decision 6). A header without one (an old replay or a
     // profile-free game) leaves the boot profile untouched.
-    if let Some(profile) = &reader.header().profile {
+    if let Some(profile) = &header.profile {
         engine.install_profile_from_text(profile);
     }
 
-    Ok((engine, actions))
+    Ok(())
 }
 
 /// Files a recording's prefab texts per rebuild epoch and turns its reload records into drive actions.

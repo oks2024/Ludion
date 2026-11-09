@@ -98,6 +98,7 @@ mod render_size;
 mod render_view;
 mod replay;
 mod replay_compat;
+mod replay_playback;
 mod residue_store;
 mod run_recording;
 mod run_save;
@@ -245,6 +246,7 @@ pub use replay::{
     replay_render_frames, replay_with,
 };
 pub use replay_compat::replay_content_hash;
+pub use replay_playback::{PlaybackOutcome, ReplayEntry, ReplayPlayback, ReplayPlaybackConfig};
 pub use residue_store::ResidueStore;
 pub use run_recording::{RunRecording, RunRecordingConfig, RunRecordingEntry, RunRecordingRequest};
 pub use run_save::{BuildStamp, ResumeOutcome, RunSave, RunSaveEntry, RunSaveRequest, SuspendInfo};

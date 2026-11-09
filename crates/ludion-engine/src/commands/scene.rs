@@ -13,7 +13,7 @@ use crate::engine::Engine;
 
 /// Joins a client-supplied `path` onto the content root, refusing anything that is not a plain path
 /// below it (`L3040`). Every scene command resolves through here, so every client gets the rule.
-fn resolve_in_root(engine: &Engine, path: &str) -> Result<PathBuf, Diagnostic> {
+pub(crate) fn resolve_in_root(engine: &Engine, path: &str) -> Result<PathBuf, Diagnostic> {
     match relative_refusal(path) {
         None => Ok(engine.project_root().join(path)),
         Some(refusal) => Err(Diagnostic::new(

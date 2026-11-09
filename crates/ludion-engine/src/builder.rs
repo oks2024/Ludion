@@ -108,6 +108,7 @@ pub struct EngineBuilder {
     profile_off_disk: bool,
     run_save: bool,
     run_recordings: Option<crate::RunRecordingConfig>,
+    replay_playback: Option<crate::ReplayPlaybackConfig>,
     game_version: Option<String>,
     observe_load: bool,
     category_gains: CategoryGains,
@@ -153,6 +154,7 @@ impl EngineBuilder {
             profile_off_disk: false,
             run_save: false,
             run_recordings: None,
+            replay_playback: None,
             game_version: None,
             observe_load: false,
             category_gains: CategoryGains::default(),
@@ -239,6 +241,20 @@ impl EngineBuilder {
     #[must_use]
     pub fn run_recordings(mut self, config: crate::RunRecordingConfig) -> Self {
         self.run_recordings = Some(config);
+        self
+    }
+
+    /// Installs a [`ReplayPlayback`](crate::ReplayPlayback) resource: a game system calls
+    /// `play(name, return_to)` and the engine turns itself, in place, into the replay of
+    /// `<save_root>/<dir>/<name>.lrp` at a free-running frame boundary, then reloads `return_to`
+    /// when the file ends. It also lists and deletes recordings. Like
+    /// [`run_save`](EngineBuilder::run_save) it acts only with
+    /// [`persist_profile`](EngineBuilder::persist_profile); elsewhere a request is only logged.
+    ///
+    /// `build` fails with `L1405` for a `dir` that is not a relative path inside the save root.
+    #[must_use]
+    pub fn replay_playback(mut self, config: crate::ReplayPlaybackConfig) -> Self {
+        self.replay_playback = Some(config);
         self
     }
 
@@ -1180,6 +1196,22 @@ impl EngineBuilder {
                 ));
             }
             engine.init_run_recording(config);
+        }
+        if let Some(config) = self.replay_playback.clone() {
+            if let Some(refusal) = ludion_core::paths::content_refusal(&config.dir) {
+                return Err(Diagnostic::new(
+                    code::REPLAY_PLAYBACK_FAILED,
+                    format!(
+                        "replay_playback: `dir` {:?} {}",
+                        config.dir,
+                        refusal.describe()
+                    ),
+                )
+                .with_help(
+                    "use a relative directory below the save root, such as `save/replays`",
+                ));
+            }
+            engine.init_replay_playback(config);
         }
         engine.set_game_version(self.game_version.clone());
         engine.boot_profile_pending = true;

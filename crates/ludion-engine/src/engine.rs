@@ -77,6 +77,10 @@ use crate::player_profile::{ProfileKind, ProfileSaveEntry};
 use crate::probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
 use crate::quality::QualitySetting;
 use crate::recording::{AppliedDocReload, Recorder};
+use crate::replay_playback::{
+    ActivePlayback, PlaybackOutcome, PlaybackPlan, ReplayEntry, ReplayPlayback,
+    ReplayPlaybackState, SavedHost,
+};
 use crate::run_recording::{
     ActiveRun, RUN_RECORDING_LOG_CAPACITY, RunRecording, RunRecordingEntry, RunRecordingRequest,
     RunRecordingState,
@@ -507,6 +511,15 @@ pub struct Engine {
     /// The run-recording state, `Some` once [`run_recordings`](crate::EngineBuilder::run_recordings)
     /// opted in. It lives here, not in `SessionState`, because a run's reset clears the session.
     run_recording: Option<RunRecordingState>,
+    /// The replay-playback state, `Some` once [`replay_playback`](crate::EngineBuilder::replay_playback)
+    /// opted in.
+    replay_playback: Option<ReplayPlaybackState>,
+    /// The playback in progress. Taken out of the engine while its cursor ticks, so the tick the
+    /// cursor performs re-enters [`advance_live`](Engine::advance_live) as a plain tick.
+    playback: Option<ActivePlayback>,
+    /// The name of the recording playing, set for the whole playback (the cursor's absence while it
+    /// ticks does not clear it).
+    playback_name: Option<String>,
     /// The game's own version string (`EngineBuilder::game_version`), part of [`Engine::game_identity`].
     game_version: Option<String>,
     /// True from build until the first world rebuild: the profile the build read is what that first
@@ -893,6 +906,9 @@ impl Engine {
             profile_off_disk: false,
             run_save: None,
             run_recording: None,
+            replay_playback: None,
+            playback: None,
+            playback_name: None,
             game_version: None,
             boot_profile_pending: false,
             replay_scene_text: None,
@@ -1664,6 +1680,9 @@ impl Engine {
     /// A [`TickObserver`] set with [`set_tick_observer`](Engine::set_tick_observer) watches here, so
     /// it sees every tick `sim.step` and the live loop perform.
     pub fn advance_live(&mut self) -> bool {
+        if let Some(playback) = self.playback.take() {
+            return self.advance_playback(playback);
+        }
         self.before_tick();
         let Some(mut observer) = self.tick_observer.take() else {
             return self.advance_live_unwatched();
@@ -1780,6 +1799,7 @@ impl Engine {
         // leaves no pending tick of the old run in the new recording.
         if was_running {
             self.drain_run_recording(frame);
+            self.drain_replay_playback();
         }
     }
 
@@ -2793,6 +2813,411 @@ impl Engine {
         }
     }
 
+    /// Installs the replay-playback state; called once at build when
+    /// [`replay_playback`](crate::EngineBuilder::replay_playback) is on. No disk I/O.
+    pub(crate) fn init_replay_playback(&mut self, config: crate::ReplayPlaybackConfig) {
+        self.replay_playback = Some(ReplayPlaybackState {
+            config,
+            last_outcome: None,
+            entries: Vec::new(),
+            error: None,
+        });
+        self.install_replay_playback();
+    }
+
+    /// (Re)installs the [`ReplayPlayback`] resource from the engine's state; a no-op without
+    /// [`replay_playback`](crate::EngineBuilder::replay_playback). Called after every world (re)build.
+    fn install_replay_playback(&mut self) {
+        if let Some(state) = self.replay_playback.as_ref() {
+            self.driver
+                .world_mut()
+                .insert_resource(ReplayPlayback::mirror(state, self.playback_name.as_deref()));
+        }
+    }
+
+    /// The name of the recording playing in place, if any.
+    pub fn playing(&self) -> Option<&str> {
+        self.playback_name.as_deref()
+    }
+
+    /// The most recent playback problem (`L1405`), or `None` if the last request succeeded.
+    pub fn replay_playback_error(&self) -> Option<&Diagnostic> {
+        self.replay_playback.as_ref()?.error.as_ref()
+    }
+
+    /// Where the recording called `name` lives: `<save_root>/<dir>/<name>.lrp`.
+    pub fn replay_path(&self, name: &str) -> PathBuf {
+        let dir = self
+            .replay_playback
+            .as_ref()
+            .map_or("", |state| state.config.dir.as_str());
+        self.save_root().join(dir).join(format!("{name}.lrp"))
+    }
+
+    /// Whether the live loop should idle: the sim is paused and no replay is playing. A replay's own
+    /// `sim.step`s leave the driver paused between ticks, so the loop must keep ticking through one.
+    pub fn pacing_paused(&self) -> bool {
+        self.playback_name.is_none() && self.driver.run_state() == RunState::Paused
+    }
+
+    /// Ends the playback in progress at the current replay frame and returns to its `return_to`
+    /// scene with the pre-play profile. A no-op when nothing plays.
+    pub fn stop_playback(&mut self) {
+        let Some(playback) = self.playback.take() else {
+            return;
+        };
+        let outcome = PlaybackOutcome::Stopped {
+            name: playback.name.clone(),
+            frame: self.frame(),
+        };
+        self.return_from_playback(playback, outcome);
+    }
+
+    /// Applies the replay-playback requests at the end of a free-running tick (see
+    /// [`ReplayPlayback`]): deletes, then a refresh, then a play. Only a persisting host touches disk
+    /// or the world; elsewhere the requests are dropped.
+    fn drain_replay_playback(&mut self) {
+        if self.replay_playback.is_none() {
+            return;
+        }
+        let Some(resource) = self.driver.world_mut().resource_mut::<ReplayPlayback>() else {
+            return;
+        };
+        let play = resource.play.take();
+        let refresh = std::mem::take(&mut resource.refresh);
+        let deletes = std::mem::take(&mut resource.delete);
+        if play.is_none() && !refresh && deletes.is_empty() {
+            return;
+        }
+        if self.profile_persistence && !self.profile_off_disk {
+            let deleted = !deletes.is_empty();
+            for name in deletes {
+                self.delete_replay(&name);
+            }
+            if refresh || deleted {
+                self.refresh_replay_entries();
+            }
+            if let Some((name, return_to)) = play {
+                self.start_playback(&name, &return_to);
+            }
+        }
+        self.install_replay_playback();
+    }
+
+    /// Removes `<name>.lrp`; a missing file is already what was asked for.
+    fn delete_replay(&mut self, name: &str) {
+        if let Err(reason) = crate::run_recording::validate_name(name) {
+            self.playback_failed(
+                format!("replay not deleted: {reason}"),
+                "use a plain file-safe name",
+            );
+            return;
+        }
+        let path = self.replay_path(name);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => self.playback_failed(
+                format!("replay `{name}` not deleted: {}: {error}", path.display()),
+                "check that the file is not open elsewhere and the directory is writable",
+            ),
+        }
+    }
+
+    /// Lists the replays directory into the playback state, sorted by name. A missing directory is an
+    /// empty list.
+    fn refresh_replay_entries(&mut self) {
+        let dir = self.replay_path("x").with_file_name("");
+        let mut entries = Vec::new();
+        if let Ok(read) = std::fs::read_dir(&dir) {
+            for item in read.flatten() {
+                let path = item.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("lrp") {
+                    continue;
+                }
+                let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if crate::run_recording::validate_name(name).is_err() {
+                    continue;
+                }
+                let bytes = item.metadata().map_or(0, |m| m.len());
+                let refusal = self.replay_refusal(&path).err();
+                entries.push(ReplayEntry {
+                    name: name.to_string(),
+                    bytes,
+                    refusal,
+                });
+            }
+        }
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        if let Some(state) = self.replay_playback.as_mut() {
+            state.entries = entries;
+        }
+    }
+
+    /// `Err` with why this build cannot replay the file at `path`: unreadable, malformed,
+    /// incompatible, or recorded by another build of the game.
+    fn replay_refusal(&self, path: &Path) -> Result<(), Diagnostic> {
+        let bytes = std::fs::read(path).map_err(|error| {
+            Diagnostic::new(
+                code::REPLAY_PLAYBACK_FAILED,
+                format!("could not read `{}`: {error}", path.display()),
+            )
+        })?;
+        let reader = ludion_protocol::replay::ReplayReader::new(&bytes)?;
+        crate::replay_compat::check_compatible(reader.header())?;
+        crate::replay_compat::check_game(reader.header(), &self.game_identity())
+    }
+
+    /// Everything a start checks before it may touch the world.
+    fn playback_preflight(&self, name: &str, return_to: &str) -> Result<PlaybackPlan, Diagnostic> {
+        let refused = |message: String, help: &str| {
+            Diagnostic::new(code::REPLAY_PLAYBACK_FAILED, message).with_help(help.to_string())
+        };
+        if let Err(reason) = crate::run_recording::validate_name(name) {
+            return Err(refused(
+                format!("replay not played: {reason}"),
+                "use the file stem of a recording in the replays directory",
+            ));
+        }
+        let path = self.replay_path(name);
+        let bytes = std::fs::read(&path).map_err(|error| {
+            refused(
+                format!("replay `{name}` not played: {}: {error}", path.display()),
+                "list the recordings with `ReplayPlayback::refresh` and play one of those",
+            )
+        })?;
+        let reader = ludion_protocol::replay::ReplayReader::new(&bytes)?;
+        crate::replay_compat::check_compatible(reader.header())?;
+        let mut scan = crate::replay::scan_replay(&reader, crate::replay::Keyframes::Skip)?;
+        crate::replay_compat::check_game(reader.header(), &self.game_identity())?;
+        let doc_texts = crate::docs::resolve_doc_texts(
+            &self.doc_kinds,
+            std::mem::take(&mut scan.inline_docs).into_iter().collect(),
+        )?;
+        if self.recorder.is_some() {
+            return Err(refused(
+                format!("replay `{name}` not played: a recording is running"),
+                "stop the `--record` session or the run recording first",
+            ));
+        }
+        if self.playback_name.is_some() {
+            return Err(refused(
+                format!("replay `{name}` not played: another replay is playing"),
+                "stop the current playback first",
+            ));
+        }
+        let resolved = crate::commands::scene::resolve_in_root(self, return_to).map_err(|d| {
+            refused(
+                format!("replay `{name}` not played: return scene: {}", d.message),
+                "name a scene file below the content root as `return_to`",
+            )
+        })?;
+        let return_text = std::fs::read_to_string(&resolved).map_err(|error| {
+            refused(
+                format!(
+                    "replay `{name}` not played: return scene `{}` is unreadable: {error}",
+                    resolved.display()
+                ),
+                "name a scene file that exists as `return_to`",
+            )
+        })?;
+        Ok(PlaybackPlan {
+            header: reader.header().clone(),
+            scan,
+            doc_texts,
+            resolved,
+            return_text,
+        })
+    }
+
+    /// The start half of [`drain_replay_playback`](Engine::drain_replay_playback): every check runs
+    /// before the first mutation, so a refusal leaves the live world untouched.
+    fn start_playback(&mut self, name: &str, return_to: &str) {
+        let plan = match self.playback_preflight(name, return_to) {
+            Ok(plan) => plan,
+            Err(diagnostic) => {
+                self.playback_refused(name, diagnostic);
+                return;
+            }
+        };
+        let PlaybackPlan {
+            header,
+            scan,
+            doc_texts,
+            resolved,
+            return_text,
+        } = plan;
+        let saved = SavedHost {
+            doc_texts: std::mem::replace(&mut self.doc_texts, doc_texts),
+            profile_off_disk: self.profile_off_disk,
+            profile_text: self.emit_profile_text(),
+            speed: self.driver.speed(),
+            render_size: self.render_size,
+            return_to: return_to.to_string(),
+            resolved,
+            return_text,
+            fallback_path: self.current_scene_path.clone(),
+            fallback_text: self.current_scene_text(),
+        };
+        let active = ActivePlayback {
+            name: name.to_string(),
+            cursor: crate::replay::ActionCursor::new(scan.actions),
+            frames: 0,
+            saved,
+        };
+        self.profile_off_disk = true;
+        self.playback_name = Some(name.to_string());
+        if let Some(state) = self.replay_playback.as_mut() {
+            state.last_outcome = None;
+            state.error = None;
+        }
+        if let Err(diagnostic) =
+            crate::replay::install_replay(self, &header, scan.scene_text, scan.prefab_reads)
+        {
+            let outcome = PlaybackOutcome::Failed {
+                name: name.to_string(),
+                diagnostic: diagnostic.clone(),
+            };
+            self.playback_failed(
+                format!("replay `{name}` could not start: {}", diagnostic.message),
+                "the engine returned to the `return_to` scene",
+            );
+            self.return_from_playback(active, outcome);
+            return;
+        }
+        self.push_event(Event::SceneChanged(SceneChangedData {
+            kind: SceneChangeKind::Load,
+            path: None,
+            request_id: None,
+        }));
+        self.driver.set_speed(active.saved.speed);
+        self.playback = Some(active);
+    }
+
+    /// One live tick of a playing replay: the cursor runs to the next tick of the shared driver.
+    fn advance_playback(&mut self, mut playback: ActivePlayback) -> bool {
+        match playback
+            .cursor
+            .advance(self, &mut crate::replay::PlainDrive)
+        {
+            Ok(crate::replay::Advance::Ticked) => {
+                playback.frames += 1;
+                self.playback = Some(playback);
+                true
+            }
+            Ok(_) => {
+                let outcome = PlaybackOutcome::Finished {
+                    name: playback.name.clone(),
+                    frames: playback.frames,
+                };
+                self.return_from_playback(playback, outcome);
+                false
+            }
+            Err(diagnostic) => {
+                let outcome = PlaybackOutcome::Failed {
+                    name: playback.name.clone(),
+                    diagnostic: diagnostic.clone(),
+                };
+                self.playback_failed(
+                    format!("replay `{}` failed: {}", playback.name, diagnostic.message),
+                    "the engine returned to the `return_to` scene",
+                );
+                self.return_from_playback(playback, outcome);
+                false
+            }
+        }
+    }
+
+    /// Ends a playback: restores the host state, reloads the `return_to` scene carrying the pre-play
+    /// profile, disarms the replay's off-disk maps and records `outcome`.
+    fn return_from_playback(&mut self, playback: ActivePlayback, outcome: PlaybackOutcome) {
+        let SavedHost {
+            doc_texts,
+            profile_off_disk,
+            profile_text,
+            speed,
+            render_size,
+            return_to,
+            resolved,
+            return_text,
+            fallback_path,
+            fallback_text,
+        } = playback.saved;
+        self.doc_texts = doc_texts;
+        self.profile_off_disk = profile_off_disk;
+        self.playback = None;
+        self.playback_name = None;
+        self.replay_scene_text = None;
+        self.replay_prefab_text = None;
+        self.replay_prefab_epoch = 0;
+        self.replay_prefab_next_epoch = 0;
+        self.set_render_size(render_size.0, render_size.1);
+        match self.load_scene_with_profile(return_text.clone(), profile_text.clone()) {
+            Ok(_) => {
+                self.set_scene_base(resolved, return_text);
+                self.set_current_scene_path(Some(return_to));
+            }
+            Err(errors) => {
+                let detail = errors
+                    .first()
+                    .map_or_else(String::new, |d| d.message.clone());
+                self.playback_failed(
+                    format!("return scene `{return_to}` did not load: {detail}"),
+                    "the scene from before the replay was reloaded instead",
+                );
+                if let Some(text) = fallback_text
+                    && self.load_scene_with_profile(text, profile_text).is_ok()
+                {
+                    self.set_current_scene_path(fallback_path);
+                }
+            }
+        }
+        self.push_event(Event::SceneChanged(SceneChangedData {
+            kind: SceneChangeKind::Load,
+            path: self.current_scene_path.clone(),
+            request_id: None,
+        }));
+        self.driver.set_speed(speed);
+        if let Some(state) = self.replay_playback.as_mut() {
+            state.last_outcome = Some(outcome);
+        }
+        self.install_replay_playback();
+    }
+
+    /// Records a refused start as the outcome and reports it.
+    fn playback_refused(&mut self, name: &str, diagnostic: Diagnostic) {
+        self.playback_note(
+            diagnostic.message.clone(),
+            "no replay started; the world is unchanged",
+        );
+        if let Some(state) = self.replay_playback.as_mut() {
+            state.error = Some(diagnostic.clone());
+            state.last_outcome = Some(PlaybackOutcome::Refused {
+                name: name.to_string(),
+                diagnostic,
+            });
+        }
+    }
+
+    /// Reports an `L1405` and keeps it as the last playback error.
+    fn playback_failed(&mut self, message: String, help: &str) {
+        let diagnostic = self.playback_note(message, help);
+        if let Some(state) = self.replay_playback.as_mut() {
+            state.error = Some(diagnostic);
+        }
+    }
+
+    /// Reports an `L1405` on both sinks.
+    fn playback_note(&mut self, message: String, help: &str) -> Diagnostic {
+        let diagnostic =
+            Diagnostic::new(code::REPLAY_PLAYBACK_FAILED, message).with_help(help.to_string());
+        eprintln!("{diagnostic}");
+        self.push_event(Event::Log(LogEvent::from_diagnostic(diagnostic.clone())));
+        diagnostic
+    }
+
     /// Ends the active run's file: publishes it durably when `closed_with` is `None`, otherwise
     /// removes the temp and reports why it did not finish.
     fn publish_run(&mut self, closed_with: Option<&Diagnostic>) {
@@ -2917,6 +3342,13 @@ impl Engine {
             .world_mut()
             .resource_mut::<crate::Shutdown>()
             .is_some_and(crate::Shutdown::take);
+        if requested && self.playback_name.is_some() {
+            self.playback_note(
+                "a quit requested by the replayed game was dropped".to_string(),
+                "the replay is not the host's session; close the window to quit",
+            );
+            return false;
+        }
         if requested {
             self.request_shutdown();
         }
@@ -4555,8 +4987,18 @@ impl Engine {
     /// [`load_scene_document`](Engine::load_scene_document) that installs the live profile, unsaved
     /// writes included, instead of re-reading the save from disk: a run's reset keeps the profile.
     fn load_scene_carrying_profile(&mut self, document: String) -> Result<u32, Vec<Diagnostic>> {
-        self.load_begin(LoadPhase::Scene);
         let profile_text = self.emit_profile_text();
+        self.load_scene_with_profile(document, profile_text)
+    }
+
+    /// [`load_scene_carrying_profile`](Engine::load_scene_carrying_profile) with the profile text
+    /// given: the live profile of a moment ago, such as the one a playback saved before it began.
+    fn load_scene_with_profile(
+        &mut self,
+        document: String,
+        profile_text: Option<String>,
+    ) -> Result<u32, Vec<Diagnostic>> {
+        self.load_begin(LoadPhase::Scene);
         let loaded = self.instantiate_and_commit(document, profile_text);
         self.load_end(LoadPhase::Scene);
         loaded
@@ -7025,6 +7467,7 @@ impl Engine {
         self.install_residue_store();
         self.install_run_save();
         self.install_run_recording();
+        self.install_replay_playback();
         self.commit_docs(docs);
         // A later load reads the persisted save; the boot load carries the profile the build read.
         // A restore is an exact continuation, so it installs the snapshot's embedded profile off-disk
