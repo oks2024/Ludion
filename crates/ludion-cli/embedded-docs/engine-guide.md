@@ -36,7 +36,7 @@ report `L0008` from a game project.
 - `ludion docs data-docs-checks` — `--check-docs`, cross-doc rules, one-doc kinds.
 - `ludion docs map-authoring` — districts as text maps: `kind: map`/`map-kit`, generate and check.
 - `ludion docs map-check` — reading the report: occupancy, `--traverse`, lints.
-- `ludion docs player-profiles` — persistent save state, its migration and its replay.
+- `ludion docs player-profiles` — persistent save state, its migration and its replay; `replays` beside it.
 - `ludion docs scene-transitions` — moving the player between districts inside one run.
 - `ludion docs scene-residue` — what a district keeps between visits, and reading it back.
 - `ludion docs verify-loop` — `cargo test`: sim assertions, `WorldHash`, and golden images.

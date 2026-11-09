@@ -174,7 +174,7 @@ or just written, and `last_resume()` the `ResumeOutcome` (`Resumed` or `Refused`
 - **Profile:** the resume installs the snapshot's profile (the restore rule), so do not write the
   profile between a suspend and its resume; `discard()` when a new run starts.
 
-Example: `cargo run -p ludion --example run_save`.
+Example: `cargo run -p ludion --example run_save`. A run recording across a suspend (it ends at the suspend; `resume()` while recording is refused) is `ludion docs replays`.
 
 ## Non-goals (and their triggers)
 
@@ -190,6 +190,7 @@ Example: `cargo run -p ludion --example run_save`.
 
 ## Next
 
+- `ludion docs replays` — recording a run in the game, playing it back, game identity.
 - `ludion docs data-docs` — game data as validated text.
 - `ludion docs scene-transitions` — moving between districts mid-run.
 - `ludion docs verify-loop` — the `cargo test` verification loop.

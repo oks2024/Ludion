@@ -9,7 +9,8 @@ driver, the snapshot document, keyframes, and divergence bisection. The `Engine`
 `ludion devdocs ludion-engine`; the on-wire container and `REPLAY_FORMAT_VERSION` are
 `ludion devdocs ludion-protocol`; why the traces must match at all is
 `ludion devdocs determinism`. Sim-visible content reloads that a replay *cannot* regenerate are
-`ludion devdocs engine-content-kinds`.
+`ludion devdocs engine-content-kinds`. The game-facing guide to run recordings and in-window playback
+is `ludion docs replays`.
 
 ## Dataflow
 

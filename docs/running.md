@@ -141,7 +141,7 @@ let score = end.world_mut().query::<(&Score,)>().next().map(|(s,)| s.0);
 its replay expects that panic and only that one (`L3050` if it no longer happens there).
 
 Recordings embed the scene text, so an `.lrp` is self-contained and replays identically anywhere
-(given the same game builder). Worked example: `games/breakout/tests/replay.rs`; from a failing test to its frames: `ludion docs failing-run`.
+(given the same game builder). A recording the game starts itself, from a system, is `ludion docs replays`. Worked example: `games/breakout/tests/replay.rs`; from a failing test to its frames: `ludion docs failing-run`.
 
 ## Quitting from a system
 
@@ -181,5 +181,6 @@ world state it writes no replay record: the recording ends at that frame, and so
 - `ludion docs verify-loop` — the `cargo test` verification loop.
 - `ludion docs dev-loop` — the live reload loop.
 - `ludion docs wire-protocol` — the raw JSON protocol.
+- `ludion docs replays` — recording and playing back a player run from inside the game.
 - `ludion docs post-processing` — the imaging chain.
 - `ludion docs scene-transitions` — the other request a system leaves for the frame boundary, and restarting the scene.
