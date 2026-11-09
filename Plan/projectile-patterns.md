@@ -88,6 +88,8 @@ any process, on any thread count, after any snapshot.
 - *Rejected — a `Collider` per bullet:* the `steady-indexed` measurement already showed
   `spatial_rebuild` as the whole difference; volleys have no per-bullet collider and never enter the
   index. The pure overlap query (decision 6) is the hit test.
+- *Not bridged — 3D swept shots:* the pooled, physics-swept 3D projectiles are a separate system,
+  `Plan/bulk-projectiles.md`; volleys do not feed it (trigger recorded there).
 
 **2. Motion is a list of at most four segments, each with a closed form.** A segment is `ramp
 { frames, from, to }` (speed linear from `from` to `to` along the current heading) or `turn { frames,
@@ -197,7 +199,7 @@ determinism + census gate covers both. (b) **Vigil**: the ranged archetype's dir
 system applies `volley_hits` against the player with the doc's `shot_damage`. The mortar keeps its
 shell (a landing is stateful) and the player's bolt keeps its entity and tracer light until a modified
 shot gives a reason to move it. The look changes from an emissive sphere to an additive sprite — the
-sitting judges it. (c) **The external shmup** on a git dependency is the driver and the human gate.
+sitting judges it. (c) **The external shmup** on its local path dependency is the driver and the human gate (a from-git build waits on the user's decision to publish the dependency, ruled 2026-11-02).
 
 **10. The Effects view's pattern tab.** A schema-driven form over one `kind: pattern` file (the same
 `schemars` output that validates the doc; nested lists get list widgets, not a raw-JSON bucket — the
@@ -263,7 +265,7 @@ migration set of decision 9. The exit gates below.
   line; the live-smoke list in `Plan/editor-live-smoke.md`.
 - **Exit, here**: `check.mjs --frontend-only` green; the parity audit at 29 methods.
 - **Human gate (the plan's exit)**: your external shmup's first boss pattern authored in the Effects
-  view and played on a **git** dependency; the vigil ranged-fire look at the next sitting.
+  view and played on its local path dependency; the vigil ranged-fire look at the next sitting.
 
 ## Engine/game boundary
 
@@ -407,6 +409,6 @@ migration set of decision 9. The exit gates below.
   **`L1155` warning** (`Engine::doc_skip_warnings()`, printed by `serve`/`sim-hash`) instead of the
   `L1119` boot failure a game builder keeps — vigil's stage boots with 28 skips and plays its patterns. A scene that cannot be
   read is `L1015` before the engine is built (the walk would otherwise sweep a root nobody named).
-- **Exit (the human gate) still open:** the external shmup's first boss pattern authored in the tab on a
-  git dependency; the vigil ranged-fire look at the sitting. The Effects/pattern live smoke rides the
+- **Exit (the human gate) still open:** the external shmup's first boss pattern authored in the tab on its
+  local path dependency; the vigil ranged-fire look at the sitting. The Effects/pattern live smoke rides the
   next Tauri sitting.
