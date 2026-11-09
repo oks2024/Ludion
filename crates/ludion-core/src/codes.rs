@@ -2396,7 +2396,7 @@ pub mod code {
     /// `L5006` — a stem of a music set cannot share the set's playhead: its sample rate or length
     /// differs from the set's first playable stem, or the set names more than 8 stems. A
     /// **warning**: the stem is left out and the rest of the set plays. Raised by `ludion-audio`,
-    /// at every set start.
+    /// once per set (again if the files change).
     pub const MUSIC_STEM_MISMATCHED: DiagnosticCode = DiagnosticCode::new("L5006");
 }
 
@@ -11201,8 +11201,8 @@ The stems of a set are decoded side by side and mixed from one sample counter, s
 only while they are the same length at the same sample rate. The first stem that opens sets the
 reference; a later stem with another sample rate or another length (the last Ogg page's granule
 position) is dropped, and so is every stem past the eighth. This is a warning for the same reason
-as the rest of L5xxx: audio sits outside every determinism gate. It is raised at every set start,
-not once per file, because the set (not the file) is what is wrong.
+as the rest of L5xxx: audio sits outside every determinism gate. It is raised once per set
+(not once per file, because the set is what is wrong), and again if the files change.
 
 Fix: export all stems of a set from one session at one sample rate and one length (pad the shorter
 ones with silence), and keep a set to 8 stems or fewer.",

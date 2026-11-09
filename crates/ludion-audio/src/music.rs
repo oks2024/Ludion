@@ -338,6 +338,34 @@ struct Stem {
     ended: bool,
 }
 
+impl Stem {
+    /// Reopens the decoder and positions it at source frame `to` (fractional: the converter's
+    /// phase), for a device of `out_rate`/`out_channels`. Decodes and discards the frames before it.
+    fn seek(&mut self, to: f64, out_rate: u32, out_channels: usize) -> Result<(), Diagnostic> {
+        self.track.reopen()?;
+        self.ended = false;
+        self.staging.clear();
+        let channels = self.track.channels().max(1);
+        self.converter = Converter::new(self.track.rate(), channels, out_rate, out_channels);
+        let whole = to as u64;
+        self.converter.pos = to - whole as f64;
+        let mut skip = whole;
+        while skip > 0 {
+            // Past the end: `stage` finds the end itself and loops or ends the stem.
+            let Some(packet) = self.track.next_packet()? else {
+                break;
+            };
+            let frames = (packet.len() / channels) as u64;
+            if frames > skip {
+                let tail = &packet[skip as usize * channels..];
+                self.converter.convert(tail, &mut self.staging);
+            }
+            skip = skip.saturating_sub(frames);
+        }
+        Ok(())
+    }
+}
+
 /// The music currently feeding the ring: a `MusicPlay` track is a one-stem set.
 struct Current {
     /// The track (for a `MusicPlay`) or the set id.
@@ -350,6 +378,11 @@ struct Current {
     gain: f32,
     /// Each stem's latest gain, kept for the same reason.
     stem_gains: Vec<f32>,
+    /// The set-wide source frame the next chunk starts at, counted from the start of the play
+    /// across loops: the one position every stem shares, whatever it holds staged or carried.
+    position: f64,
+    /// Source frames in one pass, learned at the first loop reopen; the loop the position wraps at.
+    period: Option<u64>,
 }
 
 /// The sink-thread side: owns the decoder, keeps the ring full, and turns messages into the
@@ -366,6 +399,8 @@ pub(crate) struct MusicFeed {
     stop_after: Option<usize>,
     /// Files that failed, by the stamp they failed at: one warning per file version.
     failed: HashMap<String, Stamped>,
+    /// The `L5006` texts already printed per set id, so a set resent every tick warns once.
+    mismatch_shown: HashMap<String, Vec<String>>,
     /// How long a failure's stamp is trusted before it is read again.
     recheck: Duration,
     tx: Sender<MusicChunk>,
@@ -388,6 +423,7 @@ impl MusicFeed {
             current: None,
             stop_after: None,
             failed: HashMap::new(),
+            mismatch_shown: HashMap::new(),
             recheck: STAMP_RECHECK,
             tx,
         }
@@ -492,6 +528,8 @@ impl MusicFeed {
             looping,
             gain,
             stem_gains: vec![1.0],
+            position: 0.0,
+            period: None,
         };
         Some(self.start(current, fade_frames))
     }
@@ -524,8 +562,13 @@ impl MusicFeed {
         for (name, diagnostic) in &opened.unplayable {
             self.note_failure(name, diagnostic);
         }
+        let shown = self.mismatch_shown.entry(id.to_string()).or_default();
         for diagnostic in &opened.mismatched {
-            eprintln!("{diagnostic}");
+            let text = diagnostic.to_string();
+            if !shown.contains(&text) {
+                eprintln!("{text}");
+                shown.push(text);
+            }
         }
         if opened.stems.is_empty() {
             return None;
@@ -544,6 +587,8 @@ impl MusicFeed {
             looping: true,
             gain: 1.0,
             stem_gains,
+            position: 0.0,
+            period: None,
         };
         Some(self.start(current, fade_frames))
     }
@@ -566,9 +611,10 @@ impl MusicFeed {
         })
     }
 
-    /// Moves the feed onto a reopened device: another format and a new ring. The decoder keeps its
-    /// position, so the track resumes where it was (the converted audio staged for the dead ring is
-    /// skipped). A fade-out in progress when the device died ends as a stop.
+    /// Moves the feed onto a reopened device: another format and a new ring. Every stem is
+    /// repositioned at the set's common source frame, so the stems stay locked however their
+    /// encodes were packetized; the converted audio staged for the dead ring is skipped. A fade-out
+    /// in progress when the device died ends as a stop.
     pub(crate) fn retarget(&mut self, out_rate: u32, out_channels: u16, tx: Sender<MusicChunk>) {
         self.out_rate = out_rate;
         self.out_channels = usize::from(out_channels.max(1));
@@ -576,16 +622,22 @@ impl MusicFeed {
         if self.stop_after.take().is_some() {
             self.current = None;
         }
-        if let Some(current) = &mut self.current {
-            for stem in &mut current.stems {
-                stem.staging.clear();
-                stem.converter = Converter::new(
-                    stem.track.rate(),
-                    stem.track.channels(),
-                    out_rate,
-                    self.out_channels,
-                );
+        let Some(current) = &mut self.current else {
+            return;
+        };
+        if let Some(period) = current.period {
+            current.position %= period as f64;
+        }
+        let mut failure = None;
+        for stem in &mut current.stems {
+            if let Err(diagnostic) = stem.seek(current.position, out_rate, self.out_channels) {
+                failure = Some((stem.name.clone(), diagnostic));
+                break;
             }
+        }
+        if let Some((name, diagnostic)) = failure {
+            self.current = None;
+            self.note_failure(&name, &diagnostic);
         }
     }
 
@@ -624,6 +676,7 @@ impl MusicFeed {
                 match stem.track.next_packet() {
                     Ok(Some(packet)) => stem.converter.convert(&packet, &mut stem.staging),
                     Ok(None) if looping && stem.track.produced => {
+                        current.period.get_or_insert(stem.track.frames);
                         let reopened = stem.track.reopen().inspect(|()| {
                             let (rate, channels) = (stem.track.rate(), stem.track.channels());
                             stem.converter.retarget(rate, channels);
@@ -675,6 +728,8 @@ impl MusicFeed {
                     count: current.stems.len(),
                     samples: [[0.0; MUSIC_CHUNK]; MUSIC_STEMS_MAX],
                 };
+                current.position +=
+                    (len / self.out_channels) as f64 * current.stems[0].converter.step;
                 for (slot, stem) in chunk.samples.iter_mut().zip(&mut current.stems) {
                     slot[..len].copy_from_slice(&stem.staging[..len]);
                     stem.staging.drain(..len);
@@ -1391,22 +1446,39 @@ mod tests {
         names.iter().map(|name| (name.to_string(), 1.0)).collect()
     }
 
+    /// A stem of the same rate and length as [`TONE`] but another signal and encode, so its
+    /// packets split the stream differently.
+    const SWEEP: &str = "sweep-stereo-44k.ogg";
+
+    /// One loop period (the stream's granule length) of `name` at 44.1 kHz stereo, taken from a
+    /// looping pass: a once pass drops its last frame to the converter's lookahead.
+    fn looped_period(name: &str) -> Vec<f32> {
+        let (mut looped, rx) = feed(testdata(), 44100, 2);
+        looped.play(name, 1.0, true, 0).unwrap();
+        let period = 2 * last_granule(&testdata().join(name)) as usize;
+        let mut pass = collect(&mut looped, &rx, period + 1);
+        pass.truncate(period);
+        pass
+    }
+
     #[test]
     fn two_stems_stay_sample_locked_across_loops_and_gain_moves() {
-        let root = scratch_root("stems-locked");
-        for name in ["a.ogg", "b.ogg"] {
-            std::fs::copy(testdata().join(TONE), root.join(name)).unwrap();
-        }
-        // One loop period (the stream's granule length), taken from a looping pass: a once pass
-        // drops its last frame to the converter's lookahead.
-        let tone = {
-            let (mut looped, rx) = feed(testdata(), 44100, 2);
-            looped.play(TONE, 1.0, true, 0).unwrap();
-            let period = 2 * last_granule(&testdata().join(TONE)) as usize;
-            let mut pass = collect(&mut looped, &rx, period + 1);
-            pass.truncate(period);
-            pass
-        };
+        stems_locked_across_loops_and_gain_moves(TONE);
+    }
+
+    #[test]
+    fn differently_encoded_stems_stay_sample_locked_across_loops_and_gain_moves() {
+        stems_locked_across_loops_and_gain_moves(SWEEP);
+    }
+
+    /// Stem `a.ogg` is the tone and `b.ogg` a copy of `second`.
+    fn stems_locked_across_loops_and_gain_moves(second: &str) {
+        let root = scratch_root(&format!("stems-locked-{second}"));
+        std::fs::copy(testdata().join(TONE), root.join("a.ogg")).unwrap();
+        std::fs::copy(testdata().join(second), root.join("b.ogg")).unwrap();
+        let tone = looped_period(TONE);
+        let other = looped_period(second);
+        assert_eq!(tone.len(), other.len(), "stems share a length");
         let (mut feed, rx) = feed(root, 44100, 2);
         let mut player = MusicPlayer::new(rx, 2, 4);
         let stems = [("a.ogg".to_string(), 1.0), ("b.ogg".to_string(), 0.0)];
@@ -1437,10 +1509,10 @@ mod tests {
                 }
             }
             for frame in 0..256 {
-                let level = 1.0 + b.next();
+                let level = b.next();
                 for c in 0..2 {
                     let i = (block * 256 + frame) * 2 + c;
-                    let want = level * tone[i % tone.len()];
+                    let want = tone[i % tone.len()] + level * other[i % tone.len()];
                     assert!(
                         (out[i] - want).abs() < 1e-6,
                         "sample {i} (loop {}): {} vs {want}",
@@ -1451,6 +1523,42 @@ mod tests {
             }
         }
         assert!(blocks * 512 > tone.len() * 3, "ran past three loops");
+    }
+
+    #[test]
+    fn differently_encoded_stems_stay_locked_across_a_retarget() {
+        let root = scratch_root("stems-retarget");
+        std::fs::copy(testdata().join(TONE), root.join("a.ogg")).unwrap();
+        std::fs::copy(testdata().join(SWEEP), root.join("b.ogg")).unwrap();
+        let (tone, sweep) = (looped_period(TONE), looped_period(SWEEP));
+        assert_eq!(tone.len(), sweep.len(), "stems share a length");
+        let frames = tone.len() / 2;
+
+        let (mut feed, rx) = feed(root, 44100, 2);
+        let mut player = MusicPlayer::new(rx, 2, 4);
+        let stems = set_of(&["a.ogg", "b.ogg"]);
+        player.apply(feed.set("pair", &stems, 0).unwrap());
+        // Retarget in the second pass, at a block that leaves each stem mid-packet.
+        for block in [frames / 256 + 7, frames / 256 + 12] {
+            let _ = render(&mut feed, &mut player, block, |_, _, _| {});
+            let at = feed.current.as_ref().unwrap().position;
+            let (tx, rx) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
+            feed.retarget(44100, 2, tx);
+            player = MusicPlayer::new(rx, 2, 4);
+            player.apply(feed.resume(0).unwrap());
+
+            // The first frame after the retarget is the one the old ring had not yet been sent.
+            let start = at as usize % frames;
+            let out = render(&mut feed, &mut player, 2 * frames / 256 + 4, |_, _, _| {});
+            for (i, got) in out.iter().enumerate() {
+                let j = (start * 2 + i) % tone.len();
+                let want = tone[j] + sweep[j];
+                assert!(
+                    (got - want).abs() < 1e-6,
+                    "sample {i} after a retarget at frame {start}: {got} vs {want}"
+                );
+            }
+        }
     }
 
     #[test]

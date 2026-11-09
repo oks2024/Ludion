@@ -107,8 +107,8 @@ pub struct CategoryGains {
     /// The master gain of the ambient bus.
     pub ambient: f32,
     /// The master gain of the music bus. Music only travels in [`AudioMessage::MusicPlay`],
-    /// [`AudioMessage::MusicSet`] and their companions, so its bus is implied: there is no [`AudioCategory`] for it and [`gain_for`](Self::gain_for) never
-    /// returns it.
+    /// [`AudioMessage::MusicSet`] and their companions, so its bus is implied: there is no
+    /// [`AudioCategory`] for it and [`gain_for`](Self::gain_for) never returns it.
     pub music: f32,
 }
 

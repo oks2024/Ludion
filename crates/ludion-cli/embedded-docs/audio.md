@@ -200,12 +200,16 @@ queue.music_stem_gain("music/perc.ogg", 1.0, 120); // raise the percussion over 
 
 - **One playhead.** The stems decode side by side and mix from one sample counter, so they loop
   together and cannot drift. They must share a sample rate and length; the first that opens is the
-  reference, and one that differs (or is past the 8th) is left out with `L5006` at every set start
-  while the rest plays. Export all stems from one session at one rate and length.
+  reference, and one that differs (or is past the 8th) is left out with `L5006`, printed once per
+  set while the rest plays. Export all stems from one session at one rate and length. A device
+  change resumes every stem at the same frame, however each was encoded.
 - **Resend freely.** `music_set` with the id already playing (and not stopping) is a no-op, so a
   system may send it every tick; its starting gains apply only when the set starts. Move a stem
   with `music_stem_gain`, which slews in ticks (`0` still slews ~10 ms, click-free) and is free to
   resend. Another set or track hard-cuts; a set is not crossfaded.
+- **A plain track has one stem.** `music_stem_gain` on the path of the track `music_play` is
+  playing addresses that single stem (a mix gain on top of the track's own); it is ignored when
+  the path is not in the playing set.
 - **Cost.** Each stem is a streamed decoder outside the 64-voice cap.
 
 ## Category gains
