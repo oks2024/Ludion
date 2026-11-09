@@ -141,8 +141,10 @@ replaying it.
 own live engine. `ludion::run` takes one builder, so the host cannot build a second engine: the live one
 becomes the replay in place.
 
-- **Persisting hosts only.** A `play` / `refresh` / `delete` request drains at a free-running boundary
-  after `drain_run_recording`; elsewhere (and from the replayed world, which is `profile_off_disk`) it is
+- **Persisting hosts only.** A `play` / `refresh` / `delete` request is taken off the resource in
+  `take_host_requests` (after `drain_run_save`, before `drain_scene_switch`, which wipes the resource;
+  the `RunRecording` start/stop and a suspend's stop travel the same way, in engine state), then drains
+  at the end of a free-running tick, after `drain_run_recording`; elsewhere (and from the replayed world, which is `profile_off_disk`) it is
   only dropped.
 - **Start checks everything first** (name, file, `check_compatible`, `scan_replay`, `check_game`, inline
   docs, no recorder, not already playing, `return_to` readable), so a refusal (`L1405`, `L3010`,
@@ -159,7 +161,11 @@ becomes the replay in place.
 - **Live commands are gated at `Engine::execute`** (`gate_live_command`) while the cursor is parked in
   `self.playback`; the cursor's own replayed commands run while it is taken, so they pass. `input.inject`
   goes to the playback's live `InputState`, `render.size` is stored into the saved host and applies at the
-  return, and every other kind `record_kind` writes, plus `asset.reload`, is refused with `L1405`.
+  return, and every other kind `record_kind` writes, plus `asset.reload` and the unrecorded disk writers
+  (`scene.save`, `prefab.create`, `prefab.apply`), is refused with `L1405`.
+- **The replayed world's host mirrors are the `--replay-verify` ones** (`RunSave` pending and last resume,
+  `RunRecording` active and finished, `ReplayPlayback` entries, outcome and `playing` all empty): the `install_*`
+  mirrors take `playback_name.is_some()`; the return re-installs the live ones.
 - **Controls hook, no key policy.** `EngineBuilder::playback_controls` runs at every live boundary, paused
   included (`pacing_paused` is false while playing), with the live input and `PlaybackControls`
   (pause, resume, `PlaybackSpeed`, stop). The speed sets driver pacing only, and is re-applied after each

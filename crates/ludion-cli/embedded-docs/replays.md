@@ -44,7 +44,7 @@ Then check a saved file with `cargo run -- --replay-verify save/replays/run-1.lr
 
 ## Suspend and resume
 
-A successful `RunSave::suspend` finalizes the open recording: the file replays up to the suspend, and later ticks never extend it. `RunSave::resume()` while a run is recording is refused with `L1401`, the pending save left as it was. `RunSave::pending()` is disk input a replay never sees (it is always `None` there), so read it **before** `start()`. The suspend file itself is `ludion docs player-profiles`.
+A successful `RunSave::suspend` finalizes the open recording: the file replays up to the suspend, and later ticks never extend it, also when a scene switch lands in the same tick. A suspend during a lockstep `sim.step` ends the file at the end of the step command that carried it. `RunSave::resume()` while a run is recording is refused with `L1401`, the pending save left as it was and no backup made: `stop()`, then `resume()`. A quit with a run recording open publishes the partial run. `RunSave::pending()` is disk input: a replay, and an in-place playback, sees `None`, so read it **before** `start()`. The suspend file itself is `ludion docs player-profiles`.
 
 ## Game identity
 
@@ -54,9 +54,9 @@ Run recordings, and only they, carry `GameIdentity { schema, version }` in their
 
 `ReplayPlayback::play(name, return_to)` turns the live engine into the replay of `<name>.lrp`; `return_to` is a scene **file**, relative to the project root.
 
-- **Persisting hosts only**, applied at a frame boundary. Everything is checked first (name, file, engine, game identity, the scene to return to), so a refusal leaves the world untouched: `last_outcome()` is `Refused` with `L1404`, `L3010` or `L1405`.
+- **Persisting hosts only**, applied at a frame boundary. Everything is checked first (name, file, engine, game identity, the scene to return to), so a refusal leaves the world untouched: `last_outcome()` is `Refused` with `L1404` (another build of the game), `L3010` (a file this engine cannot read) or `L1405` (a bad name, a missing file, a recording or playback already running, an unreadable `return_to`).
 - **Outcomes** are `Finished`, `Stopped`, `Refused` and `Failed`. At the end or on stop the `return_to` scene reloads with the profile as it was before the play.
-- **While playing**, a live command that would change the sim is refused (`L1405`) and reads pass; a `render.size` is kept and applied on the return; a quit the replayed game requests is dropped.
+- **While playing**, a live command that would change the sim, `asset.reload`, and a command that writes the replayed world to disk (`scene.save`, `prefab.create`, `prefab.apply`) are refused (`L1405`) and reads pass; the replayed world sees no pending suspend, no open or finished recording, no listing and `ReplayPlayback::playing()` of `None`, as under `--replay-verify`; a `render.size` is kept and applied on the return; a quit the replayed game requests is dropped.
 - **Controls.** The `playback_controls` hook sees live input and a `PlaybackControls` (pause, resume, `PlaybackSpeed` X1/X2/X4, stop). It runs at every boundary, paused included, and has no world access: the game maps the keys, the engine binds none. Speed changes the pacing only; the replayed trace is the same at every speed.
 - **Live input** goes to the `PlaybackInput` resource. Read it in a presentation system only: a sim system that reads it diverges the playback.
 - While paused the same frame is presented again and `frame()` and the hash hold. There is no seek.
@@ -79,8 +79,8 @@ To scale it: the file is about `1.8 MB + keyframes x 177 KiB`, so a `keyframe_ev
 
 - **A director keyed on a frame number must guard on `RunRecording::active()` and `last_finished()`**: `start` restarts the scene at frame 0, so an unguarded `frame == 30` starts again every time the frame comes round.
 - **Never write hashed state from `active()`.** In a replay the resource is non-persisting, so `active()` differs from the live run.
-- **A sim system reading `PlaybackInput` diverges the playback**; it is for presentation systems.
-- **Read `RunSave::pending()` before `start()`.**
+- **A sim system reading `PlaybackInput` diverges the playback**; it is for presentation systems, which detect a playback by the resource's presence (`ReplayPlayback::playing()` is `None` in the replayed world, as in `--replay-verify`; `Engine::playing()` is the host's check).
+- **Read `RunSave::pending()` before `start()`**: a replay and a playback see `None`.
 
 ## Next
 

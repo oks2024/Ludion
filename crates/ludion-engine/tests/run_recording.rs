@@ -512,3 +512,138 @@ fn a_resume_while_recording_is_refused_and_keeps_the_save() {
         "the recording stays open"
     );
 }
+
+const NEXT: &str = "format: 1\nname: next\nentities:\n  - name: gate\n    components:\n      Transform:\n        translation:\n          - 0.0\n          - 0.0\n          - 0.0\n      Tally:\n        sum: 0\n        edges: 0\n        held: 0\n";
+
+fn switch_to_next(world: &mut World) {
+    if let Some(switch) = world.resource_mut::<ludion_engine::SceneSwitch>() {
+        switch.request("next.yaml".to_string(), "gate".to_string(), Vec::new());
+    }
+}
+
+fn stop_and_switch(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == 4 {
+        world.resource_mut::<RunRecording>().unwrap().stop();
+        switch_to_next(world);
+    }
+}
+
+fn suspend_and_switch(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == 4 {
+        world.resource_mut::<RunSave>().unwrap().suspend();
+        switch_to_next(world);
+    }
+}
+
+#[test]
+fn a_stop_in_a_switch_tick_still_publishes_the_file() {
+    let dir = fresh_dir("stop-switch");
+    std::fs::write(dir.join("next.yaml"), NEXT).unwrap();
+    let mut engine = boot(game(&dir, true, 3600).system("stop_and_switch", stop_and_switch));
+    start(&mut engine, "cut");
+    engine.advance_live();
+    let mut live: Trace = vec![sample(&mut engine)];
+    for _ in 0..4 {
+        engine.advance_live();
+        live.push(sample(&mut engine));
+    }
+    engine.advance_live();
+    live.push(sample(&mut engine));
+
+    assert!(engine.last_transition_error().is_none());
+    let path = engine.run_recording_path("cut");
+    assert!(path.is_file(), "{path:?}");
+    let resource = engine.world().resource::<RunRecording>().unwrap();
+    assert_eq!(
+        (resource.active(), resource.last_finished()),
+        (None, Some("cut"))
+    );
+    assert_eq!(error_code(&engine), None);
+    let bytes = std::fs::read(&path).unwrap();
+    let replayer = game(&dir, false, 3600).system("stop_and_switch", stop_and_switch);
+    let replayed = replay_hashes_with(replayer, &bytes, &dir).unwrap();
+    assert_eq!(replayed, live);
+}
+
+#[test]
+fn a_suspend_in_a_switch_tick_finalizes_and_a_later_resume_is_not_refused() {
+    let dir = fresh_dir("suspend-switch");
+    std::fs::write(dir.join("next.yaml"), NEXT).unwrap();
+    let mut engine = boot(
+        game(&dir, true, 3600)
+            .run_save()
+            .system("suspend_and_switch", suspend_and_switch),
+    );
+    start(&mut engine, "cut");
+    engine.advance_live();
+    for _ in 0..5 {
+        engine.advance_live();
+    }
+
+    assert!(engine.last_transition_error().is_none());
+    assert!(engine.run_recording_path("cut").is_file());
+    let resource = engine.world().resource::<RunRecording>().unwrap();
+    assert_eq!(
+        (resource.active(), resource.last_finished()),
+        (None, Some("cut"))
+    );
+
+    run_save(&mut engine).resume();
+    engine.advance_live();
+    assert!(
+        matches!(
+            engine.world().resource::<RunSave>().unwrap().last_resume(),
+            Some(ResumeOutcome::Resumed { .. })
+        ),
+        "{:?}",
+        engine.run_save_error()
+    );
+}
+
+fn step(engine: &mut Engine, ticks: u64) {
+    engine
+        .execute(Command::SimStep(ludion_protocol::command::SimStepParams {
+            ticks,
+            hash: false,
+        }))
+        .unwrap();
+}
+
+#[test]
+fn a_suspend_in_a_lockstep_step_finalizes_the_open_run_recording() {
+    let dir = fresh_dir("suspend-lockstep");
+    let mut engine = boot(game(&dir, true, 3600).run_save());
+    start(&mut engine, "cut");
+    engine.advance_live();
+    let mut live: Trace = vec![sample(&mut engine)];
+    for _ in 0..3 {
+        engine.advance_live();
+        live.push(sample(&mut engine));
+    }
+    engine.execute(Command::SimPause).unwrap();
+    step(&mut engine, 1);
+    live.push(sample(&mut engine));
+    run_save(&mut engine).suspend();
+    step(&mut engine, 1);
+    live.push(sample(&mut engine));
+
+    let path = engine.run_recording_path("cut");
+    assert!(path.is_file(), "{path:?}");
+    assert!(leftovers(&dir).is_empty(), "{:?}", leftovers(&dir));
+    let resource = engine.world().resource::<RunRecording>().unwrap();
+    assert_eq!(
+        (resource.active(), resource.last_finished()),
+        (None, Some("cut"))
+    );
+    assert_eq!(error_code(&engine), None);
+    let bytes = std::fs::read(&path).unwrap();
+    let replayed = replay_hashes_with(game(&dir, false, 3600), &bytes, &dir).unwrap();
+    assert_eq!(replayed.last(), live.last());
+
+    step(&mut engine, 2);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "later ticks do not extend it"
+    );
+}

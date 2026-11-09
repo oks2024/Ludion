@@ -467,6 +467,22 @@ fn live_input_and_mutations_never_reach_the_replay() {
         press(&mut engine, "key_down");
         assert_eq!(live_error(&mut engine, Command::SimPause), "L1405");
         assert_eq!(live_error(&mut engine, Command::SimResume), "L1405");
+        for command in [
+            Command::SceneSave(ludion_protocol::command::SceneSaveParams {
+                path: "saved.yaml".to_string(),
+                force: true,
+            }),
+            Command::PrefabCreate(ludion_protocol::command::PrefabCreateParams {
+                entities: Vec::new(),
+                path: "made.prefab.yaml".to_string(),
+            }),
+            Command::PrefabApply(ludion_protocol::command::PrefabApplyParams {
+                instance: ludion_core::ids::EntityId::new(1, 0),
+                parts: None,
+            }),
+        ] {
+            assert_eq!(live_error(&mut engine, command), "L1405");
+        }
         let reply = engine
             .execute(Command::RenderSize(RenderSizeParams {
                 width: Some(640),
@@ -487,6 +503,7 @@ fn live_input_and_mutations_never_reach_the_replay() {
     }
     assert_eq!(played, expected);
     assert_eq!(engine.render_size(), (640, 360), "applied at the return");
+    assert!(!dir.join("saved.yaml").exists() && !dir.join("made.prefab.yaml").exists());
 }
 
 #[test]
@@ -659,4 +676,119 @@ fn run_live_keeps_ticking_a_playback() {
     }
     shutdown.signal();
     handle.join().unwrap().unwrap();
+}
+
+static PLAY_AND_SWITCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn play_and_switch(world: &mut World, _ctx: &SystemCtx) {
+    if PLAY_AND_SWITCH.swap(false, Ordering::SeqCst) {
+        world
+            .resource_mut::<ReplayPlayback>()
+            .unwrap()
+            .play("run", "hub.yaml");
+        if let Some(switch) = world.resource_mut::<ludion_engine::SceneSwitch>() {
+            switch.request("next.yaml".to_string(), "gate".to_string(), Vec::new());
+        }
+    }
+}
+
+#[test]
+fn a_play_in_a_switch_tick_still_plays() {
+    let dir = fresh_dir("play-switch");
+    std::fs::write(
+        dir.join("next.yaml"),
+        "format: 1\nname: next\nentities:\n  - name: gate\n    components:\n      Transform:\n        translation:\n          - 0.0\n          - 0.0\n          - 0.0\n",
+    )
+    .unwrap();
+    record(&dir, "run", None);
+    let mut engine = boot(game(&dir, true, None).system("play_and_switch", play_and_switch));
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+    PLAY_AND_SWITCH.store(true, Ordering::SeqCst);
+    engine.advance_live();
+    assert!(engine.last_transition_error().is_none());
+    assert_eq!(engine.playing(), Some("run"));
+    assert_eq!(outcome(&engine), None);
+}
+
+/// Branches the sim on disk state a replay never sees.
+fn disk_branch(world: &mut World, _ctx: &SystemCtx) {
+    let suspended = world
+        .resource::<ludion_engine::RunSave>()
+        .is_some_and(|run| run.pending().is_some());
+    let listed = world
+        .resource::<ReplayPlayback>()
+        .is_some_and(|playback| !playback.entries().is_empty());
+    let finished = world
+        .resource::<RunRecording>()
+        .is_some_and(|recording| recording.last_finished().is_some());
+    for (t,) in world.query::<(&mut Tally,)>() {
+        t.held += u32::from(suspended) + 2 * u32::from(listed) + 4 * u32::from(finished);
+    }
+}
+
+#[test]
+fn playback_sees_the_host_state_a_replay_verify_sees() {
+    let dir = fresh_dir("host-state");
+    record(&dir, "run", None);
+    let bytes = std::fs::read(dir.join("save/replays/run.lrp")).unwrap();
+    let build = |persist| {
+        game(&dir, persist, None)
+            .run_save()
+            .system("disk", disk_branch)
+    };
+    let expected: Trace = replay_hashes_with(build(false), &bytes, &dir).unwrap();
+
+    let mut engine = boot(build(true));
+    engine
+        .world_mut()
+        .resource_mut::<ludion_engine::RunSave>()
+        .unwrap()
+        .suspend();
+    playback(&mut engine).refresh();
+    engine.advance_live();
+    engine.advance_live();
+    let resource = engine.world().resource::<ludion_engine::RunSave>().unwrap();
+    assert!(
+        resource.pending().is_some(),
+        "a live suspend file is pending"
+    );
+    assert!(
+        !engine
+            .world()
+            .resource::<ReplayPlayback>()
+            .unwrap()
+            .entries()
+            .is_empty()
+    );
+
+    playback(&mut engine).play("run", "hub.yaml");
+    engine.advance_live();
+    assert_eq!(engine.playing(), Some("run"));
+    assert_eq!(
+        engine
+            .world()
+            .resource::<ReplayPlayback>()
+            .unwrap()
+            .playing(),
+        None,
+        "the replayed world sees no playback, as under --replay-verify"
+    );
+    let mut played: Trace = vec![sample(&mut engine)];
+    while engine.advance_live() {
+        played.push(sample(&mut engine));
+    }
+    assert_eq!(played, expected);
+
+    let resource = engine.world().resource::<ludion_engine::RunSave>().unwrap();
+    assert!(resource.pending().is_some(), "the live mirror is back");
+    assert!(
+        !engine
+            .world()
+            .resource::<ReplayPlayback>()
+            .unwrap()
+            .entries()
+            .is_empty()
+    );
 }

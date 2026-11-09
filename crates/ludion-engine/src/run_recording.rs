@@ -75,6 +75,13 @@ pub(crate) struct RunRecordingState {
     pub(crate) last_finished: Option<String>,
     pub(crate) log: VecDeque<RunRecordingEntry>,
     pub(crate) error: Option<Diagnostic>,
+    /// Requests taken off the resource before a scene switch could wipe it, applied at the end of
+    /// the free-running tick.
+    pub(crate) stop: bool,
+    pub(crate) start: Option<String>,
+    /// A suspend raised `stop`: a lockstep step finalizes the run at once instead of waiting for a
+    /// free-running tick.
+    pub(crate) suspended: bool,
 }
 
 /// The start/stop handle a game system holds, installed by
@@ -126,10 +133,15 @@ impl RunRecording {
         self.last_finished.as_deref()
     }
 
-    pub(crate) fn mirror(state: &RunRecordingState) -> Self {
+    /// `replayed`: the world a replay runs in sees no recording, as under `--replay-verify`.
+    pub(crate) fn mirror(state: &RunRecordingState, replayed: bool) -> Self {
         RunRecording {
-            active: state.active.as_ref().map(|run| run.name.clone()),
-            last_finished: state.last_finished.clone(),
+            active: state
+                .active
+                .as_ref()
+                .map(|run| run.name.clone())
+                .filter(|_| !replayed),
+            last_finished: state.last_finished.clone().filter(|_| !replayed),
             start: None,
             stop: false,
         }

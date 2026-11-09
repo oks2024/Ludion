@@ -197,7 +197,8 @@ impl RunSave {
 
     /// The suspended run read at boot, or the one the last [`suspend`](RunSave::suspend) wrote.
     ///
-    /// This is disk input a replay never sees: it is `None` in every replay. Read it before
+    /// This is disk input a replay never sees: a replay, and an in-place playback, starts with
+    /// `None` whatever file is pending live. Read it before
     /// [`RunRecording::start`](crate::RunRecording::start) (on the title screen); a system that
     /// branches on it during a recorded run diverges on replay.
     pub fn pending(&self) -> Option<&SuspendInfo> {
@@ -209,10 +210,11 @@ impl RunSave {
         self.last_resume.as_ref()
     }
 
-    pub(crate) fn mirror(state: &RunSaveState) -> Self {
+    /// `replayed`: the world a replay runs in sees no disk state, as under `--replay-verify`.
+    pub(crate) fn mirror(state: &RunSaveState, replayed: bool) -> Self {
         RunSave {
-            pending: state.pending.clone(),
-            last_resume: state.last_resume.clone(),
+            pending: state.pending.clone().filter(|_| !replayed),
+            last_resume: state.last_resume.clone().filter(|_| !replayed),
             suspend: false,
             discard: false,
             resume: false,

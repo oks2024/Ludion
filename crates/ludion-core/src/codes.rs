@@ -5463,12 +5463,16 @@ A game system called `RunSave::resume()` and the engine refused the suspended ru
   - its envelope `format` is newer than this build reads;
   - the file or its snapshot is unreadable or unparsable;
   - restoring it would only work with drift (dropped or migrated components, an unknown field);
-  - there is no suspended run.
+  - there is no suspended run;
+  - a run recording is open.
 
 This is a **warning**: nothing is restored, the file is renamed to `suspend.json.bak.<hash>` (left in
 place if the rename fails), `RunSave::last_resume()` is `Refused { reason }`, and the run continues.
+The open-recording cause is the exception: the file is kept, no backup is made, and `pending()` is
+unchanged.
 
-Fix: start a new run. The backup can be inspected by hand.",
+Fix: start a new run. The backup can be inspected by hand. For an open recording, call
+`RunRecording::stop()`, then `resume()` again.",
     },
     CodeEntry {
         code: code::RUN_RECORDING_FAILED,
@@ -5534,6 +5538,11 @@ replay in progress failed. Causes:
   - a recording is running (a session or run recording wins) or a replay is already playing;
   - the `return_to` scene does not resolve or cannot be read;
   - the replay hit a driver error mid-play (the outcome is `Failed`);
+  - a command was refused while a replay plays: anything that would change the sim or the recording
+    (`sim.pause`, `sim.step`, `component.set`, …), `asset.reload`, and the unrecorded commands that would
+    write the replayed world to disk (`scene.save`, `prefab.create`, `prefab.apply`); input and reads
+    pass, and `render.size` waits for the return;
+  - the replayed sim asked to quit: the request is dropped, never shutting the host;
   - a replay file could not be deleted;
   - the `replay_playback` builder `dir` is not a relative path inside the save root (a build error).
 

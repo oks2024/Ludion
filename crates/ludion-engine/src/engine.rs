@@ -1828,6 +1828,7 @@ impl Engine {
         self.sync_audio_emitters(frame);
         self.drain_profile(frame);
         self.drain_run_save(frame);
+        self.take_host_requests();
         self.drain_residue_clear();
         self.drain_render_settings();
         self.drain_cursor_lock();
@@ -2377,13 +2378,11 @@ impl Engine {
         }
         // The recorder is still mid-batch here; `drain_run_recording` finalizes it after the tick.
         if suspended
-            && self
-                .run_recording
-                .as_ref()
-                .is_some_and(|state| state.active.is_some())
-            && let Some(recording) = self.driver.world_mut().resource_mut::<RunRecording>()
+            && let Some(state) = self.run_recording.as_mut()
+            && state.active.is_some()
         {
-            recording.stop = true;
+            state.stop = true;
+            state.suspended = true;
         }
         if let Some(state) = self.run_save.as_mut() {
             state.pending.clone_from(&pending);
@@ -2594,7 +2593,7 @@ impl Engine {
         if let Some(state) = self.run_save.as_ref() {
             self.driver
                 .world_mut()
-                .insert_resource(RunSave::mirror(state));
+                .insert_resource(RunSave::mirror(state, self.playback_name.is_some()));
         }
     }
 
@@ -2623,6 +2622,9 @@ impl Engine {
             last_finished: None,
             log: VecDeque::new(),
             error: None,
+            stop: false,
+            start: None,
+            suspended: false,
         });
         self.install_run_recording();
     }
@@ -2633,7 +2635,7 @@ impl Engine {
         if let Some(state) = self.run_recording.as_ref() {
             self.driver
                 .world_mut()
-                .insert_resource(RunRecording::mirror(state));
+                .insert_resource(RunRecording::mirror(state, self.playback_name.is_some()));
         }
     }
 
@@ -2664,19 +2666,42 @@ impl Engine {
         self.current_scene_text()
     }
 
+    /// Moves the run-recording and replay-playback requests off the world's resources into engine
+    /// state, before a scene switch rebuilds the world and wipes them (as
+    /// [`drain_run_save`](Engine::drain_run_save) runs before it for the same reason). They are
+    /// applied at the end of the tick, by [`drain_run_recording`](Engine::drain_run_recording) and
+    /// [`drain_replay_playback`](Engine::drain_replay_playback).
+    fn take_host_requests(&mut self) {
+        if let Some(state) = self.run_recording.as_mut()
+            && let Some(resource) = self.driver.world_mut().resource_mut::<RunRecording>()
+        {
+            state.stop |= std::mem::take(&mut resource.stop);
+            if let Some(name) = resource.start.take() {
+                state.start = Some(name);
+            }
+        }
+        if let Some(state) = self.replay_playback.as_mut()
+            && let Some(resource) = self.driver.world_mut().resource_mut::<ReplayPlayback>()
+        {
+            if let Some(play) = resource.play.take() {
+                state.play = Some(play);
+            }
+            state.refresh |= std::mem::take(&mut resource.refresh);
+            state.delete.append(&mut resource.delete);
+        }
+    }
+
     /// Applies the run-recording requests at the end of a free-running tick (see
     /// [`RunRecording`]): a stop publishes the file, then a start restarts the run from the scene
     /// text at frame 0 and arms the ordinary recorder. Only a persisting host resets or touches
     /// disk; elsewhere the requests are only logged. Every failure is a non-fatal `L1402`.
     fn drain_run_recording(&mut self, frame: FrameIndex) {
-        if self.run_recording.is_none() {
-            return;
-        }
-        let Some(resource) = self.driver.world_mut().resource_mut::<RunRecording>() else {
+        let Some(state) = self.run_recording.as_mut() else {
             return;
         };
-        let stop = std::mem::take(&mut resource.stop);
-        let start = resource.start.take();
+        let stop = std::mem::take(&mut state.stop);
+        let start = state.start.take();
+        state.suspended = false;
         let persisting = self.profile_persistence && !self.profile_off_disk;
         let died = self
             .run_recording
@@ -2825,6 +2850,9 @@ impl Engine {
             last_outcome: None,
             entries: Vec::new(),
             error: None,
+            play: None,
+            refresh: false,
+            delete: Vec::new(),
         });
         self.install_replay_playback();
     }
@@ -2835,7 +2863,11 @@ impl Engine {
         if let Some(state) = self.replay_playback.as_ref() {
             self.driver
                 .world_mut()
-                .insert_resource(ReplayPlayback::mirror(state, self.playback_name.as_deref()));
+                .insert_resource(ReplayPlayback::mirror(
+                    state,
+                    self.playback_name.as_deref(),
+                    self.playback_name.is_some(),
+                ));
         }
     }
 
@@ -2920,15 +2952,12 @@ impl Engine {
     /// [`ReplayPlayback`]): deletes, then a refresh, then a play. Only a persisting host touches disk
     /// or the world; elsewhere the requests are dropped.
     fn drain_replay_playback(&mut self) {
-        if self.replay_playback.is_none() {
-            return;
-        }
-        let Some(resource) = self.driver.world_mut().resource_mut::<ReplayPlayback>() else {
+        let Some(state) = self.replay_playback.as_mut() else {
             return;
         };
-        let play = resource.play.take();
-        let refresh = std::mem::take(&mut resource.refresh);
-        let deletes = std::mem::take(&mut resource.delete);
+        let play = state.play.take();
+        let refresh = std::mem::take(&mut state.refresh);
+        let deletes = std::mem::take(&mut state.delete);
         if play.is_none() && !refresh && deletes.is_empty() {
             return;
         }
@@ -4951,6 +4980,12 @@ impl Engine {
                     self.playback_refusal(command, "retry after the playback")
                 ));
             }
+            Command::SceneSave(_) | Command::PrefabCreate(_) | Command::PrefabApply(_) => {
+                return Some(Err(self.playback_refusal(
+                    command,
+                    "it would write the replayed world to disk; retry after the playback",
+                )));
+            }
             _ if crate::recording::record_kind(command).is_some() => {
                 return Some(Err(self.playback_refusal(
                     command,
@@ -6661,6 +6696,29 @@ impl Engine {
     /// Infallible: the command already ran, so a write failure cannot un-apply it. It goes through
     /// `stop_recording_on_failure` instead of the caller's answer.
     fn record(
+        &mut self,
+        applied: Option<&ludion_protocol::Command>,
+        drain_frame: FrameIndex,
+        applied_doc: Option<AppliedDocReload>,
+        panicked_at: Option<FrameIndex>,
+    ) {
+        self.write_command_record(applied, drain_frame, applied_doc, panicked_at);
+        // A suspend during a lockstep `sim.step` ends the run recording once the step that carried it
+        // is in the file; a free-running tick consumes the flag in `drain_run_recording`.
+        let held_start = self
+            .run_recording
+            .as_mut()
+            .filter(|state| state.suspended)
+            .map(|state| state.start.take());
+        if let Some(start) = held_start {
+            self.drain_run_recording(self.frame());
+            if let Some(state) = self.run_recording.as_mut() {
+                state.start = start;
+            }
+        }
+    }
+
+    fn write_command_record(
         &mut self,
         applied: Option<&ludion_protocol::Command>,
         drain_frame: FrameIndex,

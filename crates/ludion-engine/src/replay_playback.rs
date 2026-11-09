@@ -58,8 +58,9 @@ pub enum PlaybackOutcome {
         /// The replay frame it stopped at.
         frame: FrameIndex,
     },
-    /// The request was refused before anything changed: `L1405`, or `L3010` / `L1404` for a file
-    /// this build cannot replay.
+    /// The request was refused before anything changed: `L1405` (a bad name, a missing file, a
+    /// recording or playback already running, an unreadable `return_to`), or `L3010` / `L1404` for a
+    /// file this build cannot replay.
     Refused {
         /// The recording asked for.
         name: String,
@@ -82,7 +83,8 @@ pub struct ReplayEntry {
     pub name: String,
     /// The file size in bytes.
     pub bytes: u64,
-    /// Why this build cannot play it (`L3010`, `L1404`), or `None` if it can.
+    /// Why this build cannot play it, or `None` if it can: `L3010` (not readable by this engine),
+    /// `L1404` (recorded by another build of the game) or `L1405` (the file could not be read).
     pub refusal: Option<Diagnostic>,
 }
 
@@ -150,11 +152,20 @@ impl ReplayPlayback {
         &self.entries
     }
 
-    pub(crate) fn mirror(state: &ReplayPlaybackState, playing: Option<&str>) -> Self {
+    /// `replayed`: the world a replay runs in sees no listing, outcome or `playing`, as under `--replay-verify`.
+    pub(crate) fn mirror(
+        state: &ReplayPlaybackState,
+        playing: Option<&str>,
+        replayed: bool,
+    ) -> Self {
         ReplayPlayback {
-            playing: playing.map(str::to_owned),
-            last_outcome: state.last_outcome.clone(),
-            entries: state.entries.clone(),
+            playing: playing.filter(|_| !replayed).map(str::to_owned),
+            last_outcome: state.last_outcome.clone().filter(|_| !replayed),
+            entries: if replayed {
+                Vec::new()
+            } else {
+                state.entries.clone()
+            },
             play: None,
             refresh: false,
             delete: Vec::new(),
@@ -169,6 +180,11 @@ pub(crate) struct ReplayPlaybackState {
     pub(crate) last_outcome: Option<PlaybackOutcome>,
     pub(crate) entries: Vec<ReplayEntry>,
     pub(crate) error: Option<Diagnostic>,
+    /// Requests taken off the resource before a scene switch could wipe it, applied at the end of
+    /// the free-running tick.
+    pub(crate) play: Option<(String, String)>,
+    pub(crate) refresh: bool,
+    pub(crate) delete: Vec<String>,
 }
 
 /// The host state a playback replaces and the return restores.
