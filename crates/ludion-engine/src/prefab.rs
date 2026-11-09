@@ -719,17 +719,49 @@ pub fn spawn_prefab(
     } else {
         None
     };
+    let ids = spawn_expanded(
+        world,
+        &key,
+        presentation_copy.as_ref().unwrap_or(&ready.expanded),
+        placement,
+        name,
+    )?;
+    apply_bone_poses(world, &ids, &ready.poses);
+    Ok(ids)
+}
+
+/// Instantiates `expanded` (the flattened prefab `key`) into `world`, then prunes dead instance
+/// records and binds and places the new instance — the tail [`spawn_prefab`] and
+/// `switch_skin_to_ragdoll` share. Bone poses are the caller's to apply.
+pub(crate) fn spawn_expanded(
+    world: &mut World,
+    key: &str,
+    expanded: &ExpandedScene,
+    placement: Option<Transform>,
+    name: Option<&str>,
+) -> Result<Vec<EntityId>, Vec<Diagnostic>> {
+    let Some(registry) = world
+        .resource::<PrefabLibrary>()
+        .map(|library| Arc::clone(&library.registry))
+    else {
+        return Err(vec![
+            Diagnostic::new(
+                code::PREFAB_UNRESOLVED,
+                format!("cannot spawn prefab `{key}`: this world has no prefab library"),
+            )
+            .with_help("spawn prefabs from a system of an engine-built game"),
+        ]);
+    };
     let ids = ludion_scene::instantiate_expanded(
         world,
-        presentation_copy.as_ref().unwrap_or(&ready.expanded),
+        expanded,
         &registry,
         &InstantiateOptions {
             placement: placement.as_ref().map(level_trs),
             name_prefix: name,
-            hooks: &PrefabHooks { source: &key },
+            hooks: &PrefabHooks { source: key },
         },
     )?;
-    apply_bone_poses(world, &ids, &ready.poses);
     if world
         .resource::<PrefabLibrary>()
         .is_some_and(PrefabLibrary::prune_due)

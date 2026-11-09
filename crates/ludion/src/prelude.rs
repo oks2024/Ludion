@@ -131,6 +131,9 @@
 //!   `joints:` binds it to something else); the root entity survives, stripped of its drawing/physics
 //!   components. [`AssemblyData`] (+ [`load_assembly`]) is the meshed model the switch reads —
 //!   whatever a game's asset cache already holds for the entity's `assembly` path.
+//!   [`switch_skin_to_ragdoll`] does the same for a skinned mesh: it spawns a parts prefab of
+//!   `SkinBone` bodies bound to the live skin (the prefab's last part, `$skin`, stands for it) at the
+//!   rest pose, with the skin's velocity.
 //! - **Projectile patterns** — [`Volley`] is one fired volley, a closed-form bullet field on the
 //!   entity that carries it; [`PatternPlayer`] plays a `kind: pattern` document's timeline, standing
 //!   a [`Volley`] up on each entry's frame. [`play_patterns`] and [`advance_volleys`] are the
@@ -233,8 +236,9 @@ pub use ludion_engine::{
     move_character, move_character_with, nav_steer, nav_update, path_follow, path_follower_motion,
     play_patterns, play_sound, posed_joint_world, probe_character_ground, projectiles_step,
     reparent, report_diagnostic, report_full_diagnostic, resize_character, revert_prefab,
-    set_clip_speed, set_look, snap_rig, spawn_prefab, spawn_projectile, switch_to_ragdoll,
-    teleport_character, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
+    set_clip_speed, set_look, snap_rig, spawn_prefab, spawn_projectile, switch_skin_to_ragdoll,
+    switch_to_ragdoll, teleport_character, unpack_prefab, validate_pattern_docs, volley_hits,
+    world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;

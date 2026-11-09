@@ -2046,10 +2046,11 @@ pub mod code {
     /// the first time.
     pub const JOINT_BODY_MISSING: DiagnosticCode = DiagnosticCode::new("L3035");
 
-    /// `L3036` — `switch_to_ragdoll` refused to switch an entity: it is dead, has no `Transform`,
-    /// its `Mesh.shape` is not `Assembly`, its scale is not uniform, one of the assembly's part
-    /// meshes is empty, or a part's mass at that scale is zero or not finite. Raised by `ludion-engine`'s ragdoll helper; the switch mutates nothing when
-    /// this fires (all-or-nothing).
+    /// `L3036` — `switch_to_ragdoll` or `switch_skin_to_ragdoll` refused to switch an entity: it is
+    /// dead, has no `Transform`, its scale is not uniform, its `Mesh` is not an assembly (or not a
+    /// skinned mesh), one of the assembly's part meshes is empty, a part's mass at that scale is zero
+    /// or not finite, or the skin's parts prefab breaks the `$skin` rules. Raised by `ludion-engine`'s
+    /// ragdoll helpers; the switch mutates nothing when this fires (all-or-nothing).
     pub const RAGDOLL_SWITCH_INVALID: DiagnosticCode = DiagnosticCode::new("L3036");
 
     /// `L3037` — a `JointMotor` does not fit its carrier's `Joint`: the joint is `fixed`, the
@@ -10060,7 +10061,19 @@ the world is left exactly as it was. The refusal names which check failed:
     scale large enough to overflow) — a rigid body needs a strictly positive, finite mass.
 
 Fix: switch an entity that still draws the whole assembly with a uniform scale, and make sure every
-part file the assembly places has geometry.",
+part file the assembly places has geometry.
+
+`switch_skin_to_ragdoll` raises the same code when it refuses to turn a skinned mesh into its
+`SkinBone` ragdoll. Besides the dead / no-`Transform` / scale cases above, it refuses when:
+
+  - the entity's `Mesh` is not a skinned `asset` or `character` mesh (no `joints:` in its document);
+  - the parts prefab's last part is not named `$skin` (a `$skin` elsewhere gets a hint to move it last);
+  - a part's `SkinBone` binds another skin than `$skin`;
+  - any other entity reference in the parts names `$skin`;
+  - the `$skin` part's mesh document differs from the live skin's.
+
+Nothing is mutated when it fires. Fix: end the parts prefab with a `$skin` part that carries the same
+skinned `Mesh` as the entity, and bind every `SkinBone.skin` to it.",
     },
     CodeEntry {
         code: code::JOINT_MOTOR_MISMATCH,

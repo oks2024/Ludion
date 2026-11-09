@@ -106,6 +106,7 @@ mod scene_session;
 mod sculpt_mesh;
 mod shutdown;
 mod skin_bone;
+mod skin_ragdoll;
 mod snapshot;
 mod sprite_sheet;
 pub mod sweep;
@@ -255,6 +256,7 @@ pub use scene_check::{
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
 pub use shutdown::Shutdown;
 pub use skin_bone::scene_skin_bone_diagnostics;
+pub use skin_ragdoll::switch_skin_to_ragdoll;
 pub use sprite_sheet::{
     AtlasClipOutcome, AtlasClipRequest, SpriteSheetOutcome, SpriteSheetRequest, SpriteSteps,
     check_atlas_clip_flags, render_atlas_clip, render_atlas_sheet, render_sprite_sheet,

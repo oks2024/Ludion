@@ -319,7 +319,11 @@ pub fn switch_to_ragdoll(
 /// `code::RAGDOLL_SWITCH_INVALID` — a refused switch, prefixed with `named` (the offending entity,
 /// see [`entity_label`](crate::scene_physics::entity_label)) so a game switching several figures
 /// in one tick can tell which one this refers to, and carrying a one-line `help`.
-fn switch_invalid(named: &str, message: impl Into<String>, help: impl Into<String>) -> Diagnostic {
+pub(crate) fn switch_invalid(
+    named: &str,
+    message: impl Into<String>,
+    help: impl Into<String>,
+) -> Diagnostic {
     Diagnostic::new(
         code::RAGDOLL_SWITCH_INVALID,
         format!("{named}: {}", message.into()),

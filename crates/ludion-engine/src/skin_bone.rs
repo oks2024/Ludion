@@ -89,7 +89,7 @@ pub(crate) struct BonePose {
     /// [`crate::engine::instantiate_named_world`]'s `Name` loop uses).
     index: usize,
     /// The skin's document position.
-    skin_index: usize,
+    pub(crate) skin_index: usize,
     /// The bone's rest model transform, column-major.
     bone_model: [f64; 16],
 }
@@ -283,11 +283,21 @@ pub(crate) fn skinned_mesh_path(
 ) -> Option<Result<String, (String, Vec<Diagnostic>)>> {
     let (_, value) = entity.components.iter().find(|(name, _)| name == "Mesh")?;
     let mesh: Mesh = serde_json::from_value(value.clone()).ok()?;
-    match mesh.shape {
-        MeshSource::Asset(path) => Some(Ok(path)),
-        MeshSource::Character(path) => {
-            Some(crate::character::mesh_path(project_root, &path).map_err(|errors| (path, errors)))
-        }
+    mesh_document_path(project_root, &mesh)
+}
+
+/// `mesh`'s `shape: asset` path, or the document a `shape: character` resolves to; `None` for any
+/// other shape.
+pub(crate) fn mesh_document_path(
+    project_root: AssetRoot<'_>,
+    mesh: &Mesh,
+) -> Option<Result<String, (String, Vec<Diagnostic>)>> {
+    match &mesh.shape {
+        MeshSource::Asset(path) => Some(Ok(path.clone())),
+        MeshSource::Character(path) => Some(
+            crate::character::mesh_path(project_root, path)
+                .map_err(|errors| (path.clone(), errors)),
+        ),
         _ => None,
     }
 }
