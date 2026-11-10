@@ -22,6 +22,8 @@ wire = ["dep:ludion-server", "dep:clap", "dep:ludion-assets"]
 # binds (`L0018`). Independent of `wire`: with both, the window hosts the listener alongside itself;
 # `window` alone is the desktop player shape, where `launch` opens the window with no listener.
 window = ["dep:ludion-window", "dep:winit"]
+# Measurement only: forwards `ludion-engine`'s `physics-profiler`, enabling `PhysicsWorld::step_breakdown`'s rapier stage timers. Never feeds the sim.
+physics-profiler = ["ludion-engine/physics-profiler"]
 
 [dependencies]
 # The command core: `Engine`, `EngineBuilder`, the built-in components, and the recording/replay

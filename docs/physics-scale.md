@@ -24,7 +24,7 @@ Unpinned M5, 2026-11-09, medians of three runs — **indicative, not authoritati
 - The same 500 moves through `move_characters`: 3.72 ms at 1 thread, 1.22 ms at 8.
 - `projectiles_step` for 5,000 shots: 0.68 ms at 1 thread, 0.26 ms at 8.
 
-Reproduce: `cargo test -p ludion-engine --release --features physics-profiler --test it -- horde_bench --ignored --nocapture`. It checks `budgets/pinned-<box>-physics-horde.toml` when one exists for the platform. Its table (d) compares the dispersed walk with a converged arm, where every motor walks to one point and the crowd piles up.
+Reproduce: a game enables the timers with the `ludion` crate's `physics-profiler` feature. `cargo test -p ludion-engine --release --features physics-profiler --test it -- horde_bench --ignored --nocapture`. It checks `budgets/pinned-<box>-physics-horde.toml` when one exists for the platform. Its table (d) compares the dispersed walk with a converged arm, where every motor walks to one point and the crowd piles up.
 
 ## Crowds of motors
 
