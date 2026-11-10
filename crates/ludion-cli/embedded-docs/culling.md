@@ -33,9 +33,9 @@ A mesh asset with a `lods:` chain draws the coarser level its screen size select
   from the drawn camera's eye, against each `screen_size`, so turning never changes a level. Shadow views take the
   camera's eye, never their own frustum, so a shadow is never finer than its mesh.
   The sphere's radius is the half-diagonal of the instance's world box; for a skinned instance that is the posed-joint
-  cull box, typically 2× the mesh or more, so its levels switch that much farther than the mesh's own size suggests.
+  cull box, about 1.7–2.3× the mesh, so its levels switch that much farther than the mesh's own size suggests.
   Author a threshold as `screen_size = r·k/d` for the wanted switch distance `d` (`k` is the projection's `[1][1]`
-  scale), reading `r` from `culling.lod_radii` `radius_median` in `ludion profile`. A tighter skinned radius is Proposed
+  scale times `2^-lod_bias`, so a nonzero `Camera.lod_bias` or quality `lod_bias` scales it), reading `r` from `culling.lod_radii` `radius_median` in `ludion profile`. A tighter skinned radius is Proposed
   in `Plan/gpu-driven-culling.md` (0034).
 - `Camera.lod_bias` (`-4..=4`, absent is `0`) adds octaves to the pick: each unit halves every switch distance, so `+1`
   goes coarser sooner. `Camera.shadow_bias_levels` (`0..=3`) makes shadow views draw that many levels coarser.

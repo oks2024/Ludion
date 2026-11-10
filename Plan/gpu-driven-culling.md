@@ -730,11 +730,13 @@ G11 stay open with their recommendations as defaults.
 - (ii) **Centre.** The centre of the posed world box (decision 13), so a figure whose palette carries it away from its `Transform` (a ragdoll) is sized from where it is drawn.
 - (iii) **Culling unchanged.** Visibility keeps the conservative posed box; only the level selection reads the new radius.
 - (iv) **GPU.** `CullItem.pad0` becomes `lod_radius: f32` (struct size unchanged; 0 means the box half-diagonal), filled for `SLOT_OVERRIDE` skinned items; `cull.wgsl` `select_level` and the CPU oracle (`cull::instance_level`, `cull_marks`) take it. No new binding.
-- (v) **Observing.** `CullingProfile` gains `lod_radii`: per chained mesh asset drawn in the profiled frames, its path, whether it is skinned, and the median LOD radius over its instances. It moves the wire schema hash once. `docs culling` "Mesh LOD" states the rule for both kinds.
+- (v) **Observing.** The shipped `culling.lod_radii` (per chained mesh asset: path, skinned, min/median/max radius) reports the new radius for skinned assets once adopted; no schema move. `docs culling` "Mesh LOD" states the rule for both kinds.
 - (vi) **Determinism.** Render-only: `WorldHash`, replay content hashes and `.lrp` records do not move. Goldens: `lod-hall` (500 skinned chained mannequins) moves, Windows re-blessed on the pinned 3090, macOS twin owed to the M4; every unchained or unskinned golden (`voxel-horde` included) stays byte-identical, and culling on/off stays byte-identical.
-- (vii) **Acceptance.** A renderer test: a skinned chained asset with a known rest half-diagonal at known distances and scales selects `lod_level(r·k/d)` with `r` from (i), on the CPU oracle and the GPU cull, under a posed palette that inflates the cull box (so the box provably no longer sizes it). The shmup then re-scales its thresholds by about 0.62/1.4 ≈ 0.44, or keeps 0.25/0.1 and draws coarser sooner: at its camera, level 1 from about 3.7 m and level 2 from about 9 m, so horde-500's 4–8 m band moves from level 0 to level 1.
+- (vii) **Acceptance.** A renderer test: a skinned chained asset with a known rest half-diagonal at known distances and scales selects `lod_level(r·k/d)` with `r` from (i), on the CPU oracle and the GPU cull, under a posed palette that inflates the cull box (so the box provably no longer sizes it), plus a scaled skinned instance on both paths (guards a path that bakes scale into the bone palette rather than the model). The shmup then re-scales its thresholds by about 0.62/1.4 ≈ 0.44, or keeps 0.25/0.1 and draws coarser sooner: at its camera, level 1 from about 3.7 m and level 2 from about 9 m, so horde-500's 4–8 m band moves from level 0 to level 1.
 
 ## Status
+
+Serious Isaac 0034 shipped (r2294): `culling.lod_radii` and `docs culling` "Mesh LOD"; the tighter skinned radius is Proposed above.
 
 Design written 2026-09-30. Rung 0 shipped (Clockout 0030; `Visibility`, `examples/gallery/visibility.yaml`). Rung 2a shipped for request 0008 (decisions 7–20; the W2 wave set above); the bench figures are below.
 
