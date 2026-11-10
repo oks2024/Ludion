@@ -203,6 +203,27 @@ pub struct CullingProfile {
     pub over_cap_views: u64,
     /// One entry per cull view, in cull order.
     pub views: Vec<CullViewProfile>,
+    /// Per chained mesh asset: the radius its LOD selection sizes instances from.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lod_radii: Vec<LodRadiusProfile>,
+}
+
+/// The LOD radius one chained mesh asset's instances size from, in metres, world space.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LodRadiusProfile {
+    /// The asset's path (`meshes/lod/skin-mannequin.mesh.yaml`), or `mesh_assets[N]` when unnamed.
+    pub mesh: String,
+    /// Whether the asset is skinned: its radius is the posed-joint box's half-diagonal, about 2× the
+    /// mesh or more (`ludion docs culling`).
+    pub skinned: bool,
+    /// Instances of the asset with known bounds.
+    pub instances: u64,
+    /// Smallest radius over those instances.
+    pub radius_min: f64,
+    /// Median radius over those instances.
+    pub radius_median: f64,
+    /// Largest radius over those instances.
+    pub radius_max: f64,
 }
 
 /// One cull view's counts.
@@ -798,6 +819,7 @@ mod tests {
                 drawn_median: 4.0,
                 levels_drawn_median: vec![3.0, 1.0],
             }],
+            lod_radii: Vec::new(),
         });
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["culling"]["views"][0]["drawn_median"], 4.0);

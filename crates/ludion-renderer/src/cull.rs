@@ -163,9 +163,66 @@ pub(crate) fn instance_level(bound: Option<Aabb>, thresholds: &[f32], view: &Lod
         return 0;
     };
     let center = (b.min + b.max) * 0.5;
-    let radius = ((b.max - b.min) * 0.5).length();
-    let size = lod_size(radius, (center - view.eye).length(), view.k, view.ortho);
+    let size = lod_size(
+        lod_radius(&b),
+        (center - view.eye).length(),
+        view.k,
+        view.ortho,
+    );
     lod_level(size, thresholds, view.offset)
+}
+
+/// The LOD sphere's radius (decision 22): the world box's half-diagonal; for a skinned instance the
+/// posed-joint box. `cull.wgsl`'s `select_level` mirrors it.
+pub(crate) fn lod_radius(bound: &Aabb) -> f32 {
+    ((bound.max - bound.min) * 0.5).length()
+}
+
+/// The LOD radii one chained mesh asset's instances size from.
+#[derive(Clone, PartialEq, Debug)]
+pub struct LodRadii {
+    /// Index into `RenderScene::mesh_assets`.
+    pub asset: usize,
+    /// Whether the asset is skinned (its radius is the posed-joint box's).
+    pub skinned: bool,
+    /// One radius per instance with known bounds, in instance order (metres, world space).
+    pub radii: Vec<f32>,
+}
+
+/// Per chained mesh asset, the LOD radii of its non-viewmodel instances, ascending by asset; assets
+/// with no instance of known bounds are omitted. Independent of the camera.
+pub fn lod_radii(scene: &RenderScene) -> Vec<LodRadii> {
+    let assets: Vec<AssetBounds> = scene
+        .mesh_assets
+        .iter()
+        .map(|mesh| AssetBounds::of_mesh(mesh))
+        .collect();
+    let bounds = instance_bounds(&scene.meshes, &assets, &scene.bone_palette);
+    let mut out: Vec<LodRadii> = Vec::new();
+    for (mesh, bound) in scene.meshes.iter().zip(&bounds) {
+        let (MeshShape::Asset(i), Some(b), false) = (mesh.shape, bound, mesh.viewmodel) else {
+            continue;
+        };
+        let Some(asset) = scene.mesh_assets.get(i).filter(|m| !m.lods.is_empty()) else {
+            continue;
+        };
+        let at = match out.binary_search_by_key(&i, |r| r.asset) {
+            Ok(at) => at,
+            Err(at) => {
+                out.insert(
+                    at,
+                    LodRadii {
+                        asset: i,
+                        skinned: !asset.skin_joints.is_empty(),
+                        radii: Vec::new(),
+                    },
+                );
+                at
+            }
+        };
+        out[at].radii.push(lod_radius(b));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1072,6 +1129,72 @@ mod tests {
         let proj = Mat4::perspective_rh(90.0_f32.to_radians(), 1.0, 1.0, 20.0);
         let away = CullVolume::Frustum(Frustum::from_view_proj(proj * view));
         assert!(cull(&bounds, &away).is_empty());
+    }
+
+    /// A skinned chained asset sizes its LOD from the posed-joint box, not the mesh: the report
+    /// carries that radius and selection follows it; an unskinned chain reports its transformed box.
+    #[test]
+    fn lod_radii_report_the_radius_selection_sizes_from() {
+        use crate::scene::MeshLod;
+        let corners = vec![-0.5, -0.5, -0.5, 0.5, 0.5, 0.5];
+        let chain = |mut mesh: MeshData| {
+            mesh.lods = [0.2, 0.1]
+                .iter()
+                .map(|&screen_size| MeshLod {
+                    mesh: Arc::new(plain_mesh(vec![0.0; 3])),
+                    screen_size,
+                })
+                .collect();
+            Arc::new(mesh)
+        };
+        let skinned = chain(skin_mesh(
+            corners.clone(),
+            [1.0, 0.0, 0.0, 0.0].repeat(2),
+            vec![0; 8],
+            &[Vec3::ZERO],
+        ));
+        let rest_radius = Vec3::splat(0.5).length();
+        let (d, k) = (10.0, 1.0);
+        let at = Mat4::from_translation(Vec3::new(0.0, 0.0, -d));
+        let mut scene = marks_scene(vec![
+            skinned_instance(at, 1),
+            instance(MeshShape::Asset(1), at),
+        ]);
+        scene.mesh_assets = vec![skinned, chain(plain_mesh(corners))];
+        scene.bone_palette = vec![Mat4::IDENTITY];
+
+        let radii = lod_radii(&scene);
+        assert_eq!(radii.len(), 2);
+        let (posed, plain) = (&radii[0], &radii[1]);
+        assert!(posed.skinned && !plain.skinned);
+        assert_eq!((posed.asset, plain.asset), (0, 1));
+        // The posed box is each vertex's reach (the mesh's half-diagonal) on every axis, plus a pad.
+        let posed_radius = posed.radii[0];
+        assert!(
+            (posed_radius - rest_radius * 3.0_f32.sqrt()).abs() < 0.01,
+            "{posed_radius}"
+        );
+        assert!(posed_radius > rest_radius);
+        assert!((plain.radii[0] - rest_radius).abs() < 1e-5);
+
+        let view = LodView {
+            eye: Vec3::ZERO,
+            k,
+            ortho: false,
+            offset: 0,
+        };
+        let thresholds = [0.2, 0.1];
+        let assets = [AssetBounds::of_mesh(&scene.mesh_assets[0])];
+        let bound = instance_bounds(&scene.meshes[..1], &assets, &scene.bone_palette)[0];
+        let level = instance_level(bound, &thresholds, &view);
+        let by_radius = |r: f32| lod_level(lod_size(r, d, k, false), &thresholds, 0);
+        assert_eq!(level, by_radius(posed_radius));
+        assert_ne!(level, 0);
+        assert_ne!(
+            level,
+            by_radius(rest_radius),
+            "the rest radius would pick another level"
+        );
     }
 
     #[test]

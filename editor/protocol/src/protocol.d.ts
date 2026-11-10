@@ -3093,6 +3093,10 @@ export interface ClusterProfile {
  */
 export interface CullingProfile {
   /**
+   * Per chained mesh asset: the radius its LOD selection sizes instances from.
+   */
+  lod_radii?: LodRadiusProfile[];
+  /**
    * Views past the 128 MiB cull-output cap: they draw every caster and are not in `views`.
    */
   over_cap_views: number;
@@ -3104,6 +3108,37 @@ export interface CullingProfile {
    * One entry per cull view, in cull order.
    */
   views: CullViewProfile[];
+  [k: string]: unknown;
+}
+/**
+ * The LOD radius one chained mesh asset's instances size from, in metres, world space.
+ */
+export interface LodRadiusProfile {
+  /**
+   * Instances of the asset with known bounds.
+   */
+  instances: number;
+  /**
+   * The asset's path (`meshes/lod/skin-mannequin.mesh.yaml`), or `mesh_assets[N]` when unnamed.
+   */
+  mesh: string;
+  /**
+   * Largest radius over those instances.
+   */
+  radius_max: number;
+  /**
+   * Median radius over those instances.
+   */
+  radius_median: number;
+  /**
+   * Smallest radius over those instances.
+   */
+  radius_min: number;
+  /**
+   * Whether the asset is skinned: its radius is the posed-joint box's half-diagonal, about 2× the
+   * mesh or more (`ludion docs culling`).
+   */
+  skinned: boolean;
   [k: string]: unknown;
 }
 /**

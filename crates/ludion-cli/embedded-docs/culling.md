@@ -32,6 +32,11 @@ A mesh asset with a `lods:` chain draws the coarser level its screen size select
 - **Selection** is stateless and rotation-invariant: the fraction of viewport height the bounding sphere covers
   from the drawn camera's eye, against each `screen_size`, so turning never changes a level. Shadow views take the
   camera's eye, never their own frustum, so a shadow is never finer than its mesh.
+  The sphere's radius is the half-diagonal of the instance's world box; for a skinned instance that is the posed-joint
+  cull box, typically 2× the mesh or more, so its levels switch that much farther than the mesh's own size suggests.
+  Author a threshold as `screen_size = r·k/d` for the wanted switch distance `d` (`k` is the projection's `[1][1]`
+  scale), reading `r` from `culling.lod_radii` `radius_median` in `ludion profile`. A tighter skinned radius is Proposed
+  in `Plan/gpu-driven-culling.md` (0034).
 - `Camera.lod_bias` (`-4..=4`, absent is `0`) adds octaves to the pick: each unit halves every switch distance, so `+1`
   goes coarser sooner. `Camera.shadow_bias_levels` (`0..=3`) makes shadow views draw that many levels coarser.
   Out of range is `L1397`. A free `render.view` camera takes the game camera's values.
@@ -62,6 +67,7 @@ and the image are unchanged.
 - `ludion profile` JSON `culling`: per view (`camera`, `sun`, `cascade_N`, `local_N`) the median instances
   tested and drawn (`levels_drawn_median`: the drawn count per LOD level when the frame drew a chain), read back through a non-blocking ring that skips a frame rather than stall. Offline
   profiles only; absent with culling off, a live capture or a scene with no world mesh.
+  `lod_radii`: per chained mesh asset the radius its instances size from (`radius_min`/`radius_median`/`radius_max`, metres, with `skinned`).
 - `[passes] cull` in `--dump-timings` and the profile pass list.
 - `--debug-draw cull`: each mesh's box in the rendered camera view, green kept, red culled (the CPU oracle); a kept mesh with a `lods:` chain is tinted by its level: green 0,
   yellow 1, orange 2, magenta 3.

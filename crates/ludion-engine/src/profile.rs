@@ -34,9 +34,10 @@ use ludion_ecs::ScheduleObserver;
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
 use ludion_protocol::perf::{
-    AssetLoadCounters, CullViewProfile, CullingProfile, LoadProfile, ProfileSamples, SkinProfile,
+    AssetLoadCounters, CullViewProfile, CullingProfile, LoadProfile, LodRadiusProfile,
+    ProfileSamples, SkinProfile,
 };
-use ludion_renderer::CullViewCount;
+use ludion_renderer::{CullViewCount, LodRadii};
 use ludion_sim::RunState;
 use serde::Deserialize;
 
@@ -1100,6 +1101,13 @@ fn profile_gpu(
     let scene = engine
         .extract_render_scene(width, height)
         .map_err(collapse)?;
+    let lod_radii = lod_radius_profiles(&ludion_renderer::lod_radii(&scene), |asset| {
+        scene
+            .mesh_assets
+            .get(asset)
+            .and_then(|mesh| engine.asset_cache().mesh_path(mesh))
+            .map(str::to_string)
+    });
 
     let renderer = match engine.renderer() {
         Ok(renderer) => renderer,
@@ -1164,7 +1172,10 @@ fn profile_gpu(
 
     cull_samples.extend(renderer.collect_cull_stats(true));
     renderer.set_cull_stats(false);
-    let culling = reduce_culling(&cull_samples, u64::from(renderer.cull_over_cap_views()));
+    let mut culling = reduce_culling(&cull_samples, u64::from(renderer.cull_over_cap_views()));
+    if let Some(culling) = &mut culling {
+        culling.lod_radii = lod_radii;
+    }
 
     let passes = names
         .into_iter()
@@ -1189,6 +1200,29 @@ fn profile_gpu(
         frame_tail,
     };
     Ok((gpu, culling))
+}
+
+/// One report entry per chained asset; `path` names an asset by its index, `mesh_assets[N]` when it
+/// has no path.
+fn lod_radius_profiles(
+    radii: &[LodRadii],
+    path: impl Fn(usize) -> Option<String>,
+) -> Vec<LodRadiusProfile> {
+    radii
+        .iter()
+        .map(|entry| {
+            let mut sorted: Vec<f64> = entry.radii.iter().map(|&r| f64::from(r)).collect();
+            let median = median_f64(&mut sorted);
+            LodRadiusProfile {
+                mesh: path(entry.asset).unwrap_or_else(|| format!("mesh_assets[{}]", entry.asset)),
+                skinned: entry.skinned,
+                instances: sorted.len() as u64,
+                radius_min: sorted.first().copied().unwrap_or(0.0),
+                radius_median: median,
+                radius_max: sorted.last().copied().unwrap_or(0.0),
+            }
+        })
+        .collect()
 }
 
 /// The per-view median of the sampled frames' cull counts, views in first-seen order; `None` when no
@@ -1221,6 +1255,7 @@ fn reduce_culling(samples: &[Vec<CullViewCount>], over_cap_views: u64) -> Option
     Some(CullingProfile {
         sampled_frames: samples.len() as u64,
         over_cap_views,
+        lod_radii: Vec::new(),
         views: columns
             .into_iter()
             .map(
@@ -3052,6 +3087,61 @@ entities:
         assert_eq!(culling.views[0].levels_drawn_median, vec![5.0, 3.0, 1.0]);
         assert_eq!(culling.views[0].drawn_median, 9.0);
         assert!(culling.views[1].levels_drawn_median.is_empty());
+    }
+
+    #[test]
+    fn lod_radius_profiles_reduce_radii_and_fall_back_to_the_asset_index() {
+        let radii = [
+            LodRadii {
+                asset: 0,
+                skinned: true,
+                radii: vec![3.0, 1.0, 2.0],
+            },
+            LodRadii {
+                asset: 4,
+                skinned: false,
+                radii: vec![0.5],
+            },
+        ];
+        let named = lod_radius_profiles(&radii, |i| (i == 0).then(|| "meshes/a.mesh.yaml".into()));
+        assert_eq!(named[0].mesh, "meshes/a.mesh.yaml");
+        assert!(named[0].skinned);
+        assert_eq!(
+            (
+                named[0].instances,
+                named[0].radius_min,
+                named[0].radius_median
+            ),
+            (3, 1.0, 2.0)
+        );
+        assert_eq!(named[0].radius_max, 3.0);
+        assert_eq!(named[1].mesh, "mesh_assets[4]");
+        assert_eq!((named[1].radius_min, named[1].radius_max), (0.5, 0.5));
+    }
+
+    /// The offline driver reports the LOD radius of a skinned chained scene's asset.
+    #[test]
+    fn needs_gpu_profile_engine_reports_lod_radii_for_a_skinned_chain() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/lod-hall.yaml");
+        let mut engine = Engine::with_project_root(path.parent().unwrap());
+        engine.observe_load();
+        engine
+            .load_inline_scene(&std::fs::read_to_string(&path).unwrap())
+            .unwrap();
+        let report = profile_engine(&mut engine, "lod-hall".to_string(), 2, 0).unwrap();
+        if !report.gpu.available {
+            return;
+        }
+        let culling = report.culling.expect("a mesh scene with culling on");
+        assert_eq!(culling.lod_radii.len(), 1, "{:?}", culling.lod_radii);
+        let entry = &culling.lod_radii[0];
+        assert_eq!(entry.mesh, "meshes/lod/skin-mannequin.mesh.yaml");
+        assert!(entry.skinned);
+        assert_eq!(entry.instances, 500);
+        assert!(0.0 < entry.radius_min);
+        assert!(entry.radius_min <= entry.radius_median);
+        assert!(entry.radius_median <= entry.radius_max);
     }
 
     /// The offline driver fills `culling` for a mesh scene — the camera tests no more than it draws

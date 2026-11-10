@@ -4068,6 +4068,13 @@
       "CullingProfile": {
         "description": "What the GPU frustum cull kept, per view, read back from its indirect args.",
         "properties": {
+          "lod_radii": {
+            "description": "Per chained mesh asset: the radius its LOD selection sizes instances from.",
+            "items": {
+              "$ref": "#/$defs/LodRadiusProfile"
+            },
+            "type": "array"
+          },
           "over_cap_views": {
             "description": "Views past the 128 MiB cull-output cap: they draw every caster and are not in `views`.",
             "format": "uint64",
@@ -4451,6 +4458,49 @@
           "skipped",
           "views",
           "atlas_edge"
+        ],
+        "type": "object"
+      },
+      "LodRadiusProfile": {
+        "description": "The LOD radius one chained mesh asset's instances size from, in metres, world space.",
+        "properties": {
+          "instances": {
+            "description": "Instances of the asset with known bounds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mesh": {
+            "description": "The asset's path (`meshes/lod/skin-mannequin.mesh.yaml`), or `mesh_assets[N]` when unnamed.",
+            "type": "string"
+          },
+          "radius_max": {
+            "description": "Largest radius over those instances.",
+            "format": "double",
+            "type": "number"
+          },
+          "radius_median": {
+            "description": "Median radius over those instances.",
+            "format": "double",
+            "type": "number"
+          },
+          "radius_min": {
+            "description": "Smallest radius over those instances.",
+            "format": "double",
+            "type": "number"
+          },
+          "skinned": {
+            "description": "Whether the asset is skinned: its radius is the posed-joint box's half-diagonal, about 2× the\nmesh or more (`ludion docs culling`).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mesh",
+          "skinned",
+          "instances",
+          "radius_min",
+          "radius_median",
+          "radius_max"
         ],
         "type": "object"
       },
@@ -6594,6 +6644,13 @@
       "CullingProfile": {
         "description": "What the GPU frustum cull kept, per view, read back from its indirect args.",
         "properties": {
+          "lod_radii": {
+            "description": "Per chained mesh asset: the radius its LOD selection sizes instances from.",
+            "items": {
+              "$ref": "#/$defs/LodRadiusProfile"
+            },
+            "type": "array"
+          },
           "over_cap_views": {
             "description": "Views past the 128 MiB cull-output cap: they draw every caster and are not in `views`.",
             "format": "uint64",
@@ -6977,6 +7034,49 @@
           "skipped",
           "views",
           "atlas_edge"
+        ],
+        "type": "object"
+      },
+      "LodRadiusProfile": {
+        "description": "The LOD radius one chained mesh asset's instances size from, in metres, world space.",
+        "properties": {
+          "instances": {
+            "description": "Instances of the asset with known bounds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mesh": {
+            "description": "The asset's path (`meshes/lod/skin-mannequin.mesh.yaml`), or `mesh_assets[N]` when unnamed.",
+            "type": "string"
+          },
+          "radius_max": {
+            "description": "Largest radius over those instances.",
+            "format": "double",
+            "type": "number"
+          },
+          "radius_median": {
+            "description": "Median radius over those instances.",
+            "format": "double",
+            "type": "number"
+          },
+          "radius_min": {
+            "description": "Smallest radius over those instances.",
+            "format": "double",
+            "type": "number"
+          },
+          "skinned": {
+            "description": "Whether the asset is skinned: its radius is the posed-joint box's half-diagonal, about 2× the\nmesh or more (`ludion docs culling`).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mesh",
+          "skinned",
+          "instances",
+          "radius_min",
+          "radius_median",
+          "radius_max"
         ],
         "type": "object"
       },

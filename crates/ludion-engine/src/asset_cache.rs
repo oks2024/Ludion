@@ -334,6 +334,16 @@ pub(crate) struct AssetCache {
 }
 
 impl AssetCache {
+    /// The normalized path a cached mesh or voxel model was loaded from, by identity of its `Arc`.
+    /// Linear: for the profile report only.
+    pub(crate) fn mesh_path(&self, mesh: &Arc<MeshData>) -> Option<&str> {
+        self.meshes
+            .iter()
+            .chain(&self.voxels)
+            .find(|(_, cached)| Arc::ptr_eq(cached, mesh))
+            .map(|(path, _)| path.as_str())
+    }
+
     /// An empty cache.
     pub(crate) fn new() -> Self {
         AssetCache {
