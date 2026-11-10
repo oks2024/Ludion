@@ -1,0 +1,21 @@
+format: 1
+kind: map
+name: door-mirror
+kit: door-collider.kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+rows:
+  - "......"
+  - "......"
+  - "..#..."
+  - "......"
+markers:
+  - name: start
+    x: 1.0
+    z: 1.0
+  - name: door-exit
+    kind: door
+    x: 7.0
+    z: 5.0

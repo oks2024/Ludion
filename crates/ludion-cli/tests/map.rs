@@ -1571,3 +1571,27 @@ fn map_check_door_on_foreign_box_collider_is_still_l1029() {
         "{stderr}"
     );
 }
+
+/// Under `--mirror x` the door lands at x=5 beside its own collider, and the wall tile at x=5 moves to
+/// x=7 — the unmirrored spawn point sits on that wall. The marker is judged where it lands: no `L1029`.
+#[test]
+fn map_check_mirrored_kit_collider_sibling_is_not_foreign() {
+    let map = fixtures().join("door-mirror.map.yaml");
+    let output = run_ludion(&["map-check", map.to_str().unwrap(), "--mirror", "x"]);
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("L1029"), "{stderr}");
+}
+
+/// A *foreign* collider at the mirrored marker still raises `L1029`.
+#[test]
+fn map_check_mirrored_door_on_foreign_box_collider_is_still_l1029() {
+    let map = fixtures().join("door-foreign.map.yaml");
+    let output = run_ludion(&["map-check", map.to_str().unwrap(), "--mirror", "x"]);
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning[L1029]") && stderr.contains("door-exit"),
+        "{stderr}"
+    );
+}

@@ -279,6 +279,31 @@ impl MapGrid {
         }
     }
 
+    /// A world XZ point as `generate` places it under `mirror` (unchanged for [`Mirror::None`]).
+    pub fn mirror_point(&self, mirror: Mirror, point: [f64; 2]) -> [f64; 2] {
+        let mut out = point;
+        match mirror {
+            Mirror::None => {}
+            Mirror::X => {
+                out[0] = mirror_line_sum(
+                    mirror,
+                    self.origin,
+                    [self.width, self.height],
+                    self.cell_size,
+                ) - point[0]
+            }
+            Mirror::Z => {
+                out[1] = mirror_line_sum(
+                    mirror,
+                    self.origin,
+                    [self.width, self.height],
+                    self.cell_size,
+                ) - point[1]
+            }
+        }
+        out
+    }
+
     /// World XZ of the grid's `(col 0, row 0)` corner.
     pub fn origin(&self) -> [f64; 2] {
         self.origin
@@ -1429,11 +1454,7 @@ pub fn generate_traced(
         }
 
         if map.mirror != Mirror::None {
-            let (origin, count) = match map.mirror {
-                Mirror::X => (map.origin[0], width),
-                _ => (map.origin[1], height),
-            };
-            let line_sum = 2.0 * origin + count as f64 * map.cell_size;
+            let line_sum = mirror_line_sum(map.mirror, map.origin, [width, height], map.cell_size);
             for entity in &mut entities[fragment_count..] {
                 mirror_entity(entity, map.mirror, line_sum);
             }
@@ -2061,6 +2082,13 @@ const MIRRORED_FIELDS: &[(&str, &str, MirrorKind)] = &[
 /// Negates `v`, keeping zero as `+0.0`.
 fn negated(v: f64) -> f64 {
     if v == 0.0 { 0.0 } else { -v }
+}
+
+/// The coordinate sum of the mirror plane's two reflected values (`reflected = line_sum - v`) on the
+/// mirrored axis: `2 * origin + extent * cell_size`. The one rule `generate` and `map-check` share.
+fn mirror_line_sum(mirror: Mirror, origin: [f64; 2], size: [usize; 2], cell_size: f64) -> f64 {
+    let axis = usize::from(mirror != Mirror::X);
+    2.0 * origin[axis] + size[axis] as f64 * cell_size
 }
 
 /// Reflects an entity across the grid line whose coordinate sum is `line_sum`. Translation is

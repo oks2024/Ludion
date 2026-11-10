@@ -1522,7 +1522,10 @@ fn placement_lints(
 ) -> Vec<Diagnostic> {
     let mut warnings = Vec::new();
     for (index, marker) in doc.markers.iter().enumerate() {
-        let Some((row, col)) = grid.cell_of(marker.x, marker.z) else {
+        // Under `--mirror` the generated entities (colliders included) are reflected, so the marker's
+        // spawn point is judged where it lands, not where the unmirrored file puts it.
+        let [x, z] = grid.mirror_point(doc.mirror, [marker.x, marker.z]);
+        let Some((row, col)) = grid.cell_of(x, z) else {
             continue; // an out-of-bounds marker already failed `generate` as L1023.
         };
         let name = marker.derived_name(index);
@@ -1553,18 +1556,18 @@ fn placement_lints(
         }
 
         // L1029a — a *foreign* collider lies within the probe radius of the marker's spawn point. Probed at
-        // `(marker.x, marker.z)`, not the cell centre: a marker parked at a cell corner (a torch by
+        // `(x, z)`, not the cell centre: a marker parked at a cell corner (a torch by
         // a fountous prop) is clear even when its cell centre clips the prop, and only the real spawn
         // point is the real bug. The marker's own collider is excluded (a passthrough footprint).
-        if blocked_by_other(probe, [marker.x, marker.z], &name) {
+        if blocked_by_other(probe, [x, z], &name) {
             warnings.push(
                 Diagnostic::new(
                     code::MAP_MARKER_BLOCKED,
                     format!(
                         "marker `{name}` at ({}, {}) / cell (c{col},r{row}) has another prop's \
                          collider within the {} probe radius of its point — it would spawn blocked",
-                        fmt_num(marker.x),
-                        fmt_num(marker.z),
+                        fmt_num(x),
+                        fmt_num(z),
                         probe.radius,
                     ),
                 )
@@ -1580,10 +1583,10 @@ fn placement_lints(
         // not the cell: a thin wall can seal one half of a cell the anchor reaches the other half of.
         // A marker standing inside its own collider is a footprint, not a spawn, and is skipped.
         else if !probe.blocked[cell]
-            && !probe.overlaps_any([marker.x as f32, marker.z as f32], probe.radius)
+            && !probe.overlaps_any([x as f32, z as f32], probe.radius)
             && probe
                 .lattice
-                .nearest_free(&[(row, col)], [marker.x, marker.z], |_| true)
+                .nearest_free(&[(row, col)], [x, z], |_| true)
                 .is_some_and(|sample| !sample_reach[sample])
         {
             warnings.push(
