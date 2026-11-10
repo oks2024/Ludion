@@ -1141,6 +1141,9 @@ fn extract_inner(
     let mut skin_joints = 0usize;
     let mut last_fade = None;
     let mut last_rim = None;
+    let mut fade_memo = crate::hierarchy::InheritMemo::<Option<crate::components::Fade>>::new();
+    let mut rim_memo = crate::hierarchy::InheritMemo::<Option<Rim>>::new();
+    let mut medium_memo = crate::hierarchy::InheritMemo::<Option<f32>>::new();
     for mesh in &placed.meshes {
         // Hidden meshes stay in `placed` for the voxelizer (the static GI bake ignores `Visibility`)
         // but are never resolved, skinned or drawn.
@@ -1155,7 +1158,21 @@ fn extract_inner(
         let fade = match last_fade {
             Some((id, fade)) if id == mesh.id => fade,
             _ => {
-                let fade = crate::hierarchy::inherited_fade(world, mesh.id);
+                let fade = fade_memo
+                    .resolve(
+                        world,
+                        mesh.id,
+                        |id| {
+                            world
+                                .get::<crate::components::Fade>(id)
+                                .ok()
+                                .flatten()
+                                .copied()
+                        },
+                        |parent, own| own.or(parent),
+                        None,
+                    )
+                    .unwrap_or_default();
                 last_fade = Some((mesh.id, fade));
                 fade
             }
@@ -1166,15 +1183,23 @@ fn extract_inner(
         let (rim, medium) = match last_rim {
             Some((id, rim, medium)) if id == mesh.id => (rim, medium),
             _ => {
-                let rim = rim_lane(crate::hierarchy::inherited_mesh_field(
-                    world,
-                    mesh.id,
-                    mesh.rim,
-                    |m| m.rim,
-                ));
-                let medium =
-                    crate::hierarchy::inherited_mesh_field(world, mesh.id, mesh.medium, |m| {
-                        m.medium
+                let own_rim =
+                    |id: EntityId| world.get::<Mesh>(id).ok().flatten().and_then(|m| m.rim);
+                let own_medium =
+                    |id: EntityId| world.get::<Mesh>(id).ok().flatten().and_then(|m| m.medium);
+                let rim = rim_lane(mesh.rim.or_else(|| {
+                    rim_memo.resolve_ancestors(world, mesh.id, own_rim, |p, o| o.or(p), None)
+                }));
+                let medium = mesh
+                    .medium
+                    .or_else(|| {
+                        medium_memo.resolve_ancestors(
+                            world,
+                            mesh.id,
+                            own_medium,
+                            |p, o| o.or(p),
+                            None,
+                        )
                     })
                     .unwrap_or(1.0);
                 last_rim = Some((mesh.id, rim, medium));
@@ -4072,7 +4097,8 @@ type SkinFollowers<'w> = StableMap<EntityId, Vec<(&'w str, Mat4)>>;
 /// palette instead of posing it again: a skin is posed once per extract.
 #[derive(Default)]
 pub(crate) struct SocketPalettes {
-    palette: Vec<Mat4>,
+    /// Each evaluate chunk's palette run as `par_map_chunks` returned it, never concatenated.
+    chunks: Vec<Vec<Mat4>>,
     skins: StableMap<EntityId, StoredPalette>,
 }
 
@@ -4081,6 +4107,7 @@ struct StoredPalette {
     mesh: Arc<MeshData>,
     character: Option<Arc<CharacterData>>,
     model: Mat4,
+    chunk: usize,
     range: std::ops::Range<usize>,
     path: PalettePath,
 }
@@ -4100,10 +4127,18 @@ impl SocketPalettes {
             .iter()
             .zip(job.model.to_cols_array())
             .all(|(a, b)| a.to_bits() == b.to_bits());
-        (Arc::ptr_eq(&stored.mesh, mesh) && same_character && same_model)
-            .then(|| (&self.palette[stored.range.clone()], stored.path))
+        (Arc::ptr_eq(&stored.mesh, mesh) && same_character && same_model).then(|| {
+            (
+                &self.chunks[stored.chunk][stored.range.clone()],
+                stored.path,
+            )
+        })
     }
 }
+
+/// [`pose_each`]'s per-call asset cache: `(is_character, rel)` to the mesh and its character.
+type ResolvedSocketAssets<'w> =
+    StableMap<(bool, &'w str), (Arc<MeshData>, Option<Arc<CharacterData>>)>;
 
 /// One socketed skin to pose in a [`pose_each`] depth group.
 struct SocketJob {
@@ -4140,6 +4175,7 @@ fn pose_each(
 ) -> bool {
     *store = SocketPalettes::default();
     let mut stale = false;
+    let mut resolved: ResolvedSocketAssets = StableMap::new();
     for group in sockets.chunk_by(|a, b| a.0 == b.0) {
         let mut jobs: Vec<SocketJob> = Vec::new();
         let mut job_of: StableMap<EntityId, usize> = StableMap::new();
@@ -4155,16 +4191,30 @@ fn pose_each(
             let Some(mesh) = get::<Mesh>(world, skin) else {
                 continue;
             };
-            let (mesh_rel, character) = match &mesh.shape {
-                MeshSource::Asset(rel) => (rel.clone(), None),
-                MeshSource::Character(rel) => match assets.character(rel) {
-                    Ok(data) => (data.mesh.clone(), Some(data)),
-                    Err(_) => continue,
-                },
+            // A distinct asset resolves once per call: sockets share a handful of paths. Only
+            // successes are cached, so a failing path is retried (and reported) per socket.
+            let (is_character, rel) = match &mesh.shape {
+                MeshSource::Asset(rel) => (false, rel.as_str()),
+                MeshSource::Character(rel) => (true, rel.as_str()),
                 _ => continue,
             };
-            let Ok(data) = assets.mesh(&mesh_rel) else {
-                continue;
+            let (data, character) = match resolved.get(&(is_character, rel)) {
+                Some((data, character)) => (data.clone(), character.clone()),
+                None => {
+                    let (mesh_rel, character) = if is_character {
+                        match assets.character(rel) {
+                            Ok(data) => (data.mesh.clone(), Some(data)),
+                            Err(_) => continue,
+                        }
+                    } else {
+                        (rel.to_owned(), None)
+                    };
+                    let Ok(data) = assets.mesh(&mesh_rel) else {
+                        continue;
+                    };
+                    resolved.insert((is_character, rel), (data.clone(), character.clone()));
+                    (data, character)
+                }
             };
             let Some(index) = data.skin_joints.iter().position(|j| j.name == joint.joint) else {
                 continue;
@@ -4221,8 +4271,9 @@ fn pose_each(
         let mut results: Vec<SocketPosed> = Vec::with_capacity(jobs.len());
         let mut chunk_jobs = jobs.iter();
         for (out, posed) in chunks {
-            let mut start = store.palette.len();
-            store.palette.extend(out);
+            let chunk = store.chunks.len();
+            store.chunks.push(out);
+            let mut start = 0;
             for result in posed {
                 let job = chunk_jobs.next().expect("one result per job");
                 store.skins.insert(
@@ -4231,6 +4282,7 @@ fn pose_each(
                         mesh: job.mesh.clone(),
                         character: job.character.clone(),
                         model: job.model,
+                        chunk,
                         range: start..start + result.len,
                         path: result.path,
                     },

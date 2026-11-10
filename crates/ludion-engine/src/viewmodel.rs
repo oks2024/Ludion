@@ -28,8 +28,10 @@ impl FrameViewmodel {
     pub(crate) fn of(world: &World, ids: &[EntityId]) -> Self {
         let mut flagged = BTreeSet::new();
         if world.component_count::<Viewmodel>() != 0 {
+            let mut memo = crate::hierarchy::InheritMemo::new();
             for &id in ids {
-                if crate::hierarchy::inherits(world, id, |e| world.has::<Viewmodel>(e)) {
+                let own = |e: EntityId| world.has::<Viewmodel>(e);
+                if memo.resolve(world, id, own, |parent, own| parent || own, false) {
                     flagged.insert(id);
                 }
             }

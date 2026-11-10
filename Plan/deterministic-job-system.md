@@ -190,6 +190,13 @@ the private macOS queue; three results worth carrying here.
 
 Don't. Engine-vanity territory for this project.
 
+### Decisions Proposed (Serious Isaac 0033)
+
+**Proposed (Serious Isaac 0033, owner approval owed). Two render-side extract costs the bookkeeping pass could not remove.** Both are ready to build once approved; neither moves a hash, a schema or a golden. Evidence is the 0033 extract profile on the reference game's horde-500 scene (500 sockets, 8 threads). Before 0033-03 (the memoized hierarchy folds and the socket gather cache): `Place` 1.13 ms and `Poses` 1.06 ms per extract (scratch sub-timers). After it (step-8 re-measure, median of 3): `Place` 1.039 ms and `Poses` 0.961 ms, so what remains is the thread spawn and the per-entity lookups below.
+
+- (i) **A persistent worker pool behind `ludion_core::par`.** `par_map_chunks` spawns `workers − 1` OS threads per call (`std::thread::scope`), so posing 500 skins gains only 0.80 → 0.50 ms from 8 threads (T=1 against T=8), and every extract pays the spawn and join once per call site. J0's results name this swap ("a persistent pool, if J1 profiles demand one"); this profile is that demand. API, chunking, chunk size and results stay as they are, so the 1/2/8-thread hash-identity gate and the `to_bits`-exact tests pass unchanged. Trigger: owner approval, then one wave in `ludion-core` with a before/after of this profile and of the sim-side `par_for_each` systems. Nothing hashed moves.
+- (ii) **Optional: a per-frame read-only column handle on `World` for extract walks.** `place_with` costs about 0.1 µs per entity, nearly all of it `World::get` (a `BTreeMap<TypeId>` probe plus a downcast) over eight component types per id. A handle that resolves each type's column once per extract and indexes it per id would remove most of that. It is new `ludion-ecs` API: the crate is freeze-listed and sits at 2915 of its 3000-line budget, so it needs an explicit unfreeze and a budget raise, as J1 did for `par_for_each`. Trigger: only if (i) leaves `Place` the largest extract phase on the pinned box. Nothing hashed moves.
+
 ## Costs and risks
 
 - **Amdahl is the real constraint, not determinism.** Command drain, hashing, extract, command-buffer application stay sequential. Heavy systems at 70 % of tick → ~2.8× on 8 cores, not 8×. Own this number in every presentation of the result; S1's decision gate quantifies it before any migration spend.

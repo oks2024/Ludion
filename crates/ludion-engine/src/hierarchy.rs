@@ -22,7 +22,9 @@ use ludion_ecs::{ChildMap, PRESENTATION_BASE, Parent, World, is_presentation};
 use ludion_renderer::DebugSegment;
 use ludion_spatial::{Body, Collider, ParentPose};
 
-use crate::components::{Fade, Mesh, Transform, Visibility};
+#[cfg(test)]
+use crate::components::{Fade, Mesh};
+use crate::components::{Transform, Visibility};
 
 /// The most ancestors a chain may have before the entity is treated as a root.
 pub const MAX_HIERARCHY_DEPTH: usize = 64;
@@ -86,6 +88,7 @@ fn chain(world: &World, entity: EntityId) -> (Vec<EntityId>, Option<HierarchyFau
 
 /// Whether `entity` or any `Parent` ancestor satisfies `flag` (an OR fold, unlike `Visibility`'s
 /// AND). An unparented entity costs one check and no chain walk.
+#[cfg(test)]
 pub(crate) fn inherits(world: &World, entity: EntityId, flag: impl Fn(EntityId) -> bool) -> bool {
     if flag(entity) {
         return true;
@@ -102,6 +105,7 @@ pub(crate) fn hierarchy_root(world: &World, entity: EntityId) -> EntityId {
 
 /// `entity`'s own `Fade`, else its nearest ancestor's through `Parent`, else the default. An
 /// unparented entity costs one read and one presence check.
+#[cfg(test)]
 pub(crate) fn inherited_fade(world: &World, entity: EntityId) -> Fade {
     let own = |id: EntityId| world.get::<Fade>(id).ok().flatten().copied();
     if let Some(fade) = own(entity) {
@@ -120,6 +124,7 @@ pub(crate) fn inherited_fade(world: &World, entity: EntityId) -> Fade {
 
 /// `own` (the entity's own `Mesh` field) when set, else the nearest `Parent` ancestor's `Some` for
 /// the same field, else `None`. An unparented entity costs one presence check and no chain walk.
+#[cfg(test)]
 pub(crate) fn inherited_mesh_field<T: Copy>(
     world: &World,
     entity: EntityId,
@@ -139,6 +144,7 @@ pub(crate) fn inherited_mesh_field<T: Copy>(
 /// `entity`'s effective [`Visibility`]: the AND of its own and every `Parent` ancestor's (a hidden
 /// ancestor hides the whole tree; a part's own `visible: true` never shows it). A world with no
 /// `Visibility` anywhere answers the default after one O(1) count and never walks a chain.
+#[cfg(test)]
 pub(crate) fn inherited_visibility(world: &World, entity: EntityId) -> Visibility {
     if world.component_count::<Visibility>() == 0 {
         return Visibility::default();
@@ -170,8 +176,21 @@ impl FrameVisibility {
         let mut hidden = BTreeSet::new();
         let mut shadowless = BTreeSet::new();
         if world.component_count::<Visibility>() != 0 {
+            let own = |id: EntityId| {
+                world
+                    .get::<Visibility>(id)
+                    .ok()
+                    .flatten()
+                    .copied()
+                    .unwrap_or_default()
+            };
+            let join = |acc: Visibility, v: Visibility| Visibility {
+                visible: acc.visible && v.visible,
+                cast_shadows: acc.cast_shadows && v.cast_shadows,
+            };
+            let mut memo = InheritMemo::new();
             for &id in ids {
-                let seen = inherited_visibility(world, id);
+                let seen = memo.resolve(world, id, own, join, Visibility::default());
                 if !seen.visible {
                     hidden.insert(id);
                 } else if !seen.cast_shadows {
@@ -316,6 +335,108 @@ impl<T: Copy> SlotTable<T> {
         } else {
             (&mut self.sim, id.index() as usize)
         }
+    }
+}
+
+/// A per-extract memo of a root-to-entity fold over the [`chain`] an entity would get:
+/// `join(parent_value, own_value)` from the top, starting at `base`. Mirrors [`WorldAffines::parented`]:
+/// the walk stops at the first memoized ancestor, uses no allocation, and memoizes only clean chains
+/// (no cycle, at most [`MAX_HIERARCHY_DEPTH`] ancestors). A dead or presentation parent cuts the
+/// chain, which stays clean. One memo serves one `own`/`join`/`base` triple.
+pub(crate) struct InheritMemo<T: Copy> {
+    memo: SlotTable<(T, u32)>,
+}
+
+impl<T: Copy> InheritMemo<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            memo: SlotTable::new(),
+        }
+    }
+
+    /// The fold over `chain(entity)`; an unparented, cyclic or too-deep entity folds only itself.
+    pub(crate) fn resolve(
+        &mut self,
+        world: &World,
+        entity: EntityId,
+        own: impl Fn(EntityId) -> T,
+        join: impl Fn(T, T) -> T,
+        base: T,
+    ) -> T {
+        match self.fold(world, entity, &own, &join, base) {
+            Some((value, _)) => value,
+            None => join(base, own(entity)),
+        }
+    }
+
+    /// The fold over `chain(entity)` without `entity` itself: `base` when it has no valid parent or
+    /// its chain is a cycle or too deep.
+    pub(crate) fn resolve_ancestors(
+        &mut self,
+        world: &World,
+        entity: EntityId,
+        own: impl Fn(EntityId) -> T,
+        join: impl Fn(T, T) -> T,
+        base: T,
+    ) -> T {
+        match self.fold(world, entity, &own, &join, base) {
+            Some((_, depth)) if depth > 0 => {
+                let parent = parent_of(world, entity).map_or(entity, |p| p.0);
+                self.memo.get(parent).map_or(base, |(value, _)| value)
+            }
+            _ => base,
+        }
+    }
+
+    /// `entity`'s memoized `(value, ancestor count)` when its chain is clean and it has a parent
+    /// (walking and memoizing it if need be); `None` for an unparented or unclean entity.
+    fn fold(
+        &mut self,
+        world: &World,
+        entity: EntityId,
+        own: &impl Fn(EntityId) -> T,
+        join: &impl Fn(T, T) -> T,
+        base: T,
+    ) -> Option<(T, u32)> {
+        parent_of(world, entity)?;
+        if let Some(hit) = self.memo.get(entity) {
+            return Some(hit);
+        }
+        let mut stack = [entity; MAX_HIERARCHY_DEPTH + 2];
+        let mut len = 0;
+        let mut current = entity;
+        let mut hit: Option<(T, u32)> = None;
+        loop {
+            if len == stack.len() {
+                return None;
+            }
+            stack[len] = current;
+            len += 1;
+            let Some(Parent(parent)) = parent_of(world, current) else {
+                break;
+            };
+            if !world.is_alive(parent) || (is_presentation(parent) && !is_presentation(current)) {
+                break;
+            }
+            if let Some(found) = self.memo.get(parent) {
+                hit = Some(found);
+                break;
+            }
+            if stack[..len].contains(&parent) {
+                return None;
+            }
+            current = parent;
+        }
+        let top_depth = hit.map_or(0, |(_, depth)| depth + 1);
+        if top_depth as usize + len - 1 > MAX_HIERARCHY_DEPTH {
+            return None;
+        }
+        let mut acc = hit.map_or(base, |(value, _)| value);
+        for (step, node) in stack[..len].iter().rev().enumerate() {
+            acc = join(acc, own(*node));
+            self.memo.set(*node, (acc, top_depth + step as u32));
+        }
+        Some((acc, top_depth + len as u32 - 1))
     }
 }
 
@@ -1036,6 +1157,206 @@ mod tests {
         let selfish = spawn(&mut world, at(5.0), None);
         world.insert(selfish, Parent(selfish)).unwrap();
         assert_eq!(world_pose_transform(&world, selfish), Some(at(5.0)));
+    }
+
+    fn memo_own(id: EntityId) -> u64 {
+        u64::from(id.index()) + 1
+    }
+
+    /// Order-sensitive, so a wrong fold direction or a skipped level changes the result.
+    fn memo_join(parent: u64, own: u64) -> u64 {
+        parent.wrapping_mul(31).wrapping_add(own).wrapping_add(7)
+    }
+
+    fn assert_memo_matches_chain(world: &World, queries: &[EntityId]) {
+        let mut full = InheritMemo::<u64>::new();
+        let mut ancestors = InheritMemo::<u64>::new();
+        for &id in queries {
+            let (up, _) = chain(world, id);
+            let expect = up.iter().fold(5, |acc, &e| memo_join(acc, memo_own(e)));
+            let expect_ancestors = up[..up.len() - 1]
+                .iter()
+                .fold(5, |acc, &e| memo_join(acc, memo_own(e)));
+            assert_eq!(
+                full.resolve(world, id, memo_own, memo_join, 5),
+                expect,
+                "{id:?}"
+            );
+            assert_eq!(
+                ancestors.resolve_ancestors(world, id, memo_own, memo_join, 5),
+                expect_ancestors,
+                "{id:?}"
+            );
+            // A warm memo answers the same.
+            assert_eq!(full.resolve(world, id, memo_own, memo_join, 5), expect);
+            assert_eq!(
+                full.resolve_ancestors(world, id, memo_own, memo_join, 5),
+                expect_ancestors
+            );
+        }
+    }
+
+    #[test]
+    fn inherit_memo_matches_chain_folds_on_random_forests() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize
+        };
+        for _ in 0..20 {
+            let mut world = World::new();
+            let mut ids: Vec<EntityId> = Vec::new();
+            for _ in 0..120 {
+                let parent = if ids.is_empty() || next() % 5 == 0 {
+                    None
+                } else {
+                    Some(ids[next() % ids.len()])
+                };
+                ids.push(spawn(&mut world, at(0.0), parent));
+            }
+            // Presentation parents above sim children, a 2-cycle, a self-cycle.
+            let presentation = world.spawn_presentation();
+            for _ in 0..4 {
+                let child = ids[next() % ids.len()];
+                world.insert(child, Parent(presentation)).unwrap();
+            }
+            let (a, b) = (ids[next() % ids.len()], ids[next() % ids.len()]);
+            world.insert(a, Parent(b)).unwrap();
+            world.insert(b, Parent(a)).unwrap();
+            let selfish = ids[next() % ids.len()];
+            world.insert(selfish, Parent(selfish)).unwrap();
+            // Dead parents: despawn a few entities others still name.
+            let mut dead = Vec::new();
+            for _ in 0..6 {
+                let victim = ids.swap_remove(next() % ids.len());
+                let _ = world.despawn(victim);
+                dead.push(victim);
+            }
+            for victim in dead {
+                let orphans: Vec<EntityId> = ids
+                    .iter()
+                    .copied()
+                    .filter(|&id| world.is_alive(id))
+                    .take(3)
+                    .collect();
+                for orphan in orphans {
+                    world.insert(orphan, Parent(victim)).unwrap();
+                }
+            }
+            let mut queries: Vec<EntityId> = ids
+                .iter()
+                .copied()
+                .filter(|&id| world.is_alive(id))
+                .collect();
+            queries.push(presentation);
+            for i in (1..queries.len()).rev() {
+                queries.swap(i, next() % (i + 1));
+            }
+            assert_memo_matches_chain(&world, &queries);
+        }
+    }
+
+    #[test]
+    fn inherit_memo_replaces_the_per_entity_walks_exactly() {
+        use crate::components::Viewmodel;
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize
+        };
+        let mut world = World::new();
+        let mut ids: Vec<EntityId> = Vec::new();
+        for _ in 0..200 {
+            let parent = if ids.is_empty() || next() % 4 == 0 {
+                None
+            } else {
+                Some(ids[next() % ids.len()])
+            };
+            let id = spawn(&mut world, at(0.0), parent);
+            if next() % 4 == 0 {
+                let visibility = Visibility {
+                    visible: next() % 2 == 0,
+                    cast_shadows: next() % 2 == 0,
+                };
+                world.insert(id, visibility).unwrap();
+            }
+            if next() % 6 == 0 {
+                world.insert(id, Viewmodel {}).unwrap();
+            }
+            if next() % 5 == 0 {
+                let fade = Fade {
+                    fade: (next() % 100) as f32 / 100.0,
+                    ..Fade::default()
+                };
+                world.insert(id, fade).unwrap();
+            }
+            if next() % 5 == 0 {
+                let mesh = Mesh {
+                    medium: Some((next() % 100) as f32 / 10.0),
+                    ..Mesh::default()
+                };
+                world.insert(id, mesh).unwrap();
+            }
+            ids.push(id);
+        }
+        let frame = FrameVisibility::of(&world, &ids);
+        let viewmodel = crate::viewmodel::FrameViewmodel::of(&world, &ids);
+        let mut fade_memo = InheritMemo::<Option<Fade>>::new();
+        let mut medium_memo = InheritMemo::<Option<f32>>::new();
+        let own_medium = |id: EntityId| world.get::<Mesh>(id).ok().flatten().and_then(|m| m.medium);
+        for &id in &ids {
+            let seen = inherited_visibility(&world, id);
+            assert_eq!(frame.hidden(id), !seen.visible);
+            assert_eq!(frame.casts(id), !seen.visible || seen.cast_shadows);
+            assert_eq!(
+                viewmodel.contains(id),
+                inherits(&world, id, |e| world.has::<Viewmodel>(e))
+            );
+            let fade = fade_memo
+                .resolve(
+                    &world,
+                    id,
+                    |e| world.get::<Fade>(e).ok().flatten().copied(),
+                    |parent, own| own.or(parent),
+                    None,
+                )
+                .unwrap_or_default();
+            assert_eq!(fade, inherited_fade(&world, id));
+            let own = own_medium(id);
+            let medium = own.or_else(|| {
+                medium_memo.resolve_ancestors(&world, id, own_medium, |p, o| o.or(p), None)
+            });
+            assert_eq!(medium, inherited_mesh_field(&world, id, own, |m| m.medium));
+        }
+    }
+
+    #[test]
+    fn inherit_memo_honours_the_depth_limit_on_the_descendants_total() {
+        for extra in [
+            MAX_HIERARCHY_DEPTH - 1,
+            MAX_HIERARCHY_DEPTH,
+            MAX_HIERARCHY_DEPTH + 1,
+            MAX_HIERARCHY_DEPTH + 2,
+        ] {
+            let mut world = World::new();
+            let mut line = vec![spawn(&mut world, at(0.0), None)];
+            for _ in 0..extra {
+                let last = *line.last().unwrap();
+                line.push(spawn(&mut world, at(0.0), Some(last)));
+            }
+            // Memoize an ancestor first so the deep descendants resume from it.
+            let mid = line[extra / 2];
+            let mut queries = vec![mid];
+            queries.extend(line.iter().rev().copied());
+            assert_memo_matches_chain(&world, &queries);
+            let mut ascending = line.clone();
+            ascending.push(spawn(&mut world, at(0.0), Some(*line.last().unwrap())));
+            assert_memo_matches_chain(&world, &ascending);
+        }
     }
 
     #[test]
