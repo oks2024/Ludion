@@ -757,7 +757,7 @@ fn extract_inner(
     let mut poses = WorldAffines::new();
     assets.extract_end(ExtractPhase::Place);
     assets.extract_begin(ExtractPhase::Poses);
-    let skin_followers = place_poses(world, &ids, assets, &mut poses, now);
+    let (skin_followers, socket_palettes) = place_poses(world, &ids, assets, &mut poses, now);
     assets.extract_end(ExtractPhase::Poses);
     assets.extract_begin(ExtractPhase::Place);
     let mut placed = place_with(
@@ -1392,7 +1392,8 @@ fn extract_inner(
     assets.extract_end(ExtractPhase::Meshes);
 
     assets.extract_begin(ExtractPhase::Skin);
-    let (bone_palette, skin_counts) = pose_skins(world, &skin_jobs, &mesh_assets, now);
+    let (bone_palette, skin_counts) =
+        pose_skins(world, &skin_jobs, &mesh_assets, now, &socket_palettes);
     debug_assert_eq!(bone_palette.len(), skin_joints);
     assets.extract_skin(skin_counts);
     assets.extract_end(ExtractPhase::Skin);
@@ -3396,7 +3397,7 @@ pub(crate) fn place<'w>(
     poses: &mut WorldAffines,
     now: SimTime,
 ) -> Placed<'w> {
-    let skin_followers = place_poses(world, ids, assets, poses, now);
+    let (skin_followers, _) = place_poses(world, ids, assets, poses, now);
     place_with(
         world,
         ids,
@@ -3411,15 +3412,16 @@ pub(crate) fn place<'w>(
 }
 
 /// The animation half of [`place`]: prefab part poses, then `ParentJoint` socket joints. Returns the
-/// skin followers [`place_with`] attaches to their skins. [`extract_inner`] calls the halves apart so
-/// the profile can time them separately.
+/// skin followers [`place_with`] attaches to their skins, and the palettes it posed for socketed skins
+/// ([`pose_skins`] reuses them). [`extract_inner`] calls the halves apart so the profile can time
+/// them separately.
 pub(crate) fn place_poses<'w>(
     world: &'w World,
     ids: &[EntityId],
     assets: &mut dyn SceneAssets,
     poses: &mut WorldAffines,
     now: SimTime,
-) -> StableMap<EntityId, Vec<(&'w str, Mat4)>> {
+) -> (SkinFollowers<'w>, SocketPalettes) {
     prefab_part_poses(world, ids, assets, now, poses);
     pose_sockets(world, ids, assets, poses, now)
 }
@@ -3796,8 +3798,10 @@ fn transform_matrix(xform: &Transform) -> Mat4 {
 /// pose when `followed` names any ([`posed_palette`]), else its character's `Animation` clip and
 /// crossfade at the held `now` ([`sampled_palette`]), else each joint's precomposed rest entry.
 /// Returns the path taken; `scratch` holds the joints' posed model matrices unless it was
-/// [`PalettePath::Rest`]. The `Skin` block and the socket pre-pass both call it, so a socket child
-/// and the skin it rides can never read two evaluations of one pose.
+/// [`PalettePath::Rest`]. The `Skin` block and the socket pre-pass both call it, and a skin poses
+/// once per extract: a socketed skin in the pre-pass ([`pose_each`]), whose palette `pose_skins`
+/// then copies, any other in `pose_skins`. A socket child and the skin it rides therefore can never
+/// read two evaluations of one pose.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn skin_palette(
     world: &World,
@@ -3867,6 +3871,9 @@ const SKIN_PAR_MIN_JOINTS: usize = 2048;
 
 /// Every job's bone palette, concatenated in job order, and the frame's [`SkinCounts`].
 ///
+/// A job whose skin the socket pre-pass already posed from the same inputs copies that palette
+/// ([`SocketPalettes`]) and counts as sampled; every other job poses here.
+///
 /// Jobs pose in parallel through [`par::par_map_chunks`] in fixed-size chunks whose results are
 /// concatenated in chunk order, so the palette is byte-identical at any thread count.
 fn pose_skins(
@@ -3874,6 +3881,7 @@ fn pose_skins(
     jobs: &[SkinJob],
     mesh_assets: &[Arc<MeshData>],
     now: SimTime,
+    socketed: &SocketPalettes,
 ) -> (Vec<Mat4>, SkinCounts) {
     let total: usize = jobs
         .iter()
@@ -3885,18 +3893,25 @@ fn pose_skins(
             let mut out = Vec::new();
             let mut counts = SkinCounts::default();
             for job in chunk {
-                let joints = &mesh_assets[job.asset].skin_joints;
-                let path = skin_palette(
-                    world,
-                    job.skin,
-                    joints,
-                    job.character.as_deref(),
-                    job.model,
-                    job.followed,
-                    now,
-                    &mut scratch,
-                    &mut out,
-                );
+                let mesh = &mesh_assets[job.asset];
+                let joints = &mesh.skin_joints;
+                let path = match socketed.reusable(job, mesh) {
+                    Some((stored, path)) => {
+                        out.extend_from_slice(stored);
+                        path
+                    }
+                    None => skin_palette(
+                        world,
+                        job.skin,
+                        joints,
+                        job.character.as_deref(),
+                        job.model,
+                        job.followed,
+                        now,
+                        &mut scratch,
+                        &mut out,
+                    ),
+                };
                 counts.instances += 1;
                 counts.palettes_sampled += 1;
                 counts.joints_sampled += match path {
@@ -3910,7 +3925,19 @@ fn pose_skins(
             (out, counts)
         })
     };
-    let chunks = if total < SKIN_PAR_MIN_JOINTS {
+    // Copies cost nothing next to a scoped spawn: only the jobs that pose count toward going wide.
+    let posing: usize = jobs
+        .iter()
+        .map(|job| {
+            let mesh = &mesh_assets[job.asset];
+            if socketed.reusable(job, mesh).is_some() {
+                0
+            } else {
+                mesh.skin_joints.len()
+            }
+        })
+        .sum();
+    let chunks = if posing < SKIN_PAR_MIN_JOINTS {
         par::with_threads(1, evaluate)
     } else {
         evaluate()
@@ -3994,14 +4021,16 @@ fn skin_followers<'w>(
 /// differing posed joint on an already memoized child is stale: the memo is cleared and the pass
 /// reruns, at most `sockets + 1` times (an acyclic nesting gains a level per pass). A cycle (a part
 /// under a skin's own socket that drives that same skin) settles at the cap with the last pass,
-/// deterministically. A scene with no part or skin under a socket runs one pass.
+/// deterministically. A scene with no part or skin under a socket runs one pass. Each pass poses
+/// every socketed skin once, in parallel per depth group, and returns the final pass's palettes
+/// ([`SocketPalettes`]) beside the followers.
 fn pose_sockets<'w>(
     world: &'w World,
     ids: &[EntityId],
     assets: &mut dyn SceneAssets,
     poses: &mut WorldAffines,
     now: SimTime,
-) -> StableMap<EntityId, Vec<(&'w str, Mat4)>> {
+) -> (SkinFollowers<'w>, SocketPalettes) {
     let mut sockets: Vec<(usize, EntityId, EntityId)> = Vec::new();
     for &id in ids {
         if !world.has::<ParentJoint>(id) || !world.has::<ludion_ecs::Parent>(id) {
@@ -4024,19 +4053,82 @@ fn pose_sockets<'w>(
         sockets.push((depth, id, skin));
     }
     sockets.sort_by_key(|&(depth, id, _)| (depth, id));
+    let mut store = SocketPalettes::default();
     for pass in 0..=sockets.len() {
         let followers = skin_followers(world, ids, poses);
-        let stale = pose_each(world, &sockets, assets, poses, &followers, now);
+        let stale = pose_each(world, &sockets, assets, poses, &followers, now, &mut store);
         if !stale || pass == sockets.len() {
-            return followers;
+            return (followers, store);
         }
         poses.clear_memo();
     }
     unreachable!("the loop returns on its last pass")
 }
 
+/// Each skin's `SkinBone` followers: bone name and the part's world pose.
+type SkinFollowers<'w> = StableMap<EntityId, Vec<(&'w str, Mat4)>>;
+
+/// The palettes [`pose_each`] computed for socketed skins, kept so [`pose_skins`] copies a skin's
+/// palette instead of posing it again: a skin is posed once per extract.
+#[derive(Default)]
+pub(crate) struct SocketPalettes {
+    palette: Vec<Mat4>,
+    skins: StableMap<EntityId, StoredPalette>,
+}
+
+/// One skin's stored palette and the inputs it was posed with.
+struct StoredPalette {
+    mesh: Arc<MeshData>,
+    character: Option<Arc<CharacterData>>,
+    model: Mat4,
+    range: std::ops::Range<usize>,
+    path: PalettePath,
+}
+
+impl SocketPalettes {
+    /// The stored palette for `job` when it was posed from the same inputs [`pose_skins`] would use.
+    fn reusable(&self, job: &SkinJob, mesh: &Arc<MeshData>) -> Option<(&[Mat4], PalettePath)> {
+        let stored = self.skins.get(&job.skin)?;
+        let same_character = match (&stored.character, &job.character) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        let same_model = stored
+            .model
+            .to_cols_array()
+            .iter()
+            .zip(job.model.to_cols_array())
+            .all(|(a, b)| a.to_bits() == b.to_bits());
+        (Arc::ptr_eq(&stored.mesh, mesh) && same_character && same_model)
+            .then(|| (&self.palette[stored.range.clone()], stored.path))
+    }
+}
+
+/// One socketed skin to pose in a [`pose_each`] depth group.
+struct SocketJob {
+    skin: EntityId,
+    mesh: Arc<MeshData>,
+    character: Option<Arc<CharacterData>>,
+    model: Mat4,
+    /// The joint indices this skin's sockets ride.
+    joints: Vec<usize>,
+}
+
+/// What posing a [`SocketJob`] produced: its palette length, path and the requested joints' models.
+struct SocketPosed {
+    len: usize,
+    path: PalettePath,
+    joints: Vec<Option<Mat4>>,
+}
+
 /// One pass of [`pose_sockets`]: poses each socket child's joint; true when it set a differing
 /// value on a child a lookup had already memoized (compared bit for bit, so a NaN cannot loop).
+///
+/// Sockets are taken a depth group at a time (a skin under a socket child sits strictly deeper than
+/// that child, so no group member reads another's joint): gathered in socket order, each distinct skin
+/// posed once in parallel through [`par::par_map_chunks`] and its palette kept in `store`, then applied
+/// in socket order. Same result at any thread count.
 fn pose_each(
     world: &World,
     sockets: &[(usize, EntityId, EntityId)],
@@ -4044,40 +4136,113 @@ fn pose_each(
     poses: &mut WorldAffines,
     followers: &StableMap<EntityId, Vec<(&str, Mat4)>>,
     now: SimTime,
+    store: &mut SocketPalettes,
 ) -> bool {
+    *store = SocketPalettes::default();
     let mut stale = false;
-    for &(_, id, skin) in sockets {
-        if !world.is_alive(skin) {
-            continue;
+    for group in sockets.chunk_by(|a, b| a.0 == b.0) {
+        let mut jobs: Vec<SocketJob> = Vec::new();
+        let mut job_of: StableMap<EntityId, usize> = StableMap::new();
+        // (socket child, job, slot in the job's joints), in socket order.
+        let mut applies: Vec<(EntityId, usize, usize)> = Vec::new();
+        for &(_, id, skin) in group {
+            if !world.is_alive(skin) {
+                continue;
+            }
+            let Some(joint) = get::<ParentJoint>(world, id) else {
+                continue;
+            };
+            let Some(mesh) = get::<Mesh>(world, skin) else {
+                continue;
+            };
+            let (mesh_rel, character) = match &mesh.shape {
+                MeshSource::Asset(rel) => (rel.clone(), None),
+                MeshSource::Character(rel) => match assets.character(rel) {
+                    Ok(data) => (data.mesh.clone(), Some(data)),
+                    Err(_) => continue,
+                },
+                _ => continue,
+            };
+            let Ok(data) = assets.mesh(&mesh_rel) else {
+                continue;
+            };
+            let Some(index) = data.skin_joints.iter().position(|j| j.name == joint.joint) else {
+                continue;
+            };
+            let slot = *job_of.entry(skin).or_insert_with(|| {
+                jobs.push(SocketJob {
+                    skin,
+                    mesh: data,
+                    character,
+                    model: render_pose(world, poses, skin).model(),
+                    joints: Vec::new(),
+                });
+                jobs.len() - 1
+            });
+            jobs[slot].joints.push(index);
+            applies.push((id, slot, jobs[slot].joints.len() - 1));
         }
-        let Some(joint) = get::<ParentJoint>(world, id) else {
-            continue;
+        let total: usize = jobs.iter().map(|job| job.mesh.skin_joints.len()).sum();
+        let evaluate = || {
+            par::par_map_chunks(&jobs, SKIN_PAR_CHUNK, |_, chunk| {
+                let (mut scratch, mut out) = (Vec::new(), Vec::new());
+                let mut posed = Vec::with_capacity(chunk.len());
+                for job in chunk {
+                    let start = out.len();
+                    let path = skin_palette(
+                        world,
+                        job.skin,
+                        &job.mesh.skin_joints,
+                        job.character.as_deref(),
+                        job.model,
+                        followers.get(&job.skin).map(Vec::as_slice),
+                        now,
+                        &mut scratch,
+                        &mut out,
+                    );
+                    posed.push(SocketPosed {
+                        len: out.len() - start,
+                        path,
+                        joints: job
+                            .joints
+                            .iter()
+                            .map(|&index| path.posed().then(|| scratch[index]))
+                            .collect(),
+                    });
+                }
+                (out, posed)
+            })
         };
-        let Some(mesh) = get::<Mesh>(world, skin) else {
-            continue;
+        let chunks = if total < SKIN_PAR_MIN_JOINTS {
+            par::with_threads(1, evaluate)
+        } else {
+            evaluate()
         };
-        let (mesh_rel, character) = match &mesh.shape {
-            MeshSource::Asset(rel) => (rel.clone(), None),
-            MeshSource::Character(rel) => match assets.character(rel) {
-                Ok(data) => (data.mesh.clone(), Some(data)),
-                Err(_) => continue,
-            },
-            _ => continue,
-        };
-        let Ok(data) = assets.mesh(&mesh_rel) else {
-            continue;
-        };
-        let skin_model = render_pose(world, poses, skin).model();
-        if let Some(model) = posed_joint_model(
-            world,
-            skin,
-            &data.skin_joints,
-            character.as_deref(),
-            skin_model,
-            followers.get(&skin).map(Vec::as_slice),
-            now,
-            &joint.joint,
-        ) {
+        let mut results: Vec<SocketPosed> = Vec::with_capacity(jobs.len());
+        let mut chunk_jobs = jobs.iter();
+        for (out, posed) in chunks {
+            let mut start = store.palette.len();
+            store.palette.extend(out);
+            for result in posed {
+                let job = chunk_jobs.next().expect("one result per job");
+                store.skins.insert(
+                    job.skin,
+                    StoredPalette {
+                        mesh: job.mesh.clone(),
+                        character: job.character.clone(),
+                        model: job.model,
+                        range: start..start + result.len,
+                        path: result.path,
+                    },
+                );
+                start += result.len;
+                results.push(result);
+            }
+        }
+        for (id, job, slot) in applies {
+            let Some(model) = results[job].joints[slot] else {
+                continue;
+            };
             let posed = mat4_affine(model);
             if poses.is_memoized(id) {
                 let same = poses.posed_joint(id).is_some_and(|old| {

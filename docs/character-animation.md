@@ -98,10 +98,11 @@ clips:
   `palettes_sampled`, `palettes_reused`, `palettes_shared` (both reserved, always 0) and `joints_sampled`.
   Per extract `instances = sampled + reused + shared`. Read the time beside `sim.threads`.
   `ProfileReport.extract.phases` times every extract phase: `poses` scales with `ParentJoint` sockets on
-  animated skins (each re-poses its skin), `place` with entities, `meshes` with drawn instances, `skin`
+  animated skins (each such skin is posed once, here), `place` with entities, `meshes` with drawn instances, `skin`
   with skinned instances and joints.
 - **Indicative figures** (RTX 3090 / 5950X, release): 500 figures, 5,500 joints: 0.37 ms at 1 thread, 0.32 ms at 8 or 32. The owner is `Plan/animation-clips.md` Status "Crowd posing".
-- Bench: `cargo test -p ludion-engine --release --test it -- skin_pose --ignored --nocapture`.
+- **Sockets pose once.** A skin carrying a `ParentJoint` child is posed in the parallel `Poses` phase and `Skin` reuses that palette, so a socket costs no second pose. 500 socketed figures, `Poses`+`Skin` (RTX 3090 / 5950X, release): 1.05 ms to 0.70 at 1 thread, 1.03 to 0.75 at 8.
+- Bench: `cargo test -p ludion-engine --release --test it -- skin_pose --ignored --nocapture` (`socket_pose` for the socketed crowd).
 
 ## AnimationEvents
 
