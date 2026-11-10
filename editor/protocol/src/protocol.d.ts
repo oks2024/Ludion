@@ -2976,6 +2976,12 @@ export interface ProfileReport {
    * absent otherwise and for a live capture, for `cluster`'s reason.
    */
   decals?: DecalProfile | null;
+  /**
+   * Median wall time of every extract phase, and the extract time outside all of them. Filled by
+   * the **offline** driver and absent for a live capture, for `cluster`'s reason. Read beside
+   * `sim.threads`; the phases are CPU wall time and do not sum with GPU time.
+   */
+  extract?: ExtractProfile | null;
   gpu: GpuProfile;
   /**
    * What loading the scene cost, phase by phase, and how many assets each kind decoded or reused.
@@ -3195,6 +3201,40 @@ export interface DecalProfile {
    * Meshes the receiver-id pass redraws; 0 means the pass is not scheduled.
    */
   receiver_meshes: number;
+  [k: string]: unknown;
+}
+/**
+ * Where extract spends its wall time: one median per phase of the walk, in walk order.
+ */
+export interface ExtractProfile {
+  /**
+   * Median over extracts of the extract time no phase covers (cache refresh, debug lines, scene
+   * drop): the extract span minus that extract's phase sum, floored at 0.
+   */
+  outside_median_ms: number;
+  /**
+   * Every phase in walk order, zeros included.
+   */
+  phases: ExtractPhaseTiming[];
+  /**
+   * Measured extracts the medians are over.
+   */
+  sampled_frames: number;
+  [k: string]: unknown;
+}
+/**
+ * One extract phase's median wall time.
+ */
+export interface ExtractPhaseTiming {
+  /**
+   * Median wall time of the phase per extract, in milliseconds.
+   */
+  median_ms: number;
+  /**
+   * The phase name: `place`, `poses`, `sprites`, `ui`, `meshes`, `skin`, `decals`, `gi`,
+   * `particles`, `lights`, `projectiles`.
+   */
+  phase: string;
   [k: string]: unknown;
 }
 /**

@@ -19,7 +19,7 @@
 //! profiled run's [`WorldHash`](Engine::world_hash) is bit-identical to an unprofiled one (asserted
 //! by the `observer_does_not_change_world_hash` test below). The crate's clippy denylist bans
 //! [`std::time::Instant::now`] everywhere; the functions here that call it — and `LoadClock`,
-//! `SpanClock` and `SkinClock`, the implementors of the clock-free observers — scope an `allow` with that rationale,
+//! `SpanClock` and `ExtractClock`, the implementors of the clock-free observers — scope an `allow` with that rationale,
 //! exactly as `live.rs` does for the tick clock.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,8 +34,8 @@ use ludion_ecs::ScheduleObserver;
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
 use ludion_protocol::perf::{
-    AssetLoadCounters, CullViewProfile, CullingProfile, LoadProfile, LodRadiusProfile,
-    ProfileSamples, SkinProfile,
+    AssetLoadCounters, CullViewProfile, CullingProfile, ExtractPhaseTiming, ExtractProfile,
+    LoadProfile, LodRadiusProfile, ProfileSamples, SkinProfile,
 };
 use ludion_renderer::{CullViewCount, LodRadii};
 use ludion_sim::RunState;
@@ -170,7 +170,7 @@ pub fn profile_engine(
         ]);
     }
     let load = measure_load(engine)?;
-    let (sim, samples, skin) = profile_sim(engine, frames, warmup);
+    let (sim, samples, skin, extract) = profile_sim(engine, frames, warmup);
     let cluster = profile_cluster(engine, frames, warmup).map_err(|d| vec![d])?;
     let local_shadows = profile_local_shadows(engine).map_err(|d| vec![d])?;
     let sun_cascades = profile_sun_cascades(engine).map_err(|d| vec![d])?;
@@ -198,6 +198,7 @@ pub fn profile_engine(
         probes: engine.probe_profile(),
         culling,
         skin,
+        extract,
         samples: Some(samples),
     })
 }
@@ -508,7 +509,12 @@ fn profile_sim(
     engine: &mut Engine,
     frames: u64,
     warmup: u64,
-) -> (SimProfile, ProfileSamples, Option<SkinProfile>) {
+) -> (
+    SimProfile,
+    ProfileSamples,
+    Option<SkinProfile>,
+    Option<ExtractProfile>,
+) {
     let mut observer = TimingObserver::default();
 
     for _ in 0..warmup {
@@ -524,7 +530,7 @@ fn profile_sim(
     let mut frame_indices: Vec<u64> = Vec::new();
 
     // The measured extracts only; the caller's observer, if any, is put back below.
-    let clock = SkinClock::default();
+    let clock = ExtractClock::default();
     let previous = engine.take_extract_observer();
     engine.set_extract_observer(Some(Box::new(clock.clone())));
 
@@ -539,75 +545,120 @@ fn profile_sim(
         for (samples, elapsed) in per_sequential.iter_mut().zip(measure_sequential(engine)) {
             samples.push(elapsed);
         }
+        clock.finish_extract();
 
         systems.push(frame, &observer.frame);
     }
 
     engine.set_extract_observer(previous);
-    let skin = clock.into_profile();
+    // Extract is index 1 of `SEQUENTIAL_NAMES`.
+    let (skin, extract) = clock.into_profiles(&per_sequential[1]);
     let (sim, samples) = reduce_sim(systems, per_sequential, frame_totals, frame_indices);
-    (sim, samples, skin)
+    (sim, samples, skin, extract)
 }
 
-/// What a [`SkinClock`] collected: the `Skin` phase's wall time and counters per measured extract.
+/// One extract's wall time per phase, split pieces summed.
+type PhaseRow = [Duration; ExtractPhase::ALL.len()];
+
+/// What an [`ExtractClock`] collected: per measured extract, a row of phase times and the `Skin`
+/// counters.
 #[derive(Default)]
-struct SkinSamples {
-    open: Option<Instant>,
-    pose: Vec<Duration>,
+struct ExtractSamples {
+    open: Option<(ExtractPhase, Instant)>,
+    row: PhaseRow,
+    rows: Vec<PhaseRow>,
     counts: Vec<SkinCounts>,
 }
 
-/// An [`ExtractObserver`] that times the `Skin` phase and keeps its counters, ignoring every other
-/// phase. Cloned so the profiler keeps a handle on what the engine's boxed copy collects.
+/// An [`ExtractObserver`] that times every phase and keeps the `Skin` counters. Cloned so the
+/// profiler keeps a handle on what the engine's boxed copy collects.
 #[derive(Clone, Default)]
-struct SkinClock(Arc<Mutex<SkinSamples>>);
+struct ExtractClock(Arc<Mutex<ExtractSamples>>);
 
-impl SkinClock {
-    /// The medians over the collected extracts; `None` when none drew a skinned instance.
-    fn into_profile(self) -> Option<SkinProfile> {
+impl ExtractClock {
+    /// Closes the row of the extract just measured; row `i` pairs with `per_sequential[1][i]`.
+    fn finish_extract(&self) {
         let mut samples = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if samples.counts.iter().all(|c| c.instances == 0) {
-            return None;
-        }
-        let column = |f: fn(&SkinCounts) -> f64| -> f64 {
-            let mut values: Vec<f64> = samples.counts.iter().map(f).collect();
-            median_f64(&mut values)
+        let row = std::mem::take(&mut samples.row);
+        samples.rows.push(row);
+        samples.open = None;
+    }
+
+    /// The `skin` and `extract` sections over the collected extracts. `extract_spans` are the
+    /// whole-extract wall times, one per row; `skin` is `None` when no extract drew a skinned
+    /// instance and `extract` when none was measured.
+    fn into_profiles(
+        self,
+        extract_spans: &[Duration],
+    ) -> (Option<SkinProfile>, Option<ExtractProfile>) {
+        let samples = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let phase_column = |phase: ExtractPhase| -> Vec<Duration> {
+            let index = ExtractPhase::ALL
+                .iter()
+                .position(|p| *p == phase)
+                .unwrap_or(0);
+            samples.rows.iter().map(|row| row[index]).collect()
         };
-        let instances_median = column(|c| f64::from(c.instances));
-        let palettes_sampled_median = column(|c| f64::from(c.palettes_sampled));
-        let palettes_reused_median = column(|c| f64::from(c.palettes_reused));
-        let palettes_shared_median = column(|c| f64::from(c.palettes_shared));
-        let joints_sampled_median = column(|c| c.joints_sampled as f64);
-        let sampled_frames = samples.counts.len() as u64;
-        Some(SkinProfile {
-            pose_median_ms: median_ms(&mut samples.pose),
-            sampled_frames,
-            instances_median,
-            palettes_sampled_median,
-            palettes_reused_median,
-            palettes_shared_median,
-            joints_sampled_median,
-        })
+
+        let extract = (!samples.rows.is_empty()).then(|| {
+            let phases = ExtractPhase::ALL
+                .iter()
+                .map(|&phase| ExtractPhaseTiming {
+                    phase: phase.name().to_string(),
+                    median_ms: median_ms(&mut phase_column(phase)),
+                })
+                .collect();
+            let mut outside: Vec<Duration> = samples
+                .rows
+                .iter()
+                .zip(extract_spans)
+                .map(|(row, span)| span.saturating_sub(row.iter().sum()))
+                .collect();
+            ExtractProfile {
+                sampled_frames: samples.rows.len() as u64,
+                phases,
+                outside_median_ms: median_ms(&mut outside),
+            }
+        });
+
+        let skin = (!samples.counts.iter().all(|c| c.instances == 0)).then(|| {
+            let column = |f: fn(&SkinCounts) -> f64| -> f64 {
+                let mut values: Vec<f64> = samples.counts.iter().map(f).collect();
+                median_f64(&mut values)
+            };
+            SkinProfile {
+                pose_median_ms: median_ms(&mut phase_column(ExtractPhase::Skin)),
+                sampled_frames: samples.counts.len() as u64,
+                instances_median: column(|c| f64::from(c.instances)),
+                palettes_sampled_median: column(|c| f64::from(c.palettes_sampled)),
+                palettes_reused_median: column(|c| f64::from(c.palettes_reused)),
+                palettes_shared_median: column(|c| f64::from(c.palettes_shared)),
+                joints_sampled_median: column(|c| c.joints_sampled as f64),
+            }
+        });
+        (skin, extract)
     }
 }
 
-impl ExtractObserver for SkinClock {
+impl ExtractObserver for ExtractClock {
     // Sanctioned wall-clock site (see the module docs).
     #[allow(clippy::disallowed_methods)]
     fn begin(&mut self, phase: ExtractPhase) {
-        if phase == ExtractPhase::Skin {
-            self.0.lock().unwrap_or_else(|e| e.into_inner()).open = Some(Instant::now());
-        }
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).open = Some((phase, Instant::now()));
     }
 
     // Sanctioned wall-clock site (see the module docs).
     #[allow(clippy::disallowed_methods)]
     fn end(&mut self, phase: ExtractPhase) {
-        if phase == ExtractPhase::Skin {
-            let mut samples = self.0.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(start) = samples.open.take() {
-                samples.pose.push(start.elapsed());
-            }
+        let mut samples = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((open, start)) = samples.open.take()
+            && open == phase
+        {
+            let index = ExtractPhase::ALL
+                .iter()
+                .position(|p| *p == phase)
+                .unwrap_or(0);
+            samples.row[index] += start.elapsed();
         }
     }
 
@@ -873,6 +924,7 @@ pub(crate) fn profile_replay_engine(
         probes: None,
         culling: None,
         skin: None,
+        extract: None,
         samples: Some(samples),
     };
     Ok((report, engine))
@@ -2514,7 +2566,7 @@ entities:
 
         let mut profiled = counter_engine();
         profiled.load_inline_scene(SCENE).unwrap();
-        let (sim, samples, _) = profile_sim(&mut profiled, 40, 10);
+        let (sim, samples, _, _) = profile_sim(&mut profiled, 40, 10);
 
         assert_eq!(
             plain_hash,
@@ -2535,7 +2587,7 @@ entities:
     fn profiled_run_reports_the_sequential_section() {
         let mut engine = counter_engine();
         engine.load_inline_scene(SCENE).unwrap();
-        let (sim, _samples, _) = profile_sim(&mut engine, 8, 1);
+        let (sim, _samples, _, _) = profile_sim(&mut engine, 8, 1);
 
         let names: Vec<&str> = sim.sequential.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, SEQUENTIAL_NAMES);
@@ -2612,6 +2664,7 @@ entities:
             probes: None,
             culling: None,
             skin: None,
+            extract: None,
             samples: None,
         };
 
@@ -2687,7 +2740,7 @@ entities:
         // here (see `profile_engine`'s end-to-end use); this is the sim-side driver unit.
         let mut engine = counter_engine();
         engine.load_inline_scene(SCENE).unwrap();
-        let (sim, samples, _) = profile_sim(&mut engine, 4, 1);
+        let (sim, samples, _, _) = profile_sim(&mut engine, 4, 1);
         let names: Vec<&str> = sim.systems.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["path_follow", "bump", "camera_rig"]);
         assert!(sim.frame_total_median_ms >= 0.0);
@@ -2706,7 +2759,7 @@ entities:
         engine
             .load_inline_scene(&source)
             .expect("the committed gallery scene validates");
-        let (sim, _samples, _) = profile_sim(&mut engine, 3, 1);
+        let (sim, _samples, _, _) = profile_sim(&mut engine, 3, 1);
         let names: Vec<&str> = sim.systems.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names,
@@ -2757,7 +2810,7 @@ entities:
     #[test]
     fn profile_sim_reports_the_skin_section_for_a_skinned_scene() {
         let mut engine = skinned_engine();
-        let (_, _, skin) = profile_sim(&mut engine, 3, 1);
+        let (_, _, skin, _) = profile_sim(&mut engine, 3, 1);
         let skin = skin.expect("a scene with skinned instances reports a skin section");
         assert_eq!(skin.sampled_frames, 3);
         assert_eq!(skin.instances_median, 3.0);
@@ -2773,8 +2826,21 @@ entities:
     fn profile_sim_has_no_skin_section_without_skins() {
         let mut engine = counter_engine();
         engine.load_inline_scene(SCENE).unwrap();
-        let (_, _, skin) = profile_sim(&mut engine, 3, 1);
+        let (_, _, skin, _) = profile_sim(&mut engine, 3, 1);
         assert!(skin.is_none());
+    }
+
+    #[test]
+    fn profile_sim_reports_every_extract_phase_in_walk_order() {
+        let mut engine = skinned_engine();
+        let (_, _, _, extract) = profile_sim(&mut engine, 3, 1);
+        let extract = extract.expect("a measured extract reports a phase table");
+        assert_eq!(extract.sampled_frames, 3);
+        let names: Vec<&str> = extract.phases.iter().map(|p| p.phase.as_str()).collect();
+        let expected: Vec<&str> = ExtractPhase::ALL.iter().map(|p| p.name()).collect();
+        assert_eq!(names, expected);
+        assert_eq!(names.len(), 11);
+        assert!(extract.outside_median_ms >= 0.0);
     }
 
     #[test]
@@ -2832,7 +2898,7 @@ entities:
             .unwrap();
         engine.load_inline_scene(SCENE).unwrap();
 
-        let (sim, samples, _) = profile_sim(&mut engine, 6, 1);
+        let (sim, samples, _, _) = profile_sim(&mut engine, 6, 1);
 
         assert_eq!(samples.frames.len(), 6);
         // Ascending and contiguous: the driver's own tick counter, one tick per measured frame.
@@ -3405,6 +3471,7 @@ entities:
             probes: None,
             culling: None,
             skin: None,
+            extract: None,
             samples: None,
         }
     }

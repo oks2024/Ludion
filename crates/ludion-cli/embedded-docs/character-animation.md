@@ -97,6 +97,9 @@ clips:
   `ProfileReport.skin`, offline only: `pose_median_ms` (the `Skin` phase) and `<count>_median` for `instances`,
   `palettes_sampled`, `palettes_reused`, `palettes_shared` (both reserved, always 0) and `joints_sampled`.
   Per extract `instances = sampled + reused + shared`. Read the time beside `sim.threads`.
+  `ProfileReport.extract.phases` times every extract phase: `poses` scales with `ParentJoint` sockets on
+  animated skins (each re-poses its skin), `place` with entities, `meshes` with drawn instances, `skin`
+  with skinned instances and joints.
 - **Indicative figures** (RTX 3090 / 5950X, release): 500 figures, 5,500 joints: 0.37 ms at 1 thread, 0.32 ms at 8 or 32. The owner is `Plan/animation-clips.md` Status "Crowd posing".
 - Bench: `cargo test -p ludion-engine --release --test it -- skin_pose --ignored --nocapture`.
 

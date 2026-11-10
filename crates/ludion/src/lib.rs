@@ -2612,6 +2612,7 @@ mod budget_quality_tests {
             probes: None,
             culling: None,
             skin: None,
+            extract: None,
             samples: None,
         }
     }

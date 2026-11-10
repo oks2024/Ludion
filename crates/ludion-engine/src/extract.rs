@@ -755,7 +755,12 @@ fn extract_inner(
     // texture resolution below ask the same atlases for different halves of the same region.
     let mut atlases = AtlasCache::default();
     let mut poses = WorldAffines::new();
-    let mut placed = place(
+    assets.extract_end(ExtractPhase::Place);
+    assets.extract_begin(ExtractPhase::Poses);
+    let skin_followers = place_poses(world, &ids, assets, &mut poses, now);
+    assets.extract_end(ExtractPhase::Poses);
+    assets.extract_begin(ExtractPhase::Place);
+    let mut placed = place_with(
         world,
         &ids,
         &camera,
@@ -764,6 +769,7 @@ fn extract_inner(
         &mut atlases,
         &mut poses,
         now,
+        skin_followers,
     );
     drop_non_finite(world, &mut placed, degraded);
     // Hidden entities leave every list that feeds the scene, early, so the blend keys and the pixel
@@ -3390,6 +3396,47 @@ pub(crate) fn place<'w>(
     poses: &mut WorldAffines,
     now: SimTime,
 ) -> Placed<'w> {
+    let skin_followers = place_poses(world, ids, assets, poses, now);
+    place_with(
+        world,
+        ids,
+        camera,
+        fonts,
+        assets,
+        atlases,
+        poses,
+        now,
+        skin_followers,
+    )
+}
+
+/// The animation half of [`place`]: prefab part poses, then `ParentJoint` socket joints. Returns the
+/// skin followers [`place_with`] attaches to their skins. [`extract_inner`] calls the halves apart so
+/// the profile can time them separately.
+pub(crate) fn place_poses<'w>(
+    world: &'w World,
+    ids: &[EntityId],
+    assets: &mut dyn SceneAssets,
+    poses: &mut WorldAffines,
+    now: SimTime,
+) -> StableMap<EntityId, Vec<(&'w str, Mat4)>> {
+    prefab_part_poses(world, ids, assets, now, poses);
+    pose_sockets(world, ids, assets, poses, now)
+}
+
+/// The placement half of [`place`], after [`place_poses`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn place_with<'w>(
+    world: &'w World,
+    ids: &[EntityId],
+    camera: &RenderCamera,
+    fonts: &FontLibrary,
+    assets: &mut dyn SceneAssets,
+    atlases: &mut AtlasCache,
+    poses: &mut WorldAffines,
+    now: SimTime,
+    skin_followers: StableMap<EntityId, Vec<(&'w str, Mat4)>>,
+) -> Placed<'w> {
     // The camera's world basis, for billboards. Through [`CameraBasis::from_view`], which the
     // particle path also calls: one derivation, so a sprite and a particle in the same frame can
     // never disagree about which way "up" is.
@@ -3404,12 +3451,8 @@ pub(crate) fn place<'w>(
         texts: Vec::new(),
         lights: Vec::new(),
         spot_lights: Vec::new(),
-        skin_followers: StableMap::new(),
+        skin_followers,
     };
-
-    prefab_part_poses(world, ids, assets, now, poses);
-
-    placed.skin_followers = pose_sockets(world, ids, assets, poses, now);
 
     for (index, &id) in ids.iter().enumerate() {
         let pose = render_pose(world, poses, id);

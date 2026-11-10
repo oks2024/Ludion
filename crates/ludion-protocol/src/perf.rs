@@ -165,6 +165,11 @@ pub struct ProfileReport {
     /// capture, for `cluster`'s reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skin: Option<SkinProfile>,
+    /// Median wall time of every extract phase, and the extract time outside all of them. Filled by
+    /// the **offline** driver and absent for a live capture, for `cluster`'s reason. Read beside
+    /// `sim.threads`; the phases are CPU wall time and do not sum with GPU time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extract: Option<ExtractProfile>,
     /// The measured frames' raw per-frame columns, present when the request asked for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<ProfileSamples>,
@@ -192,6 +197,28 @@ pub struct SkinProfile {
     pub palettes_shared_median: f64,
     /// Median joints sampled per extract.
     pub joints_sampled_median: f64,
+}
+
+/// Where extract spends its wall time: one median per phase of the walk, in walk order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ExtractProfile {
+    /// Measured extracts the medians are over.
+    pub sampled_frames: u64,
+    /// Every phase in walk order, zeros included.
+    pub phases: Vec<ExtractPhaseTiming>,
+    /// Median over extracts of the extract time no phase covers (cache refresh, debug lines, scene
+    /// drop): the extract span minus that extract's phase sum, floored at 0.
+    pub outside_median_ms: f64,
+}
+
+/// One extract phase's median wall time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ExtractPhaseTiming {
+    /// The phase name: `place`, `poses`, `sprites`, `ui`, `meshes`, `skin`, `decals`, `gi`,
+    /// `particles`, `lights`, `projectiles`.
+    pub phase: String,
+    /// Median wall time of the phase per extract, in milliseconds.
+    pub median_ms: f64,
 }
 
 /// What the GPU frustum cull kept, per view, read back from its indirect args.
@@ -797,6 +824,7 @@ impl ProfileWindowData {
             probes: None,
             culling: None,
             skin: None,
+            extract: None,
             samples: include_samples.then_some(self.samples),
         }
     }
@@ -864,6 +892,41 @@ mod tests {
             serde_json::from_value::<ProfileReport>(json)
                 .unwrap()
                 .skin
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn extract_section_round_trips_and_is_optional() {
+        let mut report = window().into_report("scene".to_string(), false);
+        assert!(report.extract.is_none());
+        report.extract = Some(ExtractProfile {
+            sampled_frames: 3,
+            phases: vec![
+                ExtractPhaseTiming {
+                    phase: "place".into(),
+                    median_ms: 1.5,
+                },
+                ExtractPhaseTiming {
+                    phase: "poses".into(),
+                    median_ms: 0.0,
+                },
+            ],
+            outside_median_ms: 0.25,
+        });
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["extract"]["phases"][0]["phase"], "place");
+        assert_eq!(
+            serde_json::from_value::<ProfileReport>(json).unwrap(),
+            report
+        );
+        report.extract = None;
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json.get("extract").is_none());
+        assert!(
+            serde_json::from_value::<ProfileReport>(json)
+                .unwrap()
+                .extract
                 .is_none()
         );
     }

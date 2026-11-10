@@ -4,7 +4,7 @@ description: Profiling capture surfaces: offline driver, live channel, profile.c
 
 # profiling-capture
 
-**Scope:** the capture half of `ludion devdocs profiling` (the hub: layers, report shape, arming rule, layout). Offline and live surfaces, the deferred capture reply, replay tails, the `cluster`, `load` and `skin` sections and the Perfetto export.
+**Scope:** the capture half of `ludion devdocs profiling` (the hub: layers, report shape, arming rule, layout). Offline and live surfaces, the deferred capture reply, replay tails, the `cluster`, `load`, `skin` and `extract` sections and the Perfetto export.
 
 ## Dataflow
 
@@ -40,8 +40,14 @@ observer and prints the load as one stderr line.
 **The `skin` section.** A report may also carry `SkinProfile`: the median wall time of extract's `Skin`
 phase beside the medians of its five per-extract counters (instances; palettes sampled, reused and
 shared; joints sampled). Offline only, like `cluster`, and absent for a scene with no skinned
-instance. `profile_sim` attaches a `SkinClock` over the measured frames alone and restores the caller's
+instance. `profile_sim` attaches an `ExtractClock` over the measured frames alone and restores the caller's
 extract observer. Posing is parallel, so read `pose_median_ms` beside `sim.threads`.
+
+**The `extract` section.** A report also carries `ExtractProfile`: the median wall time of every extract
+phase in walk order (`phases`, all eleven, zeros included; `Poses` is the prefab part poses and
+`ParentJoint` socket joints, split out of `Place`) and `outside_median_ms`, the extract span minus that
+extract's phase sum (cache refresh, debug lines, scene drop), floored at 0. Offline only, like `skin`,
+and absent for a live capture. The same `ExtractClock` times it; read it beside `sim.threads`.
 
 **Offline: `ludion profile --scene <FILE> --frames N`.** Loads a scene, drives a warmup then N
 measured frames, medians them. It links no game code, so `sim.systems` holds only engine-registered

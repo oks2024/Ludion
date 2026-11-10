@@ -10,8 +10,10 @@
 /// A contiguous block of the extract walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ExtractPhase {
-    /// Camera resolve, `place`, the non-finite filter and the visibility filter.
+    /// Camera resolve, placement, the non-finite filter and the visibility filter.
     Place,
+    /// Prefab part animation poses and `ParentJoint` socket joints, before placement.
+    Poses,
     /// Sprite texture resolve, volley bullets and the pixel snap.
     Sprites,
     /// UI elements and world text.
@@ -34,8 +36,9 @@ pub enum ExtractPhase {
 
 impl ExtractPhase {
     /// Every phase, in walk order.
-    pub const ALL: [ExtractPhase; 10] = [
+    pub const ALL: [ExtractPhase; 11] = [
         ExtractPhase::Place,
+        ExtractPhase::Poses,
         ExtractPhase::Sprites,
         ExtractPhase::Ui,
         ExtractPhase::Meshes,
@@ -46,6 +49,23 @@ impl ExtractPhase {
         ExtractPhase::Lights,
         ExtractPhase::Projectiles,
     ];
+
+    /// The snake_case name a profile report carries.
+    pub fn name(self) -> &'static str {
+        match self {
+            ExtractPhase::Place => "place",
+            ExtractPhase::Poses => "poses",
+            ExtractPhase::Sprites => "sprites",
+            ExtractPhase::Ui => "ui",
+            ExtractPhase::Meshes => "meshes",
+            ExtractPhase::Skin => "skin",
+            ExtractPhase::Decals => "decals",
+            ExtractPhase::Gi => "gi",
+            ExtractPhase::Particles => "particles",
+            ExtractPhase::Lights => "lights",
+            ExtractPhase::Projectiles => "projectiles",
+        }
+    }
 }
 
 /// What one extract's `Skin` phase did. A deterministic shape of the frame, not a measurement:
