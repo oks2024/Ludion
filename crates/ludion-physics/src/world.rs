@@ -1887,9 +1887,11 @@ impl PhysicsWorld {
         self.fresh_colliders.push(collider_handle);
         if let Some(tunables) = tunables {
             let sleep_after_ticks = tunables.sleep_after_ticks.unwrap_or(self.sleep_after_ticks);
-            self.rapier.bodies[body_handle]
-                .activation_mut()
-                .time_until_sleep = time_until_sleep(sleep_after_ticks, self.tick_rate);
+            let activation = self.rapier.bodies[body_handle].activation_mut();
+            activation.time_until_sleep = time_until_sleep(sleep_after_ticks, self.tick_rate);
+            if let Some(threshold) = tunables.sleep_threshold {
+                activation.normalized_linear_threshold = threshold;
+            }
         }
         self.table.push(BodyEntry {
             entity,
@@ -1907,7 +1909,7 @@ impl PhysicsWorld {
     /// does so only when the entity has a body, the recorded source and `collider` are the same
     /// body kind, and the two differ in nothing but the contact material (`friction`,
     /// `restitution` and both combine rules, any body kind) and, for a [`Body::Rigid`],
-    /// `linear_damping`, `angular_damping`, `gravity_scale` and `sleep_after_ticks`; otherwise it
+    /// `linear_damping`, `angular_damping`, `gravity_scale`, `sleep_after_ticks` and `sleep_threshold`; otherwise it
     /// returns `false` and touches nothing, leaving the caller to `rebuild`.
     ///
     /// A rebuild replaces the body handle, which re-captures the zero of every `Joint` naming the
@@ -1942,6 +1944,7 @@ impl PhysicsWorld {
                 angular_damping: new.angular_damping,
                 gravity_scale: new.gravity_scale,
                 sleep_after_ticks: new.sleep_after_ticks,
+                sleep_threshold: new.sleep_threshold,
                 ..*old
             }),
             (Body::Static(_), Body::Static(new)) => Body::Static(*new),
@@ -1961,8 +1964,11 @@ impl PhysicsWorld {
             body.set_linear_damping(new.linear_damping);
             body.set_angular_damping(new.angular_damping);
             body.set_gravity_scale(new.gravity_scale, true);
-            body.activation_mut().time_until_sleep =
-                time_until_sleep(sleep_after_ticks, self.tick_rate);
+            let activation = body.activation_mut();
+            activation.time_until_sleep = time_until_sleep(sleep_after_ticks, self.tick_rate);
+            activation.normalized_linear_threshold = new.sleep_threshold.unwrap_or(
+                rapier3d::dynamics::RigidBodyActivation::default_normalized_linear_threshold(),
+            );
             // The setters clear the sleeping flag at most, not the rest timer, so a body already
             // past its threshold would fall straight back asleep before the edit moved it. A
             // sleeping pair is also not re-solved, so the new material would go unread.

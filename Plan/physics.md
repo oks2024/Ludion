@@ -270,6 +270,12 @@ Two hashed, sim-only components beside `JointMotor` (in `ludion-spatial`): `Join
 - (vii) Re-bless: no hash moves, so nothing re-records. Only the physics budgets (`pinned-*-physics-stress.toml`, the horde budgets) are re-measured, in the pin ritual's order.
 - (viii) The plan text it amends: the adopt-rapier decision's feature list, give-up 1, the W1 note on `parallel`, the W4 "no island parallelism" line, the non-goal, `dev-docs/physics-pin.md` §features and §ceiling. It also names the stale "`enhanced-determinism` and `parallel` are mutually exclusive" claim (`Plan/physics.md`, `dev-docs/physics-pin.md`, the root `Cargo.toml` comment) as the docs fix that adoption carries.
 
+**Proposed (Serious Isaac 0035, owner approval owed). An opt-in angular sleep gate.** Measured in `crates/ludion-physics/tests/ragdoll_sleep.rs`: a limp ball-jointed ragdoll's small shin capsules keep rocking at about 1.6 rad/s (farthest-point speed only 0.05–0.07 m/s). For a body with a collider, rapier's `RigidBodyActivation::update_energy` hard-codes `|ω| < π/2`, so no linear threshold (`RigidBody.sleep_threshold`, which saturates at 0.1) can sleep them. With 0.1 and `sleep_after_ticks` 15 the calm/shot/curl repro sleeps at 128/160/150 ticks against the 120 the game asked for.
+
+- (i) Vendor patch: the collider branch's gate becomes `|ω| < max(π/2, angular_threshold)`. The default `angular_threshold` (0.5) gives `π/2`, so every existing body, trace and `WorldHash` is unchanged. `LUDION-PATCH.md`/`.diff` record the change.
+- (ii) Additive `RigidBody.sleep_angular_threshold: Option<f32>` (rad/s, `>= 0`), written to `activation.angular_threshold` at creation and in place, like `sleep_threshold`.
+- (iii) Risk: a body slept mid-rock freezes visibly at up to that angular speed. That is acceptable for corpses, and only opted-in bodies are affected.
+
 ## Waves
 
 W0 and its extension are the measurement the decision was made from; Status carries the record.

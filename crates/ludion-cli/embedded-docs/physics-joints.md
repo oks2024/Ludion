@@ -277,6 +277,11 @@ gone goes inert and is reported.
 - **Settle:** every part `PhysicsWorld::is_sleeping(part) == Some(true)`. Sleep is already debounced by
   `sleep_after_ticks` and restored with the snapshot, so the retire system keeps no counter. A blast
   wakes sleepers; retiring, not sleeping, bounds the cost.
+  A limp ragdoll of ball-jointed, near-spherical parts sleeps late: an island sleeps only when every part is
+  still, and rapier also refuses sleep while any part spins faster than π/2 rad/s, so a slowly spinning
+  shin holds all eleven awake (measured: 185 / 231 / never ticks to sleep when calm / shot / curled, over
+  2,000–3,300 awake part-ticks in 300). Give its parts `sleep_threshold: 0.1` and `sleep_after_ticks: 15`
+  (128 / 160 / 150 ticks, 1,400–1,750 awake part-ticks); damping alone is chaotic, not a fix.
 - **Never-sleepers:** some parts never fall asleep, so pair the settle retire with a max-age
   force-retire (the example's `max_sim_ticks`), or those groups stay simulated forever.
 - **Pinned group:** a part joined to a `Body::Static` collider outside the group. Evict those last.

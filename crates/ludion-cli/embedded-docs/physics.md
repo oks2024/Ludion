@@ -62,7 +62,7 @@ only reaches the solver when its body is `rigid`. Collision ignores `Transform.s
 
 | field | edit |
 |---|---|
-| `friction`, `restitution`, `*_combine` (any body kind), `linear_damping`, `angular_damping`, `gravity_scale`, `sleep_after_ticks` | in place |
+| `friction`, `restitution`, `*_combine` (any body kind), `linear_damping`, `angular_damping`, `gravity_scale`, `sleep_after_ticks`, `sleep_threshold` | in place |
 | shape, body kind, `mass`, `lock`, `layer` | rebuild |
 
 In place wakes the body (a static or kinematic edit wakes what touches it); its handle, `Joint` zeros (`ludion docs physics-joints`)

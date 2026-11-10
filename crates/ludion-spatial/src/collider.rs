@@ -292,6 +292,13 @@ pub struct RigidBody {
     /// `physics.sleep_after_ticks`, else 30.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sleep_after_ticks: Option<u32>,
+    /// The farthest-point speed (m/s, rotation included) below which the body counts as still for
+    /// its `sleep_after_ticks` timer; absent ⇒ rapier's `0.05`. Raise it for a limp ragdoll whose
+    /// parts jitter just above the default. Zero or more. A live edit applies in place — see
+    /// `ludion docs physics` §Live edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub sleep_threshold: Option<f32>,
 }
 
 impl Default for RigidBody {
@@ -307,6 +314,7 @@ impl Default for RigidBody {
             gravity_scale: one(),
             lock: AxisLock::default(),
             sleep_after_ticks: None,
+            sleep_threshold: None,
         }
     }
 }
@@ -652,6 +660,12 @@ impl SemanticValidate for Collider {
             .and_then(Value::as_f64)
         {
             require_finite_gravity_scale(scale, &mut out);
+        }
+        if let Some(threshold) = value
+            .pointer("/body/rigid/sleep_threshold")
+            .and_then(Value::as_f64)
+        {
+            require_non_negative_sleep_threshold(threshold, &mut out);
         }
         out
     }
@@ -1006,6 +1020,25 @@ fn require_finite_gravity_scale(value: f64, out: &mut Vec<Diagnostic>) {
             .with_path("/body/rigid/gravity_scale")
             .with_help(
                 "give gravity_scale a finite value, e.g. 0.0 to float or 1.0 for normal gravity",
+            ),
+        );
+    }
+}
+
+/// Pushes an `L1116` when a `rigid` body's `sleep_threshold` is negative or not finite as an `f32`.
+fn require_non_negative_sleep_threshold(value: f64, out: &mut Vec<Diagnostic>) {
+    if !ludion_core::number::fits_f32(value) || value < 0.0 {
+        out.push(
+            Diagnostic::new(
+                code::COLLIDER_NON_POSITIVE_EXTENT,
+                format!(
+                    "rigid body sleep_threshold {value} is not valid; it must be a finite speed \
+                     of zero or more (m/s)"
+                ),
+            )
+            .with_path("/body/rigid/sleep_threshold")
+            .with_help(
+                "give sleep_threshold a value such as 0.15, or omit it for the default 0.05",
             ),
         );
     }

@@ -1755,6 +1755,15 @@
             ],
             "format": "uint32",
             "minimum": 0
+          },
+          "sleep_threshold": {
+            "description": "The farthest-point speed (m/s, rotation included) below which the body counts as still for\nits `sleep_after_ticks` timer; absent ⇒ rapier's `0.05`. Raise it for a limp ragdoll whose\nparts jitter just above the default. Zero or more. A live edit applies in place — see\n`ludion docs physics` §Live edits.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "minimum": 0.0
           }
         }
       },
