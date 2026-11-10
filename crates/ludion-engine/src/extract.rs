@@ -3912,15 +3912,18 @@ fn pose_skins(
         .iter()
         .map(|job| mesh_assets[job.asset].skin_joints.len())
         .sum();
+    let planned: Vec<(&SkinJob, Reuse<'_>)> = jobs
+        .iter()
+        .map(|job| (job, socketed.reusable(job, &mesh_assets[job.asset])))
+        .collect();
     let evaluate = || {
-        par::par_map_chunks(jobs, SKIN_PAR_CHUNK, |_, chunk| {
+        par::par_map_chunks(&planned, SKIN_PAR_CHUNK, |_, chunk| {
             let mut scratch = Vec::new();
             let mut out = Vec::new();
             let mut counts = SkinCounts::default();
-            for job in chunk {
-                let mesh = &mesh_assets[job.asset];
-                let joints = &mesh.skin_joints;
-                let path = match socketed.reusable(job, mesh) {
+            for &(job, reuse) in chunk {
+                let joints = &mesh_assets[job.asset].skin_joints;
+                let path = match reuse {
                     Some((stored, path)) => {
                         out.extend_from_slice(stored);
                         path
@@ -3951,16 +3954,10 @@ fn pose_skins(
         })
     };
     // Copies cost nothing next to a scoped spawn: only the jobs that pose count toward going wide.
-    let posing: usize = jobs
+    let posing: usize = planned
         .iter()
-        .map(|job| {
-            let mesh = &mesh_assets[job.asset];
-            if socketed.reusable(job, mesh).is_some() {
-                0
-            } else {
-                mesh.skin_joints.len()
-            }
-        })
+        .filter(|(_, reuse)| reuse.is_none())
+        .map(|(job, _)| mesh_assets[job.asset].skin_joints.len())
         .sum();
     let chunks = if posing < SKIN_PAR_MIN_JOINTS {
         par::with_threads(1, evaluate)
@@ -4112,9 +4109,12 @@ struct StoredPalette {
     path: PalettePath,
 }
 
+/// A stored palette slice and its path, when [`SocketPalettes::reusable`] accepts a job.
+type Reuse<'a> = Option<(&'a [Mat4], PalettePath)>;
+
 impl SocketPalettes {
     /// The stored palette for `job` when it was posed from the same inputs [`pose_skins`] would use.
-    fn reusable(&self, job: &SkinJob, mesh: &Arc<MeshData>) -> Option<(&[Mat4], PalettePath)> {
+    fn reusable(&self, job: &SkinJob, mesh: &Arc<MeshData>) -> Reuse<'_> {
         let stored = self.skins.get(&job.skin)?;
         let same_character = match (&stored.character, &job.character) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -7552,6 +7552,110 @@ mod tests {
             authored,
             "extract order is preserved verbatim (no sort, no selection)"
         );
+    }
+
+    /// [`SocketPalettes::reusable`] hands back a stored palette only when the mesh, the character and
+    /// the model all match the inputs it was posed with.
+    mod socket_palette_reuse {
+        use super::*;
+        use crate::character::CharacterData;
+        use ludion_renderer::MeshData;
+
+        fn mesh() -> Arc<MeshData> {
+            Arc::new(MeshData {
+                positions: Vec::new(),
+                normals: Vec::new(),
+                colors: Vec::new(),
+                materials: Vec::new(),
+                uvs: Vec::new(),
+                tangents: Vec::new(),
+                weights: Vec::new(),
+                bone_indices: Vec::new(),
+                skin_joints: Vec::new(),
+                textures: None,
+                authored_material: false,
+                base_color_mean: [1.0; 4],
+                rim: None,
+                double_sided: false,
+                indices: Vec::new(),
+                hash: 0,
+                lods: Vec::new(),
+            })
+        }
+
+        fn character() -> Arc<CharacterData> {
+            Arc::new(CharacterData {
+                mesh: String::new(),
+                clips: Vec::new(),
+            })
+        }
+
+        fn job(
+            skin: EntityId,
+            character: Option<Arc<CharacterData>>,
+            model: Mat4,
+        ) -> SkinJob<'static> {
+            SkinJob {
+                skin,
+                asset: 0,
+                character,
+                model,
+                followed: None,
+            }
+        }
+
+        #[test]
+        fn reusable_declines_on_each_guard_input() {
+            let mut world = World::new();
+            let skin = world.spawn();
+            let (stored_mesh, stored_character) = (mesh(), character());
+            let model = Mat4::from_translation(Vec3::new(1.0, 2.0, 3.0));
+            let palette = vec![Mat4::IDENTITY, model];
+            let store = SocketPalettes {
+                chunks: vec![vec![Mat4::ZERO, palette[0], palette[1]]],
+                skins: [(
+                    skin,
+                    StoredPalette {
+                        mesh: stored_mesh.clone(),
+                        character: Some(stored_character.clone()),
+                        model,
+                        chunk: 0,
+                        range: 1..3,
+                        path: PalettePath::Followed,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            };
+            let same = job(skin, Some(stored_character.clone()), model);
+
+            let (slice, path) = store
+                .reusable(&same, &stored_mesh)
+                .expect("same inputs reuse");
+            assert_eq!(slice, palette.as_slice());
+            assert!(matches!(path, PalettePath::Followed));
+
+            assert!(
+                store.reusable(&same, &mesh()).is_none(),
+                "an equal-content mesh behind another Arc declines"
+            );
+            let other_character = job(skin, Some(character()), model);
+            assert!(store.reusable(&other_character, &stored_mesh).is_none());
+            let no_character = job(skin, None, model);
+            assert!(store.reusable(&no_character, &stored_mesh).is_none());
+            let other_skin = job(world.spawn(), Some(stored_character), model);
+            assert!(store.reusable(&other_skin, &stored_mesh).is_none());
+
+            let mut cols = model.to_cols_array();
+            cols[1] = -0.0;
+            let signed = Mat4::from_cols_array(&cols);
+            assert_eq!(signed, model, "-0.0 equals 0.0 numerically");
+            let one_bit = job(skin, same.character.clone(), signed);
+            assert!(
+                store.reusable(&one_bit, &stored_mesh).is_none(),
+                "a model that differs by one bit declines"
+            );
+        }
     }
 
     /// The assembly clip evaluator: what [`part_placements`] does to a two-part fixture, at rest and
