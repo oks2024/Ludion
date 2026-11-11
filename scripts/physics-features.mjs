@@ -7,8 +7,9 @@
 // *path in our code* and has never looked inside a dependency. This script is the mechanical stand-in: it reads `cargo metadata` and asserts the
 // exact feature set both crates resolved to (`parallel` included: rapier's scheduler runs on the
 // pool `ludion-physics` owns), plus that `rayon`/`rayon-core` are reachable from `ludion-physics`'s
-// own (normal, non-dev, non-build) dependency closure only through the named carve-out, the
-// `rapier3d -> rayon` and `parry3d -> rayon` edges (`Plan/deterministic-job-system.md`).
+// own (normal, non-dev, non-build) dependency closure only through the named carve-outs, the
+// `rapier3d -> rayon` and `parry3d -> rayon` edges and `ludion-core -> rayon-core`, `par`'s own
+// persistent pool (`Plan/deterministic-job-system.md`).
 //
 // Why `hashbrown` is NOT gated here, on purpose, after checking: `rapier3d`'s `std` feature pulls
 // `alloc`, which turns on `parry3d/alloc`, which is what makes `hashbrown` a resolved dependency —
@@ -95,9 +96,10 @@ const EXPECTED_GLAM_FEATURES = ['approx', 'f64', 'i32', 'libm', 'nostd-libm', 's
 const DENIED_GLAM_FEATURES = ['fast-math', 'core-simd'];
 
 const FORBIDDEN_NORMAL_DEPS = new Set(['rayon', 'rayon-core']);
-// The one named carve-out: rapier's internal scheduler (Serious Isaac 0020). Only these crates may
-// depend on rayon; the pool they run on is owned by `ludion-physics` and sized `par::threads()`.
-const ALLOWED_RAYON_EDGES = new Set(['rapier3d', 'parry3d']);
+// The named carve-outs: rapier's internal scheduler (Serious Isaac 0020; its pool is owned by
+// `ludion-physics`, sized `par::threads()`) and `ludion_core::par`'s private persistent pool (0033).
+// Only these crates may depend on rayon.
+const ALLOWED_RAYON_EDGES = new Set(['rapier3d', 'parry3d', 'ludion-core']);
 
 function fail(msg) {
   console.error(`physics-features: ${msg}`);
@@ -291,13 +293,14 @@ for (const id of visited) {
   }
   chain.reverse();
   const path_ = chain.map((pid) => `${nameById.get(pid)}@${metadata.packages.find((p) => p.id === pid)?.version ?? '?'}`).join(' -> ');
-  fail(`"${name}" is reachable from ludion-physics's normal dependency closure:\n  ${path_}\nRayon is allowed only through rapier3d and parry3d (the \`parallel\` carve-out); something else in the closure now reaches it.`);
+  fail(`"${name}" is reachable from ludion-physics's normal dependency closure:\n  ${path_}\nRayon is allowed only through rapier3d and parry3d (the \`parallel\` carve-out) and ludion-core (par's pool); something else in the closure now reaches it.`);
 }
-for (const edge of ['rapier3d -> rayon', 'parry3d -> rayon']) {
+for (const edge of ['rapier3d -> rayon', 'parry3d -> rayon', 'ludion-core -> rayon-core']) {
   if (!allowedEdgesSeen.has(edge)) {
     fail(
-      `${edge.split(' ')[0]} no longer reaches rayon — the \`parallel\` pin changed? Expected rapier3d -> rayon and ` +
-      `parry3d -> rayon (seen: ${[...allowedEdgesSeen].join(', ') || 'none'})`,
+      `${edge.split(' ')[0]} no longer reaches ${edge.split(' ')[2]} — ` +
+      `${edge.startsWith('ludion-core') ? "par's pool dependency was removed?" : 'the \`parallel\` pin changed?'} Expected rapier3d -> rayon, ` +
+      `parry3d -> rayon and ludion-core -> rayon-core (seen: ${[...allowedEdgesSeen].join(', ') || 'none'})`,
     );
   }
 }
@@ -326,5 +329,5 @@ for (const name of ['rapier3d', 'parry3d']) {
 
 console.log(
   `physics-features: ok — rapier3d@${rapier.version} and parry3d@${parry.version} resolved to their ` +
-  `pinned feature sets, glam/glamx on their recorded sets with no fast-math or core-simd, rayon/rayon-core reachable from ludion-physics only through rapier3d and parry3d (the parallel carve-out), and a path consumer resolves both from vendor/`,
+  `pinned feature sets, glam/glamx on their recorded sets with no fast-math or core-simd, rayon/rayon-core reachable from ludion-physics only through rapier3d, parry3d (the parallel carve-out) and ludion-core (par's pool), and a path consumer resolves both from vendor/`,
 );

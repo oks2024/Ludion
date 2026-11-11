@@ -44,7 +44,7 @@ ludion-components      → camera, core, ecs, physics, scene, sim, spatial  [sch
       serde_json]
 ludion-cook            → assets, core  [ctt-astcenc, intel_tex_2, ktx2]
     dev: (none)  [texture2ddecoder]
-ludion-core            → (none)  [glam, libm, schemars, serde, serde_json]
+ludion-core            → (none)  [glam, libm, rayon-core, schemars, serde, serde_json]
 ludion-ecs             → core  [erased-serde, schemars, serde, serde_json]
     dev: (none)  [schemars, serde, serde_json]
 ludion-engine          → assets, camera, components, core, ecs, font, nav, physics, projectiles,

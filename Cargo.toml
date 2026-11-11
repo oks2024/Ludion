@@ -18,6 +18,8 @@ rust-version = "1.94"
 # Shared dependency versions. Crates opt in with `dep.workspace = true`; the version and
 # default feature set are pinned here so every crate agrees on one build of each dependency.
 [workspace.dependencies]
+# `ludion_core::par`'s persistent worker pool; pinned to the version rapier already resolves.
+rayon-core = "=1.13.0"
 # Lock-free MPSC/one-shot channels for the live driver seam (engine-architecture.md §3): the
 # tokio side pushes `StampedCommand`s into the intake channel and the sim thread replies via a
 # capacity-1 reply channel whose send never blocks. Deliberately tokio-free so `ludion-engine`

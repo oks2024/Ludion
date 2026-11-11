@@ -32,8 +32,8 @@
 //! ([`with_threads`]), so concurrent caller threads can hold different counts. The override covers a
 //! region's workers too: a nested region inside a chunk resolves the same count. Effective parallelism
 //! is `min(count, number of chunks)`; an effective count of `1` runs inline on the calling thread and
-//! spawns nothing, so the sequential path is not a second implementation to keep in step — it is this
-//! one with no workers.
+//! hands nothing to the pool, so the sequential path is not a second implementation to keep in step —
+//! it is this one with no workers.
 //!
 //! **The default resolves itself, and it is not `1`.** The first time [`threads`] is asked on a
 //! process where nothing called [`set_threads`], it reads `LUDION_THREADS` ([`THREADS_ENV`]) and
@@ -87,7 +87,7 @@ use std::cell::Cell;
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A caught panic's payload, in the shape [`std::panic::catch_unwind`] hands it over.
 type PanicPayload = Box<dyn Any + Send + 'static>;
@@ -364,11 +364,12 @@ where
                 lock(&failures).push((index, payload, site));
             }
         };
-        std::thread::scope(|scope| {
-            // The calling thread is one of the workers, so `workers` threads means `workers - 1`
-            // spawns and no idle caller.
+        // Helpers are tasks on `par`'s persistent pool (`ludion-par-N`, rapier's pool is separate).
+        // The calling thread is one of the workers, so `workers` threads means `workers - 1`
+        // spawned tasks and no idle caller.
+        pool(count).in_place_scope(|scope| {
             for _ in 1..workers {
-                scope.spawn(|| with_threads(count, || panic_capture::scoped(capturing, drain)));
+                scope.spawn(|_| with_threads(count, || panic_capture::scoped(capturing, drain)));
             }
             drain();
         });
@@ -471,6 +472,28 @@ where
     par_map_chunks(items, chunk_size, map)
         .into_iter()
         .fold(init, fold)
+}
+
+/// The process-wide worker pool, rebuilt larger when a region asks for more threads than it has and
+/// never shrunk. A region in flight keeps the pool it fetched alive through its own `Arc`.
+static POOL: Mutex<Option<Arc<rayon_core::ThreadPool>>> = Mutex::new(None);
+
+/// The pool for a region of `count` workers: the shared one, grown first if it is too small.
+fn pool(count: usize) -> Arc<rayon_core::ThreadPool> {
+    let mut slot = lock(&POOL);
+    if let Some(existing) = slot.as_ref().filter(|p| p.current_num_threads() >= count) {
+        return Arc::clone(existing);
+    }
+    let built = rayon_core::ThreadPoolBuilder::new()
+        .num_threads(count)
+        .thread_name(|i| format!("ludion-par-{i}"))
+        .build()
+        .unwrap_or_else(|e| {
+            panic!("ludion_core::par: failed to build a {count}-thread worker pool: {e}")
+        });
+    let built = Arc::new(built);
+    *slot = Some(Arc::clone(&built));
+    built
 }
 
 /// Locks a bookkeeping mutex, ignoring poisoning.
@@ -877,5 +900,87 @@ mod tests {
     #[should_panic(expected = "worker count must be at least 1")]
     fn zero_workers_is_a_panic() {
         with_threads(0, || ());
+    }
+
+    /// Thread names seen by the chunks of a sleeping region run at `count` workers.
+    fn region_thread_names(count: usize, chunks: usize) -> Vec<Option<String>> {
+        let names = Mutex::new(Vec::new());
+        let mut items = vec![0u8; chunks];
+        with_threads(count, || {
+            par_chunks(&mut items, 1, |_, _| {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                lock(&names).push(std::thread::current().name().map(str::to_owned));
+            });
+        });
+        names.into_inner().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn helpers_run_on_the_persistent_pool() {
+        let caller = std::thread::current().name().map(str::to_owned);
+        for _ in 0..2 {
+            let names = region_thread_names(4, 16);
+            assert_eq!(names.len(), 16);
+            for name in names {
+                assert!(
+                    name == caller
+                        || name
+                            .as_deref()
+                            .is_some_and(|n| n.starts_with("ludion-par-")),
+                    "chunk ran on {name:?}, neither the caller {caller:?} nor a pool thread"
+                );
+            }
+        }
+    }
+
+    fn nested_total(outer: &[f32]) -> f32 {
+        ordered_reduce(
+            outer,
+            1,
+            |_, o| {
+                let middle = [o[0], o[0] * 0.5, o[0] * 0.25, o[0] * 0.125];
+                ordered_reduce(
+                    &middle,
+                    1,
+                    |_, m| {
+                        let leaf = [m[0], m[0] * 0.1];
+                        ordered_reduce(&leaf, 1, |_, l| l[0], 0.0f32, |acc, v| acc + v)
+                    },
+                    0.0f32,
+                    |acc, v| acc + v,
+                )
+            },
+            0.0f32,
+            |acc, v| acc + v,
+        )
+    }
+
+    #[test]
+    fn nested_regions_three_deep_complete_at_every_count() {
+        let data = order_sensitive_values(8);
+        let reference = with_threads(1, || nested_total(&data));
+        for count in COUNTS {
+            let total = with_threads(count, || nested_total(&data));
+            assert_eq!(total.to_bits(), reference.to_bits(), "count {count}");
+        }
+    }
+
+    #[test]
+    fn the_pool_grows_for_a_larger_count() {
+        let data = order_sensitive_values(64);
+        let reference = with_threads(1, || {
+            ordered_reduce(&data, 4, chunk_sum, 0.0f32, |a, v| a + v)
+        });
+        for count in [2, 12, 2] {
+            let total = with_threads(count, || {
+                ordered_reduce(&data, 4, chunk_sum, 0.0f32, |a, v| a + v)
+            });
+            assert_eq!(total.to_bits(), reference.to_bits(), "count {count}");
+        }
+        let names = region_thread_names(12, 48);
+        assert!(
+            names.iter().flatten().any(|n| n.starts_with("ludion-par-")),
+            "no chunk of a 12-worker region ran on a pool thread: {names:?}"
+        );
     }
 }

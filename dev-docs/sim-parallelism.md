@@ -76,6 +76,9 @@ let total = par::ordered_reduce(&forces, 256, |_, c: &[f32]| c.iter().sum::<f32>
 The worker count is a process-global default (`par::set_threads`) with a thread-local scoped override
 (`par::with_threads`), so concurrent caller threads can hold different counts; an effective count of 1
 runs inline with no spawns, so the sequential path is the same code, not a second implementation.
+Helpers are tasks on a dedicated persistent pool `par` owns (rayon-core, threads `ludion-par-N`, never
+rayon's global pool, separate from rapier's), sized to the largest count any region has asked for and
+never shrinking; results are unchanged.
 
 **The parallelism is on by default, and that is a determinism decision, not a performance one.** The
 process default resolves itself the first time it is asked: `LUDION_THREADS` if set (a positive

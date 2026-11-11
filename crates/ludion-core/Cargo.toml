@@ -12,6 +12,7 @@ categories = ["game-engines", "simulation", "data-structures"]
 [dependencies]
 glam.workspace = true
 libm.workspace = true
+rayon-core.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
