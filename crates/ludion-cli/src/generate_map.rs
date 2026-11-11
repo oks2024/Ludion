@@ -212,7 +212,7 @@ fn generate_one(
     }
     let (count, yaml) = match generate_yaml(map_path, &out_path, overrides, prefab) {
         Ok(pair) => pair,
-        Err(code) => return code,
+        Err(error) => return print_compile_error(map_path, error),
     };
     if let Err(error) = write_atomic(&out_path, &yaml) {
         eprintln!(
@@ -249,7 +249,7 @@ fn check_one(
         .unwrap_or_else(|| default_out(map_path));
     let (_count, yaml) = match generate_yaml(map_path, &out_path, overrides, prefab) {
         Ok(pair) => pair,
-        Err(code) => return code,
+        Err(error) => return print_compile_error(map_path, error),
     };
 
     match std::fs::read(&out_path) {
@@ -362,7 +362,25 @@ pub(crate) fn generate_checked(
 type Generated = (Scene, Option<PrefabDocument>);
 
 /// A fault with the fragment file it was written in (`None`: the map).
-type Fault = (Option<String>, Diagnostic);
+pub(crate) type Fault = (Option<String>, Diagnostic);
+
+/// Why a map did not compile: a flag-level usage problem, or coded faults.
+pub(crate) enum CompileError {
+    Usage(String),
+    Faults(Vec<Fault>),
+}
+
+fn print_compile_error(map_path: &Path, error: CompileError) -> ExitCode {
+    match error {
+        CompileError::Usage(message) => crate::diagnostic::usage_error(message),
+        CompileError::Faults(faults) => report_faults(map_path, faults),
+    }
+}
+
+/// Wraps diagnostics that belong to the map file itself.
+fn on_map(diagnostics: impl IntoIterator<Item = Diagnostic>) -> CompileError {
+    CompileError::Faults(diagnostics.into_iter().map(|d| (None, d)).collect())
+}
 
 /// Where a map prefab is written, for rewriting its paths: the map's directory and the prefab's.
 #[derive(Clone, Copy)]
@@ -495,46 +513,39 @@ pub(crate) fn report_faults(
 /// Loads, generates, and canonically emits a map (or, with `prefab`, its `kind: prefab`), running
 /// the parse→emit idempotence self-check. Returns the entity count and the YAML. Shared by
 /// `generate_one` (which writes the YAML) and `check_one` (which compares it).
-fn generate_yaml(
+pub(crate) fn generate_yaml(
     map_path: &Path,
     out_path: &Path,
     overrides: &MapOverrides,
     prefab: bool,
-) -> Result<(usize, String), ExitCode> {
-    let mut loaded = match load(map_path, overrides) {
-        Ok(loaded) => loaded,
-        Err(diagnostics) => return Err(report(map_path, &diagnostics)),
-    };
+) -> Result<(usize, String), CompileError> {
+    let mut loaded = load(map_path, overrides).map_err(on_map)?;
     // `generated_from` is read from the scene's own directory: beside the map it is the bare file
     // name, an `--out` elsewhere names the map relative to it.
     let out_dir = out_path.parent().unwrap_or_else(|| Path::new("."));
     match ludion_import::relative_to(out_dir, map_path, code::OUTPUT_IO) {
         Ok(source) if source.contains(char::is_whitespace) => {
-            return Err(crate::diagnostic::usage_error(format_args!(
+            return Err(CompileError::Usage(format!(
                 "the map path `{source}` contains whitespace, which `generated_from` cannot \
                  record; rename the map file or its directory"
             )));
         }
         Ok(source) => loaded.doc.source = Some(overrides.provenance(&source)),
-        Err(diagnostic) => return Err(report(map_path, &[diagnostic])),
+        Err(diagnostic) => return Err(on_map([diagnostic])),
     }
     let registry = ludion_engine::builtin_registry();
     let target = prefab.then(|| PrefabTarget {
         map_dir: map_path.parent().unwrap_or_else(|| Path::new(".")),
         out_dir,
     });
-    let (scene, document) = match generate_checked(&loaded, &registry, target) {
-        Ok(generated) => generated,
-        Err(faults) => return Err(report_faults(map_path, faults)),
-    };
+    let (scene, document) =
+        generate_checked(&loaded, &registry, target).map_err(CompileError::Faults)?;
     let count = scene.entities.len();
     let yaml = match &document {
         Some(doc) => ludion_scene::emit_prefab(doc, &registry),
         None => ludion_scene::emit(&scene, &registry),
     };
-    if let Err(diagnostics) = self_check_idempotent(&yaml, prefab, &registry) {
-        return Err(report(map_path, &diagnostics));
-    }
+    self_check_idempotent(&yaml, prefab, &registry).map_err(on_map)?;
     Ok((count, yaml))
 }
 
@@ -592,7 +603,7 @@ fn lexical(path: &Path) -> PathBuf {
 
 /// The default output path: the map file with the `.map` component of its `.map.yaml` extension
 /// dropped (`district-plaza.map.yaml` → `district-plaza.yaml`).
-fn default_out(map_path: &Path) -> PathBuf {
+pub(crate) fn default_out(map_path: &Path) -> PathBuf {
     let name = file_name(map_path);
     let out_name = name.strip_suffix(".map.yaml").map_or_else(
         || match name.strip_suffix(".yaml") {

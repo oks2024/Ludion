@@ -133,7 +133,7 @@ moves a generated scene.
 
 ## Next
 
-- `ludion docs map-authoring` — the map and kit documents, and the compile loop this verifies.
+- `ludion docs map-authoring` — the map and kit documents, the compile loop this verifies, and `ludion map-drift` (the CI gate).
 - `ludion docs scene-transitions` — the gates a map's `Gate` markers drive.
 - `ludion docs scene-residue` — the `Residue` marking `L1032` guards.
 - `ludion docs collision` — the colliders the occupancy probe tests against.

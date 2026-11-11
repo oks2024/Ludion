@@ -60,6 +60,7 @@ mod generate_map;
 mod image_stats;
 mod import;
 mod map_check;
+mod map_drift;
 mod mesh;
 mod new;
 mod perfetto;
@@ -1183,6 +1184,31 @@ enum Command {
         /// Reflect the compiled room in X or Z, like `generate-map --mirror`.
         #[arg(long, value_name = "x|z", value_parser = ["x", "z"])]
         mirror: Option<String>,
+    },
+    /// The map half of the drift gate, for any project: recompiles every `*.map.yaml` under the scan
+    /// dirs and byte-compares it against its default output (a map claimed by a prefab or an
+    /// override scene needs no default one), rechecks every scene or prefab whose `generated_from:`
+    /// names a map (with its recorded `--kit`/`--seed`/`--mirror`), and requires every compile to
+    /// seal (an `L1040` leak fails here). Writes nothing; exits non-zero on any fault, each naming
+    /// its file and the `generate-map` command that fixes it. Warnings are ignored unless
+    /// `--deny-warnings`.
+    MapDrift {
+        /// The project root the scan dirs and printed paths are relative to. Defaults to the
+        /// current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Directories (relative to the root) to scan; defaults to `scenes`.
+        dirs: Vec<PathBuf>,
+        /// Print one JSON object (`ok`, `maps`, `outputs`, `files`, `diagnostics`) instead of text.
+        #[arg(long)]
+        json: bool,
+        /// Fail on every `map-check` warning except those `--allow`ed (a leak is always a fault).
+        #[arg(long)]
+        deny_warnings: bool,
+        /// With `--deny-warnings`, tolerate a warning: `L1029` alone matches the code,
+        /// `L1029:marker` also requires the message to start with that prefix. Repeatable.
+        #[arg(long, requires = "deny_warnings", value_name = "CODE[:PREFIX]")]
+        allow: Vec<String>,
     },
     /// Runs the four `ImageStats` defect metrics (`banding_score`, `edge_aliasing`, `clipped_low`,
     /// `clipped_high` — see `ludion_testkit::ImageStats` for what each measures) over one or more
@@ -2466,6 +2492,13 @@ fn main() -> std::process::ExitCode {
             seed,
             mirror.as_deref(),
         ),
+        Command::MapDrift {
+            root,
+            dirs,
+            json,
+            deny_warnings,
+            allow,
+        } => map_drift::run(root.as_deref(), &dirs, json, deny_warnings, &allow),
         Command::Voxel { command } => match command {
             VoxelCommand::New {
                 out,

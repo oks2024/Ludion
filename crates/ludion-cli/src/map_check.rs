@@ -186,40 +186,34 @@ fn parse_at(value: &str) -> Result<[f64; 2], String> {
 }
 
 /// The per-invocation switches, carried whole so one report's inputs travel as one value.
-struct Options<'a> {
-    anchor: Option<&'a str>,
+#[derive(Default)]
+pub(crate) struct Options<'a> {
+    pub(crate) anchor: Option<&'a str>,
     /// The `--radius` / `--speed` flags as given: `None` defers to the kit, then to the default.
-    radius: Option<f64>,
-    at: Option<[f64; 2]>,
-    traverse: bool,
-    speed: Option<f64>,
+    pub(crate) radius: Option<f64>,
+    pub(crate) at: Option<[f64; 2]>,
+    pub(crate) traverse: bool,
+    pub(crate) speed: Option<f64>,
 }
 
 /// Renders `expand_scene`'s errors where their source lives. A pointer into the generated scene's
 /// fragment entities (copied first, verbatim, in `fragments:` order) becomes a fragment-local pointer
 /// reported against that fragment's file; anything else stays on the map.
-fn report_expand_errors(
-    map_path: &Path,
+fn expand_faults(
     loaded: &generate_map::LoadedMap,
     diagnostics: Vec<Diagnostic>,
-) -> ExitCode {
-    let dir = map_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut groups: Vec<(PathBuf, Vec<Diagnostic>)> = Vec::new();
-    for mut diagnostic in diagnostics {
-        let mut source = map_path.to_path_buf();
-        if let Some((path, local, rest)) = fragment_origin(loaded, diagnostic.path.as_deref()) {
-            diagnostic.path = Some(format!("/entities/{local}{rest}"));
-            source = dir.join(path);
-        }
-        match groups.iter_mut().find(|(path, _)| *path == source) {
-            Some((_, found)) => found.push(diagnostic),
-            None => groups.push((source, vec![diagnostic])),
-        }
-    }
-    for (source, found) in &groups {
-        diagnostic::fail_on_errors(source, found);
-    }
-    ExitCode::FAILURE
+) -> Vec<generate_map::Fault> {
+    diagnostics
+        .into_iter()
+        .map(|mut diagnostic| {
+            let mut file = None;
+            if let Some((path, local, rest)) = fragment_origin(loaded, diagnostic.path.as_deref()) {
+                diagnostic.path = Some(format!("/entities/{local}{rest}"));
+                file = Some(path.to_owned());
+            }
+            (file, diagnostic)
+        })
+        .collect()
 }
 
 /// The fragment (as written in `fragments:`), local entity index and pointer tail a generated-scene
@@ -233,21 +227,59 @@ fn fragment_origin<'a>(
     Some((path, local, rest.to_owned()))
 }
 
-/// Checks one map and prints its report.
-fn run_one(
+/// Everything one map's check measured, owned so a caller can print the report or only read the
+/// verdicts.
+pub(crate) struct Analysis {
+    scene: Scene,
+    loaded: generate_map::LoadedMap,
+    grid: MapGrid,
+    probe: Probe,
+    markers: Vec<Option<(usize, usize)>>,
+    anchor: Anchor,
+    reach: Vec<bool>,
+    seal: SealReport,
+    outside: Vec<bool>,
+    delta_count: usize,
+    traverse: Traverse,
+    /// Heuristic placement lints (warnings — they never flip the exit code).
+    pub(crate) warnings: Vec<Diagnostic>,
+    /// The cross-map gate check, the only analysis step that raises errors (L1027).
+    pub(crate) gate_diagnostics: Vec<Diagnostic>,
+    walker: Walker,
+    at: Option<AtQuery>,
+}
+
+impl Analysis {
+    /// Whether the seal walk found the map closed.
+    pub(crate) fn sealed(&self) -> bool {
+        matches!(self.seal.outcome, Seal::Sealed)
+    }
+
+    /// The report's `seal:` line.
+    pub(crate) fn seal_line(&self) -> String {
+        self.seal.line()
+    }
+
+    /// `L1040` when the map leaks.
+    pub(crate) fn seal_lint(&self) -> Option<Diagnostic> {
+        self.seal.lint()
+    }
+}
+
+/// Measures one map: everything `map-check` reports, returned instead of printed.
+pub(crate) fn analyze(
     map_path: &Path,
     options: &Options<'_>,
     overrides: &ludion_scene::MapOverrides,
-) -> ExitCode {
-    let loaded = match generate_map::load(map_path, overrides) {
-        Ok(loaded) => loaded,
-        Err(diagnostics) => return diagnostic::report(map_path, &diagnostics),
-    };
-    let scene =
-        match generate_map::generate_checked(&loaded, &ludion_engine::builtin_registry(), None) {
-            Ok((scene, _)) => scene,
-            Err(faults) => return generate_map::report_faults(map_path, faults),
-        };
+) -> Result<Analysis, Vec<generate_map::Fault>> {
+    let loaded = generate_map::load(map_path, overrides).map_err(|diagnostics| {
+        diagnostics
+            .into_iter()
+            .map(|d| (None, d))
+            .collect::<Vec<_>>()
+    })?;
+    let (scene, _) =
+        generate_map::generate_checked(&loaded, &ludion_engine::builtin_registry(), None)?;
 
     // The walker resolves per map: the kit's `probe:` block is the content's own radius and speed, so
     // a report is quoted at the numbers the game actually walks with unless a flag overrides them.
@@ -255,24 +287,20 @@ fn run_one(
     let (speed, speed_source) = resolve(options.speed, loaded.kit.probe.speed, DEFAULT_SPEED);
 
     let grid = MapGrid::new(&loaded.doc);
-    if let Err(diagnostic) = check_lattice_budget(&grid, radius) {
-        return diagnostic::report(map_path, &[diagnostic]);
-    }
+    check_lattice_budget(&grid, radius).map_err(|diagnostic| vec![(None, diagnostic)])?;
     let root = map_path.parent().unwrap_or_else(|| Path::new("."));
-    let probe = match Probe::build(root, &scene, &grid, radius as f32) {
-        Ok(probe) => probe,
-        Err(diagnostics) => return report_expand_errors(map_path, &loaded, diagnostics),
-    };
+    let probe = Probe::build(root, &scene, &grid, radius as f32)
+        .map_err(|diagnostics| expand_faults(&loaded, diagnostics))?;
     let markers = marker_cells(&loaded.doc, &grid);
-    let anchor_cell = resolve_anchor(&scene, options.anchor, &loaded.doc, &grid);
-    let (sample_reach, anchor_start) = anchor_reach(&grid, &probe.lattice, &anchor_cell);
-    let reach = cell_reach(&grid, &probe.lattice, &sample_reach, &anchor_cell);
+    let anchor = resolve_anchor(&scene, options.anchor, &loaded.doc, &grid);
+    let (sample_reach, anchor_start) = anchor_reach(&grid, &probe.lattice, &anchor);
+    let reach = cell_reach(&grid, &probe.lattice, &sample_reach, &anchor);
     let seal = seal_check(
         &loaded.doc,
         &grid,
         &probe,
         &sample_reach,
-        &anchor_cell,
+        &anchor,
         anchor_start,
     );
     let outside = outside_cells(&loaded.doc, &grid, &probe.blocked, &reach);
@@ -283,49 +311,69 @@ fn run_one(
     // already ran. `--traverse` only decides whether the table prints.
     let traverse = Traverse::measure(&loaded.doc, &grid, &probe.lattice, &sample_reach, speed);
 
-    // Heuristic placement lints (warnings — they never flip the exit code).
-    let mut warnings = placement_lints(
-        &loaded.doc,
-        &grid,
-        &probe,
-        &reach,
-        &sample_reach,
-        &anchor_cell,
-    );
+    let mut warnings = placement_lints(&loaded.doc, &grid, &probe, &reach, &sample_reach, &anchor);
     warnings.extend(traverse.lints());
     warnings.extend(seal.lint());
     warnings.extend(name_lints(&loaded.doc));
-    // The cross-map gate check is the only report step that raises errors (L1027) and the only thing
-    // that makes the command exit non-zero. The report still prints below it.
     let gate_diagnostics = check_gate_links(map_path, &scene);
+    let at = options
+        .at
+        .map(|xz| at_query(xz, &grid, &probe, &loaded.doc));
 
-    print_report(&ReportInputs {
-        map_path,
-        scene: &scene,
-        loaded: &loaded,
-        grid: &grid,
-        probe: &probe,
-        markers: &markers,
-        anchor: &anchor_cell,
-        reached: &reach,
-        seal: &seal,
-        outside: &outside,
+    Ok(Analysis {
+        scene,
+        loaded,
+        grid,
+        probe,
+        markers,
+        anchor,
+        reach,
+        seal,
+        outside,
         delta_count,
-        gate_diagnostics: &gate_diagnostics,
-        warnings: &warnings,
+        traverse,
+        warnings,
+        gate_diagnostics,
         walker: Walker {
             radius,
             radius_source,
             speed,
             speed_source,
         },
-        at: options
-            .at
-            .map(|xz| at_query(xz, &grid, &probe, &loaded.doc)),
-        traverse: options.traverse.then_some(&traverse),
+        at,
+    })
+}
+
+/// Checks one map and prints its report.
+fn run_one(
+    map_path: &Path,
+    options: &Options<'_>,
+    overrides: &ludion_scene::MapOverrides,
+) -> ExitCode {
+    let analysis = match analyze(map_path, options, overrides) {
+        Ok(analysis) => analysis,
+        Err(faults) => return generate_map::report_faults(map_path, faults),
+    };
+    print_report(&ReportInputs {
+        map_path,
+        scene: &analysis.scene,
+        loaded: &analysis.loaded,
+        grid: &analysis.grid,
+        probe: &analysis.probe,
+        markers: &analysis.markers,
+        anchor: &analysis.anchor,
+        reached: &analysis.reach,
+        seal: &analysis.seal,
+        outside: &analysis.outside,
+        delta_count: analysis.delta_count,
+        gate_diagnostics: &analysis.gate_diagnostics,
+        warnings: &analysis.warnings,
+        walker: analysis.walker,
+        at: analysis.at,
+        traverse: options.traverse.then_some(&analysis.traverse),
     });
 
-    if gate_diagnostics.is_empty() {
+    if analysis.gate_diagnostics.is_empty() {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

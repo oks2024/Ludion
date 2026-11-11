@@ -23,7 +23,7 @@ One module per verb, each a thin wrapper over the owning crate:
 - `crates/ludion-cli/src/perfetto.rs` — `chrome_trace`: a pure `ProfileReport` → Chrome trace-event serializer, twin of the editor's `perf/trace.ts`.
 - `crates/ludion-cli/src/image_stats.rs` — `image-stats`; it reuses `ludion-assets`' PNG decoder rather than adding a second one, so an undecodable file surfaces as `L1101`/`L1102`.
 - `crates/ludion-cli/src/generate_atlas.rs` — `generate-atlas`: bakes a `kind: atlas-source` into its committed `<name>.png` + `<name>.atlas.yaml` pair over `ludion_sprite::pack`, or a `kind: font-source` (TTF/OTF read beside it) into `<name>.png` + `<name>.font.yaml` over `ludion_font::bake::bake`; `--check`-compares both bytes for the `atlas-drift` gate. `render --font` composes a font's CPU specimen sheet (`<stem>.font-sheet.png`).
-- `crates/ludion-cli/src/generate_map.rs`, `crates/ludion-cli/src/map_check.rs` — the map verbs: build-time compilers over `ludion_scene::generate`, no engine process.
+- `crates/ludion-cli/src/generate_map.rs`, `map_check.rs`, `map_drift.rs` (the in-process drift gate over both) — the map verbs: build-time compilers over `ludion_scene::generate`, no engine process.
 - `crates/ludion-cli/src/import.rs` — the thin `import` wrapper; the glTF mapping is `ludion-import`'s.
 - `crates/ludion-cli/src/dev.rs` — the hot-reload supervisor (`ludion devdocs ludion-cli-dev`).
 - `crates/ludion-cli/src/new.rs` — `new <name>`, scaffolding from the embedded `crates/ludion-cli/templates/` (dumb `{{…}}` substitution) plus the guide, embedded from its single source of truth `docs/engine-guide.md` (frontmatter stripped) so it never drifts from what `ludion docs` serves.

@@ -454,6 +454,11 @@ pub mod code {
     /// edge that never enters a gate's trigger. Raised by `ludion-cli`.
     pub const MAP_EDGE_LEAK: DiagnosticCode = DiagnosticCode::new("L1040");
 
+    /// `L1041` — `map-drift` found a map-generated scene or prefab that fails the drift gate for a
+    /// reason other than byte drift (L1039): a missing output, a moved copy, a bad recorded flag, a
+    /// leaking seal, a denied warning, an empty scan. Raised by `ludion-cli`.
+    pub const MAP_DRIFT_FAULT: DiagnosticCode = DiagnosticCode::new("L1041");
+
     /// `L1101` — an asset file referenced by a scene could not be read (missing, a directory, or
     /// permission-denied). Raised by `ludion-assets` (wrapped with the offending component path by
     /// `ludion-engine`'s extract). The diagnostic suggests the nearest filename in the assets dir.
@@ -3932,6 +3937,26 @@ gate, a key held through an arrival), so every opening in the frame needs a coll
 
 Fix: plug the gap with a collider (`map-check --at x,z` probes the reported point), or close the
 opening behind its gate.",
+    },
+    CodeEntry {
+        code: code::MAP_DRIFT_FAULT,
+        severity: Severity::Error,
+        title: "a map-generated scene fails the drift check",
+        explanation: "\
+`map-drift` checks every `*.map.yaml` under its scan directories and every scene or prefab whose
+`generated_from:` names one. This code is any failure that is not byte drift (L1039): a map whose
+default output is missing or does not compile, a scene naming a map from anywhere but that map's
+default output (a moved or orphaned copy), a recorded `--kit`, `--seed` or `--mirror` flag that does
+not parse, a named map that does not exist, a map whose seal is not `sealed` (a leak is L1040, which
+the gate treats as an error), a warning denied by `--deny-warnings`, or a scan that found no map.
+
+A map with at least one scene or prefab claiming it needs no default output: a room map compiled only
+into prefabs is checked through those.
+
+Fix: the diagnostic's help names the file and the command. Usually `ludion generate-map <map>`
+(default output) or `ludion generate-map <map> --out <file> [--kit <k>] [--seed <n>] [--mirror x|z]
+[--prefab]`, then commit the result. For a denied warning that is intended, add
+`--allow CODE[:PREFIX]`.",
     },
     CodeEntry {
         code: code::ASSET_FILE_IO,
@@ -11504,6 +11529,7 @@ mod tests {
         code::OUTPUT_IO,
         code::MAP_SCENE_DRIFT,
         code::MAP_EDGE_LEAK,
+        code::MAP_DRIFT_FAULT,
         code::ASSET_FILE_IO,
         code::ASSET_PNG_DECODE,
         code::WATCHER_START_FAILED,

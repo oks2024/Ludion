@@ -105,7 +105,7 @@ Parts are not parented unless the prefab says so, so `entity.destroy` on the roo
 
 ## Rooms from maps
 
-`ludion generate-map <map> --out rooms/x.prefab.yaml --prefab [--kit K] [--seed N] [--mirror x|z]` compiles a map into a `kind: prefab` room: one committed, drift-gated file per combination (`scripts/map-drift.mjs` rechecks it with the flags recorded in `generated_from`, but scans only the engine's own `games/` and `examples/`; an external game gates its rooms with `generate-map … --check` and `map-check <map> --kit …` in its own CI). A game that picks the kit, seed or mirror at run time stamps the map itself with `spawn_map`.
+`ludion generate-map <map> --out rooms/x.prefab.yaml --prefab [--kit K] [--seed N] [--mirror x|z]` compiles a map into a `kind: prefab` room: one committed, drift-gated file per combination (`ludion map-drift` rechecks it with the flags recorded in `generated_from`: `ludion docs map-authoring`). A game that picks the kit, seed or mirror at run time stamps the map itself with `spawn_map`.
 
 - **Mirror** reflects every transform; scale is never negative, so pieces keep their handedness and colliders stay exact. X negates yaw and Z turns it to 180−θ, so a piece faces its reflected direction. Built-in world-space vectors reflect too (`SpotLight`/`DirectionalLight` `direction`, `Velocity`, `NavSteering`, `NavAgent.target`). Game components are copied verbatim, so one holding a world direction, point or offset is not mirrored. A mirror on a map with fragments is `L1399`.
 - **Paths and refusals.** `--prefab` rewrites asset paths relative to the prefab file, except inside game components, which are copied as written. The map's `physics:` is refused and its `seed:` is dropped.
