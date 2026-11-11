@@ -101,8 +101,14 @@ pub(crate) fn cull_view_names(
 }
 
 /// The cull item of `mesh` in `bucket`, from its entry `bound` in `cull::instance_bounds`: the item
-/// rule that makes the GPU's visible set the oracle's, "unknown, or admitted".
-pub(crate) fn cull_item(mesh: &MeshInstance, bucket: u32, bound: Option<Aabb>) -> CullItem {
+/// rule that makes the GPU's visible set the oracle's, "unknown, or admitted". `lod_radius` is the
+/// instance's `cull::skinned_lod_radius` (0 sizes the level from the box).
+pub(crate) fn cull_item(
+    mesh: &MeshInstance,
+    bucket: u32,
+    bound: Option<Aabb>,
+    lod_radius: f32,
+) -> CullItem {
     let (min, max, slot) = match bound {
         None => ([0.0; 3], [0.0; 3], SLOT_ALWAYS),
         Some(b) if mesh.bone_offset != 0 => (b.min.to_array(), b.max.to_array(), SLOT_OVERRIDE),
@@ -114,7 +120,7 @@ pub(crate) fn cull_item(mesh: &MeshInstance, bucket: u32, bound: Option<Aabb>) -
         max,
         bucket,
         casts: mesh.cast_shadows as u32,
-        pad0: 0,
+        lod_radius,
         pad1: 0,
         pad2: 0,
     }
@@ -231,6 +237,8 @@ pub(crate) struct WorldCullInput<'a> {
     pub(crate) meshes: &'a [MeshInstance],
     /// `cull::instance_bounds` of `meshes`.
     pub(crate) bounds: &'a [Option<Aabb>],
+    /// `cull::instance_lod_radii` of `meshes`.
+    pub(crate) lod_radii: &'a [f32],
     pub(crate) buckets: &'a [WorldBucket<'a>],
     /// The views in order: the camera (the one view-projection its uniform uses), then the shadow views.
     pub(crate) views: &'a [CullViewSpec],
@@ -252,6 +260,7 @@ pub(crate) fn world_cull(
         instances,
         meshes,
         bounds,
+        lod_radii,
         buckets,
         views,
         stats,
@@ -268,7 +277,7 @@ pub(crate) fn world_cull(
                 .iter()
                 .map(move |&src| (b as u32, src as usize))
         })
-        .map(|(b, src)| cull_item(&meshes[src], b, bounds[src]))
+        .map(|(b, src)| cull_item(&meshes[src], b, bounds[src], lod_radii[src]))
         .collect();
     let cull_buckets: Vec<CullBucket> = buckets
         .iter()

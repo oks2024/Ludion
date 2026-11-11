@@ -27,7 +27,9 @@ mod mesh_pipeline;
 use crate::cache_eviction::CacheEviction;
 use crate::compressed::{self, CompressedUploadError};
 use crate::compute_shader::ComputeShader;
-use crate::cull::{AssetBounds, CullVolume, LodView, bounds_table, instance_bounds};
+use crate::cull::{
+    AssetBounds, CullVolume, LodView, bounds_table, instance_bounds, instance_lod_radii,
+};
 use crate::cull_stats::{CullStatsRing, CullViewCount, SampleMeta};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
@@ -2024,14 +2026,17 @@ impl Renderer {
             "the graph schedules local_shadow exactly when a light is granted a view",
         );
         // Only the cull reads the bounds; a frame without one draws its casters directly.
-        let caster_bounds = if chain.cull.is_some() {
+        let (caster_bounds, caster_lod_radii) = if chain.cull.is_some() {
             let asset_bounds: Vec<AssetBounds> = mesh_assets
                 .iter()
                 .map(|asset| asset.bounds.clone())
                 .collect();
-            instance_bounds(&scene.meshes, &asset_bounds, &scene.bone_palette)
+            (
+                instance_bounds(&scene.meshes, &asset_bounds, &scene.bone_palette),
+                instance_lod_radii(&scene.meshes, &asset_bounds),
+            )
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         // The sun's shadow maps, in the order the shadow passes address them: each cascade, else the
         // one anchored map.
@@ -2121,6 +2126,7 @@ impl Renderer {
                         instances,
                         meshes: &scene.meshes,
                         bounds: &caster_bounds,
+                        lod_radii: &caster_lod_radii,
                         buckets: &buckets,
                         views: &cull_views,
                         stats,

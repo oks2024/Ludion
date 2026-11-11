@@ -439,7 +439,7 @@ pub struct CullItem {
     pub max: [f32; 3],
     pub bucket: u32,
     pub casts: u32,
-    pub pad0: u32,
+    pub lod_radius: f32,
     pub pad1: u32,
     pub pad2: u32,
 }
@@ -449,7 +449,7 @@ const _: () = assert!(core::mem::offset_of!(CullItem, slot) == 12);
 const _: () = assert!(core::mem::offset_of!(CullItem, max) == 16);
 const _: () = assert!(core::mem::offset_of!(CullItem, bucket) == 28);
 const _: () = assert!(core::mem::offset_of!(CullItem, casts) == 32);
-const _: () = assert!(core::mem::offset_of!(CullItem, pad0) == 36);
+const _: () = assert!(core::mem::offset_of!(CullItem, lod_radius) == 36);
 const _: () = assert!(core::mem::offset_of!(CullItem, pad1) == 40);
 const _: () = assert!(core::mem::offset_of!(CullItem, pad2) == 44);
 

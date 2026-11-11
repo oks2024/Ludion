@@ -157,14 +157,19 @@ impl LodView {
 }
 
 /// The level of an instance with world box `bound` in `view`, chosen from `thresholds`; 0 for an
-/// instance whose bounds are unknown.
-pub(crate) fn instance_level(bound: Option<Aabb>, thresholds: &[f32], view: &LodView) -> u32 {
+/// instance whose bounds are unknown. `radius` is [`skinned_lod_radius`] (0 sizes from the box).
+pub(crate) fn instance_level(
+    bound: Option<Aabb>,
+    radius: f32,
+    thresholds: &[f32],
+    view: &LodView,
+) -> u32 {
     let Some(b) = bound else {
         return 0;
     };
     let center = (b.min + b.max) * 0.5;
     let size = lod_size(
-        lod_radius(&b),
+        if radius > 0.0 { radius } else { lod_radius(&b) },
         (center - view.eye).length(),
         view.k,
         view.ortho,
@@ -172,10 +177,42 @@ pub(crate) fn instance_level(bound: Option<Aabb>, thresholds: &[f32], view: &Lod
     lod_level(size, thresholds, view.offset)
 }
 
-/// The LOD sphere's radius (decision 22): the world box's half-diagonal; for a skinned instance the
-/// posed-joint box. `cull.wgsl`'s `select_level` mirrors it.
+/// The LOD sphere's radius of an instance sized from its world box (decision 22): the box's
+/// half-diagonal. `cull.wgsl`'s `select_level` mirrors it.
 pub(crate) fn lod_radius(bound: &Aabb) -> f32 {
     ((bound.max - bound.min) * 0.5).length()
+}
+
+/// A skinned instance's LOD radius (decision 22): the half-diagonal of its asset's rest box times the
+/// model's largest axis scale. Independent of the pose, so an animating or ragdolled figure never
+/// flips a level; 0 for any other instance, which sizes from its world box ([`lod_radius`]).
+pub(crate) fn skinned_lod_radius(mesh: &MeshInstance, assets: &[AssetBounds]) -> f32 {
+    let MeshShape::Asset(i) = mesh.shape else {
+        return 0.0;
+    };
+    if mesh.bone_offset == 0 {
+        return 0.0;
+    }
+    let Some(rest) = assets.get(i).and_then(|a| a.local) else {
+        return 0.0;
+    };
+    let scale = mesh
+        .model
+        .x_axis
+        .truncate()
+        .length()
+        .max(mesh.model.y_axis.truncate().length())
+        .max(mesh.model.z_axis.truncate().length());
+    let radius = lod_radius(&rest) * scale;
+    if radius.is_finite() { radius } else { 0.0 }
+}
+
+/// [`skinned_lod_radius`] of every instance in `meshes`.
+pub(crate) fn instance_lod_radii(meshes: &[MeshInstance], assets: &[AssetBounds]) -> Vec<f32> {
+    meshes
+        .iter()
+        .map(|mesh| skinned_lod_radius(mesh, assets))
+        .collect()
 }
 
 /// The LOD radii one chained mesh asset's instances size from.
@@ -183,7 +220,7 @@ pub(crate) fn lod_radius(bound: &Aabb) -> f32 {
 pub struct LodRadii {
     /// Index into `RenderScene::mesh_assets`.
     pub asset: usize,
-    /// Whether the asset is skinned (its radius is the posed-joint box's).
+    /// Whether the asset is skinned (a posed instance's radius is its rest box's, scaled).
     pub skinned: bool,
     /// One radius per instance with known bounds, in instance order (metres, world space).
     pub radii: Vec<f32>,
@@ -220,23 +257,29 @@ pub fn lod_radii(scene: &RenderScene) -> Vec<LodRadii> {
                 at
             }
         };
-        out[at].radii.push(lod_radius(b));
+        let radius = skinned_lod_radius(mesh, &assets);
+        out[at]
+            .radii
+            .push(if radius > 0.0 { radius } else { lod_radius(b) });
     }
     out
 }
 
 #[cfg(test)]
 /// The CPU oracle of the GPU level selection: each instance's level in `view`, where `chains[i]` is
-/// instance `i`'s thresholds (empty for an instance with no chain, which is always level 0).
+/// instance `i`'s thresholds (empty for an instance with no chain, which is always level 0) and
+/// `radii[i]` its [`skinned_lod_radius`].
 pub(crate) fn instance_levels(
     bounds: &[Option<Aabb>],
+    radii: &[f32],
     chains: &[&[f32]],
     view: &LodView,
 ) -> Vec<u32> {
     bounds
         .iter()
+        .zip(radii)
         .zip(chains)
-        .map(|(&bound, thresholds)| instance_level(bound, thresholds, view))
+        .map(|((&bound, &radius), thresholds)| instance_level(bound, radius, thresholds, view))
         .collect()
 }
 
@@ -567,6 +610,7 @@ pub fn cull_marks(
         if mesh.viewmodel {
             continue;
         }
+        let radius = skinned_lod_radius(mesh, &assets);
         match bound {
             Some(b) => {
                 let color = if frustum.intersects_aabb(b) {
@@ -579,7 +623,7 @@ pub fn cull_marks(
                         _ => Vec::new(),
                     };
                     let level = if draws_levels {
-                        instance_level(Some(*b), &thresholds, &lod_view)
+                        instance_level(Some(*b), radius, &thresholds, &lod_view)
                     } else {
                         0
                     };
@@ -719,10 +763,14 @@ mod tests {
         let at = |z: f32| Some(cube_at(Vec3::new(0.0, 0.0, -z)));
         let bounds = [at(3.0), at(5.0), at(40.0), None];
         let chains = [thresholds; 4];
-        let levels = instance_levels(&bounds, &chains, &view);
+        let radii = [0.0; 4];
+        let levels = instance_levels(&bounds, &radii, &chains, &view);
         assert_eq!(levels, vec![0, 1, 2, 0]);
         let shadow = LodView { offset: 1, ..view };
-        assert_eq!(instance_levels(&bounds, &chains, &shadow), vec![1, 2, 2, 0]);
+        assert_eq!(
+            instance_levels(&bounds, &radii, &chains, &shadow),
+            vec![1, 2, 2, 0]
+        );
     }
 
     #[test]
@@ -1131,8 +1179,9 @@ mod tests {
         assert!(cull(&bounds, &away).is_empty());
     }
 
-    /// A skinned chained asset sizes its LOD from the posed-joint box, not the mesh: the report
-    /// carries that radius and selection follows it; an unskinned chain reports its transformed box.
+    /// A skinned chained asset sizes its LOD from its rest box times the model's largest axis scale,
+    /// not the posed-joint box: the report carries that radius and selection follows it; an unskinned
+    /// chain reports its transformed box.
     #[test]
     fn lod_radii_report_the_radius_selection_sizes_from() {
         use crate::scene::MeshLod;
@@ -1156,8 +1205,9 @@ mod tests {
         let rest_radius = Vec3::splat(0.5).length();
         let (d, k) = (10.0, 1.0);
         let at = Mat4::from_translation(Vec3::new(0.0, 0.0, -d));
+        let scaled = at * Mat4::from_scale(Vec3::new(1.0, 2.0, 1.5));
         let mut scene = marks_scene(vec![
-            skinned_instance(at, 1),
+            skinned_instance(scaled, 1),
             instance(MeshShape::Asset(1), at),
         ]);
         scene.mesh_assets = vec![skinned, chain(plain_mesh(corners))];
@@ -1168,13 +1218,12 @@ mod tests {
         let (posed, plain) = (&radii[0], &radii[1]);
         assert!(posed.skinned && !plain.skinned);
         assert_eq!((posed.asset, plain.asset), (0, 1));
-        // The posed box is each vertex's reach (the mesh's half-diagonal) on every axis, plus a pad.
+        // The rest box's half-diagonal times the largest axis scale (2), whatever the pose.
         let posed_radius = posed.radii[0];
         assert!(
-            (posed_radius - rest_radius * 3.0_f32.sqrt()).abs() < 0.01,
+            (posed_radius - rest_radius * 2.0).abs() < 1e-5,
             "{posed_radius}"
         );
-        assert!(posed_radius > rest_radius);
         assert!((plain.radii[0] - rest_radius).abs() < 1e-5);
 
         let view = LodView {
@@ -1186,14 +1235,21 @@ mod tests {
         let thresholds = [0.2, 0.1];
         let assets = [AssetBounds::of_mesh(&scene.mesh_assets[0])];
         let bound = instance_bounds(&scene.meshes[..1], &assets, &scene.bone_palette)[0];
-        let level = instance_level(bound, &thresholds, &view);
+        let level = instance_level(
+            bound,
+            skinned_lod_radius(&scene.meshes[0], &assets),
+            &thresholds,
+            &view,
+        );
         let by_radius = |r: f32| lod_level(lod_size(r, d, k, false), &thresholds, 0);
         assert_eq!(level, by_radius(posed_radius));
         assert_ne!(level, 0);
+        let posed_box_radius = lod_radius(&bound.unwrap());
+        assert!(posed_box_radius > posed_radius);
         assert_ne!(
             level,
-            by_radius(rest_radius),
-            "the rest radius would pick another level"
+            by_radius(posed_box_radius),
+            "the posed box's radius would pick another level"
         );
     }
 

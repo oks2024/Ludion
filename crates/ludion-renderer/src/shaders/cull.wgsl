@@ -55,14 +55,15 @@ struct CullInstance {
 }
 
 // `slot` indexes `cull_boxes`, or is SLOT_OVERRIDE (min/max is the world box) or SLOT_ALWAYS.
-// `casts` is 0 for a mesh with `cast_shadows: false`.
+// `casts` is 0 for a mesh with `cast_shadows: false`. `lod_radius` is the LOD sphere's radius for a
+// skinned item (its rest box, scaled), 0 to size from the world box.
 struct CullItem {
     min: vec3<f32>,
     slot: u32,
     max: vec3<f32>,
     bucket: u32,
     casts: u32,
-    pad0: u32,
+    lod_radius: f32,
     pad1: u32,
     pad2: u32,
 }
@@ -184,7 +185,10 @@ fn select_level(view: u32, i: u32) -> u32 {
     }
     let v = cull_views[view];
     let center = (box.lo + box.hi) * 0.5;
-    let radius = length((box.hi - box.lo) * 0.5);
+    var radius = length((box.hi - box.lo) * 0.5);
+    if cull_items[i].lod_radius > 0.0 {
+        radius = cull_items[i].lod_radius;
+    }
     var size = radius * v.lod_eye.w;
     if v.lod_ortho == 0u {
         size = size / max(length(center - v.lod_eye.xyz), radius);

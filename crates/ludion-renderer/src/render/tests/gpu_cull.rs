@@ -7,6 +7,7 @@ use super::skin_bounds::bounded_skin_quad;
 use super::*;
 use crate::cull::{
     Aabb, CullVolume, Frustum, LodView, bounds_table, cull, instance_bounds, instance_levels,
+    skinned_lod_radius,
 };
 use crate::gpu_cull::{
     Chain, CullFrame, CullInput, CullPipelines, CullTargets, CullViewSpec, cull_item,
@@ -236,7 +237,14 @@ fn run_cull(
         .iter()
         .zip(&bounds)
         .zip(&fx.raws)
-        .map(|((mesh, bound), raw)| cull_item(mesh, raw.color[1] as u32, *bound))
+        .map(|((mesh, bound), raw)| {
+            cull_item(
+                mesh,
+                raw.color[1] as u32,
+                *bound,
+                skinned_lod_radius(mesh, assets),
+            )
+        })
         .collect();
     let buckets: Vec<CullBucket> = fx
         .buckets
@@ -915,18 +923,13 @@ fn lod_row(n: usize) -> Vec<MeshInstance> {
 fn run_lod_cull(
     renderer: &Renderer,
     meshes: &[MeshInstance],
+    assets: &[AssetBounds],
+    palette: &[Mat4],
     shadow_levels: u32,
     cull_on: bool,
 ) -> (Vec<u8>, Vec<u32>) {
     let device = renderer.gpu.device();
-    let assets = [AssetBounds {
-        local: Some(Aabb {
-            min: Vec3::splat(-1.0),
-            max: Vec3::splat(1.0),
-        }),
-        skin: None,
-    }];
-    let bounds = instance_bounds(meshes, &assets, &[]);
+    let bounds = instance_bounds(meshes, assets, palette);
     let raws: Vec<MeshInstanceRaw> = meshes
         .iter()
         .enumerate()
@@ -940,7 +943,7 @@ fn run_lod_cull(
     let items: Vec<CullItem> = meshes
         .iter()
         .zip(&bounds)
-        .map(|(mesh, bound)| cull_item(mesh, 0, *bound))
+        .map(|(mesh, bound)| cull_item(mesh, 0, *bound, skinned_lod_radius(mesh, assets)))
         .collect();
     let chain = Chain::of(&THRESHOLDS, &LEVEL_ELEMENTS, 3);
     let buckets = [CullBucket {
@@ -979,7 +982,7 @@ fn run_lod_cull(
         })
     };
     let instances = storage(bytemuck::cast_slice(&raws));
-    let table = storage(bytemuck::cast_slice(&bounds_table(&assets)));
+    let table = storage(bytemuck::cast_slice(&bounds_table(assets)));
     let target = |size: u64| {
         device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -1054,15 +1057,18 @@ fn needs_gpu_the_cull_selects_levels_as_the_oracle_and_compacts_level_major() {
     let bounds = instance_bounds(&meshes, &assets, &[]);
     let camera = LodView::of_camera(&lod_camera(), 0.0);
     let chains = vec![&THRESHOLDS[..]; meshes.len()];
+    let radii = vec![0.0; meshes.len()];
     for cull_on in [true, false] {
         let mut camera_counts = [0usize; 3];
         let mut shadow_counts = [0usize; 3];
         for shadow_levels in [0u32, 1] {
-            let (out, args) = run_lod_cull(&renderer, &meshes, shadow_levels, cull_on);
+            let (out, args) =
+                run_lod_cull(&renderer, &meshes, &assets, &[], shadow_levels, cull_on);
             for (v, (casters_only, offset)) in
                 [(false, 0), (true, shadow_levels)].into_iter().enumerate()
             {
-                let levels = instance_levels(&bounds, &chains, &LodView { offset, ..camera });
+                let levels =
+                    instance_levels(&bounds, &radii, &chains, &LodView { offset, ..camera });
                 let mut start = 0u32;
                 for level in 0..3u32 {
                     let survivors: Vec<usize> = (0..meshes.len())
@@ -1112,6 +1118,112 @@ fn needs_gpu_the_cull_selects_levels_as_the_oracle_and_compacts_level_major() {
                 shadow_counts[0] == 0 && shadow_counts[2] > camera_counts[2] / 2,
                 "shadow_levels = 1 moves the sun view coarser: {shadow_counts:?} vs {camera_counts:?}"
             );
+        }
+    }
+}
+
+/// **A skinned chain sizes its level from the rest box, on the GPU as in the oracle.** A row of
+/// skinned, scaled instances whose palette inflates the posed cull box well past the rest box: the
+/// kernel's per-view, per-level survivors are the oracle's, which select `lod_level(r·k/d)` for
+/// `r` = the rest half-diagonal times the largest axis scale, with the posed box's radius selecting
+/// another level for some instance.
+#[test]
+fn needs_gpu_a_skinned_chain_sizes_its_level_from_the_rest_box_as_the_oracle_does() {
+    let Some(renderer) = skip_or_renderer("a_skinned_chain_sizes_its_level_from_the_rest_box")
+    else {
+        return;
+    };
+    let assets = [AssetBounds::of_mesh(&bounded_skin_quad(0xC0_11_02))];
+    let rest = assets[0].local.unwrap();
+    let rest_radius = ((rest.max - rest.min) * 0.5).length();
+    let lod = LodView::of_camera(&lod_camera(), 0.0);
+    let targets = [0.5, 0.15, 0.04];
+    let (mut meshes, mut palette) = (Vec::new(), Vec::new());
+    for i in 0..24usize {
+        let scale = Vec3::new(1.0, 1.0 + 0.5 * (i % 2) as f32, 1.0 + 0.25 * (i % 3) as f32);
+        let r = rest_radius * scale.max_element();
+        // Distance at which the rest radius reaches this instance's target screen size.
+        let z = -(r * lod.k / (targets[i % 3] * (1.0 + 0.05 * (i / 3) as f32)));
+        let x = ((i % 5) as f32 - 2.0) * -0.18 * z;
+        let mut mesh = skin_instance(
+            Mat4::from_translation(Vec3::new(x, 0.0, z)) * Mat4::from_scale(scale),
+            1 + palette.len() as u32,
+        );
+        mesh.cast_shadows = i % 5 != 4;
+        palette.push(Mat4::from_scale(Vec3::splat(2.0 + (i % 4) as f32)));
+        meshes.push(mesh);
+    }
+    let bounds = instance_bounds(&meshes, &assets, &palette);
+    let radii: Vec<f32> = meshes
+        .iter()
+        .map(|m| skinned_lod_radius(m, &assets))
+        .collect();
+    let max_scale = |m: &MeshInstance| {
+        m.model
+            .x_axis
+            .truncate()
+            .length()
+            .max(m.model.y_axis.truncate().length())
+            .max(m.model.z_axis.truncate().length())
+    };
+    for (m, &r) in meshes.iter().zip(&radii) {
+        assert!((r - rest_radius * max_scale(m)).abs() < 1e-4, "{r}");
+    }
+    let chains = vec![&THRESHOLDS[..]; meshes.len()];
+    let by_box = vec![0.0; meshes.len()];
+    let oracle = instance_levels(&bounds, &radii, &chains, &lod);
+    assert_ne!(
+        oracle,
+        instance_levels(&bounds, &by_box, &chains, &lod),
+        "the posed box must pick other levels than the rest radius"
+    );
+    let bucket_cap = 16;
+    for cull_on in [true, false] {
+        for shadow_levels in [0u32, 1] {
+            let (out, args) = run_lod_cull(
+                &renderer,
+                &meshes,
+                &assets,
+                &palette,
+                shadow_levels,
+                cull_on,
+            );
+            for (v, (casters_only, offset)) in
+                [(false, 0), (true, shadow_levels)].into_iter().enumerate()
+            {
+                let levels = instance_levels(&bounds, &radii, &chains, &LodView { offset, ..lod });
+                let mut start = 0u32;
+                for level in 0..3u32 {
+                    let survivors: Vec<usize> = (0..meshes.len())
+                        .filter(|&i| {
+                            levels[i] == level && (!casters_only || meshes[i].cast_shadows)
+                        })
+                        .collect();
+                    let slot = (v * 3 + level as usize) * bucket_cap * 5;
+                    assert_eq!(
+                        args[slot..slot + 5],
+                        [
+                            LEVEL_ELEMENTS[level as usize],
+                            survivors.len() as u32,
+                            0,
+                            0,
+                            start
+                        ],
+                        "cull {cull_on} view {v} offset {offset} level {level}: args"
+                    );
+                    let base = (v * 256 + start as usize) * INSTANCE_BYTES;
+                    for (k, &i) in survivors.iter().enumerate() {
+                        let at = base + k * INSTANCE_BYTES;
+                        let model: [[f32; 4]; 4] = *bytemuck::from_bytes(&out[at..at + 64]);
+                        assert_eq!(
+                            model,
+                            meshes[i].model.to_cols_array_2d(),
+                            "cull {cull_on} view {v} level {level} slot {k}"
+                        );
+                    }
+                    start += survivors.len() as u32;
+                }
+            }
         }
     }
 }
