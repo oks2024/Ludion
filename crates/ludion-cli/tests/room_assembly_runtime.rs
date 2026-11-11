@@ -12,7 +12,7 @@ use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::diagnostics::Diagnostics;
 use ludion_engine::{
-    Engine, MapSpawn, Mirror, NavAgent, PrefabInstance, Transform, despawn_instance,
+    Engine, MapSpawn, Mirror, NavAgent, PrefabInstance, Transform, despawn_instance, prepare_map,
     replay_hashes_with, spawn_map, spawn_prefab,
 };
 use ludion_protocol::Command;
@@ -97,12 +97,26 @@ fn spawner<const V: u8>(world: &mut World, ctx: &SystemCtx) {
     }
 }
 
+/// `spawner::<V>` that first prepares the same room `PREPARE_AHEAD` ticks before the spawn.
+fn preparer<const V: u8>(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == SPAWN - PREPARE_AHEAD {
+        prepare_map(world, MAP_PATH, &variant(V)).expect("the room compiles");
+    }
+    spawner::<V>(world, ctx);
+}
+
+const PREPARE_AHEAD: u64 = 4;
+
 fn hash_trace(root: &Path, v: u8, ticks: usize) -> Vec<u64> {
     let spawner: fn(&mut World, &SystemCtx) = match v {
         0 => spawner::<0>,
         1 => spawner::<1>,
         _ => spawner::<2>,
     };
+    trace_with(root, spawner, ticks)
+}
+
+fn trace_with(root: &Path, spawner: fn(&mut World, &SystemCtx), ticks: usize) -> Vec<u64> {
     let mut engine = booted_with(root, spawner);
     (0..ticks)
         .map(|_| {
@@ -330,9 +344,19 @@ fn walkers_path_into_a_runtime_room_and_not_into_a_torn_down_one() {
 
 #[test]
 fn a_runtime_room_replays_after_its_map_and_kit_are_deleted() {
-    let root = root("room_runtime_replay");
+    replays_after_deleting_its_files("room_runtime_replay", spawner::<1>);
+}
+
+#[test]
+fn a_prepared_runtime_room_replays_after_its_map_and_kit_are_deleted() {
+    replays_after_deleting_its_files("room_runtime_prepare_replay", preparer::<1>);
+}
+
+/// Records `spawner`'s session, deletes the map and both kits, and replays it to the same hashes.
+fn replays_after_deleting_its_files(tag: &str, spawner: fn(&mut World, &SystemCtx)) {
+    let root = root(tag);
     let sink = SharedSink::default();
-    let mut engine = booted_with(&root, spawner::<1>);
+    let mut engine = booted_with(&root, spawner);
     let mut live = vec![(engine.frame(), engine.world_hash().unwrap())];
     engine.set_recording(sink.clone()).unwrap();
     while engine.frame().as_u64() < TEARDOWN + 30 {
@@ -363,7 +387,6 @@ fn a_runtime_room_replays_after_its_map_and_kit_are_deleted() {
     for gone in [MAP_PATH, KIT2_PATH, "kit.kit.yaml"] {
         std::fs::remove_file(root.join(gone)).unwrap();
     }
-    let spawner: fn(&mut World, &SystemCtx) = spawner::<1>;
     let replayed = replay_hashes_with(
         crate::room_assembly::game_with(&root, spawner),
         &bytes,
@@ -526,5 +549,51 @@ fn save_and_prefab_edits_on_a_map_instance_error_cleanly() {
     assert!(
         std::fs::read_to_string(root.join(MAP_PATH)).unwrap() == MAP,
         "the map file is untouched"
+    );
+}
+
+#[test]
+fn preparing_a_room_is_invisible_to_the_hash_and_the_spawn_after_it_is_equal() {
+    let root = root("room_runtime_prepare");
+    for (v, prepared) in [
+        (0, preparer::<0> as fn(&mut World, &SystemCtx)),
+        (1, preparer::<1>),
+        (2, preparer::<2>),
+    ] {
+        let plain = hash_trace(&root, v, 340);
+        assert_eq!(
+            trace_with(&root, prepared, 340),
+            plain,
+            "variant {v}: a prepare {PREPARE_AHEAD} ticks ahead moves no hash"
+        );
+    }
+}
+
+#[test]
+fn preparing_a_bad_map_returns_the_spawn_errors_and_spawns_nothing() {
+    let root = root("room_runtime_prepare_errors");
+    std::fs::write(
+        root.join("phys.map.yaml"),
+        format!(
+            "{MAP}physics:
+  space: free
+"
+        ),
+    )
+    .unwrap();
+    let mut engine = bare(&root);
+    let count = engine.world().entity_count();
+    for map in ["phys.map.yaml", "../outside.map.yaml", "missing.map.yaml"] {
+        let found = prepare_map(engine.world_mut(), map, &MapSpawn::default()).unwrap_err();
+        assert_eq!(codes(&found), ["L1406"], "{map}");
+        let spawned = spawn_map(engine.world_mut(), map, MapSpawn::default()).unwrap_err();
+        assert_eq!(codes(&spawned), codes(&found), "{map}: the spawn agrees");
+    }
+    assert_eq!(engine.world().entity_count(), count, "nothing spawned");
+    prepare_map(engine.world_mut(), MAP_PATH, &variant(1)).unwrap();
+    assert_eq!(
+        engine.world().entity_count(),
+        count,
+        "a good prepare spawns nothing"
     );
 }

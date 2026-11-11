@@ -87,7 +87,7 @@ pub(crate) struct PrefabLibrary {
 }
 
 mod map_spawn;
-pub use map_spawn::{MapSpawn, spawn_map};
+pub use map_spawn::{MapSpawn, prepare_map, spawn_map};
 
 /// The prefab texts a scene load or district switch reads, before the world it builds exists: the
 /// one resolver `ludion_scene::expand` is given there. A key resolves to one text per load; the

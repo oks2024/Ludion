@@ -318,6 +318,71 @@ pub fn spawn_map(
     map: &str,
     spawn: MapSpawn<'_>,
 ) -> Result<Vec<EntityId>, Vec<Diagnostic>> {
+    let ready = ready_room(world, map, &spawn)?;
+    let map_key = content_key(map, "map").map_err(|found| vec![found])?;
+    let ids = spawn_expanded(
+        world,
+        &map_key,
+        &ready.expanded,
+        spawn.placement,
+        spawn.name,
+    )?;
+    apply_bone_poses(world, &ids, &ready.poses);
+    Ok(ids)
+}
+
+/// Compiles and caches the room [`spawn_map`] would stamp for `(map, spawn.kit, spawn.seed,
+/// spawn.mirror)`, and spawns nothing: call it a few ticks before the door so the later
+/// `spawn_map` of the same combination finds the room built. `spawn.placement` and `spawn.name`
+/// are ignored (they do not key the cache).
+///
+/// It reads and records the map, kit and fragment texts exactly as a spawn would, so a recording
+/// replays the same whichever call compiled first; the library is not hashed, so a prepare leaves
+/// the `WorldHash` untouched. A failed compile is cached as its diagnostics, so the later spawn
+/// returns the same errors.
+///
+/// # Errors
+/// The compile errors of [`spawn_map`] (`L1406`, `L1019`–`L1026`, `L1399`); the spawn-time passes
+/// run only when the room is stamped.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Engine, MapSpawn, prepare_map, spawn_map};
+///
+/// let root = std::env::temp_dir().join(format!("ludion-prepare-map-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(root.join("rooms")).unwrap();
+/// std::fs::write(
+///     root.join("rooms/ossuary.kit.yaml"),
+///     "format: 1\nkind: map-kit\nname: k\ntiles:\n  \".\":\n    - name: floor\n      shape: cube\n",
+/// )
+/// .unwrap();
+/// std::fs::write(
+///     root.join("rooms/crypt.map.yaml"),
+///     "format: 1\nkind: map\nname: crypt\nkit: ossuary.kit.yaml\ncell_size: 2.0\norigin:\n  - 0.0\n  - 0.0\nrows:\n  - \"..\"\n",
+/// )
+/// .unwrap();
+///
+/// let mut engine = Engine::builder().project_root(&root).build().unwrap();
+/// let spawn = MapSpawn { seed: Some(7), ..MapSpawn::default() };
+/// prepare_map(engine.world_mut(), "rooms/crypt.map.yaml", &spawn).unwrap();
+/// let ids = spawn_map(engine.world_mut(), "rooms/crypt.map.yaml", spawn).unwrap();
+/// assert_eq!(ids.len(), 2);
+/// # std::fs::remove_dir_all(&root).ok();
+/// ```
+pub fn prepare_map(
+    world: &mut World,
+    map: &str,
+    spawn: &MapSpawn<'_>,
+) -> Result<(), Vec<Diagnostic>> {
+    ready_room(world, map, spawn).map(drop)
+}
+
+/// The compiled room for `(map, spawn)`: path keys, the library, the cached compile.
+fn ready_room(
+    world: &mut World,
+    map: &str,
+    spawn: &MapSpawn<'_>,
+) -> Result<Arc<Ready>, Vec<Diagnostic>> {
     let map_key = content_key(map, "map").map_err(|found| vec![found])?;
     let kit_key = spawn
         .kit
@@ -332,14 +397,5 @@ pub fn spawn_map(
             .with_help("spawn maps from a system of an engine-built game"),
         ]);
     };
-    let ready = library.ready_map(&map_key, kit_key.as_deref(), spawn.seed, spawn.mirror)?;
-    let ids = spawn_expanded(
-        world,
-        &map_key,
-        &ready.expanded,
-        spawn.placement,
-        spawn.name,
-    )?;
-    apply_bone_poses(world, &ids, &ready.poses);
-    Ok(ids)
+    library.ready_map(&map_key, kit_key.as_deref(), spawn.seed, spawn.mirror)
 }

@@ -24,7 +24,8 @@ use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
     Engine, EngineBuilder, MapSpawn, Nav, NavSteering, PrefabInstance, Transform,
-    TransformHierarchy, despawn_instance, nav_steer, nav_update, spawn_map, spawn_prefab,
+    TransformHierarchy, despawn_instance, nav_steer, nav_update, prepare_map, spawn_map,
+    spawn_prefab,
 };
 use ludion_spatial::spatial3d;
 
@@ -181,6 +182,17 @@ fn map_spawner(world: &mut World, ctx: &SystemCtx) {
     });
 }
 
+/// The tick that warms the room before the first spawn (frame 10) of `prepared_map_spawner`.
+const PREPARE_FRAME: u64 = 5;
+
+/// `map_spawner`, with the first room compiled by `prepare_map` on an earlier tick.
+fn prepared_map_spawner(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == PREPARE_FRAME {
+        prepare_map(world, "big.map.yaml", &MapSpawn::default()).expect("the map compiles");
+    }
+    map_spawner(world, ctx);
+}
+
 fn mover(world: &mut World, ctx: &SystemCtx) {
     let moves: Vec<_> = world
         .query_ids::<(&Transform, &NavSteering)>()
@@ -221,11 +233,10 @@ struct Run {
     entities: usize,
 }
 
-fn run(root: &Path, threads: usize, map: bool) -> Run {
+fn run(root: &Path, threads: usize, spawner: fn(&mut World, &SystemCtx), preload: bool) -> Run {
     par::with_threads(threads, || {
-        let spawner = if map { map_spawner } else { spawner };
         let mut engine = builder(root, spawner).build().expect("boots");
-        engine.load_inline_scene(&scene(!map)).unwrap();
+        engine.load_inline_scene(&scene(preload)).unwrap();
         let total = (10 + CYCLES * PERIOD) as usize;
         let mut hashes = Vec::new();
         let mut ticks = Vec::new();
@@ -303,8 +314,8 @@ fn room_spawn_and_teardown_under_nav() {
     std::fs::write(root.join("big.map.yaml"), big_map()).unwrap();
     generate(&root, "big.map.yaml", PREFAB);
 
-    let one = run(&root, 1, false);
-    let many = run(&root, 8, false);
+    let one = run(&root, 1, spawner, true);
+    let many = run(&root, 8, spawner, true);
     assert_eq!(
         one.hashes, many.hashes,
         "WorldHash traces differ between 1 and 8 threads"
@@ -338,12 +349,38 @@ fn room_spawn_map_under_nav() {
     std::fs::write(root.join("kit.kit.yaml"), KIT).unwrap();
     std::fs::write(root.join("big.map.yaml"), big_map()).unwrap();
 
-    let one = run(&root, 1, true);
-    let many = run(&root, 8, true);
+    let one = run(&root, 1, map_spawner, false);
+    let many = run(&root, 8, map_spawner, false);
     assert_eq!(
         one.hashes, many.hashes,
         "WorldHash traces differ between 1 and 8 threads"
     );
     println!("spawn_map");
     print_rows(&one, &many);
+}
+
+/// The same cycle with `prepare_map` on frame 5: "cycle 0" of the spawn row is the first spawn after
+/// a prepare (a cache hit), and the prepare tick carries the compile.
+#[test]
+#[ignore = "benchmark: run explicitly in release with --ignored --nocapture"]
+fn room_spawn_map_after_prepare_under_nav() {
+    let root = crate::room_assembly::room_root("room_assembly_prepare_bench");
+    std::fs::write(root.join("kit.kit.yaml"), KIT).unwrap();
+    std::fs::write(root.join("big.map.yaml"), big_map()).unwrap();
+
+    let one = run(&root, 1, prepared_map_spawner, false);
+    let many = run(&root, 8, prepared_map_spawner, false);
+    assert_eq!(
+        one.hashes, many.hashes,
+        "WorldHash traces differ between 1 and 8 threads"
+    );
+    println!("spawn_map after prepare_map");
+    print_rows(&one, &many);
+    for (label, r) in [("1 thread", &one), ("8 threads", &many)] {
+        println!(
+            "{label:>9} {:<24} {:.3} ms",
+            "prepare tick",
+            ms(r.ticks[PREPARE_FRAME as usize])
+        );
+    }
 }
