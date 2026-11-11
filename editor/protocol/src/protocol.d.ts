@@ -2805,8 +2805,9 @@ export interface EntityIdSchema11 {
  */
 export interface PrefabInstanceOverrides {
   /**
-   * The `L1234` or `L1230` a save would raise for this instance, in which case the fields above
-   * are empty or false.
+   * The `L1234` or `L1230` a save would raise for this instance, or `L1235` for a runtime room
+   * (a `map.spawn`/`spawn_map` instance), which has no prefab text to diff against. In both
+   * cases the fields above are empty or false.
    */
   diagnostic?: WireErrorSchema | null;
   /**

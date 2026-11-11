@@ -84,11 +84,12 @@ pub enum Command {
     /// being its root; replies with the normalized path.
     #[serde(rename = "prefab.create")]
     PrefabCreate(PrefabCreateParams),
-    /// `prefab.apply` — write a spawned instance's edits back into its prefab file.
+    /// `prefab.apply` — write a spawned instance's edits back into its prefab file; a runtime room
+    /// (a `map.spawn` instance) is refused with `L1237`.
     #[serde(rename = "prefab.apply")]
     PrefabApply(PrefabApplyParams),
     /// `prefab.revert` — restore a spawned instance's parts (or one component or field) from its
-    /// prefab file.
+    /// prefab file; a runtime room (a `map.spawn` instance) is refused with `L1238`.
     #[serde(rename = "prefab.revert")]
     PrefabRevert(PrefabRevertParams),
     /// `prefab.unpack` — turn a spawned instance into plain entities by removing its
@@ -96,7 +97,8 @@ pub enum Command {
     #[serde(rename = "prefab.unpack")]
     PrefabUnpack(PrefabUnpackParams),
     /// `prefab.overrides` — what `scene.save` would write for each prefab instance: its overrides,
-    /// removed parts and placement. A pure read.
+    /// removed parts and placement. A pure read; a runtime room (a `map.spawn` instance) reports
+    /// `L1235` for its entry.
     #[serde(rename = "prefab.overrides")]
     PrefabOverrides(PrefabOverridesParams),
     /// `map.spawn` — instantiate a `kind: map` file as a room at runtime; replies with the new

@@ -384,8 +384,9 @@ pub struct PrefabInstanceOverrides {
     /// Their `Transform` and `Parent` are the instance's placement, which `prefab.revert` leaves
     /// alone. Empty when `diagnostic` is set or the prefab cannot be read.
     pub root_parts: Vec<String>,
-    /// The `L1234` or `L1230` a save would raise for this instance, in which case the fields above
-    /// are empty or false.
+    /// The `L1234` or `L1230` a save would raise for this instance, or `L1235` for a runtime room
+    /// (a `map.spawn`/`spawn_map` instance), which has no prefab text to diff against. In both
+    /// cases the fields above are empty or false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<crate::schema_proxy::WireErrorSchema>")]
     pub diagnostic: Option<ludion_core::diagnostics::Diagnostic>,

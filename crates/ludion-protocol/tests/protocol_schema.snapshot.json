@@ -1158,7 +1158,7 @@
         "type": "object"
       },
       {
-        "description": "`prefab.apply` — write a spawned instance's edits back into its prefab file.",
+        "description": "`prefab.apply` — write a spawned instance's edits back into its prefab file; a runtime room\n(a `map.spawn` instance) is refused with `L1237`.",
         "properties": {
           "method": {
             "const": "prefab.apply",
@@ -1175,7 +1175,7 @@
         "type": "object"
       },
       {
-        "description": "`prefab.revert` — restore a spawned instance's parts (or one component or field) from its\nprefab file.",
+        "description": "`prefab.revert` — restore a spawned instance's parts (or one component or field) from its\nprefab file; a runtime room (a `map.spawn` instance) is refused with `L1238`.",
         "properties": {
           "method": {
             "const": "prefab.revert",
@@ -1209,7 +1209,7 @@
         "type": "object"
       },
       {
-        "description": "`prefab.overrides` — what `scene.save` would write for each prefab instance: its overrides,\nremoved parts and placement. A pure read.",
+        "description": "`prefab.overrides` — what `scene.save` would write for each prefab instance: its overrides,\nremoved parts and placement. A pure read; a runtime room (a `map.spawn` instance) reports\n`L1235` for its entry.",
         "properties": {
           "method": {
             "const": "prefab.overrides",
@@ -3627,7 +3627,7 @@
         "type": "object"
       },
       {
-        "description": "`prefab.apply` — write a spawned instance's edits back into its prefab file.",
+        "description": "`prefab.apply` — write a spawned instance's edits back into its prefab file; a runtime room\n(a `map.spawn` instance) is refused with `L1237`.",
         "properties": {
           "method": {
             "const": "prefab.apply",
@@ -3644,7 +3644,7 @@
         "type": "object"
       },
       {
-        "description": "`prefab.revert` — restore a spawned instance's parts (or one component or field) from its\nprefab file.",
+        "description": "`prefab.revert` — restore a spawned instance's parts (or one component or field) from its\nprefab file; a runtime room (a `map.spawn` instance) is refused with `L1238`.",
         "properties": {
           "method": {
             "const": "prefab.revert",
@@ -3678,7 +3678,7 @@
         "type": "object"
       },
       {
-        "description": "`prefab.overrides` — what `scene.save` would write for each prefab instance: its overrides,\nremoved parts and placement. A pure read.",
+        "description": "`prefab.overrides` — what `scene.save` would write for each prefab instance: its overrides,\nremoved parts and placement. A pure read; a runtime room (a `map.spawn` instance) reports\n`L1235` for its entry.",
         "properties": {
           "method": {
             "const": "prefab.overrides",
@@ -4829,7 +4829,7 @@
                 "type": "null"
               }
             ],
-            "description": "The `L1234` or `L1230` a save would raise for this instance, in which case the fields above\nare empty or false."
+            "description": "The `L1234` or `L1230` a save would raise for this instance, or `L1235` for a runtime room\n(a `map.spawn`/`spawn_map` instance), which has no prefab text to diff against. In both\ncases the fields above are empty or false."
           },
           "name": {
             "description": "The instance's name, `null` for an unnamed spawn (which a save leaves as plain entities).",
@@ -7485,7 +7485,7 @@
                 "type": "null"
               }
             ],
-            "description": "The `L1234` or `L1230` a save would raise for this instance, in which case the fields above\nare empty or false."
+            "description": "The `L1234` or `L1230` a save would raise for this instance, or `L1235` for a runtime room\n(a `map.spawn`/`spawn_map` instance), which has no prefab text to diff against. In both\ncases the fields above are empty or false."
           },
           "name": {
             "description": "The instance's name, `null` for an unnamed spawn (which a save leaves as plain entities).",
