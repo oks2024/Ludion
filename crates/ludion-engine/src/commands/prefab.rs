@@ -1,5 +1,5 @@
-//! `prefab.spawn`, `prefab.create`, `prefab.apply`, `prefab.revert`, `prefab.unpack` and
-//! `prefab.overrides` handlers.
+//! `prefab.spawn`, `map.spawn`, `prefab.despawn`, `prefab.create`, `prefab.apply`,
+//! `prefab.revert`, `prefab.unpack` and `prefab.overrides` handlers.
 
 use std::collections::BTreeMap;
 
@@ -8,8 +8,8 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::paths::relative_refusal;
 use ludion_protocol::ResponseBody;
 use ludion_protocol::command::{
-    PrefabApplyParams, PrefabCreateParams, PrefabOverridesParams, PrefabRevertParams,
-    PrefabSpawnParams, PrefabUnpackParams,
+    MapMirror, MapSpawnParams, PrefabApplyParams, PrefabCreateParams, PrefabDespawnParams,
+    PrefabOverridesParams, PrefabRevertParams, PrefabSpawnParams, PrefabUnpackParams,
 };
 use ludion_protocol::response::PrefabInstanceOverrides;
 
@@ -19,11 +19,11 @@ use crate::components::Transform;
 use crate::engine::Engine;
 
 /// `L3040` for a path outside the content root.
-fn refuse_path(path: &str) -> Result<(), Diagnostic> {
+fn refuse_path(what: &str, path: &str) -> Result<(), Diagnostic> {
     match relative_refusal(path) {
         Some(refusal) => Err(Diagnostic::new(
             code::WIRE_PATH_OUTSIDE_ROOT,
-            format!("prefab path `{path}` {}", refusal.describe()),
+            format!("{what} `{path}` {}", refusal.describe()),
         )
         .with_help(
             "pass a path relative to the content root (the directory of the scene the engine was \
@@ -40,7 +40,7 @@ pub(crate) fn spawn(
     engine: &mut Engine,
     params: PrefabSpawnParams,
 ) -> Result<ResponseBody, Diagnostic> {
-    refuse_path(&params.path)?;
+    refuse_path("prefab path", &params.path)?;
     let placement = params.transform.map(|placement| Transform {
         translation: placement.translation,
         rotation: placement.rotation,
@@ -59,13 +59,56 @@ pub(crate) fn spawn(
     Ok(ResponseBody::PrefabSpawned { entities })
 }
 
+/// `map.spawn` — instantiate the `kind: map` file at `map` as a room, all-or-nothing, with the same
+/// path refusal (`L3040`) as `prefab.spawn` on `map` and `kit`. Replies with the new ids, the
+/// instance root first.
+pub(crate) fn spawn_map(
+    engine: &mut Engine,
+    params: MapSpawnParams,
+) -> Result<ResponseBody, Diagnostic> {
+    refuse_path("map path", &params.map)?;
+    if let Some(kit) = &params.kit {
+        refuse_path("kit path", kit)?;
+    }
+    let spawn = crate::MapSpawn {
+        kit: params.kit.as_deref(),
+        seed: params.seed,
+        mirror: match params.mirror {
+            None => crate::Mirror::default(),
+            Some(MapMirror::X) => crate::Mirror::X,
+            Some(MapMirror::Z) => crate::Mirror::Z,
+        },
+        placement: params.placement.map(|placement| Transform {
+            translation: placement.translation,
+            rotation: placement.rotation,
+            scale: placement.scale,
+        }),
+        name: params.name.as_deref(),
+    };
+    let spawned = crate::spawn_map(engine.world_mut(), &params.map, spawn);
+    // Drain on the error path too: the map and kit texts were read, and the Command record follows.
+    engine.drain_prefab_texts();
+    let entities = spawned.map_err(collapse)?;
+    Ok(ResponseBody::PrefabSpawned { entities })
+}
+
+/// `prefab.despawn` — remove every part of the instance rooted at `root`; replies with the removed
+/// ids, sorted.
+pub(crate) fn despawn(
+    engine: &mut Engine,
+    params: PrefabDespawnParams,
+) -> Result<ResponseBody, Diagnostic> {
+    let entities = crate::despawn_instance(engine.world_mut(), params.root)?;
+    Ok(ResponseBody::PrefabDespawned { entities })
+}
+
 /// `prefab.create` — write the live `entities` out as a new prefab at `path`; the world's entities are
 /// untouched, and the library takes the new text of a prefab it already holds.
 pub(crate) fn create(
     engine: &mut Engine,
     params: PrefabCreateParams,
 ) -> Result<ResponseBody, Diagnostic> {
-    refuse_path(&params.path)?;
+    refuse_path("prefab path", &params.path)?;
     let path = engine
         .create_prefab(&params.entities, &params.path)
         .map_err(collapse)?;
@@ -80,7 +123,7 @@ pub(crate) fn apply(
 ) -> Result<ResponseBody, Diagnostic> {
     // A missing provenance falls through to the engine's own refusal.
     if let Ok(Some(held)) = engine.world().get::<crate::PrefabInstance>(params.instance) {
-        refuse_path(&held.source)?;
+        refuse_path("prefab path", &held.source)?;
     }
     let applied = engine
         .apply_prefab(params.instance, params.parts.as_deref())

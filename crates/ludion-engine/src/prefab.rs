@@ -849,7 +849,10 @@ pub fn despawn_instance(world: &mut World, root: EntityId) -> Result<Vec<EntityI
                 code::PREFAB_NOT_INSTANCE,
                 format!("entity {root} is not part of a prefab instance"),
             )
-            .with_help("pass the instance's root — `ids[0]` of `spawn_prefab`"));
+            .with_help(
+                "pass the instance's root — `ids[0]` of `spawn_prefab`/`spawn_map`, `entities[0]` of \
+                 `prefab.spawn`/`map.spawn`",
+            ));
         }
         Some(instance) if instance.root != root => {
             return Err(Diagnostic::new(
@@ -859,7 +862,10 @@ pub fn despawn_instance(world: &mut World, root: EntityId) -> Result<Vec<EntityI
                     instance.root
                 ),
             )
-            .with_help("pass the instance's root — `ids[0]` of `spawn_prefab`"));
+            .with_help(
+                "pass the instance's root — `ids[0]` of `spawn_prefab`/`spawn_map`, `entities[0]` of \
+                 `prefab.spawn`/`map.spawn`",
+            ));
         }
         Some(_) => {}
     }

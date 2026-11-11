@@ -125,6 +125,8 @@ pub(crate) fn record_kind(command: &Command) -> Option<RecordKind> {
         | Command::EntityDestroy(_)
         | Command::EntityReparent(_)
         | Command::PrefabSpawn(_)
+        | Command::MapSpawn(_)
+        | Command::PrefabDespawn(_)
         | Command::PrefabRevert(_)
         | Command::PrefabUnpack(_)
         | Command::ComponentSet(_)

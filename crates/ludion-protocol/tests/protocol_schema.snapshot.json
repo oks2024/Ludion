@@ -303,6 +303,80 @@
         ],
         "type": "object"
       },
+      "MapMirror": {
+        "description": "Which axis `map.spawn` mirrors the room across; the same spelling as `generate-map --mirror`.\n\n# Example\n```\nuse ludion_protocol::command::MapMirror;\nassert_eq!(serde_json::to_value(MapMirror::X).unwrap(), \"x\");\n```",
+        "oneOf": [
+          {
+            "const": "x",
+            "description": "Flip the room's x axis.",
+            "type": "string"
+          },
+          {
+            "const": "z",
+            "description": "Flip the room's z axis.",
+            "type": "string"
+          }
+        ]
+      },
+      "MapSpawnParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `map.spawn`.\n\n# Example\n```\nuse ludion_protocol::command::{MapMirror, MapSpawnParams};\n\nlet params = MapSpawnParams {\n    map: \"rooms/crypt.map.yaml\".into(),\n    kit: None,\n    seed: Some(7),\n    mirror: Some(MapMirror::X),\n    placement: None,\n    name: Some(\"a\".into()),\n};\nassert_eq!(serde_json::to_value(&params).unwrap()[\"mirror\"], \"x\");\n```",
+        "properties": {
+          "kit": {
+            "description": "A kit file overriding the map's own `kit`, relative to the content root.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "map": {
+            "description": "The `kind: map` file, relative to the content root.",
+            "type": "string"
+          },
+          "mirror": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MapMirror"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Mirror the room across this axis; omitted, no mirror."
+          },
+          "name": {
+            "description": "An instance name: the parts become `<name>/<part>`; omitted, they keep their bare part names.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "placement": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Placement"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A pose baked onto every root part of the room; omitted, the parts keep their authored pose."
+          },
+          "seed": {
+            "description": "The seed for the map's random choices; omitted, the map's own seed. A JS client loses\nprecision above 2^53.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "map"
+        ],
+        "type": "object"
+      },
       "Placement": {
         "additionalProperties": false,
         "description": "A pose baked onto every root part of a spawned prefab. Field defaults equal a `Transform`'s.\n\n# Example\n```\nuse ludion_protocol::command::Placement;\nlet placement: Placement = serde_json::from_str(r#\"{\"translation\": [5, 0, 0]}\"#).unwrap();\nassert_eq!(placement.scale, [1.0, 1.0, 1.0]);\n```",
@@ -398,6 +472,20 @@
         "required": [
           "entities",
           "path"
+        ],
+        "type": "object"
+      },
+      "PrefabDespawnParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `prefab.despawn`.\n\n# Example\n```\nuse ludion_core::ids::EntityId;\nuse ludion_protocol::command::PrefabDespawnParams;\n\nlet params = PrefabDespawnParams { root: EntityId::new(1, 0) };\nassert_eq!(serde_json::to_value(&params).unwrap()[\"root\"][\"index\"], 1);\n```",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/EntityIdSchema",
+            "description": "The instance's root: `entities[0]` of `prefab.spawn` or `map.spawn`."
+          }
+        },
+        "required": [
+          "root"
         ],
         "type": "object"
       },
@@ -1129,6 +1217,40 @@
           },
           "params": {
             "$ref": "#/$defs/PrefabOverridesParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`map.spawn` — instantiate a `kind: map` file as a room at runtime; replies with the new\nentity ids in part order, the instance root first.",
+        "properties": {
+          "method": {
+            "const": "map.spawn",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/MapSpawnParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`prefab.despawn` — remove every part of a spawned prefab or map instance, given its root;\nreplies with the removed ids.",
+        "properties": {
+          "method": {
+            "const": "prefab.despawn",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/PrefabDespawnParams"
           }
         },
         "required": [
@@ -2644,6 +2766,80 @@
         ],
         "type": "object"
       },
+      "MapMirror": {
+        "description": "Which axis `map.spawn` mirrors the room across; the same spelling as `generate-map --mirror`.\n\n# Example\n```\nuse ludion_protocol::command::MapMirror;\nassert_eq!(serde_json::to_value(MapMirror::X).unwrap(), \"x\");\n```",
+        "oneOf": [
+          {
+            "const": "x",
+            "description": "Flip the room's x axis.",
+            "type": "string"
+          },
+          {
+            "const": "z",
+            "description": "Flip the room's z axis.",
+            "type": "string"
+          }
+        ]
+      },
+      "MapSpawnParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `map.spawn`.\n\n# Example\n```\nuse ludion_protocol::command::{MapMirror, MapSpawnParams};\n\nlet params = MapSpawnParams {\n    map: \"rooms/crypt.map.yaml\".into(),\n    kit: None,\n    seed: Some(7),\n    mirror: Some(MapMirror::X),\n    placement: None,\n    name: Some(\"a\".into()),\n};\nassert_eq!(serde_json::to_value(&params).unwrap()[\"mirror\"], \"x\");\n```",
+        "properties": {
+          "kit": {
+            "description": "A kit file overriding the map's own `kit`, relative to the content root.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "map": {
+            "description": "The `kind: map` file, relative to the content root.",
+            "type": "string"
+          },
+          "mirror": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MapMirror"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Mirror the room across this axis; omitted, no mirror."
+          },
+          "name": {
+            "description": "An instance name: the parts become `<name>/<part>`; omitted, they keep their bare part names.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "placement": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Placement"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A pose baked onto every root part of the room; omitted, the parts keep their authored pose."
+          },
+          "seed": {
+            "description": "The seed for the map's random choices; omitted, the map's own seed. A JS client loses\nprecision above 2^53.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "map"
+        ],
+        "type": "object"
+      },
       "Placement": {
         "additionalProperties": false,
         "description": "A pose baked onto every root part of a spawned prefab. Field defaults equal a `Transform`'s.\n\n# Example\n```\nuse ludion_protocol::command::Placement;\nlet placement: Placement = serde_json::from_str(r#\"{\"translation\": [5, 0, 0]}\"#).unwrap();\nassert_eq!(placement.scale, [1.0, 1.0, 1.0]);\n```",
@@ -2739,6 +2935,20 @@
         "required": [
           "entities",
           "path"
+        ],
+        "type": "object"
+      },
+      "PrefabDespawnParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `prefab.despawn`.\n\n# Example\n```\nuse ludion_core::ids::EntityId;\nuse ludion_protocol::command::PrefabDespawnParams;\n\nlet params = PrefabDespawnParams { root: EntityId::new(1, 0) };\nassert_eq!(serde_json::to_value(&params).unwrap()[\"root\"][\"index\"], 1);\n```",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/EntityIdSchema",
+            "description": "The instance's root: `entities[0]` of `prefab.spawn` or `map.spawn`."
+          }
+        },
+        "required": [
+          "root"
         ],
         "type": "object"
       },
@@ -3476,6 +3686,40 @@
           },
           "params": {
             "$ref": "#/$defs/PrefabOverridesParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`map.spawn` — instantiate a `kind: map` file as a room at runtime; replies with the new\nentity ids in part order, the instance root first.",
+        "properties": {
+          "method": {
+            "const": "map.spawn",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/MapSpawnParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`prefab.despawn` — remove every part of a spawned prefab or map instance, given its root;\nreplies with the removed ids.",
+        "properties": {
+          "method": {
+            "const": "prefab.despawn",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/PrefabDespawnParams"
           }
         },
         "required": [
@@ -5259,7 +5503,7 @@
             "type": "object"
           },
           {
-            "description": "Result of `prefab.spawn` — the spawned entities in the prefab's part order; the first is the\ninstance root (`PrefabInstance.root`). The undo is `entity.destroy` on each root part.",
+            "description": "Result of `prefab.spawn` and `map.spawn` — the spawned entities in the prefab's part order;\nthe first is the instance root (`PrefabInstance.root`). The undo is `prefab.despawn` on\n`entities[0]`.",
             "properties": {
               "entities": {
                 "description": "The new entity ids, one per prefab part, in part order.",
@@ -5270,6 +5514,27 @@
               },
               "kind": {
                 "const": "prefab_spawned",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "entities"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Result of `prefab.despawn` — every part removed, sorted by id.",
+            "properties": {
+              "entities": {
+                "description": "The removed entity ids, sorted.",
+                "items": {
+                  "$ref": "#/$defs/EntityIdSchema"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "prefab_despawned",
                 "type": "string"
               }
             },
@@ -8523,7 +8788,7 @@
         "type": "object"
       },
       {
-        "description": "Result of `prefab.spawn` — the spawned entities in the prefab's part order; the first is the\ninstance root (`PrefabInstance.root`). The undo is `entity.destroy` on each root part.",
+        "description": "Result of `prefab.spawn` and `map.spawn` — the spawned entities in the prefab's part order;\nthe first is the instance root (`PrefabInstance.root`). The undo is `prefab.despawn` on\n`entities[0]`.",
         "properties": {
           "entities": {
             "description": "The new entity ids, one per prefab part, in part order.",
@@ -8534,6 +8799,27 @@
           },
           "kind": {
             "const": "prefab_spawned",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "entities"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Result of `prefab.despawn` — every part removed, sorted by id.",
+        "properties": {
+          "entities": {
+            "description": "The removed entity ids, sorted.",
+            "items": {
+              "$ref": "#/$defs/EntityIdSchema"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "const": "prefab_despawned",
             "type": "string"
           }
         },

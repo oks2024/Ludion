@@ -102,10 +102,17 @@ pub enum ResponseBody {
         /// The entity's `Transform` before the call, or `null` when it had none.
         previous_transform: Option<Value>,
     },
-    /// Result of `prefab.spawn` — the spawned entities in the prefab's part order; the first is the
-    /// instance root (`PrefabInstance.root`). The undo is `entity.destroy` on each root part.
+    /// Result of `prefab.spawn` and `map.spawn` — the spawned entities in the prefab's part order;
+    /// the first is the instance root (`PrefabInstance.root`). The undo is `prefab.despawn` on
+    /// `entities[0]`.
     PrefabSpawned {
         /// The new entity ids, one per prefab part, in part order.
+        #[schemars(with = "Vec<crate::schema_proxy::EntityIdSchema>")]
+        entities: Vec<EntityId>,
+    },
+    /// Result of `prefab.despawn` — every part removed, sorted by id.
+    PrefabDespawned {
+        /// The removed entity ids, sorted.
         #[schemars(with = "Vec<crate::schema_proxy::EntityIdSchema>")]
         entities: Vec<EntityId>,
     },
@@ -550,6 +557,9 @@ mod tests {
                 previous_transform: None,
             },
             ResponseBody::PrefabSpawned {
+                entities: vec![EntityId::new(3, 0), EntityId::new(4, 0)],
+            },
+            ResponseBody::PrefabDespawned {
                 entities: vec![EntityId::new(3, 0), EntityId::new(4, 0)],
             },
             ResponseBody::PrefabCreated {

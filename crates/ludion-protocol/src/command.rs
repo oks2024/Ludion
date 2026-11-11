@@ -99,6 +99,14 @@ pub enum Command {
     /// removed parts and placement. A pure read.
     #[serde(rename = "prefab.overrides")]
     PrefabOverrides(PrefabOverridesParams),
+    /// `map.spawn` — instantiate a `kind: map` file as a room at runtime; replies with the new
+    /// entity ids in part order, the instance root first.
+    #[serde(rename = "map.spawn")]
+    MapSpawn(MapSpawnParams),
+    /// `prefab.despawn` — remove every part of a spawned prefab or map instance, given its root;
+    /// replies with the removed ids.
+    #[serde(rename = "prefab.despawn")]
+    PrefabDespawn(PrefabDespawnParams),
 
     /// `component.set` — insert or overwrite one component value on an entity.
     #[serde(rename = "component.set")]
@@ -231,6 +239,8 @@ impl Command {
             Command::PrefabRevert(_) => "prefab.revert",
             Command::PrefabUnpack(_) => "prefab.unpack",
             Command::PrefabOverrides(_) => "prefab.overrides",
+            Command::MapSpawn(_) => "map.spawn",
+            Command::PrefabDespawn(_) => "prefab.despawn",
             Command::ComponentSet(_) => "component.set",
             Command::ComponentGet(_) => "component.get",
             Command::ComponentRemove(_) => "component.remove",
@@ -290,6 +300,8 @@ impl Command {
             | Command::EntityDestroy(_)
             | Command::EntityReparent(_)
             | Command::PrefabSpawn(_)
+            | Command::MapSpawn(_)
+            | Command::PrefabDespawn(_)
             | Command::PrefabRevert(_)
             | Command::PrefabUnpack(_)
             | Command::ComponentSet(_)
@@ -374,6 +386,8 @@ impl Command {
         "prefab.revert",
         "prefab.unpack",
         "prefab.overrides",
+        "map.spawn",
+        "prefab.despawn",
         "component.set",
         "component.get",
         "component.remove",
@@ -678,6 +692,79 @@ pub struct PrefabOverridesParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<Vec<crate::schema_proxy::EntityIdSchema>>")]
     pub instances: Option<Vec<EntityId>>,
+}
+
+/// Which axis `map.spawn` mirrors the room across; the same spelling as `generate-map --mirror`.
+///
+/// # Example
+/// ```
+/// use ludion_protocol::command::MapMirror;
+/// assert_eq!(serde_json::to_value(MapMirror::X).unwrap(), "x");
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MapMirror {
+    /// Flip the room's x axis.
+    X,
+    /// Flip the room's z axis.
+    Z,
+}
+
+/// Parameters for `map.spawn`.
+///
+/// # Example
+/// ```
+/// use ludion_protocol::command::{MapMirror, MapSpawnParams};
+///
+/// let params = MapSpawnParams {
+///     map: "rooms/crypt.map.yaml".into(),
+///     kit: None,
+///     seed: Some(7),
+///     mirror: Some(MapMirror::X),
+///     placement: None,
+///     name: Some("a".into()),
+/// };
+/// assert_eq!(serde_json::to_value(&params).unwrap()["mirror"], "x");
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapSpawnParams {
+    /// The `kind: map` file, relative to the content root.
+    pub map: String,
+    /// A kit file overriding the map's own `kit`, relative to the content root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kit: Option<String>,
+    /// The seed for the map's random choices; omitted, the map's own seed. A JS client loses
+    /// precision above 2^53.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    /// Mirror the room across this axis; omitted, no mirror.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror: Option<MapMirror>,
+    /// A pose baked onto every root part of the room; omitted, the parts keep their authored pose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Placement>,
+    /// An instance name: the parts become `<name>/<part>`; omitted, they keep their bare part names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// Parameters for `prefab.despawn`.
+///
+/// # Example
+/// ```
+/// use ludion_core::ids::EntityId;
+/// use ludion_protocol::command::PrefabDespawnParams;
+///
+/// let params = PrefabDespawnParams { root: EntityId::new(1, 0) };
+/// assert_eq!(serde_json::to_value(&params).unwrap()["root"]["index"], 1);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PrefabDespawnParams {
+    /// The instance's root: `entities[0]` of `prefab.spawn` or `map.spawn`.
+    #[schemars(with = "crate::schema_proxy::EntityIdSchema")]
+    pub root: EntityId,
 }
 
 /// Parameters for `component.set`.
@@ -1368,7 +1455,7 @@ mod tests {
         // A tripwire, not a fact worth asserting for its own sake: the surface is deliberately small
         // and every addition is a protocol rev, so growing it should require editing this number and
         // saying so in the commit — not slip in unremarked.
-        assert_eq!(Command::METHODS.len(), 38);
+        assert_eq!(Command::METHODS.len(), 40);
     }
 
     /// One instance of every variant, in declaration order. The method-name assertion below is what
@@ -1417,6 +1504,15 @@ mod tests {
             }),
             Command::PrefabUnpack(PrefabUnpackParams { instance: entity }),
             Command::PrefabOverrides(PrefabOverridesParams::default()),
+            Command::MapSpawn(MapSpawnParams {
+                map: "rooms/crypt.map.yaml".into(),
+                kit: Some("rooms/ossuary.kit.yaml".into()),
+                seed: Some(7),
+                mirror: Some(MapMirror::Z),
+                placement: None,
+                name: Some("a".into()),
+            }),
+            Command::PrefabDespawn(PrefabDespawnParams { root: entity }),
             Command::ComponentSet(ComponentSetParams {
                 entity,
                 component: "Transform".into(),
@@ -1494,6 +1590,8 @@ mod tests {
                 "prefab.spawn",
                 "prefab.revert",
                 "prefab.unpack",
+                "map.spawn",
+                "prefab.despawn",
                 "component.set",
                 "component.remove",
                 "sim.step",

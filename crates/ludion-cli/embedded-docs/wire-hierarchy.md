@@ -40,7 +40,7 @@ in order, remapping the old ids to the fresh ones:
 ]}, "frame": 12, "game_frame": 12}
 ```
 
-## Prefabs: `prefab.spawn`, `prefab.create`, `prefab.apply`, `prefab.revert`, `prefab.unpack`, `prefab.overrides`
+## Prefabs: `prefab.spawn`, `map.spawn`, `prefab.despawn`, `prefab.create`, `prefab.apply`, `prefab.revert`, `prefab.unpack`, `prefab.overrides`
 
 `prefab.spawn` instantiates a `kind: prefab` file and replies with the new ids in the prefab's part
 order, the first being the instance's first part, which every part's `PrefabInstance.root` names:
@@ -48,7 +48,7 @@ order, the first being the instance's first part, which every part's `PrefabInst
 ```jsonc
 // → spawn prefabs/crate.prefab.yaml as instance "a", shifted 5 units along x
 {"v": 1, "id": 12, "method": "prefab.spawn", "params": {"path": "prefabs/crate.prefab.yaml", "name": "a", "transform": {"translation": [5.0, 0.0, 0.0]}}}
-// ← one id per part; undo is entity.destroy on each root part
+// ← one id per part; undo is prefab.despawn on entities[0]
 {"id": 12, "ok": {"kind": "prefab_spawned", "entities": [{"index": 4, "generation": 0}, {"index": 5, "generation": 0}]}, "frame": 12, "game_frame": 12}
 ```
 
@@ -56,6 +56,34 @@ order, the first being the instance's first part, which every part's `PrefabInst
 every root part. `presentation: true` spawns every part presentation (`L1320` for a sim-only component). The spawn is all-or-nothing: a bad path (`L3040`), a missing file (`L1230`) or an
 invalid prefab changes nothing. The prefab's text is recorded inline with the command, so a replay
 survives later edits to the file.
+
+`map.spawn` is the wire face of `spawn_map`: it compiles a `kind: map` file into a room and replies
+with the same `prefab_spawned` body, `entities[0]` the instance root. `kit` (content-root-relative)
+and `seed` override the map's own, `mirror` is `"x"` or `"z"` (omitted, none), and `placement` and
+`name` act as `transform` and `name` do above. `seed` is a u64, imprecise in JS above 2^53.
+
+```jsonc
+// → a room from the map, seed 7, mirrored across x, named "r1"
+{"v": 1, "id": 19, "method": "map.spawn", "params": {"map": "rooms/crypt.map.yaml", "seed": 7, "mirror": "x", "name": "r1"}}
+{"id": 19, "ok": {"kind": "prefab_spawned", "entities": [{"index": 8, "generation": 0}, {"index": 9, "generation": 0}]}, "frame": 12, "game_frame": 12}
+```
+
+A path outside the content root (map or kit) is `L3040`; a missing or wrong-`kind` map is `L1406`; a
+mirror on a map with `fragments:` is `L1399`; any refusal changes nothing. Map, kit and fragment texts
+are recorded inline before the command, so a replay survives deleting the files.
+
+`prefab.despawn` removes every part of an instance given its root (`entities[0]` of `prefab.spawn` or
+`map.spawn`), unparented parts included, which `entity.destroy` on the root leaves alive:
+
+```jsonc
+// → remove the whole instance
+{"v": 1, "id": 20, "method": "prefab.despawn", "params": {"root": {"index": 8, "generation": 0}}}
+// ← every removed part, sorted by id
+{"id": 20, "ok": {"kind": "prefab_despawned", "entities": [{"index": 8, "generation": 0}, {"index": 9, "generation": 0}]}, "frame": 12, "game_frame": 12}
+```
+
+A dead id is `L0002`; a part that is not the root, or an entity outside any instance, is `L1235`;
+neither changes anything. Both commands are recorded and replay like `prefab.spawn`.
 
 The next four edit prefabs and their instances; `instance` is any part of the instance:
 

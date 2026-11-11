@@ -64,6 +64,8 @@ pub fn dispatch(engine: &mut Engine, command: Command) -> Result<Dispatched, Dia
         Command::PrefabRevert(params) => prefab::revert(engine, params)?,
         Command::PrefabUnpack(params) => prefab::unpack(engine, params)?,
         Command::PrefabOverrides(params) => prefab::overrides(engine, params)?,
+        Command::MapSpawn(params) => prefab::spawn_map(engine, params)?,
+        Command::PrefabDespawn(params) => prefab::despawn(engine, params)?,
         Command::ComponentSet(params) => entity::set(engine, params)?,
         Command::ComponentGet(params) => entity::get(engine, params)?,
         Command::ComponentRemove(params) => entity::remove(engine, params)?,

@@ -97,6 +97,16 @@ export type Command =
       [k: string]: unknown;
     }
   | {
+      method: 'map.spawn';
+      params: MapSpawnParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'prefab.despawn';
+      params: PrefabDespawnParams;
+      [k: string]: unknown;
+    }
+  | {
       method: 'component.set';
       params: ComponentSetParams;
       [k: string]: unknown;
@@ -218,6 +228,16 @@ export type Command =
       params: ProfileCaptureParams;
       [k: string]: unknown;
     };
+/**
+ * Which axis `map.spawn` mirrors the room across; the same spelling as `generate-map --mirror`.
+ *
+ * # Example
+ * ```
+ * use ludion_protocol::command::MapMirror;
+ * assert_eq!(serde_json::to_value(MapMirror::X).unwrap(), "x");
+ * ```
+ */
+export type MapMirror = 'x' | 'z';
 /**
  * Whether a host's global-illumination caches follow the world or hold the baseline they already
  * have. The wire form is the bare lowercase name (`"auto"` / `"hold"`).
@@ -412,6 +432,16 @@ export type Request1 =
   | {
       method: 'prefab.overrides';
       params: PrefabOverridesParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'map.spawn';
+      params: MapSpawnParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'prefab.despawn';
+      params: PrefabDespawnParams;
       [k: string]: unknown;
     }
   | {
@@ -611,7 +641,7 @@ export type Response1 =
             [k: string]: unknown;
           }
         | {
-            entity: EntityIdSchema9;
+            entity: EntityIdSchema10;
             kind: 'spawned';
             [k: string]: unknown;
           }
@@ -649,6 +679,14 @@ export type Response1 =
              */
             entities: EntityIdSchema2[];
             kind: 'prefab_spawned';
+            [k: string]: unknown;
+          }
+        | {
+            /**
+             * The removed entity ids, sorted.
+             */
+            entities: EntityIdSchema2[];
+            kind: 'prefab_despawned';
             [k: string]: unknown;
           }
         | {
@@ -968,7 +1006,7 @@ export type RestoreEntry =
        * The dropped component's registry name (as stored in the snapshot).
        */
       component: string;
-      entity: EntityIdSchema14;
+      entity: EntityIdSchema15;
       kind: 'component_unregistered';
       [k: string]: unknown;
     }
@@ -977,7 +1015,7 @@ export type RestoreEntry =
        * The dropped component's registry name.
        */
       component: string;
-      entity: EntityIdSchema15;
+      entity: EntityIdSchema16;
       /**
        * The serde failure text explaining why the value would not deserialize.
        */
@@ -990,7 +1028,7 @@ export type RestoreEntry =
        * The migrated component's registry name.
        */
       component: string;
-      entity: EntityIdSchema16;
+      entity: EntityIdSchema17;
       /**
        * Field paths newly filled from serde defaults (added since the snapshot), sorted; a nested
        * field is dotted (`inner.b`).
@@ -1080,7 +1118,7 @@ export type ResponseBody =
       [k: string]: unknown;
     }
   | {
-      entity: EntityIdSchema9;
+      entity: EntityIdSchema10;
       kind: 'spawned';
       [k: string]: unknown;
     }
@@ -1118,6 +1156,14 @@ export type ResponseBody =
        */
       entities: EntityIdSchema2[];
       kind: 'prefab_spawned';
+      [k: string]: unknown;
+    }
+  | {
+      /**
+       * The removed entity ids, sorted.
+       */
+      entities: EntityIdSchema2[];
+      kind: 'prefab_despawned';
       [k: string]: unknown;
     }
   | {
@@ -1747,6 +1793,74 @@ export interface PrefabOverridesParams {
   instances?: EntityIdSchema2[] | null;
 }
 /**
+ * Parameters for `map.spawn`.
+ *
+ * # Example
+ * ```
+ * use ludion_protocol::command::{MapMirror, MapSpawnParams};
+ *
+ * let params = MapSpawnParams {
+ *     map: "rooms/crypt.map.yaml".into(),
+ *     kit: None,
+ *     seed: Some(7),
+ *     mirror: Some(MapMirror::X),
+ *     placement: None,
+ *     name: Some("a".into()),
+ * };
+ * assert_eq!(serde_json::to_value(&params).unwrap()["mirror"], "x");
+ * ```
+ */
+export interface MapSpawnParams {
+  /**
+   * A kit file overriding the map's own `kit`, relative to the content root.
+   */
+  kit?: string | null;
+  /**
+   * The `kind: map` file, relative to the content root.
+   */
+  map: string;
+  /**
+   * Mirror the room across this axis; omitted, no mirror.
+   */
+  mirror?: MapMirror | null;
+  /**
+   * An instance name: the parts become `<name>/<part>`; omitted, they keep their bare part names.
+   */
+  name?: string | null;
+  /**
+   * A pose baked onto every root part of the room; omitted, the parts keep their authored pose.
+   */
+  placement?: Placement | null;
+  /**
+   * The seed for the map's random choices; omitted, the map's own seed. A JS client loses
+   * precision above 2^53.
+   */
+  seed?: number | null;
+}
+/**
+ * Parameters for `prefab.despawn`.
+ *
+ * # Example
+ * ```
+ * use ludion_core::ids::EntityId;
+ * use ludion_protocol::command::PrefabDespawnParams;
+ *
+ * let params = PrefabDespawnParams { root: EntityId::new(1, 0) };
+ * assert_eq!(serde_json::to_value(&params).unwrap()["root"]["index"], 1);
+ * ```
+ */
+export interface PrefabDespawnParams {
+  root: EntityIdSchema6;
+}
+/**
+ * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
+ */
+export interface EntityIdSchema6 {
+  generation: number;
+  index: number;
+  [k: string]: unknown;
+}
+/**
  * Parameters for `component.set`.
  */
 export interface ComponentSetParams {
@@ -1754,7 +1868,7 @@ export interface ComponentSetParams {
    * The registry name of the component to insert or overwrite.
    */
   component: string;
-  entity: EntityIdSchema6;
+  entity: EntityIdSchema7;
   /**
    * The component's JSON value, validated at dispatch against the component's schema, its
    * semantic validator and the entity-reference checks.
@@ -1766,7 +1880,7 @@ export interface ComponentSetParams {
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
  */
-export interface EntityIdSchema6 {
+export interface EntityIdSchema7 {
   generation: number;
   index: number;
   [k: string]: unknown;
@@ -1779,12 +1893,12 @@ export interface ComponentGetParams {
    * The registry name of the component to read.
    */
   component: string;
-  entity: EntityIdSchema7;
+  entity: EntityIdSchema8;
 }
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
  */
-export interface EntityIdSchema7 {
+export interface EntityIdSchema8 {
   generation: number;
   index: number;
   [k: string]: unknown;
@@ -1797,12 +1911,12 @@ export interface ComponentRemoveParams {
    * The registry name of the component to remove.
    */
   component: string;
-  entity: EntityIdSchema8;
+  entity: EntityIdSchema9;
 }
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
  */
-export interface EntityIdSchema8 {
+export interface EntityIdSchema9 {
   generation: number;
   index: number;
   [k: string]: unknown;
@@ -2630,7 +2744,7 @@ export interface Hello {
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
  */
-export interface EntityIdSchema9 {
+export interface EntityIdSchema10 {
   generation: number;
   index: number;
   [k: string]: unknown;
@@ -2655,13 +2769,13 @@ export interface DestroyedEntity {
   components?: {
     [k: string]: unknown;
   };
-  entity: EntityIdSchema10;
+  entity: EntityIdSchema11;
   [k: string]: unknown;
 }
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
  */
-export interface EntityIdSchema10 {
+export interface EntityIdSchema11 {
   generation: number;
   index: number;
   [k: string]: unknown;
@@ -2723,7 +2837,7 @@ export interface PrefabInstanceOverrides {
    * The part paths the instance dropped from its prefab.
    */
   removed: string[];
-  root: EntityIdSchema11;
+  root: EntityIdSchema12;
   /**
    * The prefab's root part paths, in part order: the parts with no `Parent` in the prefab file.
    * Their `Transform` and `Parent` are the instance's placement, which `prefab.revert` leaves
@@ -2735,7 +2849,7 @@ export interface PrefabInstanceOverrides {
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
  */
-export interface EntityIdSchema11 {
+export interface EntityIdSchema12 {
   generation: number;
   index: number;
   [k: string]: unknown;
@@ -2762,7 +2876,7 @@ export interface EntityMatch {
   components?: {
     [k: string]: unknown;
   };
-  entity: EntityIdSchema12;
+  entity: EntityIdSchema13;
   /**
    * The composed world transform; present only when the query set `world` and the entity has a
    * `Transform`.
@@ -2773,7 +2887,7 @@ export interface EntityMatch {
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
  */
-export interface EntityIdSchema12 {
+export interface EntityIdSchema13 {
   generation: number;
   index: number;
   [k: string]: unknown;
@@ -2850,7 +2964,7 @@ export interface WorldTransform {
  * ```
  */
 export interface EntityBounds {
-  entity: EntityIdSchema13;
+  entity: EntityIdSchema14;
   /**
    * The entity, or an ancestor, has `Visibility { visible: false }`: it is not drawn; picking still
    * finds it. Omitted when false.
@@ -2871,7 +2985,7 @@ export interface EntityBounds {
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
  */
-export interface EntityIdSchema13 {
+export interface EntityIdSchema14 {
   generation: number;
   index: number;
   [k: string]: unknown;
@@ -2931,14 +3045,6 @@ export interface RestoreReport {
 /**
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
  */
-export interface EntityIdSchema14 {
-  generation: number;
-  index: number;
-  [k: string]: unknown;
-}
-/**
- * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
- */
 export interface EntityIdSchema15 {
   generation: number;
   index: number;
@@ -2948,6 +3054,14 @@ export interface EntityIdSchema15 {
  * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
  */
 export interface EntityIdSchema16 {
+  generation: number;
+  index: number;
+  [k: string]: unknown;
+}
+/**
+ * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
+ */
+export interface EntityIdSchema17 {
   generation: number;
   index: number;
   [k: string]: unknown;

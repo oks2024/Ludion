@@ -73,6 +73,7 @@ A prefab edit reaches every instance **at the next load**. Live instances are no
 | `Engine::create_prefab(&ids, path)` | `prefab.create` | live entities → a new prefab file; the first is the root; names unique and slash-free; references must stay inside the set (`L1236`) |
 | `Engine::apply_prefab(part, parts)` | `prefab.apply` | the instance's edits → the prefab file; `parts` narrows it; the anchor's `Transform` is never written (`L1237`) |
 | `revert_prefab(world, part, pointer)` | `prefab.revert` | prefab values back, gained components removed, roots (a nested entry's unparented root too) keep their placement — a whole revert leaves their `Transform` and `Parent` alone, and a pointer naming them is `L1238` — removed parts are not respawned; `pointer` is `/<part>[/<Component>[/<field>]]` (`L1238`) |
+| `despawn_instance(world, root)` | `prefab.despawn` | removes every part of the instance (`L1235` for a non-root) |
 | `unpack_prefab(world, part)` | `prefab.unpack` | drops `PrefabInstance`; names stay, the entities become plain (`L1235` when not an instance) |
 
 `apply` diffs the instance against the text it came from and merges into the current file, so another edit in the file survives. After `engine.restore` it recovers the placement from the first root, and a rotated multi-root instance may write low-digit noise. `create` refuses a path that names a generated prefab (`L1236`).
