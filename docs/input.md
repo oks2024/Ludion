@@ -99,10 +99,13 @@ For your own deadzone, `input.gamepad().left_stick_dz(dz)` / `right_stick_dz(dz)
 
 ## Actions — keys or buttons under one name
 
-`Action` is a const-constructible set of keys and gamepad buttons; games own their bindings as constants:
+`Action` is a const-constructible set of keys, gamepad buttons and mouse buttons; games own their
+bindings as constants. `Action::new(keys, buttons, mouse)` is the `const` constructor:
 
 ```rust
-const JUMP: Action = Action { keys: &[Key::Space], buttons: &[GamepadButton::South] };
+const JUMP: Action = Action::new(&[Key::Space], &[GamepadButton::South], &[]);
+// Fire: left mouse or the right trigger.
+const FIRE: Action = Action::new(&[], &[GamepadButton::RightTrigger], &[MouseButton::Left]);
 
 if input.action_pressed(&JUMP) { /* jump */ }
 ```

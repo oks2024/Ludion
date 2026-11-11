@@ -723,7 +723,7 @@ fn radial_deadzone(stick: [f32; 2], deadzone: f32) -> [f32; 2] {
     [stick[0] * scale, stick[1] * scale]
 }
 
-/// A game-owned input binding: any of these keys or gamepad buttons triggers it.
+/// A game-owned input binding: any of these keys, gamepad buttons or mouse buttons triggers it.
 ///
 /// Constructible in a `const`; rebinding is out of scope, so games hold their bindings as
 /// constants and read them with [`InputState::action_pressed`], [`action_held`] and
@@ -736,7 +736,7 @@ fn radial_deadzone(stick: [f32; 2], deadzone: f32) -> [f32; 2] {
 /// ```
 /// use ludion_sim::{Action, GamepadButton, InputEvent, InputState, Key};
 ///
-/// const JUMP: Action = Action { keys: &[Key::Space], buttons: &[GamepadButton::South] };
+/// const JUMP: Action = Action::new(&[Key::Space], &[GamepadButton::South], &[]);
 ///
 /// let mut input = InputState::default();
 /// input.begin_tick();
@@ -749,6 +749,23 @@ pub struct Action {
     pub keys: &'static [Key],
     /// Gamepad buttons that trigger the action.
     pub buttons: &'static [GamepadButton],
+    /// Mouse buttons that trigger the action.
+    pub mouse: &'static [MouseButton],
+}
+
+impl Action {
+    /// A binding from keys, gamepad buttons and mouse buttons (`const`, so it fits a `const` item).
+    pub const fn new(
+        keys: &'static [Key],
+        buttons: &'static [GamepadButton],
+        mouse: &'static [MouseButton],
+    ) -> Self {
+        Self {
+            keys,
+            buttons,
+            mouse,
+        }
+    }
 }
 
 /// The per-tick input state systems read, maintained by the driver as a `World` resource.
@@ -874,23 +891,26 @@ impl InputState {
         }
     }
 
-    /// Whether any key or button of `action` went down this frame.
+    /// Whether any key, gamepad button or mouse button of `action` went down this frame.
     pub fn action_pressed(&self, action: &Action) -> bool {
         action.keys.iter().any(|&k| self.was_pressed(k))
             || action.buttons.iter().any(|&b| self.gamepad.was_pressed(b))
+            || action.mouse.iter().any(|&m| self.mouse.was_pressed(m))
     }
 
-    /// Whether any key or button of `action` is currently down.
+    /// Whether any key, gamepad button or mouse button of `action` is currently down.
     pub fn action_held(&self, action: &Action) -> bool {
         action.keys.iter().any(|&k| self.is_held(k))
             || action.buttons.iter().any(|&b| self.gamepad.is_held(b))
+            || action.mouse.iter().any(|&m| self.mouse.is_held(m))
     }
 
     /// Whether the action's last held input went up this frame: some key or button was released
     /// and none of the action's inputs is still down.
     pub fn action_released(&self, action: &Action) -> bool {
         (action.keys.iter().any(|&k| self.was_released(k))
-            || action.buttons.iter().any(|&b| self.gamepad.was_released(b)))
+            || action.buttons.iter().any(|&b| self.gamepad.was_released(b))
+            || action.mouse.iter().any(|&m| self.mouse.was_released(m)))
             && !self.action_held(action)
     }
 
@@ -1428,6 +1448,7 @@ mod tests {
         const FIRE: Action = Action {
             keys: &[],
             buttons: &[GamepadButton::RightTrigger],
+            mouse: &[],
         };
         let mut input = InputState::default();
         tick(&mut input, &[axis(GamepadAxis::RightTrigger, 1.0)]);
@@ -1550,6 +1571,7 @@ mod tests {
         const JUMP: Action = Action {
             keys: &[Key::Space],
             buttons: &[GamepadButton::South],
+            mouse: &[],
         };
         let key = ticked(&[InputEvent::KeyDown { key: Key::Space }]);
         assert!(key.action_pressed(&JUMP) && key.action_held(&JUMP));
@@ -1574,6 +1596,36 @@ mod tests {
         assert!(input.action_released(&JUMP));
         input.begin_tick();
         assert!(!input.action_released(&JUMP));
+    }
+
+    #[test]
+    fn actions_bind_mouse_buttons_with_the_same_edges() {
+        const FIRE: Action = Action::new(&[Key::Space], &[], &[MouseButton::Left]);
+        let mut input = ticked(&[InputEvent::MouseDown {
+            button: MouseButton::Left,
+        }]);
+        assert!(input.action_pressed(&FIRE) && input.action_held(&FIRE));
+        input.begin_tick();
+        assert!(!input.action_pressed(&FIRE) && input.action_held(&FIRE));
+        input.apply(InputEvent::MouseUp {
+            button: MouseButton::Left,
+        });
+        assert!(input.action_released(&FIRE) && !input.action_held(&FIRE));
+
+        let mut both = ticked(&[
+            InputEvent::KeyDown { key: Key::Space },
+            InputEvent::MouseDown {
+                button: MouseButton::Left,
+            },
+        ]);
+        both.begin_tick();
+        both.apply(InputEvent::MouseUp {
+            button: MouseButton::Left,
+        });
+        assert!(!both.action_released(&FIRE) && both.action_held(&FIRE));
+        both.begin_tick();
+        both.apply(InputEvent::KeyUp { key: Key::Space });
+        assert!(both.action_released(&FIRE));
     }
 
     #[test]

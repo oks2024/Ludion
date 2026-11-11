@@ -232,11 +232,13 @@ pub fn triggers(world: &mut World, _ctx: &SystemCtx) {
 const JUMP: Action = Action {
     keys: &[Key::Space],
     buttons: &[GamepadButton::South],
+    mouse: &[],
 };
 /// Crouch: C or the pad's east button.
 const CROUCH: Action = Action {
     keys: &[Key::C],
     buttons: &[GamepadButton::East],
+    mouse: &[],
 };
 
 /// Drives the hero: input → velocity, gravity, jump and its cut, crouch, one `move_character`
