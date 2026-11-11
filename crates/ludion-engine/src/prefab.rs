@@ -78,7 +78,16 @@ pub(crate) struct PrefabLibrary {
     /// Roots despawned from a sim system, whose non-parented presentation parts the next frame
     /// boundary sweeps (a sim query cannot see them).
     sweep: Vec<EntityId>,
+    /// The rooms [`spawn_map`] compiled, per `(map, kit override, seed, mirror)`; a failed compile
+    /// is cached as its diagnostics.
+    rooms: BTreeMap<map_spawn::RoomKey, Result<Arc<Ready>, Vec<Diagnostic>>>,
+    /// Per room, every text key its compile read or resolved (map, kit, fragments, nested prefabs):
+    /// the rooms a reload of one of them drops.
+    room_deps: BTreeMap<map_spawn::RoomKey, BTreeSet<String>>,
 }
+
+mod map_spawn;
+pub use map_spawn::{MapSpawn, spawn_map};
 
 /// The prefab texts a scene load or district switch reads, before the world it builds exists: the
 /// one resolver `ludion_scene::expand` is given there. A key resolves to one text per load; the
@@ -194,6 +203,8 @@ impl PrefabLibrary {
             placements: BTreeMap::new(),
             pruned_len: 0,
             sweep: Vec::new(),
+            rooms: BTreeMap::new(),
+            room_deps: BTreeMap::new(),
         }
     }
 
@@ -409,6 +420,11 @@ impl PrefabLibrary {
     /// # Errors
     /// `key`'s own diagnostics, or a dependent's, prefixed ``reloading `key` breaks `dependent`: ``.
     pub(crate) fn replace(&mut self, key: &str, source: &str) -> Result<(), Vec<Diagnostic>> {
+        if !self.prefabs.contains_key(key)
+            && let Some(kind) = map_spawn::MapText::of(source)
+        {
+            return self.replace_map_text(key, source, kind);
+        }
         let mut nested = Vec::new();
         let mut deps = BTreeSet::new();
         let loaded = self.load(key, source, &mut nested, &mut deps);

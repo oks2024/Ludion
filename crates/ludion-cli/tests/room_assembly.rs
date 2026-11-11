@@ -65,7 +65,7 @@ tiles:
 ";
 
 /// A 6 x 6 room whose wall at column 2 spans rows 0-3, leaving a door gap in rows 4-5.
-const MAP: &str = "format: 1
+pub(crate) const MAP: &str = "format: 1
 kind: map
 name: room
 kit: kit.kit.yaml
@@ -83,13 +83,13 @@ rows:
 ";
 
 pub(crate) const PREFAB: &str = "rooms/room.prefab.yaml";
-const SPAWN: u64 = 10;
-const TEARDOWN: u64 = 300;
-const RESPAWN: u64 = 320;
-const PLACEMENT: [f32; 3] = [12.0, 0.0, 0.0];
+pub(crate) const SPAWN: u64 = 10;
+pub(crate) const TEARDOWN: u64 = 300;
+pub(crate) const RESPAWN: u64 = 320;
+pub(crate) const PLACEMENT: [f32; 3] = [12.0, 0.0, 0.0];
 /// Room cell (row 1, col 4) at the placement.
-const T: [f32; 3] = [21.0, 0.0, 3.0];
-const WALKERS: usize = 20;
+pub(crate) const T: [f32; 3] = [21.0, 0.0, 3.0];
+pub(crate) const WALKERS: usize = 20;
 
 pub(crate) fn nav_config() -> NavConfig {
     NavConfig {
@@ -101,13 +101,13 @@ pub(crate) fn nav_config() -> NavConfig {
     }
 }
 
-fn seq(v: [f32; 3], indent: usize) -> String {
+pub(crate) fn seq(v: [f32; 3], indent: usize) -> String {
     v.iter()
         .map(|c| format!("{:indent$}- {c:?}\n", ""))
         .collect()
 }
 
-fn scene() -> String {
+pub(crate) fn scene() -> String {
     let mut out = String::from(
         "format: 1\nseed: 1\nphysics:\n  space: free\nentities:\n  - name: ground\n    components:\n      \
          Transform:\n        translation:\n",
@@ -140,6 +140,11 @@ pub(crate) fn room_root(tag: &str) -> PathBuf {
 }
 
 pub(crate) fn generate(root: &Path, map: &str, out: &str) {
+    generate_with(root, map, out, &[]);
+}
+
+/// [`generate`] with extra `generate-map` flags (`--kit`, `--seed`, `--mirror`).
+pub(crate) fn generate_with(root: &Path, map: &str, out: &str, extra: &[&str]) {
     let output = ProcCommand::new(env!("CARGO_BIN_EXE_ludion"))
         .args([
             "generate-map",
@@ -148,6 +153,7 @@ pub(crate) fn generate(root: &Path, map: &str, out: &str) {
             root.join(out).to_str().unwrap(),
             "--prefab",
         ])
+        .args(extra)
         .output()
         .unwrap();
     assert!(
@@ -161,7 +167,7 @@ pub(crate) fn generate(root: &Path, map: &str, out: &str) {
 #[derive(Default)]
 pub(crate) struct Spawned(pub(crate) Vec<Vec<EntityId>>);
 
-fn spawn(world: &mut World) {
+pub(crate) fn spawn(world: &mut World) {
     let placement = Transform {
         translation: PLACEMENT,
         ..Transform::default()
@@ -174,7 +180,7 @@ fn spawn(world: &mut World) {
     }
 }
 
-fn spawner(world: &mut World, ctx: &SystemCtx) {
+pub(crate) fn spawner(world: &mut World, ctx: &SystemCtx) {
     match ctx.frame.as_u64() {
         SPAWN | RESPAWN => spawn(world),
         TEARDOWN => {
@@ -187,7 +193,7 @@ fn spawner(world: &mut World, ctx: &SystemCtx) {
 }
 
 /// Applies each agent's steering, `y` from the grid node under it.
-fn mover(world: &mut World, ctx: &SystemCtx) {
+pub(crate) fn mover(world: &mut World, ctx: &SystemCtx) {
     let moves: Vec<_> = world
         .query_ids::<(&Transform, &NavSteering)>()
         .map(|(id, (t, s))| (id, t.translation, s.velocity))
@@ -205,6 +211,11 @@ fn mover(world: &mut World, ctx: &SystemCtx) {
 
 /// The spawner runs before `nav_update`, so nav sees a spawned room the same tick.
 pub(crate) fn game(root: &Path) -> EngineBuilder {
+    game_with(root, spawner)
+}
+
+/// [`game`] with its own spawn system.
+pub(crate) fn game_with(root: &Path, spawner: fn(&mut World, &SystemCtx)) -> EngineBuilder {
     Engine::builder()
         .project_root(root)
         .nav(nav_config())
@@ -219,8 +230,12 @@ pub(crate) fn game(root: &Path) -> EngineBuilder {
         .query::<(&PrefabInstance,)>()
 }
 
-fn booted(root: &Path) -> Engine {
-    let mut engine = game(root).build().expect("boots");
+pub(crate) fn booted(root: &Path) -> Engine {
+    booted_with(root, spawner)
+}
+
+pub(crate) fn booted_with(root: &Path, spawner: fn(&mut World, &SystemCtx)) -> Engine {
+    let mut engine = game_with(root, spawner).build().expect("boots");
     engine.load_inline_scene(&scene()).unwrap();
     engine
 }
@@ -235,7 +250,7 @@ pub(crate) fn hash_trace(root: &Path, ticks: usize) -> Vec<u64> {
         .collect()
 }
 
-fn spawned(engine: &Engine) -> Vec<Vec<EntityId>> {
+pub(crate) fn spawned(engine: &Engine) -> Vec<Vec<EntityId>> {
     engine
         .world()
         .resource::<Spawned>()
@@ -243,7 +258,7 @@ fn spawned(engine: &Engine) -> Vec<Vec<EntityId>> {
         .unwrap_or_default()
 }
 
-fn assert_no_query_drift(engine: &Engine) {
+pub(crate) fn assert_no_query_drift(engine: &Engine) {
     let diagnostics = engine.world().resource::<Diagnostics>().unwrap();
     assert_eq!(
         diagnostics.reported(code::QUERY_DRIFT_UNDECLARED).count(),
@@ -299,7 +314,7 @@ fn a_room_spawn_teardown_respawn_hashes_the_same_at_one_and_eight_threads() {
 }
 
 /// The floor map: the node under every nav cell centre, as its world position.
-fn floor_map(engine: &Engine) -> Vec<Option<[f32; 3]>> {
+pub(crate) fn floor_map(engine: &Engine) -> Vec<Option<[f32; 3]>> {
     let grid = engine
         .world()
         .resource::<Nav>()
@@ -320,7 +335,7 @@ fn floor_map(engine: &Engine) -> Vec<Option<[f32; 3]>> {
     out
 }
 
-fn node_at_t(engine: &Engine) -> Option<[f32; 3]> {
+pub(crate) fn node_at_t(engine: &Engine) -> Option<[f32; 3]> {
     let grid = engine
         .world()
         .resource::<Nav>()
@@ -329,7 +344,7 @@ fn node_at_t(engine: &Engine) -> Option<[f32; 3]> {
     grid.node_at([T[0], 0.0, T[2]]).map(|n| grid.node_pos(n))
 }
 
-fn tick_to(engine: &mut Engine, frame: u64) {
+pub(crate) fn tick_to(engine: &mut Engine, frame: u64) {
     while engine.frame().as_u64() < frame {
         engine.advance_live();
     }
@@ -381,7 +396,7 @@ fn walkers_path_into_a_spawned_room_and_not_into_a_torn_down_one() {
 }
 
 #[derive(Clone, Default)]
-struct SharedSink(Arc<Mutex<Vec<u8>>>);
+pub(crate) struct SharedSink(pub(crate) Arc<Mutex<Vec<u8>>>);
 
 impl std::io::Write for SharedSink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {

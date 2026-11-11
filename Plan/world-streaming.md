@@ -228,9 +228,12 @@ names an instance count.
 
 - **One giant scene file.** Kills diff locality and the per-region drift gate; a 60 000-line file
   is not reviewable by anyone.
-- **Additive scenes with no world document** (load a scene into the live world by command). The
-  primitive exists inside W2, but without the world document there is no footprint, no seam check
-  and no deterministic policy — the agent would be scripting loads by hand.
+- **Additive scenes with no world document, *by command*** (load a scene into the live world by
+  command). The primitive exists inside W2, but without the world document there is no footprint,
+  no seam check and no deterministic policy — the agent would be scripting loads by hand. Narrowed:
+  `spawn_map` is an additive spawn *from a sim system*, where the game's own policy decides; it has
+  no world document, footprint or seam check, and is a narrower primitive W2 can build on (owner
+  approval for 0022, relay grill 2026-11-10).
 - **A regular chunk grid over one voxel volume.** Right for a Minecraft-shaped game, wrong for a
   district city authored as maps with kits; the map is the unit the tooling and the designers
   already have.

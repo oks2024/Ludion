@@ -19,11 +19,12 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use ludion_core::ids::EntityId;
 use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
-    Engine, EngineBuilder, Nav, NavSteering, PrefabInstance, Transform, TransformHierarchy,
-    despawn_instance, nav_steer, nav_update, spawn_prefab,
+    Engine, EngineBuilder, MapSpawn, Nav, NavSteering, PrefabInstance, Transform,
+    TransformHierarchy, despawn_instance, nav_steer, nav_update, spawn_map, spawn_prefab,
 };
 use ludion_spatial::spatial3d;
 
@@ -105,11 +106,13 @@ fn seq(v: [f32; 3], indent: usize) -> String {
 /// Room cell (row 7, col 10) at the placement.
 const TARGET: [f32; 3] = [41.0, 0.0, 15.0];
 
-fn scene() -> String {
-    let mut out = String::from(
-        "format: 1\nseed: 1\nphysics:\n  space: free\npreload:\n  - rooms/big.prefab.yaml\nentities:\n  \
-         - name: ground\n    components:\n      Transform:\n        translation:\n",
-    );
+/// The scene; `preload` names the room prefab, so a `spawn_map` run leaves its first compile cold.
+fn scene(preload: bool) -> String {
+    let mut out = String::from("format: 1\nseed: 1\nphysics:\n  space: free\n");
+    if preload {
+        out += "preload:\n  - rooms/big.prefab.yaml\n";
+    }
+    out += "entities:\n  - name: ground\n    components:\n      Transform:\n        translation:\n";
     out += &seq([10.0, -0.5, 14.0], 10);
     out += "      Collider:\n        shape:\n          box:\n            half_extents:\n";
     out += &seq([10.0, 0.5, 14.0], 14);
@@ -126,7 +129,12 @@ fn scene() -> String {
     out
 }
 
-fn spawner(world: &mut World, ctx: &SystemCtx) {
+/// Spawns the room on cycle starts and tears it down mid-cycle; `spawn` stamps it.
+fn cycle(
+    world: &mut World,
+    ctx: &SystemCtx,
+    spawn: fn(&mut World, Transform) -> Option<Vec<EntityId>>,
+) {
     let frame = ctx.frame.as_u64();
     if frame < 10 || (frame - 10) / PERIOD >= CYCLES {
         return;
@@ -137,7 +145,7 @@ fn spawner(world: &mut World, ctx: &SystemCtx) {
                 translation: PLACEMENT,
                 ..Transform::default()
             };
-            if let Ok(ids) = spawn_prefab(world, PREFAB, Some(placement), Some("r"), false) {
+            if let Some(ids) = spawn(world, placement) {
                 let mut spawned = world.remove_resource::<Spawned>().unwrap_or_default();
                 spawned.0.push(ids);
                 world.insert_resource(spawned);
@@ -156,6 +164,23 @@ fn spawner(world: &mut World, ctx: &SystemCtx) {
     }
 }
 
+fn spawner(world: &mut World, ctx: &SystemCtx) {
+    cycle(world, ctx, |world, placement| {
+        spawn_prefab(world, PREFAB, Some(placement), Some("r"), false).ok()
+    });
+}
+
+fn map_spawner(world: &mut World, ctx: &SystemCtx) {
+    cycle(world, ctx, |world, placement| {
+        let spawn = MapSpawn {
+            placement: Some(placement),
+            name: Some("r"),
+            ..MapSpawn::default()
+        };
+        spawn_map(world, "big.map.yaml", spawn).ok()
+    });
+}
+
 fn mover(world: &mut World, ctx: &SystemCtx) {
     let moves: Vec<_> = world
         .query_ids::<(&Transform, &NavSteering)>()
@@ -172,7 +197,7 @@ fn mover(world: &mut World, ctx: &SystemCtx) {
     }
 }
 
-fn builder(root: &Path) -> EngineBuilder {
+fn builder(root: &Path, spawner: fn(&mut World, &SystemCtx)) -> EngineBuilder {
     let mut config = nav_config();
     config.nx = 60;
     config.nz = 28;
@@ -196,10 +221,11 @@ struct Run {
     entities: usize,
 }
 
-fn run(root: &Path, threads: usize) -> Run {
+fn run(root: &Path, threads: usize, map: bool) -> Run {
     par::with_threads(threads, || {
-        let mut engine = builder(root).build().expect("boots");
-        engine.load_inline_scene(&scene()).unwrap();
+        let spawner = if map { map_spawner } else { spawner };
+        let mut engine = builder(root, spawner).build().expect("boots");
+        engine.load_inline_scene(&scene(!map)).unwrap();
         let total = (10 + CYCLES * PERIOD) as usize;
         let mut hashes = Vec::new();
         let mut ticks = Vec::new();
@@ -239,31 +265,12 @@ fn idle(run: &Run) -> Vec<Duration> {
         .collect()
 }
 
-#[test]
-#[ignore = "benchmark: run explicitly in release with --ignored --nocapture"]
-fn room_spawn_and_teardown_under_nav() {
-    let root = crate::room_assembly::room_root("room_assembly_bench");
-    std::fs::write(root.join("kit.kit.yaml"), KIT).unwrap();
-    std::fs::write(root.join("big.map.yaml"), big_map()).unwrap();
-    generate(&root, "big.map.yaml", PREFAB);
-
-    let one = run(&root, 1);
-    let many = run(&root, 8);
-    assert_eq!(
-        one.hashes, many.hashes,
-        "WorldHash traces differ between 1 and 8 threads"
-    );
-    assert!(
-        (620..=760).contains(&one.entities),
-        "room entity count {}",
-        one.entities
-    );
-
+fn print_rows(one: &Run, many: &Run) {
     println!(
         "room of {} entities, {CYCLES} cycles, {WALKERS} walkers",
         one.entities
     );
-    for (label, r) in [("1 thread", &one), ("8 threads", &many)] {
+    for (label, r) in [("1 thread", one), ("8 threads", many)] {
         for (name, off) in [
             ("spawn tick", 0),
             ("spawn + 1 (nav rebuild)", 1),
@@ -286,6 +293,29 @@ fn room_spawn_and_teardown_under_nav() {
             max_ms(&idle)
         );
     }
+}
+
+#[test]
+#[ignore = "benchmark: run explicitly in release with --ignored --nocapture"]
+fn room_spawn_and_teardown_under_nav() {
+    let root = crate::room_assembly::room_root("room_assembly_bench");
+    std::fs::write(root.join("kit.kit.yaml"), KIT).unwrap();
+    std::fs::write(root.join("big.map.yaml"), big_map()).unwrap();
+    generate(&root, "big.map.yaml", PREFAB);
+
+    let one = run(&root, 1, false);
+    let many = run(&root, 8, false);
+    assert_eq!(
+        one.hashes, many.hashes,
+        "WorldHash traces differ between 1 and 8 threads"
+    );
+    assert!(
+        (620..=760).contains(&one.entities),
+        "room entity count {}",
+        one.entities
+    );
+
+    print_rows(&one, &many);
 
     let spawn = median_ms(&at(&one, 0, true));
     let rebuild = median_ms(&at(&one, 1, true));
@@ -297,4 +327,23 @@ fn room_spawn_and_teardown_under_nav() {
         rebuild < ROOM_REBUILD_TICK_BUDGET_MS,
         "rebuild tick {rebuild:.3} ms exceeds the {ROOM_REBUILD_TICK_BUDGET_MS} ms sub-budget"
     );
+}
+
+/// The same cycle through `spawn_map`: cycle 0 is the cache miss (read, compile, validate), every
+/// later spawn a hit. The "cycle 0" column of each row is the miss; median and max are hits.
+#[test]
+#[ignore = "benchmark: run explicitly in release with --ignored --nocapture"]
+fn room_spawn_map_under_nav() {
+    let root = crate::room_assembly::room_root("room_assembly_map_bench");
+    std::fs::write(root.join("kit.kit.yaml"), KIT).unwrap();
+    std::fs::write(root.join("big.map.yaml"), big_map()).unwrap();
+
+    let one = run(&root, 1, true);
+    let many = run(&root, 8, true);
+    assert_eq!(
+        one.hashes, many.hashes,
+        "WorldHash traces differ between 1 and 8 threads"
+    );
+    println!("spawn_map");
+    print_rows(&one, &many);
 }

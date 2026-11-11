@@ -182,6 +182,7 @@ pub use ludion_camera::{
     look_from_counts, set_look, snap_rig,
 };
 pub use ludion_protocol::replay::GameIdentity;
+pub use ludion_scene::Mirror;
 pub use ludion_scene::{
     PathDocument, PathFrame, PathInterpolation, PathMetric, PathSampler, check_path,
 };
@@ -214,7 +215,7 @@ pub use perf_live::{
     ProfileSamples, ProfileWindowData,
 };
 pub use player_profile::{Profile, ProfileSaveEntry};
-pub use prefab::{PrefabInstance, despawn_instance, spawn_prefab};
+pub use prefab::{MapSpawn, PrefabInstance, despawn_instance, spawn_map, spawn_prefab};
 pub use prefab_clips::{
     PrefabClipData, load as load_prefab_clips, prefab_clip_target_diagnostics, prefab_part_names,
 };

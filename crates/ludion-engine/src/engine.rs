@@ -3949,7 +3949,18 @@ impl Engine {
         library.adopt(std::mem::take(&mut reads.held));
         library.seed(reads.reads);
         for key in keys {
-            if let Err(found) = library.ready(&key) {
+            // A kit is only read (the resolve above held it); a map compiles with its authored
+            // kit, seed and no mirror, which warms the map, its kit and its fragments.
+            let warmed = if key.ends_with(".kit.yaml") {
+                Ok(())
+            } else if key.ends_with(".map.yaml") {
+                library
+                    .ready_map(&key, None, None, ludion_scene::Mirror::None)
+                    .map(drop)
+            } else {
+                library.ready(&key).map(drop)
+            };
+            if let Err(found) = warmed {
                 diagnostics.extend(found);
             }
         }

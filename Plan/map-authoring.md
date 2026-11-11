@@ -8,14 +8,19 @@
 > kit file + fragments incl. a shared HUD — vs a 900-line hand-authored
 > original), run.lrp re-recorded with ZERO session-script edits, Windows golden re-blessed, drift
 > gate live at 1 scene. **Sub-decisions settled:** commit-output **(a)** (generated scene committed,
-> drift gate enforces byte-identity, discovery via `generated_from:`); `map`/`map-kit` joined the
+> drift gate enforces byte-identity, discovery via `generated_from:`) — committed scenes and prefabs
+> stay the drift-gated authoring output, while a room compiled at runtime by `spawn_map` is not a
+> committed file and its sources (`*.map.yaml`, `*.kit.yaml`) stay drift-gated (owner approval for
+> 0022, relay grill 2026-11-10); `map`/`map-kit` joined the
 > engine's `ENGINE_KINDS` doc-walk skip set (Wave 3's find: sources live in the content root beside
 > their scene, the Phase 16 `profile` precedent). **M1's nav knob stays untriggered:**
 > the game's flow-field update measured 0.106 ms on the doubled arena vs the 0.20 ms ceiling (more extent,
 > but also more blocked perimeter). M1 (protocol command + `ludion dev` hot loop) and M2 (GUI
 > painter) remain future, triggers below. macOS golden re-bless queued.
 >
-> **Room assembly (Serious Isaac 0022, 2026-11-09):** `generate-map` gained `--kit/--seed/--mirror` (L1399 for a mirror with fragments), `--prefab` (a `kind: prefab` room, `ids[0]` its handle) and `despawn_instance`; `crates/ludion-cli/tests/room_assembly*.rs` proves spawn/teardown/respawn hash-identical at 1 and 8 threads, replay without the prefab, map and kit, and a ~340-entity bench. **Decision:** conservative path, commit-output (a) intact; a runtime `spawn_map` is proposed, not approved (`Plan/owed.md`). **Finding:** kit colliders are 2D, so a generated room has no solver colliders and nav does not see it.
+> **Room assembly (Serious Isaac 0022, 2026-11-09):** `generate-map` gained `--kit/--seed/--mirror` (L1399 for a mirror with fragments), `--prefab` (a `kind: prefab` room, `ids[0]` its handle) and `despawn_instance`; `crates/ludion-cli/tests/room_assembly*.rs` proves spawn/teardown/respawn hash-identical at 1 and 8 threads, replay without the prefab, map and kit, and a ~340-entity bench. **Decision:** conservative path, commit-output (a) intact for committed files; a runtime `spawn_map` was approved by the owner (relay grill 2026-11-10) and shipped (below). **Finding:** kit colliders are 2D, so a generated room has no solver colliders and nav does not see it.
+>
+> **Runtime path (Serious Isaac 0022 amendment, 2026-11-11):** `spawn_map(world, map, MapSpawn { kit, seed, mirror, placement, name })` stamps a `kind: map` from a sim system as one prefab-style instance (`ids[0]` the handle, `PrefabInstance.source` the map key). Map, kit and fragment texts go through the `PrefabLibrary` text store (so recordings carry them as `prefab_text` records, no format change), the compile is the pure `generate` then the prefab loader (entity for entity the `generate-map --prefab` file), rooms are cached per `(map, kit, seed, mirror)`, `asset.reload` drops the rooms that read a reloaded text, and a `preload:` map warms it. `L1406` covers refused paths, wrong kinds and `physics:`. Proofs in `room_assembly_runtime.rs`; usage `ludion docs prefabs` "Rooms from maps". `scene.save` writes such a room as plain entities and `prefab.apply`/`revert` refuse it.
 >
 > Originally scheduled 2026-07-18 (user direction): the trigger fired early —
 > the queued human-gate batch's judgment calls are hard to judge on the current small scenes, so

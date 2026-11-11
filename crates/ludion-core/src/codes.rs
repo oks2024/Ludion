@@ -354,6 +354,11 @@ pub mod code {
     /// (parents, pitch/roll) the compiler does not reflect. Raised by `ludion-scene`'s map generator;
     /// the JSON Pointer is `/fragments`.
     pub const MAP_MIRROR_FRAGMENTS: DiagnosticCode = DiagnosticCode::new("L1399");
+    /// `L1406` — `spawn_map` could not read or accept the map it was asked to stamp: a path that is
+    /// absolute, escapes the content root, is unreadable or not recorded under replay; a file that is
+    /// not a `kind: map` (or its kit not a `kind: map-kit`); a map carrying `physics:`; or a world
+    /// with no prefab library. Raised by `ludion-engine`'s `spawn_map`.
+    pub const MAP_SPAWN_INVALID: DiagnosticCode = DiagnosticCode::new("L1406");
     /// `L1400` — the suspended run (`save/suspend.json`) could not be written or removed.
     pub const RUN_SAVE_WRITE_FAILED: DiagnosticCode = DiagnosticCode::new("L1400");
     /// `L1401` — the suspended run was refused on resume; nothing was restored.
@@ -3602,6 +3607,24 @@ mirrored map would leave them standing in the unreflected room.
 
 The diagnostic's JSON Pointer is `/fragments`. Fix: move the fragment's entities onto markers (a
 marker's `components:` carry lights and game components), or drop the mirror.",
+    },
+    CodeEntry {
+        code: code::MAP_SPAWN_INVALID,
+        severity: Severity::Error,
+        title: "spawn_map could not use the map",
+        explanation: "\
+`spawn_map` was asked to stamp a map it could not read or accept, so nothing was spawned.
+
+The map's path (and a `MapSpawn.kit` override) is relative to the content root, like `spawn_prefab`'s.
+This code covers a path that is absolute or climbs out of the content root, a file that cannot be read
+(or, under replay, that the recording does not hold), a file that is not a `kind: map` (or a kit that
+is not a `kind: map-kit`), a map carrying a `physics:` block (the scene that spawns the room owns
+physics), and a world with no prefab library (it was not built by an engine).
+
+Bad map or kit content keeps its own codes (`L1019`-`L1026`), a mirror on a map with fragments is
+`L1399`, and the spawn-time passes keep the prefab codes. Fix: name the map relative to the content
+root, e.g. `rooms/crypt.map.yaml`, pass a map (not a prefab or scene) and a kit, and keep `physics:` in
+the scene that spawns the room.",
     },
     CodeEntry {
         code: code::MAP_DANGLING_GATE_ANCHOR,
@@ -11464,6 +11487,7 @@ mod tests {
         code::MAP_NAME_COLLISION,
         code::MAP_FOOTPRINT_MISFIT,
         code::MAP_MIRROR_FRAGMENTS,
+        code::MAP_SPAWN_INVALID,
         code::MAP_DANGLING_GATE_ANCHOR,
         code::MAP_GATE_SEALED,
         code::MAP_MARKER_BLOCKED,

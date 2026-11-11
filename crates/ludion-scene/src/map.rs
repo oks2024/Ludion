@@ -120,7 +120,7 @@ pub struct MapDoc {
 }
 
 /// The axis a compiled map is reflected across: `X` flips the room left-right, `Z` front-back.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Mirror {
     /// No reflection.
     #[default]
