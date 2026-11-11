@@ -34,6 +34,7 @@ struct Tune {
     angular_damping: f32,
     sleep_threshold: Option<f32>,
     sleep_after_ticks: Option<u32>,
+    sleep_angular_threshold: Option<f32>,
 }
 
 #[derive(Debug)]
@@ -219,6 +220,7 @@ fn measure(scenario: Scenario, tune: Tune) -> Run {
                 angular_damping: tune.angular_damping,
                 sleep_threshold: tune.sleep_threshold,
                 sleep_after_ticks: tune.sleep_after_ticks,
+                sleep_angular_threshold: tune.sleep_angular_threshold,
                 ..RigidBody::default()
             })
         },
@@ -309,13 +311,21 @@ const BASELINE: Tune = Tune {
     angular_damping: 0.0,
     sleep_threshold: None,
     sleep_after_ticks: None,
+    sleep_angular_threshold: None,
 };
 
-/// The tune a game adopts for a limp ragdoll: a raised stillness threshold and a shorter timer.
+/// A raised stillness threshold and a shorter timer; rapier's π/2 angular gate still binds on it.
 const TUNED: Tune = Tune {
     sleep_threshold: Some(0.1),
     sleep_after_ticks: Some(15),
     ..BASELINE
+};
+
+/// The corpse tune: TUNED plus an angular gate raised to 2.4 rad/s, the least value at which all
+/// three scenarios have plateaued.
+const CORPSE: Tune = Tune {
+    sleep_angular_threshold: Some(2.4),
+    ..TUNED
 };
 
 #[test]
@@ -339,6 +349,7 @@ fn ragdoll_sleep_sweep() {
                     angular_damping,
                     sleep_threshold,
                     sleep_after_ticks,
+                    sleep_angular_threshold: None,
                 },
             );
             println!(
@@ -357,8 +368,71 @@ fn ragdoll_sleep_sweep() {
     }
 }
 
+#[test]
+#[ignore = "prints the angular sweep"]
+fn ragdoll_angular_sweep() {
+    println!("scenario  ang_thr  ticks_to_sleep  awake_part_ticks  hips_y  slowest@120");
+    for scenario in [Scenario::Calm, Scenario::Shot, Scenario::Curl] {
+        for step in 16..=31 {
+            let threshold = step as f32 / 10.0;
+            let run = measure(
+                scenario,
+                Tune {
+                    sleep_angular_threshold: Some(threshold),
+                    ..TUNED
+                },
+            );
+            println!(
+                "{:<8} {:>7.1}  {:>14}  {:>16}  {:>6.3}  part {} {:.3}",
+                format!("{scenario:?}"),
+                threshold,
+                run.ticks_to_sleep.map_or("none".into(), |t| t.to_string()),
+                run.awake_part_ticks,
+                run.hips_y,
+                run.slowest.0,
+                run.slowest.1,
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "prints the grid sweep"]
+fn ragdoll_grid_sweep() {
+    println!("thr  after  ang   Calm  Shot  Curl  min_hips_y");
+    for thr in [0.1, 0.15, 0.2, 0.3] {
+        for after in [15, 8] {
+            for ang in [None, Some(1.8), Some(2.0), Some(2.4)] {
+                let runs = [Scenario::Calm, Scenario::Shot, Scenario::Curl].map(|scenario| {
+                    measure(
+                        scenario,
+                        Tune {
+                            sleep_threshold: Some(thr),
+                            sleep_after_ticks: Some(after),
+                            sleep_angular_threshold: ang,
+                            ..BASELINE
+                        },
+                    )
+                });
+                let ticks = runs
+                    .each_ref()
+                    .map(|r| r.ticks_to_sleep.map_or("none".into(), |t| t.to_string()));
+                let hips = runs.iter().map(|r| r.hips_y).fold(f32::MAX, f32::min);
+                println!(
+                    "{thr:<4} {after:>5}  {:<4}  {:>4}  {:>4}  {:>4}  {hips:.3}",
+                    ang.map_or("-".into(), |a: f32| a.to_string()),
+                    ticks[0],
+                    ticks[1],
+                    ticks[2]
+                );
+            }
+        }
+    }
+}
+
 /// Upper bounds on the tuned ticks-to-sleep per scenario: measured 128 / 160 / 150, with margin.
-/// The rapier angular gate (|ω| < π/2 rad/s) still binds on the shins, so 120 is out of reach.
+/// The rapier angular gate (|ω| < π/2 rad/s) binds on the shins without `sleep_angular_threshold`,
+/// so 120 is out of reach.
 #[test]
 fn a_raised_sleep_threshold_and_a_short_timer_settle_a_limp_ragdoll_sooner() {
     let bounds = [
@@ -393,6 +467,40 @@ fn a_raised_sleep_threshold_and_a_short_timer_settle_a_limp_ragdoll_sooner() {
             "{scenario:?}: tuned cost {} vs {}",
             after.awake_part_ticks,
             before.awake_part_ticks
+        );
+    }
+}
+
+/// With the angular gate raised to 2.4 rad/s the ragdoll sleeps at 123 / 132 / 129 ticks, against
+/// 128 / 160 / 150 without it. Shot and Curl plateau from 1.9 and 1.8, but at 2.3 Calm still
+/// reads 126, three ticks over, so 2.4 is the least value at which all three have plateaued. Past it the
+/// linear/drift gate binds, so the 120-tick `BUDGET` is out of reach by the angular gate alone; the
+/// fastest combination swept, `sleep_threshold` 0.15 with `sleep_after_ticks` 8, reaches 108 / 124 /
+/// 120 (`ragdoll_grid_sweep`).
+#[test]
+fn an_angular_threshold_settles_a_limp_ragdoll_sooner_still() {
+    let bounds = [
+        (Scenario::Calm, 128),
+        (Scenario::Shot, 137),
+        (Scenario::Curl, 134),
+    ];
+    for (scenario, bound) in bounds {
+        let tuned = measure(scenario, TUNED);
+        let corpse = measure(scenario, CORPSE);
+        let slept = corpse.ticks_to_sleep.expect("the corpse tune sleeps");
+        assert!(
+            corpse.hips_y > 0.0,
+            "{scenario:?}: hips fell through the floor: {corpse:?}"
+        );
+        assert!(
+            slept <= bound,
+            "{scenario:?} slept at {slept}, over {bound}"
+        );
+        assert!(
+            corpse.awake_part_ticks <= tuned.awake_part_ticks,
+            "{scenario:?}: corpse cost {} vs {}",
+            corpse.awake_part_ticks,
+            tuned.awake_part_ticks
         );
     }
 }

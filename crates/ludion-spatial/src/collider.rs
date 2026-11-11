@@ -299,6 +299,13 @@ pub struct RigidBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0.0))]
     pub sleep_threshold: Option<f32>,
+    /// The angular speed (rad/s) below which the body may sleep; absent ⇒ rapier's fixed π/2
+    /// gate. Values at or below π/2 (≈ 1.571) change nothing; raising it lets a body sleep while
+    /// still turning that fast, so it freezes mid-rock (acceptable for corpses). Zero or more. A
+    /// live edit applies in place — see `ludion docs physics` §Live edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub sleep_angular_threshold: Option<f32>,
 }
 
 impl Default for RigidBody {
@@ -315,6 +322,7 @@ impl Default for RigidBody {
             lock: AxisLock::default(),
             sleep_after_ticks: None,
             sleep_threshold: None,
+            sleep_angular_threshold: None,
         }
     }
 }
@@ -665,7 +673,25 @@ impl SemanticValidate for Collider {
             .pointer("/body/rigid/sleep_threshold")
             .and_then(Value::as_f64)
         {
-            require_non_negative_sleep_threshold(threshold, &mut out);
+            require_non_negative_sleep_threshold(
+                threshold,
+                "sleep_threshold",
+                "a finite speed of zero or more (m/s)",
+                "give sleep_threshold a value such as 0.15, or omit it for the default 0.05",
+                &mut out,
+            );
+        }
+        if let Some(threshold) = value
+            .pointer("/body/rigid/sleep_angular_threshold")
+            .and_then(Value::as_f64)
+        {
+            require_non_negative_sleep_threshold(
+                threshold,
+                "sleep_angular_threshold",
+                "a finite angular speed of zero or more (rad/s)",
+                "give sleep_angular_threshold a value such as 2.0, or omit it for rapier's π/2 gate",
+                &mut out,
+            );
         }
         out
     }
@@ -1025,21 +1051,23 @@ fn require_finite_gravity_scale(value: f64, out: &mut Vec<Diagnostic>) {
     }
 }
 
-/// Pushes an `L1116` when a `rigid` body's `sleep_threshold` is negative or not finite as an `f32`.
-fn require_non_negative_sleep_threshold(value: f64, out: &mut Vec<Diagnostic>) {
+/// Pushes an `L1116` when a `rigid` body's sleep threshold `field` is negative or not finite as an
+/// `f32`; `expected` and `help` name the unit and a usable value.
+fn require_non_negative_sleep_threshold(
+    value: f64,
+    field: &str,
+    expected: &str,
+    help: &str,
+    out: &mut Vec<Diagnostic>,
+) {
     if !ludion_core::number::fits_f32(value) || value < 0.0 {
         out.push(
             Diagnostic::new(
                 code::COLLIDER_NON_POSITIVE_EXTENT,
-                format!(
-                    "rigid body sleep_threshold {value} is not valid; it must be a finite speed \
-                     of zero or more (m/s)"
-                ),
+                format!("rigid body {field} {value} is not valid; it must be {expected}"),
             )
-            .with_path("/body/rigid/sleep_threshold")
-            .with_help(
-                "give sleep_threshold a value such as 0.15, or omit it for the default 0.05",
-            ),
+            .with_path(format!("/body/rigid/{field}"))
+            .with_help(help),
         );
     }
 }
@@ -1447,6 +1475,24 @@ mod tests {
         }
         let boundary = json!({ "shape": { "circle": { "radius": 1.5e-45 } } });
         assert!(Collider::validate_semantics(&boundary).is_empty());
+    }
+
+    #[test]
+    fn a_negative_sleep_threshold_is_l1116_at_its_own_field() {
+        for (field, unit) in [
+            ("sleep_threshold", "(m/s)"),
+            ("sleep_angular_threshold", "(rad/s)"),
+        ] {
+            let bad = json!({ "shape": { "sphere": { "radius": 0.5 } }, "body": { "rigid": { field: -0.5 } } });
+            let out = Collider::validate_semantics(&bad);
+            assert_eq!(out.len(), 1, "{field}");
+            assert_eq!(out[0].code.as_str(), "L1116");
+            let pointer = format!("/body/rigid/{field}");
+            assert_eq!(out[0].path.as_deref(), Some(pointer.as_str()));
+            assert!(out[0].message.contains(unit), "{}", out[0].message);
+            let ok = json!({ "shape": { "sphere": { "radius": 0.5 } }, "body": { "rigid": { field: 2.0 } } });
+            assert!(Collider::validate_semantics(&ok).is_empty(), "{field}");
+        }
     }
 
     #[test]

@@ -1764,6 +1764,15 @@
             ],
             "format": "float",
             "minimum": 0.0
+          },
+          "sleep_angular_threshold": {
+            "description": "The angular speed (rad/s) below which the body may sleep; absent ⇒ rapier's fixed π/2\ngate. Values at or below π/2 (≈ 1.571) change nothing; raising it lets a body sleep while\nstill turning that fast, so it freezes mid-rock (acceptable for corpses). Zero or more. A\nlive edit applies in place — see `ludion docs physics` §Live edits.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "minimum": 0.0
           }
         }
       },

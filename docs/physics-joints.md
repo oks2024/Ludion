@@ -280,8 +280,11 @@ gone goes inert and is reported.
   A limp ragdoll of ball-jointed, near-spherical parts sleeps late: an island sleeps only when every part is
   still, and rapier also refuses sleep while any part spins faster than π/2 rad/s, so a slowly spinning
   shin holds all eleven awake (measured: 185 / 231 / never ticks to sleep when calm / shot / curled, over
-  2,000–3,300 awake part-ticks in 300). Give its parts `sleep_threshold: 0.1` and `sleep_after_ticks: 15`
-  (128 / 160 / 150 ticks, 1,400–1,750 awake part-ticks); damping alone is chaotic, not a fix.
+  2,000–3,300 awake part-ticks in 300). Give its parts `sleep_threshold: 0.1`, `sleep_after_ticks: 15`
+  and `sleep_angular_threshold: 2.4` (123 / 132 / 129 ticks; without the angular value 128 / 160 / 150).
+  Past 2.4 the linear/drift gate binds, so 120 ticks is not reachable this way; `sleep_threshold: 0.15`
+  with `sleep_after_ticks: 8` is the fastest tune measured (108 / 124 / 120). A part may freeze mid-rock at up
+  to that angular speed, and only bodies that opt in change. Damping alone is chaotic, not a fix.
 - **Never-sleepers:** some parts never fall asleep, so pair the settle retire with a max-age
   force-retire (the example's `max_sim_ticks`), or those groups stay simulated forever.
 - **Pinned group:** a part joined to a `Body::Static` collider outside the group. Evict those last.

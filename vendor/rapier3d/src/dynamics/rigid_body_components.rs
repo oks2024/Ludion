@@ -1442,8 +1442,9 @@ impl RigidBodyActivation {
                     // The position-based criteria will be more restrictive, but we keep
                     // this for the rare case where the orientation’s periodicity would
                     // make the pose drift estimate too approximate.
-                    self.angular_threshold >= 0.0
-                        && sq_angvel < Real::FRAC_PI_2() * Real::FRAC_PI_2()
+                    // Ludion patch: a larger `angular_threshold` raises the gate, see LUDION-PATCH.md.
+                    let gate = Real::FRAC_PI_2().max(self.angular_threshold);
+                    self.angular_threshold >= 0.0 && sq_angvel < gate * gate
                 } else {
                     // Collider-less bodies have `max_extent == 0` so we need to take its
                     // angular velocity into account since the pose delta cannot take its

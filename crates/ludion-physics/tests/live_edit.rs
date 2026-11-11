@@ -444,6 +444,41 @@ fn a_sleep_threshold_edit_applies_in_place() {
     assert_eq!(physics(&world).is_sleeping(ball), Some(true));
 }
 
+/// A body spinning at 2 rad/s is above rapier's π/2 gate, so it stays awake until
+/// `sleep_angular_threshold` is raised past its spin; the edit applies in place.
+#[test]
+fn a_sleep_angular_threshold_edit_applies_in_place() {
+    let mut world = World::new();
+    let spinner = spawn_body(
+        &mut world,
+        [0.0, 5.0, 0.0],
+        rigid(
+            sphere(),
+            RigidBody {
+                gravity_scale: 0.0,
+                sleep_after_ticks: Some(2),
+                sleep_threshold: Some(5.0),
+                ..RigidBody::default()
+            },
+        ),
+    );
+    world
+        .get_mut::<Velocity>(spinner)
+        .unwrap()
+        .expect("spawn_body gives it a Velocity")
+        .angular = [0.0, 2.0, 0.0];
+    let mut schedule = physics_schedule();
+    run(&mut world, &mut schedule, 0..40);
+    assert_eq!(physics(&world).is_sleeping(spinner), Some(false));
+
+    edit_rigid(&mut world, spinner, |body| {
+        body.sleep_angular_threshold = Some(3.0)
+    });
+    run(&mut world, &mut schedule, 40..50);
+
+    assert_eq!(physics(&world).is_sleeping(spinner), Some(true));
+}
+
 /// Only an in-place-tunables difference takes the in-place path: changing the mass alongside the
 /// scale rebuilds, and the rebuilt body carries both.
 #[test]

@@ -1892,6 +1892,9 @@ impl PhysicsWorld {
             if let Some(threshold) = tunables.sleep_threshold {
                 activation.normalized_linear_threshold = threshold;
             }
+            if let Some(threshold) = tunables.sleep_angular_threshold {
+                activation.angular_threshold = threshold;
+            }
         }
         self.table.push(BodyEntry {
             entity,
@@ -1909,7 +1912,7 @@ impl PhysicsWorld {
     /// does so only when the entity has a body, the recorded source and `collider` are the same
     /// body kind, and the two differ in nothing but the contact material (`friction`,
     /// `restitution` and both combine rules, any body kind) and, for a [`Body::Rigid`],
-    /// `linear_damping`, `angular_damping`, `gravity_scale`, `sleep_after_ticks` and `sleep_threshold`; otherwise it
+    /// `linear_damping`, `angular_damping`, `gravity_scale`, `sleep_after_ticks`, `sleep_threshold` and `sleep_angular_threshold`; otherwise it
     /// returns `false` and touches nothing, leaving the caller to `rebuild`.
     ///
     /// A rebuild replaces the body handle, which re-captures the zero of every `Joint` naming the
@@ -1945,6 +1948,7 @@ impl PhysicsWorld {
                 gravity_scale: new.gravity_scale,
                 sleep_after_ticks: new.sleep_after_ticks,
                 sleep_threshold: new.sleep_threshold,
+                sleep_angular_threshold: new.sleep_angular_threshold,
                 ..*old
             }),
             (Body::Static(_), Body::Static(new)) => Body::Static(*new),
@@ -1969,6 +1973,9 @@ impl PhysicsWorld {
             activation.normalized_linear_threshold = new.sleep_threshold.unwrap_or(
                 rapier3d::dynamics::RigidBodyActivation::default_normalized_linear_threshold(),
             );
+            activation.angular_threshold = new
+                .sleep_angular_threshold
+                .unwrap_or(rapier3d::dynamics::RigidBodyActivation::default_angular_threshold());
             // The setters clear the sleeping flag at most, not the rest timer, so a body already
             // past its threshold would fall straight back asleep before the edit moved it. A
             // sleeping pair is also not re-solved, so the new material would go unread.
