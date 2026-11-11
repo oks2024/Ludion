@@ -1470,10 +1470,16 @@ impl PhysicsWorld {
     /// size is re-checked wherever it could have drifted (build, decode, every step).
     fn sync_solver_pool(&mut self) {
         let want = ludion_core::par::threads();
-        if self.rapier.physics_pipeline.num_threads() != Some(want)
-            && let Err(why) = self.rapier.physics_pipeline.configure_thread_pool(want)
-        {
+        if self.rapier.physics_pipeline.num_threads() == Some(want) {
+            return;
+        }
+        if let Err(why) = self.rapier.physics_pipeline.configure_thread_pool(want) {
             panic!("could not start the physics solver's {want} worker threads: {why}");
+        }
+        if let Some(pool) = self.rapier.physics_pipeline.thread_pool() {
+            // Rayon returns from `build` before its threads have run: their startup allocations
+            // would land in whatever the caller does next, on a loaded box.
+            pool.broadcast(|_| ());
         }
     }
 
