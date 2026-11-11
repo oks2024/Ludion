@@ -339,3 +339,36 @@ fn explain_knows_the_fault_code() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stdout(&output).contains("map-drift"), "{}", stdout(&output));
 }
+
+#[test]
+fn a_themed_prefab_seals_against_the_kit_it_ships_with() {
+    let root = scratch("map-drift-themed", &[("room.map.yaml", ROOM)]);
+    let kit = std::fs::read_to_string(fixtures().join("kit.yaml")).unwrap();
+    std::fs::write(root.join("scenes/kit2.yaml"), &kit).unwrap();
+    let themed = [
+        "scenes/room.map.yaml",
+        "--kit",
+        "scenes/kit2.yaml",
+        "--out",
+        "scenes/rooms/themed.prefab.yaml",
+        "--prefab",
+    ];
+    generate(&root, &["scenes/room.map.yaml"]);
+    generate(&root, &themed);
+    let output = ludion(&root, &["map-drift"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    // The themed kit's walls lose their collider: the room leaks only under that kit.
+    let leaky = kit.replace(
+        "      collider:\n        aabb:\n          - 1.0\n          - 1.0\n",
+        "",
+    );
+    assert_ne!(leaky, kit);
+    std::fs::write(root.join("scenes/kit2.yaml"), leaky).unwrap();
+    generate(&root, &themed);
+    let output = ludion(&root, &["map-drift"]);
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(err.contains("[L1040]") && err.contains("[L1041]"), "{err}");
+    assert!(err.contains("room.map.yaml --kit kit2.yaml"), "{err}");
+}

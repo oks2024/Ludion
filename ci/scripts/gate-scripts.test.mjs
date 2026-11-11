@@ -264,172 +264,82 @@ test('mesh-edit-drift rejects an orphan tree and reports an edit with no tree', 
   }
 });
 
-test('map-drift checks a map with no scene without writing, and rejects a scene from elsewhere', () => {
+test('map-drift makes one verb call over the scan roots and reports its counts', () => {
   const root = scratchTree({
-    'games/v/plaza.map.yaml': 'kind: map\n',
-    'games/v/plaza.yaml': 'format: 1\ngenerated_from: plaza.map.yaml\n',
-    'games/v/renamed.yaml': 'format: 1\ngenerated_from: plaza.map.yaml\n',
-    'games/v/bare.map.yaml': 'kind: map\n',
-    'games/v/odd.yaml': 'format: 1\ngenerated_from: foo.png\n',
+    'games/v/a.map.yaml': 'kind: map\n',
+    'examples/e/b.map.yaml': 'kind: map\n',
   });
   try {
     const calls = [];
-    const ludion = stubLudion(calls, (args) => {
-      if (args[0] === 'map-check') return ok('seal: sealed from first marker `m` — no way out\n');
-      const map = args[1];
-      const scene = map.replace('.map.yaml', '.yaml');
-      return existsSync(scene) ? ok(`${map}: up to date -> ${scene}`) : fail(`${scene}: missing`);
-    });
-    const { errors, checked } = mapGate({ root, ludion });
+    const ludion = stubLudion(calls, () => ok(JSON.stringify({ ok: true, maps: 2, outputs: 3, files: [], diagnostics: [] })));
+    const { errors, checked, outputs } = mapGate({ root, ludion });
+    assert.deepEqual(calls, [['map-drift', '--root', root, '--json', 'games', 'examples']]);
+    assert.deepEqual(errors, []);
     assert.equal(checked, 2);
-    assert.ok(calls.filter((c) => c[0] === 'generate-map').every((c) => c.includes('--check') && !c.includes('--out') && c.length === 3), JSON.stringify(calls));
-    assert.ok(errors.some((e) => e.includes('games/v/bare.map.yaml') && e.includes('failed')), errors.join('\n'));
-    assert.ok(errors.some((e) => e.includes('games/v/renamed.yaml names games/v/plaza.map.yaml') && e.includes('orphaned')), errors.join('\n'));
-    assert.ok(errors.some((e) => e.includes('games/v/odd.yaml names foo.png') && e.includes('not a map source')), errors.join('\n'));
-    assert.equal(errors.length, 3, errors.join('\n'));
+    assert.equal(outputs, 3);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('map-drift rechecks an override scene with its flags and rejects an unknown flag', () => {
-  const root = scratchTree({
-    'games/v/plaza.map.yaml': 'kind: map\n',
-    'games/v/plaza.yaml': 'format: 1\ngenerated_from: plaza.map.yaml\n',
-    'games/v/rooms/r1.yaml': 'format: 1\ngenerated_from: ../plaza.map.yaml --kit kits/b.kit.yaml --seed 3 --mirror x\n',
-    'games/v/rooms/r2.yaml': 'format: 1\ngenerated_from: ../plaza.map.yaml --bogus 1\n',
-  });
+test('map-drift turns the verb faults into errors and ignores warnings', () => {
+  const root = scratchTree({ 'games/v/a.map.yaml': 'kind: map\n' });
   try {
-    const calls = [];
-    const ludion = stubLudion(calls, (args) => {
-      if (args[0] === 'map-check') return ok('seal: sealed from first marker `m` — no way out\n');
-      return args.includes('--out') ? ok('') : ok(`${args[1]}: up to date -> ${args[1].replace('.map.yaml', '.yaml')}`);
-    });
-    const { errors, overrideChecked } = mapGate({ root, ludion });
-    assert.equal(overrideChecked, 2);
-    const call = calls.find((c) => c.includes('--out'));
-    assert.deepEqual(call, [
-      'generate-map',
-      path.join(root, 'games/v/plaza.map.yaml'),
-      '--out',
-      path.join(root, 'games/v/rooms/r1.yaml'),
-      '--kit',
-      path.join(root, 'games/v/kits/b.kit.yaml'),
-      '--seed',
-      '3',
-      '--mirror',
-      'x',
-      '--check',
-    ]);
-    assert.equal(calls.filter((c) => c.includes('--out')).length, 1, JSON.stringify(calls));
-    // The override scene is sealed with the same flags, so a themed room is checked against its kit.
-    assert.deepEqual(calls.find((c) => c[0] === 'map-check' && c.includes('--kit')), [
-      'map-check',
-      path.join(root, 'games/v/plaza.map.yaml'),
-      '--kit',
-      path.join(root, 'games/v/kits/b.kit.yaml'),
-      '--seed',
-      '3',
-      '--mirror',
-      'x',
-    ]);
-    assert.equal(errors.length, 1, errors.join('\n'));
-    assert.match(errors[0], /games\/v\/rooms\/r2\.yaml.*--bogus/);
+    const report = {
+      ok: false,
+      maps: 1,
+      outputs: 2,
+      files: [
+        {
+          file: 'games/v/a.yaml',
+          diagnostics: [
+            { code: 'L1039', message: 'has drifted', help: 'run generate-map' },
+            { code: 'L1040', severity: 'warning', message: 'the walker can leave' },
+          ],
+        },
+        { file: 'games/v/rooms/r.prefab.yaml', diagnostics: [{ code: 'L1041', message: 'seal unchecked' }] },
+      ],
+      diagnostics: [],
+    };
+    const { errors } = mapGate({ root, ludion: () => ({ status: 1, stdout: JSON.stringify(report), stderr: '' }) });
+    assert.equal(errors.length, 2, errors.join('\n'));
+    assert.match(errors[0], /^games\/v\/a\.yaml: \[L1039\] has drifted\n {2}help: run generate-map$/);
+    assert.match(errors[1], /^games\/v\/rooms\/r\.prefab\.yaml: \[L1041\] seal unchecked$/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('map-drift fails an override scene whose themed kit leaks (L1040)', () => {
+test('map-drift reports a dead or unreadable verb as one error', () => {
+  const root = scratchTree({ 'games/v/a.map.yaml': 'kind: map\n' });
+  try {
+    for (const reply of [
+      { status: 101, stdout: '', stderr: 'panicked' },
+      { status: null, error: new Error('spawn ENOENT'), stdout: '', stderr: '' },
+      { status: 0, stdout: 'not json', stderr: '' },
+    ]) {
+      const { errors } = mapGate({ root, ludion: () => reply });
+      assert.equal(errors.length, 1, errors.join('\n'));
+      assert.match(errors[0], /`ludion map-drift` failed/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('map-drift leaves map claims to the verb but still rejects an unknown source', () => {
   const root = scratchTree({
     'games/v/plaza.map.yaml': 'kind: map\n',
     'games/v/plaza.yaml': 'format: 1\ngenerated_from: plaza.map.yaml\n',
     'games/v/rooms/r1.yaml': 'format: 1\ngenerated_from: ../plaza.map.yaml --kit kits/b.kit.yaml\n',
-  });
-  try {
-    const ludion = stubLudion([], (args) => {
-      if (args[0] === 'map-check') {
-        return args.includes('--kit')
-          ? { status: 0, stdout: 'seal: LEAKS — warning L1040\n', stderr: 'warning[L1040]: the walker can leave the map: a walk reaches the edge\n' }
-          : ok('seal: sealed from first marker `m` — no way out\n');
-      }
-      return args.includes('--out') ? ok('') : ok(`${args[1]}: up to date -> ${args[1].replace('.map.yaml', '.yaml')}`);
-    });
-    const { errors } = mapGate({ root, ludion });
-    assert.equal(errors.length, 1, errors.join('\n'));
-    assert.match(errors[0], /games\/v\/rooms\/r1\.yaml: the walker can leave the map \(L1040\)/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('map-drift rechecks a map-generated prefab with --prefab', () => {
-  const root = scratchTree({
-    'games/v/plaza.map.yaml': 'kind: map\n',
-    'games/v/plaza.yaml': 'format: 1\ngenerated_from: plaza.map.yaml\n',
     'games/v/rooms/a.prefab.yaml': 'format: 1\nkind: prefab\ngenerated_from: ../plaza.map.yaml\n',
-    'games/v/rooms/b.prefab.yaml': 'format: 1\nkind: prefab\ngenerated_from: ../plaza.map.yaml --mirror z\n',
-    'games/v/rooms/goblin.prefab.yaml': 'format: 1\nkind: prefab\ngenerated_from: goblin.gltf\n',
+    'games/v/odd.yaml': 'format: 1\ngenerated_from: foo.png\n',
   });
   try {
-    const calls = [];
-    const ludion = stubLudion(calls, (args) => {
-      if (args[0] === 'map-check') return ok('seal: sealed from first marker `m` — no way out\n');
-      return args.includes('--out') ? ok('') : ok(`${args[1]}: up to date -> ${args[1].replace('.map.yaml', '.yaml')}`);
-    });
-    const { errors, overrideChecked } = mapGate({ root, ludion });
-    assert.equal(overrideChecked, 2);
-    const map = path.join(root, 'games/v/plaza.map.yaml');
-    const prefabCalls = calls.filter((c) => c.includes('--out'));
-    assert.deepEqual(prefabCalls, [
-      ['generate-map', map, '--out', path.join(root, 'games/v/rooms/a.prefab.yaml'), '--prefab', '--check'],
-      ['generate-map', map, '--out', path.join(root, 'games/v/rooms/b.prefab.yaml'), '--mirror', 'z', '--prefab', '--check'],
-    ]);
-    assert.equal(errors.length, 0, errors.join('\n'));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('map-drift fails a map whose walker can leave it (L1040)', () => {
-  const root = scratchTree({
-    'games/v/open.map.yaml': 'kind: map\n',
-    'games/v/open.yaml': 'format: 1\ngenerated_from: open.map.yaml\n',
-  });
-  try {
-    const ludion = stubLudion([], (args) =>
-      args[0] === 'map-check'
-        ? { status: 0, stdout: 'seal: LEAKS — warning L1040\n', stderr: 'warning[L1040]: the walker can leave the map: a walk reaches the edge\n  help: close the opening' }
-        : ok(`${args[1]}: up to date -> ${args[1].replace('.map.yaml', '.yaml')}`));
+    const ludion = () => ok(JSON.stringify({ ok: true, maps: 1, outputs: 3, files: [], diagnostics: [] }));
     const { errors } = mapGate({ root, ludion });
     assert.equal(errors.length, 1, errors.join('\n'));
-    assert.match(errors[0], /games\/v\/open\.map\.yaml: the walker can leave the map \(L1040\)/);
-    assert.match(errors[0], /warning\[L1040\]/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('map-drift fails a map whose map-check dies, cannot spawn, or leaves the seal unchecked', () => {
-  const files = {};
-  for (const name of ['dies', 'nospawn', 'unchecked', 'sealed']) {
-    files[`games/v/${name}.map.yaml`] = 'kind: map\n';
-    files[`games/v/${name}.yaml`] = `format: 1\ngenerated_from: ${name}.map.yaml\n`;
-  }
-  const root = scratchTree(files);
-  try {
-    const ludion = stubLudion([], (args) => {
-      if (args[0] !== 'map-check') return ok(`${args[1]}: up to date -> ${args[1].replace('.map.yaml', '.yaml')}`);
-      if (args[1].endsWith('dies.map.yaml')) return { status: 101, stdout: '', stderr: 'panicked' };
-      if (args[1].endsWith('nospawn.map.yaml')) return { status: null, error: new Error('spawn ENOENT'), stdout: '', stderr: '' };
-      if (args[1].endsWith('unchecked.map.yaml')) return ok('seal: not checked — the grid is empty\n');
-      return ok('seal: sealed from first marker `m` — no way out\n');
-    });
-    const { errors } = mapGate({ root, ludion });
-    assert.equal(errors.length, 3, errors.join('\n'));
-    for (const name of ['dies', 'nospawn', 'unchecked']) {
-      assert.ok(errors.some((e) => e.includes(`games/v/${name}.map.yaml`)), errors.join('\n'));
-    }
+    assert.match(errors[0], /games\/v\/odd\.yaml names foo\.png.*not a map source/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

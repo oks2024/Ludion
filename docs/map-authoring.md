@@ -161,7 +161,7 @@ so adding it never moves a generated scene (`ludion docs map-check`).
   marker the drift gate pairs back against — there is no manifest. The gate
   enumerates every committed `*.map.yaml`, requires its scene at the default path to regenerate
   byte-identical, and flags a scene naming a map from anywhere else
-  (`node scripts/map-drift.mjs`, a step in `node scripts/check.mjs` and in CI). An edit to the
+  (`ludion map-drift`, see Drift check; the engine's own `node scripts/map-drift.mjs` wraps it). An edit to the
   generated file fails the gate on the next run, and the wire's `scene.save` refuses to write it
   (`L1267`).
 - **Generated entity names must be globally unique** across fragments, grid and markers (`L1025`),
