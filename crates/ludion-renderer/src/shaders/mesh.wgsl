@@ -67,9 +67,10 @@ struct VsOut {
     @location(1) world_normal: vec3<f32>,
     @location(2) color: vec4<f32>,
     @location(3) material: vec3<f32>,
-    // Per-instance occlusion fade `(fade, height_min)`, flat (a per-instance constant — no
-    // interpolation) so the fragment stage sees the exact authored values for the Bayer discard.
-    @location(4) @interpolate(flat) fade: vec2<f32>,
+    // Per-instance occlusion fade `(fade, height_min, bone_offset)`, flat (a per-instance constant — no
+    // interpolation) so the fragment stage sees the exact authored values for the Bayer discard; the
+    // bone offset is nonzero for a skinned instance (`fs_main` flags the surface with it).
+    @location(4) @interpolate(flat) fade: vec3<f32>,
     // Per-instance hit-flash `(flash_color.rgb, amount)`, flat for the same reason.
     @location(5) @interpolate(flat) flash: vec4<f32>,
     // The vertex UV, interpolated — what every group-4 map is sampled at.
@@ -128,7 +129,7 @@ fn vs_main(in: VsIn) -> VsOut {
     // Selection is per-instance (flag in w), so mixing here then interpolating is exact.
     out.material = mix(in.instance_material.xyz, in.vertex_material, in.instance_material.w);
     // Carry the fade lane (fade, height_min) to the fragment stage for the screen-door discard.
-    out.fade = in.fade.xy;
+    out.fade = in.fade.xyz;
     // Carry the hit-flash lane to the fragment stage.
     out.flash = in.flash;
     out.rim = in.rim;
@@ -160,10 +161,17 @@ struct CaptureOut {
     @location(3) emissive: vec4<f32>,
 }
 
+// A skinned surface stores its roughness negated: the decal passes read the sign as "skinned" (an
+// `all` decal skips it) and every other reader of `scene_normal.a` takes `abs`. Roughness is clamped
+// to [0.045, 1], never zero, so the flag is exact. Probe captures (`fs_capture`) stay unsigned.
+fn flag_skinned(normal_roughness: vec4<f32>, bone_offset: f32) -> vec4<f32> {
+    return vec4<f32>(normal_roughness.xyz, select(normal_roughness.w, -normal_roughness.w, bone_offset != 0.0));
+}
+
 @fragment
 fn fs_main(in: VsOut, @builtin(front_facing) front_facing: bool) -> FsOut {
     let c = shade_fragment(in, front_facing, true);
-    return FsOut(c.color, c.normal_roughness, c.specular);
+    return FsOut(c.color, flag_skinned(c.normal_roughness, in.fade.z), c.specular);
 }
 
 // The medium twin's extra target: the mesh's medium scale per pixel, read by the composite.
@@ -177,7 +185,7 @@ struct MediumOut {
 @fragment
 fn fs_medium(in: VsOut, @builtin(front_facing) front_facing: bool) -> MediumOut {
     let c = shade_fragment(in, front_facing, true);
-    return MediumOut(c.color, c.normal_roughness, c.specular, vec4<f32>(in.medium, 0.0, 0.0, 0.0));
+    return MediumOut(c.color, flag_skinned(c.normal_roughness, in.fade.z), c.specular, vec4<f32>(in.medium, 0.0, 0.0, 0.0));
 }
 
 @fragment

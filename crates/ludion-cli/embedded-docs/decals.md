@@ -60,9 +60,10 @@ green = image up = box −Z.
   the lowest EntityId draws last and wins. A `multiply` scorch therefore darkens paint even at a
   lower layer; the drop shadow darkens paint under the hero.
 - **Receivers.** Every opaque mesh kind. Never the sky, sprites, particles, text, ground markers or
-  skinned meshes. An `all` decal carries no receiver list. Whenever an `all` decal
-  shares a scene with skinned meshes, the `decal_receivers` id pass redraws each skinned mesh once per
-  frame, so its cost grows with the skinned count, not with decals × skinned. `receivers: hierarchy`
+  skinned meshes. An `all` decal carries no receiver list and costs no extra pass: the scene pass
+  flags a skinned surface (the sign of `scene_normal`'s roughness) and the decal passes skip it. Only
+  an `Exclude`/`Only` list schedules the `decal_receivers` id pass, which redraws exactly the listed
+  meshes once per frame. `receivers: hierarchy`
   limits a decal to its own root and the root's descendants and adds its own meshes to that list. A
   1–2 px contact rim can show.
 - **Hash-neutral and graph-neutral.** Render-only. A scene with no `Decal` and no `DropShadow` keeps
@@ -76,13 +77,14 @@ green = image up = box −Z.
 ## Cost and lifetime
 
 - **No frustum cull.** Every decal is packed and drawn each frame, on screen or not.
-- **Indicative cost** (unpinned M5), two parts:
-  - *Fixed:* whenever any `all` decal shares the scene with skinned meshes, the `decal_receivers`
-    pass redraws every skinned mesh once per frame (about 0.76 ms pass median facing 600 skinned
-    meshes). It scales with the skinned count, not the decal count, so a lower decal cap does not
-    remove it.
+- **Indicative cost** (pinned RTX 3090, release), two parts:
+  - *Fixed:* none for an `all` decal, whatever the skinned instance or triangle count. A receiver
+    list redraws its listed meshes once per frame, costing per vertex and fragment of those meshes
+    (re-skinned vertices, then a fragment shader on every covered pixel, with no early depth test).
+    That redraw was once paid for every skinned mesh: 1.38 ms of a 9.25 ms GPU frame at 500 skinned
+    enemies, now gone (7.6 ms).
   - *Per decal:* 1,000 multiply decals beside 500 skinned enemies add about 0.2 µs of GPU frame at
-    the crowd view (0.03 µs facing a wall) and 0.35 µs of extract each.
+    the crowd view (0.03 µs facing a wall) and 0.35 µs of extract each (unpinned M5).
 
   Figures and method: `Plan/gpu-driven-culling.md` Status, "The decal room bench".
 - **Lifetime recipe.** Kill decals are presentation entities, spawned and despawned by a

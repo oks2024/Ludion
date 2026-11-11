@@ -224,7 +224,9 @@ pub mod pass {
     /// The generic projector pass: one box volume per instance, the world position rebuilt from
     /// `scene_depth`, the instance's analytic footprint evaluated and multiplied into `scene`. It is
     /// present exactly when the scene carries a drop shadow (each one a projector instance) or a
-    /// decal, so a drop shadow's occlusion atlas and a decal's receiver ids both feed it.
+    /// decal, so a drop shadow's occlusion atlas and a decal's receiver ids both feed it. Reads
+    /// `[scene_depth, surface_normal, scene_normal?, drop_shadow_occlusion?, decal_receivers?]`;
+    /// `scene_normal` is listed only when the lit decals painted a copy (the `surface_normal`).
     pub const PROJECTOR: &str = "projector";
     /// The lit decal pass: the `alpha` and `coat` decals shaded like a mesh into `scene`, right after
     /// the opaque pass and before the probe relight and the reflections. Reads `[scene_depth,
@@ -1720,9 +1722,14 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             atlas,
         );
     }
-    // The recorder maps the inputs by the chain's flags: the atlas, then the receiver ids.
+    // The recorder maps the inputs by the chain's flags: the unpainted `scene_normal` when the lit
+    // decals made a painted copy (its alpha sign flags a skinned surface, which the copy drops), the
+    // atlas, then the receiver ids.
     if drop_shadow_atlas.is_some() || chain.decals {
         let mut projector_reads = vec![scene_depth, surface_normal];
+        if lit_normal.is_some() {
+            projector_reads.push(scene_normal);
+        }
         projector_reads.extend(drop_shadow_atlas);
         projector_reads.extend(decal_receivers);
         graph.add_external_pass(
@@ -3702,8 +3709,9 @@ mod tests {
         assert!(schedule(&graph).is_ok());
     }
 
-    /// With lit decals every reader past `decals_lit` takes the painted normal; the scene pass keeps
-    /// the receiver's. A multiply-only scene has no `lit_normal`.
+    /// With lit decals every reader past `decals_lit` takes the painted normal (the projector also
+    /// reads the unpainted one, for the skinned flag); the scene pass keeps the receiver's. A
+    /// multiply-only scene has no `lit_normal`.
     #[test]
     fn lit_decals_hand_the_painted_normal_to_the_later_readers() {
         let chain = PostChain {
@@ -3721,8 +3729,16 @@ mod tests {
         for pass in ["reflections", "ssr_trace", "ssr_blend", "projector"] {
             let r = reads(pass);
             assert!(r.contains(&"lit_normal"), "{pass}: {r:?}");
-            assert!(!r.contains(&"scene_normal"), "{pass}: {r:?}");
+            assert!(
+                !r.contains(&"scene_normal") || pass == "projector",
+                "{pass}: {r:?}"
+            );
         }
+        // The projector also reads the unpainted normal, whose alpha sign flags a skinned surface.
+        assert_eq!(
+            reads("projector"),
+            ["scene_depth", "lit_normal", "scene_normal"]
+        );
         assert!(!reads("scene").contains(&"lit_normal"));
 
         let multiply_only = PostChain {

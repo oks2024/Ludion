@@ -66,6 +66,9 @@ struct ProjectorParams {
 @group(0) @binding(6) var<storage, read> proj_decals: array<ProjectorDecal>;
 // Every decal's receiver list, ascending, concatenated; a decal names its slice.
 @group(0) @binding(7) var<storage, read> proj_receiver_ids: array<u32>;
+// The scene pass's `scene_normal` as written, before any lit decal painted a copy: the sign of its
+// alpha (roughness) is negative where the visible surface is a skinned mesh.
+@group(0) @binding(8) var proj_scene_normal: texture_2d<f32>;
 // The decal batch's base-colour map (the white default for a drop shadow).
 @group(1) @binding(0) var proj_map: texture_2d<f32>;
 @group(1) @binding(1) var proj_map_samp: sampler;
@@ -256,11 +259,11 @@ fn vs_decal(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) ->
 }
 
 // Whether the listed mesh visible at `pixel` lets decal `d` paint. No listed mesh there (id 0) is
-// "not in the list": an exclude list receives, an only list does not. The texel is negative for a
-// skinned mesh, which an unskinned decal refuses; the lists match by magnitude.
+// "not in the list": an exclude list receives, an only list does not. An unskinned decal refuses a
+// skinned surface, which the scene pass flags by the sign of `proj_scene_normal`'s alpha.
 fn decal_receives(d: ProjectorDecal, pixel: vec2<i32>) -> bool {
     let value = textureLoad(proj_receivers, pixel, 0).x;
-    let id = u32(abs(value) + 0.5);
+    let id = u32(value + 0.5);
     let wanted = id - 1u;
     var lo = 0u;
     var hi = select(0u, d.receivers.z, id != 0u);
@@ -274,7 +277,8 @@ fn decal_receives(d: ProjectorDecal, pixel: vec2<i32>) -> bool {
     }
     let listed = id != 0u && lo < d.receivers.z && proj_receiver_ids[d.receivers.y + lo] == wanted;
     let in_list = select(!listed, listed, d.receivers.x == RECEIVERS_ONLY);
-    return select(in_list, value >= 0.0, d.receivers.x == RECEIVERS_UNSKINNED);
+    let unskinned = textureLoad(proj_scene_normal, pixel, 0).w >= 0.0;
+    return select(in_list, unskinned, d.receivers.x == RECEIVERS_UNSKINNED);
 }
 
 @fragment

@@ -4995,9 +4995,9 @@ impl FrameRecorder<'_> {
     }
 
     /// The projector pass (present with a drop shadow or a decal): one cube volume per instance, reading
-    /// `[scene_depth, scene_normal, drop_shadow_occlusion?, decal_receivers?]` and painting into
-    /// `scene`. The decals draw first, in scene order and one draw per batch; every drop shadow draws
-    /// after them, so a shadow darkens a decal's glow too.
+    /// `[scene_depth, surface_normal, scene_normal?, drop_shadow_occlusion?, decal_receivers?]` and
+    /// painting into `scene`. The decals draw first, in scene order and one draw per batch; every
+    /// drop shadow draws after them, so a shadow darkens a decal's glow too.
     fn record_projector(&self, pass: &mut RecordedPass<'_>) {
         let drop_instances: Vec<shader_gen::Projector> = match self.occlusion_atlas {
             Some(atlas) => self
@@ -5009,6 +5009,15 @@ impl FrameRecorder<'_> {
             None => Vec::new(),
         };
         let mut optional_inputs = pass.inputs[2..].iter().copied();
+        // With lit decals the pass reads the painted `lit_normal` at slot 1 and the unpainted
+        // `scene_normal` next; otherwise the one normal target serves both bindings.
+        let scene_normal = if self.decals.lit_instances.is_empty() {
+            pass.inputs[1]
+        } else {
+            optional_inputs
+                .next()
+                .expect("the projector reads scene_normal beside lit_normal")
+        };
         let occlusion = if self.occlusion_atlas.is_some() {
             optional_inputs
                 .next()
@@ -5088,6 +5097,10 @@ impl FrameRecorder<'_> {
                 wgpu::BindGroupEntry {
                     binding: shader_gen::PROJ_RECEIVER_IDS_BINDING,
                     resource: receiver_ids_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::PROJ_SCENE_NORMAL_BINDING,
+                    resource: wgpu::BindingResource::TextureView(scene_normal),
                 },
             ],
         });
@@ -7925,7 +7938,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::Projector,
-        create: shader_gen::create_proj_depth_proj_normal_proj_occlusion_proj_params_projectors_proj_receivers_proj_decals_proj_receiver_ids_bgl,
+        create: shader_gen::create_proj_depth_proj_normal_proj_occlusion_proj_params_projectors_proj_receivers_proj_decals_proj_receiver_ids_proj_scene_normal_bgl,
     },
     LayoutDesc {
         id: LayoutId::LocalShadowDebug,
@@ -18303,8 +18316,9 @@ mod tests {
     }
 
     /// **An `Unskinned` decal spares a skinned mesh exactly as `Exclude` of it does.** The plate
-    /// (mesh 1) is skinned at an identity pose, so the receiver pass marks its pixels negative; the
-    /// render equals the `Exclude(vec![1])` one byte for byte, unlit and lit, with the floor painted.
+    /// (mesh 1) is skinned at an identity pose, so the scene pass flags its pixels (the sign of
+    /// `scene_normal`'s alpha) and no receiver pass is scheduled; the render equals the
+    /// `Exclude(vec![1])` one byte for byte, unlit and lit, with the floor painted.
     #[test]
     fn needs_gpu_an_unskinned_decal_spares_a_skinned_mesh() {
         let Some(renderer) = skip_or_renderer("an_unskinned_decal_spares_a_skinned_mesh") else {
@@ -18333,6 +18347,12 @@ mod tests {
                 &scene,
                 (w, h),
                 vec![decal(crate::scene::DecalReceivers::Unskinned)],
+            );
+            let mut all_only = scene.clone();
+            all_only.decals = vec![decal(crate::scene::DecalReceivers::Unskinned)];
+            assert!(
+                !PostChain::for_scene(&all_only).decal_receivers,
+                "{name}: an all decal schedules no receiver-id pass"
             );
             let (_, excluded) = decal_pair(
                 &renderer,

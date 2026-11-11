@@ -146,8 +146,8 @@ pub fn occlusion_bias(ds: &DropShadowInstance, atlas: &OcclusionAtlas) -> f32 {
 }
 
 /// Every mesh index the receiver-id pass must redraw, ascending and deduplicated: those some decal's
-/// receiver list names, plus every skinned mesh when any decal is [`DecalReceivers::Unskinned`]
-/// (the pass marks them so that decal can refuse them). Empty means no decal needs the pass.
+/// receiver list names. An [`DecalReceivers::Unskinned`] decal needs none: the scene pass flags a
+/// skinned surface in `scene_normal`'s alpha sign. Empty means no decal needs the pass.
 pub(crate) fn receiver_union(scene: &RenderScene) -> Vec<u32> {
     let mut union: Vec<u32> = scene
         .decals
@@ -157,20 +157,6 @@ pub(crate) fn receiver_union(scene: &RenderScene) -> Vec<u32> {
             DecalReceivers::Unskinned => [].iter().copied(),
         })
         .collect();
-    if scene
-        .decals
-        .iter()
-        .any(|decal| decal.receivers == DecalReceivers::Unskinned)
-    {
-        union.extend(
-            scene
-                .meshes
-                .iter()
-                .enumerate()
-                .filter(|(_, mesh)| mesh.bone_offset != 0)
-                .map(|(index, _)| index as u32),
-        );
-    }
     union.sort_unstable();
     union.dedup();
     union
@@ -817,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn an_all_decal_packs_no_ids_whatever_the_skinned_count() {
+    fn an_all_decal_packs_no_ids_and_redraws_no_skinned_mesh() {
         for skinned in [1usize, 50] {
             let mut scene = RenderScene::empty((64, 64));
             scene.meshes = (0..skinned + 3)
@@ -836,10 +822,9 @@ mod tests {
                     [2, if index == 3 { 1 } else { 0 }, 0, 0]
                 );
             }
-            let mut expected: Vec<u32> = vec![0];
-            expected.extend(3..(3 + skinned) as u32);
-            assert_eq!(receiver_union(&scene), expected);
-            assert_eq!(decal_stats(&scene).receiver_meshes as usize, expected.len());
+            // Only the Only list's mesh is redrawn: the scene pass flags the skinned ones.
+            assert_eq!(receiver_union(&scene), [0]);
+            assert_eq!(decal_stats(&scene).receiver_meshes, 1);
         }
     }
 

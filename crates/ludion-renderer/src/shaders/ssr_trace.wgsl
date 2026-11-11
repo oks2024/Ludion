@@ -130,7 +130,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
     let nr = textureLoad(trace_normal, p, 0);
-    let roughness = nr.w;
+    // The sign of the roughness flags a skinned surface (`mesh.wgsl`).
+    let roughness = abs(nr.w);
     let fade = trace_params.look.zw;
     if (roughness >= fade.y) {
         return vec4<f32>(0.0);

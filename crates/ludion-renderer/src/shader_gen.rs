@@ -2006,6 +2006,10 @@ pub const BAKE_BIN_TABLE_BINDING: u32 = 8;
 pub const DOWNSAMPLE_DST_GROUP: u32 = 0;
 pub const DOWNSAMPLE_DST_BINDING: u32 = 8;
 
+/// `proj_scene_normal` — `@group(0) @binding(8)`, in `projector.wgsl`.
+pub const PROJ_SCENE_NORMAL_GROUP: u32 = 0;
+pub const PROJ_SCENE_NORMAL_BINDING: u32 = 8;
+
 /// `samp` — `@group(0) @binding(8)`, in `composite.wgsl`.
 pub const SAMP_GROUP: u32 = 0;
 pub const SAMP_BINDING: u32 = 8;
@@ -3347,12 +3351,12 @@ pub fn create_pdbg_normal_pdbg_depth_pdbg_probe_list_probe_mask_bgl(
     })
 }
 
-/// Bind group layout `proj_depth_proj_normal_proj_occlusion_proj_params_projectors_proj_receivers_proj_decals_proj_receiver_ids` (@group 0), from `projector.wgsl`.
-pub fn create_proj_depth_proj_normal_proj_occlusion_proj_params_projectors_proj_receivers_proj_decals_proj_receiver_ids_bgl(
+/// Bind group layout `proj_depth_proj_normal_proj_occlusion_proj_params_projectors_proj_receivers_proj_decals_proj_receiver_ids_proj_scene_normal` (@group 0), from `projector.wgsl`.
+pub fn create_proj_depth_proj_normal_proj_occlusion_proj_params_projectors_proj_receivers_proj_decals_proj_receiver_ids_proj_scene_normal_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("proj_depth_proj_normal_proj_occlusion_proj_params_projectors_proj_receivers_proj_decals_proj_receiver_ids"),
+        label: Some("proj_depth_proj_normal_proj_occlusion_proj_params_projectors_proj_receivers_proj_decals_proj_receiver_ids_proj_scene_normal"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: PROJ_DEPTH_BINDING,
@@ -3431,6 +3435,16 @@ pub fn create_proj_depth_proj_normal_proj_occlusion_proj_params_projectors_proj_
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
                     min_binding_size: wgpu::BufferSize::new(4),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: PROJ_SCENE_NORMAL_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
                 count: None,
             },

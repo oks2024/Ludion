@@ -863,7 +863,9 @@ fn needs_gpu_decal_room_bench() {
         let decals = on.report.decals.as_ref().expect("room decals are profiled");
         assert_eq!(decals.multiply, ROOM_DECALS as u64);
         if gpu {
-            assert_eq!(decals.receiver_meshes, (ENEMIES + CORPSES) as u64);
+            // The room decals are `all` decals: the scene pass flags skinned surfaces, so no
+            // receiver-id redraw is scheduled.
+            assert_eq!(decals.receiver_meshes, 0);
         }
     }
     for off in [&arms[1], &arms[3]] {

@@ -1,8 +1,8 @@
 // The decal receiver-id pass: the meshes some decal lists, redrawn once more into an `R32Float` target
-// that holds ±(mesh index + 1) where the redraw is the visible surface and 0 everywhere else; the
-// value is negative for a skinned mesh. The projector reads it per pixel to honour a decal's
-// `Exclude`/`Only` list (by magnitude) or an `all` decal's skinned exclusion (by sign), so a decal
-// can skip the player's skinned mesh or paint only the floor without a scene-wide id attachment.
+// that holds (mesh index + 1) where the redraw is the visible surface and 0 everywhere else. The
+// decal passes read it per pixel to honour a decal's `Exclude`/`Only` list, so a decal can skip the
+// player's mesh or paint only the floor without a scene-wide id attachment. (An `all` decal needs
+// no pass: the scene pass flags skinned surfaces in `scene_normal`'s alpha sign.)
 //
 // There is no depth attachment: a fragment writes only where its depth matches the opaque pass's
 // `scene_depth` (within `DEPTH_SLACK`), so a listed mesh hidden behind another surface never claims
@@ -83,7 +83,6 @@ struct VsOut {
     @location(3) uv: vec2<f32>,
     // The scene pass's own `vertex_color * color`, so the cutout coverage interpolates identically.
     @location(4) color: vec4<f32>,
-    @location(5) @interpolate(flat) skinned: u32,
 };
 
 @vertex
@@ -103,7 +102,6 @@ fn vs_main(in: VsIn, @builtin(instance_index) instance: u32) -> VsOut {
     out.instance = instance;
     out.uv = in.uv;
     out.color = in.vertex_color * in.color;
-    out.skinned = u32(bone_offset != 0u);
     return out;
 }
 
@@ -138,5 +136,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (id == RECV_NONE) {
         discard;
     }
-    return vec4<f32>(select(f32(id + 1u), -f32(id + 1u), in.skinned != 0u), 0.0, 0.0, 0.0);
+    return vec4<f32>(f32(id + 1u), 0.0, 0.0, 0.0);
 }

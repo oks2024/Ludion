@@ -102,7 +102,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let v = normalize(view_to_eye(blend_params.cam_pos.xyz - world, blend_params.view_forward));
     let ndv = max(dot(n, v), 1e-4);
     // The sky's split-sum scale and bias, so the two paths match in BRDF.
-    let ab = textureSampleLevel(blend_brdf_lut, blend_samp, vec2<f32>(ndv, nr.w), 0.0).rg;
+    // The sign of the roughness flags a skinned surface (`mesh.wgsl`).
+    let ab = textureSampleLevel(blend_brdf_lut, blend_samp, vec2<f32>(ndv, abs(nr.w)), 0.0).rg;
     let fill = textureLoad(blend_fill, p, 0).rgb;
     let traced = hdr_safe(hit.rgb * dfg_specular(ab, spec.rgb));
     return vec4<f32>(confidence * (traced - fill), 0.0);

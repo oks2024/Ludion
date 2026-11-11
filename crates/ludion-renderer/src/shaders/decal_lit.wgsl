@@ -74,10 +74,10 @@ fn vs_lit(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> L
 }
 
 // Whether the listed mesh visible at `pixel` lets decal `d` paint: `projector.wgsl`'s test over this
-// pass's globals.
+// pass's globals (an unskinned decal reads the skinned flag off `lit_surface`'s alpha sign).
 fn lit_receives(d: ProjectorDecal, pixel: vec2<i32>) -> bool {
     let value = textureLoad(lit_receivers, pixel, 0).x;
-    let id = u32(abs(value) + 0.5);
+    let id = u32(value + 0.5);
     let wanted = id - 1u;
     var lo = 0u;
     var hi = select(0u, d.receivers.z, id != 0u);
@@ -91,7 +91,8 @@ fn lit_receives(d: ProjectorDecal, pixel: vec2<i32>) -> bool {
     }
     let listed = id != 0u && lo < d.receivers.z && lit_receiver_ids[d.receivers.y + lo] == wanted;
     let in_list = select(!listed, listed, d.receivers.x == RECEIVERS_ONLY);
-    return select(in_list, value >= 0.0, d.receivers.x == RECEIVERS_UNSKINNED);
+    let unskinned = textureLoad(lit_surface, pixel, 0).w >= 0.0;
+    return select(in_list, unskinned, d.receivers.x == RECEIVERS_UNSKINNED);
 }
 
 // What the decal paints at one pixel.
@@ -116,7 +117,9 @@ fn lit_sample(in: LitVsOut) -> LitSample {
     let ndc = vec3<f32>(uv_screen.x * 2.0 - 1.0, 1.0 - uv_screen.y * 2.0, depth);
     let world4 = lit_params.inv_view_proj * vec4<f32>(ndc, 1.0);
     let world = world4.xyz / world4.w;
-    let surface = textureLoad(lit_surface, pixel, 0);
+    let raw = textureLoad(lit_surface, pixel, 0);
+    // The sign of the roughness flags a skinned surface (`mesh.wgsl`); the magnitude is the roughness.
+    let surface = vec4<f32>(raw.xyz, abs(raw.w));
     let n_r = normalize(surface.xyz);
     let local = (d.world_to_box * vec4<f32>(world, 1.0)).xyz;
     let uv = mix(d.uv_rect.xy, d.uv_rect.zw, vec2<f32>(local.x + 0.5, local.z + 0.5));
@@ -191,8 +194,9 @@ fn lit_roughness(r: f32) -> f32 {
 // targets are masked off.
 @fragment
 fn fs_lit_copy(in: VsOut) -> LitOut {
-    let surface = textureLoad(lit_surface, vec2<i32>(in.pos.xy), 0);
-    return lit_out(vec4<f32>(0.0), surface, vec4<f32>(0.0));
+    let raw = textureLoad(lit_surface, vec2<i32>(in.pos.xy), 0);
+    // `abs` drops the skinned flag, so `lit_normal` and its readers see the plain roughness.
+    return lit_out(vec4<f32>(0.0), vec4<f32>(raw.xyz, abs(raw.w)), vec4<f32>(0.0));
 }
 
 @fragment

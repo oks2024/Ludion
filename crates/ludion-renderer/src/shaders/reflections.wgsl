@@ -86,7 +86,8 @@ fn reflection_fill(pos: vec4<f32>) -> vec3<f32> {
 
     let nr = textureLoad(refl_normal, p, 0);
     let n = normalize(nr.xyz);
-    let roughness = nr.w;
+    // The sign of the roughness flags a skinned surface (`mesh.wgsl`).
+    let roughness = abs(nr.w);
     let spec = textureLoad(refl_specular, p, 0);
     let v = normalize(view_to_eye(reflections.cam_pos.xyz - world, reflections.view_forward));
     let ndv = max(dot(n, v), 1e-4);
