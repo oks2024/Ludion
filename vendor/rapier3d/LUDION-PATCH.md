@@ -1,12 +1,14 @@
 # rapier3d 0.35.3, modified by Ludion
 
-This is rapier3d 0.35.3 (Apache-2.0, Dimforge) with five files changed, as Apache-2.0 §4(b) requires
+This is rapier3d 0.35.3 (Apache-2.0, Dimforge) with seven files changed, as Apache-2.0 §4(b) requires
 stating. Everything else is byte-identical to the crates.io release; the license is `LICENSE-APACHE`.
 
 **Changed:**
 - `src/dynamics/solver/joint_constraint/joint_constraint_helper.rs`, the dim3 branches of
   `JointConstraintHelper::limit_angular` and `JointConstraintHelper::motor_angular`.
 - `src/dynamics/rigid_body_components.rs`, the angular sleep gate in `RigidBodyActivation::update_energy`.
+- `src/pipeline/physics_pipeline/mod.rs` (`join_deferred_bvh_optimize`, new `wait_helping_pool`) and
+  `src/pipeline/physics_pipeline/solve.rs` (a comment).
 - `src/geometry/collider.rs` (`set_friction`, `set_restitution`) and
   `src/geometry/collider_components.rs` (`ColliderChanges::MATERIAL`).
 - `Cargo.toml`, the `parry3d` dependency gains `path = "../parry3d"`: a consumer never sees a root
@@ -32,6 +34,11 @@ changes; an equal write flags nothing.
 never slept inside a tick budget. The gate is now `|ω| < max(π/2, angular_threshold)`: every default body is
 bit-identical, a negative threshold still means never sleep, and a body opts in by raising `angular_threshold`.
 `max` is exact, so results stay cross-architecture exact.
+
+**Why (deferred join):** the broad phase `rayon::spawn`s its deferred BVH optimize, which from a pool worker
+lands on that worker's own deque, and rayon may wake no sibling for a local push. The join then blocked that worker in
+a plain `recv`, stranding the task: `step()` hung at 0% CPU. The join now runs pool jobs (`rayon::yield_now`) until
+the task arrives, so the waiter executes it itself. The tree is identical, only the executing thread changes. Upstream: not reported.
 
 **Formulas** (`ω` the relative angular velocity in frame-1 coordinates, `(i, j, k)` cyclic):
 - limit angle `θ = 2·atan2(q_i, w)`: `θ̇ = ω_i + [(w·q_k + q_i·q_j)·ω_j + (q_i·q_k − w·q_j)·ω_k] / (w² + q_i²)`

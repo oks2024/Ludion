@@ -71,7 +71,8 @@ pub struct PhysicsPipeline {
     staged_solver: crate::dynamics::StagedIslandSolver,
     /// Handle on the BVH optimization pass running concurrently with the narrow
     /// phase and solver (the `Mutex` only exists to keep the pipeline `Sync`; it is
-    /// never contended).
+    /// never contended). The join helps the pool while it waits, since a task spawned
+    /// from a worker sits on that worker's own deque and may wake no sibling.
     #[cfg(feature = "parallel")]
     deferred_bvh:
         std::sync::Mutex<Option<std::sync::mpsc::Receiver<crate::geometry::DeferredBvhOptimize>>>,
@@ -95,6 +96,36 @@ impl Default for PhysicsPipeline {
 fn check_pipeline_send_sync() {
     fn do_test<T: Sync>() {}
     do_test::<PhysicsPipeline>();
+}
+
+/// Receives the deferred optimize task, running pool jobs while it waits.
+///
+/// A plain `recv` parks this worker, and a task `rayon::spawn`ed from it may sit on its own
+/// deque with no sibling woken to steal it. `yield_now` rather than `yield_local`: the join can
+/// run on a different worker than the one holding the task, so the waiter must be able to steal.
+#[cfg(feature = "parallel")]
+fn wait_helping_pool(
+    rx: &std::sync::mpsc::Receiver<crate::geometry::DeferredBvhOptimize>,
+) -> crate::geometry::DeferredBvhOptimize {
+    use std::sync::mpsc::TryRecvError;
+
+    loop {
+        match rx.try_recv() {
+            Ok(task) => return task,
+            Err(TryRecvError::Disconnected) => panic!("the deferred BVH optimization task died"),
+            Err(TryRecvError::Empty) => {}
+        }
+        match rayon::yield_now() {
+            // Ran a pending job, possibly the task itself: check again.
+            Some(rayon::Yield::Executed) => continue,
+            // Nothing is queued anywhere in this pool, so the task is already running on
+            // another worker and a blocking wait can no longer strand it. `None`: not a pool
+            // thread, so the task is on a pool this thread cannot help.
+            Some(rayon::Yield::Idle) | None => {
+                return rx.recv().expect("the deferred BVH optimization task died");
+            }
+        }
+    }
 }
 
 impl PhysicsPipeline {
@@ -132,7 +163,7 @@ impl PhysicsPipeline {
     fn join_deferred_bvh_optimize(&mut self, broad_phase: &mut BroadPhaseBvh) {
         #[cfg(feature = "parallel")]
         if let Some(rx) = self.deferred_bvh.get_mut().unwrap().take() {
-            let task = rx.recv().expect("the deferred BVH optimization task died");
+            let task = wait_helping_pool(&rx);
             broad_phase.finish_deferred_optimize(task);
             return;
         }

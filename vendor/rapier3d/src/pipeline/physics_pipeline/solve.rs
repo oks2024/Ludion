@@ -83,8 +83,9 @@ impl PhysicsPipeline {
             // walked must stay un-optimized until the join, in every build — but the
             // *execution* needs a spare worker. `step` itself runs inside the pool (see
             // `PhysicsPipeline::step`), so on a single-worker pool a detached task would
-            // queue behind the `recv` waiting for it: deadlock. Hand those to the join
-            // point instead, which runs them inline.
+            // queue behind the wait for it: deadlock. Hand those to the join point instead,
+            // which runs them inline. On a larger pool the join helps the pool while it
+            // waits, because a local spawn is not guaranteed to wake a sibling.
             #[cfg(feature = "parallel")]
             if rayon::current_num_threads() > 1 {
                 let (tx, rx) = std::sync::mpsc::channel();
