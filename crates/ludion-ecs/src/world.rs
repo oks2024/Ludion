@@ -681,6 +681,46 @@ impl World {
         }
     }
 
+    /// Resolves the column of component `T` once, for an engine read walk over many ids (extract).
+    /// [`ReadColumn::get`] then skips the per-call type-map probe that [`get_unrecorded`](World::get_unrecorded)
+    /// pays. Like `get_unrecorded` it skips the query recorder, so game systems use
+    /// [`get`](World::get) or a query instead. It borrows the world, so it lives for one frame at most.
+    ///
+    /// # Panics
+    /// With the `L0026` text if `T` is a column the enclosing [`par_for_each`](World::par_for_each)
+    /// took `&mut`, like [`has`](World::has).
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_ecs::World;
+    /// use serde::{Deserialize, Serialize};
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct Health(u32);
+    ///
+    /// let mut world = World::new();
+    /// let (a, b, gone) = (world.spawn(), world.spawn(), world.spawn());
+    /// world.insert(a, Health(3)).unwrap();
+    /// world.insert(gone, Health(9)).unwrap();
+    /// world.despawn(gone).unwrap();
+    ///
+    /// let health = world.read_column::<Health>();
+    /// assert_eq!(health.get(a).unwrap().0, 3);
+    /// assert!(health.get(b).is_none());
+    /// assert!(health.get(gone).is_none());
+    /// ```
+    pub fn read_column<T: Component>(&self) -> ReadColumn<'_, T> {
+        let storage = self.storage_opt::<T>();
+        if storage.is_none() {
+            self.panic_if_lifted(TypeId::of::<T>());
+        }
+        ReadColumn {
+            world: self,
+            storage,
+        }
+    }
+
     /// Gets an exclusive reference to component `T` on `entity`.
     ///
     /// Returns `Ok(None)` if the entity is alive but has no `T`. Records a `(T, write)` access while
@@ -1622,6 +1662,27 @@ fn collect_storages<'a>(
     out
 }
 
+/// One component type's column, resolved once by [`World::read_column`]. [`get`](ReadColumn::get)
+/// answers exactly what `world.get_unrecorded::<T>(id).ok().flatten()` does, without the per-call
+/// type-map probe.
+pub struct ReadColumn<'w, T> {
+    world: &'w World,
+    storage: Option<&'w Storage<T>>,
+}
+
+impl<'w, T: Component> ReadColumn<'w, T> {
+    /// `T` on `entity`, or `None` when the id is dead, `T` is absent, or the id lies across the
+    /// phase boundary (that crossing is queued like [`World::get_unrecorded`]'s). A recycled slot
+    /// never answers for the stale id.
+    #[inline]
+    pub fn get(&self, entity: EntityId) -> Option<&'w T> {
+        if self.world.entities.is_alive(entity) {
+            return self.storage?.get(entity.index);
+        }
+        self.world.get_unrecorded::<T>(entity).ok().flatten()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1653,5 +1714,73 @@ mod tests {
         assert!(world.is_alive(root) && world.is_alive(b) && !world.is_alive(a));
         world.despawn(root).unwrap();
         assert!(!world.is_alive(b));
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Debug, PartialEq)]
+    struct Probe(u64);
+
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    struct Never;
+
+    fn as_ptr<T>(r: Option<&T>) -> Option<*const T> {
+        r.map(|r| r as *const T)
+    }
+
+    #[test]
+    fn read_column_matches_get_unrecorded_in_every_phase() {
+        use ludion_core::rng::DeterministicRng;
+
+        let mut rng = DeterministicRng::new(0x5EAD_C0DE);
+        let mut world = World::new();
+        let mut ids = Vec::new();
+        for round in 0..6 {
+            for _ in 0..40 {
+                let sim = world.spawn();
+                let pres = world.spawn_presentation();
+                ids.extend([sim, pres]);
+            }
+            // Despawn a random subset (stale ids stay in `ids`), so later rounds recycle slots.
+            for &id in &ids {
+                if rng.gen_range_u32(0..4) == 0 && world.is_alive(id) {
+                    world.despawn(id).ok();
+                }
+            }
+            for &id in &ids {
+                if world.is_alive(id) && rng.gen_range_u32(0..2) == 0 {
+                    world.insert(id, Probe(rng.next_u64() ^ round)).unwrap();
+                }
+            }
+        }
+
+        for phase in [Phase::Host, Phase::Sim, Phase::Presentation] {
+            world.set_phase(phase, Some("oracle"));
+            let col = world.read_column::<Probe>();
+            let got: Vec<_> = ids.iter().map(|&id| as_ptr(col.get(id))).collect();
+            let got_crossings = world.take_boundary_crossings();
+            let want: Vec<_> = ids
+                .iter()
+                .map(|&id| as_ptr(world.get_unrecorded::<Probe>(id).ok().flatten()))
+                .collect();
+            let want_crossings = world.take_boundary_crossings();
+            assert_eq!(got, want, "values differ in {phase:?}");
+            assert_eq!(
+                got_crossings.iter().map(|c| &c.key).collect::<Vec<_>>(),
+                want_crossings.iter().map(|c| &c.key).collect::<Vec<_>>(),
+                "crossings differ in {phase:?}"
+            );
+            assert!(
+                got.iter().any(Option::is_some),
+                "oracle must hit in {phase:?}"
+            );
+        }
+        world.set_phase(Phase::Host, None);
+    }
+
+    #[test]
+    fn read_column_of_a_never_created_column_is_none() {
+        let mut world = World::new();
+        let e = world.spawn();
+        let col = world.read_column::<Never>();
+        assert!(col.get(e).is_none());
     }
 }

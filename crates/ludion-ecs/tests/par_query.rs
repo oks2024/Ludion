@@ -382,6 +382,15 @@ fn lifted_read_panic_message(read: impl Fn(&World) + Sync) -> String {
 }
 
 #[test]
+fn read_column_of_a_lifted_column_panics_with_l0026_and_the_world_recovers() {
+    let message = lifted_read_panic_message(|world| {
+        let _ = world.read_column::<Position>();
+    });
+    assert!(message.contains("L0026"), "{message}");
+    assert!(message.contains("Position"), "{message}");
+}
+
+#[test]
 fn par_join_fold_over_a_lifted_column_panics_with_l0026_and_the_world_recovers() {
     let message = lifted_read_panic_message(|world| {
         let _ = world.par_join_fold::<(&Position,), usize, usize>(

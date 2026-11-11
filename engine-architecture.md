@@ -192,7 +192,9 @@ windowed is an append-only feature, not a mode switch.
 - Component storage with defined, documented, conformance-tested iteration order.
 - Typed queries (`world.query::<(&Transform, &mut Velocity)>()`), explicit and macro-light — plus
   their chunk-parallel form (`world.par_for_each::<(&mut Transform, &Velocity), _>(…)`,
-  `par_join_fold`), which is the same join over `ludion_core::par` chunks.
+  `par_join_fold`), which is the same join over `ludion_core::par` chunks — plus a read-only
+  per-type column handle for engine read walks (`World::read_column`, Serious Isaac 0033 item
+  (ii), owner-approved 2026-11-10).
 - Explicit sequential system registration — systems run in registration order, period. This is a
   determinism rule, not a scheduling limitation.
 - Component registry: `register::<T>()` records name, JSON Schema (`schemars`), and erased serde
@@ -211,7 +213,8 @@ points are `World::par_for_each`/`par_join_fold`; a system-level parallel schedu
 module; gated by `scripts/ecs-budget.mjs`, raising it is the user's decision). The original ≈ 2–3k
 was set for the sequential v1 and the crate sat at ≈ 2.9k against it; J1 (user unfreeze, 2026-08-01)
 deliberately spends the difference on the parallel region machinery (`par_query.rs`) — a one-off
-raise for a named plan, not a standing licence to grow. Conformance tests are written *before*
+raise for a named plan, not a standing licence to grow; the 0033 column handle is a second named,
+owner-approved addition, spent inside the existing 3000. Conformance tests are written *before*
 storage internals: generational safety (stale `EntityId` is an error, not a hit on a recycled
 entity), query iteration order.
 

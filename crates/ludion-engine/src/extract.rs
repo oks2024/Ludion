@@ -27,7 +27,7 @@ use ludion_core::math::glam::{Mat3, Mat4, Quat, Vec3};
 use ludion_core::math::{Affine3, Trs, euler_xyz_degrees_to_quat, quat_to_euler_xyz_degrees};
 use ludion_core::par;
 use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
-use ludion_ecs::World;
+use ludion_ecs::{ReadColumn, World};
 use ludion_protocol::command::ViewPose;
 use ludion_renderer::LodSettings;
 use ludion_renderer::{
@@ -3451,6 +3451,35 @@ pub(crate) fn place_poses<'w>(
     pose_sockets(world, ids, assets, poses, now)
 }
 
+/// The component columns [`place_with`] reads per entity, each resolved once per call.
+struct PlaceColumns<'w> {
+    transform: ReadColumn<'w, Transform>,
+    gi_dynamic: ReadColumn<'w, GiDynamic>,
+    mesh: ReadColumn<'w, Mesh>,
+    mesh_grid: ReadColumn<'w, MeshGrid>,
+    sprite: ReadColumn<'w, Sprite>,
+    tilemap: ReadColumn<'w, Tilemap>,
+    point_light: ReadColumn<'w, PointLight>,
+    spot_light: ReadColumn<'w, SpotLight>,
+    text: ReadColumn<'w, Text>,
+}
+
+impl<'w> PlaceColumns<'w> {
+    fn of(world: &'w World) -> Self {
+        Self {
+            transform: world.read_column(),
+            gi_dynamic: world.read_column(),
+            mesh: world.read_column(),
+            mesh_grid: world.read_column(),
+            sprite: world.read_column(),
+            tilemap: world.read_column(),
+            point_light: world.read_column(),
+            spot_light: world.read_column(),
+            text: world.read_column(),
+        }
+    }
+}
+
 /// The placement half of [`place`], after [`place_poses`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn place_with<'w>(
@@ -3481,15 +3510,16 @@ pub(crate) fn place_with<'w>(
         skin_followers,
     };
 
+    let cols = PlaceColumns::of(world);
     for (index, &id) in ids.iter().enumerate() {
-        let pose = render_pose(world, poses, id);
+        let pose = render_pose_with(&cols.transform, world, poses, id);
         let translation = Vec3::from(pose.translation());
         // Read once per entity (`Plan/gi-wave3-dynamic-injection.md` §3.2), whichever of Mesh/
         // PointLight this entity carries reads the same answer — an entity carrying neither is
         // simply never consulted, the marker's documented inert case.
-        let dynamic = get::<GiDynamic>(world, id).is_some();
+        let dynamic = cols.gi_dynamic.get(id).is_some();
 
-        if let Some(mesh) = get::<Mesh>(world, id) {
+        if let Some(mesh) = cols.mesh.get(id) {
             let model = pose.model();
             let normal_matrix = pose.normal_matrix();
             placed.meshes.push(PlacedMesh {
@@ -3511,7 +3541,7 @@ pub(crate) fn place_with<'w>(
             });
         }
 
-        if let Some(grid) = get::<MeshGrid>(world, id) {
+        if let Some(grid) = cols.mesh_grid.get(id) {
             // One `PlacedMesh` per non-empty cell, row-major, in the entity's local XZ plane under
             // its whole pose (see `MeshGrid`'s placement convention). Every cell carries this one
             // entity `id`, so `render.bounds` unions the grid into one renderable and a `Fade`
@@ -3548,7 +3578,7 @@ pub(crate) fn place_with<'w>(
             }
         }
 
-        if let Some(sprite) = get::<Sprite>(world, id) {
+        if let Some(sprite) = cols.sprite.get(id) {
             // `right`/`up` are FULL width/height vectors (the shader's unit-quad corners span
             // [-0.5, 0.5], so the drawn quad is exactly `|right|` × `|up|` world units — a
             // `size: [2, 0.4]` sprite draws 2.0 × 0.4). A sprite is an XY quad in local space, so
@@ -3627,7 +3657,7 @@ pub(crate) fn place_with<'w>(
             });
         }
 
-        if let Some(tilemap) = get::<Tilemap>(world, id) {
+        if let Some(tilemap) = cols.tilemap.get(id) {
             // Expand cells row-major (rows outer, columns inner) into the existing sprite batcher —
             // no new GPU work. Each cell is a `cell_size × cell_size` axis-aligned quad; only the
             // entity's Transform.translation is used, as the center of cell (0, 0). +X is column,
@@ -3678,19 +3708,19 @@ pub(crate) fn place_with<'w>(
             }
         }
 
-        if let Some(light) = get::<PointLight>(world, id)
+        if let Some(light) = cols.point_light.get(id)
             && let Some(data) = point_light_data(light, translation, dynamic)
         {
             placed.lights.push((id, data));
         }
 
-        if let Some(light) = get::<SpotLight>(world, id)
+        if let Some(light) = cols.spot_light.get(id)
             && let Some(data) = spot_light_data(light, translation)
         {
             placed.spot_lights.push((id, data));
         }
 
-        if let Some(text) = get::<Text>(world, id) {
+        if let Some(text) = cols.text.get(id) {
             let laid =
                 ludion_font::layout(fonts.face(text.font.as_deref()), &text.text, text.size, 0.0);
             let quads = laid.quads(
@@ -3797,12 +3827,22 @@ impl RenderPose {
 }
 
 fn render_pose(world: &World, poses: &mut WorldAffines, id: EntityId) -> RenderPose {
+    render_pose_with(&world.read_column(), world, poses, id)
+}
+
+/// [`render_pose`] reading the stored [`Transform`] through a column the caller built once.
+fn render_pose_with(
+    transforms: &ReadColumn<'_, Transform>,
+    world: &World,
+    poses: &mut WorldAffines,
+    id: EntityId,
+) -> RenderPose {
     let affine = poses.parented(world, id);
     RenderPose {
         local: if affine.is_some() {
             Transform::default()
         } else {
-            transform_of(world, id)
+            transforms.get(id).copied().unwrap_or_default()
         },
         affine,
     }
