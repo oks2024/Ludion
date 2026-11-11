@@ -72,7 +72,8 @@ every game crate):
 5. **Systems run sequentially in explicit registration order.** There is no parallel scheduler and no
    system runs concurrently with another. Data parallelism *inside* one system is sanctioned only
    through `ludion_core::par` and its ECS entry points. Ad-hoc `std::thread` spawns/scopes and rayon
-   stay banned in sim crates.
+   stay banned in sim crates, except rapier's internal scheduler on the pool `ludion-physics` owns,
+   sized `par::threads()` (`Plan/deterministic-job-system.md`).
 6. **Deterministic entity allocation** — free-list pop order defined and conformance-tested in
    `ludion-ecs`.
 

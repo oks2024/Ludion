@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // The physics resolved-feature gate (Plan/physics.md W1).
 //
-// Cargo unifies features across the whole workspace: one crate anywhere enabling `parallel` (or a
-// `simd-*` feature) on `rapier3d`/`parry3d` would silently turn a second thread or SIMD-width-
-// dependent arithmetic on for every build, and clippy's `disallowed-types`/`disallowed-methods`
-// cannot see this — a denylist bans a type *path in our code* and has never looked inside a
-// dependency. This script is the mechanical stand-in: it reads `cargo metadata` and asserts the
-// exact feature set both crates resolved to, plus that `rayon`/`rayon-core` are unreachable from
-// `ludion-physics`'s own (normal, non-dev, non-build) dependency closure.
+// Cargo unifies features across the whole workspace: one crate anywhere enabling a `simd-*` feature
+// on `rapier3d`/`parry3d` would silently turn SIMD-width-dependent arithmetic on for every build,
+// and clippy's `disallowed-types`/`disallowed-methods` cannot see this — a denylist bans a type
+// *path in our code* and has never looked inside a dependency. This script is the mechanical stand-in: it reads `cargo metadata` and asserts the
+// exact feature set both crates resolved to (`parallel` included: rapier's scheduler runs on the
+// pool `ludion-physics` owns), plus that `rayon`/`rayon-core` are reachable from `ludion-physics`'s
+// own (normal, non-dev, non-build) dependency closure only through the named carve-out, the
+// `rapier3d -> rayon` and `parry3d -> rayon` edges (`Plan/deterministic-job-system.md`).
 //
 // Why `hashbrown` is NOT gated here, on purpose, after checking: `rapier3d`'s `std` feature pulls
 // `alloc`, which turns on `parry3d/alloc`, which is what makes `hashbrown` a resolved dependency —
@@ -63,22 +64,23 @@ if (values.help) {
 }
 
 // The exact feature set `rapier3d` must resolve to under `[workspace.dependencies]`'s pin
-// (`dim3 f32 std enhanced-determinism serde-serialize`, `default-features = false`): those five
-// plus `alloc`, which rapier3d's own `std` feature unconditionally implies. A resolved set that
-// differs — larger (something unexpectedly on, e.g. `parallel` or a `simd*` feature) or smaller
-// (a pin regression) — is exactly the silent-drift case this gate exists for.
-const EXPECTED_RAPIER3D_FEATURES = ['alloc', 'dim3', 'enhanced-determinism', 'f32', 'serde-serialize', 'std'];
+// (`dim3 f32 std enhanced-determinism parallel serde-serialize`, `default-features = false`): those
+// six plus `alloc`, which rapier3d's own `std` feature unconditionally implies. A resolved set that
+// differs — larger (something unexpectedly on, e.g. a `simd*` feature) or smaller (a pin
+// regression, `parallel` dropped) — is exactly the silent-drift case this gate exists for.
+const EXPECTED_RAPIER3D_FEATURES = ['alloc', 'dim3', 'enhanced-determinism', 'f32', 'parallel', 'serde-serialize', 'std'];
 
 // parry3d's feature set as `rapier3d` 0.35.3 actually resolves it today (inspected via `cargo
 // metadata` against the pinned lock, not derived by reading manifests): `required-features` (its
-// own `dim3`+`f32` gate), the five it shares with rapier3d's request, plus what `alloc` and
-// `enhanced-determinism` each turn on transitively inside parry3d itself (`downcast-rs`, `ena`,
-// `hashbrown`, `indexmap`, `rstar`, `slab`, `smallvec`, `serde`, `serde_arrays`). Any drift here —
+// own `dim3`+`f32` gate), the six it shares with rapier3d's request, plus what `alloc`,
+// `enhanced-determinism` and `parallel` each turn on transitively inside parry3d itself
+// (`downcast-rs`, `ena`, `hashbrown`, `indexmap`, `rstar`, `slab`, `smallvec`, `serde`,
+// `serde_arrays`, and `rayon`, the implicit feature of parry's `parallel = ["rayon"]`). Any drift here —
 // added or missing — means the pin moved under us or parry3d's own feature wiring changed, either
 // of which is a stop-and-recheck event, not something to wave through silently.
 const EXPECTED_PARRY3D_FEATURES = [
   'alloc', 'dim3', 'downcast-rs', 'ena', 'enhanced-determinism', 'f32', 'hashbrown', 'indexmap',
-  'required-features', 'rstar', 'serde', 'serde-serialize', 'serde_arrays', 'slab', 'smallvec', 'std',
+  'parallel', 'rayon', 'required-features', 'rstar', 'serde', 'serde-serialize', 'serde_arrays', 'slab', 'smallvec', 'std',
 ];
 
 // glamx (rapier3d's math layer) and the glam it builds on: `scalar-math` keeps every glam operation
@@ -93,6 +95,9 @@ const EXPECTED_GLAM_FEATURES = ['approx', 'f64', 'i32', 'libm', 'nostd-libm', 's
 const DENIED_GLAM_FEATURES = ['fast-math', 'core-simd'];
 
 const FORBIDDEN_NORMAL_DEPS = new Set(['rayon', 'rayon-core']);
+// The one named carve-out: rapier's internal scheduler (Serious Isaac 0020). Only these crates may
+// depend on rayon; the pool they run on is owned by `ludion-physics` and sized `par::threads()`.
+const ALLOWED_RAYON_EDGES = new Set(['rapier3d', 'parry3d']);
 
 function fail(msg) {
   console.error(`physics-features: ${msg}`);
@@ -244,7 +249,8 @@ for (const pkg of packagesByName.get('glam') ?? []) {
   }
 }
 
-// 4. rayon / rayon-core unreachable from ludion-physics's own normal dependency closure. A dep_kind
+// 4. rayon / rayon-core reachable from ludion-physics's own normal dependency closure only through
+// the carve-out edges (rapier3d/parry3d -> rayon), both of which must exist. A dep_kind
 // entry with `kind: null` (or an empty `dep_kinds` array, which cargo treats the same way) is a
 // normal edge; dev/build-only edges are not walked, since neither reaches a shipped build.
 const physicsPkgs = packagesByName.get('ludion-physics') ?? [];
@@ -257,11 +263,16 @@ const nameById = new Map(metadata.packages.map((p) => [p.id, p.name]));
 const parentOf = new Map();
 const visited = new Set([physicsRoot.id]);
 const queue = [physicsRoot.id];
+const allowedEdgesSeen = new Set();
 while (queue.length) {
   const id = queue.shift();
   const node = nodesById.get(id);
   for (const dep of node.deps) {
     if (!isNormalEdge(dep)) continue;
+    if (ALLOWED_RAYON_EDGES.has(nameById.get(id)) && FORBIDDEN_NORMAL_DEPS.has(nameById.get(dep.pkg))) {
+      allowedEdgesSeen.add(`${nameById.get(id)} -> ${nameById.get(dep.pkg)}`);
+      continue;
+    }
     if (visited.has(dep.pkg)) continue;
     visited.add(dep.pkg);
     parentOf.set(dep.pkg, id);
@@ -280,7 +291,15 @@ for (const id of visited) {
   }
   chain.reverse();
   const path_ = chain.map((pid) => `${nameById.get(pid)}@${metadata.packages.find((p) => p.id === pid)?.version ?? '?'}`).join(' -> ');
-  fail(`"${name}" is reachable from ludion-physics's normal dependency closure:\n  ${path_}\nSomething turned on parallel/rayon somewhere in the workspace — feature unification means this affects every build.`);
+  fail(`"${name}" is reachable from ludion-physics's normal dependency closure:\n  ${path_}\nRayon is allowed only through rapier3d and parry3d (the \`parallel\` carve-out); something else in the closure now reaches it.`);
+}
+for (const edge of ['rapier3d -> rayon', 'parry3d -> rayon']) {
+  if (!allowedEdgesSeen.has(edge)) {
+    fail(
+      `${edge.split(' ')[0]} no longer reaches rayon — the \`parallel\` pin changed? Expected rapier3d -> rayon and ` +
+      `parry3d -> rayon (seen: ${[...allowedEdgesSeen].join(', ') || 'none'})`,
+    );
+  }
 }
 
 // 5. A path consumer of ludion-physics resolves the vendored crates. Only the scratch dir under
@@ -307,5 +326,5 @@ for (const name of ['rapier3d', 'parry3d']) {
 
 console.log(
   `physics-features: ok — rapier3d@${rapier.version} and parry3d@${parry.version} resolved to their ` +
-  `pinned feature sets, glam/glamx on their recorded sets with no fast-math or core-simd, rayon/rayon-core unreachable from ludion-physics, and a path consumer resolves both from vendor/`,
+  `pinned feature sets, glam/glamx on their recorded sets with no fast-math or core-simd, rayon/rayon-core reachable from ludion-physics only through rapier3d and parry3d (the parallel carve-out), and a path consumer resolves both from vendor/`,
 );

@@ -30,7 +30,7 @@ and what stays ours.
 
 - **Ordered iteration inside the solver.** `enhanced-determinism` selects `IndexMap`/`IndexSet` with a
   fixed hasher; the dependency audit found no reachable `HashMap`/`HashSet`.
-- **Single-threaded solving.** `enhanced-determinism` excludes `parallel`; rayon is unreachable.
+- **Single-threaded solving.** (0020: superseded — `parallel` builds beside `enhanced-determinism` and the step runs on a pool `ludion-physics` owns, sized `par::threads()`; see Proposed (Serious Isaac 0020).)
 - **Pure-Rust libm inside the solver**, and no `mul_add` in rapier's or parry's own sources.
 - **Cross-architecture bit-identity for the operations a real scene exercises.** The cross-arch trace
   is the empirical answer to the one thing reading could not settle (`wide`'s internal fused paths).
@@ -73,7 +73,7 @@ and what stays ours.
 ## Decision: adopt rapier (2026-09-21)
 
 **Ruled by the user, 2026-09-21: adopt `rapier3d`, pinned with `=` (today `=0.35.3`), features
-`dim3 f32 std enhanced-determinism serde-serialize`, never `parallel`, never a SIMD feature, behind a
+`dim3 f32 std enhanced-determinism serde-serialize` (0020: plus `parallel`, on a pool we own; see Proposed (Serious Isaac 0020)), never a SIMD feature, behind a
 `ludion-physics` crate that is the only place in the workspace naming a rapier or nalgebra type.**
 The author surface stays ours (below) and rapier stays replaceable — that is what the wrapper buys.
 
@@ -84,8 +84,9 @@ write path is cheap and reproduces cross-arch.
 
 **What was given up:**
 
-1. *Single-threaded solving.* `enhanced-determinism` and `parallel` are mutually exclusive, so the
-   solver will not use a second core. The measured ceiling: about 2 000 bodies costs 4.6 ms mean and
+1. *Single-threaded solving.* (0020: the "mutually exclusive" claim is false for 0.35.3 — the two
+   compile together — and the ceiling is now a threaded step on `par::threads()` workers; see
+   Proposed (Serious Isaac 0020).) As first measured, single-threaded, the ceiling: about 2 000 bodies costs 4.6 ms mean and
    9.6 ms p99 of a 16.7 ms tick on the reference box, which is the practical body budget for a 60 fps
    scene with a game on top of it. For content: hundreds of props are comfortable, a few thousand is
    the wall — and the wall is a *measurement on one box and one scene*, not a constant.
@@ -313,10 +314,12 @@ The thinnest thing a game can run.
 - **The mechanical feature gate:** `scripts/physics-features.mjs`, run by `check.mjs` and mirrored into
   `.github/workflows/ci.yml` and `ci/scripts/` per the gate-set rule, asserting over `cargo metadata`
   that `rapier3d`'s resolved feature set is exactly the expected one and that `rayon` and `hashbrown`
-  appear nowhere in `ludion-physics`'s normal dependency tree. It exists in place of a denylist because
+  appear nowhere in `ludion-physics`'s normal dependency tree (0020: `rayon` is now reachable only
+  through the named `rapier3d`/`parry3d` carve-out). It exists in place of a denylist because
   clippy bans type paths in our code and has never seen inside a dependency
   (`dev-docs/determinism.md` §Gotchas), and cargo unifies features across the workspace: one crate
-  anywhere enabling `parallel` would turn rayon on for every build, silently.
+  anywhere enabling `parallel` would turn rayon on for every build, silently (0020: `parallel` is
+  now expected and the gate asserts the pool carve-out instead).
 - Verifiable by: a gallery physics scene with a per-tick hash trace, identical on both pinned machines;
   the snapshot-resume trace on the bincode path; the thread-identity gate; the recorded
   `cargo check -p ludion-engine` delta.
@@ -357,7 +360,7 @@ The thinnest thing a game can run.
 ### W4 — the ceiling, the ritual and the exit
 
 This replaces the old "parallel islands" wave: no island parallelism exists on this route and none is
-planned, because `enhanced-determinism` excludes it.
+planned, because `enhanced-determinism` excludes it. (0020: that exclusion is false; the step itself now runs threaded, see Proposed (Serious Isaac 0020).)
 
 - The body-count ceiling written down and *gated*: the stress budget on both boxes is what fails when a
   content change walks past it, and the `physics` row in the profile report (`dev-docs/profiling.md`'s
@@ -427,7 +430,7 @@ Requests from the external game's `ludion-requests/`, one at a time, each a mini
   Fast 3D shots sweep with `first_hit` in the projectile pool instead (`Plan/bulk-projectiles.md`).
 - A physics debug view in the editor: rides the parity gate — the wireframe is a `render.*` flag
   first, then a peer-client toggle.
-- Island parallelism: excluded by `enhanced-determinism`; only reachable by leaving rapier.
+- Island parallelism: excluded by `enhanced-determinism`; only reachable by leaving rapier. (0020: not a non-goal any more — rapier's `parallel` step is adopted; see Proposed (Serious Isaac 0020).)
 - Rapier's character controller: see §The 2D queries.
 - Springs, velocity-target motors, a per-motor model choice and multibody joints are not built. Trigger:
   a game request that a force-based position drive cannot express.

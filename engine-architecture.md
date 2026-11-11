@@ -248,7 +248,8 @@ enforced, not aspirational:
    writes; the query's `&mut` columns are lifted out of the world for the region) and
    `World::par_join_fold` (read-only, ordered map-reduce). `World` is `Sync` only so those chunks
    can share `&World`; the sim thread still solely owns it and `Arc<Mutex<World>>` stays banned.
-   Ad-hoc `std::thread` spawns/scopes and rayon stay banned in sim crates; see
+   Ad-hoc `std::thread` spawns/scopes and rayon stay banned in sim crates, except rapier's internal
+   scheduler on the pool `ludion-physics` owns, sized `par::threads()`; see
    `Plan/deterministic-job-system.md` and `dev-docs/determinism.md`. The worker count defaults to the
    machine's available parallelism capped at `par::AUTO_THREAD_CAP` (8, the top of the identity
    gate's range) and is set per-machine by `LUDION_THREADS` or per-run by a host's `--threads`, so

@@ -594,7 +594,7 @@ impl PhysicsWorld {
         let mut rapier = RapierWorld::new();
         rapier.integration_parameters.dt = seconds_per_tick(tick_rate);
         rapier.gravity = to_vector(DEFAULT_GRAVITY);
-        PhysicsWorld {
+        let mut world = PhysicsWorld {
             rapier,
             table: Vec::new(),
             rows: StableMap::new(),
@@ -630,7 +630,9 @@ impl PhysicsWorld {
             last_write_held: None,
             move_reports: StableMap::new(),
             wire_edges: Mutex::default(),
-        }
+        };
+        world.sync_solver_pool();
+        world
     }
 
     /// Builder form of [`set_plane`](PhysicsWorld::set_plane).
@@ -1458,7 +1460,21 @@ impl PhysicsWorld {
         world.rapier.integration_parameters.dt = seconds_per_tick(tick_rate);
         world.reindex();
         world.reindex_joints();
+        world.sync_solver_pool();
         Ok(world)
+    }
+
+    /// Sizes the solver's worker pool to `par::threads()`. A `parallel` rapier with no pool of its
+    /// own falls back to rayon's global one, which `LUDION_THREADS`/`--threads` do not govern; the
+    /// count is thread-local and a world can be built under one and stepped under another, so the
+    /// size is re-checked wherever it could have drifted (build, decode, every step).
+    fn sync_solver_pool(&mut self) {
+        let want = ludion_core::par::threads();
+        if self.rapier.physics_pipeline.num_threads() != Some(want)
+            && let Err(why) = self.rapier.physics_pipeline.configure_thread_pool(want)
+        {
+            panic!("could not start the physics solver's {want} worker threads: {why}");
+        }
     }
 
     /// Advances the simulation by one fixed timestep scaled by the pending
@@ -1466,6 +1482,7 @@ impl PhysicsWorld {
     /// event handler, then diffs the solver's contact graph into this step's
     /// [`contact_events`](PhysicsWorld::contact_events). The scale and the freeze reset here.
     pub(crate) fn step(&mut self) {
+        self.sync_solver_pool();
         self.contacts.clear();
         self.sensor_events.clear();
         self.joint_events.clear();
@@ -3053,6 +3070,25 @@ mod tests {
         assert_eq!(&bytes[..4], b"LPB1");
         let world = PhysicsWorld::from_bytes(&bytes, TickRate::DEFAULT).unwrap();
         assert_eq!(world.to_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn the_solver_pool_follows_the_thread_count_in_effect() {
+        use ludion_core::par::with_threads;
+
+        let built = with_threads(3, || PhysicsWorld::new(TickRate::DEFAULT));
+        assert_eq!(built.rapier.physics_pipeline.num_threads(), Some(3));
+
+        let bytes = built.to_bytes().unwrap();
+        let decoded = with_threads(1, || {
+            PhysicsWorld::from_bytes(&bytes, TickRate::DEFAULT).unwrap()
+        });
+        assert_eq!(decoded.rapier.physics_pipeline.num_threads(), Some(1));
+
+        let mut moved = with_threads(2, || PhysicsWorld::new(TickRate::DEFAULT));
+        assert_eq!(moved.rapier.physics_pipeline.num_threads(), Some(2));
+        with_threads(5, || moved.step());
+        assert_eq!(moved.rapier.physics_pipeline.num_threads(), Some(5));
     }
 
     #[test]

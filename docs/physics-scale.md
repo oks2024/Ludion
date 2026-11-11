@@ -13,13 +13,13 @@ description: How many physics bodies the solver is gated for, the horde shape, m
 | `examples/gallery/physics-stress.yaml` | 512 rigid bodies | a pinned `physics_step` budget on each box (`budgets/pinned-rtx3090-physics-stress.toml`, `budgets/pinned-apple-m4-physics-stress.toml`), trace, replay, restore |
 | `examples/gallery/physics-horde.yaml` | 500 `CharacterMotor`s, 120 eleven-part `SkinBone` ragdolls (24 pinned to the walls by runtime joints), 5,000 pool projectiles | determinism only: committed trace, replay, snapshot restore, 1/2/8-thread identity. **no pinned budget** |
 
-512 non-static bodies is the **gated scale**; the single-threaded solver's measured wall is about 2,000 rigid bodies. Past 512, the step cost is unmeasured on the pinned boxes: build a stress scene at your game's shape and measure it with `ludion profile` against a budget on each box.
+512 non-static bodies is the **gated scale**; the step runs on the machine's `par::threads()` workers (`LUDION_THREADS` or `--threads`), and its measured wall, taken single-threaded and not re-measured, is about 2,000 rigid bodies. Past 512, the step cost is unmeasured on the pinned boxes: build a stress scene at your game's shape and measure it with `ludion profile` against a budget on each box.
 
 ## Indicative figures
 
 Unpinned M5, 2026-11-09, medians of three runs — **indicative, not authoritative** (`Plan/physics.md` "Horde bench" owns them). Horde scene, 1,865 bodies, 1,820 awake:
 
-- `physics_step` 1.78 ms mean (solver about half, narrow phase about a quarter).
+- `physics_step` 1.78 ms mean (solver about half, narrow phase about a quarter). A spike of the threaded step cut the 8-thread step from 1.83 to 1.06 ms.
 - 500 serial `move_character` calls: 3.76 ms, about twice the whole step.
 - The same 500 moves through `move_characters`: 3.72 ms at 1 thread, 1.22 ms at 8.
 - `projectiles_step` for 5,000 shots: 0.68 ms at 1 thread, 0.26 ms at 8.

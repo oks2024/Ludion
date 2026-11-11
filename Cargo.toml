@@ -195,9 +195,12 @@ ktx2 = "0.5"
 skrifa = { version = "=0.46.1", default-features = false, features = ["std"] }
 harfrust = { version = "=0.13.3", default-features = false, features = ["std"] }
 # Deterministic rigid-body dynamics (`Plan/physics.md`), pinned with `=` because a pin move is a
-# hash-moving event the pin-upgrade ritual gates, not an ordinary bump. `default-features = false`
-# plus `enhanced-determinism` excludes `parallel` (no rayon) and `simd-*` (no SIMD-width-dependent
-# arithmetic); `serde-serialize` is what the snapshot codec needs to capture solver state. Only
+# hash-moving event the pin-upgrade ritual gates, not an ordinary bump. `default-features = false`.
+# `enhanced-determinism` keeps the solver's containers ordered. `parallel` runs rapier's internal
+# scheduler on a pool `ludion-physics` owns, sized `par::threads()`; the two compile together in
+# 0.35.3 (the one `compile_error!` is `simd8` + `enhanced-determinism`). No `simd-*` (no
+# SIMD-width-dependent arithmetic). `serde-serialize` is what the snapshot codec needs to capture
+# solver state. Only
 # `ludion-physics` names a rapier or nalgebra type — the boundary rule the crate's `clippy.toml`
 # cannot itself enforce, which is why `scripts/physics-features.mjs` exists.
 # rapier3d and parry3d are vendored and patched (`vendor/<crate>/LUDION-PATCH.md`) and reach the build
@@ -205,7 +208,7 @@ harfrust = { version = "=0.13.3", default-features = false, features = ["std"] }
 # depends on Ludion by path builds the patched crates too — a root `[patch.crates-io]` would not
 # reach it. `version` stays first for `scripts/physics-pin-ritual.mjs`. A temporary mechanism while
 # Ludion is unpublished: revisit before any crates.io publish (`dev-docs/physics-pin.md`).
-rapier3d = { version = "=0.35.3", path = "vendor/rapier3d", default-features = false, features = ["dim3", "f32", "std", "enhanced-determinism", "serde-serialize"] }
+rapier3d = { version = "=0.35.3", path = "vendor/rapier3d", default-features = false, features = ["dim3", "f32", "std", "enhanced-determinism", "parallel", "serde-serialize"] }
 # Binary codec for the physics snapshot blob (`Plan/physics.md` W1): about 4.7x smaller and 11x
 # faster than JSON text for rapier's serialized state, which a structured `serde_json::Value`
 # cannot hold at all (the narrow phase's 128-bit solver masks overflow it). Unpinned within the 1.x

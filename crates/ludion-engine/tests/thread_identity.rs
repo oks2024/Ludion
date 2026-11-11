@@ -1,8 +1,8 @@
 //! `Plan/physics.md` W1 gate 3: the gallery pile's, the 512-body stress scene's, and the ragdoll
 //! scene's 600-tick `WorldHash` traces are thread-count invariant at 1, 2 and 8 threads.
-//! `ludion-physics`'s solver is single-threaded regardless (the `enhanced-determinism` feature
-//! excludes `parallel`), so this is trivially true for the solver itself; what it actually guards is
-//! that the rest of the tick — the write/step/mirror systems' place in the schedule, the ECS join
+//! `ludion-physics`'s step runs rapier's `parallel` scheduler on a pool sized `par::threads()`, so
+//! this is the gate that the solver's result does not depend on the pool size; it also guards that
+//! the rest of the tick — the write/step/mirror systems' place in the schedule, the ECS join
 //! each one runs — stays thread-count invariant with physics in the frame, the same property
 //! `games/breakout/tests/thread_identity.rs` guards for a game with no physics at all.
 //!

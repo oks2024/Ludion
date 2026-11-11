@@ -82,8 +82,8 @@
 //! documentation. `scripts/physics-features.mjs` is the mechanical half of the rule: clippy's
 //! `disallowed-types` bans a type path in *our* code but has never seen inside a dependency, and
 //! cargo unifies features workspace-wide, so that script asserts over `cargo metadata` that
-//! `rapier3d` resolves to exactly the pinned feature set and that `rayon` is unreachable from this
-//! crate's dependency tree.
+//! `rapier3d` resolves to exactly the pinned feature set and that `rayon` is reachable from this
+//! crate's dependency tree only through `rapier3d`/`parry3d`.
 //!
 //! This crate does not depend on `ludion-engine`, and so cannot name the engine's `Transform`:
 //! [`PhysicsPose`] is the seam instead, with rotation as a quaternion so that the Euler convention
@@ -94,13 +94,14 @@
 //! # Determinism
 //!
 //! `rapier3d` is pinned (`=0.35.3` today) with `default-features = false` and features `dim3 f32
-//! std enhanced-determinism serde-serialize`: `enhanced-determinism` selects `IndexMap`/`IndexSet`
-//! with a fixed hasher inside the solver and excludes `parallel`, so the solver never reaches for a
-//! second thread. What stays ours is the fixed timestep ([`PhysicsWorld::new`] takes a
-//! [`TickRate`](ludion_core::time::TickRate) and sets `dt` once), sleeping authored in ticks, and
-//! above all the iteration order: the handle table is a `Vec` in creation order, it is the only
-//! thing this crate iterates, and it rides in the snapshot rather than being rebuilt by walking a
-//! solver set. See `ludion devdocs ludion-physics` for the full argument and the pin-upgrade
+//! std enhanced-determinism parallel serde-serialize`: `enhanced-determinism` selects
+//! `IndexMap`/`IndexSet` with a fixed hasher inside the solver, and `parallel` brings rayon in
+//! through rapier alone: its scheduler runs on a pool this crate owns, sized `par::threads()`, never
+//! on rayon's global pool, and the results stay thread-count invariant. What stays ours is the fixed
+//! timestep ([`PhysicsWorld::new`] takes a [`TickRate`](ludion_core::time::TickRate) and sets `dt`
+//! once), sleeping authored in ticks, and above all the iteration order: the handle table is a
+//! `Vec` in creation order, it is the only thing this crate iterates, and it rides in the snapshot
+//! rather than being rebuilt by walking a solver set. See `ludion devdocs ludion-physics` for the full argument and the pin-upgrade
 //! ritual.
 //!
 //! # Contacts

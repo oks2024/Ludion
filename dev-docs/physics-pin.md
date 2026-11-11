@@ -10,21 +10,25 @@ for everything else about the crate.
 
 `rapier3d` is pinned with `=` in `[workspace.dependencies]` (`=0.35.3` today, vendored and patched under `vendor/rapier3d/`) — a pin move is a
 hash-moving event the pin-upgrade ritual (`Plan/physics.md` W4) gates, never a routine bump.
-`default-features = false`, features `dim3 f32 std enhanced-determinism serde-serialize`: `dim3`/
-`f32` are the only shape/scalar type rapier builds for us; `std` pulls `alloc`, without which rapier
-does not build the collections its solver needs; `enhanced-determinism` selects `IndexMap`/
-`IndexSet` with a fixed hasher inside the solver and is mutually exclusive with `parallel`, so the
-solver never reaches for a second thread; `serde-serialize` is what the snapshot codec (`bincode`,
-pinned `"1"`) needs. Never `parallel`, never a `simd-*` feature.
+`default-features = false`, features `dim3 f32 std enhanced-determinism parallel serde-serialize`:
+`dim3`/`f32` are the only shape/scalar type rapier builds for us; `std` pulls `alloc`, without which
+rapier does not build the collections its solver needs; `enhanced-determinism` selects `IndexMap`/
+`IndexSet` with a fixed hasher inside the solver; `parallel` runs rapier's internal scheduler on a
+pool `ludion-physics` owns, sized `par::threads()` and synced in `new`, `from_bytes` and every step,
+never on rayon's global pool (the two features compile together in 0.35.3; the one `compile_error!`
+is `simd8` + `enhanced-determinism`); `serde-serialize` is what the snapshot codec (`bincode`,
+pinned `"1"`) needs. Never a `simd-*` feature.
 
 `scripts/physics-features.mjs` (wired into `check.mjs`'s default lane and `ci.yml`) asserts over
 `cargo metadata --format-version 1 --locked`: exactly one `rapier3d` and one `parry3d` in the
-resolve graph; `rapier3d` resolves to exactly `alloc dim3 enhanced-determinism f32 serde-serialize
-std`; `parry3d` to exactly its recorded set, `enhanced-determinism` included; `rayon`/`rayon-core`
-unreachable from this crate's normal dependency closure, with the reaching path printed on failure.
-It exists because clippy's denylist bans a type path in *our* code and has never seen inside a
-dependency, and cargo unifies features workspace-wide — one crate anywhere enabling `parallel` would
-silently turn rayon on for every build.
+resolve graph; `rapier3d` resolves to exactly `alloc dim3 enhanced-determinism f32 parallel
+serde-serialize std`; `parry3d` to exactly its recorded set, `enhanced-determinism` and `parallel`
+included; `rayon`/`rayon-core` reachable from this crate's normal dependency closure only through the
+named carve-out, the `rapier3d -> rayon` and `parry3d -> rayon` edges (both must exist), with the
+reaching path printed when anything else reaches them. The carve-out is documented in
+`Plan/deterministic-job-system.md`. It exists because clippy's denylist bans a type path in *our*
+code and has never seen inside a dependency, and cargo unifies features workspace-wide — a `simd-*`
+feature or a dropped `parallel` anywhere would silently change every build.
 
 **`hashbrown` is deliberately not gated.** `std` pulls `alloc`, which turns on `parry3d/alloc`,
 which is what makes `hashbrown` resolve — unavoidable here, and not physics-specific: the root
@@ -45,8 +49,9 @@ A pin move means porting both `LUDION-PATCH.diff`s onto the new releases first; 
 
 ## The body-count ceiling
 
-Single-threaded solving is the price of `enhanced-determinism`, so a scene's rigid-body count has a
-ceiling. The **gated scale** is 512 rigid bodies (`examples/gallery/physics-stress.yaml`):
+A scene's rigid-body count has a ceiling. The solver runs on `par::threads()` workers (the pool
+`ludion-physics` owns). The wall below was measured single-threaded, before `parallel`, and has not
+been re-measured. The **gated scale** is 512 rigid bodies (`examples/gallery/physics-stress.yaml`):
 `physics_step` measures ≈1.13 ms median on the RTX 3090, with the ceilings in
 `budgets/pinned-rtx3090-physics-stress.toml`. The **measured wall** is ≈2 000 bodies (4.6 ms mean,
 9.6 ms p99 of a 16.7 ms tick — W0, one box, one scene). Three things hold it: the TeamCity profile
