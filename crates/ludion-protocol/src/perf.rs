@@ -240,8 +240,8 @@ pub struct CullingProfile {
 pub struct LodRadiusProfile {
     /// The asset's path (`meshes/lod/skin-mannequin.mesh.yaml`), or `mesh_assets[N]` when unnamed.
     pub mesh: String,
-    /// Whether the asset is skinned: its radius is the posed-joint box's half-diagonal, about 2× the
-    /// mesh or more (`ludion docs culling`).
+    /// Whether the asset is skinned: a posed instance's radius is its rest box's half-diagonal times
+    /// the model's largest axis scale, never the posed box's (`ludion docs culling`).
     pub skinned: bool,
     /// Instances of the asset with known bounds.
     pub instances: u64,

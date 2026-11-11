@@ -4538,7 +4538,7 @@
             "type": "number"
           },
           "skinned": {
-            "description": "Whether the asset is skinned: its radius is the posed-joint box's half-diagonal, about 2× the\nmesh or more (`ludion docs culling`).",
+            "description": "Whether the asset is skinned: a posed instance's radius is its rest box's half-diagonal times\nthe model's largest axis scale, never the posed box's (`ludion docs culling`).",
             "type": "boolean"
           }
         },
@@ -7173,7 +7173,7 @@
             "type": "number"
           },
           "skinned": {
-            "description": "Whether the asset is skinned: its radius is the posed-joint box's half-diagonal, about 2× the\nmesh or more (`ludion docs culling`).",
+            "description": "Whether the asset is skinned: a posed instance's radius is its rest box's half-diagonal times\nthe model's largest axis scale, never the posed box's (`ludion docs culling`).",
             "type": "boolean"
           }
         },
