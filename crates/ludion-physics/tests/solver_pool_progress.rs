@@ -5,7 +5,6 @@
 //! worker lands on that worker's own deque with no guarantee a sibling wakes for it. The step's
 //! join then waited on a plain channel, so a pool whose other workers were busy or asleep left the
 //! task stranded behind its own waiter: `step()` never returned, at 0% CPU.
-#![allow(clippy::disallowed_methods)] // watchdog threads: a hang must fail the test, not hang it
 
 mod common;
 
@@ -48,6 +47,7 @@ fn few_boxes() -> rapier3d::prelude::PhysicsWorld {
 /// Steps `world` [`STEPS`] times on a spawned thread; the harness times it out instead of hanging.
 const STEPS: usize = 300;
 
+#[allow(clippy::disallowed_methods)] // watchdog thread: a hang must fail the test, not hang it
 fn step_under_watchdog(mut world: rapier3d::prelude::PhysicsWorld, hang_message: &str) {
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -62,6 +62,7 @@ fn step_under_watchdog(mut world: rapier3d::prelude::PhysicsWorld, hang_message:
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // watchdog thread: a hang must fail the test, not hang it
 fn a_step_completes_when_its_spawned_optimize_lands_on_the_only_free_worker() {
     let mut world = few_boxes();
     world
@@ -272,6 +273,7 @@ fn soak(threads: usize) -> Vec<[u32; 3]> {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // watchdog thread and wall-clock bound: a hang must fail the test, not hang it
 fn long_runs_with_reloads_restores_and_thread_changes_never_hang() {
     let started = Instant::now();
     let traces: Vec<Vec<[u32; 3]>> = [1usize, 2, 8]
