@@ -7,6 +7,7 @@
 //! the prefab loader), so a runtime room is entity for entity the `generate-map --prefab` file.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::Arc;
 
 use ludion_core::codes::code;
@@ -15,7 +16,7 @@ use ludion_core::ids::EntityId;
 use ludion_ecs::World;
 use ludion_scene::{MapOverrides, Mirror, PrefabDocument, Scene};
 
-use super::{PrefabLibrary, Ready, fetch, spawn_expanded};
+use super::{PrefabLibrary, Ready, spawn_expanded};
 use crate::components::Transform;
 use crate::skin_bone::apply_bone_poses;
 
@@ -98,15 +99,65 @@ fn content_key(path: &str, what: &str) -> Result<String, Diagnostic> {
     }
 }
 
+/// The name of `root` when it plays a clip no room can have: an `Animation` with a clip and no
+/// assembly or character `Mesh` for the clip to belong to.
+fn animating_root(root: &ludion_scene::SceneEntity) -> Option<String> {
+    let component = |name: &str| {
+        root.components
+            .iter()
+            .find(|(held, _)| held == name)
+            .map(|(_, value)| value)
+    };
+    let clip = component("Animation")?.get("clip")?.as_str()?;
+    let drives_a_model = component("Mesh")
+        .and_then(|mesh| mesh.get("shape")?.as_object())
+        .is_some_and(|shape| shape.contains_key("assembly") || shape.contains_key("character"));
+    (!clip.is_empty() && !drives_a_model).then(|| root.name.clone().unwrap_or_default())
+}
+
+/// Whether the instance source `key` is a runtime room's map rather than a prefab: a room compiled
+/// from it, else its held text (or, with none held, the file at `root`) is a `kind: map`.
+pub(crate) fn is_room_source(library: Option<&PrefabLibrary>, root: &Path, key: &str) -> bool {
+    let sniff = |text: &str| matches!(MapText::of(text), Some(MapText::Map));
+    if let Some(library) = library {
+        if library.rooms.keys().any(|room| room.0 == key) {
+            return true;
+        }
+        if let Some(held) = library.texts.get(key) {
+            return sniff(held);
+        }
+    }
+    std::fs::read_to_string(root.join(key)).is_ok_and(|text| sniff(&text))
+}
+
 impl PrefabLibrary {
     /// The text of the map-side file `key`: held, else read (disk, or under replay the recording)
-    /// and held and logged like a prefab read. Every refusal is `L1406`.
+    /// and held and logged like a prefab read. Every refusal is `L1406`, and a failed read stays
+    /// failed until a reload of `key`, so a replay (which cannot see a file appear) agrees.
     fn map_text(&mut self, key: &str) -> Result<String, Diagnostic> {
         if let Some(held) = self.texts.get(key) {
             return Ok(held.clone());
         }
-        let text = fetch(&self.root, self.source.as_deref(), self.epoch, key)
-            .map_err(|found| invalid(format!("cannot read `{key}`: {}", found.message)))?;
+        if let Some(failed) = self.unread.get(key) {
+            return Err(failed.clone());
+        }
+        let read = match self.source.as_deref() {
+            Some(source) => source
+                .get(&(self.epoch, key.to_owned()))
+                .cloned()
+                .ok_or_else(|| {
+                    invalid(format!("`{key}` is not recorded in this replay")).with_help(
+                        "the recording holds the map, kit and fragment texts its session read",
+                    )
+                }),
+            None => std::fs::read_to_string(self.root.join(key)).map_err(|found| {
+                invalid(format!("cannot read `{key}`: {found}"))
+                    .with_help("the path is relative to the content root")
+            }),
+        };
+        let text = read.inspect_err(|failed| {
+            self.unread.insert(key.to_owned(), failed.clone());
+        })?;
         self.hold(key, &text);
         self.log
             .push((self.frame, key.to_owned(), text.clone(), false));
@@ -196,6 +247,18 @@ impl PrefabLibrary {
 
         let scene: Scene = ludion_scene::generate(&doc, &kit, &fragments, &self.registry)
             .map_err(|found| name_the_file(map_key, found))?;
+        if let Some(root) = scene.entities.first()
+            && let Some(part) = animating_root(root)
+        {
+            return Err(vec![
+                invalid(format!(
+                    "cannot spawn map `{map_key}`: its root part `{part}` carries an `Animation`, but a runtime room has no clips"
+                ))
+                .with_help(
+                    "put the animation on a part below the root, or on a mesh that is an assembly or a character",
+                ),
+            ]);
+        }
         let prefab = PrefabDocument {
             name: scene.name,
             generated_from: scene.generated_from,
@@ -231,6 +294,30 @@ impl PrefabLibrary {
         Ok(text)
     }
 
+    /// Warms what a scene's `preload:` names, whose text the load already held: a map compiles with
+    /// its authored kit and seed, a kit is already read, anything else loads as a prefab.
+    pub(crate) fn preload(&mut self, key: &str) -> Result<(), Vec<Diagnostic>> {
+        match self.texts.get(key).and_then(|text| MapText::of(text)) {
+            Some(MapText::Map) => self.ready_map(key, None, None, Mirror::None).map(drop),
+            Some(MapText::Kit) => Ok(()),
+            _ => self.ready(key).map(drop),
+        }
+    }
+
+    /// Drops every cached room whose compile read or resolved `key`; each recompiles on its next spawn.
+    pub(super) fn drop_rooms_reading(&mut self, key: &str) {
+        let stale: Vec<RoomKey> = self
+            .room_deps
+            .iter()
+            .filter(|(_, read)| read.contains(key))
+            .map(|(room, _)| room.clone())
+            .collect();
+        for room in stale {
+            self.rooms.remove(&room);
+            self.room_deps.remove(&room);
+        }
+    }
+
     /// Accepts a reload of a map, kit or fragment text: parses it, holds it in a new snapshot, logs
     /// it as a reload and drops every room that read `key`, which recompiles on its next spawn.
     pub(super) fn replace_map_text(
@@ -242,22 +329,14 @@ impl PrefabLibrary {
         kind.check(source)
             .map_err(|found| name_the_file(key, found))?;
         self.texts.insert(key.to_owned(), source.to_owned());
+        self.unread.remove(key);
         let frozen = self.snapshots.last().expect("a snapshot").clone();
         self.snapshots.push(frozen);
         self.snapshots
             .last_mut()
             .expect("a snapshot")
             .insert(key.to_owned(), source.to_owned());
-        let stale: Vec<RoomKey> = self
-            .room_deps
-            .iter()
-            .filter(|(_, read)| read.contains(key))
-            .map(|(room, _)| room.clone())
-            .collect();
-        for room in stale {
-            self.rooms.remove(&room);
-            self.room_deps.remove(&room);
-        }
+        self.drop_rooms_reading(key);
         self.log
             .push((self.frame, key.to_owned(), source.to_owned(), true));
         Ok(())
@@ -398,4 +477,53 @@ fn ready_room(
         ]);
     };
     library.ready_map(&map_key, kit_key.as_deref(), spawn.seed, spawn.mirror)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::builtin_registry;
+    use ludion_core::time::FrameIndex;
+
+    #[test]
+    fn a_map_missing_from_a_replay_says_map_not_prefab() {
+        let mut library = PrefabLibrary::new(
+            std::path::PathBuf::from("unused"),
+            Arc::new(builtin_registry()),
+            None,
+            FrameIndex::ZERO,
+            Some(Arc::new(Default::default())),
+            0,
+        );
+        let found = library.map_text("rooms/crypt.map.yaml").unwrap_err();
+        assert!(
+            found.message.contains("is not recorded in this replay"),
+            "{}",
+            found.message
+        );
+        assert!(!found.message.contains("prefab"), "{}", found.message);
+        assert!(
+            !found.help.as_deref().unwrap_or_default().contains("prefab"),
+            "{found:?}"
+        );
+        assert_eq!(found.code, code::MAP_SPAWN_INVALID);
+    }
+
+    #[test]
+    fn a_root_animation_is_refused_unless_a_model_mesh_owns_it() {
+        use serde_json::json;
+        let root = |mesh: Option<serde_json::Value>| ludion_scene::SceneEntity {
+            name: Some("door".to_owned()),
+            presentation: false,
+            components: [("Animation".to_owned(), json!({ "clip": "open" }))]
+                .into_iter()
+                .chain(mesh.map(|shape| ("Mesh".to_owned(), json!({ "shape": shape }))))
+                .collect(),
+            instance: None,
+        };
+        assert_eq!(animating_root(&root(None)).as_deref(), Some("door"));
+        assert!(animating_root(&root(Some(json!("cube")))).is_some());
+        assert!(animating_root(&root(Some(json!({ "assembly": "a.assembly.yaml" })))).is_none());
+        assert!(animating_root(&root(Some(json!({ "character": "c.character.yaml" })))).is_none());
+    }
 }

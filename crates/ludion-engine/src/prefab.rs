@@ -84,9 +84,13 @@ pub(crate) struct PrefabLibrary {
     /// Per room, every text key its compile read or resolved (map, kit, fragments, nested prefabs):
     /// the rooms a reload of one of them drops.
     room_deps: BTreeMap<map_spawn::RoomKey, BTreeSet<String>>,
+    /// The map, kit and fragment keys whose read failed this epoch, with the refusal: a failed read
+    /// stays failed until `asset.reload` of the key, because a replay cannot see a file appear.
+    unread: BTreeMap<String, Diagnostic>,
 }
 
 mod map_spawn;
+pub(crate) use map_spawn::is_room_source;
 pub use map_spawn::{MapSpawn, prepare_map, spawn_map};
 
 /// The prefab texts a scene load or district switch reads, before the world it builds exists: the
@@ -110,6 +114,7 @@ pub(crate) struct HeldPrefabs {
     texts: BTreeMap<String, String>,
     failed: BTreeMap<String, Vec<Diagnostic>>,
     deps: BTreeMap<String, BTreeSet<String>>,
+    unread: BTreeMap<String, Diagnostic>,
 }
 
 impl LoadReads {
@@ -205,6 +210,7 @@ impl PrefabLibrary {
             sweep: Vec::new(),
             rooms: BTreeMap::new(),
             room_deps: BTreeMap::new(),
+            unread: BTreeMap::new(),
         }
     }
 
@@ -290,6 +296,7 @@ impl PrefabLibrary {
             texts: self.texts.clone(),
             failed,
             deps,
+            unread: self.unread.clone(),
         }
     }
 
@@ -304,6 +311,7 @@ impl PrefabLibrary {
             self.prefabs.insert(key, Err(diagnostics));
         }
         self.deps.extend(held.deps);
+        self.unread.extend(held.unread);
     }
 
     /// Holds the texts a scene load read and logs them at the library's frame, so the recording files
@@ -407,9 +415,11 @@ impl PrefabLibrary {
     }
 
     /// Whether `key` has been loaded (successfully or not) or its text is held — read as a nested
-    /// prefab, or by a scene load.
+    /// prefab, or by a scene load — or a map-side read of it failed (so a reload may fill it).
     pub(crate) fn holds(&self, key: &str) -> bool {
-        self.prefabs.contains_key(key) || self.texts.contains_key(key)
+        self.prefabs.contains_key(key)
+            || self.texts.contains_key(key)
+            || self.unread.contains_key(key)
     }
 
     /// Re-validates `source` as the prefab `key`, then every cached prefab that expanded `key`, from
@@ -472,6 +482,7 @@ impl PrefabLibrary {
         }
         self.prefabs.insert(key.to_owned(), Ok(ready));
         self.deps.insert(key.to_owned(), deps);
+        self.drop_rooms_reading(key);
         let frozen = self.snapshots.last().expect("a snapshot").clone();
         self.snapshots.push(frozen);
         self.snapshots

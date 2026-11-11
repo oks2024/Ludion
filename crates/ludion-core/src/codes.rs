@@ -356,8 +356,8 @@ pub mod code {
     pub const MAP_MIRROR_FRAGMENTS: DiagnosticCode = DiagnosticCode::new("L1399");
     /// `L1406` — `spawn_map` could not read or accept the map it was asked to stamp: a path that is
     /// absolute, escapes the content root, is unreadable or not recorded under replay; a file that is
-    /// not a `kind: map` (or its kit not a `kind: map-kit`); a map carrying `physics:`; or a world
-    /// with no prefab library. Raised by `ludion-engine`'s `spawn_map`.
+    /// not a `kind: map` (or its kit not a `kind: map-kit`); a map carrying `physics:`; a room root
+    /// carrying `Animation`; or a world with no prefab library. Raised by `ludion-engine`'s `spawn_map`.
     pub const MAP_SPAWN_INVALID: DiagnosticCode = DiagnosticCode::new("L1406");
     /// `L1400` — the suspended run (`save/suspend.json`) could not be written or removed.
     pub const RUN_SAVE_WRITE_FAILED: DiagnosticCode = DiagnosticCode::new("L1400");
@@ -3619,7 +3619,9 @@ The map's path (and a `MapSpawn.kit` override) is relative to the content root, 
 This code covers a path that is absolute or climbs out of the content root, a file that cannot be read
 (or, under replay, that the recording does not hold), a file that is not a `kind: map` (or a kit that
 is not a `kind: map-kit`), a map carrying a `physics:` block (the scene that spawns the room owns
-physics), and a world with no prefab library (it was not built by an engine).
+physics), a room root carrying `Animation` (a room has no clips: put it on a part below the root or
+on an assembly or character mesh), and a world with no prefab library (it was not built by an
+engine).
 
 Bad map or kit content keeps its own codes (`L1019`-`L1026`), a mirror on a map with fragments is
 `L1399`, and the spawn-time passes keep the prefab codes. Fix: name the map relative to the content

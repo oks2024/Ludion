@@ -3949,18 +3949,8 @@ impl Engine {
         library.adopt(std::mem::take(&mut reads.held));
         library.seed(reads.reads);
         for key in keys {
-            // A kit is only read (the resolve above held it); a map compiles with its authored
-            // kit, seed and no mirror, which warms the map, its kit and its fragments.
-            let warmed = if key.ends_with(".kit.yaml") {
-                Ok(())
-            } else if key.ends_with(".map.yaml") {
-                library
-                    .ready_map(&key, None, None, ludion_scene::Mirror::None)
-                    .map(drop)
-            } else {
-                library.ready(&key).map(drop)
-            };
-            if let Err(found) = warmed {
+            // Routed by the held text's `kind:`, never by the file name.
+            if let Err(found) = library.preload(&key) {
                 diagnostics.extend(found);
             }
         }
@@ -6481,18 +6471,45 @@ impl Engine {
                 }
             }
         }
-        let wanted: Vec<EntityId> = roots.iter().map(|(root, _)| *root).collect();
-        if wanted.is_empty() {
-            return Ok(Vec::new());
+        // A runtime room has no prefab text to diff against: refused here, out of the collapse.
+        let rooms: Vec<Option<Diagnostic>> = roots
+            .iter()
+            .map(|(root, source)| {
+                crate::prefab_ops::refuse_room(
+                    world,
+                    source,
+                    *root,
+                    (
+                        ludion_core::codes::code::PREFAB_NOT_INSTANCE,
+                        "prefab.overrides",
+                        "diff against",
+                    ),
+                )
+                .err()
+            })
+            .collect();
+        let wanted: Vec<EntityId> = roots
+            .iter()
+            .zip(&rooms)
+            .filter(|(_, room)| room.is_none())
+            .map(|((root, _), _)| *root)
+            .collect();
+        let mut results = if wanted.is_empty() {
+            Vec::new()
+        } else {
+            crate::collapse::instance_overrides(self.save_live(self.authored_scene()), &wanted)?
         }
-        let results =
-            crate::collapse::instance_overrides(self.save_live(self.authored_scene()), &wanted)?;
+        .into_iter();
         let library = world.resource::<crate::prefab::PrefabLibrary>();
         let mut memo: BTreeMap<String, Vec<String>> = BTreeMap::new();
         Ok(roots
             .into_iter()
-            .zip(results)
-            .map(|((root, prefab), result)| {
+            .zip(rooms)
+            .map(|((root, prefab), room)| {
+                let result = match room {
+                    Some(refusal) => Err(refusal),
+                    None => results.next().expect("a result per wanted root"),
+                };
                 let root_parts = match (&result, library) {
                     (Ok(_), Some(library)) => memo
                         .entry(prefab.clone())

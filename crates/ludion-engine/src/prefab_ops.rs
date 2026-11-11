@@ -81,6 +81,30 @@ pub(crate) fn instance_parts(
     Ok((instance.source, instance.root, parts))
 }
 
+/// Refuses `op` on an instance of a runtime room: `source` is a map, so there is no prefab text to
+/// `to`. Checked before any library load, which would cache the map as a failed prefab.
+pub(crate) fn refuse_room(
+    world: &World,
+    source: &str,
+    any: EntityId,
+    (code, op, to): (ludion_core::diagnostics::DiagnosticCode, &str, &str),
+) -> Result<(), Diagnostic> {
+    let library = world.resource::<PrefabLibrary>();
+    let root = library.map_or(std::path::Path::new(""), |library| library.root());
+    if library.is_none() || !crate::prefab::is_room_source(library, root, source) {
+        return Ok(());
+    }
+    Err(Diagnostic::new(
+        code,
+        format!(
+            "entity {any} is part of a runtime room spawned from map `{source}`, not a prefab instance: `{op}` has no prefab text to {to}"
+        ),
+    )
+    .with_help(
+        "edit the map or its kit and respawn the room; `scene.save` writes a room as plain entities",
+    ))
+}
+
 /// The prefab `key` from the world's library, and the registry it validates against.
 fn library_ready(
     world: &mut World,
@@ -522,6 +546,13 @@ pub fn revert_prefab(
     pointer: Option<&str>,
 ) -> Result<PrefabReverted, Vec<Diagnostic>> {
     let (source, _, parts) = instance_parts(world, instance).map_err(one)?;
+    refuse_room(
+        world,
+        &source,
+        instance,
+        (code::PREFAB_REVERT, "prefab.revert", "revert to"),
+    )
+    .map_err(one)?;
     let (ready, registry) = library_ready(world, &source)?;
     let live: BTreeMap<&str, EntityId> = parts
         .iter()
@@ -696,6 +727,13 @@ pub(crate) fn apply(
     parts: Option<&[String]>,
 ) -> Result<PrefabApplied, Vec<Diagnostic>> {
     let (source, root_id, live) = instance_parts(world, instance).map_err(one)?;
+    refuse_room(
+        world,
+        &source,
+        instance,
+        (code::PREFAB_APPLY, "prefab.apply", "write"),
+    )
+    .map_err(one)?;
     let Some(library) = world.resource::<PrefabLibrary>() else {
         return Err(one(no_library("apply to the prefab")));
     };

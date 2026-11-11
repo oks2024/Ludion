@@ -12,15 +12,15 @@ use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::diagnostics::Diagnostics;
 use ludion_engine::{
-    Engine, MapSpawn, Mirror, NavAgent, PrefabInstance, Transform, despawn_instance, prepare_map,
-    replay_hashes_with, spawn_map, spawn_prefab,
+    Engine, MapSpawn, Mirror, NavAgent, PrefabInstance, SceneSwitch, Transform, despawn_instance,
+    prepare_map, replay_hashes_with, spawn_map, spawn_prefab,
 };
-use ludion_protocol::Command;
 use ludion_protocol::command::{
     AssetReloadParams, PrefabApplyParams, PrefabOverridesParams, PrefabRevertParams,
     SceneSaveParams, SimStepParams,
 };
 use ludion_protocol::replay::{ReplayReader, ReplayRecord};
+use ludion_protocol::{Command, ResponseBody};
 use serde_json::Value;
 
 use crate::room_assembly::{
@@ -396,6 +396,91 @@ fn replays_after_deleting_its_files(tag: &str, spawner: fn(&mut World, &SystemCt
     assert_eq!(replayed, live);
 }
 
+/// Tries the room on four ticks, each a different combination (so each compiles afresh), and
+/// requests a restart between the second and the third.
+fn retrier(world: &mut World, ctx: &SystemCtx) {
+    let seed = match ctx.frame.as_u64() {
+        25 => {
+            world
+                .resource_mut::<SceneSwitch>()
+                .expect("the switch")
+                .restart(Vec::new());
+            return;
+        }
+        10 => 1,
+        20 => 2,
+        30 => 3,
+        40 => 4,
+        _ => return,
+    };
+    let _ = spawn_map(
+        world,
+        MAP_PATH,
+        MapSpawn {
+            seed: Some(seed),
+            ..MapSpawn::default()
+        },
+    );
+}
+
+#[test]
+fn a_failed_room_read_retries_only_through_a_reload_and_replays() {
+    let root = root("room_runtime_unread");
+    std::fs::remove_file(root.join("kit.kit.yaml")).unwrap();
+    let sink = SharedSink::default();
+    let mut engine = booted_with(&root, retrier);
+    let base = engine.world().entity_count();
+    let mut live = vec![(engine.frame(), engine.world_hash().unwrap())];
+    let mut counts = Vec::new();
+    engine.set_recording(sink.clone()).unwrap();
+    while engine.frame().as_u64() < 50 {
+        let frame = engine.frame().as_u64();
+        if frame == 12 {
+            std::fs::write(root.join("kit.kit.yaml"), KIT).unwrap();
+        }
+        if frame == 36 {
+            let reloaded = engine
+                .execute(Command::AssetReload(AssetReloadParams {
+                    path: Some("kit.kit.yaml".to_owned()),
+                }))
+                .unwrap();
+            assert!(
+                matches!(reloaded.body, ResponseBody::AssetsReloaded { ref paths } if !paths.is_empty()),
+                "the failed kit reloads: {reloaded:?}"
+            );
+        }
+        engine
+            .execute(Command::SimStep(SimStepParams {
+                ticks: 1,
+                hash: false,
+            }))
+            .unwrap();
+        counts.push((frame, engine.world().entity_count()));
+        live.push((engine.frame(), engine.world_hash().unwrap()));
+    }
+    engine.stop_recording().unwrap();
+    let bytes = sink.0.lock().unwrap().clone();
+
+    for (frame, count) in counts {
+        assert_eq!(
+            count > base,
+            frame >= 40,
+            "frame {frame}: the room spawns only after the reload, not once the file exists, nor across the restart ({count} entities, {base} before)"
+        );
+    }
+
+    for gone in [MAP_PATH, "kit.kit.yaml"] {
+        std::fs::remove_file(root.join(gone)).unwrap();
+    }
+    let replayed = replay_hashes_with(
+        crate::room_assembly::game_with(&root, retrier),
+        &bytes,
+        &root,
+    )
+    .unwrap();
+    assert_eq!(replayed, live, "the replay agrees tick for tick");
+}
+
 #[test]
 fn a_preloaded_map_spawns_after_its_files_are_deleted() {
     let root = root("room_runtime_preload");
@@ -420,6 +505,37 @@ fn a_preloaded_map_spawns_after_its_files_are_deleted() {
         ["L1406"],
         "without preload the file is needed"
     );
+}
+
+#[test]
+fn a_preloaded_map_routes_by_kind_not_name() {
+    let root = root("room_runtime_preload_kind");
+    std::fs::write(
+        root.join("rooms/crypt.yaml"),
+        MAP.replace("kit: kit.kit.yaml", "kit: k.yaml"),
+    )
+    .unwrap();
+    std::fs::write(root.join("rooms/k.yaml"), KIT).unwrap();
+    let with_preload = scene().replacen(
+        "entities:",
+        "preload:
+  - rooms/crypt.yaml
+  - rooms/k.yaml
+entities:",
+        1,
+    );
+    let mut engine = crate::room_assembly::game_with(&root, spawner::<9>)
+        .build()
+        .unwrap();
+    engine
+        .load_inline_scene(&with_preload)
+        .expect("the preload warms a map and a kit whatever their names");
+
+    for gone in ["rooms/crypt.yaml", "rooms/k.yaml"] {
+        std::fs::remove_file(root.join(gone)).unwrap();
+    }
+    let ids = spawn_map(engine.world_mut(), "rooms/crypt.yaml", MapSpawn::default());
+    assert!(ids.is_ok(), "the preload held the map and its kit: {ids:?}");
 }
 
 #[test]
@@ -454,6 +570,123 @@ fn reloading_a_kit_changes_the_next_runtime_room_and_no_live_one() {
         first_dump,
         "the live room is unchanged"
     );
+}
+
+/// Every part's `translation.y` in thousandths, sorted.
+fn heights(parts: &[BTreeMap<String, Value>]) -> Vec<i64> {
+    let mut ys: Vec<i64> = parts
+        .iter()
+        .map(|p| (p["Transform"]["translation"][1].as_f64().unwrap() * 1000.0).round() as i64)
+        .collect();
+    ys.sort_unstable();
+    ys
+}
+
+fn lamp(y: f32) -> String {
+    let mut out = String::from(
+        "format: 1
+kind: prefab
+name: lamp
+entities:
+",
+    );
+    out += "  - name: post
+    components:
+      Transform:
+        translation:
+";
+    out += &crate::room_assembly::seq([0.0, y, 0.0], 10);
+    out
+}
+
+#[test]
+fn reloading_a_prefab_in_a_fragment_changes_the_next_room_and_no_live_one() {
+    let root = root("room_runtime_nested_reload");
+    std::fs::write(root.join("lamp.prefab.yaml"), lamp(70.0)).unwrap();
+    std::fs::write(
+        root.join("frag.scene.yaml"),
+        "format: 1
+entities:
+  - name: lamp-1
+    prefab: lamp.prefab.yaml
+",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("frag.map.yaml"),
+        format!(
+            "{MAP}fragments:
+  - frag.scene.yaml
+"
+        ),
+    )
+    .unwrap();
+    let mut engine = bare(&root);
+    let first = spawn_map(engine.world_mut(), "frag.map.yaml", MapSpawn::default()).unwrap();
+    let first_dump = dump(&engine, &first);
+    assert!(
+        heights(&first_dump).contains(&70_000),
+        "the lamp's first height"
+    );
+
+    std::fs::write(root.join("lamp.prefab.yaml"), lamp(90.0)).unwrap();
+    let reloaded = engine
+        .execute(Command::AssetReload(AssetReloadParams {
+            path: Some("lamp.prefab.yaml".to_owned()),
+        }))
+        .unwrap();
+    assert!(
+        matches!(reloaded.body, ResponseBody::AssetsReloaded { ref paths } if !paths.is_empty()),
+        "the nested prefab reloads: {reloaded:?}"
+    );
+
+    let second = spawn_map(engine.world_mut(), "frag.map.yaml", MapSpawn::default()).unwrap();
+    let second_heights = heights(&dump(&engine, &second));
+    assert!(
+        second_heights.contains(&90_000),
+        "the new room has the new lamp"
+    );
+    assert!(!second_heights.contains(&70_000), "and not the old one");
+    assert_eq!(
+        dump(&engine, &first),
+        first_dump,
+        "the live room keeps the old lamp"
+    );
+}
+
+#[test]
+fn a_room_whose_root_animates_is_refused() {
+    let root = root("room_runtime_root_animation");
+    std::fs::write(
+        root.join("anim.scene.yaml"),
+        "format: 1
+entities:
+  - name: lamp
+    components:
+      Animation:
+        clip: walk
+",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("anim.map.yaml"),
+        format!(
+            "{MAP}fragments:
+  - anim.scene.yaml
+"
+        ),
+    )
+    .unwrap();
+    let mut engine = bare(&root);
+    let count = engine.world().entity_count();
+    let refused = spawn_map(engine.world_mut(), "anim.map.yaml", MapSpawn::default()).unwrap_err();
+    assert_eq!(codes(&refused), ["L1406"]);
+    assert!(
+        refused[0].message.contains("lamp") && refused[0].message.contains("no clips"),
+        "{}",
+        refused[0].message
+    );
+    assert_eq!(engine.world().entity_count(), count, "nothing spawned");
 }
 
 #[test]
@@ -519,37 +752,120 @@ fn a_bad_map_is_refused_and_spawns_nothing() {
 }
 
 #[test]
-fn save_and_prefab_edits_on_a_map_instance_error_cleanly() {
+fn save_and_prefab_edits_on_a_named_map_instance() {
     let root = root("room_runtime_instance_ops");
     let mut engine = bare(&root);
-    let ids = spawn_map(engine.world_mut(), MAP_PATH, MapSpawn::default()).unwrap();
+    let named = MapSpawn {
+        name: Some("f1-r04"),
+        ..MapSpawn::default()
+    };
+    let ids = spawn_map(engine.world_mut(), MAP_PATH, named).unwrap();
     let root_id = ids[0];
     let part = *ids.last().unwrap();
+    let prefab = spawn_prefab(
+        engine.world_mut(),
+        "rooms/room.prefab.yaml",
+        Some(placement()),
+        Some("p"),
+        false,
+    )
+    .unwrap();
 
-    let outcomes = [
-        engine.execute(Command::SceneSave(SceneSaveParams {
-            path: "saved.scene.yaml".to_owned(),
-            force: true,
-        })),
-        engine.execute(Command::PrefabOverrides(PrefabOverridesParams {
-            instances: Some(vec![root_id]),
-        })),
-        engine.execute(Command::PrefabApply(PrefabApplyParams {
+    let saved = engine.execute(Command::SceneSave(SceneSaveParams {
+        path: "saved.scene.yaml".to_owned(),
+        force: true,
+    }));
+    assert!(saved.is_ok(), "scene.save of a named room: {saved:?}");
+    let text = std::fs::read_to_string(root.join("saved.scene.yaml")).unwrap();
+    assert!(
+        !text.contains(&format!("prefab: {MAP_PATH}")),
+        "the room is not an instance entry:
+{text}"
+    );
+    assert!(
+        text.contains("prefab: rooms/room.prefab.yaml"),
+        "the real prefab instance still saves as an instance:
+{text}"
+    );
+    assert_eq!(
+        text.matches("name: f1-r04/").count(),
+        ids.len(),
+        "one plain entity per room part:
+{text}"
+    );
+    let mut fresh = bare(&root);
+    fresh.load_inline_scene(&text).unwrap();
+    assert_eq!(
+        fresh.world().entity_count(),
+        engine.world().entity_count(),
+        "the saved scene reloads to the same entities"
+    );
+
+    let overrides = engine
+        .execute(Command::PrefabOverrides(PrefabOverridesParams {
+            instances: Some(vec![root_id, prefab[0]]),
+        }))
+        .unwrap();
+    let ResponseBody::PrefabOverrides { instances } = overrides.body else {
+        panic!("prefab.overrides body");
+    };
+    assert_eq!(instances.len(), 2);
+    let refused = instances[0]
+        .diagnostic
+        .as_ref()
+        .expect("the room is refused");
+    assert_eq!(refused.code.to_string(), "L1235", "{refused:?}");
+    assert!(
+        instances[1].diagnostic.is_none(),
+        "the prefab instance diffs"
+    );
+
+    let apply = engine
+        .execute(Command::PrefabApply(PrefabApplyParams {
             instance: part,
             parts: None,
-        })),
-        engine.execute(Command::PrefabRevert(PrefabRevertParams {
+        }))
+        .unwrap_err();
+    assert_eq!(apply.code.to_string(), "L1237", "{apply:?}");
+    assert!(apply.message.contains("runtime room"), "{}", apply.message);
+    assert!(!apply.message.contains("  "), "{}", apply.message);
+    let revert = engine
+        .execute(Command::PrefabRevert(PrefabRevertParams {
             instance: part,
             pointer: None,
-        })),
-    ];
-    // A map instance is not a prefab text: applying or reverting it is refused, not a panic.
-    assert!(outcomes[2].is_err(), "prefab.apply is refused");
-    assert!(outcomes[3].is_err(), "prefab.revert is refused");
+        }))
+        .unwrap_err();
+    assert_eq!(revert.code.to_string(), "L1238", "{revert:?}");
+    assert_eq!(std::fs::read_to_string(root.join(MAP_PATH)).unwrap(), MAP);
+
+    // The refused ops left the library clean: a map reload still lands, the next room is new.
+    std::fs::write(root.join("kit.kit.yaml"), kit2()).unwrap();
+    let reloaded = engine
+        .execute(Command::AssetReload(AssetReloadParams {
+            path: Some(MAP_PATH.to_owned()),
+        }))
+        .unwrap();
     assert!(
-        std::fs::read_to_string(root.join(MAP_PATH)).unwrap() == MAP,
-        "the map file is untouched"
+        matches!(reloaded.body, ResponseBody::AssetsReloaded { ref paths } if !paths.is_empty()),
+        "the map reloads: {reloaded:?}"
     );
+    std::fs::write(root.join("kit.kit.yaml"), kit2()).unwrap();
+    engine
+        .execute(Command::AssetReload(AssetReloadParams {
+            path: Some("kit.kit.yaml".to_owned()),
+        }))
+        .unwrap();
+    spawn_map(engine.world_mut(), MAP_PATH, MapSpawn::default()).unwrap();
+
+    // The unnamed room saves too.
+    let mut plain = bare(&root);
+    spawn_map(plain.world_mut(), MAP_PATH, MapSpawn::default()).unwrap();
+    plain
+        .execute(Command::SceneSave(SceneSaveParams {
+            path: "plain.scene.yaml".to_owned(),
+            force: true,
+        }))
+        .unwrap();
 }
 
 #[test]

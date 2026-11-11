@@ -699,6 +699,10 @@ impl<'a> Collapser<'a> {
                     ),
                 ));
             }
+            // A runtime room has no prefab text: its parts save as plain entities.
+            if crate::prefab::is_room_source(live.library, live.project_root, &source) {
+                continue;
+            }
             let names: Vec<Option<&str>> = members
                 .iter()
                 .map(|&m| instance_name(flat[m].name.as_deref(), &held(m).part))
