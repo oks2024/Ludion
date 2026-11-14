@@ -74,7 +74,7 @@ use crate::docs::{DocKind, DocValidator, PreparedDocs};
 use crate::load_observer::{FrameLoadObserver, LoadObserver, LoadPhase};
 use crate::perf_live::{LivePerf, ProfileWindowData, Span};
 use crate::player_profile::{ProfileKind, ProfileSaveEntry};
-use crate::probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeSource};
+use crate::probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeRefreeze, ProbeSource};
 use crate::quality::QualitySetting;
 use crate::recording::{AppliedDocReload, Recorder};
 use crate::replay_playback::{
@@ -397,10 +397,11 @@ pub struct Engine {
     probes: ProbeSource,
     /// The probe store directory under `Store`, resolved when the axis is set.
     probe_store: Option<PathBuf>,
-    /// The world the probe captures read, frozen at the first tick or render after a load; `None`
-    /// until a scene with probes freezes one.
+    /// The world the probe captures read, frozen at the first tick or render after a load or a
+    /// `ProbeRefreeze` request; `None` until a scene with probes freezes one.
     probe_world: Option<ProbeWorld>,
-    /// A load-class event happened: the next tick or render re-freezes the probe world.
+    /// A load-class event or a `ProbeRefreeze` request happened: the next tick or render re-freezes
+    /// the probe world.
     probe_world_pending: bool,
     /// The renderer's probe resolve count `finish_probe_frame` last examined.
     probe_resolve_seen: u64,
@@ -939,6 +940,7 @@ impl Engine {
         engine.install_audio_queue();
         engine.install_presentation_rules();
         engine.install_scene_switch();
+        engine.install_probe_refreeze();
         engine.install_shutdown();
         engine.install_render_settings();
         engine.install_cursor_lock();
@@ -1348,15 +1350,25 @@ impl Engine {
     }
 
     /// Marks the frozen probe world stale: the next tick or render re-freezes it, so a load-class
-    /// event (a world rebuild, a reloaded asset, another texture source) recaptures the probes.
+    /// event (a world rebuild, a reloaded asset, another texture source) or a `ProbeRefreeze`
+    /// request recaptures the probes.
     pub(crate) fn probe_world_stale(&mut self) {
         self.probe_world_pending = true;
     }
 
     /// Freezes the probe world from the frame-0 world before the first tick after a load-class
-    /// event, so a bake and a host that ticks first capture the same world. A world without probes
-    /// pays nothing but the entity scan, once.
+    /// event or a `ProbeRefreeze` request (drained here, so a request always freezes the
+    /// end-of-tick world), so a bake and a host that ticks first capture the same world. A world
+    /// without probes pays nothing but the entity scan, once.
     fn freeze_probe_world_before_tick(&mut self) {
+        if self
+            .driver
+            .world_mut()
+            .resource_mut::<ProbeRefreeze>()
+            .is_some_and(ProbeRefreeze::take)
+        {
+            self.probe_world_stale();
+        }
         if !self.probe_world_pending {
             return;
         }
@@ -3720,6 +3732,16 @@ impl Engine {
         world.allow_presentation_writes::<crate::prefab::PrefabLibrary>();
         world.allow_presentation_writes::<crate::patterns::PatternSystemsRan>();
         world.set_entity_label::<crate::components::Name>();
+    }
+
+    /// Installs a fresh (unrequested) [`ProbeRefreeze`] resource into the current world so game
+    /// systems can ask for a probe-world refreeze. Called after every world (re)build — the
+    /// [`install_scene_switch`](Engine::install_scene_switch) mold. Excluded from the world hash and
+    /// from snapshots.
+    fn install_probe_refreeze(&mut self) {
+        self.driver
+            .world_mut()
+            .insert_resource(ProbeRefreeze::default());
     }
 
     /// Installs a fresh (empty) [`SceneSwitch`] resource into the current world so game systems can
@@ -7668,6 +7690,7 @@ impl Engine {
         self.install_audio_queue();
         self.install_presentation_rules();
         self.install_scene_switch();
+        self.install_probe_refreeze();
         self.install_projectiles();
         self.install_nav();
         if matches!(

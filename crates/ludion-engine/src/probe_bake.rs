@@ -66,6 +66,43 @@ impl ProbeSource {
     }
 }
 
+/// A sim system's request to re-freeze the probe world, so probes spawned at runtime (a prefab room
+/// swap) capture the world that now holds them.
+///
+/// The engine installs one into every world. At the start of the next tick it re-freezes the probe
+/// world exactly as a load does; with no probe in the world that is a silent no-op that clears the
+/// request. It never fires on its own: an edit or a `Static` change alone does not recapture. A plain
+/// resource, excluded from the `WorldHash` and from snapshots, registering no component; a replay
+/// reproduces it because the system re-issues the request.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Engine, ProbeRefreeze};
+/// let mut engine = Engine::new();
+/// engine.world_mut().resource_mut::<ProbeRefreeze>().unwrap().request();
+/// assert!(engine.world_mut().resource_mut::<ProbeRefreeze>().unwrap().is_requested());
+/// ```
+#[derive(Default, Debug)]
+pub struct ProbeRefreeze {
+    requested: bool,
+}
+
+impl ProbeRefreeze {
+    /// Asks for a re-freeze at the next tick's start.
+    pub fn request(&mut self) {
+        self.requested = true;
+    }
+
+    /// Whether a request is waiting for the next tick.
+    pub fn is_requested(&self) -> bool {
+        self.requested
+    }
+
+    pub(crate) fn take(&mut self) -> bool {
+        std::mem::take(&mut self.requested)
+    }
+}
+
 /// The probe store under the project that holds `project_root`'s `ludion.toml`, or under
 /// `project_root` itself when no manifest is above it.
 pub(crate) fn store_dir(project_root: &Path) -> PathBuf {
@@ -653,8 +690,9 @@ entities:
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Only a load recaptures: an in-session edit of the world leaves the probes alone, a reload of
-    /// the same text with other geometry, or another scene with the same probes, does not.
+    /// Only a load or a `ProbeRefreeze` request recaptures: an in-session edit of the world leaves the
+    /// probes alone; a reload of the same text with other geometry, or another scene with the same
+    /// probes, recaptures.
     #[test]
     fn needs_gpu_a_reload_recaptures_and_an_edit_does_not() {
         let dir = project("reload");
@@ -679,11 +717,21 @@ entities:
         assert_eq!(edited.resolve, first.resolve, "an edit recaptured");
 
         engine
+            .world_mut()
+            .resource_mut::<ProbeRefreeze>()
+            .unwrap()
+            .request();
+        engine.step_ticks(1);
+        let refrozen = render(&mut engine);
+        assert_eq!(refrozen.resolve, first.resolve + 1);
+        assert_ne!(refrozen.probes[0].key, first.probes[0].key);
+
+        engine
             .load_inline_scene(&scene().replace("- -0.5", "- -0.6"))
             .unwrap();
         let moved = render(&mut engine);
-        assert_eq!(moved.resolve, first.resolve + 1);
-        assert_ne!(moved.probes[0].key, first.probes[0].key);
+        assert_eq!(moved.resolve, refrozen.resolve + 1);
+        assert_ne!(moved.probes[0].key, refrozen.probes[0].key);
 
         let other = format!(
             "{}  - name: extra\n    components:\n      Mesh:\n        shape: cube\n",
@@ -694,6 +742,235 @@ entities:
         assert_eq!(swapped.resolve, moved.resolve + 1);
         assert_ne!(swapped.probes[0].key, moved.probes[0].key);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn request_refreeze(engine: &mut Engine) {
+        engine
+            .world_mut()
+            .resource_mut::<ProbeRefreeze>()
+            .unwrap()
+            .request();
+    }
+
+    fn is_requested(engine: &mut Engine) -> bool {
+        engine
+            .world_mut()
+            .resource_mut::<ProbeRefreeze>()
+            .unwrap()
+            .is_requested()
+    }
+
+    fn frozen_meshes(engine: &mut Engine) -> Vec<ludion_renderer::MeshInstance> {
+        let scene = engine.extract_render_scene(64, 64).expect("extract");
+        scene.probe_world.as_ref().unwrap().scene().meshes.clone()
+    }
+
+    #[test]
+    fn a_refreeze_applies_at_the_next_tick() {
+        let dir = project("refreeze-tick");
+        let mut engine = engine(&dir, scene());
+        let before = frozen_meshes(&mut engine);
+        shift(engine.world_mut(), "box", 1.0);
+        assert_eq!(frozen_meshes(&mut engine), before, "an edit recaptured");
+        request_refreeze(&mut engine);
+        assert_eq!(frozen_meshes(&mut engine), before, "a request froze early");
+        assert!(is_requested(&mut engine));
+        engine.step_ticks(1);
+        assert_ne!(frozen_meshes(&mut engine), before, "the box did not move");
+        assert!(!is_requested(&mut engine));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_refreeze_without_probes_is_a_no_op() {
+        let dir = project("refreeze-none");
+        let mut engine = engine(
+            &dir,
+            "format: 1\nentities:\n  - name: a\n    components:\n      Mesh:\n        shape: cube\n",
+        );
+        request_refreeze(&mut engine);
+        engine.step_ticks(1);
+        assert!(!is_requested(&mut engine));
+        assert!(codes(&mut engine).is_empty());
+        let scene = engine.extract_render_scene(64, 64).expect("extract");
+        assert!(scene.probe_world.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hidden_mesh_is_not_in_the_probe_world() {
+        let dir = project("refreeze-hidden");
+        let mut plain = engine(&dir, scene());
+        let expected = frozen_meshes(&mut plain).len();
+        let hidden = format!(
+            "{}  - name: warm\n    components:\n      Mesh:\n        shape: cube\n      Visibility:\n        visible: false\n      GiDynamic: {{}}\n",
+            scene()
+        );
+        let mut engine = engine(&dir, &hidden);
+        assert_eq!(frozen_meshes(&mut engine).len(), expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_refreeze_resource_survives_a_reload() {
+        let dir = project("refreeze-reload");
+        let mut engine = engine(&dir, scene());
+        engine.load_inline_scene(scene()).unwrap();
+        assert!(engine.world_mut().resource_mut::<ProbeRefreeze>().is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const ROOM_BASE: &str = "format: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.5
+          - 6.0
+      Camera: {}
+  - name: environment
+    components:
+      Environment: {}
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 10.0
+          - 1.0
+          - 10.0
+      Mesh:
+        shape: cube
+  - name: room
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 0.0
+      ReflectionProbe: {}
+";
+
+    const ROOM_A: &str = "format: 1
+kind: prefab
+name: room-a
+entities:
+  - name: cube-a
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 0.5
+          - 0.0
+      Mesh:
+        shape: cube
+";
+
+    const ROOM_B: &str = "format: 1
+kind: prefab
+name: room-b
+entities:
+  - name: ball-b
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 1.0
+          - -2.0
+      Mesh:
+        shape: sphere
+  - name: cube-b
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 0.5
+          - 3.0
+      Mesh:
+        shape: cube
+";
+
+    /// A store engine on `dir` holding the base room, with both prefabs on disk.
+    fn room_engine(dir: &Path) -> Engine {
+        std::fs::write(dir.join("a.prefab.yaml"), ROOM_A).unwrap();
+        std::fs::write(dir.join("b.prefab.yaml"), ROOM_B).unwrap();
+        let mut engine = engine(dir, ROOM_BASE);
+        engine.set_textures(TextureSource::Cooked);
+        engine.set_probes(ProbeSource::Store);
+        engine
+    }
+
+    /// Spawns the prefab, asks for a refreeze and ticks once, as a system swapping a room would.
+    fn swap_in(engine: &mut Engine, path: &str) -> Vec<ludion_core::ids::EntityId> {
+        let ids = crate::prefab::spawn_prefab(engine.world_mut(), path, None, Some("room"), false)
+            .expect("the prefab spawns");
+        request_refreeze(engine);
+        engine.step_ticks(1);
+        ids
+    }
+
+    fn render_resolve(engine: &mut Engine) -> ludion_renderer::ProbeResolve {
+        engine
+            .render_image(64, 64, false)
+            .map_err(|d| d[0].clone())
+            .unwrap();
+        engine.renderer().unwrap().probe_resolve()
+    }
+
+    /// A runtime room swap captures the world that holds it: the swapped engine's key and faces equal
+    /// those of a fresh engine that spawned room B the same way (spawn, request, tick) on a project
+    /// of its own.
+    #[test]
+    fn needs_gpu_a_refreeze_captures_the_swapped_room() {
+        let dir = project("swap");
+        let mut engine = room_engine(&dir);
+        if no_gpu(&mut engine) {
+            return;
+        }
+        let a_ids = swap_in(&mut engine, "a.prefab.yaml");
+        let a = render_resolve(&mut engine);
+        for id in a_ids {
+            engine.world_mut().despawn(id).unwrap();
+        }
+        swap_in(&mut engine, "b.prefab.yaml");
+        let b = render_resolve(&mut engine);
+        assert_eq!(b.resolve, a.resolve + 1, "the swap did not recapture");
+        assert_ne!(b.probes[0].key, a.probes[0].key);
+
+        let fresh_dir = project("swap-fresh");
+        let mut fresh = room_engine(&fresh_dir);
+        swap_in(&mut fresh, "b.prefab.yaml");
+        let fresh_b = render_resolve(&mut fresh);
+        assert_eq!(
+            b.probes[0].key, fresh_b.probes[0].key,
+            "a runtime swap and a fresh world keyed differently"
+        );
+
+        let swapped_scene = engine.extract_render_scene(64, 64).expect("extract");
+        let fresh_scene = fresh.extract_render_scene(64, 64).expect("extract");
+        let swapped_faces = engine
+            .renderer()
+            .unwrap()
+            .read_probes(&swapped_scene, None)
+            .expect("read_probes");
+        let fresh_faces = fresh
+            .renderer()
+            .unwrap()
+            .read_probes(&fresh_scene, None)
+            .expect("read_probes");
+        assert_eq!(swapped_faces.len(), fresh_faces.len());
+        for (s, f) in swapped_faces.iter().zip(&fresh_faces) {
+            assert_eq!(s.key, f.key);
+            assert!(s.captured == f.captured, "captured faces differ");
+            assert!(s.levels == f.levels, "prefiltered levels differ");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&fresh_dir);
     }
 
     /// An observed offline profile times the probe captures as their own load phase and reports the

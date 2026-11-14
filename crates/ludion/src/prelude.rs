@@ -193,6 +193,8 @@
 //!   [`SceneSwitch`] mold one frame shorter. The engine honors it at the frame boundary through the
 //!   same path the wire `engine.shutdown` takes, so a title screen's back binding closes a `--window`
 //!   session exactly as the window button does.
+//! - **Probe refreeze** — [`ProbeRefreeze`]: the resource a system sets with `request()` on the tick
+//!   it swaps a room, so probes spawned at runtime capture the world that holds them from the next tick.
 //! - **Anti-aliasing** — [`RenderSettings`]: the resource an options-menu system sets with
 //!   `request_anti_aliasing(`[`AntiAliasing`]`)`, beating the host's choice and the builder's
 //!   `anti_aliasing` default from the next frame. Write-only: a system cannot read the effective mode.
@@ -231,9 +233,9 @@ pub use ludion_engine::{
     ParentJoint, ParticleBlend, ParticleEmitter, PathDocument, PathFollower, PathFrame,
     PathInterpolation, PathMetric, PathMode, PathOrient, PathSampler, PatternDoc, PatternPlayer,
     PlaybackControls, PlaybackInput, PlaybackOutcome, PlaybackSpeed, PointLight, PostProcess,
-    PrefabApplied, PrefabInstance, PrefabReverted, ProbeShape, Profile, ProjectileConfig,
-    ProjectileLook, ProjectileVisual, ProjectileVisuals, Projectiles, Projection, RampSpec,
-    ReflectionProbe, RenderExtent, RenderSettings, ReplayEntry, ReplayPlayback,
+    PrefabApplied, PrefabInstance, PrefabReverted, ProbeRefreeze, ProbeShape, Profile,
+    ProjectileConfig, ProjectileLook, ProjectileVisual, ProjectileVisuals, Projectiles, Projection,
+    RampSpec, ReflectionProbe, RenderExtent, RenderSettings, ReplayEntry, ReplayPlayback,
     ReplayPlaybackConfig, Residue, ResidueStore, ResumeOutcome, RigConfig, RigMode, RigState,
     RunRecording, RunRecordingConfig, RunSave, SceneSwitch, ShakeConfig, Shutdown, SkinBone,
     SpotLight, Springs, Sprite, SpriteBlend, Static, SuspendInfo, SwitchTo, Text, TileAppearance,

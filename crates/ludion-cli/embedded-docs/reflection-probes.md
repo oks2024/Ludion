@@ -28,7 +28,8 @@ cover. Probes are authored text; the captured pixels are derived and never commi
    `ludion sync` warms the store for each CLI-loadable scene that names a probe, or every scene when a prefab or other document carries one, at `--quality` (else this machine's). It also drops entries unused for 14 days, or the oldest past a 4 GiB cap; one dropped by mistake only costs a recapture.
 5. `run`, `serve` and `dev` read the store; `--probes rebake` captures afresh and leaves it alone.
    A probe added, moved or removed in a live session is captured on the spot — no bake step. A
-   geometry, light or sky edit shows in the probes after a reload (`scene.load`, `asset.reload`).
+   geometry, light or sky edit shows in the probes after a reload (`scene.load`, `asset.reload`) or a
+   requested refreeze (`ProbeRefreeze`, below).
 
 ## Format
 
@@ -82,7 +83,7 @@ onto the volume from there. `Transform.scale` is ignored — size the shape, nev
   inside a higher-ranked probe's volume (weight 1 there), its own band included, never shows,
   `L1276`; two probes with the same shape, size and pose are a copy-paste, `L1277`.
 - **At most 32 probes per scene** (`L1278`). Merge neighbours into larger volumes.
-- **A capture holds what the world looks like at load** — meshes, the sky and the lighting. Sprites,
+- **A capture holds what the world looks like at load or at a requested refreeze** — meshes, the sky and the lighting. Sprites,
   particles, text and editor markers are absent, and a prop that moves later does not move in it.
   Its sky part follows the live sky, and its geometry follows the live ambient, `ibl_intensity` and
   GI, so a run clock needs no rebake; emissive surfaces (a night city's neon) keep their brightness
@@ -96,13 +97,31 @@ onto the volume from there. `Transform.scale` is ignored — size the shape, nev
   than captured as the ambient dims.
 - **`shape`, `blend` and `priority` never recapture** — they only change how the cube is projected
   and weighted. Moving the probe recaptures it. What it sees (geometry, lights, `Environment`, the
-  textures) is the world at the last load, so an in-session edit waits for a reload; the quality
+  textures) is the world at the last load or requested refreeze, so an in-session edit waits for one; the quality
   and an engine shader change give a new store key too. The grade (`PostProcess`) never does.
 - **The store is per-machine, derived and ignored** — `.ludion/cooked/probes/` beside the project;
   only the text is committed. `ludion render` and `ludion test` never read it: they capture fresh,
   so a golden never depends on whether a store exists. Hosts read it and capture on a miss.
 - **Export ships the store:** `ludion export` bakes every probe of every shipped scene against the
   written bundle at the target's quality; a missing entry is `L1281`.
+
+## Probes spawned at runtime
+
+A game that swaps a room by spawning a prefab holding probes and props asks the engine to re-freeze:
+a system calls `world.resource_mut::<ProbeRefreeze>()` then `request()` on the tick it swaps.
+
+- **Timing:** a request on tick N freezes the end-of-tick-N world at tick N+1's start; the capture or
+  store lookup runs at the next render. A render before that shows the old capture.
+- **Scope:** whole-world, and only on request; a `Static` change never fires it. With no probe in the
+  world the request is a silent no-op that clears itself.
+- **Determinism:** the store key hashes the whole frozen world (meshes, lights, sun, environment, GI
+  voxel grid, quality), so a store hit needs the freeze-time world identical between bake and play.
+  Anything spawned that tick counts.
+- **Stripped from the capture:** sprites, particles, text, ground markers, drop shadows, decals, UI,
+  debug lines, nested probes and the viewmodel; light shadows and scatter, sun cascades and disc,
+  and SSAO, SSR, shafts and DoF. Hidden meshes are not captured, but a hidden mesh without
+  `GiDynamic` still enters the GI voxelization and so the key; hidden **and** `GiDynamic` keeps a
+  warm set out of both. Visible `GiDynamic` meshes are captured.
 
 ## Gotchas
 
