@@ -725,19 +725,12 @@ pub fn spawn_prefab(
     name: Option<&str>,
     presentation: bool,
 ) -> Result<Vec<EntityId>, Vec<Diagnostic>> {
-    let key = prefab_key(path)?;
-    let Some(library) = world.resource_mut::<PrefabLibrary>() else {
-        return Err(vec![
-            Diagnostic::new(
-                code::PREFAB_UNRESOLVED,
-                format!("cannot spawn prefab `{path}`: this world has no prefab library"),
-            )
-            .with_help("spawn prefabs from a system of an engine-built game"),
-        ]);
-    };
-    let ready = library.ready(&key)?;
-    let registry = Arc::clone(&library.registry);
+    let (key, ready) = library_ready(world, path)?;
     let presentation_copy = if presentation {
+        let registry = world
+            .resource::<PrefabLibrary>()
+            .map(|library| Arc::clone(&library.registry))
+            .expect("library_ready found the prefab library");
         Some(ludion_scene::presentation_copy(
             &ready.expanded,
             &registry,
@@ -755,6 +748,61 @@ pub fn spawn_prefab(
     )?;
     apply_bone_poses(world, &ids, &ready.poses);
     Ok(ids)
+}
+
+/// The key and the read, validated prefab at `path`: the path check, the library, the cached load.
+fn library_ready(world: &mut World, path: &str) -> Result<(String, Arc<Ready>), Vec<Diagnostic>> {
+    let key = prefab_key(path)?;
+    let Some(library) = world.resource_mut::<PrefabLibrary>() else {
+        return Err(vec![
+            Diagnostic::new(
+                code::PREFAB_UNRESOLVED,
+                format!("cannot spawn prefab `{path}`: this world has no prefab library"),
+            )
+            .with_help("spawn prefabs from a system of an engine-built game"),
+        ]);
+    };
+    let ready = library.ready(&key)?;
+    Ok((key, ready))
+}
+
+/// Reads and validates the prefab [`spawn_prefab`] would spawn at `path`, and spawns nothing: call it
+/// a few ticks before the spawn of the same path, never on the spawn tick, so the later spawn finds
+/// the prefab loaded. `placement`, `name` and `presentation` do not key the library, so they are not
+/// taken; a later `presentation` spawn still builds its presentation copy at spawn time.
+///
+/// It reads and records the text exactly as a spawn would, at the prepare tick, so a recording
+/// replays the same whichever call loaded first; the library is not hashed, so a prepare leaves the
+/// `WorldHash` untouched. A failed load is cached as its diagnostics, so the later spawn returns the
+/// same errors.
+///
+/// # Errors
+/// `L1230` if `path` is absolute, the file cannot be read or `world` has no prefab library (it was
+/// not built by an engine); the prefab's own diagnostics (`L1226`–`L1229`, `L1221`/`L1222`,
+/// `L1186`/`L1187`, `L1151`/`L1152`/`L1209`, `L1194`–`L1197`, component errors) when it is invalid.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Engine, prepare_prefab, spawn_prefab};
+///
+/// let root = std::env::temp_dir().join(format!("ludion-prepare-prefab-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(&root).unwrap();
+/// std::fs::write(
+///     root.join("crate.prefab.yaml"),
+///     "format: 1\nkind: prefab\nname: crate\nentities:\n  - name: lid\n    components: {}\n",
+/// )
+/// .unwrap();
+///
+/// let mut engine = Engine::builder().project_root(&root).build().unwrap();
+/// let before = engine.world_mut().entity_count();
+/// prepare_prefab(engine.world_mut(), "crate.prefab.yaml").unwrap();
+/// assert_eq!(engine.world_mut().entity_count(), before);
+/// let ids = spawn_prefab(engine.world_mut(), "crate.prefab.yaml", None, None, false).unwrap();
+/// assert_eq!(ids.len(), 1);
+/// # std::fs::remove_dir_all(&root).ok();
+/// ```
+pub fn prepare_prefab(world: &mut World, path: &str) -> Result<(), Vec<Diagnostic>> {
+    library_ready(world, path).map(drop)
 }
 
 /// Instantiates `expanded` (the flattened prefab `key`) into `world`, then prunes dead instance

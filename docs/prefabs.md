@@ -95,6 +95,7 @@ Everything else is the scene's own validation — `L1014` for a bad component va
 - **Paths resolve against the document they are written in.** A prefab's asset fields, overrides and nested `prefab:` entries are relative to the prefab file, `..` allowed; an absolute, drive or scheme path is `L1311`. `prefab.create` and `prefab.apply` write prefab-relative paths (one that cannot be written relative is `L1236` / `L1237`). `spawn_prefab`'s path argument stays content-root-relative.
 - **A fault on a named part reports once per `(source, part)`**, not once per instance: spawning the same faulty prefab twenty times logs one line, naming the first instance.
 - **Read once.** The file is read and validated once per path per world, and every later spawn reuses it. Live instances never change when the file does.
+- **`prepare_prefab(world, path)`** reads and validates a prefab ahead of its spawn from a sim system. It records the same way, spawns nothing, leaves `WorldHash` untouched, and a bad prefab returns the errors the spawn would. Call it a few ticks before the door, never on the spawn tick.
 - **`presentation`** (the fifth argument; `presentation` over the wire) `true` spawns every part presentation, sticky; a sim-only component is `L1320`. A presentation system may spawn prefabs with `true` or an all-presentation prefab; a sim system asking for presentation, or a presentation system spawning sim parts, is `L0028` as a diagnostic (`ludion docs presentation`).
 
 ## `PrefabInstance`

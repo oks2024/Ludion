@@ -218,7 +218,8 @@ pub use perf_live::{
 };
 pub use player_profile::{Profile, ProfileSaveEntry};
 pub use prefab::{
-    MapSpawn, PrefabInstance, despawn_instance, prepare_map, spawn_map, spawn_prefab,
+    MapSpawn, PrefabInstance, despawn_instance, prepare_map, prepare_prefab, spawn_map,
+    spawn_prefab,
 };
 pub use prefab_clips::{
     PrefabClipData, load as load_prefab_clips, prefab_clip_target_diagnostics, prefab_part_names,

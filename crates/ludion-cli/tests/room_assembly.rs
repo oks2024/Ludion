@@ -13,7 +13,8 @@ use ludion_ecs::{SystemCtx, World};
 use ludion_engine::diagnostics::Diagnostics;
 use ludion_engine::{
     Engine, EngineBuilder, Nav, NavAgent, NavConfig, NavSteering, PrefabInstance, Transform,
-    TransformHierarchy, despawn_instance, nav_steer, nav_update, replay_hashes_with, spawn_prefab,
+    TransformHierarchy, despawn_instance, nav_steer, nav_update, prepare_prefab,
+    replay_hashes_with, spawn_prefab,
 };
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
@@ -192,6 +193,16 @@ pub(crate) fn spawner(world: &mut World, ctx: &SystemCtx) {
     }
 }
 
+const PREPARE_AHEAD: u64 = 4;
+
+/// [`spawner`] that first prepares the room's prefab `PREPARE_AHEAD` ticks before the spawn.
+pub(crate) fn preparer(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == SPAWN - PREPARE_AHEAD {
+        prepare_prefab(world, PREFAB).expect("the room prefab loads");
+    }
+    spawner(world, ctx);
+}
+
 /// Applies each agent's steering, `y` from the grid node under it.
 pub(crate) fn mover(world: &mut World, ctx: &SystemCtx) {
     let moves: Vec<_> = world
@@ -209,12 +220,7 @@ pub(crate) fn mover(world: &mut World, ctx: &SystemCtx) {
     }
 }
 
-/// The spawner runs before `nav_update`, so nav sees a spawned room the same tick.
-pub(crate) fn game(root: &Path) -> EngineBuilder {
-    game_with(root, spawner)
-}
-
-/// [`game`] with its own spawn system.
+/// A game with its own spawn system, which runs before `nav_update`, so nav sees a spawned room the same tick.
 pub(crate) fn game_with(root: &Path, spawner: fn(&mut World, &SystemCtx)) -> EngineBuilder {
     Engine::builder()
         .project_root(root)
@@ -241,7 +247,15 @@ pub(crate) fn booted_with(root: &Path, spawner: fn(&mut World, &SystemCtx)) -> E
 }
 
 pub(crate) fn hash_trace(root: &Path, ticks: usize) -> Vec<u64> {
-    let mut engine = booted(root);
+    hash_trace_with(root, spawner, ticks)
+}
+
+pub(crate) fn hash_trace_with(
+    root: &Path,
+    spawner: fn(&mut World, &SystemCtx),
+    ticks: usize,
+) -> Vec<u64> {
+    let mut engine = booted_with(root, spawner);
     (0..ticks)
         .map(|_| {
             engine.advance_live();
@@ -410,11 +424,37 @@ impl std::io::Write for SharedSink {
 
 #[test]
 fn a_room_spawn_replays_after_its_prefab_map_and_kit_are_deleted() {
-    let root = room_root("room_assembly_replay");
+    replays_after_deleting_its_files("room_assembly_replay", spawner);
+}
+
+#[test]
+fn a_prepared_prefab_spawn_replays_after_its_files_are_deleted() {
+    let bytes = replays_after_deleting_its_files("room_assembly_prepare_replay", preparer);
+    let stamped: Vec<u64> = ReplayReader::new(&bytes[..])
+        .unwrap()
+        .records()
+        .unwrap()
+        .into_iter()
+        .filter_map(|record| match record {
+            ReplayRecord::PrefabText { frame, path, .. } if path == PREFAB => Some(frame.as_u64()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stamped.len(), 1, "one text record for the prefab");
+    assert!(
+        stamped[0] < SPAWN,
+        "the text is stamped at the prepare tick, not the spawn's"
+    );
+}
+
+/// Records `spawner`'s session, deletes the prefab, map and kit, and replays it to the same hashes;
+/// returns the recording.
+fn replays_after_deleting_its_files(tag: &str, spawner: fn(&mut World, &SystemCtx)) -> Vec<u8> {
+    let root = room_root(tag);
     let prefab_bytes = std::fs::read_to_string(root.join(PREFAB)).unwrap();
 
     let sink = SharedSink::default();
-    let mut engine = booted(&root);
+    let mut engine = booted_with(&root, spawner);
     let mut live = vec![(engine.frame(), engine.world_hash().unwrap())];
     engine.set_recording(sink.clone()).unwrap();
     while engine.frame().as_u64() < TEARDOWN + 30 {
@@ -447,6 +487,55 @@ fn a_room_spawn_replays_after_its_prefab_map_and_kit_are_deleted() {
     for gone in [PREFAB, "room.map.yaml", "kit.kit.yaml"] {
         std::fs::remove_file(root.join(gone)).unwrap();
     }
-    let replayed = replay_hashes_with(game(&root), &bytes, &root).unwrap();
+    let replayed = replay_hashes_with(game_with(&root, spawner), &bytes, &root).unwrap();
     assert_eq!(replayed, live);
+    bytes
+}
+
+#[test]
+fn preparing_a_prefab_is_invisible_to_the_hash_at_one_and_eight_threads() {
+    let root = room_root("room_assembly_prepare_threads");
+    for threads in [1, 8] {
+        let plain = par::with_threads(threads, || hash_trace_with(&root, spawner, 340));
+        let prepared = par::with_threads(threads, || hash_trace_with(&root, preparer, 340));
+        assert_eq!(
+            prepared, plain,
+            "{threads} threads: a prepare {PREPARE_AHEAD} ticks ahead moves no hash"
+        );
+    }
+}
+
+#[test]
+fn preparing_a_bad_prefab_returns_the_spawn_errors_and_spawns_nothing() {
+    let root = room_root("room_assembly_prepare_errors");
+    std::fs::write(
+        root.join("bad.prefab.yaml"),
+        "format: 1\nkind: prefab\nname: bad\nentities:\n  - name: a\n    components:\n      NoSuchComponent: {}\n",
+    )
+    .unwrap();
+    let mut engine = booted_with(&root, spawner);
+    let count = engine.world().entity_count();
+    for path in [
+        "../outside.prefab.yaml",
+        "missing.prefab.yaml",
+        "bad.prefab.yaml",
+    ] {
+        let prepared = prepare_prefab(engine.world_mut(), path).unwrap_err();
+        let spawned = spawn_prefab(engine.world_mut(), path, None, None, false).unwrap_err();
+        let codes = |found: &[ludion_core::diagnostics::Diagnostic]| -> Vec<String> {
+            found.iter().map(|d| d.code.to_string()).collect()
+        };
+        assert_eq!(
+            codes(&spawned),
+            codes(&prepared),
+            "{path}: the spawn agrees"
+        );
+    }
+    assert_eq!(engine.world().entity_count(), count, "nothing spawned");
+    prepare_prefab(engine.world_mut(), PREFAB).unwrap();
+    assert_eq!(
+        engine.world().entity_count(),
+        count,
+        "a good prepare spawns nothing"
+    );
 }
