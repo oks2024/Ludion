@@ -43,7 +43,7 @@ test('the protocol crate brings the schema-drift gate along', () => {
 });
 
 test('prose needs only the cheap gates', () => {
-  const s = classify(['Plan/owed.md', 'dev-docs/determinism.md', 'README.md'], WS);
+  const s = classify(['Plan/README.md', 'dev-docs/determinism.md', 'README.md'], WS);
   assert.deepEqual(s.packages, []);
   assert.equal(s.drift || s.scripts || s.frontend || s.vigil, false);
 });

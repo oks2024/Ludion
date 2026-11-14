@@ -59,7 +59,7 @@ jobs:
         run: node scripts/size-gate.mjs
 
       # CLAUDE.md is loaded into every agent session, so its size is a gated budget: over it, text
-      # moves to its owner (a plan's Status, Plan/owed.md, a skill or a docs topic). Mirrors
+      # moves to its owner (a plan's Status, the owed ledger, a skill or a docs topic). Mirrors
       # scripts/check.mjs `claude-md`.
       - name: CLAUDE.md budget
         run: node scripts/claude-md-budget.mjs

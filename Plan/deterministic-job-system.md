@@ -170,7 +170,7 @@ the private macOS queue; three results worth carrying here.
 - **`move_projectiles`' negative scaling is gone** — 0.0750 / 0.0755 / 0.0807 at 1/2/8t, against the 0.081 / 0.113 / 0.349 recorded above. Flat, not inverted. The queued `usize::MAX` fix should not be taken on the strength of the old Windows reading; what survives of that finding is the M4 half, unmeasured since.
 - **The `world_hash` term grew with the game, not with contention** — 18.73 / 18.96 / 19.04 ms against 12.88–12.95, and steady to 1.6 % across the three runs, which is what says the box was quiet: a bigger world has more component bytes to hash. At 8 threads it is now **75.9 %** of the oracle loop (was ~71 %), so the ranked-#2 parallel/incremental hash is sharpened, not changed.
 
-**M4 twins re-recorded (2026-09-26, Lore rev 916 — no code change, no ceiling anywhere).** The three `stress-spatial-apple-m4-{1,2,8}t.json` re-recorded raw the same way (120 frames after 30 warmup, `--threads 1/2/8`; the `world_hash` canary steady at 12.56–12.65 ms). Tick **6.16 / 5.02 / 2.59 ms**, `enemy_ai` 4.88 / 3.72 / 1.26, `move_projectiles` 0.0358 / 0.0356 / 0.0361 — flat on the M4 too, so the negative-scaling finding is gone on both boxes and the queued `usize::MAX` fix has no remaining evidence. The pair still compares nothing: the RTX 3090 dumps are at rev 739, and a same-rev comparison needs them re-recorded at the M4's rev (`Plan/owed.md`).
+**M4 twins re-recorded (2026-09-26, Lore rev 916 — no code change, no ceiling anywhere).** The three `stress-spatial-apple-m4-{1,2,8}t.json` re-recorded raw the same way (120 frames after 30 warmup, `--threads 1/2/8`; the `world_hash` canary steady at 12.56–12.65 ms). Tick **6.16 / 5.02 / 2.59 ms**, `enemy_ai` 4.88 / 3.72 / 1.26, `move_projectiles` 0.0358 / 0.0356 / 0.0361 — flat on the M4 too, so the negative-scaling finding is gone on both boxes and the queued `usize::MAX` fix has no remaining evidence. The pair still compares nothing: the RTX 3090 dumps are at rev 739, and a same-rev comparison needs them re-recorded at the M4's rev.
 
 ### J2 — System-level parallelism (large, invasive, maybe never)
 
@@ -198,7 +198,7 @@ Don't. Engine-vanity territory for this project.
 - (ii) **`World::read_column` / `ReadColumn` (r2309).** A read-only column handle resolved once per extract and indexed per id; additive public API in `ludion-ecs` (unfrozen, budget raised to 3000). `place_with` adopts it: Place T1 0.98 → 0.64, T8 0.99 → 0.70; extract T1 3.49 → 2.99, T8 3.46 → 3.17; GPU unchanged. The Poses adoption was reverted: at T8 the gain was inside noise (T1 1.27 → 1.08, possibly real; no follow-up scheduled).
 - **Trigger answer.** After (i) alone, Place was still the largest extract phase at T8, so (ii)'s trigger was met. Both together at T8: extract 2.44, Place 0.63, Poses 0.46. A socket_pose bench reads Poses 0.521 → 0.288 at T8.
 
-**0033 amendment (2026-11-11):** shipped r2309–r2310; M4 identity and horde-500 re-run owed in `Plan/owed.md`.
+**0033 amendment (2026-11-11):** shipped r2309–r2310; M4 identity and horde-500 re-run owed.
 
 ## Costs and risks
 

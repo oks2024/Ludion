@@ -1,6 +1,6 @@
 # Plan: Viewmodel — a first-person held-object layer in the main scene pass
 
-> Status: **mechanized** — every subtask shipped (r2148–r2156); the pinned blesses, the default-golden check and the live look are owed (`Plan/owed.md`). An external game's request 0003 (priority *blocking*). Code facts read from the tree on 2026-11-07 (file:line pointers are of that date; re-grep before editing).
+> Status: **mechanized** — every subtask shipped (r2148–r2156); the pinned blesses, the default-golden check and the live look are owed. An external game's request 0003 (priority *blocking*). Code facts read from the tree on 2026-11-07 (file:line pointers are of that date; re-grep before editing).
 
 ## Context
 

@@ -52,5 +52,5 @@ per-light cost for a per-mesh effect and was not taken.
   `ludion-scene` rim module and its precedence in the extract.
 - **10c**: docs (`ludion docs materials`, components, voxel, sculpt, `scene-kind-documents`), this plan,
   and the gallery scene with its strength and power sweeps. Its macOS golden was blessed on the unpinned
-  M5. Owed: the pinned M4 and Windows blesses of `rim-light.png` (`Plan/owed.md`); the M5 bless is not
+  M5. Owed: the pinned M4 and Windows blesses of `rim-light.png`; the M5 bless is not
   authoritative.

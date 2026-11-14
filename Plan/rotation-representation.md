@@ -78,7 +78,7 @@ fuzz corpus).
 - The faceted-normal helper the audit names moves with them.
 - This is **hash- and golden-moving** only where render used std trig: sub-ulp matrix differences can
   shift a pixel. Pinned goldens are the judge. Expect SSIM-level passes, and re-bless on the reference
-  box only if a tile falls below the floor (the M4 half goes to `Plan/owed.md`). The sim-side paths
+  box only if a tile falls below the floor (the M4 half is owed). The sim-side paths
   already use libm, so `WorldHash` should not move. Verify with the 1/2/8-thread gate and the physics
   traces.
 

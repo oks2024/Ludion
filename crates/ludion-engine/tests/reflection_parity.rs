@@ -431,7 +431,7 @@ fn needs_gpu_ssr_and_probes_agree_in_a_fitted_box_room() {
     }
     let text = std::fs::read_to_string(&path).unwrap_or_else(|_| {
         panic!(
-            "no reflection parity floors at {} — this calibration is owed (`Plan/owed.md`, \"Reflections \
+            "no reflection parity floors at {} — this calibration is owed (\"Reflections \
              parity floors\"). Calibrate with `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it \
              -E 'test(/^reflection_parity::/)'`",
             path.display()

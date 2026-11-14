@@ -395,7 +395,7 @@
   Indicative figures on the unpinned M5 (500 enemies + 5,000 projectiles): rebuild 0.29 ms;
   5,000 swept casts 2.55 ms serial, 0.48 ms over `par_chunks`; 500 k-nearest 0.64 ms; serial
   frame sum 3.57 ms against the inline `SPATIAL3D_BUDGET_MS = 11`. Pinned M4/3090 runs are owed
-  (`Plan/owed.md`).
+ .
 
 ## Waves
 

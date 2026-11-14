@@ -336,7 +336,7 @@ game crate, and the tooling knows `games/*`).
 4. `examples/character-course`:
    - the bpy script that emits the course's render and collision meshes and its paths;
    - the run/jump reference controller;
-   - a trace, a `.lrp` and a golden blessed on the 3090 (the M4 re-bless goes to `owed.md`).
+   - a trace, a `.lrp` and a golden blessed on the 3090 (the M4 re-bless is owed).
 5. Docs: the motor topic, and the `move_and_slide` ↔ motor pointers (decision 7).
 
 ### W3 — Camera rigs and vigil
@@ -362,7 +362,7 @@ behind/side rigs, zones, snap and respawn trauma (`games/character-course`, `tes
 1. Path overlay and control-point dragging (writes canonical `kind: path` text).
 2. The debug-draw category toggle over `render.debug`.
 3. Rig tunables live through the inspector.
-4. The live smoke goes to `owed.md`.
+4. The live smoke is owed.
 
 ### W5 — Animation hookup (gated on animation-clips W2)
 
@@ -370,7 +370,7 @@ behind/side rigs, zones, snap and respawn trauma (`games/character-course`, `tes
    `MoveReport` and speed.
 2. The course's `.lrp` and golden re-record if the pose changes them.
 
-### Exit (human gate, in `owed.md`)
+### Exit (human gate, owed)
 
 One sitting (about 30 minutes):
 

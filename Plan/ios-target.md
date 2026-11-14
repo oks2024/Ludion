@@ -234,7 +234,7 @@ fatal; `ludion_core::par` is plain `std::thread`; arm64 WorldHash identity is al
   Exit: `ludion export --target ios-sim --run` boots vigil in the simulator; the replay verdict line
   matches the committed hash; the agent attaches over loopback; `simctl io screenshot` shows the frame
   inside the safe rect with the touch views drawn.
-- **M3 — device bring-up** (2–3 days). Human prerequisites, once — they move to `Plan/owed.md` when M3
+- **M3 — device bring-up** (2–3 days). Human prerequisites, once — they become owed when M3
   starts: an Apple ID signed into Xcode (the free personal team), Developer Mode on the phone, the
   developer certificate trusted in its settings, the phone paired for network deployment, auto-lock
   off while the agent drives it (`devicectl` launches only on an unlocked device). Then signing, the

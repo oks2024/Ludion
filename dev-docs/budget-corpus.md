@@ -63,7 +63,7 @@ vigil's E6 pair carry `threads = 8`; the rest state no worker count.
   `examples/gallery/mirror-floor.yaml` (a near-mirror floor at the full preset, `Plan/reflections.md`
   Wave 2), gating `[post_groups] ssr` (both pyramids, the trace and the blend), `[passes] scene` and
   `reflections`. Measured on the RTX 3090 2026-10-27: `ssr` 0.4332 ms, `reflections` 0.0512. The M4
-  twin is owed (`Plan/owed.md`).
+  twin is owed.
 - `budgets/image-stats-windows.toml` / `budgets/image-stats-macos.toml` — a different instrument:
   not timing ceilings but per-golden defect ceilings (`banding_score`, `edge_aliasing`,
   `clipped_low`, `clipped_high`), checked with `ludion image-stats --check`. Per-OS because the two

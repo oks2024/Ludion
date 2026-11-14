@@ -1,6 +1,6 @@
 # Plan: Transparent depth — sprites, particles and text at their own distance
 
-> Status: **mechanized; human look owed** (`Plan/owed.md`). The goldens for `fog-sprites`,
+> Status: **mechanized; human look owed**. The goldens for `fog-sprites`,
 > `fog-sprites-ortho`, `dof-sprites` and `shafts-sprites` are blessed on both pinned machines.
 
 ## Trigger
@@ -108,4 +108,4 @@ tried on Metal, in the orthographic shaft tests, or on the reference game, and w
   renderer-passes`.
 - macOS goldens blessed for `fog-sprites`, `fog-sprites-ortho`, `dof-sprites`, `shafts-sprites`.
 - Windows: the same four first-blessed on the RTX 3090, and `night-street` re-blessed for the three
-  pixels above. Mechanized; the human look and the Windows cost are in `Plan/owed.md`.
+  pixels above. Mechanized; the human look and the Windows cost are in the owed ledger.

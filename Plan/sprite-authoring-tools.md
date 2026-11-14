@@ -1,6 +1,6 @@
 # Plan: Sprite authoring tools — less to write, palette discipline, baked self-light
 
-> Status: **Exit mechanized 2026-11-01; human look verdict owed** (Plan/owed.md, "Sprite ramp and
+> Status: **Exit mechanized 2026-11-01; human look verdict owed** ("Sprite ramp and
 > self-light look"). A follow-on to `Plan/sprite-engine.md`: that plan built the sprite layer, and this
 > one makes the `kind: sprite` document cheaper to write and its bake truer to pixel-art practice.
 
@@ -267,7 +267,7 @@ from 8×8 to 480×48, every one including a shared `kind: palette`.
 | **2. Less to write** | Hex colours with the legacy spelling (1), the pointer domain (2), `mirror` (3), frame patches (4), atlas-source variants (5). `--rows` shows the resolved grid. The in-repo gallery documents are rewritten to hex by script; their atlases re-bake. Docs: `sprite-authoring`, `sprite-sheets`, `sprite-craft`. |
 | **3. Palette discipline** | `ramps:` (6), ramp mode on `shade` and `gradient` with the current-glyph plane, `dither` on the plane, and the enforced ordering (7). A gallery document in ramp mode, beside its colour-mode twin. Docs: `sprite-effects`, `sprite-authoring`, `sprite-craft`. |
 | **4. Baked self-light** | `op: light`, additive, in colour and ramp modes (8). The gallery ship lit from its cockpit and thrusters. Docs: `sprite-effects`, `sprite-craft` (with decision 9's boundary). |
-| **Exit** | An authoring round re-authors the gallery's sprites with the new tools and records each document's line count before and after in Status (recorded, not targeted). The human look verdict (ramp mode and `light` beside their colour-mode twins) goes in `Plan/owed.md`. The external game's adoption is its own and doesn't gate the exit. |
+| **Exit** | An authoring round re-authors the gallery's sprites with the new tools and records each document's line count before and after in Status (recorded, not targeted). The human look verdict (ramp mode and `light` beside their colour-mode twins) is owed. The external game's adoption is its own and doesn't gate the exit. |
 
 ## Codes
 

@@ -1,6 +1,6 @@
 # Plan: SpotLight — a cone of light on the clustered-forward path
 
-> Status: **W1–W3 mechanized (2026-10-15); Exit owed** — the look sitting (`Plan/owed.md`); the
+> Status: **W1–W3 mechanized (2026-10-15); Exit owed** — the look sitting; the
 > M4 twin passed 2026-10-15 at rev 1441. Current-code facts read from the tree on
 > 2026-10-15 (file:line pointers are of that date; re-grep before editing). Parent:
 > `Plan/clustered-forward.md` (its deferred `SpotLight` entry is this plan's trigger, now fired).

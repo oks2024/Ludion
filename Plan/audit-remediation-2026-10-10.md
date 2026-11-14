@@ -84,4 +84,4 @@ Each waits on its trigger; none is scheduled.
   `EntityBounds` "projected corners" wording.
 
 Owed to a human: the live smoke in `Plan/editor-live-smoke.md` ("Stream subscriptions, reconnect,
-file sync, gen children"), listed in `Plan/owed.md`.
+file sync, gen children"), listed as owed.

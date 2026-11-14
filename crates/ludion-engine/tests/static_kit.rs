@@ -54,7 +54,7 @@ const EXPECTED_ENTITIES: usize = FIXED + KIT_PIECES + DYNAMICS;
 const MESH_INSTANCES: usize = 3_186;
 /// Ceiling for one extract of the room with the static scene on, calibrated at [`MESH_INSTANCES`]:
 /// measured median 0.31 ms, about 3x, on an unpinned M5 laptop (not authoritative), 2026-11-14.
-/// Pinned M4 / RTX 3090 figures are owed (`Plan/owed.md`).
+/// Pinned M4 / RTX 3090 figures are owed.
 const STATIC_KIT_EXTRACT_BUDGET_MS: f64 = 1.0;
 /// The committed scene must stay under the 1 MiB size gate with room to spare.
 const MAX_SCENE_BYTES: usize = 900_000;

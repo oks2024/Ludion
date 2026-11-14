@@ -27,7 +27,7 @@ Launch: `node scripts/editor.mjs <project-dir>` (`--help`).
 - **No frontend gate renders React.** `check.mjs --frontend-only` (oxlint, `tsc -b`, vitest) proves
   pure modules only, so put logic in pure modules with tests, and treat a view as *unverified in the
   GUI* until a human sitting passes. A wave that ships a view adds its falsifiable click-path
-  checklist to `Plan/editor-live-smoke.md` and one line to `Plan/owed.md` — "mechanized-complete",
+  checklist to `Plan/editor-live-smoke.md` and one line to the owed ledger — "mechanized-complete",
   never "done".
 
 ## Traps

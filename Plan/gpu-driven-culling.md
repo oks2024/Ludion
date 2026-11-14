@@ -450,7 +450,7 @@ built if 2b is.
 
 ## Proposed waves
 
-Each wave's gate is mechanical. "Both boxes" means the RTX 3090 now and the M4 through `Plan/owed.md`,
+Each wave's gate is mechanical. "Both boxes" means the RTX 3090 now and the M4 as owed,
 as usual.
 
 ### W0 — the measurement (shared with world-streaming W0)
@@ -524,7 +524,7 @@ Sprites, particles, billboard shots, decals and volleys keep their CPU path and 
 - the graph snapshot diff reviewed, and the wire schema snapshot moved once with 6b;
 - the bench "after" figures recorded in Status.
 
-The pinned `[passes] cull` budget lines are owed in `Plan/owed.md`, because the M5 box is unpinned.
+The pinned `[passes] cull` budget lines are owed, because the M5 box is unpinned.
 
 ### W3 — the persistent static scene (rung 2b)
 
@@ -582,7 +582,7 @@ G7 stays a trigger, out of W3 (decision 38).
   medians, so this is harmless. A per-frame assertion on GPU counts must read back with a stall,
   which is allowed only in lockstep and test mode.
 - **The macOS twin lags.** Every golden-identity claim is proven on the 3090 first. The M4 re-run
-  is an `owed.md` line per wave, as for every renderer arc.
+  is an owed line per wave, as for every renderer arc.
 
 ## Questions for the grilling
 
@@ -820,7 +820,7 @@ scene 0.97 → 1.79, frame 2.96 → 5.11 (power-state noise dominates), `cull` p
   off/on delta therefore overstates the gain over the pre-0008 engine for shadow passes; the "before" figures
   above predate that change.
 - Owed: pinned before/after figures, the `[passes] cull` budget lines, the pinned indirect-validation figure
-  and M4/3090 golden byte-identity (`Plan/owed.md`).
+  and M4/3090 golden byte-identity.
 - **Shipped:** the W2 wave set (rung 2a) for request 0008; the agent doc is `docs/culling.md`.
 
 **The static-kit room, before W3 (Serious Isaac 0039, unpinned M5, 2026-11-14).** `cargo test -p ludion-engine
@@ -837,7 +837,7 @@ instances per extract. Indicative only (an unpinned laptop); pinned figures are 
   a corridor): `scene` 0.69–0.85 → 0.43, `shadow` 0.15, `cull` 0.12 → 0.17.
 - **GPU frame** (fastest of five): 2.66–2.92 ms full against 2.71–2.78 ablated. The kit's frame delta reads
   −0.05 to +0.18 ms, inside the run-to-run noise, so the frame is not bound by the kit at this size.
-- **Owed:** the pinned M4 and RTX 3090 figures and the golden (`Plan/owed.md`).
+- **Owed:** the pinned M4 and RTX 3090 figures and the golden.
 
 **The static-kit room, after W3 (Serious Isaac 0039, unpinned M5, 2026-11-14).** Same command, same room.
 Three runs, 3,186 mesh instances, indicative only.
@@ -858,7 +858,7 @@ Three runs, 3,186 mesh instances, indicative only.
 
 **W3 shipped (rung 2b).** Mechanized: the ECS write journal, `Static`, `StaticScene`, the persistent static GPU
 buffers (decision 49) and the inline budget. Owed: pinned M4 / RTX 3090 figures, the pinned budget lines and the
-static-kit golden (`Plan/owed.md`).
+static-kit golden.
 
 **LOD (request 0013).** Shipped as decisions 21–29; the acceptance scene is `examples/gallery/lod-hall.yaml` (500
 skinned figures down a 130 m hall on `meshes/lod/`, a three-level mannequin imported with `--lod 0.3:0.5 --lod
@@ -867,6 +867,6 @@ off byte-identical; no-chain identity is every other gallery golden staying unto
 a chainless frame. Bench, `CULLING_BENCH_LOD=off|on`, the crowd view, fastest of five rounds, GPU pass medians
 (unpinned M5, 2026-11-08, indicative): chain off `shadow` 0.117, `prepass` 0.195, `scene` 1.000 ms, no `cull` pass;
 chain on `cull` 0.071, `shadow` 0.135, `prepass` 0.197, `scene` 1.049 ms. The mannequin is only 512, 256 and 200 triangles across its three levels, so 500 of them are a few hundred
-thousand triangles at most and the chain is a wash here: the saving is for the game's horde of heavier meshes, which the game re-measures (`Plan/owed.md`).
+thousand triangles at most and the chain is a wash here: the saving is for the game's horde of heavier meshes, which the game re-measures.
 
 **Voxel LOD (request 0013).** Shipped as decisions 30–35; the acceptance scene is `examples/gallery/voxel-horde.yaml` (500 figures down the hall on `voxels/horde-figure-lod.voxel.yaml`, a 24×40×10 upscale of `rim-figure` with a three-threshold chain, so all four levels draw at `lod_bias 0`: 33/65/150/253 in the camera view). Gallery tests: the golden, culling on/off byte-identical, and a chain whose thresholds can never fire byte-identical to the chainless `horde-figure`; no committed document but the new one gains `lods`, so every other voxel golden is untouched. Bench, `CULLING_BENCH_LOD=voxel-off|voxel-on`, crowd view, GPU pass medians (unpinned M5, 2026-11-08, indicative): chain off `shadow` 0.111, `prepass` 0.189, `scene` 0.850 ms, no `cull` pass; chain on `cull` 0.058, `shadow` 0.082, `prepass` 0.129, `scene` 0.527 ms. The 60-triangle base is cheap, so most of the saving is draw and vertex work on the far ranks.

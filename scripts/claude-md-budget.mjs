@@ -16,7 +16,7 @@
 //
 // Over a limit, MOVE text to its owner — never cut a rule to hit the number:
 //   what a wave shipped            → that plan's Status section in Plan/
-//   anything owed (a sitting, the second pinned machine, a user decision)  → Plan/owed.md
+//   anything owed (a sitting, the second pinned machine, a user decision)  → the owed ledger (CLAUDE.local.md names it)
 //   a rare-event runbook           → a skill under .claude/skills/, or a dev-docs/ topic
 //   a rule only one subtree needs  → that topic in docs/ or dev-docs/, with a one-line pointer
 // Raising a limit is a decision for the user, not a fix.
@@ -107,6 +107,6 @@ if (hits.length === 0) {
 }
 console.error('claude-md-budget: over budget — every session pays for the root file, every session in a subtree for its nested one.');
 for (const h of hits) console.error(`  - ${h}`);
-console.error('Move text to its owner, never cut a rule: shipped narrative → the plan\'s Status; owed items → Plan/owed.md;');
+console.error('Move text to its owner, never cut a rule: shipped narrative → the plan\'s Status; owed items → the owed ledger (CLAUDE.local.md names it);');
 console.error('a rare-event runbook → a skill or dev-docs topic. Raising a limit is the user\'s decision.');
 process.exit(1);

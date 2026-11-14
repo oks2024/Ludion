@@ -1,7 +1,7 @@
 # Plan: Navigation — grid, flow fields, agent steering
 
-> **Mechanized — every subtask shipped; pinned bench figures and the vigil migration are owed
-> (`Plan/owed.md`).** Driven by the external FPS request 0007: navigation and crowd AI for 100–500
+> **Mechanized — every subtask shipped; pinned bench figures and the vigil migration are owed.**
+> Driven by the external FPS request 0007: navigation and crowd AI for 100–500
 > agents, deterministic, with the 3D motor's cost at that count. Game-facing doc: `ludion docs nav`.
 
 ## Design decisions
@@ -50,7 +50,7 @@ chase target crossing a cell every 30 ticks): `nav_steer` 100 agents 0.03 ms at 
 at 8, 500 agents 0.17 ms and 0.11 ms; one flow field over 4,096 nodes 0.11 ms; full grid build
 0.79 ms, region rebuild 0.16 ms; 100 `CharacterMotor`s fed by `NavSteering` 0.71 ms, 500 motors
 3.8 ms at 1 or 8 threads (the motor is serial; whole tick 4.2 ms). The 1- and N-thread `WorldHash`
-traces are identical. Pinned figures owed: `Plan/owed.md`.
+traces are identical. Pinned figures owed.
 
 ## Explicitly out of scope (triggers recorded)
 

@@ -73,7 +73,7 @@ possible.
 
 1. **Sculpt is parked as is.** Its code, docs, gallery content and goldens stay shipped and built.
    `Plan/mesh-modeling.md` records the pause. Checkpoint 2, W4 and W6 carry a resume trigger (the
-   user's word after this plan's phase-1 verdict). Its `owed.md` items are frozen, not dropped.
+   user's word after this plan's phase-1 verdict). Its owed items are frozen, not dropped.
    **Why:** the later question "could a dedicated tool beat Blender" needs the sculpt path alive, and
    no negative verdict was recorded.
 2. **Blender is an agent tool, and becomes a pipeline verb only if it wins.** In phases 1–2, Ludion

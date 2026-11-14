@@ -261,7 +261,7 @@ bone_indices:      # 4 per vertex, into joints
    authoring is error-prone — not built, decision 8.
 5. **Content:** `examples/gallery/ragdoll-skinned.yaml`. The mannequin as a skinned ragdoll dropped
    onto steps, with a trace and a golden (`ragdoll-skinned`), blessed on the 3090. The M4 re-bless
-   goes to `owed.md`.
+   is owed.
 6. Docs: `docs/physics-joints.md` (§ skinned ragdolls, replacing "Next") and `docs/components.md`
    (`SkinBone`). The rest-pose rule is stated where the joint-zero gotcha is.
 
@@ -269,7 +269,7 @@ bone_indices:      # 4 per vertex, into joints
 
 1. In the external game's repo: F7 swaps the eleven placeholder part meshes for the skinned goblin, one `SkinBone`
    per part. Request 0002 moves to `done/` with a Shipped section.
-2. **Exit (human gate, in `owed.md`):** the goblin tumbling in the external game. Does it read as one continuous
+2. **Exit (human gate, owed):** the goblin tumbling in the external game. Does it read as one continuous
    body through the shoulders, hips and neck at launch speed? The verdict is recorded as a decision.
    Close: the root `CLAUDE.md` line, and this plan's Status collapsed.
 

@@ -56,7 +56,7 @@ moved). A whole-group review led to r1136–r1138: soak/probe ceilings, TeamCity
 mirroring, POSIX process-group kill, software adapters refused under `LUDION_REQUIRE_GPU`, the import
 guard checks source hashes (enumeration moved to `ludion-assets::import_sync`), must-differ tests
 assert extent, crate- and manifest-level denylist allows rejected.
-Owed: the M4 golden re-check under the new comparison (`Plan/owed.md`); the POSIX kill-tree path is
+Owed: the M4 golden re-check under the new comparison; the POSIX kill-tree path is
 untested on macOS. Follow-ups (unproven review suspicions, left for Group 18's sweep): the bless
 direct-read guard is single-line only; the "prefixed test touches no device" heuristic is weak (a
 CPU test misnamed `needs_gpu_` leaves hosted CI); `L4019` trusts `available && timestamps_supported`;
@@ -125,7 +125,7 @@ L7+L8 (r1161–r1162, new `L0030`–`L0034`, `L1258`, `L1259`, `L4020`, `L4021`,
 `ci/scripts/diagnostic-prints.mjs` gate in check.mjs and CI), L11+L12+L13+W8 (r1163), L1+W7 (r1164,
 `report_full_diagnostic`, optional `LogEvent.diagnostic`; schema hash `d5f769fa052ee453` →
 `1ebb24651f97ed0f`, the 13 committed `.lrp` re-recorded, `WorldHash`, goldens and budgets unmoved), L6
-(r1165, banner live smoke queued in `Plan/owed.md`). User decisions: L1 adds the structured `LogEvent`
+(r1165, banner live smoke queued in the owed ledger). User decisions: L1 adds the structured `LogEvent`
 field; L11 documents both `path` grammars instead of migrating. A whole-group review found 2 Medium
 (library fault strings still flattened diagnostics into log text; a refused `entity.reparent` carried
 the warning lint `L1220`) and 8 Low, all fixed in r1166 (`L1260`) and r1167 (`L3044`, `L0030` widened
@@ -160,7 +160,7 @@ capture on a paused sim stays refused (sync clients cannot pipeline the closing 
 capture, pause. A whole-group review found 2 Medium (the mid-flight capture cancel assumed nominal tick
 rate and cancelled captures on slow hosts; a windowed host still hung on close with a wedged sim) and
 7 Low, all fixed in r1176–r1177 except the gizmo's two-query pose. Owed: the schema-drift banner and
-wedged-sim window-close live smokes (`Plan/owed.md`). Follow-ups (Group 18): the `L4022` stuck path
+wedged-sim window-close live smokes. Follow-ups (Group 18): the `L4022` stuck path
 cannot flush an armed recording; the embed listener path joins boot bounded only through server
 teardown; a host rendering slower than its tick rate still times a capture out as `L3023`; the editor's
 Performance view could disable Capture while paused; `prefab-actions.ts` still reads the whole world
@@ -189,8 +189,7 @@ blast quirk kept and documented); D4 reorders the schedule; R10 refuses. A whole
 (a kept snapshot was lost across a `dev` restart; a fresh `dev` now resumes from it, user decision, and the
 file exists only while kept) and 2 Low (restore + record not refused on the embed path; no handshake
 timeout in `ludion-client`), all fixed in r1185 with the `L3016` grouping; vigil's restore boot measured
-well under a second, so the 20 s listen timeout stays. Owed: the restore and reload-status live smoke
-(`Plan/owed.md`). Follow-ups (Group 18): `--window` gives up ~30 s after a failed boot; the `dev`
+well under a second, so the 20 s listen timeout stays. Owed: the restore and reload-status live smoke. Follow-ups (Group 18): `--window` gives up ~30 s after a failed boot; the `dev`
 integration tests use fixed scratch names and the failures test takes 70–165 s under load; the source
 fingerprint misses a same-size edit under coarse mtimes; two `dev` sessions share one kept file; a
 reference-game carried state needs a hashed-or-not check; `L3048` is latent while every build
@@ -214,7 +213,7 @@ a once-per-component `L4024` warning — user decision; `Engine::world_hash` tak
 traces re-blessed), corpus re-record (r1192; `stress.lrp`'s committed shape stays keyframe-less for its
 size gate, so its thread-identity check is trace-only). Review fixes (r1193): bisect at a recorded panic
 tick, no keyframe after a lockstep panic marker, committed run recordings must carry a keyframe.
-Owed: the M4 reproduces the five re-blessed gallery traces (`Plan/owed.md`). Follow-ups for Group 18:
+Owed: the M4 reproduces the five re-blessed gallery traces. Follow-ups for Group 18:
 the strict tier (ludion-engine, ludion-core) carries no glam Quat/Vec4 ban; `cargo doc` of vigil has a
 private intra-doc link; the fuzz corpus's breakout
 `run.lrp` is an older copy, not re-recorded.
@@ -309,7 +308,7 @@ G6, G7 (textures shared by `Arc`). A whole-group review led to r1224–r1225: th
 its direction (symmetric ranges no longer NaN), `MeshGrid` colour checks, particle alpha above 1 legal
 again, `Camera` near/far (new L1264), a bloom test that fails per missing scrub, the render fault
 handled by the headless host and the iOS API, the sRGB fallback format, viewer device faults fatal.
-Owed: M4 re-blesses, Metal's fp16 overflow, the blit live smoke (`Plan/owed.md`). Follow-ups (Group
+Owed: M4 re-blesses, Metal's fp16 overflow, the blit live smoke. Follow-ups (Group
 18): lit sprites under an `Environment` have no ambient floor (no IBL term for sprites); composite,
 DOF, halation and shafts read raw scene texels; a non-finite sprite placement has no diagnostic;
 `engine-architecture.md` risk row 2 says "render thread"; a headless `ludion dev` child that exits on
@@ -340,7 +339,7 @@ split at the source midpoint (an exact 180° flip was refused since r1231), a ze
 collapses instead of NaN, `serde_json/float_roundtrip` workspace-wide (an `f64` anchor crossing JSON
 text moved `WorldHash`), the walk caps a tick at the latest 64 cycles (`MAX_CYCLES_PER_WALK`) and keeps
 the furthest time reached, `AssetCache::reload` drops every dependent first, specific `L1202` help.
-Owed: M4 twins of the two goldens, the gameplay-frame live smoke (`Plan/owed.md`). Follow-ups (Group
+Owed: M4 twins of the two goldens, the gameplay-frame live smoke. Follow-ups (Group
 18): multi-axis windings pass A5's per-axis rule ((179,179,179) plays as 1.74°); a one-axis zero scale
 collapses to a point, not a plane; a shearing glTF `matrix` node loses its shear silently
 (`ludion-import` `lib.rs`, `skin.rs`); channels on folded joints and reframed roots are dropped, not
@@ -375,7 +374,7 @@ and shares `ui_text_draw`'s layout), F4 (one layout per list line, a linear `wra
 validator error refuses a pattern reload, and the atlas half refuses only a reference the edit changes
 and breaks; the walk fires an `every: 0` train once; `L1265` and leaf-loop wording; an independent
 oracle back in the UiText rect tests. No `WorldHash`, schema hash, replay or golden moved; no corpus
-re-record. Owed: the M4 run of the embedded-face goldens (`Plan/owed.md`). Follow-ups (Group 18):
+re-record. Owed: the M4 run of the embedded-face goldens. Follow-ups (Group 18):
 a reload that pushes *another* pattern doc into an error stays reported; other doc kinds still apply a
 reload the validator rejects; `particles.rs` `floor(elapsed × rate)` emission index and `fade_weight`'s
 end-of-fade tick share B4's float class (`model_sheet` mirrors the latter); ludion-gen labels overflow
@@ -407,8 +406,7 @@ A whole-group review led to r1253: loops past the voice total wait in the Router
 stops; superseded buffers are freed on the sink thread; the music gain slews, sink-restarted loops fade
 in, a bus change crossfades; before the first callback one-shots stop at half the queue; no first
 callback within 5 s is a loss; the backoff resets after 5 s of playing. No `WorldHash`, schema hash,
-replay or golden moved; no corpus re-record. Owed: the policy and an audio listening sitting
-(`Plan/owed.md`). Follow-ups (Group 18): check-scene validating `AudioEmitter.sound` (engine
+replay or golden moved; no corpus re-record. Owed: the policy and an audio listening sitting. Follow-ups (Group 18): check-scene validating `AudioEmitter.sound` (engine
 `scene_check`, cli, facade, prefab bodies); `lose()` drops the cpal stream on the sink thread and could
 block on a stuck driver; the granule clamp assumes a stream starting at granule 0; a default-device
 change while the old device plays is not followed, and a device absent at session start is not
@@ -443,7 +441,7 @@ editor per machine. Decisions (the coordinator, for the user): port 1420; produc
 `ludion-viewer` kept (a rename resets WebView2 localStorage; offered to the user as an option); stage
 ports 9412/9413 stay fixed; X8 wire-free (a wire change only when additive and no wire-free route exists);
 any WebSocket host may be attached. No `WorldHash`, schema hash, replay or golden moved; no corpus
-re-record. Owed: the editor host live smoke and the M4 kill-reach run (`Plan/owed.md`). Follow-ups
+re-record. Owed: the editor host live smoke and the M4 kill-reach run. Follow-ups
 (Group 18): no drift gate ties `entityRefs.ts` to `entity_ref.rs`; editor reads of CLI prose remain
 (`stage.rs` `parse_listening_url`, `anim.ts` `tickLabel` against `render --strip`); `sync --json` prints
 diagnostics as rendered strings; `--bounds --json` lacks the envelope; X8's documented limit (a stale
@@ -487,8 +485,7 @@ Decisions (the coordinator, for the user): a `partial` run exits non-zero, as `l
 `https://` refused, no TLS dependency; the committed meshes were corrected only by a byte-identical
 re-accept, never by hand. Tech Lead calls: the ones named above, plus one envelope for every gen verb
 and Fetch kept all-or-nothing (documented). No `WorldHash`, schema hash, replay or golden moved; no
-corpus re-record. Owed: the live ComfyUI check of C2 and the Generation view failure-path smoke
-(`Plan/owed.md`). Follow-ups (Group 18): check.mjs's doctest step lacks `--no-fail-fast`; the
+corpus re-record. Owed: the live ComfyUI check of C2 and the Generation view failure-path smoke. Follow-ups (Group 18): check.mjs's doctest step lacks `--no-fail-fast`; the
 Generation view shows reason `empty` as a plain error; `voxel/ModelPanel.tsx` keeps its own diagnostic
 rows (`generation/DiagnosticList.tsx` exists); wrapped string literals with space runs outside
 ludion-gen and `gen_cmd.rs` were not swept; pid-suffixed test scratch dirs accumulate in `%TEMP%`.
@@ -499,7 +496,7 @@ spatial-nav N8; import-sync I10.
 Depends on: groups 6, 8 and 9.
 Watch for: the game's hashed-state and replay traps; the corpus is re-recorded last.
 Status: **closed** — Lore r1277–r1284. Fixed V2–V7, L7, N8, I10; none "not reproduced"; **V1 parked for the
-user** (`Plan/owed.md`). The gameplay fixes are recorded privately. r1278: a map-seal leak found and fixed;
+user**. The gameplay fixes are recorded privately. r1278: a map-seal leak found and fixed;
 `docs/map-check.md` states the lattice's limit. r1280: L7, N8, I10 (kit pieces compose their parent chain).
 r1284: `run.lrp` and the segments re-recorded; `stress.lrp` and every golden unchanged. Owed: V1, the M4
 corpus check. Follow-ups (Group 18): a sound leak lint in map-check; the map builder's auto plugs catch only
@@ -517,7 +514,7 @@ green again (a public doc linked the private `extract_through`), plus stale doc 
 corpus's breakout replay. r1287: `commit.mjs --mirror-only` and `mirror-gap.mjs` — the git mirror lags
 Lore by ~280 public paths (240 revisions never mirrored; a clone does not build) and has tracked Lore-only
 private paths since c06a2d18; the catch-up commit was denied to agents and is **owed to the user**
-(`Plan/owed.md`, "Waiting on the user's word"), and the fresh-root cutover must not carry that history;
+(waiting on the user's word), and the fresh-root cutover must not carry that history;
 r1305 keeps tracked private files out of every normal mirror commit meanwhile. r1288, r1291: diagnostics
 keep code, severity and payload in transit (`sync --json` and `--bounds --json` envelopes, L1038 for
 gen write failures, L3051 for an unparseable server message, the print gate over the Tauri host, L2109
@@ -552,8 +549,7 @@ user to see: two reference-game design notes, tracked privately; `%TEMP%` holds 
 
 #### Close-out ledger — follow-ups retired with a trigger
 Every follow-up the groups left open was fixed in Group 18 (Status above) or is retired here. Each one
-is reopened when its trigger fires, not before. Owed sittings, M4 checks and live smokes stay in
-`Plan/owed.md`; the parked user decisions (K5, B9, U4's policy values, V1, the `ludion-viewer` rename) are
+is reopened when its trigger fires, not before. Owed sittings, M4 checks and live smokes stay owed; the parked user decisions (K5, B9, U4's policy values, V1, the `ludion-viewer` rename) are
 untouched.
 - **Scene text (G3).** `scene.save` drops YAML comments; a comment-keeping writer waits until a comment
   someone needed is lost to an editor or wire save. The schema checker's flattened `oneOf` enums and

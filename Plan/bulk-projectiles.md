@@ -1,7 +1,7 @@
 # Plan: Bulk 3D projectiles
 
-> **Mechanized — every subtask shipped; pinned bench figures and the pinned golden blesses are owed
-> (`Plan/owed.md`).** Driven by the external FPS requests 0006 (shots) and 0012 (gibs): thousands of
+> **Mechanized — every subtask shipped; pinned bench figures and the pinned golden blesses are owed.**
+> Driven by the external FPS requests 0006 (shots) and 0012 (gibs): thousands of
 > fast shots in a 3D room, deterministic, swept (no tunnelling), drawn leaving the gun. Game-facing
 > doc: `ludion docs projectiles`; crate doc: `ludion devdocs ludion-projectiles`.
 
@@ -116,7 +116,7 @@ config (`ProjectilePool::resize`, `L4031`), the per-tick re-box documented.
 Bench (release, unpinned M5 laptop, 2026-11-07, indicative only): 5,000 live shots against a
 120×12×120 room, 40 pillars and 500 index targets — `step + digest` 1.9 ms at 1 thread (step 1.8,
 digest 0.08) and 0.47 ms at 8 threads; `extract_present_scene` for 5,000 drawn shots adds 0.13 ms.
-The 1- and N-thread digest traces are identical. Pinned figures owed: `Plan/owed.md`.
+The 1- and N-thread digest traces are identical. Pinned figures owed.
 
 Gibs (request 0012), by commit subject: gibs on the pool, `Response::Settle` with `spin`, `orientation`
 and per-shot `targets` (r2211, sim); the Mesh look with `scale`, `cast_shadows`, `fade_out`, `Posed`
@@ -131,7 +131,7 @@ centred); `rest_speed` must be `> 0`, with the resting re-bounce documented.
 Gib bench (release, unpinned M5 laptop, 2026-11-08, indicative only): 5,000 shots + 1,000 gibs,
 `step + digest` 1.92 ms at 1 thread (step 1.82, digest 0.10) and 0.51 ms at 8 threads, about 389 of
 1,000 gibs parked; the digest traces are identical. `extract_present_scene` for 1,000 Mesh/Voxel
-gibs on top of 5,000 shots adds about 0.03 ms (0.143 to 0.170 ms). Pinned figures owed: `Plan/owed.md`.
+gibs on top of 5,000 shots adds about 0.03 ms (0.143 to 0.170 ms). Pinned figures owed.
 
 ## Explicitly out of scope (triggers recorded)
 

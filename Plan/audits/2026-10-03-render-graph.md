@@ -248,7 +248,7 @@ correct the comment.
   invalidates the cached bind group.
 - **No temporal accumulation** exists in the renderer, so the test-mode rule has nothing to disable.
 - **Per-OS golden-set gaps** (Windows lacks `ui-fonts*.png` and breakout `menu.png`; macOS lacks
-  `mesh-grid.png`) are already tracked in `Plan/owed.md` and are not re-reported.
+  `mesh-grid.png`) are already tracked in the owed ledger and are not re-reported.
 
 ## Suggested order of work
 

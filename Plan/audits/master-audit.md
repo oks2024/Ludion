@@ -101,7 +101,7 @@ detail (revisions, residuals, follow-ups).
   user-visible writer, guarded by the `atomic-writes` gate), float time at tick boundaries, and skips that
   read as passes. map-check's seal check is sound and trusts no gate trigger as a wall; vigil's maps are
   sealed by caps behind their triggers. The git mirror's gap is measured and its repair is owed to the
-  user (`Plan/owed.md`).
+  user.
 
 ## Audits
 

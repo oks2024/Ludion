@@ -341,7 +341,7 @@ The thinnest thing a game can run.
   first body-count test.
 - Verifiable by: a gallery golden and a `sim-hash` trace per new scene on both boxes; the budget files
   green; the event stream's order asserted by a test, not by inspection. Each new scene also carries
-  gates 2 and 3 (resume at a live tick, 1/2/8 identity); the M4 halves ride `Plan/owed.md`.
+  gates 2 and 3 (resume at a live tick, 1/2/8 identity); the M4 halves are owed.
 
 ### W3 — joints and the ragdoll
 
@@ -497,7 +497,7 @@ The two gallery ragdoll traces and replays and the Windows `ragdoll-skinned` gol
 the M4 twin passed unblessed 2026-09-30 (rev 996), with `ragdoll-skinned`'s first macOS bless. The residual settle tail is a head rocking on its neck, physical and governed by
 `angular_damping`. **A crates.io publish of `ludion-physics` would lose the patch** (`[patch]` does not
 travel with a published crate): publishing needs the fix upstream or a published fork first. Upstream
-report on the user's word (`Plan/owed.md`).
+report on the user's word.
 
 **Vendored parry, heightfield rays on grid lines (external-game request 0017), 2026-10-01 (Lore rev 995).** `HeightField` ray casts
 missed on a grid line (about half the vertices of the external game's 151x41, 2 m grid): the start cell came from
@@ -511,7 +511,7 @@ vertices, edges and diagonals missed 10241 of 36571 at the origin pose, oblique 
 3542 of 11622; both now 0. Residue: an oblique ray lying in a grid plane can still miss on a shared edge
 or vertex, from f32 rounding in the triangle test, which has no tolerance (282 of 46488 for in-plane
 rays travelling along x). Hash impact: none — the no-flag pin ritual ends PASS, so no committed trace or replay moved. **A crates.io publish of `ludion-physics` loses this patch too**,
-as it does rapier's. Upstream report on the user's word (`Plan/owed.md`).
+as it does rapier's. Upstream report on the user's word.
 
 **Mirror baseline, 2026-09-26 (audit 09-25 C1).** The edit-detection baseline is the pose each
 component reads back after the mirror's write, not the solver's pose, so a `Transform` body (Euler
@@ -672,13 +672,13 @@ count, and a committed stress replay whose size has a ceiling — and written do
 `dev-docs/physics-pin.md`; a profile test pins the write/step/mirror triple in an offline report; the
 ragdoll golden reframed so the six figures fill the frame, its scene, trace, replay and Windows golden
 regenerated; and the pin-upgrade ritual as a script, rehearsed once end-to-end (next paragraph). The M4
-halves are in `Plan/owed.md`. The wire is unchanged at 30 methods, schema hash `be7ebe1877875ed1`.
+halves are in the owed ledger. The wire is unchanged at 30 methods, schema hash `be7ebe1877875ed1`.
 
 **W4 review, 2026-09-23 (Lore revs 829–830).** A whole-wave review found defects in the ritual and one
 in the scene, all fixed. The failure parser choked on the counter nextest prints before a test name, so
 MOVED was unreachable and a hash-moving bump read FAIL; the MOVED protocol claimed replay tests fail
 after the traces are re-blessed when they pass while the `.lrp` keyframes keep the old pin's physics
-blob (no gate compares them — `Plan/owed.md`); `--bless-traces` now re-records only after an
+blob (no gate compares them — owed); `--bless-traces` now re-records only after an
 unblessed MOVED and names the replays to re-record; a failure after a pin move prints the exact revert;
 and the leftover-version scan walks the working tree, not the git mirror. In the scene, the ragdoll
 floor and obstacles were drawn at half their collider size, so figures landed on invisible geometry;
@@ -696,7 +696,7 @@ is MOVED, not FAIL, and `--bless-traces` re-records the four traces for the seco
 rebuilt rapier and all dependents in 112 s (104 s of it the gates' build) and moved only `rapier3d` in
 `Cargo.lock` — parry3d stayed 0.30.2 — and every gate passed with no hash moving, then 21 s back to
 0.35.3 with `Cargo.toml` and `Cargo.lock` byte-identical to the committed pin. The M4 half and the first
-real run are in `Plan/owed.md`.
+real run are in the owed ledger.
 
 **W3 mechanized, 2026-09-23 (Lore revs 817–821).** What exists: `Joint` — hinge, ball, slider or
 fixed, with limits in degrees or units, an optional `break_impulse` and a `collide` flag — as a
@@ -828,7 +828,7 @@ own pile trace (300 of 300 distinct), the gallery trace (600 of 600 distinct), t
 resume proof on the bincode path (`crates/ludion-engine/tests/physics_snapshot.rs`, restore at tick
 80, identical through 200, 200 of 200 distinct), 1/2/8-thread identity on the gallery scene
 (`crates/ludion-engine/tests/thread_identity.rs`), the resolved-feature gate green. Owed: the M4
-halves of gates 1 and 2 and the `macos/physics-pile.png` golden (`Plan/owed.md`). The `cargo check
+halves of gates 1 and 2 and the `macos/physics-pile.png` golden. The `cargo check
 -p ludion-engine` delta is not measurable warm (1.2 s before and after); the one-time cold build of
 the rapier subtree is about 16 s, and a clean `cargo check -p ludion-physics` about 27 s.
 
@@ -1055,6 +1055,6 @@ a private plan; pointer only). Reference box, on the spike:
 
 **Serious Isaac 0035 (angular sleep gate), mechanized.** The vendor gate patch, `RigidBody.sleep_angular_threshold` (`L1116` validation, creation and in-place apply) and the pinned corpse tune (0.1 / 15 / 2.4) shipped; the component schema moved, no WorldHash did; the replay content hash moved and the committed replays are re-recorded separately.
 
-**Serious Isaac 0020 (threaded step), mechanized.** `parallel` is on, rapier on a pool `ludion-physics` owns, hashes unmoved. RTX 3090, 8 threads, release: horde bench step 4.654 / 6.583 → 2.262 / 3.014 ms (mean / p99); at 1 thread 4.421 → 4.969 ms; stress step 1.216 → 1.019 ms. The physics-stress budget, re-measured over four warm 300-frame runs at 8 threads (median of runs, ms), still passes everywhere and is **not re-pinned** (a global swing moves no ceiling): `physics_step` 1.1316 → 0.9918 (ceiling 2.30), `physics_write` 0.0851 → 0.1104 (0.17), `physics_mirror` 0.0670 → 0.0739 (0.14), frame total 1.2861 → 1.3229 (2.60). No horde budget exists; `ragdoll_bench`'s ceilings are in-code and unpinned. M4 twins are owed in `Plan/owed.md`.
+**Serious Isaac 0020 (threaded step), mechanized.** `parallel` is on, rapier on a pool `ludion-physics` owns, hashes unmoved. RTX 3090, 8 threads, release: horde bench step 4.654 / 6.583 → 2.262 / 3.014 ms (mean / p99); at 1 thread 4.421 → 4.969 ms; stress step 1.216 → 1.019 ms. The physics-stress budget, re-measured over four warm 300-frame runs at 8 threads (median of runs, ms), still passes everywhere and is **not re-pinned** (a global swing moves no ceiling): `physics_step` 1.1316 → 0.9918 (ceiling 2.30), `physics_write` 0.0851 → 0.1104 (0.17), `physics_mirror` 0.0670 → 0.0739 (0.14), frame total 1.2861 → 1.3229 (2.60). No horde budget exists; `ragdoll_bench`'s ceilings are in-code and unpinned. M4 twins are owed in the owed ledger.
 
 **Serious Isaac 0020 follow-up (step deadlock), mechanized.** The step hung at 0% CPU in `join_deferred_bvh_optimize`: the broad phase `rayon::spawn`s its deferred BVH optimize, which from a worker lands on that worker's own deque with no guaranteed wake, and the join then blocked that same worker in a plain `recv`. The vendored join now runs pool jobs (`rayon::yield_now`) until the task arrives (`vendor/rapier3d/LUDION-PATCH.md`). `tests/solver_pool_progress.rs` holds a deterministic repro (one of two workers pinned by a blocker, red before the fix) and a 1/2/8-thread soak with reloads, restores and pool rebuilds, both under a watchdog. No hash moved. Fix rev r2324.

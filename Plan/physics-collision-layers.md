@@ -98,7 +98,7 @@ entities:
 - **The snapshot blob does not change shape.** Groups live on rapier's colliders, which the blob already
   serializes, and the table is derived from the restored `scene_physics` block rather than stored. So
   the committed `.lrp` keyframes (`ragdoll.lrp`, `physics-stress.lrp`) stay decodable. This matters
-  because no gate checks them yet (`Plan/owed.md`'s replay-keyframe debt).
+  because no gate checks them yet (the owed replay-keyframe debt).
 
 ### 3. Queries filter by layer — one parameter, replacing `exclude`
 
@@ -153,7 +153,7 @@ let near = physics.overlap(&Shape::Sphere { radius: 0.3 }, hand, [0.0, 0.0, 0.0,
   - snapshot resume through a mid-run restore.
 - A new pinned trace, `crates/ludion-physics/tests/traces/layers.txt`: a small jointed figure falling
   into a pile with self-ignoring parts, chaotic enough to stay varied (the pile scenes' kick rule).
-  Its M4 half joins `Plan/owed.md`.
+  Its M4 half is owed.
 
 ### W2 — queries, docs, and the figure case end to end
 
@@ -236,7 +236,7 @@ Rulings of 2026-09-25:
 
 **W1 shipped** in Lore revs 854–856: the data half and validation (`physics.layers`, `Collider.layer`,
 `L1033`, `L1186`, `L1187`), the check verbs (`check-scene --bounds [--json]` matrix), and the solver
-half (rapier collision groups, runtime `L1186`, the `layers` trace whose M4 half is in `Plan/owed.md`).
+half (rapier collision groups, runtime `L1186`, the `layers` trace whose M4 half is in the owed ledger).
 **W2 shipped**: `QueryFilter` on `ray_cast`, `shape_cast` and `overlap` in place of `exclude`, and the
 docs (`ludion docs collision-layers`, `ludion devdocs ludion-physics`). **M4 half verified** (2026-09-26, rev 916): the
 `layers` trace reproduces unblessed there. **W3 closed as not needed** (2026-09-25): the external game's request `0001` ruled

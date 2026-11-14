@@ -248,7 +248,7 @@ shows its game.
 **Exit:** `check.mjs` green; a fresh `ludion new` project and an external project both start the Voxel Artist and
 Effects stages.
 
-## Exit gate (human, owed — goes to `Plan/owed.md` when W4 ships)
+## Exit gate (human, owed once W4 ships)
 
 1. From a cold start, `node scripts/editor.mjs "<project>"` opens the editor on the project with its game
    running in the viewport.

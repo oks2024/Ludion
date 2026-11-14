@@ -91,7 +91,7 @@ Wave 2 record:
   eye paint's mean colour (tolerance 0.11 — 0.15 leaked a sliver up the lid crease), 568 texels in 2 applies
   and 0 picks. Sheet read: the fill's outline without its ragged top; the edge is still the key's hard
   colour step except at the capsule ends. The user's look (2026-09-28, Models view): better than both —
-  shape plus key is the eye's best form so far. The M4 reproduced both conformance hashes (`Plan/owed.md`, cleared
+  shape plus key is the eye's best form so far. The M4 reproduced both conformance hashes (cleared
   2026-09-26). Unbuilt tool findings: a fill report that says whether the radius or the tolerance
   stopped it; a soft edge at a fill's colour boundary; a multi-pixel `pick`; the dim emissive pixels of
   the brow and `front`.

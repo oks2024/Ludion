@@ -415,7 +415,7 @@ interiors**. Large open water is not a driver.
 - The relight (decision 17) and the disc-light specular (decision 8).
 - The parity scene and its calibrated floors (decision 27).
 - Probe placement in the reference game, recorded in its own private tree.
-- **Owed:** the M4 twins, and the decision-28 sitting in `Plan/owed.md`.
+- **Owed:** the M4 twins, and the decision-28 sitting in the owed ledger.
 - **Exit:** the parity gate is green in `check.mjs`, and the sitting is queued.
 
 ### Wave 5 — PBR correctness
@@ -440,7 +440,7 @@ interiors**. Large open water is not a driver.
 - Shipped item 9(b): the relight ratio is per cube axis, resolved along the surface's facing; an open
   floor under a moved zenith relights to within 0.5% of its own change where the mean ratio missed
   by 50% in red (decision 17).
-- **Owed:** the M4/3090 blesses (`Plan/owed.md`).
+- **Owed:** the M4/3090 blesses.
 - **Exit:** 1–4 shipped with provisional goldens; 5–9 each verified and either fixed or recorded.
 
 ## Status
@@ -459,7 +459,7 @@ interiors**. Large open water is not a driver.
   r = 1 lands on the 8×8 face and the chain stops there (the literal one-texel match sent rough metal
   to 1×1 faces and made a cube-face artifact on rough metal).
   Owed: the re-bless on both pinned boxes, the `transparents`/`reflections` budgets and the 256²
-  re-prefilter spike, in `Plan/owed.md`.
+  re-prefilter spike, in the owed ledger.
 - W2 (2026-10-22): screen-space reflections, opt-in per scene. Two half-resolution input pyramids
   (`hiz`, an R32Float min-Z pyramid of the opaque depth; `ssr_color`, the opaque colour reduced by a
   1-3-3-1 tent whose blur matches the lobe function's footprint per level); the `ssr_trace` pass marches
@@ -475,7 +475,7 @@ interiors**. Large open water is not a driver.
   over the wire; the SSR passes are budgetable (an `ssr` group); `QualityProfile` reports `ssr`,
   `ssr_scale` and `ibl_specular_size`. `L1273` validates the authored fields. Every SSR-off golden is
   byte-identical. Owed: `examples/gallery/mirror-floor.yaml`'s golden on both pinned boxes and the 1080p
-  pass time on the reference box (the Wave 2 Exit), in `Plan/owed.md`.
+  pass time on the reference box (the Wave 2 Exit), in the owed ledger.
 - W3 (2026-10-22): reflection probes. `ReflectionProbe { shape: box | sphere, blend, priority }` ranks by a
   static key (priority, then boxes before spheres, then smaller volume, then entity id); scene checks
   L1274–L1278 cover invalid shapes, equal-rank overlaps, shadowed probes, near-duplicates and the 32-probe
@@ -495,8 +495,7 @@ interiors**. Large open water is not a driver.
   float noise across machines); the probe face size reuses `ibl_specular_size`; shape, blend and priority
   never rebake. Known limits: a probe re-frozen after a
   mid-session reload or a dev restore is keyed correctly but won't match a cold boot's entry. Owed:
-  `examples/gallery/probe-rooms.yaml`'s golden on both pinned boxes and the cold-store capture cost, in
-  `Plan/owed.md`. The Exit's reference-game district check moves to W4 with the real probe placement
+  `examples/gallery/probe-rooms.yaml`'s golden on both pinned boxes and the cold-store capture cost, owed. The Exit's reference-game district check moves to W4 with the real probe placement
   (user, 2026-10-22).
 
 - W4 (2026-10-22): disc light, outward fade, live relight, parity gate. `DirectionalLight.angular_radius` (opt-in,
@@ -517,7 +516,7 @@ interiors**. Large open water is not a driver.
   on one rain street. Known limits: direct light on captured geometry is frozen at capture and only scaled by the
   ambient ratio, so moving a light or switching a lamp waits for a rebake (decision 17); the sky-to-probe seam is
   measured, not fixed. Owed: the parity floors on both pinned boxes (Windows fails with a message naming it
-  until then) and the re-blessed provisional probe-rooms golden, in `Plan/owed.md`.
+  until then) and the re-blessed provisional probe-rooms golden, in the owed ledger.
 
 - Reference box (2026-10-27): the RTX 3090 half of W1–W5's owed items. Windows goldens blessed: the new
   `mirror-floor`, `probe-rooms` and `ssr-probe-metal`; `material-park`, `night-sky` and `post-full` (W5's
@@ -555,7 +554,7 @@ interiors**. Large open water is not a driver.
   bone ranges by content (r2353), and the GI voxelizer combines shared cells in signature order rather
   than slot order (r2354). GPU tests hold a runtime-swapped room's key and faces to a fresh world's, with
   and without a `GiVolume`. Usage: `ludion docs reflection-probes` "Probes spawned at runtime". Owed:
-  pinned GI re-check and export reach (`Plan/owed.md`).
+  pinned GI re-check and export reach.
   0042: a probe's store key cannot be predicted from a prefab, so the prewarm does not touch probes; the swap-tick refreeze plus a store hit is the probe path (relay-approved 2026-11-14).
 
 ## Deferred, with triggers

@@ -1,7 +1,7 @@
 # Plans
 
 One markdown file per plan. A plan records the decisions, the waves it ships in, and a **Status** section that is its shipping log; read the status line below first, the file's own Status section for detail.
-[`owed.md`](owed.md) is the ledger of everything waiting on a human, the second pinned machine, or a trigger.
+Owed items, everything waiting on a human, the second pinned machine, or a trigger, are tracked in a private ledger.
 "Mechanized" means every wave shipped and the automated gates are green; a plan is not closed until its human gate passes.
 Terms are defined in the [glossary](#glossary).
 
@@ -110,7 +110,6 @@ The reference game that drove many engine arcs is private; its design and plans 
 
 Audits, remediations, evidence of blessed goldens, surveys and operational guidance. None of these is a build plan.
 
-- [Owed](owed.md) — the ledger of everything waiting on a human, a second machine, or a trigger.
 - [Post-publication](post-publication.md) — hygiene deferred past publication, one trigger each.
 - [API freeze: client crates](api-freeze-clients.md) — executed checklist for the publication-facing crates.
 - [API freeze: engine and renderer crates](api-freeze-engine.md) — executed checklist.
@@ -148,7 +147,7 @@ Audits, remediations, evidence of blessed goldens, surveys and operational guida
 - **Lore rev** — a revision in the project's primary version control; the git mirror is derived from it.
 - **M0 / M1** — milestones of the reference game's private roadmap; both closed.
 - **mechanized / mechanized-complete** — every wave shipped and the automated gates green; not closed until its human gate passes.
-- **owed** — waiting on a human, the second pinned machine, or a trigger; see [owed.md](owed.md).
+- **owed** — waiting on a human, the second pinned machine, or a trigger.
 - **phase** — a numbered step of the engine build order (phases 0–11 closed; 12–17 are the first-game waves).
 - **pinned platform / pinned GPU** — the two machines whose goldens are bit-exact: Windows on an RTX 3090 and macOS on an M4.
 - **sitting** — one human session that clears queued live checks and verdicts.

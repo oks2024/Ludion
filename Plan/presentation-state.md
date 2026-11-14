@@ -194,6 +194,6 @@ No re-record step: nothing committed moves.
   take cold paths). Vigil budget-horde, 8 interleaved pairs on a quiet box: every low-noise system
   is within 3% except a spawn placement system +7.4% (about 1 µs, attributed to codegen layout; no ceiling
   crossed); `frame_total` -1.3%. Every engine rtx3090 budget passes. Vigil's `fire` and
-  `spatial_rebuild` were already over their E6 ceilings on the baseline: `Plan/owed.md`.
+  `spatial_rebuild` were already over their E6 ceilings on the baseline (owed).
 - 2026-10-01: scene and docs shipped. Entities take `presentation: true` (parse, emit after `name:`, load via `spawn_presentation`; `ludion_scene::instantiated_ids` maps document position to id); a sim→presentation reference is `L1036` (scene) / `L1018` (save); `scene.save` writes presentation entities last; `query.entities` lists them; `ludion docs presentation`.
 - 2026-11-01: instance entries take presentation: true (external request 0031): load, save collapse, spawn_prefab/prefab.spawn flag, presentation-system prefab spawns, prefab.overrides field; L1320.

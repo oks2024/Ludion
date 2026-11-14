@@ -142,7 +142,7 @@ it raise the number of autonomous agent iterations (the North Star)?
 
 1. **Unblock the consuming games.** The external games' request folders are the priority queue;
    a `blocking` request outranks any roadmap wave.
-2. **Drain and mechanize the human queue.** `Plan/owed.md` carries about thirty entries and grows
+2. **Drain and mechanize the human queue.** The owed ledger carries about thirty entries and grows
    faster than sittings drain it. Run the G7 merged sitting (it unlocks the M2–M7 closes), and build
    a real-GUI gate for the editor — the React app driven by a browser automation harness against
    `ludion serve`, asserting DOM and screenshots — so most live-smoke checklist lines become

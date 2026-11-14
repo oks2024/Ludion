@@ -14,7 +14,7 @@
 > counted in the export's summary line and falls back on the device. Vigil's bundle content, dot-files
 > excluded and the Mac-built staticlib not counted: 402.7 MB without the cooked entries (scene dir,
 > manifest, `assets/town`), plus 507.5 MB for 495 shipped ASTC maps (`ludion sync --target ios`: 495
-> cooked, 0 failed). The ASTC set outweighs the PNGs it sits beside. The exit rides the M4 (`Plan/owed.md`).
+> cooked, 0 failed). The ASTC set outweighs the PNGs it sits beside. The exit rides the M4.
 >
 > **Wave 1 exit (2026-10-14, reference box, RTX 3090).** The plaza (`scenes/district-plaza.yaml`),
 > `--profile 30`, one cold run discarded, medians of three warm runs, `source` → `cooked`
@@ -47,7 +47,7 @@
 > embed test `a_hosted_engine_defaults_to_cooked_textures`. VRAM unchanged at 0.2500 (same store).
 > Budgets re-calibrated at `--textures cooked`: plaza ceiling 5000 ms (median 2427.2), breach 4000 ms
 > (median 1764.3). Exit bullets: **zero fallback warnings — met**; **load time and VRAM recorded —
-> met**; **budgets re-calibrated — met** (the M4 twins ride `Plan/owed.md`).
+> met**; **budgets re-calibrated — met** (the M4 twins are owed).
 
 ## Why
 

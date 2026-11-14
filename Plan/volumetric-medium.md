@@ -473,7 +473,7 @@ dimming and colour are all governed by the fog they live in.
 Local-light scatter and GI in the haze shipped (`medium_scatter`, `medium_scatter_blur`, composite
 binding 6; gallery `examples/gallery/medium-scatter.yaml`; bench
 `crates/ludion-engine/tests/scatter_bench.rs`). Pinned M4/3090 figures, blesses and the vigil
-re-bless are owed (`Plan/owed.md`).
+re-bless are owed.
 
 GPU frame-time delta against an identical scatter-off twin, **unpinned M5**, release, 1080p, three
 runs (ranges). Not authoritative; per-pass medians overlap on a tiled GPU and are not summed
@@ -492,7 +492,7 @@ runs (ranges). Not authoritative; per-pass medians overlap on a tiled GPU and ar
 The per-object medium scale shipped in r2206 (`Mesh.medium` data path, instance lane 21), r2207
 (`scene_medium` target and composite) and r2208 (`Sprite`, `ParticleEmitter` and `ProjectileVisual`
 medium, the `Rgba16Float` transparent layer). Acceptance scene: `examples/gallery/medium-exempt.yaml`,
-whose exempt pair lands within one 8-bit step of its fog-free colour. Owed (`Plan/owed.md`): the pinned
+whose exempt pair lands within one 8-bit step of its fog-free colour. Owed: the pinned
 golden blesses (the macOS one is an unpinned M5 bless), the GPU tests on both pinned boxes, and
 byte-identity of the other gallery goldens.
 

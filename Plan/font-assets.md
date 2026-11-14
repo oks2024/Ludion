@@ -12,8 +12,8 @@
 > while recording), the `ui-fonts` gallery scene (macOS goldens at 960×540 and 1080), the proportional
 > `list_hit` proof, the `font_text` example, the `fonts` docs topic. The eager table load and the
 > embedded atlas as a dedicated upload are recorded decisions (19, 20); the `L1256` coverage warning
-> covers table faces only. The Exit's "SSIM 1.0 on the RTX 3090" and the human gate are owed
-> (`Plan/owed.md`). **W4's in-repo half is mechanized:** breakout's pause menu draws and hit-tests with its own baked Inter (`scenes/fonts.yaml`, `scenes/fonts/`), `run.lrp` re-recorded (the `UiList` now serializes `font: body`), a macOS `menu.png` golden, and a proportional `list_hit` click proven through record→replay; The external game's adoption is external. `discover` skips the `kind: fonts` table so `fonts.yaml` can sit at the gallery root. Authored 2026-09-30
+> covers table faces only. The Exit's "SSIM 1.0 on the RTX 3090" and the human gate are owed.
+> **W4's in-repo half is mechanized:** breakout's pause menu draws and hit-tests with its own baked Inter (`scenes/fonts.yaml`, `scenes/fonts/`), `run.lrp` re-recorded (the `UiList` now serializes `font: body`), a macOS `menu.png` golden, and a proportional `list_hit` click proven through record→replay; The external game's adoption is external. `discover` skips the `kind: fonts` table so `fonts.yaml` can sit at the gallery root. Authored 2026-09-30
 > from `Plan/engine-gap-map.md` "Recommended order" item 3 (font assets) and external-game request 0009
 > (`0009-ttf-fonts.md` in the external game request folder, priority *painful*, filed 2026-09-24). This line
 > becomes the shipping log as waves land.

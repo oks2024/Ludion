@@ -1,6 +1,6 @@
 # Plan: Display-paced present — a presenter thread, then interpolation between ticks
 
-> Status: **mechanized (2026-11-01)** — every wave shipped, gates green; closes when its owed live checks pass (`Plan/owed.md`: windowed smoke on both pinned boxes, a 120 Hz Mac trace and look, the iOS M3 stall re-read). 01 presenter module + engine wiring r1898–r1899 (test de-flake r1901); 02 blend r1900, engine blend data r1902; 03 presenter interpolates + `present_interpolation` r1903; 04 particles/bullets by instance key r1904; 05 review fixes r1905. Trigger:
+> Status: **mechanized (2026-11-01)** — every wave shipped, gates green; closes when its owed live checks pass (owed: windowed smoke on both pinned boxes, a 120 Hz Mac trace and look, the iOS M3 stall re-read). 01 presenter module + engine wiring r1898–r1899 (test de-flake r1901); 02 blend r1900, engine blend data r1902; 03 presenter interpolates + `present_interpolation` r1903; 04 particles/bullets by instance key r1904; 05 review fixes r1905. Trigger:
 > Clockout request 0026 (`engine-requests/0026-sim-presentation-boundary-display-paced-present.md`,
 > priority *painful*). Code facts read from the tree on 2026-11-01 (file:line pointers are of that
 > date; re-grep before editing).
@@ -182,8 +182,8 @@ these shows. On iOS, `AutoNoVsync` resolves to `Fifo` and the sim thread itself 
   rather than a 120 Hz one: Windows sleep granularity is ~15.6 ms, so an 8 ms fake would flake);
   and the existing present/embed/egress tests green. Docs: `engine-architecture.md` §3 (a fourth
   thread; the windowed-mode paragraph), `dev-docs/render-graph-gpu.md` (the reversal),
-  `dev-docs/engine-present.md`, `dev-docs/profiling.md`, `docs/desktop-window.md:51`,
-  `Plan/owed.md`; the renderer's `render` denylist tier (decision 12); the tick stamp (decision 13);
+  `dev-docs/engine-present.md`, `dev-docs/profiling.md`, `docs/desktop-window.md:51`;
+  the renderer's `render` denylist tier (decision 12); the tick stamp (decision 13);
   the thread-identity doc line and the live hash-neutrality test (decision 14). Crates:
   ludion-render-graph, ludion-renderer, ludion-engine. No wire, schema, hash, replay or golden move.
 - **02 — extract publishes the blend data.** Decision 11's pose table, entity keys and snap set; the
@@ -219,7 +219,7 @@ these shows. On iOS, `AutoNoVsync` resolves to `Fifo` and the sim thread itself 
 ## Status
 
 - 01–03 shipped (presenter thread, interpolation). Serious Isaac 0004 added `low_latency` (decision 16, r2144) and
-  `late_latch` over the `CameraLatch` seam (decision 17, r2145–r2146). Owed: `Plan/owed.md` (the 0026 entry).
+  `late_latch` over the `CameraLatch` seam (decision 17, r2145–r2146). The 0026 live checks are owed.
 
 ## Measurements
 

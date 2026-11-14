@@ -8,7 +8,7 @@
 > with `L5006`. The same id again is a no-op (initial gains apply only at the set's start); a different set
 > hard-cuts. `music_play` keeps emitting today's `MusicPlay` (byte-identical stream) and plays as a one-stem
 > set. No wire, schema, replay or hash movement; no Cargo change. Crossfade is design only (§Decisions
-> Proposed (0025)). By-ear check on a stereo device is owed (`Plan/owed.md`).
+> Proposed (0025)). By-ear check on a stereo device is owed.
 > Earlier: **Stereo pan + spatial distance SHIPPED (2026-11-01, r2013, Clockout 0035)** — two per-game builder
 > knobs, `EngineBuilder::audio_pan(AudioPan::{Centred, Stereo})` and
 > `audio_distance(AudioDistance::{Planar, Spatial})`, both defaulting to today's behaviour so every
@@ -23,8 +23,7 @@
 > acceptance: inside `PAN_INNER_RADIUS` (0.5) the pan scales continuously by `len/R` instead of a hard
 > zero, so it never jumps as a sound passes through the listener. Resync step `0.02`; a stereo clip
 > narrows to its channel mean as the pan leaves centre; `collapse_simultaneous` takes the louder
-> copy's pan. No wire, hash or replay movement. By-ear check on a stereo device is owed
-> (`Plan/owed.md`).
+> copy's pan. No wire, hash or replay movement. By-ear check on a stereo device is owed.
 > **Wave 3 COMPLETE (2026-09-03) — the plan's mechanized half is CLOSED** — `AudioEvent`
 > carries `category: AudioCategory` and `AudioEvent::new(sound, gain)` is the `Sfx` default (`play()`
 > goes through it; an ambient one-shot is a literal through `push`; every other literal migrated —

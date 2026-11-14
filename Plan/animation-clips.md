@@ -1,6 +1,6 @@
 # Plan: Animation clips — skeletal clips from Blender, crossfades and events
 
-> Status: **W1–W3 mechanized (2026-09-30); the W3 sitting is owed (`Plan/owed.md`).** Design settled 2026-09-29 (grilling session; every ruling is the user's).
+> Status: **W1–W3 mechanized (2026-09-30); the W3 sitting is owed.** Design settled 2026-09-29 (grilling session; every ruling is the user's).
 > The driver is the next test game, a 3D platformer in the style of Crash Bandicoot, which gets its
 > own plan (character controller, camera: `Plan/character-controller.md`). This plan is the animation system only. It builds on
 > `Plan/skeletal-animation.md` (skins, the bone palette, `SkinBone`) and `Plan/voxel-animation.md`
@@ -85,7 +85,7 @@ same strip. Owed: the sitting (gallery feel in the window + the preview's live s
 
 ### Crowd posing (Serious Isaac 0019)
 
-Shipped: S1a r2272 (`ExtractPhase::Skin`, `SkinCounts`, palettes sampled in parallel through `ludion_core::par`); S1b r2273 (`ProfileReport.skin`, one schema move, the `.lrp` corpus re-recorded header-only); S2 r2275 (`examples/gallery/crowd-animation.yaml` with its Windows golden, `crates/ludion-engine/tests/skin_pose.rs`). Piece 1, the palette reuse cache, was built, measured and rejected (§Decisions, "Piece 1"). Bench, `cargo test -p ludion-engine --release --test it -- skin_pose --ignored --nocapture` (RTX 3090 / 5950X, release, `crowd-animation`, 500 figures, 5,500 joints): `Skin` median 0.374 ms at 1 thread, 0.315 at 8, 0.317 at the default 32. Socketed skins are posed once (Serious Isaac 0033-02): `Poses` poses each in parallel per depth group and `Skin` copies the palette; `socket_pose` bench, 500 socketed figures, `Poses`+`Skin` (RTX 3090 / 5950X, release): 1.05 ms to 0.70 at 1 thread, 1.03 to 0.75 at 8. Pinned M4 figures are owed (`Plan/owed.md`). Pieces 3 (`lod_hold`) and 4 (pose sharing) are Proposed, not approved: see §Decisions and `Plan/gpu-driven-culling.md` §Decisions.
+Shipped: S1a r2272 (`ExtractPhase::Skin`, `SkinCounts`, palettes sampled in parallel through `ludion_core::par`); S1b r2273 (`ProfileReport.skin`, one schema move, the `.lrp` corpus re-recorded header-only); S2 r2275 (`examples/gallery/crowd-animation.yaml` with its Windows golden, `crates/ludion-engine/tests/skin_pose.rs`). Piece 1, the palette reuse cache, was built, measured and rejected (§Decisions, "Piece 1"). Bench, `cargo test -p ludion-engine --release --test it -- skin_pose --ignored --nocapture` (RTX 3090 / 5950X, release, `crowd-animation`, 500 figures, 5,500 joints): `Skin` median 0.374 ms at 1 thread, 0.315 at 8, 0.317 at the default 32. Socketed skins are posed once (Serious Isaac 0033-02): `Poses` poses each in parallel per depth group and `Skin` copies the palette; `socket_pose` bench, 500 socketed figures, `Poses`+`Skin` (RTX 3090 / 5950X, release): 1.05 ms to 0.70 at 1 thread, 1.03 to 0.75 at 8. Pinned M4 figures are owed. Pieces 3 (`lod_hold`) and 4 (pose sharing) are Proposed, not approved: see §Decisions and `Plan/gpu-driven-culling.md` §Decisions.
 
 ## Trigger
 
@@ -289,7 +289,7 @@ clip file layout are settled in W1 and W2 and recorded in Status.
    assemblies.
 5. **Proofs:**
    - hash-neutrality: an extracted run's `WorldHash` sequence and `.lrp` match a never-extracted run;
-   - event determinism: thread-count invariance, and the M4 twin (queued in `owed.md`);
+   - event determinism: thread-count invariance, and the M4 twin (queued as owed);
    - the existing goldens and vigil's corpus. If the new `Animation` fields move vigil's hash
      encoding, its replays re-record last, after the schema snapshot.
 6. **Strips:** `render --model <character> --clip <c> [--time] [--strip <n>]` for skinned
@@ -297,7 +297,7 @@ clip file layout are settled in W1 and W2 and recorded in Status.
    its duration.
 7. **Gallery scene:** `examples/gallery/` gets a mannequin cycling idle → run → jump → spin from a
    small driver, crossfading run↔idle, run→jump and jump→run. It has a trace, a `.lrp` and a golden
-   blessed on the 3090 (the M4 re-bless goes to `owed.md`).
+   blessed on the 3090 (the M4 re-bless is owed).
 8. Docs: `docs/components.md` (`Animation`'s new fields, `AnimationEvents`), a character topic,
    and vigil's `ceil(0.35 × hz)` hold replaced by the `end` event.
 
@@ -307,7 +307,7 @@ clip file layout are settled in W1 and W2 and recorded in Status.
    expressible with existing commands (an entity edit of `Animation`, plus pause/step). A new wire
    method is added only if that check proves one is needed, and the decision is recorded.
 2. The preview: pick a character, list its clips, play, pause, scrub, and preview a crossfade.
-3. **Exit (human gate, in `owed.md`):** one sitting judges the gallery scene's feel (pops at loop
+3. **Exit (human gate, owed):** one sitting judges the gallery scene's feel (pops at loop
    seams and crossfades, foot sliding, the squash timing) in the window
    (`cargo run -p ludion-testkit --example character_cycle -- --scene examples/gallery/character-cycle.yaml --window`) and runs the editor preview's live smoke.
    The verdict is recorded as a decision. Close: the root `CLAUDE.md` line, and this plan's Status
