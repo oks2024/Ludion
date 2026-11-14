@@ -165,23 +165,59 @@ fn fresnel_schlick(vdh: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (vec3<f32>(1.0) - f0) * pow(clamp(1.0 - vdh, 0.0, 1.0), 5.0);
 }
 
-// PCSS for a sun with an angular radius: a blocker search, then a comparison filter whose radius is
-// `(receiver - blocker depth) * scale` texels. `scale` is texels per unit of light-NDC depth (the cascade's
-// `params.w` or `penumbra_anchored`); `lo`/`hi` are the tile's UV clamp and `tile_lo_px`/`tile_hi_px` its
-// integer texel clamp, so no tap crosses into a neighbouring cascade. The per-texel rotation is interleaved
-// gradient noise: deterministic, no history. No blocker in reach is fully lit, as the PCF kernel says there.
+// Golden-angle rotation of a Vogel spiral, applied as a complex multiply so no tap pays a cos/sin.
+const GOLDEN_COS: f32 = -0.73736888;
+const GOLDEN_SIN: f32 = 0.67549029;
+// A penumbra narrower than this many texels falls back to the caller's PCF: its 3x3 already reaches +-1 texel,
+// so a disc this narrow only re-estimates it.
+const PCSS_PCF_FALLBACK_TEXELS: f32 = 1.5;
+
+// One `textureGatherCompare` of the 2x2 footprint at `c`, summed: 4 = all lit. `c` is clamped so the footprint
+// (texels `floor(c*dims - 0.5)` and the next) stays inside the tile that `lo`/`hi` bound.
+fn pcss_gather_lit(c: vec2<f32>, compare: f32, texel: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>) -> f32 {
+    let g = textureGatherCompare(shadow_tex, shadow_samp, clamp(c, lo + 0.5 * texel, hi - 0.5 * texel), compare);
+    return g.x + g.y + g.z + g.w;
+}
+
+// PCSS for a sun with an angular radius, in four stages, each an approximation of the full search + filter:
+// 1. classify: 5 gathers (centre + 4 at `ring` texels) call the point lit (20/20) or umbra (0/20) outright, so a
+//    blocker thinner than the gather spacing reads lit and the penumbra's ends snap to 1/0;
+// 2. blocker search: a Vogel disc of `textureLoad`s, its tap count scaled to the search area;
+// 3. a penumbra under `PCSS_PCF_FALLBACK_TEXELS` returns -1.0 and the caller runs its PCF (a seam where the radius
+//    crosses it);
+// 4. a Vogel comparison filter of radius `(receiver - blocker depth) * scale` texels, tap count scaled to the disc.
+// `scale` is texels per unit of light-NDC depth (the cascade's `params.w` or `penumbra_anchored`); `lo`/`hi` are the
+// tile's UV clamp and `tile_lo_px`/`tile_hi_px` its integer texel clamp, so no tap crosses into a neighbouring
+// cascade. The per-texel rotation is interleaved gradient noise: deterministic, no history.
 fn sun_pcss(uv: vec2<f32>, compare: f32, scale: f32, lo: vec2<f32>, hi: vec2<f32>, tile_lo_px: vec2<i32>, tile_hi_px: vec2<i32>) -> f32 {
     let dims = vec2<f32>(textureDimensions(shadow_tex));
     let texel = 1.0 / dims;
     let px = uv * dims;
     let rot = 6.2831853 * fract(52.9829189 * fract(dot(floor(px), vec2<f32>(0.06711056, 0.00583715))));
+    let rot_dir = vec2<f32>(cos(rot), sin(rot));
     let search = min(max(compare, 0.0) * scale, MAX_PENUMBRA_TEXELS);
+    let ring = max(0.7 * search, 1.0);
+    let ring_x = rot_dir * ring * texel;
+    let ring_y = vec2<f32>(-rot_dir.y, rot_dir.x) * ring * texel;
+    let lit = pcss_gather_lit(uv, compare, texel, lo, hi)
+        + pcss_gather_lit(uv + ring_x, compare, texel, lo, hi)
+        + pcss_gather_lit(uv - ring_x, compare, texel, lo, hi)
+        + pcss_gather_lit(uv + ring_y, compare, texel, lo, hi)
+        + pcss_gather_lit(uv - ring_y, compare, texel, lo, hi);
+    if (lit >= 20.0) {
+        return 1.0;
+    }
+    if (lit <= 0.0) {
+        return 0.0;
+    }
+    let n_b = min(sun.pcss_blocker_taps, max(4u, u32(ceil(search * search))));
     var blocker_sum = 0.0;
     var blockers = 0.0;
-    for (var k = 0u; k < sun.pcss_blocker_taps; k = k + 1u) {
-        let r = sqrt((f32(k) + 0.5) / f32(sun.pcss_blocker_taps));
-        let a = f32(k) * 2.39996323 + rot;
-        let coord = clamp(vec2<i32>(floor(px + vec2<f32>(cos(a), sin(a)) * r * search)), tile_lo_px, tile_hi_px);
+    var dir = rot_dir;
+    for (var k = 0u; k < n_b; k = k + 1u) {
+        let r = sqrt((f32(k) + 0.5) / f32(n_b));
+        let coord = clamp(vec2<i32>(floor(px + dir * r * search)), tile_lo_px, tile_hi_px);
+        dir = vec2<f32>(dir.x * GOLDEN_COS - dir.y * GOLDEN_SIN, dir.x * GOLDEN_SIN + dir.y * GOLDEN_COS);
         let d = textureLoad(shadow_tex, coord, 0);
         if (d < compare) {
             blocker_sum = blocker_sum + d;
@@ -191,15 +227,23 @@ fn sun_pcss(uv: vec2<f32>, compare: f32, scale: f32, lo: vec2<f32>, hi: vec2<f32
     if (blockers == 0.0) {
         return 1.0;
     }
+    if (blockers == f32(n_b)) {
+        return 0.0;
+    }
     let radius_tx = clamp((compare - blocker_sum / blockers) * scale, 1.0, MAX_PENUMBRA_TEXELS);
+    if (radius_tx < PCSS_PCF_FALLBACK_TEXELS) {
+        return -1.0;
+    }
+    let n_f = min(sun.pcss_filter_taps, max(8u, u32(ceil(PI * radius_tx * radius_tx))));
     var sum = 0.0;
-    for (var k = 0u; k < sun.pcss_filter_taps; k = k + 1u) {
-        let r = sqrt((f32(k) + 0.5) / f32(sun.pcss_filter_taps));
-        let a = f32(k) * 2.39996323 + rot;
-        let tap = clamp(uv + vec2<f32>(cos(a), sin(a)) * r * radius_tx * texel, lo, hi);
+    dir = rot_dir;
+    for (var k = 0u; k < n_f; k = k + 1u) {
+        let r = sqrt((f32(k) + 0.5) / f32(n_f));
+        let tap = clamp(uv + dir * r * radius_tx * texel, lo, hi);
+        dir = vec2<f32>(dir.x * GOLDEN_COS - dir.y * GOLDEN_SIN, dir.x * GOLDEN_SIN + dir.y * GOLDEN_COS);
         sum = sum + textureSampleCompareLevel(shadow_tex, shadow_samp, tap, compare);
     }
-    return sum / f32(sun.pcss_filter_taps);
+    return sum / f32(n_f);
 }
 
 // PCF sun-shadow factor in [0, 1]: 1 = fully lit, 0 = fully shadowed. Hardware depth comparison
@@ -228,7 +272,10 @@ fn sun_shadow_anchored(world_pos: vec3<f32>) -> f32 {
     let compare = ndc.z - sun.direction.w * 2048.0 * texel.x;
     if (sun.penumbra_anchored > 0.0) {
         let dims = vec2<f32>(textureDimensions(shadow_tex));
-        return sun_pcss(uv, compare, sun.penumbra_anchored, 0.5 * texel, vec2<f32>(1.0) - 0.5 * texel, vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1));
+        let p = sun_pcss(uv, compare, sun.penumbra_anchored, 0.5 * texel, vec2<f32>(1.0) - 0.5 * texel, vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1));
+        if (p >= 0.0) {
+            return p;
+        }
     }
     // Half the kernel's edge, which is why the edge must be odd: 3 taps reach ±1, 1 tap reaches 0.
     let reach = i32(sun.pcf) / 2;
@@ -278,7 +325,10 @@ fn sun_cascade_factor(i: u32, world_pos: vec3<f32>) -> f32 {
         let dims = vec2<f32>(textureDimensions(shadow_tex));
         let tile_lo_px = vec2<i32>(floor(rect.xy * dims + vec2<f32>(0.5)));
         let tile_hi_px = vec2<i32>(floor((rect.xy + rect.zw) * dims + vec2<f32>(0.5))) - vec2<i32>(1);
-        return sun_pcss(uv, compare, sun.cascade_params[i].w, lo, hi, tile_lo_px, tile_hi_px);
+        let p = sun_pcss(uv, compare, sun.cascade_params[i].w, lo, hi, tile_lo_px, tile_hi_px);
+        if (p >= 0.0) {
+            return p;
+        }
     }
     var sum = 0.0;
     for (var dy = -reach; dy <= reach; dy = dy + 1) {

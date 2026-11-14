@@ -53,9 +53,11 @@ re-blesses every mesh-bearing golden:
   **PCSS:** a sun with `angular_radius` θ > 0 softens its penumbra. The gate is a uniform:
   `cascade_params[i].w` (per cascade; texels of that tile per unit of light-NDC depth, `depth_range·tanθ/texel`,
   set in `build_sun`, never in `sun_cascade_lanes`, whose `params` also fills `Shafts`) and `penumbra_anchored`
-  (the same for the anchored map). Above 0, `sun_pcss` runs a `textureLoad` blocker search (clamped to the tile),
-  then a Vogel-disc comparison filter of radius `(receiver − blocker)·scale`, clamped to `MAX_PENUMBRA_TEXELS` (16
-  texels of that map, the search radius too); tap counts are the `pcss_*_taps` quality axes. At 0 the PCF loops
+  (the same for the anchored map). Above 0, `sun_pcss` runs four stages: 5 `textureGatherCompare`s (centre + 4 on a
+  ring, clamped so each 2×2 footprint stays in the tile) call a point lit or umbra outright; a `textureLoad` blocker
+  search with taps scaled to its area; a penumbra under `PCSS_PCF_FALLBACK_TEXELS` (1.5) returns -1 and the caller runs
+  its PCF; a Vogel comparison filter of radius `(receiver − blocker)·scale` with taps scaled to the disc. Radii clamp
+  to `MAX_PENUMBRA_TEXELS` (16 texels of that map); the `pcss_*_taps` quality axes are caps. At 0 the PCF loops
   run verbatim, so θ = 0 is byte-identical.
 - **Local lights' shadows** — opt-in (`cast_shadows`), also mesh-only group 2, beside the sun:
   `3 local_shadow_tex: texture_depth_2d`, `4 local_views: array<LocalView>`, `5 light_shadow: array<u32>`

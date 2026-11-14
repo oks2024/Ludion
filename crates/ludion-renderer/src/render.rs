@@ -11072,6 +11072,32 @@ mod tests {
         }
     }
 
+    /// A penumbra narrower than the PCF fallback threshold renders exactly as the hard PCF edge: the
+    /// classifier and the sentinel fallback both agree with PCF. Anchored and cascaded paths.
+    #[test]
+    fn needs_gpu_sun_narrow_penumbra_falls_back_to_pcf() {
+        let Some(renderer) = sun_renderer("sun_narrow_penumbra_falls_back_to_pcf", 512, 3) else {
+            return;
+        };
+        let (w, h) = (256u32, 64u32);
+        for cascaded in [false, true] {
+            let render = |angular_radius: f32| {
+                let (scene, _) = penumbra_scene(1.0, angular_radius, cascaded, (w, h));
+                renderer
+                    .render(&scene, FrameSize::native(w, h))
+                    .expect("render")
+                    .rgba
+            };
+            let hard = render(0.0);
+            let narrow = render(0.2_f32.to_radians());
+            let differing = hard.iter().zip(&narrow).filter(|(a, b)| a != b).count();
+            assert_eq!(
+                differing, 0,
+                "cascaded={cascaded}: {differing} bytes differ"
+            );
+        }
+    }
+
     /// A wide sun saturates at `MAX_PENUMBRA_TEXELS`: the transition is at most twice the cap in shadow
     /// texels wide, and 30° and 60° suns agree to within a pixel or two.
     #[test]

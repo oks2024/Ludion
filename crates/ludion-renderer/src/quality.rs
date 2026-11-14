@@ -547,19 +547,19 @@ mod tests {
                 "sun.pcf",
                 9,
             ),
-            // Two: the PCSS blocker search's loop bound and its Vogel radius divisor.
+            // One each: the PCSS blocker search and filter read their count once, into the derived
+            // `n_b`/`n_f`, which is the loop bound and every divisor.
             (
                 "mesh_shading.wgsl",
                 include_str!("shaders/snippets/mesh_shading.wgsl"),
                 "sun.pcss_blocker_taps",
-                2,
+                1,
             ),
-            // Three: the PCSS filter's loop bound, its Vogel radius divisor and the normalizing divisor.
             (
                 "mesh_shading.wgsl",
                 include_str!("shaders/snippets/mesh_shading.wgsl"),
                 "sun.pcss_filter_taps",
-                3,
+                1,
             ),
             // Four: the march's loop bound, the ray set's elevation denominator, the hit cache's
             // stride, and the estimator's own `1/N`.
