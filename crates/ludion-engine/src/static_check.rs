@@ -104,6 +104,10 @@ pub(crate) fn pose_source(
 /// Frames in a row a `Static` entity must be written before it is called hot.
 pub const HOT_STATIC_FRAMES: u32 = 30;
 
+/// Longest gap between two observations that still counts as one streak: a paused or minimized
+/// extract must not turn two distant writes into a write-every-frame streak.
+const HOT_STATIC_MAX_GAP: u64 = 4;
+
 /// Counts consecutive sim frames each static entity was written and reports a hot one once.
 #[derive(Clone, Debug, Default)]
 pub struct HotStatic {
@@ -142,9 +146,10 @@ impl HotStatic {
         for &id in written {
             let count = match self.streak.get(&id).copied() {
                 Some((_, at)) if at == frame => continue,
-                Some((count, at)) => {
+                Some((count, at)) if frame.0 - at.0 <= HOT_STATIC_MAX_GAP => {
                     count.saturating_add(u32::try_from(frame.0 - at.0).unwrap_or(u32::MAX))
                 }
+                Some(_) => 1,
                 None => 1,
             };
             self.streak.insert(id, (count, frame));
@@ -433,6 +438,17 @@ mod tests {
             .map(|n| hot.observe(f(n), &[id(1)]).len())
             .sum();
         assert_eq!(reported, 1);
+    }
+
+    #[test]
+    fn a_long_observation_gap_restarts_the_streak() {
+        let mut hot = HotStatic::default();
+        assert!(hot.observe(f(0), &[id(1)]).is_empty());
+        assert!(hot.observe(f(100), &[id(1)]).is_empty());
+        for n in 101..129 {
+            assert!(hot.observe(f(n), &[id(1)]).is_empty());
+        }
+        assert_eq!(hot.observe(f(129), &[id(1)]).len(), 1);
     }
 
     #[test]
