@@ -556,6 +556,7 @@ interiors**. Large open water is not a driver.
   than slot order (r2354). GPU tests hold a runtime-swapped room's key and faces to a fresh world's, with
   and without a `GiVolume`. Usage: `ludion docs reflection-probes` "Probes spawned at runtime". Owed:
   pinned GI re-check and export reach (`Plan/owed.md`).
+  0042: a probe's store key cannot be predicted from a prefab, so the prewarm does not touch probes; the swap-tick refreeze plus a store hit is the probe path (relay-approved 2026-11-14).
 
 ## Deferred, with triggers
 

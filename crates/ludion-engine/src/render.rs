@@ -683,4 +683,124 @@ indices:
             "sp_b, b.png and b; s and its maps are held"
         );
     }
+
+    const ROOM_B: &str = "rooms/b.prefab.yaml";
+
+    /// The reupload project plus `rooms/b.prefab.yaml`, one part drawing mesh `b`, and an engine
+    /// running scene `a`.
+    fn prewarm_engine(tag: &str) -> (Engine, std::path::PathBuf) {
+        let dir = reupload_project(tag);
+        std::fs::create_dir_all(dir.join("rooms")).unwrap();
+        std::fs::write(
+            dir.join(ROOM_B),
+            "format: 1\nkind: prefab\nname: room-b\nentities:\n  - name: floor\n    components:\n      Mesh:\n        shape:\n          asset: ../meshes/b.mesh.yaml\n",
+        )
+        .unwrap();
+        let mut engine = Engine::builder().project_root(&dir).build().unwrap();
+        engine
+            .load_inline_scene(&reupload_scene(&["a", "s"], "sp_a"))
+            .unwrap();
+        (engine, dir)
+    }
+
+    fn prewarm_b(engine: &mut Engine) {
+        crate::prewarm_prefab(engine.world_mut(), ROOM_B, None).unwrap();
+    }
+
+    fn spawn_b(engine: &mut Engine) -> Vec<ludion_core::ids::EntityId> {
+        crate::spawn_prefab(engine.world_mut(), ROOM_B, None, None, false).unwrap()
+    }
+
+    fn only_b_assets() -> GpuUploads {
+        GpuUploads {
+            textures: 0,
+            mesh_maps: 1,
+            mesh_assets: 1,
+        }
+    }
+
+    #[test]
+    fn needs_gpu_a_prewarmed_prefab_spawns_without_uploading() {
+        let (mut engine, dir) = prewarm_engine("prewarm-spawn");
+        let Some(first) = render_delta(&mut engine, GpuUploads::default()) else {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        };
+        prewarm_b(&mut engine);
+        let warm = render_delta(&mut engine, first).unwrap();
+        let mut before = gpu_uploads(&mut engine).unwrap();
+        let steady = render_delta(&mut engine, before).unwrap();
+        spawn_b(&mut engine);
+        before = gpu_uploads(&mut engine).unwrap();
+        let spawned = render_delta(&mut engine, before).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(warm, only_b_assets(), "the prewarm uploads b and its map");
+        assert_eq!(steady, GpuUploads::default(), "kept, not evicted");
+        assert_eq!(spawned, GpuUploads::default(), "the spawn uploads nothing");
+    }
+
+    #[test]
+    fn needs_gpu_a_prewarm_changes_no_pixel_hash_or_id() {
+        let (mut warm, warm_dir) = prewarm_engine("prewarm-same-warm");
+        let (mut cold, cold_dir) = prewarm_engine("prewarm-same-cold");
+        let png = |engine: &mut Engine| match engine.render_png(64, 64) {
+            Ok(png) => Some(png),
+            Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => None,
+            Err(d) => panic!("render failed: {d:?}"),
+        };
+        let (Some(_), Some(_)) = (png(&mut warm), png(&mut cold)) else {
+            eprintln!("SKIPPED prewarm_changes_no_pixel: no GPU adapter");
+            let _ = std::fs::remove_dir_all(&warm_dir);
+            let _ = std::fs::remove_dir_all(&cold_dir);
+            return;
+        };
+        prewarm_b(&mut warm);
+        let warm_frame = png(&mut warm).unwrap();
+        let cold_frame = png(&mut cold).unwrap();
+        let warm_ids = spawn_b(&mut warm);
+        let cold_ids = spawn_b(&mut cold);
+        let warm_after = png(&mut warm).unwrap();
+        let cold_after = png(&mut cold).unwrap();
+        let warm_hash = warm.world_hash().unwrap();
+        let cold_hash = cold.world_hash().unwrap();
+        let _ = std::fs::remove_dir_all(&warm_dir);
+        let _ = std::fs::remove_dir_all(&cold_dir);
+
+        assert_eq!(warm_frame, cold_frame, "the prewarm frame draws the same");
+        assert_eq!(
+            warm_after, cold_after,
+            "and so does the frame after the spawn"
+        );
+        assert_eq!(warm_ids, cold_ids, "no id shifted");
+        assert_eq!(warm_hash, cold_hash, "the world hash did not move");
+    }
+
+    #[test]
+    fn needs_gpu_a_superseded_or_cleared_prewarm_is_evicted() {
+        let (mut engine, dir) = prewarm_engine("prewarm-evict");
+        let Some(first) = render_delta(&mut engine, GpuUploads::default()) else {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        };
+        prewarm_b(&mut engine);
+        let warm = render_delta(&mut engine, first).unwrap();
+        engine
+            .world_mut()
+            .resource_mut::<crate::PrefabPrewarm>()
+            .unwrap()
+            .clear();
+        let mut before = gpu_uploads(&mut engine).unwrap();
+        render_delta(&mut engine, before).unwrap();
+        spawn_b(&mut engine);
+        before = gpu_uploads(&mut engine).unwrap();
+        let spawned = render_delta(&mut engine, before).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(warm, only_b_assets());
+        assert_eq!(
+            spawned.mesh_assets, 1,
+            "the cleared prewarm was freed, so the spawn uploads b again"
+        );
+    }
 }

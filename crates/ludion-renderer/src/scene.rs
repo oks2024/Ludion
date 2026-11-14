@@ -1411,6 +1411,8 @@ pub struct RenderScene {
     /// engine's `AssetCache` so a cache hit clones a refcount, not the mesh's megabyte-scale buffers
     /// (`Plan/voxel-artist-scale.md`).
     pub mesh_assets: Vec<Arc<MeshData>>,
+    /// Asset meshes uploaded and kept resident but never drawn (a prefab prewarm); empty by default.
+    pub prewarm: Vec<Arc<MeshData>>,
     /// The static prefix of [`meshes`](Self::meshes) and [`mesh_assets`](Self::mesh_assets); the
     /// default for a scene with no `Static`.
     pub statics: StaticRange,
@@ -1510,6 +1512,7 @@ impl RenderScene {
             ambient: DEFAULT_AMBIENT,
             textures: Vec::new(),
             mesh_assets: Vec::new(),
+            prewarm: Vec::new(),
             statics: StaticRange::default(),
             meshes: Vec::new(),
             sprites: Vec::new(),

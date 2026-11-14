@@ -110,6 +110,8 @@ pub(crate) fn world_key(
         // only sprites, particles, text and the UI index it, and the face scene has none
         textures: _,
         mesh_assets,
+        // never drawn, so never captured
+        prewarm: _,
         // its key is entity-ordered; the instances are hashed per record and a static draws as a
         // dynamic does in a capture
         statics: _,

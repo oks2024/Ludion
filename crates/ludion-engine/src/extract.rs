@@ -1484,6 +1484,7 @@ fn extract_inner(
     let post = extract_post(world, &ids);
     assets.extract_end(ExtractPhase::Lights);
     let mut scene = RenderScene {
+        prewarm: Vec::new(),
         camera,
         cull_camera: None,
         lod: scene_lod(world, &ids),

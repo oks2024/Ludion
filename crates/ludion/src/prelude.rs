@@ -63,7 +63,7 @@
 //!   [`Parent`]: [`world_transform`] reads the composed [`WorldPose`] (never stored, never hashed)
 //!   and [`reparent`] (`world, child, parent, `[`Keep::World`] or [`Keep::Local`]) re-points it
 //!   (`ludion docs hierarchy`). [`spawn_prefab`] spawns a `kind: prefab` document from a system
-//!   ([`prepare_prefab`] reads one ahead, spawning nothing), each part carrying a [`PrefabInstance`]; [`spawn_map`] stamps a `kind: map` the same way, with a
+//!   ([`prepare_prefab`] reads one ahead, spawning nothing; [`prewarm_prefab`] also keeps its GPU assets resident), each part carrying a [`PrefabInstance`]; [`spawn_map`] stamps a `kind: map` the same way, with a
 //!   [`MapSpawn`] kit, seed and [`Mirror`] ([`prepare_map`] compiles one ahead, spawning nothing); [`despawn_instance`] removes one by its root; [`revert_prefab`] and [`unpack_prefab`] edit one.
 //!   [`SingleExt`] adds `world.single::<T>()` / `world.single_get::<T>()`: the first entity carrying a
 //!   singleton component, and its value. [`Phase`] is the phase a system runs in, which the world
@@ -235,26 +235,26 @@ pub use ludion_engine::{
     ParentJoint, ParticleBlend, ParticleEmitter, PathDocument, PathFollower, PathFrame,
     PathInterpolation, PathMetric, PathMode, PathOrient, PathSampler, PatternDoc, PatternPlayer,
     PlaybackControls, PlaybackInput, PlaybackOutcome, PlaybackSpeed, PointLight, PostProcess,
-    PrefabApplied, PrefabInstance, PrefabReverted, ProbeCoverage, ProbeCoverageEntry,
-    ProbeRefreeze, ProbeShape, Profile, ProjectileConfig, ProjectileLook, ProjectileVisual,
-    ProjectileVisuals, Projectiles, Projection, RampSpec, ReflectionProbe, RenderExtent,
-    RenderSettings, ReplayEntry, ReplayPlayback, ReplayPlaybackConfig, Residue, ResidueStore,
-    ResumeOutcome, RigConfig, RigMode, RigState, RunRecording, RunRecordingConfig, RunSave,
-    SceneSwitch, ShakeConfig, Shutdown, SkinBone, SpotLight, Springs, Sprite, SpriteBlend, Static,
-    SuspendInfo, SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
-    TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect, UiText, VOLLEY_MAX_BULLETS,
-    VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Visibility, Volley, VolleyCenter,
-    VolleyShape, WorldPose, add_fov_kick, add_kick, add_look, add_look_counts, add_trauma,
-    advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
+    PrefabApplied, PrefabInstance, PrefabPrewarm, PrefabReverted, ProbeCoverage,
+    ProbeCoverageEntry, ProbeRefreeze, ProbeShape, Profile, ProjectileConfig, ProjectileLook,
+    ProjectileVisual, ProjectileVisuals, Projectiles, Projection, RampSpec, ReflectionProbe,
+    RenderExtent, RenderSettings, ReplayEntry, ReplayPlayback, ReplayPlaybackConfig, Residue,
+    ResidueStore, ResumeOutcome, RigConfig, RigMode, RigState, RunRecording, RunRecordingConfig,
+    RunSave, SceneSwitch, ShakeConfig, Shutdown, SkinBone, SpotLight, Springs, Sprite, SpriteBlend,
+    Static, SuspendInfo, SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry, TrackRig,
+    Transform, TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect, UiText,
+    VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Visibility, Volley,
+    VolleyCenter, VolleyShape, WorldPose, add_fov_kick, add_kick, add_look, add_look_counts,
+    add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
     bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw,
     despawn_instance, first_person_eye, fits_character, lane_error_colour, lane_frame,
     lane_relative, load_assembly, move_character, move_character_with, move_characters, nav_steer,
     nav_update, path_follow, path_follower_motion, play_patterns, play_sound, posed_joint_world,
-    prepare_map, prepare_prefab, probe_character_ground, projectiles_step, reparent,
-    report_diagnostic, report_full_diagnostic, resize_character, revert_prefab, set_clip_speed,
-    set_look, snap_rig, spawn_map, spawn_prefab, spawn_projectile, switch_skin_to_ragdoll,
-    switch_to_ragdoll, teleport_character, unpack_prefab, validate_pattern_docs, volley_hits,
-    world_transform,
+    prepare_map, prepare_prefab, prewarm_prefab, probe_character_ground, projectiles_step,
+    reparent, report_diagnostic, report_full_diagnostic, resize_character, revert_prefab,
+    set_clip_speed, set_look, snap_rig, spawn_map, spawn_prefab, spawn_projectile,
+    switch_skin_to_ragdoll, switch_to_ragdoll, teleport_character, unpack_prefab,
+    validate_pattern_docs, volley_hits, world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;

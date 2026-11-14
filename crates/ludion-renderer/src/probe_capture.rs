@@ -55,6 +55,7 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
     // must not re-key the capture.
     out.meshes.retain(|mesh| !mesh.viewmodel);
     out.viewmodel = None;
+    out.prewarm.clear();
     out.sprites.clear();
     out.particles.clear();
     out.texts.clear();

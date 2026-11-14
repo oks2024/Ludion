@@ -82,6 +82,7 @@ mod pose_blend;
 mod prefab;
 mod prefab_clips;
 mod prefab_ops;
+mod prefab_prewarm;
 mod probe_bake;
 mod probe_check;
 mod probe_dump;
@@ -225,6 +226,7 @@ pub use prefab_clips::{
     PrefabClipData, load as load_prefab_clips, prefab_clip_target_diagnostics, prefab_part_names,
 };
 pub use prefab_ops::{PrefabApplied, PrefabReverted, revert_prefab, unpack_prefab};
+pub use prefab_prewarm::{PrefabPrewarm, prewarm_prefab};
 pub use probe_bake::{
     ProbeBake, ProbeBakeReport, ProbeCoverage, ProbeCoverageEntry, ProbeOutcome, ProbeRefreeze,
     ProbeSource, prune_probe_store,

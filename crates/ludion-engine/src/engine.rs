@@ -406,6 +406,8 @@ pub struct Engine {
     /// A load-class event or a `ProbeRefreeze` request happened: the next tick or render re-freezes
     /// the probe world.
     probe_world_pending: bool,
+    /// The prefab prewarm last built from the world's `PrefabPrewarm`.
+    prefab_prewarm: crate::prefab_prewarm::PrewarmState,
     /// The renderer's probe resolve count `finish_probe_frame` last examined.
     probe_resolve_seen: u64,
     /// Whether a bake is rendering, which writes the store on purpose and so warns of no miss.
@@ -891,6 +893,7 @@ impl Engine {
             probe_store: None,
             probe_world: None,
             probe_world_pending: true,
+            prefab_prewarm: crate::prefab_prewarm::PrewarmState::default(),
             probe_resolve_seen: 0,
             probe_baking: false,
             gi_rebake: GiRebakeMode::default(),
@@ -948,6 +951,7 @@ impl Engine {
         engine.install_presentation_rules();
         engine.install_scene_switch();
         engine.install_probe_refreeze();
+        engine.install_prefab_prewarm();
         engine.install_shutdown();
         engine.install_render_settings();
         engine.install_cursor_lock();
@@ -3869,6 +3873,38 @@ impl Engine {
             .insert_resource(ProbeRefreeze::default());
     }
 
+    /// Installs a fresh (empty) [`PrefabPrewarm`] resource into the current world, so a game system
+    /// can prewarm a prefab. Called after every world (re)build; excluded from the world hash and
+    /// from snapshots.
+    fn install_prefab_prewarm(&mut self) {
+        self.driver
+            .world_mut()
+            .insert_resource(crate::PrefabPrewarm::default());
+    }
+
+    /// Brings the prewarm mesh set to the world's [`PrefabPrewarm`]: rebuilt when its generation
+    /// moved, emptied when the request is gone.
+    fn refresh_prewarm(&mut self) {
+        let Some(prewarm) = self.driver.world().resource::<crate::PrefabPrewarm>() else {
+            self.prefab_prewarm = crate::prefab_prewarm::PrewarmState::default();
+            return;
+        };
+        if prewarm.generation == self.prefab_prewarm.generation {
+            return;
+        }
+        let generation = prewarm.generation;
+        let meshes = prewarm.request.as_ref().map_or_else(Vec::new, |request| {
+            crate::prefab_prewarm::warm_meshes(
+                request,
+                AssetRoot::content(&self.project_root),
+                &mut self.asset_cache,
+                self.driver.time(),
+                self.quality.params.particle_density,
+            )
+        });
+        self.prefab_prewarm = crate::prefab_prewarm::PrewarmState { generation, meshes };
+    }
+
     /// Installs a fresh (empty) [`SceneSwitch`] resource into the current world so game systems can
     /// request an in-run district change. Called after every world (re)build — the
     /// [`install_audio_queue`](Engine::install_audio_queue) mold, including inside a switch itself, so
@@ -6216,6 +6252,8 @@ impl Engine {
             }
             scene.probe_world = self.probe_world.clone();
         }
+        // After the freeze, so a frozen `ProbeWorld` never holds the prewarm set.
+        scene.prewarm = self.prefab_prewarm.meshes.clone();
         Ok(scene)
     }
 
@@ -6234,6 +6272,7 @@ impl Engine {
         self.asset_cache.set_gi_hold(hold);
         self.resolve_cook();
         let prefetched = self.refresh_asset_cache(true);
+        self.refresh_prewarm();
         // The sim clock the assembly clip evaluator poses against: read out by value first, so the
         // driver's immutable borrow below stays the only one. This machine's particle density comes
         // out with it, for the same borrow reason and from the same setting the renderer was built
@@ -7816,6 +7855,7 @@ impl Engine {
         self.install_presentation_rules();
         self.install_scene_switch();
         self.install_probe_refreeze();
+        self.install_prefab_prewarm();
         self.install_projectiles();
         self.install_nav();
         if matches!(
@@ -7941,6 +7981,7 @@ impl Engine {
         // frame runs unheld, so both GI caches rebuild and become the new baseline.
         self.gi_rebake_force = true;
         self.probe_world_stale();
+        self.prefab_prewarm = crate::prefab_prewarm::PrewarmState::default();
         self.present_epoch = self.present_epoch.wrapping_add(1);
         self.projectile_draw.reset_convergence();
         // Prefetched at the first extract, not here: headless rebuilds (replay verification, sim

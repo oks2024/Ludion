@@ -98,6 +98,10 @@ Everything else is the scene's own validation — `L1014` for a bad component va
 - **`prepare_prefab(world, path)`** reads and validates a prefab ahead of its spawn from a sim system. It records the same way, spawns nothing, leaves `WorldHash` untouched, and a bad prefab returns the errors the spawn would. Call it a few ticks before the door, never on the spawn tick.
 - **`presentation`** (the fifth argument; `presentation` over the wire) `true` spawns every part presentation, sticky; a sim-only component is `L1320`. A presentation system may spawn prefabs with `true` or an all-presentation prefab; a sim system asking for presentation, or a presentation system spawning sim parts, is `L0028` as a diagnostic (`ludion docs presentation`).
 
+### Prewarming a room
+
+`prewarm_prefab(world, path, placement)` makes the engine decode a prefab's assets and upload its meshes and material maps ahead of the spawn, so the later `spawn_prefab` uploads nothing. Call it from a sim system on the room-clear tick, never the spawn tick. The engine instantiates the prefab into a scratch world, so no entity is created and no id shifts. It holds one request: the same path and placement again is a no-op, a different one replaces it, and `PrefabPrewarm::clear()` (a resource in every world) drops it. Assets stay resident, never drawn, until then or until the world rebuilds. Nothing is hashed, recorded or put on the wire; a replay re-runs the system. A prefab cannot predict a reflection probe's store key, so pair it with `ProbeRefreeze` on the swap tick.
+
 ## `PrefabInstance`
 
 Every part carries `PrefabInstance { source, part, root }`: the path as passed to `spawn_prefab`, the part's name without the instance prefix, and the instance's first part. It is registered, hashed and saved like any component, and `root` is remapped on load and restore like `Joint.a`.

@@ -751,7 +751,10 @@ pub fn spawn_prefab(
 }
 
 /// The key and the read, validated prefab at `path`: the path check, the library, the cached load.
-fn library_ready(world: &mut World, path: &str) -> Result<(String, Arc<Ready>), Vec<Diagnostic>> {
+pub(crate) fn library_ready(
+    world: &mut World,
+    path: &str,
+) -> Result<(String, Arc<Ready>), Vec<Diagnostic>> {
     let key = prefab_key(path)?;
     let Some(library) = world.resource_mut::<PrefabLibrary>() else {
         return Err(vec![

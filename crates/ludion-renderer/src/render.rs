@@ -2365,32 +2365,38 @@ impl Renderer {
         eviction: CacheEviction,
     ) -> Vec<MeshAssetGpu> {
         let mut cache = self.mesh_asset_cache.borrow_mut();
-        let referenced: HashSet<u64> = scene.mesh_assets.iter().map(|m| m.hash).collect();
-        eviction.retain(&mut cache, |hash| referenced.contains(hash));
-        scene
+        let referenced: HashSet<u64> = scene
             .mesh_assets
             .iter()
-            .map(|m| {
-                cache
-                    .entry(m.hash)
-                    .or_insert_with(|| {
-                        self.count_upload(|u| u.mesh_assets += 1);
-                        let upload = |mesh: &MeshData| {
-                            let material_bg = self.material_bind_group(
-                                self.gpu.device(),
-                                mesh.textures.as_ref(),
-                                mesh.double_sided,
-                            );
-                            upload_mesh_asset(self.gpu.device(), mesh, material_bg)
-                        };
-                        let mut asset = upload(m);
-                        asset.levels = m.lods.iter().map(|lod| upload(&lod.mesh)).collect();
-                        asset.screen = m.lods.iter().map(|lod| lod.screen_size).collect();
-                        asset
-                    })
-                    .clone()
-            })
-            .collect()
+            .chain(&scene.prewarm)
+            .map(|m| m.hash)
+            .collect();
+        eviction.retain(&mut cache, |hash| referenced.contains(hash));
+        let mut resolve = |m: &std::sync::Arc<MeshData>| {
+            cache
+                .entry(m.hash)
+                .or_insert_with(|| {
+                    self.count_upload(|u| u.mesh_assets += 1);
+                    let upload = |mesh: &MeshData| {
+                        let material_bg = self.material_bind_group(
+                            self.gpu.device(),
+                            mesh.textures.as_ref(),
+                            mesh.double_sided,
+                        );
+                        upload_mesh_asset(self.gpu.device(), mesh, material_bg)
+                    };
+                    let mut asset = upload(m);
+                    asset.levels = m.lods.iter().map(|lod| upload(&lod.mesh)).collect();
+                    asset.screen = m.lods.iter().map(|lod| lod.screen_size).collect();
+                    asset
+                })
+                .clone()
+        };
+        let drawn = scene.mesh_assets.iter().map(&mut resolve).collect();
+        for m in &scene.prewarm {
+            resolve(m);
+        }
+        drawn
     }
 
     /// Brings the persistent static buffers up to `scene.statics`; a main frame whose scene has none
@@ -2454,6 +2460,7 @@ impl Renderer {
             let material = scene
                 .mesh_assets
                 .iter()
+                .chain(&scene.prewarm)
                 .filter_map(|m| m.textures.as_ref())
                 .flat_map(material_maps);
             let decal = scene.decals.iter().flat_map(|d| decal_maps(&d.maps));
@@ -10761,6 +10768,49 @@ mod tests {
             delta(&b),
             expect(0, 0, 0),
             "a repeated frame uploads nothing"
+        );
+    }
+
+    /// A prewarmed mesh uploads once and stays resident without being drawn: the frame that then
+    /// draws it uploads nothing, and a frame naming it nowhere evicts it. Skips with no GPU.
+    #[test]
+    fn needs_gpu_a_prewarmed_mesh_uploads_once_and_is_evicted_when_unnamed() {
+        let renderer = match Renderer::new() {
+            Ok(r) => r,
+            Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
+                eprintln!("SKIPPED a_prewarmed_mesh_uploads_once: no GPU adapter");
+                return;
+            }
+            Err(d) => panic!("renderer init failed: {d:?}"),
+        };
+        let m = Arc::new(triangle(0x77));
+        let mut last = renderer.uploads().mesh_assets;
+        let mut moved = |scene: &RenderScene| {
+            renderer
+                .render(scene, FrameSize::native(64, 64))
+                .expect("render succeeds");
+            let now = renderer.uploads().mesh_assets;
+            let delta = now - last;
+            last = now;
+            delta
+        };
+        let mut warm = RenderScene::empty((64, 64));
+        warm.prewarm = vec![m.clone()];
+        assert_eq!(moved(&warm), 1, "the prewarm uploads the mesh");
+        assert_eq!(moved(&warm), 0, "a kept prewarm uploads nothing more");
+        let mut drawn = RenderScene::empty((64, 64));
+        drawn.mesh_assets = vec![m];
+        assert_eq!(
+            moved(&drawn),
+            0,
+            "the frame that draws it finds it resident"
+        );
+        let bare = RenderScene::empty((64, 64));
+        assert_eq!(moved(&bare), 0, "an empty frame uploads nothing");
+        assert_eq!(
+            moved(&drawn),
+            1,
+            "and evicted it, so drawing it uploads again"
         );
     }
 
