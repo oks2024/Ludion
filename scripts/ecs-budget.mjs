@@ -2,12 +2,13 @@
 // Size budget for `ludion-ecs`, the freeze-listed crate (engine-architecture.md §4): the ECS stays small
 // enough to hold in an agent's context, so it carries a metric and a limit rather than a rough number.
 //
-//   code lines  ≤ 3000    per `crates/ludion-ecs/src/*.rs`, the lines before the first column-0
+//   code lines  ≤ 3250    per `crates/ludion-ecs/src/*.rs`, the lines before the first column-0
 //                         `#[cfg(test)]` (every ECS file keeps its test module last), excluding blank
 //                         lines and lines whose trimmed text starts with `//`
 //
 // Over the limit, the crate has outgrown "milestone-minimal": move the new capability to the crate that
 // needs it, or take the growth to the user. Raising the limit is a decision for the user, not a fix.
+// Raised for the opt-in write journal (Serious Isaac request 0039), like J1 before it.
 //
 // Usage:  node scripts/ecs-budget.mjs
 //
@@ -18,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const LIMIT = 3000;
+export const LIMIT = 3250;
 
 // Non-blank, non-comment lines of `text` before its first `#[cfg(test)]` that opens a `mod`.
 export function countCodeLines(text) {

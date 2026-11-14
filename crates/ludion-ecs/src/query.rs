@@ -28,6 +28,7 @@ use ludion_core::ids::EntityId;
 use crate::Component;
 use crate::World;
 use crate::entity::{EntityAllocator, resolve_id};
+use crate::journal::WriteJournal;
 use crate::storage::{AnyStorage, Storage};
 
 /// One element of a query's declared *shape*: the underlying component's `TypeId` and Rust type name,
@@ -374,6 +375,9 @@ macro_rules! impl_query {
         #[allow(non_snake_case)]
         pub struct $join<'w, $($P: QueryParam<'w>),+> {
             $( $col: $P::Col, )+
+            /// Armed only for a query with a `&mut` column while a marker is watched: every
+            /// yielded row is journaled.
+            journal: Option<&'w mut WriteJournal>,
         }
 
         impl<'w, $($P: QueryParam<'w>),+> Query<'w> for ($($P,)+) {
@@ -383,11 +387,12 @@ macro_rules! impl_query {
             fn build(world: &'w mut World) -> Self::Iter {
                 let ids = [ $( $P::type_id() ),+ ];
                 assert_unique_query_types(&ids);
-                let window = world.query_window(false $(|| $P::MUTABLE)+);
-                let storages = world.many_storages_mut(&ids);
+                let write = false $(|| $P::MUTABLE)+;
+                let window = world.query_window(write);
+                let (_, _, journal, storages) = world.split_for_query(&ids, write);
                 let mut drain = storages.into_iter();
                 $( let $col = $P::make_col(drain.next().expect("one storage slot per query element"), &window); )+
-                $join { $($col,)+ }
+                $join { $($col,)+ journal }
             }
 
             fn build_ids(world: &'w mut World) -> QueryIds<'w, Self> {
@@ -395,11 +400,12 @@ macro_rules! impl_query {
                 assert_unique_query_types(&ids);
                 // Split the world's borrow: the entity allocator (shared, for generations) and the
                 // named storages (mutable) are disjoint fields, so both can be live at once.
-                let window = world.query_window(false $(|| $P::MUTABLE)+);
-                let (sim, presentation, storages) = world.split_storages_and_entities(&ids);
+                let write = false $(|| $P::MUTABLE)+;
+                let window = world.query_window(write);
+                let (sim, presentation, journal, storages) = world.split_for_query(&ids, write);
                 let mut drain = storages.into_iter();
                 $( let $col = $P::make_col(drain.next().expect("one storage slot per query element"), &window); )+
-                QueryIds { join: $join { $($col,)+ }, sim, presentation }
+                QueryIds { join: $join { $($col,)+ journal }, sim, presentation }
             }
 
             fn shape() -> Vec<QueryElemShape> {
@@ -439,6 +445,9 @@ macro_rules! impl_query {
                         }
                     )+
                     if aligned {
+                        if let Some(journal) = self.journal.as_deref_mut() {
+                            journal.touch(target);
+                        }
                         return Some((target, ( $( self.$col.take(), )+ )));
                     }
                     // Otherwise a column overshot; loop to recompute a higher target.

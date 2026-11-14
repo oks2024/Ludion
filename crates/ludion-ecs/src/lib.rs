@@ -7,7 +7,8 @@
 //! entities, per-component sorted dense-column storage, typed queries, a
 //! component registry (name + JSON Schema + erased serde), a plain `Parent` hierarchy component
 //! (child lists derived, never stored), sequential system scheduling, and typed resources. There
-//! are no archetypes, no change detection, **no parallel scheduler**, and **no `unsafe`** — every
+//! are no archetypes, no general change ticks (the opt-in write journal,
+//! [`World::watch_with`], is the one exception), **no parallel scheduler**, and **no `unsafe`** — every
 //! storage is two parallel `Vec`s sorted by entity index (keys, values) plus a slot table from
 //! entity index to row.
 //!
@@ -77,6 +78,7 @@ mod asset_path;
 mod entity;
 mod entity_ref;
 mod hierarchy;
+mod journal;
 pub mod par_query;
 mod query;
 mod registry;

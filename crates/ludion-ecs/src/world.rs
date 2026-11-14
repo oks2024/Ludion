@@ -28,6 +28,7 @@ use crate::entity::{
     AllocatorState, EntityAllocator, PRESENTATION_BASE, Phase, is_presentation, resolve_id,
 };
 use crate::hierarchy::{ChildMap, Parent};
+use crate::journal::WriteJournal;
 use crate::query::{FULL_WINDOW, KeyWindow, Query, QueryIds};
 use crate::storage::{AnyStorage, Storage};
 
@@ -182,6 +183,9 @@ pub struct World {
     /// Reads an entity's display name from a label component, for `L0028` messages (see
     /// [`set_entity_label`](World::set_entity_label)). Survives restores.
     entity_label: Option<fn(&World, u32) -> Option<String>>,
+    /// The opt-in write journal (see [`watch_with`](World::watch_with)). Host/consumer observation
+    /// only: never hashed, snapshotted, or replayed. It survives restores as registrations only.
+    pub(crate) journal: WriteJournal,
 }
 
 impl World {
@@ -256,6 +260,7 @@ impl World {
             for storage in self.storages.values_mut() {
                 storage.remove_entity(entity.index);
             }
+            self.journal.on_despawn(entity);
             self.free_slot(entity);
             return Ok(());
         }
@@ -263,6 +268,7 @@ impl World {
         doomed.extend(ChildMap::build_full(self).descendants(entity));
         let mut indices = Vec::with_capacity(doomed.len());
         for id in doomed {
+            self.journal.on_despawn(id);
             self.free_slot(id);
             indices.push(id.index);
         }
@@ -342,10 +348,12 @@ impl World {
         for &id in ids {
             match self.ensure_access(id, true, "despawn_many", no_component) {
                 Ok(()) => {
+                    self.journal.on_despawn(id);
                     self.free_slot(id);
                     doomed.push(id.index);
                     for d in children.iter().flat_map(|map| map.descendants(id)) {
                         if self.is_alive(d) {
+                            self.journal.on_despawn(d);
                             self.free_slot(d);
                             doomed.push(d.index);
                         }
@@ -498,6 +506,7 @@ impl World {
     /// ```
     pub fn restore_entities(&mut self, live: &[EntityId]) -> Result<(), Diagnostic> {
         let entities = EntityAllocator::from_live(live)?;
+        self.forget_journaled();
         self.storages.clear();
         self.resources.clear();
         self.entities = entities;
@@ -536,6 +545,7 @@ impl World {
     /// [`MAX_ENTITY_SLOTS`](crate::MAX_ENTITY_SLOTS) slots; the world is left untouched.
     pub fn restore_allocator(&mut self, state: &AllocatorState) -> Result<(), Diagnostic> {
         let entities = EntityAllocator::from_state(state)?;
+        self.forget_journaled();
         self.storages.clear();
         self.resources.clear();
         self.entities = entities;
@@ -587,6 +597,99 @@ impl World {
         Ok(())
     }
 
+    // --- Write journal ------------------------------------------------------------------------
+
+    /// Starts journaling writes to every entity carrying the marker component `M`; idempotent.
+    ///
+    /// The journal is opt-in host observation, never hashed, snapshotted or replayed. Once armed,
+    /// every entity that carries `M` is recorded as written by: any mutable handout of one of its
+    /// components ([`get_mut`](World::get_mut), [`component_mut`](World::component_mut), a `&mut`
+    /// [`query`](World::query) yield, a [`par_for_each`](World::par_for_each) row), an
+    /// [`insert`](World::insert), a [`remove`](World::remove) that returns a value, the insertion or
+    /// removal of `M` itself, and despawn. An unwatched entity pays one bit test per mutable
+    /// access; a world that watches nothing pays nothing per query row. Entities already carrying
+    /// `M` are seeded, so the first [`drain_watched`](World::drain_watched) returns all of them.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_ecs::World;
+    /// use serde::{Deserialize, Serialize};
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct Static;
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct Hp(u32);
+    ///
+    /// let mut world = World::new();
+    /// world.watch_with::<Static>();
+    /// let wall = world.spawn();
+    /// let crate_ = world.spawn();
+    /// let rat = world.spawn();
+    /// world.insert(wall, Static).unwrap();
+    /// world.insert(crate_, Static).unwrap();
+    /// world.insert(rat, Hp(3)).unwrap();
+    /// assert_eq!(world.drain_watched::<Static>(), vec![wall, crate_]);
+    /// assert!(world.drain_watched::<Static>().is_empty());
+    ///
+    /// // Writes to watched entities are reported; writes to unwatched ones are not.
+    /// world.insert(wall, Hp(9)).unwrap();
+    /// world.get_mut::<Hp>(rat).unwrap().unwrap().0 = 1;
+    /// assert_eq!(world.drain_watched::<Static>(), vec![wall]);
+    ///
+    /// // A dead id is reported too, so the consumer can evict it.
+    /// world.despawn(crate_).unwrap();
+    /// assert_eq!(world.drain_watched::<Static>(), vec![crate_]);
+    /// ```
+    pub fn watch_with<M: Component>(&mut self) {
+        let keys: Vec<u32> = self
+            .storage_opt::<M>()
+            .map_or_else(Vec::new, |s| s.as_slices().0.to_vec());
+        self.journal.watch(TypeId::of::<M>(), &keys);
+    }
+
+    /// Takes the entities written since the last drain that carried the marker `M` at that time,
+    /// sorted and deduplicated; empty if `M` is not watched (see [`watch_with`](World::watch_with)).
+    ///
+    /// **Drain contract:** every returned id is either alive, so the consumer re-reads it (it may
+    /// no longer carry `M`, in which case it evicts it), or dead, so the consumer evicts it.
+    /// Consumers never need a reset signal; a restore reports the old ids the same way. A drained
+    /// watched ancestor expands to its watched [`Parent`] descendants, which moved with it.
+    #[must_use = "the drained ids are consumed; dropping them loses the writes"]
+    pub fn drain_watched<M: Component>(&mut self) -> Vec<EntityId> {
+        let marker = TypeId::of::<M>();
+        let Some((dirty, gone)) = self.journal.take_marker(marker) else {
+            return Vec::new();
+        };
+        let mut ids: Vec<EntityId> = dirty
+            .ones()
+            .map(|i| resolve_id(&self.entities, &self.presentation, i))
+            .collect();
+        if self.doomed_has_children(&ids) {
+            let map = ChildMap::build_full(self);
+            let roots = ids.clone();
+            for root in roots {
+                ids.extend(
+                    map.descendants(root)
+                        .into_iter()
+                        .filter(|d| self.journal.watches(marker, d.index)),
+                );
+            }
+        }
+        ids.extend(gone);
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    /// Moves every watched or dirty live slot into the journal's `gone` lists; called before a
+    /// restore swaps the allocators.
+    fn forget_journaled(&mut self) {
+        let (sim, presentation) = (&self.entities, &self.presentation);
+        self.journal
+            .forget_live(|i| resolve_id(sim, presentation, i));
+    }
+
     // --- Components ---------------------------------------------------------------------------
 
     /// Inserts (or replaces) component `T` on `entity`, returning the previous value if there was
@@ -607,6 +710,7 @@ impl World {
     ) -> Result<Option<T>, Diagnostic> {
         self.record_component_access::<T>(true);
         self.ensure_access(entity, true, "insert", std::any::type_name::<T>)?;
+        self.journal.on_insert(TypeId::of::<T>(), entity.index);
         Ok(self.storage_mut::<T>().insert(entity.index, value))
     }
 
@@ -623,9 +727,13 @@ impl World {
     pub fn remove<T: Component>(&mut self, entity: EntityId) -> Result<Option<T>, Diagnostic> {
         self.record_component_access::<T>(true);
         self.ensure_access(entity, true, "remove", std::any::type_name::<T>)?;
-        Ok(self
+        let removed = self
             .storage_opt_mut::<T>()
-            .and_then(|s| s.remove(entity.index)))
+            .and_then(|s| s.remove(entity.index));
+        if removed.is_some() {
+            self.journal.on_remove(TypeId::of::<T>(), entity.index);
+        }
+        Ok(removed)
     }
 
     /// Gets a shared reference to component `T` on `entity`.
@@ -737,6 +845,13 @@ impl World {
     ) -> Result<Option<&mut T>, Diagnostic> {
         self.record_component_access::<T>(true);
         self.ensure_access(entity, true, "get_mut", std::any::type_name::<T>)?;
+        if self.journal.watches_any(entity.index)
+            && self
+                .storage_opt::<T>()
+                .is_some_and(|s| s.contains(entity.index))
+        {
+            self.journal.touch(entity.index);
+        }
         Ok(self
             .storage_opt_mut::<T>()
             .and_then(|s| s.get_mut(entity.index)))
@@ -1535,31 +1650,25 @@ impl World {
         })
     }
 
-    /// Returns disjoint mutable borrows of the storages named by `ids`, in `ids` order (`None` for
-    /// a type that has no storage yet). `ids` must be duplicate-free; the query builder guarantees
-    /// this before calling. Used only by the query machinery.
-    pub(crate) fn many_storages_mut(&mut self, ids: &[TypeId]) -> Vec<Option<&mut dyn AnyStorage>> {
-        collect_storages(&mut self.storages, ids)
-    }
-
-    /// The id-yielding counterpart of [`many_storages_mut`](World::many_storages_mut): the storages
-    /// named by `ids` (mutable) **and** a shared borrow of the entity allocator, taken disjointly.
-    /// `entities` and `storages` are separate fields, so the mutable storage borrows and the shared
-    /// allocator borrows (one per id range) coexist without `unsafe`. The allocators supply the
-    /// live generation for each joined row's slot index. `ids` must be duplicate-free; used only by
-    /// [`Query::build_ids`].
-    ///
-    /// [`Query::build_ids`]: crate::query::Query::build_ids
-    pub(crate) fn split_storages_and_entities(
+    /// Splits the world for a query build: both entity allocators (shared, for generations), the
+    /// write journal (only when `write` and a marker is armed, so a read-only query or an unwatched
+    /// world pays nothing per row), and disjoint mutable borrows of the storages named by `ids`, in
+    /// `ids` order (`None` for a type with no storage yet). The fields are separate, so the borrows
+    /// coexist without `unsafe`. `ids` must be duplicate-free; used only by the query machinery.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn split_for_query(
         &mut self,
         ids: &[TypeId],
+        write: bool,
     ) -> (
         &EntityAllocator,
         &EntityAllocator,
+        Option<&mut WriteJournal>,
         Vec<Option<&mut dyn AnyStorage>>,
     ) {
         let storages = collect_storages(&mut self.storages, ids);
-        (&self.entities, &self.presentation, storages)
+        let journal = (write && self.journal.is_armed()).then_some(&mut self.journal);
+        (&self.entities, &self.presentation, journal, storages)
     }
 
     /// Lifts the whole storage box for `type_id` **out** of the world, leaving that component type
@@ -1648,7 +1757,7 @@ fn unpoison<T>(result: Result<T, PoisonError<T>>) -> T {
 /// Collects disjoint mutable borrows of the storages named by `ids`, in `ids` order (`None` for a
 /// type with no storage yet). Free function over the `storages` field alone, so a caller can hold a
 /// disjoint borrow of another `World` field at the same time (that is how
-/// [`World::split_storages_and_entities`] borrows the entity allocator alongside the storages).
+/// [`World::split_for_query`] borrows the entity allocators alongside the storages).
 fn collect_storages<'a>(
     storages: &'a mut BTreeMap<TypeId, Box<dyn AnyStorage>>,
     ids: &[TypeId],

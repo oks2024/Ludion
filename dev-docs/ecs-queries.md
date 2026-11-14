@@ -55,6 +55,8 @@ recording included (the recorder's lock is what lets a worker chunk file its rea
 system). A chunk that panics gets its columns put back before the unwind resumes, so the `Schedule`'s
 system-boundary catch still hands the host a structurally whole world.
 
+`&mut` yields — sequential queries and `par_for_each` rows (journaled from the sequential join) — feed the opt-in write journal (`ludion devdocs ludion-ecs`, "Write journal").
+
 Determinism: results are `to_bits`-identical at 1, 2 and 8 threads, gated in `tests/par_query.rs`
 against the sequential `query`. `par_for_each` performs no reduction, so it is `chunk_rows`-invariant
 as well; `par_join_fold` deliberately is not (a different grouping is a different float sum), matching

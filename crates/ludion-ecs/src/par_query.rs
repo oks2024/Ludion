@@ -359,11 +359,20 @@ macro_rules! impl_par_query {
                 $( let mut $lift = $P::take(world); )+
                 // The lifted boxes are owned locals, so the world can be re-borrowed *shared* for
                 // the whole region — that shared borrow is what every chunk's `ParCtx` carries.
+                // Journaled from the sequential join, not per chunk (the chunks only hold `&World`):
+                // the touched set is a pure function of the join, so it is thread-count-invariant.
+                // Declared outside the unwind closure so a caught panic still journals every joined
+                // row — conservative, never a missed write.
+                let journaling = false $(|| $P::MUTABLE)+ && world.journal.is_armed();
+                let mut touched: Vec<u32> = Vec::new();
                 let outcome = {
                     let shared: &World = &*world;
                     panic::catch_unwind(AssertUnwindSafe(|| {
                         $( let ($keys, mut $src) = $P::acquire(shared, &mut $lift, &window); )+
                         let join = join_rows(shared, &[ $($keys),+ ]);
+                        if journaling {
+                            shared.journal.collect_watched(&join.keys, &mut touched);
+                        }
                         let rows = join.ids.len();
                         if rows == 0 {
                             return Vec::new();
@@ -430,6 +439,8 @@ macro_rules! impl_par_query {
                 $( if let Some(boxed) = $lift {
                     world.put_storage_erased($P::type_id(), boxed);
                 } )+
+
+                world.journal.touch_all(&touched);
 
                 match outcome {
                     Ok(results) => results,
