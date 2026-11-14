@@ -3574,10 +3574,11 @@ pub struct Viewmodel {}
 /// Eligible: a `Mesh` with a primitive shape, an unskinned `asset`, a `voxel` or `sculpt` model
 /// (LOD chains included), or a `MeshGrid`, mirrored placements included. Anything else (a skinned
 /// asset, `assembly`, `assembly_part`, `character`, `SkinBone`, `ParentJoint`, `Viewmodel`, a
-/// sprite, particle emitter, text, decal, light, `GroundMarker`, `Volley`, `PatternPlayer`, or an
-/// entity with nothing to draw) is reported `L1341` and takes the dynamic path. Every `Parent`
-/// ancestor must be `Static` too; otherwise the entity is reported `L1342` and takes the dynamic
-/// path, since a static under a moving parent would go stale.
+/// sprite, particle emitter, text, decal, light, `GroundMarker`, `Volley`, `PatternPlayer`) is
+/// reported `L1341` and takes the dynamic path. A `Static` with no renderable is a transform
+/// group: never reported, and its `Static` children stay static. Every `Parent` ancestor must be
+/// `Static` too; otherwise the entity is reported `L1342` and takes the dynamic path, since a
+/// static under a moving parent would go stale.
 ///
 /// Writes stay legal: a written static entity is re-placed. One written on 30 consecutive frames
 /// is reported once (`L1343`); remove `Static` from it. On a sim entity the flag is hashed like any

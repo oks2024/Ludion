@@ -782,6 +782,13 @@ fn extract_inner(
         feed,
         degraded,
     );
+    // The GI voxelizer's view of the statics is resolved only for a scene that has a `GiVolume`,
+    // and only when the static set changed; its error surfaces at the GI stage below.
+    let gi_volume = extract_gi_volume(world, &ids);
+    let static_gi = match gi_volume {
+        Some(_) => statics.ensure_gi(&ids, assets),
+        None => Ok(()),
+    };
     let statics = &*statics;
     let mut placed = place_with(
         world,
@@ -1415,13 +1422,14 @@ fn extract_inner(
     if viewmodel_camera.is_some() {
         placed.meshes.retain(|m| !viewmodel_frame.contains(m.id));
     }
-    let (voxel, gi) = match extract_gi_volume(world, &ids) {
+    let (voxel, gi) = match gi_volume {
         None => (None, None),
         Some((index, volume)) => {
+            static_gi.map_err(|diagnostics| gi_volume_errors(diagnostics, index))?;
+            let resolved = statics.gi().expect("ensure_gi succeeded");
             assets.observe_begin(LoadPhase::Voxelize);
-            let mut gi_meshes = statics.placements(&ids);
-            gi_meshes.append(&mut placed.meshes);
-            let voxel = crate::voxelizer::voxelize(&gi_meshes, volume.cell_size, assets);
+            let voxel =
+                crate::voxelizer::voxelize(resolved, &placed.meshes, volume.cell_size, assets);
             assets.observe_end(LoadPhase::Voxelize);
             let voxel = voxel
                 .map_err(|diagnostics| gi_volume_errors(diagnostics, index))?
@@ -1482,6 +1490,7 @@ fn extract_inner(
         ambient,
         textures,
         mesh_assets,
+        statics: static_flat.range,
         meshes,
         sprites,
         ground_markers,
@@ -8829,7 +8838,9 @@ mod tests {
                 root: ludion_assets::AssetRoot::content(&dir),
                 cache: &mut cache,
             };
-            let voxelized = crate::voxelizer::voxelize(&placed.meshes, 0.5, &mut assets).unwrap();
+            let voxelized =
+                crate::voxelizer::voxelize(&Default::default(), &placed.meshes, 0.5, &mut assets)
+                    .unwrap();
             assert!(voxelized.grid.is_some());
             let report = crate::voxelizer::skip_report(&placed.meshes, &mut assets).unwrap();
             assert_eq!((report.dynamic.count, report.dynamic.first), (2, Some(3)));

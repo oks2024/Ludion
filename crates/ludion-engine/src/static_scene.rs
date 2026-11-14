@@ -20,7 +20,7 @@ use ludion_core::collections::{StableMap, StableSet};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, World};
-use ludion_renderer::{MeshData, MeshInstance, MeshShape};
+use ludion_renderer::{MeshData, MeshInstance, MeshShape, StaticRange};
 
 use crate::components::{
     GiDynamic, Mesh, MeshGrid, MeshSource, ParentJoint, ParticleEmitter, PointLight, SkinBone,
@@ -34,6 +34,7 @@ use crate::hierarchy::{FrameVisibility, MAX_HIERARCHY_DEPTH, WorldAffines};
 use crate::static_check::{
     HotStatic, StaticIneligible, ineligible_diagnostic, parent_diagnostic, static_ineligibility,
 };
+use crate::voxelizer::{StaticGi, resolve_static};
 
 /// What invalidated the scene since the last refresh.
 pub(crate) enum Feed {
@@ -96,6 +97,8 @@ pub(crate) struct Flat {
     /// First-encounter order over `instances`, deduplicated by path.
     pub(crate) assets: Vec<Arc<MeshData>>,
     pub(crate) asset_paths: Vec<String>,
+    /// The prefix descriptor for `RenderScene::statics`.
+    pub(crate) range: StaticRange,
 }
 
 /// A mesh document in use, with the entities that draw it.
@@ -115,6 +118,8 @@ pub(crate) struct StaticScene {
     hot: HotStatic,
     flat: Flat,
     asset_uses: Vec<AssetUse>,
+    /// The GI voxelizer's resolved view of the held placements; built on demand, dropped on change.
+    gi: Option<StaticGi>,
 }
 
 enum Class {
@@ -150,15 +155,32 @@ impl StaticScene {
         &self.flat
     }
 
-    /// Every held placement, hidden ones included, in the order the flat lists use: the statics
-    /// half of the GI voxelizer's input. `ids` is the walk's entity list, for the error pointers.
-    pub(crate) fn placements(&self, ids: &[EntityId]) -> Vec<PlacedMesh<'_>> {
-        let mut out = Vec::new();
+    /// Resolves the held placements for the GI voxelizer once per change to the static set,
+    /// hidden ones included, in the order the flat lists use. `ids` is the walk's entity list, for
+    /// the error pointers.
+    ///
+    /// # Errors
+    /// A mesh document the voxelizer cannot load; nothing is cached, so the next frame retries.
+    pub(crate) fn ensure_gi(
+        &mut self,
+        ids: &[EntityId],
+        assets: &mut dyn SceneAssets,
+    ) -> Result<(), Vec<Diagnostic>> {
+        if self.gi.is_some() {
+            return Ok(());
+        }
+        let mut placements = Vec::new();
         for (&id, entry) in &self.entries {
             let index = ids.binary_search(&id).unwrap_or(0);
-            out.extend(entry.parts.iter().map(|part| part.placed(index)));
+            placements.extend(entry.parts.iter().map(|part| part.placed(index)));
         }
-        out
+        self.gi = Some(resolve_static(&placements, assets)?);
+        Ok(())
+    }
+
+    /// What [`ensure_gi`](StaticScene::ensure_gi) built; empty before it, or with no statics.
+    pub(crate) fn gi(&self) -> Option<&StaticGi> {
+        self.gi.as_ref()
     }
 
     /// Brings the scene up to date with `feed`, reporting rejections and hot statics to `degraded`.
@@ -242,6 +264,7 @@ impl StaticScene {
         self.hot = HotStatic::default();
         self.flat = Flat::default();
         self.asset_uses = Vec::new();
+        self.gi = None;
     }
 
     /// Marks the users of every document whose decoded data is no longer the one placed with
@@ -301,7 +324,9 @@ impl StaticScene {
                 flat.owners.push(id);
             }
         }
+        flat.range = StaticRange::of(&flat.instances, &flat.assets);
         self.flat = flat;
+        self.gi = None;
         self.asset_uses = uses.into_iter().map(|(_, used)| used).collect();
     }
 }
@@ -315,6 +340,7 @@ fn classify(frame: &mut Frame<'_>, inherit: &mut MeshInherit, id: EntityId) -> C
     let key = crate::diagnostics::offender_key(world, id);
     let mesh = world.get::<Mesh>(id).ok().flatten();
     let grid = world.get::<MeshGrid>(id).ok().flatten();
+    let group = mesh.is_none() && grid.is_none();
     let mut shapes: Vec<&MeshSource> = mesh.iter().map(|m| &m.shape).collect();
     if let Some(grid) = grid {
         shapes.extend(grid.legend.values().map(|m| &m.shape));
@@ -340,6 +366,10 @@ fn classify(frame: &mut Frame<'_>, inherit: &mut MeshInherit, id: EntityId) -> C
     let subject = id.to_string();
     if let Some(reason) = static_ineligibility(&has, &shapes) {
         return rejected(key, ineligible_diagnostic(&subject, &reason), "static");
+    }
+    if group {
+        // A transform group draws nothing and is held by no one; it is still a `Static` ancestor.
+        return Class::NotStatic;
     }
 
     let mut chain = Vec::new();

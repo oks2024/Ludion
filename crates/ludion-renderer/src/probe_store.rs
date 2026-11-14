@@ -103,6 +103,8 @@ pub(crate) fn world_key(
         // only sprites, particles, text and the UI index it, and the face scene has none
         textures: _,
         mesh_assets,
+        // the leading instances are hashed through `statics.key`, which the extract computed once
+        statics,
         meshes,
         // the lists below are stripped from the face scene
         sprites: _,
@@ -158,7 +160,14 @@ pub(crate) fn world_key(
             None => w.u32(0),
         }
     }
-    w.debug(meshes);
+    if statics.count == 0 {
+        w.debug(meshes);
+    } else {
+        // content-addressed across processes: the key is a content hash, never a generation
+        w.u32(2);
+        w.u64(statics.key);
+        w.debug(&&meshes[statics.count..]);
+    }
     w.debug(lights);
     w.debug(spot_lights);
     w.debug(sun);
@@ -661,6 +670,27 @@ mod tests {
     #[test]
     fn the_same_input_gives_the_same_key() {
         assert_eq!(key_of(&fixture()), key_of(&fixture()));
+    }
+
+    #[test]
+    fn a_static_prefix_keys_through_its_range() {
+        use crate::scene::StaticRange;
+        let mut f = fixture();
+        let range = |f: &Fixture| StaticRange::of(&f.scene.meshes[..1], &f.scene.mesh_assets[..1]);
+        f.scene.statics = range(&f);
+        let base = key_of(&f);
+        assert_eq!(base, key_of(&f));
+        assert_ne!(base, key_of(&fixture()), "the range is part of the key");
+        f.scene.meshes[0].model *= Mat4::from_translation(Vec3::X);
+        f.scene.statics = range(&f);
+        assert_ne!(
+            key_of(&f),
+            base,
+            "a moved static with a recomputed key re-keys"
+        );
+        let moved = key_of(&f);
+        f.scene.meshes[1].color[0] = 0.25;
+        assert_ne!(key_of(&f), moved, "the dynamic tail stays keyed");
     }
 
     #[test]

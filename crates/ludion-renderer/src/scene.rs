@@ -1305,6 +1305,90 @@ pub struct LodSettings {
     pub shadow_levels: u32,
 }
 
+/// The static prefix of a scene's mesh list: the leading `count` entries of
+/// [`RenderScene::meshes`] and the leading `assets` entries of [`RenderScene::mesh_assets`] come
+/// from `Static` entities, in ascending entity order. `key` is a content hash of those instances
+/// and of those assets' content hashes, so a consumer keyed on the static set compares one `u64`
+/// instead of walking every instance. The default is no statics.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct StaticRange {
+    /// Leading entries of [`RenderScene::meshes`] that are static.
+    pub count: usize,
+    /// Leading entries of [`RenderScene::mesh_assets`] that the static instances reference.
+    pub assets: usize,
+    /// Content hash of the static instances and their assets; `0` with no statics.
+    pub key: u64,
+}
+
+impl StaticRange {
+    /// The range of `instances` over `assets`, with `key` hashed from every field of every instance
+    /// (floats by bit pattern) and each asset's content hash.
+    pub fn of(instances: &[MeshInstance], assets: &[Arc<MeshData>]) -> StaticRange {
+        if instances.is_empty() {
+            return StaticRange::default();
+        }
+        let mut bytes = Vec::with_capacity(instances.len() * 224 + assets.len() * 8);
+        for instance in instances {
+            // Full destructure: a new `MeshInstance` field fails to compile here until it is keyed.
+            let MeshInstance {
+                shape,
+                model,
+                normal_matrix,
+                color,
+                material,
+                use_vertex_material,
+                fade,
+                fade_height_min,
+                flash,
+                flash_color,
+                wrap,
+                scatter_color,
+                bone_offset,
+                cast_shadows,
+                viewmodel,
+                rim,
+                medium,
+            } = instance;
+            match shape {
+                MeshShape::Cube => bytes.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0]),
+                MeshShape::Plane => bytes.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0, 0]),
+                MeshShape::Sphere => bytes.extend_from_slice(&[2, 0, 0, 0, 0, 0, 0, 0, 0]),
+                MeshShape::Asset(index) => {
+                    bytes.push(3);
+                    bytes.extend_from_slice(&(*index as u64).to_le_bytes());
+                }
+            }
+            let floats = model
+                .to_cols_array()
+                .into_iter()
+                .chain(normal_matrix.to_cols_array())
+                .chain(color.iter().copied())
+                .chain(material.iter().copied())
+                .chain([*fade, *fade_height_min, *flash, *wrap, *medium])
+                .chain(flash_color.iter().copied())
+                .chain(scatter_color.iter().copied())
+                .chain(rim.iter().copied());
+            for value in floats {
+                bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+            }
+            bytes.extend_from_slice(&bone_offset.to_le_bytes());
+            bytes.extend_from_slice(&[
+                u8::from(*use_vertex_material),
+                u8::from(*cast_shadows),
+                u8::from(*viewmodel),
+            ]);
+        }
+        for asset in assets {
+            bytes.extend_from_slice(&asset.hash.to_le_bytes());
+        }
+        StaticRange {
+            count: instances.len(),
+            assets: assets.len(),
+            key: ludion_assets::content_hash(&bytes),
+        }
+    }
+}
+
 /// Everything the renderer needs to draw one frame — plain data, no ECS, no paths.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RenderScene {
@@ -1327,6 +1411,9 @@ pub struct RenderScene {
     /// engine's `AssetCache` so a cache hit clones a refcount, not the mesh's megabyte-scale buffers
     /// (`Plan/voxel-artist-scale.md`).
     pub mesh_assets: Vec<Arc<MeshData>>,
+    /// The static prefix of [`meshes`](Self::meshes) and [`mesh_assets`](Self::mesh_assets); the
+    /// default for a scene with no `Static`.
+    pub statics: StaticRange,
     /// Low-poly meshes.
     pub meshes: Vec<MeshInstance>,
     /// Sprites and billboards.
@@ -1423,6 +1510,7 @@ impl RenderScene {
             ambient: DEFAULT_AMBIENT,
             textures: Vec::new(),
             mesh_assets: Vec::new(),
+            statics: StaticRange::default(),
             meshes: Vec::new(),
             sprites: Vec::new(),
             ground_markers: Vec::new(),
@@ -1487,6 +1575,104 @@ pub fn aspect_ratio(viewport: (u32, u32)) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn instance() -> MeshInstance {
+        MeshInstance {
+            shape: MeshShape::Asset(0),
+            model: Mat4::from_translation(Vec3::new(1.0, 2.0, 3.0)),
+            normal_matrix: Mat3::IDENTITY,
+            color: [1.0; 4],
+            material: [0.5, 0.0, 0.0],
+            use_vertex_material: false,
+            fade: 1.0,
+            fade_height_min: -f32::MAX,
+            flash: 0.0,
+            flash_color: [1.0; 3],
+            wrap: 0.0,
+            scatter_color: [1.0; 3],
+            bone_offset: 0,
+            cast_shadows: true,
+            viewmodel: false,
+            rim: [0.0; 4],
+            medium: 1.0,
+        }
+    }
+
+    #[test]
+    fn static_range_key_is_stable_and_moves_with_any_field() {
+        let base = instance();
+        let key = |i: MeshInstance| StaticRange::of(&[i], &[]).key;
+        assert_eq!(key(base), key(base));
+        assert_eq!(StaticRange::of(&[], &[]), StaticRange::default());
+        let variants = [
+            MeshInstance {
+                shape: MeshShape::Asset(1),
+                ..base
+            },
+            MeshInstance {
+                shape: MeshShape::Cube,
+                ..base
+            },
+            MeshInstance {
+                model: Mat4::IDENTITY,
+                ..base
+            },
+            MeshInstance {
+                normal_matrix: Mat3::ZERO,
+                ..base
+            },
+            MeshInstance {
+                color: [0.0; 4],
+                ..base
+            },
+            MeshInstance {
+                material: [0.0; 3],
+                ..base
+            },
+            MeshInstance {
+                use_vertex_material: true,
+                ..base
+            },
+            MeshInstance { fade: 0.5, ..base },
+            MeshInstance {
+                fade_height_min: 0.0,
+                ..base
+            },
+            MeshInstance { flash: 0.1, ..base },
+            MeshInstance {
+                flash_color: [0.0; 3],
+                ..base
+            },
+            MeshInstance { wrap: 0.1, ..base },
+            MeshInstance {
+                scatter_color: [0.0; 3],
+                ..base
+            },
+            MeshInstance {
+                bone_offset: 1,
+                ..base
+            },
+            MeshInstance {
+                cast_shadows: false,
+                ..base
+            },
+            MeshInstance {
+                viewmodel: true,
+                ..base
+            },
+            MeshInstance {
+                rim: [1.0; 4],
+                ..base
+            },
+            MeshInstance {
+                medium: 2.0,
+                ..base
+            },
+        ];
+        for (n, v) in variants.into_iter().enumerate() {
+            assert_ne!(key(v), key(base), "variant {n} did not move the key");
+        }
+    }
 
     #[test]
     fn view_forward_lane_is_zero_for_perspective_and_the_forward_for_ortho() {

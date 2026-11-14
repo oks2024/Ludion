@@ -14,8 +14,6 @@ use ludion_scene::Scene;
 /// Why an entity carrying `Static` cannot take the static path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StaticIneligible {
-    /// Neither a `Mesh` nor a `MeshGrid`: there is nothing to keep.
-    NothingToDraw,
     /// A component the static path cannot hold.
     Component(&'static str),
     /// A mesh shape the static path cannot hold.
@@ -28,7 +26,6 @@ impl StaticIneligible {
     /// The reason as a message fragment.
     pub fn reason(&self) -> String {
         match self {
-            StaticIneligible::NothingToDraw => "it has no `Mesh` or `MeshGrid` to draw".to_string(),
             StaticIneligible::Component(name) => format!("it carries a `{name}`"),
             StaticIneligible::Shape(shape) => format!("its mesh shape is `{shape}`"),
             StaticIneligible::SkinnedAsset => "its mesh asset is skinned".to_string(),
@@ -53,16 +50,14 @@ const DISQUALIFYING: [&str; 13] = [
     "PatternPlayer",
 ];
 
-/// The first reason an entity cannot be static, or `None` when it can. `has` answers whether the
+/// The first reason an entity cannot be static, or `None` when it can. An entity with no `Mesh`
+/// or `MeshGrid` and no disqualifying component is a transform group: never ineligible. `has` answers whether the
 /// entity carries a component by name; `shapes` is its `Mesh.shape` plus every `MeshGrid.legend`
 /// mesh shape. A skinned `asset` needs the file and is the caller's check.
 pub(crate) fn static_ineligibility(
     has: &dyn Fn(&str) -> bool,
     shapes: &[&MeshSource],
 ) -> Option<StaticIneligible> {
-    if !(has("Mesh") || has("MeshGrid")) {
-        return Some(StaticIneligible::NothingToDraw);
-    }
     if let Some(name) = DISQUALIFYING.iter().find(|name| has(name)) {
         return Some(StaticIneligible::Component(name));
     }
@@ -252,7 +247,6 @@ mod tests {
     #[test]
     fn ineligible_entities_are_l1341() {
         for body in [
-            "      Static: {}\n      Transform: {}\n",
             "      Static: {}\n      Sprite: {}\n",
             "      Static: {}\n      Mesh:\n        shape:\n          assembly: a.assembly.yaml\n",
             "      Static: {}\n      Mesh:\n        shape:\n          character: a.character.yaml\n",
@@ -264,6 +258,11 @@ mod tests {
                 "{body}"
             );
         }
+    }
+
+    #[test]
+    fn a_static_with_no_renderable_is_a_silent_transform_group() {
+        assert!(codes_of("  - components:\n      Static: {}\n      Transform: {}\n").is_empty());
     }
 
     #[test]

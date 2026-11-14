@@ -383,3 +383,121 @@ fn the_static_kit_room_extracts_the_same_kept_and_rebuilt() {
     assert!(reported(&engine, code::STATIC_REWRITTEN).is_empty());
     assert!(reported(&engine, code::STATIC_INELIGIBLE).is_empty());
 }
+
+#[test]
+fn a_static_group_root_is_silent_and_its_static_children_stay_static() {
+    let group = "  - name: group
+    components:
+      Transform:
+        translation:
+          - 10.0
+          - 0.0
+          - 0.0
+      Static: {}
+";
+    let mut engine = engine_for(&[group.to_string(), marked("leaf", 1.0, "cube")]);
+    let (group, leaf) = (named(&engine, "group"), named(&engine, "leaf"));
+    engine
+        .world_mut()
+        .insert(leaf, Parent(group))
+        .expect("parents");
+    let (scene, blend) = on_equals_off(&mut engine);
+    assert_eq!(leading_unkeyed(&blend), 1, "the leaf is held");
+    assert_eq!(scene.statics.count, 1);
+    assert!(drawn_at(&scene, 11.0), "it follows the group's transform");
+    assert!(reported(&engine, code::STATIC_INELIGIBLE).is_empty());
+    assert!(reported(&engine, code::STATIC_PARENT_NOT_STATIC).is_empty());
+
+    set_x(&mut engine, group, 20.0);
+    let (scene, _) = on_equals_off(&mut engine);
+    assert!(drawn_at(&scene, 21.0), "a moved group moves its children");
+}
+
+#[test]
+fn the_static_range_describes_the_prefix_and_its_key_follows_the_content() {
+    let mut engine = engine_for(&[
+        marked("a", 0.0, "cube"),
+        dynamic("crate", 1.0, "cube"),
+        marked("b", 2.0, "sphere"),
+    ]);
+    let (first, _) = on_equals_off(&mut engine);
+    assert_eq!(first.statics.count, 2);
+    assert_ne!(first.statics.key, 0);
+    for _ in 0..3 {
+        let (quiet, _) = on_equals_off(&mut engine);
+        assert_eq!(quiet.statics, first.statics, "a quiet frame keeps the key");
+    }
+    let a = named(&engine, "a");
+    engine
+        .execute(Command::ComponentSet(ComponentSetParams {
+            entity: a,
+            component: "Transform".into(),
+            value: serde_json::json!({"translation": [7.0, 0.0, 0.0]}),
+        }))
+        .expect("the wire edit applies");
+    let (moved, _) = on_equals_off(&mut engine);
+    assert_eq!(moved.statics.count, 2);
+    assert_ne!(moved.statics.key, first.statics.key, "a wire edit moves it");
+
+    let crate_ = named(&engine, "crate");
+    set_x(&mut engine, crate_, 9.0);
+    let (after, _) = on_equals_off(&mut engine);
+    assert_eq!(
+        after.statics, moved.statics,
+        "a dynamic's motion never moves it"
+    );
+}
+
+#[test]
+fn a_scene_without_statics_has_the_default_range() {
+    let mut engine = engine_for(&[dynamic("a", 0.0, "cube")]);
+    let (scene, _) = on_equals_off(&mut engine);
+    assert_eq!(scene.statics, Default::default());
+}
+
+#[test]
+fn the_static_kit_range_covers_the_kit_and_stays_put() {
+    let mut engine = Engine::builder()
+        .project_root(gallery())
+        .build()
+        .expect("boots");
+    let text = std::fs::read_to_string(gallery().join("staged/static-kit.yaml"))
+        .expect("the committed static-kit scene");
+    engine.load_inline_scene(&text).expect("the scene loads");
+    let (scene, blend) = on_equals_off(&mut engine);
+    assert_eq!(scene.statics.count, leading_unkeyed(&blend));
+    let key = scene.statics.key;
+    for _ in 0..3 {
+        assert_eq!(on_equals_off(&mut engine).0.statics.key, key);
+    }
+}
+
+#[test]
+fn the_gi_grid_is_kept_on_quiet_frames_and_rebuilt_when_a_static_moves() {
+    let volume = "  - name: gi
+    components:
+      GiVolume:
+        cell_size: 1.0
+        probe_spacing: 4.0
+";
+    let mut engine = engine_for(&[
+        volume.to_string(),
+        marked("floor", 0.0, "cube"),
+        dynamic("crate", 2.0, "cube"),
+        marked("pillar", -2.0, "cube"),
+    ]);
+    let (first, _) = extract(&mut engine);
+    let (second, _) = extract(&mut engine);
+    let (grid, again) = (first.voxel.expect("voxel"), second.voxel.expect("voxel"));
+    assert!(
+        std::sync::Arc::ptr_eq(&grid, &again),
+        "a quiet frame keeps the grid"
+    );
+
+    let pillar = named(&engine, "pillar");
+    set_x(&mut engine, pillar, -3.0);
+    let (moved, _) = extract(&mut engine);
+    let moved = moved.voxel.expect("voxel");
+    assert_ne!(moved.hash, grid.hash, "a moved static rebuilds the grid");
+    on_equals_off(&mut engine);
+}

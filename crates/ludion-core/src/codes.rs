@@ -8438,10 +8438,11 @@ its default.",
         title: "a static entity cannot take the static path",
         explanation: "\
 An entity carries `Static` (pointer `/entities/{i}/components/Static`) but has something the static
-path cannot hold: nothing to draw (no `Mesh` or `MeshGrid`), a skinned `asset`, an `assembly`,
-`assembly_part` or `character` shape, or one of `SkinBone`, `ParentJoint`, `Viewmodel`, `Sprite`,
-`ParticleEmitter`, `Text`, `Decal`, `PointLight`, `SpotLight`, `DirectionalLight`, `GroundMarker`,
-`Volley`, `PatternPlayer`. The message names the reason. The entity still draws, on the dynamic path.
+path cannot hold: a skinned `asset`, an `assembly`, `assembly_part` or `character` shape, or one of
+`SkinBone`, `ParentJoint`, `Viewmodel`, `Sprite`, `ParticleEmitter`, `Text`, `Decal`, `PointLight`,
+`SpotLight`, `DirectionalLight`, `GroundMarker`, `Volley`, `PatternPlayer`. The message names the
+reason. The entity still draws, on the dynamic path. A `Static` with no renderable is a transform
+group: it is never reported and lets its `Static` children stay static.
 
 Fix: remove `Static` from the entity, or remove what makes it ineligible.",
     },

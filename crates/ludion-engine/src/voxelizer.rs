@@ -177,12 +177,13 @@ pub(crate) struct Voxelized {
 /// - `L1101`/`L1113`/`L1114` if a referenced voxel document cannot be read or validated. Extract
 ///   resolves and reports every such document before it calls this, so the path is defensive.
 pub(crate) fn voxelize(
+    statics: &StaticGi,
     meshes: &[PlacedMesh<'_>],
     cell_size: f32,
     assets: &mut dyn SceneAssets,
 ) -> Result<Voxelized, Vec<Diagnostic>> {
     let (instances, _) = resolve(meshes, assets)?;
-    let signature = signature(&instances, cell_size);
+    let signature = signature(statics, &instances, cell_size);
     if let Some(cached) = assets.voxelization(signature) {
         return Ok(Voxelized { grid: cached });
     }
@@ -197,7 +198,8 @@ pub(crate) fn voxelize(
     // Object boxes of asset meshes walk every vertex, so they are computed here, on a miss, once
     // per distinct mesh — never in `resolve` or `signature`, which run every frame.
     let mut boxes = MeshBoxes::new();
-    let Some(bounds) = scene_bounds(&instances, &mut boxes) else {
+    let ordered = || statics.instances.iter().chain(&instances);
+    let Some(bounds) = scene_bounds(ordered(), &mut boxes) else {
         return Ok(Voxelized {
             grid: assets.set_voxelization(signature, None),
         });
@@ -205,7 +207,7 @@ pub(crate) fn voxelize(
     let mut grid = allocate(bounds, cell_size)?;
     #[cfg(test)]
     RASTERIZATIONS.with(|count| count.set(count.get() + 1));
-    for instance in &instances {
+    for instance in ordered() {
         rasterize(&mut grid, instance, &mut boxes);
     }
     Ok(Voxelized {
@@ -239,36 +241,77 @@ pub(crate) fn rasterization_count() -> u32 {
 /// grid are two keys. That hash also covers whether the document authors a material, which is what
 /// picks a voxel model's emissive source — and `emissive` is load-bearing for every instance, since
 /// a model whose palette authors none deposits the component's value.
-fn signature(instances: &[Instance], cell_size: f32) -> u64 {
-    let mut bytes: Vec<u8> = Vec::with_capacity(4 + instances.len() * 96);
+///
+/// With kept statics ([`StaticGi`]) the key hashes their precomputed digest in place of their
+/// instances, so a quiet frame never re-walks them; without, the bytes are exactly the historical
+/// ones.
+fn signature(statics: &StaticGi, instances: &[Instance], cell_size: f32) -> u64 {
+    let mut bytes: Vec<u8> = Vec::with_capacity(16 + instances.len() * 96);
     bytes.extend_from_slice(&cell_size.to_le_bytes());
+    if !statics.instances.is_empty() {
+        bytes.extend_from_slice(b"static");
+        bytes.extend_from_slice(&statics.digest.to_le_bytes());
+    }
     for instance in instances {
-        for v in instance.model.to_cols_array() {
-            bytes.extend_from_slice(&v.to_le_bytes());
-        }
-        for v in instance.color {
-            bytes.extend_from_slice(&v.to_le_bytes());
-        }
-        bytes.extend_from_slice(&instance.emissive.to_le_bytes());
-        match &instance.solid {
-            Solid::Cube => bytes.push(0),
-            Solid::Box { min, max } => {
-                bytes.push(1);
-                for v in [min.x, min.y, min.z, max.x, max.y, max.z] {
-                    bytes.extend_from_slice(&v.to_le_bytes());
-                }
-            }
-            Solid::Voxel { grid, .. } => {
-                bytes.push(2);
-                bytes.extend_from_slice(&grid.hash.to_le_bytes());
-            }
-            Solid::Mesh { mesh } => {
-                bytes.push(3);
-                bytes.extend_from_slice(&mesh.hash.to_le_bytes());
-            }
-        }
+        instance_bytes(instance, &mut bytes);
     }
     ludion_assets::content_hash(&bytes)
+}
+
+/// The values [`rasterize`] reads from one instance, as signature bytes.
+fn instance_bytes(instance: &Instance, bytes: &mut Vec<u8>) {
+    for v in instance.model.to_cols_array() {
+        bytes.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in instance.color {
+        bytes.extend_from_slice(&v.to_le_bytes());
+    }
+    bytes.extend_from_slice(&instance.emissive.to_le_bytes());
+    match &instance.solid {
+        Solid::Cube => bytes.push(0),
+        Solid::Box { min, max } => {
+            bytes.push(1);
+            for v in [min.x, min.y, min.z, max.x, max.y, max.z] {
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        Solid::Voxel { grid, .. } => {
+            bytes.push(2);
+            bytes.extend_from_slice(&grid.hash.to_le_bytes());
+        }
+        Solid::Mesh { mesh } => {
+            bytes.push(3);
+            bytes.extend_from_slice(&mesh.hash.to_le_bytes());
+        }
+    }
+}
+
+/// The resolved GI instances of the kept statics and a digest of their signature bytes, built once
+/// per change to the static set (`StaticScene::ensure_gi`) rather than once per frame.
+#[derive(Default)]
+pub(crate) struct StaticGi {
+    instances: Vec<Instance>,
+    digest: u64,
+}
+
+/// Resolves the kept statics' placements (hidden ones included, in the flat lists' order) into a
+/// [`StaticGi`].
+///
+/// # Errors
+/// As [`voxelize`]: a mesh document that will not load.
+pub(crate) fn resolve_static(
+    placements: &[PlacedMesh<'_>],
+    assets: &mut dyn SceneAssets,
+) -> Result<StaticGi, Vec<Diagnostic>> {
+    let (instances, _) = resolve(placements, assets)?;
+    let mut bytes = Vec::with_capacity(instances.len() * 96);
+    for instance in &instances {
+        instance_bytes(instance, &mut bytes);
+    }
+    Ok(StaticGi {
+        digest: ludion_assets::content_hash(&bytes),
+        instances,
+    })
 }
 
 /// One instance's resolved contribution: its world transform, the two shading channels the grid
@@ -551,7 +594,10 @@ fn voxel_solid(
 /// The union of every instance's transformed object box. A voxel model's box is `render.bounds`'
 /// own (both call `grid_box`); the other solids are the primitive boxes the query reports too. `None`
 /// for a scene with nothing to bound.
-fn scene_bounds(instances: &[Instance], boxes: &mut MeshBoxes) -> Option<Aabb> {
+fn scene_bounds<'a>(
+    instances: impl Iterator<Item = &'a Instance>,
+    boxes: &mut MeshBoxes,
+) -> Option<Aabb> {
     let mut bounds: Option<Aabb> = None;
     for instance in instances {
         if let Some(world) = world_box(instance, boxes) {
