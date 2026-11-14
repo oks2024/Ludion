@@ -1537,8 +1537,8 @@ impl PhysicsWorld {
         self.rapier.prime();
     }
 
-    /// Whether the last [`step`](PhysicsWorld::step) reused the collision detection
-    /// [`prime`](crate::prime) ran at scene commit, and so skipped its own detect phase. A measurement only: it never
+    /// Whether the last step reused the collision detection [`prime`](crate::prime) ran at scene
+    /// commit, and so skipped its own detect phase. A measurement only: it never
     /// feeds the simulation, and a world that was not primed, or whose first tick found anything
     /// changed, reports `false` with the same result.
     pub fn last_step_primed(&self) -> bool {
