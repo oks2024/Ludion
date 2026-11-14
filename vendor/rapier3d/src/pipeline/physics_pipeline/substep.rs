@@ -263,10 +263,12 @@ impl PhysicsPipeline {
         }
     }
 
+    /// The part of a step that reconciles user changes and runs collision detection, everything
+    /// before the solve loop. Returns the CCD fixed-target cache invalidation signal. Shared by
+    /// `step_inner` and [`Self::prime`].
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn step_inner(
+    pub(super) fn detect_phase(
         &mut self,
-        gravity: Vector,
         integration_parameters: &IntegrationParameters,
         islands: &mut IslandManager,
         broad_phase: &mut BroadPhaseBvh,
@@ -275,12 +277,9 @@ impl PhysicsPipeline {
         colliders: &mut ColliderSet,
         impulse_joints: &mut ImpulseJointSet,
         multibody_joints: &mut MultibodyJointSet,
-        ccd_solver: &mut CCDSolver,
         hooks: &dyn PhysicsHooks,
         events: &dyn EventHandler,
-    ) {
-        self.counters.reset();
-        self.counters.step_started();
+    ) -> bool {
         self.quarantine.clear();
 
         // Apply some of delayed wake-ups.
@@ -398,6 +397,59 @@ impl PhysicsPipeline {
         self.clear_modified_bodies(bodies, &mut modified_bodies);
         removed_colliders.clear();
         self.counters.stages.user_changes.pause();
+        colliders.set_modified(modified_colliders);
+        ccd_scene_changed
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn step_inner(
+        &mut self,
+        gravity: Vector,
+        integration_parameters: &IntegrationParameters,
+        islands: &mut IslandManager,
+        broad_phase: &mut BroadPhaseBvh,
+        narrow_phase: &mut NarrowPhase,
+        bodies: &mut RigidBodySet,
+        colliders: &mut ColliderSet,
+        impulse_joints: &mut ImpulseJointSet,
+        multibody_joints: &mut MultibodyJointSet,
+        ccd_solver: &mut CCDSolver,
+        hooks: &dyn PhysicsHooks,
+        events: &dyn EventHandler,
+    ) {
+        self.counters.reset();
+        self.counters.step_started();
+
+        // A prime made for this step's `dt`, with nothing touched since, already ran the detect
+        // phase on the state the step now sees (and left its quarantine in place); anything else
+        // runs it here.
+        self.last_step_used_prime = false;
+        let ccd_scene_changed = match self.primed.take() {
+            Some((dt, scene_changed))
+                if dt == integration_parameters.dt
+                    && !bodies.has_pending_changes()
+                    && !colliders.has_pending_changes()
+                    && !impulse_joints.has_pending_changes()
+                    && !multibody_joints.has_pending_changes() =>
+            {
+                self.last_step_used_prime = true;
+                scene_changed
+            }
+            _ => self.detect_phase(
+                integration_parameters,
+                islands,
+                broad_phase,
+                narrow_phase,
+                bodies,
+                colliders,
+                impulse_joints,
+                multibody_joints,
+                hooks,
+                events,
+            ),
+        };
+        // Empty here (the detect phase cleared it); re-inserted at the end of the step.
+        let mut modified_colliders = colliders.take_modified();
 
         let mut remaining_time = integration_parameters.dt;
         let mut integration_parameters = *integration_parameters;

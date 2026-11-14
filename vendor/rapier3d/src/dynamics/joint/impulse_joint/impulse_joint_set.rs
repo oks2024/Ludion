@@ -82,6 +82,11 @@ impl ImpulseJointSet {
         }
     }
 
+    /// Whether a wake-up, island join or island edit is waiting for the next step.
+    pub(crate) fn has_pending_changes(&self) -> bool {
+        !self.to_wake_up.is_empty() || !self.to_join.is_empty() || !self.island_events.is_empty()
+    }
+
     /// Drops the memo of the last [`Self::select_active_interactions`], forcing the next
     /// call to recompute into the caller's buffer.
     pub(crate) fn invalidate_selection_memo(&mut self) {

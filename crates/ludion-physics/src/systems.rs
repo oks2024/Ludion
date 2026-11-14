@@ -5,9 +5,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use ludion_core::codes::code;
-use ludion_core::diagnostics::Diagnostic;
+use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
 use ludion_core::ids::EntityId;
-use ludion_core::time::GameClock;
+use ludion_core::time::{FrameIndex, GameClock, TickRate};
 use ludion_ecs::{Parent, Schedule, SystemCtx, World};
 use ludion_spatial::{Body, Collider, Joint, JointMotor, Plane, Shape, Velocity};
 
@@ -312,27 +312,81 @@ pub fn teleport_kinematic(world: &mut World, entity: EntityId) {
     }
 }
 
-/// Reconciles the body set with the colliders physics [`claims`] and pushes this tick's authored
-/// state in.
-///
-/// Bodies are created and retired in **ascending entity order** — the typed join's order, which is
-/// a pure function of world content and independent of spawn order — so the creation-order handle
-/// table is reproducible from the scene alone.
-fn write<P: PhysicsPose, R: ParentPose>(
+/// Everything [`write`] reads out of the world for one tick, gathered before any solver call so a
+/// prime made at scene commit can be compared against what tick 1 would have fed the solver.
+struct WriteInputs {
+    teleports: BTreeSet<EntityId>,
+    live: Vec<Claimed>,
+    motor_rejections: Vec<(EntityId, DiagnosticCode, String)>,
+    velocities: Vec<(EntityId, Velocity)>,
+    plane: Option<Plane>,
+    joints: Vec<(EntityId, Joint)>,
+    motors: Vec<(EntityId, JointMotor)>,
+    /// Each live entity's own `Collider`, recorded only when there is no world yet: the cold
+    /// create path reads it straight off the entity, so a prime must see it unchanged too.
+    colliders: Vec<(EntityId, Collider)>,
+}
+
+/// Two resolved meshes agree when they carry the same content hash, or failed with the same diagnostic.
+fn mesh_input_eq(a: &MeshInput, b: &MeshInput) -> bool {
+    match (a, b) {
+        (Ok(_), Ok(_)) => mesh_hash_of(a) == mesh_hash_of(b),
+        (Err(a), Err(b)) => a == b,
+        _ => false,
+    }
+}
+
+impl PartialEq for WriteInputs {
+    fn eq(&self, other: &Self) -> bool {
+        self.teleports == other.teleports
+            && self.live.len() == other.live.len()
+            && self.live.iter().zip(&other.live).all(|(a, b)| {
+                (a.0, a.1, a.2, &a.3) == (b.0, b.1, b.2, &b.3) && mesh_input_eq(&a.4, &b.4)
+            })
+            && self.motor_rejections == other.motor_rejections
+            && self.velocities == other.velocities
+            && self.plane == other.plane
+            && self.joints == other.joints
+            && self.motors == other.motors
+            && self.colliders == other.colliders
+    }
+}
+
+/// A scene's physics world, built and collision-detected at commit by [`prime`] and waiting for the
+/// first [`WRITE`] to adopt it. A hidden resource until then: a game system on tick 1 sees no
+/// [`PhysicsWorld`], exactly as in an unprimed world. Never hashed or snapshotted.
+#[doc(hidden)]
+pub struct PrimedPhysics {
+    #[doc(hidden)]
+    pub world: PhysicsWorld,
+    inputs: WriteInputs,
+    settings: PhysicsSettings,
+    tick_rate: TickRate,
+}
+
+/// Reads the world's authored state for one write pass, or `None` when there is nothing to do: no
+/// claimed entity, no motor rejection, and no `physics` world yet. `physics` is the world as it stood
+/// before this pass (`None` on tick 1): a collider is only marked stale against an existing body.
+/// `consume_teleports` drains the [`KinematicTeleports`] record; a prime leaves it alone.
+fn gather<P: PhysicsPose, R: ParentPose>(
     world: &mut World,
-    ctx: &SystemCtx,
+    physics: Option<&PhysicsWorld>,
     settings: &PhysicsSettings,
-) {
+    consume_teleports: bool,
+) -> Option<WriteInputs> {
     // First, before any early return, so the record never outlives the tick it was made in.
-    let teleports = world
-        .remove_resource::<KinematicTeleports>()
-        .map(|KinematicTeleports(entities)| entities)
-        .unwrap_or_default();
-    // Taken out before the query so the staleness check below can read it: `query_ids` borrows
-    // `world` mutably, and a `PhysicsWorld` still living in `world`'s resources would not be
-    // readable at the same time.
-    let physics_taken = world.remove_resource::<PhysicsWorld>();
-    // Taken for the same reason: resolving a mesh needs it mutably beside the query.
+    let teleports = if consume_teleports {
+        world
+            .remove_resource::<KinematicTeleports>()
+            .map(|KinematicTeleports(entities)| entities)
+            .unwrap_or_default()
+    } else {
+        world
+            .resource::<KinematicTeleports>()
+            .map(|KinematicTeleports(entities)| entities.clone())
+            .unwrap_or_default()
+    };
+    // Taken out before the query: resolving a mesh needs it mutably beside the query.
     let mut meshes = world.remove_resource::<ColliderMeshes>();
 
     let mut live: Vec<Claimed> = world
@@ -340,8 +394,7 @@ fn write<P: PhysicsPose, R: ParentPose>(
         .filter(|(_, (collider, _))| claims(collider))
         .map(|(entity, (collider, pose))| {
             let mesh = resolve_mesh(meshes.as_mut(), collider);
-            let stale = physics_taken
-                .as_ref()
+            let stale = physics
                 .is_some_and(|physics| physics.is_stale(entity, collider, mesh_hash_of(&mesh)));
             let source = stale.then(|| collider.clone());
             (
@@ -403,7 +456,7 @@ fn write<P: PhysicsPose, R: ParentPose>(
                 motor_rejections.push((row.entity, code::CHARACTER_MOTOR_INVALID, reason))
             }
             Ok(collider) => {
-                let stale = physics_taken.as_ref().is_none_or(|physics| {
+                let stale = physics.is_none_or(|physics| {
                     !physics.has_body(row.entity) || physics.is_stale(row.entity, &collider, None)
                 });
                 live.push((
@@ -419,8 +472,8 @@ fn write<P: PhysicsPose, R: ParentPose>(
     live.sort_by_key(|(entity, ..)| *entity);
     // Nothing claimed and no world yet: allocate nothing. A 2D game that registers this verb pays
     // the query and no more, and the resource only ever exists for a scene that has physics in it.
-    if live.is_empty() && physics_taken.is_none() && motor_rejections.is_empty() {
-        return;
+    if live.is_empty() && physics.is_none() && motor_rejections.is_empty() {
+        return None;
     }
     // A sorted side list rather than a map: both walks are ascending, so one cursor joins them.
     let velocities: Vec<(EntityId, Velocity)> = world
@@ -437,21 +490,49 @@ fn write<P: PhysicsPose, R: ParentPose>(
         PhysicsSpace::Free => None,
         PhysicsSpace::Planar => Some(Plane::of(world)),
     };
-    let mut physics =
-        physics_taken.unwrap_or_else(|| PhysicsWorld::new(ctx.time.rate()).with_plane(plane));
-    physics.apply_settings(settings);
-    physics.last_write_frame = Some(ctx.frame.as_u64());
-    physics.last_write_held = world.resource::<GameClock>().map(|clock| clock.held());
-    for (entity, code, reason) in motor_rejections {
+    let joints: Vec<(EntityId, Joint)> = world
+        .query_ids::<(&Joint,)>()
+        .map(|(entity, (joint,))| (entity, joint.clone()))
+        .collect();
+    let motors: Vec<(EntityId, JointMotor)> = world
+        .query_ids::<(&JointMotor,)>()
+        .map(|(entity, (motor,))| (entity, motor.clone()))
+        .collect();
+    let colliders = if physics.is_none() {
+        live.iter()
+            .filter_map(|(entity, ..)| match world.get::<Collider>(*entity) {
+                Ok(Some(collider)) => Some((*entity, collider.clone())),
+                _ => None,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Some(WriteInputs {
+        teleports,
+        live,
+        motor_rejections,
+        velocities,
+        plane,
+        joints,
+        motors,
+        colliders,
+    })
+}
+
+/// Pushes the gathered state into `physics`: retires what is gone, creates, rebuilds and pushes
+/// bodies, then reconciles joints and motors.
+fn apply(world: &World, physics: &mut PhysicsWorld, inputs: &WriteInputs) {
+    for (entity, code, reason) in &inputs.motor_rejections {
         physics.queue_rejection(ShapeRejection {
-            entity,
-            code,
-            reason,
+            entity: *entity,
+            code: *code,
+            reason: reason.clone(),
             related: Vec::new(),
         });
     }
 
-    let present: Vec<EntityId> = live.iter().map(|(entity, ..)| *entity).collect();
+    let present: Vec<EntityId> = inputs.live.iter().map(|(entity, ..)| *entity).collect();
     let gone: Vec<EntityId> = physics
         .retire(&present)
         .into_iter()
@@ -459,8 +540,10 @@ fn write<P: PhysicsPose, R: ParentPose>(
         .collect();
     physics.note_despawned(&gone);
 
+    let velocities = &inputs.velocities;
+    let teleports = &inputs.teleports;
     let mut cursor = 0;
-    for (entity, translation, rotation, source, mesh) in &live {
+    for (entity, translation, rotation, source, mesh) in &inputs.live {
         let (entity, translation, rotation) = (*entity, *translation, *rotation);
         let mesh = mesh.clone();
         while cursor < velocities.len() && velocities[cursor].0 < entity {
@@ -489,19 +572,114 @@ fn write<P: PhysicsPose, R: ParentPose>(
         }
     }
 
-    let joints: Vec<(EntityId, Joint)> = world
-        .query_ids::<(&Joint,)>()
-        .map(|(entity, (joint,))| (entity, joint.clone()))
-        .collect();
-    physics.reconcile_joints(&joints);
-    let motors: Vec<(EntityId, JointMotor)> = world
-        .query_ids::<(&JointMotor,)>()
-        .map(|(entity, (motor,))| (entity, motor.clone()))
-        .collect();
-    physics.drive_joints(&motors);
+    physics.reconcile_joints(&inputs.joints);
+    physics.drive_joints(&inputs.motors);
     physics.apply_queued_impulses();
+}
 
+/// Reconciles the body set with the colliders physics [`claims`] and pushes this tick's authored
+/// state in.
+///
+/// Bodies are created and retired in **ascending entity order** — the typed join's order, which is
+/// a pure function of world content and independent of spawn order — so the creation-order handle
+/// table is reproducible from the scene alone.
+///
+/// Tick 1 adopts the world [`prime`] built at commit when the inputs it gathers equal the prime's,
+/// field for field; otherwise the prime is dropped and the world is built here.
+fn write<P: PhysicsPose, R: ParentPose>(
+    world: &mut World,
+    ctx: &SystemCtx,
+    settings: &PhysicsSettings,
+) {
+    // Taken out before the query so the staleness check can read it: `query_ids` borrows `world`
+    // mutably, and a `PhysicsWorld` still living in `world`'s resources would not be readable at
+    // the same time. A prime beside a live world is stray: dropped.
+    let physics_taken = world.remove_resource::<PhysicsWorld>();
+    let primed = world
+        .remove_resource::<PrimedPhysics>()
+        .filter(|_| physics_taken.is_none());
+    let Some(inputs) = gather::<P, R>(world, physics_taken.as_ref(), settings, true) else {
+        return;
+    };
+    let held = world.resource::<GameClock>().map(|clock| clock.held());
+    let adopted = primed.and_then(|primed| {
+        (primed.inputs == inputs
+            && primed.settings == *settings
+            && primed.tick_rate == ctx.time.rate())
+        .then_some(primed.world)
+    });
+    if let Some(mut physics) = adopted {
+        physics.last_write_frame = Some(ctx.frame.as_u64());
+        physics.last_write_held = held;
+        world.insert_resource(physics);
+        return;
+    }
+    let mut physics = physics_taken
+        .unwrap_or_else(|| PhysicsWorld::new(ctx.time.rate()).with_plane(inputs.plane));
+    physics.apply_settings(settings);
+    physics.last_write_frame = Some(ctx.frame.as_u64());
+    physics.last_write_held = held;
+    apply(world, &mut physics, &inputs);
     world.insert_resource(physics);
+}
+
+/// Builds the scene's physics world and runs its first collision detection now, so the first
+/// [`WRITE`] only has to adopt it. Call it once a scene's entities exist and its settings are
+/// known, before the first tick.
+///
+/// A pure cache: the first write gathers the same inputs a cold tick 1 would and adopts the world
+/// only when they equal the ones it was built from — a game system that moved a body, set a
+/// velocity or edited a collider on tick 1 sends the write down the cold path instead. WorldHash and
+/// the tick's contacts are identical either way. A no-op when a [`PhysicsWorld`] or a prime
+/// already exists, or when nothing is claimed. `settings` and `tick_rate` must be the ones the
+/// [`install`] call and the schedule use, or the prime is dropped.
+///
+/// # Example
+/// ```
+/// use ludion_core::time::{FrameIndex, TickRate};
+/// use ludion_ecs::World;
+/// use ludion_physics::{NoParent, PhysicsSpace, PrimedPhysics, prime};
+/// # use ludion_physics::PhysicsPose;
+/// # use schemars::JsonSchema;
+/// # use serde::{Deserialize, Serialize};
+/// # #[derive(Serialize, Deserialize, JsonSchema)]
+/// # struct Pose { translation: [f32; 3], rotation: [f32; 4] }
+/// # impl PhysicsPose for Pose {
+/// #     fn translation(&self) -> [f32; 3] { self.translation }
+/// #     fn set_translation(&mut self, t: [f32; 3]) { self.translation = t; }
+/// #     fn rotation_quat(&self) -> [f32; 4] { self.rotation }
+/// #     fn set_rotation_quat(&mut self, r: [f32; 4]) { self.rotation = r; }
+/// # }
+/// let mut world = World::new();
+/// // Nothing is claimed, so nothing is built.
+/// prime::<Pose, NoParent>(&mut world, PhysicsSpace::Free, TickRate::DEFAULT, FrameIndex(0));
+/// assert!(world.resource::<PrimedPhysics>().is_none());
+/// ```
+pub fn prime<P: PhysicsPose, R: ParentPose>(
+    world: &mut World,
+    settings: impl Into<PhysicsSettings>,
+    tick_rate: TickRate,
+    frame: FrameIndex,
+) {
+    if world.resource::<PhysicsWorld>().is_some() || world.resource::<PrimedPhysics>().is_some() {
+        return;
+    }
+    let settings = settings.into();
+    let Some(inputs) = gather::<P, R>(world, None, &settings, false) else {
+        return;
+    };
+    let mut physics = PhysicsWorld::new(tick_rate).with_plane(inputs.plane);
+    physics.apply_settings(&settings);
+    physics.last_write_frame = Some(frame.as_u64());
+    physics.last_write_held = world.resource::<GameClock>().map(|clock| clock.held());
+    apply(world, &mut physics, &inputs);
+    physics.prime_detection();
+    world.insert_resource(PrimedPhysics {
+        world: physics,
+        inputs,
+        settings,
+        tick_rate,
+    });
 }
 
 /// One motor entity this tick: the body-centre pose it writes, and the synthesized `Collider` its

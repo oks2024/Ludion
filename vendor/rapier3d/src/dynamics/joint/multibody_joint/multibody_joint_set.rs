@@ -89,6 +89,13 @@ impl MultibodyJointSet {
         }
     }
 
+    /// Whether a wake-up, island join or chain refresh is waiting for the next step.
+    pub(crate) fn has_pending_changes(&self) -> bool {
+        !self.to_wake_up.is_empty()
+            || !self.to_join.is_empty()
+            || !self.island_chain_events.is_empty()
+    }
+
     /// Iterates through all the multibody joints from this set.
     pub fn iter(
         &self,

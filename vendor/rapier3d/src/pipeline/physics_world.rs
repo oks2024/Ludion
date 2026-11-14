@@ -155,6 +155,25 @@ impl PhysicsWorld {
         );
     }
 
+    /// Runs the next step's detect phase now (user changes, broad and narrow phase), using no hooks
+    /// and no event handler. The next [`step`](Self::step) reuses it when its `dt` matches and
+    /// nothing was modified in between; otherwise it detects as usual, so priming only ever saves
+    /// time. See [`PhysicsPipeline::prime`].
+    pub fn prime(&mut self) {
+        self.physics_pipeline.prime(
+            &self.integration_parameters,
+            &mut self.islands,
+            &mut self.broad_phase,
+            &mut self.narrow_phase,
+            &mut self.bodies,
+            &mut self.colliders,
+            &mut self.impulse_joints,
+            &mut self.multibody_joints,
+            &(),
+            &(),
+        );
+    }
+
     /// The bodies and colliders automatically disabled during the last step because their
     /// state became non-finite; see [`Quarantine`].
     pub fn quarantine(&self) -> &Quarantine {

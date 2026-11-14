@@ -120,7 +120,20 @@
      #[cfg(feature = "parallel")]
      deferred_bvh:
          std::sync::Mutex<Option<std::sync::mpsc::Receiver<crate::geometry::DeferredBvhOptimize>>>,
-@@ -97,6 +98,36 @@
+@@ -83,6 +84,12 @@
+     /// `None` uses whichever pool the calling thread is in.
+     #[cfg(all(feature = "parallel", not(feature = "unsync-callbacks")))]
+     thread_pool: Option<std::sync::Arc<rayon::ThreadPool>>,
++    /// Set by [`Self::prime`]: the `dt` the detect phase ran for and the CCD scene-changed signal
++    /// it computed. The next step consumes it (and skips its own detect phase) only when its `dt`
++    /// matches and nothing is pending.
++    primed: Option<(crate::math::Real, bool)>,
++    /// Whether the last step reused a prime instead of running its own detect phase.
++    last_step_used_prime: bool,
+ }
+ 
+ impl Default for PhysicsPipeline {
+@@ -97,6 +104,36 @@
      do_test::<PhysicsPipeline>();
  }
  
@@ -157,7 +170,108 @@
  impl PhysicsPipeline {
      /// Creates a new physics pipeline.
      ///
-@@ -132,7 +163,7 @@
+@@ -119,9 +156,100 @@
+             broad_phase_events: vec![],
+             end_step_collider_aabbs: vec![],
+             quarantine: Quarantine::default(),
++            primed: None,
++            last_step_used_prime: false,
+         }
+     }
+ 
++    /// Whether the last [`Self::step`] reused the detect phase [`Self::prime`] ran. Measurement
++    /// only: the step's result is the same either way.
++    pub fn last_step_used_prime(&self) -> bool {
++        self.last_step_used_prime
++    }
++
++    /// Runs a step's detect phase now (user changes, broad and narrow phase) and remembers it, so
++    /// the next [`Self::step`] with the same `dt` and nothing modified in between skips it.
++    ///
++    /// A pure cache: the step that follows computes exactly what an unprimed one would. A step
++    /// that finds anything pending, or a different `dt`, discards the prime and detects as usual.
++    /// The deferred BVH optimization is joined before returning, so no task outlives the call.
++    pub fn prime(
++        &mut self,
++        integration_parameters: &IntegrationParameters,
++        islands: &mut IslandManager,
++        broad_phase: &mut BroadPhaseBvh,
++        narrow_phase: &mut NarrowPhase,
++        bodies: &mut RigidBodySet,
++        colliders: &mut ColliderSet,
++        impulse_joints: &mut ImpulseJointSet,
++        multibody_joints: &mut MultibodyJointSet,
++        hooks: &dyn PhysicsHooks,
++        events: &dyn EventHandler,
++    ) {
++        self.counters.reset();
++        self.counters.step_started();
++        #[cfg(all(feature = "parallel", not(feature = "unsync-callbacks")))]
++        if let Some(pool) = self.thread_pool.clone() {
++            return pool.install(|| {
++                self.prime_inner(
++                    integration_parameters,
++                    islands,
++                    broad_phase,
++                    narrow_phase,
++                    bodies,
++                    colliders,
++                    impulse_joints,
++                    multibody_joints,
++                    hooks,
++                    events,
++                )
++            });
++        }
++
++        self.prime_inner(
++            integration_parameters,
++            islands,
++            broad_phase,
++            narrow_phase,
++            bodies,
++            colliders,
++            impulse_joints,
++            multibody_joints,
++            hooks,
++            events,
++        )
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    fn prime_inner(
++        &mut self,
++        integration_parameters: &IntegrationParameters,
++        islands: &mut IslandManager,
++        broad_phase: &mut BroadPhaseBvh,
++        narrow_phase: &mut NarrowPhase,
++        bodies: &mut RigidBodySet,
++        colliders: &mut ColliderSet,
++        impulse_joints: &mut ImpulseJointSet,
++        multibody_joints: &mut MultibodyJointSet,
++        hooks: &dyn PhysicsHooks,
++        events: &dyn EventHandler,
++    ) {
++        let scene_changed = self.detect_phase(
++            integration_parameters,
++            islands,
++            broad_phase,
++            narrow_phase,
++            bodies,
++            colliders,
++            impulse_joints,
++            multibody_joints,
++            hooks,
++            events,
++        );
++        self.join_deferred_bvh_optimize(broad_phase);
++        self.primed = Some((integration_parameters.dt, scene_changed));
++    }
++
+     /// Completes the BVH optimization pass deferred by the last broad-phase update (if
+     /// any) and puts the optimized tree back into the broad-phase. Must be called before
+     /// anything uses the broad-phase tree again.
+@@ -132,7 +260,7 @@
      fn join_deferred_bvh_optimize(&mut self, broad_phase: &mut BroadPhaseBvh) {
          #[cfg(feature = "parallel")]
          if let Some(rx) = self.deferred_bvh.get_mut().unwrap().take() {
@@ -180,3 +294,180 @@
              #[cfg(feature = "parallel")]
              if rayon::current_num_threads() > 1 {
                  let (tx, rx) = std::sync::mpsc::channel();
+--- a/src/pipeline/physics_pipeline/substep.rs
++++ b/src/pipeline/physics_pipeline/substep.rs
+@@ -263,10 +263,12 @@
+         }
+     }
+ 
++    /// The part of a step that reconciles user changes and runs collision detection, everything
++    /// before the solve loop. Returns the CCD fixed-target cache invalidation signal. Shared by
++    /// `step_inner` and [`Self::prime`].
+     #[allow(clippy::too_many_arguments)]
+-    pub(super) fn step_inner(
++    pub(super) fn detect_phase(
+         &mut self,
+-        gravity: Vector,
+         integration_parameters: &IntegrationParameters,
+         islands: &mut IslandManager,
+         broad_phase: &mut BroadPhaseBvh,
+@@ -275,12 +277,9 @@
+         colliders: &mut ColliderSet,
+         impulse_joints: &mut ImpulseJointSet,
+         multibody_joints: &mut MultibodyJointSet,
+-        ccd_solver: &mut CCDSolver,
+         hooks: &dyn PhysicsHooks,
+         events: &dyn EventHandler,
+-    ) {
+-        self.counters.reset();
+-        self.counters.step_started();
++    ) -> bool {
+         self.quarantine.clear();
+ 
+         // Apply some of delayed wake-ups.
+@@ -398,6 +397,59 @@
+         self.clear_modified_bodies(bodies, &mut modified_bodies);
+         removed_colliders.clear();
+         self.counters.stages.user_changes.pause();
++        colliders.set_modified(modified_colliders);
++        ccd_scene_changed
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    pub(super) fn step_inner(
++        &mut self,
++        gravity: Vector,
++        integration_parameters: &IntegrationParameters,
++        islands: &mut IslandManager,
++        broad_phase: &mut BroadPhaseBvh,
++        narrow_phase: &mut NarrowPhase,
++        bodies: &mut RigidBodySet,
++        colliders: &mut ColliderSet,
++        impulse_joints: &mut ImpulseJointSet,
++        multibody_joints: &mut MultibodyJointSet,
++        ccd_solver: &mut CCDSolver,
++        hooks: &dyn PhysicsHooks,
++        events: &dyn EventHandler,
++    ) {
++        self.counters.reset();
++        self.counters.step_started();
++
++        // A prime made for this step's `dt`, with nothing touched since, already ran the detect
++        // phase on the state the step now sees (and left its quarantine in place); anything else
++        // runs it here.
++        self.last_step_used_prime = false;
++        let ccd_scene_changed = match self.primed.take() {
++            Some((dt, scene_changed))
++                if dt == integration_parameters.dt
++                    && !bodies.has_pending_changes()
++                    && !colliders.has_pending_changes()
++                    && !impulse_joints.has_pending_changes()
++                    && !multibody_joints.has_pending_changes() =>
++            {
++                self.last_step_used_prime = true;
++                scene_changed
++            }
++            _ => self.detect_phase(
++                integration_parameters,
++                islands,
++                broad_phase,
++                narrow_phase,
++                bodies,
++                colliders,
++                impulse_joints,
++                multibody_joints,
++                hooks,
++                events,
++            ),
++        };
++        // Empty here (the detect phase cleared it); re-inserted at the end of the step.
++        let mut modified_colliders = colliders.take_modified();
+ 
+         let mut remaining_time = integration_parameters.dt;
+         let mut integration_parameters = *integration_parameters;
+--- a/src/pipeline/physics_world.rs
++++ b/src/pipeline/physics_world.rs
+@@ -155,6 +155,25 @@
+         );
+     }
+ 
++    /// Runs the next step's detect phase now (user changes, broad and narrow phase), using no hooks
++    /// and no event handler. The next [`step`](Self::step) reuses it when its `dt` matches and
++    /// nothing was modified in between; otherwise it detects as usual, so priming only ever saves
++    /// time. See [`PhysicsPipeline::prime`].
++    pub fn prime(&mut self) {
++        self.physics_pipeline.prime(
++            &self.integration_parameters,
++            &mut self.islands,
++            &mut self.broad_phase,
++            &mut self.narrow_phase,
++            &mut self.bodies,
++            &mut self.colliders,
++            &mut self.impulse_joints,
++            &mut self.multibody_joints,
++            &(),
++            &(),
++        );
++    }
++
+     /// The bodies and colliders automatically disabled during the last step because their
+     /// state became non-finite; see [`Quarantine`].
+     pub fn quarantine(&self) -> &Quarantine {
+--- a/src/dynamics/rigid_body_set.rs
++++ b/src/dynamics/rigid_body_set.rs
+@@ -114,6 +114,11 @@
+         core::mem::take(&mut self.modified_bodies)
+     }
+ 
++    /// Whether a modification is waiting for the next step to process.
++    pub(crate) fn has_pending_changes(&self) -> bool {
++        !self.modified_bodies.is_empty()
++    }
++
+     /// Returns how many rigid bodies are currently in this collection.
+     pub fn len(&self) -> usize {
+         self.bodies.len()
+--- a/src/geometry/collider_set.rs
++++ b/src/geometry/collider_set.rs
+@@ -90,6 +90,11 @@
+         self.modified_colliders = modified;
+     }
+ 
++    /// Whether a modification or removal is waiting for the next step to process.
++    pub(crate) fn has_pending_changes(&self) -> bool {
++        !self.modified_colliders.is_empty() || !self.removed_colliders.is_empty()
++    }
++
+     /// Fetch the set of colliders removed since the last call to `take_removed`
+     ///
+     /// Provides a value that can be passed to the `removed_colliders` argument
+--- a/src/dynamics/joint/impulse_joint/impulse_joint_set.rs
++++ b/src/dynamics/joint/impulse_joint/impulse_joint_set.rs
+@@ -82,6 +82,11 @@
+         }
+     }
+ 
++    /// Whether a wake-up, island join or island edit is waiting for the next step.
++    pub(crate) fn has_pending_changes(&self) -> bool {
++        !self.to_wake_up.is_empty() || !self.to_join.is_empty() || !self.island_events.is_empty()
++    }
++
+     /// Drops the memo of the last [`Self::select_active_interactions`], forcing the next
+     /// call to recompute into the caller's buffer.
+     pub(crate) fn invalidate_selection_memo(&mut self) {
+--- a/src/dynamics/joint/multibody_joint/multibody_joint_set.rs
++++ b/src/dynamics/joint/multibody_joint/multibody_joint_set.rs
+@@ -89,6 +89,13 @@
+         }
+     }
+ 
++    /// Whether a wake-up, island join or chain refresh is waiting for the next step.
++    pub(crate) fn has_pending_changes(&self) -> bool {
++        !self.to_wake_up.is_empty()
++            || !self.to_join.is_empty()
++            || !self.island_chain_events.is_empty()
++    }
++
+     /// Iterates through all the multibody joints from this set.
+     pub fn iter(
+         &self,

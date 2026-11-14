@@ -90,6 +90,11 @@ impl ColliderSet {
         self.modified_colliders = modified;
     }
 
+    /// Whether a modification or removal is waiting for the next step to process.
+    pub(crate) fn has_pending_changes(&self) -> bool {
+        !self.modified_colliders.is_empty() || !self.removed_colliders.is_empty()
+    }
+
     /// Fetch the set of colliders removed since the last call to `take_removed`
     ///
     /// Provides a value that can be passed to the `removed_colliders` argument

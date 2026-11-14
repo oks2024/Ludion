@@ -69,6 +69,7 @@ mod physics_gallery;
 mod physics_hierarchy;
 mod physics_horde;
 mod physics_joints;
+mod physics_prime;
 mod physics_scene;
 mod physics_snapshot;
 mod physics_stress;

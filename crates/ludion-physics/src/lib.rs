@@ -209,7 +209,8 @@ pub use sweep::{Sweep, SweepFilter, SweepHit};
 pub use systems::{
     CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, DEFAULT_SOLVER_ITERATIONS,
     DEFAULT_STABILIZATION_ITERATIONS, KinematicTeleports, MAX_COLLISION_LAYERS, MIRROR,
-    PhysicsSettings, PhysicsSpace, STEP, WRITE, claims, install, teleport_kinematic,
+    PhysicsSettings, PhysicsSpace, PrimedPhysics, STEP, WRITE, claims, install, prime,
+    teleport_kinematic,
 };
 pub use time_scale::MIN_TIME_SCALE;
 pub use wireframe::{WireBody, feature_edges};

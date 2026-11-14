@@ -437,6 +437,9 @@ pub struct StepBreakdown {
     pub impulse_joints: usize,
     /// The solver iteration count (also the substep count).
     pub substeps: u32,
+    /// Whether this step reused the detect phase [`prime`](crate::prime) ran at scene commit, so
+    /// the user-change, broad-phase and narrow-phase timers above read zero for it.
+    pub primed: bool,
 }
 
 /// The solver state for one world: the rigid-body, collider, joint, island, broad-phase and
@@ -565,6 +568,9 @@ pub struct PhysicsWorld {
     /// The `GameClock` frames held at that write pass, so a motor can tell whether gameplay time
     /// advanced into its tick. Rides the snapshot.
     pub(crate) last_write_held: Option<u64>,
+    /// See [`last_step_primed`](PhysicsWorld::last_step_primed). Measurement only; never read by
+    /// the simulation and not part of the snapshot.
+    pub(crate) last_step_primed: bool,
     /// Each motor's last `move_character` report and the frame it ran in. Never hashed or
     /// snapshotted: a restore empties it.
     pub(crate) move_reports: StableMap<EntityId, (FrameIndex, MoveReport)>,
@@ -628,6 +634,7 @@ impl PhysicsWorld {
             despawned: Vec::new(),
             last_write_frame: None,
             last_write_held: None,
+            last_step_primed: false,
             move_reports: StableMap::new(),
             wire_edges: Mutex::default(),
         };
@@ -830,6 +837,7 @@ impl PhysicsWorld {
                     .count(),
                 impulse_joints: self.rapier.impulse_joints.len(),
                 substeps: self.solver_iterations(),
+                primed: self.last_step_primed,
             })
         }
         #[cfg(not(feature = "profiler"))]
@@ -1454,6 +1462,7 @@ impl PhysicsWorld {
             despawned: snapshot.despawned,
             last_write_frame: snapshot.last_write_frame,
             last_write_held: snapshot.last_write_held,
+            last_step_primed: false,
             move_reports: StableMap::new(),
             wire_edges: Mutex::default(),
         };
@@ -1489,6 +1498,7 @@ impl PhysicsWorld {
     /// [`contact_events`](PhysicsWorld::contact_events). The scale and the freeze reset here.
     pub(crate) fn step(&mut self) {
         self.sync_solver_pool();
+        self.last_step_primed = false;
         self.contacts.clear();
         self.sensor_events.clear();
         self.joint_events.clear();
@@ -1504,6 +1514,7 @@ impl PhysicsWorld {
         self.record_detection_poses();
         let retuned = (scale < 1.0).then(|| self.scale_joint_softness(base, scale));
         self.rapier.step();
+        self.last_step_primed = self.rapier.physics_pipeline.last_step_used_prime();
         if let Some(saved) = retuned {
             self.restore_joint_softness(saved);
         }
@@ -1514,6 +1525,24 @@ impl PhysicsWorld {
         self.collect_broken_joints();
         self.collect_sensors();
         self.despawned.clear();
+    }
+
+    /// Runs the first step's detect phase (user changes, broad and narrow phase) ahead of time, at
+    /// the timestep `step` will use. The step that follows reuses it only when nothing was
+    /// modified in between, so the result is the one an unprimed world computes. `fresh_colliders`
+    /// is left alone: only a real step clears it.
+    pub(crate) fn prime_detection(&mut self) {
+        self.sync_solver_pool();
+        self.rapier.integration_parameters.dt = seconds_per_tick(self.tick_rate);
+        self.rapier.prime();
+    }
+
+    /// Whether the last [`step`](PhysicsWorld::step) reused the collision detection
+    /// [`prime`](crate::prime) ran at scene commit, and so skipped its own detect phase. A measurement only: it never
+    /// feeds the simulation, and a world that was not primed, or whose first tick found anything
+    /// changed, reports `false` with the same result.
+    pub fn last_step_primed(&self) -> bool {
+        self.last_step_primed
     }
 
     /// Fills `detection_poses` with the pose each collider will have when the step's collision

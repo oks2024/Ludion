@@ -114,6 +114,11 @@ impl RigidBodySet {
         core::mem::take(&mut self.modified_bodies)
     }
 
+    /// Whether a modification is waiting for the next step to process.
+    pub(crate) fn has_pending_changes(&self) -> bool {
+        !self.modified_bodies.is_empty()
+    }
+
     /// Returns how many rigid bodies are currently in this collection.
     pub fn len(&self) -> usize {
         self.bodies.len()

@@ -7,6 +7,7 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
+use ludion_core::time::{FrameIndex, TickRate};
 use ludion_ecs::{Parent, Phase, Schedule, World};
 use ludion_physics::{
     CharacterMotor, CollisionLayers, MIRROR, PhysicsSettings, PhysicsSpace, PhysicsWorld, STEP,
@@ -95,6 +96,25 @@ pub(crate) fn settings(physics: &ScenePhysics) -> PhysicsSettings {
         settings.layers = Some(CollisionLayers::new(matrix.names().to_vec(), masks));
     }
     settings
+}
+
+/// Builds the loaded scene's physics world and runs its first collision detection at commit, so
+/// tick 1's write only adopts it (a pure cache; `ludion_physics::prime` says when it is dropped).
+/// Does nothing for a scene with no `physics:` block.
+pub(crate) fn prime(
+    world: &mut World,
+    physics: Option<&ScenePhysics>,
+    tick_rate: TickRate,
+    frame: FrameIndex,
+) {
+    if let Some(physics) = physics {
+        ludion_physics::prime::<Transform, TransformHierarchy>(
+            world,
+            settings(physics),
+            tick_rate,
+            frame,
+        );
+    }
 }
 
 /// Appends the physics triple to `schedule`, after every game system already added, when the

@@ -7762,6 +7762,17 @@ impl Engine {
         self.cook_resolved = false;
         self.revalidate_pending = true;
         self.arm_query_recording();
+        // Last: the prime reads the finished world (collider meshes, prefab placements). A restore
+        // carries its own `PhysicsWorld`.
+        if matches!(kind, Rebuild::Load { .. } | Rebuild::Switch { .. }) {
+            let (tick_rate, frame) = (self.driver.tick_rate(), self.driver.frame());
+            crate::scene_physics::prime(
+                self.driver.world_mut(),
+                self.scene_physics.as_ref(),
+                tick_rate,
+                frame,
+            );
+        }
     }
 }
 

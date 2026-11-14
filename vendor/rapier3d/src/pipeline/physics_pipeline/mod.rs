@@ -84,6 +84,12 @@ pub struct PhysicsPipeline {
     /// `None` uses whichever pool the calling thread is in.
     #[cfg(all(feature = "parallel", not(feature = "unsync-callbacks")))]
     thread_pool: Option<std::sync::Arc<rayon::ThreadPool>>,
+    /// Set by [`Self::prime`]: the `dt` the detect phase ran for and the CCD scene-changed signal
+    /// it computed. The next step consumes it (and skips its own detect phase) only when its `dt`
+    /// matches and nothing is pending.
+    primed: Option<(crate::math::Real, bool)>,
+    /// Whether the last step reused a prime instead of running its own detect phase.
+    last_step_used_prime: bool,
 }
 
 impl Default for PhysicsPipeline {
@@ -150,7 +156,98 @@ impl PhysicsPipeline {
             broad_phase_events: vec![],
             end_step_collider_aabbs: vec![],
             quarantine: Quarantine::default(),
+            primed: None,
+            last_step_used_prime: false,
         }
+    }
+
+    /// Whether the last [`Self::step`] reused the detect phase [`Self::prime`] ran. Measurement
+    /// only: the step's result is the same either way.
+    pub fn last_step_used_prime(&self) -> bool {
+        self.last_step_used_prime
+    }
+
+    /// Runs a step's detect phase now (user changes, broad and narrow phase) and remembers it, so
+    /// the next [`Self::step`] with the same `dt` and nothing modified in between skips it.
+    ///
+    /// A pure cache: the step that follows computes exactly what an unprimed one would. A step
+    /// that finds anything pending, or a different `dt`, discards the prime and detects as usual.
+    /// The deferred BVH optimization is joined before returning, so no task outlives the call.
+    pub fn prime(
+        &mut self,
+        integration_parameters: &IntegrationParameters,
+        islands: &mut IslandManager,
+        broad_phase: &mut BroadPhaseBvh,
+        narrow_phase: &mut NarrowPhase,
+        bodies: &mut RigidBodySet,
+        colliders: &mut ColliderSet,
+        impulse_joints: &mut ImpulseJointSet,
+        multibody_joints: &mut MultibodyJointSet,
+        hooks: &dyn PhysicsHooks,
+        events: &dyn EventHandler,
+    ) {
+        self.counters.reset();
+        self.counters.step_started();
+        #[cfg(all(feature = "parallel", not(feature = "unsync-callbacks")))]
+        if let Some(pool) = self.thread_pool.clone() {
+            return pool.install(|| {
+                self.prime_inner(
+                    integration_parameters,
+                    islands,
+                    broad_phase,
+                    narrow_phase,
+                    bodies,
+                    colliders,
+                    impulse_joints,
+                    multibody_joints,
+                    hooks,
+                    events,
+                )
+            });
+        }
+
+        self.prime_inner(
+            integration_parameters,
+            islands,
+            broad_phase,
+            narrow_phase,
+            bodies,
+            colliders,
+            impulse_joints,
+            multibody_joints,
+            hooks,
+            events,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prime_inner(
+        &mut self,
+        integration_parameters: &IntegrationParameters,
+        islands: &mut IslandManager,
+        broad_phase: &mut BroadPhaseBvh,
+        narrow_phase: &mut NarrowPhase,
+        bodies: &mut RigidBodySet,
+        colliders: &mut ColliderSet,
+        impulse_joints: &mut ImpulseJointSet,
+        multibody_joints: &mut MultibodyJointSet,
+        hooks: &dyn PhysicsHooks,
+        events: &dyn EventHandler,
+    ) {
+        let scene_changed = self.detect_phase(
+            integration_parameters,
+            islands,
+            broad_phase,
+            narrow_phase,
+            bodies,
+            colliders,
+            impulse_joints,
+            multibody_joints,
+            hooks,
+            events,
+        );
+        self.join_deferred_bvh_optimize(broad_phase);
+        self.primed = Some((integration_parameters.dt, scene_changed));
     }
 
     /// Completes the BVH optimization pass deferred by the last broad-phase update (if
