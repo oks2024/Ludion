@@ -119,13 +119,14 @@ kinds:                    # marker kind → primitives
         aabb: [3.5, 3.5]
 ```
 
-A **primitive** names exactly one mesh source and may carry a static collider:
+A **primitive** names one mesh source, or none for a collider-only blocker, and may carry a static collider:
 
 | key | meaning |
 |---|---|
-| `shape:` / `voxel:` / `mesh:` | the one mesh source — a built-in `cube`/`plane`/`sphere`, a `.voxel.yaml`, or a `.mesh.yaml` |
+| `shape:` / `voxel:` / `mesh:` / `sculpt:` | the mesh source — a built-in `cube`/`plane`/`sphere`, a `.voxel.yaml`, a `.mesh.yaml`, or a `.sculpt.yaml` |
 | `variants` | further mesh sources; the primitive's own is candidate 0 |
 | `color` | `[r, g, b, a]` |
+| `roughness` / `metallic` / `emissive` | the `Mesh` fields, same ranges and defaults (`ludion docs components`); absent = not emitted |
 | `collider` | `aabb: [half_x, half_z]`, `circle: r` (2D) or `box: [half_x, half_y, half_z]` (3D: solver and nav see it; emitted on a unit-scale `<name>-collider` sibling) |
 | `y` | the vertical placement, and **where the game bakes its floor rule** — the engine never hardcodes one |
 | `scale` | `[x, y, z]` |
@@ -139,12 +140,14 @@ wall piece:
   entity per rect, and the mesh's X/Z scale is multiplied by the rect's cell dimensions. Set
   `scale.x`/`scale.z` so one cell is covered (a unit cube wants `cell_size`). Floors and long wall
   runs want this: one entity and collider per run, no seams. A merged primitive —
-  `merge: true`, or any primitive of the map's `base` glyph — takes `collider: aabb: [cell_size/2,
+  `merge: true`, or a `base` glyph primitive without `merge: false` — takes `collider: aabb: [cell_size/2,
   cell_size/2]` or `box: [cell_size/2, any, cell_size/2]` (the collider grows to the rect), never a
   `circle`; anything else is `L1022`. That ties a kit to one `cell_size`: a kit shared across cell sizes needs per-size merged tiles.
 - **`footprint: [w, h]`** — the glyph's cells tile with one **unscaled** prop per `w × h`-cell block,
   greedily row-major. Modular walls and fences.
-- **neither** — one unscaled prop per cell.
+- **neither** — one unscaled prop per cell. A `base` primitive with `merge: false` emits this way instead of merging.
+
+A **collider-only** primitive (a `collider`, no mesh source) emits one unit-scale entity carrying its collider, any shape, no `-collider` sibling. `color`, `roughness`, `metallic`, `emissive`, `scale`, `variants` and `static` have no mesh to act on there: `L1022`.
 
 **Variants** pick per cell via a splitmix64 mix of `(seed, row, col)` — **independent per cell**, so
 editing one corner never reshuffles variants elsewhere.

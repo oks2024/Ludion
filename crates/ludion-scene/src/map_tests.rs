@@ -2102,3 +2102,279 @@ kinds:
             && d.path.as_deref() == Some("/kinds/gate/0/static"))
     );
 }
+
+// --- Material scalars, collider-only primitives, sculpt, per-cell base -------------------------
+
+/// A one-tile kit (`T`) whose single primitive is the given block-style YAML lines.
+fn tile_kit(primitive: &str) -> MapKit {
+    parse_map_kit(&format!(
+        "format: 1\nkind: map-kit\ntiles:\n  T:\n    - {primitive}\n"
+    ))
+    .expect("the kit parses")
+}
+
+fn gen_tiles(kit: &MapKit, rows: &[&str]) -> Scene {
+    let rows: String = rows.iter().map(|r| format!("  - \"{r}\"\n")).collect();
+    let src = format!(
+        "format: 1\nkind: map\nkit: kit.yaml\ncell_size: 2.0\norigin:\n  - 0.0\n  - 0.0\nrows:\n{rows}"
+    );
+    let map = parse_map(&src).expect("the map parses");
+    generate(&map, kit, &[], &Registry::new()).expect("generates")
+}
+
+fn tile_errors(kit_src: &str) -> Vec<Diagnostic> {
+    let kit = parse_map_kit(kit_src);
+    match kit {
+        Err(d) => d,
+        Ok(kit) => {
+            let map = parse_map(TWO_BY_TWO_T).expect("the map parses");
+            generate(&map, &kit, &[], &Registry::new()).unwrap_err()
+        }
+    }
+}
+
+fn has_collider(e: &SceneEntity) -> bool {
+    e.components.iter().any(|(n, _)| n == "Collider")
+}
+
+#[test]
+fn material_scalars_are_emitted_on_the_mesh() {
+    let kit =
+        tile_kit("shape: cube\n      roughness: 0.25\n      metallic: 0.5\n      emissive: 2.0");
+    let scene = gen_tiles(&kit, &["T"]);
+    let mesh = component(&scene.entities[0], "Mesh");
+    assert_eq!(mesh["roughness"], serde_json::json!(0.25));
+    assert_eq!(mesh["metallic"], serde_json::json!(0.5));
+    assert_eq!(mesh["emissive"], serde_json::json!(2.0));
+}
+
+#[test]
+fn absent_material_scalars_are_not_emitted() {
+    let kit = tile_kit("shape: cube\n      roughness: 0.25");
+    let scene = gen_tiles(&kit, &["T"]);
+    let mesh = component(&scene.entities[0], "Mesh");
+    assert!(mesh.get("roughness").is_some());
+    assert!(mesh.get("metallic").is_none());
+    assert!(mesh.get("emissive").is_none());
+    let plain = gen_tiles(&tile_kit("shape: cube"), &["T"]);
+    assert_eq!(
+        component(&plain.entities[0], "Mesh"),
+        &serde_json::json!({ "shape": "cube" })
+    );
+}
+
+#[test]
+fn out_of_range_material_scalars_are_l1022_at_the_key() {
+    for (key, value) in [
+        ("roughness", "1.5"),
+        ("metallic", "-0.1"),
+        ("emissive", "-1"),
+    ] {
+        let kit = format!(
+            "format: 1\nkind: map-kit\ntiles:\n  T:\n    - shape: cube\n      {key}: {value}\n"
+        );
+        let diagnostics = tile_errors(&kit);
+        let want = format!("/tiles/T/0/{key}");
+        assert!(
+            diagnostics.iter().any(
+                |d| d.code == code::MAP_KIT_INVALID && d.path.as_deref() == Some(want.as_str())
+            ),
+            "{key}: {diagnostics:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_merge_never_blends_material_scalars() {
+    let kit = parse_map_kit(
+        "format: 1\nkind: map-kit\ntiles:\n  A:\n    - shape: cube\n      merge: true\n      roughness: 0.2\n  B:\n    - shape: cube\n      merge: true\n      roughness: 0.8\n",
+    )
+    .expect("the kit parses");
+    let scene = gen_tiles(&kit, &["AABB"]);
+    assert_eq!(scene.entities.len(), 2);
+    assert_eq!(
+        component(&scene.entities[0], "Mesh")["roughness"],
+        serde_json::json!(0.2f32 as f64)
+    );
+    assert_eq!(
+        component(&scene.entities[1], "Mesh")["roughness"],
+        serde_json::json!(0.8f32 as f64)
+    );
+}
+
+#[test]
+fn a_sculpt_source_and_variant_emit_a_sculpt_shape() {
+    let kit = tile_kit(
+        "sculpt: sculpts/rock.sculpt.yaml\n      variants:\n        - sculpt: sculpts/rock2.sculpt.yaml",
+    );
+    let scene = gen_tiles(&kit, &["TTTT"]);
+    let mut seen = Vec::new();
+    for e in &scene.entities {
+        seen.push(
+            component(e, "Mesh")["shape"]["sculpt"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
+    }
+    assert!(seen.iter().all(|p| p.starts_with("sculpts/rock")));
+    assert!(
+        seen.iter().any(|p| p == "sculpts/rock.sculpt.yaml")
+            || seen.iter().any(|p| p == "sculpts/rock2.sculpt.yaml")
+    );
+    let single = gen_tiles(&tile_kit("sculpt: sculpts/rock.sculpt.yaml"), &["T"]);
+    assert_eq!(
+        component(&single.entities[0], "Mesh")["shape"],
+        serde_json::json!({ "sculpt": "sculpts/rock.sculpt.yaml" })
+    );
+}
+
+#[test]
+fn a_collider_only_primitive_is_one_unit_scale_entity_with_its_collider() {
+    for (collider, key) in [
+        ("aabb:\n          - 1.0\n          - 1.0", "aabb"),
+        ("circle: 0.5", "circle"),
+        (
+            "box:\n          - 1.0\n          - 2.0\n          - 1.0",
+            "box",
+        ),
+    ] {
+        let kit = tile_kit(&format!("y: 0.5\n      collider:\n        {collider}"));
+        let scene = gen_tiles(&kit, &["T"]);
+        assert_eq!(scene.entities.len(), 1, "{key}");
+        let e = &scene.entities[0];
+        assert!(e.components.iter().all(|(n, _)| n != "Mesh"), "{key}");
+        assert_eq!(
+            component(e, "Transform")["scale"],
+            serde_json::json!([1.0, 1.0, 1.0])
+        );
+        assert!(
+            component(e, "Collider")["shape"].get(key).is_some(),
+            "{key}"
+        );
+        assert!(!e.name.as_deref().unwrap().ends_with("-collider"));
+    }
+}
+
+#[test]
+fn a_merged_collider_only_aabb_grows_to_the_rect() {
+    let kit =
+        tile_kit("merge: true\n      collider:\n        aabb:\n          - 1.0\n          - 1.0");
+    let scene = gen_tiles(&kit, &["TT", "TT"]);
+    assert_eq!(scene.entities.len(), 1);
+    assert_eq!(
+        component(&scene.entities[0], "Collider")["shape"]["aabb"]["half_extents"],
+        serde_json::json!([2.0, 2.0])
+    );
+}
+
+#[test]
+fn a_collider_only_marker_kind_carries_the_marker_components() {
+    let kit = parse_map_kit(
+        "format: 1\nkind: map-kit\ntiles:\n  T:\n    - shape: cube\nkinds:\n  trigger:\n    - collider:\n        circle: 1.0\n",
+    )
+    .expect("the kit parses");
+    let src = "format: 1\nkind: map\nkit: kit.yaml\ncell_size: 2.0\norigin:\n  - 0.0\n  - 0.0\nrows:\n  - \"T\"\nmarkers:\n  - name: zone\n    kind: trigger\n    x: 1.0\n    z: 1.0\n    components:\n      Zone:\n        id: 7\n";
+    let map = parse_map(src).expect("the map parses");
+    let scene = generate(&map, &kit, &[], &Registry::new()).expect("generates");
+    let zone = entity(&scene, "zone");
+    let names: Vec<_> = zone.components.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["Transform", "Collider", "Zone"]);
+}
+
+#[test]
+fn a_mirrored_collider_only_entity_reflects() {
+    let kit = tile_kit("collider:\n        circle: 0.5");
+    let src = "format: 1\nkind: map\nkit: kit.yaml\ncell_size: 2.0\norigin:\n  - 0.0\n  - 0.0\nrows:\n  - \"T   \"\n";
+    let generate_with = |mirror| {
+        let mut map = parse_map(src).unwrap();
+        map.mirror = mirror;
+        generate(&map, &kit, &[], &Registry::new()).expect("generates")
+    };
+    let (a, b) = (generate_with(Mirror::None), generate_with(Mirror::X));
+    assert_eq!(
+        translation(&b.entities[0])[0],
+        8.0 - translation(&a.entities[0])[0]
+    );
+}
+
+#[test]
+fn a_primitive_with_neither_source_nor_collider_is_l1021() {
+    let diagnostics = tile_errors("format: 1\nkind: map-kit\ntiles:\n  T:\n    - y: 1.0\n");
+    let d = diagnostics
+        .iter()
+        .find(|d| d.code == code::MAP_DOCUMENT_STRUCTURE)
+        .expect("a structure diagnostic");
+    assert!(
+        d.message.contains("`sculpt`") && d.message.contains("`collider`"),
+        "{}",
+        d.message
+    );
+    assert!(d.help.is_some());
+}
+
+#[test]
+fn mesh_only_keys_on_a_collider_only_primitive_are_l1022() {
+    for (key, value) in [
+        (
+            "color",
+            "\n        - 1.0\n        - 1.0\n        - 1.0\n        - 1.0",
+        ),
+        ("scale", "\n        - 1.0\n        - 1.0\n        - 1.0"),
+        ("roughness", " 0.5"),
+        ("metallic", " 0.5"),
+        ("emissive", " 0.5"),
+        ("static", " true"),
+        ("variants", "\n        - shape: cube"),
+    ] {
+        let kit = format!(
+            "format: 1\nkind: map-kit\ntiles:\n  T:\n    - collider:\n        circle: 1.0\n      {key}:{value}\n"
+        );
+        let diagnostics = tile_errors(&kit);
+        let want = format!("/tiles/T/0/{key}");
+        assert!(
+            diagnostics.iter().any(
+                |d| d.code == code::MAP_KIT_INVALID && d.path.as_deref() == Some(want.as_str())
+            ),
+            "{key}: {diagnostics:#?}"
+        );
+    }
+}
+
+const BASE_FLOOR_KIT: &str = "format: 1\nkind: map-kit\ntiles:\n  B:\n    - name: floor\n      shape: cube\n      merge: false\n";
+
+#[test]
+fn a_base_primitive_with_merge_false_emits_one_unscaled_piece_per_cell() {
+    let kit = parse_map_kit(BASE_FLOOR_KIT).expect("the kit parses");
+    let src = "format: 1\nkind: map\nkit: kit.yaml\ncell_size: 2.0\norigin:\n  - 0.0\n  - 0.0\nbase: B\nrows:\n  - \"BB\"\n  - \"B \"\n";
+    let map = parse_map(src).expect("the map parses");
+    let scene = generate(&map, &kit, &[], &Registry::new()).expect("generates");
+    let floors: Vec<_> = names(&scene)
+        .into_iter()
+        .filter(|n| n.starts_with("floor-"))
+        .collect();
+    assert_eq!(
+        floors,
+        vec!["floor-r000-c000", "floor-r000-c001", "floor-r001-c000"]
+    );
+    for e in &scene.entities {
+        assert_eq!(
+            component(e, "Transform")["scale"],
+            serde_json::json!([1.0, 1.0, 1.0])
+        );
+    }
+}
+
+#[test]
+fn a_per_cell_base_primitive_accepts_a_circle_collider() {
+    let kit = parse_map_kit(
+        "format: 1\nkind: map-kit\ntiles:\n  B:\n    - shape: cube\n      merge: false\n      collider:\n        circle: 0.5\n",
+    )
+    .expect("the kit parses");
+    let src = "format: 1\nkind: map\nkit: kit.yaml\ncell_size: 2.0\norigin:\n  - 0.0\n  - 0.0\nbase: B\nrows:\n  - \"BB\"\n";
+    let map = parse_map(src).expect("the map parses");
+    let scene =
+        generate(&map, &kit, &[], &Registry::new()).expect("a per-cell base takes any collider");
+    assert_eq!(scene.entities.len(), 2);
+    assert!(scene.entities.iter().all(has_collider));
+}

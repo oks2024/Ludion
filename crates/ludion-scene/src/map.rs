@@ -80,7 +80,15 @@ const PROBE_KEYS: [&str; 2] = ["radius", "speed"];
 const PRIMITIVE_KEYS: [&str; 9] = [
     "name", "shape", "voxel", "mesh", "color", "collider", "y", "scale", "variants",
 ];
-const PRIMITIVE_KEYS_EXTRA: [&str; 3] = ["merge", "footprint", "static"];
+const PRIMITIVE_KEYS_EXTRA: [&str; 7] = [
+    "merge",
+    "footprint",
+    "static",
+    "sculpt",
+    "roughness",
+    "metallic",
+    "emissive",
+];
 const COLLIDER_KEYS: [&str; 3] = ["aabb", "circle", "box"];
 
 // --- Data model --------------------------------------------------------------------------------
@@ -424,8 +432,9 @@ impl MapKit {
 pub struct KitPrimitive {
     /// Optional entity-name prefix (else derived from the glyph/kind, with a per-primitive index).
     pub name: Option<String>,
-    /// The primitive's mesh source (variant candidate index 0).
-    pub mesh: MeshSpec,
+    /// The primitive's mesh source (variant candidate index 0). `None` is a collider-only
+    /// primitive: one entity carrying its `collider` and no `Mesh`.
+    pub mesh: Option<MeshSpec>,
     /// Additional mesh candidates chosen deterministically by `(seed, cell coords)`.
     pub variants: Vec<MeshSpec>,
     /// Optional flat RGBA color (omitted → the `Mesh` default, opaque white).
@@ -436,8 +445,16 @@ pub struct KitPrimitive {
     pub y: f64,
     /// Per-cell base scale (default `[1, 1, 1]`); `merge` multiplies the X/Z axes by the rect size.
     pub scale: [f64; 3],
-    /// `true` → same-glyph cells rectangle-merge into one scaled entity per rect (floors).
-    pub merge: bool,
+    /// Optional `Mesh.roughness` (`[0, 1]`; absent → not emitted, the `Mesh` default).
+    pub roughness: Option<f64>,
+    /// Optional `Mesh.metallic` (`[0, 1]`; absent → not emitted).
+    pub metallic: Option<f64>,
+    /// Optional `Mesh.emissive` (`>= 0`; absent → not emitted).
+    pub emissive: Option<f64>,
+    /// `Some(true)` → same-glyph cells rectangle-merge into one scaled entity per rect (floors).
+    /// Absent merges only for the map's `base` glyph; `Some(false)` on a base primitive emits it
+    /// per cell instead.
+    pub merge: Option<bool>,
     /// `Some([w, h])` → runs of the glyph tile with one unscaled prop per `w × h`-cell footprint.
     pub footprint: Option<[u32; 2]>,
     /// `true` → the emitted mesh entities carry `Static: {}` (never the `box` collider sibling).
@@ -448,16 +465,26 @@ impl Default for KitPrimitive {
     fn default() -> Self {
         KitPrimitive {
             name: None,
-            mesh: MeshSpec::Shape("cube".to_string()),
+            mesh: Some(MeshSpec::Shape("cube".to_string())),
             variants: Vec::new(),
             color: None,
             collider: None,
             y: 0.0,
             scale: [1.0, 1.0, 1.0],
-            merge: false,
+            roughness: None,
+            metallic: None,
+            emissive: None,
+            merge: None,
             footprint: None,
             is_static: false,
         }
+    }
+}
+
+impl KitPrimitive {
+    /// Whether same-glyph cells rectangle-merge: an explicit `merge` wins, else only the `base`.
+    fn merges(&self, is_base: bool) -> bool {
+        self.merge.unwrap_or(is_base)
     }
 }
 
@@ -470,13 +497,17 @@ pub enum MeshSpec {
     Voxel(String),
     /// A mesh asset document path (`meshes/*.mesh.yaml`).
     Mesh(String),
+    /// A sculpt document path (`sculpts/*.sculpt.yaml`).
+    Sculpt(String),
 }
 
 impl MeshSpec {
-    /// The `Mesh.shape` value: a bare string for a primitive, else a one-key `{voxel|asset: path}`.
+    /// The `Mesh.shape` value: a bare string for a primitive, else a one-key
+    /// `{voxel|asset|sculpt: path}`.
     fn shape_value(&self) -> Value {
         match self {
             MeshSpec::Shape(s) => Value::String(s.clone()),
+            MeshSpec::Sculpt(p) => json!({ "sculpt": p }),
             MeshSpec::Voxel(p) => json!({ "voxel": p }),
             MeshSpec::Mesh(p) => json!({ "asset": p }),
         }
@@ -1070,9 +1101,12 @@ fn parse_primitive(
     };
     let mut prim = KitPrimitive::default();
     let before = diagnostics.len();
-    // A primitive names exactly one mesh source (shape | voxel | mesh); track them to enforce it.
+    // A primitive names one mesh source (shape | voxel | mesh | sculpt), or none when collider-only.
     let mut mesh: Option<MeshSpec> = None;
     let mut sources = 0usize;
+    let mut has_collider = false;
+    // Mesh-only keys seen, refused on a collider-only primitive.
+    let mut inert: Vec<&'static str> = Vec::new();
     for entry in entries {
         let child = |seg: &str| format!("{pointer}/{seg}");
         match entry.key.as_str() {
@@ -1118,17 +1152,46 @@ fn parse_primitive(
                 )
                 .map(MeshSpec::Mesh);
             }
+            "sculpt" => {
+                sources += 1;
+                mesh = envelope::expect_string(
+                    &entry.node,
+                    &child("sculpt"),
+                    "the sculpt path",
+                    code::MAP_DOCUMENT_STRUCTURE,
+                    diagnostics,
+                )
+                .map(MeshSpec::Sculpt);
+            }
             "color" => {
+                inert.push("color");
                 prim.color =
                     expect_number_array::<4>(&entry.node, &child("color"), "color", diagnostics);
             }
+            "roughness" => {
+                inert.push("roughness");
+                prim.roughness =
+                    expect_f64(&entry.node, &child("roughness"), "roughness", diagnostics);
+            }
+            "metallic" => {
+                inert.push("metallic");
+                prim.metallic =
+                    expect_f64(&entry.node, &child("metallic"), "metallic", diagnostics);
+            }
+            "emissive" => {
+                inert.push("emissive");
+                prim.emissive =
+                    expect_f64(&entry.node, &child("emissive"), "emissive", diagnostics);
+            }
             "collider" => {
+                has_collider = true;
                 prim.collider = parse_collider(&entry.node, &child("collider"), diagnostics);
             }
             "y" => {
                 prim.y = expect_f64(&entry.node, &child("y"), "y", diagnostics).unwrap_or_default();
             }
             "scale" => {
+                inert.push("scale");
                 if let Some(s) =
                     expect_number_array::<3>(&entry.node, &child("scale"), "scale", diagnostics)
                 {
@@ -1136,17 +1199,18 @@ fn parse_primitive(
                 }
             }
             "variants" => {
+                inert.push("variants");
                 prim.variants = parse_variants(&entry.node, &child("variants"), diagnostics);
             }
             "merge" => {
-                prim.merge = expect_bool(&entry.node, &child("merge"), "merge", diagnostics)
-                    .unwrap_or(false);
+                prim.merge = expect_bool(&entry.node, &child("merge"), "merge", diagnostics);
             }
             "footprint" => {
                 prim.footprint =
                     expect_pair(&entry.node, &child("footprint"), "footprint", diagnostics);
             }
             "static" => {
+                inert.push("static");
                 prim.is_static = expect_bool(&entry.node, &child("static"), "static", diagnostics)
                     .unwrap_or(false);
             }
@@ -1163,15 +1227,34 @@ fn parse_primitive(
             }
         }
     }
-    match mesh {
-        Some(m) => prim.mesh = m,
-        None if sources == 0 => diagnostics.push(
-            structure(
-                "a primitive must name exactly one mesh source (`shape`, `voxel`, or `mesh`)",
-            )
-            .with_path(pointer.to_string()),
-        ),
-        None => {}
+    prim.mesh = mesh;
+    if sources == 0 {
+        if !has_collider {
+            diagnostics.push(
+                structure(
+                    "a primitive needs a mesh source (`shape`, `voxel`, `mesh` or `sculpt`) or a `collider`",
+                )
+                .with_help(
+                    "add `shape: cube` (or another source) for a visible piece, or a `collider` alone for an invisible blocker",
+                )
+                .with_path(pointer.to_string()),
+            );
+        } else {
+            for key in inert {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::MAP_KIT_INVALID,
+                        format!(
+                            "`{key}` has no effect on a collider-only primitive: it has no mesh"
+                        ),
+                    )
+                    .with_help(format!(
+                        "remove `{key}`, or add a mesh source (`shape`, `voxel`, `mesh` or `sculpt`)"
+                    ))
+                    .with_path(format!("{pointer}/{key}")),
+                );
+            }
+        }
     }
     (diagnostics.len() == before).then_some(prim)
 }
@@ -1252,8 +1335,10 @@ fn parse_variants(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>)
         let child = format!("{pointer}/{index}");
         let NodeValue::Mapping(entries) = &item.value else {
             diagnostics.push(
-                structure("a variant must be a one-key mesh source (`shape`/`voxel`/`mesh`)")
-                    .with_path(child),
+                structure(
+                    "a variant must be a one-key mesh source (`shape`/`voxel`/`mesh`/`sculpt`)",
+                )
+                .with_path(child),
             );
             continue;
         };
@@ -1270,10 +1355,11 @@ fn parse_variants(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>)
                 ("shape", Some(s)) => Some(MeshSpec::Shape(s)),
                 ("voxel", Some(s)) => Some(MeshSpec::Voxel(s)),
                 ("mesh", Some(s)) => Some(MeshSpec::Mesh(s)),
+                ("sculpt", Some(s)) => Some(MeshSpec::Sculpt(s)),
                 (other, _) => {
                     diagnostics.push(
                         structure(&format!(
-                            "a variant key must be `shape`, `voxel`, or `mesh`, found `{other}`"
+                            "a variant key must be `shape`, `voxel`, `mesh`, or `sculpt`, found `{other}`"
                         ))
                         .with_path(child.clone()),
                     );
@@ -1594,7 +1680,11 @@ fn emit_grid(
                 glyph: &glyph,
                 prim_index,
             };
-            emit_merged(grid, prim, &prefix, seed, &mask, &src, items);
+            if prim.merges(true) {
+                emit_merged(grid, prim, &prefix, seed, &mask, &src, items);
+            } else {
+                emit_per_cell(grid, prim, &prefix, seed, &mask, &src, items);
+            }
         }
     }
 
@@ -1613,7 +1703,7 @@ fn emit_grid(
                 glyph: glyph_str,
                 prim_index,
             };
-            if prim.merge {
+            if prim.merges(false) {
                 emit_merged(grid, prim, &prefix, seed, &mask, &src, items);
             } else if let Some([w, h]) = prim.footprint {
                 emit_footprint(
@@ -1947,19 +2037,22 @@ impl KitPrimitive {
         1 + self.variants.len()
     }
 
-    /// The mesh source at candidate index `i` (0 = the primitive's own source).
-    fn candidate(&self, i: usize) -> &MeshSpec {
+    /// The mesh source at candidate index `i` (0 = the primitive's own source); `None` for a
+    /// collider-only primitive.
+    fn candidate(&self, i: usize) -> Option<&MeshSpec> {
         if i == 0 {
-            &self.mesh
+            self.mesh.as_ref()
         } else {
-            &self.variants[i - 1]
+            Some(&self.variants[i - 1])
         }
     }
 }
 
 /// Builds one entity with a `Transform`, a `Mesh` (variant-selected), an optional `Collider`, and
 /// any verbatim passthrough components appended. A 3D `box` collider rides a second, unit-scale
-/// `<name>-collider` entity instead: a solver-owned collider on a scaled entity is `L1290`.
+/// `<name>-collider` entity instead: a solver-owned collider on a scaled entity is `L1290`. A
+/// collider-only primitive (no mesh source) is one unit-scale entity carrying its `Collider`, of
+/// any shape, with no sibling.
 #[allow(clippy::too_many_arguments)]
 fn build_entity(
     name: &str,
@@ -1972,15 +2065,28 @@ fn build_entity(
     collider: Option<ColliderSpec>,
     extra: &[(String, Value)],
 ) -> Vec<SceneEntity> {
+    let Some(mesh) = prim.candidate(variant) else {
+        let mut components = vec![(
+            "Transform".to_string(),
+            transform_value(center, y, rotation, [1.0, 1.0, 1.0]),
+        )];
+        if let Some(collider) = collider {
+            components.push(("Collider".to_string(), collider_value(collider)));
+        }
+        components.extend(extra.iter().cloned());
+        return vec![SceneEntity {
+            presentation: false,
+            name: Some(name.to_string()),
+            components,
+            instance: None,
+        }];
+    };
     let mut components = vec![
         (
             "Transform".to_string(),
             transform_value(center, y, rotation, scale),
         ),
-        (
-            "Mesh".to_string(),
-            mesh_value(prim.candidate(variant), prim.color),
-        ),
+        ("Mesh".to_string(), mesh_value(mesh, prim)),
     ];
     let mut sibling = None;
     match collider {
@@ -2167,10 +2273,19 @@ fn mirror_entity(entity: &mut SceneEntity, mirror: Mirror, line_sum: f64) {
     }
 }
 
-fn mesh_value(mesh: &MeshSpec, color: Option<[f64; 4]>) -> Value {
+fn mesh_value(mesh: &MeshSpec, prim: &KitPrimitive) -> Value {
     let mut obj = serde_json::Map::new();
     obj.insert("shape".to_string(), mesh.shape_value());
-    if let Some(c) = color {
+    for (key, value) in [
+        ("roughness", prim.roughness),
+        ("metallic", prim.metallic),
+        ("emissive", prim.emissive),
+    ] {
+        if let Some(v) = value {
+            obj.insert(key.to_string(), json!(f32_exact(v)));
+        }
+    }
+    if let Some(c) = prim.color {
         obj.insert(
             "color".to_string(),
             json!([
@@ -2332,7 +2447,7 @@ fn validate_kit(kit: &MapKit, map: &MapDoc, diagnostics: &mut Vec<Diagnostic>) {
         validate_primitive_list(primitives, &pointer, diagnostics);
         let is_base = base.is_some() && single_char(glyph) == base;
         for (i, prim) in primitives.iter().enumerate() {
-            if prim.merge || is_base {
+            if prim.merges(is_base) {
                 validate_merged_collider(
                     prim,
                     map.cell_size,
@@ -2389,7 +2504,7 @@ fn validate_merged_collider(
         Diagnostic::new(code::MAP_KIT_INVALID, problem)
             .with_path(format!("{pointer}/collider"))
             .with_help(format!(
-                "a merged primitive (`merge: true`, or the map's `base` glyph) takes `aabb: \
+                "a merged primitive (`merge: true`, or a `base` glyph primitive without `merge: false`) takes `aabb: \
                     [{half}, {half}]` or `box: [{half}, hy, {half}]`; its collider grows to the \
                  merged rect. Use a per-cell glyph for other shapes"
             )),
@@ -2413,7 +2528,7 @@ fn validate_primitive_list(
     }
     for (i, prim) in primitives.iter().enumerate() {
         let p = format!("{pointer}/{i}");
-        if prim.merge && prim.footprint.is_some() {
+        if prim.merge == Some(true) && prim.footprint.is_some() {
             diagnostics.push(
                 Diagnostic::new(
                     code::MAP_KIT_INVALID,
@@ -2450,6 +2565,27 @@ fn validate_primitive_list(
                 )
                 .with_path(format!("{p}/color")),
             );
+        }
+        for (key, value, max, default) in [
+            ("roughness", prim.roughness, Some(1.0), "1"),
+            ("metallic", prim.metallic, Some(1.0), "0"),
+            ("emissive", prim.emissive, None, "0"),
+        ] {
+            if let Some(v) = value
+                && (!v.is_finite() || v < 0.0 || max.is_some_and(|m| v > m))
+            {
+                let range = if max.is_some() { "in [0, 1]" } else { ">= 0" };
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::MAP_KIT_INVALID,
+                        format!("`{key}` {v} is out of range: it must be finite and {range}, as on `Mesh`"),
+                    )
+                    .with_path(format!("{p}/{key}"))
+                    .with_help(format!(
+                        "use a value {range}; absent means the `Mesh` default, {default}"
+                    )),
+                );
+            }
         }
         let collider_finite = match prim.collider {
             Some(ColliderSpec::Aabb(half)) => half.iter().all(|v| v.is_finite()),

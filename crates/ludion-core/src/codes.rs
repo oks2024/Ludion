@@ -318,7 +318,8 @@ pub mod code {
     /// `L1022` — a map-kit entry, or a reference to one, is semantically invalid: a glyph/kind with
     /// an empty `emit` list, a primitive naming zero or more than one mesh source, a `footprint` that
     /// is not two positive integers, a primitive that sets both `merge` and `footprint`, a non-finite
-    /// `y`/`scale`/`color`/collider size, a non-positive `probe` radius or speed, or a marker
+    /// `y`/`scale`/`color`/collider size, a `roughness`/`metallic`/`emissive` out of the `Mesh`
+    /// range, a mesh-only key on a collider-only primitive, a non-positive `probe` radius or speed, or a marker
     /// `variant` index with no such candidate in the referenced kit entry. Raised by
     /// `ludion-scene`'s map parser and generator; the JSON Pointer names the offending kit
     /// primitive, `probe` field or marker field. A merged primitive needs a cell-sized `aabb`,
