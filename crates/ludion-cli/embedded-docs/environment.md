@@ -73,7 +73,7 @@ else:
   `0.0` = no disc). The disc's *direction* is not authored here — it is read from the scene's
   `DirectionalLight` at render time, so it sits exactly where the sun/moon light comes from. A size
   authored with no `DirectionalLight` in the scene simply draws no disc. Set it to
-  `2 × DirectionalLight.angular_radius` so the disc and the sun's specular highlight match.
+  `2 × DirectionalLight.angular_radius` so the disc and the sun's specular highlight match (the same angle also softens the sun's shadow).
   An orthographic camera sees the sky along one direction, so the gradient is a single colour and a disc fills the
   frame or none of it.
 - **`sun_disc_intensity`** — the disc's brightness, linear HDR, `>= 0` (default `1.0`); only relevant

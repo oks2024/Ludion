@@ -1,0 +1,95 @@
+# Feature: DirectionalLight.angular_radius also softens the sun's shadow — a contact-hardening
+# penumbra (PCSS-style). A low sun (~14 degrees, 3 degrees of angular radius) rakes rightward over a
+# ground plane past two blockers of very different height: look for the short post's shadow staying
+# crisp along its whole length while the tall pole's shadow is sharp at its base and widens toward
+# the tip, where the blocker is far above the ground. Angular radius 0 would render every edge hard.
+# Setting angular_radius for a specular disc buys this softness too; there is no separate knob.
+format: 1
+name: "sun-penumbra - DirectionalLight angular_radius: contact-hardening sun shadow"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 5.5
+          - 13.0
+        rotation:
+          - -18.0
+          - 4.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 42.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - 0.8
+          - -0.22
+          - -0.3
+        color:
+          - 1.0
+          - 0.93
+          - 0.78
+        intensity: 2.6
+        angular_radius: 3.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 40.0
+          - 1.0
+          - 40.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.52
+          - 0.5
+          - 0.46
+          - 1.0
+        roughness: 0.9
+  - name: tall-pole
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 3.0
+          - -1.0
+        scale:
+          - 0.5
+          - 6.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.78
+          - 0.3
+          - 0.26
+          - 1.0
+        roughness: 0.7
+  - name: short-post
+    components:
+      Transform:
+        translation:
+          - -2.0
+          - 0.5
+          - 1.5
+        scale:
+          - 0.5
+          - 1.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.82
+          - 0.8
+          - 0.78
+          - 1.0
+        roughness: 0.6
