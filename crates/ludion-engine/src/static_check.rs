@@ -87,7 +87,7 @@ pub struct HotStatic {
 impl HotStatic {
     /// One call per frame with the entities written that frame. An entity absent from `written`
     /// starts over; reaching [`HOT_STATIC_FRAMES`] yields one `L1343`, never again for that entity.
-    pub fn observe(&mut self, written: &[EntityId]) -> Vec<Diagnostic> {
+    pub fn observe(&mut self, written: &[EntityId]) -> Vec<(EntityId, Diagnostic)> {
         let mut next = StableMap::default();
         let mut hot = Vec::new();
         let mut seen = StableSet::default();
@@ -99,7 +99,8 @@ impl HotStatic {
             next.insert(id, count);
             if count == HOT_STATIC_FRAMES && !self.reported.contains(&id) {
                 self.reported.insert(id);
-                hot.push(
+                hot.push((
+                    id,
                     Diagnostic::new(
                         code::STATIC_REWRITTEN,
                         format!(
@@ -108,7 +109,7 @@ impl HotStatic {
                         ),
                     )
                     .with_help("remove `Static` from it"),
-                );
+                ));
             }
         }
         self.streak = next;
@@ -120,6 +121,30 @@ impl HotStatic {
         self.streak.remove(&id);
         self.reported.remove(&id);
     }
+}
+
+/// The `L1341` for `subject` (a `Static` entity), unpointed.
+pub(crate) fn ineligible_diagnostic(subject: &str, reason: &StaticIneligible) -> Diagnostic {
+    Diagnostic::new(
+        code::STATIC_INELIGIBLE,
+        format!(
+            "{subject} is `Static` but {}, so it takes the dynamic path",
+            reason.reason()
+        ),
+    )
+    .with_help("remove `Static`, or remove what makes it ineligible")
+}
+
+/// The `L1342` for `subject` (a `Static` entity) whose ancestor `ancestor` is not `Static`,
+/// unpointed.
+pub(crate) fn parent_diagnostic(subject: &str, ancestor: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::STATIC_PARENT_NOT_STATIC,
+        format!(
+            "{subject} is `Static` but its ancestor {ancestor} is not, so it takes the dynamic path"
+        ),
+    )
+    .with_help("mark every ancestor `Static`, or remove `Static` from this entity")
 }
 
 /// `L1341` for each `Static` entity the static path cannot hold, and `L1342` for each whose `Parent`
@@ -165,31 +190,11 @@ pub fn scene_static_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
                 .then_some(StaticIneligible::SkinnedAsset)
         });
         if let Some(reason) = ineligible {
-            diagnostics.push(
-                Diagnostic::new(
-                    code::STATIC_INELIGIBLE,
-                    format!(
-                        "this entity is `Static` but {}, so it takes the dynamic path",
-                        reason.reason()
-                    ),
-                )
-                .with_path(at.clone())
-                .with_help("remove `Static`, or remove what makes it ineligible"),
-            );
+            diagnostics.push(ineligible_diagnostic("this entity", &reason).with_path(at.clone()));
         }
         if let Some(ancestor) = non_static_ancestor(scene, index) {
-            diagnostics.push(
-                Diagnostic::new(
-                    code::STATIC_PARENT_NOT_STATIC,
-                    format!(
-                        "this entity is `Static` but its ancestor {} is not, so it takes the \
-                         dynamic path",
-                        crate::skin_bone::named(&scene.entities[ancestor], ancestor)
-                    ),
-                )
-                .with_path(at)
-                .with_help("mark every ancestor `Static`, or remove `Static` from this entity"),
-            );
+            let named = crate::skin_bone::named(&scene.entities[ancestor], ancestor);
+            diagnostics.push(parent_diagnostic("this entity", &named).with_path(at));
         }
     }
     diagnostics

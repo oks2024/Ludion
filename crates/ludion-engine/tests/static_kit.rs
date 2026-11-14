@@ -558,6 +558,11 @@ fn needs_gpu_static_kit_bench() {
         println!("mesh instances {ablated_instances}");
         println!();
         print_ablation("kit", &full, &ablated);
+        let mut off_engine = prepare(false);
+        off_engine.set_static_scene(false);
+        let off = measure_engine(&format!("{view} / statics off"), off_engine);
+        print_arm(&off);
+        print_ablation("static scene (off minus on)", &off, &full);
         assert!(
             ablated_instances < full_instances,
             "{view}: ablating the kit must draw fewer instances"

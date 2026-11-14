@@ -347,6 +347,12 @@ pub(crate) struct InheritMemo<T: Copy> {
     memo: SlotTable<(T, u32)>,
 }
 
+impl<T: Copy> Default for InheritMemo<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Copy> InheritMemo<T> {
     pub(crate) fn new() -> Self {
         Self {

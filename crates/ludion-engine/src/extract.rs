@@ -61,6 +61,7 @@ use crate::patterns::{self, BulletKind, PatternDoc, Volley};
 use crate::prefab::PrefabInstance;
 use crate::prefab_clips::{PartRests, PrefabClipData};
 use crate::projectile_draw::ProjectileDraw;
+use crate::static_scene::{self, Feed, StaticScene};
 use crate::ui;
 use crate::voxel_mesh::VoxelStaticGrid;
 
@@ -668,6 +669,7 @@ pub(crate) fn extract_through(
         degraded,
         None,
         None,
+        None,
     )
 }
 
@@ -685,6 +687,7 @@ pub(crate) fn extract_through_blend(
     degraded: &mut Vec<(String, Diagnostic)>,
     blend: Option<&mut BlendData>,
     projectiles: Option<&mut ProjectileDraw>,
+    statics: Option<(&mut StaticScene, Feed)>,
 ) -> Result<RenderScene, Vec<Diagnostic>> {
     // The cache owns the decoded bytes; `extract`'s `RenderScene` gets a handle, so a hit reads out
     // of the cache instead of touching disk. Every asset is `Arc`-shared (a hit is a refcount bump,
@@ -711,6 +714,7 @@ pub(crate) fn extract_through_blend(
         degraded,
         blend,
         projectiles,
+        statics,
     )
 }
 
@@ -729,6 +733,7 @@ fn extract_inner(
     degraded: &mut Vec<(String, Diagnostic)>,
     blend: Option<&mut BlendData>,
     projectiles: Option<&mut ProjectileDraw>,
+    statics: Option<(&mut StaticScene, Feed)>,
 ) -> Result<RenderScene, Vec<Diagnostic>> {
     assets.extract_begin(ExtractPhase::Place);
     // Gameplay time, read once: every closed form below — a volley's bullets, a particle emitter's
@@ -760,6 +765,24 @@ fn extract_inner(
     let (skin_followers, socket_palettes) = place_poses(world, &ids, assets, &mut poses, now);
     assets.extract_end(ExtractPhase::Poses);
     assets.extract_begin(ExtractPhase::Place);
+    // The visibility of this frame, before the placement: a kept static bakes its own.
+    let visibility = FrameVisibility::of(world, &ids);
+    // The statics are the prefix of the mesh lists; off, or one-shot, this is a fresh scene refreshed
+    // in full, which is exactly what the kept one must equal.
+    let mut fresh = StaticScene::default();
+    let (statics, feed) = statics.unwrap_or((&mut fresh, Feed::Full));
+    statics.refresh(
+        &mut static_scene::Frame {
+            world,
+            ids: &ids,
+            assets,
+            poses: &mut poses,
+            visibility: &visibility,
+        },
+        feed,
+        degraded,
+    );
+    let statics = &*statics;
     let mut placed = place_with(
         world,
         &ids,
@@ -770,11 +793,11 @@ fn extract_inner(
         &mut poses,
         now,
         skin_followers,
+        &|id| statics.held(id),
     );
     drop_non_finite(world, &mut placed, degraded);
     // Hidden entities leave every list that feeds the scene, early, so the blend keys and the pixel
     // snap stay consistent. Meshes stay: the GI voxelizer reads them and ignores `Visibility`.
-    let visibility = FrameVisibility::of(world, &ids);
     placed
         .sprites
         .retain(|sprite| !visibility.hidden(sprite.id));
@@ -1122,15 +1145,20 @@ fn extract_inner(
     // `voxels/*.voxel.yaml` vs `sculpts/*.sculpt.yaml` vs `*.assembly.yaml`). A character resolves
     // to its mesh's path, so it shares that entry with a plain `asset` of the same mesh. Primitives
     // resolve inline in `place`.
-    let mut mesh_assets: Vec<Arc<MeshData>> = Vec::new();
-    let mut mesh_path_index: StableMap<String, usize> = StableMap::new();
+    let static_flat = statics.flat();
+    let static_count = static_flat.instances.len();
+    let mut mesh_assets: Vec<Arc<MeshData>> = static_flat.assets.clone();
+    let mut mesh_path_index: StableMap<String, usize> =
+        static_flat.asset_paths.iter().cloned().zip(0..).collect();
     // An assembly's parts land in `mesh_assets` as one contiguous run, so one first-encounter entry
     // per assembly path — the index of its first part — is the whole dedup index.
     let mut assembly_part_base: StableMap<String, usize> = StableMap::new();
 
-    let mut meshes = Vec::with_capacity(placed.meshes.len());
+    let mut meshes = Vec::with_capacity(static_count + placed.meshes.len());
+    meshes.extend_from_slice(&static_flat.instances);
     // The owning entity of each `meshes` entry, parallel to it: a drop shadow's caster exclusion.
-    let mut mesh_owners: Vec<EntityId> = Vec::with_capacity(placed.meshes.len());
+    let mut mesh_owners: Vec<EntityId> = Vec::with_capacity(static_count + placed.meshes.len());
+    mesh_owners.extend_from_slice(&static_flat.owners);
     // Every skinned instance's bone palette, in extract order (filled in the `Skin` block; the
     // offsets are assigned here); the renderer prepends its own identity entry 0, so an instance's
     // `bone_offset` into the combined buffer starts at 1. A joint a `SkinBone` part names takes that
@@ -1139,73 +1167,14 @@ fn extract_inner(
     // (`sampled_palette`), or pushes its asset's joints' rest entries verbatim when there is none.
     let mut skin_jobs: Vec<SkinJob> = Vec::new();
     let mut skin_joints = 0usize;
-    let mut last_fade = None;
-    let mut last_rim = None;
-    let mut fade_memo = crate::hierarchy::InheritMemo::<Option<crate::components::Fade>>::new();
-    let mut rim_memo = crate::hierarchy::InheritMemo::<Option<Rim>>::new();
-    let mut medium_memo = crate::hierarchy::InheritMemo::<Option<f32>>::new();
+    let mut inherit = MeshInherit::default();
     for mesh in &placed.meshes {
         // Hidden meshes stay in `placed` for the voxelizer (the static GI bake ignores `Visibility`)
         // but are never resolved, skinned or drawn.
         if visibility.hidden(mesh.id) {
             continue;
         }
-        // Per-instance fade rides the entity's optional `Fade` component; absent ⇒ the
-        // render-identical default `(1.0, -f32::MAX)`, which `mesh.wgsl`'s screen-door discard can
-        // never reject. A mesh with no `Fade` of its own takes its nearest ancestor's, so a faded
-        // collider root fades its presentation children. Read once per entity: consecutive placed
-        // meshes of one entity (a grid's cells, an assembly's parts) fade as one model.
-        let fade = match last_fade {
-            Some((id, fade)) if id == mesh.id => fade,
-            _ => {
-                let fade = fade_memo
-                    .resolve(
-                        world,
-                        mesh.id,
-                        |id| {
-                            world
-                                .get::<crate::components::Fade>(id)
-                                .ok()
-                                .flatten()
-                                .copied()
-                        },
-                        |parent, own| own.or(parent),
-                        None,
-                    )
-                    .unwrap_or_default();
-                last_fade = Some((mesh.id, fade));
-                fade
-            }
-        };
-        // Rim and medium resolve like `Fade`: the mesh's own, else its nearest ancestor's `Mesh`
-        // value. The inheritance walk is keyed on the entity, so a grid's cells or an assembly's parts
-        // share it.
-        let (rim, medium) = match last_rim {
-            Some((id, rim, medium)) if id == mesh.id => (rim, medium),
-            _ => {
-                let own_rim =
-                    |id: EntityId| world.get::<Mesh>(id).ok().flatten().and_then(|m| m.rim);
-                let own_medium =
-                    |id: EntityId| world.get::<Mesh>(id).ok().flatten().and_then(|m| m.medium);
-                let rim = rim_lane(mesh.rim.or_else(|| {
-                    rim_memo.resolve_ancestors(world, mesh.id, own_rim, |p, o| o.or(p), None)
-                }));
-                let medium = mesh
-                    .medium
-                    .or_else(|| {
-                        medium_memo.resolve_ancestors(
-                            world,
-                            mesh.id,
-                            own_medium,
-                            |p, o| o.or(p),
-                            None,
-                        )
-                    })
-                    .unwrap_or(1.0);
-                last_rim = Some((mesh.id, rim, medium));
-                (rim, medium)
-            }
-        };
+        let (fade, rim, medium) = inherit.resolve(world, mesh);
         let cast_shadows = visibility.casts(mesh.id);
         let mut character: Option<Arc<CharacterData>> = None;
         let shape = match mesh.source {
@@ -1333,13 +1302,6 @@ fn extract_inner(
             .map(MeshShape::Asset),
         };
         if let Some(shape) = shape {
-            // Selection, not multiplication: a mesh whose geometry authors its own material uses it
-            // entirely; the component's material fields apply only to meshes that author none
-            // (primitives, plain asset meshes). Resolved per-mesh into the shader's branch-free flag.
-            let use_vertex_material = match shape {
-                MeshShape::Asset(idx) => mesh_assets[idx].authored_material,
-                _ => false,
-            };
             let bone_offset = match shape {
                 MeshShape::Asset(idx) if !mesh_assets[idx].skin_joints.is_empty() => {
                     // Entry 0 is the renderer's identity, so an asset's own entries start at 1.
@@ -1359,32 +1321,16 @@ fn extract_inner(
                 _ => 0,
             };
             mesh_owners.push(mesh.id);
-            meshes.push(MeshInstance {
+            meshes.push(mesh_instance(
+                mesh,
                 shape,
-                model: mesh.model,
-                normal_matrix: mesh.normal_matrix,
-                color: mesh.color,
-                material: mesh.material,
-                use_vertex_material,
-                fade: fade.fade,
-                fade_height_min: fade.height_min,
-                flash: mesh.flash,
-                flash_color: mesh.flash_color,
-                wrap: mesh.wrap,
-                scatter_color: mesh.scatter_color,
-                bone_offset,
-                cast_shadows,
-                viewmodel: false,
-                rim: resolve_rim_lane(
-                    &mesh_assets,
-                    match shape {
-                        MeshShape::Asset(idx) => Some(idx),
-                        _ => None,
-                    },
-                    rim,
-                ),
+                &mesh_assets,
+                fade,
+                rim,
                 medium,
-            });
+                cast_shadows,
+                bone_offset,
+            ));
         }
     }
 
@@ -1473,7 +1419,9 @@ fn extract_inner(
         None => (None, None),
         Some((index, volume)) => {
             assets.observe_begin(LoadPhase::Voxelize);
-            let voxel = crate::voxelizer::voxelize(&placed.meshes, volume.cell_size, assets);
+            let mut gi_meshes = statics.placements(&ids);
+            gi_meshes.append(&mut placed.meshes);
+            let voxel = crate::voxelizer::voxelize(&gi_meshes, volume.cell_size, assets);
             assets.observe_end(LoadPhase::Voxelize);
             let voxel = voxel
                 .map_err(|diagnostics| gi_volume_errors(diagnostics, index))?
@@ -1626,7 +1574,11 @@ fn extract_inner(
                 meshes: mesh_owners
                     .iter()
                     .zip(&scene.meshes)
-                    .map(|(&owner, mesh)| (!mesh.viewmodel).then_some(owner))
+                    .enumerate()
+                    // The kept statics are fixed: keyed to nothing, so the pose table never holds them.
+                    .map(|(i, (&owner, mesh))| {
+                        (i >= static_count && !mesh.viewmodel).then_some(owner)
+                    })
                     // Appended projectile meshes have no owner entity: unkeyed, but present, so the
                     // list stays parallel to `scene.meshes`.
                     .chain(
@@ -2920,6 +2872,7 @@ pub(crate) struct Placed<'w> {
 /// [`PlacedSprite`]'s texture, a mesh's *geometry* is left unresolved here — a mesh's world transform
 /// (and therefore `render.bounds`) does not depend on whether an asset document loads, so asset
 /// resolution and its errors stay in [`extract`].
+#[derive(Clone)]
 pub(crate) struct PlacedMesh<'w> {
     /// The entity this mesh belongs to.
     pub(crate) id: EntityId,
@@ -2985,7 +2938,7 @@ pub(crate) enum PlacedMeshSource<'w> {
 }
 
 /// The unresolved geometry source a `Mesh.shape` places.
-fn placed_source(shape: &MeshSource) -> PlacedMeshSource<'_> {
+pub(crate) fn placed_source(shape: &MeshSource) -> PlacedMeshSource<'_> {
     match shape {
         MeshSource::Cube => PlacedMeshSource::Primitive(MeshShape::Cube),
         MeshSource::Plane => PlacedMeshSource::Primitive(MeshShape::Plane),
@@ -3433,6 +3386,7 @@ pub(crate) fn place<'w>(
         poses,
         now,
         skin_followers,
+        &|_| false,
     )
 }
 
@@ -3480,6 +3434,75 @@ impl<'w> PlaceColumns<'w> {
     }
 }
 
+/// Every mesh placement an entity's `Mesh` and `MeshGrid` make, from its world `model` and
+/// `normal_matrix` alone: the `Mesh` first, then each non-empty grid cell row-major, in the
+/// entity's local XZ plane under its whole pose (see `MeshGrid`'s placement convention).
+///
+/// Pure — no `World`, no `EntityId` — so the placement of a part is a function of its component
+/// values and its pose: the one placement every mesh shares, dynamic or kept in the
+/// [`StaticScene`](crate::static_scene::StaticScene), and the one a prefab's unspawned statics can
+/// be placed with. A space is the empty cell; a glyph with no legend entry draws nothing
+/// (validation rejects it as `L1020`; extract stays panic-free on an unvalidated world).
+pub(crate) fn place_mesh_parts<'a>(
+    mesh: Option<&'a Mesh>,
+    grid: Option<&'a MeshGrid>,
+    model: Mat4,
+    normal_matrix: Mat3,
+    mut emit: impl FnMut(MeshSite, Mat4, Mat3, &'a Mesh),
+) {
+    if let Some(mesh) = mesh {
+        emit(MeshSite::Component, model, normal_matrix, mesh);
+    }
+    if let Some(grid) = grid {
+        let mut glyph_buf = [0u8; 4];
+        for (row_index, row) in grid.rows.iter().enumerate() {
+            for (col_index, glyph) in row.chars().enumerate() {
+                let Some(mesh) = grid.legend.get(glyph.encode_utf8(&mut glyph_buf)) else {
+                    continue;
+                };
+                let (cell, basis) = mesh_grid_cell(grid, col_index, row_index);
+                emit(
+                    MeshSite::GridCell(glyph),
+                    model * cell,
+                    normal_matrix * basis,
+                    mesh,
+                );
+            }
+        }
+    }
+}
+
+/// One [`PlacedMesh`] from a [`place_mesh_parts`] emission. Every cell of a grid carries the one
+/// entity `id`, so `render.bounds` unions the grid into one renderable and a `Fade` applies to all
+/// of it.
+pub(crate) fn placed_mesh<'a>(
+    id: EntityId,
+    index: usize,
+    site: MeshSite,
+    model: Mat4,
+    normal_matrix: Mat3,
+    mesh: &'a Mesh,
+    dynamic: bool,
+) -> PlacedMesh<'a> {
+    PlacedMesh {
+        id,
+        index,
+        site,
+        model,
+        normal_matrix,
+        color: mesh.color,
+        material: [mesh.roughness, mesh.metallic, mesh.emissive],
+        flash: mesh.flash,
+        flash_color: mesh.flash_color,
+        wrap: mesh.wrap,
+        scatter_color: mesh.scatter_color,
+        rim: mesh.rim,
+        medium: mesh.medium,
+        source: placed_source(&mesh.shape),
+        dynamic,
+    }
+}
+
 /// The placement half of [`place`], after [`place_poses`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn place_with<'w>(
@@ -3492,6 +3515,7 @@ pub(crate) fn place_with<'w>(
     poses: &mut WorldAffines,
     now: SimTime,
     skin_followers: StableMap<EntityId, Vec<(&'w str, Mat4)>>,
+    skip: &dyn Fn(EntityId) -> bool,
 ) -> Placed<'w> {
     // The camera's world basis, for billboards. Through [`CameraBasis::from_view`], which the
     // particle path also calls: one derivation, so a sprite and a particle in the same frame can
@@ -3519,62 +3543,26 @@ pub(crate) fn place_with<'w>(
         // simply never consulted, the marker's documented inert case.
         let dynamic = cols.gi_dynamic.get(id).is_some();
 
-        if let Some(mesh) = cols.mesh.get(id) {
-            let model = pose.model();
-            let normal_matrix = pose.normal_matrix();
-            placed.meshes.push(PlacedMesh {
-                id,
-                index,
-                site: MeshSite::Component,
-                model,
-                normal_matrix,
-                color: mesh.color,
-                material: [mesh.roughness, mesh.metallic, mesh.emissive],
-                flash: mesh.flash,
-                flash_color: mesh.flash_color,
-                wrap: mesh.wrap,
-                scatter_color: mesh.scatter_color,
-                rim: mesh.rim,
-                medium: mesh.medium,
-                source: placed_source(&mesh.shape),
-                dynamic,
-            });
-        }
-
-        if let Some(grid) = cols.mesh_grid.get(id) {
-            // One `PlacedMesh` per non-empty cell, row-major, in the entity's local XZ plane under
-            // its whole pose (see `MeshGrid`'s placement convention). Every cell carries this one
-            // entity `id`, so `render.bounds` unions the grid into one renderable and a `Fade`
-            // applies to all of it.
-            let (model, normal_matrix) = (pose.model(), pose.normal_matrix());
-            let mut glyph_buf = [0u8; 4];
-            for (row_index, row) in grid.rows.iter().enumerate() {
-                for (col_index, glyph) in row.chars().enumerate() {
-                    // A space is the empty cell; a glyph with no legend entry draws nothing
-                    // (validation rejects it as `L1020`; extract stays panic-free on an unvalidated
-                    // world).
-                    let Some(mesh) = grid.legend.get(glyph.encode_utf8(&mut glyph_buf)) else {
-                        continue;
-                    };
-                    let (cell, basis) = mesh_grid_cell(grid, col_index, row_index);
-                    placed.meshes.push(PlacedMesh {
-                        id,
-                        index,
-                        site: MeshSite::GridCell(glyph),
-                        model: model * cell,
-                        normal_matrix: normal_matrix * basis,
-                        color: mesh.color,
-                        material: [mesh.roughness, mesh.metallic, mesh.emissive],
-                        flash: mesh.flash,
-                        flash_color: mesh.flash_color,
-                        wrap: mesh.wrap,
-                        scatter_color: mesh.scatter_color,
-                        rim: mesh.rim,
-                        medium: mesh.medium,
-                        source: placed_source(&mesh.shape),
-                        dynamic,
-                    });
-                }
+        if !skip(id) {
+            let (mesh, grid) = (cols.mesh.get(id), cols.mesh_grid.get(id));
+            if mesh.is_some() || grid.is_some() {
+                place_mesh_parts(
+                    mesh,
+                    grid,
+                    pose.model(),
+                    pose.normal_matrix(),
+                    |site, model, normal_matrix, mesh| {
+                        placed.meshes.push(placed_mesh(
+                            id,
+                            index,
+                            site,
+                            model,
+                            normal_matrix,
+                            mesh,
+                            dynamic,
+                        ));
+                    },
+                );
             }
         }
 
@@ -3824,6 +3812,12 @@ impl RenderPose {
             None => self.local,
         }
     }
+}
+
+/// The world model and normal matrix [`place_with`] gives `id`'s meshes.
+pub(crate) fn render_model(world: &World, poses: &mut WorldAffines, id: EntityId) -> (Mat4, Mat3) {
+    let pose = render_pose(world, poses, id);
+    (pose.model(), pose.normal_matrix())
 }
 
 fn render_pose(world: &World, poses: &mut WorldAffines, id: EntityId) -> RenderPose {
@@ -4510,6 +4504,129 @@ pub(crate) fn resolve_rim_lane(
         .unwrap_or(entity)
 }
 
+/// The per-entity values a mesh inherits down `Parent`, resolved once per entity: the dynamic mesh
+/// loop and the [`StaticScene`](crate::static_scene::StaticScene) both read them here.
+#[derive(Default)]
+pub(crate) struct MeshInherit {
+    last_fade: Option<(EntityId, crate::components::Fade)>,
+    last_rim: Option<(EntityId, [f32; 4], f32)>,
+    fade_memo: crate::hierarchy::InheritMemo<Option<crate::components::Fade>>,
+    rim_memo: crate::hierarchy::InheritMemo<Option<Rim>>,
+    medium_memo: crate::hierarchy::InheritMemo<Option<f32>>,
+}
+
+impl MeshInherit {
+    /// `(fade, rim lane, medium)` of `mesh`.
+    ///
+    /// Per-instance fade rides the entity's optional `Fade` component; absent ⇒ the
+    /// render-identical default `(1.0, -f32::MAX)`, which `mesh.wgsl`'s screen-door discard can
+    /// never reject. A mesh with no `Fade` of its own takes its nearest ancestor's, so a faded
+    /// collider root fades its presentation children. Rim and medium resolve like `Fade`: the mesh's
+    /// own, else its nearest ancestor's `Mesh` value. Read once per entity: consecutive placed meshes
+    /// of one entity (a grid's cells, an assembly's parts) fade as one model.
+    pub(crate) fn resolve(
+        &mut self,
+        world: &World,
+        mesh: &PlacedMesh<'_>,
+    ) -> (crate::components::Fade, [f32; 4], f32) {
+        let fade = match self.last_fade {
+            Some((id, fade)) if id == mesh.id => fade,
+            _ => {
+                let fade = self
+                    .fade_memo
+                    .resolve(
+                        world,
+                        mesh.id,
+                        |id| {
+                            world
+                                .get::<crate::components::Fade>(id)
+                                .ok()
+                                .flatten()
+                                .copied()
+                        },
+                        |parent, own| own.or(parent),
+                        None,
+                    )
+                    .unwrap_or_default();
+                self.last_fade = Some((mesh.id, fade));
+                fade
+            }
+        };
+        let (rim, medium) = match self.last_rim {
+            Some((id, rim, medium)) if id == mesh.id => (rim, medium),
+            _ => {
+                let own_rim =
+                    |id: EntityId| world.get::<Mesh>(id).ok().flatten().and_then(|m| m.rim);
+                let own_medium =
+                    |id: EntityId| world.get::<Mesh>(id).ok().flatten().and_then(|m| m.medium);
+                let rim = rim_lane(mesh.rim.or_else(|| {
+                    self.rim_memo
+                        .resolve_ancestors(world, mesh.id, own_rim, |p, o| o.or(p), None)
+                }));
+                let medium = mesh
+                    .medium
+                    .or_else(|| {
+                        self.medium_memo.resolve_ancestors(
+                            world,
+                            mesh.id,
+                            own_medium,
+                            |p, o| o.or(p),
+                            None,
+                        )
+                    })
+                    .unwrap_or(1.0);
+                self.last_rim = Some((mesh.id, rim, medium));
+                (rim, medium)
+            }
+        };
+        (fade, rim, medium)
+    }
+}
+
+/// The instance of one placed mesh with a resolved single `shape`: the build the dynamic mesh loop
+/// and the [`StaticScene`](crate::static_scene::StaticScene) share, so the bytes of a static and of
+/// the same mesh drawn dynamically cannot diverge.
+///
+/// Selection, not multiplication: a mesh whose geometry authors its own material uses it entirely;
+/// the component's material fields apply only to meshes that author none (primitives, plain asset
+/// meshes). Resolved per mesh into the shader's branch-free flag. `rim` is the entity's resolved
+/// lane; an asset's own rim wins.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn mesh_instance(
+    mesh: &PlacedMesh<'_>,
+    shape: MeshShape,
+    mesh_assets: &[Arc<MeshData>],
+    fade: crate::components::Fade,
+    rim: [f32; 4],
+    medium: f32,
+    cast_shadows: bool,
+    bone_offset: u32,
+) -> MeshInstance {
+    let asset = match shape {
+        MeshShape::Asset(idx) => Some(idx),
+        _ => None,
+    };
+    MeshInstance {
+        shape,
+        model: mesh.model,
+        normal_matrix: mesh.normal_matrix,
+        color: mesh.color,
+        material: mesh.material,
+        use_vertex_material: asset.is_some_and(|idx| mesh_assets[idx].authored_material),
+        fade: fade.fade,
+        fade_height_min: fade.height_min,
+        flash: mesh.flash,
+        flash_color: mesh.flash_color,
+        wrap: mesh.wrap,
+        scatter_color: mesh.scatter_color,
+        bone_offset,
+        cast_shadows,
+        viewmodel: false,
+        rim: resolve_rim_lane(mesh_assets, asset, rim),
+        medium,
+    }
+}
+
 /// The normal matrix for a mesh: the transform that carries object-space normals to world space.
 ///
 /// - **Uniform scale** (`sx == sy == sz`): the model's own upper-3×3. A similarity transform already
@@ -5002,7 +5119,7 @@ fn resolve_atlas_frame(
 /// Which mesh-like asset a `Mesh.shape` names — selects the loader and the diagnostic label, so
 /// asset meshes and voxel models share one first-encounter dedup path into `mesh_assets`.
 #[derive(Clone, Copy)]
-enum MeshKind {
+pub(crate) enum MeshKind {
     /// A `*.mesh.yaml` asset mesh.
     Asset,
     /// A `*.voxel.yaml` voxel model.
@@ -5015,7 +5132,7 @@ enum MeshKind {
 
 impl MeshKind {
     /// Loads the document at `rel` through `assets` with this kind's loader.
-    fn load(
+    pub(crate) fn load(
         self,
         assets: &mut dyn SceneAssets,
         rel: &str,
@@ -5998,6 +6115,7 @@ mod tests {
             ludion_renderer::QualityParams::FULL.particle_density,
             None,
             &mut degraded,
+            None,
             None,
             None,
         )

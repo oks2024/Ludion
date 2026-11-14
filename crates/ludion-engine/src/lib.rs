@@ -113,6 +113,7 @@ mod skin_ragdoll;
 mod snapshot;
 mod sprite_sheet;
 mod static_check;
+mod static_scene;
 pub mod sweep;
 mod tick_observer;
 mod trace;

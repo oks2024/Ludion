@@ -357,6 +357,11 @@ pub struct Engine {
     /// Host setting: render-only, never hashed, snapshotted or on the wire, and not a quality axis.
     /// Oracle tests and the "before" bench turn it off; a game cannot request it.
     frustum_culling: bool,
+    /// The persistent static scene ([`set_static_scene`](Engine::set_static_scene)): the placed
+    /// instances of every `Static` entity, kept between frames.
+    static_scene: crate::static_scene::StaticScene,
+    /// Whether extract keeps the static scene. Host setting, same status as `frustum_culling`.
+    static_scene_on: bool,
     /// The mode the game's own systems last requested through
     /// [`RenderSettings`](crate::RenderSettings), the strongest source. Lives here rather than in the
     /// world so a district switch or restore does not forget it; same status as the others.
@@ -866,6 +871,8 @@ impl Engine {
             look_motion: None,
             anti_aliasing_override: None,
             frustum_culling: true,
+            static_scene: crate::static_scene::StaticScene::default(),
+            static_scene_on: true,
             anti_aliasing_game: None,
             cursor_lock_game: None,
             cursor_lock_sender: None,
@@ -1113,6 +1120,23 @@ impl Engine {
     /// Whether frustum culling is on.
     pub fn frustum_culling(&self) -> bool {
         self.frustum_culling
+    }
+
+    /// Turns the persistent static scene on or off for this host. On by default; survives scene
+    /// loads.
+    ///
+    /// On, extract places each `Static` entity once and re-places it only when the ECS write journal
+    /// reports it; off, it places them all again every frame. Either way the statics lead the mesh
+    /// lists in ascending entity order, so the scene, and the image, are identical. A host switch, not
+    /// a protocol command and not a game request: it changes what extract walks, never the sim.
+    pub fn set_static_scene(&mut self, on: bool) {
+        self.static_scene_on = on;
+        self.static_scene.invalidate();
+    }
+
+    /// Whether the persistent static scene is on.
+    pub fn static_scene(&self) -> bool {
+        self.static_scene_on
     }
 
     /// Attaches (or detaches) an [`ExtractObserver`](crate::extract_observer::ExtractObserver) that
@@ -6064,6 +6088,11 @@ impl Engine {
         // Disjoint field borrows: the view override, the world (through the driver), the project root
         // and the cache are four separate fields, so this borrows each without aliasing `self`.
         let view = use_view.then_some(self.view_override.as_ref()).flatten();
+        // The journal drains before the world is borrowed shared; off, extract builds its own.
+        let feed = self.static_scene_on.then(|| {
+            self.static_scene
+                .feed(self.driver.world_mut(), self.present_epoch)
+        });
         let world = self.driver.world();
         let root = AssetRoot::content(&self.project_root);
         let cache = &mut self.asset_cache;
@@ -6093,6 +6122,7 @@ impl Engine {
             &mut degraded,
             blend,
             Some(projectile_draw),
+            feed.map(|feed| (&mut self.static_scene, feed)),
         )
         .map(|mut scene| {
             scene.debug_lines = crate::debug_draw::segments(world, &self.debug_draw);
