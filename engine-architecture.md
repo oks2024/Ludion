@@ -204,8 +204,14 @@ windowed is an append-only feature, not a mode switch.
   cascade (the named entity, then descendants in ascending slot; a sim entity's presentation
   descendants included) — ruling E1, `Plan/transform-hierarchy-and-prefabs.md`.
 
-**Explicitly out (do not build):** parallel scheduler, archetype-graph cleverness, change-detection
-ticks (the inspector polls queries at low Hz until a real need appears), relations, exclusive
+**In, opt-in:** a write journal, `World::watch_with::<M>()` / `drain_watched::<M>()` — a bitset of
+entities carrying a watched marker, set on any mutable access to their components, drained sorted
+(deterministic at any thread count), never hashed or snapshotted (Serious Isaac 0039, owner
+grilling 2026-11-13, `Plan/gpu-driven-culling.md` decision 41).
+
+**Explicitly out (do not build):** parallel scheduler, archetype-graph cleverness, general
+change-detection ticks (the inspector polls queries at low Hz until a real need appears; the opt-in
+journal above is the one exception), relations, exclusive
 systems, world splitting. Chunk-level data parallelism *within* one system is the one sanctioned
 exception (via `ludion_core::par`, per `Plan/deterministic-job-system.md` J0/J1) — its ECS entry
 points are `World::par_for_each`/`par_join_fold`; a system-level parallel scheduler stays out.
@@ -214,7 +220,9 @@ module; gated by `scripts/ecs-budget.mjs`, raising it is the user's decision). T
 was set for the sequential v1 and the crate sat at ≈ 2.9k against it; J1 (user unfreeze, 2026-08-01)
 deliberately spends the difference on the parallel region machinery (`par_query.rs`) — a one-off
 raise for a named plan, not a standing licence to grow; the 0033 column handle is a second named,
-owner-approved addition, spent inside the existing 3000. Conformance tests are written *before*
+owner-approved addition, spent inside the existing 3000; the 0039 write journal is a third, a named
+one-off raise of the target to 3250 (quality wins over the number: raise it again rather than
+compromise the code). Conformance tests are written *before*
 storage internals: generational safety (stale `EntityId` is an error, not a hit on a recycled
 entity), query iteration order.
 

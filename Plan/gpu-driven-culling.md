@@ -39,8 +39,8 @@
   Resolving means asset lookup, assembly part posing and skinned palette sampling. It does this
   with no camera test of any kind. Sprites are sorted back to front, particles evaluated in closed
   form, and text laid out, all regardless of visibility.
-- **The renderer rebuilds every instance buffer every frame.** `build_mesh_draws` and
-  `build_mesh_asset_draws` (`crates/ludion-renderer/src/render.rs`) bucket instances by primitive
+- **The renderer rebuilds every instance buffer every frame.** `build_mesh_batch`
+  (`crates/ludion-renderer/src/render/mesh_batch.rs`) buckets instances by primitive
   shape or by `mesh_assets` index. Each bucket gets a **new** `VERTEX` buffer via `init_buffer`
   every frame, and each bucket is one `draw`/`draw_indexed` with `0..count` instances. Sprites are
   batched by `(layer, texture)` after a CPU sort.
@@ -528,19 +528,24 @@ The pinned `[passes] cull` budget lines are owed in `Plan/owed.md`, because the 
 
 ### W3 — the persistent static scene (rung 2b)
 
-- The static notion as ruled (question G6).
-- Per-region persistent instance buffers uploaded at scene or region load (whole scene until
-  world-streaming W2 exists).
-- Extract skips statics; the cull pass runs over static plus dynamic.
-- Explicit invalidation for wire edits to a static entity.
-- A debug validation mode: re-place statics and compare against the persistent copy, run in tests
-  and `--full`, never per frame in shipping.
+Opened for Serious Isaac 0039; G6 is resolved (decisions 36–48).
+
+- **W3.0 Bench and `static-kit` gallery.** About 3k unscaled kit-style statics interleaved with dynamics, an ignored release bench in code (the `culling_bench` precedent) with `extract_ms` statics off and on. The "before" figures go in Status.
+- **W3.1 ECS write journal.** `World::watch_with::<M>()` / `drain_watched::<M>()` (decision 41), the `ludion-ecs` budget raise.
+- **W3.2 `Static` component, eligibility codes, map-kit `static: true`.** The component schema snapshot moves deliberately.
+- **W3.3 `StaticScene` on the CPU.** Pure placement function, journal-fed cache, extract skip, static-first order, `set_static_scene`, every index consumer taught the static range.
+- **W3.4 Persistent GPU buffer** as the cull's second input; statics draw uncull above the capacity clamp.
+- **W3.5 Gates, budget, docs, close.**
 
 **Gates:**
 - goldens byte-identical;
+- gallery `static-kit` on/off byte-identical, and a 20-repeat render identical;
 - the static-invalidation test (edit a static wall over the wire, the next frame shows it moved);
-- the composed-city scene's `extract_ms` below a ceiling set from W0's numbers;
-- the first **instance-count-naming budget** (world-streaming W5's `city-stress`, brought forward).
+- the GPU-vs-oracle mask test covers statics; `world_hash` unchanged for content without `Static`;
+- the first **instance-count-naming budget** (world-streaming W5's `city-stress`, brought forward) plus an `extract_ms` ceiling from the bench (about 3× the median unpinned; pinned lines owed);
+- the game's `perf_m2` extract delta at or below +0.5 ms composite p95 on a dressed horde-large-a (horde-500, gibfest, full-run-bot), as the game's own acceptance.
+
+G7 stays a trigger, out of W3 (decision 38).
 
 ### Later, on triggers
 
@@ -666,7 +671,8 @@ Decisions 1–6 are rung 0, amended by the owner (Clockout 0030). Decisions 7–
 2026-11-07 for request 0008, GPU frustum culling for the M2 torture scene (500 enemies, ragdoll parts
 and 5,000 projectiles in a room of about 40 m, 5.0 ms render budget). They cover only what 0008
 needs: G6 (the static marker), rung 2b (the persistent scene), the world-streaming coupling, G7 and
-G11 stay open with their recommendations as defaults.
+G11 stay open with their recommendations as defaults. Decisions 36–48 were ruled on 2026-11-13 (owner
+grilling, Serious Isaac 0039) and resolve G6 and open rung 2b.
 
 1. Rung 0 ships ahead of the grilling.
 2. G3 is settled as option 0a, the `Visibility` component.
@@ -703,6 +709,22 @@ G11 stay open with their recommendations as defaults.
 33. **Base frame, odd-extent overhang.** Level n meshes with step `2^n` against the base size's bottom-centre offset, so silhouettes stay aligned; an odd extent overhangs the base by under one coarse cell toward +X/+Y/+Z.
 34. **Chain-union bounds.** `AssetBounds::of_mesh` takes the union of the base box and every level's box, so an overhang is never frustum-culled early and culling on/off stays byte-identical. A meshoptimizer chain's levels lie inside the base, so its bounds, and every existing golden, are unchanged.
 35. **Not chained:** sculpt `shape: voxel` parts (they read the document and ignore `lods`), assembly parts, the GI voxelizer and the static grid (level 0 only). The pool's Voxel looks select levels like its Mesh looks.
+
+**Rung 2b, the persistent static scene (Serious Isaac 0039, owner grilling 2026-11-13).** Resolves G6.
+
+36. **Marker (G6).** An authored `Static: {}` component, a marker like `Viewmodel`. A map-kit visual primitive's `static: true` makes `generate-map`, and through it `spawn_map` (same emitter), put `Static` on each emitted entity, merged rects and `MeshGrid` entities included. Colliders and gameplay entities are never marked.
+37. **Scope.** The contract is defined engine-wide; only render is wired in W3. `GiDynamic` is kept as is. GI, probes and nav adopt `Static` in their own requests (0041/0042 or later).
+38. **G7 is out of scope.** Decision 17's trigger stands.
+39. **Rung 2b.** One engine-wide `StaticScene`: a CPU cache of placed instances and cull items keyed by entity, plus a persistent GPU buffer sorted by (bucket, static-first, EntityId). It is the cull's second input. Core WebGPU only, unchanged from 2a.
+40. **Draw order.** Inside each bucket, statics draw before dynamics, each by ascending EntityId. The host off switch `set_static_scene(false)` (modelled on `set_frustum_culling`: host-only, never sim or wire) makes extract walk statics again in the same static-first order, so on and off are byte-identical. No existing golden moves.
+41. **ECS write journal** (amends `engine-architecture.md` §4). A public, generic `World::watch_with::<M>()` / `drain_watched::<M>()`, with docs and a runnable example. It journals any mutable access to any component of an entity carrying M (`get_mut`, `component_mut`, `insert`, `remove`, `&mut` query and `par_for_each` yields), the insertion or removal of M, and despawn. A bitset with a sorted drain, so deterministic at 1, 2 and 8 threads; never hashed or snapshotted (a restore or `ludion dev` reload rebuilds `StaticScene`). A drained watched ancestor expands to its `Parent` descendants. Non-watched entities pay one bit test per mutable access. `ludion-ecs` budget target 3250, a named one-off raise; quality wins over the number. General change ticks stay out.
+42. **Writes to statics are legal.** A journaled static is re-placed the next frame. A static journaled on 30 consecutive frames gets a warning `L`-code, once per entity ("static rewritten every frame; remove `Static`").
+43. **GPU updates.** A whole rebuild (`create_buffer_init`, the `cull_bounds_table` pattern) when membership or a bucket changes; otherwise `queue.write_buffer` patches the 224 B slot and its cull item. If the `CullShape` capacity clamp is exceeded, statics draw uncull from their persistent ranges.
+44. **Eligible:** primitive `Mesh` shapes; unskinned mesh assets and voxel models, LOD chains included; `MeshGrid` (every cell); `generate-map` merged rects; mirrored instances (the existing mirrored bucket and pipeline twin). **Ineligible:** skinned, `SkinBone`, assemblies, the viewmodel, projectile and pool looks, sprites, particles, text, decals, lights, markers. An ineligible `Static`, or a `Static` whose `Parent` ancestor is not `Static`, gets a warning `L`-code (`check-scene`, `scene.check`, runtime) and takes the dynamic path.
+45. **Participation is identical everywhere.** All camera views, the prepass, sun cascades, spot and point shadows (LOD, `cast_shadows`); decal receivers and drop-shadow occlusion (index schemes gain a static range); the probe content key; the GI voxelizer, with a static-set generation folded into its signature; cascade fit, the CPU oracle and `--debug-draw cull`. Interpolation treats statics as fixed. `render.bounds` is unchanged (it walks the world). Cached static shadow maps are deferred to a measured trigger.
+46. **`asset.reload`** re-places the statics whose mesh asset generation moved. Wire and editor edits are covered by the journal.
+47. **Hashing.** `Static` is hashed like any component on sim entities (map rooms are sim). The component schema snapshot and `GameIdentity.schema` move, so the game's run recordings fail `L1404` once and are re-recorded when the game regenerates its rooms. `replay_content_hash` does not move.
+48. **The 0042 hook.** Static placement is a pure function of a part's component values plus its placement (no EntityId, no World borrow), so 0042 can pre-place unspawned prefab statics. No prewarm command in W3.
 
 **Proposed (Serious Isaac 0021, owner approval owed). Decals join culling.** Ready to build once approved; it amends decisions 12 and 16. The trigger evidence is the decal room bench figure in Status.
 
