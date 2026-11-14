@@ -1244,10 +1244,8 @@ entities:
                 .map(|p| (p.key, p.world.clone()))
                 .collect::<Vec<_>>()
         };
-        // World b's key is not compared: the key is slot-order dependent, and the second walk
-        // reuses freed slots in another order.
         assert_eq!(forced.probes.len(), 3);
-        assert_eq!(identity(&forced)[..2], identity(&report)[..2]);
+        assert_eq!(identity(&forced), identity(&report));
         assert_eq!(forced.probes[2].world.as_deref(), Some("b"));
         assert_eq!(
             h.bake_probes(Some("nowhere")).unwrap_err().code.as_str(),

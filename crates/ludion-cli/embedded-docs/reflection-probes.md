@@ -117,7 +117,8 @@ a system calls `world.resource_mut::<ProbeRefreeze>()` then `request()` on the t
   world the request is a silent no-op that clears itself.
 - **Determinism:** the store key hashes the whole frozen world (meshes, lights, sun, environment, GI
   voxel grid, quality), so a store hit needs the freeze-time world identical between bake and play.
-  Anything spawned that tick counts.
+  Anything spawned that tick counts. The key ignores spawn order and entity slots, except through
+  the GI voxel grid in a world with a `GiVolume`.
 - **Stripped from the capture:** sprites, particles, text, ground markers, drop shadows, decals, UI,
   debug lines, nested probes and the viewmodel; light shadows and scatter, sun cascades and disc,
   and SSAO, SSR, shafts and DoF. Hidden meshes are not captured, but a hidden mesh without

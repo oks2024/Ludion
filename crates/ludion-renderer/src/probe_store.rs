@@ -4,7 +4,8 @@
 //! The key hashes exactly what `probe_capture`'s capture reads: the derived face scene (so a sprite,
 //! the sun disc, the camera or the composite's `post` never moves it), the quality toggles and
 //! parameters, the renderer's shader code key, the face size and [`PROBE_BAKE_VERSION`], plus the
-//! probe's capture point. Shape, blend and priority shade the probe; they are not captured, so they
+//! probe's capture point. The key is order-free: meshes, assets, bone palettes and lights are hashed
+//! as content records, so entity slots and spawn history never reach it. Shape, blend and priority shade the probe; they are not captured, so they
 //! are not in the key.
 //!
 //! The adapter is not a key term, deliberately: `ludion export` bakes on the dev machine's GPU and
@@ -15,16 +16,17 @@
 use std::fmt::Debug;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use ludion_assets::content_hash;
 use ludion_assets::cooked::{ProbeCube, cooked_file_name, read_probe_cube, write_probe_cube};
 use ludion_core::diagnostics::Diagnostic;
-use ludion_core::math::glam::Vec3;
+use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_render_graph::Gpu;
 
 use crate::quality::{Quality, QualityParams};
-use crate::scene::{MeshTexture, RenderScene};
+use crate::scene::{MeshData, MeshInstance, MeshShape, MeshTexture, RenderScene};
 
 /// Bump whenever the capture or the prefilter produces different bytes for the same input; every
 /// stored entry is then orphaned. `ludion-engine`'s `probe_bake_pin` test fails when the capture
@@ -82,6 +84,11 @@ impl KeyWriter {
 /// capture strips cannot move the key. The destructure below names every `RenderScene` field with
 /// no `..`: a new field is a compile error until it is hashed or its exclusion is argued.
 ///
+/// The key is order-free: instances, mesh assets, bone palettes and lights are hashed as content
+/// records and sorted, so entity slots, spawn history and the static prefix never reach it. The
+/// voxel grid still enters by `hash`, which depends on slot order while the voxelizer's combine is
+/// last-writer-wins.
+///
 /// Small `Copy` structs are hashed through `Debug`; heavy data (meshes, maps, the voxel grid)
 /// through its content key.
 pub(crate) fn world_key(
@@ -103,8 +110,9 @@ pub(crate) fn world_key(
         // only sprites, particles, text and the UI index it, and the face scene has none
         textures: _,
         mesh_assets,
-        // the leading instances are hashed through `statics.key`, which the extract computed once
-        statics,
+        // its key is entity-ordered; the instances are hashed per record and a static draws as a
+        // dynamic does in a capture
+        statics: _,
         meshes,
         // the lists below are stripped from the face scene
         sprites: _,
@@ -128,6 +136,7 @@ pub(crate) fn world_key(
         post: _,
         voxel,
         gi,
+        // keyed through the instances that read it, by value rather than by offset
         bone_palette,
         // CPU-only lens data, always `None` here: `face_scene` drops the gun and its lens
         viewmodel: _,
@@ -140,36 +149,17 @@ pub(crate) fn world_key(
     w.debug(quality);
     w.debug(params);
     w.debug(ambient);
-    for asset in mesh_assets {
-        w.u64(asset.hash);
-        match &asset.textures {
-            Some(textures) => {
-                w.u32(1);
-                for map in [
-                    &textures.base_color,
-                    &textures.metallic_roughness,
-                    &textures.normal,
-                    &textures.occlusion,
-                    &textures.emissive,
-                ] {
-                    w.map(map.as_ref());
-                }
-                w.f32(textures.normal_scale);
-                w.f32(textures.occlusion_strength);
-            }
-            None => w.u32(0),
-        }
+    let mut instances: Vec<u64> = meshes
+        .iter()
+        .map(|instance| instance_hash(instance, mesh_assets, bone_palette))
+        .collect();
+    instances.sort_unstable();
+    w.u64(instances.len() as u64);
+    for hash in instances {
+        w.u64(hash);
     }
-    if statics.count == 0 {
-        w.debug(meshes);
-    } else {
-        // content-addressed across processes: the key is a content hash, never a generation
-        w.u32(2);
-        w.u64(statics.key);
-        w.debug(&&meshes[statics.count..]);
-    }
-    w.debug(lights);
-    w.debug(spot_lights);
+    sorted_debug(&mut w, lights);
+    sorted_debug(&mut w, spot_lights);
     w.debug(sun);
     w.debug(environment);
     match voxel {
@@ -180,8 +170,113 @@ pub(crate) fn world_key(
         None => w.u32(0),
     }
     w.debug(gi);
-    w.debug(bone_palette);
     content_hash(&w.0)
+}
+
+/// One mesh asset's content: its hash and, when it has maps, every map's identity and the scales.
+fn asset_bytes(w: &mut KeyWriter, asset: &MeshData) {
+    w.u64(asset.hash);
+    match &asset.textures {
+        Some(textures) => {
+            w.u32(1);
+            for map in [
+                &textures.base_color,
+                &textures.metallic_roughness,
+                &textures.normal,
+                &textures.occlusion,
+                &textures.emissive,
+            ] {
+                w.map(map.as_ref());
+            }
+            w.f32(textures.normal_scale);
+            w.f32(textures.occlusion_strength);
+        }
+        None => w.u32(0),
+    }
+}
+
+/// A mesh instance's content hash: its asset by content (never its table index) and its bone
+/// palette slice by value (never its offset), so no slot or table order reaches it.
+fn instance_hash(instance: &MeshInstance, assets: &[Arc<MeshData>], palette: &[Mat4]) -> u64 {
+    // Full destructure: a new `MeshInstance` field fails to compile here until it is keyed.
+    let MeshInstance {
+        shape,
+        model,
+        normal_matrix,
+        color,
+        material,
+        use_vertex_material,
+        fade,
+        fade_height_min,
+        flash,
+        flash_color,
+        wrap,
+        scatter_color,
+        bone_offset,
+        cast_shadows,
+        viewmodel,
+        rim,
+        medium,
+    } = instance;
+    let mut w = KeyWriter(Vec::new());
+    let mut skin_joints = 0;
+    match shape {
+        MeshShape::Cube => w.u32(0),
+        MeshShape::Plane => w.u32(1),
+        MeshShape::Sphere => w.u32(2),
+        MeshShape::Asset(index) => match assets.get(*index) {
+            Some(asset) => {
+                w.u32(3);
+                asset_bytes(&mut w, asset);
+                skin_joints = asset.skin_joints.len();
+            }
+            None => w.u32(4),
+        },
+    }
+    // offset 0 is unskinned; otherwise the instance reads `palette[offset - 1..][..joints]`
+    match bone_offset.checked_sub(1) {
+        None => w.u32(0),
+        Some(start) => {
+            w.u32(1);
+            let start = (start as usize).min(palette.len());
+            let end = (start + skin_joints).min(palette.len());
+            w.u64((end - start) as u64);
+            for matrix in &palette[start..end] {
+                for v in matrix.to_cols_array() {
+                    w.f32(v);
+                }
+            }
+        }
+    }
+    let floats = model
+        .to_cols_array()
+        .into_iter()
+        .chain(normal_matrix.to_cols_array())
+        .chain(color.iter().copied())
+        .chain(material.iter().copied())
+        .chain([*fade, *fade_height_min, *flash, *wrap, *medium])
+        .chain(flash_color.iter().copied())
+        .chain(scatter_color.iter().copied())
+        .chain(rim.iter().copied());
+    for v in floats {
+        w.f32(v);
+    }
+    w.0.extend_from_slice(&[
+        u8::from(*use_vertex_material),
+        u8::from(*cast_shadows),
+        u8::from(*viewmodel),
+    ]);
+    content_hash(&w.0)
+}
+
+/// A list hashed without its order: each item through `Debug`, sorted, count first. Duplicates stay.
+fn sorted_debug<T: Debug>(w: &mut KeyWriter, items: &[T]) {
+    let mut strings: Vec<String> = items.iter().map(|item| format!("{item:?}")).collect();
+    strings.sort_unstable();
+    w.u64(strings.len() as u64);
+    for s in &strings {
+        w.str(s);
+    }
 }
 
 /// A probe's store key: the world key and its capture point. The capture is world-axis-aligned, so
@@ -539,7 +634,8 @@ mod tests {
     use crate::render::Renderer;
     use crate::scene::{
         EnvironmentData, GiData, MapImage, MeshData, MeshTextures, PointLightData, PostData,
-        SpotLightData, SpriteInstance, TextureImage, TextureWrap, TonemapOperator, WorldVoxelGrid,
+        SkinJoint, SpotLightData, SpriteInstance, TextureImage, TextureWrap, TonemapOperator,
+        WorldVoxelGrid,
     };
     use ludion_core::math::glam::{Mat4, Quat};
 
@@ -598,30 +694,63 @@ mod tests {
         }
     }
 
-    fn fixture() -> Fixture {
-        let mut scene = lit_scene();
-        scene.probes.clear();
-        scene.mesh_assets = vec![Arc::new(asset(11))];
-        scene.lights = vec![PointLightData {
-            position: Vec3::new(1.0, 2.0, 3.0),
+    fn skin_joint() -> SkinJoint {
+        SkinJoint {
+            name: "root".to_owned(),
+            parent: None,
+            rest_local: Mat4::IDENTITY,
+            rest_translation: Vec3::ZERO,
+            rest_rotation: Quat::IDENTITY,
+            rest_scale: Vec3::ONE,
+            inverse_bind: Mat4::IDENTITY,
+            rest: Mat4::IDENTITY,
+        }
+    }
+
+    fn skinned_asset(hash: u64) -> MeshData {
+        MeshData {
+            skin_joints: vec![skin_joint()],
+            ..asset(hash)
+        }
+    }
+
+    fn point_light(x: f32) -> PointLightData {
+        PointLightData {
+            position: Vec3::new(x, 2.0, 3.0),
             color: Vec3::ONE,
             intensity: 5.0,
             range: 8.0,
             dynamic: false,
             shadow: None,
             scatter: 0.0,
-        }];
-        scene.spot_lights = vec![SpotLightData {
+        }
+    }
+
+    fn spot_light(range: f32) -> SpotLightData {
+        SpotLightData {
             position: Vec3::new(0.0, 4.0, 0.0),
             direction: Vec3::NEG_Y,
             color: Vec3::ONE,
             intensity: 5.0,
-            range: 9.0,
+            range,
             cos_inner: 0.9,
             cos_outer: 0.8,
             shadow: None,
             scatter: 0.0,
-        }];
+        }
+    }
+
+    /// Meshes 1 and 2 are skinned instances of assets 0 and 1, reading palette entries 0 and 1.
+    fn fixture() -> Fixture {
+        let mut scene = lit_scene();
+        scene.probes.clear();
+        scene.mesh_assets = vec![Arc::new(skinned_asset(11)), Arc::new(skinned_asset(12))];
+        for (i, mesh) in scene.meshes[1..3].iter_mut().enumerate() {
+            mesh.shape = MeshShape::Asset(i);
+            mesh.bone_offset = 1 + i as u32;
+        }
+        scene.lights = vec![point_light(1.0), point_light(2.0)];
+        scene.spot_lights = vec![spot_light(9.0), spot_light(11.0)];
         scene.voxel = Some(Arc::new(
             WorldVoxelGrid {
                 origin: Vec3::ZERO,
@@ -643,7 +772,7 @@ mod tests {
             origin: Vec3::ZERO,
             span: Vec3::ONE,
         });
-        scene.bone_palette = vec![Mat4::IDENTITY];
+        scene.bone_palette = vec![Mat4::IDENTITY, Mat4::from_translation(Vec3::Z)];
         scene.post = Some(PostData::default());
         Fixture {
             scene,
@@ -673,24 +802,56 @@ mod tests {
     }
 
     #[test]
-    fn a_static_prefix_keys_through_its_range() {
+    fn a_static_prefix_keys_as_its_instances() {
         use crate::scene::StaticRange;
         let mut f = fixture();
+        let base = key_of(&f);
         let range = |f: &Fixture| StaticRange::of(&f.scene.meshes[..1], &f.scene.mesh_assets[..1]);
         f.scene.statics = range(&f);
-        let base = key_of(&f);
-        assert_eq!(base, key_of(&f));
-        assert_ne!(base, key_of(&fixture()), "the range is part of the key");
+        assert_eq!(key_of(&f), base, "marking a prefix static leaves the key");
         f.scene.meshes[0].model *= Mat4::from_translation(Vec3::X);
         f.scene.statics = range(&f);
-        assert_ne!(
-            key_of(&f),
-            base,
-            "a moved static with a recomputed key re-keys"
-        );
+        assert_ne!(key_of(&f), base, "a moved static re-keys");
         let moved = key_of(&f);
         f.scene.meshes[1].color[0] = 0.25;
-        assert_ne!(key_of(&f), moved, "the dynamic tail stays keyed");
+        assert_ne!(key_of(&f), moved, "the tail stays keyed");
+    }
+
+    #[test]
+    fn the_key_ignores_record_order() {
+        let base = key_of(&fixture());
+        let mut f = fixture();
+        f.scene.meshes.reverse();
+        f.scene.mesh_assets.reverse();
+        for mesh in &mut f.scene.meshes {
+            if let MeshShape::Asset(i) = mesh.shape {
+                mesh.shape = MeshShape::Asset(1 - i);
+            }
+        }
+        f.scene.lights.reverse();
+        f.scene.spot_lights.reverse();
+        assert_eq!(key_of(&f), base);
+    }
+
+    #[test]
+    fn the_key_ignores_palette_order() {
+        let base = key_of(&fixture());
+        let mut f = fixture();
+        f.scene.bone_palette.swap(0, 1);
+        f.scene.meshes[1].bone_offset = 2;
+        f.scene.meshes[2].bone_offset = 1;
+        assert_eq!(key_of(&f), base);
+        f.scene.bone_palette[0] = Mat4::from_translation(Vec3::Y);
+        assert_ne!(key_of(&f), base, "a changed palette matrix re-keys");
+    }
+
+    #[test]
+    fn a_duplicate_instance_moves_the_key() {
+        let base = key_of(&fixture());
+        let mut f = fixture();
+        let copy = f.scene.meshes[0];
+        f.scene.meshes.push(copy);
+        assert_ne!(key_of(&f), base);
     }
 
     #[test]
@@ -762,6 +923,16 @@ mod tests {
             }),
             ("bone palette", |f| {
                 f.scene.bone_palette[0] = Mat4::from_translation(Vec3::Y)
+            }),
+            ("second mesh asset hash", |f| {
+                let mut mesh = (*f.scene.mesh_assets[1]).clone();
+                mesh.hash += 1;
+                f.scene.mesh_assets[1] = Arc::new(mesh);
+            }),
+            ("normal scale", |f| {
+                let mut mesh = (*f.scene.mesh_assets[0]).clone();
+                mesh.textures.as_mut().unwrap().normal_scale = 2.0;
+                f.scene.mesh_assets[0] = Arc::new(mesh);
             }),
             ("quality", |f| f.quality = QualityParams::LOW),
             ("shadows toggle", |f| f.toggles.shadows = false),
