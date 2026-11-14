@@ -3,7 +3,7 @@
 //! through the ECS write journal. The one acceptance is that the kept scene equals the rebuilt one
 //! (`Engine::set_static_scene(false)`) after every kind of edit, and none of it needs a GPU.
 
-use ludion_components::{Mesh, MeshSource, Name, Static, Transform};
+use ludion_components::{Animation, Mesh, MeshSource, Name, PrefabInstance, Static, Transform};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::DiagnosticCode;
 use ludion_core::ids::EntityId;
@@ -559,4 +559,209 @@ fn needs_gpu_the_static_kit_renders_the_same_through_the_static_buffers() {
         "the patched static renders as a fresh one"
     );
     assert_ne!(patched, with_statics, "the moved wall shows");
+}
+
+/// The mannequin, a socket on its `lower_arm_l` joint and the socket's own child, all `Static`.
+fn socket_scene() -> String {
+    format!(
+        "{HEAD}  - name: skin
+    components:
+      Static: {{}}
+      Mesh:
+        shape:
+          character: characters/mannequin.character.yaml
+      Animation:
+        clip: run
+  - name: socket
+    components:
+      Static: {{}}
+      Mesh:
+        shape: cube
+      Parent:
+        index: 1
+        generation: 0
+      ParentJoint:
+        joint: lower_arm_l
+  - name: grandchild
+    components:
+      Static: {{}}
+      Mesh:
+        shape: cube
+      Transform:
+        translation:
+          - 0.0
+          - 1.0
+          - 0.0
+      Parent:
+        index: 2
+        generation: 0
+"
+    )
+}
+
+#[test]
+fn a_static_under_a_socket_takes_the_dynamic_path() {
+    let mut engine = Engine::builder()
+        .project_root(gallery())
+        .build()
+        .expect("boots");
+    engine
+        .load_inline_scene(&socket_scene())
+        .expect("the scene loads");
+    for _ in 0..5 {
+        let (scene, _) = on_equals_off(&mut engine);
+        assert_eq!(scene.statics.count, 0, "nothing in the chain is held");
+        assert!(!scene.meshes.is_empty());
+    }
+    let keys = reported(&engine, code::STATIC_INELIGIBLE);
+    assert!(
+        keys.iter().any(|k| k.contains("/grandchild/")),
+        "the posed grandchild is reported: {keys:?}"
+    );
+}
+
+fn hinge_project(name: &str) -> std::path::PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("ludion-static-hinge-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/import-node-clips/expected");
+    for file in [
+        "model.prefab.yaml",
+        "clips/open.anim.yaml",
+        "clips/snap.anim.yaml",
+        "meshes/base.mesh.yaml",
+        "meshes/lid.mesh.yaml",
+        "meshes/latch.mesh.yaml",
+    ] {
+        let to = dir.join("hinge").join(file);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::copy(source.join(file), to).unwrap();
+    }
+    dir
+}
+
+fn hinge_engine(name: &str, base_overrides: &str) -> Engine {
+    let text = format!(
+        "{HEAD}  - name: door
+    prefab: hinge/model.prefab.yaml
+    overrides:
+      base:
+{base_overrides}      lid:
+        Static: {{}}
+      latch:
+        Static: {{}}
+"
+    );
+    let mut engine = Engine::builder()
+        .project_root(hinge_project(name))
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(&text).expect("the scene loads");
+    engine
+}
+
+fn part(engine: &Engine, wanted: &str) -> EntityId {
+    let world = engine.world();
+    world
+        .entities()
+        .find(|&e| {
+            world
+                .get::<PrefabInstance>(e)
+                .ok()
+                .flatten()
+                .is_some_and(|i| i.part == wanted)
+        })
+        .unwrap_or_else(|| panic!("the instance has a `{wanted}`"))
+}
+
+#[test]
+fn an_animated_prefab_part_takes_the_dynamic_path() {
+    let mut engine = hinge_engine(
+        "animated",
+        "        Static: {}\n        Animation:\n          clip: open\n",
+    );
+    for _ in 0..5 {
+        let (scene, _) = on_equals_off(&mut engine);
+        assert_eq!(scene.statics.count, 0, "the posed parts are not held");
+    }
+    assert!(!reported(&engine, code::STATIC_INELIGIBLE).is_empty());
+}
+
+#[test]
+fn animating_a_held_prefab_part_at_runtime_releases_it() {
+    let mut engine = hinge_engine("runtime", "        Static: {}\n");
+    let (scene, _) = on_equals_off(&mut engine);
+    assert_eq!(scene.statics.count, 3, "the still instance is held");
+    let base = part(&engine, "base");
+    engine
+        .world_mut()
+        .insert(
+            base,
+            Animation {
+                clip: "open".into(),
+                ..Animation::default()
+            },
+        )
+        .expect("animates");
+    for _ in 0..5 {
+        let (scene, _) = on_equals_off(&mut engine);
+        assert_eq!(scene.statics.count, 0, "the animated instance is released");
+    }
+    assert!(!reported(&engine, code::STATIC_INELIGIBLE).is_empty());
+}
+
+#[test]
+fn l1343_counts_sim_frames_not_extracts() {
+    let mut engine = engine_for(&[marked("spinner", 0.0, "cube")]);
+    let spinner = named(&engine, "spinner");
+    extract(&mut engine);
+    let mut frames = Vec::new();
+    for frame in 0..30 {
+        engine.advance_live();
+        frames.push(engine.frame());
+        set_x(&mut engine, spinner, frame as f32);
+        for _ in 0..3 {
+            engine.extract_present_scene().expect("extracts");
+        }
+    }
+    assert!(
+        frames.windows(2).all(|w| w[0] < w[1]),
+        "a frame per advance"
+    );
+    assert_eq!(reported(&engine, code::STATIC_REWRITTEN).len(), 1);
+
+    let mut engine = engine_for(&[marked("blinker", 0.0, "cube")]);
+    let blinker = named(&engine, "blinker");
+    extract(&mut engine);
+    for frame in 0..60 {
+        engine.advance_live();
+        if frame % 2 == 0 {
+            set_x(&mut engine, blinker, frame as f32);
+        }
+        engine.extract_present_scene().expect("extracts");
+    }
+    assert!(reported(&engine, code::STATIC_REWRITTEN).is_empty());
+}
+
+#[test]
+fn turning_the_static_scene_off_disarms_the_journal() {
+    let mut engine = engine_for(&[marked("post", 2.0, "cube"), marked("pillar", 4.0, "cube")]);
+    extract(&mut engine);
+    assert!(engine.world().is_watched::<Static>());
+    engine.set_static_scene(false);
+    assert!(!engine.world().is_watched::<Static>());
+    let pillar = named(&engine, "pillar");
+    set_x(&mut engine, pillar, -3.0);
+    engine.extract_present_scene().expect("extracts");
+    assert!(
+        !engine.world().is_watched::<Static>(),
+        "off stays unwatched"
+    );
+    engine.set_static_scene(true);
+    extract(&mut engine);
+    assert!(engine.world().is_watched::<Static>());
+    set_x(&mut engine, pillar, 5.0);
+    let (scene, _) = on_equals_off(&mut engine);
+    assert!(drawn_at(&scene, 5.0));
 }

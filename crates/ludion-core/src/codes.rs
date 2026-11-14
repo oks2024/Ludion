@@ -8441,7 +8441,9 @@ An entity carries `Static` (pointer `/entities/{i}/components/Static`) but has s
 path cannot hold: a skinned `asset`, an `assembly`, `assembly_part` or `character` shape, or one of
 `SkinBone`, `ParentJoint`, `Viewmodel`, `Sprite`, `ParticleEmitter`, `Text`, `Decal`, `PointLight`,
 `SpotLight`, `DirectionalLight`, `GroundMarker`, `Volley`, `PatternPlayer`. The message names the
-reason. The entity still draws, on the dynamic path. A `Static` with no renderable is a transform
+reason. The entity still draws, on the dynamic path. An entity that is posed every frame, by its
+prefab root's `Animation` or under an ancestor carrying `ParentJoint` or `SkinBone`, is ineligible
+too; the prefab case is detected only at runtime. A `Static` with no renderable is a transform
 group: it is never reported and lets its `Static` children stay static.
 
 Fix: remove `Static` from the entity, or remove what makes it ineligible.",

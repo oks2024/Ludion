@@ -648,6 +648,37 @@ impl World {
         self.journal.watch(TypeId::of::<M>(), &keys);
     }
 
+    /// Stops watching `M` and drops its pending dirty bits and dead handles; idempotent. With no
+    /// marker left the write hot path is disarmed. A later [`watch_with`](World::watch_with)
+    /// seeds every carrier again.
+    ///
+    /// ```
+    /// use ludion_ecs::World;
+    /// use serde::{Deserialize, Serialize};
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// struct Static;
+    ///
+    /// let mut world = World::new();
+    /// world.watch_with::<Static>();
+    /// let wall = world.spawn();
+    /// world.insert(wall, Static).unwrap();
+    /// world.unwatch::<Static>();
+    /// assert!(!world.is_watched::<Static>() && world.drain_watched::<Static>().is_empty());
+    /// world.watch_with::<Static>();
+    /// assert_eq!(world.drain_watched::<Static>(), vec![wall]);
+    /// ```
+    pub fn unwatch<M: Component>(&mut self) {
+        self.journal.unwatch(TypeId::of::<M>());
+    }
+
+    /// Whether `M` is currently watched.
+    #[must_use]
+    pub fn is_watched<M: Component>(&self) -> bool {
+        self.journal.is_watching(TypeId::of::<M>())
+    }
+
     /// Takes the entities written since the last drain that carried the marker `M` at that time,
     /// sorted and deduplicated; empty if `M` is not watched (see [`watch_with`](World::watch_with)).
     ///

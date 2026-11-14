@@ -9,6 +9,7 @@ use ludion_core::codes::code;
 use ludion_core::collections::{StableMap, StableSet};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
+use ludion_core::time::FrameIndex;
 use ludion_scene::Scene;
 
 /// Why an entity carrying `Static` cannot take the static path.
@@ -20,6 +21,13 @@ pub enum StaticIneligible {
     Shape(&'static str),
     /// A mesh asset with joints.
     SkinnedAsset,
+    /// Posed every frame by the presentation pose table, which no write journals.
+    Posed {
+        /// The `Parent` ancestor that is posed, `None` when the entity itself is.
+        ancestor: Option<String>,
+        /// What poses it: `ParentJoint`, `SkinBone`, or `Animation` on a prefab root.
+        by: &'static str,
+    },
 }
 
 impl StaticIneligible {
@@ -29,6 +37,18 @@ impl StaticIneligible {
             StaticIneligible::Component(name) => format!("it carries a `{name}`"),
             StaticIneligible::Shape(shape) => format!("its mesh shape is `{shape}`"),
             StaticIneligible::SkinnedAsset => "its mesh asset is skinned".to_string(),
+            StaticIneligible::Posed { ancestor, by } => {
+                let source = match *by {
+                    "Animation" => "its prefab root's `Animation`".to_string(),
+                    by => format!("a `{by}`"),
+                };
+                match ancestor {
+                    Some(ancestor) => {
+                        format!("its ancestor {ancestor} is posed every frame by {source}")
+                    }
+                    None => format!("it is posed every frame by {source}"),
+                }
+            }
         }
     }
 }
@@ -69,45 +89,79 @@ pub(crate) fn static_ineligibility(
     })
 }
 
+/// What poses a node from the presentation pose table, in the order the first one is named:
+/// `ParentJoint`, `SkinBone`, or (`prefab_root_animated`) the `Animation` of its prefab's root.
+pub(crate) fn pose_source(
+    has: &dyn Fn(&str) -> bool,
+    prefab_root_animated: bool,
+) -> Option<&'static str> {
+    ["ParentJoint", "SkinBone"]
+        .into_iter()
+        .find(|name| has(name))
+        .or(prefab_root_animated.then_some("Animation"))
+}
+
 /// Frames in a row a `Static` entity must be written before it is called hot.
 pub const HOT_STATIC_FRAMES: u32 = 30;
 
-/// Counts consecutive frames each static entity was written and reports a hot one once.
+/// Counts consecutive sim frames each static entity was written and reports a hot one once.
 #[derive(Clone, Debug, Default)]
 pub struct HotStatic {
-    streak: StableMap<EntityId, u32>,
+    /// Per entity: the streak length and the last observed frame it was written at.
+    streak: StableMap<EntityId, (u32, FrameIndex)>,
     reported: StableSet<EntityId>,
+    last: Option<FrameIndex>,
+    prev: Option<FrameIndex>,
 }
 
 impl HotStatic {
-    /// One call per frame with the entities written that frame. An entity absent from `written`
-    /// starts over; reaching [`HOT_STATIC_FRAMES`] yields one `L1343`, never again for that entity.
-    pub fn observe(&mut self, written: &[EntityId]) -> Vec<(EntityId, Diagnostic)> {
-        let mut next = StableMap::default();
+    /// The entities written at sim `frame`. Calls with the same `frame` merge. On a new frame a
+    /// streak survives only if its entity was written at the previous observed frame, and then
+    /// grows by the frames in between, so a sparse observer still sees a write-every-frame streak.
+    /// A lower `frame` (a restore) clears every streak. Reaching [`HOT_STATIC_FRAMES`] yields one
+    /// `L1343`, never again for that entity.
+    pub fn observe(
+        &mut self,
+        frame: FrameIndex,
+        written: &[EntityId],
+    ) -> Vec<(EntityId, Diagnostic)> {
+        if self.last.is_some_and(|last| frame < last) {
+            self.streak = StableMap::default();
+            self.last = None;
+        }
+        if self.last != Some(frame) {
+            self.prev = self.last;
+            self.last = Some(frame);
+            let prev = self.prev;
+            self.streak = std::mem::take(&mut self.streak)
+                .into_iter()
+                .filter(|(_, (_, at))| Some(*at) == prev)
+                .collect();
+        }
         let mut hot = Vec::new();
-        let mut seen = StableSet::default();
         for &id in written {
-            if !seen.insert(id) {
-                continue;
-            }
-            let count = self.streak.get(&id).copied().unwrap_or(0) + 1;
-            next.insert(id, count);
-            if count == HOT_STATIC_FRAMES && !self.reported.contains(&id) {
-                self.reported.insert(id);
+            let count = match self.streak.get(&id).copied() {
+                Some((_, at)) if at == frame => continue,
+                Some((count, at)) => {
+                    count.saturating_add(u32::try_from(frame.0 - at.0).unwrap_or(u32::MAX))
+                }
+                None => 1,
+            };
+            self.streak.insert(id, (count, frame));
+            if count >= HOT_STATIC_FRAMES && self.reported.insert(id) {
                 hot.push((
                     id,
                     Diagnostic::new(
                         code::STATIC_REWRITTEN,
                         format!(
                             "static entity {id} was written on {HOT_STATIC_FRAMES} consecutive \
-                             frames, so it is re-placed every frame"
+                             sim frames, so it is re-placed every frame"
                         ),
                     )
                     .with_help("remove `Static` from it"),
                 ));
             }
         }
-        self.streak = next;
         hot
     }
 
@@ -184,7 +238,18 @@ pub fn scene_static_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
                 })
                 .then_some(StaticIneligible::SkinnedAsset)
         });
+        let posed = ineligible
+            .is_none()
+            .then(|| posed_ancestor(scene, index))
+            .flatten();
         if let Some(reason) = ineligible {
+            diagnostics.push(ineligible_diagnostic("this entity", &reason).with_path(at.clone()));
+        } else if let Some((ancestor, by)) = posed {
+            let named = crate::skin_bone::named(&scene.entities[ancestor], ancestor);
+            let reason = StaticIneligible::Posed {
+                ancestor: Some(named),
+                by,
+            };
             diagnostics.push(ineligible_diagnostic("this entity", &reason).with_path(at.clone()));
         }
         if let Some(ancestor) = non_static_ancestor(scene, index) {
@@ -195,17 +260,41 @@ pub fn scene_static_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics
 }
 
+/// The nearest `Static` `Parent` ancestor of entity `index` that a pose source poses, with the
+/// source; the walk stops at the first non-`Static` ancestor (the `L1342` case). A prefab root's
+/// `Animation` is runtime-only: a scene holds unexpanded `prefab:` entries.
+fn posed_ancestor(scene: &Scene, index: usize) -> Option<(usize, &'static str)> {
+    let mut current = index;
+    for _ in 0..scene.entities.len() {
+        let parent = parent_index(scene, current)?;
+        let entity = scene.entities.get(parent)?;
+        let has = |name: &str| entity.components.iter().any(|(n, _)| n == name);
+        if !has("Static") {
+            return None;
+        }
+        if let Some(by) = pose_source(&has, false) {
+            return Some((parent, by));
+        }
+        current = parent;
+    }
+    None
+}
+
+fn parent_index(scene: &Scene, index: usize) -> Option<usize> {
+    scene.entities[index]
+        .components
+        .iter()
+        .find(|(name, _)| name == "Parent")
+        .and_then(|(_, value)| value.get("index"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|p| usize::try_from(p).ok())
+}
+
 /// The first `Parent` ancestor of entity `index` that lacks `Static`, if any.
 fn non_static_ancestor(scene: &Scene, index: usize) -> Option<usize> {
     let mut current = index;
     for _ in 0..scene.entities.len() {
-        let parent = scene.entities[current]
-            .components
-            .iter()
-            .find(|(name, _)| name == "Parent")
-            .and_then(|(_, value)| value.get("index"))
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|p| usize::try_from(p).ok())?;
+        let parent = parent_index(scene, current)?;
         let entity = scene.entities.get(parent)?;
         if !entity.components.iter().any(|(name, _)| name == "Static") {
             return Some(parent);
@@ -281,33 +370,91 @@ mod tests {
         assert!(codes_of(text).is_empty());
     }
 
+    #[test]
+    fn a_static_under_a_parent_joint_is_l1341_naming_it() {
+        let text = "  - components:\n      Static: {}\n      ParentJoint:\n        joint: hand\n  \
+                    - components:\n      Static: {}\n      Mesh:\n        shape: cube\n      \
+                    Parent:\n        index: 0\n        generation: 0\n";
+        let diagnostics = scene_static_diagnostics(&std::env::temp_dir(), &scene(text));
+        let codes: Vec<_> = diagnostics.iter().map(|d| d.code.as_str()).collect();
+        assert_eq!(codes, ["L1341", "L1341"], "{diagnostics:?}");
+        assert!(diagnostics[1].message.contains("ParentJoint"));
+    }
+
     fn id(index: u32) -> EntityId {
         EntityId::new(index, 0)
+    }
+
+    fn f(n: u64) -> FrameIndex {
+        FrameIndex::new(n)
     }
 
     #[test]
     fn hot_static_reports_once_at_thirty_frames() {
         let mut hot = HotStatic::default();
-        for _ in 0..HOT_STATIC_FRAMES - 1 {
-            assert!(hot.observe(&[id(1)]).is_empty());
+        for n in 1..u64::from(HOT_STATIC_FRAMES) {
+            assert!(hot.observe(f(n), &[id(1)]).is_empty());
         }
-        assert_eq!(hot.observe(&[id(1)]).len(), 1);
-        for _ in 0..5 {
-            assert!(hot.observe(&[id(1)]).is_empty());
+        assert_eq!(hot.observe(f(30), &[id(1)]).len(), 1);
+        for n in 31..36 {
+            assert!(hot.observe(f(n), &[id(1)]).is_empty());
         }
     }
 
     #[test]
     fn a_gap_resets_the_streak() {
         let mut hot = HotStatic::default();
-        for _ in 0..HOT_STATIC_FRAMES - 1 {
-            hot.observe(&[id(1)]);
+        for n in 1..u64::from(HOT_STATIC_FRAMES) {
+            hot.observe(f(n), &[id(1)]);
         }
-        assert!(hot.observe(&[]).is_empty());
-        for _ in 0..HOT_STATIC_FRAMES - 1 {
-            assert!(hot.observe(&[id(1)]).is_empty());
+        assert!(hot.observe(f(30), &[]).is_empty());
+        for n in 31..60 {
+            assert!(hot.observe(f(n), &[id(1)]).is_empty());
         }
-        assert_eq!(hot.observe(&[id(1)]).len(), 1);
+        assert_eq!(hot.observe(f(60), &[id(1)]).len(), 1);
+    }
+
+    #[test]
+    fn repeat_calls_in_one_frame_merge() {
+        let mut hot = HotStatic::default();
+        for n in 1..=29 {
+            assert!(hot.observe(f(n), &[id(1)]).is_empty());
+            assert!(hot.observe(f(n), &[]).is_empty());
+            assert!(hot.observe(f(n), &[id(1)]).is_empty());
+        }
+        assert_eq!(hot.observe(f(30), &[id(1)]).len(), 1);
+    }
+
+    #[test]
+    fn sparse_observation_of_a_write_every_frame_still_reaches_thirty() {
+        let mut hot = HotStatic::default();
+        let reported: usize = (0..=30)
+            .step_by(2)
+            .map(|n| hot.observe(f(n), &[id(1)]).len())
+            .sum();
+        assert_eq!(reported, 1);
+    }
+
+    #[test]
+    fn writes_on_alternate_frames_never_report() {
+        let mut hot = HotStatic::default();
+        for n in 0..200 {
+            let written = if n % 2 == 0 { vec![id(1)] } else { vec![] };
+            assert!(hot.observe(f(n), &written).is_empty());
+        }
+    }
+
+    #[test]
+    fn a_backwards_frame_clears_the_streaks() {
+        let mut hot = HotStatic::default();
+        for n in 100..129 {
+            hot.observe(f(n), &[id(1)]);
+        }
+        assert!(hot.observe(f(3), &[id(1)]).is_empty());
+        for n in 4..32 {
+            assert!(hot.observe(f(n), &[id(1)]).is_empty());
+        }
+        assert_eq!(hot.observe(f(32), &[id(1)]).len(), 1);
     }
 
     fn world_hash(presentation: bool, with_static: bool) -> ludion_sim::WorldHash {

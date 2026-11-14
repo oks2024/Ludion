@@ -9,9 +9,11 @@
 //! order (ascending `EntityId`; a `Mesh`, then its grid cells row-major).
 //!
 //! An entity is **held** when it carries `Static`, is eligible ([`static_ineligibility`], no skinned
-//! asset), and every `Parent` ancestor carries `Static`. Anything else takes the dynamic path; a
-//! *rejected* one is reported (`L1341`, `L1342`) each frame, a *fallback* one (an asset that does
-//! not resolve, a non-finite placement) is silently retried the next frame.
+//! asset), every `Parent` ancestor carries `Static`, and neither it nor an ancestor is *posed*
+//! (`ParentJoint`, `SkinBone`, or a prefab root's `Animation`: poses the journal never sees).
+//! Anything else takes the dynamic path; a *rejected* one is reported (`L1341`, `L1342`) each
+//! frame, a *fallback* one (an asset that does not resolve, a non-finite placement) is silently
+//! retried the next frame.
 
 use std::sync::Arc;
 
@@ -19,20 +21,23 @@ use ludion_core::codes::code;
 use ludion_core::collections::{StableMap, StableSet};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
+use ludion_core::time::FrameIndex;
 use ludion_ecs::{Parent, World};
 use ludion_renderer::{MeshData, MeshInstance, MeshShape, StaticRange};
 
 use crate::components::{
-    GiDynamic, Mesh, MeshGrid, MeshSource, ParentJoint, ParticleEmitter, PointLight, SkinBone,
-    SpotLight, Sprite, Static, Text,
+    Animation, GiDynamic, Mesh, MeshGrid, MeshSource, ParentJoint, ParticleEmitter, PointLight,
+    SkinBone, SpotLight, Sprite, Static, Text,
 };
 use crate::extract::{
     MeshInherit, MeshKind, PlacedMesh, PlacedMeshSource, SceneAssets, mesh_instance,
     place_mesh_parts, placed_mesh, render_model,
 };
 use crate::hierarchy::{FrameVisibility, MAX_HIERARCHY_DEPTH, WorldAffines};
+use crate::prefab::PrefabInstance;
 use crate::static_check::{
-    HotStatic, StaticIneligible, ineligible_diagnostic, parent_diagnostic, static_ineligibility,
+    HotStatic, StaticIneligible, ineligible_diagnostic, parent_diagnostic, pose_source,
+    static_ineligibility,
 };
 use crate::voxelizer::{StaticGi, resolve_static};
 
@@ -40,8 +45,11 @@ use crate::voxelizer::{StaticGi, resolve_static};
 pub(crate) enum Feed {
     /// Everything: a fresh scene, a replaced world, or the switch turned back on.
     Full,
-    /// The ids [`World::drain_watched`] returned.
-    Written(Vec<EntityId>),
+    /// The ids [`World::drain_watched`] returned, at sim frame `frame`.
+    Written {
+        ids: Vec<EntityId>,
+        frame: FrameIndex,
+    },
 }
 
 /// What a refresh reads, all borrowed from the frame.
@@ -84,6 +92,8 @@ impl Part {
 struct Entry {
     /// Its `Parent` ancestors, nearest first: the entities whose losing `Static` evicts it.
     chain: Vec<EntityId>,
+    /// The distinct prefab roots of it and its chain: an `Animation` appearing on one poses it.
+    prefab_roots: Vec<EntityId>,
     /// A hidden entity keeps its placements for the GI voxelizer and draws nothing.
     hidden: bool,
     parts: Vec<Part>,
@@ -109,6 +119,12 @@ struct AssetUse {
     users: Vec<EntityId>,
 }
 
+/// A prefab root and the held entities whose pose it may drive.
+struct PrefabUse {
+    root: EntityId,
+    users: Vec<EntityId>,
+}
+
 #[derive(Default)]
 pub(crate) struct StaticScene {
     epoch: Option<u64>,
@@ -118,6 +134,7 @@ pub(crate) struct StaticScene {
     hot: HotStatic,
     flat: Flat,
     asset_uses: Vec<AssetUse>,
+    prefab_uses: Vec<PrefabUse>,
     /// The GI voxelizer's resolved view of the held placements; built on demand, dropped on change.
     gi: Option<StaticGi>,
 }
@@ -131,9 +148,12 @@ enum Class {
 impl StaticScene {
     /// The feed for this frame: a replaced world (a different `epoch`) is watched afresh and
     /// rebuilt from scratch; otherwise the journal's drain.
-    pub(crate) fn feed(&mut self, world: &mut World, epoch: u64) -> Feed {
+    pub(crate) fn feed(&mut self, world: &mut World, epoch: u64, frame: FrameIndex) -> Feed {
         if self.epoch == Some(epoch) {
-            return Feed::Written(world.drain_watched::<Static>());
+            return Feed::Written {
+                ids: world.drain_watched::<Static>(),
+                frame,
+            };
         }
         self.epoch = Some(epoch);
         world.watch_with::<Static>();
@@ -193,6 +213,7 @@ impl StaticScene {
         let world = frame.world;
         let mut todo: StableSet<EntityId> = StableSet::default();
         let mut written = Vec::new();
+        let mut frame_at = FrameIndex::ZERO;
         let full = matches!(feed, Feed::Full);
         match feed {
             Feed::Full => {
@@ -206,7 +227,8 @@ impl StaticScene {
                     }
                 }
             }
-            Feed::Written(ids) => {
+            Feed::Written { ids, frame: at } => {
+                frame_at = at;
                 for &id in &ids {
                     todo.insert(id);
                     if !world.is_alive(id) || !world.has::<Static>(id) {
@@ -223,6 +245,7 @@ impl StaticScene {
                     todo.insert(id);
                 }
                 self.stale_assets(frame.assets, &mut todo);
+                self.stale_prefab_roots(world, &mut todo);
             }
         }
         let mut changed = full;
@@ -246,7 +269,7 @@ impl StaticScene {
             }
         }
         let written: Vec<EntityId> = written.into_iter().filter(|&id| self.held(id)).collect();
-        for (id, diagnostic) in self.hot.observe(&written) {
+        for (id, diagnostic) in self.hot.observe(frame_at, &written) {
             let key = format!("{}/static-hot", crate::diagnostics::offender_key(world, id));
             degraded.push((key, diagnostic));
         }
@@ -264,6 +287,7 @@ impl StaticScene {
         self.hot = HotStatic::default();
         self.flat = Flat::default();
         self.asset_uses = Vec::new();
+        self.prefab_uses = Vec::new();
         self.gi = None;
     }
 
@@ -283,12 +307,28 @@ impl StaticScene {
         }
     }
 
+    /// Marks the users of every prefab root that now carries `Animation`: it poses their parts
+    /// every frame, which no write to them journals. Loose entries are retried anyway.
+    fn stale_prefab_roots(&self, world: &World, todo: &mut StableSet<EntityId>) {
+        for used in &self.prefab_uses {
+            if world.is_alive(used.root) && world.has::<Animation>(used.root) {
+                for &id in &used.users {
+                    todo.insert(id);
+                }
+            }
+        }
+    }
+
     /// Rebuilds the flat lists and the asset-use table from the entries.
     fn flatten(&mut self) {
         let mut flat = Flat::default();
         let mut index: StableMap<String, usize> = StableMap::default();
         let mut uses: StableMap<String, AssetUse> = StableMap::default();
+        let mut roots: StableMap<EntityId, Vec<EntityId>> = StableMap::default();
         for (&id, entry) in &self.entries {
+            for &root in &entry.prefab_roots {
+                roots.entry(root).or_default().push(id);
+            }
             for part in &entry.parts {
                 let Some((kind, path, data)) = &part.asset else {
                     if !entry.hidden {
@@ -328,7 +368,28 @@ impl StaticScene {
         self.flat = flat;
         self.gi = None;
         self.asset_uses = uses.into_iter().map(|(_, used)| used).collect();
+        self.prefab_uses = roots
+            .into_iter()
+            .map(|(root, users)| PrefabUse { root, users })
+            .collect();
     }
+}
+
+/// Whether `node` belongs to a prefab instance whose live root carries `Animation`.
+fn prefab_root_animated(world: &World, node: EntityId) -> bool {
+    world
+        .get::<PrefabInstance>(node)
+        .ok()
+        .flatten()
+        .is_some_and(|i| world.is_alive(i.root) && world.has::<Animation>(i.root))
+}
+
+fn prefab_root_of(world: &World, node: EntityId) -> Option<EntityId> {
+    world
+        .get::<PrefabInstance>(node)
+        .ok()
+        .flatten()
+        .map(|i| i.root)
 }
 
 /// Decides what `id` is this frame and, when held, places it.
@@ -371,8 +432,13 @@ fn classify(frame: &mut Frame<'_>, inherit: &mut MeshInherit, id: EntityId) -> C
         // A transform group draws nothing and is held by no one; it is still a `Static` ancestor.
         return Class::NotStatic;
     }
+    if let Some(by) = pose_source(&has, prefab_root_animated(world, id)) {
+        let reason = StaticIneligible::Posed { ancestor: None, by };
+        return rejected(key, ineligible_diagnostic(&subject, &reason), "static");
+    }
 
     let mut chain = Vec::new();
+    let mut prefab_roots: Vec<EntityId> = prefab_root_of(world, id).into_iter().collect();
     let mut node = id;
     for _ in 0..=MAX_HIERARCHY_DEPTH {
         let Some(Parent(parent)) = crate::hierarchy::parent_of(world, node) else {
@@ -384,6 +450,23 @@ fn classify(frame: &mut Frame<'_>, inherit: &mut MeshInherit, id: EntityId) -> C
         if !world.has::<Static>(parent) {
             let ancestor = parent.to_string();
             return rejected(key, parent_diagnostic(&subject, &ancestor), "static-parent");
+        }
+        let ancestor_has = |name: &str| match name {
+            "ParentJoint" => world.has::<ParentJoint>(parent),
+            "SkinBone" => world.has::<SkinBone>(parent),
+            _ => false,
+        };
+        if let Some(by) = pose_source(&ancestor_has, prefab_root_animated(world, parent)) {
+            let reason = StaticIneligible::Posed {
+                ancestor: Some(parent.to_string()),
+                by,
+            };
+            return rejected(key, ineligible_diagnostic(&subject, &reason), "static");
+        }
+        if let Some(root) = prefab_root_of(world, parent)
+            && !prefab_roots.contains(&root)
+        {
+            prefab_roots.push(root);
         }
         chain.push(parent);
         node = parent;
@@ -462,6 +545,7 @@ fn classify(frame: &mut Frame<'_>, inherit: &mut MeshInherit, id: EntityId) -> C
     }
     Class::Held(Entry {
         chain,
+        prefab_roots,
         hidden,
         parts,
     })

@@ -140,6 +140,22 @@ impl WriteJournal {
         self.markers.push(marker);
     }
 
+    /// Drops the marker `type_id` with its dirty bits and `gone` list (idempotent), and rebuilds
+    /// the union of the remaining markers' watched bits.
+    pub(crate) fn unwatch(&mut self, type_id: TypeId) {
+        self.markers.retain(|m| m.type_id != type_id);
+        self.any = SlotBits::default();
+        for marker in &self.markers {
+            for index in marker.watched.ones() {
+                self.any.set(index);
+            }
+        }
+    }
+
+    pub(crate) fn is_watching(&self, type_id: TypeId) -> bool {
+        self.markers.iter().any(|m| m.type_id == type_id)
+    }
+
     /// Marks the entity at `index` dirty for every marker watching it.
     #[inline]
     pub(crate) fn touch(&mut self, index: u32) {
@@ -252,5 +268,21 @@ mod tests {
         let taken = bits.take();
         assert!(bits.ones().next().is_none() && taken.ones().next().is_some());
         assert!(!bits.test(5000));
+    }
+
+    #[test]
+    fn unwatch_disarms_and_keeps_the_other_markers_bits() {
+        struct A;
+        struct B;
+        let (a, b) = (TypeId::of::<A>(), TypeId::of::<B>());
+        let mut journal = WriteJournal::default();
+        journal.watch(a, &[1, 2]);
+        journal.watch(b, &[2, 3]);
+        journal.unwatch(a);
+        assert!(journal.is_armed() && !journal.watches_any(1));
+        assert!(journal.watches_any(2) && journal.watches_any(3));
+        journal.unwatch(b);
+        journal.unwatch(b);
+        assert!(!journal.is_armed() && !journal.watches_any(2) && !journal.watches_any(3));
     }
 }

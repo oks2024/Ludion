@@ -1129,8 +1129,16 @@ impl Engine {
     /// reports it; off, it places them all again every frame. Either way the statics lead the mesh
     /// lists in ascending entity order, so the scene, and the image, are identical. A host switch, not
     /// a protocol command and not a game request: it changes what extract walks, never the sim.
+    /// Off, the `Static` write journal is disarmed and the kept scene freed; on, the next extract
+    /// re-arms it with a full rebuild.
     pub fn set_static_scene(&mut self, on: bool) {
         self.static_scene_on = on;
+        if !on {
+            self.driver
+                .world_mut()
+                .unwatch::<crate::components::Static>();
+            self.static_scene = crate::static_scene::StaticScene::default();
+        }
         self.static_scene.invalidate();
     }
 
@@ -6089,9 +6097,10 @@ impl Engine {
         // and the cache are four separate fields, so this borrows each without aliasing `self`.
         let view = use_view.then_some(self.view_override.as_ref()).flatten();
         // The journal drains before the world is borrowed shared; off, extract builds its own.
+        let sim_frame = self.driver.frame();
         let feed = self.static_scene_on.then(|| {
             self.static_scene
-                .feed(self.driver.world_mut(), self.present_epoch)
+                .feed(self.driver.world_mut(), self.present_epoch, sim_frame)
         });
         let world = self.driver.world();
         let root = AssetRoot::content(&self.project_root);

@@ -70,8 +70,10 @@ re-placed only when it is written, despawned, loses `Static`, has an ancestor ch
 culled, LOD-selected, shadowed and received by decals and drop shadows exactly like a dynamic mesh, and draws
 before the dynamics of its bucket, each in ascending `EntityId`. The image is byte-identical with the static scene
 on or off: `Engine::set_static_scene(false)` is a host setting, not on the wire and not a quality axis; tests and
-the bench use it. Writing a static is legal, but one rewritten every frame wastes the cache (`L1343`). The saving
-shows in the profile's `extract` timing.
+the bench use it. A static that is posed every frame (under a `ParentJoint` or `SkinBone` ancestor, or a part of
+a prefab whose root carries `Animation`) is never held: it takes the dynamic path with `L1341`; the prefab case
+shows only at runtime. Writing a static is legal, but one rewritten every frame wastes the cache (`L1343`). The
+saving shows in the profile's `extract` timing.
 
 ## Observing it
 - `ludion profile` JSON `culling`: per view (`camera`, `sun`, `cascade_N`, `local_N`) the median instances
