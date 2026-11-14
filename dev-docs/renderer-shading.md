@@ -50,6 +50,13 @@ re-blesses every mesh-bearing golden:
   inside the tile; the bias is held at the same texel count per cascade. `sun_shadow` calls
   `sun_shadow_anchored` verbatim at count 0, which is the bit-identity rule for a sun without cascades
   (`ludion devdocs renderer-quality-axes`, `Plan/shadow-mapping.md` decisions 12–17).
+  **PCSS:** a sun with `angular_radius` θ > 0 softens its penumbra. The gate is a uniform:
+  `cascade_params[i].w` (per cascade; texels of that tile per unit of light-NDC depth, `depth_range·tanθ/texel`,
+  set in `build_sun`, never in `sun_cascade_lanes`, whose `params` also fills `Shafts`) and `penumbra_anchored`
+  (the same for the anchored map). Above 0, `sun_pcss` runs a `textureLoad` blocker search (clamped to the tile),
+  then a Vogel-disc comparison filter of radius `(receiver − blocker)·scale`, clamped to `MAX_PENUMBRA_TEXELS` (16
+  texels of that map, the search radius too); tap counts are the `pcss_*_taps` quality axes. At 0 the PCF loops
+  run verbatim, so θ = 0 is byte-identical.
 - **Local lights' shadows** — opt-in (`cast_shadows`), also mesh-only group 2, beside the sun:
   `3 local_shadow_tex: texture_depth_2d`, `4 local_views: array<LocalView>`, `5 light_shadow: array<u32>`
   (the light's first view index, `0xFFFFFFFF` unshadowed). The 48-byte `Light` record, the GI shaders and

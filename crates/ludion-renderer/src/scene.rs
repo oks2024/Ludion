@@ -497,7 +497,8 @@ pub struct SunData {
     /// map. `extract` converts the authored world-unit bias.
     pub bias: f32,
     /// Angular radius of the light's disc in radians (already validated); `0.0` is a point light.
-    /// Only the specular term reads it.
+    /// The specular term reads it, and a shadowed sun softens its penumbra by it (PCSS, `Sun.penumbra_anchored`
+    /// and `cascade_params[i].w`); `0.0` keeps the hard PCF kernel.
     pub angular_radius: f32,
     /// `None` keeps the anchored box in [`light_space`](SunData::light_space); `Some` asks the
     /// renderer to fit cascades (`fit_sun_cascades`).

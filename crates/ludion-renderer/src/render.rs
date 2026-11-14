@@ -1825,7 +1825,7 @@ impl Renderer {
         let sun_raw = build_sun(
             scene,
             chain.shadow_map.is_some(),
-            self.quality_params.pcf,
+            &self.quality_params,
             &sun_lanes,
         );
         let sun_buf = init_buffer(
@@ -3127,18 +3127,43 @@ fn view_depth(view: &Mat4, center: Vec3) -> f32 {
 /// sunless frame takes, reached for a different reason. Without it the mesh pass would compare
 /// against the 1×1 fallback depth and shadow the world solid.
 ///
-/// `pcf` rides along on every frame, sunless ones included, so the uniform has one shape and the
-/// kernel's edge cannot be left at zero on a path that later grows a sun.
+/// `pcf` and the two PCSS tap counts ride along on every frame, sunless ones included, so the uniform
+/// has one shape and none can be left at zero on a path that later grows a sun.
+///
+/// A shadowed sun with an angular radius θ also gets the penumbra growth `cascade_params[i].w` per
+/// cascade and `penumbra_anchored` for the anchored map: texels of that map per unit of light-NDC
+/// depth, `depth_range · tan θ / texel`. A zero θ or an unshadowed frame leaves every one exactly 0.0,
+/// which is the shader's gate for the untouched PCF loops.
 ///
 /// `lanes` are the fitted cascades; a frame that draws no shadow map takes none of them, so the
 /// shader never samples the fallback depth through a cascade either.
-fn build_sun(scene: &RenderScene, shadowed: bool, pcf: u32, lanes: &SunCascadeLanes) -> Sun {
+fn build_sun(
+    scene: &RenderScene,
+    shadowed: bool,
+    params: &QualityParams,
+    lanes: &SunCascadeLanes,
+) -> Sun {
     match &scene.sun {
         Some(s) => {
-            let lanes = if shadowed {
+            let mut lanes = if shadowed {
                 *lanes
             } else {
                 SunCascadeLanes::default()
+            };
+            let tan = if shadowed {
+                s.angular_radius.tan()
+            } else {
+                0.0
+            };
+            for i in 0..lanes.count as usize {
+                lanes.params[i][3] = lanes.depth_range[i] * tan / lanes.texel[i];
+            }
+            let penumbra_anchored = if shadowed && tan > 0.0 {
+                let metres_per_depth = 1.0 / s.light_space.row(2).truncate().length();
+                let metres_per_ndc = 2.0 / s.light_space.row(0).truncate().length();
+                metres_per_depth * tan / (metres_per_ndc / params.shadow_map_size as f32)
+            } else {
+                0.0
             };
             Sun {
                 light_space: match shadowed {
@@ -3147,7 +3172,7 @@ fn build_sun(scene: &RenderScene, shadowed: bool, pcf: u32, lanes: &SunCascadeLa
                 },
                 direction: [s.direction.x, s.direction.y, s.direction.z, s.bias],
                 color: [s.color.x, s.color.y, s.color.z, 0.0],
-                pcf,
+                pcf: params.pcf,
                 disc_sin: s.angular_radius.sin(),
                 disc_cos: s.angular_radius.cos(),
                 disc_spread: 0.5 * s.angular_radius.tan(),
@@ -3156,13 +3181,15 @@ fn build_sun(scene: &RenderScene, shadowed: bool, pcf: u32, lanes: &SunCascadeLa
                 cascade_params: lanes.params,
                 view_depth: lanes.view_depth,
                 cascade_count: lanes.count,
-                cascade_pad0: 0,
-                cascade_pad1: 0,
-                cascade_pad2: 0,
+                pcss_blocker_taps: params.pcss_blocker_taps,
+                pcss_filter_taps: params.pcss_filter_taps,
+                penumbra_anchored,
             }
         }
         None => Sun {
-            pcf,
+            pcf: params.pcf,
+            pcss_blocker_taps: params.pcss_blocker_taps,
+            pcss_filter_taps: params.pcss_filter_taps,
             ..Sun::zeroed()
         },
     }
@@ -3187,6 +3214,10 @@ struct SunCascadeLanes {
     rect: [[f32; 4]; 4],
     /// Per cascade: near view depth, far view depth, depth bias in the cascade's light-NDC.
     params: [[f32; 4]; 4],
+    /// Per cascade: world metres per shadow texel and per unit of light-NDC depth. Kept out of
+    /// `params`, which also fills the `Shafts` uniform; [`build_sun`] folds them into `params[i].w`.
+    texel: [f32; 4],
+    depth_range: [f32; 4],
     /// `dot(xyz, p) + w` is a world point's view depth.
     view_depth: [f32; 4],
 }
@@ -3222,6 +3253,8 @@ fn sun_cascade_lanes(
         ];
         let bias_ndc = bias_world * (cascade.texel / SUN_CASCADE_BIAS_TEXEL) / cascade.depth_range;
         lanes.params[index] = [cascade.near, cascade.far, bias_ndc, 0.0];
+        lanes.texel[index] = cascade.texel;
+        lanes.depth_range[index] = cascade.depth_range;
     }
     lanes
 }
@@ -10904,6 +10937,176 @@ mod tests {
         assert_eq!(disc, disc_again, "the disc renders byte-identically twice");
     }
 
+    /// A top-down camera over a ground, a thin slab `height` metres above it covering everything left of
+    /// its edge, and a sun tilted so the shadow edge falls into view right of the slab's own image. `size`
+    /// is the sun's shadow map edge; `cascaded` fits one cascade over the view instead of the anchored box.
+    /// Returns the scene and the pixel row's first ground pixel past the slab.
+    fn penumbra_scene(
+        height: f32,
+        angular_radius: f32,
+        cascaded: bool,
+        (w, h): (u32, u32),
+    ) -> (RenderScene, u32) {
+        let mut scene = RenderScene::empty((w, h));
+        scene.post = Some(exact_post());
+        scene.ambient = [0.1; 3];
+        let eye = Vec3::new(0.0, 40.0, 0.0);
+        let aspect = crate::scene::aspect_ratio((w, h));
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_to_rh(eye, -Vec3::Y, -Vec3::Z),
+            // A 6° horizontal fov: the frame spans 4.2 m of ground.
+            projection: Mat4::perspective_rh(
+                2.0 * (3.0_f32.to_radians().tan() / aspect).atan(),
+                aspect,
+                0.1,
+                1000.0,
+            ),
+            position: eye,
+        };
+        let mut sun = test_sun_framed(
+            Vec3::new(0.3, -1.0, 0.0),
+            Vec3::splat(3.0),
+            0.05 / 48.0,
+            (4.0, 1.0, 40.0),
+        );
+        sun.angular_radius = angular_radius;
+        if cascaded {
+            // The ground is 40 m from the camera: cascade 1 covers view depth 35–45 m.
+            sun.cascades = Some(crate::scene::SunCascadeConfig {
+                count: 3,
+                shadow_distance: 50.0,
+                splits: Some([0.7, 0.9, 1.0]),
+                shadow_near: -24.0,
+                shadow_far: 24.0,
+            });
+        }
+        scene.sun = Some(sun);
+        let edge = -1.05;
+        scene.meshes = vec![
+            ground(60.0),
+            cube(
+                Vec3::new(edge - 10.0, height, 0.0),
+                Vec3::new(20.0, 0.1, 20.0),
+                [0.8; 4],
+            ),
+        ];
+        let (slab_x, _) = project_pixel(&scene, Vec3::new(edge, height + 0.05, 0.0), (w, h));
+        (scene, slab_x + 3)
+    }
+
+    /// Transition pixels along the middle row of a [`penumbra_scene`] render: luma strictly between the
+    /// shadowed level at the slab's edge and the lit level at the right border.
+    fn penumbra_band(renderer: &Renderer, height: f32, angular_radius: f32, cascaded: bool) -> u32 {
+        let (w, h) = (256u32, 64u32);
+        let (scene, first) = penumbra_scene(height, angular_radius, cascaded, (w, h));
+        let img = renderer
+            .render(&scene, FrameSize::native(w, h))
+            .expect("render");
+        let again = renderer
+            .render(&scene, FrameSize::native(w, h))
+            .expect("render again");
+        assert_eq!(img.rgba, again.rgba, "two renders agree byte for byte");
+        let row = h / 2;
+        let (dark, lit) = (luma(&img, first, row), luma(&img, w - 1, row));
+        assert!(
+            dark + 30 < lit,
+            "the shadow is in view (dark {dark}, lit {lit})"
+        );
+        (first..w)
+            .filter(|&x| (dark + 1..lit).contains(&luma(&img, x, row)))
+            .count() as u32
+    }
+
+    /// The sun's penumbra grows with the blocker's distance when it has an angular radius: a slab 6 m up
+    /// casts a wider transition than one at 1 m, and both are wider than the hard PCF edge of a sun with
+    /// none. Anchored and cascaded paths.
+    #[test]
+    fn needs_gpu_sun_penumbra_widens_with_blocker_distance() {
+        let Some(renderer) = sun_renderer("sun_penumbra_widens_with_blocker_distance", 512, 3)
+        else {
+            return;
+        };
+        for cascaded in [false, true] {
+            let hard = penumbra_band(&renderer, 6.0, 0.0, cascaded);
+            let near = penumbra_band(&renderer, 1.0, 3.0_f32.to_radians(), cascaded);
+            let far = penumbra_band(&renderer, 6.0, 3.0_f32.to_radians(), cascaded);
+            assert!(
+                far > near && near > hard,
+                "cascaded={cascaded}: band {hard} (θ=0) < {near} (1 m) < {far} (6 m)"
+            );
+        }
+    }
+
+    /// At θ = 0 the PCSS tap counts are never read: the original PCF loops run, so any counts render the
+    /// same bytes.
+    #[test]
+    fn needs_gpu_sun_zero_angular_radius_ignores_pcss_taps() {
+        let Some(mut renderer) = sun_renderer("sun_zero_angular_radius_ignores_pcss_taps", 512, 3)
+        else {
+            return;
+        };
+        let (w, h) = (256u32, 64u32);
+        for cascaded in [false, true] {
+            let (scene, _) = penumbra_scene(3.0, 0.0, cascaded, (w, h));
+            let mut render = |blocker: u32, filter: u32| {
+                renderer.set_quality(
+                    Quality::FULL,
+                    QualityParams {
+                        shadow_map_size: 512,
+                        pcss_blocker_taps: blocker,
+                        pcss_filter_taps: filter,
+                        ..QualityParams::FULL
+                    },
+                );
+                renderer
+                    .render(&scene, FrameSize::native(w, h))
+                    .expect("render")
+                    .rgba
+            };
+            let minimal = render(1, 1);
+            let full = render(
+                QualityParams::FULL.pcss_blocker_taps,
+                QualityParams::FULL.pcss_filter_taps,
+            );
+            assert_eq!(minimal, full, "cascaded={cascaded}");
+        }
+    }
+
+    /// A wide sun saturates at `MAX_PENUMBRA_TEXELS`: the transition is at most twice the cap in shadow
+    /// texels wide, and 30° and 60° suns agree to within a pixel or two.
+    #[test]
+    fn needs_gpu_sun_penumbra_is_capped() {
+        let Some(renderer) = sun_renderer("sun_penumbra_is_capped", 512, 3) else {
+            return;
+        };
+        for cascaded in [false, true] {
+            let wide = penumbra_band(&renderer, 6.0, 30.0_f32.to_radians(), cascaded);
+            let wider = penumbra_band(&renderer, 6.0, 60.0_f32.to_radians(), cascaded);
+            // A pixel is 4.2 m / 256; a shadow texel is 8 m / 512 anchored, or the fitted cascade's
+            // that shades the ground 40 m out.
+            let (scene, _) = penumbra_scene(6.0, 0.0, cascaded, (256, 64));
+            let texel = if cascaded {
+                let fit = fit_sun_cascades(&scene, &renderer.quality_params, false).expect("a fit");
+                let ground = fit.cascades[..fit.count as usize]
+                    .iter()
+                    .find(|c| c.near <= 40.0 && 40.0 < c.far)
+                    .expect("a cascade holds the ground");
+                ground.texel
+            } else {
+                8.0 / 512.0
+            };
+            let bound = (2.0 * 16.0 * texel / (4.2 / 256.0)) as u32 + 4;
+            assert!(
+                wide <= bound && wider <= bound,
+                "cascaded={cascaded}: bands {wide}, {wider} exceed {bound} px"
+            );
+            assert!(
+                wide.abs_diff(wider) <= 3,
+                "cascaded={cascaded}: 30° gives {wide} px, 60° gives {wider} px"
+            );
+        }
+    }
+
     /// The post settings that make a rendered byte the sRGB encoding of the linear HDR value itself.
     fn exact_post() -> PostData {
         PostData {
@@ -16721,6 +16924,11 @@ mod tests {
         let mut scene = RenderScene::empty((8, 8));
         let sun = test_sun(Vec3::new(0.3, -1.0, 0.2), Vec3::new(1.0, 0.9, 0.8), 0.002);
         scene.sun = Some(sun);
+        let pcf_only = QualityParams {
+            pcss_blocker_taps: 0,
+            pcss_filter_taps: 0,
+            ..QualityParams::FULL
+        };
         for shadowed in [true, false] {
             let old = Sun {
                 light_space: if shadowed {
@@ -16736,7 +16944,7 @@ mod tests {
                 disc_spread: 0.0,
                 ..Sun::zeroed()
             };
-            let built = build_sun(&scene, shadowed, 3, &SunCascadeLanes::default());
+            let built = build_sun(&scene, shadowed, &pcf_only, &SunCascadeLanes::default());
             assert_eq!(
                 bytemuck::bytes_of(&built)[..112],
                 bytemuck::bytes_of(&old)[..112]
@@ -16746,7 +16954,7 @@ mod tests {
         // A frame that draws no shadow map takes no cascade lanes either.
         let fit = lanes_fit(2);
         let lanes = sun_cascade_lanes(Some(&fit), &lanes_sun(), Mat4::IDENTITY);
-        let masked = build_sun(&scene, false, 3, &lanes);
+        let masked = build_sun(&scene, false, &pcf_only, &lanes);
         assert_eq!(masked.cascade_count, 0);
     }
 
@@ -17097,7 +17305,7 @@ mod tests {
     /// A camera 1.5 m up, pitched down, over a floor; the sun travels away from it. With `wall`, a
     /// 20 m wall floats at 45 m, above the camera's top ray, so it casts a shadow but is never in the frame
     /// (a visible bright wall would shift the whole frame through bloom).
-    fn tile_wall_scene(size: (u32, u32), wall: bool) -> RenderScene {
+    fn tile_wall_scene(size: (u32, u32), wall: bool, angular_radius: f32) -> RenderScene {
         let mut scene = RenderScene::empty(size);
         let eye = Vec3::new(0.0, 1.5, 0.0);
         let pitch = 30.0_f32.to_radians();
@@ -17112,6 +17320,7 @@ mod tests {
             position: eye,
         };
         let mut sun = test_sun(Vec3::new(0.3, -0.6, -1.0), Vec3::splat(3.0), 0.05 / 48.0);
+        sun.angular_radius = angular_radius;
         sun.cascades = Some(crate::scene::SunCascadeConfig {
             count: 4,
             shadow_distance: 60.0,
@@ -17133,7 +17342,8 @@ mod tests {
 
     /// **No PCF tap crosses a tile.** The wall at 45 m is in no cascade-0 caster list, yet it fills
     /// other tiles of the atlas. Every pixel that only cascade 0 shades (view depth under its seam
-    /// band) is byte-identical with and without the wall, with a 5×5 kernel.
+    /// band) is byte-identical with and without the wall, with a 5×5 kernel, and again with a 5° sun
+    /// whose PCSS blocker search and filter read the same tile.
     #[test]
     fn needs_gpu_sun_cascade_no_pcf_tap_crosses_a_tile() {
         let Some(renderer) = sun_renderer("sun_cascade_no_pcf_tap_crosses_a_tile", 256, 5) else {
@@ -17141,52 +17351,56 @@ mod tests {
         };
         let (w, h) = (96u32, 96u32);
         let size = FrameSize::native(w, h);
-        let (bare_scene, wall_scene) = (
-            tile_wall_scene((w, h), false),
-            tile_wall_scene((w, h), true),
-        );
+        for angular_radius in [0.0, 5.0_f32.to_radians()] {
+            let (bare_scene, wall_scene) = (
+                tile_wall_scene((w, h), false, angular_radius),
+                tile_wall_scene((w, h), true, angular_radius),
+            );
 
-        let (atlas_bare, extent, _) = render_sun_atlas(&renderer, &bare_scene, size);
-        let (atlas_wall, _, casters) = render_sun_atlas(&renderer, &wall_scene, size);
-        assert!(!casters[0].contains(&1), "cascade 0 does not draw the wall");
-        let moved_elsewhere = (0..extent.1)
-            .flat_map(|y| (0..extent.0).map(move |x| (x, y)))
-            .filter(|&(x, y)| x >= 256 || y >= 256)
-            .any(|(x, y)| {
-                let i = (y * extent.0 + x) as usize;
-                atlas_bare[i] != atlas_wall[i]
-            });
-        assert!(moved_elsewhere, "the wall reaches another tile");
+            let (atlas_bare, extent, _) = render_sun_atlas(&renderer, &bare_scene, size);
+            let (atlas_wall, _, casters) = render_sun_atlas(&renderer, &wall_scene, size);
+            assert!(!casters[0].contains(&1), "cascade 0 does not draw the wall");
+            let moved_elsewhere = (0..extent.1)
+                .flat_map(|y| (0..extent.0).map(move |x| (x, y)))
+                .filter(|&(x, y)| x >= 256 || y >= 256)
+                .any(|(x, y)| {
+                    let i = (y * extent.0 + x) as usize;
+                    atlas_bare[i] != atlas_wall[i]
+                });
+            assert!(moved_elsewhere, "the wall reaches another tile");
 
-        let bare = renderer.render(&bare_scene, size).expect("bare");
-        let walled = renderer.render(&wall_scene, size).expect("walled");
-        let fit = fit_sun_cascades(&wall_scene, &renderer.quality_params, false).expect("a fit");
-        let first = fit.cascades[0];
-        let seam = first.far - 0.1 * (first.far - first.near);
-        let camera = &wall_scene.camera;
-        let inverse = (camera.projection * camera.view).inverse();
-        let mut compared = 0;
-        for y in 0..h {
-            for x in 0..w {
-                let ndc_x = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
-                let ndc_y = 1.0 - (y as f32 + 0.5) / h as f32 * 2.0;
-                let ray = (inverse.project_point3(Vec3::new(ndc_x, ndc_y, 1.0)) - camera.position)
-                    .normalize();
-                if ray.y > -1e-4 {
-                    continue;
+            let bare = renderer.render(&bare_scene, size).expect("bare");
+            let walled = renderer.render(&wall_scene, size).expect("walled");
+            let fit =
+                fit_sun_cascades(&wall_scene, &renderer.quality_params, false).expect("a fit");
+            let first = fit.cascades[0];
+            let seam = first.far - 0.1 * (first.far - first.near);
+            let camera = &wall_scene.camera;
+            let inverse = (camera.projection * camera.view).inverse();
+            let mut compared = 0;
+            for y in 0..h {
+                for x in 0..w {
+                    let ndc_x = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
+                    let ndc_y = 1.0 - (y as f32 + 0.5) / h as f32 * 2.0;
+                    let ray = (inverse.project_point3(Vec3::new(ndc_x, ndc_y, 1.0))
+                        - camera.position)
+                        .normalize();
+                    if ray.y > -1e-4 {
+                        continue;
+                    }
+                    let hit = camera.position + ray * (-camera.position.y / ray.y);
+                    if -camera.view.transform_point3(hit).z >= seam - 0.1 {
+                        continue;
+                    }
+                    compared += 1;
+                    assert_eq!(pixel(&bare, x, y), pixel(&walled, x, y), "pixel ({x}, {y})");
                 }
-                let hit = camera.position + ray * (-camera.position.y / ray.y);
-                if -camera.view.transform_point3(hit).z >= seam - 0.1 {
-                    continue;
-                }
-                compared += 1;
-                assert_eq!(pixel(&bare, x, y), pixel(&walled, x, y), "pixel ({x}, {y})");
             }
+            assert!(
+                compared > 200,
+                "only {compared} pixels are cascade 0's alone"
+            );
         }
-        assert!(
-            compared > 200,
-            "only {compared} pixels are cascade 0's alone"
-        );
     }
 
     /// **The seam band never blends toward a cascade that does not cover the fragment.** A camera

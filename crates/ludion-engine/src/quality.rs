@@ -1025,6 +1025,8 @@ mod tests {
                 local_shadow_atlas_size: 256,
                 ibl_specular_size: 64,
                 pcf: 1,
+                pcss_blocker_taps: QualityParams::FULL.pcss_blocker_taps,
+                pcss_filter_taps: QualityParams::FULL.pcss_filter_taps,
                 gi_rays: 16,
                 gi_probe_scale: 2.5,
                 render_scale: 0.5,

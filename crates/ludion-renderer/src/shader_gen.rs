@@ -1302,9 +1302,9 @@ pub struct Sun {
     pub cascade_params: [[f32; 4]; 4],
     pub view_depth: [f32; 4],
     pub cascade_count: u32,
-    pub cascade_pad0: u32,
-    pub cascade_pad1: u32,
-    pub cascade_pad2: u32,
+    pub pcss_blocker_taps: u32,
+    pub pcss_filter_taps: u32,
+    pub penumbra_anchored: f32,
 }
 const _: () = assert!(core::mem::size_of::<Sun>() == 528);
 const _: () = assert!(core::mem::offset_of!(Sun, light_space) == 0);
@@ -1319,9 +1319,9 @@ const _: () = assert!(core::mem::offset_of!(Sun, cascade_rect) == 368);
 const _: () = assert!(core::mem::offset_of!(Sun, cascade_params) == 432);
 const _: () = assert!(core::mem::offset_of!(Sun, view_depth) == 496);
 const _: () = assert!(core::mem::offset_of!(Sun, cascade_count) == 512);
-const _: () = assert!(core::mem::offset_of!(Sun, cascade_pad0) == 516);
-const _: () = assert!(core::mem::offset_of!(Sun, cascade_pad1) == 520);
-const _: () = assert!(core::mem::offset_of!(Sun, cascade_pad2) == 524);
+const _: () = assert!(core::mem::offset_of!(Sun, pcss_blocker_taps) == 516);
+const _: () = assert!(core::mem::offset_of!(Sun, pcss_filter_taps) == 520);
+const _: () = assert!(core::mem::offset_of!(Sun, penumbra_anchored) == 524);
 
 /// WGSL `struct Ui`.
 ///

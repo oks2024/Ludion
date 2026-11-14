@@ -216,6 +216,15 @@ pub struct QualityParams {
     /// the 3×3 the mesh pass averages, `1` a single centre tap. Odd, because the kernel is centred
     /// on the shaded texel.
     pub pcf: u32,
+    /// Disc taps of the sun's PCSS blocker search (`Sun.pcss_blocker_taps` in `mesh_shading.wgsl`): a
+    /// Vogel spiral of depth reads that finds the average blocker depth. Read only when the sun has
+    /// an angular radius; a sun with none keeps the [`pcf`](QualityParams::pcf) kernel and never
+    /// touches it.
+    pub pcss_blocker_taps: u32,
+    /// Disc taps of the sun's PCSS comparison filter (`Sun.pcss_filter_taps`): a Vogel spiral of
+    /// depth comparisons across the penumbra the blocker search sized. Read only when the sun has an
+    /// angular radius, like [`pcss_blocker_taps`](QualityParams::pcss_blocker_taps).
+    pub pcss_filter_taps: u32,
     /// Rays cast per probe by the GI bake (`params.flags.y` in `gi_bake.wgsl`, `params.rays.x` in
     /// `gi_inject.wgsl`).
     ///
@@ -318,6 +327,8 @@ impl QualityParams {
         local_shadow_atlas_size: 4096,
         ibl_specular_size: 256,
         pcf: 3,
+        pcss_blocker_taps: 16,
+        pcss_filter_taps: 32,
         gi_rays: 64,
         gi_probe_scale: 1.0,
         render_scale: 1.0,
@@ -352,6 +363,8 @@ impl QualityParams {
         local_shadow_atlas_size: QualityParams::FULL.local_shadow_atlas_size,
         ibl_specular_size: QualityParams::FULL.ibl_specular_size,
         pcf: 3,
+        pcss_blocker_taps: 12,
+        pcss_filter_taps: 24,
         gi_rays: 48,
         gi_probe_scale: 1.0,
         render_scale: QualityParams::FULL.render_scale,
@@ -379,6 +392,8 @@ impl QualityParams {
         local_shadow_atlas_size: 2048,
         ibl_specular_size: QualityParams::FULL.ibl_specular_size,
         pcf: 3,
+        pcss_blocker_taps: 8,
+        pcss_filter_taps: 16,
         gi_rays: 32,
         gi_probe_scale: 1.5,
         render_scale: QualityParams::FULL.render_scale,
@@ -531,6 +546,20 @@ mod tests {
                 include_str!("shaders/snippets/mesh_shading.wgsl"),
                 "sun.pcf",
                 9,
+            ),
+            // Two: the PCSS blocker search's loop bound and its Vogel radius divisor.
+            (
+                "mesh_shading.wgsl",
+                include_str!("shaders/snippets/mesh_shading.wgsl"),
+                "sun.pcss_blocker_taps",
+                2,
+            ),
+            // Three: the PCSS filter's loop bound, its Vogel radius divisor and the normalizing divisor.
+            (
+                "mesh_shading.wgsl",
+                include_str!("shaders/snippets/mesh_shading.wgsl"),
+                "sun.pcss_filter_taps",
+                3,
             ),
             // Four: the march's loop bound, the ray set's elevation denominator, the hit cache's
             // stride, and the estimator's own `1/N`.
@@ -692,6 +721,16 @@ mod tests {
                     high.ibl_specular_size,
                 ),
                 ("pcf", low.pcf, high.pcf),
+                (
+                    "pcss_blocker_taps",
+                    low.pcss_blocker_taps,
+                    high.pcss_blocker_taps,
+                ),
+                (
+                    "pcss_filter_taps",
+                    low.pcss_filter_taps,
+                    high.pcss_filter_taps,
+                ),
                 ("gi_rays", low.gi_rays, high.gi_rays),
             ] {
                 assert!(

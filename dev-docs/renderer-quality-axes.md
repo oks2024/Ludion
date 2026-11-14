@@ -62,6 +62,10 @@ description: Quality axes: uniform sample counts, gi_rays, gi_probe_scale, and w
   struct as usual, but no `masked` site, no shader, and no `record_*` upload at all —
   `extract_at` reads it directly and `particles::evaluate` thins `rate`/`burst` there, and the
   particles plan's no-schema-rev ruling keeps it out of the profile report's descriptor too.
+- **`pcss_blocker_taps` and `pcss_filter_taps`** are modulated uniform axes (`Sun.pcss_*_taps`, two and
+  three reads in `mesh_shading.wgsl`) read only when the sun has an `angular_radius`. Like `lod_bias`
+  they stay out of the `Params` TOML struct and the descriptor (`preset` names them), so no protocol or
+  engine code moves with them.
 - **An explicit scale beats a quality-supplied one, which beats native**, resolved in one function
   (`resolve_render_scale`). The two sources are held apart and combined on *read* — `Engine` keeps
   `render_scale_override: Option<RenderScale>` beside its `QualitySetting` — which is what makes
