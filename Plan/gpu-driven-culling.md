@@ -832,8 +832,28 @@ instances per extract. Indicative only (an unpinned laptop); pinned figures are 
   a corridor): `scene` 0.69–0.85 → 0.43, `shadow` 0.15, `cull` 0.12 → 0.17.
 - **GPU frame** (fastest of five): 2.66–2.92 ms full against 2.71–2.78 ablated. The kit's frame delta reads
   −0.05 to +0.18 ms, inside the run-to-run noise, so the frame is not bound by the kit at this size.
-- **Owed:** the pinned M4 and RTX 3090 figures and the golden (`Plan/owed.md`); W3.5 adds the first
-  instance-count budget and an unpinned `extract_ms` ceiling (about 3x the M5 median); pinned lines are owed.
+- **Owed:** the pinned M4 and RTX 3090 figures and the golden (`Plan/owed.md`).
+
+**The static-kit room, after W3 (Serious Isaac 0039, unpinned M5, 2026-11-14).** Same command, same room.
+Three runs, 3,186 mesh instances, indicative only.
+- **Extract**, both views: statics on 0.306–0.311 ms (`Place` 0.086, the rest `Lights` 0.052, `Poses` 0.038);
+  against the pre-W3 0.53 ms extract the saving is about 0.22 ms (0.53 → 0.31). Statics off (1.69–1.70 ms,
+  `Place` 1.41–1.43) rebuilds `StaticScene` every frame: an identity switch, not the old path. Kit ablated: 0.054 ms, so
+  the kit now costs 0.25 ms (was 0.48 ms; the residue is the held-prefix copy and the dynamics' share).
+- **GPU frame**, on against off: −0.08 to +0.11 ms across runs, inside noise (the image is identical; the saving
+  is CPU). `cull` 0.10–0.12 ms, `scene` 0.60–0.91 ms, the same as before W3.
+- **Inline budget:** `MESH_INSTANCES = 3_186` (asserted every push in `static_kit_scene_matches_its_counts` and
+  in the bench) and `STATIC_KIT_EXTRACT_BUDGET_MS = 1.0` (about 3x the 0.31 ms median); no `budgets/*.toml`
+  entry, no GPU ceiling. Pinned lines are owed.
+- **Remaining per-frame O(all meshes) walks** (renderer, medians at 3,186 instances, statics on): `cull_shape`
+  2.8 µs, `casts` 1.0 µs, the static `sources` copy 84 ns per run (about 10 runs); all far under 0.05 ms, so
+  none is fixed. Re-measure when a scene passes ~50k mesh instances. `viewmodel_bounds` returns early without a
+  viewmodel (this room has none). `sun_cascade_stats` is profile-only (its one non-test caller is
+  `profile.rs`), not on the frame path.
+
+**W3 shipped (rung 2b).** Mechanized: the ECS write journal, `Static`, `StaticScene`, the persistent static GPU
+buffers (decision 49) and the inline budget. Owed: pinned M4 / RTX 3090 figures, the pinned budget lines and the
+static-kit golden (`Plan/owed.md`).
 
 **LOD (request 0013).** Shipped as decisions 21–29; the acceptance scene is `examples/gallery/lod-hall.yaml` (500
 skinned figures down a 130 m hall on `meshes/lod/`, a three-level mannequin imported with `--lod 0.3:0.5 --lod

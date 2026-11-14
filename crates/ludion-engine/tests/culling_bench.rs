@@ -518,7 +518,7 @@ fn median(samples: &mut [f64]) -> f64 {
 
 pub(crate) struct Arm {
     pub(crate) label: String,
-    extract_total_ms: f64,
+    pub(crate) extract_total_ms: f64,
     phases: Vec<(ExtractPhase, f64)>,
     skin: SkinCounts,
     pub(crate) report: ProfileReport,

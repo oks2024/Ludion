@@ -64,6 +64,15 @@ always on; tests and the culling bench use it to compare. With it off the `cull`
 `--dump-graph`, unless the frame draws a LOD chain: the pass then stays with the frustum test skipped, so levels
 and the image are unchanged.
 
+## Static meshes
+A mesh marked `Static` (`ludion docs components`) is placed once and kept in persistent GPU buffers. It is
+re-placed only when it is written, despawned, loses `Static`, has an ancestor change or its asset reloads. It is
+culled, LOD-selected, shadowed and received by decals and drop shadows exactly like a dynamic mesh, and draws
+before the dynamics of its bucket, each in ascending `EntityId`. The image is byte-identical with the static scene
+on or off: `Engine::set_static_scene(false)` is a host setting, not on the wire and not a quality axis; tests and
+the bench use it. Writing a static is legal, but one rewritten every frame wastes the cache (`L1343`). The saving
+shows in the profile's `extract` timing.
+
 ## Observing it
 - `ludion profile` JSON `culling`: per view (`camera`, `sun`, `cascade_N`, `local_N`) the median instances
   tested and drawn (`levels_drawn_median`: the drawn count per LOD level when the frame drew a chain), read back through a non-blocking ring that skips a frame rather than stall. Offline

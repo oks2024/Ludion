@@ -52,6 +52,11 @@ seam: they resolve through `mesh_asset::load` (`check-scene` checks them in `mes
 (`/base_color_texture`, …) rather than this seam's. Every component derives `Serialize + Deserialize + JsonSchema` with per-field
 defaults, so partial YAML instantiates cleanly and `check-scene` gets a schema per component.
 
+**Statics** are not walked: the `StaticScene` cache's held placements are emitted first, in ascending
+`EntityId`, as the prefix of `meshes`/`mesh_owners`/`mesh_assets`, so every consumer that indexes meshes is
+unchanged. `RenderScene.statics` names that range (count, mesh assets, a content key). With
+`set_static_scene(false)` extract rebuilds the same prefix every frame, so the scene is identical either way.
+
 It also resolves `UiRect`/`UiText` entities: `ui.rs` turns each element's `anchor`/`offset`/
 `size-or-measured-text` into a pixel-space rect against the render target's actual `(width, height)`
 — extract already receives the dims for aspect, so anchor math costs nothing new — and the results

@@ -23,7 +23,9 @@
 //! cargo test -p ludion-engine --release --test it -- static_kit::needs_gpu_static_kit_bench --ignored --nocapture
 //! ```
 //!
-//! Like `culling_bench`, it carries no budget file: it reuses that bench's measuring helpers.
+//! Like `culling_bench`, it carries no `budgets/*.toml` entry and reuses that bench's measuring helpers.
+//! Its inline budget names the instance count ([`MESH_INSTANCES`], asserted every push) and an
+//! `extract_ms` ceiling for the statics-on arm ([`STATIC_KIT_EXTRACT_BUDGET_MS`]); there is no GPU ceiling.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -48,6 +50,12 @@ const MANNEQUINS: usize = 8;
 /// The fixed entities: camera, sun, two point lights, the ground, one decal.
 const FIXED: usize = 6;
 const EXPECTED_ENTITIES: usize = FIXED + KIT_PIECES + DYNAMICS;
+/// Mesh instances one extract emits (camera-independent); the extract budget is calibrated at this count.
+const MESH_INSTANCES: usize = 3_186;
+/// Ceiling for one extract of the room with the static scene on, calibrated at [`MESH_INSTANCES`]:
+/// measured median 0.31 ms, about 3x, on an unpinned M5 laptop (not authoritative), 2026-11-14.
+/// Pinned M4 / RTX 3090 figures are owed (`Plan/owed.md`).
+const STATIC_KIT_EXTRACT_BUDGET_MS: f64 = 1.0;
 /// The committed scene must stay under the 1 MiB size gate with room to spare.
 const MAX_SCENE_BYTES: usize = 900_000;
 
@@ -503,7 +511,16 @@ fn static_kit_scene_matches_its_counts() {
     assert_eq!(engine.world().entity_count(), EXPECTED_ENTITIES);
     assert_eq!(named(&engine, "kit-").len(), KIT_PIECES + 1);
     assert_eq!(named(&engine, "dyn-").len(), DYNAMICS);
-    engine.extract_present_scene().expect("extracts");
+    let instances = engine
+        .extract_present_scene()
+        .expect("extracts")
+        .0
+        .meshes
+        .len();
+    assert_eq!(
+        instances, MESH_INSTANCES,
+        "MESH_INSTANCES is the count STATIC_KIT_EXTRACT_BUDGET_MS is calibrated at; a changed room re-calibrates it"
+    );
 }
 
 /// Eye height inside the row-2 corridor, looking down its length (+X).
@@ -566,6 +583,15 @@ fn needs_gpu_static_kit_bench() {
         assert!(
             ablated_instances < full_instances,
             "{view}: ablating the kit must draw fewer instances"
+        );
+        assert_eq!(
+            full_instances, MESH_INSTANCES,
+            "{view}: the budget is calibrated at {MESH_INSTANCES} instances"
+        );
+        assert!(
+            full.extract_total_ms <= STATIC_KIT_EXTRACT_BUDGET_MS,
+            "{view}: extract {:.3} ms over the {STATIC_KIT_EXTRACT_BUDGET_MS} ms budget at {MESH_INSTANCES} instances",
+            full.extract_total_ms
         );
         for arm in [&full, &ablated] {
             assert!(
