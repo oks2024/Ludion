@@ -174,7 +174,7 @@ fn sparks(world: &mut World, _ctx: &SystemCtx) {
 **Queries.** `ray_cast`, `shape_cast` and `overlap` are pure reads against the solver, reading the
 state as of the **last completed step** — an entity created, moved, teleported or despawned this
 tick is visible only after the step that follows. The two casts return every hit sorted
-`(distance, entity)` ascending; `overlap` returns every hit entity sorted ascending. Each takes a `&QueryFilter` (your own body, ignored
+`(distance, entity)` ascending; `overlap` returns every hit entity sorted ascending. `closest_points(point, max_distance, &filter)` ranks colliders by distance to their *surface* (a long wall's edge beats a nearer-origin ball; `0` inside a solid) as `PointHit { entity, distance, point }`, sorted `(distance, entity)`. Each takes a `&QueryFilter` (your own body, ignored
 layers — `ludion docs collision-layers`; sensors are skipped unless the filter calls `include_sensors()`) and
 reports errors rather than an empty result: a non-finite or negative input, a `rotation` that is not
 a unit quaternion, or a query shape the solver cannot build, is

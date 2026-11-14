@@ -135,7 +135,8 @@
 //! state as of the last completed step — a body created, moved, teleported or despawned this tick
 //! becomes visible only after the step that follows. The two casts return every hit as a
 //! [`QueryHit`], sorted `(distance, entity)` ascending; `overlap` returns every hit `EntityId`,
-//! sorted ascending. Rapier's own BVH traversal order is never exposed. Each takes a [`QueryFilter`]:
+//! sorted ascending; [`PhysicsWorld::closest_points`] returns a [`PointHit`] per collider within
+//! reach of a point, ranked by surface distance. Rapier's own BVH traversal order is never exposed. Each takes a [`QueryFilter`]:
 //! one excluded entity, ignored layer names and optionally static colliders only, which only drops hits.
 //!
 //! [`PhysicsWorld::first_hit`] and [`PhysicsWorld::first_hits`] return the one nearest hit of a swept
@@ -203,7 +204,7 @@ pub use motor::{
     teleport_character,
 };
 pub use pose::PhysicsPose;
-pub use queries::{QueryFilter, QueryHit};
+pub use queries::{PointHit, QueryFilter, QueryHit};
 pub use sensors::{ExitCause, SensorEvent, SensorPhase};
 pub use sweep::{Sweep, SweepFilter, SweepHit};
 pub use systems::{

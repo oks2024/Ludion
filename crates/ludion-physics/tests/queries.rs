@@ -959,3 +959,140 @@ fn the_request_three_by_three_slope_hits_at_its_centre_vertex() {
         );
     }
 }
+
+fn spawn_collider(world: &mut World, at: [f32; 3], shape: Shape) -> EntityId {
+    let entity = world.spawn();
+    world.insert(entity, TestPose::at(at)).unwrap();
+    let mut collider = box_collider(Body::new_static());
+    collider.shape = shape;
+    world.insert(entity, collider).unwrap();
+    entity
+}
+
+#[test]
+fn closest_points_rank_by_distance_then_entity() {
+    let mut world = World::new();
+    // Two boxes equidistant from the origin on opposite sides; spawned so entity order is known.
+    let first = spawn_static_box(&mut world, 3.0);
+    let second = spawn_static_box(&mut world, -3.0);
+    let far = spawn_static_box(&mut world, 6.0);
+    let mut schedule = free_schedule();
+    tick(&mut world, &mut schedule, 0);
+
+    let hits = physics(&world)
+        .closest_points([0.0; 3], 100.0, &QueryFilter::new())
+        .expect("a finite query");
+    assert_eq!(
+        hits.iter().map(|h| h.entity).collect::<Vec<_>>(),
+        [first, second, far],
+        "{hits:?}"
+    );
+    assert_eq!(hits[0].distance, 2.5);
+    assert_eq!(hits[1].distance, 2.5);
+    assert_eq!(hits[2].distance, 5.5);
+    assert_eq!(hits[0].point, [2.5, 0.0, 0.0]);
+    assert_eq!(hits[1].point, [-2.5, 0.0, 0.0]);
+}
+
+#[test]
+fn closest_points_inside_a_solid_is_zero_at_the_query_point() {
+    let mut world = World::new();
+    let inside = spawn_static_box(&mut world, 0.0);
+    let mut schedule = free_schedule();
+    tick(&mut world, &mut schedule, 0);
+
+    let hits = physics(&world)
+        .closest_points([0.1, 0.2, 0.3], 1.0, &QueryFilter::new())
+        .unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].entity, inside);
+    assert_eq!(hits[0].distance, 0.0);
+    assert_eq!(hits[0].point, [0.1, 0.2, 0.3]);
+}
+
+#[test]
+fn closest_points_respect_max_distance() {
+    let mut world = World::new();
+    let near = spawn_static_box(&mut world, 2.0);
+    spawn_static_box(&mut world, 6.0);
+    let mut schedule = free_schedule();
+    tick(&mut world, &mut schedule, 0);
+
+    let hits = physics(&world)
+        .closest_points([0.0; 3], 2.0, &QueryFilter::new())
+        .unwrap();
+    assert_eq!(hits.iter().map(|h| h.entity).collect::<Vec<_>>(), [near]);
+    let none = physics(&world)
+        .closest_points([0.0; 3], 1.0, &QueryFilter::new())
+        .unwrap();
+    assert!(none.is_empty(), "{none:?}");
+}
+
+#[test]
+fn closest_points_honour_the_filter() {
+    let (world, [props, dummy, plain, dummy_far]) = layered_row();
+    let at = |filter: &QueryFilter| -> Vec<EntityId> {
+        physics(&world)
+            .closest_points([0.0; 3], 100.0, filter)
+            .unwrap()
+            .iter()
+            .map(|h| h.entity)
+            .collect()
+    };
+    assert_eq!(at(&QueryFilter::new()), [props, dummy, plain, dummy_far]);
+    assert_eq!(
+        at(&QueryFilter::new().exclude(props)),
+        [dummy, plain, dummy_far]
+    );
+    assert_eq!(
+        at(&QueryFilter::new().ignore_layer("dummy")),
+        [props, plain]
+    );
+    assert_eq!(at(&QueryFilter::new().only_fixed()).len(), 4);
+}
+
+#[test]
+fn a_long_surface_near_the_point_beats_a_small_ball_with_a_nearer_origin() {
+    let mut world = World::new();
+    let awning = spawn_collider(
+        &mut world,
+        [9.0, 0.0, 0.0],
+        Shape::Box {
+            half_extents: [8.0, 0.1, 0.5],
+        },
+    );
+    let wheel = spawn_collider(&mut world, [0.0, 1.5, 0.0], Shape::Sphere { radius: 0.1 });
+    let mut schedule = free_schedule();
+    tick(&mut world, &mut schedule, 0);
+
+    let hits = physics(&world)
+        .closest_points([0.0; 3], 5.0, &QueryFilter::new())
+        .unwrap();
+    // The awning's origin is 9 away, the wheel's 1.5, but the awning's edge is 1.0 from the point.
+    assert_eq!(
+        hits.iter().map(|h| h.entity).collect::<Vec<_>>(),
+        [awning, wheel],
+        "{hits:?}"
+    );
+    assert_eq!(hits[0].distance, 1.0);
+    assert!((hits[1].distance - 1.4).abs() < 1e-5, "{hits:?}");
+}
+
+#[test]
+fn closest_points_reject_bad_input() {
+    let mut world = World::new();
+    spawn_static_box(&mut world, 2.0);
+    let mut schedule = free_schedule();
+    tick(&mut world, &mut schedule, 0);
+    let p = physics(&world);
+    let f = QueryFilter::new();
+    for err in [
+        p.closest_points([f32::NAN, 0.0, 0.0], 1.0, &f).unwrap_err(),
+        p.closest_points([0.0; 3], -1.0, &f).unwrap_err(),
+        p.closest_points([0.0; 3], f32::INFINITY, &f).unwrap_err(),
+        p.closest_points([0.0; 3], 1.0, &QueryFilter::new().ignore_layer("nope"))
+            .unwrap_err(),
+    ] {
+        assert!(matches!(err, PhysicsError::QueryInput(_)), "{err:?}");
+    }
+}

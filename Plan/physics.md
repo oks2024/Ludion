@@ -432,6 +432,8 @@ Requests from the external game's `ludion-requests/`, one at a time, each a mini
   first, then a peer-client toggle.
 - Island parallelism: excluded by `enhanced-determinism`; only reachable by leaving rapier. (0020: not a non-goal any more — rapier's `parallel` step is adopted; see Decided (Serious Isaac 0020).)
 - Rapier's character controller: see §The 2D queries.
+- A protocol command for the physics queries: `ray_cast`, `shape_cast`, `overlap` and `closest_points` are
+  Rust-only; wiring all four is one later arc (schema snapshot + TS regen).
 - Springs, velocity-target motors, a per-motor model choice and multibody joints are not built. Trigger:
   a game request that a force-based position drive cannot express.
 - A convex hull generator from a voxel, sculpt or mesh source is not built. Trigger: a game whose props'

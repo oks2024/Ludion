@@ -8,7 +8,7 @@ use ludion_spatial::Shape;
 use rapier3d::parry::query::RayCast as _;
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::parry::shape::Shape as ParryShape;
-use rapier3d::prelude::{Aabb, BoundingVolume, Collider, Ray, RayIntersection};
+use rapier3d::prelude::{Aabb, Ball, BoundingVolume, Collider, Pose, Ray, RayIntersection};
 
 use crate::motor::Gather;
 use crate::sweep::SweepFilter;
@@ -32,6 +32,20 @@ pub struct QueryHit {
     /// World-space normal at `point`, pointing out of the hit collider. Parry reports a zero
     /// vector for a ray whose origin starts inside the shape.
     pub normal: [f32; 3],
+}
+
+/// One hit from [`PhysicsWorld::closest_points`].
+///
+/// Never snapshotted: a query is a pure read over a stepped world.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointHit {
+    /// The entity whose collider the point was projected onto.
+    pub entity: EntityId,
+    /// World units from the query point to the collider's surface — `0.0` when the point is inside
+    /// a solid collider.
+    pub distance: f32,
+    /// World-space closest point on the collider's surface; the query point itself when inside.
+    pub point: [f32; 3],
 }
 
 /// Slack on a ray segment's box when deciding whether a gather covers it: the slab test rounds its
@@ -520,6 +534,76 @@ impl PhysicsWorld {
             .collect();
         entities.sort_unstable();
         Ok(entities)
+    }
+
+    /// Every collider within `max_distance` of `point`, ranked by distance to its *surface* rather
+    /// than its origin: a long wall whose edge is under `point` ranks ahead of a small ball whose
+    /// centre is nearer. Sorted `(distance, entity)` ascending. `filter` drops excluded entities,
+    /// ignored layers, sensors and, with `only_fixed`, non-static bodies ([`QueryFilter`]).
+    ///
+    /// A `point` inside a solid collider gives `distance` `0.0` and `point` itself, as a
+    /// [`Blast`](crate::Blast) measures it. Reads the state as of the last completed step, same as
+    /// [`ray_cast`](PhysicsWorld::ray_cast). `point` must be finite, `max_distance` finite and
+    /// non-negative, and every ignored layer name one the scene declares — otherwise
+    /// [`PhysicsError::QueryInput`].
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_physics::{PhysicsWorld, QueryFilter};
+    ///
+    /// let world = PhysicsWorld::new(TickRate::DEFAULT);
+    /// let hits = world
+    ///     .closest_points([0.0, 0.0, 0.0], 5.0, &QueryFilter::new())
+    ///     .unwrap();
+    /// assert!(hits.is_empty());
+    /// ```
+    pub fn closest_points(
+        &self,
+        point: [f32; 3],
+        max_distance: f32,
+        filter: &QueryFilter,
+    ) -> Result<Vec<PointHit>, PhysicsError> {
+        check_finite("point", &point)?;
+        check_max_distance(max_distance)?;
+        let drops = self.query_drops(filter)?;
+        let center = to_vector(point);
+        let ball = Ball::new(max_distance);
+        let mut hits: Vec<PointHit> = Vec::new();
+        for (handle, collider) in self
+            .rapier
+            .query_pipeline()
+            .intersect_shape(Pose::from_translation(center), &ball)
+        {
+            // Rapier maps a BVH leaf to a collider by slot alone, so a leaf of a collider retired
+            // this tick can resolve to a new one that reused the slot.
+            if self.fresh_colliders.contains(&handle) {
+                continue;
+            }
+            let entity = entity_from_bits(collider.user_data);
+            if drops(entity) {
+                continue;
+            }
+            let closest = collider
+                .shape()
+                .project_point(collider.position(), center, true)
+                .point;
+            let offset = closest - center;
+            let distance = sqrt(offset.x * offset.x + offset.y * offset.y + offset.z * offset.z);
+            if distance <= max_distance {
+                hits.push(PointHit {
+                    entity,
+                    distance,
+                    point: from_vector(closest),
+                });
+            }
+        }
+        hits.sort_unstable_by(|a, b| {
+            a.distance
+                .total_cmp(&b.distance)
+                .then(a.entity.cmp(&b.entity))
+        });
+        Ok(hits)
     }
 }
 

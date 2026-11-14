@@ -122,8 +122,8 @@
 //!   `free` for a 3D game, which ignores the [`Plane`] an engine always installs, or `planar` for a
 //!   2D one, which takes the plane's axis locks on every rigid body. [`PhysicsWorld`] is the world
 //!   resource it maintains: it queues impulses (at a body's centre, at a point, or a radial [`Blast`]
-//!   with a [`Falloff`]) and answers body counts, sleep state and its three read-only queries
-//!   ([`QueryFilter`], [`QueryHit`]), which report a bad argument as [`PhysicsError`]. An entity
+//!   with a [`Falloff`]) and answers body counts, sleep state and its four read-only queries
+//!   ([`QueryFilter`], [`QueryHit`], [`PointHit`]), which report a bad argument as [`PhysicsError`]. An entity
 //!   belongs to one tier or the other, never both.
 //! - **Physics events** — [`ContactEvent`] (a contact beginning or ending between two bodies; `ludion
 //!   docs physics`, `ludion docs collision-layers`), [`SensorEvent`] (a body entering or leaving a
@@ -271,7 +271,7 @@ pub use single::SingleExt;
 pub use ludion_physics::{
     Blast, BlastHit, CharacterMotor, CharacterMotorState, ContactEvent, ContactPhase, ExitCause,
     Falloff, GroundHit, GroundProbe, JointBroken, LaneEnd, LaneFrame, LaneReport, MotorError,
-    MoveConstraint, MoveReport, PhysicsError, PhysicsWorld, PlatformCarry, PlatformPose,
+    MoveConstraint, MoveReport, PhysicsError, PhysicsWorld, PlatformCarry, PlatformPose, PointHit,
     QueryFilter, QueryHit, ResizeReport, SensorEvent, SensorPhase, SurfaceHit, SurfaceVelocity,
     height_in_force, teleport_kinematic,
 };
