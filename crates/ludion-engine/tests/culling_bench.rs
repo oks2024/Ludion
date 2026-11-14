@@ -403,7 +403,7 @@ fn visuals() -> ProjectileVisuals {
     visuals
 }
 
-fn gallery() -> std::path::PathBuf {
+pub(crate) fn gallery() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery")
 }
 
@@ -516,12 +516,12 @@ fn median(samples: &mut [f64]) -> f64 {
     }
 }
 
-struct Arm {
-    label: String,
+pub(crate) struct Arm {
+    pub(crate) label: String,
     extract_total_ms: f64,
     phases: Vec<(ExtractPhase, f64)>,
     skin: SkinCounts,
-    report: ProfileReport,
+    pub(crate) report: ProfileReport,
 }
 
 impl Arm {
@@ -534,7 +534,7 @@ impl Arm {
             .and_then(|p| p.median_ms)
     }
 
-    fn gpu_ms(&self) -> Option<f64> {
+    pub(crate) fn gpu_ms(&self) -> Option<f64> {
         self.report.gpu.frame_median_ms
     }
 
@@ -549,7 +549,11 @@ impl Arm {
 }
 
 fn measure(label: &str, facing: Facing, mix: Mix, shots: bool) -> Arm {
-    let mut engine = engine(facing, mix, shots);
+    measure_engine(label, engine(facing, mix, shots))
+}
+
+/// Measures an already-built engine: extract per phase and the GPU profile, fastest of [`ROUNDS`].
+pub(crate) fn measure_engine(label: &str, mut engine: Engine) -> Arm {
     let clock = PhaseClock::default();
     let mut best: Option<(f64, Vec<(ExtractPhase, f64)>)> = None;
     let mut best_report: Option<ProfileReport> = None;
@@ -606,7 +610,7 @@ fn measure(label: &str, facing: Facing, mix: Mix, shots: bool) -> Arm {
     }
 }
 
-fn print_arm(arm: &Arm) {
+pub(crate) fn print_arm(arm: &Arm) {
     println!("\n== {} ==", arm.label);
     println!(
         "extract (observed total) {:.3} ms | sim `extract` span {:.3} ms",
@@ -657,7 +661,7 @@ fn print_arm(arm: &Arm) {
     );
 }
 
-fn print_ablation(what: &str, full: &Arm, without: &Arm) {
+pub(crate) fn print_ablation(what: &str, full: &Arm, without: &Arm) {
     let gpu = match (full.gpu_ms(), without.gpu_ms()) {
         (Some(a), Some(b)) => format!("{:.3} ms", a - b),
         _ => "n/a".to_string(),
