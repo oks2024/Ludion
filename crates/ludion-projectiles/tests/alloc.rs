@@ -4,6 +4,7 @@
 mod common;
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::*;
@@ -15,17 +16,29 @@ struct Counting;
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 
+thread_local! {
+    // Only the test's own thread counts: at one worker the step runs inline on it, and the
+    // harness's other threads allocate on their own schedule on a loaded box.
+    static COUNTING: Cell<bool> = const { Cell::new(false) };
+}
+
+fn count() {
+    if COUNTING.try_with(Cell::get).unwrap_or(false) {
+        ALLOCS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 // SAFETY: forwards every call to `System` unchanged; it only counts.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        count();
         unsafe { System.alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        count();
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
@@ -102,12 +115,14 @@ fn a_warm_step_does_not_allocate() {
             step(&mut pool, DT, physics, &index, &cfg, &mut events);
         }
         ALLOCS.store(0, Ordering::Relaxed);
+        COUNTING.with(|c| c.set(true));
         for _ in 0..100 {
             for _ in 0..20 {
                 spawn(&mut pool);
             }
             step(&mut pool, DT, physics, &index, &cfg, &mut events);
         }
+        COUNTING.with(|c| c.set(false));
         assert_eq!(ALLOCS.load(Ordering::Relaxed), 0);
     });
     assert!(!pool.is_empty());
