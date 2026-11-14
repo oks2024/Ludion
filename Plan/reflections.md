@@ -335,6 +335,20 @@ interiors**. Large open water is not a driver.
     - SSR keeps tracing along R: it hits real geometry on the mirror ray. Render-only; the store keys move
       with the shader text, no bake-version bump.
 
+### Probes spawned at runtime
+
+32. **The probe world is frozen at load and refrozen only on request** (owner approval 2026-11-14,
+    Serious Isaac request 0041). A sim system sets the render-only `ProbeRefreeze` request (unhashed,
+    like `ProbeSource`), and the engine refreezes at the start of the next tick as a load would, so
+    probes spawned with a runtime prefab capture the world that holds them. The refreeze is explicit,
+    never inferred from `Static` changes: the frozen world holds every mesh and light, and only the game
+    knows the tick at which its world is complete (a room swap spans a despawn and a spawn). Bakes reach
+    runtime worlds through a game-provided bake hook on the builder: the game binary's `--bake-probes`
+    asks the hook for each world in turn, refreezes and bakes the probes present, and a coverage query
+    (per probe: store key, hit or miss) lets a game test fail on a stale store. Partial refreezes and a
+    static-change trigger are deferred, with the trigger: more than one live room, or a refreeze cost
+    that breaks a fade window.
+
 ## Waves
 
 ### Wave 1 — Foundation: one blend site
@@ -533,11 +547,22 @@ interiors**. Large open water is not a driver.
   past range all read `0x7BFF`), so `HDR_CEILING` and `hdr_safe` are defensive on both pinned GPUs.
   Owed: the spike on an iOS device, with `Plan/ios-target.md` M3.
 
+- Decision 32 (2026-11-14, Serious Isaac 0041, r2351–r2354): `ProbeRefreeze`, drained in
+  `freeze_probe_world_before_tick`; `EngineBuilder::probe_bake_worlds` walks hook worlds under
+  `--bake-probes`, labelling each probe's `world` in the report; `Engine::probe_coverage` +
+  `ProbeCoverage::check` (`L1279`). The store key had followed entity-slot history, so a room spawned
+  after a different room order missed: `world_key` now hashes canonically sorted records with assets and
+  bone ranges by content (r2353), and the GI voxelizer combines shared cells in signature order rather
+  than slot order (r2354). GPU tests hold a runtime-swapped room's key and faces to a fresh world's, with
+  and without a `GiVolume`. Usage: `ludion docs reflection-probes` "Probes spawned at runtime". Owed:
+  pinned GI re-check and export reach (`Plan/owed.md`).
+
 ## Deferred, with triggers
 
 - **Temporal SSR:** decision 12's trigger.
 - **Probe streaming (camera-driven residency):** decision 21's trigger.
 - **Cached probes on verification paths:** decision 22's trigger.
+- **Partial or static-driven probe refreeze:** decision 32's trigger.
 - **A separate projection box:** a real level whose influence volume and room shape differ, and a
   sitting judges the single box wrong.
 - **Real-time probe recapture:** a lighting change the relight in decision 17 cannot express, such as
