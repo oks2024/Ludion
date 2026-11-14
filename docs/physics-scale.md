@@ -26,6 +26,12 @@ Unpinned M5, 2026-11-09, medians of three runs — **indicative, not authoritati
 
 Reproduce: a game enables the timers with the `ludion` crate's `physics-profiler` feature. `cargo test -p ludion-engine --release --features physics-profiler --test it -- horde_bench --ignored --nocapture`. It checks `budgets/pinned-<box>-physics-horde.toml` when one exists for the platform. Its table (d) compares the dispersed walk with a converged arm, where every motor walks to one point and the crowd piles up.
 
+## Tick 1 after a load
+
+A scene load or switch builds the physics world and runs its first collision detection at commit, so the one-time settle cost is paid in the load, not in the frame the scene appears in. Tick 1 reuses that work unless a Sim system changed an input physics reads (a body's `Velocity`, `Collider`, pose, a joint) before `physics_write`; then it builds cold as before, with the identical result. `PhysicsWorld::last_step_primed()` tells which happened. A restore never primes.
+
+The settle bench (`cargo test -p ludion-engine --release --features physics-profiler --test it -- settle_bench --ignored --nocapture`) measures a 2,000-body jointed town primed vs cold, and `budgets/pinned-rtx3090-physics-settle.toml` gates the primed tick 1.
+
 ## Crowds of motors
 
 Motor casts dominate a character crowd, not contacts. Move many motors per tick with `move_characters` (`ludion docs motor`, "Batch moves"): the casts run in parallel and the result does not depend on the thread count.

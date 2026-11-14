@@ -1,0 +1,39 @@
+# Physics settle budget — pinned RTX 3090, release, 8 sim threads.
+#
+# Gates the load-time prime (the external game's settle request): a 2,000-body jointed town (50 walls of 32 glued
+# bricks and 8 two-part compound tiles, 1,200 fixed joints, `solver_iterations: 8`), primed at scene
+# commit, measured by `settle_bench.rs` over 60 frames from tick 1 (`warmup = 0`, so the tick-1 settle
+# frame is in the window):
+#
+#   cargo test -p ludion-engine --release --features physics-profiler --test it -- settle_bench --ignored --nocapture
+#
+# Regression tripwires on the primed arm, not performance goals. All values are milliseconds.
+# Re-calibrate deliberately (a re-bless event) — `ludion explain L4005`. Its Apple M4 twin is owed.
+#
+# **Why the max ceilings have thin headroom.** `[systems_max] physics_step = 12.0` and
+# `frame_total_max_ms = 16.667` are the request's targets (the tick-1 step under 12 ms, the whole
+# tick-1 frame under one 60 fps frame), not 2x tripwires; the worst frame of the window is tick 1. The
+# bench is `#[ignore]` and runs on an idle box, which is what keeps a worst frame that close to its
+# ceiling honest. The median ceilings below are the usual ~2x.
+#
+# MEASURED 2026-11-14 over three bench runs (primed arm, tick 1 = the worst frame of the window):
+#
+#                    t1 physics_step   t1 physics_write   t1 frame_total   cold t1 step / write / frame
+#   run 1            9.891             0.720              11.869           17.9 / 4.2 / 23.9
+#   run 2            8.268             0.408              10.303           12.5 / 2.8 / 16.1
+#   run 3            6.487             0.398               7.874           13.0 / 3.6 / 17.4
+#
+# 60-frame primed medians (run 3): physics_step 2.316, physics_write 0.587, physics_mirror 0.206,
+# frame_total 3.881. Prime cost at load: 8.6-11.2 ms of a 340-476 ms load (2.3-2.8%).
+
+threads = 8
+frame_total_ms = 7.8
+frame_total_max_ms = 16.667
+
+[systems]
+physics_write  = 1.2
+physics_step   = 4.7
+physics_mirror = 0.42
+
+[systems_max]
+physics_step = 12.0

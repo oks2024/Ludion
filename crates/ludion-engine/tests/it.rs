@@ -115,6 +115,7 @@ mod run_recording;
 mod run_save;
 mod scatter_bench;
 mod scene_paths;
+mod settle_bench;
 mod shutdown;
 mod skin_bone;
 mod skin_pose;
