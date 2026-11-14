@@ -111,6 +111,7 @@ mod render_view;
 mod replay_game_identity;
 mod replay_playback;
 mod replay_with;
+mod room_prewarm_bench;
 mod run_recording;
 mod run_save;
 mod scatter_bench;

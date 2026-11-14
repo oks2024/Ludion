@@ -762,6 +762,8 @@ grilling, Serious Isaac 0039) and resolve G6 and open rung 2b.
 
 0042 upload prewarm shipped (decision 50).
 
+`room_prewarm_bench` (unpinned M5, not authoritative): GI share 7.34 ms (prewarmed swap, tick + render, GI on 92.5 ms vs off 85.1 ms; extract `Gi` phase 0.21 ms), under the 10 ms 42-03 trigger; the prewarm takes the swap tick from 10.6 ms to 0.9 ms and its uploads from 30 meshes and 30 maps to none.
+
 Serious Isaac 0034 shipped (r2294): `culling.lod_radii` and `docs culling` "Mesh LOD"; the tighter skinned radius (decision 22 amended, below) shipped for the 0034 amendment: `cull::skinned_lod_radius`, `CullItem.lod_radius`, `docs culling` "Mesh LOD"; Windows `lod-hall` and `crowd-animation` re-blessed, macOS twins owed to the M4.
 
 Design written 2026-09-30. Rung 0 shipped (Clockout 0030; `Visibility`, `examples/gallery/visibility.yaml`). Rung 2a shipped for request 0008 (decisions 7–20; the W2 wave set above); the bench figures are below.
