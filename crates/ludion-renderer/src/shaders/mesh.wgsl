@@ -270,7 +270,7 @@ fn wrap_band(
             if (is_viewmodel) {
                 sun_point = camera.cam_pos.xyz;
             }
-            sum += sun.color.rgb * sun_shadow(sun_point) * excess;
+            sum += sun.color.rgb * sun_shadow(sun_point, n) * excess;
         }
     }
     return sum * diffuse * direct_ao;

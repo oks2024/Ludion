@@ -11117,6 +11117,181 @@ mod tests {
             .count() as u32
     }
 
+    /// Pixel regions of a [`grazing_scene`] frame, `(x0, y0, x1, y1)` inclusive.
+    struct GrazingProbes {
+        /// Open ground well upwind of the caster.
+        upwind: (u32, u32, u32, u32),
+        /// Open ground beside the shadow, clear of its footprint and penumbra.
+        beside: (u32, u32, u32, u32),
+        /// Rows that cross the shadow's far edge.
+        tip_rows: Vec<u32>,
+        /// First column geometrically past the shadow's far edge, penumbra excluded.
+        lit_from: u32,
+        /// Last column of the frame.
+        last: u32,
+        /// A pixel deep in the umbra.
+        umbra: (u32, u32),
+    }
+
+    /// A top-down camera over a ground and a 1 m cube, lit by a sun 9° above the horizon (a grazing
+    /// angle, where the receiver's depth slope across a shadow-map footprint is steep). The cube's
+    /// shadow runs about 6.5 m to the right; the frame is 14 m wide.
+    fn grazing_scene(
+        angular_radius: f32,
+        cascaded: bool,
+        (w, h): (u32, u32),
+    ) -> (RenderScene, GrazingProbes) {
+        let mut scene = RenderScene::empty((w, h));
+        scene.post = Some(exact_post());
+        scene.ambient = [0.1; 3];
+        let eye = Vec3::new(0.0, 40.0, 0.0);
+        let aspect = crate::scene::aspect_ratio((w, h));
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_to_rh(eye, -Vec3::Y, -Vec3::Z),
+            // A 20° horizontal fov: the frame spans about 14 m of ground.
+            projection: Mat4::perspective_rh(
+                2.0 * (10.0_f32.to_radians().tan() / aspect).atan(),
+                aspect,
+                0.1,
+                1000.0,
+            ),
+            position: eye,
+        };
+        let elevation = 9.0_f32.to_radians();
+        let mut sun = test_sun_framed(
+            Vec3::new(elevation.cos(), -elevation.sin(), 0.15),
+            Vec3::splat(3.0),
+            0.05 / 48.0,
+            (10.0, 1.0, 40.0),
+        );
+        sun.angular_radius = angular_radius;
+        if cascaded {
+            sun.cascades = Some(crate::scene::SunCascadeConfig {
+                count: 3,
+                shadow_distance: 50.0,
+                splits: Some([0.7, 0.9, 1.0]),
+                shadow_near: -24.0,
+                shadow_far: 24.0,
+            });
+        }
+        let dir = sun.direction;
+        scene.sun = Some(sun);
+        scene.meshes = vec![
+            ground(60.0),
+            cube(Vec3::new(-2.0, 0.5, 0.0), Vec3::ONE, [0.8; 4]),
+        ];
+        // The sun ray from a point meets the ground `y / -dir.y` along it: the cube top's far edge, and
+        // the cube centre's shadow, deep inside the umbra.
+        let at_ground = |from: Vec3| from + dir * (from.y / -dir.y);
+        let pixel = |p: Vec3| project_pixel(&scene, Vec3::new(p.x, 0.0, p.z), (w, h));
+        let tip_x = at_ground(Vec3::new(-1.5, 1.0, 0.0)).x;
+        let umbra = pixel(at_ground(Vec3::new(-2.0, 0.5, 0.0)));
+        let (ux0, uy0) = pixel(Vec3::new(-6.8, 0.0, -3.3));
+        // A 16 texel filter at this sun reaches about 3 m along the ground, so open ground is only
+        // "upwind" once the cube's lit face is out of that reach.
+        let (ux1, uy1) = pixel(Vec3::new(-5.5, 0.0, 3.3));
+        let (bx0, by0) = pixel(Vec3::new(-6.8, 0.0, -3.3));
+        let (bx1, by1) = pixel(Vec3::new(6.8, 0.0, -1.6));
+        let tip_rows = [0.7, 0.9, 1.1]
+            .map(|z| pixel(Vec3::new(0.0, 0.0, z)).1)
+            .to_vec();
+        let (lit_from, _) = pixel(Vec3::new(tip_x + 0.25, 0.0, 0.0));
+        (
+            scene,
+            GrazingProbes {
+                upwind: (ux0, uy0, ux1, uy1),
+                beside: (bx0, by0, bx1, by1),
+                tip_rows,
+                lit_from,
+                last: w - 1,
+                umbra,
+            },
+        )
+    }
+
+    /// With a grazing sun, a penumbra must not dirty lit ground: open ground upwind of and beside the
+    /// shadow renders the same bytes as the same scene with sun shadows off (same disc specular, no
+    /// shadow map), and the lit ground just past the shadow's far edge never darkens to the umbra. The
+    /// hard sun (θ = 0) is held to the same equality as a sanity check on the anchored path only: the
+    /// cascaded hard PCF is itself acned at a grazing sun (pre-existing). Anchored and cascaded paths.
+    #[test]
+    fn needs_gpu_sun_grazing_penumbra_keeps_lit_ground_clean() {
+        let Some(mut renderer) =
+            sun_renderer("sun_grazing_penumbra_keeps_lit_ground_clean", 512, 3)
+        else {
+            return;
+        };
+        let params = renderer.quality_params;
+        let (w, h) = (256u32, 128u32);
+        for cascaded in [false, true] {
+            let mut render = |angular_radius: f32, shadows: bool| {
+                renderer.set_quality(
+                    Quality {
+                        shadows,
+                        ..Quality::FULL
+                    },
+                    params,
+                );
+                let (scene, probes) = grazing_scene(angular_radius, cascaded, (w, h));
+                let img = renderer
+                    .render(&scene, FrameSize::native(w, h))
+                    .expect("render");
+                let again = renderer
+                    .render(&scene, FrameSize::native(w, h))
+                    .expect("render again");
+                assert_eq!(img.rgba, again.rgba, "two renders agree byte for byte");
+                (img, probes)
+            };
+            let soft_angle = 3.0_f32.to_radians();
+            let (soft_open, _) = render(soft_angle, false);
+            let (soft, probes) = render(soft_angle, true);
+            let (hard_open, _) = render(0.0, false);
+            let (hard, _) = render(0.0, true);
+            let mut pairs = vec![("θ=3°", &soft, &soft_open)];
+            if !cascaded {
+                pairs.insert(0, ("θ=0", &hard, &hard_open));
+            }
+            for (label, shadowed, open) in pairs {
+                for (name, (x0, y0, x1, y1)) in
+                    [("upwind", probes.upwind), ("beside", probes.beside)]
+                {
+                    let (mut differing, mut drop) = (0, 0);
+                    let mut bounds = (u32::MAX, u32::MAX, 0, 0);
+                    for y in y0..=y1 {
+                        for x in x0..=x1 {
+                            let i = ((y * w + x) * 4) as usize;
+                            if shadowed.rgba[i..i + 4] != open.rgba[i..i + 4] {
+                                differing += 1;
+                                bounds = (
+                                    bounds.0.min(x),
+                                    bounds.1.min(y),
+                                    bounds.2.max(x),
+                                    bounds.3.max(y),
+                                );
+                                drop =
+                                    drop.max(luma(open, x, y).saturating_sub(luma(shadowed, x, y)));
+                            }
+                        }
+                    }
+                    assert_eq!(
+                        differing, 0,
+                        "cascaded={cascaded} {label}: {differing} {name} ground pixels differ from the unshadowed render (max luma drop {drop}, within {bounds:?} of the region {x0},{y0}..{x1},{y1})"
+                    );
+                }
+            }
+            let umbra = luma(&soft, probes.umbra.0, probes.umbra.1);
+            for &row in &probes.tip_rows {
+                for x in probes.lit_from..=probes.last {
+                    let l = luma(&soft, x, row);
+                    assert!(
+                        l > umbra + 2,
+                        "cascaded={cascaded}: lit pixel ({x}, {row}) is umbra-dark: {l} vs umbra {umbra}"
+                    );
+                }
+            }
+        }
+    }
+
     /// The sun's penumbra grows with the blocker's distance when it has an angular radius: a slab 6 m up
     /// casts a wider transition than one at 1 m, and both are wider than the hard PCF edge of a sun with
     /// none. Anchored and cascaded paths.
@@ -11182,7 +11357,14 @@ mod tests {
         let (w, h) = (256u32, 64u32);
         for cascaded in [false, true] {
             let render = |angular_radius: f32| {
-                let (scene, _) = penumbra_scene(1.0, angular_radius, cascaded, (w, h));
+                let (mut scene, _) = penumbra_scene(1.0, angular_radius, cascaded, (w, h));
+                // A 0.1 m post in the lit part of the frame: a caster thinner than the classifier's gather
+                // spacing, whose narrow shadow the PCF fallback must still render as the hard edge does.
+                scene.meshes.push(cube(
+                    Vec3::new(0.6, 0.5, 0.0),
+                    Vec3::new(0.1, 1.0, 0.1),
+                    [0.8; 4],
+                ));
                 renderer
                     .render(&scene, FrameSize::native(w, h))
                     .expect("render")
@@ -17082,6 +17264,61 @@ mod tests {
         let lanes = sun_cascade_lanes(Some(&fit), &lanes_sun(), Mat4::IDENTITY);
         let masked = build_sun(&scene, false, &pcf_only, &lanes);
         assert_eq!(masked.cascade_count, 0);
+    }
+
+    /// The penumbra growth is the map's own geometry: texels per unit of light-NDC depth,
+    /// `depth_range · tan θ / texel`, for the anchored box and for every fitted cascade, and exactly 0.0
+    /// (the shader's gate for the PCF loops) at θ = 0 or without a shadow map.
+    #[test]
+    fn build_sun_penumbra_scale_matches_the_map_geometry() {
+        let (extent, near, far, size) = (20.0_f32, 1.0_f32, 40.0_f32, 512u32);
+        let theta = 3.0_f32.to_radians();
+        let params = QualityParams {
+            shadow_map_size: size,
+            ..QualityParams::FULL
+        };
+        let framed = |angular_radius: f32| {
+            let mut scene = RenderScene::empty((8, 8));
+            let mut sun = test_sun_framed(
+                Vec3::new(0.3, -1.0, 0.2),
+                Vec3::ONE,
+                0.002,
+                (extent, near, far),
+            );
+            sun.angular_radius = angular_radius;
+            scene.sun = Some(sun);
+            scene
+        };
+        let fit = lanes_fit(2);
+        let lanes = sun_cascade_lanes(Some(&fit), &lanes_sun(), Mat4::IDENTITY);
+
+        let lit = build_sun(&framed(theta), true, &params, &lanes);
+        let want = (far - near) * theta.tan() / (2.0 * extent / size as f32);
+        assert!(
+            (lit.penumbra_anchored - want).abs() <= want * 1e-5,
+            "anchored {} vs {want}",
+            lit.penumbra_anchored
+        );
+        for (i, cascade) in fit.cascades[..2].iter().enumerate() {
+            let want = cascade.depth_range * theta.tan() / cascade.texel;
+            let got = lit.cascade_params[i][3];
+            assert!(
+                (got - want).abs() <= want * 1e-5,
+                "cascade {i}: {got} vs {want}"
+            );
+        }
+
+        for (scene, shadowed) in [
+            (framed(0.0), true),
+            (framed(theta), false),
+            (framed(0.0), false),
+        ] {
+            let sun = build_sun(&scene, shadowed, &params, &lanes);
+            assert_eq!(sun.penumbra_anchored, 0.0);
+            for lane in sun.cascade_params {
+                assert_eq!(lane[3], 0.0);
+            }
+        }
     }
 
     /// The `sun_cascades` view's twins are drawn only with the view asked, a sun, cascades fitted and

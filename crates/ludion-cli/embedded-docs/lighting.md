@@ -45,8 +45,9 @@ it with `Environment.sun_disc_size = 2 × angular_radius` for a matching sky dis
 is the only specular source; the sky disc is not also reflected).
 - `0` is a point sun: the plain PCF shadow, byte-identical to a scene that never had the field.
 - Range: the real sun or moon (`~0.27`) gives a subtle edge; a painted look wants several degrees. The
-  width saturates at 16 shadow-map texels (per cascade, or on the anchored map), so past that more
-  degrees change nothing; finer maps and tighter cascades leave more room.
+  width saturates at 16 shadow-map *texels* (per cascade, or on the anchored map), so past that more
+  degrees change nothing; finer maps and tighter cascades make the saturated penumbra **narrower** in
+  metres, and the quality tier changes the look (medium's 1024 map saturates 2× wider than full's 2048).
 - An edge narrower than 1.5 texels uses the plain PCF filter.
 - Cost: a soft sun adds about 4–5% frame GPU at medium–full on the reference RTX 3090 at 1080p,
   scaling with the shadowed screen coverage. Quality tiers scale the taps (blocker/filter: 16/32

@@ -1,0 +1,94 @@
+# Feature: the sun-penumbra soft shadow at a grazing sun (about 9 degrees, 3 degrees of angular
+# radius, the elevation a dusk or a shooter's low sun gives). The shadow filter must not self-shadow the
+# receiver at this angle: look for clean open ground (no black dashes at the pole's shadow tip, no
+# stipple past the post, no dotted line on the pole's lit face) and a penumbra that is crisp at the
+# pole's base and widens toward its tip. The same scene as sun-penumbra at 14 degrees.
+format: 1
+name: sun-penumbra-low - DirectionalLight angular_radius at a grazing 9 degree sun
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 5.5
+          - 13.0
+        rotation:
+          - -18.0
+          - 4.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 42.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - 0.8
+          - -0.135
+          - -0.3
+        color:
+          - 1.0
+          - 0.93
+          - 0.78
+        intensity: 2.6
+        angular_radius: 3.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 40.0
+          - 1.0
+          - 40.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.52
+          - 0.5
+          - 0.46
+          - 1.0
+        roughness: 0.9
+  - name: tall-pole
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 3.0
+          - -1.0
+        scale:
+          - 0.5
+          - 6.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.78
+          - 0.3
+          - 0.26
+          - 1.0
+        roughness: 0.7
+  - name: short-post
+    components:
+      Transform:
+        translation:
+          - -2.0
+          - 0.5
+          - 1.5
+        scale:
+          - 0.5
+          - 1.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.82
+          - 0.8
+          - 0.78
+          - 1.0
+        roughness: 0.6
