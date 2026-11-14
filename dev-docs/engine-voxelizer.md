@@ -52,8 +52,10 @@ instead of re-hashing the grid's contents every frame.
 
 - **The combine rule is stated, not emergent.** Occupancy is an order-independent OR — any
   contribution marks a cell filled. Albedo and emissive are **last-writer-wins**, iterating instances
-  in ascending entity-slot order (the same order `extract::place` walks — the `WorldHash` order) and,
-  within one voxel model, its cells in ascending flat-index order. Stated because GPU float scatter has
+  in ascending order of their signature bytes (`instance_bytes`, a content order, so the grid is a
+  function of the instance *set*, independent of entity slots, spawn history and which instances sit
+  in the kept statics) and, within one voxel model, its cells in ascending flat-index order (an asset
+  mesh's triangles in mesh order). The sort runs on a miss only; `signature` stays slot-ordered. Stated because GPU float scatter has
   no such order and the CPU path must pick one deterministically when two instances' fills overlap one
   world cell.
 - **Voxel-model emissive mirrors the render path's material selection.** `deposit_voxels` picks

@@ -315,8 +315,9 @@ fn grid_fingerprint(grid: &WorldVoxelGrid) -> u64 {
         })
 }
 
-/// A scene with no asset mesh keeps the grid it had before asset meshes were voxelized: the pinned
-/// fingerprint is the value the primitive + voxel-model path produced beforehand.
+/// A scene with no asset mesh keeps the grid the primitive + voxel-model path produces: the pinned
+/// fingerprint is that grid under the signature-byte combine order (the plane and the cube share
+/// cells, so it moved when the order stopped being entity-slot).
 #[test]
 fn a_scene_without_asset_meshes_keeps_its_pinned_grid() {
     let dir = project_with_voxel_model("pinned-grid");
@@ -365,7 +366,7 @@ fn a_scene_without_asset_meshes_keeps_its_pinned_grid() {
         .unwrap();
     assert_eq!(
         grid_fingerprint(&grid),
-        16_562_896_631_023_753_224,
+        1_635_338_734_726_045_416,
         "pinned grid fingerprint"
     );
 
@@ -558,12 +559,12 @@ fn a_voxel_model_with_no_authored_material_deposits_the_components_emissive() {
 }
 
 /// **The last-writer rule, pinned across instances.** Two unit cubes of different colors share every
-/// cell; the combine rule says the one later in ascending entity-slot order wins, so the shared cell
-/// carries the second-spawned cube's channels. Swapping the spawn order flips the result — which is
-/// what rules out first-writer-wins and descending order, neither of which the two-run bit-identity
-/// test can tell apart from this.
+/// cell; the combine rule says the one later in ascending signature-byte order wins, whatever order
+/// they were spawned in. Red's color bytes (`1.0f32` little-endian) sort after green's (`0.0`), so red
+/// carries the shared cell in both spawn orders — which rules out entity-slot order, first-writer-wins
+/// and descending order, none of which the two-run bit-identity test can tell apart from this.
 #[test]
-fn overlapping_instances_keep_the_last_writers_channels() {
+fn overlapping_instances_keep_the_later_signatures_channels() {
     const RED: ([f32; 4], f32) = ([1.0, 0.0, 0.0, 1.0], 1.0);
     const GREEN: ([f32; 4], f32) = ([0.0, 1.0, 0.0, 1.0], 2.0);
 
@@ -605,13 +606,13 @@ fn overlapping_instances_keep_the_last_writers_channels() {
 
     assert_eq!(
         shared_cell(RED, GREEN),
-        GREEN,
-        "the later entity slot wins the shared cell"
+        RED,
+        "the later signature bytes win the shared cell"
     );
     assert_eq!(
         shared_cell(GREEN, RED),
         RED,
-        "and swapping the authoring order flips it — the rule is order, not color"
+        "and swapping the authoring order changes nothing — the rule is content, not slot"
     );
 }
 

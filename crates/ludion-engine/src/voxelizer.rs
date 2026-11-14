@@ -14,12 +14,13 @@
 //! rather than emergent:
 //!
 //! - **occupancy is OR** — any contribution marks the cell filled;
-//! - **albedo and emissive are LAST WRITER WINS**, iterating instances in ascending entity-slot
-//!   order (exactly the order [`place`](crate::extract::place) walks, which is the `WorldHash`
-//!   order) and, within one voxel model, its cells in ascending flat-index order.
+//! - **albedo and emissive are LAST WRITER WINS**, iterating instances in ascending order of their
+//!   signature bytes ([`instance_bytes`]: model, colour, emissive, solid) and, within one voxel
+//!   model, its cells in ascending flat-index order (an asset mesh's triangles in mesh order).
 //!
-//! That rule is what makes the grid a pure function of the world: same scene ⇒ bit-identical
-//! buffers, on any machine, at any thread count.
+//! The instance order is a content order, so the grid is a pure function of the *set* of resolved
+//! instances: independent of entity slots, spawn history and which instances sit in the kept
+//! statics. Same scene ⇒ bit-identical buffers, on any machine, at any thread count.
 //!
 //! # What each source contributes (`Plan/gi-wave0-voxelizer.md` §8)
 //!
@@ -207,12 +208,32 @@ pub(crate) fn voxelize(
     let mut grid = allocate(bounds, cell_size)?;
     #[cfg(test)]
     RASTERIZATIONS.with(|count| count.set(count.get() + 1));
-    for instance in ordered() {
-        rasterize(&mut grid, instance, &mut boxes);
-    }
+    rasterize_ordered(&mut grid, ordered(), &mut boxes);
     Ok(Voxelized {
         grid: assets.set_voxelization(signature, Some(Arc::new(grid.sealed()))),
     })
+}
+
+/// Rasterizes `instances` into `grid`, last writer winning in ascending signature-byte order, a
+/// content order: the grid is a function of the instance set, not of entity slots or of which
+/// instances sit in the kept statics. Exact byte ties are the same deposit, so their order cannot
+/// matter.
+fn rasterize_ordered<'a>(
+    grid: &mut WorldVoxelGrid,
+    instances: impl Iterator<Item = &'a Instance>,
+    boxes: &mut MeshBoxes,
+) {
+    let mut keyed: Vec<(Vec<u8>, &Instance)> = instances
+        .map(|instance| {
+            let mut bytes = Vec::with_capacity(96);
+            instance_bytes(instance, &mut bytes);
+            (bytes, instance)
+        })
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    for (_, instance) in keyed {
+        rasterize(grid, instance, boxes);
+    }
 }
 
 // Test-only. Counts completed rasterizations — the proof a signature hit skips the whole per-cell
@@ -230,7 +251,7 @@ pub(crate) fn rasterization_count() -> u32 {
 }
 
 /// The `O(instances)` cache key: the authored `cell_size`, then every resolved instance in the
-/// pinned ascending-entity-slot order, each contributing exactly the values [`rasterize`] reads —
+/// resolved order (statics' digest first, then ascending entity slot), each contributing exactly the values [`rasterize`] reads —
 /// its model matrix, its color, its emissive, and a tag for the solid it fills from (a voxel model
 /// by its document's content hash, so the model's *contents* are covered without walking them).
 ///
@@ -413,7 +434,7 @@ pub(crate) fn skip_report(
 }
 
 /// Resolves each placed mesh into the geometry the rasterizer needs, keeping the ascending
-/// entity-slot order the combine rule depends on, and counts what it drops. Instances whose
+/// entity-slot order the signature hashes, and counts what it drops. Instances whose
 /// transform sends a corner to a non-finite coordinate are dropped: they have no world box the grid
 /// can be sized from, and skipping them is what keeps the extent arithmetic finite (the
 /// `build_sun` posture — a degenerate input yields an omission, never a NaN).
@@ -1083,7 +1104,7 @@ const SHELL_INFLATION: f32 = 1e-4;
 ///
 /// Triangles are walked in index order and the cells of one triangle with `z` outer, `x` inner, all
 /// through [`write_cell`], so a later triangle overwrites an earlier one's albedo and emissive — the
-/// combine rule, unchanged. Albedo is `mean(three vertex colours) × instance colour ×
+/// combine rule within one instance; across instances it is ascending signature-byte order. Albedo is `mean(three vertex colours) × instance colour ×
 /// MeshData::base_color_mean`; emissive is the mean of the three vertices' authored emissive when the
 /// document authors a material (`authored_material`, the render path's selection) and the
 /// instance's otherwise. A triangle with an out-of-range index is skipped.
@@ -1296,7 +1317,7 @@ fn cell_center(grid: &WorldVoxelGrid, cell: [u32; 3]) -> Vec3 {
 }
 
 /// Marks a cell filled and overwrites its shading channels — the last-writer half of the combine
-/// rule, in the one place it happens.
+/// rule, in the one place it happens. Which writer is last is [`voxelize`]'s instance order.
 fn write_cell(grid: &mut WorldVoxelGrid, cell: [u32; 3], albedo: [f32; 4], emissive: f32) {
     let index = grid.index(cell);
     grid.occupancy[index] = true;
@@ -1313,6 +1334,92 @@ fn modulate(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cube(x: f32, color: [f32; 4], emissive: f32) -> Instance {
+        Instance {
+            model: Mat4::from_translation(Vec3::new(x, 0.0, 0.0)),
+            color,
+            emissive,
+            solid: Solid::Cube,
+        }
+    }
+
+    /// Builds the grid `voxelize` would for these kept statics and dynamic instances.
+    fn grid_of(statics: &StaticGi, instances: &[Instance]) -> WorldVoxelGrid {
+        let mut boxes = MeshBoxes::new();
+        let all = || statics.instances.iter().chain(instances);
+        let bounds = scene_bounds(all(), &mut boxes).expect("the cubes have bounds");
+        let mut grid = allocate(bounds, 1.0).expect("the grid fits");
+        rasterize_ordered(&mut grid, all(), &mut boxes);
+        grid.sealed()
+    }
+
+    fn signature_bytes(instance: &Instance) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        instance_bytes(instance, &mut bytes);
+        bytes
+    }
+
+    /// Two cubes cover the same cells with different colour and emissive; a third sits apart. Any
+    /// order of the instances gives one grid, and the shared cells hold the cube whose signature
+    /// bytes sort last. Equal signature bytes are one deposit, so a tie cannot change the grid.
+    #[test]
+    fn a_permuted_instance_order_voxelizes_identically() {
+        let red = || cube(0.0, [1.0, 0.0, 0.0, 1.0], 0.0);
+        let blue = || cube(0.0, [0.0, 0.0, 1.0, 1.0], 2.0);
+        let far = || cube(6.0, [0.0, 1.0, 0.0, 1.0], 0.0);
+        let statics = StaticGi::default();
+        let forward = grid_of(&statics, &[red(), blue(), far()]);
+        let backward = grid_of(&statics, &[far(), blue(), red()]);
+        assert_eq!(forward.albedo, backward.albedo);
+        assert_eq!(forward.emissive, backward.emissive);
+        assert_eq!(forward.occupancy, backward.occupancy);
+        assert_eq!(forward.hash, backward.hash);
+
+        let (last, first) = if signature_bytes(&red()) > signature_bytes(&blue()) {
+            (red(), blue())
+        } else {
+            (blue(), red())
+        };
+        let holding = |who: &Instance| {
+            (0..forward.occupancy.len())
+                .filter(|&i| forward.albedo[i] == who.color && forward.emissive[i] == who.emissive)
+                .count()
+        };
+        assert!(
+            holding(&last) > 0,
+            "the later signature owns the shared cells"
+        );
+        assert_eq!(
+            holding(&first),
+            0,
+            "the earlier signature is overwritten everywhere"
+        );
+    }
+
+    /// Which instances sit in the kept statics does not change the grid.
+    #[test]
+    fn a_static_set_does_not_change_the_grid() {
+        let make = || {
+            vec![
+                cube(0.0, [1.0, 0.0, 0.0, 1.0], 0.0),
+                cube(0.0, [0.0, 0.0, 1.0, 1.0], 2.0),
+                cube(4.0, [0.0, 1.0, 0.0, 1.0], 0.0),
+            ]
+        };
+        let dynamic = grid_of(&StaticGi::default(), &make());
+        let mut kept = make();
+        let rest = kept.split_off(1);
+        let split = grid_of(
+            &StaticGi {
+                instances: kept,
+                digest: 0,
+            },
+            &rest,
+        );
+        assert_eq!(dynamic.hash, split.hash);
+        assert_eq!(dynamic.albedo, split.albedo);
+    }
 
     /// The suggestion walks whole doublings until the count fits: eight times too many cells is one
     /// doubling (each divides the count by eight).

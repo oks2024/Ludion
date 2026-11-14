@@ -1148,6 +1148,110 @@ entities:
         let _ = std::fs::remove_dir_all(&fresh_dir);
     }
 
+    /// [`ROOM_BASE`] plus a `GiVolume`, so the world voxelizes.
+    fn room_base_gi() -> String {
+        format!(
+            "{ROOM_BASE}  - name: gi
+    components:
+      GiVolume:
+        cell_size: 1.0
+"
+        )
+    }
+
+    /// A prefab of cubes that sit in the floor's top cell row, each its own colour, so the cells
+    /// they share with the floor and with each other have several writers.
+    fn gi_room(name: &str, cubes: &[(f32, [f32; 3])]) -> String {
+        let mut text = format!("format: 1\nkind: prefab\nname: {name}\nentities:\n");
+        for (i, (x, [r, g, b])) in cubes.iter().enumerate() {
+            text.push_str(&format!(
+                "  - name: cube-{i}
+    components:
+      Transform:
+        translation:
+          - {x}
+          - -0.5
+          - 0.0
+      Mesh:
+        shape: cube
+        color:
+          - {r}
+          - {g}
+          - {b}
+          - 1.0
+"
+            ));
+        }
+        text
+    }
+
+    /// A store engine on `dir` over [`room_base_gi`], with the two GI room prefabs on disk.
+    fn gi_room_engine(dir: &Path) -> Engine {
+        std::fs::write(
+            dir.join("a.prefab.yaml"),
+            gi_room(
+                "room-a",
+                &[(-3.0, [1.0, 0.0, 0.0]), (-3.0, [0.0, 1.0, 0.0])],
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("b.prefab.yaml"),
+            gi_room("room-b", &[(2.0, [0.0, 0.0, 1.0]), (2.0, [1.0, 1.0, 0.0])]),
+        )
+        .unwrap();
+        let mut engine = engine(dir, &room_base_gi());
+        engine.set_textures(TextureSource::Cooked);
+        engine.set_probes(ProbeSource::Store);
+        engine
+    }
+
+    /// In a world with a `GiVolume` the voxel grid, and so the probe key, ignores spawn history: room
+    /// B after room A's despawn keys and voxelizes as room B spawned on a fresh engine. The rooms'
+    /// cubes overlap the floor and each other with different colours, so entity-slot order would
+    /// otherwise pick the surviving albedo.
+    #[test]
+    fn needs_gpu_a_gi_room_swap_keys_as_a_fresh_room() {
+        let dir = project("gi-swap");
+        let mut engine = gi_room_engine(&dir);
+        if no_gpu(&mut engine) {
+            return;
+        }
+        let a_ids = swap_in(&mut engine, "a.prefab.yaml");
+        render_resolve(&mut engine);
+        for id in a_ids {
+            engine.world_mut().despawn(id).unwrap();
+        }
+        swap_in(&mut engine, "b.prefab.yaml");
+        let swapped = render_resolve(&mut engine);
+
+        let fresh_dir = project("gi-swap-fresh");
+        let mut fresh = gi_room_engine(&fresh_dir);
+        swap_in(&mut fresh, "b.prefab.yaml");
+        let fresh_b = render_resolve(&mut fresh);
+
+        let grid_hash = |engine: &mut Engine| {
+            engine
+                .extract_render_scene(64, 64)
+                .expect("extract")
+                .voxel
+                .as_ref()
+                .expect("a GiVolume builds a grid")
+                .hash
+        };
+        assert_eq!(
+            grid_hash(&mut engine),
+            grid_hash(&mut fresh),
+            "the voxel grid depends on spawn history"
+        );
+        assert_eq!(
+            swapped.probes[0].key, fresh_b.probes[0].key,
+            "a runtime swap and a fresh world keyed differently under a GiVolume"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&fresh_dir);
+    }
+
     /// The bake hook fills the store for runtime-spawned rooms under the keys a `Store` host computes
     /// after the game's own swap, coverage reports a miss before a bake and a hit after, and `force`
     /// reaches every world.
