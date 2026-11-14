@@ -103,7 +103,8 @@ onto the volume from there. `Transform.scale` is ignored — size the shape, nev
   only the text is committed. `ludion render` and `ludion test` never read it: they capture fresh,
   so a golden never depends on whether a store exists. Hosts read it and capture on a miss.
 - **Export ships the store:** `ludion export` bakes every probe of every shipped scene against the
-  written bundle at the target's quality; a missing entry is `L1281`.
+  written bundle at the target's quality; a missing entry is `L1281`. Only scenes whose text holds a
+  probe are baked, so a `probe_bake_worlds` hook's worlds in a probe-less scene are not bundled.
 
 ## Probes spawned at runtime
 
@@ -122,6 +123,24 @@ a system calls `world.resource_mut::<ProbeRefreeze>()` then `request()` on the t
   and SSAO, SSR, shafts and DoF. Hidden meshes are not captured, but a hidden mesh without
   `GiDynamic` still enters the GI voxelization and so the key; hidden **and** `GiDynamic` keeps a
   warm set out of both. Visible `GiDynamic` meshes are captured.
+- **Baking:** register `EngineBuilder::probe_bake_worlds(|engine, i| ..)`. After the loaded world,
+  `--bake-probes` calls it for `i = 0, 1, ..` until `Ok(None)`, on one engine; it puts world `i` in
+  place as the game's swap tick leaves it (despawn the last, spawn the room, step ticks if systems
+  need them) and returns a label. The engine then re-freezes as a tick start does, so bake and play
+  key the same world. Probes carry the label as `world` in the JSON; `--bake-probe <Name>` recaptures
+  that name in every world. The hook runs after every `--bake-probes` load: return `Ok(None)` at once
+  for a scene it does not drive.
+- **Coverage gate:** after the swap tick, `engine.probe_coverage()?.check()` fails with `L1279` when
+  a probe has no store entry, so a test catches a stale store after a room edit. Needs a GPU.
+
+```rust
+let worlds = ["hall", "vault"];
+let builder = Engine::builder().probe_bake_worlds(move |engine, i| {
+    let Some(room) = worlds.get(i) else { return Ok(None) };
+    swap_room(engine, room)?; // despawn the last room, spawn this one
+    Ok(Some(room.to_string()))
+});
+```
 
 ## Gotchas
 

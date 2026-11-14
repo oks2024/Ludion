@@ -195,6 +195,8 @@
 //!   session exactly as the window button does.
 //! - **Probe refreeze** — [`ProbeRefreeze`]: the resource a system sets with `request()` on the tick
 //!   it swaps a room, so probes spawned at runtime capture the world that holds them from the next tick.
+//!   `EngineBuilder::probe_bake_worlds` bakes those rooms; `Engine::probe_coverage` returns a
+//!   [`ProbeCoverage`] whose `check()` fails with `L1279` for a probe the store lacks.
 //! - **Anti-aliasing** — [`RenderSettings`]: the resource an options-menu system sets with
 //!   `request_anti_aliasing(`[`AntiAliasing`]`)`, beating the host's choice and the builder's
 //!   `anti_aliasing` default from the next frame. Write-only: a system cannot read the effective mode.
@@ -233,18 +235,19 @@ pub use ludion_engine::{
     ParentJoint, ParticleBlend, ParticleEmitter, PathDocument, PathFollower, PathFrame,
     PathInterpolation, PathMetric, PathMode, PathOrient, PathSampler, PatternDoc, PatternPlayer,
     PlaybackControls, PlaybackInput, PlaybackOutcome, PlaybackSpeed, PointLight, PostProcess,
-    PrefabApplied, PrefabInstance, PrefabReverted, ProbeRefreeze, ProbeShape, Profile,
-    ProjectileConfig, ProjectileLook, ProjectileVisual, ProjectileVisuals, Projectiles, Projection,
-    RampSpec, ReflectionProbe, RenderExtent, RenderSettings, ReplayEntry, ReplayPlayback,
-    ReplayPlaybackConfig, Residue, ResidueStore, ResumeOutcome, RigConfig, RigMode, RigState,
-    RunRecording, RunRecordingConfig, RunSave, SceneSwitch, ShakeConfig, Shutdown, SkinBone,
-    SpotLight, Springs, Sprite, SpriteBlend, Static, SuspendInfo, SwitchTo, Text, TileAppearance,
-    Tilemap, TimelineEntry, TrackRig, Transform, TransformHierarchy, TurnSpec, UiList, UiListItem,
-    UiRect, UiText, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens,
-    Visibility, Volley, VolleyCenter, VolleyShape, WorldPose, add_fov_kick, add_kick, add_look,
-    add_look_counts, add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age,
-    bullet_is_alive, bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade,
-    debug_draw, despawn_instance, first_person_eye, fits_character, lane_error_colour, lane_frame,
+    PrefabApplied, PrefabInstance, PrefabReverted, ProbeCoverage, ProbeCoverageEntry,
+    ProbeRefreeze, ProbeShape, Profile, ProjectileConfig, ProjectileLook, ProjectileVisual,
+    ProjectileVisuals, Projectiles, Projection, RampSpec, ReflectionProbe, RenderExtent,
+    RenderSettings, ReplayEntry, ReplayPlayback, ReplayPlaybackConfig, Residue, ResidueStore,
+    ResumeOutcome, RigConfig, RigMode, RigState, RunRecording, RunRecordingConfig, RunSave,
+    SceneSwitch, ShakeConfig, Shutdown, SkinBone, SpotLight, Springs, Sprite, SpriteBlend, Static,
+    SuspendInfo, SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
+    TransformHierarchy, TurnSpec, UiList, UiListItem, UiRect, UiText, VOLLEY_MAX_BULLETS,
+    VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Visibility, Volley, VolleyCenter,
+    VolleyShape, WorldPose, add_fov_kick, add_kick, add_look, add_look_counts, add_trauma,
+    advance_volleys, animation_events, builtin_registry, bullet_age, bullet_is_alive,
+    bullet_position, camera_relative, camera_relative_yaw, check_path, crossfade, debug_draw,
+    despawn_instance, first_person_eye, fits_character, lane_error_colour, lane_frame,
     lane_relative, load_assembly, move_character, move_character_with, move_characters, nav_steer,
     nav_update, path_follow, path_follower_motion, play_patterns, play_sound, posed_joint_world,
     prepare_map, probe_character_ground, projectiles_step, reparent, report_diagnostic,

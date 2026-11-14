@@ -479,10 +479,14 @@ struct ProbesShipped {
 
 /// A probe as the user knows it: its `Name`, else its entity.
 fn probe_label(probe: &ProbeBake) -> String {
-    probe
+    let label = probe
         .name
         .clone()
-        .unwrap_or_else(|| format!("entity {}", probe.entity.index()))
+        .unwrap_or_else(|| format!("entity {}", probe.entity.index()));
+    match &probe.world {
+        Some(world) => format!("{label} in {world}"),
+        None => label,
+    }
 }
 
 /// Checks each baked probe has its entry in the bundle's store. Reports the first missing one, the
@@ -592,6 +596,7 @@ fn parse_bake_report(stdout: &str) -> Option<(bool, ProbeBakeReport, String)> {
                 name: probe["name"].as_str().map(str::to_string),
                 key: u64::from_str_radix(probe["key"].as_str()?, 16).ok()?,
                 outcome: serde_json::from_value::<ProbeOutcome>(probe["outcome"].clone()).ok()?,
+                world: probe["world"].as_str().map(str::to_string),
             })
         })
         .collect::<Option<Vec<_>>>()?;
@@ -1210,6 +1215,7 @@ mod tests {
             name: name.map(str::to_string),
             key,
             outcome: ProbeOutcome::Captured,
+            world: None,
         }
     }
 

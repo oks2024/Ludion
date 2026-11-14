@@ -225,7 +225,8 @@ pub use prefab_clips::{
 };
 pub use prefab_ops::{PrefabApplied, PrefabReverted, revert_prefab, unpack_prefab};
 pub use probe_bake::{
-    ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeRefreeze, ProbeSource, prune_probe_store,
+    ProbeBake, ProbeBakeReport, ProbeCoverage, ProbeCoverageEntry, ProbeOutcome, ProbeRefreeze,
+    ProbeSource, prune_probe_store,
 };
 pub use probe_check::scene_probe_diagnostics;
 pub use probe_dump::{DumpedProbe, ProbeDumpOutcome, render_probe_dump};

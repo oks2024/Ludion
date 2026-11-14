@@ -373,6 +373,7 @@ pub(crate) struct RunArgs {
     /// can use, since the CLI's is built-in-only and rejects every game component with `L1013`. The
     /// scene is `--scene`, else the default scene; `--quality` applies (the store key hashes it), so
     /// bake at the quality the game will run. Needs a GPU; a scene with no probe prints an empty list.
+    /// A builder's `probe_bake_worlds` hook adds its runtime worlds; their probes carry `world`.
     #[arg(
         long,
         conflicts_with_all = ["addr", "window", "profile", "trace", "profile_replay", "check_docs", "check_scene", "replay_frames", "replay_verify", "render_out", "textures", "probes"]

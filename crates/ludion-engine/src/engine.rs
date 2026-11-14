@@ -74,7 +74,10 @@ use crate::docs::{DocKind, DocValidator, PreparedDocs};
 use crate::load_observer::{FrameLoadObserver, LoadObserver, LoadPhase};
 use crate::perf_live::{LivePerf, ProfileWindowData, Span};
 use crate::player_profile::{ProfileKind, ProfileSaveEntry};
-use crate::probe_bake::{ProbeBake, ProbeBakeReport, ProbeOutcome, ProbeRefreeze, ProbeSource};
+use crate::probe_bake::{
+    ProbeBake, ProbeBakeReport, ProbeCoverage, ProbeCoverageEntry, ProbeOutcome, ProbeRefreeze,
+    ProbeSource,
+};
 use crate::quality::QualitySetting;
 use crate::recording::{AppliedDocReload, Recorder};
 use crate::replay_playback::{
@@ -526,6 +529,9 @@ pub struct Engine {
     /// The playback-controls hook ([`EngineBuilder::playback_controls`](crate::EngineBuilder::playback_controls)).
     /// Host state: never in the world, a hash or a snapshot.
     pub(crate) playback_hook: Option<PlaybackHook>,
+    /// The extra worlds `bake_probes` walks ([`EngineBuilder::probe_bake_worlds`](crate::EngineBuilder::probe_bake_worlds)).
+    /// Host state, like the playback hook.
+    pub(crate) probe_bake_worlds: Option<crate::probe_bake::ProbeBakeWorlds>,
     /// The name of the recording playing, set for the whole playback (the cursor's absence while it
     /// ticks does not clear it).
     playback_name: Option<String>,
@@ -920,6 +926,7 @@ impl Engine {
             replay_playback: None,
             playback: None,
             playback_hook: None,
+            probe_bake_worlds: None,
             playback_name: None,
             game_version: None,
             boot_profile_pending: false,
@@ -1321,10 +1328,25 @@ impl Engine {
     ///
     /// With `force` naming a probe's `Name`, that probe's entry is deleted first and recaptured.
     ///
+    /// With a [`probe_bake_worlds`](crate::EngineBuilder::probe_bake_worlds) hook the loaded world is
+    /// baked first, then each world the hook puts in place, re-frozen as a tick start does; their
+    /// probes carry the hook's label as `world`. `force` recaptures that name in every world that has
+    /// it, and `L1280` is reported only when no world had it, after the walk.
+    ///
     /// # Errors
-    /// `L1280` if `force` names no probe; a render failure (`L2003` with no GPU) as it comes.
+    /// `L1280` if `force` names no probe; the hook's own error; a render failure (`L2003` with no GPU)
+    /// as it comes.
     pub fn bake_probes(&mut self, force: Option<&str>) -> Result<ProbeBakeReport, Diagnostic> {
         let store = crate::probe_bake::store_dir(&self.project_root);
+        if let Some(mut hook) = self.probe_bake_worlds.take() {
+            self.set_textures(TextureSource::Cooked);
+            self.set_probes(ProbeSource::Store);
+            self.probe_baking = true;
+            let walked = self.bake_hook_worlds(force, &mut hook, store);
+            self.probe_baking = false;
+            self.probe_bake_worlds = Some(hook);
+            return walked;
+        }
         let named = self.named_probes();
         if named.is_empty() {
             return match force {
@@ -1347,6 +1369,63 @@ impl Engine {
         let report = self.bake_renders(force, &named);
         self.probe_baking = false;
         report
+    }
+
+    /// The walk of a hooked bake: the loaded world, then each hook world, into one report.
+    fn bake_hook_worlds(
+        &mut self,
+        force: Option<&str>,
+        hook: &mut crate::probe_bake::ProbeBakeWorlds,
+        store: PathBuf,
+    ) -> Result<ProbeBakeReport, Diagnostic> {
+        let mut report = ProbeBakeReport {
+            store,
+            probes: Vec::new(),
+        };
+        let mut names = Vec::new();
+        self.bake_world(force, None, &mut report, &mut names)?;
+        let mut index = 0;
+        while let Some(label) = hook(self, index)? {
+            self.probe_world_stale();
+            self.freeze_probe_world_before_tick();
+            self.bake_world(force, Some(label), &mut report, &mut names)?;
+            index += 1;
+        }
+        if let Some(name) = force
+            && !names.iter().any(|n| n == name)
+        {
+            return Err(crate::probe_bake::unknown_probe(name, &names));
+        }
+        Ok(report)
+    }
+
+    /// Bakes the probes of the world as it stands, appending them to `report` under `label` and their
+    /// names to `names`. A world with no probe renders nothing.
+    fn bake_world(
+        &mut self,
+        force: Option<&str>,
+        label: Option<String>,
+        report: &mut ProbeBakeReport,
+        names: &mut Vec<String>,
+    ) -> Result<(), Diagnostic> {
+        let named = self.named_probes();
+        if named.is_empty() {
+            return Ok(());
+        }
+        for name in named.iter().filter_map(|(_, n)| n.as_ref()) {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        let force = force.filter(|name| named.iter().any(|(_, n)| n.as_deref() == Some(name)));
+        let baked = self.bake_renders(force, &named)?;
+        report
+            .probes
+            .extend(baked.probes.into_iter().map(|mut probe| {
+                probe.world = label.clone();
+                probe
+            }));
+        Ok(())
     }
 
     /// Marks the frozen probe world stale: the next tick or render re-freezes it, so a load-class
@@ -1447,6 +1526,51 @@ impl Engine {
         Ok(report)
     }
 
+    /// Which of the frozen probe world's probes the probe store holds, under the keys a `Store` host
+    /// computes for it (cooked textures, this engine's quality). Call it after the tick a
+    /// [`ProbeRefreeze`] applies at; a pending request is not yet frozen. A world with no probe gives
+    /// an empty coverage and builds no renderer.
+    ///
+    /// # Errors
+    /// `L2003` with no GPU, or the extract's own diagnostic.
+    pub fn probe_coverage(&mut self) -> Result<ProbeCoverage, Diagnostic> {
+        let store = crate::probe_bake::store_dir(&self.project_root);
+        let named = self.named_probes();
+        if named.is_empty() {
+            return Ok(ProbeCoverage {
+                store,
+                probes: Vec::new(),
+            });
+        }
+        let restore = self.textures();
+        if restore != TextureSource::Cooked {
+            self.set_textures(TextureSource::Cooked);
+        }
+        let scene = self.extract_render_scene(64, 64);
+        if restore != TextureSource::Cooked {
+            self.set_textures(restore);
+        }
+        let scene = scene.map_err(|mut d| d.swap_remove(0))?;
+        let keys = self.renderer()?.probe_keys(&scene);
+        let probes = scene
+            .probes
+            .iter()
+            .zip(keys)
+            .map(|(probe, key)| ProbeCoverageEntry {
+                entity: probe.entity,
+                name: named
+                    .iter()
+                    .find(|(id, _)| *id == probe.entity)
+                    .and_then(|(_, name)| name.clone()),
+                key,
+                stored: store
+                    .join(ludion_assets::cooked::cooked_file_name(key))
+                    .is_file(),
+            })
+            .collect();
+        Ok(ProbeCoverage { store, probes })
+    }
+
     /// The last probe resolve as a profile section: store hits against captures. `None` for a scene
     /// without probes or an engine that has not rendered.
     pub fn probe_profile(&self) -> Option<ludion_protocol::perf::ProbeProfile> {
@@ -1487,6 +1611,7 @@ impl Engine {
                     } else {
                         ProbeOutcome::Captured
                     },
+                    world: None,
                 })
             })
             .collect();

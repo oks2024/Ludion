@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use ludion_core::codes::code;
-use ludion_core::diagnostics::Diagnostic;
+use ludion_core::diagnostics::{Diagnostic, Severity};
 use ludion_core::ids::EntityId;
 use serde::{Deserialize, Serialize};
 
@@ -153,16 +153,30 @@ pub struct ProbeBake {
     pub key: u64,
     /// Whether the entry was already stored or captured now.
     pub outcome: ProbeOutcome,
+    /// The hook world's label ([`EngineBuilder::probe_bake_worlds`](crate::EngineBuilder::probe_bake_worlds));
+    /// `None` for the loaded scene's world.
+    pub world: Option<String>,
 }
 
 /// What [`Engine::bake_probes`](crate::Engine::bake_probes) did.
 ///
 /// # Example
 /// ```
-/// use ludion_engine::ProbeBakeReport;
+/// use ludion_engine::{ProbeBake, ProbeBakeReport, ProbeOutcome};
 /// let report = ProbeBakeReport { store: "probes".into(), probes: Vec::new() };
 /// assert_eq!(report.lines(), vec!["0 probes: 0 captured, 0 loaded".to_string()]);
 /// assert_eq!(report.to_json("a.yaml".as_ref(), true, &[])["probes"], serde_json::json!([]));
+///
+/// let probe = ProbeBake {
+///     entity: ludion_core::ids::EntityId::new(0, 0),
+///     name: None,
+///     key: 1,
+///     outcome: ProbeOutcome::Captured,
+///     world: None,
+/// };
+/// let report = ProbeBakeReport { store: "probes".into(), probes: vec![probe] };
+/// let json = report.to_json("a.yaml".as_ref(), true, &[]);
+/// assert!(json["probes"][0].get("world").is_none());
 /// ```
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct ProbeBakeReport {
@@ -174,18 +188,23 @@ pub struct ProbeBakeReport {
 
 impl ProbeBakeReport {
     /// The report as the wire-shaped JSON `ludion bake-probes --json` prints:
-    /// `{ok, scene, store, probes: [{entity, name, key, outcome}], diagnostics}`.
+    /// `{ok, scene, store, probes: [{entity, name, key, outcome, world?}], diagnostics}`; `world`
+    /// appears only on a hook world's probes.
     pub fn to_json(&self, scene: &Path, ok: bool, diagnostics: &[Diagnostic]) -> serde_json::Value {
         let probes: Vec<_> = self
             .probes
             .iter()
             .map(|probe| {
-                serde_json::json!({
+                let mut json = serde_json::json!({
                     "entity": probe.entity,
                     "name": probe.name,
                     "key": format!("{:016x}", probe.key),
                     "outcome": probe.outcome,
-                })
+                });
+                if let Some(world) = &probe.world {
+                    json["world"] = serde_json::json!(world);
+                }
+                json
             })
             .collect();
         serde_json::json!({
@@ -212,8 +231,13 @@ impl ProbeBakeReport {
                     ProbeOutcome::Loaded => "loaded",
                     ProbeOutcome::Captured => "captured",
                 };
+                let world = probe
+                    .world
+                    .as_ref()
+                    .map(|world| format!("{world}: "))
+                    .unwrap_or_default();
                 format!(
-                    "{} {:016x} {outcome}",
+                    "{world}{} {:016x} {outcome}",
                     probe.name.as_deref().unwrap_or("(unnamed)"),
                     probe.key
                 )
@@ -256,6 +280,94 @@ pub(crate) fn not_stored_warning(missing: &[String]) -> Diagnostic {
     }
     diagnostic
 }
+
+/// The error for a coverage check that found probes with no store entry; `missing` holds each such
+/// probe's label.
+pub(crate) fn not_stored_error(missing: &[String]) -> Diagnostic {
+    let mut diagnostic = Diagnostic::new(
+        code::REFLECTION_PROBE_NOT_STORED,
+        format!(
+            "{} reflection probes of this world have no probe-store entry{}",
+            missing.len(),
+            match missing.len().saturating_sub(LISTED) {
+                0 => String::new(),
+                more => format!(" (and {more} more)"),
+            }
+        ),
+    )
+    .with_severity(Severity::Error)
+    .with_help("bake with the game's `--bake-probes`");
+    for label in missing.iter().take(LISTED) {
+        diagnostic = diagnostic.with_related(Diagnostic::new(
+            code::REFLECTION_PROBE_NOT_STORED,
+            format!("{label} has no store entry"),
+        ));
+    }
+    diagnostic
+}
+
+/// One probe of a [`ProbeCoverage`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ProbeCoverageEntry {
+    /// The probe's entity.
+    pub entity: EntityId,
+    /// The probe entity's `Name`, if it has one.
+    pub name: Option<String>,
+    /// The store key a `Store` host computes for this world.
+    pub key: u64,
+    /// Whether the store holds the entry.
+    pub stored: bool,
+}
+
+/// Which of the frozen world's probes the probe store holds
+/// ([`Engine::probe_coverage`](crate::Engine::probe_coverage)).
+///
+/// # Example
+/// ```
+/// use ludion_engine::ProbeCoverage;
+/// let coverage = ProbeCoverage { store: "probes".into(), probes: Vec::new() };
+/// assert_eq!(coverage.missing().count(), 0);
+/// assert!(coverage.check().is_ok());
+/// ```
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct ProbeCoverage {
+    /// The store directory the entries are looked up in.
+    pub store: PathBuf,
+    /// The world's probes, in the renderer's slot order.
+    pub probes: Vec<ProbeCoverageEntry>,
+}
+
+impl ProbeCoverage {
+    /// The probes the store does not hold.
+    pub fn missing(&self) -> impl Iterator<Item = &ProbeCoverageEntry> {
+        self.probes.iter().filter(|probe| !probe.stored)
+    }
+
+    /// Fails with an `L1279` error naming every probe the store does not hold.
+    ///
+    /// # Errors
+    /// `L1279` when any probe is missing.
+    pub fn check(&self) -> Result<(), Diagnostic> {
+        let labels: Vec<String> = self
+            .missing()
+            .map(|probe| {
+                probe
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| probe.entity.to_string())
+            })
+            .collect();
+        if labels.is_empty() {
+            Ok(())
+        } else {
+            Err(not_stored_error(&labels))
+        }
+    }
+}
+
+/// The game hook behind [`EngineBuilder::probe_bake_worlds`](crate::EngineBuilder::probe_bake_worlds).
+pub(crate) type ProbeBakeWorlds =
+    Box<dyn FnMut(&mut crate::Engine, usize) -> Result<Option<String>, Diagnostic> + Send>;
 
 /// `L1280`: a forced bake named no probe.
 pub(crate) fn unknown_probe(name: &str, names: &[String]) -> Diagnostic {
@@ -428,6 +540,69 @@ entities:
             .unwrap();
         let report = engine.bake_probes(None).unwrap();
         assert!(report.probes.is_empty());
+        assert!(!engine.has_renderer());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn hooked_engine(
+        dir: &Path,
+        scene: &str,
+        hook: impl FnMut(&mut Engine, usize) -> Result<Option<String>, Diagnostic> + Send + 'static,
+    ) -> Engine {
+        let mut engine = Engine::builder()
+            .project_root(dir)
+            .probe_bake_worlds(hook)
+            .build()
+            .expect("builds");
+        engine.load_inline_scene(scene).expect("the scene loads");
+        engine
+    }
+
+    const PROBELESS: &str = "format: 1\nentities:\n  - name: a\n";
+
+    #[test]
+    fn a_hook_walks_its_worlds_in_order() {
+        let dir = project("hook-walk");
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        let mut engine = hooked_engine(&dir, PROBELESS, move |_, i| {
+            seen.lock().unwrap().push(i);
+            Ok((i < 2).then(|| format!("world-{i}")))
+        });
+        let report = engine.bake_probes(None).unwrap();
+        assert!(report.probes.is_empty());
+        assert_eq!(*calls.lock().unwrap(), [0, 1, 2]);
+        assert!(!engine.has_renderer());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hook_error_fails_the_bake_and_keeps_the_hook() {
+        let dir = project("hook-error");
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+        let seen = calls.clone();
+        let mut engine = hooked_engine(&dir, PROBELESS, move |_, _| {
+            *seen.lock().unwrap() += 1;
+            Err(Diagnostic::new(
+                code::REFLECTION_PROBE_UNKNOWN,
+                "the room failed",
+            ))
+        });
+        let first = engine.bake_probes(None).unwrap_err();
+        assert_eq!(first.message, "the room failed");
+        let second = engine.bake_probes(None).unwrap_err();
+        assert_eq!(second.message, "the room failed");
+        assert_eq!(*calls.lock().unwrap(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_probeless_world_has_empty_coverage() {
+        let dir = project("coverage-empty");
+        let mut engine = engine(&dir, PROBELESS);
+        let coverage = engine.probe_coverage().unwrap();
+        assert!(coverage.probes.is_empty());
+        assert!(coverage.check().is_ok());
         assert!(!engine.has_renderer());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -969,6 +1144,115 @@ entities:
             assert!(s.captured == f.captured, "captured faces differ");
             assert!(s.levels == f.levels, "prefiltered levels differ");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&fresh_dir);
+    }
+
+    /// The bake hook fills the store for runtime-spawned rooms under the keys a `Store` host computes
+    /// after the game's own swap, coverage reports a miss before a bake and a hit after, and `force`
+    /// reaches every world.
+    #[test]
+    fn needs_gpu_a_bake_hook_fills_the_store_for_runtime_worlds() {
+        let dir = project("hook-gpu");
+        std::fs::write(dir.join("a.prefab.yaml"), ROOM_A).unwrap();
+        std::fs::write(dir.join("b.prefab.yaml"), ROOM_B).unwrap();
+        let mut ids: Vec<ludion_core::ids::EntityId> = Vec::new();
+        let mut h = hooked_engine(&dir, ROOM_BASE, move |engine, i| {
+            let spawn = |engine: &mut Engine, path: &str| {
+                crate::prefab::spawn_prefab(engine.world_mut(), path, None, Some("room"), false)
+                    .map_err(|mut d| d.swap_remove(0))
+            };
+            match i {
+                0 => ids = spawn(engine, "a.prefab.yaml")?,
+                1 => {
+                    for id in ids.drain(..) {
+                        engine.world_mut().despawn(id).expect("the room despawns");
+                    }
+                    ids = spawn(engine, "b.prefab.yaml")?;
+                }
+                _ => {
+                    for id in ids.drain(..) {
+                        engine.world_mut().despawn(id).expect("the room despawns");
+                    }
+                    return Ok(None);
+                }
+            }
+            Ok(Some(["a", "b"][i].to_string()))
+        });
+        if no_gpu(&mut h) {
+            return;
+        }
+        let report = h.bake_probes(None).unwrap();
+        let worlds: Vec<_> = report.probes.iter().map(|p| p.world.as_deref()).collect();
+        assert_eq!(worlds, [None, Some("a"), Some("b")]);
+        assert!(
+            report
+                .probes
+                .iter()
+                .all(|p| p.outcome == ProbeOutcome::Captured)
+        );
+        let mut keys: Vec<_> = report.probes.iter().map(|p| p.key).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), 3, "the three worlds key apart");
+        let store = dir.join(".ludion/cooked/probes");
+        assert_eq!(std::fs::read_dir(&store).unwrap().count(), 3);
+        let json = report.to_json("s.yaml".as_ref(), true, &[]);
+        assert_eq!(json["probes"][1]["world"], "a");
+        assert!(json["probes"][0].get("world").is_none());
+        let key_b = report.probes[2].key;
+
+        let mut s = room_engine(&dir);
+        assert!(s.probe_coverage().unwrap().missing().next().is_none());
+        let a_ids = swap_in(&mut s, "a.prefab.yaml");
+        let coverage = s.probe_coverage().unwrap();
+        assert!(coverage.probes.iter().all(|p| p.stored), "{coverage:?}");
+        assert!(render_resolve(&mut s).probes.iter().all(|p| p.loaded));
+        for id in a_ids {
+            s.world_mut().despawn(id).unwrap();
+        }
+        swap_in(&mut s, "b.prefab.yaml");
+        let coverage = s.probe_coverage().unwrap();
+        assert!(coverage.probes.iter().all(|p| p.stored), "{coverage:?}");
+        assert_eq!(coverage.probes[0].key, key_b);
+        assert!(render_resolve(&mut s).probes.iter().all(|p| p.loaded));
+        assert!(!codes(&mut s).contains(&"L1279".to_string()));
+
+        let fresh_dir = project("hook-gpu-fresh");
+        let mut f = room_engine(&fresh_dir);
+        swap_in(&mut f, "b.prefab.yaml");
+        let miss = f.probe_coverage().unwrap();
+        assert!(miss.probes.iter().all(|p| !p.stored), "{miss:?}");
+        assert_eq!(miss.check().unwrap_err().code.as_str(), "L1279");
+        f.bake_probes(None).unwrap();
+        let hit = f.probe_coverage().unwrap();
+        assert!(hit.probes.iter().all(|p| p.stored), "{hit:?}");
+        assert!(hit.check().is_ok());
+        assert_eq!(hit.probes[0].key, key_b);
+
+        let forced = h.bake_probes(Some("room")).unwrap();
+        assert!(
+            forced
+                .probes
+                .iter()
+                .all(|p| p.outcome == ProbeOutcome::Captured)
+        );
+        let identity = |report: &ProbeBakeReport| {
+            report
+                .probes
+                .iter()
+                .map(|p| (p.key, p.world.clone()))
+                .collect::<Vec<_>>()
+        };
+        // World b's key is not compared: the key is slot-order dependent, and the second walk
+        // reuses freed slots in another order.
+        assert_eq!(forced.probes.len(), 3);
+        assert_eq!(identity(&forced)[..2], identity(&report)[..2]);
+        assert_eq!(forced.probes[2].world.as_deref(), Some("b"));
+        assert_eq!(
+            h.bake_probes(Some("nowhere")).unwrap_err().code.as_str(),
+            "L1280"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&fresh_dir);
     }

@@ -110,6 +110,7 @@ pub struct EngineBuilder {
     run_recordings: Option<crate::RunRecordingConfig>,
     replay_playback: Option<crate::ReplayPlaybackConfig>,
     playback_controls: Option<crate::replay_playback::PlaybackHook>,
+    probe_bake_worlds: Option<crate::probe_bake::ProbeBakeWorlds>,
     game_version: Option<String>,
     observe_load: bool,
     category_gains: CategoryGains,
@@ -157,6 +158,7 @@ impl EngineBuilder {
             run_recordings: None,
             replay_playback: None,
             playback_controls: None,
+            probe_bake_worlds: None,
             game_version: None,
             observe_load: false,
             category_gains: CategoryGains::default(),
@@ -271,6 +273,43 @@ impl EngineBuilder {
         f: impl FnMut(&ludion_sim::InputState, &mut crate::PlaybackControls) + Send + 'static,
     ) -> Self {
         self.playback_controls = Some(Box::new(f));
+        self
+    }
+
+    /// Registers the worlds [`Engine::bake_probes`] bakes beyond the loaded scene's: the probes a game
+    /// spawns at runtime (a prefab room swap, see [`ProbeRefreeze`](crate::ProbeRefreeze)).
+    ///
+    /// After baking the loaded world, `bake_probes` calls `f(engine, i)` for `i = 0, 1, …` until it
+    /// returns `Ok(None)`, on one engine: world `i` replaces world `i - 1`, so the game despawns the
+    /// last one. The hook puts world `i` in place (spawn the room prefab, place the player, step ticks
+    /// with `Command::SimStep` if its systems need them) and returns the world's label; leave the world
+    /// as the game's swap tick leaves it. The engine then re-freezes the probe world as a tick start
+    /// does, so the bake keys the world a `Store` host captures, and bakes the probes present. Each
+    /// such probe's report entry carries the label as `world`. An `Err` fails the bake. The hook runs
+    /// after every `--bake-probes` load, so one that does not drive the loaded scene returns `Ok(None)`
+    /// at once.
+    ///
+    /// ```
+    /// use ludion_engine::Engine;
+    ///
+    /// let worlds = ["room-a", "room-b"];
+    /// let engine = Engine::builder()
+    ///     .probe_bake_worlds(move |_engine, i| Ok(worlds.get(i).map(|label| label.to_string())))
+    ///     .build()
+    ///     .unwrap();
+    /// # drop(engine);
+    /// ```
+    #[must_use]
+    pub fn probe_bake_worlds(
+        mut self,
+        f: impl FnMut(
+            &mut crate::Engine,
+            usize,
+        ) -> Result<Option<String>, ludion_core::diagnostics::Diagnostic>
+        + Send
+        + 'static,
+    ) -> Self {
+        self.probe_bake_worlds = Some(Box::new(f));
         self
     }
 
@@ -1230,6 +1269,7 @@ impl EngineBuilder {
             engine.init_replay_playback(config);
         }
         engine.playback_hook = self.playback_controls.take();
+        engine.probe_bake_worlds = self.probe_bake_worlds.take();
         engine.set_game_version(self.game_version.clone());
         engine.boot_profile_pending = true;
         if self.observe_load {

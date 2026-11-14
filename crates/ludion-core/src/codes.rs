@@ -1443,7 +1443,7 @@ pub mod code {
     /// reflection-probe scene check.
     pub const REFLECTION_PROBE_OVER_CAP: DiagnosticCode = DiagnosticCode::new("L1278");
     /// `L1279` — a host serving the probe store had to capture some reflection probes because the
-    /// store held no entry for them; one warning per resolve.
+    /// store held no entry for them, or `Engine::probe_coverage` finds missing; one warning per resolve.
     pub const REFLECTION_PROBE_NOT_STORED: DiagnosticCode = DiagnosticCode::new("L1279");
     /// `L1280` — `Engine::bake_probes` was asked to force a probe by a name no probe in the scene
     /// carries.
@@ -12393,6 +12393,11 @@ mod tests {
                 "ludion-cli/src/gen_cmd.rs",
                 1,
                 "L1167: the live check is optional",
+            ),
+            (
+                "ludion-engine/src/probe_bake.rs",
+                1,
+                "L1279: a failed coverage check is an error, the resolve's miss a warning",
             ),
             ("ludion-core/src/diagnostics.rs", 1, "its own unit test"),
             ("ludion-protocol/src/lib.rs", 1, "a wire-shape test fixture"),

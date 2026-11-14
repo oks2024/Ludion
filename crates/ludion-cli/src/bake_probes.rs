@@ -345,6 +345,7 @@ mod tests {
             name: None,
             key,
             outcome,
+            world: None,
         };
         let report = ProbeBakeReport {
             store: PathBuf::new(),
