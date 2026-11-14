@@ -1958,3 +1958,147 @@ fn provenance_spelling() {
         "a.map.yaml --kit k/x.kit.yaml --seed 7 --mirror z"
     );
 }
+
+// --- `static: true` -----------------------------------------------------------------------------
+
+// A kit whose floor (`.`, merged, also the base underlay), box-collider wall (`#`, per cell),
+// footprint post (`W`) and orb (`O`) are all `static: true`, beside a plain tile (`P`).
+const STATIC_KIT: &str = "\
+format: 1
+kind: map-kit
+tiles:
+  \".\":
+    - name: floor
+      shape: cube
+      merge: true
+      static: true
+  \"#\":
+    - name: wall
+      shape: cube
+      static: true
+      collider:
+        box:
+          - 1.0
+          - 1.0
+          - 1.0
+  W:
+    - name: post
+      shape: cube
+      footprint:
+        - 2
+        - 1
+      static: true
+  O:
+    - name: orb
+      shape: sphere
+      static: true
+  P:
+    - name: plain
+      shape: cube
+";
+
+const STATIC_MAP: &str = "\
+format: 1
+kind: map
+kit: kit.yaml
+cell_size: 2.0
+origin:
+  - 0.0
+  - 0.0
+base: \".\"
+rows:
+  - \"#WWO\"
+  - \"P...\"
+";
+
+fn static_scene(overrides: MapOverrides) -> Scene {
+    let kit = parse_map_kit(STATIC_KIT).expect("the static kit parses");
+    let mut map = parse_map(STATIC_MAP).expect("the map parses");
+    overrides.apply(&mut map);
+    generate(&map, &kit, &[], &Registry::new()).expect("the static map generates")
+}
+
+fn has_static(entity: &SceneEntity) -> bool {
+    entity.components.iter().any(|(name, _)| name == "Static")
+}
+
+#[test]
+fn static_kit_primitives_emit_the_marker_on_mesh_entities_only() {
+    let scene = static_scene(MapOverrides::default());
+    let mut seen = [0usize; 4];
+    for entity in &scene.entities {
+        let name = entity.name.as_deref().unwrap_or_default();
+        if name.ends_with("-collider") {
+            assert!(
+                !has_static(entity),
+                "{name}: a collider sibling is never static"
+            );
+            continue;
+        }
+        let slot = ["floor-", "wall-", "post-", "orb-"]
+            .iter()
+            .position(|prefix| name.starts_with(prefix));
+        if let Some(slot) = slot {
+            assert_eq!(
+                component(entity, "Static"),
+                &serde_json::json!({}),
+                "{name}"
+            );
+            seen[slot] += 1;
+        } else if name.starts_with("plain-") {
+            assert!(!has_static(entity), "{name}: no `static` key, no marker");
+        }
+    }
+    assert!(
+        seen.iter().all(|n| *n > 0),
+        "every expansion mode emitted: {seen:?}"
+    );
+    assert!(
+        scene
+            .entities
+            .iter()
+            .any(|e| e.name.as_deref().is_some_and(|n| n.ends_with("-collider"))),
+        "the box collider sibling exists"
+    );
+}
+
+#[test]
+fn a_mirrored_static_map_keeps_the_marker() {
+    let scene = static_scene(MapOverrides {
+        mirror: Mirror::X,
+        ..MapOverrides::default()
+    });
+    let marked = scene.entities.iter().filter(|e| has_static(e)).count();
+    assert!(marked > 0);
+    for entity in &scene.entities {
+        let name = entity.name.as_deref().unwrap_or_default();
+        let is_mesh = entity.components.iter().any(|(n, _)| n == "Mesh");
+        assert_eq!(
+            has_static(entity),
+            is_mesh && !name.starts_with("plain-"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn static_on_a_marker_kind_is_l1022() {
+    let bad = "\
+format: 1
+kind: map-kit
+tiles:
+  \".\":
+    - shape: cube
+kinds:
+  gate:
+    - shape: cube
+      static: true
+";
+    let kit = parse_map_kit(bad).expect("the kit parses structurally");
+    let map = parse_map(FLOOR_3X3).expect("map parses");
+    let diagnostics = generate(&map, &kit, &[], &Registry::new()).unwrap_err();
+    assert!(
+        diagnostics.iter().any(|d| d.code == code::MAP_KIT_INVALID
+            && d.path.as_deref() == Some("/kinds/gate/0/static"))
+    );
+}

@@ -150,6 +150,7 @@ impl Doc {
     ) {
         let mut body = transform(at, yaw, None);
         body.push_str(&mesh(shape, tint, roughness, metallic));
+        body.push_str("      Static: {}\n");
         self.entity(name, &body);
     }
 }
@@ -280,6 +281,7 @@ fn source() -> String {
     let half = CELLS as f32 * CELL / 2.0;
     let mut ground = transform([-half, 0.0, -half], 0.0, None);
     ground.push_str(&kit_ground());
+    ground.push_str("      Static: {}\n");
     doc.entity("kit-ground", &ground);
 
     let mut decal = transform([-5.0, 0.3, 3.0], 0.0, None);
@@ -568,4 +570,13 @@ fn needs_gpu_static_kit_bench() {
             );
         }
     }
+}
+
+#[test]
+fn the_committed_static_kit_scene_has_no_static_diagnostics() {
+    let text = std::fs::read_to_string(scene_path()).expect("the committed static-kit scene");
+    let engine = Engine::with_project_root(gallery());
+    let scene = ludion_scene::check(&text, engine.registry()).expect("the scene checks");
+    let found = ludion_engine::scene_static_diagnostics(&gallery(), &scene);
+    assert!(found.is_empty(), "{found:?}");
 }

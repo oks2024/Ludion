@@ -126,6 +126,7 @@ mod sprite_atlas;
 mod sprite_flipbook;
 mod sprite_sheet;
 mod sprite_w3;
+mod static_kit;
 mod sweep;
 mod system_panic;
 mod tick_observer;

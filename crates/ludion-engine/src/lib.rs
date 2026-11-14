@@ -112,6 +112,7 @@ mod skin_bone;
 mod skin_ragdoll;
 mod snapshot;
 mod sprite_sheet;
+mod static_check;
 pub mod sweep;
 mod tick_observer;
 mod trace;
@@ -148,8 +149,8 @@ pub use components::{
     GiVolume, GroundMarker, GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, Name, NavAgent,
     NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter,
     PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Residue, SkinBone, SpotLight,
-    Sprite, SpriteBlend, Text, TileAppearance, Tilemap, Transform, UiList, UiListItem, UiRect,
-    UiText, Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
+    Sprite, SpriteBlend, Static, Text, TileAppearance, Tilemap, Transform, UiList, UiListItem,
+    UiRect, UiText, Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
 };
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
@@ -274,6 +275,7 @@ pub use sprite_sheet::{
     check_atlas_clip_flags, render_atlas_clip, render_atlas_sheet, render_sprite_sheet,
     resolve_sprite_palette,
 };
+pub use static_check::{HOT_STATIC_FRAMES, HotStatic, StaticIneligible, scene_static_diagnostics};
 pub use sweep::{
     FrameCell, FrameStripOutcome, MAX_SWEEP_CELLS, SweepCell, SweepOutcome, render_frame_strip,
     render_sweep_sheet,

@@ -3568,6 +3568,35 @@ fn is_zero3(value: &[f32; 3]) -> bool {
 #[schemars(extend("properties" = serde_json::json!({})))]
 pub struct Viewmodel {}
 
+/// Marks a renderable that does not move, so the renderer can keep it in a persistent buffer.
+/// Authored `Static: {}`; a field-less flag, so any extra field raises the ordinary `L1014`.
+///
+/// Eligible: a `Mesh` with a primitive shape, an unskinned `asset`, a `voxel` or `sculpt` model
+/// (LOD chains included), or a `MeshGrid`, mirrored placements included. Anything else (a skinned
+/// asset, `assembly`, `assembly_part`, `character`, `SkinBone`, `ParentJoint`, `Viewmodel`, a
+/// sprite, particle emitter, text, decal, light, `GroundMarker`, `Volley`, `PatternPlayer`, or an
+/// entity with nothing to draw) is reported `L1341` and takes the dynamic path. Every `Parent`
+/// ancestor must be `Static` too; otherwise the entity is reported `L1342` and takes the dynamic
+/// path, since a static under a moving parent would go stale.
+///
+/// Writes stay legal: a written static entity is re-placed. One written on 30 consecutive frames
+/// is reported once (`L1343`); remove `Static` from it. On a sim entity the flag is hashed like any
+/// other component.
+///
+/// ```yaml
+/// components:
+///   Transform:
+///     position: [4.0, 0.0, 2.0]
+///   Static: {}
+///   Mesh:
+///     shape: cube
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
+// A zero-field struct's derived schema omits `properties`, and the unknown-field check only fires
+// when it is present; forcing the empty map keeps `Static: { x: 1 }` an ordinary `L1014`.
+#[schemars(extend("properties" = serde_json::json!({})))]
+pub struct Static {}
+
 /// The projection and depth slice a [`Viewmodel`] is drawn with. It sits on the **camera entity**
 /// (the first-person camera); absent means the defaults, and `ViewmodelLens: {}` is the default.
 /// Every field defaults and is omitted from text at its default.
@@ -6058,6 +6087,8 @@ pub fn builtin_registry() -> Registry {
         .register_validated::<JointPoses>("JointPoses")
         .expect("unique");
     registry.register::<PoseBlend>("PoseBlend").expect("unique");
+    // The authored does-not-move marker, appended after `PoseBlend`.
+    registry.register::<Static>("Static").expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -6507,12 +6538,13 @@ mod tests {
                 "NavSteering",
                 "JointPoses",
                 "PoseBlend",
+                "Static",
             ]
         );
         assert_eq!(
             registry.len(),
-            52,
-            "appending JointPoses and PoseBlend grows the registry to 52"
+            53,
+            "appending Static grows the registry to 53"
         );
     }
 

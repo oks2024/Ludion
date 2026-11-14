@@ -130,6 +130,7 @@ A **primitive** names exactly one mesh source and may carry a static collider:
 | `y` | the vertical placement, and **where the game bakes its floor rule** — the engine never hardcodes one |
 | `scale` | `[x, y, z]` |
 | `name` | the generated entity's name stem |
+| `static` | `true` → the emitted mesh entities carry `Static: {}`; the `box` collider sibling never does. Tiles only — on a marker kind `L1022` |
 
 **Expansion mode**, chosen per primitive so one glyph can merge a floor slab *and* footprint-tile a
 wall piece:

@@ -80,7 +80,7 @@ const PROBE_KEYS: [&str; 2] = ["radius", "speed"];
 const PRIMITIVE_KEYS: [&str; 9] = [
     "name", "shape", "voxel", "mesh", "color", "collider", "y", "scale", "variants",
 ];
-const PRIMITIVE_KEYS_EXTRA: [&str; 2] = ["merge", "footprint"];
+const PRIMITIVE_KEYS_EXTRA: [&str; 3] = ["merge", "footprint", "static"];
 const COLLIDER_KEYS: [&str; 3] = ["aabb", "circle", "box"];
 
 // --- Data model --------------------------------------------------------------------------------
@@ -440,6 +440,8 @@ pub struct KitPrimitive {
     pub merge: bool,
     /// `Some([w, h])` → runs of the glyph tile with one unscaled prop per `w × h`-cell footprint.
     pub footprint: Option<[u32; 2]>,
+    /// `true` → the emitted mesh entities carry `Static: {}` (never the `box` collider sibling).
+    pub is_static: bool,
 }
 
 impl Default for KitPrimitive {
@@ -454,6 +456,7 @@ impl Default for KitPrimitive {
             scale: [1.0, 1.0, 1.0],
             merge: false,
             footprint: None,
+            is_static: false,
         }
     }
 }
@@ -1142,6 +1145,10 @@ fn parse_primitive(
             "footprint" => {
                 prim.footprint =
                     expect_pair(&entry.node, &child("footprint"), "footprint", diagnostics);
+            }
+            "static" => {
+                prim.is_static = expect_bool(&entry.node, &child("static"), "static", diagnostics)
+                    .unwrap_or(false);
             }
             unknown => {
                 let mut valid: Vec<&'static str> = PRIMITIVE_KEYS.to_vec();
@@ -1983,6 +1990,9 @@ fn build_entity(
         Some(collider) => components.push(("Collider".to_string(), collider_value(collider))),
         None => {}
     }
+    if prim.is_static {
+        components.push(("Static".to_string(), json!({})));
+    }
     components.extend(extra.iter().cloned());
     let mut entities = vec![SceneEntity {
         presentation: false,
@@ -2335,6 +2345,18 @@ fn validate_kit(kit: &MapKit, map: &MapDoc, diagnostics: &mut Vec<Diagnostic>) {
     for (kind, primitives) in &kit.kinds {
         let pointer = format!("/kinds/{}", pointer_token(kind));
         validate_primitive_list(primitives, &pointer, diagnostics);
+        for (i, prim) in primitives.iter().enumerate() {
+            if prim.is_static {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::MAP_KIT_INVALID,
+                        "a marker kind is a gameplay entity; `static` marks tile dressing only",
+                    )
+                    .with_path(format!("{pointer}/{i}/static"))
+                    .with_help("remove `static` from the kind's primitive"),
+                );
+            }
+        }
     }
 }
 

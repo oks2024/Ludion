@@ -5195,6 +5195,13 @@
       }
     }
   },
+  "Static": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Static",
+    "description": "Marks a renderable that does not move, so the renderer can keep it in a persistent buffer.\nAuthored `Static: {}`; a field-less flag, so any extra field raises the ordinary `L1014`.\n\nEligible: a `Mesh` with a primitive shape, an unskinned `asset`, a `voxel` or `sculpt` model\n(LOD chains included), or a `MeshGrid`, mirrored placements included. Anything else (a skinned\nasset, `assembly`, `assembly_part`, `character`, `SkinBone`, `ParentJoint`, `Viewmodel`, a\nsprite, particle emitter, text, decal, light, `GroundMarker`, `Volley`, `PatternPlayer`, or an\nentity with nothing to draw) is reported `L1341` and takes the dynamic path. Every `Parent`\nancestor must be `Static` too; otherwise the entity is reported `L1342` and takes the dynamic\npath, since a static under a moving parent would go stale.\n\nWrites stay legal: a written static entity is re-placed. One written on 30 consecutive frames\nis reported once (`L1343`); remove `Static` from it. On a sim entity the flag is hashed like any\nother component.\n\n```yaml\ncomponents:\n  Transform:\n    position: [4.0, 0.0, 2.0]\n  Static: {}\n  Mesh:\n    shape: cube\n```",
+    "type": "object",
+    "properties": {}
+  },
   "SurfaceVelocity": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "SurfaceVelocity",

@@ -1670,6 +1670,16 @@ pub mod code {
     /// `L1340` — a `NavAgent` has a non-finite or negative field, or too many separation neighbours.
     pub const NAV_AGENT_INVALID: DiagnosticCode = DiagnosticCode::new("L1340");
 
+    /// `L1341` — a `Static` entity holds something the static path cannot; it takes the dynamic path.
+    pub const STATIC_INELIGIBLE: DiagnosticCode = DiagnosticCode::new("L1341");
+
+    /// `L1342` — a `Static` entity has a `Parent` ancestor without `Static`; it takes the dynamic
+    /// path.
+    pub const STATIC_PARENT_NOT_STATIC: DiagnosticCode = DiagnosticCode::new("L1342");
+
+    /// `L1343` — a `Static` entity was written on 30 consecutive frames; reported once per entity.
+    pub const STATIC_REWRITTEN: DiagnosticCode = DiagnosticCode::new("L1343");
+
     /// `L1390` — a prefab document's `entities` list is empty, so an instance would spawn nothing.
     pub const PREFAB_EMPTY: DiagnosticCode = DiagnosticCode::new("L1390");
 
@@ -8423,6 +8433,40 @@ Fix: write a finite, non-negative value, and at most 16 separation neighbours, o
 its default.",
     },
     CodeEntry {
+        code: code::STATIC_INELIGIBLE,
+        severity: Severity::Warning,
+        title: "a static entity cannot take the static path",
+        explanation: "\
+An entity carries `Static` (pointer `/entities/{i}/components/Static`) but has something the static
+path cannot hold: nothing to draw (no `Mesh` or `MeshGrid`), a skinned `asset`, an `assembly`,
+`assembly_part` or `character` shape, or one of `SkinBone`, `ParentJoint`, `Viewmodel`, `Sprite`,
+`ParticleEmitter`, `Text`, `Decal`, `PointLight`, `SpotLight`, `DirectionalLight`, `GroundMarker`,
+`Volley`, `PatternPlayer`. The message names the reason. The entity still draws, on the dynamic path.
+
+Fix: remove `Static` from the entity, or remove what makes it ineligible.",
+    },
+    CodeEntry {
+        code: code::STATIC_PARENT_NOT_STATIC,
+        severity: Severity::Warning,
+        title: "a static entity has a parent that is not static",
+        explanation: "\
+An entity carries `Static` but a `Parent` ancestor does not (pointer
+`/entities/{i}/components/Static`; the message names the ancestor). A static under a moving parent would
+go stale, so the entity takes the dynamic path.
+
+Fix: mark every ancestor `Static` too, or remove `Static` from the entity.",
+    },
+    CodeEntry {
+        code: code::STATIC_REWRITTEN,
+        severity: Severity::Warning,
+        title: "a static entity is rewritten every frame",
+        explanation: "\
+An entity carrying `Static` was written on 30 consecutive frames. Writes are legal and the entity is
+re-placed, but a hot entity defeats the point of the static path. Reported once per entity.
+
+Fix: remove `Static` from the entity.",
+    },
+    CodeEntry {
         code: code::PREFAB_EMPTY,
         severity: Severity::Error,
         title: "a prefab has no parts",
@@ -11759,6 +11803,9 @@ mod tests {
         code::VIEWMODEL_LENS_INVALID,
         code::SPATIAL_VOLUME_INVALID,
         code::NAV_AGENT_INVALID,
+        code::STATIC_INELIGIBLE,
+        code::STATIC_PARENT_NOT_STATIC,
+        code::STATIC_REWRITTEN,
         code::PREFAB_EMPTY,
         code::GENERATION_JOBS_UNKNOWN,
         code::ENTITY_REF_IN_COLLECTION,
@@ -12055,6 +12102,9 @@ mod tests {
             code::CAMERA_OFFSET_FOV_CLAMPED,
             code::VIEWMODEL_NO_CAMERA,
             code::VIEWMODEL_LENS_NOT_ON_CAMERA,
+            code::STATIC_INELIGIBLE,
+            code::STATIC_PARENT_NOT_STATIC,
+            code::STATIC_REWRITTEN,
             code::PATTERN_SYSTEM_NOT_RUN,
             code::VOXEL_LOD_EMPTY_LEVEL,
             code::VOLLEY_INVALID,
