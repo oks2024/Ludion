@@ -15,7 +15,7 @@ use wgpu::util::DeviceExt;
 
 use crate::cull::{Aabb, CullBoundsRaw, Frustum, LodView, bounds_slot};
 use crate::graph::CullShape;
-use crate::render::MeshInstanceRaw;
+use crate::render::{MeshInstanceRaw, StaticCopy, StaticSlice};
 use crate::scene::MeshInstance;
 use crate::shader_gen::{self, CullBucket, CullItem, CullParams, CullView};
 
@@ -133,6 +133,26 @@ fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
     }
 }
 
+/// A `STORAGE` buffer of `bytes`. A zero-size binding is invalid: an empty array uploads one zeroed
+/// element.
+fn storage_buffer(device: &wgpu::Device, label: &str, bytes: &[u8]) -> wgpu::Buffer {
+    let mut padded = bytes.to_vec();
+    if padded.is_empty() {
+        padded.resize(16, 0);
+    }
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: &padded,
+        usage: wgpu::BufferUsages::STORAGE,
+    })
+}
+
+/// The `cull items` buffer of `items`, for a [`CullInput`].
+#[cfg(test)]
+pub(crate) fn upload_items(device: &wgpu::Device, items: &[CullItem]) -> wgpu::Buffer {
+    storage_buffer(device, "cull items", bytemuck::cast_slice(items))
+}
+
 /// The five compute pipelines over one shared layout: group 0 the inputs, group 1 the outputs.
 pub(crate) struct CullPipelines {
     device: wgpu::Device,
@@ -192,6 +212,8 @@ pub(crate) struct WorldBucket<'a> {
     pub(crate) sources: &'a [u32],
     /// The LOD chain this draw selects from; `Chain::NONE` for a primitive or an unchained asset.
     pub(crate) chain: Chain,
+    /// The leading instances that are the persistent static run: their items are GPU-copied.
+    pub(crate) statics: Option<StaticSlice>,
 }
 
 /// A bucket's LOD chain as the cull reads it: the `screen_size` under which level `i + 1` takes over
@@ -235,9 +257,11 @@ impl Chain {
 pub(crate) struct WorldCullInput<'a> {
     pub(crate) instances: &'a wgpu::Buffer,
     pub(crate) meshes: &'a [MeshInstance],
-    /// `cull::instance_bounds` of `meshes`.
+    /// The leading `meshes` that are static: `bounds` and `lod_radii` start after them.
+    pub(crate) static_count: usize,
+    /// `cull::instance_bounds` of `meshes[static_count..]`.
     pub(crate) bounds: &'a [Option<Aabb>],
-    /// `cull::instance_lod_radii` of `meshes`.
+    /// `cull::instance_lod_radii` of `meshes[static_count..]`.
     pub(crate) lod_radii: &'a [f32],
     pub(crate) buckets: &'a [WorldBucket<'a>],
     /// The views in order: the camera (the one view-projection its uniform uses), then the shadow views.
@@ -248,6 +272,10 @@ pub(crate) struct WorldCullInput<'a> {
     pub(crate) names: Vec<String>,
     pub(crate) bounds_table: &'a wgpu::Buffer,
     pub(crate) shape: CullShape,
+    /// The persistent static cull items, source of each bucket's static run.
+    pub(crate) static_items: Option<&'a wgpu::Buffer>,
+    /// Where the item copies of the static runs are queued.
+    pub(crate) copies: &'a mut Vec<StaticCopy>,
 }
 
 /// Prepares the cull over the frame's world draws, one bucket each, in packing order.
@@ -259,6 +287,7 @@ pub(crate) fn world_cull(
     let WorldCullInput {
         instances,
         meshes,
+        static_count,
         bounds,
         lod_radii,
         buckets,
@@ -267,18 +296,51 @@ pub(crate) fn world_cull(
         names,
         bounds_table,
         shape,
+        static_items,
+        copies,
     } = input;
-    let items: Vec<CullItem> = buckets
-        .iter()
-        .enumerate()
-        .flat_map(|(b, bucket)| {
-            bucket
-                .sources
-                .iter()
-                .map(move |&src| (b as u32, src as usize))
-        })
-        .map(|(b, src)| cull_item(&meshes[src], b, bounds[src], lod_radii[src]))
-        .collect();
+    // One item per instance, bucket after bucket: the dynamic items are written here, after each
+    // bucket's static run, which the frame copies in from the persistent items.
+    let total: u32 = buckets.iter().map(|b| b.count).sum();
+    let item_bytes = std::mem::size_of::<CullItem>();
+    let items_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("cull items"),
+        size: (u64::from(total) * item_bytes as u64).max(16),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: true,
+    });
+    let (mut dynamic, mut dynamic_casters) = (0u32, 0u32);
+    {
+        let mut mapped = items_buf
+            .slice(..)
+            .get_mapped_range_mut()
+            .expect("a freshly mapped_at_creation buffer is always mappable");
+        for (b, bucket) in buckets.iter().enumerate() {
+            let lead = bucket.statics.map_or(0, |s| s.count) as usize;
+            for (k, &src) in bucket.sources[lead..].iter().enumerate() {
+                let (src, at) = (src as usize, bucket.first as usize + lead + k);
+                let item = cull_item(
+                    &meshes[src],
+                    b as u32,
+                    bounds[src - static_count],
+                    lod_radii[src - static_count],
+                );
+                dynamic += 1;
+                dynamic_casters += u32::from(item.casts != 0);
+                mapped
+                    .slice(at * item_bytes..(at + 1) * item_bytes)
+                    .copy_from_slice(bytemuck::bytes_of(&item));
+            }
+        }
+    }
+    items_buf.unmap();
+    if let Some(src) = static_items {
+        for bucket in buckets {
+            if let Some(slice) = bucket.statics {
+                copies.push(StaticCopy::items(src, slice, &items_buf, bucket.first));
+            }
+        }
+    }
     let cull_buckets: Vec<CullBucket> = buckets
         .iter()
         .map(|bucket| {
@@ -299,13 +361,15 @@ pub(crate) fn world_cull(
         .collect();
     // A casters-only view tests only the items that cast; the camera view tests every item.
     let tested = if stats {
+        let statics = || buckets.iter().filter_map(|b| b.statics);
         views
             .iter()
             .map(|v| {
-                items
-                    .iter()
-                    .filter(|item| !v.casters_only || item.casts != 0)
-                    .count() as u32
+                if v.casters_only {
+                    dynamic_casters + statics().map(|s| s.casters).sum::<u32>()
+                } else {
+                    dynamic + statics().map(|s| s.count).sum::<u32>()
+                }
             })
             .collect()
     } else {
@@ -316,7 +380,8 @@ pub(crate) fn world_cull(
         pipelines,
         CullInput {
             instances,
-            items: &items,
+            items: &items_buf,
+            item_count: total,
             buckets: &cull_buckets,
             views,
             bounds_table,
@@ -332,8 +397,10 @@ pub(crate) fn world_cull(
 pub(crate) struct CullInput<'a> {
     /// The packed instances, bucket after bucket (`MeshInstanceRaw`s, `STORAGE`).
     pub(crate) instances: &'a wgpu::Buffer,
-    /// One item per instance.
-    pub(crate) items: &'a [CullItem],
+    /// One item per instance (`CullItem`s, `STORAGE`; see [`upload_items`]).
+    pub(crate) items: &'a wgpu::Buffer,
+    /// How many items the buffer holds: the instance count.
+    pub(crate) item_count: u32,
     /// One entry per bucket: its `[first, first + count)` range and draw element count.
     pub(crate) buckets: &'a [CullBucket],
     /// At most `shape.views` of them: the live views.
@@ -368,11 +435,11 @@ impl CullFrame {
         input: CullInput<'_>,
     ) -> CullFrame {
         let shape = input.shape;
-        debug_assert!(input.items.len() <= shape.instances as usize);
+        debug_assert!(input.item_count <= shape.instances);
         debug_assert!(input.buckets.len() <= shape.buckets as usize);
         debug_assert!(input.views.len() <= shape.views as usize);
         let params = CullParams {
-            instance_count: input.items.len() as u32,
+            instance_count: input.item_count,
             bucket_count: input.buckets.len() as u32,
             view_count: input.views.len() as u32,
             instance_cap: shape.instances,
@@ -393,25 +460,13 @@ impl CullFrame {
                 lod_eye: [v.lod.eye.x, v.lod.eye.y, v.lod.eye.z, v.lod.k],
             })
             .collect();
-        let storage = |label: &str, bytes: &[u8]| {
-            // A zero-size binding is invalid: an empty array uploads one zeroed element.
-            let mut padded = bytes.to_vec();
-            if padded.is_empty() {
-                padded.resize(16, 0);
-            }
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: &padded,
-                usage: wgpu::BufferUsages::STORAGE,
-            })
-        };
+        let storage = |label: &str, bytes: &[u8]| storage_buffer(device, label, bytes);
         let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("cull params"),
             contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let views_buf = storage("cull views", bytemuck::cast_slice(&views));
-        let items_buf = storage("cull items", bytemuck::cast_slice(input.items));
         let buckets_buf = storage("cull buckets", bytemuck::cast_slice(input.buckets));
         let inputs = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cull inputs"),
@@ -420,7 +475,7 @@ impl CullFrame {
                 entry(shader_gen::CULL_PARAMS_BINDING, &params_buf),
                 entry(shader_gen::CULL_VIEWS_BINDING, &views_buf),
                 entry(shader_gen::CULL_IN_BINDING, input.instances),
-                entry(shader_gen::CULL_ITEMS_BINDING, &items_buf),
+                entry(shader_gen::CULL_ITEMS_BINDING, input.items),
                 entry(shader_gen::CULL_BOXES_BINDING, input.bounds_table),
                 entry(shader_gen::CULL_BUCKETS_BINDING, &buckets_buf),
             ],
@@ -428,7 +483,7 @@ impl CullFrame {
         CullFrame {
             inputs,
             shape,
-            instances: input.items.len() as u32,
+            instances: input.item_count,
             buckets: input.buckets.len() as u32,
             views: input.views.len() as u32,
             names: Vec::new(),

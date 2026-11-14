@@ -10,7 +10,7 @@ use crate::cull::{
     skinned_lod_radius,
 };
 use crate::gpu_cull::{
-    Chain, CullFrame, CullInput, CullPipelines, CullTargets, CullViewSpec, cull_item,
+    Chain, CullFrame, CullInput, CullPipelines, CullTargets, CullViewSpec, cull_item, upload_items,
 };
 use crate::graph::CullShape;
 use crate::shader_gen::{CullBucket, CullItem};
@@ -305,7 +305,8 @@ fn run_cull(
         &pipelines,
         CullInput {
             instances: &instances,
-            items: &items,
+            items: &upload_items(device, &items),
+            item_count: items.len() as u32,
             buckets: &buckets,
             views: &views,
             bounds_table: &table,
@@ -470,7 +471,7 @@ fn onoff_scene(size: (u32, u32)) -> RenderScene {
     scene
 }
 
-fn visible_world(scene: &RenderScene) -> (usize, usize) {
+pub(super) fn visible_world(scene: &RenderScene) -> (usize, usize) {
     let assets: Vec<AssetBounds> = scene
         .mesh_assets
         .iter()
@@ -562,7 +563,7 @@ fn needs_gpu_the_frame_chain_follows_the_culling_switch() {
     assert!(renderer.frame_chain(&gun_only).cull.is_none());
 }
 
-fn casting_light() -> Option<crate::scene::LocalShadowData> {
+pub(super) fn casting_light() -> Option<crate::scene::LocalShadowData> {
     Some(crate::scene::LocalShadowData {
         bias: 0.05,
         near: 0.1,
@@ -762,11 +763,27 @@ fn needs_gpu_views_past_the_cull_capacity_draw_directly_and_change_nothing() {
     renderer.set_frustum_culling(false);
     let off = renderer.render(&scene, size).expect("direct render");
     assert_eq!(on.rgba, off.rgba, "the cap changed the image");
+
+    // The same scene with its first half marked static reads the same bytes through the static buffers.
+    renderer.set_frustum_culling(true);
+    let mut marked = scene.clone();
+    marked.statics = crate::scene::StaticRange::of(&scene.meshes[..8192], &[]);
+    let with_statics = renderer
+        .render(&marked, size)
+        .expect("capped static render");
+    assert_eq!(
+        on.rgba, with_statics.rgba,
+        "statics changed the capped image"
+    );
 }
 
 /// The oracle's `(tested, kept)` for a view that `volume` bounds: the casters-only views test only
 /// the world meshes that cast, the camera view every world mesh.
-fn oracle_counts(scene: &RenderScene, volume: &CullVolume, casters_only: bool) -> (u32, u32) {
+pub(super) fn oracle_counts(
+    scene: &RenderScene,
+    volume: &CullVolume,
+    casters_only: bool,
+) -> (u32, u32) {
     let assets: Vec<AssetBounds> = scene
         .mesh_assets
         .iter()
@@ -1002,7 +1019,8 @@ fn run_lod_cull(
         &pipelines,
         CullInput {
             instances: &instances,
-            items: &items,
+            items: &upload_items(device, &items),
+            item_count: items.len() as u32,
             buckets: &buckets,
             views: &views,
             bounds_table: &table,
@@ -1238,7 +1256,7 @@ fn scaled_box(hash: u64, scale: f32) -> MeshData {
 }
 
 /// A chained box asset: the full box, then half-size boxes, switching at the test thresholds.
-fn chained_asset() -> Arc<MeshData> {
+pub(super) fn chained_asset() -> Arc<MeshData> {
     let mut base = box_asset(0x10D_0001, false);
     base.lods = THRESHOLDS
         .iter()

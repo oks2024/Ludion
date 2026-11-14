@@ -4,7 +4,8 @@
 
 use ludion_core::math::glam::{Mat3, Mat4, Vec3};
 
-use super::{CasterPipeline, MeshAssetGpu, MeshVariant, init_buffer};
+use super::static_batch::{RunKey, StaticCopy, StaticGpu, StaticSlice};
+use super::{CasterPipeline, MeshAssetGpu, MeshVariant};
 use crate::cull::{Aabb, AssetBounds, local_bounds};
 use crate::scene::{MeshInstance, MeshShape, RenderScene};
 use bytemuck::{Pod, Zeroable};
@@ -60,6 +61,8 @@ pub(super) struct MeshDraw {
     /// Ascending indices into `scene.meshes` of this draw's instances, in instance order, so the
     /// drop-shadow occlusion pass can skip a caster's own.
     pub(super) sources: Vec<u32>,
+    /// The leading instances that are the persistent static run, GPU-copied into the packed buffer.
+    pub(super) statics: Option<StaticSlice>,
 }
 
 impl MeshDraw {
@@ -94,6 +97,8 @@ pub(super) struct MeshAssetDraw {
     pub(super) viewmodel: bool,
     /// As [`MeshDraw::sources`].
     pub(super) sources: Vec<u32>,
+    /// As [`MeshDraw::statics`].
+    pub(super) statics: Option<StaticSlice>,
 }
 
 impl MeshAssetDraw {
@@ -177,17 +182,34 @@ pub(super) fn instance_normal_lanes(
     lanes
 }
 
+/// The packed raw of one instance. `lane_bounds` are the asset bounds the wrap lanes size from; a
+/// primitive passes none.
+pub(super) fn instance_raw(m: &MeshInstance, lane_bounds: &[AssetBounds]) -> MeshInstanceRaw {
+    MeshInstanceRaw {
+        model: m.model.to_cols_array_2d(),
+        color: m.color,
+        material: instance_material(m),
+        normal: instance_normal_lanes(m, lane_bounds),
+        fade: instance_fade(m),
+        flash: instance_flash(m),
+        rim: m.rim,
+        medium: [m.medium, 0.0, 0.0, 0.0],
+    }
+}
+
 /// Buckets every [`MeshShape::Asset`] instance in `scene` by its asset index, in scene order, into
 /// `asset_count` buckets — one linear pass instead of one filter pass per asset — keeping only the
 /// instances whose [`is_mirrored`] equals `mirrored` and whose viewmodel flag equals `viewmodel`.
 ///
 /// Instances whose index is out of range are dropped: the caller has no GPU mesh to draw them with.
-/// Draw order is golden-bearing (this repo gates on bit-exact pinned-GPU images), and this is the
+/// Only instances from scene index `from` on are bucketed: the statics before it come from their
+/// persistent run. Draw order is golden-bearing (this repo gates on bit-exact pinned-GPU images), and this is the
 /// order that decides it: buckets ascending, scene order within a bucket.
 ///
 /// The second return value is, per bucket, the ascending `scene.meshes` index of each instance.
 pub(super) fn bucket_asset_instances(
     scene: &RenderScene,
+    from: usize,
     asset_count: usize,
     asset_bounds: &[AssetBounds],
     mirrored: bool,
@@ -195,7 +217,7 @@ pub(super) fn bucket_asset_instances(
 ) -> (Vec<Vec<MeshInstanceRaw>>, Vec<Vec<u32>>) {
     let mut buckets: Vec<Vec<MeshInstanceRaw>> = vec![Vec::new(); asset_count];
     let mut sources: Vec<Vec<u32>> = vec![Vec::new(); asset_count];
-    for (scene_index, m) in scene.meshes.iter().enumerate() {
+    for (scene_index, m) in scene.meshes.iter().enumerate().skip(from) {
         let MeshShape::Asset(index) = m.shape else {
             continue;
         };
@@ -206,16 +228,7 @@ pub(super) fn bucket_asset_instances(
             continue;
         };
         sources[index].push(scene_index as u32);
-        bucket.push(MeshInstanceRaw {
-            model: m.model.to_cols_array_2d(),
-            color: m.color,
-            material: instance_material(m),
-            normal: instance_normal_lanes(m, asset_bounds),
-            fade: instance_fade(m),
-            flash: instance_flash(m),
-            rim: m.rim,
-            medium: [m.medium, 0.0, 0.0, 0.0],
-        });
+        bucket.push(instance_raw(m, asset_bounds));
     }
     (buckets, sources)
 }
@@ -247,43 +260,70 @@ pub(super) struct MeshBatch {
     /// Every draw's instances: primitive world draws, asset world draws, then the viewmodel's.
     /// `None` when nothing draws.
     pub(super) instances: Option<wgpu::Buffer>,
+    /// The frame bucket of each static run, in run order.
+    pub(super) static_buckets: Vec<u32>,
+}
+
+/// One draw's instances before packing: the static run it leads with (already on the GPU) and the
+/// dynamic raws the CPU writes after it. `sources` lists both, ascending.
+struct Pending {
+    mirrored: bool,
+    viewmodel: bool,
+    sources: Vec<u32>,
+    raws: Vec<MeshInstanceRaw>,
+    statics: Option<StaticSlice>,
+}
+
+impl Pending {
+    fn count(&self) -> u32 {
+        self.statics.map_or(0, |s| s.count) + self.raws.len() as u32
+    }
 }
 
 struct PrimPending {
     shape: MeshShape,
-    mirrored: bool,
-    viewmodel: bool,
-    sources: Vec<u32>,
-    raws: Vec<MeshInstanceRaw>,
+    draw: Pending,
 }
 
 struct AssetPending {
     mesh: MeshAssetGpu,
-    mirrored: bool,
-    viewmodel: bool,
-    sources: Vec<u32>,
-    raws: Vec<MeshInstanceRaw>,
+    draw: Pending,
+}
+
+/// The static run of `key` as a draw's leading instances: its slice and sources.
+fn static_lead(statics: Option<&StaticGpu>, key: RunKey) -> (Option<StaticSlice>, Vec<u32>) {
+    match statics.and_then(|s| s.run(key)) {
+        Some((i, run)) => (Some(run.slice(i)), run.sources.clone()),
+        None => (None, Vec::new()),
+    }
 }
 
 /// Groups the scene's mesh instances into per-shape and per-asset draws and uploads them once.
 /// Draw order is golden-bearing and unchanged from the per-draw buffers this replaced; only the
 /// packing differs (world draws contiguous, so a world draw's `bucket` is its `cull` bucket).
+///
+/// The leading `statics` meshes of the scene come from their persistent run: each world draw's static
+/// run is queued as a GPU copy into `copies` and only the dynamic instances are written here, after
+/// it. Without `statics` every instance is written, and the buffer holds the same bytes.
 pub(super) fn build_mesh_batch(
     scene: &RenderScene,
     device: &wgpu::Device,
     meshes: &[MeshAssetGpu],
+    statics: Option<&StaticGpu>,
+    copies: &mut Vec<StaticCopy>,
 ) -> MeshBatch {
-    let prims = pending_primitives(scene);
-    let assets = pending_assets(scene, meshes);
+    let from = statics.map_or(0, StaticGpu::count);
+    let prims = pending_primitives(scene, from, statics);
+    let assets = pending_assets(scene, from, meshes, statics);
 
-    let mut packed: Vec<MeshInstanceRaw> = Vec::new();
+    let mut total = 0u32;
     let mut bucket = 0u32;
     let mut prim_slot = vec![(0u32, None); prims.len()];
     let mut asset_slot = vec![(0u32, None); assets.len()];
     for viewmodel in [false, true] {
-        let mut place = |raws: &[MeshInstanceRaw]| {
-            let first = packed.len() as u32;
-            packed.extend_from_slice(raws);
+        let mut place = |draw: &Pending| {
+            let first = total;
+            total += draw.count();
             let b = (!viewmodel).then(|| {
                 bucket += 1;
                 bucket - 1
@@ -293,37 +333,81 @@ pub(super) fn build_mesh_batch(
         for (i, p) in prims
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.viewmodel == viewmodel)
+            .filter(|(_, p)| p.draw.viewmodel == viewmodel)
         {
-            prim_slot[i] = place(&p.raws);
+            prim_slot[i] = place(&p.draw);
         }
         for (i, a) in assets
             .iter()
             .enumerate()
-            .filter(|(_, a)| a.viewmodel == viewmodel)
+            .filter(|(_, a)| a.draw.viewmodel == viewmodel)
         {
-            asset_slot[i] = place(&a.raws);
+            asset_slot[i] = place(&a.draw);
         }
     }
-    let instances = (!packed.is_empty()).then(|| {
-        init_buffer(
-            device,
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
-            bytemuck::cast_slice(&packed),
-        )
+    let instances = (total > 0).then(|| {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ludion frame buffer"),
+            size: u64::from(total) * std::mem::size_of::<MeshInstanceRaw>() as u64,
+            usage: wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        {
+            let mut mapped = buffer
+                .slice(..)
+                .get_mapped_range_mut()
+                .expect("a freshly mapped_at_creation buffer is always mappable");
+            let stride = std::mem::size_of::<MeshInstanceRaw>();
+            let mut write = |draw: &Pending, first: u32| {
+                let at = (first + draw.statics.map_or(0, |s| s.count)) as usize * stride;
+                let bytes: &[u8] = bytemuck::cast_slice(&draw.raws);
+                mapped.slice(at..at + bytes.len()).copy_from_slice(bytes);
+            };
+            for (p, &(first, _)) in prims.iter().zip(&prim_slot) {
+                write(&p.draw, first);
+            }
+            for (a, &(first, _)) in assets.iter().zip(&asset_slot) {
+                write(&a.draw, first);
+            }
+        }
+        buffer.unmap();
+        buffer
     });
+    let mut static_buckets = vec![0u32; statics.map_or(0, StaticGpu::run_count)];
+    if let (Some(gpu), Some(buffer)) = (statics, instances.as_ref()) {
+        let draws = prims
+            .iter()
+            .zip(&prim_slot)
+            .map(|(p, slot)| (&p.draw, slot))
+            .chain(
+                assets
+                    .iter()
+                    .zip(&asset_slot)
+                    .map(|(a, slot)| (&a.draw, slot)),
+            );
+        for (draw, &(first, b)) in draws {
+            let Some(slice) = draw.statics else { continue };
+            debug_assert!(!draw.viewmodel, "a static is never a viewmodel mesh");
+            let run = gpu.run_by_index(slice.run as usize);
+            copies.push(StaticCopy::instances(gpu.instances(), run, buffer, first));
+            static_buckets[slice.run as usize] = b.expect("a world draw has a bucket");
+        }
+    }
     let draws = prims
         .into_iter()
         .zip(prim_slot)
         .map(|(p, (first, bucket))| MeshDraw {
             shape: p.shape,
             instances: instances.clone().expect("a pending draw has instances"),
-            count: p.raws.len() as u32,
+            count: p.draw.count(),
             first,
             bucket,
-            mirrored: p.mirrored,
-            viewmodel: p.viewmodel,
-            sources: p.sources,
+            mirrored: p.draw.mirrored,
+            viewmodel: p.draw.viewmodel,
+            sources: p.draw.sources,
+            statics: p.draw.statics,
         })
         .collect();
     let asset_draws = assets
@@ -332,24 +416,30 @@ pub(super) fn build_mesh_batch(
         .map(|(a, (first, bucket))| MeshAssetDraw {
             mesh: a.mesh,
             instances: instances.clone().expect("a pending draw has instances"),
-            count: a.raws.len() as u32,
+            count: a.draw.count(),
             first,
             bucket,
-            mirrored: a.mirrored,
-            viewmodel: a.viewmodel,
-            sources: a.sources,
+            mirrored: a.draw.mirrored,
+            viewmodel: a.draw.viewmodel,
+            sources: a.draw.sources,
+            statics: a.draw.statics,
         })
         .collect();
     MeshBatch {
         draws,
         asset_draws,
         instances,
+        static_buckets,
     }
 }
 
-/// Groups mesh instances by shape; world draws first, then the viewmodel's, unmirrored before
-/// mirrored within each.
-fn pending_primitives(scene: &RenderScene) -> Vec<PrimPending> {
+/// Groups mesh instances from scene index `from` on by shape, each led by its static run; world draws
+/// first, then the viewmodel's, unmirrored before mirrored within each.
+fn pending_primitives(
+    scene: &RenderScene,
+    from: usize,
+    statics: Option<&StaticGpu>,
+) -> Vec<PrimPending> {
     let mut out = Vec::new();
     for (viewmodel, (mirrored, shape)) in [false, true].into_iter().flat_map(|viewmodel| {
         [false, true].into_iter().flat_map(move |mirrored| {
@@ -357,63 +447,84 @@ fn pending_primitives(scene: &RenderScene) -> Vec<PrimPending> {
                 .map(move |shape| (viewmodel, (mirrored, shape)))
         })
     }) {
-        let (sources, raws): (Vec<u32>, Vec<MeshInstanceRaw>) = scene
+        let (lead, mut sources) = if viewmodel {
+            (None, Vec::new())
+        } else {
+            static_lead(statics, RunKey::Prim { mirrored, shape })
+        };
+        let (dynamic, raws): (Vec<u32>, Vec<MeshInstanceRaw>) = scene
             .meshes
             .iter()
             .enumerate()
+            .skip(from)
             .filter(|(_, m)| {
                 m.shape == shape && is_mirrored(&m.model) == mirrored && m.viewmodel == viewmodel
             })
-            .map(|(i, m)| {
-                (
-                    i as u32,
-                    MeshInstanceRaw {
-                        model: m.model.to_cols_array_2d(),
-                        color: m.color,
-                        material: instance_material(m),
-                        normal: instance_normal_lanes(m, &[]),
-                        fade: instance_fade(m),
-                        flash: instance_flash(m),
-                        rim: m.rim,
-                        medium: [m.medium, 0.0, 0.0, 0.0],
-                    },
-                )
-            })
+            .map(|(i, m)| (i as u32, instance_raw(m, &[])))
             .unzip();
-        if raws.is_empty() {
+        if raws.is_empty() && lead.is_none() {
             continue;
         }
+        sources.extend(dynamic);
         out.push(PrimPending {
             shape,
-            mirrored,
-            viewmodel,
-            sources,
-            raws,
+            draw: Pending {
+                mirrored,
+                viewmodel,
+                sources,
+                raws,
+                statics: lead,
+            },
         });
     }
     out
 }
 
-/// Groups asset-mesh instances by their `mesh_assets` index, keyed like [`pending_primitives`] and
-/// paired with that mesh's cached GPU buffers for an **indexed** instanced draw.
-fn pending_assets(scene: &RenderScene, meshes: &[MeshAssetGpu]) -> Vec<AssetPending> {
+/// Groups asset-mesh instances from scene index `from` on by their `mesh_assets` index, keyed like
+/// [`pending_primitives`] and paired with that mesh's cached GPU buffers for an **indexed** instanced
+/// draw.
+fn pending_assets(
+    scene: &RenderScene,
+    from: usize,
+    meshes: &[MeshAssetGpu],
+    statics: Option<&StaticGpu>,
+) -> Vec<AssetPending> {
     let mut out = Vec::new();
     let asset_bounds: Vec<AssetBounds> = meshes.iter().map(|asset| asset.bounds.clone()).collect();
     for (viewmodel, mirrored) in [(false, false), (false, true), (true, false), (true, true)] {
-        let (buckets, sources) =
-            bucket_asset_instances(scene, meshes.len(), &asset_bounds, mirrored, viewmodel);
-        for ((mesh, raws), sources) in meshes.iter().zip(buckets).zip(sources) {
+        let (buckets, sources) = bucket_asset_instances(
+            scene,
+            from,
+            meshes.len(),
+            &asset_bounds,
+            mirrored,
+            viewmodel,
+        );
+        for (index, ((mesh, raws), dynamic)) in meshes.iter().zip(buckets).zip(sources).enumerate()
+        {
+            let (lead, mut sources) = if viewmodel {
+                (None, Vec::new())
+            } else {
+                static_lead(statics, RunKey::Asset { mirrored, index })
+            };
             // An empty mesh is valid content (erasing a model's last voxel) with nothing to draw;
             // its zero-size buffers cannot be sliced, so it never reaches a draw loop.
-            if raws.is_empty() || mesh.vertex_count == 0 || mesh.index_count == 0 {
+            if (raws.is_empty() && lead.is_none())
+                || mesh.vertex_count == 0
+                || mesh.index_count == 0
+            {
                 continue;
             }
+            sources.extend(dynamic);
             out.push(AssetPending {
                 mesh: mesh.clone(),
-                mirrored,
-                viewmodel,
-                sources,
-                raws,
+                draw: Pending {
+                    mirrored,
+                    viewmodel,
+                    sources,
+                    raws,
+                    statics: lead,
+                },
             });
         }
     }

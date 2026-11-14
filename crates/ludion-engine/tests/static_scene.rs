@@ -501,3 +501,62 @@ fn the_gi_grid_is_kept_on_quiet_frames_and_rebuilt_when_a_static_moves() {
     assert_ne!(moved.hash, grid.hash, "a moved static rebuilds the grid");
     on_equals_off(&mut engine);
 }
+
+/// **The static-kit room renders the same through the persistent static buffers.** With the range and
+/// without it the room's pixels are equal, 20 repeats on one renderer agree, and a moved static
+/// renders as the zeroed scene does on a fresh renderer.
+#[test]
+fn needs_gpu_the_static_kit_renders_the_same_through_the_static_buffers() {
+    use ludion_renderer::{FrameSize, Renderer};
+
+    let renderer = match Renderer::new() {
+        Ok(renderer) => renderer,
+        Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
+            eprintln!("SKIPPED the_static_kit_renders_the_same: no GPU adapter");
+            return;
+        }
+        Err(d) => panic!("renderer init failed: {d:?}"),
+    };
+    let size = FrameSize::native(640, 360);
+    let zeroed = |scene: &RenderScene| {
+        let mut plain = scene.clone();
+        plain.statics = Default::default();
+        plain
+    };
+    let mut engine = Engine::builder()
+        .project_root(gallery())
+        .build()
+        .expect("boots");
+    let text = std::fs::read_to_string(gallery().join("staged/static-kit.yaml"))
+        .expect("the committed static-kit scene");
+    engine.load_inline_scene(&text).expect("the scene loads");
+    let (scene, _) = extract(&mut engine);
+    assert!(scene.statics.count > 1_900, "the kit is the static prefix");
+
+    let plain = renderer.render(&zeroed(&scene), size).expect("plain").rgba;
+    let with_statics = renderer.render(&scene, size).expect("statics").rgba;
+    assert_eq!(with_statics, plain, "the static buffers changed the room");
+    for run in 1..20 {
+        let again = renderer.render(&scene, size).expect("repeat").rgba;
+        assert_eq!(again, with_statics, "repeat {run} differs");
+    }
+
+    let wall = named(&engine, "kit-wall-00-00");
+    let x = engine
+        .world()
+        .get::<Transform>(wall)
+        .expect("transform")
+        .expect("transform")
+        .translation[0];
+    set_x(&mut engine, wall, x + 0.7);
+    let (moved, _) = extract(&mut engine);
+    assert_ne!(moved.statics.key, scene.statics.key, "the move re-keys");
+    let patched = renderer.render(&moved, size).expect("patched").rgba;
+    let fresh = Renderer::new().expect("a second renderer");
+    let expected = fresh.render(&zeroed(&moved), size).expect("fresh").rgba;
+    assert_eq!(
+        patched, expected,
+        "the patched static renders as a fresh one"
+    );
+    assert_ne!(patched, with_statics, "the moved wall shows");
+}
