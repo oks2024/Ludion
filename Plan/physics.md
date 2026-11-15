@@ -45,7 +45,7 @@ and what stays ours.
   `TickRate::seconds_per_tick()`, set once; no render-rate stepping; the renderer may interpolate
   presentation only.
 - **The mirror order is ours.** The handle table is a `Vec<(EntityId, RigidBodyHandle)>` in
-  **creation order**, and it is the only order that reaches an output. Nothing whose order reaches an
+  **creation order**, fed in spawn-rank order, and it is the only order that reaches an output. Nothing whose order reaches an
   output iterates a rapier set unsorted — rebuilding the table by walking a set would be exactly
   the determinism bug this contract forbids — so the table is captured in the snapshot, never
   recomputed. The two order-insensitive walks are `record_detection_poses` and
@@ -277,6 +277,10 @@ Two hashed, sim-only components beside `JointMotor` (in `ludion-spatial`): `Join
 - (ii) Additive `RigidBody.sleep_angular_threshold: Option<f32>` (rad/s, `>= 0`), written to `activation.angular_threshold` at creation and in place, like `sleep_threshold`.
 - (iii) Measured with `sleep_threshold` 0.1 and `sleep_after_ticks` 15: calm/shot/curl sleep at 123/132/129 ticks at 2.4 (the least value at which all three have plateaued; at 2.3 calm is still 126, shot and curl plateau from 1.9 and 1.8). Past it the linear/drift gate binds, so the 120-tick budget is not reachable by the angular gate alone; the fastest combination swept, 0.15 / 8 / 2.4, gives 108/124/120.
 - (iv) Risk: a body slept mid-rock freezes visibly at up to that angular speed. That is acceptable for corpses, and only opted-in bodies are affected.
+
+**Decided (Serious Isaac 0043). Physics order follows spawn order, never slot values.** The write system builds, rebuilds, pushes and wakes bodies, and inserts joints, in ascending ECS **spawn rank**, a monotonic per-occupancy stamp that `World::spawn` takes. Blasts, partner wakes and the motor's contact tie-break go in table order. So rapier's whole call history, and with it its arena handles, islands and contact order, is invariant under unrelated entity churn.
+
+The creation-order handle table remains the only iteration order; only the order in which it is fed changes. Ranks are not hashed. They ride the snapshot as an optional `spawn_order`, omitted when it equals slot order. Event and query lists keep their documented `EntityId` order. One-time cost: worlds that respawn claimed bodies into reused slots shift once, and the `.lrp` corpus re-records. The ECS freeze list gains "spawn rank" (`engine-architecture.md` §4), as a named one-off.
 
 ## Waves
 
@@ -1058,3 +1062,5 @@ a private plan; pointer only). Reference box, on the spike:
 **Serious Isaac 0020 (threaded step), mechanized.** `parallel` is on, rapier on a pool `ludion-physics` owns, hashes unmoved. RTX 3090, 8 threads, release: horde bench step 4.654 / 6.583 → 2.262 / 3.014 ms (mean / p99); at 1 thread 4.421 → 4.969 ms; stress step 1.216 → 1.019 ms. The physics-stress budget, re-measured over four warm 300-frame runs at 8 threads (median of runs, ms), still passes everywhere and is **not re-pinned** (a global swing moves no ceiling): `physics_step` 1.1316 → 0.9918 (ceiling 2.30), `physics_write` 0.0851 → 0.1104 (0.17), `physics_mirror` 0.0670 → 0.0739 (0.14), frame total 1.2861 → 1.3229 (2.60). No horde budget exists; `ragdoll_bench`'s ceilings are in-code and unpinned. M4 twins are owed in the owed ledger.
 
 **Serious Isaac 0020 follow-up (step deadlock), mechanized.** The step hung at 0% CPU in `join_deferred_bvh_optimize`: the broad phase `rayon::spawn`s its deferred BVH optimize, which from a worker lands on that worker's own deque with no guaranteed wake, and the join then blocked that same worker in a plain `recv`. The vendored join now runs pool jobs (`rayon::yield_now`) until the task arrives (`vendor/rapier3d/LUDION-PATCH.md`). `tests/solver_pool_progress.rs` holds a deterministic repro (one of two workers pinned by a blocker, red before the fix) and a 1/2/8-thread soak with reloads, restores and pool rebuilds, both under a watchdog. No hash moved. Fix rev r2324.
+
+**Serious Isaac 0043 (physics order follows spawn rank), 2026-11-15, mechanized.** The write system feeds rapier in ECS spawn-rank order; blasts, partner wakes and the motor tie-break use table order; `SnapshotDoc.spawn_order` carries the order; `tests/churn.rs` pins bit-identity under churn. `physics-stress`, 300 frames, 8 threads, release, M5 (unpinned, indicative), median of 3: `physics_write` 0.060 → 0.063 ms, `physics_step` 0.512 → 0.511 ms. The gated CPU traces are checked at the corpus re-record.

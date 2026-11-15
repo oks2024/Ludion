@@ -224,3 +224,56 @@ fn a_huge_entity_index_without_an_allocator_is_refused_and_changes_nothing() {
     assert_eq!(target.world().entity_count(), 1);
     assert_eq!(target.frame(), frame);
 }
+
+/// Spawns six, despawns slots 2 and 4, spawns two more: they reuse slots 4 then 2, so spawn order
+/// differs from slot order.
+fn churned_order(engine: &mut Engine) -> Vec<EntityId> {
+    let world = engine.world_mut();
+    let ids: Vec<EntityId> = (0..6).map(|_| world.spawn()).collect();
+    world.despawn(ids[2]).unwrap();
+    world.despawn(ids[4]).unwrap();
+    world.spawn();
+    world.spawn();
+    world.entities().collect()
+}
+
+#[test]
+fn a_churned_spawn_order_survives_a_restore() {
+    let mut engine = Engine::new();
+    let live = churned_order(&mut engine);
+    let order = engine.world().spawn_order().expect("slots were reused");
+    let snapshot = snapshot_of(&mut engine);
+    assert_eq!(snapshot["spawn_order"], serde_json::json!(order));
+
+    let mut restored = Engine::new();
+    restore(&mut restored, snapshot);
+    assert_eq!(restored.world().spawn_order(), Some(order));
+    for pair in live.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        assert_eq!(
+            engine.world().spawn_rank(a) < engine.world().spawn_rank(b),
+            restored.world().spawn_rank(a) < restored.world().spawn_rank(b),
+        );
+    }
+}
+
+#[test]
+fn a_clean_snapshot_omits_the_spawn_order() {
+    let mut engine = Engine::new();
+    for _ in 0..5 {
+        engine.world_mut().spawn();
+    }
+    assert!(snapshot_of(&mut engine).get("spawn_order").is_none());
+}
+
+#[test]
+fn a_spawn_order_that_is_not_a_permutation_is_refused() {
+    let mut engine = Engine::new();
+    churned_order(&mut engine);
+    let mut snapshot = snapshot_of(&mut engine);
+    snapshot["spawn_order"][0] = Value::from(999);
+
+    let (code, path) = restore_err(&mut Engine::new(), snapshot);
+    assert_eq!(code, "L0025");
+    assert!(path.unwrap().starts_with("/spawn_order"));
+}

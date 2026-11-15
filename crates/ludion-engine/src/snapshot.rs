@@ -245,6 +245,12 @@ struct SnapshotDoc {
     /// `WorldHash` by construction (the hash visits only live slots).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     allocator: Option<ludion_ecs::AllocatorState>,
+    /// The live sim slot indices, earliest spawn first, present **only when** that order differs
+    /// from slot order (a slot reused after a despawn). Optional and additive (the `allocator`
+    /// precedent): a clean snapshot omits it, and an older snapshot restores in slot order. Physics
+    /// feeds its solver in this order, so it must survive a restore. Never hashed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spawn_order: Option<Vec<u32>>,
     /// The live presentation entities (`Plan/presentation-state.md`), in ascending slot-index
     /// order, with their components. Optional and additive (the `doc_reloads` precedent): a world
     /// with none omits it and serializes byte-identically to before this field existed, and an
@@ -517,6 +523,7 @@ pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
         pending_input: engine.pending_input(),
         entities,
         allocator: engine.world().allocator_state(),
+        spawn_order: engine.world().spawn_order(),
         presentation,
         presentation_allocator: engine.world().presentation_allocator_state(),
         doc_reloads: engine
@@ -827,7 +834,7 @@ pub(crate) enum DriftPolicy {
 /// # Errors
 /// `L3008` for a genuinely malformed snapshot document — a wrong envelope shape, an unparseable
 /// body, an unsupported `format`, an invalid speed, a `frame` past `MAX_RESTORE_FRAME`, or a
-/// `pending_input` event addressed to a frame before the snapshot's; `L0025` for an entity allocator state that
+/// `pending_input` event addressed to a frame before the snapshot's; `L0025` for an entity allocator state or a `spawn_order` that
 /// is inconsistent; `L3041` when the `allocator` field's live slots differ from the `entities`
 /// list. All are raised before the engine is touched. Per-component drift never errors; it lands in
 /// the returned report.
@@ -975,6 +982,15 @@ pub(crate) fn restore_into(
         "entities",
         "allocator",
     )?;
+    if let Some(order) = &doc.spawn_order {
+        world.restore_spawn_order(order).map_err(|mut diagnostic| {
+            diagnostic.path = Some(format!(
+                "/spawn_order{}",
+                diagnostic.path.as_deref().unwrap_or_default()
+            ));
+            diagnostic
+        })?;
+    }
     let presentation_live: Vec<EntityId> = doc
         .presentation
         .iter()

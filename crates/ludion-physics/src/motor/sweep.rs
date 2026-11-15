@@ -77,7 +77,7 @@ impl PhysicsWorld {
         })
     }
 
-    /// Every contact of the capsule at `center` within `prediction`, sorted `(dist, entity)`.
+    /// Every contact of the capsule at `center` within `prediction`, sorted `(dist, table row, entity)`.
     /// Composite shapes (a level mesh) report their single deepest contact.
     pub(crate) fn capsule_contacts(
         &self,
@@ -116,7 +116,15 @@ impl PhysicsWorld {
                 point: from_vector(pose * contact.point1),
             });
         });
-        contacts.sort_unstable_by(|a, b| a.dist.total_cmp(&b.dist).then(a.entity.cmp(&b.entity)));
+        contacts.sort_unstable_by(|a, b| {
+            a.dist
+                .total_cmp(&b.dist)
+                .then_with(|| {
+                    self.creation_row(a.entity)
+                        .cmp(&self.creation_row(b.entity))
+                })
+                .then(a.entity.cmp(&b.entity))
+        });
         contacts
     }
 

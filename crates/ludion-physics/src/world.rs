@@ -2098,8 +2098,10 @@ impl PhysicsWorld {
     }
 
     /// Wakes every body still touching `entity` (this crate's own `touching` set), so nothing is
-    /// left resting asleep on a shape that changed or vanished.
+    /// left resting asleep on a shape that changed or vanished. Wakes go in table (creation)
+    /// order, never the entity-pair order `touching` is kept in.
     fn wake_touching(&mut self, entity: EntityId) {
+        let mut partners = Vec::new();
         for &(a, b) in &self.touching {
             let partner = if a == entity {
                 b
@@ -2109,8 +2111,12 @@ impl PhysicsWorld {
                 continue;
             };
             if let Some(&row) = self.rows.get(&partner) {
-                self.rapier.wake_up(self.table[row].body, true);
+                partners.push(row);
             }
+        }
+        partners.sort_unstable();
+        for row in partners {
+            self.rapier.wake_up(self.table[row].body, true);
         }
     }
 
@@ -2269,8 +2275,9 @@ impl PhysicsWorld {
         }
     }
 
-    /// Reconciles the joint table against `live` — every carrier's current `Joint`, ascending by
-    /// entity id (the typed join's own order, `systems.rs::write`'s query). Called after the body
+    /// Reconciles the joint table against `live` — every carrier's current `Joint`, ordered by the
+    /// carrier's spawn rank (`systems.rs::write`'s sort), so a joint is inserted in an order churn
+    /// cannot permute. Called after the body
     /// loop, so `self.rows` already reflects this tick's creations, rebuilds and retirements.
     ///
     /// A carrier not in `live` any more is retired (its rapier joint removed, if any), and so is
@@ -2286,7 +2293,9 @@ impl PhysicsWorld {
     /// bodies' current poses; and a handle that is `None`, or no longer present in
     /// `rapier.impulse_joints` (a body rebuild or retirement cascaded its removal), is reattached.
     pub(crate) fn reconcile_joints(&mut self, live: &[(EntityId, Joint)]) {
-        let carriers: Vec<EntityId> = live.iter().map(|(carrier, _)| *carrier).collect();
+        // The binary searches below need entity order; the insert loop keeps `live`'s rank order.
+        let mut carriers: Vec<EntityId> = live.iter().map(|(carrier, _)| *carrier).collect();
+        carriers.sort_unstable();
         let stale = self
             .joints
             .iter()
@@ -2638,6 +2647,11 @@ impl PhysicsWorld {
     /// The table row for `entity`, if it has one.
     pub(crate) fn entry(&self, entity: EntityId) -> Option<&BodyEntry> {
         self.rows.get(&entity).map(|&row| &self.table[row])
+    }
+
+    /// `entity`'s table position; a churn-invariant tie-break.
+    pub(crate) fn creation_row(&self, entity: EntityId) -> usize {
+        self.rows.get(&entity).copied().unwrap_or(usize::MAX)
     }
 
     /// `entity`'s body handle if it is `rigid`, or why it is not: no body at all, or a `static` or

@@ -469,13 +469,16 @@ fn gather<P: PhysicsPose, R: ParentPose>(
             }
         }
     }
-    live.sort_by_key(|(entity, ..)| *entity);
+    // Spawn rank, not slot value: rapier's whole call history follows this order, and a slot is
+    // reused LIFO, so unrelated churn would otherwise permute it. Rank order equals slot order in
+    // a freshly loaded scene.
+    live.sort_by_key(|(entity, ..)| (world.spawn_rank(*entity).unwrap_or(u64::MAX), *entity));
     // Nothing claimed and no world yet: allocate nothing. A 2D game that registers this verb pays
     // the query and no more, and the resource only ever exists for a scene that has physics in it.
     if live.is_empty() && physics.is_none() && motor_rejections.is_empty() {
         return None;
     }
-    // A sorted side list rather than a map: both walks are ascending, so one cursor joins them.
+    // A sorted side list rather than a map: the join binary-searches it by entity.
     let velocities: Vec<(EntityId, Velocity)> = world
         .query_ids::<(&Velocity,)>()
         .map(|(entity, (velocity,))| (entity, *velocity))
@@ -490,10 +493,11 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         PhysicsSpace::Free => None,
         PhysicsSpace::Planar => Some(Plane::of(world)),
     };
-    let joints: Vec<(EntityId, Joint)> = world
+    let mut joints: Vec<(EntityId, Joint)> = world
         .query_ids::<(&Joint,)>()
         .map(|(entity, (joint,))| (entity, joint.clone()))
         .collect();
+    joints.sort_by_key(|(entity, _)| (world.spawn_rank(*entity).unwrap_or(u64::MAX), *entity));
     let motors: Vec<(EntityId, JointMotor)> = world
         .query_ids::<(&JointMotor,)>()
         .map(|(entity, (motor,))| (entity, motor.clone()))
@@ -532,7 +536,9 @@ fn apply(world: &World, physics: &mut PhysicsWorld, inputs: &WriteInputs) {
         });
     }
 
-    let present: Vec<EntityId> = inputs.live.iter().map(|(entity, ..)| *entity).collect();
+    // `live` is in spawn-rank order; `retire` binary-searches an entity-sorted copy.
+    let mut present: Vec<EntityId> = inputs.live.iter().map(|(entity, ..)| *entity).collect();
+    present.sort_unstable();
     let gone: Vec<EntityId> = physics
         .retire(&present)
         .into_iter()
@@ -542,17 +548,13 @@ fn apply(world: &World, physics: &mut PhysicsWorld, inputs: &WriteInputs) {
 
     let velocities = &inputs.velocities;
     let teleports = &inputs.teleports;
-    let mut cursor = 0;
     for (entity, translation, rotation, source, mesh) in &inputs.live {
         let (entity, translation, rotation) = (*entity, *translation, *rotation);
         let mesh = mesh.clone();
-        while cursor < velocities.len() && velocities[cursor].0 < entity {
-            cursor += 1;
-        }
         let velocity = velocities
-            .get(cursor)
-            .filter(|(candidate, _)| *candidate == entity)
-            .map(|&(_, velocity)| velocity);
+            .binary_search_by_key(&entity, |(candidate, _)| *candidate)
+            .ok()
+            .map(|index| velocities[index].1);
         if let Some(collider) = source {
             if physics.retune_in_place(entity, collider, mesh_hash_of(&mesh)) {
                 physics.push(entity, translation, rotation, velocity);
@@ -580,9 +582,10 @@ fn apply(world: &World, physics: &mut PhysicsWorld, inputs: &WriteInputs) {
 /// Reconciles the body set with the colliders physics [`claims`] and pushes this tick's authored
 /// state in.
 ///
-/// Bodies are created and retired in **ascending entity order** — the typed join's order, which is
-/// a pure function of world content and independent of spawn order — so the creation-order handle
-/// table is reproducible from the scene alone.
+/// Bodies are created, rebuilt, pushed and woken, and joints inserted, in ascending ECS **spawn
+/// rank**, which unrelated spawn and despawn churn cannot reorder, so the creation-order handle
+/// table (and with it rapier's whole call history) is reproducible from the scene alone.
+/// Retirement stays in table order.
 ///
 /// Tick 1 adopts the world [`prime`] built at commit when the inputs it gathers equal the prime's,
 /// field for field; otherwise the prime is dropped and the world is built here.

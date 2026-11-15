@@ -169,6 +169,8 @@ fn sparks(world: &mut World, _ctx: &SystemCtx) {
 
 **Events name ids that may be gone.** A contact, sensor (`ExitCause::Despawned`, `ludion docs physics-sensors`) or joint-break event is read a tick after its step, so it can name an entity a system despawned since: check it is alive before reading its components.
 
+**Order.** The solver is independent of unrelated spawns and despawns: bodies and joints reach it in spawn order, not slot order. Contact, sensor and joint events, `blast_hits`, queries and the motor's wall report stay in `EntityId` order, so a game folding floats over one of these lists in list order inherits id order.
+
 **Time scale.** `scale_time`, `freeze` and `last_step_dt` slow or stop the step alone (a hit-stop, slow motion); an impact's impulse survives it: `ludion docs physics-time-scale`.
 
 **Queries.** `ray_cast`, `shape_cast` and `overlap` are pure reads against the solver, reading the

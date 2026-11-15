@@ -303,10 +303,7 @@ impl PhysicsWorld {
     /// Resolves every body `blast` reaches against the last step, then pushes them all.
     fn apply_blast(&mut self, index: u32, blast: &Blast) {
         let targets = self.blast_targets(blast);
-        for target in targets {
-            if let Some(body) = self.rapier.bodies.get_mut(target.body) {
-                body.apply_impulse_at_point(target.impulse, target.point, true);
-            }
+        for target in &targets {
             self.blast_hits.push(BlastHit {
                 blast: index,
                 entity: target.entity,
@@ -314,9 +311,19 @@ impl PhysicsWorld {
                 point: from_vector(target.point),
             });
         }
+        // Pushed in table (creation) order, so the wake order is churn-invariant; `blast_hits`
+        // above keeps its documented `EntityId` order.
+        let mut order: Vec<usize> = (0..targets.len()).collect();
+        order.sort_by_key(|&i| self.creation_row(targets[i].entity));
+        for i in order {
+            let target = &targets[i];
+            if let Some(body) = self.rapier.bodies.get_mut(target.body) {
+                body.apply_impulse_at_point(target.impulse, target.point, true);
+            }
+        }
     }
 
-    /// The rigid bodies `blast` pushes, `EntityId` ascending, each with its closest point and impulse
+    /// The rigid bodies `blast` pushes (`EntityId` ascending; application order is separate), each with its closest point and impulse
     /// vector.
     fn blast_targets(&self, blast: &Blast) -> Vec<BlastTarget> {
         // A layer table that no longer declares an ignored name reaches here only if it changed

@@ -76,7 +76,7 @@ every game crate):
    rapier's internal scheduler on the pool `ludion-physics` owns, sized `par::threads()`
    (`Plan/deterministic-job-system.md`).
 6. **Deterministic entity allocation** — free-list pop order defined and conformance-tested in
-   `ludion-ecs`.
+   `ludion-ecs`. Each live slot also carries a never-hashed spawn rank; physics feeds rapier in rank order, so its result does not depend on unrelated entity churn.
 
 Host-side crates (`ludion-render-graph`, `ludion-renderer`, `ludion-testkit`) are exempt: their
 `clippy.toml`s are deliberately empty (wall clock is *required* for GPU timings; std hash containers

@@ -649,7 +649,16 @@ impl<'a> Solver<'a> {
             contact.dist += self.skin;
         }
         contacts.retain(|contact| !self.is_free_prop(contact));
-        contacts.sort_unstable_by(|a, b| a.dist.total_cmp(&b.dist).then(a.entity.cmp(&b.entity)));
+        contacts.sort_unstable_by(|a, b| {
+            a.dist
+                .total_cmp(&b.dist)
+                .then_with(|| {
+                    self.physics
+                        .creation_row(a.entity)
+                        .cmp(&self.physics.creation_row(b.entity))
+                })
+                .then(a.entity.cmp(&b.entity))
+        });
         contacts
     }
 
