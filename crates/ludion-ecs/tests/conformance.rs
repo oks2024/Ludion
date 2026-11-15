@@ -1118,3 +1118,93 @@ fn query_join_edge_layouts_match_reference() {
         check_joins(label, &mut world, &mut mirror, 7);
     }
 }
+
+// --- Spawn rank (Serious Isaac 0043) --------------------------------------------------------------
+
+#[test]
+fn spawn_ranks_are_monotonic_and_a_lifo_reuse_gets_a_fresh_rank() {
+    let mut world = World::new();
+    let ids: Vec<EntityId> = (0..4).map(|_| world.spawn()).collect();
+    let ranks: Vec<u64> = ids
+        .iter()
+        .map(|&id| world.spawn_rank(id).unwrap())
+        .collect();
+    assert!(ranks.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(world.spawn_order(), None, "a fresh world is in slot order");
+
+    // Free 1 then 3: LIFO hands slot 3 to the next spawn, then slot 1.
+    world.despawn(ids[1]).unwrap();
+    world.despawn(ids[3]).unwrap();
+    assert_eq!(world.spawn_rank(ids[1]), None, "a stale handle has no rank");
+    let a = world.spawn();
+    let b = world.spawn();
+    assert_eq!((a.index(), b.index()), (3, 1));
+    let (ra, rb) = (world.spawn_rank(a).unwrap(), world.spawn_rank(b).unwrap());
+    assert!(
+        ra > ranks[3] && rb > ra,
+        "a reused slot takes a fresh, later rank"
+    );
+    assert_eq!(world.spawn_order(), Some(vec![0, 2, 3, 1]));
+}
+
+#[test]
+fn spawn_order_round_trips_through_a_restore() {
+    let mut world = World::new();
+    let ids: Vec<EntityId> = (0..4).map(|_| world.spawn()).collect();
+    world.despawn(ids[1]).unwrap();
+    world.despawn(ids[3]).unwrap();
+    world.spawn();
+    world.spawn();
+    let order = world.spawn_order().expect("churned");
+    assert!(
+        world.allocator_state().is_none(),
+        "every recycled slot is live again, so the live set rebuilds the allocator"
+    );
+    let live: Vec<EntityId> = world.entities().collect();
+
+    let mut restored = World::new();
+    restored.restore_entities(&live).unwrap();
+    assert_eq!(
+        restored.spawn_order(),
+        None,
+        "restore defaults to slot order"
+    );
+    restored.restore_spawn_order(&order).unwrap();
+    assert_eq!(restored.spawn_order(), Some(order));
+    let next = restored.spawn();
+    assert_eq!(
+        restored.spawn_rank(next).unwrap(),
+        4,
+        "a post-restore spawn ranks after every live entity"
+    );
+}
+
+#[test]
+fn restore_spawn_order_rejects_a_non_permutation_and_leaves_ranks_alone() {
+    let mut world = World::new();
+    for _ in 0..3 {
+        world.spawn();
+    }
+    for bad in [&[0u32, 1][..], &[0, 1, 1], &[0, 1, 9]] {
+        let error = world.restore_spawn_order(bad).unwrap_err();
+        assert_eq!(error.code, code::ENTITY_ALLOCATOR_STATE_INVALID, "{bad:?}");
+    }
+    assert_eq!(world.spawn_order(), None);
+}
+
+#[test]
+fn a_recycled_but_reducible_allocator_still_omits_its_state() {
+    // Slots 1 and 3 are recycled (generation 1) yet live again: the live ids carry the generations,
+    // so the allocator is reducible although the ranks no longer follow slot order.
+    let mut world = World::new();
+    let ids: Vec<EntityId> = (0..4).map(|_| world.spawn()).collect();
+    world.despawn(ids[1]).unwrap();
+    world.despawn(ids[3]).unwrap();
+    world.spawn();
+    world.spawn();
+    assert!(world.spawn_order().is_some());
+    assert!(
+        world.allocator_state().is_none(),
+        "ranks are not part of allocator equality"
+    );
+}

@@ -70,11 +70,23 @@ pub enum Phase {
 
 /// One entity slot: the generation currently (or most recently) occupying it, and whether it is
 /// live right now.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `rank` is the spawn rank of the current occupancy (see [`EntityAllocator::alloc`]). It is not part
+/// of equality: ranks are never hashed and a snapshot reproduces them separately, so the "can the
+/// live set alone rebuild this allocator" test must ignore them.
+#[derive(Clone, Copy, Debug)]
 struct Slot {
     generation: u32,
     alive: bool,
+    rank: u64,
 }
+
+impl PartialEq for Slot {
+    fn eq(&self, other: &Self) -> bool {
+        self.generation == other.generation && self.alive == other.alive
+    }
+}
+impl Eq for Slot {}
 
 /// A serializable snapshot of the **entire** generational allocator — every slot's generation plus
 /// the free-list stack order — sufficient to reconstruct it exactly, including the generations of
@@ -101,13 +113,22 @@ pub struct AllocatorState {
 }
 
 /// Allocates and recycles [`EntityId`]s with generational safety and a deterministic free-list.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub(crate) struct EntityAllocator {
     /// Indexed by slot index; grows and never shrinks.
     slots: Vec<Slot>,
     /// Indices of currently-free slots, used as a LIFO stack (`push`/`pop` at the end).
     free: Vec<u32>,
+    /// The rank the next `alloc` stamps; strictly above every live slot's rank. Not in equality.
+    next_rank: u64,
 }
+
+impl PartialEq for EntityAllocator {
+    fn eq(&self, other: &Self) -> bool {
+        self.slots == other.slots && self.free == other.free
+    }
+}
+impl Eq for EntityAllocator {}
 
 impl EntityAllocator {
     /// Reconstructs an allocator in which exactly `live` are alive, each at its own generation.
@@ -140,6 +161,7 @@ impl EntityAllocator {
             Slot {
                 generation: 0,
                 alive: false,
+                rank: 0,
             };
             len
         ];
@@ -165,6 +187,7 @@ impl EntityAllocator {
             *slot = Slot {
                 generation: entity.generation,
                 alive: true,
+                rank: u64::from(entity.index),
             };
         }
         // Push free indices high-to-low so the LIFO `pop` hands out the lowest free index first —
@@ -173,7 +196,12 @@ impl EntityAllocator {
             .rev()
             .filter(|&i| !slots[i as usize].alive)
             .collect();
-        Ok(EntityAllocator { slots, free })
+        let next_rank = len as u64;
+        Ok(EntityAllocator {
+            slots,
+            free,
+            next_rank,
+        })
     }
 
     /// Serializes the full allocator — every slot's generation and the free-list order — into an
@@ -231,14 +259,17 @@ impl EntityAllocator {
             .generations
             .iter()
             .zip(dead)
-            .map(|(&generation, is_dead)| Slot {
+            .enumerate()
+            .map(|(index, (&generation, is_dead))| Slot {
                 generation,
                 alive: !is_dead,
+                rank: index as u64,
             })
             .collect();
         Ok(EntityAllocator {
             slots,
             free: state.free.clone(),
+            next_rank: slot_count as u64,
         })
     }
 
@@ -258,14 +289,18 @@ impl EntityAllocator {
     }
 
     /// Allocates an entity, reusing the most recently freed slot (LIFO) if any, otherwise appending
-    /// a fresh slot at generation 0.
+    /// a fresh slot at generation 0. Each occupancy is stamped with the next spawn rank, so relative
+    /// rank is spawn-call order whatever slots the free list hands out.
     ///
     /// # Panics
     /// When every one of [`MAX_ENTITY_SLOTS`] slots is live.
     pub(crate) fn alloc(&mut self) -> EntityId {
+        let rank = self.next_rank;
+        self.next_rank += 1;
         if let Some(index) = self.free.pop() {
             let slot = &mut self.slots[index as usize];
             slot.alive = true;
+            slot.rank = rank;
             EntityId::new(index, slot.generation)
         } else {
             let index = u32::try_from(self.slots.len())
@@ -279,6 +314,7 @@ impl EntityAllocator {
             self.slots.push(Slot {
                 generation: 0,
                 alive: true,
+                rank,
             });
             EntityId::new(index, 0)
         }
@@ -338,6 +374,72 @@ impl EntityAllocator {
     pub(crate) fn live_id_at(&self, index: u32) -> Option<EntityId> {
         let slot = self.slots.get(index as usize)?;
         slot.alive.then(|| EntityId::new(index, slot.generation))
+    }
+
+    /// The spawn rank of the live entity in slot `index`; `None` for a free or out-of-range slot.
+    pub(crate) fn rank_at(&self, index: u32) -> Option<u64> {
+        let slot = self.slots.get(index as usize)?;
+        slot.alive.then_some(slot.rank)
+    }
+
+    /// The live slot indices in ascending spawn-rank order, or `None` when that is ascending slot
+    /// order (the common case, which a snapshot omits).
+    pub(crate) fn spawn_order(&self) -> Option<Vec<u32>> {
+        let mut order: Vec<u32> = self.iter_alive().map(|id| id.index).collect();
+        if order
+            .windows(2)
+            .all(|w| self.slots[w[0] as usize].rank < self.slots[w[1] as usize].rank)
+        {
+            return None;
+        }
+        order.sort_by_key(|&index| self.slots[index as usize].rank);
+        Some(order)
+    }
+
+    /// Re-ranks the live slots to `order` (rebased to `0..n`; only relative order is observable).
+    ///
+    /// # Errors
+    /// `L0025` at `/<position>` if `order` names a slot that is not live or repeats one, or if it
+    /// omits a live slot (position = its length); the allocator is left untouched.
+    pub(crate) fn restore_order(&mut self, order: &[u32]) -> Result<(), Diagnostic> {
+        let invalid = |position: usize, message: String| {
+            Diagnostic::new(code::ENTITY_ALLOCATOR_STATE_INVALID, message)
+                .with_path(format!("/{position}"))
+                .with_help("re-take the snapshot rather than editing the spawn order")
+        };
+        let mut seen = vec![false; self.slots.len()];
+        for (position, &index) in order.iter().enumerate() {
+            match seen.get_mut(index as usize) {
+                Some(flag) if self.slots[index as usize].alive && !*flag => *flag = true,
+                Some(flag) if *flag => {
+                    return Err(invalid(
+                        position,
+                        format!("spawn order repeats slot {index}"),
+                    ));
+                }
+                _ => {
+                    return Err(invalid(
+                        position,
+                        format!("spawn order names slot {index}, which is not live"),
+                    ));
+                }
+            }
+        }
+        if order.len() != self.alive_count() {
+            return Err(invalid(
+                order.len(),
+                format!(
+                    "spawn order lists {} slots but {} are live",
+                    order.len(),
+                    self.alive_count()
+                ),
+            ));
+        }
+        for (rank, &index) in order.iter().enumerate() {
+            self.slots[index as usize].rank = rank as u64;
+        }
+        self.next_rank = order.len() as u64;
+        Ok(())
     }
 
     /// A human-readable reason a handle is not alive, for diagnostics. Only meaningful when

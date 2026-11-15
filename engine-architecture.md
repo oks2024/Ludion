@@ -215,14 +215,16 @@ journal above is the one exception), relations, exclusive
 systems, world splitting. Chunk-level data parallelism *within* one system is the one sanctioned
 exception (via `ludion_core::par`, per `Plan/deterministic-job-system.md` J0/J1) — its ECS entry
 points are `World::par_for_each`/`par_join_fold`; a system-level parallel scheduler stays out.
-**Budget 3000 code lines under `crates/ludion-ecs/src`** (non-blank, non-comment, outside the test
+**Budget 3300 code lines under `crates/ludion-ecs/src`** (non-blank, non-comment, outside the test
 module; gated by `scripts/ecs-budget.mjs`, raising it is the user's decision). The original ≈ 2–3k
 was set for the sequential v1 and the crate sat at ≈ 2.9k against it; J1 (user unfreeze, 2026-08-01)
 deliberately spends the difference on the parallel region machinery (`par_query.rs`) — a one-off
 raise for a named plan, not a standing licence to grow; the 0033 column handle is a second named,
-owner-approved addition, spent inside the existing 3000; the 0039 write journal is a third, a named
-one-off raise of the target to 3250 (quality wins over the number: raise it again rather than
-compromise the code). Conformance tests are written *before*
+owner-approved addition, spent inside the then-current 3000; the 0039 write journal is a third, a named
+one-off raise of the target to 3250; the 0043 spawn rank (a per-occupancy `u64` stamped by `alloc`,
+`World::spawn_rank`/`spawn_order`/`restore_spawn_order`, so physics can feed rapier in spawn order
+rather than slot order) is a fourth, raising it to 3300. A size budget never justifies degrading
+code quality, architecture or performance: a capability that needs lines goes to the user as a raise. Conformance tests are written *before*
 storage internals: generational safety (stale `EntityId` is an error, not a hit on a recycled
 entity), query iteration order.
 

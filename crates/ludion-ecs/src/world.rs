@@ -553,6 +553,33 @@ impl World {
         Ok(())
     }
 
+    /// The spawn rank of sim entity `entity`: a monotonic stamp taken at each [`spawn`](World::spawn),
+    /// so a lower rank was spawned earlier whatever slot it landed in. `None` for a dead,
+    /// stale or presentation handle. Never hashed.
+    pub fn spawn_rank(&self, entity: EntityId) -> Option<u64> {
+        self.entities
+            .is_alive(entity)
+            .then(|| self.entities.rank_at(entity.index))
+            .flatten()
+    }
+
+    /// The live sim slot indices in spawn-rank order, or `None` when that equals ascending slot
+    /// order (a world with no slot reuse), mirroring [`allocator_state`](World::allocator_state):
+    /// `None` keeps a clean snapshot byte-identical.
+    pub fn spawn_order(&self) -> Option<Vec<u32>> {
+        self.entities.spawn_order()
+    }
+
+    /// Re-ranks the live sim entities to `order` (slot indices, earliest spawn first). Call after
+    /// [`restore_entities`](World::restore_entities) or [`restore_allocator`](World::restore_allocator),
+    /// which default to slot order. Only relative order is kept.
+    ///
+    /// # Errors
+    /// `L0025` if `order` is not a permutation of the live sim slots; the world is left untouched.
+    pub fn restore_spawn_order(&mut self, order: &[u32]) -> Result<(), Diagnostic> {
+        self.entities.restore_order(order)
+    }
+
     /// The presentation allocator's exact state, mirroring [`allocator_state`](World::allocator_state)
     /// in indices relative to [`PRESENTATION_BASE`]; `None` when the live set alone reproduces it.
     pub fn presentation_allocator_state(&self) -> Option<AllocatorState> {
