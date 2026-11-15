@@ -1,7 +1,10 @@
 //! Physics is independent of unrelated entity churn: two worlds that differ only by bare "pad"
 //! entities spawned and despawned around the claimed spawns (so the LIFO free list hands the
 //! claimed bodies reversed slots) step bit-identically, per spawn index. The write system feeds
-//! rapier in ECS spawn-rank order, never by slot value.
+//! rapier in ECS spawn-rank order, never by slot value. Blasts and partner wakes follow spawn rank
+//! too. The last test observes the partner-wake order through rapier's awake-body order (table
+//! order would differ after a rebuild); a blast's per-body impulses are commutative in rapier, so
+//! its order has no observable effect to assert on.
 
 mod common;
 #[path = "common/ragdoll.rs"]
@@ -9,13 +12,14 @@ mod ragdoll;
 
 use common::{TestPose, pose_of, tick};
 use ludion_core::ids::EntityId;
+use ludion_core::time::FrameIndex;
 use ludion_core::time::TickRate;
-use ludion_ecs::{Schedule, World};
+use ludion_ecs::{Schedule, SystemCtx, World};
 use ludion_physics::{
     Blast, CharacterMotor, Falloff, MotorError, NoParent, PhysicsSettings, PhysicsSpace,
     PhysicsWorld, QueryFilter, move_characters, teleport_kinematic,
 };
-use ludion_spatial::{Body, Collider, Joint, Shape, Velocity};
+use ludion_spatial::{Body, Collider, Joint, RigidBody, Shape, Velocity};
 use ragdoll::{collider, physics, ragdoll_parts, rigid, schedule_with, spawn, spawn_moving};
 
 const TICKS: u64 = 80;
@@ -395,4 +399,121 @@ fn copy<T: ludion_ecs::Component + Clone>(from: &World, to: &mut World, entity: 
     if let Ok(Some(value)) = from.get::<T>(entity) {
         to.insert(entity, value.clone()).unwrap();
     }
+}
+
+/// A floor and three separate sleepy boxes A, B, C (spawn order, so ranks A < B < C); A is rebuilt
+/// early, so the handle table reads B, C, A. After all three sleep, `wake` fires and the awake
+/// order, read right after the write, is returned.
+fn wake_order(churned: bool, wake: impl Fn(&mut World, EntityId)) -> Vec<EntityId> {
+    let mut world = World::new();
+    if churned {
+        churn(&mut world, 9);
+    }
+    let floor = ragdoll::floor(&mut world);
+    let mut boxes = [EntityId::new(0, 0); 3];
+    for (i, slot) in boxes.iter_mut().enumerate() {
+        if churned {
+            churn(&mut world, 3 + i);
+        }
+        let body = Body::Rigid(RigidBody {
+            mass: 10.0,
+            sleep_after_ticks: Some(5),
+            ..RigidBody::default()
+        });
+        *slot = spawn(
+            &mut world,
+            box_shape(0.5),
+            body,
+            [3.0 * i as f32, 0.5, 0.0],
+            [0.0; 3],
+        );
+    }
+    let mut schedule = schedule_with(PhysicsSettings::new(PhysicsSpace::Free));
+    for frame in 0..60 {
+        if frame == 3 {
+            let body = Body::Rigid(RigidBody {
+                mass: 10.0,
+                sleep_after_ticks: Some(5),
+                ..RigidBody::default()
+            });
+            world
+                .insert(boxes[0], collider(box_shape(0.55), body))
+                .unwrap();
+        }
+        tick(&mut world, &mut schedule, frame);
+    }
+    let asleep = physics(&mut world).awake_order();
+    assert!(
+        boxes.iter().all(|b| !asleep.contains(b)),
+        "the boxes must be asleep before the wake: {asleep:?}"
+    );
+    wake(&mut world, floor);
+    // Read right after the write: the step rebuilds the awake island and forgets the wake order.
+    let mut order = Vec::new();
+    schedule.run_probed(
+        &mut world,
+        &SystemCtx::new(FrameIndex::new(60), TickRate::DEFAULT),
+        &mut |name, world| {
+            if name == ludion_physics::WRITE {
+                order = world.resource::<PhysicsWorld>().unwrap().awake_order();
+            }
+        },
+    );
+    // Spawn order of the boxes, whatever slots they got.
+    order
+        .into_iter()
+        .map(|e| EntityId::new(boxes.iter().position(|b| *b == e).unwrap() as u32, 0))
+        .collect()
+}
+
+fn index(order: &[EntityId]) -> Vec<u32> {
+    order.iter().map(|e| e.index()).collect()
+}
+
+#[test]
+fn partner_wakes_follow_spawn_rank_even_after_a_rebuild() {
+    // The floor is rebuilt, so its resting partners are woken. Rank order is A, B, C; the handle
+    // table reads B, C, A (A was rebuilt at tick 3), so table order would wake B first.
+    let rebuild_floor = |world: &mut World, floor: EntityId| {
+        let bigger = Shape::Box {
+            half_extents: [50.0, 1.0, 51.0],
+        };
+        world
+            .insert(floor, collider(bigger, Body::new_static()))
+            .unwrap();
+    };
+    assert_eq!(index(&wake_order(false, rebuild_floor)), [0, 1, 2]);
+    assert_eq!(index(&wake_order(true, rebuild_floor)), [0, 1, 2]);
+}
+
+#[test]
+fn a_restore_refills_the_rank_table_in_the_same_relative_order() {
+    let mut scene = Scene::build(true);
+    for frame in 0..SNAPSHOT_AT {
+        scene.step(frame, true, Extra::None);
+    }
+    let by_rank = |ranks: &[(EntityId, u64)]| {
+        let mut ranks = ranks.to_vec();
+        ranks.sort_by_key(|&(_, rank)| rank);
+        ranks.into_iter().map(|(e, _)| e).collect::<Vec<_>>()
+    };
+    let source = by_rank(physics(&mut scene.world).spawn_ranks_view());
+    assert!(!source.is_empty(), "the write fills the table");
+    let bytes = physics(&mut scene.world).to_bytes().unwrap();
+    let order = scene.world.spawn_order().expect("slots are permuted");
+
+    let mut restored = World::new();
+    restored
+        .restore_allocator(
+            &scene
+                .world
+                .allocator_state()
+                .expect("an irreducible allocator"),
+        )
+        .unwrap();
+    restored.restore_spawn_order(&order).unwrap();
+    let mut fresh = PhysicsWorld::from_bytes(&bytes, TickRate::DEFAULT).unwrap();
+    assert!(fresh.spawn_ranks_view().is_empty());
+    fresh.sync_spawn_ranks(&restored);
+    assert_eq!(by_rank(fresh.spawn_ranks_view()), source);
 }

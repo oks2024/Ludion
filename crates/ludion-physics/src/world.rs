@@ -472,6 +472,9 @@ pub struct PhysicsWorld {
     pub(crate) rapier: RapierWorld,
     pub(crate) table: Vec<BodyEntry>,
     pub(crate) rows: StableMap<EntityId, usize>,
+    /// Each live claimed entity's ECS spawn rank, entity-sorted, refreshed by every write before
+    /// anything reads it. Not part of the snapshot (the write refills it); never hashed.
+    ranks: Vec<(EntityId, u64)>,
     pub(crate) plane: Option<Plane>,
     tick_rate: TickRate,
     sleep_after_ticks: u32,
@@ -604,6 +607,7 @@ impl PhysicsWorld {
             rapier,
             table: Vec::new(),
             rows: StableMap::new(),
+            ranks: Vec::new(),
             plane: None,
             tick_rate,
             sleep_after_ticks: DEFAULT_SLEEP_AFTER_TICKS,
@@ -1432,6 +1436,7 @@ impl PhysicsWorld {
             rapier: snapshot.rapier,
             table: snapshot.table,
             rows: StableMap::new(),
+            ranks: Vec::new(),
             plane: snapshot.plane.map(Plane::from),
             tick_rate,
             sleep_after_ticks: DEFAULT_SLEEP_AFTER_TICKS,
@@ -1724,27 +1729,21 @@ impl PhysicsWorld {
         self.touching = next_touching;
     }
 
-    /// Drops the bodies of every entity not in `live` (which is ascending, the join's own order),
-    /// walking the table in creation order — and drops any rejected-shape entry for an entity that
-    /// has left too, so a despawned entity's dead shape does not sit in the map forever. Returns the
-    /// entities whose bodies it removed, in table order.
-    pub(crate) fn retire(&mut self, live: &[EntityId]) -> Vec<EntityId> {
+    /// Drops the bodies of every entity not in `live` (entity-ascending, the join's own order, each
+    /// with its spawn rank), walking the table in creation order — and drops any rejected-shape
+    /// entry for an entity that has left too, so a despawned entity's dead shape does not sit in the
+    /// map forever. Returns the entities whose bodies it removed, in table order.
+    pub(crate) fn retire(&mut self, live: &[(EntityId, u64)]) -> Vec<EntityId> {
         let mut retired = Vec::new();
-        let table_dirty = self
-            .table
-            .iter()
-            .any(|entry| live.binary_search(&entry.entity).is_err());
-        let rejected_dirty = self
-            .rejected
-            .keys()
-            .any(|entity| live.binary_search(entity).is_err());
+        let table_dirty = self.table.iter().any(|entry| !is_live(live, entry.entity));
+        let rejected_dirty = self.rejected.keys().any(|entity| !is_live(live, *entity));
         if !table_dirty && !rejected_dirty {
             return retired;
         }
         if table_dirty {
             let mut kept = Vec::with_capacity(self.table.len());
             for entry in std::mem::take(&mut self.table) {
-                if live.binary_search(&entry.entity).is_ok() {
+                if is_live(live, entry.entity) {
                     kept.push(entry);
                 } else {
                     retired.push(entry.entity);
@@ -1758,7 +1757,7 @@ impl PhysicsWorld {
         if rejected_dirty {
             self.rejected = std::mem::take(&mut self.rejected)
                 .into_iter()
-                .filter(|(entity, _)| live.binary_search(entity).is_ok())
+                .filter(|(entity, _)| is_live(live, *entity))
                 .collect();
         }
         retired
@@ -2098,8 +2097,9 @@ impl PhysicsWorld {
     }
 
     /// Wakes every body still touching `entity` (this crate's own `touching` set), so nothing is
-    /// left resting asleep on a shape that changed or vanished. Wakes go in table (creation)
-    /// order, never the entity-pair order `touching` is kept in.
+    /// left resting asleep on a shape that changed or vanished. Wakes go in spawn-rank order, never
+    /// the entity-pair order `touching` is kept in; an unranked partner sorts last, and the row only
+    /// makes the order total.
     fn wake_touching(&mut self, entity: EntityId) {
         let mut partners = Vec::new();
         for &(a, b) in &self.touching {
@@ -2111,11 +2111,11 @@ impl PhysicsWorld {
                 continue;
             };
             if let Some(&row) = self.rows.get(&partner) {
-                partners.push(row);
+                partners.push((self.spawn_rank(partner), row));
             }
         }
         partners.sort_unstable();
-        for row in partners {
+        for (_, row) in partners {
             self.rapier.wake_up(self.table[row].body, true);
         }
     }
@@ -2649,9 +2649,42 @@ impl PhysicsWorld {
         self.rows.get(&entity).map(|&row| &self.table[row])
     }
 
-    /// `entity`'s table position; a churn-invariant tie-break.
-    pub(crate) fn creation_row(&self, entity: EntityId) -> usize {
-        self.rows.get(&entity).copied().unwrap_or(usize::MAX)
+    /// Test hook: the spawn-rank side table; never hashed, not API.
+    #[doc(hidden)]
+    pub fn spawn_ranks_view(&self) -> &[(EntityId, u64)] {
+        &self.ranks
+    }
+
+    /// Test hook: rapier's awake-body order; never hashed, not API.
+    #[doc(hidden)]
+    pub fn awake_order(&self) -> Vec<EntityId> {
+        self.rapier
+            .islands
+            .active_bodies()
+            .filter_map(|handle| self.table.iter().find(|e| e.body == handle))
+            .map(|entry| entry.entity)
+            .collect()
+    }
+
+    /// Replaces the spawn-rank side table; `ranks` is entity-sorted. Reuses the allocation.
+    pub(crate) fn set_ranks(&mut self, ranks: &[(EntityId, u64)]) {
+        self.ranks.clear();
+        self.ranks.extend_from_slice(ranks);
+    }
+
+    /// Refreshes the spawn ranks from `world`; call it after a restore, before anything that can
+    /// wake a body. The write refreshes them itself every tick. Only bodies with a table row can be
+    /// woken or blasted, so those are the entities it ranks.
+    pub fn sync_spawn_ranks(&mut self, world: &World) {
+        self.ranks = crate::systems::spawn_ranks(world, self.entities());
+    }
+
+    /// `entity`'s ECS spawn rank, the order blasts and partner wakes follow; `u64::MAX` for an
+    /// entity the table does not rank, a total-order guard.
+    pub(crate) fn spawn_rank(&self, entity: EntityId) -> u64 {
+        self.ranks
+            .binary_search_by_key(&entity, |&(e, _)| e)
+            .map_or(u64::MAX, |i| self.ranks[i].1)
     }
 
     /// `entity`'s body handle if it is `rigid`, or why it is not: no body at all, or a `static` or
@@ -3096,6 +3129,11 @@ fn check_blob_tag(rest: &[u8]) -> Result<&[u8], PhysicsError> {
 /// The inverse of [`entity_bits`].
 pub(crate) fn entity_from_bits(bits: u128) -> EntityId {
     EntityId::new(bits as u32, (bits >> 32) as u32)
+}
+
+/// Whether `entity` is in `live`, the entity-sorted live list.
+fn is_live(live: &[(EntityId, u64)], entity: EntityId) -> bool {
+    live.binary_search_by_key(&entity, |&(e, _)| e).is_ok()
 }
 
 #[cfg(test)]

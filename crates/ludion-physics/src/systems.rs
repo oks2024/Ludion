@@ -312,11 +312,27 @@ pub fn teleport_kinematic(world: &mut World, entity: EntityId) {
     }
 }
 
+/// Each of `entities` with its ECS spawn rank (`u64::MAX` for one the world does not know),
+/// entity-sorted: the one place a rank list is built, for the write and for a restore.
+pub(crate) fn spawn_ranks(
+    world: &World,
+    entities: impl Iterator<Item = EntityId>,
+) -> Vec<(EntityId, u64)> {
+    let mut ranks: Vec<(EntityId, u64)> = entities
+        .map(|entity| (entity, world.spawn_rank(entity).unwrap_or(u64::MAX)))
+        .collect();
+    ranks.sort_unstable();
+    ranks
+}
+
 /// Everything [`write`] reads out of the world for one tick, gathered before any solver call so a
 /// prime made at scene commit can be compared against what tick 1 would have fed the solver.
 struct WriteInputs {
     teleports: BTreeSet<EntityId>,
     live: Vec<Claimed>,
+    /// `live`'s entities with their spawn rank, entity-sorted; `retire` and the physics world's
+    /// rank side table read it.
+    ranks: Vec<(EntityId, u64)>,
     motor_rejections: Vec<(EntityId, DiagnosticCode, String)>,
     velocities: Vec<(EntityId, Velocity)>,
     plane: Option<Plane>,
@@ -339,6 +355,7 @@ fn mesh_input_eq(a: &MeshInput, b: &MeshInput) -> bool {
 impl PartialEq for WriteInputs {
     fn eq(&self, other: &Self) -> bool {
         self.teleports == other.teleports
+            && self.ranks == other.ranks
             && self.live.len() == other.live.len()
             && self.live.iter().zip(&other.live).all(|(a, b)| {
                 (a.0, a.1, a.2, &a.3) == (b.0, b.1, b.2, &b.3) && mesh_input_eq(&a.4, &b.4)
@@ -472,7 +489,10 @@ fn gather<P: PhysicsPose, R: ParentPose>(
     // Spawn rank, not slot value: rapier's whole call history follows this order, and a slot is
     // reused LIFO, so unrelated churn would otherwise permute it. Rank order equals slot order in
     // a freshly loaded scene.
-    live.sort_by_key(|(entity, ..)| (world.spawn_rank(*entity).unwrap_or(u64::MAX), *entity));
+    let ranks = spawn_ranks(world, live.iter().map(|(entity, ..)| *entity));
+    live.sort_by_cached_key(|(entity, ..)| {
+        (world.spawn_rank(*entity).unwrap_or(u64::MAX), *entity)
+    });
     // Nothing claimed and no world yet: allocate nothing. A 2D game that registers this verb pays
     // the query and no more, and the resource only ever exists for a scene that has physics in it.
     if live.is_empty() && physics.is_none() && motor_rejections.is_empty() {
@@ -515,6 +535,7 @@ fn gather<P: PhysicsPose, R: ParentPose>(
     Some(WriteInputs {
         teleports,
         live,
+        ranks,
         motor_rejections,
         velocities,
         plane,
@@ -536,11 +557,8 @@ fn apply(world: &World, physics: &mut PhysicsWorld, inputs: &WriteInputs) {
         });
     }
 
-    // `live` is in spawn-rank order; `retire` binary-searches an entity-sorted copy.
-    let mut present: Vec<EntityId> = inputs.live.iter().map(|(entity, ..)| *entity).collect();
-    present.sort_unstable();
     let gone: Vec<EntityId> = physics
-        .retire(&present)
+        .retire(&inputs.ranks)
         .into_iter()
         .filter(|entity| !world.is_alive(*entity))
         .collect();
@@ -584,8 +602,9 @@ fn apply(world: &World, physics: &mut PhysicsWorld, inputs: &WriteInputs) {
 ///
 /// Bodies are created, rebuilt, pushed and woken, and joints inserted, in ascending ECS **spawn
 /// rank**, which unrelated spawn and despawn churn cannot reorder, so the creation-order handle
-/// table (and with it rapier's whole call history) is reproducible from the scene alone.
-/// Retirement stays in table order.
+/// table (and with it rapier's whole call history) is reproducible from the scene alone. Blasts and
+/// partner wakes follow spawn rank too, through a side table the write refreshes; retirement stays
+/// in table order.
 ///
 /// Tick 1 adopts the world [`prime`] built at commit when the inputs it gathers equal the prime's,
 /// field for field; otherwise the prime is dropped and the world is built here.
@@ -619,6 +638,7 @@ fn write<P: PhysicsPose, R: ParentPose>(
     }
     let mut physics = physics_taken
         .unwrap_or_else(|| PhysicsWorld::new(ctx.time.rate()).with_plane(inputs.plane));
+    physics.set_ranks(&inputs.ranks);
     physics.apply_settings(settings);
     physics.last_write_frame = Some(ctx.frame.as_u64());
     physics.last_write_held = held;
@@ -672,6 +692,7 @@ pub fn prime<P: PhysicsPose, R: ParentPose>(
         return;
     };
     let mut physics = PhysicsWorld::new(tick_rate).with_plane(inputs.plane);
+    physics.set_ranks(&inputs.ranks);
     physics.apply_settings(&settings);
     physics.last_write_frame = Some(frame.as_u64());
     physics.last_write_held = world.resource::<GameClock>().map(|clock| clock.held());

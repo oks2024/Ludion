@@ -158,7 +158,7 @@ pub fn move_character_with<P: PhysicsPose, R: ParentPose>(
         let physics = world
             .resource::<PhysicsWorld>()
             .ok_or(MotorError::NoPhysicsWorld)?;
-        let solver = Solver::new(physics, entity, &prepared.checked);
+        let solver = Solver::new(&*world, physics, entity, &prepared.checked);
         let outcome = solver.solve(
             prepared.feet,
             displacement,
@@ -368,7 +368,7 @@ pub fn probe_character_ground<P: PhysicsPose>(
     let physics = world
         .resource::<PhysicsWorld>()
         .ok_or(MotorError::NoPhysicsWorld)?;
-    let solver = Solver::new(physics, entity, &checked);
+    let solver = Solver::new(world, physics, entity, &checked);
     let lift = solver.step_height;
     let origin = [feet[0], feet[1] + lift, feet[2]];
     let reach = lift + solver.snap + solver.skin;
@@ -494,8 +494,22 @@ pub(super) struct CarryPlan {
 /// BVH, so it sets speed, never results.
 const GATHER_SLACK: f32 = 0.05;
 
+/// Sorts `(dist, rank, entity)`: equal gaps fall to spawn rank, which unrelated entity churn leaves
+/// alone, and `EntityId` is the last deterministic tie.
+fn sort_by_gap_then_rank(contacts: &mut [Contact], rank: impl Fn(EntityId) -> u64) {
+    contacts.sort_unstable_by(|a, b| {
+        a.dist
+            .total_cmp(&b.dist)
+            .then_with(|| rank(a.entity).cmp(&rank(b.entity)))
+            .then(a.entity.cmp(&b.entity))
+    });
+}
+
 pub(super) struct Solver<'a> {
     physics: &'a PhysicsWorld,
+    /// The ECS world, for the spawn rank that breaks equal-gap contact ties: the motor runs before
+    /// the write, so the physics world's own rank table may not be filled yet.
+    world: &'a World,
     filter: SweepFilter,
     /// The colliders around the solve's start, walked once; empty outside `solve`.
     gather: OnceCell<Rc<Gather>>,
@@ -514,7 +528,12 @@ pub(super) struct Solver<'a> {
 }
 
 impl<'a> Solver<'a> {
-    pub(super) fn new(physics: &'a PhysicsWorld, entity: EntityId, motor: &CharacterMotor) -> Self {
+    pub(super) fn new(
+        world: &'a World,
+        physics: &'a PhysicsWorld,
+        entity: EntityId,
+        motor: &CharacterMotor,
+    ) -> Self {
         let capsule = Capsule {
             half_height: motor.half_height_for(motor.height),
             radius: motor.radius,
@@ -525,6 +544,7 @@ impl<'a> Solver<'a> {
             .expect("a motor's ignored layers come from the layer table");
         Solver {
             physics,
+            world,
             filter,
             gather: OnceCell::new(),
             shape: capsule.built(physics),
@@ -649,15 +669,8 @@ impl<'a> Solver<'a> {
             contact.dist += self.skin;
         }
         contacts.retain(|contact| !self.is_free_prop(contact));
-        contacts.sort_unstable_by(|a, b| {
-            a.dist
-                .total_cmp(&b.dist)
-                .then_with(|| {
-                    self.physics
-                        .creation_row(a.entity)
-                        .cmp(&self.physics.creation_row(b.entity))
-                })
-                .then(a.entity.cmp(&b.entity))
+        sort_by_gap_then_rank(&mut contacts, |entity| {
+            self.world.spawn_rank(entity).unwrap_or(u64::MAX)
         });
         contacts
     }
@@ -1220,5 +1233,38 @@ fn normalize(a: [f32; 3]) -> [f32; 3] {
         scale(a, 1.0 / length)
     } else {
         a
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn contact(entity: u32, dist: f32) -> Contact {
+        Contact {
+            entity: EntityId::new(entity, 0),
+            dist,
+            normal: [0.0, 1.0, 0.0],
+            point: [0.0; 3],
+        }
+    }
+
+    #[test]
+    fn equal_gaps_follow_rank_and_a_smaller_gap_still_wins() {
+        // Entity order 1 < 2 < 3, rank order 3 < 1 < 2.
+        let rank = |e: EntityId| match e.index() {
+            3 => 0,
+            1 => 1,
+            _ => 2,
+        };
+        let mut contacts = [
+            contact(1, 0.1),
+            contact(2, 0.1),
+            contact(3, 0.1),
+            contact(2, -0.5),
+        ];
+        sort_by_gap_then_rank(&mut contacts, rank);
+        let order: Vec<u32> = contacts.iter().map(|c| c.entity.index()).collect();
+        assert_eq!(order, [2, 3, 1, 2]);
     }
 }

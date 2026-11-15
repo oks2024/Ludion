@@ -311,10 +311,10 @@ impl PhysicsWorld {
                 point: from_vector(target.point),
             });
         }
-        // Pushed in table (creation) order, so the wake order is churn-invariant; `blast_hits`
-        // above keeps its documented `EntityId` order.
+        // Pushed in spawn-rank order, so the wake order is churn-invariant and survives a rebuild;
+        // `blast_hits` above keeps its documented `EntityId` order.
         let mut order: Vec<usize> = (0..targets.len()).collect();
-        order.sort_by_key(|&i| self.creation_row(targets[i].entity));
+        order.sort_by_key(|&i| self.spawn_rank(targets[i].entity));
         for i in order {
             let target = &targets[i];
             if let Some(body) = self.rapier.bodies.get_mut(target.body) {

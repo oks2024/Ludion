@@ -93,13 +93,15 @@ pub fn move_characters<P: PhysicsPose, R: ParentPose>(
         par::par_chunks(&mut slots, MOTOR_CHUNK, |_, chunk| {
             for slot in chunk {
                 let prepared = &slot.prepared;
-                slot.outcome = Some(Solver::new(physics, slot.entity, &prepared.checked).solve(
-                    prepared.feet,
-                    prepared.displacement,
-                    prepared.was_grounded,
-                    None,
-                    prepared.carry.as_ref(),
-                ));
+                slot.outcome = Some(
+                    Solver::new(world, physics, slot.entity, &prepared.checked).solve(
+                        prepared.feet,
+                        prepared.displacement,
+                        prepared.was_grounded,
+                        None,
+                        prepared.carry.as_ref(),
+                    ),
+                );
             }
         });
         slots

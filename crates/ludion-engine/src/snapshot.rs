@@ -1077,6 +1077,9 @@ pub(crate) fn restore_into(
     // remove.
     if let Some(blob) = &doc.physics {
         let mut physics = restore_physics(blob, tick_rate)?;
+        // The side table the write refills each tick; a layer-table drift below can wake partners
+        // before that, and the wake order follows the restored spawn ranks.
+        physics.sync_spawn_ranks(&world);
         // The decoded solver has no layer table until the next physics write; a game system that
         // moves a character before then would ignore `physics.layers`.
         if let Some(scene) = &scene_physics {

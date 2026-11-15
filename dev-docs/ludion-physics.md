@@ -26,7 +26,7 @@ gravity vector, and the **creation-order handle table** — a `Vec`, and the onl
 iterates; a rapier set is never walked, and the table is never rebuilt from one, it rides in the
 snapshot instead. The entity→row map beside it is a lookup accelerator, iterated by nothing.
 
-**Fed in spawn-rank order.** The write system creates, rebuilds, pushes and wakes bodies and inserts joints in ascending ECS spawn rank (`World::spawn_rank`), never by slot value, so rapier's call history, handles and islands are independent of unrelated spawn/despawn churn (`tests/churn.rs`). Blasts, partner wakes and the motor's contact tie-break go in table order. Public lists keep `EntityId` order: contact, sensor and joint events, `blast_hits`, queries, the motor's wall report. Ranks are never hashed; they ride the engine snapshot as an optional `spawn_order`.
+**Fed in spawn-rank order.** The write system creates, rebuilds, pushes and wakes bodies and inserts joints in ascending ECS spawn rank (`World::spawn_rank`), never by slot value, so rapier's call history, handles and islands are independent of unrelated spawn/despawn churn (`tests/churn.rs`). Blasts and partner wakes follow spawn rank too, through a rank side table the write refreshes (never snapshotted); the motor's equal-gap contact tie-break reads `World::spawn_rank` directly, because the motor runs before the write. Public lists keep `EntityId` order: contact, sensor and joint events, `blast_hits`, queries, the motor's wall report. Ranks are never hashed; they ride the engine snapshot as an optional `spawn_order`.
 
 `PhysicsWorld::new(TickRate)` sets `dt` and leaves every other solver tunable at the pin's default.
 Gravity defaults to `[0, -9.81, 0]`; a top-down `Plane::Xz` game zeroes it through
