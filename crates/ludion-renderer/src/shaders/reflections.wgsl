@@ -121,6 +121,7 @@ fn reflection_fill(pos: vec4<f32>) -> vec3<f32> {
         let sky_k = select(0.0, reflections.env.y, env_on);
         // Lowest set bit first is rank order. Only a positive weight takes one of the four slots, so
         // a spuriously binned probe is skipped.
+        let view_dist = length(world - reflections.cam_pos.xyz);
         loop {
             if (mask == 0u || taken >= 4u || coverage >= 1.0) {
                 break;
@@ -128,7 +129,7 @@ fn reflection_fill(pos: vec4<f32>) -> vec3<f32> {
             let k = firstTrailingBit(mask);
             mask = mask & (mask - 1u);
             let probe = probe_list.probes[k];
-            let w = probe_weight(probe, world);
+            let w = probe_weight(probe, world, view_dist);
             if (w <= 0.0) {
                 continue;
             }

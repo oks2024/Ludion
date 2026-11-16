@@ -22,7 +22,9 @@ use bytemuck::Zeroable;
 use ludion_core::math::glam::{Mat4, Vec3};
 
 use crate::cull::{Aabb, AssetBounds, instance_bounds};
-use crate::probe::{MAX_PROBES, ProbeData, ProbeVolume};
+use crate::probe::{
+    MAX_PROBES, PROBE_FACE_TOLERANCE_MIN, PROBE_FACE_TOLERANCE_REL, ProbeData, ProbeVolume,
+};
 use crate::scene::{MeshInstance, MeshShape, RenderCamera, RenderScene};
 use crate::shader_gen::{CLUSTER_SLICES, CLUSTER_TILES_X, CLUSTER_TILES_Y, Light, LightHeader};
 
@@ -467,7 +469,9 @@ fn sphere_footprint(
 
 /// Per-cell reflection-probe bitmasks: bit `k` of cell `c` is set when the `k`th probe of `ranked`
 /// (rank order) can reach a fragment in `c`. Same conservatism as the light tables — a probe's
-/// weight is an exact 0 outside its volume grown by `blend`, so over-inclusion cannot move a pixel.
+/// weight is an exact 0 outside its volume grown by `blend` and the face tolerance, so
+/// over-inclusion cannot move a pixel. The tolerance is `max(REL·|p−cam|, MIN)`; with
+/// `|p−cam| ≤ dc + |p−c|` the reach `r0 + MIN + REL·dc` is `r0`-grown by `1/(1−REL)`.
 pub(crate) fn probe_masks(
     ranked: &[ProbeData],
     camera: &RenderCamera,
@@ -478,11 +482,14 @@ pub(crate) fn probe_masks(
     let ladder = shell_ladder();
     let mut masks = vec![0u32; CLUSTER_CELLS];
     for (k, probe) in ranked.iter().take(MAX_PROBES).enumerate() {
-        let radius = probe.blend
+        let reach = probe.blend
             + match probe.volume {
                 ProbeVolume::Box { extent } => extent.length(),
                 ProbeVolume::Sphere { radius } => radius,
             };
+        let dc = (probe.position - camera.position).length();
+        let radius = (reach + PROBE_FACE_TOLERANCE_MIN + PROBE_FACE_TOLERANCE_REL * dc)
+            / (1.0 - PROBE_FACE_TOLERANCE_REL);
         let footprint = sphere_footprint(
             probe.position,
             radius,
@@ -946,9 +953,15 @@ mod tests {
                         v * radius
                     }
                 };
-                // The in-volume point, then the same point pushed out into the blend shell.
-                let pushed = local + local.normalize_or_zero() * probe.blend * 0.9;
-                for local in [local, pushed] {
+                // The in-volume point, the same point pushed out into the blend shell, and past
+                // the blend into the face tolerance (which grows with the camera distance).
+                let outward = local.normalize_or_zero();
+                let eps = crate::probe::probe_face_tolerance(
+                    (camera.position - (probe.position + probe.rotation * local)).length(),
+                );
+                let pushed = local + outward * probe.blend * 0.9;
+                let toleranced = local + outward * (probe.blend + 0.9 * eps);
+                for local in [local, pushed, toleranced] {
                     let sample = probe.position + probe.rotation * local;
                     let clip = view_proj * sample.extend(1.0);
                     if clip.w <= 0.0

@@ -69,8 +69,13 @@ onto the volume from there. `Transform.scale` is ignored — size the shape, nev
 - **Fit a box to its room.** Set `extent` to the room's inner half-size and centre the probe in it:
   the box faces then sit on the walls and the reflection parallaxes exactly. A box wider than the
   room smears the walls; a sphere suits open areas, where no wall defines a box.
-- **Walls and floor on the faces get full weight.** The weight is 1 inside the volume and on its
-  surface, so a box fitted exactly to its room covers the room's own floor and walls.
+- **An exact fit is safe.** The weight is 1 inside the volume, on its surface and within a
+  depth-relative tolerance of it (about 1e-4 × the view distance, at least 1 mm), so receivers
+  rebuilt from depth that lie on a face never flicker at any camera pose.
+- **Enclose the receivers.** A receiver meant to be covered is inside or on the volume, never just
+  past it; the tolerance is no margin to author against. With `blend: 0` the weight is a hard step
+  just past the tolerance: anything beyond it gets the sky fill only, so pad the box or give it a
+  band where receivers stray outside.
 - **The fade band reaches `blend` past the faces.** Where two fitted rooms share a wall, the
   higher-ranked room's band shows through into its neighbour, so keep `blend` at most the wall
   thickness (or 0) between rooms. Open edges, such as a doorway onto a street, want a real band.

@@ -323,6 +323,83 @@ mod tests {
         }
     }
 
+    /// A floor lying exactly on a box probe's bottom face is inside it from every pose: depth
+    /// reconstruction float error never tips a receiver on the face out of the volume.
+    #[test]
+    fn needs_gpu_a_floor_on_a_box_face_takes_full_weight_from_every_pose() {
+        let Some(r) = renderer_or_skip("a floor on a box face takes full weight") else {
+            return;
+        };
+        let size = FrameSize::native(128, 128);
+        let mut scene = room_scene();
+        scene.meshes.truncate(1);
+        scene.debug_view = Some(crate::DebugView::ProbeIndex);
+        // The box's bottom face is y = 0, the floor's plane; x and z enclose the whole floor.
+        scene.probes = vec![box_probe(1, Vec3::new(16.0, 4.0, 16.0), 0)];
+        let want = palette_bytes(0);
+
+        let mut poses: Vec<(Vec3, f32, f32)> = Vec::new();
+        for (i, &height) in [0.3_f32, 1.0, 2.0, 4.0, 8.0].iter().enumerate() {
+            for (j, &dist) in [2.0_f32, 6.0, 15.0, 35.0, 60.0].iter().enumerate() {
+                let yaw = ((i * 5 + j) as f32 * 37.0).to_radians();
+                poses.push((
+                    Vec3::new(dist * yaw.sin(), height.max(dist / 10.0), dist * yaw.cos()),
+                    0.0,
+                    0.0,
+                ));
+            }
+        }
+        // The request's sub-degree perturbations of one pose.
+        for k in 0..6 {
+            poses.push((
+                Vec3::new(0.0, 2.0, 4.0),
+                0.4_f32.to_radians() * k as f32,
+                0.05_f32.to_radians() * k as f32,
+            ));
+        }
+
+        let mut worst = 0;
+        let mut report = String::new();
+        for (position, yaw, pitch) in poses {
+            let forward = (Vec3::new(0.0, 0.0, 0.0) - position).normalize();
+            let forward = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch) * forward;
+            scene.camera = RenderCamera {
+                view: Mat4::look_at_rh(position, position + forward, Vec3::Y),
+                projection: Mat4::perspective_rh(60.0_f32.to_radians(), 1.0, 0.1, 100.0),
+                position,
+            };
+            let image = r.render(&scene, size).expect("render the view");
+            let (mut floor, mut bad, mut first) = (0, 0, None);
+            for y in 0..image.height {
+                for x in 0..image.width {
+                    let px = pixel(&image, x, y);
+                    if px == [0, 0, 0] {
+                        continue;
+                    }
+                    floor += 1;
+                    if !px.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 1) {
+                        bad += 1;
+                        first.get_or_insert((x, y, px));
+                    }
+                }
+            }
+            assert!(
+                floor > 50,
+                "pose {position:?} sees only {floor} floor pixels"
+            );
+            if bad > 0 {
+                worst = worst.max(bad);
+                report.push_str(&format!(
+                    "pose {position:?} yaw {yaw} pitch {pitch}: {bad}/{floor} off the probe colour, first {first:?}\n"
+                ));
+            }
+        }
+        assert!(
+            report.is_empty(),
+            "floor pixels on the face left the probe (worst {worst}):\n{report}"
+        );
+    }
+
     /// A scene with no probes ignores the view: the frame is the one drawn without it.
     #[test]
     fn needs_gpu_a_probe_view_without_probes_draws_the_normal_frame() {

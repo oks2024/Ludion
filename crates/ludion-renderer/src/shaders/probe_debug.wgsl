@@ -52,13 +52,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         var mask = probe_mask[cell];
         var coverage = 0.0;
         var taken = 0u;
+        let view_dist = length(world - pdbg.cam_pos.xyz);
         loop {
             if (mask == 0u || taken >= 4u || coverage >= 1.0) {
                 break;
             }
             let k = firstTrailingBit(mask);
             mask = mask & (mask - 1u);
-            let w = probe_weight(probe_list.probes[k], world);
+            let w = probe_weight(probe_list.probes[k], world, view_dist);
             if (w <= 0.0) {
                 continue;
             }

@@ -349,6 +349,28 @@ interiors**. Large open water is not a driver.
     static-change trigger are deferred, with the trigger: more than one live room, or a refreeze cost
     that breaks a fade window.
 
+### Receivers on the surface
+
+33. **A receiver on a probe's surface gets full weight** (owner approval 2026-11-15, Serious Isaac
+    request 0047). `probe_weight` treats a point within a depth-relative tolerance
+    ε(d) = `max(1e-4 · d, 1e-3)` of the volume as inside, d the point's distance from the camera, for
+    box faces and sphere shells alike; with `blend > 0` the fade starts after ε. The reflections pass
+    rebuilds the receiver from depth, so a floor exactly on a box face fell either side of it by float
+    error and flickered between the probe and the sky fill. The projection is standard-Z
+    `perspective_rh` into `Depth32Float`, whose reconstructed depth has relative error about
+    `(z / near) · 2⁻²⁴`: ≈ 6e-6 at 10 m and 6e-5 at 100 m with `near = 0.1`, so 1e-4 covers receivers
+    to ~170 m at the tightest near plane in use, with headroom at room scale (the error projected on a
+    face normal is never larger than along the ray). The 1 mm floor covers the `inv_view_proj`
+    multiply's absolute rounding (`|world| · 1.2e-7`, under 1 mm out to ~8 km) and orthographic views.
+    ε is at most 1 cm out to 100 m, so no seam shows. The cluster binning sphere grows by the
+    tolerance's reach (`(r0 + MIN + REL·dc) / (1 − REL)`), so a point near a box corner is never binned
+    out. Constants are twinned in `probe.rs` and `snippets/probes.wgsl`; no uniform changes. The
+    tolerance is no authoring margin: with `blend: 0` the weight is a hard step just past ε.
+
+    **Proposed (Serious Isaac 0047, owner ruling owed). A coplanar-face diagnostic.** `check-scene`
+    warns when a box face lies within ε of a static mesh face, the way decal receivers are checked.
+    Not built: the tolerance makes the documented setup safe.
+
 ## Waves
 
 ### Wave 1 — Foundation: one blend site
@@ -556,6 +578,12 @@ interiors**. Large open water is not a driver.
   and without a `GiVolume`. Usage: `ludion docs reflection-probes` "Probes spawned at runtime". Owed:
   pinned GI re-check and export reach.
   0042: a probe's store key cannot be predicted from a prefab, so the prewarm does not touch probes; the swap-tick refreeze plus a store hit is the probe path (relay-approved 2026-11-14).
+
+- Decision 33 (2026-11-16, Serious Isaac 0047): `probe_weight` takes the view distance and counts a
+  point within `max(1e-4 · d, 1e-3)` of the volume as inside (`probe.rs` twin, `probes.wgsl`, both
+  callers); `probe_masks` bins the widened reach. A GPU test sweeps 31 poses over a floor on a box's
+  bottom face. Usage: `ludion docs reflection-probes` Rules. Owed: pinned re-bless of any golden or
+  parity floor with a receiver on a probe face (`probe-rooms`, `ssr-probe-metal`, `decals`).
 
 ## Deferred, with triggers
 

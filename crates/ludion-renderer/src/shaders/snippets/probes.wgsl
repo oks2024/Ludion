@@ -28,8 +28,14 @@ fn probe_to_local(probe: ShadeProbe, v: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(probe.axis_x.xyz, v), dot(probe.axis_y.xyz, v), dot(probe.axis_z.xyz, v));
 }
 
-// 1 inside and on the volume, ramping to 0 over `blend` world units outside it.
-fn probe_weight(probe: ShadeProbe, p: vec3<f32>) -> f32 {
+// A point this close to the volume counts as on it: a receiver rebuilt from depth lands on a face
+// within float error that grows with its distance from the camera. Twins in `probe.rs`.
+const PROBE_FACE_TOLERANCE_REL: f32 = 1e-4;
+const PROBE_FACE_TOLERANCE_MIN: f32 = 1e-3;
+
+// 1 inside, on and within the face tolerance of the volume (`view_dist` = the point's distance from
+// the camera), ramping to 0 over `blend` world units past that.
+fn probe_weight(probe: ShadeProbe, p: vec3<f32>, view_dist: f32) -> f32 {
     var d: f32;
     if (probe.params.x > 0.5) {
         d = max(length(p - probe.center.xyz) - probe.extent.x, 0.0);
@@ -37,6 +43,7 @@ fn probe_weight(probe: ShadeProbe, p: vec3<f32>) -> f32 {
         let q = probe_to_local(probe, p - probe.center.xyz);
         d = length(max(abs(q) - probe.extent.xyz, vec3<f32>(0.0)));
     }
+    d = d - max(PROBE_FACE_TOLERANCE_REL * view_dist, PROBE_FACE_TOLERANCE_MIN);
     if (d <= 0.0) {
         return 1.0;
     }

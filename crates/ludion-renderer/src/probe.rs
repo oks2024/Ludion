@@ -73,10 +73,26 @@ use ludion_core::math::glam::Vec4;
 /// The most probe contributions one pixel takes.
 pub const MAX_TAKEN: usize = 4;
 
+/// The face tolerance's share of the view distance: depth-rebuilt positions carry error that grows
+/// with distance. The WGSL twin is `PROBE_FACE_TOLERANCE_REL`.
+pub(crate) const PROBE_FACE_TOLERANCE_REL: f32 = 1e-4;
+
+/// The face tolerance's floor in world units, covering the unprojection's absolute rounding and
+/// orthographic views. The WGSL twin is `PROBE_FACE_TOLERANCE_MIN`.
+pub(crate) const PROBE_FACE_TOLERANCE_MIN: f32 = 1e-3;
+
 #[cfg(test)]
-/// A probe's weight at world point `p`: 1 inside and on its volume, ramping to 0 over `blend`
-/// outside it. The WGSL twin is `probe_weight` in `snippets/probes.wgsl`.
-pub fn probe_weight(probe: &ProbeData, p: Vec3) -> f32 {
+/// How far outside a volume a point at `view_dist` from the camera still counts as on it. The WGSL
+/// twin spells `max(PROBE_FACE_TOLERANCE_REL * view_dist, PROBE_FACE_TOLERANCE_MIN)`.
+pub(crate) fn probe_face_tolerance(view_dist: f32) -> f32 {
+    (PROBE_FACE_TOLERANCE_REL * view_dist).max(PROBE_FACE_TOLERANCE_MIN)
+}
+
+#[cfg(test)]
+/// A probe's weight at world point `p`, `view_dist` from the camera: 1 inside, on and within the
+/// face tolerance of its volume, ramping to 0 over `blend` past that. The WGSL twin is
+/// `probe_weight` in `snippets/probes.wgsl`.
+pub fn probe_weight(probe: &ProbeData, p: Vec3, view_dist: f32) -> f32 {
     let d = match probe.volume {
         ProbeVolume::Box { extent } => {
             let q = probe.rotation.inverse() * (p - probe.position);
@@ -84,6 +100,7 @@ pub fn probe_weight(probe: &ProbeData, p: Vec3) -> f32 {
         }
         ProbeVolume::Sphere { radius } => ((p - probe.position).length() - radius).max(0.0),
     };
+    let d = d - probe_face_tolerance(view_dist);
     if d <= 0.0 {
         1.0
     } else if probe.blend <= 0.0 {
@@ -303,27 +320,50 @@ mod tests {
 
     #[test]
     fn weight_is_one_inside_ramps_to_zero_outside_the_volume() {
+        // At 10 m the face tolerance is its 1 mm floor; the ramp starts after it.
+        let eps = probe_face_tolerance(10.0);
+        let w = |p: &ProbeData, at: Vec3| probe_weight(p, at, 10.0);
         let b = boxed(Vec3::splat(2.0), Quat::IDENTITY, 1.0);
-        assert_eq!(probe_weight(&b, Vec3::ZERO), 1.0);
-        assert_eq!(probe_weight(&b, Vec3::new(2.0, 0.0, 0.0)), 1.0);
-        assert!((probe_weight(&b, Vec3::new(2.5, 0.0, 0.0)) - 0.5).abs() < 1e-6);
-        assert_eq!(probe_weight(&b, Vec3::new(3.5, 0.0, 0.0)), 0.0);
+        assert_eq!(w(&b, Vec3::ZERO), 1.0);
+        assert_eq!(w(&b, Vec3::new(2.0, 0.0, 0.0)), 1.0);
+        assert!((w(&b, Vec3::new(2.5 + eps, 0.0, 0.0)) - 0.5).abs() < 1e-5);
+        assert_eq!(w(&b, Vec3::new(3.5 + eps, 0.0, 0.0)), 0.0);
         // A corner is measured as the Euclidean distance to the box.
-        let corner = Vec3::splat(2.0) + Vec3::splat(0.5 / 3.0_f32.sqrt());
-        assert!((probe_weight(&b, corner) - 0.5).abs() < 1e-5);
+        let corner = Vec3::splat(2.0) + Vec3::splat((0.5 + eps) / 3.0_f32.sqrt());
+        assert!((w(&b, corner) - 0.5).abs() < 1e-5);
         let mut s = probe(0, 0, ProbeVolume::Sphere { radius: 2.0 });
         s.blend = 1.0;
-        assert_eq!(probe_weight(&s, Vec3::ZERO), 1.0);
-        assert_eq!(probe_weight(&s, Vec3::new(2.0, 0.0, 0.0)), 1.0);
-        assert!((probe_weight(&s, Vec3::new(2.5, 0.0, 0.0)) - 0.5).abs() < 1e-6);
-        assert_eq!(probe_weight(&s, Vec3::new(3.5, 0.0, 0.0)), 0.0);
+        assert_eq!(w(&s, Vec3::ZERO), 1.0);
+        assert_eq!(w(&s, Vec3::new(2.0, 0.0, 0.0)), 1.0);
+        assert!((w(&s, Vec3::new(2.5 + eps, 0.0, 0.0)) - 0.5).abs() < 1e-5);
+        assert_eq!(w(&s, Vec3::new(3.5 + eps, 0.0, 0.0)), 0.0);
         s.blend = 0.0;
-        assert_eq!(probe_weight(&s, Vec3::new(2.0, 0.0, 0.0)), 1.0);
-        assert_eq!(probe_weight(&s, Vec3::new(2.01, 0.0, 0.0)), 0.0);
+        assert_eq!(w(&s, Vec3::new(2.0, 0.0, 0.0)), 1.0);
+        assert_eq!(w(&s, Vec3::new(2.01, 0.0, 0.0)), 0.0);
         let mut b0 = b;
         b0.blend = 0.0;
-        assert_eq!(probe_weight(&b0, Vec3::new(2.0, 0.0, 0.0)), 1.0);
-        assert_eq!(probe_weight(&b0, Vec3::new(2.01, 0.0, 0.0)), 0.0);
+        assert_eq!(w(&b0, Vec3::new(2.0, 0.0, 0.0)), 1.0);
+        assert_eq!(w(&b0, Vec3::new(2.01, 0.0, 0.0)), 0.0);
+    }
+
+    #[test]
+    fn the_face_tolerance_grows_with_view_distance_and_delays_the_fade() {
+        let b = boxed(Vec3::splat(2.0), Quat::IDENTITY, 0.0);
+        let mut s = probe(0, 0, ProbeVolume::Sphere { radius: 2.0 });
+        s.blend = 0.0;
+        for (view_dist, eps) in [(10.0, 1e-3), (100.0, 1e-2)] {
+            assert!((probe_face_tolerance(view_dist) - eps).abs() < 1e-9);
+            for p in [&b, &s] {
+                let at = |off: f32| probe_weight(p, Vec3::new(2.0 + off, 0.0, 0.0), view_dist);
+                assert_eq!(at(0.5 * eps), 1.0, "{view_dist} m, inside the tolerance");
+                assert_eq!(at(2.0 * eps), 0.0, "{view_dist} m, past the tolerance");
+            }
+        }
+        // With a band the fade starts after the tolerance.
+        let soft = boxed(Vec3::splat(2.0), Quat::IDENTITY, 1.0);
+        let eps = probe_face_tolerance(100.0);
+        let w = probe_weight(&soft, Vec3::new(2.0 + eps + 0.5, 0.0, 0.0), 100.0);
+        assert!((w - 0.5).abs() < 1e-5, "{w}");
     }
 
     #[test]
