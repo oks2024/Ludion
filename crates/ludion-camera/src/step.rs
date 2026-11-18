@@ -7,17 +7,18 @@ use ludion_core::time::FrameIndex;
 use ludion_scene::PathSampler;
 
 use crate::first_person::{apply_look, first_person_eye, looked};
+use crate::orbit::{chase_look, chased, clamp_pitch, orbit_eye};
 use crate::rig::{Aim, Blend, CameraRig, Pose, RigMode};
 use crate::shake::shake_noise;
 use crate::spring::{damp, decay, ease, lerp_pose, spring_step, wrap180};
-use crate::track::{Desired, desired};
+use crate::track::{Desired, desired, rig_focus};
 
 /// What the engine resolved for one rig tick.
 #[derive(Clone, Copy, Debug)]
 pub struct RigInput<'a> {
     /// The target's world position, or `None` when it names no live entity.
     pub target: Option<[f32; 3]>,
-    /// The loaded track path, or `None` when it is empty or failed to load. A `first_person` rig
+    /// The loaded track path, or `None` when it is empty or failed to load. Every mode but `track`
     /// ignores it.
     pub path: Option<&'a PathSampler>,
     /// Gameplay seconds this tick; `0` while the clock is held.
@@ -48,7 +49,10 @@ pub struct RigOutput {
 /// that differs from `last_applied` starts a blend from the current pose. Springs, look-ahead, the
 /// anchor, trauma, the kick decay and the shake clock advance only while `game_dt > 0`; a held tick re-poses from
 /// the frozen state. A `first_person` rig has no springs: it applies and zeroes `look_deg` on every
-/// tick it poses, held clock included, and places the eye rigidly on the target.
+/// tick it poses, held clock included, and places the eye rigidly on the target. A `chase` or
+/// `follow` rig springs only a pivot toward the focus (`position_half_life`) and hangs the eye on a
+/// boom from it at unsprung angles: `chase` applies and zeroes `look_deg` like `first_person`,
+/// `follow` zeroes it unread and holds its authored yaw and pitch.
 ///
 /// # Example
 ///
@@ -78,11 +82,23 @@ pub fn step_rig(rig: &mut CameraRig, input: &RigInput) -> Option<RigOutput> {
     let target = input.target?;
     let sampler = match &rig.rig.mode {
         RigMode::Track(_) => Some(input.path?),
-        RigMode::FirstPerson(_) => None,
+        RigMode::FirstPerson(_) | RigMode::Chase(_) | RigMode::Follow(_) => None,
     };
-    if let RigMode::FirstPerson(fp) = &rig.rig.mode {
-        let look = std::mem::take(&mut rig.look_deg);
-        apply_look(&mut rig.state, fp, look);
+    match &rig.rig.mode {
+        RigMode::FirstPerson(fp) => {
+            let look = std::mem::take(&mut rig.look_deg);
+            apply_look(&mut rig.state, fp, look);
+        }
+        RigMode::Chase(chase) => {
+            let look = std::mem::take(&mut rig.look_deg);
+            chase_look(&mut rig.state, chase, look);
+        }
+        RigMode::Follow(follow) => {
+            rig.look_deg = [0.0; 2];
+            rig.state.yaw_deg = wrap180(follow.yaw_deg);
+            rig.state.pitch_deg = follow.pitch_deg;
+        }
+        RigMode::Track(_) => {}
     }
 
     let bad_blend = rig
@@ -101,6 +117,9 @@ pub fn step_rig(rig: &mut CameraRig, input: &RigInput) -> Option<RigOutput> {
     }
     if let RigMode::FirstPerson(fp) = &rig.rig.mode {
         rig.state.eye = first_person_eye(fp, target, rig.state.yaw_deg);
+    }
+    if let Some(eye) = boom_eye(rig) {
+        rig.state.eye = eye;
     }
 
     let pose = blended_pose(rig, input);
@@ -123,8 +142,9 @@ pub struct ResolvedCamera {
 ///
 /// `None` before the first pose. With `extra_look_deg == [0, 0]` the result is the tick's camera
 /// bit for bit. The extra look `[yaw, pitch]` (degrees, as [`add_look`](crate::add_look)) applies
-/// only to a `first_person` rig with no blend running; pitch clamps to the mode's limit, the eye
-/// follows the new yaw, and kick, roll, the FOV channels and shake apply on top. In any other case
+/// only to a `first_person` or `chase` rig with no blend running; pitch clamps to the mode's
+/// range (`chase` moves it only with `look_pitch`), the eye follows the new angles (about the
+/// pivot, for `chase`), and kick, roll, the FOV channels and shake apply on top. In any other case
 /// it is ignored.
 ///
 /// # Example
@@ -155,12 +175,22 @@ pub fn resolved_camera(
     extra_look_deg: [f32; 2],
 ) -> Option<ResolvedCamera> {
     let mut pose = rig.state.pose.clone()?;
-    if extra_look_deg != [0.0; 2]
-        && rig.state.blend.is_none()
-        && let RigMode::FirstPerson(fp) = &rig.rig.mode
-    {
-        (pose.yaw_deg, pose.pitch_deg) = looked(fp, pose.yaw_deg, pose.pitch_deg, extra_look_deg);
-        pose.eye = first_person_eye(fp, target, pose.yaw_deg);
+    if extra_look_deg != [0.0; 2] && rig.state.blend.is_none() {
+        match &rig.rig.mode {
+            RigMode::FirstPerson(fp) => {
+                (pose.yaw_deg, pose.pitch_deg) =
+                    looked(fp, pose.yaw_deg, pose.pitch_deg, extra_look_deg);
+                pose.eye = first_person_eye(fp, target, pose.yaw_deg);
+            }
+            RigMode::Chase(chase) => {
+                (pose.yaw_deg, pose.pitch_deg) =
+                    chased(chase, pose.yaw_deg, pose.pitch_deg, extra_look_deg);
+                if let Some(pivot) = rig.state.pivot {
+                    pose.eye = orbit_eye(pivot, pose.yaw_deg, pose.pitch_deg, chase.distance);
+                }
+            }
+            RigMode::Track(_) | RigMode::Follow(_) => {}
+        }
     }
     Some(ResolvedCamera {
         aim: Aim {
@@ -192,9 +222,37 @@ fn rest_on_desired(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathS
             let eye = first_person_eye(fp, target, state.yaw_deg);
             let state = &mut rig.state;
             state.eye = eye;
+            if let Some(pitch) = fp.enter_pitch_deg {
+                state.pitch_deg = pitch;
+            }
             state.eye_velocity = [0.0; 3];
             state.yaw_velocity = 0.0;
             state.pitch_velocity = 0.0;
+            state.pivot = None;
+            state.pivot_velocity = [0.0; 3];
+            return;
+        }
+        (RigMode::Chase(_) | RigMode::Follow(_), _) => {
+            let focus = rig_focus(&rig.rig, target, state.anchor_y, state.look_ahead);
+            let (yaw_deg, pitch_deg) = match &rig.rig.mode {
+                RigMode::Chase(chase) => (
+                    chase.yaw_deg.map_or(state.yaw_deg, wrap180),
+                    clamp_pitch(chase, chase.pitch_deg),
+                ),
+                RigMode::Follow(follow) => (wrap180(follow.yaw_deg), follow.pitch_deg),
+                _ => unreachable!("matched a boom mode"),
+            };
+            let state = &mut rig.state;
+            state.pivot = Some(focus);
+            state.pivot_velocity = [0.0; 3];
+            state.eye_velocity = [0.0; 3];
+            state.yaw_deg = yaw_deg;
+            state.pitch_deg = pitch_deg;
+            state.yaw_velocity = 0.0;
+            state.pitch_velocity = 0.0;
+            if let Some(eye) = boom_eye(rig) {
+                rig.state.eye = eye;
+            }
             return;
         }
         (RigMode::Track(_), Some(sampler)) => sampler,
@@ -223,6 +281,24 @@ fn rest_on_desired(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathS
     state.pitch_deg = pitch_deg;
     state.yaw_velocity = 0.0;
     state.pitch_velocity = 0.0;
+    state.pivot = None;
+    state.pivot_velocity = [0.0; 3];
+}
+
+/// The eye of a `chase` or `follow` rig on its boom from the sprung pivot; `None` in other modes.
+fn boom_eye(rig: &CameraRig) -> Option<[f32; 3]> {
+    let state = &rig.state;
+    let distance = match &rig.rig.mode {
+        RigMode::Chase(chase) => chase.distance,
+        RigMode::Follow(follow) => follow.distance,
+        RigMode::Track(_) | RigMode::FirstPerson(_) => return None,
+    };
+    Some(orbit_eye(
+        state.pivot?,
+        state.yaw_deg,
+        state.pitch_deg,
+        distance,
+    ))
 }
 
 fn snap(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>) {
@@ -269,10 +345,10 @@ fn advance(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>,
     let kick = &rig.kick;
     rig.kick_deg = rig.kick_deg.map(|x| decay(x, kick.half_life, dt));
     rig.fov_kick_deg = decay(rig.fov_kick_deg, kick.fov_half_life, dt);
-    let Some(sampler) = sampler else {
+    if matches!(rig.rig.mode, RigMode::FirstPerson(_)) {
         rig.state.last_target = Some(target);
         return;
-    };
+    }
 
     let cfg = &rig.rig;
     let state = &mut rig.state;
@@ -313,6 +389,26 @@ fn advance(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>,
         state.anchor_y = damp(state.anchor_y, goal, va.half_life, dt);
     }
     state.last_target = Some(target);
+
+    if matches!(cfg.mode, RigMode::Chase(_) | RigMode::Follow(_)) {
+        let focus = rig_focus(cfg, target, state.anchor_y, state.look_ahead);
+        let pivot = state.pivot.unwrap_or(focus);
+        let mut next = pivot;
+        for axis in 0..3 {
+            (next[axis], state.pivot_velocity[axis]) = spring_step(
+                pivot[axis],
+                state.pivot_velocity[axis],
+                focus[axis],
+                cfg.springs.position_half_life,
+                dt,
+            );
+        }
+        state.pivot = Some(next);
+        return;
+    }
+    let Some(sampler) = sampler else {
+        return;
+    };
 
     let want = desired(
         cfg,

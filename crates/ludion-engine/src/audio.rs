@@ -22,7 +22,9 @@
 //! A loop's *playback* state lives only in the sink — the engine holds no table of what is sounding,
 //! and a world rebuild sends [`AudioMessage::StopAllLoops`] rather than diffing against one.
 
-pub use ludion_core::audio::{AudioCategory, AudioEvent, AudioMessage, CategoryGains, LoopId};
+pub use ludion_core::audio::{
+    AudioCategory, AudioEvent, AudioMessage, Bus, CategoryGains, LoopId, MixLayer,
+};
 use ludion_core::time::FrameIndex;
 use ludion_ecs::World;
 
@@ -228,6 +230,63 @@ impl AudioQueue {
                 gain,
                 fade_frames,
             }));
+    }
+
+    /// Slews one layer of `bus`'s runtime gain to `gain` over `fade_frames` sim ticks (`0` still
+    /// slews about 10 ms, so it never clicks). The effective gain is `authored x user x game x
+    /// pause`, and the master bus multiplies every other bus. A world rebuild resets the `Game`
+    /// layer and keeps the `User` layer.
+    ///
+    /// ```
+    /// # use ludion_engine::audio::{AudioQueue, Bus, MixLayer};
+    /// let mut queue = AudioQueue::default();
+    /// // A settings slider: music at 40%.
+    /// queue.bus_gain(Bus::Music, MixLayer::User, 0.4, 0);
+    /// ```
+    pub fn bus_gain(&mut self, bus: Bus, layer: MixLayer, gain: f32, fade_frames: u32) {
+        let gain = self.finite_gain(&format!("bus {bus:?}"), gain);
+        self.pending.push(Queued::Message(AudioMessage::BusGain {
+            bus,
+            layer,
+            gain,
+            fade_frames,
+        }));
+    }
+
+    /// Holds `buses` over `fade_frames` sim ticks: each voice on them keeps its cursor (loops and
+    /// music included) until [`bus_resume`](Self::bus_resume). An empty slice queues nothing.
+    ///
+    /// ```
+    /// # use ludion_engine::audio::{AudioQueue, Bus};
+    /// let mut queue = AudioQueue::default();
+    /// // A pause menu: hold the world's sound, keep the interface alive.
+    /// queue.bus_pause(&[Bus::Sfx, Bus::Ambient, Bus::Music], 6);
+    /// ```
+    pub fn bus_pause(&mut self, buses: &[Bus], fade_frames: u32) {
+        self.push_pause(buses, true, fade_frames);
+    }
+
+    /// Releases `buses` over `fade_frames` sim ticks; held voices continue from their cursors. An
+    /// empty slice queues nothing.
+    ///
+    /// ```
+    /// # use ludion_engine::audio::{AudioQueue, Bus};
+    /// let mut queue = AudioQueue::default();
+    /// queue.bus_resume(&[Bus::Sfx, Bus::Ambient, Bus::Music], 6);
+    /// ```
+    pub fn bus_resume(&mut self, buses: &[Bus], fade_frames: u32) {
+        self.push_pause(buses, false, fade_frames);
+    }
+
+    fn push_pause(&mut self, buses: &[Bus], paused: bool, fade_frames: u32) {
+        if buses.is_empty() {
+            return;
+        }
+        self.pending.push(Queued::Message(AudioMessage::BusPause {
+            buses: buses.to_vec(),
+            paused,
+            fade_frames,
+        }));
     }
 
     fn push_music(&mut self, track: String, gain: f32, looping: bool, fade_frames: u32) {
@@ -488,7 +547,9 @@ impl AudioLogEntry {
             AudioMessage::MusicStemGain { stem, .. } => Some(stem),
             AudioMessage::LoopStop { .. }
             | AudioMessage::StopAllLoops
-            | AudioMessage::MusicStop { .. } => None,
+            | AudioMessage::MusicStop { .. }
+            | AudioMessage::BusGain { .. }
+            | AudioMessage::BusPause { .. } => None,
         }
     }
 
@@ -498,9 +559,11 @@ impl AudioLogEntry {
             AudioMessage::OneShot(event) => Some(event.gain),
             AudioMessage::LoopSync { gain, .. }
             | AudioMessage::MusicPlay { gain, .. }
-            | AudioMessage::MusicStemGain { gain, .. } => Some(*gain),
+            | AudioMessage::MusicStemGain { gain, .. }
+            | AudioMessage::BusGain { gain, .. } => Some(*gain),
             AudioMessage::LoopStop { .. }
             | AudioMessage::StopAllLoops
+            | AudioMessage::BusPause { .. }
             | AudioMessage::MusicSet { .. }
             | AudioMessage::MusicStop { .. } => None,
         }
@@ -546,6 +609,35 @@ mod tests {
         queue.music_play("e.ogg", 7.0, 0);
         assert_eq!(queued_gains(&mut queue), [0.25, -0.5, 7.0]);
         assert!(queue.take_non_finite().is_empty());
+    }
+
+    /// A non-finite bus gain is queued as 0 and recorded under the bus's name; a finite one passes.
+    #[test]
+    fn a_non_finite_bus_gain_is_queued_as_zero_and_recorded() {
+        let mut queue = AudioQueue::default();
+        queue.bus_gain(Bus::Music, MixLayer::User, f32::NAN, 3);
+        queue.bus_gain(Bus::Sfx, MixLayer::Game, 0.5, 0);
+        assert_eq!(queue.take_non_finite(), ["bus Music"]);
+        let messages = queue.take();
+        let [
+            Queued::Message(AudioMessage::BusGain { gain: first, .. }),
+            Queued::Message(AudioMessage::BusGain { gain: second, .. }),
+        ] = messages.as_slice()
+        else {
+            panic!("two bus gains, got {messages:?}");
+        };
+        assert_eq!((*first, *second), (0.0, 0.5));
+    }
+
+    /// Pausing or resuming no buses is not a message.
+    #[test]
+    fn an_empty_pause_queues_nothing() {
+        let mut queue = AudioQueue::default();
+        queue.bus_pause(&[], 4);
+        queue.bus_resume(&[], 4);
+        assert!(queue.is_empty());
+        queue.bus_pause(&[Bus::Sfx], 4);
+        assert!(!queue.is_empty());
     }
 
     /// The set verbs guard every stem gain the same way.

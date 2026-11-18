@@ -161,3 +161,56 @@ fn the_state_serializes_without_its_empty_fields() {
     let value = serde_json::to_value(CharacterMotorState::default()).unwrap();
     assert_eq!(value, Value::Object(Default::default()));
 }
+
+fn bodies(engine: &Engine) -> usize {
+    engine
+        .world()
+        .resource::<ludion_physics::PhysicsWorld>()
+        .expect("physics is installed")
+        .body_count()
+}
+
+#[test]
+fn a_snapshot_taken_while_suspended_restores_the_parking() {
+    let mut original = booted("suspended");
+    original.advance_live();
+    let hero = named(&mut original, "hero");
+    ludion_physics::suspend_character(original.world_mut(), hero).unwrap();
+    original.advance_live();
+    original.advance_live();
+    assert_eq!(bodies(&original), 1, "only the floor");
+    let document = match original.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+
+    let mut resumed = booted("suspended-restored");
+    match resumed
+        .execute(Command::EngineRestore(EngineRestoreParams {
+            snapshot: document,
+        }))
+        .unwrap()
+        .body
+    {
+        ResponseBody::Restored { .. } => {}
+        other => panic!("expected a restore, got {other:?}"),
+    }
+    let hero = named(&mut resumed, "hero");
+    assert!(state_of(&mut resumed, hero).is_some_and(|state| state.suspended));
+    resumed.advance_live();
+    resumed.advance_live();
+    assert_eq!(bodies(&resumed), 1, "still no capsule after the restore");
+
+    let report = ludion_physics::resume_character::<ludion_engine::components::Transform>(
+        resumed.world_mut(),
+        hero,
+        [2.0, 0.0, 0.0],
+        0.0,
+        None,
+    )
+    .unwrap();
+    assert!(report.resumed);
+    resumed.advance_live();
+    resumed.advance_live();
+    assert_eq!(bodies(&resumed), 2, "the capsule is back");
+}

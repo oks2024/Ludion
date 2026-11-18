@@ -57,7 +57,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use ludion_assets::{AudioPcm, load_wav};
-use ludion_core::audio::{AudioCategory, AudioEvent, AudioMessage, LoopId, MUSIC_STEMS_MAX};
+use ludion_core::audio::{
+    AudioCategory, AudioEvent, AudioMessage, Bus, LoopId, MUSIC_STEMS_MAX, MixLayer,
+};
 // The mixdown the sink applies. It lives in the shared core because the game authors it on the
 // engine builder and this crate consumes it; re-exported so a host names one type, not two.
 pub use ludion_core::audio::{CategoryGains, VoiceCaps};
@@ -258,6 +260,15 @@ impl Envelope {
         self.left = frames.max(1);
     }
 
+    /// Settles at `target` now for `0` frames, otherwise slews to it.
+    fn steer(&mut self, target: f32, frames: usize) {
+        if frames == 0 {
+            *self = Envelope::at(target);
+        } else {
+            self.slew_to(target, frames);
+        }
+    }
+
     fn fade_out(&mut self, frames: usize) {
         self.retiring = true;
         self.slew_to(0.0, frames);
@@ -352,7 +363,7 @@ impl Voice {
     }
 
     /// Adds this voice's next `scratch.len()` samples (scaled by its envelope and by `master`, its
-    /// bus's gain) into `scratch`, advancing its cursor, and reports whether it is still playing. The
+    /// bus's gain for each frame of the block) into `scratch`, advancing its cursor, and reports whether it is still playing. The
     /// envelope steps once per frame of `channels` samples. A looping voice wraps at the end of its
     /// buffer and plays until a fade-out ends; a one-shot stops at the end and retires. An empty
     /// buffer never plays — the guard that keeps a looping voice from spinning on nothing.
@@ -360,16 +371,16 @@ impl Voice {
     /// On a two-channel device a frame whose pan level is off centre takes the constant-power
     /// path; every other frame (centre, mono, more than two channels) adds the sample unpanned, so a
     /// centred voice is bit-identical to a voice with no pan at all.
-    fn advance_into(&mut self, scratch: &mut [f32], channels: usize, master: f32) -> bool {
+    fn advance_into(&mut self, scratch: &mut [f32], channels: usize, master: &[f32]) -> bool {
         if self.samples.is_empty() {
             return false;
         }
-        for frame in scratch.chunks_mut(channels.max(1)) {
+        for (index, frame) in scratch.chunks_mut(channels.max(1)).enumerate() {
             let level = self.envelope.next();
             if self.envelope.is_finished() {
                 return false;
             }
-            let gain = level * master;
+            let gain = level * master[index];
             let pan = if channels == 2 {
                 self.pan.envelope.next()
             } else {
@@ -453,6 +464,20 @@ enum VoiceCommand {
     },
     /// Fade the music out over this many device frames (`0` stops it now).
     MusicStop { fade_out: usize },
+    /// Slew one layer of a bus's runtime gain (`bus` indexes [`Bus::ALL`]) over `frames` device
+    /// frames; `0` settles now.
+    BusGain {
+        bus: usize,
+        layer: MixLayer,
+        gain: f32,
+        frames: usize,
+    },
+    /// Hold or release the buses whose bit (`1 << index`) is set in `mask`; `0` frames settles now.
+    BusPause {
+        mask: u8,
+        paused: bool,
+        frames: usize,
+    },
 }
 
 /// The sink thread body: play through `output`, reopening it whenever it is lost, and route every
@@ -872,6 +897,24 @@ struct Router {
     backlog: VecDeque<VoiceCommand>,
     /// How many declared loops the callback holds a voice for.
     playing: usize,
+    /// Each bus's runtime state, indexed like [`Bus::ALL`], replayed into a reopened stream.
+    buses: [RouterBus; BUS_COUNT],
+}
+
+/// The runtime mix the router remembers for one bus.
+#[derive(Clone, Copy, PartialEq)]
+struct RouterBus {
+    user: f32,
+    game: f32,
+    paused: bool,
+}
+
+impl RouterBus {
+    const DEFAULT: RouterBus = RouterBus {
+        user: 1.0,
+        game: 1.0,
+        paused: false,
+    };
 }
 
 /// A declared loop's last sync.
@@ -949,6 +992,7 @@ impl Router {
             feed,
             backlog: VecDeque::new(),
             playing: 0,
+            buses: [RouterBus::DEFAULT; BUS_COUNT],
         }
     }
 
@@ -1131,6 +1175,10 @@ impl Router {
                 self.declared.clear();
                 self.playing = 0;
                 self.feed.stop(0);
+                for bus in &mut self.buses {
+                    bus.game = 1.0;
+                    bus.paused = false;
+                }
                 VoiceCommand::StopAllLoops
             }
             AudioMessage::MusicPlay {
@@ -1150,8 +1198,85 @@ impl Router {
                 fade_frames,
             } => self.feed.stem_gain(&stem, gain, fade_frames)?,
             AudioMessage::MusicStop { fade_frames } => self.feed.stop(fade_frames),
+            AudioMessage::BusGain {
+                bus,
+                layer,
+                gain,
+                fade_frames,
+            } => {
+                let gain = if gain.is_finite() { gain.max(0.0) } else { 0.0 };
+                let record = &mut self.buses[bus as usize];
+                match layer {
+                    MixLayer::User => record.user = gain,
+                    MixLayer::Game => record.game = gain,
+                }
+                VoiceCommand::BusGain {
+                    bus: bus as usize,
+                    layer,
+                    gain,
+                    frames: self.mix_frames(fade_frames),
+                }
+            }
+            AudioMessage::BusPause {
+                buses,
+                paused,
+                fade_frames,
+            } => {
+                let mut mask = 0u8;
+                for bus in buses {
+                    mask |= 1 << bus as usize;
+                    self.buses[bus as usize].paused = paused;
+                }
+                if mask == 0 {
+                    return None;
+                }
+                VoiceCommand::BusPause {
+                    mask,
+                    paused,
+                    frames: self.mix_frames(fade_frames),
+                }
+            }
         };
         Some(command)
+    }
+
+    /// A mix change's length in device frames: the ticks asked for, never shorter than the click-free
+    /// ramp.
+    fn mix_frames(&self, ticks: u32) -> usize {
+        self.feed
+            .device_frames(ticks)
+            .max(ramp_frames(self.out_rate))
+    }
+
+    /// Sends every non-default bus state, settled, so a reopened device keeps the player's volume.
+    /// False only when the callback is gone.
+    fn replay_buses(&mut self, commands: &Sender<VoiceCommand>) -> bool {
+        let mut sent = true;
+        for (index, record) in self.buses.into_iter().enumerate() {
+            if record == RouterBus::DEFAULT {
+                continue;
+            }
+            for (layer, gain) in [(MixLayer::User, record.user), (MixLayer::Game, record.game)] {
+                if gain != 1.0 {
+                    let command = VoiceCommand::BusGain {
+                        bus: index,
+                        layer,
+                        gain,
+                        frames: 0,
+                    };
+                    sent &= self.forward(commands, command);
+                }
+            }
+            if record.paused {
+                let command = VoiceCommand::BusPause {
+                    mask: 1 << index,
+                    paused: true,
+                    frames: 0,
+                };
+                sent &= self.forward(commands, command);
+            }
+        }
+        sent
     }
 
     /// One wake of the sink thread: forward `message`'s command, then top the music ring up. The
@@ -1206,7 +1331,8 @@ impl Router {
             declared.playing = false;
         }
         self.playing = 0;
-        let mut sent = self.start_waiting(commands);
+        let mut sent = self.replay_buses(commands);
+        sent &= self.start_waiting(commands);
         if let Some(resume) = self.feed.resume(ramp_frames(self.out_rate)) {
             sent &= self.forward(commands, resume);
         }
@@ -1385,6 +1511,37 @@ fn open_output() -> Result<(cpal::Device, cpal::SupportedStreamConfig), Diagnost
     Ok((device, supported))
 }
 
+/// How many mixdown buses there are: [`Bus::ALL`].
+const BUS_COUNT: usize = Bus::ALL.len();
+
+/// One bus on the callback side: the authored master and the runtime layers that multiply it.
+/// `pause` is `1.0` running and `0.0` held; the bus is *held* only once it has reached `0.0`, so a
+/// pause fades.
+struct BusState {
+    authored: f32,
+    user: Envelope,
+    game: Envelope,
+    pause: Envelope,
+    paused: bool,
+}
+
+impl BusState {
+    fn new(authored: f32) -> BusState {
+        BusState {
+            authored,
+            user: Envelope::at(1.0),
+            game: Envelope::at(1.0),
+            pause: Envelope::at(1.0),
+            paused: false,
+        }
+    }
+
+    /// Whether the bus's pause fade has finished, so its voices are skipped rather than mixed.
+    fn is_held(&self) -> bool {
+        self.paused && self.pause.left == 0 && self.pause.level == 0.0
+    }
+}
+
 /// The real-time callback's state: the voices, the loop table and the music player. It holds no
 /// device, so it runs under test.
 ///
@@ -1400,7 +1557,11 @@ fn open_output() -> Result<(cpal::Device, cpal::SupportedStreamConfig), Diagnost
 /// [`Mixer::render`] never grows one.
 struct Mixer {
     commands: Receiver<VoiceCommand>,
-    gains: CategoryGains,
+    /// Each bus's authored gain and runtime layers, indexed like [`Bus::ALL`].
+    buses: [BusState; BUS_COUNT],
+    /// The per-frame effective gain of every bus for the block being mixed: bus `b` owns
+    /// `b * MIX_BLOCK_FRAMES ..` of it.
+    bus_levels: Vec<f32>,
     /// In start order — remove with `retain_mut`/`remove`, never `swap_remove`, so "oldest" is the
     /// first live voice.
     voices: Vec<Voice>,
@@ -1426,7 +1587,15 @@ impl Mixer {
         let channels = usize::from(channels).max(1);
         Mixer {
             commands,
-            gains,
+            buses: [
+                BusState::new(1.0),
+                BusState::new(gains.sfx),
+                BusState::new(gains.ambient),
+                BusState::new(gains.gain_for(AudioCategory::Voice)),
+                BusState::new(gains.gain_for(AudioCategory::Ui)),
+                BusState::new(gains.music),
+            ],
+            bus_levels: vec![0.0; BUS_COUNT * MIX_BLOCK_FRAMES],
             voices: Vec::with_capacity(2 * limits.total),
             arriving: Vec::with_capacity(limits.total),
             // Twice the live bound: removals leave tombstones, and a table at that capacity
@@ -1454,17 +1623,77 @@ impl Mixer {
                 }
             }
             VoiceCommand::StopAllLoops => {
+                let held = self.held_buses();
+                // A voice held on a paused bus is silent anyway: it drops rather than waiting for a
+                // resume that the rebuilt world never sends.
+                self.voices.retain(|voice| !is_held(&held, voice));
                 // The table drains in per-process order, so which fading voice survives a full
                 // `voices` varies between runs.
                 let room = 2 * self.limits.total;
                 for (_, voice) in self.loops.drain() {
-                    retire(&mut self.voices, room, self.ramp_frames, voice);
+                    if !is_held(&held, &voice) {
+                        retire(&mut self.voices, room, self.ramp_frames, voice);
+                    }
                 }
                 self.music.apply(VoiceCommand::MusicStop {
                     fade_out: self.ramp_frames,
                 });
+                for bus in &mut self.buses {
+                    bus.game.slew_to(1.0, self.ramp_frames);
+                    bus.paused = false;
+                    bus.pause.slew_to(1.0, self.ramp_frames);
+                }
+            }
+            VoiceCommand::BusGain {
+                bus,
+                layer,
+                gain,
+                frames,
+            } => {
+                let state = &mut self.buses[bus];
+                match layer {
+                    MixLayer::User => state.user.steer(gain, frames),
+                    MixLayer::Game => state.game.steer(gain, frames),
+                }
+            }
+            VoiceCommand::BusPause {
+                mask,
+                paused,
+                frames,
+            } => {
+                for (index, state) in self.buses.iter_mut().enumerate() {
+                    if mask & (1 << index) != 0 {
+                        state.paused = paused;
+                        state.pause.steer(if paused { 0.0 } else { 1.0 }, frames);
+                    }
+                }
             }
             music_command => self.music.apply(music_command),
+        }
+    }
+
+    /// Which buses hold their voices now: a bus is held when it or the master is.
+    fn held_buses(&self) -> [bool; BUS_COUNT] {
+        let master = self.buses[Bus::Master as usize].is_held();
+        let mut held = [master; BUS_COUNT];
+        for (flag, state) in held.iter_mut().zip(&self.buses) {
+            *flag |= state.is_held();
+        }
+        held
+    }
+
+    /// Steps every bus's envelopes one device frame at a time into `bus_levels`:
+    /// `authored x user x game x pause`, then each non-master bus times the master's.
+    fn step_buses(&mut self, frames: usize) {
+        for frame in 0..frames {
+            for (index, state) in self.buses.iter_mut().enumerate() {
+                self.bus_levels[index * MIX_BLOCK_FRAMES + frame] =
+                    state.authored * state.user.next() * state.game.next() * state.pause.next();
+            }
+            let master = self.bus_levels[frame];
+            for index in 1..BUS_COUNT {
+                self.bus_levels[index * MIX_BLOCK_FRAMES + frame] *= master;
+            }
         }
     }
 
@@ -1565,7 +1794,7 @@ impl Mixer {
     /// (loop-table edits through [`Mixer::sync_loop`], new one-shots collapsed by
     /// [`collapse_simultaneous`] and admitted under the voice limits), then in blocks of
     /// [`MIX_BLOCK_FRAMES`] sums every voice's next samples (scaled by its envelope and its bus's
-    /// master gain from `gains`) into the scratch buffer, adds the music, runs the sum through
+    /// per-frame level, skipping held buses) into the scratch buffer, adds the music, runs the sum through
     /// [`soft_limit`], converts to the device's sample type, and drops the voices that have finished.
     /// It allocates nothing.
     fn render<T: SizedSample + FromSample<f32>>(&mut self, out: &mut [T]) {
@@ -1580,15 +1809,26 @@ impl Mixer {
         }
         self.arriving = arriving;
         for block in out.chunks_mut(MIX_BLOCK_FRAMES * self.channels) {
+            let frames = block.len().div_ceil(self.channels);
+            let held = self.held_buses();
+            self.step_buses(frames);
             mix_into(
                 &mut self.voices,
                 &mut self.loops,
                 &mut self.scratch,
                 block.len(),
                 self.channels,
-                &self.gains,
+                &self.bus_levels,
+                &held,
             );
-            self.music.mix_into(&mut self.scratch, self.gains.music);
+            // A held music bus skips the player entirely: its stale-chunk drain would discard the
+            // position the pause is holding.
+            let music = Bus::Music as usize;
+            if !held[music] {
+                let start = music * MIX_BLOCK_FRAMES;
+                self.music
+                    .mix_into(&mut self.scratch, &self.bus_levels[start..start + frames]);
+            }
             for (slot, &mixed) in block.iter_mut().zip(self.scratch.iter()) {
                 *slot = T::from_sample(device_sample(mixed));
             }
@@ -1703,33 +1943,49 @@ fn collapse_simultaneous(arriving: &mut Vec<Voice>, voice: Voice, limit: usize) 
 }
 
 /// Sums every active voice into `scratch` (resized to `samples` and zeroed first) through its bus's
-/// master gain in `gains`, advancing each voice's cursor and envelope, and drops the voices that
-/// ran out of samples or finished fading out. A loop in the table is never dropped here — only a
-/// stop removes one.
+/// per-frame level in `levels` (bus `b` owns `b * MIX_BLOCK_FRAMES ..`), advancing each voice's
+/// cursor and envelope, and drops the voices that ran out of samples or finished fading out. A voice
+/// on a `held` bus is skipped, cursor and envelope kept. A loop in the table is never dropped here —
+/// only a stop removes one.
 ///
 /// The loop table's iteration order varies per process, so with three or more loops the sum can
 /// differ in its last bits between runs; audio is outside every gate. The table is a `HashMap`
 /// because the callback may neither allocate nor free, which a `BTreeMap` would. A sample-exact test
-/// uses at most two loops. A bus's master gain is resolved once per voice per callback, so it costs
-/// one multiply per sample.
+/// uses at most two loops.
 fn mix_into(
     voices: &mut Vec<Voice>,
     loops: &mut HashMap<LoopKey, Voice>,
     scratch: &mut Vec<f32>,
     samples: usize,
     channels: usize,
-    gains: &CategoryGains,
+    levels: &[f32],
+    held: &[bool; BUS_COUNT],
 ) {
+    let frames = samples.div_ceil(channels.max(1));
     scratch.clear();
     scratch.resize(samples, 0.0);
     voices.retain_mut(|voice| {
-        let master = gains.gain_for(voice.category);
-        voice.advance_into(scratch, channels, master)
+        if is_held(held, voice) {
+            return true;
+        }
+        voice.advance_into(scratch, channels, bus_levels(levels, voice, frames))
     });
     for voice in loops.values_mut() {
-        let master = gains.gain_for(voice.category);
-        voice.advance_into(scratch, channels, master);
+        if !is_held(held, voice) {
+            voice.advance_into(scratch, channels, bus_levels(levels, voice, frames));
+        }
     }
+}
+
+/// Whether `voice`'s bus is held.
+fn is_held(held: &[bool; BUS_COUNT], voice: &Voice) -> bool {
+    held[Bus::from(voice.category) as usize]
+}
+
+/// The first `frames` per-frame levels of `voice`'s bus.
+fn bus_levels<'a>(levels: &'a [f32], voice: &Voice, frames: usize) -> &'a [f32] {
+    let start = Bus::from(voice.category) as usize * MIX_BLOCK_FRAMES;
+    &levels[start..start + frames]
 }
 
 /// Converts decoded [`AudioPcm`] to an interleaved buffer at the device's rate and channel count,
@@ -1784,6 +2040,42 @@ fn stream_failed(detail: &str) -> Diagnostic {
 mod tests {
     use super::*;
     use ludion_core::audio::AudioEvent;
+
+    /// Unit bus level for every frame of a block.
+    const UNITY: [f32; MIX_BLOCK_FRAMES] = [1.0; MIX_BLOCK_FRAMES];
+
+    /// [`mix_into`] with each bus at its authored gain from `gains` for the whole block and no bus
+    /// held.
+    fn mix_with_gains(
+        voices: &mut Vec<Voice>,
+        loops: &mut HashMap<LoopKey, Voice>,
+        scratch: &mut Vec<f32>,
+        samples: usize,
+        channels: usize,
+        gains: &CategoryGains,
+    ) {
+        let authored = [
+            1.0,
+            gains.sfx,
+            gains.ambient,
+            gains.gain_for(AudioCategory::Voice),
+            gains.gain_for(AudioCategory::Ui),
+            gains.music,
+        ];
+        let levels: Vec<f32> = authored
+            .iter()
+            .flat_map(|&gain| [gain; MIX_BLOCK_FRAMES])
+            .collect();
+        mix_into(
+            voices,
+            loops,
+            scratch,
+            samples,
+            channels,
+            &levels,
+            &[false; BUS_COUNT],
+        );
+    }
 
     #[test]
     fn device_unavailable_is_l5001() {
@@ -1948,7 +2240,7 @@ mod tests {
     /// The peak absolute sample the mixer would hand the device, before its `[-1, 1]` clamp.
     fn peak(mut voices: Vec<Voice>, frames: usize) -> f32 {
         let mut scratch = Vec::new();
-        mix_into(
+        mix_with_gains(
             &mut voices,
             &mut HashMap::new(),
             &mut scratch,
@@ -2077,7 +2369,7 @@ mod tests {
         let mut voices = simultaneous(&buffer, 1.0, 1);
         let mut loops = HashMap::new();
         let mut scratch = Vec::new();
-        mix_into(
+        mix_with_gains(
             &mut voices,
             &mut loops,
             &mut scratch,
@@ -2088,7 +2380,7 @@ mod tests {
         assert_eq!(scratch, vec![1.0, 1.0]);
         assert_eq!(voices.len(), 1);
         assert_eq!(voices[0].pos, 2);
-        mix_into(
+        mix_with_gains(
             &mut voices,
             &mut loops,
             &mut scratch,
@@ -2108,7 +2400,7 @@ mod tests {
         let mut loops = HashMap::new();
         loops.insert(LoopKey::Sound(0), looping(&buffer, 1.0, AudioCategory::Sfx));
         let mut scratch = Vec::new();
-        mix_into(
+        mix_with_gains(
             &mut Vec::new(),
             &mut loops,
             &mut scratch,
@@ -2126,7 +2418,7 @@ mod tests {
     fn a_looping_voice_on_an_empty_buffer_plays_silence() {
         let mut voice = looping(&Arc::new(Vec::new()), 1.0, AudioCategory::Sfx);
         let mut scratch = vec![0.0; 4];
-        assert!(!voice.advance_into(&mut scratch, 1, 1.0));
+        assert!(!voice.advance_into(&mut scratch, 1, &UNITY));
         assert_eq!(scratch, vec![0.0; 4]);
     }
 
@@ -2222,7 +2514,7 @@ mod tests {
         let samples = Arc::new(vec![0.1, 0.7, 0.3, -0.2, 0.9, 0.05, -0.4, 0.6]);
         let mut voice = panned(&samples, 0.0);
         let mut out = vec![0.0; 8];
-        assert!(voice.advance_into(&mut out, 2, 1.0));
+        assert!(voice.advance_into(&mut out, 2, &UNITY));
         for (got, want) in out.iter().zip(samples.iter()) {
             assert_eq!(got.to_bits(), (want * 1.0).to_bits());
         }
@@ -2231,13 +2523,13 @@ mod tests {
         let mut voice = panned(&samples, 0.0);
         voice.pan.envelope.slew_to(0.5, 2);
         let mut away = vec![0.0; 4];
-        voice.advance_into(&mut away, 2, 1.0);
+        voice.advance_into(&mut away, 2, &UNITY);
         assert_ne!(away[1].to_bits(), samples[1].to_bits());
         voice.pan.envelope.slew_to(0.0, 2);
         let mut back = vec![0.0; 4];
-        voice.advance_into(&mut back, 2, 1.0);
+        voice.advance_into(&mut back, 2, &UNITY);
         let mut settled = vec![0.0; 8];
-        voice.advance_into(&mut settled, 2, 1.0);
+        voice.advance_into(&mut settled, 2, &UNITY);
         let wanted: Vec<f32> = (0..8).map(|i| samples[(8 + i) % 8]).collect();
         for (got, want) in settled.iter().zip(&wanted) {
             assert_eq!(got.to_bits(), want.to_bits());
@@ -2249,9 +2541,9 @@ mod tests {
         let samples = constant(0.25, 16);
         let root2 = std::f32::consts::SQRT_2;
         let mut left = vec![0.0; 4];
-        panned(&samples, -1.0).advance_into(&mut left, 2, 1.0);
+        panned(&samples, -1.0).advance_into(&mut left, 2, &UNITY);
         let mut right = vec![0.0; 4];
-        panned(&samples, 1.0).advance_into(&mut right, 2, 1.0);
+        panned(&samples, 1.0).advance_into(&mut right, 2, &UNITY);
         for frame in left.chunks(2) {
             assert!((frame[0] - 0.25 * root2).abs() < 1e-6, "{frame:?}");
             assert_eq!(frame[1], 0.0);
@@ -2266,11 +2558,11 @@ mod tests {
     fn a_stereo_clip_at_a_hard_pan_plays_its_channel_mean() {
         let samples = Arc::new(vec![0.1, 0.3, 0.1, 0.3]);
         let mut out = vec![0.0; 4];
-        panned(&samples, -1.0).advance_into(&mut out, 2, 1.0);
+        panned(&samples, -1.0).advance_into(&mut out, 2, &UNITY);
         assert!((out[0] - 0.2 * std::f32::consts::SQRT_2).abs() < 1e-6);
         assert_eq!(out[1], 0.0);
         let mut centre = vec![0.0; 4];
-        panned(&samples, 0.0).advance_into(&mut centre, 2, 1.0);
+        panned(&samples, 0.0).advance_into(&mut centre, 2, &UNITY);
         assert_eq!(
             centre,
             [0.1, 0.3, 0.1, 0.3],
@@ -2384,7 +2676,7 @@ mod tests {
         let samples = Arc::new(vec![0.1, 0.3, 0.1, 0.3]);
         let mut voice = panned(&samples, PAN_FULL_MONO / 2.0);
         let mut out = vec![0.0; 2];
-        voice.advance_into(&mut out, 2, 1.0);
+        voice.advance_into(&mut out, 2, &UNITY);
         let gains = voice.pan.gains_at(PAN_FULL_MONO / 2.0);
         let (a, b) = (0.1f32, 0.3f32);
         let mid = (a + b) * 0.5;
@@ -2560,6 +2852,281 @@ mod tests {
         assert!(mixer.voices.is_empty());
     }
 
+    /// A bus command on `bus`, settled now (`frames: 0`).
+    fn bus_gain(bus: Bus, layer: MixLayer, gain: f32) -> VoiceCommand {
+        VoiceCommand::BusGain {
+            bus: bus as usize,
+            layer,
+            gain,
+            frames: 0,
+        }
+    }
+
+    fn bus_pause(bus: Bus, paused: bool, frames: usize) -> VoiceCommand {
+        VoiceCommand::BusPause {
+            mask: 1 << bus as usize,
+            paused,
+            frames,
+        }
+    }
+
+    /// The layers multiply, and the master scales a loop on every bus.
+    #[test]
+    fn user_and_game_layers_multiply_and_the_master_scales_every_bus() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        let samples = constant(1.0, 64);
+        mixer.apply(VoiceCommand::LoopSync {
+            id: bed(),
+            voice: looping(&samples, 1.0, AudioCategory::Sfx),
+        });
+        mixer.apply(bus_gain(Bus::Sfx, MixLayer::User, 0.5));
+        mixer.apply(bus_gain(Bus::Sfx, MixLayer::Game, 0.5));
+        assert_eq!(render(&mut mixer, 2), [0.25, 0.25]);
+
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        let eighth = constant(0.125, 64);
+        for (index, category) in [
+            AudioCategory::Sfx,
+            AudioCategory::Ambient,
+            AudioCategory::Voice,
+            AudioCategory::Ui,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            mixer.apply(VoiceCommand::LoopSync {
+                id: LoopKey::Sound(index as u32),
+                voice: looping(&eighth, 1.0, category),
+            });
+        }
+        assert_eq!(render(&mut mixer, 1), [0.5]);
+        mixer.apply(bus_gain(Bus::Master, MixLayer::Game, 0.5));
+        assert_eq!(render(&mut mixer, 1), [0.25]);
+        mixer.apply(bus_gain(Bus::Master, MixLayer::User, 0.5));
+        assert_eq!(render(&mut mixer, 1), [0.125]);
+    }
+
+    /// A bus gain fade lands exactly on its target, one step per device frame.
+    #[test]
+    fn a_bus_gain_fade_passes_the_midpoint_and_lands_on_target() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(VoiceCommand::LoopSync {
+            id: bed(),
+            voice: looping(&constant(1.0, 64), 1.0, AudioCategory::Sfx),
+        });
+        mixer.apply(VoiceCommand::BusGain {
+            bus: Bus::Sfx as usize,
+            layer: MixLayer::User,
+            gain: 0.0,
+            frames: 4,
+        });
+        assert_eq!(render(&mut mixer, 6), [0.75, 0.5, 0.25, 0.0, 0.0, 0.0]);
+    }
+
+    /// Pause then resume continues the cursor: the output is the unpaused render with the held span
+    /// removed, and the held span is silent.
+    #[test]
+    fn pause_then_resume_continues_the_cursor() {
+        let ramp: Arc<Vec<f32>> = Arc::new((1..=8).map(|k| k as f32 * 0.0625).collect());
+        let mut free = test_mixer(1, CategoryGains::default(), default_limits());
+        free.apply(one_shot_command(&ramp, 1.0));
+        let expected = render(&mut free, 8);
+
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(one_shot_command(&ramp, 1.0));
+        let mut heard = render(&mut mixer, 3);
+        mixer.apply(bus_pause(Bus::Sfx, true, 0));
+        assert_eq!(render(&mut mixer, 2000), vec![0.0; 2000], "held span");
+        assert_eq!(mixer.voices[0].pos, 3, "the cursor holds");
+        mixer.apply(bus_pause(Bus::Sfx, false, 0));
+        heard.extend(render(&mut mixer, 5));
+        assert_eq!(heard, expected);
+    }
+
+    /// A pause fades over its frames, and a held master holds every bus.
+    #[test]
+    fn a_pause_fades_and_the_master_holds_every_bus() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(VoiceCommand::LoopSync {
+            id: bed(),
+            voice: looping(&constant(1.0, 64), 1.0, AudioCategory::Ui),
+        });
+        mixer.apply(bus_pause(Bus::Master, true, 4));
+        assert_eq!(render(&mut mixer, 6), [0.75, 0.5, 0.25, 0.0, 0.0, 0.0]);
+        let pos = mixer.loops[&bed()].pos;
+        render(&mut mixer, 3);
+        assert_eq!(mixer.loops[&bed()].pos, pos, "held under the master");
+    }
+
+    /// A paused bus holds its loops and one-shots; the others keep playing.
+    #[test]
+    fn a_paused_bus_holds_loops_and_one_shots_and_others_play_on() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        let samples = constant(0.5, 64);
+        mixer.apply(VoiceCommand::LoopSync {
+            id: bed(),
+            voice: looping(&samples, 1.0, AudioCategory::Sfx),
+        });
+        mixer.apply(VoiceCommand::OneShot(one_shot(
+            &constant(0.25, 64),
+            1.0,
+            AudioCategory::Sfx,
+        )));
+        mixer.apply(VoiceCommand::LoopSync {
+            id: LoopKey::Sound(1),
+            voice: looping(&constant(0.125, 64), 1.0, AudioCategory::Ambient),
+        });
+        mixer.apply(bus_pause(Bus::Sfx, true, 0));
+        assert_eq!(render(&mut mixer, 3), [0.125; 3]);
+        assert_eq!(mixer.loops[&bed()].pos, 0);
+        assert_eq!(mixer.voices[0].pos, 0);
+        assert_eq!(mixer.loops[&LoopKey::Sound(1)].pos, 3);
+    }
+
+    /// A rebuild's blanket stop resets Game and pause, drops voices held on a paused bus, and keeps
+    /// the User layer.
+    #[test]
+    fn stop_all_loops_resets_game_and_pause_and_keeps_user() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(VoiceCommand::LoopSync {
+            id: bed(),
+            voice: looping(&constant(1.0, 64), 1.0, AudioCategory::Sfx),
+        });
+        mixer.apply(bus_gain(Bus::Sfx, MixLayer::User, 0.5));
+        mixer.apply(bus_gain(Bus::Sfx, MixLayer::Game, 0.25));
+        mixer.apply(bus_pause(Bus::Sfx, true, 0));
+        mixer.apply(VoiceCommand::StopAllLoops);
+        assert!(
+            mixer.loops.is_empty() && mixer.voices.is_empty(),
+            "held voice dropped"
+        );
+        render(&mut mixer, 8);
+        let sfx = &mixer.buses[Bus::Sfx as usize];
+        assert_eq!(sfx.user.level, 0.5, "the User layer survives");
+        assert_eq!(sfx.game.level, 1.0);
+        assert_eq!(sfx.pause.level, 1.0);
+        assert!(!sfx.paused);
+        // A voice started after the rebuild sounds at User x 1.
+        mixer.apply(VoiceCommand::LoopSync {
+            id: bed(),
+            voice: looping(&constant(1.0, 64), 1.0, AudioCategory::Sfx),
+        });
+        assert_eq!(render(&mut mixer, 1), [0.5]);
+    }
+
+    /// The router clamps a bus gain and never schedules a change shorter than the ramp.
+    #[test]
+    fn the_router_clamps_bus_gains_and_keeps_a_ramp() {
+        let mut rig = rig(scratch_root("bus-clamp"));
+        for (gain, expect) in [(-1.0, 0.0), (f32::NAN, 0.0), (0.5, 0.5)] {
+            let command = rig.router.route(AudioMessage::BusGain {
+                bus: Bus::Voice,
+                layer: MixLayer::Game,
+                gain,
+                fade_frames: 0,
+            });
+            match command {
+                Some(VoiceCommand::BusGain {
+                    bus, gain, frames, ..
+                }) => {
+                    assert_eq!((bus, gain), (Bus::Voice as usize, expect));
+                    assert_eq!(frames, ramp_frames(44100));
+                }
+                _ => panic!("a bus gain routes to its command"),
+            }
+        }
+        let none = rig.router.route(AudioMessage::BusPause {
+            buses: Vec::new(),
+            paused: true,
+            fade_frames: 0,
+        });
+        assert!(none.is_none(), "no buses, no command");
+    }
+
+    /// A reopened stream is told the player's volume and any pause, settled; the Game layer a
+    /// rebuild reset is not replayed.
+    #[test]
+    fn a_replay_resends_non_default_bus_state_settled() {
+        let mut rig = rig(scratch_root("bus-replay"));
+        rig.step(AudioMessage::BusGain {
+            bus: Bus::Music,
+            layer: MixLayer::User,
+            gain: 0.5,
+            fade_frames: 6,
+        });
+        rig.step(AudioMessage::BusGain {
+            bus: Bus::Sfx,
+            layer: MixLayer::Game,
+            gain: 0.25,
+            fade_frames: 0,
+        });
+        rig.step(AudioMessage::BusPause {
+            buses: vec![Bus::Ui],
+            paused: true,
+            fade_frames: 0,
+        });
+        rig.step(AudioMessage::StopAllLoops);
+        rig.step(AudioMessage::BusPause {
+            buses: vec![Bus::Ambient],
+            paused: true,
+            fade_frames: 0,
+        });
+        while rig.mixer.commands.try_recv().is_ok() {}
+        assert!(rig.router.replay(&rig.commands));
+        let replayed: Vec<VoiceCommand> = rig.mixer.commands.try_iter().collect();
+        let [
+            VoiceCommand::BusPause {
+                mask,
+                paused: true,
+                frames: 0,
+            },
+            VoiceCommand::BusGain {
+                bus,
+                layer: MixLayer::User,
+                gain,
+                frames: 0,
+            },
+        ] = replayed.as_slice()
+        else {
+            panic!("the ambient pause and the music volume, in bus order, nothing else");
+        };
+        assert_eq!((*bus, *gain), (Bus::Music as usize, 0.5));
+        assert_eq!(*mask, 1 << Bus::Ambient as usize);
+    }
+
+    /// A paused music bus never touches the player: the position holds across more renders than the
+    /// ring holds, and the music resumes where it stopped.
+    #[test]
+    fn a_paused_music_bus_holds_its_position() {
+        let play = |name: &str| {
+            let root = scratch_root(name);
+            std::fs::copy(tone(), root.join("tone.ogg")).unwrap();
+            let mut rig = rig(root);
+            rig.step(music_play("tone.ogg"));
+            rig
+        };
+        let block = |rig: &mut Rig| {
+            rig.router.feed.refill();
+            let mut out = vec![0.0f32; 2 * MIX_BLOCK_FRAMES];
+            rig.mixer.render(&mut out);
+            out
+        };
+        let mut free = play("bus-music-free");
+        let expected: Vec<f32> = (0..3).flat_map(|_| block(&mut free)).collect();
+        assert!(expected.iter().any(|s| s.abs() > 1e-3), "the tone sounds");
+
+        let mut held = play("bus-music-held");
+        let mut heard = block(&mut held);
+        held.mixer.apply(bus_pause(Bus::Music, true, 0));
+        for _ in 0..(MUSIC_RING_CHUNKS + 8) {
+            assert!(block(&mut held).iter().all(|&s| s == 0.0));
+        }
+        held.mixer.apply(bus_pause(Bus::Music, false, 0));
+        heard.extend(block(&mut held));
+        heard.extend(block(&mut held));
+        assert_eq!(heard, expected);
+    }
+
     /// The callback never allocates: a burst far over every cap leaves each container's capacity
     /// exactly as `Mixer::new` reserved it.
     #[test]
@@ -2572,6 +3139,7 @@ mod tests {
                 m.arriving.capacity(),
                 m.loops.capacity(),
                 m.scratch.capacity(),
+                m.bus_levels.capacity(),
             )
         };
         let before = capacities(&mixer);
@@ -2591,6 +3159,17 @@ mod tests {
                 mixer.apply(loop_command(id, &beds[round % 2], 0.1));
             }
             mixer.apply(VoiceCommand::LoopStop(LoopKey::Sound((round % 7) as u32)));
+            mixer.apply(VoiceCommand::BusGain {
+                bus: round % BUS_COUNT,
+                layer: MixLayer::User,
+                gain: 0.5,
+                frames: round % 9,
+            });
+            mixer.apply(VoiceCommand::BusPause {
+                mask: 1 << (round % BUS_COUNT),
+                paused: round % 2 == 0,
+                frames: round % 5,
+            });
             if round % 5 == 0 {
                 mixer.apply(VoiceCommand::StopAllLoops);
             }
@@ -2675,7 +3254,7 @@ mod tests {
             looping(&buffer, 0.5, AudioCategory::Ambient),
         );
         let mut scratch = Vec::new();
-        mix_into(&mut voices, &mut loops, &mut scratch, 3, 1, &gains);
+        mix_with_gains(&mut voices, &mut loops, &mut scratch, 3, 1, &gains);
         // 0.5 sample x 0.5 gain x 1.0 sfx master, plus 0.5 x 0.5 x 0.5 ambient master.
         assert_eq!(scratch, vec![0.375, 0.375, 0.375]);
     }
@@ -2692,7 +3271,7 @@ mod tests {
             looping(&buffer, 0.5, AudioCategory::Ambient),
         );
         let mut scratch = Vec::new();
-        mix_into(
+        mix_with_gains(
             &mut voices,
             &mut loops,
             &mut scratch,
@@ -2755,7 +3334,7 @@ mod tests {
         assert_eq!(voices.len(), 4);
 
         let mut scratch = Vec::new();
-        mix_into(
+        mix_with_gains(
             &mut voices,
             &mut HashMap::new(),
             &mut scratch,

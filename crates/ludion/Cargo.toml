@@ -51,6 +51,8 @@ ludion-sim = { path = "../ludion-sim", version = "0.1.0" }
 # `GroundPosition` seam (Phase 12). The engine already registers `Collider` as a builtin; the facade
 # re-exports the authoring types and the functions a game schedules and calls.
 ludion-spatial = { path = "../ludion-spatial", version = "0.1.0" }
+# `ludion::ai`: hierarchical state machines, gameplay-time timers and squads, at the facade root.
+ludion-ai = { path = "../ludion-ai", version = "0.1.0" }
 ludion-nav = { path = "../ludion-nav", version = "0.1.0" }
 ludion-projectiles = { path = "../ludion-projectiles", version = "0.1.0" }
 # Prelude re-export: `PhysicsWorld`, the solver resource a game reads body counts and sleep state

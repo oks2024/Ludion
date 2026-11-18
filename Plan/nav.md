@@ -25,6 +25,37 @@
    engine owns no movement model to guess at.
 8. **One agent class per `Nav`**: radius, height, step and slope are the config's.
 9. **The crate is `ludion::nav` at the facade root**: a prelude `nav` clashed with a game module.
+10. **Point-to-point A* beside the flow fields** (Neon Shroud request 0004). `find_path` over the same links
+    answers "path from A to B, reachable, how far, nearest walkable point"; fields stay for many agents
+    chasing one target (decision 4 is unchanged). Both ends snap to the nearest node within a radius;
+    a goal that cannot be reached is a partial path unless the caller turns that off. A routed agent is a
+    `NavAgent` that also carries a **`NavGoal` component** — not a `NavAgent.goal` field as the request
+    drew it: presence is the opt-in, `NavAgent` (shared and locked) stays untouched, and a scene with no
+    `NavGoal` is byte-identical to today. A `NavGoal` takes precedence over `target`.
+11. **A planned `NavRoute` is hashed sim state** — an exception to decision 6. The grid is derived and
+    restarts after a restore; a route planned from the position the agent has *now* would start somewhere
+    else than the uninterrupted run's route and diverge. The component exists only on an agent with a
+    `NavGoal`, so goal-less scenes hash as before. All integer fields are `u32`.
+12. **Replan triggers are pure functions of hashed state and the current grid**: the goal moved to another
+    cell, or the leg being walked is no longer walkable (`walkable_line`). Never the grid's generation or
+    `Nav::rebuilds()`, which restart with a restore. Planning is serial in ascending `EntityId`, at most
+    `max_path_requests_per_tick` per tick (default 8), before the parallel steer; steering stays a pure
+    function of start-of-tick state, so results are identical at any thread count.
+13. **Patrols are `kind: patrol` documents walked as nav legs** (Neon Shroud request 0004 §3).
+    - A stop has `at`, `wait`, `face_deg`, a `look` sequence and a `tag`; modes `loop`, `ping_pong`, `once`.
+      A post is a one-point loop.
+    - `patrol_update` (game-scheduled, between `nav_update` and `nav_steer`) writes the guard's `NavGoal`
+      and counts waits and looks on gameplay time. `PatrolState` is hashed; the document cache is not.
+    - **The engine outputs the facing and never turns the body:** `PatrolState.look_deg` is the world yaw to
+      face (−Z forward). The request's `turn_rate_deg` is dropped; turning speed belongs to whoever turns.
+    - Arrival is the agent's `NavRoute` reporting `arrived` for the stop's point, read before `nav_steer`:
+      one tick of latency, deterministic. A partial route is not arrival.
+    - A stop lasts `max(wait, Σ look.hold)`, one tick at least. Base yaw is `face_deg`, else the heading of
+      the leg just walked, else `0`.
+    - An unreachable stop is skipped (`L4143`, once per entity and point). Legs are nav paths, never
+      splines; `follow: spline` waits for a rail-like patrol request.
+    - `paused` hands the guard to behaviour code; unpausing rejoins by `resume` (`nearest`, `next`, `last`).
+      A finished `once` patrol stays `done`.
 
 **Known second way (temporary):** vigil keeps its game-side 2D nav (`games/vigil/src/nav.rs`).
 Moving it to the layered grid moves its `WorldHash`; the exit is the owed migration, gated by
@@ -52,9 +83,42 @@ at 8, 500 agents 0.17 ms and 0.11 ms; one flow field over 4,096 nodes 0.11 ms; f
 3.8 ms at 1 or 8 threads (the motor is serial; whole tick 4.2 ms). The 1- and N-thread `WorldHash`
 traces are identical. Pinned figures owed.
 
+Wave 1a (request 0004), by commit subject: `ludion-nav` gains `find_path` (A* over the flow field's links,
+checked equal to its Dijkstra on 1,000 pairs), `walkable_line`, `string_pull` and `nearest_node`; the engine
+gains `nav_path`, `nav_distance`, `nav_reachable`, `nav_project` and routed agents (`NavGoal`, `NavRoute`,
+`NavConfig::max_path_requests_per_tick`). Tests pin the pure rules: a goal agent walks around a wall and
+arrives, the goal moving a cell or a wall across the leg replans (and `replan: never` does not), a cap of 8
+defers two of ten agents one tick, 1- and 8-thread traces match, and a mid-route restore rejoins. Only the
+component schema snapshot moved.
+
+## Waves (Neon Shroud request 0004)
+
+The request asks for paths, patrols, off-mesh links, dynamic blockers and avoidance. Each wave is
+independently shippable; later ones add fields and components, never reshape earlier ones.
+
+- **1a — paths (shipped):** `find_path`, `string_pull`, `walkable_line`, `nearest_node`; `nav_path`,
+  `nav_distance`, `nav_reachable`, `nav_project`; `NavGoal` and `NavRoute`; `L4140`, `L4141`, `L1520`, `L1521`.
+- **1b — patrols (shipped):** `kind: patrol` documents (`ludion-scene`), `PatrolFollower`/`PatrolState`,
+  `patrol_update`, `patrol_motion`; `L1522`–`L1525`, `L4142`–`L4144`; `ludion docs patrol`, example `patrol`
+  (request §3). Amends `Plan/character-controller.md` decision 9 (patrols leave `kind: path`) — the Tech Lead
+  ratified it. No gallery scene: `ludion render` runs no game systems, so a patrol would never move there.
+- **2 — agent classes:** a per-class grid (radius, height, step, slope) and `PathRequest.class`. Amends
+  decision 8 (one class per `Nav`); the trigger is met (walkers and forklifts) — **Proposed — owner ruling
+  owed**. Also `nav_random_point`, `nav_raycast` and the `nav` trace channel.
+- **3 — off-mesh links:** `NavLink`, an `AtLink` marker on a route, `nav_link_done`; waypoint annotations
+  become fields parallel to `NavRoute.waypoints`, so entity references wait for this wave.
+- **4 — dynamic blockers:** a `NavBlocker` overlay and `AtBlocker`, without re-sampling statics. Amends
+  decision 1 (statics only) — **Proposed — owner ruling owed**.
+- **5 — avoidance:** `NavAgent.avoidance` and `NavObstacle`; brings "Avoidance beyond separation" into
+  scope and subsumes Serious Isaac draft 0029 — **Proposed — owner ruling owed**.
+
+**Open questions, answered.** Planning is synchronous with a per-tick cap, not async (the cap bounds the
+cost and keeps the result a function of the tick). Waypoint entity references wait for wave 3: `NavRoute`
+keeps plain points. `nav_random_point`, `nav_raycast` and the `nav` trace channel wait for wave 2.
+
 ## Explicitly out of scope (triggers recorded)
 
-- **Several agent classes per world** — trigger: a game with two agent sizes.
+- **Several agent classes per world** — trigger: a game with two agent sizes (met: wave 2).
 - **A 3D flying field** — trigger: flyers stuck behind geometry in play.
-- **Avoidance beyond separation.**
+- **Avoidance beyond separation** — wave 5.
 - **Voxel-derived walkability** — trigger: a voxel room the collider sampler misreads.

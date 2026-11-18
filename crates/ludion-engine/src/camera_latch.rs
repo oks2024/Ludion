@@ -61,8 +61,8 @@ impl CameraLatch for RigLatch {
     }
 }
 
-/// The latch for the scene's single camera when it carries a posed first-person `CameraRig` with
-/// no `Parent`, a perspective projection and a live target; `None` otherwise.
+/// The latch for the scene's single camera when it carries a posed first-person or chase
+/// `CameraRig` with no `Parent`, a perspective projection and a live target; `None` otherwise.
 pub(crate) fn collect(world: &World, viewport: (u32, u32)) -> Option<Arc<dyn CameraLatch>> {
     let ids: Vec<EntityId> = world
         .entities()
@@ -73,7 +73,9 @@ pub(crate) fn collect(world: &World, viewport: (u32, u32)) -> Option<Arc<dyn Cam
         return None;
     }
     let rig = world.get::<CameraRig>(key).ok()??;
-    if !matches!(rig.rig.mode, RigMode::FirstPerson(_)) || rig.state.pose.is_none() {
+    if !matches!(rig.rig.mode, RigMode::FirstPerson(_) | RigMode::Chase(_))
+        || rig.state.pose.is_none()
+    {
         return None;
     }
     let camera = *world.get::<Camera>(key).ok()??;
@@ -143,6 +145,35 @@ entities:
         let turned = latch.resolve([20.0, 5.0]).expect("resolves");
         assert_ne!(turned.model, camera.model);
         assert_eq!(latch.look_from_counts(10.0, 5.0), [-1.0, 0.5]);
+    }
+
+    #[test]
+    fn a_chase_rig_latches_and_turns_about_the_pivot() {
+        let scene = SCENE.replace("first_person: {}", "chase: {}");
+        let mut engine = Engine::builder().build().expect("the game builds");
+        engine.load_inline_scene(&scene).expect("the scene loads");
+        for _ in 0..3 {
+            engine.advance_live();
+        }
+        let latch = engine.present_camera_latch().expect("a chase rig");
+        let camera = engine
+            .extract_present_scene()
+            .expect("extracts")
+            .1
+            .camera
+            .expect("a camera");
+        assert_eq!(latch.resolve([0.0; 2]), Some(camera));
+        let turned = latch.resolve([20.0, 5.0]).expect("resolves");
+        assert_ne!(turned.model, camera.model);
+    }
+
+    #[test]
+    fn a_follow_rig_has_no_latch() {
+        let scene = SCENE.replace("first_person: {}", "follow: {}");
+        let mut engine = Engine::builder().build().expect("the game builds");
+        engine.load_inline_scene(&scene).expect("the scene loads");
+        engine.advance_live();
+        assert!(engine.present_camera_latch().is_none());
     }
 
     #[test]

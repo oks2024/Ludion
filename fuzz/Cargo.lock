@@ -742,6 +742,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
+name = "ludion-ai"
+version = "0.1.0"
+dependencies = [
+ "ludion-core",
+ "ludion-ecs",
+ "schemars",
+ "serde",
+]
+
+[[package]]
 name = "ludion-assets"
 version = "0.1.0"
 dependencies = [
@@ -809,6 +819,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "crossbeam-channel",
+ "ludion-ai",
  "ludion-assets",
  "ludion-camera",
  "ludion-components",

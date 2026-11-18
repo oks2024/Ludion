@@ -39,6 +39,7 @@ report `L0008` from a game project.
 - `ludion docs player-profiles` — persistent save state, its migration and its replay; `replays` beside it.
 - `ludion docs scene-transitions` — moving the player between districts inside one run.
 - `ludion docs scene-residue` — what a district keeps between visits, and reading it back.
+- `ludion docs checkpoints` — capture the world into a named slot and restore it after a death.
 - `ludion docs verify-loop` — `cargo test`: sim assertions, `WorldHash`, and golden images.
 - `ludion docs running` — hosting a scene, attaching peers, `render.bounds`, recording.
 - `ludion docs export` — `ludion export`: a game as an Xcode project for iOS.

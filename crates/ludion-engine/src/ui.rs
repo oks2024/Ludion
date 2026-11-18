@@ -33,12 +33,17 @@
 //!
 //! then `top_left * scale` and `element_size * scale` give the pixel-space rect.
 
+pub mod hud;
+
 use std::borrow::Cow;
 use std::ops::Range;
 
 pub use ludion_components::ui::UiNav;
 
 use crate::components::{Anchor, UiList, UiRect, UiText};
+use ludion_components::ui::{UiClock, UiTween, UiTweenField, UiTweenRepeat};
+use ludion_core::math::glam::{Mat4, Vec3};
+use ludion_core::time::TickRate;
 pub use ludion_font::FontFace;
 use ludion_font::{GlyphQuad, TextLayout, YAxis, fold_line_breaks, layout};
 
@@ -582,6 +587,364 @@ pub fn list_hit(
         }
     }
     None
+}
+
+/// The canvas point `anchor` names, in pixels: `anchor_fraction(anchor) * canvas_size * scale`. This
+/// is where an anchored element's pivot sits before `offset`, and what a world anchor's translation
+/// is measured from.
+///
+/// # Example
+///
+/// ```
+/// use ludion_engine::components::Anchor;
+/// use ludion_engine::ui::canvas_anchor_px;
+///
+/// assert_eq!(canvas_anchor_px(Anchor::BottomRight, (1920, 1080)), [1920.0, 1080.0]);
+/// assert_eq!(canvas_anchor_px(Anchor::Center, (1920, 1080)), [960.0, 540.0]);
+/// ```
+pub fn canvas_anchor_px(anchor: Anchor, viewport: (u32, u32)) -> [f32; 2] {
+    let fraction = anchor_fraction(anchor);
+    let scale = pixel_scale(viewport);
+    [
+        fraction[0] * canvas_width(viewport) * scale,
+        fraction[1] * CANVAS_HEIGHT * scale,
+    ]
+}
+
+/// Samples the tracks of `tween` that animate `field` at the given frames, or `None` when no track
+/// names the field. The first [`UiTweenField::arity`] lanes of the result are meaningful.
+///
+/// Each track measures `t = (frame - start) * seconds_per_tick / duration` on its own clock
+/// (`real_frame` or `game_frame`). Before `start` it holds `from`; `once` holds `to` from `t >= 1`,
+/// `loop` uses the fractional part of `t`, `ping_pong` mirrors on odd periods, and `duration: 0` is
+/// `to` from `start` on. The value is exactly `from` at `start` and exactly `to` at the end. Tracks
+/// apply in list order, so a later track on the same field wins. Arithmetic only, no transcendentals.
+///
+/// # Example
+///
+/// ```
+/// use ludion_components::ui::{UiTween, UiTweenField};
+/// use ludion_core::time::TickRate;
+/// use ludion_engine::ui::ui_tween_sample;
+///
+/// let tween: UiTween = serde_json::from_value(serde_json::json!({
+///     "tracks": [{ "field": "opacity", "from": [0.0], "to": [1.0], "duration": 1.0 }]
+/// })).unwrap();
+/// let rate = TickRate::DEFAULT; // 60 Hz
+/// assert_eq!(ui_tween_sample(&tween, UiTweenField::Opacity, 30, 0, rate).unwrap()[0], 0.5);
+/// assert_eq!(ui_tween_sample(&tween, UiTweenField::Scale, 30, 0, rate), None);
+/// ```
+pub fn ui_tween_sample(
+    tween: &UiTween,
+    field: UiTweenField,
+    real_frame: u64,
+    game_frame: u64,
+    rate: TickRate,
+) -> Option<[f32; 4]> {
+    let mut out = None;
+    for track in tween.tracks.iter().filter(|track| track.field == field) {
+        let frame = match track.clock {
+            UiClock::Real => real_frame,
+            UiClock::Game => game_frame,
+        };
+        let u = if frame < track.start {
+            0.0
+        } else if track.duration <= 0.0 {
+            1.0
+        } else {
+            let t =
+                (frame - track.start) as f64 * rate.seconds_per_tick() / f64::from(track.duration);
+            match track.repeat {
+                UiTweenRepeat::Once => t.min(1.0),
+                UiTweenRepeat::Loop => t - t.floor(),
+                UiTweenRepeat::PingPong => {
+                    let m = t - (t * 0.5).floor() * 2.0;
+                    if m <= 1.0 { m } else { 2.0 - m }
+                }
+            }
+        };
+        let eased = track.ease.apply(u as f32);
+        let mut lanes = [0.0; 4];
+        for (i, lane) in lanes.iter_mut().enumerate().take(field.arity()) {
+            let from = track.from.get(i).copied().unwrap_or(0.0);
+            let to = track.to.get(i).copied().unwrap_or(0.0);
+            *lane = if eased >= 1.0 {
+                to
+            } else {
+                from + (to - from) * eased
+            };
+        }
+        out = Some(lanes);
+    }
+    out
+}
+
+/// Where a world point lands on screen, from [`place_world_anchor`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldAnchorPlacement {
+    /// Render-target pixel, top-left origin, +Y down: the projected point, or its clamp onto the edge
+    /// inset.
+    pub pixel: [f32; 2],
+    /// The point is in front of the camera and inside the inset rectangle. Always `false` when the
+    /// inset is degenerate.
+    pub on_screen: bool,
+    /// The point is at or behind the camera plane (perspective only).
+    pub behind: bool,
+    /// Distance from the camera to the point, in world units.
+    pub distance: f32,
+}
+
+/// Projects `point` through `view` and `projection` and clamps it to the viewport inset by `margin`
+/// canvas units. `None` for a non-finite projection or a zero-sized viewport.
+///
+/// In front of the camera the pixel is the usual projection; inside the inset rect it is `on_screen`,
+/// otherwise the vector from the viewport centre is scaled until it meets the inset rect. Behind the
+/// camera (`clip.w <= 1e-6`, a perspective camera) the direction is `(view.x, -view.y)` so the marker
+/// sits on the edge the target lies toward; a point straight behind has no direction and goes
+/// straight down. A degenerate inset (margin at least half the viewport) places every point at the
+/// viewport centre.
+///
+/// # Example
+///
+/// ```
+/// use ludion_core::math::glam::{Mat4, Vec3};
+/// use ludion_engine::ui::place_world_anchor;
+///
+/// let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
+/// let projection = Mat4::perspective_rh(1.0, 16.0 / 9.0, 0.1, 100.0);
+/// let hit = place_world_anchor(view, projection, [0.0, 0.0, 0.0], (1920, 1080), 48.0).unwrap();
+/// assert!(hit.on_screen && !hit.behind);
+/// assert!((hit.pixel[0] - 960.0).abs() < 1e-3);
+/// ```
+pub fn place_world_anchor(
+    view: Mat4,
+    projection: Mat4,
+    point: [f32; 3],
+    viewport: (u32, u32),
+    margin: f32,
+) -> Option<WorldAnchorPlacement> {
+    if viewport.0 == 0 || viewport.1 == 0 {
+        return None;
+    }
+    let v = view * Vec3::from_array(point).extend(1.0);
+    let clip = projection * v;
+    if !clip.is_finite() {
+        return None;
+    }
+    let (width, height) = (viewport.0 as f32, viewport.1 as f32);
+    let distance = ludion_core::math::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    let inset = margin * pixel_scale(viewport);
+    let half = [width * 0.5 - inset, height * 0.5 - inset];
+    let centre = [width * 0.5, height * 0.5];
+    let behind = clip.w <= 1e-6;
+    if half[0] <= 0.0 || half[1] <= 0.0 {
+        return Some(WorldAnchorPlacement {
+            pixel: centre,
+            on_screen: false,
+            behind,
+            distance,
+        });
+    }
+    let clamp = |dir: [f32; 2]| {
+        let sx = half[0] / dir[0].abs();
+        let sy = half[1] / dir[1].abs();
+        let s = sx.min(sy);
+        [centre[0] + dir[0] * s, centre[1] + dir[1] * s]
+    };
+    if behind {
+        let mut dir = [v.x, -v.y];
+        if dir[0].abs() < 1e-6 && dir[1].abs() < 1e-6 {
+            dir = [0.0, 1.0];
+        }
+        return Some(WorldAnchorPlacement {
+            pixel: clamp(dir),
+            on_screen: false,
+            behind: true,
+            distance,
+        });
+    }
+    let px = [
+        (clip.x / clip.w * 0.5 + 0.5) * width,
+        (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * height,
+    ];
+    let dir = [px[0] - centre[0], px[1] - centre[1]];
+    let on_screen = dir[0].abs() <= half[0] && dir[1].abs() <= half[1];
+    let pixel = if on_screen { px } else { clamp(dir) };
+    pixel
+        .iter()
+        .all(|c| c.is_finite())
+        .then_some(WorldAnchorPlacement {
+            pixel,
+            on_screen,
+            behind: false,
+            distance,
+        })
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+    use ludion_components::ui::{UiEase, UiTweenTrack};
+
+    const RATE: TickRate = TickRate::DEFAULT;
+
+    fn track(from: f32, to: f32, start: u64, duration: f32) -> UiTweenTrack {
+        UiTweenTrack {
+            field: UiTweenField::Opacity,
+            from: vec![from],
+            to: vec![to],
+            start,
+            duration,
+            ease: UiEase::Linear,
+            repeat: UiTweenRepeat::Once,
+            clock: UiClock::Real,
+        }
+    }
+
+    fn sample(t: &UiTweenTrack, frame: u64) -> f32 {
+        let tween = UiTween {
+            tracks: vec![t.clone()],
+        };
+        ui_tween_sample(&tween, UiTweenField::Opacity, frame, 0, RATE).unwrap()[0]
+    }
+
+    #[test]
+    fn tween_is_exact_at_start_and_end_and_holds_outside() {
+        let t = track(0.25, 0.75, 60, 1.0);
+        assert_eq!(sample(&t, 0), 0.25);
+        assert_eq!(sample(&t, 60), 0.25);
+        assert_eq!(sample(&t, 90), 0.5);
+        assert_eq!(sample(&t, 120), 0.75);
+        assert_eq!(sample(&t, 10_000), 0.75);
+    }
+
+    #[test]
+    fn tween_loop_ping_pong_and_zero_duration() {
+        let mut t = track(0.0, 1.0, 0, 1.0);
+        t.repeat = UiTweenRepeat::Loop;
+        assert_eq!(sample(&t, 90), 0.5);
+        assert_eq!(sample(&t, 120), 0.0);
+        t.repeat = UiTweenRepeat::PingPong;
+        assert_eq!(sample(&t, 60), 1.0);
+        assert_eq!(sample(&t, 90), 0.5);
+        assert_eq!(sample(&t, 120), 0.0);
+        let jump = track(2.0, 5.0, 10, 0.0);
+        assert_eq!(sample(&jump, 9), 2.0);
+        assert_eq!(sample(&jump, 10), 5.0);
+    }
+
+    #[test]
+    fn tween_clocks_and_list_order() {
+        let mut game = track(0.0, 1.0, 0, 1.0);
+        game.clock = UiClock::Game;
+        let tween = UiTween {
+            tracks: vec![game.clone()],
+        };
+        let at = |real, game| {
+            ui_tween_sample(&tween, UiTweenField::Opacity, real, game, RATE).unwrap()[0]
+        };
+        assert_eq!(at(60, 30), 0.5);
+        let later = track(7.0, 7.0, 0, 1.0);
+        let tween = UiTween {
+            tracks: vec![game, later],
+        };
+        assert_eq!(
+            ui_tween_sample(&tween, UiTweenField::Opacity, 0, 0, RATE).unwrap()[0],
+            7.0
+        );
+    }
+
+    #[test]
+    fn tween_eased_value_is_exact_at_both_ends() {
+        for ease in [
+            UiEase::Smooth,
+            UiEase::Step,
+            UiEase::OutBack,
+            UiEase::InOutCubic,
+        ] {
+            let mut t = track(0.3, 0.9, 0, 1.0);
+            t.ease = ease;
+            assert_eq!(sample(&t, 0), 0.3, "{ease:?}");
+            assert_eq!(sample(&t, 60), 0.9, "{ease:?}");
+        }
+    }
+
+    fn camera() -> (Mat4, Mat4) {
+        (
+            Mat4::look_at_rh(Vec3::new(0.0, 0.0, 10.0), Vec3::ZERO, Vec3::Y),
+            Mat4::perspective_rh(1.0, 16.0 / 9.0, 0.1, 100.0),
+        )
+    }
+
+    const VP: (u32, u32) = (1920, 1080);
+
+    fn place(point: [f32; 3], margin: f32) -> WorldAnchorPlacement {
+        let (view, projection) = camera();
+        place_world_anchor(view, projection, point, VP, margin).unwrap()
+    }
+
+    #[test]
+    fn anchor_in_front_is_the_plain_projection() {
+        let p = place([0.0, 0.0, 0.0], 48.0);
+        assert!(p.on_screen && !p.behind);
+        assert!((p.pixel[0] - 960.0).abs() < 1e-2 && (p.pixel[1] - 540.0).abs() < 1e-2);
+        assert!((p.distance - 10.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn anchor_clamps_to_each_edge_and_corner() {
+        let right = place([50.0, 0.0, 0.0], 48.0);
+        assert!(!right.on_screen && !right.behind);
+        assert!(
+            (right.pixel[0] - (1920.0 - 48.0)).abs() < 1e-3
+                && (right.pixel[1] - 540.0).abs() < 1e-3
+        );
+        let left = place([-50.0, 0.0, 0.0], 48.0);
+        assert!((left.pixel[0] - 48.0).abs() < 1e-3);
+        let top = place([0.0, 50.0, 0.0], 48.0);
+        assert!((top.pixel[1] - 48.0).abs() < 1e-3 && (top.pixel[0] - 960.0).abs() < 1e-3);
+        let bottom = place([0.0, -50.0, 0.0], 48.0);
+        assert!((bottom.pixel[1] - (1080.0 - 48.0)).abs() < 1e-3);
+        let corner = place([500.0, 500.0, 0.0], 48.0);
+        assert!(corner.pixel[0] <= 1920.0 - 48.0 + 1e-3 && corner.pixel[1] >= 48.0 - 1e-3);
+        assert!(
+            (corner.pixel[0] - (1920.0 - 48.0)).abs() < 1e-2
+                || (corner.pixel[1] - 48.0).abs() < 1e-2
+        );
+    }
+
+    #[test]
+    fn anchor_behind_follows_the_target_side_and_straight_behind_goes_down() {
+        let straight = place([0.0, 0.0, 20.0], 48.0);
+        assert!(straight.behind && !straight.on_screen);
+        assert!(
+            (straight.pixel[0] - 960.0).abs() < 1e-3 && (straight.pixel[1] - 1032.0).abs() < 1e-3
+        );
+        let left = place([-5.0, 0.0, 20.0], 48.0);
+        assert!(left.behind && (left.pixel[0] - 48.0).abs() < 1e-3);
+        let right = place([5.0, 0.0, 20.0], 48.0);
+        assert!(right.behind && (right.pixel[0] - (1920.0 - 48.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn anchor_orthographic_and_degenerate_margin() {
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 10.0), Vec3::ZERO, Vec3::Y);
+        let ortho = Mat4::orthographic_rh(-8.0, 8.0, -4.5, 4.5, 0.1, 100.0);
+        let p = place_world_anchor(view, ortho, [0.0, 0.0, 0.0], VP, 48.0).unwrap();
+        assert!(p.on_screen && (p.pixel[0] - 960.0).abs() < 1e-2);
+        let (view, projection) = camera();
+        let degenerate = place_world_anchor(view, projection, [1.0, 1.0, 0.0], VP, 600.0).unwrap();
+        assert_eq!(degenerate.pixel, [960.0, 540.0]);
+        assert!(!degenerate.on_screen);
+        assert_eq!(
+            place_world_anchor(view, projection, [0.0; 3], (0, 1080), 48.0),
+            None
+        );
+        assert_eq!(
+            place_world_anchor(view, projection, [f32::NAN, 0.0, 0.0], VP, 48.0),
+            None
+        );
+    }
 }
 
 #[cfg(test)]

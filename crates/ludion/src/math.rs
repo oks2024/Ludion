@@ -88,8 +88,9 @@
 
 pub use ludion_core::math::*;
 pub use ludion_engine::ui::{
-    FontFace, list_hit, measure_ui_list, measure_ui_text, resolve_ui_list, resolve_ui_rect,
-    resolve_ui_rect_of, resolve_ui_text, ui_list_window, wrap_ui_text,
+    FontFace, WorldAnchorPlacement, canvas_anchor_px, list_hit, measure_ui_list, measure_ui_text,
+    place_world_anchor, resolve_ui_list, resolve_ui_rect, resolve_ui_rect_of, resolve_ui_text,
+    ui_list_window, ui_tween_sample, wrap_ui_text,
 };
 pub use ludion_engine::{ModelCamera, ModelView, fit_distance_for_aspect, model_camera};
 
@@ -249,6 +250,51 @@ pub fn world_to_pixel(
     ])
 }
 
+/// Where a world-space `point` lands on screen for a HUD element pinned to it, clamped to the viewport
+/// edge inset by `margin` canvas units: the same placement `extract` gives a `UiWorldAnchor` (see
+/// [`place_world_anchor`]).
+///
+/// Arguments follow [`world_to_pixel`], plus the `margin`. `None` when the camera is degenerate or the
+/// projection is not finite. The result carries the pixel, whether it is `on_screen`, whether the point
+/// is `behind` the camera and its `distance`.
+///
+/// # Example
+///
+/// ```
+/// use ludion::math::{world_anchor, Projection};
+///
+/// let projection = Projection::Perspective { fov_y_deg: 50.0 };
+/// let at = |point| {
+///     world_anchor([0.0, 0.0, 5.0], [0.0; 3], projection, 0.1, 100.0, point, (800, 600), 48.0)
+///         .expect("a valid camera")
+/// };
+/// assert!(at([0.0, 0.0, 0.0]).on_screen);
+/// let far_right = at([40.0, 0.0, 0.0]);
+/// assert!(!far_right.on_screen);
+/// assert!((far_right.pixel[0] - (800.0 - 48.0 * 600.0 / 1080.0)).abs() < 1e-3);
+/// ```
+#[allow(clippy::too_many_arguments)]
+pub fn world_anchor(
+    cam_translation: [f32; 3],
+    cam_rotation_deg: [f32; 3],
+    projection: Projection,
+    near: f32,
+    far: f32,
+    point: [f32; 3],
+    viewport: (u32, u32),
+    margin: f32,
+) -> Option<WorldAnchorPlacement> {
+    let (view, proj) = view_and_projection(
+        cam_translation,
+        cam_rotation_deg,
+        projection,
+        near,
+        far,
+        viewport,
+    )?;
+    place_world_anchor(view, proj, point, viewport, margin)
+}
+
 /// The `(x, z)` point where `ray` crosses the `y = 0` ground plane, or `None` when it cannot.
 ///
 /// Solves `origin.y + t · dir.y = 0` and returns `[x, z]` at that `t`. `None` when the ray is
@@ -295,6 +341,28 @@ fn view_proj_matrix(
     far: f32,
     viewport: (u32, u32),
 ) -> Option<Mat4> {
+    let (view, proj) = view_and_projection(
+        cam_translation,
+        cam_rotation_deg,
+        projection,
+        near,
+        far,
+        viewport,
+    )?;
+    let view_proj = proj * view;
+    view_proj.is_finite().then_some(view_proj)
+}
+
+/// The view and projection matrices of the deterministic camera, or `None` on a degenerate
+/// viewport/projection: [`view_proj_matrix`] and [`world_anchor`] build on it.
+fn view_and_projection(
+    cam_translation: [f32; 3],
+    cam_rotation_deg: [f32; 3],
+    projection: Projection,
+    near: f32,
+    far: f32,
+    viewport: (u32, u32),
+) -> Option<(Mat4, Mat4)> {
     let (vw, vh) = viewport;
     if vw == 0 || vh == 0 {
         return None;
@@ -305,9 +373,7 @@ fn view_proj_matrix(
     let model = Mat4::from_rotation_translation(quat, Vec3::from_array(cam_translation));
     let view = math::mat4_inverse(model);
     let proj = build_projection(projection, aspect, near, far)?;
-
-    let view_proj = proj * view;
-    view_proj.is_finite().then_some(view_proj)
+    (view.is_finite() && proj.is_finite()).then_some((view, proj))
 }
 
 /// The projection matrix, mirroring `build_camera` (`extract.rs`) / `perspectiveRh` (`camera.ts`) but
@@ -649,6 +715,54 @@ mod tests {
             let centre = normalized([0, 1, 2].map(|i| 0.5 * (min[i] + max[i])));
             assert!(centre.length() <= 1.0 + 1e-4, "{centre:?}");
         }
+    }
+
+    /// `world_anchor` agrees with `world_to_pixel` for a point inside the margin, and is the engine's
+    /// `place_world_anchor` over the same camera matrices.
+    #[test]
+    fn world_anchor_matches_world_to_pixel_and_the_engine_placement() {
+        let projection = Projection::Perspective { fov_y_deg: 50.0 };
+        let (translation, rotation, viewport) = ([1.0, 2.0, 9.0], [-10.0, 15.0, 0.0], (1280, 720));
+        let point = [0.5, 0.25, 0.0];
+        let placed = world_anchor(
+            translation,
+            rotation,
+            projection,
+            0.1,
+            100.0,
+            point,
+            viewport,
+            48.0,
+        )
+        .expect("a valid camera");
+        let pixel = world_to_pixel(
+            translation,
+            rotation,
+            projection,
+            0.1,
+            100.0,
+            point,
+            viewport,
+        )
+        .expect("in front");
+        assert!(placed.on_screen && !placed.behind);
+        assert_eq!(placed.pixel, pixel);
+
+        let (view, proj) =
+            view_and_projection(translation, rotation, projection, 0.1, 100.0, viewport).unwrap();
+        assert_eq!(
+            place_world_anchor(view, proj, [40.0, 0.0, 0.0], viewport, 48.0),
+            world_anchor(
+                translation,
+                rotation,
+                projection,
+                0.1,
+                100.0,
+                [40.0, 0.0, 0.0],
+                viewport,
+                48.0
+            )
+        );
     }
 
     /// `world_to_pixel` is the inverse of `camera_ray` on every sheet camera: a point inside the

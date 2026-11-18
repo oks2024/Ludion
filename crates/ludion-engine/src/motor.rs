@@ -3,10 +3,10 @@
 //! the `motor` debug category after each successful call.
 
 use ludion_core::ids::EntityId;
-use ludion_ecs::World;
+use ludion_ecs::{Parent, World};
 use ludion_physics::{
     CharacterMotor, CharacterMotorState, GroundProbe, MotorError, MoveConstraint, MoveReport,
-    ResizeReport, ground_probe_reach,
+    ResizeReport, ResumeReport, ground_probe_reach,
 };
 
 use crate::components::Transform;
@@ -240,6 +240,88 @@ pub fn teleport_character(
     }
     crate::interpolation::cut_presentation(world, entity);
     Ok(())
+}
+
+/// Parks the motor so nothing moves it or builds its body; see [`ludion_physics::suspend_character`].
+///
+/// ```no_run
+/// # use ludion_core::ids::EntityId;
+/// # use ludion_engine::suspend_character;
+/// # use ludion_ecs::{SystemCtx, World};
+/// fn knock_out(world: &mut World, _ctx: &SystemCtx, guard: EntityId) {
+///     let _ = suspend_character(world, guard);
+/// }
+/// ```
+pub fn suspend_character(world: &mut World, entity: EntityId) -> Result<(), MotorError> {
+    ludion_physics::suspend_character(world, entity)
+}
+
+/// Whether the motor's capsule fits at `feet`; see [`ludion_physics::character_fit`].
+///
+/// ```no_run
+/// # use ludion_core::ids::EntityId;
+/// # use ludion_engine::character_fit;
+/// # use ludion_ecs::{SystemCtx, World};
+/// fn clear(world: &World, _ctx: &SystemCtx, guard: EntityId) -> bool {
+///     matches!(character_fit(world, guard, None, [0.0, 0.0, 0.0], 0.0), Ok(None))
+/// }
+/// ```
+pub fn character_fit(
+    world: &World,
+    entity: EntityId,
+    posture: Option<&str>,
+    feet: [f32; 3],
+    yaw: f32,
+) -> Result<Option<EntityId>, MotorError> {
+    ludion_physics::character_fit::<Transform>(world, entity, posture, feet, yaw)
+}
+
+/// Brings a suspended motor back at `feet` when it fits; see [`ludion_physics::resume_character`].
+/// A `LaneConstraint` on the entity re-acquires its place over the whole path, as after
+/// [`teleport_character`].
+///
+/// ```no_run
+/// # use ludion_core::ids::EntityId;
+/// # use ludion_engine::resume_character;
+/// # use ludion_ecs::{SystemCtx, World};
+/// fn wake(world: &mut World, _ctx: &SystemCtx, guard: EntityId) {
+///     if let Ok(report) = resume_character(world, guard, [0.0, 0.0, 0.0], 0.0, None) {
+///         if !report.resumed { /* report.blocked_by names what is in the way */ }
+///     }
+/// }
+/// ```
+pub fn resume_character(
+    world: &mut World,
+    entity: EntityId,
+    feet: [f32; 3],
+    yaw: f32,
+    posture: Option<&str>,
+) -> Result<ResumeReport, MotorError> {
+    let report = ludion_physics::resume_character::<Transform>(world, entity, feet, yaw, posture)?;
+    if report.resumed {
+        if let Ok(Some(lane)) = world.get_mut::<crate::lane::LaneConstraint>(entity) {
+            lane.s = None;
+        }
+        crate::interpolation::cut_presentation(world, entity);
+    }
+    Ok(report)
+}
+
+/// Suspends the motor on `entity` or its nearest ancestor that has one, walking `Parent`; the
+/// ragdoll switches call it. Nothing happens when no motor is found.
+pub(crate) fn suspend_motor_of(world: &mut World, entity: EntityId) {
+    let mut at = Some(entity);
+    while let Some(current) = at {
+        if world.has::<CharacterMotor>(current) {
+            let _ = ludion_physics::suspend_character(world, current);
+            return;
+        }
+        at = world
+            .get::<Parent>(current)
+            .ok()
+            .flatten()
+            .map(|parent| parent.0);
+    }
 }
 
 /// Draws one call's `motor` primitives. `was_grounded` is the state before the call: the probe's

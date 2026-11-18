@@ -93,6 +93,7 @@ settled plan, nothing built; **rejected** — closed by design.
 - Navmesh, pathfinding library, behaviour trees, steering, perception — absent in the engine.
   vigil runs game-side flow fields; `ludion-nav` deferred until a second consumer
   (a private plan). Trigger fired (the external FPS request 0007) → `Plan/nav.md`.
+- Agent behaviour (HFSM, timers, squads): `Plan/ai-behaviour.md`.
 
 ### Audio
 
@@ -105,8 +106,9 @@ settled plan, nothing built; **rejected** — closed by design.
 ### Input and UI
 
 - One gamepad; action maps and rebinding deferred (`Plan/phase-13-input.md`).
-- Text is an embedded 8×8 uppercase ASCII bitmap: no TTF/OTF, no Unicode, hence no localization.
-  No layout engine, widget tree, theming or clipping (`Plan/ui-widgets.md`, `Plan/phase-14-ui.md`).
+- Text: an embedded 8×8 ASCII bitmap face plus baked TTF faces with SDF (`Plan/font-assets.md`); no
+  layout engine, widget tree, theming or clipping (`Plan/ui-widgets.md`, `Plan/phase-14-ui.md`; clipping
+  and motion are `Plan/ui-hud.md`).
   Accessibility absent. Localization and accessibility wait on a post-M7 grilling.
 
 ### Shipping

@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 /// A key on the keyboard, as an abstract, layout-independent name.
 ///
 /// This is the milestone-minimal set (letters, digits, arrows, the few control keys a
-/// Breakout/Sokoban-class game needs, and the folded modifiers); variants are appended as games require them. The serde form
+/// Breakout/Sokoban-class game needs, and the folded modifiers); variants are appended as games require them. A new variant changes the
+/// replay content hash (it covers the input event schema), so every committed replay is re-recorded with it. The serde form
 /// is the variant name as a string (`"W"`, `"Left"`, `"Space"`), which is what appears in scripts
 /// and on the wire.
 ///
@@ -713,7 +714,7 @@ impl GamepadState {
     }
 }
 
-fn radial_deadzone(stick: [f32; 2], deadzone: f32) -> [f32; 2] {
+pub(crate) fn radial_deadzone(stick: [f32; 2], deadzone: f32) -> [f32; 2] {
     let deadzone = deadzone.max(0.0);
     let m = math::hypot(stick[0], stick[1]);
     if m <= deadzone || deadzone >= 1.0 {
@@ -1715,5 +1716,29 @@ mod tests {
         let json = serde_json::to_value(&input).unwrap();
         let back: InputState = serde_json::from_value(json).unwrap();
         assert_eq!(back.mouse().delta()[0].to_bits(), 0x8000_0000);
+    }
+
+    #[test]
+    fn pre_existing_key_and_button_names_and_order_are_pinned() {
+        let keys = [
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q",
+            "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "Digit0", "Digit1", "Digit2", "Digit3",
+            "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Up", "Down", "Left",
+            "Right", "Space", "Enter", "Escape", "Shift", "Ctrl", "Alt",
+        ];
+        let parsed: Vec<Key> = keys
+            .iter()
+            .map(|name| serde_json::from_value(serde_json::json!(name)).unwrap())
+            .collect();
+        assert!(parsed.windows(2).all(|w| w[0] < w[1]), "Ord order moved");
+        for (key, name) in parsed.iter().zip(keys) {
+            assert_eq!(serde_json::to_value(key).unwrap(), serde_json::json!(name));
+        }
+        let buttons = ["left", "right", "middle"];
+        let parsed: Vec<MouseButton> = buttons
+            .iter()
+            .map(|name| serde_json::from_value(serde_json::json!(name)).unwrap())
+            .collect();
+        assert!(parsed.windows(2).all(|w| w[0] < w[1]));
     }
 }

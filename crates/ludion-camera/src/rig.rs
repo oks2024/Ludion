@@ -67,9 +67,9 @@ pub struct CameraRig {
     pub trauma: f32,
     /// Game-written hint: whether the target stands on ground (steers the vertical anchor).
     pub grounded: bool,
-    /// First-person look input `[yaw, pitch]` in degrees (positive yaw turns left, positive pitch
-    /// looks down). The game writes it, usually through [`add_look`]; the rig applies and zeroes it
-    /// on each tick it poses.
+    /// Look input `[yaw, pitch]` in degrees (positive yaw turns left, positive pitch looks down)
+    /// for `first_person` and `chase`; `follow` consumes and discards it. The game writes it,
+    /// usually through [`add_look`]; the rig applies and zeroes it on each tick it poses.
     #[serde(skip_serializing_if = "look_is_zero")]
     pub look_deg: [f32; 2],
     /// Degrees of look per raw mouse count: the one sensitivity the sim ([`add_look_counts`]) and a
@@ -283,8 +283,7 @@ pub struct RigConfig {
     pub blend_in: BlendIn,
 }
 
-/// The placement mode of a rig. Externally tagged: `mode: { track: { .. } }`. Further modes
-/// (`chase`, `follow`) join as variants.
+/// The placement mode of a rig. Externally tagged: `mode: { track: { .. } }`.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum RigMode {
@@ -294,6 +293,11 @@ pub enum RigMode {
     /// The eye rides the target rigidly; yaw and pitch are game-written look deltas on
     /// [`CameraRig::look_deg`], unsmoothed.
     FirstPerson(FirstPersonRig),
+    /// The boom orbits the target: the pivot is sprung toward the focus, yaw and pitch are
+    /// game-written look deltas on [`CameraRig::look_deg`], unsmoothed.
+    Chase(ChaseRig),
+    /// The boom holds a fixed world yaw, pitch and distance from the sprung pivot.
+    Follow(FollowRig),
 }
 
 impl Default for RigMode {
@@ -335,6 +339,10 @@ pub struct FirstPersonRig {
     pub eye_offset: [f32; 3],
     /// The pitch clamp in degrees either way; in `(0, 90)`.
     pub pitch_limit_deg: f32,
+    /// The pitch in degrees a snap or switch into `first_person` starts at (clamped on the next
+    /// look); `None` carries the current pitch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enter_pitch_deg: Option<f32>,
 }
 
 impl Default for FirstPersonRig {
@@ -342,6 +350,61 @@ impl Default for FirstPersonRig {
         Self {
             eye_offset: [0.0, 1.6, 0.0],
             pitch_limit_deg: 89.0,
+            enter_pitch_deg: None,
+        }
+    }
+}
+
+/// The `chase` mode: a boom of `distance` metres from the pivot, orbited by look input.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct ChaseRig {
+    /// Boom length from the pivot to the eye, in metres; above 0.
+    pub distance: f32,
+    /// The pitch in degrees (positive looks down) a snap or switch into `chase` starts at.
+    pub pitch_deg: f32,
+    /// The lowest pitch look can reach, in degrees; in `(-90, 90)`.
+    pub pitch_min_deg: f32,
+    /// The highest pitch look can reach, in degrees; in `(-90, 90)` and at least `pitch_min_deg`
+    /// (equal gives a fixed pitch).
+    pub pitch_max_deg: f32,
+    /// The yaw in degrees a snap or switch into `chase` starts at; `None` carries the current yaw.
+    pub yaw_deg: Option<f32>,
+    /// Whether `look_deg[1]` moves the pitch; `false` consumes and drops it.
+    pub look_pitch: bool,
+}
+
+impl Default for ChaseRig {
+    fn default() -> Self {
+        Self {
+            distance: 6.0,
+            pitch_deg: 20.0,
+            pitch_min_deg: -30.0,
+            pitch_max_deg: 70.0,
+            yaw_deg: None,
+            look_pitch: true,
+        }
+    }
+}
+
+/// The `follow` mode: a fixed world yaw, pitch and distance from the sprung pivot.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct FollowRig {
+    /// World yaw in degrees (0 puts the eye on the pivot's +Z side).
+    pub yaw_deg: f32,
+    /// Pitch in degrees, positive looks down; in `(-90, 90)`.
+    pub pitch_deg: f32,
+    /// Boom length from the pivot to the eye, in metres; above 0.
+    pub distance: f32,
+}
+
+impl Default for FollowRig {
+    fn default() -> Self {
+        Self {
+            yaw_deg: 0.0,
+            pitch_deg: 45.0,
+            distance: 10.0,
         }
     }
 }
@@ -538,7 +601,13 @@ pub struct RigState {
     /// The projection onto the track path, in metres of path parameter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub param: Option<f32>,
-    /// The sprung eye position.
+    /// The sprung pivot of a `chase` or `follow` rig; `None` in other modes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pivot: Option<[f32; 3]>,
+    /// The pivot spring's velocity, per axis.
+    #[serde(skip_serializing_if = "zero3")]
+    pub pivot_velocity: [f32; 3],
+    /// The sprung eye position (the orbit eye in `chase` and `follow`).
     pub eye: [f32; 3],
     /// The eye spring's velocity, per axis.
     pub eye_velocity: [f32; 3],

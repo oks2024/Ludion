@@ -115,9 +115,9 @@ A window draws from a presenter thread at the display's refresh rate; the sim ne
 
 ## Late latch
 
-`Engine::builder().late_latch(true)` re-resolves the first-person camera every refresh with the mouse motion the last tick has not consumed yet, so look reaches the screen at display rate instead of after the next tick. Opt-in, window only, render-only: the sim, `WorldHash`, scenes, replays, screenshot, stream and goldens never see it.
+`Engine::builder().late_latch(true)` re-resolves the first-person or chase camera every refresh with the mouse motion the last tick has not consumed yet, so look reaches the screen at display rate instead of after the next tick. Opt-in, window only, render-only: the sim, `WorldHash`, scenes, replays, screenshot, stream and goldens never see it.
 
-- **Scope:** a single unparented perspective `first_person` `CameraRig` camera, and only while the window's pointer is locked (`CursorMode::Locked`); a menu over the rig never wobbles. Mouse only: the gamepad stick is not latched.
+- **Scope:** a single unparented perspective `first_person` or `chase` `CameraRig` camera, and only while the window's pointer is locked (`CursorMode::Locked`); a menu over the rig never wobbles. Mouse only: the gamepad stick is not latched.
 - **No pop:** the view is `resolved_camera` with the pending counts turned into look through `look_deg_per_count`, exactly what `add_look_counts` gives the sim, so the tick that consumes them draws the same camera. The contract: while the pointer is locked, every motion must reach `add_look_counts`. A game that ignores look while locked (a cutscene, hit-stun) shows a latched pop until it releases the lock.
 - **Blend:** the camera's rotation is not interpolated; with `present_interpolation` on the blended position is kept and only the rotation is substituted.
 - **Cost:** a latched refresh is a full re-render, one per refresh while new motion arrives (same class as `present_interpolation`); with no new motion the last image is re-presented. Billboards and particles face the tick's camera, so a fast flick shows them up to one tick behind.

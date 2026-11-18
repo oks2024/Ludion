@@ -843,6 +843,40 @@ pub(crate) fn restore_into(
     value: &Value,
     policy: DriftPolicy,
 ) -> Result<RestoreReport, Diagnostic> {
+    restore_with(engine, value, RestoreMode::Session(policy))
+}
+
+/// How [`restore_with`] installs the world it decoded.
+enum RestoreMode<'a> {
+    /// An exact continuation of a snapshotted session ([`restore_into`]).
+    Session(DriftPolicy),
+    /// A checkpoint slot inside the live session: the driver is built at the engine's own frame, run
+    /// state and speed, and the world goes in through [`Engine::install_checkpoint`]. The slot's
+    /// frame, input, profile and render extent are never read. Strict, like a run-save resume.
+    Checkpoint(&'a crate::checkpoints::Slot),
+}
+
+/// Restores a checkpoint `slot` into the live session; the engine is untouched on `Err`.
+///
+/// # Errors
+/// The same document errors as [`restore_into`], plus `L1401` for drift (a slot is this build's own
+/// capture, so none is expected).
+pub(crate) fn restore_checkpoint(
+    engine: &mut Engine,
+    slot: &crate::checkpoints::Slot,
+) -> Result<(), Diagnostic> {
+    restore_with(engine, &slot.doc, RestoreMode::Checkpoint(slot)).map(|_| ())
+}
+
+fn restore_with(
+    engine: &mut Engine,
+    value: &Value,
+    mode: RestoreMode<'_>,
+) -> Result<RestoreReport, Diagnostic> {
+    let policy = match &mode {
+        RestoreMode::Session(policy) => *policy,
+        RestoreMode::Checkpoint(_) => DriftPolicy::Refuse,
+    };
     let mut doc: SnapshotDoc = serde_json::from_value(value.clone()).map_err(|error| {
         Diagnostic::new(
             code::PROTOCOL_SNAPSHOT_INVALID,
@@ -1080,6 +1114,7 @@ pub(crate) fn restore_into(
         // The side table the write refills each tick; a layer-table drift below can wake partners
         // before that, and the wake order follows the restored spawn ranks.
         physics.sync_spawn_ranks(&world);
+        physics.sync_query_layers(&world);
         // The decoded solver has no layer table until the next physics write; a game system that
         // moves a character before then would ignore `physics.layers`.
         if let Some(scene) = &scene_physics {
@@ -1131,6 +1166,10 @@ pub(crate) fn restore_into(
     // Rebuilt so a restored engine keeps running its systems — restore resets the world, but the
     // schedule is engine configuration that must survive it (the same fix as `scene.load`).
     let schedule = engine.build_schedule(scene_physics.as_ref());
+    let (driver_frame, driver_run_state, driver_speed) = match &mode {
+        RestoreMode::Session(_) => (FrameIndex::new(doc.frame), doc.run_state, speed),
+        RestoreMode::Checkpoint(_) => (engine.frame(), engine.run_state(), engine.speed()),
+    };
     let driver = ludion_sim::SimDriver::restore(
         world,
         schedule,
@@ -1139,9 +1178,9 @@ pub(crate) fn restore_into(
             // The snapshot has always carried the run's seed; the `WorldSeed` resource is rebuilt
             // from it rather than from a new snapshot field, so old snapshots restore unchanged.
             world_seed: doc.seed,
-            frame: FrameIndex::new(doc.frame),
-            run_state: doc.run_state,
-            speed,
+            frame: driver_frame,
+            run_state: driver_run_state,
+            speed: driver_speed,
             tick_rate,
         },
     );
@@ -1186,23 +1225,26 @@ pub(crate) fn restore_into(
         .collect();
 
     let frame = doc.frame;
-    engine
-        .install_restored(RestoredWorld {
-            driver,
-            seed: doc.seed,
-            scene: doc.scene,
-            scene_name: doc.scene_name,
-            profile: doc.profile,
-            scene_physics,
-            doc_reloads,
-            residue,
-            game_clock: doc.game_clock,
-            input: doc.input,
-            pending_input: doc.pending_input,
-            arrived_by_restart: doc.arrived_by_restart,
-            render_extent,
-        })
-        .map_err(crate::commands::collapse)?;
+    let restored = RestoredWorld {
+        driver,
+        seed: doc.seed,
+        scene: doc.scene,
+        scene_name: doc.scene_name,
+        profile: doc.profile,
+        scene_physics,
+        doc_reloads,
+        residue,
+        game_clock: doc.game_clock,
+        input: doc.input,
+        pending_input: doc.pending_input,
+        arrived_by_restart: doc.arrived_by_restart,
+        render_extent,
+    };
+    match mode {
+        RestoreMode::Session(_) => engine.install_restored(restored),
+        RestoreMode::Checkpoint(slot) => engine.install_checkpoint(restored, slot),
+    }
+    .map_err(crate::commands::collapse)?;
 
     for diagnostic in invalid {
         let key = format!(

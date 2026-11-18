@@ -5,8 +5,9 @@
 > teleport, platform carry, the numeric trace and the course (`ludion docs motor`, `games/character-course`). The fourth external request added
 > the lane constraint (`LaneConstraint`, `ludion docs lane`): a lateral hold to a `kind: path` corridor, and the fifth the
 > track camera rig (`CameraRig`, `ludion-camera`, `ludion docs camera`), proved on the course's behind and side rigs. A first-person game's
-> request added the `first_person` mode (look deltas, pitch clamp, `aim()`) and post-aim kick, roll and FOV channels. `chase`, `follow`,
-> occlusion, decision 16 and the vigil migration remain open; `manual` is dropped (decision 12, amended).
+> request added the `first_person` mode (look deltas, pitch clamp, `aim()`) and post-aim kick, roll and FOV channels. `chase` and `follow` are
+> mechanized (Neon Shroud request 0010, W3a: decisions 29–32); the collision stage, framing, zones, occlusion, decision 16 and the vigil migration remain open; `manual` is dropped (decision 12, amended).
+> Neon Shroud request 0006 (2026-11-18): N1 `suspend_character` / `resume_character` / `character_fit` is mechanized (decision 26); N2 postures and N3 carry are Proposed, owner ruling owed (decisions 27–28).
 > W1 holds mesh colliders, `kind: path` with its sampler queries, `PathFollower` (motion readout, wrap
 > teleports, `orient`) and world-space debug draw including the `colliders` category and `axes`. The
 > external platformer's first engine request drove its last additions, and its second shipped sensor
@@ -111,7 +112,8 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
    external platformer's request 0022: `probe_character_ground`, the motor's ground probe at an
    arbitrary feet position, read-only, at walk reach (step-up above, snap below), returning the hit
    and the rest height. A sweep variant (ground all along a segment) is a possible follow-up; trigger:
-   a caller probes more than one point per tick.
+   a caller probes more than one point per tick. From Neon Shroud request 0006: `suspend_character`,
+   `resume_character` and `character_fit` (decision 26).
 7. **`move_and_slide` stays, split by domain.** `move_and_slide` serves planar games without a physics
    world (vigil moves hundreds of enemies through it), and the motor serves 3D. Each crate's docs point
    to the other. **Why:** these are different domains, not two ways to do one task, so each domain
@@ -132,6 +134,7 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
      `generated_from`, a provenance key the editor reads; the engine has no drift gate for it (it cannot
      run Blender).
    - It has four consumers: the track rig, `PathFollower`, game patrols and motor lanes.
+   - Patrols: `kind: patrol`, `Plan/nav.md` decision 13 (nav legs, not splines).
    - **Why:** points on the curve are readable and editable as text (North Star), and centripetal
      avoids cusps. Blender's off-curve handles buy nothing for a camera or platform.
 10. **`PathFollower`: an engine component and system.**
@@ -261,6 +264,44 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
       touching the sim's single-writer rule.
     - Shipped under Serious Isaac 0020's conservative clause, not an owner amendment.
 
+26. **Suspend and resume** (Neon Shroud request 0006, wave N1; shipped). `suspend_character(world, entity)`
+    parks a motor: `CharacterMotorState.suspended` (omitted at `false`, so every existing scene, replay and
+    trace is byte-identical) clears the grounded record and gives the motor **no body** at the next write
+    pass; every move (`move_character`, `move_character_with`, `move_characters`) and `teleport_character`
+    is `MotorError::Suspended`. `resume_character::<P>(world, entity, feet, yaw, posture)` brings it back
+    only where it fits, using `character_fit` (the `headroom` overlap test `resize_character` already
+    runs, at the height in force, so a crouch is kept). A blocker is `Ok(ResumeReport { resumed: false,
+    blocked_by })` with nothing changed. A fit writes the pose, clears the state like a teleport and
+    places the capsule without pushing props. Error order: `NoMotor`, `NoPose`, `NonFiniteTeleport`,
+    `UnknownPosture`, `Parented`, `NotSuspended`, then the fit (`InvalidMotor`, `NoPhysicsWorld`).
+    - `posture` is in the signature so postures (decision 27) do not break it; no motor declares any in
+      N1, so `Some(_)` is `UnknownPosture`. `yaw` is written to the pose and has no effect on the fit of
+      an upright capsule.
+    - **L1297 exception.** A suspended motor under a `Parent` raises no `L1297`, at runtime or in
+      `check-scene` (an authored `CharacterMotorState: { suspended: true }`): it has no body and is
+      parked while something else owns it. Resume refuses `Parented`: reparent to the root first.
+    - **The ragdoll switches suspend.** `switch_to_ragdoll` and `switch_skin_to_ragdoll` suspend the motor
+      on the switched entity or its nearest ancestor that has one (walking `Parent`), on the success
+      path only. **Why:** it is one call with nothing to forget (the game's preference), and no existing
+      content switches a motor entity or a motor's child, so no hash moves.
+    - `resize_character`, `fits_character` and `probe_character_ground` keep working on a suspended motor.
+    - Removing `CharacterMotor` is not a suspend: the state and the motor settings are lost.
+27. **Postures** (Neon Shroud request 0006, wave N2; **Proposed — owner ruling owed**). A `postures:` map on
+    `CharacterMotor`, each `upright { height, radius? }` or `lying { length, radius, offset }`, with
+    per-posture `step_height`, `slope_limit_deg` and `snap_distance`. A lying capsule yaws with facing
+    and never pitches. API: `set_character_posture`, `character_fit` with a posture (the `posture`
+    parameter of decision 26 starts to mean something), `turn_character` in 15° destination-tested
+    sub-steps; `MoveReport.posture`; `CharacterMotorState.posture`.
+    - **Amendments needed:** decision 5's capsule "never tilts or yaws" in `docs/motor.md`, and the
+      non-goal "Motor modes beyond ground and air", whose trigger (a GDD asking) fired. This adds shapes,
+      not modes.
+    - N2 may split: N2a, the data model plus upright postures; N2b, the lying shape through every sweep
+      in `mover.rs`.
+28. **Carry** (Neon Shroud request 0006, wave N3; **Proposed — owner ruling owed**). A joint whose `a` is a
+    kinematic anchor, documented and tested. The carrier/carried filter is served by request 0002's
+    in-place layer membership if that ships in place; otherwise by `IgnoreCollisions { with }`. Recipes
+    for the drag carry and the shoulder carry go in `docs/motor.md` §Carrying.
+
 ## The formats (sketch; exact key names settle in the wave that builds them)
 
 A path:
@@ -337,12 +378,43 @@ game crate, and the tooling knows `games/*`).
    - the bpy script that emits the course's render and collision meshes and its paths;
    - the run/jump reference controller;
    - a trace, a `.lrp` and a golden blessed on the 3090 (the M4 re-bless is owed).
-5. Docs: the motor topic, and the `move_and_slide` ↔ motor pointers (decision 7).
+5. Docs: the motor topic, and the `move_and_slide` ↔ motor pointers (decision 7).29. **The pivot is sprung, the angles are not** (Neon Shroud request 0010, W3a; mechanized). In `chase` and
+    `follow`, `springs.position_half_life` moves a *pivot* toward the rig focus (look-ahead and the
+    vertical anchor are shared with `track`); the eye sits rigidly on a boom from it
+    (`Orbit { pivot, yaw, pitch, distance }`). `rotation_half_life` is ignored, as in `first_person`.
+    **Why:** stick and mouse look stay 1:1 with no spring lag, the late latch is exact (rotate about the
+    pivot), and a held tick still applies look.
+30. **Chase look reuses `look_deg`** (0010 W3a; mechanized). The D15 amendment: the game writes deltas
+    through `add_look`, the rig applies them on every tick it poses (held clock included), wraps the yaw
+    and clamps the pitch to `[pitch_min_deg, pitch_max_deg]` (`min == max` fixes it); `look_deg[1]` moves
+    the pitch only with `look_pitch`. The presenter's late latch covers `chase` like `first_person`.
+31. **Follow consumes look** (0010 W3a; mechanized). `follow` holds a fixed world yaw, pitch and
+    distance and zeroes `look_deg` each tick it poses, so stick input never accumulates during a follow
+    zone and pops on the return to `chase`. `track` is unchanged (look is not consumed).
+32. **Snap and switch rules** (0010 W3a; mechanized). Into `chase`: yaw is `chase.yaw_deg` if set, else
+    the current yaw carries (from `track`, from `first_person`, or 0 on a fresh load); pitch is
+    `chase.pitch_deg` clamped; the pivot rests on the focus. Into `follow`: the authored yaw and pitch.
+    `first_person.enter_pitch_deg` (`None` carries the pitch) sets the pitch on a snap or switch into
+    first person. A spawn facing is `set_look` (its yaw carries; the pitch is reset by the mode's own
+    entry rule). The request's "`null` yaw = behind the target's facing" is not built: `RigInput`
+    carries no target rotation.
 
 ### W3 — Camera rigs and vigil
 
 Items 1, 2 and 5 are mechanized for the track subset (`ludion-camera`, `ludion docs camera`); item 3 as the course's
 behind/side rigs, zones, snap and respawn trauma (`games/character-course`, `tests/camera.rs`); a chase section is open.
+W3's remaining work splits (Neon Shroud request 0010): **W3a** `chase`, `follow` and `enter_pitch_deg`
+(mechanized, decisions 29–32); **W3b** the collision stage and the framing channel; **W3c** the engine
+`CameraZone`, the `occluders` list, `examples/gallery/camera-chase.yaml` and the course's chase section.
+
+**Proposed — owner ruling owed** (Neon Shroud request 0010):
+1. Promote the non-goal "Engine camera zones" to a decision; the trigger fired.
+2. D20: `ludion-camera` stays physics-free behind a `RigCollision` trait that `ludion-engine` implements.
+3. D12 gains a framing stage before collision.
+4. A game write while zones are active becomes the new zone `base`.
+5. `camera_relative` ignores the framing yaw offset during a peek.
+6. The occluder fade stays game policy, with the engine handing over an `occluders` list.
+7. `enter_pitch_deg` defaults to `None`, carrying the pitch.
 
 1. `ludion-camera`: `CameraRig`, the staged pipeline, the `chase`, `track`, `follow` and `manual`
    modes, the shared stages (decision 12), blend (decision 13), and `camera_relative`.
@@ -370,6 +442,14 @@ behind/side rigs, zones, snap and respawn trauma (`games/character-course`, `tes
    `MoveReport` and speed.
 2. The course's `.lrp` and golden re-record if the pose changes them.
 
+### Neon Shroud 0006 — suspend, postures, carry
+
+- **N1 — suspend and resume** (mechanized; decision 26). `suspend_character`, `resume_character`,
+  `character_fit`, `CharacterMotorState.suspended`, the `L1297` exception, the ragdoll switches suspend.
+  Docs: `docs/motor.md` §Suspend and resume.
+- **N2 — postures** (**Proposed**, decision 27; may split into N2a and N2b).
+- **N3 — carry** (**Proposed**, decision 28).
+
 ### Exit (human gate, owed)
 
 One sitting (about 30 minutes):
@@ -395,7 +475,10 @@ collapsed.
 - **Tilting platforms** (pitch and roll riding). **Trigger:** a level needs one.
 - **More rig variants:** a framing dead zone, a static look-at rig, a guide-plus-camera track.
   **Trigger:** a level or game the shipped modes plus `manual` can't serve without repetition.
-- **Engine camera zones.** **Trigger:** a second game repeats the zone pattern.
+- **Engine camera zones.** **Trigger:** a second game repeats the zone pattern (fired by Neon Shroud
+  request 0010; W3c, Proposed above).
+- **Chase `recenter`** (the boom drifting behind motion, decision 12's chase). **Trigger:** a game asks;
+  Neon Shroud keeps it off.
 - **Convex-hull generation** for rigid-body meshes (unchanged from `Plan/physics.md`).
 - **Touch input** for the reference controller. **Trigger:** iOS M3 resumes.
 - **Wrapping rapier's `KinematicCharacterController`** (decision 3).

@@ -82,6 +82,22 @@ A motor that ended its last call grounded on a `static` or `kinematic` support (
 - `probe_character_ground(world, hero, feet)` → `Result<Option<GroundProbe>, MotorError>` runs the motor's own ground probe, cast from `step_height` above `feet` over `step_height + snap_distance + skin_width`. The result is `ground` plus `rest_y` (the feet height the motor would settle at); `None` means no ground a walk could reach, including an obstacle above the step. It uses the crouched height and the motor's layer filter, does no headroom test, and moves nothing. It draws `MOTOR_PROBE`.
 - `teleport_character(world, hero, feet, yaw)` places the feet and yaw **without driving the capsule**: no prop on the way is pushed, and none near the old or new spot is launched. It clears grounded, ground, platform and the carry tick (no carry next tick) and restores the authored height when it fits at the new spot, and nulls a `LaneConstraint`'s `s` so the lane re-acquires globally (`blend` kept). A sleeping prop beside either spot is woken and shows one gravity step of speed before it settles — a wake, not a launch. A plain `Transform` write is a **move**: it drives the capsule and pushes props, and keeps the grounded record: when the old support moved or turned that tick, the next call carries the new feet with it, about the old support's pivot, once. Reposition a rider with `teleport_character` (`ludion docs physics` §Teleports for rigid bodies).
 
+## Suspend and resume
+
+- `suspend_character(world, hero)` parks the motor: `CharacterMotorState.suspended` becomes `true`, the grounded record, ground, platform and carry tick clear, the height in force stays, and the capsule **body is gone at the next physics write**. Every move (`move_character`, `move_character_with`, `move_characters`) and `teleport_character` is `MotorError::Suspended`. It is idempotent. `resize_character`, `fits_character` and `probe_character_ground` still work on a parked motor. `suspended` is omitted from the state while `false`.
+- `character_fit(world, hero, None, feet, yaw)` → `Result<Option<EntityId>, MotorError>` is the resume test without changing anything: the lowest-id collider inside the upright capsule at the height in force, `None` when it fits. `yaw` does not change the fit of an upright capsule. `Some(posture)` is `MotorError::UnknownPosture` (no motor declares postures).
+- `resume_character(world, hero, feet, yaw, None)` → `ResumeReport { resumed, blocked_by }`. A blocker gives `resumed: false` with the motor still parked and the pose unchanged; a fit writes the pose, clears the state like a teleport (no props pushed, a `LaneConstraint`'s `s` nulled) and the capsule is rebuilt by the next write. A motor under a `Parent` is `MotorError::Parented` (reparent it to the root first); one not parked is `MotorError::NotSuspended`.
+- `switch_to_ragdoll` and `switch_skin_to_ragdoll` suspend the motor on the switched entity or its nearest ancestor with one.
+- **A carried or ragdolled guard:** suspend it when something else takes the entity (a ragdoll switch does so itself; a carry, a `Parent`). To revive, put the entity back at the root, walk a candidate list and take the first that fits:
+
+```rust
+let spot = candidates.iter().copied()
+    .find(|s| matches!(character_fit(world, guard, None, *s, 0.0), Ok(None)));
+if let Some(feet) = spot { let _ = resume_character(world, guard, feet, yaw, None); }
+```
+
+Call these from a system registered before the physics systems.
+
 ## Freshness
 
 Casts and overlaps see the last completed physics step. A press or wall coming at the character is seen one tick late: one tick of overlap, then depenetration, and `stuck` up to a tick late; the platform carry is the explicit exception. Queries skip sensors by default, so the motor never stands on, or reports, a trigger volume (`ludion docs physics-sensors`). The motor's own capsule and the layers its `layer` ignores (`ludion docs collision-layers`) are excluded from its casts.
@@ -114,18 +130,19 @@ Category `motor` (`DebugCategories::parse("motor")`), drawn only by `ludion_engi
 | L1294 | a `CharacterMotor` field is out of range (check-scene, and at runtime for a motor built in Rust) |
 | L1295 | a `CharacterMotor` and a `Collider` share an entity (check-scene, runtime) |
 | L1296 | a `CharacterMotor` in a scene with no `physics:` block — its capsule is never built (check-scene, once at runtime) |
-| L1297 | a `CharacterMotor` entity has a `Parent`; it writes world-space feet (check-scene, once at runtime) |
+| L1297 | a `CharacterMotor` entity has a `Parent`; it writes world-space feet (check-scene, once at runtime); a suspended motor is exempt |
 | L1298 | a `SurfaceVelocity` component is non-finite (the component validator) |
 | L1299 | a `SurfaceVelocity` entity has no `Collider`, or a rigid one (check-scene) |
 | L1186 | the motor's `layer` is not declared in `physics.layers` |
 
-`MotorError` (`NoMotor`, `NoPose`, `NoPhysicsWorld`, `NonFiniteDisplacement`, `InvalidMotor`, `InvalidHeight`, `NonFiniteTeleport`) are `Err` returns with a message, not codes. `ludion explain L1294` prints the fix.
+`MotorError` (`NoMotor`, `NoPose`, `NoPhysicsWorld`, `NonFiniteDisplacement`, `InvalidMotor`, `InvalidHeight`, `NonFiniteTeleport`, `NonFiniteFeet`, `Suspended`, `NotSuspended`, `Parented`, `UnknownPosture`) are `Err` returns with a message, not codes. `ludion explain L1294` prints the fix.
 
 ## Gotchas
 
 - **Registered after physics:** a motor system registered after the engine's physics systems stamps reports with the wrong frame; register it before.
 - **A moveset that sums `stepped` per call** under-counts a slow climb; sum across ticks.
 - **Not modelled:** carry from `rigid` supports, surface velocity on dynamic bodies, curved belts (straight segments only), airborne step-up, platform pitch and roll (only yaw carries).
+- **Removing `CharacterMotor` is not a suspend:** the settings and state are lost; use `suspend_character`.
 - **Reports are unhashed**: `PhysicsWorld::last_move_report` keeps each motor's last one for tools and the trace; the pose and `CharacterMotorState` are the hashed result.
 
 ## Next

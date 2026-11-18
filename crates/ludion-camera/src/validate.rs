@@ -10,6 +10,7 @@ use crate::rig::{CameraRig, RigConfig, RigMode};
 const NOT_NEGATIVE: &str = "must be a finite number, not negative";
 const POSITIVE: &str = "must be a finite number above 0";
 const FINITE: &str = "must be a finite number";
+const INSIDE_PITCH: &str = "must be between -90 and 90 degrees, exclusive";
 
 /// Every field of `config` that breaks a range rule, as `(JSON Pointer relative to the config, rule)`
 /// in declaration order.
@@ -79,6 +80,7 @@ fn config_violations(config: &RigConfig) -> Vec<(&'static str, &'static str)> {
                 );
             }
         }
+        RigMode::Chase(_) | RigMode::Follow(_) => {}
     }
     for (axis, value) in config.focus_offset.into_iter().enumerate() {
         finite(
@@ -86,13 +88,53 @@ fn config_violations(config: &RigConfig) -> Vec<(&'static str, &'static str)> {
             value,
         );
     }
-    if let RigMode::FirstPerson(fp) = &config.mode
-        && !(fp.pitch_limit_deg > 0.0 && fp.pitch_limit_deg < 90.0)
-    {
-        found.push((
-            "/mode/first_person/pitch_limit_deg",
-            "must be between 0 and 90 degrees, exclusive",
-        ));
+    if let RigMode::FirstPerson(fp) = &config.mode {
+        if !(fp.pitch_limit_deg > 0.0 && fp.pitch_limit_deg < 90.0) {
+            found.push((
+                "/mode/first_person/pitch_limit_deg",
+                "must be between 0 and 90 degrees, exclusive",
+            ));
+        }
+        if fp.enter_pitch_deg.is_some_and(|v| !v.is_finite()) {
+            found.push(("/mode/first_person/enter_pitch_deg", FINITE));
+        }
+    }
+    let inside_pitch = |v: f32| v > -90.0 && v < 90.0;
+    match &config.mode {
+        RigMode::Chase(chase) => {
+            if !(chase.distance.is_finite() && chase.distance > 0.0) {
+                found.push(("/mode/chase/distance", POSITIVE));
+            }
+            if !chase.pitch_min_deg.is_finite() || !inside_pitch(chase.pitch_min_deg) {
+                found.push(("/mode/chase/pitch_min_deg", INSIDE_PITCH));
+            }
+            if !chase.pitch_max_deg.is_finite() || !inside_pitch(chase.pitch_max_deg) {
+                found.push(("/mode/chase/pitch_max_deg", INSIDE_PITCH));
+            } else if chase.pitch_max_deg < chase.pitch_min_deg {
+                found.push((
+                    "/mode/chase/pitch_max_deg",
+                    "must be at least `pitch_min_deg`",
+                ));
+            }
+            if !chase.pitch_deg.is_finite() {
+                found.push(("/mode/chase/pitch_deg", FINITE));
+            }
+            if chase.yaw_deg.is_some_and(|v| !v.is_finite()) {
+                found.push(("/mode/chase/yaw_deg", FINITE));
+            }
+        }
+        RigMode::Follow(follow) => {
+            if !(follow.distance.is_finite() && follow.distance > 0.0) {
+                found.push(("/mode/follow/distance", POSITIVE));
+            }
+            if !follow.pitch_deg.is_finite() || !inside_pitch(follow.pitch_deg) {
+                found.push(("/mode/follow/pitch_deg", INSIDE_PITCH));
+            }
+            if !follow.yaw_deg.is_finite() {
+                found.push(("/mode/follow/yaw_deg", FINITE));
+            }
+        }
+        RigMode::Track(_) | RigMode::FirstPerson(_) => {}
     }
     if let Some(fov) = config.fov_y_deg
         && !(fov.is_finite() && fov > 0.0 && fov < 180.0)
@@ -186,7 +228,9 @@ fn diagnostic(what: &str, pointer: &str, rule: &str) -> Diagnostic {
     .with_help(
         "keep half-lives, slacks and shake limits non-negative, `search_window`, \
          `full_speed`, `frequency` and `exponent` above 0, `fov_y_deg` inside (0, 180) \
-         `trauma` in [0, 1], `pitch_limit_deg` inside (0, 90) and `eye_offset`, `look_deg`, \
+         `trauma` in [0, 1], `pitch_limit_deg` inside (0, 90), a `chase` or `follow` `distance` \
+         above 0, their pitches inside (-90, 90) with `pitch_min_deg` <= `pitch_max_deg`, and \
+         `eye_offset`, `enter_pitch_deg`, chase and follow `yaw_deg` and `pitch_deg`, `look_deg`, \
          `look_deg_per_count`, `kick_deg`, `fov_kick_deg`, `roll_deg` and `fov_offset_deg` finite",
     )
 }
@@ -211,7 +255,9 @@ impl SemanticValidate for CameraRig {
     /// half-lives, `look_ahead.distance`, slacks, `blend_in.seconds`, `decay_per_second` and the shake
     /// maxima negative or not finite; `search_window`, `full_speed`, `frequency`, `exponent` not
     /// positive; `kick` half-lives negative or not finite; offsets, `look_deg`, `look_deg_per_count`, `kick_deg`, `fov_kick_deg`,
-    /// `roll_deg` and `fov_offset_deg` not finite; `pitch_limit_deg` outside `(0, 90)`; `fov_y_deg`
+    /// `roll_deg` and `fov_offset_deg` not finite; `pitch_limit_deg` outside `(0, 90)`; a `chase`
+    /// or `follow` `distance` not positive, their pitches outside `(-90, 90)`, `pitch_max_deg`
+    /// below `pitch_min_deg`; `enter_pitch_deg` and their yaws not finite; `fov_y_deg`
     /// outside `(0, 180)`; `trauma` outside `[0, 1]`. A value that does not deserialize is left to
     /// the schema.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
@@ -293,6 +339,30 @@ mod tests {
             (
                 json!({"rig": {"mode": {"first_person": {"pitch_limit_deg": 0.0}}}}),
                 "/rig/mode/first_person/pitch_limit_deg",
+            ),
+            (
+                json!({"rig": {"mode": {"chase": {"distance": 0.0}}}}),
+                "/rig/mode/chase/distance",
+            ),
+            (
+                json!({"rig": {"mode": {"chase": {"pitch_min_deg": -90.0}}}}),
+                "/rig/mode/chase/pitch_min_deg",
+            ),
+            (
+                json!({"rig": {"mode": {"chase": {"pitch_max_deg": 90.0}}}}),
+                "/rig/mode/chase/pitch_max_deg",
+            ),
+            (
+                json!({"rig": {"mode": {"chase": {"pitch_min_deg": 10.0, "pitch_max_deg": 5.0}}}}),
+                "/rig/mode/chase/pitch_max_deg",
+            ),
+            (
+                json!({"rig": {"mode": {"follow": {"distance": -1.0}}}}),
+                "/rig/mode/follow/distance",
+            ),
+            (
+                json!({"rig": {"mode": {"follow": {"pitch_deg": 90.0}}}}),
+                "/rig/mode/follow/pitch_deg",
             ),
             (json!({"rig": {"fov_y_deg": 0.0}}), "/rig/fov_y_deg"),
             (json!({"rig": {"fov_y_deg": 180.0}}), "/rig/fov_y_deg"),
@@ -405,6 +475,49 @@ mod tests {
                 Some(pointer)
             );
         }
+    }
+
+    #[test]
+    fn boom_fields_are_checked_in_rust() {
+        let chase = |chase: crate::ChaseRig| {
+            let mut rig = CameraRig::default();
+            rig.rig.mode = RigMode::Chase(chase);
+            invalid_field(&rig).map(|(pointer, _)| pointer)
+        };
+        let base = crate::ChaseRig::default;
+        assert_eq!(
+            chase(crate::ChaseRig {
+                pitch_deg: f32::NAN,
+                ..base()
+            })
+            .as_deref(),
+            Some("/rig/mode/chase/pitch_deg")
+        );
+        assert_eq!(
+            chase(crate::ChaseRig {
+                yaw_deg: Some(f32::INFINITY),
+                ..base()
+            })
+            .as_deref(),
+            Some("/rig/mode/chase/yaw_deg")
+        );
+        let mut rig = CameraRig::default();
+        rig.rig.mode = RigMode::Follow(crate::FollowRig {
+            yaw_deg: f32::NAN,
+            ..Default::default()
+        });
+        assert_eq!(
+            invalid_field(&rig).map(|(pointer, _)| pointer).as_deref(),
+            Some("/rig/mode/follow/yaw_deg")
+        );
+        rig.rig.mode = RigMode::FirstPerson(crate::FirstPersonRig {
+            enter_pitch_deg: Some(f32::NAN),
+            ..Default::default()
+        });
+        assert_eq!(
+            invalid_field(&rig).map(|(pointer, _)| pointer).as_deref(),
+            Some("/rig/mode/first_person/enter_pitch_deg")
+        );
     }
 
     #[test]

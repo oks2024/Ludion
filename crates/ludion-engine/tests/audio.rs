@@ -3,6 +3,7 @@
 //! half — the frame-boundary `AudioEmitter` sync: falloff from the listener, the liveness diff, and
 //! the emitter-less world that emits nothing at all.
 
+use ludion_core::audio::{Bus, MixLayer};
 use ludion_core::ids::EntityId;
 use ludion_engine::{
     AudioCategory, AudioDistance, AudioEvent, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
@@ -242,6 +243,27 @@ fn a_placed_emitter_syncs_at_its_distance_from_the_listener_once_then_holds() {
         vec![bell_sync(0.6)],
         "the second tick says nothing new"
     );
+}
+
+/// A scene authors `category: voice` and `ui` on an emitter, and the loop syncs on that bus.
+#[test]
+fn an_emitter_authored_on_the_voice_or_ui_bus_syncs_with_that_category() {
+    for (name, category) in [("voice", AudioCategory::Voice), ("ui", AudioCategory::Ui)] {
+        let scene = BELL_SCENE.replace(
+            "        range: 10.0\n",
+            &format!("        range: 10.0\n        category: {name}\n"),
+        );
+        let mut engine = Engine::new();
+        engine.load_inline_scene(&scene).expect("scene loads");
+        engine.advance_live();
+        let AudioMessage::LoopSync {
+            category: synced, ..
+        } = &loop_messages(&engine, BELL)[0]
+        else {
+            panic!("the emitter syncs");
+        };
+        assert_eq!(*synced, category);
+    }
 }
 
 fn bell_sync(gain: f32) -> AudioMessage {
@@ -806,6 +828,120 @@ fn music_sets_never_affect_the_world_hash() {
             if push_audio {
                 queue(&mut engine).music_set("s", &[("a.ogg", 1.0), ("b.ogg", 0.0)], 10);
                 queue(&mut engine).music_stem_gain("b.ogg", 1.0, 5);
+            }
+            engine.advance_live();
+            hashes.push(engine.world_hash().unwrap().as_u64());
+        }
+        hashes
+    }
+    assert_eq!(run(true), run(false));
+}
+
+// --- Buses: runtime gain and pause ---
+
+/// A game system that sets the music slider, ducks sfx and pauses the world's buses on fixed frames.
+fn mix_script(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+    let queue = world.resource_mut::<AudioQueue>().expect("AudioQueue");
+    match ctx.frame.as_u64() {
+        1 => queue.bus_gain(Bus::Music, MixLayer::User, 0.4, 0),
+        2 => queue.bus_gain(Bus::Sfx, MixLayer::Game, 0.25, 12),
+        3 => queue.bus_pause(&[Bus::Sfx, Bus::Ambient], 6),
+        4 => queue.bus_resume(&[Bus::Sfx, Bus::Ambient], 6),
+        _ => {}
+    }
+}
+
+fn bus_messages(engine: &Engine) -> Vec<(u64, AudioMessage)> {
+    engine
+        .audio_log()
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.message,
+                AudioMessage::BusGain { .. } | AudioMessage::BusPause { .. }
+            )
+        })
+        .map(|entry| (entry.frame.as_u64(), entry.message.clone()))
+        .collect()
+}
+
+fn mixed_engine() -> Engine {
+    let mut engine = Engine::builder()
+        .system("mix_script", mix_script)
+        .build()
+        .expect("engine builds");
+    engine.load_inline_scene(SCENE).expect("scene loads");
+    for _ in 0..6 {
+        engine.advance_live();
+    }
+    engine
+}
+
+/// The bus verbs drain in push order, stamped with the frame that emitted them.
+#[test]
+fn bus_messages_drain_in_push_order_with_the_emitting_frame() {
+    let engine = mixed_engine();
+    assert_eq!(
+        bus_messages(&engine),
+        vec![
+            (
+                1,
+                AudioMessage::BusGain {
+                    bus: Bus::Music,
+                    layer: MixLayer::User,
+                    gain: 0.4,
+                    fade_frames: 0,
+                }
+            ),
+            (
+                2,
+                AudioMessage::BusGain {
+                    bus: Bus::Sfx,
+                    layer: MixLayer::Game,
+                    gain: 0.25,
+                    fade_frames: 12,
+                }
+            ),
+            (
+                3,
+                AudioMessage::BusPause {
+                    buses: vec![Bus::Sfx, Bus::Ambient],
+                    paused: true,
+                    fade_frames: 6,
+                }
+            ),
+            (
+                4,
+                AudioMessage::BusPause {
+                    buses: vec![Bus::Sfx, Bus::Ambient],
+                    paused: false,
+                    fade_frames: 6,
+                }
+            ),
+        ]
+    );
+    let log = engine.audio_log();
+    let gains: Vec<_> = log.iter().map(|entry| entry.gain()).collect();
+    assert_eq!(gains, [Some(0.4), Some(0.25), None, None]);
+    assert!(log.iter().all(|entry| entry.sound().is_none()));
+}
+
+/// A scripted mix regenerates an identical log.
+#[test]
+fn a_bus_script_regenerates_an_identical_audio_log() {
+    assert_eq!(mixed_engine().audio_log(), mixed_engine().audio_log());
+}
+
+/// Bus gain and pause never perturb the `WorldHash`.
+#[test]
+fn bus_calls_never_affect_the_world_hash() {
+    fn run(push_audio: bool) -> Vec<u64> {
+        let mut engine = engine();
+        let mut hashes = vec![engine.world_hash().unwrap().as_u64()];
+        for _ in 0..5 {
+            if push_audio {
+                queue(&mut engine).bus_gain(Bus::Master, MixLayer::User, 0.5, 3);
+                queue(&mut engine).bus_pause(&[Bus::Music], 2);
             }
             engine.advance_live();
             hashes.push(engine.world_hash().unwrap().as_u64());

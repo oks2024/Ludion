@@ -160,6 +160,14 @@
           {
             "description": "A sustained ambient bed: a drone, wind, a tolling bell.",
             "const": "ambient"
+          },
+          {
+            "description": "Spoken dialogue and barks.",
+            "const": "voice"
+          },
+          {
+            "description": "Interface sounds: clicks, confirmations, menu music stings.",
+            "const": "ui"
           }
         ],
         "default": "ambient"
@@ -406,7 +414,7 @@
         "default": true
       },
       "look_deg": {
-        "description": "First-person look input `[yaw, pitch]` in degrees (positive yaw turns left, positive pitch\nlooks down). The game writes it, usually through [`add_look`]; the rig applies and zeroes it\non each tick it poses.",
+        "description": "Look input `[yaw, pitch]` in degrees (positive yaw turns left, positive pitch looks down)\nfor `first_person` and `chase`; `follow` consumes and discards it. The game writes it,\nusually through [`add_look`]; the rig applies and zeroes it on each tick it poses.",
         "type": "array",
         "items": {
           "type": "number",
@@ -558,7 +566,7 @@
         }
       },
       "RigMode": {
-        "description": "The placement mode of a rig. Externally tagged: `mode: { track: { .. } }`. Further modes\n(`chase`, `follow`) join as variants.",
+        "description": "The placement mode of a rig. Externally tagged: `mode: { track: { .. } }`.",
         "oneOf": [
           {
             "description": "Ride a level-authored path: the target is projected onto it and the camera sits at an offset\nin the path's frame.",
@@ -583,6 +591,32 @@
             },
             "required": [
               "first_person"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The boom orbits the target: the pivot is sprung toward the focus, yaw and pitch are\ngame-written look deltas on [`CameraRig::look_deg`], unsmoothed.",
+            "type": "object",
+            "properties": {
+              "chase": {
+                "$ref": "#/$defs/ChaseRig"
+              }
+            },
+            "required": [
+              "chase"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The boom holds a fixed world yaw, pitch and distance from the sprung pivot.",
+            "type": "object",
+            "properties": {
+              "follow": {
+                "$ref": "#/$defs/FollowRig"
+              }
+            },
+            "required": [
+              "follow"
             ],
             "additionalProperties": false
           }
@@ -645,6 +679,82 @@
             "type": "number",
             "format": "float",
             "default": 89.0
+          },
+          "enter_pitch_deg": {
+            "description": "The pitch in degrees a snap or switch into `first_person` starts at (clamped on the next\nlook); `None` carries the current pitch.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          }
+        }
+      },
+      "ChaseRig": {
+        "description": "The `chase` mode: a boom of `distance` metres from the pivot, orbited by look input.",
+        "type": "object",
+        "properties": {
+          "distance": {
+            "description": "Boom length from the pivot to the eye, in metres; above 0.",
+            "type": "number",
+            "format": "float",
+            "default": 6.0
+          },
+          "pitch_deg": {
+            "description": "The pitch in degrees (positive looks down) a snap or switch into `chase` starts at.",
+            "type": "number",
+            "format": "float",
+            "default": 20.0
+          },
+          "pitch_min_deg": {
+            "description": "The lowest pitch look can reach, in degrees; in `(-90, 90)`.",
+            "type": "number",
+            "format": "float",
+            "default": -30.0
+          },
+          "pitch_max_deg": {
+            "description": "The highest pitch look can reach, in degrees; in `(-90, 90)` and at least `pitch_min_deg`\n(equal gives a fixed pitch).",
+            "type": "number",
+            "format": "float",
+            "default": 70.0
+          },
+          "yaw_deg": {
+            "description": "The yaw in degrees a snap or switch into `chase` starts at; `None` carries the current yaw.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "default": null
+          },
+          "look_pitch": {
+            "description": "Whether `look_deg[1]` moves the pitch; `false` consumes and drops it.",
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "FollowRig": {
+        "description": "The `follow` mode: a fixed world yaw, pitch and distance from the sprung pivot.",
+        "type": "object",
+        "properties": {
+          "yaw_deg": {
+            "description": "World yaw in degrees (0 puts the eye on the pivot's +Z side).",
+            "type": "number",
+            "format": "float",
+            "default": 0.0
+          },
+          "pitch_deg": {
+            "description": "Pitch in degrees, positive looks down; in `(-90, 90)`.",
+            "type": "number",
+            "format": "float",
+            "default": 45.0
+          },
+          "distance": {
+            "description": "Boom length from the pivot to the eye, in metres; above 0.",
+            "type": "number",
+            "format": "float",
+            "default": 10.0
           }
         }
       },
@@ -853,8 +963,31 @@
             ],
             "format": "float"
           },
+          "pivot": {
+            "description": "The sprung pivot of a `chase` or `follow` rig; `None` in other modes.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "pivot_velocity": {
+            "description": "The pivot spring's velocity, per axis.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
           "eye": {
-            "description": "The sprung eye position.",
+            "description": "The sprung eye position (the orbit eye in `chase` and `follow`).",
             "type": "array",
             "items": {
               "type": "number",
@@ -1172,6 +1305,10 @@
         ],
         "format": "uint64",
         "minimum": 0
+      },
+      "suspended": {
+        "description": "Parked by `suspend_character`: no body, no moves; `resume_character` brings it back.",
+        "type": "boolean"
       }
     },
     "$defs": {
@@ -3609,6 +3746,122 @@
       }
     }
   },
+  "NavGoal": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "NavGoal",
+    "description": "Where a [`NavAgent`](crate::NavAgent) routes to. An entity with both walks a planned, string-pulled\nroute (see [`NavRoute`]) instead of reading a flow field; the goal then takes precedence over the\nagent's `target`. The game inserts and removes it; removing it returns the agent to `target`.\n\n`at` must be finite (`L1521`).\n\n```yaml\ncomponents:\n  NavAgent: {}\n  NavGoal:\n    at: [12.0, 0.0, -4.5]\n```\n\n```\nuse ludion_components::{NavGoal, NavReplan};\n\nlet goal: NavGoal = serde_json::from_value(serde_json::json!({ \"at\": [1.0, 0.0, 2.0] })).unwrap();\nassert_eq!(goal.replan, NavReplan::OnChange);\n```",
+    "type": "object",
+    "properties": {
+      "at": {
+        "description": "World position the agent routes to (default the origin).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "replan": {
+        "description": "When to plan a new route (default `on_change`).",
+        "$ref": "#/$defs/NavReplan"
+      }
+    },
+    "$defs": {
+      "NavReplan": {
+        "description": "When a routed agent plans a new route.",
+        "oneOf": [
+          {
+            "description": "Plan again when the goal moves to another cell or the next leg is no longer walkable.",
+            "type": "string",
+            "const": "on_change"
+          },
+          {
+            "description": "Plan again only when the goal moves to another cell.",
+            "type": "string",
+            "const": "never"
+          }
+        ]
+      }
+    }
+  },
+  "NavRoute": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "NavRoute",
+    "description": "The route `nav_steer` plans for a [`NavAgent`](crate::NavAgent) that carries a [`NavGoal`].\n**Written by `nav_steer`**: a game reads it and never inserts one. It is hashed sim state, so a restored\nworld resumes the route it was on instead of planning again from elsewhere. `waypoints[0]` is the\nnode the route started from; `index` is the waypoint being walked to. A partial route (`partial`)\nends at the reachable point nearest the goal; `cost` is the path length along the grid links.\n\n```yaml\ncomponents:\n  NavRoute:\n    goal: [12.0, 0.0, -4.5]\n    waypoints: [[0.5, 0.0, 0.5], [6.5, 0.0, 3.5], [12.5, 0.0, -4.5]]\n    index: 1\n    status: following\n    cost: 14.2\n```\n\n```\nuse ludion_components::{NavRoute, NavRouteStatus};\n\nlet route: NavRoute = serde_json::from_value(serde_json::json!({})).unwrap();\nassert_eq!(route.status, NavRouteStatus::Planning);\nassert!(route.waypoints.is_empty());\n```",
+    "type": "object",
+    "properties": {
+      "goal": {
+        "description": "The goal this route was planned for (default the origin).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "waypoints": {
+        "description": "The string-pulled route, start first (default none).",
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "float"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        }
+      },
+      "index": {
+        "description": "The waypoint being walked to (default `0`).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "status": {
+        "description": "Where the route is in its life (default `planning`).",
+        "$ref": "#/$defs/NavRouteStatus"
+      },
+      "partial": {
+        "description": "The route stops short of the goal (default `false`).",
+        "type": "boolean"
+      },
+      "cost": {
+        "description": "Path cost in metres along the grid links (default `0`).",
+        "type": "number",
+        "format": "float"
+      }
+    },
+    "$defs": {
+      "NavRouteStatus": {
+        "description": "Where a [`NavRoute`] is in its life.",
+        "oneOf": [
+          {
+            "description": "Not planned yet: the per-tick planning cap was reached; the agent stands still.",
+            "type": "string",
+            "const": "planning"
+          },
+          {
+            "description": "Walking toward `waypoints[index]`.",
+            "type": "string",
+            "const": "following"
+          },
+          {
+            "description": "Within `arrive_radius` of the last waypoint.",
+            "type": "string",
+            "const": "arrived"
+          },
+          {
+            "description": "No route to the goal; the agent stands still until the goal changes cell.",
+            "type": "string",
+            "const": "unreachable"
+          }
+        ]
+      }
+    }
+  },
   "NavSteering": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "NavSteering",
@@ -4023,6 +4276,126 @@
             "description": "The path's no-roll frame: −Z faces travel, +Y is up.",
             "type": "string",
             "const": "frame"
+          }
+        ]
+      }
+    }
+  },
+  "PatrolFollower": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PatrolFollower",
+    "description": "An entity that patrols a `kind: patrol` document: `patrol_update` writes its `NavGoal` for each\nstop in turn, so every leg is a nav path around obstacles. The entity also needs a `NavAgent`.\n`PatrolState` is the state `patrol_update` keeps; the game reads the facing from it (or from\n`patrol_motion`) and turns the body itself.\n\nWhile `paused` is true the patrol leaves the guard alone (the game or a behaviour drives it); when\nit turns off the guard rejoins by `resume`. `route` must be a relative path without `..` (`L1524`).\n\n```yaml\ncomponents:\n  NavAgent: {}\n  PatrolFollower:\n    route: patrols/yard.patrol.yaml\n    resume: nearest\n```\n\n```\nuse ludion_components::{PatrolFollower, PatrolResume};\n\nlet guard: PatrolFollower =\n    serde_json::from_value(serde_json::json!({ \"route\": \"patrols/yard.patrol.yaml\" })).unwrap();\nassert_eq!(guard.resume, PatrolResume::Nearest);\nassert!(!guard.paused);\n```",
+    "type": "object",
+    "properties": {
+      "route": {
+        "description": "The `kind: patrol` document, relative to the content root (default `\"\"` — inert).",
+        "type": "string",
+        "x-asset-path": true
+      },
+      "start": {
+        "description": "The stop to head for first, clamped to the last stop (default `0`).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "paused": {
+        "description": "Hands the guard to the game: `patrol_update` neither steers nor counts (default `false`).",
+        "type": "boolean"
+      },
+      "resume": {
+        "description": "Where the guard rejoins the route when `paused` turns off (default `nearest`).",
+        "$ref": "#/$defs/PatrolResume"
+      }
+    },
+    "$defs": {
+      "PatrolResume": {
+        "description": "Where a [`PatrolFollower`] rejoins its route when `paused` turns off.",
+        "oneOf": [
+          {
+            "description": "The stop nearest the guard (horizontal distance; ties to the lowest index).",
+            "type": "string",
+            "const": "nearest"
+          },
+          {
+            "description": "The stop after the one it was heading to.",
+            "type": "string",
+            "const": "next"
+          },
+          {
+            "description": "The stop it was heading to when it was paused.",
+            "type": "string",
+            "const": "last"
+          }
+        ]
+      }
+    }
+  },
+  "PatrolState": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PatrolState",
+    "description": "What `patrol_update` keeps for a [`PatrolFollower`]. **Written by `patrol_update`**: a game reads it\nand never inserts one. It is hashed sim state, so a restored world resumes the stop it was in.\n`point` is the stop being walked to or stood at; `look_deg` is the world yaw the guard should face\n(`None` while walking); `arrived` is true only on the tick a stop began. Timers count gameplay time.\n\n```yaml\ncomponents:\n  PatrolState:\n    point: 2\n    phase: stopped\n    stop_left: 0.75\n    stop_elapsed: 0.25\n    look_deg: 45.0\n```\n\n```\nuse ludion_components::{PatrolPhase, PatrolState};\n\nlet state: PatrolState = serde_json::from_value(serde_json::json!({})).unwrap();\nassert_eq!(state.phase, PatrolPhase::Walking);\nassert!(state.forward);\n```",
+    "type": "object",
+    "properties": {
+      "point": {
+        "description": "The stop being walked to or stood at (default `0`).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "forward": {
+        "description": "A `ping_pong` patrol is heading toward higher indices (default `true`).",
+        "type": "boolean"
+      },
+      "phase": {
+        "description": "Where the guard is in the stop (default `walking`).",
+        "$ref": "#/$defs/PatrolPhase"
+      },
+      "stop_left": {
+        "description": "Gameplay seconds the current stop still lasts (default `0`).",
+        "type": "number",
+        "format": "float"
+      },
+      "stop_elapsed": {
+        "description": "Gameplay seconds since the current stop began (default `0`).",
+        "type": "number",
+        "format": "float"
+      },
+      "look_deg": {
+        "description": "The world yaw, in degrees, to face while stopped; absent while walking.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float"
+      },
+      "arrived": {
+        "description": "True only on the tick a stop began (default `false`).",
+        "type": "boolean"
+      }
+    },
+    "$defs": {
+      "PatrolPhase": {
+        "description": "Where a [`PatrolState`] is in a stop.",
+        "oneOf": [
+          {
+            "description": "Walking the leg toward `point`.",
+            "type": "string",
+            "const": "walking"
+          },
+          {
+            "description": "Standing at `point`, counting its wait and look sequence.",
+            "type": "string",
+            "const": "stopped"
+          },
+          {
+            "description": "`PatrolFollower.paused` is on; the game has the guard.",
+            "type": "string",
+            "const": "paused"
+          },
+          {
+            "description": "A `once` patrol reached its last stop and finished.",
+            "type": "string",
+            "const": "done"
           }
         ]
       }
@@ -4668,6 +5041,28 @@
       "part",
       "root"
     ]
+  },
+  "QueryLayers": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "QueryLayers",
+    "description": "Extra layers an entity is on **for queries only**. A query's `include_layer` and `ignore_layer`\nsee the entity's body layer plus these; the solver sees only the body layer, so contacts,\ntraces and hashes do not change. Put it beside a `Collider` or a `CharacterMotor`; an entity with\nneither is `L1501` in `check-scene`. Every name must be `default` or declared under\n`physics.layers` (`L1186`), and an entry is not empty, repeated, or the entity's own body layer\n(`L1500`).\n\n```yaml\ncomponents:\n  QueryLayers:\n    layers: [light_occluder]\n```",
+    "type": "object",
+    "properties": {
+      "layers": {
+        "description": "The extra layer names, in author order.",
+        "$ref": "#/$defs/LayerSet",
+        "default": []
+      }
+    },
+    "$defs": {
+      "LayerSet": {
+        "description": "An ordered list of layer names, in the author's order (never sorted, so a scene's text does not\nchurn). Serializes as a plain list of strings.\n\n```\nuse ludion_physics::LayerSet;\n\nlet set = LayerSet::from(vec![\"light_occluder\".to_string()]);\nassert_eq!(set.as_slice(), [\"light_occluder\"]);\nassert!(!set.is_empty());\nassert_eq!(serde_json::to_string(&set).unwrap(), r#\"[\"light_occluder\"]\"#);\n```",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
   },
   "ReflectionProbe": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5741,7 +6136,7 @@
         "default": true
       },
       "fill": {
-        "description": "Cover the whole render target (default `false`): the rect resolves to `[0, 0, width, height]`\npixels at any extent or aspect, and `anchor`, `offset` and `size` are ignored (`L1119` warns\nwhen `offset` or `size` is authored non-default). A texture or atlas frame stretches over it\nlike over a sized rect. The one exception to \"UI anchors, never stretches\".",
+        "description": "Cover the whole render target (default `false`): the rect resolves to `[0, 0, width, height]`\npixels at any extent or aspect, and `anchor`, `offset` and `size` are ignored (`L1316` warns\nwhen `offset` or `size` is authored non-default). A texture or atlas frame stretches over it\nlike over a sized rect. The one exception to \"UI anchors, never stretches\".",
         "type": "boolean"
       }
     },
@@ -5924,6 +6319,305 @@
             "description": "The canvas's bottom-right corner; the element's own bottom-right corner sits there.",
             "type": "string",
             "const": "bottom_right"
+          }
+        ]
+      }
+    }
+  },
+  "UiTween": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "UiTween",
+    "description": "Animates a screen-space element (`UiRect`, `UiText` or `UiList` on the same entity) closed-form\nfrom a frame stamp. Nothing is written per tick: `extract` samples each track at the current\nframe, so an element with no tween draws exactly as before.\n\nTracks apply in list order; a later track on the same field wins. A track whose field the element\ncannot take is skipped with `L2300`. A wrong arity, non-finite value or negative `duration` is\n`L1610`.\n\n```yaml\ncomponents:\n  UiRect: { anchor: center, size: [200, 40] }\n  UiTween:\n    tracks:\n      - { field: opacity, from: [0.0], to: [1.0], start: 0, duration: 0.25, ease: out_quad }\n      - { field: offset, from: [0.0, 24.0], to: [0.0, 0.0], duration: 0.25, ease: out_back }\n```\n\n```\nuse ludion_components::ui::{UiTween, UiTweenField};\n\nlet tween: UiTween = serde_json::from_value(serde_json::json!({\n    \"tracks\": [{ \"field\": \"opacity\", \"from\": [0.0], \"to\": [1.0] }]\n})).unwrap();\nassert_eq!(tween.tracks[0].field, UiTweenField::Opacity);\nassert_eq!(tween.tracks[0].duration, 1.0);\n```",
+    "type": "object",
+    "properties": {
+      "tracks": {
+        "description": "The animated fields (default none).",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/UiTweenTrack"
+        },
+        "default": []
+      }
+    },
+    "$defs": {
+      "UiTweenTrack": {
+        "description": "One animated field of a [`UiTween`].",
+        "type": "object",
+        "properties": {
+          "field": {
+            "description": "What the track animates.",
+            "$ref": "#/$defs/UiTweenField"
+          },
+          "from": {
+            "description": "The value at `start`: `field.arity()` numbers.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "to": {
+            "description": "The value at `start + duration`: `field.arity()` numbers.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "start": {
+            "description": "The frame the track starts at, on its `clock` (default `0`). Before it the track holds `from`.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "duration": {
+            "description": "Length in seconds, `>= 0` (default `1`). `0` jumps to `to` at `start`.",
+            "type": "number",
+            "format": "float",
+            "minimum": 0.0
+          },
+          "ease": {
+            "description": "The easing curve (default `linear`).",
+            "$ref": "#/$defs/UiEase"
+          },
+          "repeat": {
+            "description": "What happens after `duration` (default `once`).",
+            "$ref": "#/$defs/UiTweenRepeat"
+          },
+          "clock": {
+            "description": "The frame count `start` is measured on (default `real`).",
+            "$ref": "#/$defs/UiClock"
+          }
+        },
+        "required": [
+          "field",
+          "from",
+          "to"
+        ]
+      },
+      "UiTweenField": {
+        "description": "What a [`UiTweenTrack`] animates. The number is the arity of `from` and `to`.",
+        "oneOf": [
+          {
+            "description": "Multiplied into the alpha of every colour the element draws (1). Every element.",
+            "type": "string",
+            "const": "opacity"
+          },
+          {
+            "description": "Added to the element's `offset`, canvas units (2). Every element.",
+            "type": "string",
+            "const": "offset"
+          },
+          {
+            "description": "Scales the drawn element about the centre of its box (1). `UiRect` and `UiText`.",
+            "type": "string",
+            "const": "scale"
+          },
+          {
+            "description": "Replaces a `UiRect`'s `size`, canvas units (2). `UiRect` only.",
+            "type": "string",
+            "const": "size"
+          },
+          {
+            "description": "Replaces the element's linear RGBA colour (4). `UiRect` and `UiText`.",
+            "type": "string",
+            "const": "color"
+          }
+        ]
+      },
+      "UiEase": {
+        "description": "The easing curve of a [`UiTweenTrack`], applied to the linear progress `u` in `[0, 1]`.",
+        "oneOf": [
+          {
+            "description": "`u`.",
+            "type": "string",
+            "const": "linear"
+          },
+          {
+            "description": "Smoothstep, `u * u * (3 - 2u)`: zero slope at both ends.",
+            "type": "string",
+            "const": "smooth"
+          },
+          {
+            "description": "Holds the start value until `u` reaches 1.",
+            "type": "string",
+            "const": "step"
+          },
+          {
+            "description": "`u^2`.",
+            "type": "string",
+            "const": "in_quad"
+          },
+          {
+            "description": "`u * (2 - u)`.",
+            "type": "string",
+            "const": "out_quad"
+          },
+          {
+            "description": "`2u^2` then `1 - 2(1 - u)^2`.",
+            "type": "string",
+            "const": "in_out_quad"
+          },
+          {
+            "description": "`u^3`.",
+            "type": "string",
+            "const": "in_cubic"
+          },
+          {
+            "description": "`1 - (1 - u)^3`.",
+            "type": "string",
+            "const": "out_cubic"
+          },
+          {
+            "description": "`4u^3` then `1 - 4(1 - u)^3`.",
+            "type": "string",
+            "const": "in_out_cubic"
+          },
+          {
+            "description": "Overshoots, then settles: `1 + c3 (u-1)^3 + c1 (u-1)^2` with `c1 = 1.70158`, `c3 = c1 + 1`.",
+            "type": "string",
+            "const": "out_back"
+          }
+        ]
+      },
+      "UiTweenRepeat": {
+        "description": "What a [`UiTweenTrack`] does when it reaches its end.",
+        "oneOf": [
+          {
+            "description": "Plays once, then holds `to`.",
+            "type": "string",
+            "const": "once"
+          },
+          {
+            "description": "Restarts at `from` every `duration`.",
+            "type": "string",
+            "const": "loop"
+          },
+          {
+            "description": "Plays forward, then backward, then forward again.",
+            "type": "string",
+            "const": "ping_pong"
+          }
+        ]
+      },
+      "UiClock": {
+        "description": "Which frame count a [`UiTweenTrack`] measures against.",
+        "oneOf": [
+          {
+            "description": "The sim frame: keeps running while a `GameClock` holds the game. The default, so a pause menu\ncan animate over a held game.",
+            "type": "string",
+            "const": "real"
+          },
+          {
+            "description": "The gameplay frame: stands still while a `GameClock` holds the game.",
+            "type": "string",
+            "const": "game"
+          }
+        ]
+      }
+    }
+  },
+  "UiWorldAnchor": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "UiWorldAnchor",
+    "description": "Pins a screen-space element to a 3D target: `extract` projects the target through the camera as\ndrawn and moves the element there, its `anchor` becoming its pivot on the projected point (the\n`offset` still adds, in canvas units). Off screen it clamps to the edge, inset by `margin`.\nA target that is dead or has no pose draws nothing. A `fill: true` rect ignores anchors (`L2300`).\n\n```yaml\ncomponents:\n  UiRect: { anchor: bottom_center, offset: [0, -12], size: [80, 8] }\n  UiWorldAnchor:\n    target: { index: 3, generation: 0 }\n    world_offset: [0.0, 2.0, 0.0]\n    fade: [20.0, 40.0]\n```\n\n```\nuse ludion_components::ui::{UiAnchorBehind, UiWorldAnchor};\n\nlet anchor: UiWorldAnchor = serde_json::from_value(serde_json::json!({ \"target\": { \"index\": 1, \"generation\": 0 } })).unwrap();\nassert_eq!(anchor.margin, 48.0);\nassert_eq!(anchor.behind, UiAnchorBehind::Clamp);\n```",
+    "type": "object",
+    "properties": {
+      "target": {
+        "description": "The entity the element follows.",
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "world_offset": {
+        "description": "Added to the target's world position, in world axes (default the origin).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "show": {
+        "description": "When the element draws (default `always`).",
+        "$ref": "#/$defs/UiAnchorShow"
+      },
+      "behind": {
+        "description": "What happens behind the camera (default `clamp`).",
+        "$ref": "#/$defs/UiAnchorBehind"
+      },
+      "margin": {
+        "description": "Edge inset when clamping, canvas units, `>= 0` (default `48`).",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0
+      },
+      "fade": {
+        "description": "`[near, far]` metres: opacity 1 at `near`, 0 at `far`, multiplied into alpha (default none).",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "required": [
+      "target"
+    ],
+    "$defs": {
+      "UiAnchorShow": {
+        "description": "When a [`UiWorldAnchor`] draws its element.",
+        "oneOf": [
+          {
+            "description": "Always (default).",
+            "type": "string",
+            "const": "always"
+          },
+          {
+            "description": "Only while the target projects inside the screen margin.",
+            "type": "string",
+            "const": "on_screen"
+          },
+          {
+            "description": "Only while the target is off the screen, as an edge marker.",
+            "type": "string",
+            "const": "off_screen"
+          }
+        ]
+      },
+      "UiAnchorBehind": {
+        "description": "What a [`UiWorldAnchor`] does with a target behind the camera.",
+        "oneOf": [
+          {
+            "description": "Pins the element to the screen edge in the target's direction (default).",
+            "type": "string",
+            "const": "clamp"
+          },
+          {
+            "description": "Draws nothing.",
+            "type": "string",
+            "const": "hide"
           }
         ]
       }

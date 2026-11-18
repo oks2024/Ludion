@@ -1283,3 +1283,146 @@ fn a_kick_snapshot_restore_resumes_bit_exact() {
         );
     }
 }
+
+// ---- chase and follow ----
+
+const CHASE_SCENE: &str = "format: 1\nseed: 3\nentities:\n  - name: cam\n    components:\n      Transform: {}\n      Camera: {}\n      CameraRig:\n        target:\n          index: 1\n          generation: 0\n        rig:\n          mode:\n            chase:\n              distance: 5.0\n  - name: hero\n    components:\n      Transform: {}\n";
+const CHASE_SWITCH_AT: u64 = 40;
+
+/// The hero walks a diagonal and the camera is turned a little every tick; at `CHASE_SWITCH_AT` the
+/// rig switches to a one-second blend into `follow`.
+fn walk_and_turn(world: &mut World, ctx: &SystemCtx) {
+    let hero = named(world, "hero");
+    let t = ctx.frame.as_u64() as f32;
+    world
+        .get_mut::<Transform>(hero)
+        .unwrap()
+        .unwrap()
+        .translation = [0.05 * t, 0.0, -0.03 * t];
+    let cam = named(world, "cam");
+    let rig = world.get_mut::<CameraRig>(cam).unwrap().unwrap();
+    add_look(rig, 0.7, 0.3);
+    if ctx.frame.as_u64() == CHASE_SWITCH_AT {
+        rig.rig.mode = RigMode::Follow(Default::default());
+    }
+}
+
+fn chase_engine(tag: &str) -> Engine {
+    engine_for(tag, &[], CHASE_SCENE, &[("walk_and_turn", walk_and_turn)])
+}
+
+#[test]
+fn a_chase_rig_poses_the_camera_on_its_boom_and_the_first_tick_snaps() {
+    let mut engine = engine_for("chase-pose", &[], CHASE_SCENE, &[]);
+    assert_eq!(eye_of(&engine), [0.0; 3], "authored at the origin");
+    engine.advance_live();
+    let rig = rig_of(&engine);
+    assert!(rig.state.blend.is_none(), "a snap starts no blend");
+    assert_eq!(
+        rig.state.pivot,
+        Some([0.0; 3]),
+        "the pivot rests on the hero"
+    );
+    let pose = rig.state.pose.as_ref().expect("the tick posed");
+    assert_eq!(eye_of(&engine), pose.eye);
+    assert!(
+        (distance(pose.eye, [0.0; 3]) - 5.0).abs() < 1e-4,
+        "{:?}",
+        pose.eye
+    );
+    assert_eq!((pose.yaw_deg, pose.pitch_deg), (0.0, 20.0));
+}
+
+fn chase_hashes(tag: &str) -> Vec<u64> {
+    let mut engine = chase_engine(tag);
+    (0..160)
+        .map(|_| {
+            engine.advance_live();
+            engine.world_hash().unwrap().as_u64()
+        })
+        .collect()
+}
+
+#[test]
+fn a_chase_run_hashes_the_same_twice_and_at_one_and_eight_threads() {
+    let first = chase_hashes("chase-hash-a");
+    assert_eq!(first, chase_hashes("chase-hash-b"));
+    let distinct: std::collections::BTreeSet<u64> = first.iter().copied().collect();
+    assert!(distinct.len() > 100, "a flat trace proves nothing");
+    #[allow(clippy::disallowed_methods)]
+    let [one, eight] = std::thread::scope(|scope| {
+        [(1, "chase-hash-t1"), (8, "chase-hash-t8")]
+            .map(|(n, tag)| scope.spawn(move || par::with_threads(n, || chase_hashes(tag))))
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+            })
+    });
+    assert_eq!(one, eight);
+    assert_eq!(one, first);
+}
+
+#[test]
+fn a_snapshot_restore_mid_blend_from_follow_to_chase_resumes_the_same_hashes() {
+    const AT: usize = 55;
+    const TICKS: usize = 140;
+    let mut engine = chase_engine("chase-restore-ref");
+    let reference: Vec<u64> = (0..TICKS)
+        .map(|_| {
+            engine.advance_live();
+            engine.world_hash().unwrap().as_u64()
+        })
+        .collect();
+
+    let mut before = chase_engine("chase-restore-a");
+    advance(&mut before, AT);
+    let rig = rig_of(&before);
+    assert!(rig.state.blend.is_some(), "tick {AT} is mid-blend");
+    assert!(matches!(rig.rig.mode, RigMode::Follow(_)));
+    let snapshot = match before.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let mut resumed = chase_engine("chase-restore-b");
+    match resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap()
+        .body
+    {
+        ResponseBody::Restored { .. } => {}
+        other => panic!("expected a restore, got {other:?}"),
+    }
+    assert_eq!(resumed.world_hash().unwrap().as_u64(), reference[AT - 1]);
+    for (i, expected) in reference[AT..].iter().enumerate() {
+        resumed.advance_live();
+        assert_eq!(
+            resumed.world_hash().unwrap().as_u64(),
+            *expected,
+            "tick {} after the restore",
+            i + 1
+        );
+    }
+}
+
+#[test]
+fn the_camera_category_draws_a_chase_rig_without_perturbing_the_hash() {
+    let run = |tag: &str, categories: DebugCategories| {
+        let mut engine = chase_engine(tag);
+        engine.set_debug_draw(categories);
+        let hashes: Vec<u64> = (0..100)
+            .map(|_| {
+                engine.advance_live();
+                engine.world_hash().unwrap().as_u64()
+            })
+            .collect();
+        (hashes, engine.debug_draw_drawn())
+    };
+    let (hashes, drawn) = run("chase-draw-on", DebugCategories::parse("camera"));
+    let (plain, _) = run("chase-draw-off", DebugCategories::None);
+    assert!(
+        drawn.contains(&"camera"),
+        "the camera category drew nothing"
+    );
+    assert_eq!(hashes, plain);
+}

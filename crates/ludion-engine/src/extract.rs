@@ -740,6 +740,7 @@ fn extract_inner(
     // live window, a clip's phase — measures `now − started`, so reading the world's `GameClock`
     // here is what freezes the picture while a game is held. A world with no clock (a one-shot
     // render, a game that never freezes) reads sim time unchanged.
+    let sim_now = now;
     let now = world
         .resource::<GameClock>()
         .map_or(now, |clock| clock.game_time(now));
@@ -973,10 +974,22 @@ fn extract_inner(
     // by construction. Textures resolve through the same `textures`/`path_index` dedup as sprites
     // above, so a UI rect sharing a sprite's texture path is one `RenderScene.textures` entry.
     let mut ui_entries: Vec<(i32, EntityId, UiInstance)> = Vec::new();
+    let hud = ui::hud::HudFrame {
+        world,
+        view: camera.view,
+        projection: camera.projection,
+        viewport,
+        real_frame: sim_now.ticks(),
+        game_frame: now.ticks(),
+        rate: sim_now.rate(),
+    };
     for (index, &id) in ids.iter().enumerate() {
         if let Some(rect) = get::<UiRect>(world, id)
             && rect.visible
         {
+            let hud_start = ui_entries.len();
+            let rect_motion = ui::hud::pre_rect(&hud, id, rect, degraded);
+            let rect = &*rect_motion;
             let rect_px = ui::resolve_ui_rect_of(rect, viewport);
             // The UV sub-rect the rect samples. A loose `texture:` or an untextured fill samples the
             // whole image (byte-identical to the pre-atlas path); an `atlas` + `frame` reference
@@ -1022,10 +1035,23 @@ fn extract_inner(
                     uv,
                 },
             ));
+            let element = ui::hud::HudElement::Rect { fill: rect.fill };
+            ui::hud::post(
+                &hud,
+                &mut poses,
+                id,
+                element,
+                rect.anchor,
+                &mut ui_entries,
+                hud_start,
+            );
         }
         if let Some(text) = get::<UiText>(world, id)
             && text.visible
         {
+            let hud_start = ui_entries.len();
+            let text_motion = ui::hud::pre_text(&hud, id, text, degraded);
+            let text = &*text_motion;
             let face = fonts.face(text.font.as_deref());
             let quads = ui::ui_text_draw(face, text, viewport);
             let font = resolve_font(
@@ -1047,10 +1073,23 @@ fn extract_inner(
                     font,
                 },
             ));
+            let element = ui::hud::HudElement::Text;
+            ui::hud::post(
+                &hud,
+                &mut poses,
+                id,
+                element,
+                text.anchor,
+                &mut ui_entries,
+                hud_start,
+            );
         }
         if let Some(list) = get::<UiList>(world, id)
             && list.visible
         {
+            let hud_start = ui_entries.len();
+            let list_motion = ui::hud::pre_list(&hud, id, list, degraded);
+            let list = &*list_motion;
             // An empty list draws nothing at all — panel included — independent of `visible`: the
             // emptiness check gates the background too, not just the lines.
             if !list.items.is_empty() {
@@ -1108,6 +1147,16 @@ fn extract_inner(
                     ));
                 }
             }
+            let element = ui::hud::HudElement::List;
+            ui::hud::post(
+                &hud,
+                &mut poses,
+                id,
+                element,
+                list.anchor,
+                &mut ui_entries,
+                hud_start,
+            );
         }
     }
     // Pinned, documented order: ascending `order`, ties broken by ascending `EntityId` — screen

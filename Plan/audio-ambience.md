@@ -1,6 +1,7 @@
 # Plan: Audio Ambience — loops, positional emitters, category gains
 
-> Status: **Adaptive multi-stem music SHIPPED (2026-11-09, Serious Isaac 0025, conservative)** — `AudioQueue::music_set(id,
+> Status: **Audio space and mix (Neon Shroud request 0023): Wave A1 SHIPPED (2026-11-18)** — `AudioCategory::{Voice, Ui}`, `Bus`, `MixLayer`, `AudioQueue::bus_gain`/`bus_pause`/`bus_resume`, `AudioMessage::{BusGain, BusPause}`, per-frame bus envelopes in the sink (held buses keep cursors, device reopen replays bus state), `ludion docs audio-mix` (§Decisions 7–9). No wire, hash or replay movement; the component schema snapshot gained the `voice` and `ui` consts. By-ear check on a real device is owed. Waves A2–A6 not started.
+> Earlier: **Adaptive multi-stem music SHIPPED (2026-11-09, Serious Isaac 0025, conservative)** — `AudioQueue::music_set(id,
 > stems, fade)` plays up to 8 Ogg stems (`MUSIC_STEMS_MAX`) on one shared playhead and
 > `music_stem_gain(stem, gain, fade)` slews one stem's gain in sim ticks. The sink decodes each stem with its
 > own decoder and converter but sends one chunk carrying every stem's samples for the same device frames, so
@@ -210,6 +211,41 @@ its hard cut — flipping `music_set` to crossfade would change the behaviour of
 Tests owed: both sets audible mid-fade, the old one silent after, a third set mid-fade cutting the
 outgoing slot, `audio_messages` showing the new message.
 
+## Decisions — audio space and mix (Neon Shroud 0023)
+
+Numbered on from Decision 6. Codes: L5100–29 sink and runtime, L1650–69 scene validation.
+
+7. **Buses.** `AudioCategory` gains `Voice` and `Ui`; a `Bus` enum (`Master | Sfx | Ambient | Voice | Ui | Music`) names every mixdown bus, with `From<AudioCategory>`. The master bus multiplies every other bus.
+8. **Runtime gain.** A sim-emitted `AudioMessage::BusGain { bus, layer, gain, fade_frames }` with two layers, `User` (a settings slider) and `Game` (ducking, scripted mixes). Effective gain = `authored x user x game x pause`. Amends Decision 6 and Deferred "runtime gain": both triggers fired (0022 settings, ducking).
+9. **Pause.** `AudioMessage::BusPause` holds each voice's cursor (loops and music included). A world rebuild (`StopAllLoops`) resets the Game layer and the pauses, keeps the User layer, and drops the voices held on a paused bus.
+10. **`AudioListener`.** A component that moves the listener off the camera; absent means the camera, byte-identical. Amends Decision 3.
+11. **Attached one-shots.** `play_on(entity, ...)` returns a `VoiceId`; the sim reads a WAV header for the clip length.
+12. **Ducking.** `DuckRule` plus manual `duck_start`/`duck_end`, with a `-24 dB` floor.
+13. **`VoiceSpatial { filter, send }`** rides on messages; the sink applies per-voice biquads.
+14. **Occlusion.** Ray occlusion on `ray_cast` with 0002's masks, a round-robin budget per frame, smoothing in the engine.
+15. **`AudioZone`.** Box or sphere, priority, blend, beds via `LoopId::ZoneBed`, `bus_gains`; resolved at the frame boundary from the listener point, not from sensors.
+16. **Reverb.** One algorithmic reverb send and named presets.
+17. **`music_crossfade`.** The §Decisions Proposed (0025) design; the second consumer has arrived, ruling still owed.
+18. **`ludion_testkit::audio::audio_mix_at`.** A deterministic offline mix probe for tests.
+
+## Waves — audio space and mix
+
+- **A1 — mix** (this plan's first wave): decisions 7–9, `AudioQueue::bus_gain`/`bus_pause`/`bus_resume`, the sink's per-bus envelopes.
+- **A2 — listener:** a new `crates/ludion-components/src/audio.rs`, `audio_listener` in `engine.rs`, a multi-carrier warning in L1650–69.
+- **A3 — attached voices and ducking** (decisions 11, 12).
+- **A4 — `VoiceSpatial`, sink filters, occlusion** (13, 14): needs 0002's masks; `VoiceSpatial` on `AudioEvent` is a struct-literal break, an owner ruling.
+- **A5 — zones, reverb, presets** (15, 16, 18): gallery `examples/gallery/audio-zones.yaml`, `audio_mix_at`.
+- **A6 — `music_crossfade`** (17), after the ruling.
+
+### Proposed — owner ruling owed
+
+- **`CategoryGains` fields.** A1 ships without new fields: `gain_for(Voice | Ui)` reads `1.0` and the master's authored value is `1.0`, because new fields break struct literals (one in `builder.rs`). The ruling: fields vs `#[non_exhaustive]` plus a builder.
+- **`VoiceSpatial`'s struct-literal break** on `AudioEvent` (A4).
+- **The sim-side WAV read** for clip length (Decision 11).
+- **Reverb and occlusion in scope**, amending the Deferred bullet; HRTF and Doppler stay out.
+- **`music_crossfade`** (Decision 17).
+- **The duck depth default** of `-9 dB` (Decision 12).
+
 ## Waves
 
 **Wave 1 — the loop primitive.** `ludion_core::audio` gains `AudioMessage`/`LoopId`/`AudioCategory`;
@@ -272,15 +308,15 @@ Wave 3 lands.
 
 - **OGG/streaming music.** Shipped as a `CategoryGains.music` bus, not a category variant; see
   `docs/audio.md` §Music.
-- **A `Listener` decoupled from `Camera`.** Decision 3; trigger is a genre that demonstrably needs
+- **A `Listener` decoupled from `Camera`.** Decision 3, amended by Decision 10 (wave A2); trigger is a genre that demonstrably needs
   one, not a hypothetical.
-- **Runtime-adjustable category gain (a volume slider).** Decision 6; trigger is `Plan/ui-widgets.md`
+- **Runtime-adjustable category gain (a volume slider).** Decision 6, superseded by Decision 8 (shipped, wave A1); the old trigger is `Plan/ui-widgets.md`
   landing a settings surface, or a game wanting programmatic ducking badly enough to justify the
   `AudioSink`-side setter early.
 - **Loop fade-out on stop.** Shipped: a 10 ms stop fade and gain slew.
 - **Stereo pan.** In scope since 2026-11-01: a 3D consumer needs "from the right direction" (vigil
   did not), shipped as the opt-in `AudioPan` (see Status).
-- **Reverb, geometry occlusion, HRTF, Doppler.** Out of scope — §6.1 asks for "audible when near".
+- **Reverb, geometry occlusion, HRTF, Doppler.** Reverb and occlusion proposed into scope (Decisions 14, 16; owner ruling owed); HRTF and Doppler stay out. Originally out of scope — §6.1 asks for "audible when near".
 
 ## Risks / open questions
 

@@ -404,8 +404,7 @@ wave is independently landable, one commit.
 
 ## Explicitly out of scope (triggers recorded)
 
-- **Input remapping / bindings config** — games hold their bindings as `const Action`s over `InputState`'s reads (`ludion docs input`). Trigger: a
-  second game wanting remapping (E2 brief non-goal).
+- **Input remapping / bindings config** — see `Plan/input-actions.md` (Neon Shroud request 0021).
 - **Touch input** — no target platform needs it in this arc. Trigger: a touch platform (E2 brief).
 - **Multiple gamepads** — player 1 only; the capture layer forwards the first connected pad. Trigger: a
   couch/local-multiplayer game (E2 brief non-goal).
@@ -413,8 +412,8 @@ wave is independently landable, one commit.
   playtesting through the editor. Ships as `input.inject` from the editor when it fires (decision 8).
 - **Raw mouse input — promoted by Serious Isaac 0001** (owner approved 2026-11-06): `mouse_motion` →
   `MouseState::delta()`, `CursorMode::Locked`, `CursorLock`; the in-process window only. The editor's
-  `injectCoalescer.ts` must sum, never drop, `mouse_motion` if it ever forwards it. Rumble and gyro stay
-  deferred. Trigger for a wire lock route: a client (attach viewer, editor) that must apply the lock.
+  `injectCoalescer.ts` must sum, never drop, `mouse_motion` if it ever forwards it. Gyro stays
+  deferred; rumble: see `Plan/input-actions.md`. Trigger for a wire lock route: a client (attach viewer, editor) that must apply the lock.
 - **A wire command for input beyond `input.inject`** — the one command already carries every event
   (opaque `Value`); trigger: none foreseen (decision 8).
 

@@ -366,5 +366,6 @@ pub fn switch_skin_to_ragdoll(
         .expect("checked alive above");
     world.remove::<Collider>(skin).expect("checked alive above");
     world.remove::<Velocity>(skin).expect("checked alive above");
+    crate::motor::suspend_motor_of(world, skin);
     Ok(ids)
 }

@@ -1641,6 +1641,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "ctrlc",
+ "ludion-ai",
  "ludion-assets",
  "ludion-audio",
  "ludion-core",
@@ -1661,6 +1662,17 @@ dependencies = [
  "serde_json",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "ludion-ai"
+version = "0.1.0"
+dependencies = [
+ "ludion-core",
+ "ludion-ecs",
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1805,6 +1817,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.13.1",
  "crossbeam-channel",
+ "ludion-ai",
  "ludion-assets",
  "ludion-camera",
  "ludion-components",

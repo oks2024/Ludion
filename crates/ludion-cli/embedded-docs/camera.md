@@ -4,7 +4,7 @@ description: CameraRig (sim path-rail camera, blends, shake) and CameraOffset (p
 
 # Camera rigs
 
-**Scope:** the `CameraRig` component on a scene's camera entity: the `track` mode (the camera rides a `kind: path` rail after a target), the `first_person` mode (a rigid eye, game-written look), timed blends between configurations, `snap_rig`, trauma shake, `camera_relative` for a stick, the `camera` debug draw, `L1304`–`L1309`, and the presentation `CameraOffset` (`L1332`–`L1334`). The path document is `ludion docs path`; the gameplay clock is `ludion docs game-clock`; the character the camera follows is `ludion docs motor`.
+**Scope:** the `CameraRig` component on a scene's camera entity: the `track` mode (the camera rides a `kind: path` rail after a target), the `first_person` mode (a rigid eye, game-written look), the `chase` and `follow` boom modes, timed blends between configurations, `snap_rig`, trauma shake, `camera_relative` for a stick, the `camera` debug draw, `L1304`–`L1309`, and the presentation `CameraOffset` (`L1332`–`L1334`). The path document is `ludion docs path`; the gameplay clock is `ludion docs game-clock`; the character the camera follows is `ludion docs motor`.
 
 A rig is **sim**: it writes the camera's `Transform` (and the perspective `fov_y_deg`) from a system, so the pose is hashed, replayed and safe to unproject through. That is why a `CameraRig` camera is not presentation (`ludion docs presentation`).
 
@@ -68,7 +68,7 @@ CameraRig:
   # state: ...                        # runtime, engine-written; hashed and snapshotted
 ```
 
-Every field defaults, and every half-life, slack, distance, time and decay is a finite number not below 0 (`L1304`). Modes are externally tagged (`mode: {track: {..}}`, `mode: {first_person: {..}}`).
+Every field defaults, and every half-life, slack, distance, time and decay is a finite number not below 0 (`L1304`). Modes are externally tagged (`mode: {track: {..}}`, `mode: {first_person: {..}}`, `mode: {chase: {..}}`, `mode: {follow: {..}}`).
 
 ## First person
 
@@ -80,6 +80,7 @@ CameraRig:
       first_person:
         eye_offset: [0.0, 1.6, 0.0]   # yaw frame: x right, y up, z back (not pitched)
         pitch_limit_deg: 89.0         # in (0, 90)
+        enter_pitch_deg: null         # pitch a snap or switch into first_person starts at; null carries it
   look_deg: [0.0, 0.0]                # [yaw, pitch] degrees, game-written, consumed each tick
 ```
 
@@ -88,7 +89,7 @@ The rig owns yaw and pitch as hashed state; the game writes look deltas into `lo
 - Look applies on every tick that has a target, **held gameplay clock included**: hit-stop must not eat mouse motion. Trauma decay and the shake clock stay on gameplay time. With no target, `look_deg` stays pending.
 - Look is unsmoothed. Yaw wraps to (−180, 180]; pitch clamps to ±`pitch_limit_deg`.
 - The eye sits rigidly at the target plus `eye_offset` in the yaw frame, every tick. Springs, `look_ahead`, `vertical_anchor` and `focus_offset` are ignored; `fov_y_deg`, `blend_in`, shake and trauma apply. No path is needed.
-- A snap or a switch keeps yaw and pitch: switching from `track` carries its look direction and the eye blends over `blend_in`.
+- A snap or a switch keeps yaw and pitch: switching from `track` carries its look direction and the eye blends over `blend_in`. `enter_pitch_deg: p` starts the pitch at `p` instead (clamped on the next look); the yaw is always carried, so `chase` to `first_person` keeps where the player faces.
 - `CameraRig::aim()` returns the posed eye and orientation **before shake**, in every mode (`Aim::forward()`, `Aim::rotation_deg()`): the one source of truth for aim rays. Like `camera_relative` it is one tick behind a game system. A shot that wants the look the player has already input this tick adds the pending `look_deg` to `aim()`'s yaw and pitch (pitch clamped), or accepts the one-tick lag.
 
 ```rust
@@ -100,6 +101,35 @@ fn look(world: &mut World, _ctx: &SystemCtx) {
 ```
 
 Mouse sensitivity has one source: `look_deg_per_count` (default `0.1`, omitted from files at the default, finite per `L1304`). `add_look_counts(rig, dx, dy)` converts raw counts through it (mouse right turns right, mouse down looks down); `look_from_counts(rig, dx, dy)` is the same conversion as a value.
+
+## Chase and follow
+
+A boom from a pivot: the pivot is sprung toward the focus (`target` + `focus_offset`, with `look_ahead` and `vertical_anchor` as in `track`) on `springs.position_half_life`, and the eye hangs rigidly at `distance` from it along yaw and pitch. The angles are **not** sprung (`rotation_half_life` is ignored), so look stays 1:1 and the late latch is exact. Yaw 0 puts the eye on the pivot's +Z side; positive pitch raises it. No path is needed; `ludion_camera::orbit_eye(pivot, yaw, pitch, distance)` is the eye.
+
+```yaml
+CameraRig:
+  target: { index: 1, generation: 0 }
+  rig:
+    mode:
+      chase:                      # orbit: look turns the boom
+        distance: 6.0             # metres, > 0
+        pitch_deg: 20.0           # start pitch (positive looks down)
+        pitch_min_deg: -30.0      # look's pitch range, each in (-90, 90); min == max fixes the pitch
+        pitch_max_deg: 70.0
+        yaw_deg: null             # start yaw; null carries the current yaw
+        look_pitch: true          # false: look_deg[1] is consumed and dropped
+      # follow:                   # fixed world yaw, pitch and distance
+      #   yaw_deg: 0.0
+      #   pitch_deg: 45.0         # in (-90, 90)
+      #   distance: 10.0
+```
+
+- `chase` takes `look_deg` as `first_person` does (`add_look`, `add_look_counts`): applied on every tick with a target, held clock included, yaw wrapped, pitch clamped to the range. The pivot freezes on a held tick; look still turns the boom.
+- `follow` holds its authored angles and **consumes and discards** `look_deg` every tick, so stick input does not pile up in a follow zone and pop on the return to `chase`.
+- A snap or switch into `chase` starts the yaw at `yaw_deg`, or carries the current one (from `track`, `first_person`, or 0 on a fresh load), starts the pitch at `pitch_deg`, and rests the pivot on the focus. A spawn facing is `set_look` (its yaw carries). Into `follow`: the authored angles.
+- Scale a stick by the real `dt` before `add_look` (a stick is a rate, a mouse count is a delta). A late-latching presenter covers `chase` (`ludion docs presentation`).
+
+Runnable: `crates/ludion/examples/chase_camera.rs`.
 
 ## Kick and roll
 
@@ -127,9 +157,9 @@ Runnable: `crates/ludion/examples/first_person_kick.rs`.
 `ludion_camera::resolved_camera(rig, target, extra_look_deg) -> Option<ResolvedCamera { aim, view }>` is the one seam that turns a rig's last pose into the frame's camera: extra look, then `aim`, then the post-aim stage (kick, roll, FOV channels, shake). `step_rig` returns `resolved_camera(.., [0, 0]).view`; a presenter latching fresher mouse motion calls it with the look accumulated since the tick. The viewmodel and muzzle convergence read it too; the gun itself is `ludion docs viewmodel`.
 
 - `[0, 0]` is the tick's camera bit for bit; `None` before the first pose.
-- Extra look `[yaw, pitch]` (degrees, signs as `look_deg`) applies to a `first_person` rig only, and not while a blend runs; otherwise it is ignored. Pitch clamps to `pitch_limit_deg`, the eye follows the new yaw, and kick, roll, FOV and shake apply on top.
+- Extra look `[yaw, pitch]` (degrees, signs as `look_deg`) applies to a `first_person` or `chase` rig only, and not while a blend runs; otherwise it is ignored. Pitch clamps to `pitch_limit_deg` (or the chase range, moving only with `look_pitch`), the eye follows the new angles (about the pivot, for `chase`), and kick, roll, FOV and shake apply on top.
 - Extra look equals what `add_look` plus one held tick would give, so a later tick that consumes the same look never pops the view.
-- The renderer sees it through `ludion_renderer::CameraLatch`, built by the engine into each present packet for a first-person rig camera when `late_latch` is on (`ludion docs presentation` § Late latch).
+- The renderer sees it through `ludion_renderer::CameraLatch`, built by the engine into each present packet for a first-person or chase rig camera when `late_latch` is on (`ludion docs presentation` § Late latch).
 
 ## The offset frame (`track`)
 
@@ -160,7 +190,7 @@ The system is installed on every schedule and returns at once in a world without
 
 ## Debug draw
 
-Category `camera` (`--debug-draw camera`), hash-neutral: the rail polyline, the search window around the projection, the projected point, the desired and actual eye (and the line between), the focus and eye-to-focus line, the anchored height, the look-ahead ray and, while a blend runs, its source eye. `first_person` draws the target, its line to the eye, the eye, a 2 m aim ray and a running blend's source eye. A held rig draws nothing.
+Category `camera` (`--debug-draw camera`), hash-neutral: the rail polyline, the search window around the projection, the projected point, the desired and actual eye (and the line between), the focus and eye-to-focus line, the anchored height, the look-ahead ray and, while a blend runs, its source eye. `first_person` draws the target, its line to the eye, the eye, a 2 m aim ray and a running blend's source eye; `chase` and `follow` draw the focus, the pivot, the boom to the eye, the eye and a running blend's source eye. A held rig draws nothing.
 
 ## Diagnostics
 

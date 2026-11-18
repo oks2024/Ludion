@@ -216,8 +216,10 @@ fn check_direction(direction: [f32; 3]) -> Result<[f32; 3], PhysicsError> {
 pub struct QueryFilter {
     pub(crate) exclude: Option<EntityId>,
     pub(crate) ignored_layers: Vec<String>,
+    pub(crate) included_layers: Vec<String>,
     pub(crate) include_sensors: bool,
     pub(crate) only_fixed: bool,
+    pub(crate) body_layers_only: bool,
 }
 
 impl QueryFilter {
@@ -235,6 +237,69 @@ impl QueryFilter {
     /// Drops every hit on the layer `name`. Repeatable; a repeat is harmless.
     pub fn ignore_layer(mut self, name: impl Into<String>) -> Self {
         self.ignored_layers.push(name.into());
+        self
+    }
+
+    /// Keeps only hits on the layer `name` (or another included layer): a hit is kept when its
+    /// layers intersect the included set. No `include_layer` call means no such clause. Repeatable.
+    /// A hit's layers are its body layer plus its [`QueryLayers`](crate::QueryLayers); a drop by
+    /// `exclude`, `ignore_layer`, a sensor or `only_fixed` still wins over an include.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_physics::{PhysicsError, PhysicsWorld, QueryFilter};
+    ///
+    /// let world = PhysicsWorld::new(TickRate::DEFAULT);
+    /// let hits = world
+    ///     .ray_cast([0.0; 3], [1.0, 0.0, 0.0], 10.0, &QueryFilter::new().include_layer("default"))
+    ///     .unwrap();
+    /// assert!(hits.is_empty());
+    /// let typo = QueryFilter::new().include_layer("dumy");
+    /// let err = world.ray_cast([0.0; 3], [1.0, 0.0, 0.0], 10.0, &typo).unwrap_err();
+    /// assert!(matches!(err, PhysicsError::QueryInput(_)));
+    /// ```
+    pub fn include_layer(mut self, name: impl Into<String>) -> Self {
+        self.included_layers.push(name.into());
+        self
+    }
+
+    /// [`include_layer`](QueryFilter::include_layer) for every name in `set`.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_physics::{LayerSet, QueryFilter};
+    ///
+    /// let set = LayerSet::from(vec!["cover_low".to_string(), "wall".to_string()]);
+    /// let filter = QueryFilter::new().include_set(&set);
+    /// assert_eq!(filter, QueryFilter::new().include_layer("cover_low").include_layer("wall"));
+    /// ```
+    pub fn include_set(mut self, set: &crate::LayerSet) -> Self {
+        self.included_layers.extend(set.iter().map(String::from));
+        self
+    }
+
+    /// [`ignore_layer`](QueryFilter::ignore_layer) for every name in `set`.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_physics::{LayerSet, QueryFilter};
+    ///
+    /// let set = LayerSet::from(vec!["actors".to_string()]);
+    /// assert_eq!(
+    ///     QueryFilter::new().ignore_set(&set),
+    ///     QueryFilter::new().ignore_layer("actors")
+    /// );
+    /// ```
+    pub fn ignore_set(mut self, set: &crate::LayerSet) -> Self {
+        self.ignored_layers.extend(set.iter().map(String::from));
+        self
+    }
+
+    /// Tests layer names against the body layer only, ignoring `QueryLayers`: the character motor
+    /// emulates the solver's matrix, which never sees query-only layers.
+    pub(crate) fn body_layers_only(mut self) -> Self {
+        self.body_layers_only = true;
         self
     }
 
@@ -518,7 +583,7 @@ impl PhysicsWorld {
     ) -> Result<Vec<EntityId>, PhysicsError> {
         check_finite("translation", &translation)?;
         check_rotation(rotation)?;
-        let drops = self.query_drops(filter)?;
+        let drops = self.sweep_filter(filter)?;
         reject_composite(shape)?;
         let built = shape_builder(shape, self.plane, None)
             .map_err(|(code, reason)| PhysicsError::QueryShape { code, reason })?;
@@ -529,7 +594,7 @@ impl PhysicsWorld {
             .intersect_shape(start, &*built.shape)
             .filter_map(|(_, collider)| {
                 let entity = entity_from_bits(collider.user_data);
-                (!drops(entity)).then_some(entity)
+                (!drops.drops(self, entity, collider)).then_some(entity)
             })
             .collect();
         entities.sort_unstable();
@@ -566,7 +631,7 @@ impl PhysicsWorld {
     ) -> Result<Vec<PointHit>, PhysicsError> {
         check_finite("point", &point)?;
         check_max_distance(max_distance)?;
-        let drops = self.query_drops(filter)?;
+        let drops = self.sweep_filter(filter)?;
         let center = to_vector(point);
         let ball = Ball::new(max_distance);
         let mut hits: Vec<PointHit> = Vec::new();
@@ -581,7 +646,7 @@ impl PhysicsWorld {
                 continue;
             }
             let entity = entity_from_bits(collider.user_data);
-            if drops(entity) {
+            if drops.drops(self, entity, collider) {
                 continue;
             }
             let closest = collider

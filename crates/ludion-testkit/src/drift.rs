@@ -65,6 +65,7 @@ fn probe_seed(name: &str) -> Value {
         "PoseBlend" => json!({ "pose": "p", "weight": 0.0 }),
         "SkinBone" => json!({ "skin": { "index": 0, "generation": 0 }, "bone": "b" }),
         "ParentJoint" => json!({ "joint": "j" }),
+        "UiWorldAnchor" => json!({ "target": { "index": 0, "generation": 0 } }),
         "PrefabInstance" => json!({
             "source": "p.prefab.yaml",
             "part": "a",

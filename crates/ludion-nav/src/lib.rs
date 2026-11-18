@@ -4,6 +4,8 @@
 //! nodes (several per column for bridges and overhangs) and links them under a height, step and slope
 //! rule. A [`FlowField`] is a radius-capped Dijkstra from one target node plus a unit flow direction per
 //! node; a [`FlowCache`] keeps one field per target node, so every agent chasing the same cell shares it.
+//! [`find_path`] is point-to-point A* over the same links, with [`string_pull`] and [`walkable_line`] cutting a
+//! node path to waypoints.
 //!
 //! # Boundary
 //!
@@ -47,7 +49,11 @@
 mod cache;
 mod field;
 mod grid;
+mod path;
 
 pub use cache::FlowCache;
 pub use field::FlowField;
 pub use grid::{ColumnSource, FloorSample, GridParams, NEIGHBORS, NO_LINK, NavGrid, NodeId};
+pub use path::{
+    PathOptions, PathResult, PathStatus, find_path, nearest_node, string_pull, walkable_line,
+};

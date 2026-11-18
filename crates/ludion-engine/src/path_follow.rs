@@ -215,6 +215,11 @@ impl PathLibrary {
         }
     }
 
+    /// The content root this library resolves paths against.
+    pub(crate) fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
     /// The path `rel`, loading it on first use; `Err` with the loader's diagnostics.
     fn loaded(&mut self, rel: &str) -> Result<&Loaded, &[Diagnostic]> {
         if !self.paths.contains_key(rel) {

@@ -25,6 +25,7 @@ ludion-sculpt = { path = "../ludion-sculpt", version = "0.1.0" }
 ludion-sim = { path = "../ludion-sim", version = "0.1.0" }
 ludion-sprite = { path = "../ludion-sprite", version = "0.1.0" }
 ludion-spatial = { path = "../ludion-spatial", version = "0.1.0" }
+ludion-ai = { path = "../ludion-ai", version = "0.1.0" }
 ludion-nav = { path = "../ludion-nav", version = "0.1.0" }
 ludion-projectiles = { path = "../ludion-projectiles", version = "0.1.0" }
 # Unconditional, never a cargo feature: three seams need it — the `PhysicsPose` impl on `Transform`,

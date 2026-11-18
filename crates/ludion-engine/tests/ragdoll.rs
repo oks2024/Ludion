@@ -195,6 +195,34 @@ fn bare_mesh(shape: MeshSource) -> Mesh {
     }
 }
 
+/// A switch on a motor entity parks its motor: the figure is a ragdoll now, not a capsule.
+#[test]
+fn switching_a_motor_entity_suspends_its_motor() {
+    let root = fixture_project("motor");
+    let data = assembly_data(&root);
+    let mut world = World::new();
+    let figure = world.spawn();
+    world.insert(figure, Transform::default()).unwrap();
+    world
+        .insert(
+            figure,
+            bare_mesh(MeshSource::Assembly(ASSEMBLY_REL.to_string())),
+        )
+        .unwrap();
+    world
+        .insert(figure, ludion_physics::CharacterMotor::default())
+        .unwrap();
+    switch_to_ragdoll(
+        &mut world,
+        figure,
+        &data,
+        SimTime::from_ticks(0, TickRate::DEFAULT),
+    )
+    .expect("a valid switch");
+    let state = get::<ludion_physics::CharacterMotorState>(&world, figure).expect("a state");
+    assert!(state.suspended);
+}
+
 // --- (a) At rest: spawn order, stripped root, joints -----------------------------------------------
 
 /// At rest: the switch spawns one entity per part in authored order, strips the root's drawing/

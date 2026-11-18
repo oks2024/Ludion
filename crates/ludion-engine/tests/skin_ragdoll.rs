@@ -513,3 +513,35 @@ fn a_presentation_skin_is_refused_naming_the_phase() {
     assert!(errors[0].message.contains("presentation"), "{errors:?}");
     assert_eq!(engine.world().entity_count(), count);
 }
+
+#[test]
+fn a_switch_suspends_the_motor_on_the_skins_root() {
+    let dir = fixture("motor-root");
+    let scene = format!(
+        "format: 1\nseed: 3\nphysics:\n  space: free\nentities:\n  - name: enemy\n    components:\n{MESH}{UNIT_TRANSFORM}      Parent:\n        index: 1\n        generation: 0\n  - name: boss\n    components:\n      Transform: {{}}\n      CharacterMotor: {{}}\n"
+    );
+    let mut engine = engine_with(&dir, &scene);
+    let root = EntityId::new(1, 0);
+    let suspended = |engine: &Engine| {
+        engine
+            .world()
+            .get::<ludion_physics::CharacterMotorState>(root)
+            .unwrap()
+            .is_some_and(|state| state.suspended)
+    };
+    assert!(!suspended(&engine));
+    switch_skin_to_ragdoll(engine.world_mut(), skin_id(), PARTS).expect("switches");
+    assert!(suspended(&engine), "the switch parked the root's motor");
+    engine
+        .execute(Command::SimStep(SimStepParams {
+            ticks: 3,
+            hash: false,
+        }))
+        .expect("steps");
+    let bodies = engine
+        .world()
+        .resource::<ludion_physics::PhysicsWorld>()
+        .expect("physics is installed")
+        .body_count();
+    assert_eq!(bodies, 2, "only the two parts have bodies, no capsule");
+}

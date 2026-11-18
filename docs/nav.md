@@ -1,10 +1,11 @@
 ---
-description: Navigation — the walkability grid from static colliders, shared flow fields, NavAgent steering
+description: Navigation — walkability grid, flow fields, point-to-point paths, NavAgent/NavGoal steering
 ---
 
 # Navigation: a grid from the colliders, one flow field per target, agents that steer
 
-**Scope:** `NavConfig`, `Engine::nav`, `nav_update`, `NavAgent`, `NavSteering`, `nav_steer`. The
+**Scope:** `NavConfig`, `Engine::nav`, `nav_update`, `NavAgent`, `NavSteering`, `nav_steer`, `NavGoal`, `NavRoute`,
+`nav_path` and its queries. The
 engine writes a desired velocity; moving the body is yours — `ludion docs motor` for a capsule,
 `ludion docs components` for the rows. Static colliders come from `ludion docs physics` and
 `ludion docs collision-layers`; the neighbour index is `ludion docs spatial-3d`.
@@ -45,6 +46,7 @@ Engine::builder()
 | `max_slope_deg` | `45` | in `(0, 90)` |
 | `flow_radius` | `48` | finite, `> 0`; how far a field reaches from its target |
 | `ignore_layers` | `[]` | names declared in `physics.layers`, none empty |
+| `max_path_requests_per_tick` | `8` | `>= 1`; routes `nav_steer` plans per tick |
 
 A bad value is `L4032` with a JSON Pointer to the field; `ludion explain L4032`.
 
@@ -70,10 +72,52 @@ what `nav_steer` writes each tick.
 - **Walkers** follow the field gradient; where a cell has no direction they head straight at the
   target. **Flyers** steer only (3D seek plus separation), never read the grid, and work with no
   `Nav` at all.
+- **A `NavGoal` takes precedence over `NavAgent.target`**: a walker with one follows a planned route
+  (below), not a flow field. Remove the `NavGoal` and the agent chases `target` again.
 - **Separation** reads the `Index3d`: give agents a `SpatialVolume` whose layer is in
   `neighbor_layers`.
 - **Thread-count invariant**: `nav_steer` fans out over `par`; the result is bit-identical at any
   count (`ludion devdocs sim-parallelism`).
+
+## Paths
+
+Flow fields serve many agents chasing one target; a path serves one question from A to B. Call these
+after `nav_update` has built the grid (before it: `L4140`):
+
+```rust
+let req = PathRequest { max_cost: 60.0, ..PathRequest::new(from, to) };
+let path = nav_path(world, &req)?;              // NavPath { status, cost, waypoints, expanded }
+let metres = nav_distance(world, from, to)?;    // Option<f32>: None when unreachable
+let ok = nav_reachable(world, from, to)?;
+let on_floor = nav_project(world, p, 2.0)?;     // Option<[f32; 3]>: nearest walkable point
+```
+
+- `status` is `Complete`, `Partial` (a path to the reachable node nearest the goal) or `Unreachable`;
+  `partial: false` turns `Partial` into `Unreachable`.
+- `waypoints` are the corners a straight-line walker needs (A* plus string pulling), start first.
+  A complete path ends at the goal's own x and z when that cell is walkable.
+- Both ends snap to the nearest node within `snap_radius` (default 1 m); an end with none is
+  `Unreachable`. `max_cost` and `max_expanded` (default 20000) bound the search.
+- A bad request (non-finite point, negative `max_cost` or `snap_radius`, zero `max_expanded`) is
+  `L4141` with a pointer; the queries are pure and change nothing.
+
+## Goals and routes
+
+Give a walker a `NavGoal { at }` (`replan: on_change` default, or `never`) beside its `NavAgent`.
+`nav_steer` plans a route, stores it as a `NavRoute` (`waypoints`, `index`, `status`, `partial`, `cost`)
+and steers along it; a game reads `NavRoute.status`: `planning` (waiting for the per-tick cap),
+`following`, `arrived` (within `arrive_radius` of the last waypoint) or `unreachable`.
+
+- **Replanning is pure**: when the goal moves to another cell, or, under `on_change`, when the leg being
+  walked (the stored waypoint pair, not where the agent stands) is no longer walkable (a static wall
+  appeared). A goal that moves inside its cell is followed
+  without planning. `unreachable` and partial routes stay until the goal changes cell.
+- **At most `max_path_requests_per_tick` routes are planned per tick**, in ascending entity order; the
+  rest stand in `planning` until the next tick.
+- **`NavRoute` is hashed state, written by `nav_steer`; never insert one.** A restore resumes the route
+  instead of planning again. An agent with no `NavGoal` has none, so such scenes hash as before.
+- A flyer with a `NavGoal` seeks `at` in 3D and gets no route. Routed agents skip the flow field, and
+  separation is added as for any agent.
 
 ## Feeding the motor
 
@@ -110,4 +154,6 @@ Put the motors on a layer that ignores itself, so they don't block each other. N
 
 - `ludion docs motor` — the capsule that applies a steering velocity.
 - `ludion docs spatial-3d` — the index separation reads.
-- `ludion docs components` — the `NavAgent` and `NavSteering` rows.
+- `ludion docs patrol` — guards that walk `kind: patrol` routes as nav legs.
+- `ludion docs components` — the `NavAgent`, `NavSteering`, `NavGoal` and `NavRoute` rows.
+- `cargo run -p ludion --example nav_path` — a wall between an agent and its goal.

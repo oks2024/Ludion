@@ -26,9 +26,12 @@ character-course       → ludion  [schemars, serde, serde_json]
     dev: core, engine, import, scene, sim, testkit
 hello-paddle           → ludion  [schemars, serde]
     dev: assets, client, core, engine, protocol, testkit  [serde_json]
-ludion                 → assets{watch}(wire), audio, core, ecs, engine, nav, physics, projectiles,
-      protocol, render-graph, scene, server(wire), sim, spatial, window(window)  [clap(wire),
-      crossbeam-channel, ctrlc, schemars, serde, serde_json, wgpu, winit(window)]
+ludion                 → ai, assets{watch}(wire), audio, core, ecs, engine, nav, physics,
+      projectiles, protocol, render-graph, scene, server(wire), sim, spatial,
+      window(window)  [clap(wire), crossbeam-channel, ctrlc, schemars, serde, serde_json, wgpu,
+      winit(window)]
+ludion-ai              → core, ecs  [schemars, serde]
+    dev: (none)  [serde_json]
 ludion-assets          → core  [crossbeam-channel(watch), ktx2, notify(watch), png, serde,
       xxhash-rust]
     dev: (none)  [serde_json]
@@ -47,7 +50,7 @@ ludion-cook            → assets, core  [ctt-astcenc, intel_tex_2, ktx2]
 ludion-core            → (none)  [glam, libm, rayon-core, schemars, serde, serde_json]
 ludion-ecs             → core  [erased-serde, schemars, serde, serde_json]
     dev: (none)  [schemars, serde, serde_json]
-ludion-engine          → assets, camera, components, core, ecs, font, nav, physics, projectiles,
+ludion-engine          → ai, assets, camera, components, core, ecs, font, nav, physics, projectiles,
       protocol, renderer, scene, sculpt, sim, spatial, sprite  [base64, crossbeam-channel, schemars,
       serde, serde_json, toml, wgpu]
     dev: cook, testkit  [png, proptest]
@@ -107,9 +110,9 @@ saphyr-parser ← scene, testkit
 assets/watch  ← ludion(wire), cli, server
 font/bake     ← cli
 
-no wgpu in the tree: assets, audio, camera, client, components, cook, core, ecs, font, gen, import,
-      mcp, mesh-edit, nav, physics, projectiles, protocol, scene, sculpt, shader-bindgen, sim,
-      spatial, sprite, texgen
+no wgpu in the tree: ai, assets, audio, camera, client, components, cook, core, ecs, font, gen,
+      import, mcp, mesh-edit, nav, physics, projectiles, protocol, scene, sculpt, shader-bindgen,
+      sim, spatial, sprite, texgen
 ```
 <!-- end generated -->
 

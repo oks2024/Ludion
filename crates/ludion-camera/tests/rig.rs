@@ -1,10 +1,10 @@
 //! The rig pipeline, tick by tick, on hand-built paths.
 
 use ludion_camera::{
-    Blend, BlendCurve, BlendIn, CameraRig, FirstPersonRig, KickConfig, LookAhead, RigConfig,
-    RigInput, RigMode, RigOutput, Springs, TrackRig, add_fov_kick, add_kick, add_look,
-    add_look_counts, add_trauma, camera_relative, camera_relative_yaw, look_from_counts,
-    resolved_camera, set_look, snap_rig, step_rig,
+    Blend, BlendCurve, BlendIn, CameraRig, ChaseRig, FirstPersonRig, FollowRig, KickConfig,
+    LookAhead, RigConfig, RigInput, RigMode, RigOutput, Springs, TrackRig, add_fov_kick, add_kick,
+    add_look, add_look_counts, add_trauma, camera_relative, camera_relative_yaw, look_from_counts,
+    orbit_eye, resolved_camera, set_look, snap_rig, step_rig,
 };
 use ludion_core::math::{euler_xyz_degrees_to_quat, quat_rotate};
 use ludion_core::time::FrameIndex;
@@ -1314,4 +1314,211 @@ fn sensitivity_is_serialized_only_off_the_default() {
             .as_deref(),
         Some("/look_deg_per_count")
     );
+}
+
+// ── chase and follow ─────────────────────────────────────────────────────────────────────────────
+
+fn boom_cfg(mode: RigMode, blend_seconds: f32) -> RigConfig {
+    RigConfig {
+        mode,
+        blend_in: BlendIn {
+            seconds: blend_seconds,
+            curve: BlendCurve::Linear,
+        },
+        look_ahead: LookAhead {
+            distance: 0.0,
+            ..LookAhead::default()
+        },
+        ..RigConfig::default()
+    }
+}
+
+fn chase_rig(chase: ChaseRig) -> CameraRig {
+    rig_with(boom_cfg(RigMode::Chase(chase), 0.0))
+}
+
+fn follow_rig() -> CameraRig {
+    rig_with(boom_cfg(RigMode::Follow(FollowRig::default()), 0.0))
+}
+
+#[test]
+fn chase_pivot_springs_to_the_orbit_eye_at_rest() {
+    let mut rig = chase_rig(ChaseRig::default());
+    fp_tick(&mut rig, [0.0; 3], 0);
+    assert_eq!(rig.state.pivot, Some([0.0; 3]));
+    let target = [3.0, 0.0, -5.0];
+    let mut out = fp_tick(&mut rig, target, 1);
+    // One tick behind the target: the spring, not the boom, lags.
+    assert!(dist(out.translation, orbit_eye(target, 0.0, 20.0, 6.0)) > 0.5);
+    for k in 2..400 {
+        out = fp_tick(&mut rig, target, k);
+    }
+    let want = orbit_eye(target, 0.0, 20.0, 6.0);
+    assert!(
+        near(out.translation, want, 1e-3),
+        "{:?} {want:?}",
+        out.translation
+    );
+    let aim = rig.aim().unwrap();
+    assert_eq!((aim.yaw_deg, aim.pitch_deg), (0.0, 20.0));
+}
+
+#[test]
+fn chase_yaw_is_continuous_across_the_seam_under_steady_look() {
+    let mut rig = chase_rig(ChaseRig::default());
+    set_look(&mut rig, 170.0, 20.0);
+    let mut last = fp_tick(&mut rig, [0.0; 3], 0).translation;
+    let mut crossed = false;
+    for k in 1..40 {
+        add_look(&mut rig, 3.0, 0.0);
+        let eye = fp_tick(&mut rig, [0.0; 3], k).translation;
+        // A 3 degree turn moves a 6 m boom at most ~0.32 m.
+        assert!(dist(eye, last) < 0.4, "tick {k}: {last:?} -> {eye:?}");
+        crossed |= rig.state.yaw_deg < 0.0;
+        last = eye;
+    }
+    assert!(crossed, "the yaw wrapped through the seam");
+}
+
+#[test]
+fn equal_pitch_limits_fix_the_pitch_against_look() {
+    let mut rig = chase_rig(ChaseRig {
+        pitch_min_deg: 35.0,
+        pitch_max_deg: 35.0,
+        pitch_deg: 35.0,
+        ..ChaseRig::default()
+    });
+    for k in 0..5 {
+        add_look(&mut rig, 1.0, 20.0 * (k as f32 - 2.0));
+        fp_tick(&mut rig, [0.0; 3], k);
+        assert_eq!(rig.state.pitch_deg, 35.0);
+    }
+    assert!((rig.state.yaw_deg - 5.0).abs() < 1e-4, "yaw still turns");
+}
+
+#[test]
+fn follow_sits_exactly_on_its_boom_and_consumes_look() {
+    let mut rig = follow_rig();
+    let target = [3.0, 1.0, -5.0];
+    let out = fp_tick(&mut rig, target, 0);
+    assert_eq!(rig.state.eye, orbit_eye(target, 0.0, 45.0, 10.0));
+    assert_eq!(out.translation, orbit_eye(target, 0.0, 45.0, 10.0));
+    add_look(&mut rig, 30.0, 10.0);
+    fp_tick(&mut rig, target, 1);
+    assert_eq!(rig.look_deg, [0.0; 2], "look is consumed");
+    assert_eq!(rig.state.eye, orbit_eye(target, 0.0, 45.0, 10.0));
+    assert_eq!(rig.aim().unwrap().yaw_deg, 0.0);
+}
+
+#[test]
+fn chase_to_first_person_keeps_the_yaw_and_enters_at_the_pitch() {
+    let mut rig = chase_rig(ChaseRig::default());
+    set_look(&mut rig, 70.0, 20.0);
+    fp_tick(&mut rig, [0.0; 3], 0);
+    rig.rig = RigConfig {
+        mode: RigMode::FirstPerson(FirstPersonRig {
+            enter_pitch_deg: Some(-5.0),
+            ..FirstPersonRig::default()
+        }),
+        ..fp_cfg(0.0)
+    };
+    fp_tick(&mut rig, [0.0; 3], 1);
+    assert_eq!(rig.state.yaw_deg, 70.0);
+    assert_eq!(rig.state.pitch_deg, -5.0);
+    assert_eq!(rig.state.pivot, None);
+    // Without `enter_pitch_deg` the pitch is carried.
+    let mut rig = chase_rig(ChaseRig::default());
+    fp_tick(&mut rig, [0.0; 3], 0);
+    rig.rig = fp_cfg(0.0);
+    fp_tick(&mut rig, [0.0; 3], 1);
+    assert_eq!(rig.state.pitch_deg, 20.0);
+}
+
+#[test]
+fn first_person_to_chase_keeps_the_yaw_and_resets_the_pitch() {
+    let mut rig = fp_rig();
+    set_look(&mut rig, -120.0, 60.0);
+    fp_tick(&mut rig, [0.0; 3], 0);
+    rig.rig = boom_cfg(RigMode::Chase(ChaseRig::default()), 0.0);
+    fp_tick(&mut rig, [0.0; 3], 1);
+    assert_eq!(rig.state.yaw_deg, -120.0);
+    assert_eq!(rig.state.pitch_deg, 20.0);
+    // An authored yaw wins over the carried one.
+    rig.rig = boom_cfg(
+        RigMode::Chase(ChaseRig {
+            yaw_deg: Some(30.0),
+            ..ChaseRig::default()
+        }),
+        0.0,
+    );
+    fp_tick(&mut rig, [0.0; 3], 2);
+    assert_eq!(rig.state.yaw_deg, 30.0);
+}
+
+#[test]
+fn a_held_tick_applies_chase_look_with_a_frozen_pivot() {
+    let mut rig = chase_rig(ChaseRig::default());
+    fp_tick(&mut rig, [0.0; 3], 0);
+    fp_tick(&mut rig, [4.0, 0.0, 0.0], 1);
+    let pivot = rig.state.pivot;
+    add_look(&mut rig, 12.0, 0.0);
+    let out = fp_tick_dt(&mut rig, [4.0, 0.0, 0.0], 1, 0.0);
+    assert_eq!(rig.state.pivot, pivot);
+    assert_eq!(rig.state.yaw_deg, 12.0);
+    assert_eq!(out.translation, orbit_eye(pivot.unwrap(), 12.0, 20.0, 6.0));
+}
+
+#[test]
+fn resolved_camera_on_chase_equals_look_then_a_held_tick() {
+    let mut rig = chase_rig(ChaseRig::default());
+    for k in 0..30 {
+        fp_tick(&mut rig, [k as f32 * 0.1, 0.0, -2.0], k);
+    }
+    let target = [2.9, 0.0, -2.0];
+    let latched = resolved_camera(&rig, target, [25.0, -7.0]).unwrap();
+    let mut held = rig.clone();
+    add_look(&mut held, 25.0, -7.0);
+    let out = fp_tick_dt(&mut held, target, 30, 0.0);
+    assert_eq!(latched.view, out);
+    assert_eq!(latched.aim, held.aim().unwrap());
+    assert_eq!(
+        resolved_camera(&rig, target, [0.0; 2]).unwrap().view,
+        fp_tick_dt(&mut rig.clone(), target, 30, 0.0)
+    );
+}
+
+#[test]
+fn resolved_camera_ignores_the_look_mid_blend_and_on_follow() {
+    let mut rig = fp_rig();
+    fp_tick(&mut rig, [0.0; 3], 0);
+    rig.rig = boom_cfg(RigMode::Chase(ChaseRig::default()), 1.0);
+    fp_tick(&mut rig, [0.0; 3], 1);
+    assert!(rig.state.blend.is_some());
+    let base = resolved_camera(&rig, [0.0; 3], [0.0; 2]).unwrap();
+    assert_eq!(base, resolved_camera(&rig, [0.0; 3], [30.0, 10.0]).unwrap());
+    let mut rig = follow_rig();
+    fp_tick(&mut rig, [0.0; 3], 0);
+    let base = resolved_camera(&rig, [0.0; 3], [0.0; 2]).unwrap();
+    assert_eq!(base, resolved_camera(&rig, [0.0; 3], [30.0, 10.0]).unwrap());
+}
+
+#[test]
+fn the_boom_modes_serialize_and_default_compactly() {
+    let value = serde_json::to_value(FirstPersonRig::default()).unwrap();
+    assert!(value.get("enter_pitch_deg").is_none());
+    let back: FirstPersonRig = serde_json::from_value(value).unwrap();
+    assert_eq!(back, FirstPersonRig::default());
+    let rig: CameraRig =
+        serde_json::from_value(serde_json::json!({"rig": {"mode": {"chase": {"distance": 4.0}}}}))
+            .unwrap();
+    let RigMode::Chase(chase) = &rig.rig.mode else {
+        panic!("chase");
+    };
+    assert_eq!(
+        (chase.distance, chase.pitch_deg, chase.yaw_deg),
+        (4.0, 20.0, None)
+    );
+    let value = serde_json::to_value(fp_rig()).unwrap();
+    assert!(value["state"].get("pivot").is_none());
+    assert!(value["state"].get("pivot_velocity").is_none());
 }

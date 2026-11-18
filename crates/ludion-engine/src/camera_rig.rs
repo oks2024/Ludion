@@ -15,13 +15,14 @@
 //! despawned target (`L1305`) or a track path that fails to load (`L1306`). With several rigs only
 //! the lowest entity id runs (`L1308`). A `target` of `None` or an empty `path` is inert, not a fault.
 //!
-//! A `first_person` rig needs only a live target: no path, no `L1306`. Look is applied on every tick
-//! it poses, a held clock included.
+//! A `first_person`, `chase` or `follow` rig needs only a live target: no path, no `L1306`. Look is
+//! applied on every tick the rig poses, a held clock included.
 //!
 //! The `camera` debug-draw category shows, for `track`, the track, the search window, the projection,
 //! the desired and actual eye, the focus, the anchor, the look-ahead and a running blend; for
-//! `first_person`, the target, its line to the eye, the eye, a 2 m aim ray and a running blend. A
-//! held rig draws nothing.
+//! `first_person`, the target, its line to the eye, the eye, a 2 m aim ray and a running blend; for
+//! `chase` and `follow`, the focus, the sprung pivot, the boom from the pivot to the eye, the eye and
+//! a running blend. A held rig draws nothing.
 
 use std::sync::Arc;
 
@@ -155,7 +156,7 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
     let track_path = match &rig.rig.mode {
         RigMode::Track(track) if track.path.is_empty() => return,
         RigMode::Track(track) => Some(track.path.clone()),
-        RigMode::FirstPerson(_) => None,
+        RigMode::FirstPerson(_) | RigMode::Chase(_) | RigMode::Follow(_) => None,
     };
     let Some(target) = rig.target else {
         return;
@@ -206,6 +207,9 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
     if let Some(output) = &output {
         match &sampler {
             Some(sampler) => draw(world, &rig, sampler, target_position, output.translation),
+            None if matches!(rig.rig.mode, RigMode::Chase(_) | RigMode::Follow(_)) => {
+                draw_orbit(world, &rig, target_position, output.translation);
+            }
             None => draw_first_person(world, &rig, target_position, output.translation),
         }
     }
@@ -325,6 +329,25 @@ fn draw_first_person(world: &mut World, rig: &CameraRig, target: [f32; 3], eye: 
         let forward = aim.forward().map(|v| v * AIM_RAY);
         pen.ray(aim.eye, forward, FOCUS);
     }
+    if let Some(blend) = &state.blend {
+        pen.cross(blend.from.eye, CROSS, BLEND)
+            .line(blend.from.eye, eye, BLEND);
+    }
+}
+
+/// Draws a `chase` or `follow` rig's `camera` primitives: the focus, the sprung pivot, the boom from
+/// the pivot to the eye, the eye and, while one runs, the blend's source eye.
+fn draw_orbit(world: &mut World, rig: &CameraRig, target: [f32; 3], eye: [f32; 3]) {
+    let state = &rig.state;
+    let Some(pivot) = state.pivot else {
+        return;
+    };
+    let focus = rig_focus(&rig.rig, target, state.anchor_y, state.look_ahead);
+    let mut pen = debug_draw(world, CATEGORY);
+    pen.cross(focus, CROSS, FOCUS)
+        .cross(pivot, CROSS, PROJECTED)
+        .line(pivot, eye, DESIRED)
+        .cross(eye, CROSS, EYE);
     if let Some(blend) = &state.blend {
         pen.cross(blend.from.eye, CROSS, BLEND)
             .line(blend.from.eye, eye, BLEND);

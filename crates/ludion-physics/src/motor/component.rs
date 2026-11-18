@@ -115,6 +115,9 @@ pub struct CharacterMotorState {
     /// The tick platform carry last ran on, so it applies once per tick.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub carry_tick: Option<u64>,
+    /// Parked by `suspend_character`: no body, no moves; `resume_character` brings it back.
+    #[serde(skip_serializing_if = "is_false")]
+    pub suspended: bool,
 }
 
 fn is_false(value: &bool) -> bool {

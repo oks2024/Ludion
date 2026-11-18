@@ -40,6 +40,7 @@ Then check a saved file with `cargo run -- --replay-verify save/replays/run-1.lr
 - **`stop` publishes** `<save root>/save/replays/<name>.lrp`, crash-durably: a file is complete or absent.
 - **A name** is 1 to 128 of `[A-Za-z0-9._-]` and does not start with `.`.
 - **Failures** are `L1402` (a name, a write or the finalize failed, or `start` during a `--record` session) and `L1403` (a zero `keyframe_every` or a `dir` outside the save root fails the build). `ludion explain L1402`.
+- **Checkpoint slots** (`ludion docs checkpoints`) suppress keyframes while any slot is held (`L4206`); the replay still reproduces every capture and restore.
 - **`keyframe_every`** trades file size for verify grain: a keyframe is a full snapshot, so a shorter interval is a larger file and a finer `--replay-verify` (see Size).
 
 ## Suspend and resume

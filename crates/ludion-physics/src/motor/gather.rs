@@ -257,7 +257,12 @@ mod tests {
 
     fn filter_for(physics: &PhysicsWorld, member: EntityId) -> SweepFilter {
         physics
-            .sweep_filter(&QueryFilter::new().exclude(member).ignore_layer("crowd"))
+            .sweep_filter(
+                &QueryFilter::new()
+                    .exclude(member)
+                    .ignore_layer("crowd")
+                    .body_layers_only(),
+            )
             .unwrap()
     }
 

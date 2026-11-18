@@ -430,7 +430,7 @@ impl MusicFeed {
     }
 
     /// Sim ticks → device frames.
-    fn device_frames(&self, ticks: u32) -> usize {
+    pub(crate) fn device_frames(&self, ticks: u32) -> usize {
         (f64::from(ticks) * self.seconds_per_tick * f64::from(self.out_rate)).round() as usize
     }
 
@@ -867,14 +867,14 @@ impl MusicPlayer {
     }
 
     /// Adds the next `scratch.len()` samples, scaled by the ramp, the play's gain and `master` (the
-    /// music bus), into `scratch`. An empty ring is silence — an underrun, never a block.
-    pub(crate) fn mix_into(&mut self, scratch: &mut [f32], master: f32) {
+    /// music bus's level for each frame), into `scratch`. An empty ring is silence — an underrun, never a block.
+    pub(crate) fn mix_into(&mut self, scratch: &mut [f32], master: &[f32]) {
         if !self.active {
             // Nothing sounds, but stale chunks must not pile up in the ring.
             self.drain_stale();
             return;
         }
-        for frame in scratch.chunks_mut(self.channels) {
+        for (index, frame) in scratch.chunks_mut(self.channels).enumerate() {
             if frame.len() < self.channels || !self.next_chunk() {
                 break;
             }
@@ -890,7 +890,7 @@ impl MusicPlayer {
                     break;
                 }
             }
-            let scale = self.level * self.gain.next() * master;
+            let scale = self.level * self.gain.next() * master[index];
             let mut stem_gain = [0.0; MUSIC_STEMS_MAX];
             for (gain, stem) in stem_gain.iter_mut().zip(&mut self.stems[..self.count]) {
                 *gain = stem.next();
@@ -929,6 +929,9 @@ impl MusicPlayer {
 
 #[cfg(test)]
 mod tests {
+    /// Unit music-bus level for every frame of a block.
+    const UNITY: [f32; 1024] = [1.0; 1024];
+
     use super::*;
 
     const TONE: &str = "tone-stereo-44k.ogg";
@@ -1319,7 +1322,7 @@ mod tests {
         let (mut player, _tx) = player(1, 2, 1.0);
         start(&mut player, 1, 0.5, 4);
         let mut out = vec![0.0; 12]; // 6 frames
-        player.mix_into(&mut out, 1.0);
+        player.mix_into(&mut out, &UNITY);
         let left: Vec<f32> = out.iter().step_by(2).copied().collect();
         // level 0.25, 0.5, 0.75, 1.0, then held; times gain 0.5.
         let want = [0.125, 0.25, 0.375, 0.5, 0.5, 0.5];
@@ -1334,12 +1337,12 @@ mod tests {
         start(&mut player, 1, 1.0, 0);
         let left = |out: &[f32]| out.iter().step_by(2).copied().collect::<Vec<f32>>();
         let mut out = vec![0.0; 4];
-        player.mix_into(&mut out, 1.0);
+        player.mix_into(&mut out, &UNITY);
         assert_eq!(left(&out), [0.5, 0.5]);
 
         player.apply(VoiceCommand::MusicGain(0.5));
         let mut out = vec![0.0; 10];
-        player.mix_into(&mut out, 1.0);
+        player.mix_into(&mut out, &UNITY);
         assert_eq!(left(&out), [0.4375, 0.375, 0.3125, 0.25, 0.25]);
     }
 
@@ -1349,7 +1352,7 @@ mod tests {
         start(&mut player, 1, 1.0, 0);
         player.apply(VoiceCommand::MusicStop { fade_out: 4 });
         let mut out = vec![0.0; 16];
-        player.mix_into(&mut out, 1.0);
+        player.mix_into(&mut out, &UNITY);
         let left: Vec<f32> = out.iter().step_by(2).copied().collect();
         assert!(
             (left[0] - 0.75).abs() < 1e-6 && (left[2] - 0.25).abs() < 1e-6,
@@ -1364,14 +1367,14 @@ mod tests {
         let (mut player, tx) = player(1, 1, 0.9);
         start(&mut player, 2, 1.0, 0);
         let mut out = vec![0.0; 4];
-        player.mix_into(&mut out, 1.0);
+        player.mix_into(&mut out, &UNITY);
         assert_eq!(out, vec![0.0; 4], "the old play's chunk is dropped");
         // A chunk of a play whose command has not arrived yet is held, not dropped.
         tx.send(chunk(3, 0.5)).unwrap();
-        player.mix_into(&mut out, 1.0);
+        player.mix_into(&mut out, &UNITY);
         assert_eq!(out, vec![0.0; 4]);
         start(&mut player, 3, 1.0, 0);
-        player.mix_into(&mut out, 1.0);
+        player.mix_into(&mut out, &UNITY);
         assert_eq!(out, vec![0.5; 4]);
     }
 
@@ -1380,10 +1383,10 @@ mod tests {
         let (mut player, tx) = player(1, 0, 0.0);
         start(&mut player, 1, 1.0, 0);
         let mut out = vec![0.0; 4];
-        player.mix_into(&mut out, 1.0);
+        player.mix_into(&mut out, &UNITY);
         assert_eq!(out, vec![0.0; 4], "an underrun is silence");
         tx.send(chunk(1, 0.5)).unwrap();
-        player.mix_into(&mut out, 0.5);
+        player.mix_into(&mut out, &[0.5; 1024]);
         assert_eq!(out, vec![0.25; 4]);
     }
 
@@ -1436,7 +1439,7 @@ mod tests {
             before(block, feed, player);
             feed.refill();
             let mut scratch = vec![0.0; 512];
-            player.mix_into(&mut scratch, 1.0);
+            player.mix_into(&mut scratch, &UNITY);
             out.extend(scratch);
         }
         out

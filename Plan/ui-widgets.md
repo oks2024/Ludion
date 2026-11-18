@@ -330,9 +330,9 @@ here may be justified by an editor need, and no editor-private surface appears i
 - **Analog-stick navigation** (needs a repeat latch, i.e. hidden state) — trigger: a sitting judging
   d-pad-only navigation wrong.
 - **Nine-slice / theming / UI animation** — `UiRect.texture` already stretches; trigger: authored
-  frame art that visibly breaks when stretched, or a screen whose reveal must animate.
+  frame art that visibly breaks when stretched, or a screen whose reveal must animate. Trigger fired, see `Plan/ui-hud.md`.
 - **Clipping / scissor rects** — Wave 2's window is index-based; trigger: content that must be cut
-  mid-glyph.
+  mid-glyph. Trigger fired, see `Plan/ui-hud.md`.
 - **Proportional or larger fonts** — the 8×8 uppercase atlas stays the one text surface engine-wide;
   trigger unchanged.
 - **Input routing / a UI event queue** — the game reads a return value; trigger: three or more

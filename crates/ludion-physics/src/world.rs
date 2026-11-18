@@ -33,9 +33,9 @@ use crate::joints::{
     JointBroken, JointEntry, MotorRows, apply_motor, build_generic_joint, current_motor,
     desired_motor, motor_off_target,
 };
+use crate::layer_set::LayerSet;
 use crate::meshes::TriangleMesh;
 use crate::motor::{LaneReport, MoveReport};
-use crate::queries::QueryFilter;
 use crate::sensors::SensorEvent;
 use crate::systems::{CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, PhysicsSettings};
 
@@ -475,6 +475,14 @@ pub struct PhysicsWorld {
     /// Each live claimed entity's ECS spawn rank, entity-sorted, refreshed by every write before
     /// anything reads it. Not part of the snapshot (the write refills it); never hashed.
     ranks: Vec<(EntityId, u64)>,
+    /// Each entity's authored `QueryLayers`, entity-sorted, and the same list resolved to layer
+    /// bitmasks against the current layer table. Queries see them; the solver never does. Not part
+    /// of the snapshot (the write refills them); never hashed.
+    query_layers: Vec<(EntityId, LayerSet)>,
+    query_masks: Vec<(EntityId, u32)>,
+    /// Whether `query_masks` was resolved with rejections queued; a restore resolves silently
+    /// (the layer table is not applied yet) and the next write reports.
+    query_reported: bool,
     pub(crate) plane: Option<Plane>,
     tick_rate: TickRate,
     sleep_after_ticks: u32,
@@ -608,6 +616,9 @@ impl PhysicsWorld {
             table: Vec::new(),
             rows: StableMap::new(),
             ranks: Vec::new(),
+            query_layers: Vec::new(),
+            query_masks: Vec::new(),
+            query_reported: true,
             plane: None,
             tick_rate,
             sleep_after_ticks: DEFAULT_SLEEP_AFTER_TICKS,
@@ -722,6 +733,7 @@ impl PhysicsWorld {
         if settings.layers != self.layers {
             self.layers.clone_from(&settings.layers);
             self.reapply_groups();
+            self.resolve_query_masks(true);
         }
     }
 
@@ -1437,6 +1449,9 @@ impl PhysicsWorld {
             table: snapshot.table,
             rows: StableMap::new(),
             ranks: Vec::new(),
+            query_layers: Vec::new(),
+            query_masks: Vec::new(),
+            query_reported: true,
             plane: snapshot.plane.map(Plane::from),
             tick_rate,
             sleep_after_ticks: DEFAULT_SLEEP_AFTER_TICKS,
@@ -2558,40 +2573,6 @@ impl PhysicsWorld {
         Ok(())
     }
 
-    /// Resolves `filter` into a predicate that is true for a hit to drop. Every ignored layer name
-    /// is validated first: `default` is always valid, any other name must be in the layer table.
-    /// A hit's layer comes from its table row, never from rapier's groups (an unlayered collider's
-    /// groups are `all()` and name no layer).
-    pub(crate) fn query_drops<'a>(
-        &'a self,
-        filter: &'a QueryFilter,
-    ) -> Result<impl Fn(EntityId) -> bool + 'a, PhysicsError> {
-        self.check_layer_names(&filter.ignored_layers)?;
-        Ok(move |entity: EntityId| {
-            if Some(entity) == filter.exclude {
-                return true;
-            }
-            if !filter.include_sensors && self.entry(entity).is_some_and(|e| e.source.sensor) {
-                return true;
-            }
-            if filter.only_fixed
-                && !self
-                    .entry(entity)
-                    .is_some_and(|e| e.kind == BodyKind::Fixed)
-            {
-                return true;
-            }
-            if filter.ignored_layers.is_empty() {
-                return false;
-            }
-            let layer = self
-                .entry(entity)
-                .and_then(|entry| entry.source.layer.as_deref())
-                .unwrap_or(DEFAULT_LAYER);
-            filter.ignored_layers.iter().any(|name| name == layer)
-        })
-    }
-
     /// `entity`'s authored shape and current world pose, for casting a body on its own.
     pub(crate) fn shape_and_pose(&self, entity: EntityId) -> Option<(Shape, [f32; 3], [f32; 4])> {
         let entry = self.entry(entity)?;
@@ -2664,6 +2645,70 @@ impl PhysicsWorld {
             .filter_map(|handle| self.table.iter().find(|e| e.body == handle))
             .map(|entry| entry.entity)
             .collect()
+    }
+
+    /// Replaces the query-only layer side table; `layers` is entity-sorted. Skipped when equal;
+    /// otherwise stored and resolved against the current layer table.
+    pub(crate) fn set_query_layers(&mut self, layers: &[(EntityId, LayerSet)]) {
+        if self.query_reported && self.query_layers == layers {
+            return;
+        }
+        self.query_layers = layers.to_vec();
+        self.resolve_query_masks(true);
+    }
+
+    /// Refreshes the query-only layers from `world`; call it after a restore, before
+    /// [`apply_settings`](PhysicsWorld::apply_settings), so an include query answers before the first
+    /// write. The write refreshes them itself every tick.
+    pub fn sync_query_layers(&mut self, world: &World) {
+        let mut layers: Vec<(EntityId, LayerSet)> = self
+            .entities()
+            .filter_map(|entity| match world.get::<crate::QueryLayers>(entity) {
+                Ok(Some(query)) => Some((entity, query.layers.clone())),
+                _ => None,
+            })
+            .collect();
+        layers.sort_unstable_by_key(|(entity, _)| *entity);
+        self.query_layers = layers;
+        self.resolve_query_masks(false);
+    }
+
+    /// Resolves each entity's `QueryLayers` to a bitmask under the current layer table. An entity
+    /// naming an undeclared layer gets mask `0` and one `L1186` rejection, and keeps its body.
+    fn resolve_query_masks(&mut self, report: bool) {
+        let mut masks = Vec::with_capacity(self.query_layers.len());
+        let mut rejections = Vec::new();
+        for (entity, set) in &self.query_layers {
+            match self.check_layer_names(set.as_slice()) {
+                Ok(()) => masks.push((*entity, self.layer_mask(set.as_slice()))),
+                Err(err) => {
+                    masks.push((*entity, 0));
+                    let PhysicsError::QueryInput(reason) = err else {
+                        continue;
+                    };
+                    rejections.push(ShapeRejection {
+                        entity: *entity,
+                        code: code::COLLIDER_LAYER_UNKNOWN,
+                        reason: format!("`QueryLayers` {reason}"),
+                        related: Vec::new(),
+                    });
+                }
+            }
+        }
+        self.query_masks = masks;
+        self.query_reported = report;
+        if report {
+            for rejection in rejections {
+                self.queue_rejection(rejection);
+            }
+        }
+    }
+
+    /// `entity`'s query-only layer bitmask; `0` when it has none or names an undeclared layer.
+    pub(crate) fn query_mask(&self, entity: EntityId) -> u32 {
+        self.query_masks
+            .binary_search_by_key(&entity, |&(e, _)| e)
+            .map_or(0, |i| self.query_masks[i].1)
     }
 
     /// Replaces the spawn-rank side table; `ranks` is entity-sorted. Reuses the allocation.

@@ -160,3 +160,73 @@ proptest! {
         }
     }
 }
+
+/// The serialized form of a script using every key and mouse button that existed before the full
+/// key set was appended, checked in byte for byte: appending enum variants must never move it.
+const PRE_EXISTING_SCRIPT: &str = concat!(
+    "[",
+    r#"{"frame":0,"event":{"kind":"key_down","key":"A"}},"#,
+    r#"{"frame":1,"event":{"kind":"key_down","key":"B"}},"#,
+    r#"{"frame":2,"event":{"kind":"key_down","key":"C"}},"#,
+    r#"{"frame":3,"event":{"kind":"key_down","key":"D"}},"#,
+    r#"{"frame":4,"event":{"kind":"key_down","key":"E"}},"#,
+    r#"{"frame":5,"event":{"kind":"key_down","key":"F"}},"#,
+    r#"{"frame":6,"event":{"kind":"key_down","key":"G"}},"#,
+    r#"{"frame":7,"event":{"kind":"key_down","key":"H"}},"#,
+    r#"{"frame":8,"event":{"kind":"key_down","key":"I"}},"#,
+    r#"{"frame":9,"event":{"kind":"key_down","key":"J"}},"#,
+    r#"{"frame":10,"event":{"kind":"key_down","key":"K"}},"#,
+    r#"{"frame":11,"event":{"kind":"key_down","key":"L"}},"#,
+    r#"{"frame":12,"event":{"kind":"key_down","key":"M"}},"#,
+    r#"{"frame":13,"event":{"kind":"key_down","key":"N"}},"#,
+    r#"{"frame":14,"event":{"kind":"key_down","key":"O"}},"#,
+    r#"{"frame":15,"event":{"kind":"key_down","key":"P"}},"#,
+    r#"{"frame":16,"event":{"kind":"key_down","key":"Q"}},"#,
+    r#"{"frame":17,"event":{"kind":"key_down","key":"R"}},"#,
+    r#"{"frame":18,"event":{"kind":"key_down","key":"S"}},"#,
+    r#"{"frame":19,"event":{"kind":"key_down","key":"T"}},"#,
+    r#"{"frame":20,"event":{"kind":"key_down","key":"U"}},"#,
+    r#"{"frame":21,"event":{"kind":"key_down","key":"V"}},"#,
+    r#"{"frame":22,"event":{"kind":"key_down","key":"W"}},"#,
+    r#"{"frame":23,"event":{"kind":"key_down","key":"X"}},"#,
+    r#"{"frame":24,"event":{"kind":"key_down","key":"Y"}},"#,
+    r#"{"frame":25,"event":{"kind":"key_down","key":"Z"}},"#,
+    r#"{"frame":26,"event":{"kind":"key_down","key":"Digit0"}},"#,
+    r#"{"frame":27,"event":{"kind":"key_down","key":"Digit1"}},"#,
+    r#"{"frame":28,"event":{"kind":"key_down","key":"Digit2"}},"#,
+    r#"{"frame":29,"event":{"kind":"key_down","key":"Digit3"}},"#,
+    r#"{"frame":30,"event":{"kind":"key_down","key":"Digit4"}},"#,
+    r#"{"frame":31,"event":{"kind":"key_down","key":"Digit5"}},"#,
+    r#"{"frame":32,"event":{"kind":"key_down","key":"Digit6"}},"#,
+    r#"{"frame":33,"event":{"kind":"key_down","key":"Digit7"}},"#,
+    r#"{"frame":34,"event":{"kind":"key_down","key":"Digit8"}},"#,
+    r#"{"frame":35,"event":{"kind":"key_down","key":"Digit9"}},"#,
+    r#"{"frame":36,"event":{"kind":"key_down","key":"Up"}},"#,
+    r#"{"frame":37,"event":{"kind":"key_down","key":"Down"}},"#,
+    r#"{"frame":38,"event":{"kind":"key_down","key":"Left"}},"#,
+    r#"{"frame":39,"event":{"kind":"key_down","key":"Right"}},"#,
+    r#"{"frame":40,"event":{"kind":"key_down","key":"Space"}},"#,
+    r#"{"frame":41,"event":{"kind":"key_down","key":"Enter"}},"#,
+    r#"{"frame":42,"event":{"kind":"key_down","key":"Escape"}},"#,
+    r#"{"frame":43,"event":{"kind":"key_down","key":"Shift"}},"#,
+    r#"{"frame":44,"event":{"kind":"key_down","key":"Ctrl"}},"#,
+    r#"{"frame":45,"event":{"kind":"key_down","key":"Alt"}},"#,
+    r#"{"frame":50,"event":{"kind":"mouse_down","button":"left"}},"#,
+    r#"{"frame":50,"event":{"kind":"mouse_down","button":"right"}},"#,
+    r#"{"frame":50,"event":{"kind":"mouse_down","button":"middle"}}"#,
+    "]"
+);
+
+#[test]
+fn pre_existing_keys_and_buttons_serialize_and_decode_unchanged() {
+    use ludion_sim::InputScript;
+
+    let decoded: InputScript =
+        serde_json::from_str(PRE_EXISTING_SCRIPT).expect("the pre-change script decodes");
+    assert_eq!(decoded.len(), 49);
+    assert_eq!(
+        serde_json::to_string(&decoded).unwrap(),
+        PRE_EXISTING_SCRIPT,
+        "re-serializing must reproduce the pre-change bytes"
+    );
+}

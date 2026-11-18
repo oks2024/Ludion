@@ -12,6 +12,7 @@ use ludion_ecs::{Parent, Schedule, SystemCtx, World};
 use ludion_spatial::{Body, Collider, Joint, JointMotor, Plane, Shape, Velocity};
 
 use crate::PhysicsPose;
+use crate::layer_set::{LayerSet, QueryLayers};
 use crate::meshes::ColliderMeshes;
 use crate::motor::{CharacterMotor, CharacterMotorState, check, height_in_force, motor_invalid};
 use crate::world::{DEFAULT_GRAVITY, MeshInput, PhysicsWorld, ShapeRejection, mesh_hash_of};
@@ -333,6 +334,8 @@ struct WriteInputs {
     /// `live`'s entities with their spawn rank, entity-sorted; `retire` and the physics world's
     /// rank side table read it.
     ranks: Vec<(EntityId, u64)>,
+    /// Every entity's `QueryLayers`, entity-sorted: the query-only side table.
+    query_layers: Vec<(EntityId, LayerSet)>,
     motor_rejections: Vec<(EntityId, DiagnosticCode, String)>,
     velocities: Vec<(EntityId, Velocity)>,
     plane: Option<Plane>,
@@ -356,6 +359,7 @@ impl PartialEq for WriteInputs {
     fn eq(&self, other: &Self) -> bool {
         self.teleports == other.teleports
             && self.ranks == other.ranks
+            && self.query_layers == other.query_layers
             && self.live.len() == other.live.len()
             && self.live.iter().zip(&other.live).all(|(a, b)| {
                 (a.0, a.1, a.2, &a.3) == (b.0, b.1, b.2, &b.3) && mesh_input_eq(&a.4, &b.4)
@@ -468,6 +472,9 @@ fn gather<P: PhysicsPose, R: ParentPose>(
     // re-derived from a parent. A row is built from the motor's synthesized collider, which stays
     // `Some` until the body exists.
     for row in motor_rows {
+        if row.suspended {
+            continue;
+        }
         match row.collider {
             Err(reason) => {
                 motor_rejections.push((row.entity, code::CHARACTER_MOTOR_INVALID, reason))
@@ -522,6 +529,11 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         .query_ids::<(&JointMotor,)>()
         .map(|(entity, (motor,))| (entity, motor.clone()))
         .collect();
+    let mut query_layers: Vec<(EntityId, LayerSet)> = world
+        .query_ids::<(&QueryLayers,)>()
+        .map(|(entity, (query,))| (entity, query.layers.clone()))
+        .collect();
+    query_layers.sort_unstable_by_key(|(entity, _)| *entity);
     let colliders = if physics.is_none() {
         live.iter()
             .filter_map(|(entity, ..)| match world.get::<Collider>(*entity) {
@@ -536,6 +548,7 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         teleports,
         live,
         ranks,
+        query_layers,
         motor_rejections,
         velocities,
         plane,
@@ -640,6 +653,7 @@ fn write<P: PhysicsPose, R: ParentPose>(
         .unwrap_or_else(|| PhysicsWorld::new(ctx.time.rate()).with_plane(inputs.plane));
     physics.set_ranks(&inputs.ranks);
     physics.apply_settings(settings);
+    physics.set_query_layers(&inputs.query_layers);
     physics.last_write_frame = Some(ctx.frame.as_u64());
     physics.last_write_held = held;
     apply(world, &mut physics, &inputs);
@@ -694,6 +708,7 @@ pub fn prime<P: PhysicsPose, R: ParentPose>(
     let mut physics = PhysicsWorld::new(tick_rate).with_plane(inputs.plane);
     physics.set_ranks(&inputs.ranks);
     physics.apply_settings(&settings);
+    physics.set_query_layers(&inputs.query_layers);
     physics.last_write_frame = Some(frame.as_u64());
     physics.last_write_held = world.resource::<GameClock>().map(|clock| clock.held());
     apply(world, &mut physics, &inputs);
@@ -712,6 +727,8 @@ struct MotorRow {
     entity: EntityId,
     centre: [f32; 3],
     collider: Result<Collider, String>,
+    /// Parked by `suspend_character`: the row gets no body.
+    suspended: bool,
 }
 
 /// Every `CharacterMotor` with a pose, ascending by entity. The pose is the **feet**; the body
@@ -735,6 +752,7 @@ fn motor_rows<P: PhysicsPose>(world: &mut World) -> Vec<MotorRow> {
                 entity,
                 centre: [feet[0], feet[1] + height / 2.0, feet[2]],
                 collider,
+                suspended: state.is_some_and(|state| state.suspended),
             }
         })
         .collect()

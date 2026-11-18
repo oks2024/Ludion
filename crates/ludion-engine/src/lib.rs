@@ -31,6 +31,7 @@
 //! assert_eq!(stepped.frame.as_u64(), 3);
 //! ```
 
+mod ai;
 mod animation_events;
 mod assembly_mesh;
 mod asset_cache;
@@ -42,6 +43,7 @@ mod camera_latch;
 mod camera_offset;
 mod camera_rig;
 mod character;
+mod checkpoints;
 mod collapse;
 mod collider_mesh;
 mod commands;
@@ -75,6 +77,7 @@ mod nav;
 mod parent_joint;
 pub mod particles;
 mod path_follow;
+mod patrol;
 pub mod patterns;
 pub mod perf_live;
 mod player_profile;
@@ -132,7 +135,7 @@ pub use assembly_mesh::{
 };
 pub use audio::{
     AudioCategory, AudioDistance, AudioEvent, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
-    CategoryGains, LoopId, play_sound,
+    Bus, CategoryGains, LoopId, MixLayer, play_sound,
 };
 pub use bisect::{
     BisectReport, ComponentDiff, DriveDone, EntityDiff, KeyframeDivergence, KeyframeDriftReport,
@@ -144,15 +147,18 @@ pub use character::{
     CharacterClipData, CharacterData, ClipContact, JointHeight, contact_heights,
     load as load_character,
 };
+pub use checkpoints::{CheckpointConfig, CheckpointInfo, Checkpoints, RestoreOutcome};
 pub use commands::sim::step_in_batches;
 pub use components::{
     Anchor, Animation, AudioEmitter, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, EmitShape, Environment, Fade, GiDynamic,
     GiVolume, GroundMarker, GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, Name, NavAgent,
-    NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter,
-    PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Residue, SkinBone, SpotLight,
-    Sprite, SpriteBlend, Static, Text, TileAppearance, Tilemap, Transform, UiList, UiListItem,
-    UiRect, UiText, Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
+    NavGoal, NavReplan, NavRoute, NavRouteStatus, NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER,
+    ParentJoint, ParticleBlend, ParticleEmitter, PointLight, PostProcess, ProbeShape, Projection,
+    ReflectionProbe, Residue, SkinBone, SpotLight, Sprite, SpriteBlend, Static, Text,
+    TileAppearance, Tilemap, Transform, UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiList,
+    UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
+    Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
 };
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
@@ -179,11 +185,12 @@ pub use lane::{
     LaneConstraint, LaneEnds, LaneInput, lane_error_colour, lane_frame, lane_relative,
 };
 pub use ludion_camera::{
-    Aim, BlendCurve, BlendIn, CameraRig, FirstPersonRig, KickConfig, LookAhead, RigConfig, RigMode,
-    RigState, ShakeConfig, Springs, TrackRig, VerticalAnchor, add_fov_kick, add_kick, add_look,
-    add_look_counts, add_trauma, camera_relative, camera_relative_yaw, first_person_eye,
-    look_from_counts, set_look, snap_rig,
+    Aim, BlendCurve, BlendIn, CameraRig, ChaseRig, FirstPersonRig, FollowRig, KickConfig,
+    LookAhead, RigConfig, RigMode, RigState, ShakeConfig, Springs, TrackRig, VerticalAnchor,
+    add_fov_kick, add_kick, add_look, add_look_counts, add_trauma, camera_relative,
+    camera_relative_yaw, first_person_eye, look_from_counts, orbit_eye, set_look, snap_rig,
 };
+pub use ludion_nav::PathStatus;
 pub use ludion_protocol::replay::GameIdentity;
 pub use ludion_scene::Mirror;
 pub use ludion_scene::{
@@ -199,13 +206,21 @@ pub use model_sheet::{
 };
 pub use motor::{
     MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE,
-    MOTOR_STUCK, MOTOR_WALL, fits_character, move_character, move_character_with, move_characters,
-    probe_character_ground, resize_character, teleport_character,
+    MOTOR_STUCK, MOTOR_WALL, character_fit, fits_character, move_character, move_character_with,
+    move_characters, probe_character_ground, resize_character, resume_character, suspend_character,
+    teleport_character,
 };
-pub use nav::{Nav, NavConfig, nav_steer, nav_update};
+pub use nav::{
+    Nav, NavConfig, NavPath, PathRequest, nav_distance, nav_path, nav_project, nav_reachable,
+    nav_steer, nav_update,
+};
 pub use parent_joint::{posed_joint_world, scene_parent_joint_diagnostics};
 pub use path_follow::{
     FollowerMotion, PathFollower, PathMode, PathOrient, path_follow, path_follower_motion,
+};
+pub use patrol::{
+    PatrolFollower, PatrolMotion, PatrolPhase, PatrolResume, PatrolState, patrol_motion,
+    patrol_update,
 };
 pub use patterns::{
     BulletKind, MotionSegment, PatternDoc, PatternPlayer, RampSpec, TimelineEntry, TurnSpec,

@@ -30,6 +30,7 @@ fn fixtures(name: &str) -> Vec<Value> {
             "root": entity_ref(),
         })],
         "SkinBone" => vec![json!({ "skin": entity_ref(), "bone": "b" })],
+        "UiWorldAnchor" => vec![json!({ "target": entity_ref() })],
         "Joint" => vec![
             joint(json!({ "fixed": {} })),
             joint(json!({ "hinge": { "axis": [0.0, 1.0, 0.0], "limits": [-1.0, 1.0] } })),

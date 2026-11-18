@@ -271,7 +271,8 @@ pub(crate) fn report_rejections(world: &mut World) {
 
 /// Reports a solver-claimed collider under a live `Parent` once: a rigid body (`L1221`) or a static
 /// collider (`L1222`) gets no body, and a kinematic body under a sheared chain (`L1223`) is posed from
-/// the lossy world pose. Runs whether or not a `physics:` block is installed; costs one empty join
+/// the lossy world pose. A suspended motor under a `Parent` is exempt from `L1297`: it has no body, and
+/// resuming requires a root. Runs whether or not a `physics:` block is installed; costs one empty join
 /// when nothing is parented.
 pub(crate) fn report_parented_bodies(world: &mut World) {
     let ids: Vec<EntityId> = world
@@ -282,6 +283,16 @@ pub(crate) fn report_parented_bodies(world: &mut World) {
     let motors: Vec<EntityId> = world
         .query_ids::<(&CharacterMotor, &Parent)>()
         .map(|(id, _)| id)
+        .collect();
+    let motors: Vec<EntityId> = motors
+        .into_iter()
+        .filter(|&id| {
+            !world
+                .get::<ludion_physics::CharacterMotorState>(id)
+                .ok()
+                .flatten()
+                .is_some_and(|state| state.suspended)
+        })
         .collect();
     for id in motors {
         let key = crate::diagnostics::offender_key(world, id);
@@ -852,6 +863,43 @@ mod tests {
             ],
             "{reported:?}"
         );
+    }
+
+    #[test]
+    fn a_suspended_parented_motor_raises_no_l1297() {
+        let mut world = World::new();
+        world.insert_resource(Diagnostics::default());
+        let parent = world.spawn();
+        fn motor(world: &mut World, parent: EntityId, suspended: bool) {
+            let id = world.spawn();
+            world
+                .insert(id, ludion_physics::CharacterMotor::default())
+                .unwrap();
+            world.insert(id, Parent(parent)).unwrap();
+            world
+                .insert(
+                    id,
+                    ludion_physics::CharacterMotorState {
+                        suspended,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        motor(&mut world, parent, true);
+        report_parented_bodies(&mut world);
+        assert!(
+            world
+                .resource_mut::<Diagnostics>()
+                .unwrap()
+                .take()
+                .is_empty()
+        );
+        motor(&mut world, parent, false);
+        report_parented_bodies(&mut world);
+        let reported = world.resource_mut::<Diagnostics>().unwrap().take();
+        let codes: Vec<_> = reported.iter().map(|d| d.code).collect();
+        assert_eq!(codes, [code::CHARACTER_MOTOR_PARENTED], "{reported:?}");
     }
 
     #[test]

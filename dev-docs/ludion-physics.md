@@ -28,6 +28,8 @@ snapshot instead. The entity→row map beside it is a lookup accelerator, iterat
 
 **Fed in spawn-rank order.** The write system creates, rebuilds, pushes and wakes bodies and inserts joints in ascending ECS spawn rank (`World::spawn_rank`), never by slot value, so rapier's call history, handles and islands are independent of unrelated spawn/despawn churn (`tests/churn.rs`). Blasts and partner wakes follow spawn rank too, through a rank side table the write refreshes (never snapshotted); the motor's equal-gap contact tie-break reads `World::spawn_rank` directly, because the motor runs before the write. Public lists keep `EntityId` order: contact, sensor and joint events, `blast_hits`, queries, the motor's wall report. Ranks are never hashed; they ride the engine snapshot as an optional `spawn_order`.
 
+**Query-only layers are a side table too.** `QueryLayers` (`layer_set.rs`) feeds `PhysicsWorld.query_layers`/`query_masks` each write, entity-sorted, never hashed or in the blob; `SweepFilter::drops` ORs an entity's mask into its body bit unless `body_layers_only` (the motor's filters). A restore calls `sync_query_layers` before `apply_settings` and resolves silently; the next write reports any `L1186`. Blasts and every query share `drops`; there is no second filter path.
+
 `PhysicsWorld::new(TickRate)` sets `dt` and leaves every other solver tunable at the pin's default.
 Gravity defaults to `[0, -9.81, 0]`; a top-down `Plane::Xz` game zeroes it through
 `PhysicsSettings::gravity`, which `apply_settings` writes into the solver every tick — the only way.

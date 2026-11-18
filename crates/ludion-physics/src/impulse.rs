@@ -230,7 +230,7 @@ impl PhysicsWorld {
                 )));
             }
         }
-        self.query_drops(&blast.filter).map(|_| ())?;
+        self.sweep_filter(&blast.filter).map(|_| ())?;
         let index = self.blasts_queued;
         self.blasts_queued += 1;
         self.pending_impulses.push(QueuedImpulse::Radial(blast));
@@ -328,7 +328,7 @@ impl PhysicsWorld {
     fn blast_targets(&self, blast: &Blast) -> Vec<BlastTarget> {
         // A layer table that no longer declares an ignored name reaches here only if it changed
         // after the call; the blast then reaches nothing rather than ignoring the filter.
-        let Ok(drops) = self.query_drops(&blast.filter) else {
+        let Ok(drops) = self.sweep_filter(&blast.filter) else {
             return Vec::new();
         };
         let center = to_vector(blast.center);
@@ -345,7 +345,7 @@ impl PhysicsWorld {
                 continue;
             }
             let entity = entity_from_bits(collider.user_data);
-            if drops(entity) {
+            if drops.drops(self, entity, collider) {
                 continue;
             }
             let Ok(body_handle) = self.rigid_body_of(entity) else {

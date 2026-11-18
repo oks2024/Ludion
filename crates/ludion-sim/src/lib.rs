@@ -71,11 +71,15 @@
 //! assert_eq!(hash, WorldHash::compute(driver.world(), &registry).unwrap());
 //! ```
 
+pub mod actions;
 pub mod driver;
 pub mod hash;
 pub mod input;
 pub mod run_state;
 
+pub use actions::{
+    ActionMap, ActionName, ActionState, Actions, InputActionsDoc, unknown_action_diagnostic,
+};
 pub use driver::{DriverRestore, PastFrameInject, SimConfig, SimDriver};
 pub use hash::{HashReport, NonFinite, WorldHash, non_finite_count};
 pub use input::{

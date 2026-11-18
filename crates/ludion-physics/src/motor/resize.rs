@@ -20,7 +20,7 @@ struct Checked {
     current: f32,
 }
 
-fn motor_of<P: PhysicsPose>(
+pub(super) fn motor_of<P: PhysicsPose>(
     world: &World,
     entity: EntityId,
 ) -> Result<(CharacterMotor, [f32; 3]), MotorError> {
@@ -81,7 +81,7 @@ fn checked<P: PhysicsPose>(
 /// The lowest-id collider overlapping a capsule of height `h` standing on `feet`, `None` when it
 /// fits. The test capsule is lifted by the skin because a grounded motor rests a skin above its
 /// floor: the floor never blocks, while a skin of clearance at the top is still required.
-fn headroom(
+pub(super) fn headroom(
     physics: &PhysicsWorld,
     entity: EntityId,
     motor: &CharacterMotor,
@@ -115,7 +115,8 @@ fn headroom(
 /// `step_height`) is [`MotorError::InvalidHeight`]; growing past the authored `height` is allowed.
 ///
 /// The test reads the state as of the last completed step, so a ceiling despawned in tick N still
-/// blocks in tick N and is gone in tick N + 1.
+/// blocks in tick N and is gone in tick N + 1. It works on a suspended motor too: it only changes
+/// state.
 ///
 /// Call it from a system registered **before** [`install`](crate::install)'s.
 ///
@@ -170,7 +171,8 @@ pub fn resize_character<P: PhysicsPose>(
 }
 
 /// Whether a capsule of `height` fits at `entity`'s feet: the test [`resize_character`] runs before
-/// it grows, without changing anything. A height at or below the current one fits.
+/// it grows, without changing anything. A height at or below the current one fits. It works on a
+/// suspended motor too.
 ///
 /// ```no_run
 /// # use ludion_ecs::{SystemCtx, World};
@@ -210,6 +212,9 @@ pub fn fits_character<P: PhysicsPose>(
 /// next move's `report.height` says so. The pose alone is written when the world has no physics
 /// yet.
 ///
+/// A suspended motor is [`MotorError::Suspended`]: [`resume_character`](crate::resume_character) is the
+/// way back.
+///
 /// Call it from a system registered **before** [`install`](crate::install)'s; a snapshot does not
 /// carry a queued teleport.
 ///
@@ -232,12 +237,28 @@ pub fn teleport_character<P: PhysicsPose>(
     }
     let (motor, _) = motor_of::<P>(world, entity)?;
     let state = world.get::<CharacterMotorState>(entity).ok().flatten();
+    if state.is_some_and(|state| state.suspended) {
+        return Err(MotorError::Suspended(entity));
+    }
     let crouched = height_in_force(&motor, state) < motor.height;
     let restores = crouched
         && check(&motor).is_ok()
         && world
             .resource::<PhysicsWorld>()
             .is_some_and(|physics| headroom(physics, entity, &motor, feet, motor.height).is_none());
+    place::<P>(world, entity, feet, yaw, restores);
+    Ok(())
+}
+
+/// Writes the pose and resets the motor's state like a teleport (`restore_height` drops a crouch
+/// override), then tells the physics write to place the capsule without pushing props.
+pub(super) fn place<P: PhysicsPose>(
+    world: &mut World,
+    entity: EntityId,
+    feet: [f32; 3],
+    yaw: f32,
+    restore_height: bool,
+) {
     let (s, c) = sin_cos(yaw / 2.0);
     if let Ok(Some(pose)) = world.get_mut::<P>(entity) {
         pose.set_translation(feet);
@@ -248,7 +269,7 @@ pub fn teleport_character<P: PhysicsPose>(
         state.ground = None;
         state.platform = None;
         state.carry_tick = None;
-        if restores {
+        if restore_height {
             state.height = None;
         }
     };
@@ -260,5 +281,4 @@ pub fn teleport_character<P: PhysicsPose>(
         let _ = world.insert(entity, state);
     }
     teleport_kinematic(world, entity);
-    Ok(())
 }

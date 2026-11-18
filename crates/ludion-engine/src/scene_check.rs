@@ -291,6 +291,7 @@ pub fn scene_layer_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     };
     let mut diagnostics = Vec::new();
     for (index, entity) in scene.entities.iter().enumerate() {
+        diagnostics.extend(query_layer_diagnostics(index, entity, &declared));
         if let Some((_, value)) = entity
             .components
             .iter()
@@ -341,6 +342,74 @@ pub fn scene_layer_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// The `L1186`/`L1500`/`L1501` of an entity's `QueryLayers`: an entry the scene does not declare, an
+/// entry naming the entity's own body layer (a query already sees it), and the component on an
+/// entity with neither a claimed `Collider` nor a `CharacterMotor`. Empty and repeated entries are
+/// the component validator's (`L1500`).
+fn query_layer_diagnostics(
+    index: usize,
+    entity: &ludion_scene::SceneEntity,
+    declared: &[&str],
+) -> Vec<Diagnostic> {
+    let component = |wanted: &str| {
+        entity
+            .components
+            .iter()
+            .find(|(name, _)| name == wanted)
+            .map(|(_, value)| value)
+    };
+    let Some(query) = component("QueryLayers") else {
+        return Vec::new();
+    };
+    let at = format!("/entities/{index}/components/QueryLayers");
+    let motor = component("CharacterMotor");
+    let collider = component("Collider")
+        .and_then(|value| serde_json::from_value::<ludion_spatial::Collider>(value.clone()).ok());
+    let mut diagnostics = Vec::new();
+    if motor.is_none() && !collider.as_ref().is_some_and(ludion_physics::claims) {
+        diagnostics.push(
+            Diagnostic::new(
+                code::QUERY_LAYERS_UNCLAIMED,
+                "this `QueryLayers` has no solver-claimed `Collider` or `CharacterMotor` beside it,                  so no query can reach its layers",
+            )
+            .with_path(at.clone())
+            .with_help("add a 3D `Collider` or a `CharacterMotor`, or remove `QueryLayers`"),
+        );
+    }
+    let own = match (&motor, &collider) {
+        (Some(motor), _) => motor.get("layer").and_then(serde_json::Value::as_str),
+        (None, Some(collider)) => collider.layer.as_deref(),
+        _ => None,
+    }
+    .unwrap_or(ludion_scene::DEFAULT_LAYER);
+    let entries = query
+        .get("layers")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(j, entry)| Some((j, entry.as_str()?)));
+    for (j, name) in entries {
+        let pointer = format!("{at}/layers/{j}");
+        if name.is_empty() {
+            continue;
+        }
+        if !declared.contains(&name) {
+            diagnostics.push(unknown_layer(name, declared, pointer, "query-only"));
+        } else if name == own {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::QUERY_LAYERS_INVALID,
+                    format!("`QueryLayers` entry `{name}` is this entity's own body layer"),
+                )
+                .with_path(pointer)
+                .with_help("a query already sees the body layer; delete the entry"),
+            );
+        }
+    }
+    diagnostics
+}
+
 /// The `L1186` for a layer `name` the scene does not declare, with the nearest declared name.
 fn unknown_layer(name: &str, declared: &[&str], pointer: String, owner: &str) -> Diagnostic {
     let help = match suggest::nearest(name, declared.iter().copied()) {
@@ -371,7 +440,8 @@ fn carries_surface(entity: &ludion_scene::SceneEntity) -> bool {
 /// lanes report: a `Collider` beside the motor (the motor owns its capsule), a scene with no
 /// `physics:` block (the body is never built), a `Parent` (a motor writes world-space feet), a
 /// `SurfaceVelocity` on an entity with no `static` or `kinematic` collider to carry from, and a
-/// `LaneConstraint` on an entity with no motor. The field rules (`L1294`, `L1298`, `L1300`) and the
+/// `LaneConstraint` on an entity with no motor. A motor authored `CharacterMotorState: { suspended: true }` may
+/// have a `Parent` (it is parked; resuming requires a root). The field rules (`L1294`, `L1298`, `L1300`) and the
 /// layer (`L1186`) are reported elsewhere.
 pub fn scene_motor_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -425,7 +495,11 @@ pub fn scene_motor_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                 .with_help("add `physics: { space: free }` to the scene"),
             );
         }
-        if has("Parent") {
+        let suspended = entity.components.iter().any(|(name, value)| {
+            name == "CharacterMotorState"
+                && value.get("suspended").and_then(|v| v.as_bool()) == Some(true)
+        });
+        if has("Parent") && !suspended {
             diagnostics.push(
                 Diagnostic::new(
                     code::CHARACTER_MOTOR_PARENTED,
@@ -1288,6 +1362,63 @@ entities:
         assert_eq!(found[0].help.as_deref(), Some("nearest match is `dummy`"));
     }
 
+    /// A checked scene with `LAYERS` and the entities in `body`, then `QueryLayers` pushed onto
+    /// entity 0 by hand: the component is registered with the engine's registry separately.
+    fn query_layers_scene(body: &str, layers: &[&str]) -> Scene {
+        let mut scene = ludion_scene::check(
+            &format!("format: 1\nseed: 1\n{LAYERS}{body}"),
+            &crate::builtin_registry(),
+        )
+        .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"));
+        scene.entities[0].components.push((
+            "QueryLayers".to_string(),
+            serde_json::json!({ "layers": layers }),
+        ));
+        scene
+    }
+
+    #[test]
+    fn query_layers_report_unknown_own_and_unclaimed() {
+        let body = collider("sphere:\n            radius: 0.5", "static", "dummy");
+        let found = scene_layer_diagnostics(&query_layers_scene(&body, &["dummi", "dummy"]));
+        let codes: Vec<_> = found.iter().map(|d| d.code).collect();
+        assert_eq!(
+            codes,
+            [code::COLLIDER_LAYER_UNKNOWN, code::QUERY_LAYERS_INVALID],
+            "{found:?}"
+        );
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/QueryLayers/layers/0")
+        );
+        assert_eq!(found[0].help.as_deref(), Some("nearest match is `dummy`"));
+        assert_eq!(
+            found[1].path.as_deref(),
+            Some("/entities/0/components/QueryLayers/layers/1")
+        );
+
+        let bare = "entities:\n  - name: part\n    components: {}\n";
+        let found = scene_layer_diagnostics(&query_layers_scene(bare, &["default"]));
+        let codes: Vec<_> = found.iter().map(|d| d.code).collect();
+        assert_eq!(
+            codes,
+            [code::QUERY_LAYERS_UNCLAIMED, code::QUERY_LAYERS_INVALID],
+            "`default` is the own layer of an entity with no collider: {found:?}"
+        );
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/QueryLayers")
+        );
+    }
+
+    #[test]
+    fn query_layers_beside_a_motor_or_a_claimed_collider_are_clean() {
+        let body = collider("sphere:\n            radius: 0.5", "static", "default");
+        assert!(scene_layer_diagnostics(&query_layers_scene(&body, &["dummy"])).is_empty());
+        let motor = "entities:\n  - name: hero\n    components:\n      CharacterMotor:\n        layer: dummy\n";
+        assert!(scene_layer_diagnostics(&query_layers_scene(motor, &["default"])).is_empty());
+    }
+
     fn motor_scene(physics: &str, components: &str) -> Scene {
         let source = format!(
             "format: 1\nseed: 1\n{physics}entities:\n  - name: hero\n    components:\n{components}  - name: base\n    components: {{}}\n"
@@ -1356,6 +1487,27 @@ entities:
             found[0].path.as_deref(),
             Some("/entities/0/components/Parent")
         );
+    }
+
+    #[test]
+    fn a_suspended_parented_motor_is_quiet() {
+        const PARENT: &str = "      Parent:\n        index: 1\n        generation: 0\n";
+        let parked = motor_scene(
+            LAYERS,
+            &format!(
+                "      CharacterMotor: {{}}\n      CharacterMotorState:\n        suspended: true\n{PARENT}"
+            ),
+        );
+        assert!(scene_motor_diagnostics(&parked).is_empty());
+        let live = motor_scene(
+            LAYERS,
+            &format!(
+                "      CharacterMotor: {{}}\n      CharacterMotorState:\n        grounded: true\n{PARENT}"
+            ),
+        );
+        let found = scene_motor_diagnostics(&live);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::CHARACTER_MOTOR_PARENTED);
     }
 
     #[test]

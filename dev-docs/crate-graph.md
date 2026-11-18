@@ -31,6 +31,7 @@ the strict/permissive clippy split that rides on this graph is in `determinism`.
 - `crates/ludion-spatial/` — deterministic 2D ground-plane collision: the `Collider` builtin component, a per-frame spatial hash (`SpatialIndex`/`spatial::rebuild`), and pinned-order overlap/raycast/k-nearest queries. Sim-side, GPU-free.
 - `crates/ludion-physics/` — deterministic rigid-body dynamics: a pinned rapier3d world behind the `Collider`/`Velocity` author surface, and the only crate that names a rapier or nalgebra type. Depends on core + ecs + spatial; sim-side, GPU-free.
 - `crates/ludion-projectiles/` — pooled 3D projectiles: a fixed-capacity SoA pool with generational ids, and a deterministic swept step against the physics world and the `spatial3d` index (hit responses, events, pool digest). Depends on core + physics + spatial; sim-side, GPU-free.
+- `crates/ludion-ai/` — hierarchical state machine over a game enum (`Machine`, `Mind<M>`, `ai_tick`), gameplay-time `Timer`/`Cooldown`, `Group`/`GroupMember` squads; depends on core and ecs; sim-side, GPU-free; its faults reach the engine through the `AiFaults` resource.
 - `crates/ludion-nav/` — layered 2.5D walkability grid from an abstract column source + cached bounded flow fields; depends on core; sim-side, GPU-free.
 - `crates/ludion-protocol/` — wire types: envelope, `Command` surface, replay format, schema hash.
 - `crates/ludion-render-graph/` — headless wgpu frame graph, dump-graph/timings JSON.

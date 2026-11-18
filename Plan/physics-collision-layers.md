@@ -74,8 +74,9 @@ entities:
   `ignores`. A scene with no `layers:` list simulates exactly as today, and no hash, trace, golden or blob
   moves; a scene that declares `layers:` but no `layer:` fields simulates identically, though its default
   colliders now carry explicit groups, so the physics blob's bytes differ.
-- **One layer per collider.** Multi-membership (Godot's layer bitmask) is a second way to express the
-  same matrix; it is left out until a slice needs it.
+- **One *body* layer per collider.** Multi-membership (Godot's layer bitmask) is a second way to express the
+  same matrix, so the solver keeps one. Query-only memberships come from `QueryLayers` (W4). **Proposed —
+  owner ruling owed** (shipped additive).
 - Why a declared list rather than names discovered from colliders: a name is validated at check time
   with a nearest-match suggestion (a typo in `ignores` would otherwise silently collide), and a body
   spawned at runtime with a new name has no bit to take. The matrix also lives in one place, the way
@@ -115,6 +116,9 @@ let near = physics.overlap(&Shape::Sphere { radius: 0.3 }, hand, [0.0, 0.0, 0.0,
 - `exclude` moves into the filter rather than staying beside it: two parameters that both mean "skip
   this" would be two ways to do one thing, and no caller outside the crate exists to migrate.
 - Result order is unchanged (casts by `(distance, entity)`, `overlap` by entity); the filter only drops.
+- **Include clause (W4).** `include_layer(name)` keeps only hits whose query membership intersects the included
+  set; no includes means no clause. Every drop condition is an OR, so `ignore_layer` wins over include.
+  **Proposed — owner ruling owed** (shipped additive).
 
 ### 4. Diagnostics
 
@@ -182,6 +186,36 @@ removal reuses it, only an edit to the `Joint` itself re-captures, and `ragdoll.
 (hash-neutral, last, after the schema snapshot). The engine-free alternative is to hold a rigid figure
 in place with a `fixed` joint and destroy that joint at release, so no body is ever rebuilt.
 
+### W4 — query-only layers and include masks (Neon Shroud request 0002)
+
+Decisions:
+
+1. **A separate component, not a `Collider.query_layers` field.** `QueryLayers { layers: LayerSet }` sits beside a
+   `Collider` or a `CharacterMotor`. `Collider` has ~124 struct literals across ~60 files a new field would break;
+   a field would make every query-tag edit a body rebuild through `is_stale`, perturbing contacts; one component
+   covers the motor without touching `CharacterMotor`. Absent component means nothing changes. **Proposed — owner
+   ruling owed** (shipped additive).
+2. **Query membership = body-layer bit | `QueryLayers` bits.** The solver never sees the extra bits: rapier
+   `InteractionGroups` stay exactly as `groups_for` builds them.
+3. **Both `include_layer` and `ignore_layer` test query membership.** Exception: the motor's own filters
+   (`motor_filter`, the crowd filter) test body membership only, because the motor emulates the solver matrix.
+4. **Include clause:** no includes = today; with includes a hit is kept only if membership ∩ included ≠ 0.
+   `ignore_layer` wins over include.
+5. **Codes:** an unknown `QueryLayers` name reuses `L1186`; `L1500` `QUERY_LAYERS_INVALID` (empty or repeated
+   entry; an entry naming the entity's own body layer, `check-scene`); `L1501` `QUERY_LAYERS_UNCLAIMED`
+   (`check-scene` only; mirrors `L1187`). At runtime an unknown name leaves the body built, the query-only mask `0`,
+   and queues one `L1186` rejection.
+6. **`LayerSet`:** `#[serde(transparent)]` newtype over `Vec<String>`, author order kept, in `ludion-physics`;
+   `QueryFilter::include_set` / `ignore_set` fold the per-name builders.
+
+The masks live in a side table on `PhysicsWorld` (entity-sorted, never hashed, never in the blob), fed each tick
+like spawn ranks and refilled after a restore. Blasts filter through the same `SweepFilter::drops`.
+
+### W5 — counts and migration (not started)
+
+`check-scene --bounds` prints per-layer query-only member counts; `NavConfig` / `Projectile` `ignore_layers`
+become `LayerSet`. Trigger: the first component consumer (Neon Shroud request 0001).
+
 ## Gates
 
 `Plan/physics.md` §Gates every wave carries applies unchanged:
@@ -198,7 +232,7 @@ scene is unchanged. `node scripts/check.mjs` is green at each wave's end.
 
 - **Filtering in `ludion-spatial`'s 2D tier.** No 2D game has asked; the `layer:`-on-unclaimed error
   keeps the gap loud.
-- **Multi-layer membership, solver-only groups** (detect but do not resolve), and per-pair
+- **Multi-layer *body* membership, solver-only groups** (detect but do not resolve), and per-pair
   `ignores` overrides on a collider. Each is a second way until a slice needs it.
 - **The mesh-figure document** (the external game's other forecast request, a reusable part list with joints and
   layers). It is its own plan when the external game's second scene needs the dummy.
@@ -241,3 +275,7 @@ half (rapier collision groups, runtime `L1186`, the `layers` trace whose M4 half
 docs (`ludion docs collision-layers`, `ludion devdocs ludion-physics`). **M4 half verified** (2026-09-26, rev 916): the
 `layers` trace reproduces unblessed there. **W3 closed as not needed** (2026-09-25): the external game's request `0001` ruled
 out the kinematic seat; nothing built, the joint-zero re-capture stays a known limit.
+
+**W4 shipped** (Neon Shroud request 0002): `QueryLayers`, `LayerSet`, `QueryFilter::include_layer` /
+`include_set` / `ignore_set`, codes `L1500` / `L1501`; blasts and sweeps share one `SweepFilter::drops`. No
+hash, trace, golden or replay moved. W5 not started.

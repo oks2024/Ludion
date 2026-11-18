@@ -53,6 +53,7 @@ frame (not once per sim tick) returns on.
   `ParticleEmitter.started` and `Animation.started` all want `ctx.game_frame`, never `ctx.frame`:
   on an unheld run the two are equal, so an existing stamp is unaffected; on a held run a
   `ctx.frame` stamp lands in the future and the effect starts late.
+- **The exception: `UiTween` stamps default to `clock: real`**, the sim `ctx.frame`, so a pause menu animates over a held game; set `clock: game` for a tween that should freeze with it (`ludion docs ui-tweens`).
 - **Input edges are per sim tick, not per gameplay frame.** `was_pressed` is true on one tick,
   including a held one, so a system that returns on `!ctx.game_advanced()` loses a press made
   during a hold. Latch it in an unguarded system ahead of the guarded one, and consume the latch on
@@ -104,6 +105,7 @@ frame (not once per sim tick) returns on.
 ## Next
 
 - `ludion docs systems` — the `SystemCtx` contract, registration order, and the determinism rules.
+- `ludion docs ai` — `Timer`/`Cooldown` and agent state machines read gameplay time, so they freeze while the game holds.
 - `ludion docs patterns` — `Volley`/`PatternPlayer`, and the closed forms that read gameplay time.
 - `ludion docs particles` — `ParticleEmitter`'s live window, the other closed-form evaluator.
 - `ludion docs sprite-animation` — flipbook/clip playback through `Animation`.

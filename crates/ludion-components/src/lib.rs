@@ -37,17 +37,24 @@ use ludion_spatial::{
 };
 
 pub mod lane;
+pub mod nav_route;
 pub mod path_follow;
+pub mod patrol;
 pub mod patterns;
 pub mod prefab;
 pub mod ui;
 pub mod validators;
 
 pub use lane::{LaneConstraint, LaneEnds};
+pub use nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
 pub use path_follow::{PathFollower, PathMode, PathOrient};
+pub use patrol::{PatrolFollower, PatrolPhase, PatrolResume, PatrolState};
 pub use patterns::{PatternPlayer, VOLLEY_MAX_BULLETS, Volley, VolleyShape};
 pub use prefab::PrefabInstance;
-pub use ui::UiNav;
+pub use ui::{
+    UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiNav, UiTween, UiTweenField, UiTweenRepeat,
+    UiTweenTrack, UiWorldAnchor,
+};
 
 /// An entity's human-readable name — the world-side home of a scene entity's `name:` field.
 ///
@@ -4590,7 +4597,7 @@ pub struct UiRect {
     #[serde(default = "yes")]
     pub visible: bool,
     /// Cover the whole render target (default `false`): the rect resolves to `[0, 0, width, height]`
-    /// pixels at any extent or aspect, and `anchor`, `offset` and `size` are ignored (`L1119` warns
+    /// pixels at any extent or aspect, and `anchor`, `offset` and `size` are ignored (`L1316` warns
     /// when `offset` or `size` is authored non-default). A texture or atlas frame stretches over it
     /// like over a sized rect. The one exception to "UI anchors, never stretches".
     #[serde(default, skip_serializing_if = "is_false")]
@@ -5214,7 +5221,9 @@ fn audio_category_schema(_generator: &mut schemars::SchemaGenerator) -> schemars
         "description": "Which mixdown bus a sound belongs to.",
         "oneOf": [
             { "const": "sfx", "description": "A game sound effect." },
-            { "const": "ambient", "description": "A sustained ambient bed: a drone, wind, a tolling bell." }
+            { "const": "ambient", "description": "A sustained ambient bed: a drone, wind, a tolling bell." },
+            { "const": "voice", "description": "Spoken dialogue and barks." },
+            { "const": "ui", "description": "Interface sounds: clicks, confirmations, menu music stings." }
         ]
     })
 }
@@ -6090,6 +6099,32 @@ pub fn builtin_registry() -> Registry {
     registry.register::<PoseBlend>("PoseBlend").expect("unique");
     // The authored does-not-move marker, appended after `PoseBlend`.
     registry.register::<Static>("Static").expect("unique");
+    // The routed-agent pair, appended after `Static`: the goal a game writes and the route `nav_steer` plans.
+    registry
+        .register_validated::<NavGoal>("NavGoal")
+        .expect("unique");
+    registry
+        .register_validated::<NavRoute>("NavRoute")
+        .expect("unique");
+    // Query-only layer names, appended after `NavRoute`: read by physics queries, never the solver.
+    registry
+        .register_validated::<ludion_physics::QueryLayers>("QueryLayers")
+        .expect("unique");
+    // The HUD motion pair, appended after `QueryLayers`: closed-form tracks and a world-target pin,
+    // both resolved by `extract` onto a screen-space element.
+    registry
+        .register_validated::<UiTween>("UiTween")
+        .expect("unique");
+    registry
+        .register_validated::<UiWorldAnchor>("UiWorldAnchor")
+        .expect("unique");
+    // The patrol pair, appended after `UiWorldAnchor`: the route a guard walks and the state `patrol_update` keeps.
+    registry
+        .register_validated::<PatrolFollower>("PatrolFollower")
+        .expect("unique");
+    registry
+        .register_validated::<PatrolState>("PatrolState")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -6098,7 +6133,7 @@ pub fn builtin_registry() -> Registry {
 }
 
 /// The built-ins whose engine-owned consumer is a sim-phase system.
-const SIM_ONLY_COMPONENTS: [&str; 15] = [
+const SIM_ONLY_COMPONENTS: [&str; 20] = [
     "Collider",
     "Velocity",
     "Joint",
@@ -6114,6 +6149,11 @@ const SIM_ONLY_COMPONENTS: [&str; 15] = [
     "NavSteering",
     "JointPoses",
     "PoseBlend",
+    "NavGoal",
+    "NavRoute",
+    "QueryLayers",
+    "PatrolFollower",
+    "PatrolState",
 ];
 
 #[cfg(test)]
@@ -6147,6 +6187,11 @@ mod tests {
             "NavSteering",
             "JointPoses",
             "PoseBlend",
+            "NavGoal",
+            "NavRoute",
+            "QueryLayers",
+            "PatrolFollower",
+            "PatrolState",
         ];
         expected.sort_unstable();
         assert_eq!(marked, expected);
@@ -6540,12 +6585,19 @@ mod tests {
                 "JointPoses",
                 "PoseBlend",
                 "Static",
+                "NavGoal",
+                "NavRoute",
+                "QueryLayers",
+                "UiTween",
+                "UiWorldAnchor",
+                "PatrolFollower",
+                "PatrolState",
             ]
         );
         assert_eq!(
             registry.len(),
-            53,
-            "appending Static grows the registry to 53"
+            60,
+            "appending PatrolState grows the registry to 60"
         );
     }
 
@@ -10176,6 +10228,7 @@ entities:
             ),
             ("PatternPlayer", vec![("/target", false, true, true)]),
             ("Volley", vec![("/source", true, true, true)]),
+            ("UiWorldAnchor", vec![("/target", false, false, false)]),
         ] {
             let info = registry.get(component).expect("registered");
             let fields: Vec<(&str, bool, bool, bool)> = info
@@ -10215,6 +10268,7 @@ entities:
             ("AudioEmitter", vec!["/sound".into()]),
             ("PathFollower", vec!["/path".into()]),
             ("LaneConstraint", vec!["/path".into()]),
+            ("PatrolFollower", vec!["/route".into()]),
             (
                 "CameraRig",
                 vec![

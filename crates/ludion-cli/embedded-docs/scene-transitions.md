@@ -87,7 +87,7 @@ component is left behind when the field is required; both warn `L3043`.
 - **…unless you register it.** `EngineBuilder::carry_resource::<T>()` moves the resource of type `T`
   into the district a **switch** builds. It is for session state that deliberately is not world state
   (which input device the player last touched, a debug toggle) — putting that on an entity would drag
-  it into the `WorldHash`. Only a switch carries: a `scene.load` and an `engine.restore` do not.
+  it into the `WorldHash`. Only a switch or a checkpoint restore (`ludion docs checkpoints`) carries: a `scene.load` and an `engine.restore` do not.
 - **Held input carries.** The keys, buttons, cursor and sticks held at the switch, and injected events
   addressed past the switch frame, arrive in the new district; `scene.load` resets them and
   `engine.restore` restores the snapshot's held input. Edges never re-fire (a carried key is not a
@@ -112,7 +112,7 @@ world.resource_mut::<SceneSwitch>().unwrap().restart(vec![player]);
 ```
 
 Unlike `request`, it sets no anchor (a carried entity keeps its pose); unlike `scene.load`, it does not
-reset the frame or reseed.
+reset the frame or reseed. To return to a captured moment instead of the scene's text, use a checkpoint (`ludion docs checkpoints`).
 
 What continues: the frame counter, the RNG stream, the carried entities with every component and their
 pose, `carry_resource` resources, held input, the profile, and `Residue` state, which re-applies to its

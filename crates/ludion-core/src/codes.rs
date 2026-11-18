@@ -366,6 +366,33 @@ pub mod code {
     pub const RUN_SAVE_RESUME_REFUSED: DiagnosticCode = DiagnosticCode::new("L1401");
     /// `L1402` — an in-game run recording could not start, be written or be finalized.
     pub const RUN_RECORDING_FAILED: DiagnosticCode = DiagnosticCode::new("L1402");
+
+    /// `L1560` — an `EngineBuilder::checkpoints` config is invalid: `max_slots` is 0 or above 64. An
+    /// **error** at `build`.
+    pub const CHECKPOINT_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1560");
+    /// `L4200` — a checkpoint restore named a slot that does not exist; the world is untouched and
+    /// `Checkpoints::last_restore()` is `Refused`. A warning.
+    pub const CHECKPOINT_NO_SLOT: DiagnosticCode = DiagnosticCode::new("L4200");
+    /// `L4201` — a checkpoint capture of a new name would pass `max_slots`; nothing is captured and no
+    /// slot is evicted. A warning.
+    pub const CHECKPOINT_SLOTS_FULL: DiagnosticCode = DiagnosticCode::new("L4201");
+    /// `L4202` — a checkpoint name is empty, longer than 64 characters or outside `[A-Za-z0-9_.-]`;
+    /// the request is ignored. A warning.
+    pub const CHECKPOINT_NAME_INVALID: DiagnosticCode = DiagnosticCode::new("L4202");
+    /// `L4203` — a checkpoint capture failed (for example a non-finite value, `L0007`); the previous
+    /// slot of that name, if any, is kept. A warning.
+    pub const CHECKPOINT_CAPTURE_FAILED: DiagnosticCode = DiagnosticCode::new("L4203");
+    /// `L4204` — a checkpoint restore failed while decoding or validating the slot; the world is
+    /// untouched. A warning.
+    pub const CHECKPOINT_RESTORE_FAILED: DiagnosticCode = DiagnosticCode::new("L4204");
+    /// `L4205` — a scene switch requested the same frame as a checkpoint restore was dropped; the
+    /// restore wins. A warning.
+    pub const CHECKPOINT_SWITCH_DROPPED: DiagnosticCode = DiagnosticCode::new("L4205");
+    /// `L4206` — a replay keyframe was skipped because checkpoint slots are held; a seek lands on the
+    /// last keyframe before the first capture. Reported once. A warning.
+    pub const CHECKPOINT_KEYFRAME_SKIP: DiagnosticCode = DiagnosticCode::new("L4206");
+    /// `L4207` — a run recording was not armed because checkpoint slots are held. A warning.
+    pub const CHECKPOINT_RECORDING_ARM_REFUSED: DiagnosticCode = DiagnosticCode::new("L4207");
     /// `L1403` — the `run_recordings` builder config is invalid (zero keyframe interval, bad dir).
     pub const RUN_RECORDING_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1403");
     /// `L1404` — a replay was recorded by a different game build (schema or version) and was refused.
@@ -1098,14 +1125,35 @@ pub mod code {
     /// reports) keeps that diagnostic's own code, pointed at `.../assembly_part/assembly` instead.
     pub const MESH_PART_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1185");
 
-    /// `L1186` — a `Collider`'s `layer` names no layer the scene's `physics.layers` declares. The
-    /// JSON Pointer is `/entities/<index>/components/Collider/layer`.
+    /// `L1186` — a `Collider`'s `layer`, or an entry of a `QueryLayers`, names no layer the scene's
+    /// `physics.layers` declares. The JSON Pointer is `/entities/<index>/components/Collider/layer`
+    /// or `/entities/<index>/components/QueryLayers/layers/<j>`.
     pub const COLLIDER_LAYER_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1186");
 
     /// `L1187` — a `Collider` carries a `layer` the 3D solver does not claim: a 2D `circle`/`aabb`
     /// that is not `rigid`, whose tier has no filtering. The JSON Pointer is
     /// `/entities/<index>/components/Collider/layer`.
     pub const COLLIDER_LAYER_UNCLAIMED: DiagnosticCode = DiagnosticCode::new("L1187");
+
+    /// `L1500` — a `QueryLayers` entry is empty or repeated, or (`check-scene`) names the entity's
+    /// own body layer. The JSON Pointer is `.../QueryLayers/layers/<j>`.
+    pub const QUERY_LAYERS_INVALID: DiagnosticCode = DiagnosticCode::new("L1500");
+
+    /// `L1501` — a `QueryLayers` on an entity with neither a solver-claimed `Collider` nor a
+    /// `CharacterMotor`, so no query can ever see its extra layers. Raised by `check-scene`.
+    pub const QUERY_LAYERS_UNCLAIMED: DiagnosticCode = DiagnosticCode::new("L1501");
+
+    /// `L1510` — a `Machine`'s `parent` fn does not form a tree under `ROOT`: `ROOT` has a parent,
+    /// or some state's parent chain never reaches `ROOT`. Raised by `ludion-ai`'s `register_machine`.
+    pub const AI_MACHINE_HIERARCHY: DiagnosticCode = DiagnosticCode::new("L1510");
+
+    /// `L1511` — a `Machine`'s `initial(s)` names a state whose `parent` is not `s`. Raised by
+    /// `ludion-ai`'s `register_machine`.
+    pub const AI_MACHINE_INITIAL: DiagnosticCode = DiagnosticCode::new("L1511");
+
+    /// `L1512` — a `Machine`'s `ALL` is empty, omits `ROOT`, or lists a variant twice. Raised by
+    /// `ludion-ai`'s `register_machine`.
+    pub const AI_MACHINE_VARIANTS: DiagnosticCode = DiagnosticCode::new("L1512");
 
     /// `L1188` — a `JointMotor` is structurally invalid: its `target` is not 1 or 3 numbers or holds
     /// a non-finite one, or its `stiffness`, `damping` or `max_force` is negative or non-finite. The
@@ -1542,9 +1590,12 @@ pub mod code {
 
     /// `L1304` — a `CameraRig` field is out of range: a half-life, slack, distance, decay or limit is
     /// negative or not finite, a window, speed, frequency or exponent is not positive, an offset is
-    /// not finite, `pitch_limit_deg` is outside (0, 90), `look_deg`, `look_deg_per_count`, `kick_deg`, `fov_kick_deg`,
-    /// `roll_deg` or `fov_offset_deg` is not finite, a `kick` half-life is negative, `fov_y_deg` is
-    /// outside (0, 180) or `trauma` is outside [0, 1]. Raised by the component's validator and, for a
+    /// not finite, `pitch_limit_deg` is outside (0, 90), a `chase` or `follow` `distance` is not
+    /// positive, their pitches are outside (-90, 90) or `pitch_max_deg` is below `pitch_min_deg`,
+    /// `enter_pitch_deg` or a `chase` or `follow` `yaw_deg` or `pitch_deg` is not finite, `look_deg`,
+    /// `look_deg_per_count`, `kick_deg`, `fov_kick_deg`, `roll_deg` or `fov_offset_deg` is not
+    /// finite, a `kick` half-life is negative, `fov_y_deg` is outside (0, 180) or `trauma` is
+    /// outside [0, 1]. Raised by the component's validator and, for a
     /// rig built in Rust, once per entity at runtime.
     pub const CAMERA_RIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1304");
 
@@ -1670,6 +1721,45 @@ pub mod code {
     pub const SPATIAL_VOLUME_INVALID: DiagnosticCode = DiagnosticCode::new("L1339");
     /// `L1340` — a `NavAgent` has a non-finite or negative field, or too many separation neighbours.
     pub const NAV_AGENT_INVALID: DiagnosticCode = DiagnosticCode::new("L1340");
+
+    /// `L1520` — a `NavRoute` has a non-finite goal, waypoint or cost, or an `index` past its waypoints.
+    pub const NAV_ROUTE_INVALID: DiagnosticCode = DiagnosticCode::new("L1520");
+    /// `L1521` — a `NavGoal` has a non-finite `at`.
+    pub const NAV_GOAL_INVALID: DiagnosticCode = DiagnosticCode::new("L1521");
+    /// `L1522` — a `kind: patrol` document is structurally invalid: an empty or non-mapping root, a
+    /// missing or unknown key, or a value of the wrong type.
+    pub const PATROL_DOCUMENT_STRUCTURE: DiagnosticCode = DiagnosticCode::new("L1522");
+    /// `L1523` — a well-shaped `kind: patrol` document is inconsistent: no points, a non-finite or
+    /// out-of-range number, a negative `wait` or `hold`, or an empty `tag`.
+    pub const PATROL_DATA_CONSISTENCY: DiagnosticCode = DiagnosticCode::new("L1523");
+    /// `L1524` — a `PatrolFollower` field is invalid.
+    pub const PATROL_FOLLOWER_INVALID: DiagnosticCode = DiagnosticCode::new("L1524");
+    /// `L1525` — a `PatrolState` has a non-finite or negative timer, or a non-finite `look_deg`.
+    pub const PATROL_STATE_INVALID: DiagnosticCode = DiagnosticCode::new("L1525");
+    /// `L1630` — a binding has zero or several sources.
+    pub const INPUT_BINDING_SOURCES: DiagnosticCode = DiagnosticCode::new("L1630");
+    /// `L1631` — a binding source does not fit its action kind.
+    pub const INPUT_BINDING_SOURCE_KIND: DiagnosticCode = DiagnosticCode::new("L1631");
+    /// `L1632` — a binding modifier does not fit its source.
+    pub const INPUT_BINDING_MODIFIER: DiagnosticCode = DiagnosticCode::new("L1632");
+    /// `L1633` — a binding value is out of range.
+    pub const INPUT_BINDING_RANGE: DiagnosticCode = DiagnosticCode::new("L1633");
+    /// `L1634` — two bindings share a source and gesture.
+    pub const INPUT_BINDING_DUPLICATE: DiagnosticCode = DiagnosticCode::new("L1634");
+    /// `L1635` — an action is empty or badly named.
+    pub const INPUT_ACTION_INVALID: DiagnosticCode = DiagnosticCode::new("L1635");
+    /// `L4270` — a game read an action name the loaded input map does not define.
+    pub const INPUT_ACTION_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L4270");
+    /// `L4271` — a restored input-action state is inconsistent with the loaded map.
+    pub const INPUT_STATE_INVALID: DiagnosticCode = DiagnosticCode::new("L4271");
+
+    /// `L1610` — a `UiTween` track has the wrong `from`/`to` arity, a non-finite value or a negative
+    /// `duration`.
+    pub const UI_TWEEN_INVALID: DiagnosticCode = DiagnosticCode::new("L1610");
+    /// `L1611` — a `UiWorldAnchor` has a non-finite number, a negative `margin` or a bad `fade`.
+    pub const UI_WORLD_ANCHOR_INVALID: DiagnosticCode = DiagnosticCode::new("L1611");
+    /// `L2300` — a `UiTween` or `UiWorldAnchor` names something its element cannot take; skipped.
+    pub const UI_MOTION_UNSUPPORTED: DiagnosticCode = DiagnosticCode::new("L2300");
 
     /// `L1341` — a `Static` entity holds something the static path cannot; it takes the dynamic path.
     pub const STATIC_INELIGIBLE: DiagnosticCode = DiagnosticCode::new("L1341");
@@ -2231,6 +2321,26 @@ pub mod code {
     /// Also raised when a system removed the `InputState` resource (the driver restores an empty one).
     pub const SYSTEM_PANICKED: DiagnosticCode = DiagnosticCode::new("L4007");
 
+    /// `L4120` — an agent's machine made more than `MAX_TRANSITIONS_PER_TICK` transitions in one
+    /// tick and stopped where it was. Queued by `ludion-ai`'s `ai_tick`, reported by `ludion-engine`.
+    pub const AI_TRANSITION_CHAIN_CAPPED: DiagnosticCode = DiagnosticCode::new("L4120");
+
+    /// `L4121` — an agent's event inbox was full and its oldest event was dropped. Queued by
+    /// `ludion-ai`, reported by `ludion-engine`.
+    pub const AI_INBOX_OVERFLOW: DiagnosticCode = DiagnosticCode::new("L4121");
+
+    /// `L4122` — an agent is a `GroupMember` of an entity that is gone or has no `Group`. Queued by
+    /// `ludion-ai`, reported by `ludion-engine`.
+    pub const AI_GROUP_MISSING: DiagnosticCode = DiagnosticCode::new("L4122");
+
+    /// `L4123` — an event was sent to an entity with no `Mind` of that machine. Queued by
+    /// `ludion-ai`, reported by `ludion-engine`.
+    pub const AI_SEND_NO_MIND: DiagnosticCode = DiagnosticCode::new("L4123");
+
+    /// `L4124` — a `Mind`'s authored `state` is not listed in its machine's `ALL`. Queued by
+    /// `ludion-ai`, reported by `ludion-engine`.
+    pub const AI_STATE_NOT_LISTED: DiagnosticCode = DiagnosticCode::new("L4124");
+
     /// `L4008` — a render-time scene override (`ludion render --set <json-pointer>=<value>`) could
     /// not be applied: a malformed spec, a pointer that does not resolve in the scene document, or a
     /// scene-level field given a value it cannot hold. Raised by `ludion-scene`'s override layer,
@@ -2369,6 +2479,22 @@ pub mod code {
     /// unknown `ignore_layers` name. An **error**. Raised by `ludion-engine`'s builder at `build`
     /// and by `nav_update` for an unknown layer name.
     pub const NAV_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L4032");
+
+    /// `L4140` — a navigation path query ran with no `Nav` resource or no grid built yet. An **error**
+    /// returned to the caller of `nav_path`, `nav_distance`, `nav_reachable` or `nav_project`.
+    pub const NAV_NOT_READY: DiagnosticCode = DiagnosticCode::new("L4140");
+    /// `L4141` — a navigation path request is invalid: a non-finite point, a negative or NaN
+    /// `max_cost`, a negative `snap_radius`, or a zero `max_expanded`. An **error** returned to the caller.
+    pub const NAV_PATH_REQUEST_INVALID: DiagnosticCode = DiagnosticCode::new("L4141");
+    /// `L4142` — a `PatrolFollower`'s `route` could not be loaded as a `kind: patrol` document. A
+    /// **warning**, reported once per entity by `patrol_update`; the guard is skipped.
+    pub const PATROL_ROUTE_UNLOADED: DiagnosticCode = DiagnosticCode::new("L4142");
+    /// `L4143` — a patrol stop is unreachable on the nav grid and was skipped. A **warning**, reported
+    /// once per entity and point index by `patrol_update`.
+    pub const PATROL_POINT_UNREACHABLE: DiagnosticCode = DiagnosticCode::new("L4143");
+    /// `L4144` — an entity carries a `PatrolFollower` but no `NavAgent`. A **warning**, reported once
+    /// per entity by `patrol_update`; the patrol does not run.
+    pub const PATROL_WITHOUT_AGENT: DiagnosticCode = DiagnosticCode::new("L4144");
 
     /// `L4033` — a `ProjectileLook::Mesh` asset or `ProjectileLook::Voxel` model cannot be drawn: at `build` the file does not
     /// exist (an **error**, refused with a nearest-name suggestion); at extract it failed to load
@@ -5569,6 +5695,110 @@ Fix: use a plain file-safe name, stop the session recording, and make sure the r
 writable with free space.",
     },
     CodeEntry {
+        code: code::CHECKPOINT_CONFIG_INVALID,
+        severity: Severity::Error,
+        title: "checkpoint config is invalid",
+        explanation: "\
+`EngineBuilder::checkpoints` was given a `CheckpointConfig` whose `max_slots` is 0 or above 64.
+
+Fix: choose a `max_slots` from 1 to 64 (the default is 4).",
+    },
+    CodeEntry {
+        code: code::CHECKPOINT_NO_SLOT,
+        severity: Severity::Warning,
+        title: "checkpoint slot does not exist",
+        explanation: "\
+A system called `Checkpoints::restore(name)` for a name that holds no slot: it was never captured, was
+discarded, or the store was cleared by a scene load, an `engine.restore` or a run-save resume.
+
+This is a **warning**: the world is untouched and `Checkpoints::last_restore()` is `Refused { reason }`.
+
+Fix: capture the slot first, and check `Checkpoints::slot(name)` before restoring.",
+    },
+    CodeEntry {
+        code: code::CHECKPOINT_SLOTS_FULL,
+        severity: Severity::Warning,
+        title: "checkpoint slots are full",
+        explanation: "\
+A system called `Checkpoints::capture(name)` for a new name while `max_slots` slots are held. Nothing is
+captured and no slot is evicted; recapturing an existing name is always allowed.
+
+This is a **warning**.
+
+Fix: `discard` a slot you no longer need, or raise `CheckpointConfig::max_slots` (at most 64).",
+    },
+    CodeEntry {
+        code: code::CHECKPOINT_NAME_INVALID,
+        severity: Severity::Warning,
+        title: "checkpoint name is invalid",
+        explanation: "\
+A checkpoint request named a slot that is empty, longer than 64 characters or holds a character outside
+`[A-Za-z0-9_.-]`. The request is ignored.
+
+This is a **warning**.
+
+Fix: use a short name such as `b_to_c`.",
+    },
+    CodeEntry {
+        code: code::CHECKPOINT_CAPTURE_FAILED,
+        severity: Severity::Warning,
+        title: "checkpoint capture failed",
+        explanation: "\
+Capturing the world into a slot failed, for example because a component holds a non-finite number
+(`L0007`). The previous slot of that name, if any, is kept.
+
+This is a **warning**; the message carries the underlying diagnostic.
+
+Fix: correct the value the underlying diagnostic names.",
+    },
+    CodeEntry {
+        code: code::CHECKPOINT_RESTORE_FAILED,
+        severity: Severity::Warning,
+        title: "checkpoint restore failed",
+        explanation: "\
+Restoring a slot failed while decoding or validating its document. The world is untouched and
+`Checkpoints::last_restore()` is `Refused { reason }`.
+
+This is a **warning**; the message carries the underlying diagnostic.",
+    },
+    CodeEntry {
+        code: code::CHECKPOINT_SWITCH_DROPPED,
+        severity: Severity::Warning,
+        title: "scene switch dropped by a checkpoint restore",
+        explanation: "\
+A scene switch and a checkpoint restore were requested in the same frame. The restore wins and the
+switch is dropped. A slot captured in another district performs that switch itself.
+
+This is a **warning**.
+
+Fix: request one or the other, or request the switch on a later frame.",
+    },
+    CodeEntry {
+        code: code::CHECKPOINT_KEYFRAME_SKIP,
+        severity: Severity::Warning,
+        title: "replay keyframe skipped while checkpoint slots are held",
+        explanation: "\
+A recording was due a keyframe while checkpoint slots were held. A snapshot cannot carry slots yet, so
+no keyframe is written; a seek lands on the last keyframe before the first capture. The replay itself
+is unaffected: replaying regenerates the slots.
+
+This is a **warning**, reported once per session.
+
+Fix: `discard` every slot before a recording needs keyframes, or accept the coarser seek.",
+    },
+    CodeEntry {
+        code: code::CHECKPOINT_RECORDING_ARM_REFUSED,
+        severity: Severity::Warning,
+        title: "recording not armed while checkpoint slots are held",
+        explanation: "\
+A run recording was started while checkpoint slots were held. A recording must start from a world its
+keyframes can reproduce, and a snapshot cannot carry slots yet, so it was not armed.
+
+This is a **warning**.
+
+Fix: start the recording before the first capture, or `discard` every slot first.",
+    },
+    CodeEntry {
         code: code::RUN_RECORDING_CONFIG_INVALID,
         severity: Severity::Error,
         title: "run recording config is invalid",
@@ -6463,12 +6693,15 @@ cause — and correct `part` (or `assembly`) to match.",
         severity: Severity::Error,
         title: "collider names an undeclared collision layer",
         explanation: "\
-A `Collider`'s `layer` names a layer the scene's `physics.layers` does not declare. Layers are
-declared once, in the scene's `physics:` block, with the layers each one ignores; a collider names
-at most one of them, and a collider that names none is on the implicit `default` layer.
+A `Collider`'s `layer`, or an entry of a `QueryLayers`, names a layer the scene's `physics.layers`
+does not declare. Layers are declared once, in the scene's `physics:` block, with the layers each
+one ignores; a collider names at most one of them as its body layer, and a collider that names none
+is on the implicit `default` layer.
 
-The JSON Pointer is `/entities/<index>/components/Collider/layer`. At runtime such a collider gets
-no body until its `Collider` or the scene's layers change.
+The JSON Pointer is `/entities/<index>/components/Collider/layer`, or
+`/entities/<index>/components/QueryLayers/layers/<j>`. At runtime a collider with an unknown body
+layer gets no body until its `Collider` or the scene's layers change; an unknown `QueryLayers` entry
+keeps the body and gives the entity no query-only layers until the entry or the table changes.
 
 Fix: check the spelling against `physics.layers` (the diagnostic suggests the nearest declared
 name), or declare the layer:
@@ -6492,6 +6725,124 @@ The JSON Pointer is `/entities/<index>/components/Collider/layer`.
 
 Fix: remove `layer`, or give the collider a 3D shape (`sphere`, `box`, `capsule`, `convex`,
 `heightfield`) or a `rigid` body, which the 3D solver claims.",
+    },
+    CodeEntry {
+        code: code::QUERY_LAYERS_INVALID,
+        severity: Severity::Error,
+        title: "query-only layers entry is invalid",
+        explanation: "\
+A `QueryLayers` entry cannot be used. Two cases raise it, each with a JSON Pointer
+`/entities/<index>/components/QueryLayers/layers/<j>`:
+
+  - an entry is empty or repeats an earlier entry (the component validator);
+  - an entry names the entity's own body layer (`check-scene`), which a query already sees.
+
+Fix: delete the entry, or name another declared layer:
+
+  QueryLayers:
+    layers: [light_occluder]",
+    },
+    CodeEntry {
+        code: code::QUERY_LAYERS_UNCLAIMED,
+        severity: Severity::Error,
+        title: "query-only layers on an entity no query can see",
+        explanation: "\
+An entity carries `QueryLayers` but has neither a `Collider` the 3D solver claims nor a
+`CharacterMotor`, so no query ever reaches it and the layers would silently do nothing. Raised by
+`check-scene` at `/entities/<index>/components/QueryLayers`.
+
+Fix: add a 3D `Collider` (or a `CharacterMotor`) to the entity, or remove `QueryLayers`.",
+    },
+    CodeEntry {
+        code: code::AI_MACHINE_HIERARCHY,
+        severity: Severity::Error,
+        title: "a machine's parent function is not a tree under ROOT",
+        explanation: "\
+A `Machine`'s `parent` fn does not describe a tree rooted at `ROOT`: either `ROOT` itself has a
+parent, or some state's chain of parents never reaches `ROOT` (a missing parent, or a cycle).
+`register_machine` refuses it, naming the state, because the dispatch walk (root to leaf, leaf up
+to the common ancestor on a transition) needs every active path to start at `ROOT`.
+
+Fix: return `None` from `parent(ROOT)` and `Some(..)` for every other state, leading up to `ROOT`.",
+    },
+    CodeEntry {
+        code: code::AI_MACHINE_INITIAL,
+        severity: Severity::Error,
+        title: "a machine's initial state is not a child of its state",
+        explanation: "\
+A `Machine`'s `initial(s)` returned a state whose `parent` is not `s`. Entering `s` follows
+`initial` down one level at a time, so the initial child has to sit directly below it; otherwise the
+active path would skip or leave the hierarchy. `register_machine` refuses it.
+
+Fix: make `parent(child)` return `Some(s)`, or return a different child from `initial(s)`.",
+    },
+    CodeEntry {
+        code: code::AI_MACHINE_VARIANTS,
+        severity: Severity::Error,
+        title: "a machine's ALL list is incomplete or repeats a state",
+        explanation: "\
+A `Machine`'s `ALL` is empty, omits `ROOT`, or lists a variant twice. `ALL` is the machine's table
+of states, used to validate the hierarchy and an authored start state; a wrong one would hide a state
+from every check. `register_machine` refuses it.
+
+Fix: list every variant of the enum exactly once, `ROOT` included.",
+    },
+    CodeEntry {
+        code: code::AI_TRANSITION_CHAIN_CAPPED,
+        severity: Severity::Warning,
+        title: "an agent changed state too many times in one tick",
+        explanation: "\
+An agent's machine made more than `MAX_TRANSITIONS_PER_TICK` (8) transitions in a single gameplay
+tick and stopped where it was; the rest of the chain was refused. This is what a loop looks like:
+two states whose `enter` or `exit` callbacks (through `Cx::go`) or `update` answers send the agent
+back and forth. The message names the agent and the state it stopped in.
+
+Fix: break the cycle. Give one of the states a condition that is not true on entry (a timer, an
+event), or move the work to `update` where one answer applies per tick.",
+    },
+    CodeEntry {
+        code: code::AI_INBOX_OVERFLOW,
+        severity: Severity::Warning,
+        title: "an agent's event inbox overflowed",
+        explanation: "\
+An agent's inbox already held `INBOX_CAPACITY` events (16 by default) when another arrived, so the
+oldest was dropped and the agent's `dropped` counter rose. The inbox is drained once per gameplay
+tick, so an overflow means more events arrive in a tick than the machine can read, or the agent's
+`ai_tick` is not scheduled (or the game is held).
+
+Fix: send fewer events (broadcast only on a change), raise `Machine::INBOX_CAPACITY`, or check that
+`ai_tick::<M>` is registered.",
+    },
+    CodeEntry {
+        code: code::AI_GROUP_MISSING,
+        severity: Severity::Warning,
+        title: "an agent belongs to a group that does not exist",
+        explanation: "\
+An agent's `GroupMember.group` names an entity that is despawned or carries no `Group`. The agent
+keeps running, with `Cx::group` set to `None`, so a callback that broadcasts to its squad does nothing.
+
+Fix: point `group` at a live entity with a `Group` component, or clear the field.",
+    },
+    CodeEntry {
+        code: code::AI_SEND_NO_MIND,
+        severity: Severity::Warning,
+        title: "an event was sent to an entity with no mind",
+        explanation: "\
+`send` (or `Cx::send` / `Cx::broadcast`) addressed an entity that has no `Mind` of that machine: it
+is despawned, never had one, or runs a different machine. The event was dropped. A broadcast reaches
+only `GroupMember`s, so a member without a `Mind` of the sender's machine raises this too.
+
+Fix: send to an agent of the same machine, or give the entity the mind.",
+    },
+    CodeEntry {
+        code: code::AI_STATE_NOT_LISTED,
+        severity: Severity::Warning,
+        title: "a mind starts in a state its machine does not list",
+        explanation: "\
+A `Mind`'s authored `state` is not one of its machine's `ALL`. Only a hand-edited document or a
+restored snapshot from an older build can hold such a value. The agent starts from `ROOT` instead.
+
+Fix: author a state the enum still has, or add it to `ALL`.",
     },
     CodeEntry {
         code: code::JOINT_MOTOR_INVALID,
@@ -8432,6 +8783,211 @@ not finite, or `separation_neighbors` is above 16. A scene with one is refused.
 
 Fix: write a finite, non-negative value, and at most 16 separation neighbours, or omit the field to take
 its default.",
+    },
+    CodeEntry {
+        code: code::NAV_ROUTE_INVALID,
+        severity: Severity::Error,
+        title: "a nav route is invalid",
+        explanation: "\
+A `NavRoute` field is out of range (pointer `/entities/{i}/components/NavRoute/{field}`): `goal`, a
+waypoint or `cost` is not finite, or `index` is past the end of `waypoints`. `NavRoute` is written by `nav_steer`; a scene that carries one is a snapshot.
+
+Fix: delete the component and let `nav_steer` plan it again from the entity's `NavGoal`.",
+    },
+    CodeEntry {
+        code: code::NAV_GOAL_INVALID,
+        severity: Severity::Error,
+        title: "a nav goal is invalid",
+        explanation: "\
+A `NavGoal` has a non-finite component in `at` (pointer `/entities/{i}/components/NavGoal/at/{k}`). A scene
+with one is refused.
+
+Fix: write three finite numbers for `at`.",
+    },
+    CodeEntry {
+        code: code::PATROL_DOCUMENT_STRUCTURE,
+        severity: Severity::Error,
+        title: "a patrol document is malformed",
+        explanation: "\
+A `kind: patrol` document is structurally invalid: an empty or non-mapping root, a missing `format`, `kind`
+or `points`, an unknown key (the message names the nearest valid one), a `mode` that is not `loop`,
+`ping_pong` or `once`, or a point, `look` entry or number of the wrong shape. The pointer names the spot,
+such as `/points/2/look/0/hold`. Data rules (a negative `wait`) are the separate `L1523`.
+
+Fix: a minimal patrol is `format: 1`, `kind: patrol` and `points:` with one `- at: [x, y, z]` entry; see
+`ludion docs patrol`.",
+    },
+    CodeEntry {
+        code: code::PATROL_DATA_CONSISTENCY,
+        severity: Severity::Error,
+        title: "a patrol document is inconsistent",
+        explanation: "\
+A well-shaped `kind: patrol` document breaks a data rule: it has no points, a number is not finite or is
+beyond the f32 range, a `wait` or `hold` is negative, a `look` entry has a `hold` of 0, or a `tag` is
+empty. The pointer names the field. The document's shape problems are the separate `L1522`.
+
+Fix: add a point, keep every number finite, give each look a positive `hold`, or drop the empty `tag`.",
+    },
+    CodeEntry {
+        code: code::PATROL_FOLLOWER_INVALID,
+        severity: Severity::Error,
+        title: "a patrol follower is invalid",
+        explanation: "\
+A `PatrolFollower` field is invalid (pointer `/entities/{i}/components/PatrolFollower/{field}`): `route`
+is an absolute path or climbs out of the content root with `..`. A scene with one is refused.
+
+Fix: name the patrol as a content-root-relative path such as `patrols/guard.patrol.yaml`.",
+    },
+    CodeEntry {
+        code: code::PATROL_STATE_INVALID,
+        severity: Severity::Error,
+        title: "a patrol state is invalid",
+        explanation: "\
+A `PatrolState` field is out of range (pointer `/entities/{i}/components/PatrolState/{field}`):
+`stop_left` or `stop_elapsed` is negative or not finite, or `look_deg` is not finite. `PatrolState` is
+written by `patrol_update`; a scene that carries one is a snapshot.
+
+Fix: delete the component and let `patrol_update` start the patrol again.",
+    },
+    CodeEntry {
+        code: code::PATROL_ROUTE_UNLOADED,
+        severity: Severity::Warning,
+        title: "a patrol route could not be loaded",
+        explanation: "\
+`patrol_update` could not load the `kind: patrol` document named by an entity's `PatrolFollower.route`: the
+file is missing or unreadable, or it fails validation (`L1522`, `L1523`; the loader's diagnostics follow as
+related notes). The guard is skipped and keeps whatever `NavGoal` it had. Reported once per entity.
+
+Fix: correct the `route` path or the document; `ludion check-scene <file>` shows the document's errors.",
+    },
+    CodeEntry {
+        code: code::PATROL_POINT_UNREACHABLE,
+        severity: Severity::Warning,
+        title: "a patrol stop is unreachable",
+        explanation: "\
+A patrol stop has no walkable path from the guard on the nav grid, so `patrol_update` skipped it and went on
+to the next stop (the message names the point index). Reported once per entity and point.
+
+Fix: move the point onto walkable ground, or clear what blocks it; `ludion docs nav` covers the grid.",
+    },
+    CodeEntry {
+        code: code::PATROL_WITHOUT_AGENT,
+        severity: Severity::Warning,
+        title: "a patrol follower has no nav agent",
+        explanation: "\
+An entity carries a `PatrolFollower` but no `NavAgent`, so `patrol_update` has nothing to steer and skips
+it. Reported once per entity.
+
+Fix: add a `NavAgent` to the entity.",
+    },
+    CodeEntry {
+        code: code::INPUT_BINDING_SOURCES,
+        severity: Severity::Error,
+        title: "a binding has zero or several sources",
+        explanation: "\
+An `input-actions` binding must name exactly one source (`key`, `mouse`, `pad`, `trigger`, `wheel`, `stick`, `keys`, `key_pair`, `pad_pair` or `mouse_delta`); this one names none or more than one (pointer `/actions/{name}/bindings/{i}`).
+
+Fix: keep one source per binding and move the others into their own bindings.",
+    },
+    CodeEntry {
+        code: code::INPUT_BINDING_SOURCE_KIND,
+        severity: Severity::Error,
+        title: "a binding source does not fit its action kind",
+        explanation: "\
+The binding's source cannot drive the action's `kind` (pointer `/actions/{name}/bindings/{i}/{field}`). A `button` takes `key`, `mouse`, `pad`, `trigger` or `wheel: up|down`; an `axis1` takes `wheel: x|y`, `key_pair` or `pad_pair`; an `axis2` takes `keys`, `stick` or `mouse_delta`.
+
+Fix: change the action's `kind`, or use a source of that kind.",
+    },
+    CodeEntry {
+        code: code::INPUT_BINDING_MODIFIER,
+        severity: Severity::Error,
+        title: "a binding modifier does not fit its source",
+        explanation: "\
+A modifier is set on a source it does not apply to (pointer `/actions/{name}/bindings/{i}/{field}`): `gesture` belongs on button bindings (not a wheel button), `press` and `release` only on `trigger`, `deadzone` only on `stick`, `scale` and `invert_x`/`invert_y` only on analog sources (`stick`, `mouse_delta`, `wheel` x|y).
+
+Fix: remove the modifier or move it to a binding it applies to.",
+    },
+    CodeEntry {
+        code: code::INPUT_BINDING_RANGE,
+        severity: Severity::Error,
+        title: "a binding value is out of range",
+        explanation: "\
+A binding or gesture number is out of range (pointer `/actions/{name}/bindings/{i}/{field}` or `/gestures/{field}`): non-finite, a trigger `release` above `press` or outside `[0, 1]`, a `deadzone` outside `[0, 1)`, or a gesture time that is not above zero.
+
+Fix: write a finite value inside the stated range.",
+    },
+    CodeEntry {
+        code: code::INPUT_BINDING_DUPLICATE,
+        severity: Severity::Error,
+        title: "two bindings share a source and gesture",
+        explanation: "\
+Two bindings in one `context` name the same physical input with the same gesture (pointer `/actions/{name}/bindings/{i}`), so one press would fire both actions with no way to tell them apart.
+
+Fix: change one binding's source or gesture, or move it to another `context`.",
+    },
+    CodeEntry {
+        code: code::INPUT_ACTION_INVALID,
+        severity: Severity::Error,
+        title: "an action is empty or badly named",
+        explanation: "\
+An action has no bindings, or its name is not made of `a-z`, `0-9` and `_` (pointer `/actions/{name}`).
+
+Fix: give the action at least one binding and a lower-case snake_case name.",
+    },
+    CodeEntry {
+        code: code::INPUT_ACTION_UNKNOWN,
+        severity: Severity::Warning,
+        title: "an input action name is unknown",
+        explanation: "\
+A game read an action name (`ActionName`) that the loaded `kind: input-actions` document does not define, so the read answered inactive/zero. Reported once per name.
+
+Fix: add the action to the input map, or correct the name in the game code.",
+    },
+    CodeEntry {
+        code: code::INPUT_STATE_INVALID,
+        severity: Severity::Error,
+        title: "an input-action state does not fit the map",
+        explanation: "\
+A restored input-action state holds an entry the loaded map cannot continue (a press with no ticks
+down, or a pending tap on an input with no `double_tap` binding). Entries for inputs the map no
+longer binds are dropped silently; this is for the ones that are corrupt.
+
+Fix: restore a state saved from the same input map, or drop the state and let the gestures restart.",
+    },
+    CodeEntry {
+        code: code::UI_TWEEN_INVALID,
+        severity: Severity::Error,
+        title: "a UI tween track is invalid",
+        explanation: "\
+A `UiTween` track (pointer `/entities/{i}/components/UiTween/tracks/{n}/{field}`) has a `from` or `to`
+whose length does not match its `field` (`opacity` and `scale` take 1 number, `offset` and `size` 2,
+`color` 4), a non-finite number, or a negative or non-finite `duration`. A scene with one is refused.
+
+Fix: write the right number of finite values, and a `duration` of zero or more seconds.",
+    },
+    CodeEntry {
+        code: code::UI_WORLD_ANCHOR_INVALID,
+        severity: Severity::Error,
+        title: "a UI world anchor is invalid",
+        explanation: "\
+A `UiWorldAnchor` (pointer `/entities/{i}/components/UiWorldAnchor/{field}`) has a non-finite
+`world_offset` or `margin`, a negative `margin`, or a `fade` that is not `[near, far]` with
+`0 <= near < far`. A scene with one is refused.
+
+Fix: write finite numbers, a `margin` of zero or more canvas units, and a `fade` whose `far` is past
+its `near`.",
+    },
+    CodeEntry {
+        code: code::UI_MOTION_UNSUPPORTED,
+        severity: Severity::Warning,
+        title: "a UI tween or world anchor does not apply to its element",
+        explanation: "\
+A `UiTween` track names a field its element cannot take (`scale` and `color` need a `UiRect` or
+`UiText`, `size` needs a `UiRect`), or a `UiWorldAnchor` sits on a `fill: true` rect, which ignores its
+anchor. The track or anchor is skipped and the element draws as if it were absent. Reported once per
+entity and field, as a degraded warning at render time.
+
+Fix: move the track to an element that takes it, or remove it.",
     },
     CodeEntry {
         code: code::STATIC_INELIGIBLE,
@@ -11139,6 +11695,28 @@ Fix: raise `ProjectileConfig::capacity` to at least the number the message names
 the old build.",
     },
     CodeEntry {
+        code: code::NAV_NOT_READY,
+        severity: Severity::Error,
+        title: "a navigation query ran before the grid exists",
+        explanation: "\
+`nav_path`, `nav_distance`, `nav_reachable` or `nav_project` was called on a world with no `Nav` resource, or
+before `nav_update` built the first grid.
+
+Fix: opt in with `Engine::builder().nav(NavConfig { .. })`, and run `nav_update` (it builds the grid on its
+first tick) before querying.",
+    },
+    CodeEntry {
+        code: code::NAV_PATH_REQUEST_INVALID,
+        severity: Severity::Error,
+        title: "a navigation path request is invalid",
+        explanation: "\
+A `PathRequest` has a non-finite `from` or `to`, a negative or NaN `max_cost`, a negative or non-finite
+`snap_radius`, or a `max_expanded` of 0. `nav_distance`, `nav_reachable` and `nav_project` check their own
+point and radius the same way.
+
+Fix: build the request with `PathRequest::new(from, to)` and override only finite, non-negative fields.",
+    },
+    CodeEntry {
         code: code::NAV_CONFIG_INVALID,
         severity: Severity::Error,
         title: "nav config is invalid",
@@ -11150,6 +11728,7 @@ A `NavConfig` cannot build a walkability grid. The message names the field:
 - `nx` and `nz` must be at least 1, and `nx * nz` at most 4194304;
 - `y_min` must be below `y_max`;
 - `max_slope_deg` must be in `(0, 90)`;
+- `max_path_requests_per_tick` must be at least 1;
 - `ignore_layers` must name layers declared in the scene's `physics.layers`, and no name may be
   empty.
 
@@ -11639,6 +12218,15 @@ mod tests {
         code::RUN_SAVE_WRITE_FAILED,
         code::RUN_SAVE_RESUME_REFUSED,
         code::RUN_RECORDING_FAILED,
+        code::CHECKPOINT_CONFIG_INVALID,
+        code::CHECKPOINT_NO_SLOT,
+        code::CHECKPOINT_SLOTS_FULL,
+        code::CHECKPOINT_NAME_INVALID,
+        code::CHECKPOINT_CAPTURE_FAILED,
+        code::CHECKPOINT_RESTORE_FAILED,
+        code::CHECKPOINT_SWITCH_DROPPED,
+        code::CHECKPOINT_KEYFRAME_SKIP,
+        code::CHECKPOINT_RECORDING_ARM_REFUSED,
         code::RUN_RECORDING_CONFIG_INVALID,
         code::REPLAY_GAME_MISMATCH,
         code::REPLAY_PLAYBACK_FAILED,
@@ -11675,6 +12263,11 @@ mod tests {
         code::MESH_PART_UNKNOWN,
         code::COLLIDER_LAYER_UNKNOWN,
         code::COLLIDER_LAYER_UNCLAIMED,
+        code::QUERY_LAYERS_INVALID,
+        code::QUERY_LAYERS_UNCLAIMED,
+        code::AI_MACHINE_HIERARCHY,
+        code::AI_MACHINE_INITIAL,
+        code::AI_MACHINE_VARIANTS,
         code::JOINT_MOTOR_INVALID,
         code::COLLIDER_COMPOUND_INVALID,
         code::MESH_SKIN_STRUCTURE,
@@ -11807,6 +12400,23 @@ mod tests {
         code::VIEWMODEL_LENS_INVALID,
         code::SPATIAL_VOLUME_INVALID,
         code::NAV_AGENT_INVALID,
+        code::NAV_ROUTE_INVALID,
+        code::NAV_GOAL_INVALID,
+        code::PATROL_DOCUMENT_STRUCTURE,
+        code::PATROL_DATA_CONSISTENCY,
+        code::PATROL_FOLLOWER_INVALID,
+        code::PATROL_STATE_INVALID,
+        code::INPUT_BINDING_SOURCES,
+        code::INPUT_BINDING_SOURCE_KIND,
+        code::INPUT_BINDING_MODIFIER,
+        code::INPUT_BINDING_RANGE,
+        code::INPUT_BINDING_DUPLICATE,
+        code::INPUT_ACTION_INVALID,
+        code::INPUT_ACTION_UNKNOWN,
+        code::INPUT_STATE_INVALID,
+        code::UI_TWEEN_INVALID,
+        code::UI_WORLD_ANCHOR_INVALID,
+        code::UI_MOTION_UNSUPPORTED,
         code::STATIC_INELIGIBLE,
         code::STATIC_PARENT_NOT_STATIC,
         code::STATIC_REWRITTEN,
@@ -11920,6 +12530,11 @@ mod tests {
         code::BUDGET_EXCEEDED,
         code::BUDGET_UNKNOWN_KEY,
         code::SYSTEM_PANICKED,
+        code::AI_TRANSITION_CHAIN_CAPPED,
+        code::AI_INBOX_OVERFLOW,
+        code::AI_GROUP_MISSING,
+        code::AI_SEND_NO_MIND,
+        code::AI_STATE_NOT_LISTED,
         code::SCENE_OVERRIDE_INVALID,
         code::STATS_THRESHOLD_FILE_INVALID,
         code::STATS_THRESHOLD_EXCEEDED,
@@ -11945,6 +12560,11 @@ mod tests {
         code::PROJECTILE_STEP_NOT_RUN,
         code::PROJECTILE_RESTORE_CAPACITY,
         code::NAV_CONFIG_INVALID,
+        code::NAV_NOT_READY,
+        code::NAV_PATH_REQUEST_INVALID,
+        code::PATROL_ROUTE_UNLOADED,
+        code::PATROL_POINT_UNREACHABLE,
+        code::PATROL_WITHOUT_AGENT,
         code::PROJECTILE_LOOK_ASSET,
         code::PHYSICS_SCALE_UNGATED,
         code::POSE_BLEND_POSE_MISSING,
@@ -12073,10 +12693,23 @@ mod tests {
             code::RUN_SAVE_WRITE_FAILED,
             code::RUN_SAVE_RESUME_REFUSED,
             code::RUN_RECORDING_FAILED,
+            code::CHECKPOINT_NO_SLOT,
+            code::CHECKPOINT_SLOTS_FULL,
+            code::CHECKPOINT_NAME_INVALID,
+            code::CHECKPOINT_CAPTURE_FAILED,
+            code::CHECKPOINT_RESTORE_FAILED,
+            code::CHECKPOINT_SWITCH_DROPPED,
+            code::CHECKPOINT_KEYFRAME_SKIP,
+            code::CHECKPOINT_RECORDING_ARM_REFUSED,
             code::REPLAY_PLAYBACK_FAILED,
             code::PROFILE_SAVE_FAILED,
             code::SCHEDULE_MODULE_CONCENTRATION,
             code::QUERY_DRIFT_UNOBSERVED,
+            code::AI_TRANSITION_CHAIN_CAPPED,
+            code::AI_INBOX_OVERFLOW,
+            code::AI_GROUP_MISSING,
+            code::AI_SEND_NO_MIND,
+            code::AI_STATE_NOT_LISTED,
             code::IMPORT_SKIN_UNWEIGHTED,
             code::IMPORT_EXTENSION_IGNORED,
             code::PLACEMENT_FLOATING,
@@ -12106,6 +12739,11 @@ mod tests {
             code::CAMERA_OFFSET_FOV_CLAMPED,
             code::VIEWMODEL_NO_CAMERA,
             code::VIEWMODEL_LENS_NOT_ON_CAMERA,
+            code::PATROL_ROUTE_UNLOADED,
+            code::PATROL_POINT_UNREACHABLE,
+            code::PATROL_WITHOUT_AGENT,
+            code::INPUT_ACTION_UNKNOWN,
+            code::UI_MOTION_UNSUPPORTED,
             code::STATIC_INELIGIBLE,
             code::STATIC_PARENT_NOT_STATIC,
             code::STATIC_REWRITTEN,

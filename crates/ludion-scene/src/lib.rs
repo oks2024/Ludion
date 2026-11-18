@@ -130,6 +130,7 @@ mod palette;
 mod parse;
 mod part;
 mod path;
+mod patrol;
 mod physics;
 mod physics_layers;
 mod prefab;
@@ -197,6 +198,7 @@ pub use part::{PART_FORMAT_VERSION, PartDocument};
 pub use path::{
     PATH_FORMAT_VERSION, PathDocument, PathFrame, PathInterpolation, PathMetric, PathSampler,
 };
+pub use patrol::{PATROL_FORMAT_VERSION, PatrolDocument, PatrolLook, PatrolMode, PatrolPoint};
 pub use physics::{ScenePhysics, ScenePhysicsSpace, validate_physics};
 pub use physics_layers::{DEFAULT_LAYER, LayerMatrix, MAX_LAYERS, SceneLayer};
 pub use prefab::{PREFAB_FORMAT_VERSION, PrefabDocument};
@@ -2412,6 +2414,72 @@ pub fn check_path(source: &str) -> Result<PathDocument, Vec<Diagnostic>> {
 /// ```
 pub fn emit_path(doc: &PathDocument) -> String {
     path::emit(doc)
+}
+
+// --- Patrol documents (`*.patrol.yaml`) ---------------------------------------------------------
+//
+// A patrol is an ordered list of stops a guard walks (`Plan/nav.md` decision 13); the engine's
+// `patrol_update` reads a validated one.
+
+/// Parses strict-subset YAML into a [`PatrolDocument`], checking structure/shape only.
+///
+/// # Errors
+/// `L1522` for a missing/wrong-typed key, an unrecognized `kind`, an unknown key or `mode`, or a
+/// point whose `at` is not three numbers.
+pub fn parse_patrol(source: &str) -> Result<PatrolDocument, Vec<Diagnostic>> {
+    patrol::parse(source)
+}
+
+/// Validates data-consistency invariants of `doc`: at least one point, finite f32-range numbers,
+/// non-negative `wait`, positive look `hold`, non-empty `tag` (`L1523`).
+pub fn validate_patrol(doc: &PatrolDocument) -> Vec<Diagnostic> {
+    patrol::validate(doc)
+}
+
+/// Parses and validates a patrol document in one step.
+///
+/// # Errors
+/// Everything [`parse_patrol`] and [`validate_patrol`] can report.
+pub fn check_patrol(source: &str) -> Result<PatrolDocument, Vec<Diagnostic>> {
+    let doc = parse_patrol(source)?;
+    let diagnostics = validate_patrol(&doc);
+    if diagnostics.is_empty() {
+        Ok(doc)
+    } else {
+        Err(diagnostics)
+    }
+}
+
+/// Writes `doc` in canonical form (stable field order, LF endings, ryu shortest-round-trip floats;
+/// `mode` always spelled, default point fields omitted). Byte-idempotent.
+///
+/// # Example
+/// ```
+/// let source = "\
+/// format: 1
+/// kind: patrol
+/// name: yard
+/// mode: loop
+/// points:
+///   - at:
+///       - 0.0
+///       - 0.0
+///       - 0.0
+///     wait: 1.5
+///     look:
+///       - yaw_deg: 45.0
+///         hold: 0.5
+///   - at:
+///       - 4.0
+///       - 0.0
+///       - -3.0
+/// ";
+/// let patrol = ludion_scene::check_patrol(source).expect("the patrol is valid");
+/// assert_eq!(patrol.points.len(), 2);
+/// assert_eq!(ludion_scene::emit_patrol(&patrol), source); // canonical emit is a fixed point
+/// ```
+pub fn emit_patrol(doc: &PatrolDocument) -> String {
+    patrol::emit(doc)
 }
 
 // --- Prefab documents (`*.prefab.yaml`) ---------------------------------------------------------

@@ -260,7 +260,8 @@ origin, not the body's centre of mass (exact when the skin does not spin). The s
 all-or-nothing: a dead or presentation skin, no `Transform`, a non-uniform or non-positive scale, a
 mesh that is not skinned or differs from the prefab's, a missing or misplaced `$skin`, a part bound
 to another skin or another ref to `$skin`, no `SkinBone` part, or a skin already driven by `SkinBone`
-parts (a second switch, or a scene-rigged skin) is `L3036`, and nothing is spawned or changed. Call it on one tick (`ctx.game_frame == N`, never
+parts (a second switch, or a scene-rigged skin) is `L3036`, and nothing is spawned or changed. The switch also suspends the `CharacterMotor` on the skin or its nearest ancestor (`ludion docs motor`
+§Suspend and resume). Call it on one tick (`ctx.game_frame == N`, never
 `>=`). See `examples/gallery/ragdoll-skin-switch.yaml` and `prefabs/mannequin-ragdoll.prefab.yaml`.
 **The parts land at the bone rest pose, not the pose the clip shows on the switch tick; the posed
 switch is owed.**

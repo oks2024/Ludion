@@ -81,6 +81,8 @@ impl Sweep {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SweepFilter {
     ignored: u32,
+    included: u32,
+    body_only: bool,
     include_sensors: bool,
     only_fixed: bool,
     exclude: Option<EntityId>,
@@ -94,18 +96,24 @@ impl SweepFilter {
         self
     }
 
-    /// Whether the filter drops `entity`'s `collider`: an excluded entity, a sensor, an ignored
-    /// layer (a bitmask test on the collider's own groups) or, with `only_fixed`, a non-static body.
+    /// Whether the filter drops `entity`'s `collider`: an excluded entity, a sensor, a hit whose
+    /// layers miss a non-empty include set, an ignored layer (a bitmask test on the collider's
+    /// groups plus the entity's query-only mask) or, with `only_fixed`, a non-static body.
     pub(crate) fn drops(
         &self,
         physics: &PhysicsWorld,
         entity: EntityId,
         collider: &Collider,
     ) -> bool {
+        let mut member = collider.collision_groups().memberships.bits();
+        if !self.body_only && (self.included | self.ignored) != 0 {
+            member |= physics.query_mask(entity);
+        }
         Some(entity) == self.exclude
             || Some(entity) == self.exclude_also
             || (!self.include_sensors && collider.is_sensor())
-            || collider.collision_groups().memberships.bits() & self.ignored != 0
+            || (self.included != 0 && member & self.included == 0)
+            || member & self.ignored != 0
             || (self.only_fixed
                 && !physics
                     .entry(entity)
@@ -167,23 +175,31 @@ impl PhysicsWorld {
     /// ```
     pub fn sweep_filter(&self, filter: &QueryFilter) -> Result<SweepFilter, PhysicsError> {
         self.check_layer_names(&filter.ignored_layers)?;
-        let mut ignored = 0u32;
-        for name in &filter.ignored_layers {
-            let index = match self.layer_table() {
-                Some(table) => table.index_of(name),
-                None => (name == DEFAULT_LAYER).then_some(0),
-            };
-            if let Some(index) = index {
-                ignored |= 1 << index;
-            }
-        }
+        self.check_layer_names(&filter.included_layers)?;
         Ok(SweepFilter {
-            ignored,
+            ignored: self.layer_mask(&filter.ignored_layers),
+            included: self.layer_mask(&filter.included_layers),
+            body_only: filter.body_layers_only,
             include_sensors: filter.include_sensors,
             only_fixed: filter.only_fixed,
             exclude: filter.exclude,
             exclude_also: None,
         })
+    }
+
+    /// The bitmask of the declared layers among `names`.
+    pub(crate) fn layer_mask<'a>(&self, names: impl IntoIterator<Item = &'a String>) -> u32 {
+        let mut mask = 0u32;
+        for name in names {
+            let index = match self.layer_table() {
+                Some(table) => table.index_of(name),
+                None => (name == DEFAULT_LAYER).then_some(0),
+            };
+            if let Some(index) = index {
+                mask |= 1 << index;
+            }
+        }
+        mask
     }
 
     /// The nearest hit of `sweep` by `(t, entity)`, or `None` for a miss. Allocates nothing, even

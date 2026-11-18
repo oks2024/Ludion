@@ -206,6 +206,14 @@ pub(super) fn prepare<P: PhysicsPose, R: ParentPose>(
         .flatten()
         .map(|pose| pose.translation())
         .ok_or(MotorError::NoPose(entity))?;
+    if world
+        .get::<CharacterMotorState>(entity)
+        .ok()
+        .flatten()
+        .is_some_and(|state| state.suspended)
+    {
+        return Err(MotorError::Suspended(entity));
+    }
     if !displacement.iter().all(|c| c.is_finite()) {
         return Err(MotorError::NonFiniteDisplacement(displacement));
     }
@@ -322,7 +330,7 @@ pub fn ground_probe_reach(
 ///
 /// It is pure and deterministic, reads the last completed step, uses the crouched height in force,
 /// does no headroom test (see [`fits_character`](crate::fits_character)), and filters out the
-/// motor's ignored layers and sensors as a move does.
+/// motor's ignored layers and sensors as a move does. It works on a suspended motor too.
 ///
 /// ```no_run
 /// # use ludion_ecs::{SystemCtx, World};
@@ -404,7 +412,7 @@ pub(crate) fn motor_filter(
     entity: EntityId,
     motor: &CharacterMotor,
 ) -> QueryFilter {
-    let mut filter = QueryFilter::new().exclude(entity);
+    let mut filter = QueryFilter::new().exclude(entity).body_layers_only();
     for name in physics.ignored_by(motor.layer.as_deref()) {
         filter = filter.ignore_layer(name);
     }

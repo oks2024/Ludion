@@ -147,6 +147,17 @@ pub struct ResizeReport {
     pub blocked_by: Option<EntityId>,
 }
 
+/// What one `resume_character` call did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ResumeReport {
+    /// Whether the motor is back: the spot fit, the pose was written and the motor is live again.
+    pub resumed: bool,
+    /// The lowest-id collider that kept the capsule from fitting; the motor stays suspended and
+    /// the pose unchanged then.
+    pub blocked_by: Option<EntityId>,
+}
+
 /// Why a motor function did nothing.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -189,6 +200,19 @@ pub enum MotorError {
     /// The entity has a `LaneConstraint` gated active (even one whose path fails to load), which a
     /// batch does not apply.
     LaneInBatch(EntityId),
+    /// The motor is suspended, so it takes no moves or teleports.
+    Suspended(EntityId),
+    /// `resume_character` was called on a motor that is not suspended.
+    NotSuspended(EntityId),
+    /// The entity has a `Parent`; a motor resumes only as a root.
+    Parented(EntityId),
+    /// The posture is not one the motor declares.
+    UnknownPosture {
+        /// The entity carrying the motor.
+        entity: EntityId,
+        /// The posture asked for.
+        posture: String,
+    },
 }
 
 impl fmt::Display for MotorError {
@@ -237,6 +261,26 @@ impl fmt::Display for MotorError {
                 f,
                 "{entity:?} has an active LaneConstraint (a path and a non-zero blend or engaged), which \
                  move_characters does not apply; call move_character for it"
+            ),
+            MotorError::Suspended(entity) => write!(
+                f,
+                "the CharacterMotor on {entity:?} is suspended and takes no moves; call \
+                 resume_character to bring it back"
+            ),
+            MotorError::NotSuspended(entity) => write!(
+                f,
+                "the CharacterMotor on {entity:?} is not suspended; call suspend_character first, \
+                 or use teleport_character to place a live motor"
+            ),
+            MotorError::Parented(entity) => write!(
+                f,
+                "{entity:?} has a Parent, so its motor cannot resume; reparent it to the root \
+                 first (remove Parent), then call resume_character"
+            ),
+            MotorError::UnknownPosture { entity, posture } => write!(
+                f,
+                "the CharacterMotor on {entity:?} has no posture {posture:?}; this motor declares \
+                 no postures, so pass None"
             ),
         }
     }

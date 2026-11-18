@@ -31,7 +31,7 @@ pub(crate) fn block(at: [f32; 3], half: [f32; 3]) -> Block {
 }
 
 /// A 24 x 24 m ground slab whose top is at y = 0.
-fn ground() -> Block {
+pub(crate) fn ground() -> Block {
     block([12.0, -0.5, 12.0], [12.0, 0.5, 12.0])
 }
 
@@ -62,7 +62,7 @@ pub(crate) fn scene_with_layers(blocks: &[Block], layers: &str) -> String {
     out
 }
 
-fn config() -> NavConfig {
+pub(crate) fn config() -> NavConfig {
     NavConfig {
         nx: 24,
         nz: 24,
@@ -72,7 +72,7 @@ fn config() -> NavConfig {
     }
 }
 
-fn engine(config: NavConfig, blocks: &[Block]) -> Engine {
+pub(crate) fn engine(config: NavConfig, blocks: &[Block]) -> Engine {
     let mut engine = Engine::builder()
         .nav(config)
         .system("nav_update", nav_update)
@@ -82,17 +82,17 @@ fn engine(config: NavConfig, blocks: &[Block]) -> Engine {
     engine
 }
 
-fn run(engine: &mut Engine, ticks: usize) {
+pub(crate) fn run(engine: &mut Engine, ticks: usize) {
     for _ in 0..ticks {
         engine.advance_live();
     }
 }
 
-fn nav(engine: &Engine) -> &Nav {
+pub(crate) fn nav(engine: &Engine) -> &Nav {
     engine.world().resource::<Nav>().unwrap()
 }
 
-fn grid(engine: &Engine) -> &NavGrid {
+pub(crate) fn grid(engine: &Engine) -> &NavGrid {
     nav(engine).grid().expect("the grid is built")
 }
 
@@ -232,7 +232,7 @@ fn walls_inflate_by_the_agent_radius() {
     );
 }
 
-fn add_wall(engine: &mut Engine, at: [f32; 3]) -> ludion_core::ids::EntityId {
+pub(crate) fn add_wall(engine: &mut Engine, at: [f32; 3]) -> ludion_core::ids::EntityId {
     let world: &mut World = engine.world_mut();
     let id = world.spawn();
     world
@@ -256,7 +256,7 @@ fn add_wall(engine: &mut Engine, at: [f32; 3]) -> ludion_core::ids::EntityId {
     id
 }
 
-fn wall(at: [f32; 3]) -> Block {
+pub(crate) fn wall(at: [f32; 3]) -> Block {
     block(at, [0.5, 1.5, 4.0])
 }
 
@@ -330,7 +330,7 @@ fn nav_is_invisible_to_the_world_hash() {
     assert!(nav(&with_nav).grid().is_some());
 }
 
-fn snapshot_of(engine: &mut Engine) -> Value {
+pub(crate) fn snapshot_of(engine: &mut Engine) -> Value {
     match engine.execute(Command::EngineSnapshot).unwrap().body {
         ResponseBody::Snapshot { snapshot } => snapshot,
         other => panic!("expected a snapshot, got {other:?}"),
@@ -380,7 +380,7 @@ fn an_unknown_ignore_layer_is_reported_once_and_keeps_the_grid_empty() {
 
 #[test]
 fn a_bad_config_names_its_field() {
-    let cases: [(&str, NavConfig); 12] = [
+    let cases: [(&str, NavConfig); 13] = [
         (
             "/origin/1",
             NavConfig {
@@ -460,6 +460,13 @@ fn a_bad_config_names_its_field() {
                 ..config()
             },
         ),
+        (
+            "/max_path_requests_per_tick",
+            NavConfig {
+                max_path_requests_per_tick: 0,
+                ..config()
+            },
+        ),
     ];
     for (path, bad) in cases {
         let error = bad.validate().expect_err(path);
@@ -519,7 +526,7 @@ pub(crate) fn mover(world: &mut World, ctx: &ludion_ecs::SystemCtx) {
     }
 }
 
-fn steering_builder() -> ludion_engine::EngineBuilder {
+pub(crate) fn steering_builder() -> ludion_engine::EngineBuilder {
     Engine::builder()
         .system(
             "spatial3d_rebuild",
@@ -539,7 +546,7 @@ fn chase_engine() -> Engine {
     engine
 }
 
-fn trace(engine: &mut Engine, ticks: usize) -> Vec<u64> {
+pub(crate) fn trace(engine: &mut Engine, ticks: usize) -> Vec<u64> {
     (0..ticks)
         .map(|_| {
             engine.advance_live();

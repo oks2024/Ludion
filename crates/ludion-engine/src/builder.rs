@@ -107,6 +107,7 @@ pub struct EngineBuilder {
     profile_persistence: bool,
     profile_off_disk: bool,
     run_save: bool,
+    checkpoints: Option<crate::CheckpointConfig>,
     run_recordings: Option<crate::RunRecordingConfig>,
     replay_playback: Option<crate::ReplayPlaybackConfig>,
     playback_controls: Option<crate::replay_playback::PlaybackHook>,
@@ -155,6 +156,7 @@ impl EngineBuilder {
             profile_persistence: false,
             profile_off_disk: false,
             run_save: false,
+            checkpoints: None,
             run_recordings: None,
             replay_playback: None,
             playback_controls: None,
@@ -245,6 +247,18 @@ impl EngineBuilder {
     #[must_use]
     pub fn run_recordings(mut self, config: crate::RunRecordingConfig) -> Self {
         self.run_recordings = Some(config);
+        self
+    }
+
+    /// Installs a [`Checkpoints`](crate::Checkpoints) resource: a game system captures the world into
+    /// a named in-memory slot and restores it at the frame boundary, keeping the frame, held input,
+    /// the live profile, `carry_resource` resources and an open recording. See `ludion docs
+    /// checkpoints`.
+    ///
+    /// `build` fails with `L1560` for a `max_slots` of 0 or above 64.
+    #[must_use]
+    pub fn checkpoints(mut self, config: crate::CheckpointConfig) -> Self {
+        self.checkpoints = Some(config);
         self
     }
 
@@ -1228,6 +1242,10 @@ impl EngineBuilder {
         engine.install_profile();
         if self.run_save {
             engine.init_run_save();
+        }
+        if let Some(config) = self.checkpoints {
+            config.validate()?;
+            engine.init_checkpoints(config);
         }
         if let Some(config) = self.run_recordings.clone() {
             if config.keyframe_every == 0 {

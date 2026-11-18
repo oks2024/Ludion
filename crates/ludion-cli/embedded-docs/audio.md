@@ -214,7 +214,7 @@ queue.music_stem_gain("music/perc.ogg", 1.0, 120); // raise the percussion over 
 
 ## Category gains
 
-Every message carries an `AudioCategory`: a `play()` or `play_at()` one-shot is `sfx`, while loops (`loop_start`)
+Every message carries an `AudioCategory` (`sfx`, `ambient`, `voice`, `ui`): a `play()` or `play_at()` one-shot is `sfx`, while loops (`loop_start`)
 and `AudioEmitter`s are `ambient` by default. The category is a *tag* — the sink reads it, no system
 does.
 
@@ -239,7 +239,7 @@ fn game() -> EngineBuilder {
 - **It is a mixdown concern, not gameplay.** The gains live in the sink, never in the world — the same
   category of thing as which output device to open. No value here moves the `WorldHash`, a replay, or
   the audio log: the log records what was *asked for*, at the authored gain.
-- **There is no runtime setter.** The mixdown is authored once, at build time; a player-facing volume slider is a separate surface.
+- **Runtime volume, ducking and pause** are `AudioQueue::bus_gain` / `bus_pause` / `bus_resume`: `ludion docs audio-mix`. The `voice` and `ui` buses have no authored field and read `1.0`.
 - **The mixer soft-limits, it does not clip.** Voices that sum past `0.8` are bent onto full scale by
   a smooth knee rather than flat-topped, so a staged kill firing four distinct sounds at once stays
   clean.
@@ -252,6 +252,7 @@ fn game() -> EngineBuilder {
 
 ## Next
 
+- `ludion docs audio-mix` — runtime bus gain, settings sliders, pause menus.
 - `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs verify-loop` — the `cargo test` verification loop.
 - `ludion docs running` — hosting a scene and observing it.

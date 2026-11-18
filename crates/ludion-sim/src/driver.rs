@@ -11,6 +11,8 @@
 //!
 //! 1. **Inputs** — clear the [`InputState`] edge sets, then apply every scripted event addressed
 //!    to frame *N*, in script order.
+//!    Then, if the world holds an [`Actions`] resource, resolve it against the fresh [`InputState`]
+//!    (gestures advance one tick; a world without one is untouched).
 //! 2. **Gameplay clock** — fold the [`GameClock`] resource, if the world carries one: a frame the
 //!    game marked frozen becomes one more held frame, and the fold reports whether gameplay time
 //!    advanced into this tick. A world with no clock behaves as an unheld one.
@@ -35,6 +37,7 @@ use ludion_core::rng::{DeterministicRng, WorldSeed};
 use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
 use ludion_ecs::{Schedule, ScheduleObserver, SystemCtx, SystemPanic, World};
 
+use crate::actions::Actions;
 use crate::input::{InputEvent, InputScript, InputState};
 use crate::run_state::{RunState, Speed};
 
@@ -429,6 +432,16 @@ impl SimDriver {
         while self.cursor < events.len() && events[self.cursor].frame <= frame {
             input.apply(events[self.cursor].event);
             self.cursor += 1;
+        }
+        // Resolve the action layer against the fresh input. The resource is taken out for the call
+        // (the world offers no two-resource borrow) and put straight back.
+        if let Some(mut actions) = self.world.remove_resource::<Actions>() {
+            let input = self
+                .world
+                .resource::<InputState>()
+                .expect("SimDriver::new inserts the InputState resource");
+            actions.resolve(input);
+            self.world.insert_resource(actions);
         }
 
         // 2. The gameplay clock: fold the frame the game marked frozen, if it marked one. A world

@@ -247,6 +247,23 @@ impl GameClock {
         }
     }
 
+    /// This clock with `frames` more frames excluded (saturating): the rewind a checkpoint restore
+    /// applies, so gameplay time after the restore resumes where the slot's clock stood.
+    ///
+    /// ```
+    /// use ludion_core::time::{FrameIndex, GameClock};
+    /// let slot = GameClock::default();
+    /// // Captured at frame 10, restored at frame 40: 30 frames are excluded.
+    /// let live = slot.rebased(30);
+    /// assert_eq!(live.game_frame(FrameIndex::new(40)), slot.game_frame(FrameIndex::new(10)));
+    /// ```
+    pub const fn rebased(self, frames: u64) -> GameClock {
+        GameClock {
+            held: self.held.saturating_add(frames),
+            holding: self.holding,
+        }
+    }
+
     /// The driver's per-tick fold, run once at the start of every tick: a frame marked frozen
     /// becomes one more held frame and the mark clears.
     ///

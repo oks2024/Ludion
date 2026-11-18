@@ -3,6 +3,7 @@
 //! `thread_identity` stays its own binary because it is selected by binary name.
 //! Filter one file with `cargo nextest run -p ludion-engine --test it -E 'test(/^stem::/)'`.
 
+mod ai;
 mod allocator_restore;
 mod animation_events;
 mod anti_aliasing_host;
@@ -20,6 +21,7 @@ mod character;
 mod character_animation;
 mod character_motor;
 mod character_motor_state;
+mod checkpoints;
 mod collision_plane;
 mod command_panic;
 mod cooked_textures;
@@ -60,9 +62,11 @@ mod model_sheet;
 mod motor_batch;
 mod nav;
 mod nav_bench;
+mod nav_path;
 mod parent_joint;
 mod particles;
 mod path_follow;
+mod patrol;
 mod pattern_schema_snapshot;
 mod patterns;
 mod physics_gallery;
@@ -140,6 +144,7 @@ mod transition_residue;
 mod transition_restart;
 mod transition_snapshot;
 mod trigger_edges;
+mod ui_hud;
 mod ui_list_nav;
 mod viewmodel;
 mod voxelizer;

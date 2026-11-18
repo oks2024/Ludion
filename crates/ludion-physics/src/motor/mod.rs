@@ -9,6 +9,7 @@ mod mover;
 mod report;
 mod resize;
 mod surface;
+mod suspend;
 mod sweep;
 
 pub use batch::move_characters;
@@ -20,7 +21,8 @@ pub use mover::{
 };
 pub use report::{
     GroundHit, GroundProbe, LaneEnd, LaneFrame, LaneReport, MotorError, MoveReport, PlatformCarry,
-    ResizeReport, SurfaceHit,
+    ResizeReport, ResumeReport, SurfaceHit,
 };
 pub use resize::{fits_character, resize_character, teleport_character};
 pub use surface::SurfaceVelocity;
+pub use suspend::{character_fit, resume_character, suspend_character};

@@ -334,7 +334,7 @@ independently landable, one commit.
   hand (expected: G6's shop). The brief's core deferral.
 - **Input routing to UI** (click-on-button dispatch) — games hit-test via `InputState.mouse` +
   `resolve_ui_rect`; trigger: the same widget-toolkit friction.
-- **9-slice, UI animation, styling/theming systems** — trigger: real content demand post-G3.
+- **9-slice, UI animation, styling/theming systems** — trigger: real content demand post-G3. Trigger fired for animation, clipping and nine-slice: see `Plan/ui-hud.md`.
 - **A detached `pivot` field** (anchor names both ends, decision 2) — trigger: content that needs
   an element pinned by a non-anchor point.
 - **UI-specific fonts / font assets** — the 8×8 bitmap atlas is the one text surface engine-wide;

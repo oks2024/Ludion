@@ -1,10 +1,10 @@
 ---
-description: Keyboard, mouse and gamepad input: edges, press-anything, move vector, actions, cursor aim
+description: Keyboard, mouse and gamepad input: edges, move vector, named actions, gestures, cursor aim
 ---
 
 # Input
 
-**Scope:** Every device read a system makes — keys, mouse, gamepad; edges and levels; "press anything"; the standard move vector; `Action` bindings; aiming from the cursor or a stick. The system contract and the determinism rules are systems; copyable patterns are recipes.
+**Scope:** Every device read a system makes — keys, mouse, gamepad; edges and levels; "press anything"; the standard move vector; `Action` bindings and the data-driven action map (gestures, axes); aiming from the cursor or a stick. The system contract and the determinism rules are systems; copyable patterns are recipes.
 
 ## Keys — only through `InputState`
 
@@ -20,7 +20,7 @@ fn steer(world: &mut World, _ctx: &SystemCtx) {
 }
 ```
 
-`is_held` is level; `was_pressed`/`was_released` are one-frame edges (one sim tick; under a hold, see `ludion docs game-clock`). `Key` variants games use:
+`is_held` is level; `was_pressed`/`was_released` are one-frame edges (one sim tick; under a hold, see `ludion docs game-clock`). `Key` is physical and positional, the whole keyboard:
 `A`–`Z`, `Digit0`–`Digit9`, `Up`/`Down`/`Left`/`Right`, `Space`, `Enter`, `Escape`, `Shift`, `Ctrl`, `Alt` (folded —
 left and right are one key, held while either is down; Cmd/Super is not mapped).
 
@@ -68,7 +68,8 @@ like keys.
   `Start`/`Select`, and `DpadUp`/`DpadDown`/`DpadLeft`/`DpadRight`, and `LeftTrigger`/`RightTrigger`.
 - Each trigger is also a button, held while its value is `>= TRIGGER_THRESHOLD` (0.5): so
   `was_pressed(GamepadButton::RightTrigger)` is a trigger pull and it can go in an `Action`. The
-  analog value stays readable; there is no hysteresis (0.5 presses, 0.49 releases).
+  analog value stays readable; this button has no hysteresis (0.5 presses, 0.49 releases). For hysteresis
+  bind `trigger: left|right` with `press`/`release` in an action map (below).
 
 ## "Press anything" — `input.any_pressed()`
 
@@ -111,8 +112,76 @@ if input.action_pressed(&JUMP) { /* jump */ }
 ```
 
 `action_pressed` and `action_held` fire for any input of the action; `action_released` waits for the
-last of them (some input went up this tick and none is still down). Rebinding, saved bindings and
-per-device prompt labels are out of scope.
+last of them (some input went up this tick and none is still down). `Action` constants are
+compile-time; for taps, holds, axes and a data-driven map, use the action map below. Saved bindings
+and per-device prompt labels are not in the engine.
+
+## Action maps — named actions, data-driven
+
+A `kind: input-actions` document names what the player means and which physical inputs mean it. It is
+sim-side data: `InputActionsDoc` compiles with `ActionMap::compile(&doc, rate)` into the `Actions`
+resource, and the `SimDriver` resolves it once per tick when the world holds one. The engine does not
+load the file; build the document and insert `Actions` yourself.
+
+```yaml
+gestures: { tap_max: 0.22, hold: 0.35, double_tap_window: 0.25 }   # seconds; all optional
+actions:
+  crouch:                      # a-z 0-9 _
+    kind: button
+    bindings:
+      - { key: C, gesture: tap }
+      - { key: C, gesture: hold }
+  fire:
+    kind: button
+    bindings: [ { mouse: left }, { trigger: right, press: 0.5, release: 0.35 } ]
+  move:
+    kind: axis2
+    bindings:
+      - { keys: { up: W, down: S, left: A, right: D } }
+      - { stick: left, deadzone: 0.2 }
+  look:
+    kind: axis2
+    bindings: [ { mouse_delta: true, scale: 0.05, invert_y: true }, { stick: right, scale: 3.0 } ]
+```
+
+```rust
+const CROUCH: ActionName = ActionName::new("crouch");
+let actions = world.resource::<Actions>().unwrap();
+if actions.pressed(CROUCH) { /* a tap or a hold fired this tick */ }
+let [x, y] = actions.axis2(ActionName::new("move"));
+```
+
+Reads: `pressed` / `held` / `released` (buttons; `released` waits for the last held binding),
+`held_ticks` and `hold_progress` (a `hold` binding's ticks down and its fraction of the threshold),
+`axis` (`axis1`), `axis2`. An unknown name reads inactive or zero and is reported once through
+`take_unknown()` (`L4270`). A binding names one source; the source must fit the action's kind:
+
+| kind | sources |
+|---|---|
+| `button` | `key`, `mouse`, `pad`, `trigger: left\|right`, `wheel: up\|down` |
+| `axis1` | `wheel: x\|y`, `key_pair: [neg, pos]`, `pad_pair: [neg, pos]` |
+| `axis2` | `keys: {up,down,left,right}` (1/√2 diagonals), `stick: left\|right`, `mouse_delta: true` |
+
+Modifiers: `gesture` on a button source (not a wheel step); `press`/`release` on `trigger` only (default
+0.5 and 0.7 × `press`; a trigger presses at or above `press` and releases below `release`);
+`deadzone` on `stick` only (radial, default 0.2); `scale`, `invert_x`, `invert_y` on analog sources
+(`invert_x` negates an `axis1` source's one value). An axis action reads its first non-zero binding in
+binding order. `context` scopes the duplicate check; `locked` is parsed and carried. Compile errors,
+all at once with a JSON Pointer: `L1630` zero or several sources, `L1631` source does not fit the kind,
+`L1632` modifier does not fit the source, `L1633` value out of range, `L1634` same input and gesture
+twice in one context, `L1635` empty bindings or a bad name.
+
+### Gestures
+
+Per physical input, with `n` the ticks it has been down (1 on the press tick): **press** fires on the
+down edge and is level while down; **hold** fires on the tick `n == hold` and is level until release;
+**tap** fires on release when no hold fired and `n <= tap_max`; **double_tap** fires on a second press
+within `double_tap_window` after a tap and is level while held. When an input has a `double_tap`
+binding its tap is deferred: it fires `double_tap_window` ticks after the release, unless the second
+press cancels it — that latency is the cost of telling the two apart. Thresholds are sim ticks
+(seconds rounded half up at the tick rate, minimum 1), never `game_dt`: a `GameClock` hold or slow
+motion never stretches one. `Actions::state()` and `restore_state()` carry a mid-gesture state across a
+snapshot.
 
 ## Headless is quiescent, not broken
 

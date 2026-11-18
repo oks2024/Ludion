@@ -312,6 +312,7 @@ pub fn switch_to_ragdoll(
     world
         .remove::<Velocity>(entity)
         .expect("checked alive above");
+    crate::motor::suspend_motor_of(world, entity);
 
     Ok(spawned)
 }

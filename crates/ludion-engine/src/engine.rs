@@ -519,6 +519,9 @@ pub struct Engine {
     /// The suspended-run state, `Some` once [`run_save`](crate::EngineBuilder::run_save) opted in.
     /// The [`RunSave`] resource mirrors it after every world rebuild.
     run_save: Option<RunSaveState>,
+    /// The in-memory checkpoint store, `Some` once [`checkpoints`](crate::EngineBuilder::checkpoints)
+    /// opted in. The [`Checkpoints`](crate::Checkpoints) resource mirrors it after every rebuild.
+    pub(crate) checkpoints: Option<crate::checkpoints::CheckpointState>,
     /// The run-recording state, `Some` once [`run_recordings`](crate::EngineBuilder::run_recordings)
     /// opted in. It lives here, not in `SessionState`, because a run's reset clears the session.
     run_recording: Option<RunRecordingState>,
@@ -730,6 +733,18 @@ impl SessionState {
     /// [`crate::transition`]'s `perform`, which is where the departing world is still readable.
     fn carry(&mut self) {}
 
+    /// A checkpoint restore: the session continues — every log and the doc-reload set survive, since
+    /// the restore is a sim event inside the run — while the residue and the authored-name set are
+    /// **replaced** by the slot's, so a later return re-applies what the captured session kept.
+    fn rewind(
+        &mut self,
+        residue: StableMap<String, crate::transition::SceneResidue>,
+        authored_names: StableSet<String>,
+    ) {
+        self.residue = residue;
+        self.authored_names = Some(authored_names);
+    }
+
     /// A `restore`: the transient logs reset (a snapshot never captures them; a replay regenerates
     /// them), but the doc-reload set is **replaced** by the snapshot's `reloads`. The caller then
     /// re-applies them off-disk (via [`prepare_docs`](crate::docs::prepare_docs)) so a
@@ -925,6 +940,7 @@ impl Engine {
             profile_persistence: false,
             profile_off_disk: false,
             run_save: None,
+            checkpoints: None,
             run_recording: None,
             replay_playback: None,
             playback: None,
@@ -2008,12 +2024,13 @@ impl Engine {
         self.drain_audio(frame);
         self.sync_audio_emitters(frame);
         self.drain_profile(frame);
+        self.drain_checkpoints(frame);
         self.drain_run_save(frame);
         self.take_host_requests();
         self.drain_residue_clear();
         self.drain_render_settings();
         self.drain_cursor_lock();
-        if !self.drain_shutdown() {
+        if !self.drain_shutdown() && !self.drain_checkpoint_restore(frame) {
             self.drain_scene_switch(frame);
         }
         false
@@ -2057,6 +2074,7 @@ impl Engine {
         crate::projectiles::report_unrun_step(self.driver.world_mut(), game_systems);
         crate::fonts::report_font_faults(self.driver.world_mut());
         scene_physics::report_rejections(self.driver.world_mut());
+        crate::ai::report_faults(self.driver.world_mut());
         scene_physics::report_missing_joints(self.driver.world_mut());
         scene_physics::report_motor_mismatches(self.driver.world_mut());
         scene_physics::report_impulse_misses(self.driver.world_mut());
@@ -2065,7 +2083,7 @@ impl Engine {
     }
 
     /// Sends what the [`Diagnostics`](crate::Diagnostics) resource holds to both sinks and empties it.
-    fn emit_pending_diagnostics(&mut self) {
+    pub(crate) fn emit_pending_diagnostics(&mut self) {
         let reported = match self.driver.world_mut().resource_mut::<crate::Diagnostics>() {
             Some(diagnostics) if !diagnostics.is_empty() => diagnostics.take(),
             _ => return,
@@ -2148,6 +2166,10 @@ impl Engine {
         recorder: &mut Recorder,
         frame: FrameIndex,
     ) -> Result<Option<Diagnostic>, Diagnostic> {
+        if let Some(skipped) = self.checkpoint_keyframe_skip() {
+            recorder.last_keyframe = frame;
+            return Ok(Some(skipped));
+        }
         match crate::snapshot::capture(self) {
             Ok(snapshot) => {
                 crate::recording::write_keyframe(recorder, frame, &snapshot)
@@ -5046,6 +5068,10 @@ impl Engine {
         self.scene_bases.insert(base_key(&resolved), text);
     }
 
+    pub(crate) fn current_scene_path(&self) -> Option<&str> {
+        self.current_scene_path.as_deref()
+    }
+
     pub(crate) fn set_current_scene_path(&mut self, path: Option<String>) {
         self.current_scene_path = path;
     }
@@ -6865,6 +6891,9 @@ impl Engine {
         keyframe_interval: u64,
         game: Option<ludion_protocol::replay::GameIdentity>,
     ) -> Result<(), Diagnostic> {
+        if let Some(refusal) = self.checkpoint_arm_refusal() {
+            return Err(refusal);
+        }
         let mut header = self.replay_header();
         header.game = game;
         let writer = ReplayWriter::new(sink, &header).map_err(io_to_diagnostic)?;
@@ -7730,6 +7759,16 @@ pub(crate) enum Rebuild {
         profile_text: Option<String>,
         restart: bool,
     },
+    /// A checkpoint restore: the slot's world inside the live session. The frame, held input, logs,
+    /// doc reloads, carried resources and the live profile (`profile_text`, taken before the swap)
+    /// continue; the residue and authored names are the slot's and the clock is already rebased.
+    Checkpoint {
+        residue: StableMap<String, crate::transition::SceneResidue>,
+        authored_names: StableSet<String>,
+        game_clock: GameClock,
+        arrived_by_restart: bool,
+        profile_text: Option<String>,
+    },
 }
 
 impl Engine {
@@ -7800,13 +7839,14 @@ impl Engine {
         // The latch is session state, not world state, so it is taken before the swap. It crosses a
         // switch only: a load or restore is a fresh session, so a still-broken scene reports again.
         let diagnostics = match &kind {
-            Rebuild::Switch { .. } => self.carry_diagnostics(),
+            Rebuild::Switch { .. } | Rebuild::Checkpoint { .. } => self.carry_diagnostics(),
             Rebuild::Load { .. } | Rebuild::Restore { .. } => crate::Diagnostics::default(),
         };
-        // The game's registered resources cross only on a switch: a `scene.load` is a fresh session and
-        // a `restore` reinstalls from a snapshot that never held them. Both worlds are alive here — the
+        // The game's registered resources cross only on a switch or a checkpoint restore (a sim event
+        // inside the session, like a restart): a `scene.load` is a fresh session and a `restore`
+        // reinstalls from a snapshot that never held them. Both worlds are alive here — the
         // departing one is dropped by the swap.
-        if matches!(kind, Rebuild::Switch { .. }) {
+        if matches!(kind, Rebuild::Switch { .. } | Rebuild::Checkpoint { .. }) {
             for carry in &self.resource_carriers {
                 carry(self.driver.world_mut(), driver.world_mut());
             }
@@ -7825,7 +7865,9 @@ impl Engine {
                 driver.world_mut().insert_resource(*std::mem::take(input));
                 driver.set_pending_input(std::mem::take(pending_input));
             }
-            Rebuild::Switch { .. } => driver.carry_input_from(&mut self.driver),
+            Rebuild::Switch { .. } | Rebuild::Checkpoint { .. } => {
+                driver.carry_input_from(&mut self.driver)
+            }
         }
         self.driver = driver;
         if matches!(kind, Rebuild::Load { .. } | Rebuild::Restore { .. }) {
@@ -7846,7 +7888,9 @@ impl Engine {
             Rebuild::Load { source, .. } => {
                 std::sync::OnceLock::from(Some(std::mem::take(&mut **source)))
             }
-            Rebuild::Restore { .. } | Rebuild::Switch { .. } => std::sync::OnceLock::new(),
+            Rebuild::Restore { .. } | Rebuild::Switch { .. } | Rebuild::Checkpoint { .. } => {
+                std::sync::OnceLock::new()
+            }
         };
         self.scene_name = scene_name;
         self.scene_physics = scene_physics;
@@ -7865,6 +7909,10 @@ impl Engine {
                     arrived_by_restart: true,
                     ..
                 }
+                | Rebuild::Checkpoint {
+                    arrived_by_restart: true,
+                    ..
+                }
         ) && let Some(switch) = self
             .driver
             .world_mut()
@@ -7878,7 +7926,9 @@ impl Engine {
         self.install_debug_draw();
         // A restore resumes the gameplay time it captured, not a clock level with the frame counter.
         self.install_game_clock(match &kind {
-            Rebuild::Restore { game_clock, .. } => *game_clock,
+            Rebuild::Restore { game_clock, .. } | Rebuild::Checkpoint { game_clock, .. } => {
+                *game_clock
+            }
             Rebuild::Load { .. } | Rebuild::Switch { .. } => GameClock::default(),
         });
         self.install_diagnostics(diagnostics);
@@ -7931,11 +7981,23 @@ impl Engine {
                 self.session.carry();
                 self.session.authored_names = Some(std::mem::take(authored));
             }
+            Rebuild::Checkpoint {
+                residue,
+                authored_names,
+                ..
+            } => self
+                .session
+                .rewind(std::mem::take(residue), std::mem::take(authored_names)),
         }
         // After the session settles: the mirror copies its residue. On a switch `perform` has already
         // committed the departing scene's capture, so the arriving district reads what it just left.
         self.install_residue_store();
         self.install_run_save();
+        // A load or restore is a fresh session; a switch and a checkpoint restore keep the slots.
+        self.install_checkpoints(matches!(
+            kind,
+            Rebuild::Load { .. } | Rebuild::Restore { .. }
+        ));
         self.install_run_recording();
         self.install_replay_playback();
         self.commit_docs(docs);
@@ -7967,8 +8029,15 @@ impl Engine {
             Rebuild::Switch {
                 profile_text: Some(text),
                 ..
+            }
+            | Rebuild::Checkpoint {
+                profile_text: Some(text),
+                ..
             } => self.install_profile_from_text(text),
             Rebuild::Switch {
+                profile_text: None, ..
+            }
+            | Rebuild::Checkpoint {
                 profile_text: None, ..
             } => {}
         }

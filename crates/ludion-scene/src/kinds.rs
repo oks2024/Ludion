@@ -135,6 +135,13 @@ pub const KINDS: &[KindEntry] = &[
         model_sheet: false,
     },
     KindEntry {
+        name: "patrol",
+        noun: "a patrol",
+        check: KindCheck::Here(|s| crate::check_patrol(s).map(drop)),
+        doc_store: false,
+        model_sheet: false,
+    },
+    KindEntry {
         name: "animation",
         noun: "an animation clip",
         check: KindCheck::Here(|s| crate::check_animation(s).map(drop)),

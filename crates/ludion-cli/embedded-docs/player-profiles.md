@@ -174,6 +174,8 @@ or just written, and `last_resume()` the `ResumeOutcome` (`Resumed` or `Refused`
 - **Profile:** the resume installs the snapshot's profile (the restore rule), so do not write the
   profile between a suspend and its resume; `discard()` when a new run starts.
 
+To roll back to the last threshold after a death with the profile, frame and recording kept, use `Checkpoints` (`ludion docs checkpoints`), not a suspend.
+
 Example: `cargo run -p ludion --example run_save`. A run recording across a suspend (it ends at the suspend; `resume()` while recording is refused) is `ludion docs replays`.
 
 ## Non-goals (and their triggers)

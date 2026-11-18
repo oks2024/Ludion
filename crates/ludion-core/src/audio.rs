@@ -76,6 +76,74 @@ pub enum AudioCategory {
     Sfx,
     /// A sustained ambient bed: a drone, wind, a tolling bell.
     Ambient,
+    /// Spoken dialogue and barks.
+    Voice,
+    /// Interface sounds: clicks, confirmations, menu music stings.
+    Ui,
+}
+
+/// A mixdown bus: every [`AudioCategory`], the music bus and the master over all of them.
+///
+/// Runtime gain and pause ([`AudioMessage::BusGain`], [`AudioMessage::BusPause`]) address buses.
+/// A tag the sink reads, never simulation state.
+///
+/// # Example
+///
+/// ```
+/// use ludion_core::audio::{AudioCategory, Bus};
+///
+/// assert_eq!(Bus::from(AudioCategory::Voice), Bus::Voice);
+/// assert_eq!(Bus::from(AudioCategory::Sfx), Bus::Sfx);
+/// assert_eq!(Bus::ALL.len(), 6);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Bus {
+    /// Multiplies every other bus.
+    Master,
+    /// Sound effects.
+    Sfx,
+    /// Ambient beds.
+    Ambient,
+    /// Dialogue.
+    Voice,
+    /// Interface sounds.
+    Ui,
+    /// The music player.
+    Music,
+}
+
+impl Bus {
+    /// Every bus, in index order (`bus as usize`).
+    pub const ALL: [Bus; 6] = [
+        Bus::Master,
+        Bus::Sfx,
+        Bus::Ambient,
+        Bus::Voice,
+        Bus::Ui,
+        Bus::Music,
+    ];
+}
+
+impl From<AudioCategory> for Bus {
+    fn from(category: AudioCategory) -> Bus {
+        match category {
+            AudioCategory::Sfx => Bus::Sfx,
+            AudioCategory::Ambient => Bus::Ambient,
+            AudioCategory::Voice => Bus::Voice,
+            AudioCategory::Ui => Bus::Ui,
+        }
+    }
+}
+
+/// Which runtime gain layer a [`AudioMessage::BusGain`] writes. The layers multiply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MixLayer {
+    /// The player's setting (a volume slider); survives a world rebuild.
+    User,
+    /// The game's mix (ducking, scripted levels); reset by a world rebuild.
+    Game,
 }
 
 /// The master gain of each mixdown bus: how loud sound effects are against ambience.
@@ -84,7 +152,9 @@ pub enum AudioCategory {
 /// sink, which multiplies every voice by its own bus's value while mixing. It is a mixdown decision,
 /// the same category of thing as which device to open — never simulation state: it reaches no
 /// `WorldHash`, no snapshot and no audio log, so changing a value here cannot move a replay. There
-/// is no runtime setter: a player-facing volume slider would be a separate surface.
+/// is no authored field for the `voice` and `ui` buses (they read `1.0`) and the master bus is `1.0`;
+/// runtime volume, ducking and pause go through [`AudioMessage::BusGain`] and
+/// [`AudioMessage::BusPause`].
 ///
 /// It lives here, beside [`AudioCategory`], because the engine (which stores the authored value) and
 /// the sink (which applies it) both need the type and neither may depend on the other.
@@ -130,6 +200,7 @@ impl CategoryGains {
         match category {
             AudioCategory::Sfx => self.sfx,
             AudioCategory::Ambient => self.ambient,
+            AudioCategory::Voice | AudioCategory::Ui => 1.0,
         }
     }
 }
@@ -245,7 +316,9 @@ pub enum AudioMessage {
     },
     /// Silence every running loop and the music; each fades out over about 10 ms. A loop's playback
     /// state lives only in the sink, so a rebuilt world has nothing to diff against — the blanket
-    /// stop is what keeps a loop or a track from outliving the scene that started it.
+    /// stop is what keeps a loop or a track from outliving the scene that started it. It also resets
+    /// the [`MixLayer::Game`] gains to `1.0` and every bus pause, drops the voices held on a paused
+    /// bus, and keeps the [`MixLayer::User`] gains.
     StopAllLoops,
     /// Stream `track` as the music, or update the gain of the track already playing. Music is one
     /// voice: the same track again (not stopping) only takes the new `gain`, so resending it every
@@ -287,6 +360,41 @@ pub enum AudioMessage {
         /// The target linear gain.
         gain: f32,
         /// The slew length in sim ticks.
+        fade_frames: u32,
+    },
+    /// Slew one layer of a bus's runtime gain to `gain` over `fade_frames` sim ticks (`0` still
+    /// slews about 10 ms, click-free). The effective bus gain is `authored x user x game x pause`.
+    ///
+    /// ```
+    /// use ludion_core::audio::{AudioMessage, Bus, MixLayer};
+    ///
+    /// // "The player set music to 40%."
+    /// let message = AudioMessage::BusGain {
+    ///     bus: Bus::Music,
+    ///     layer: MixLayer::User,
+    ///     gain: 0.4,
+    ///     fade_frames: 0,
+    /// };
+    /// assert_ne!(message, AudioMessage::StopAllLoops);
+    /// ```
+    BusGain {
+        /// The bus.
+        bus: Bus,
+        /// The layer written.
+        layer: MixLayer,
+        /// The target linear gain, at least `0.0`.
+        gain: f32,
+        /// The slew length in sim ticks.
+        fade_frames: u32,
+    },
+    /// Hold (`paused`) or release the listed buses over `fade_frames` sim ticks. A held voice keeps
+    /// its cursor — loops and music included — and silent voices are not advanced.
+    BusPause {
+        /// The buses held or released.
+        buses: Vec<Bus>,
+        /// `true` holds, `false` resumes.
+        paused: bool,
+        /// The fade length in sim ticks.
         fade_frames: u32,
     },
 }
