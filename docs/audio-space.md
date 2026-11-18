@@ -59,6 +59,7 @@ queue.voice_stop(id, 6); // optional: fade it out over 6 ticks
   A voice on an already-dead entity sends nothing.
 - **It ends with the clip.** The engine reads the WAV's length at the frame boundary and stops following after
   `ceil(frames x tick_hz / sample_rate)` ticks; `audio_messages` carries `VoiceStart`, `VoiceSync`, `VoiceStop`.
+- **An audible attached voice counts for ducking** (`DuckRule`, `ludion docs audio-mix`); one out of earshot does not.
 - **A despawned entity stops it** with the sink's ~10 ms fade; `voice_stop` on an ended or unknown id is ignored.
 - **Ids count up from `0` per queue** and restart when the world rebuilds (`scene.load`, restore).
 - A device reopen drops attached voices, as it drops one-shots; only loops come back.

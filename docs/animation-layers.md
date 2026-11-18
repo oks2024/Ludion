@@ -1,5 +1,5 @@
 ---
-description: Bone masks, AnimationLayers and blend spaces on a skinned character
+description: Masks, AnimationLayers and blend spaces on skinned characters and voxel assemblies
 ---
 
 # Animation layers
@@ -157,12 +157,14 @@ collinear 2D points, an unbound or non-looping point clip, or a `sync` event a p
 - **Presentation only.** No system reads the component; the pose is never hashed, and a scene without
   it poses and hashes exactly as before. The component itself is hashed state, like `Animation`.
 - An unknown clip or mask name, or a layer at weight 0, is a silent degrade — the layer does nothing.
-- A skin named by `SkinBone` parts refuses `AnimationLayers` (`L1672`); assemblies and prefab parts
-  ignore it.
+- A skin named by `SkinBone` parts refuses `AnimationLayers` (`L1672`); prefab parts ignore it.
+  An assembly takes layers over plain clips with its own `masks:` (`ludion docs voxel-animation`);
+  assembly blends are not supported.
 - A layer raises no `AnimationEvents` unless it sets `events: true`.
 - `ParentJoint` sockets and `posed_joint_world` read the layered pose.
 
 ## Next
 
 - `ludion docs character-animation` — the base clip, crossfade, events and sockets.
+- `ludion docs voxel-animation` — layers on an assembly: part masks, override and additive rules.
 - `ludion docs components` — the `AnimationLayers` row.

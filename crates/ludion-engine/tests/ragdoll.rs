@@ -12,9 +12,10 @@ use ludion_core::math::glam::{Mat4, Quat, Vec3};
 use ludion_core::time::{FrameIndex, SimTime, TickRate};
 use ludion_ecs::{Component, World};
 use ludion_engine::{
-    Animation, AssemblyData, Engine, Mesh, MeshSource, Name, QualityParams, Transform, extract_at,
-    load_assembly, switch_to_ragdoll,
+    Animation, AssemblyData, Diagnostics, Engine, Mesh, MeshSource, Name, QualityParams, Transform,
+    extract_at, load_assembly, switch_to_ragdoll,
 };
+use ludion_physics::{PartSurface, SurfacePart, SurfaceTag};
 use ludion_spatial::{Body, Collider, Joint, JointKind, Shape, Velocity};
 
 // --- Fixture -------------------------------------------------------------------------------------
@@ -780,4 +781,120 @@ fn the_figure_falls_jointed_and_deterministically() {
         "the figure must fall under gravity: torso.y = {} from a start of {FIGURE_START_Y}",
         torso_a[1]
     );
+}
+
+// --- Surface tag inheritance (`Plan/surface-tags.md` decision 10) -----------------------------------
+
+/// A switchable figure at the origin, optionally carrying `tag`, in a world with `Diagnostics`.
+fn tagged_figure(tag: Option<SurfaceTag>) -> (World, EntityId) {
+    let mut world = World::new();
+    world.insert_resource(Diagnostics::default());
+    let figure = world.spawn();
+    world.insert(figure, Transform::default()).unwrap();
+    world
+        .insert(
+            figure,
+            bare_mesh(MeshSource::Assembly(ASSEMBLY_REL.to_string())),
+        )
+        .unwrap();
+    if let Some(tag) = tag {
+        world.insert(figure, tag).unwrap();
+    }
+    (world, figure)
+}
+
+fn part_tag(part: &str, surface: &str) -> PartSurface {
+    PartSurface {
+        part: SurfacePart::Name(part.to_string()),
+        surface: surface.to_string(),
+    }
+}
+
+/// A named part takes its entry's surface, every other part the root's; the root keeps its tag.
+#[test]
+fn ragdoll_parts_inherit_the_root_surface_tag_by_part_name() {
+    let root = fixture_project("surface-inherit");
+    let data = assembly_data(&root);
+    let tag = SurfaceTag {
+        surface: "cloth".to_string(),
+        parts: vec![part_tag("arm-ball", "metal")],
+    };
+    let (mut world, figure) = tagged_figure(Some(tag.clone()));
+    let spawned = switch_to_ragdoll(
+        &mut world,
+        figure,
+        &data,
+        SimTime::from_ticks(0, TickRate::DEFAULT),
+    )
+    .expect("a valid switch");
+    let surfaces: Vec<String> = spawned
+        .iter()
+        .map(|&id| get::<SurfaceTag>(&world, id).expect("a tag").surface)
+        .collect();
+    assert_eq!(surfaces, ["cloth", "cloth", "metal", "cloth"]);
+    assert!(
+        spawned
+            .iter()
+            .all(|&id| get::<SurfaceTag>(&world, id).unwrap().parts.is_empty())
+    );
+    assert_eq!(get::<SurfaceTag>(&world, figure), Some(tag));
+    assert_eq!(
+        world
+            .resource::<Diagnostics>()
+            .unwrap()
+            .reported(ludion_core::codes::code::SURFACE_PART_UNMATCHED)
+            .count(),
+        0
+    );
+}
+
+/// A root without a tag gives no part one.
+#[test]
+fn an_untagged_root_gives_its_parts_no_surface_tag() {
+    let root = fixture_project("surface-untagged");
+    let data = assembly_data(&root);
+    let (mut world, figure) = tagged_figure(None);
+    let spawned = switch_to_ragdoll(
+        &mut world,
+        figure,
+        &data,
+        SimTime::from_ticks(0, TickRate::DEFAULT),
+    )
+    .expect("a valid switch");
+    assert!(
+        spawned
+            .iter()
+            .all(|&id| get::<SurfaceTag>(&world, id).is_none())
+    );
+}
+
+/// A mistyped name key does not cancel the switch: every part takes the root surface and the world
+/// holds exactly one `L1695` warning.
+#[test]
+fn a_mistyped_part_key_warns_once_and_falls_back_to_the_root_surface() {
+    let root = fixture_project("surface-typo");
+    let data = assembly_data(&root);
+    let tag = SurfaceTag {
+        surface: "cloth".to_string(),
+        parts: vec![part_tag("arm-bal", "metal")],
+    };
+    let (mut world, figure) = tagged_figure(Some(tag));
+    let spawned = switch_to_ragdoll(
+        &mut world,
+        figure,
+        &data,
+        SimTime::from_ticks(0, TickRate::DEFAULT),
+    )
+    .expect("the switch still succeeds");
+    assert!(
+        spawned
+            .iter()
+            .all(|&id| get::<SurfaceTag>(&world, id).unwrap().surface == "cloth")
+    );
+    let diagnostics = world.resource::<Diagnostics>().unwrap();
+    let keys: Vec<&str> = diagnostics
+        .reported(ludion_core::codes::code::SURFACE_PART_UNMATCHED)
+        .collect();
+    assert_eq!(keys.len(), 1, "{keys:?}");
+    assert!(keys[0].ends_with(":arm-bal"), "{keys:?}");
 }

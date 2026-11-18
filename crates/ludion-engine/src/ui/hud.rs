@@ -18,7 +18,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::time::TickRate;
 use ludion_ecs::World;
-use ludion_renderer::UiInstance;
+use ludion_renderer::{UiClip, UiInstance};
 
 use super::group::{GroupXf, UiGroups};
 use super::{
@@ -264,7 +264,7 @@ pub(crate) fn pre_group(
 }
 
 /// The bounding box `[l, t, r, b]` of every rect and glyph quad in `instances`, or `None` when empty.
-fn bounds(instances: &[UiEntry]) -> Option<[f32; 4]> {
+pub(crate) fn bounds(instances: &[UiEntry]) -> Option<[f32; 4]> {
     let mut out: Option<[f32; 4]> = None;
     let mut grow = |b: [f32; 4]| {
         out = Some(match out {
@@ -450,6 +450,11 @@ fn apply_group(entries: &mut [UiEntry], start: usize, group: Option<GroupXf>) {
     let Some(xf) = group else {
         return;
     };
+    for (_, _, instance) in &mut entries[start..] {
+        match instance {
+            UiInstance::Rect { clip, .. } | UiInstance::Text { clip, .. } => *clip = xf.clip,
+        }
+    }
     if xf.scale.to_bits() != 1.0f32.to_bits() || xf.offset != [0.0, 0.0] {
         transform_instances(&mut entries[start..], [0.0, 0.0], xf.scale, xf.offset);
     }
@@ -505,6 +510,24 @@ fn placement(
     Some((placed, alpha))
 }
 
+/// The pixel box a rect resolves to, before `post`: its canvas rect, or the group's box for a
+/// `fill_group` rect (a group that cannot resolve leaves the canvas rect, and `post` reports it).
+pub(crate) fn rect_box(
+    frame: &HudFrame<'_>,
+    poses: &mut WorldAffines,
+    groups: &mut UiGroups,
+    rect: &UiRect,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) -> [f32; 4] {
+    let rect_px = super::resolve_ui_rect_of(rect, frame.viewport);
+    match rect.group {
+        Some(group) if rect.fill_group && !rect.fill => groups
+            .resolve(frame, poses, group, degraded)
+            .map_or(rect_px, |g| g.box_px),
+        _ => rect_px,
+    }
+}
+
 /// Pushes the draw rows of one resolved `UiRect`: a nine-slice of nine rects when it carries a
 /// `slice` and a texture, else one rect whose uv is `uv_rect` narrowed into `uv` (the loose
 /// texture or atlas-region uv). `region_texels` is the sampled region size in texels. A `uv_rect`
@@ -530,6 +553,7 @@ pub(crate) fn emit_rect(
                 texture,
                 color: rect.color,
                 uv,
+                clip: UiClip::NONE,
             },
         )
     };
@@ -571,6 +595,7 @@ mod tests {
                 texture: None,
                 color: [1.0; 4],
                 uv: [0.0, 0.0, 1.0, 1.0],
+                clip: UiClip::NONE,
             },
         )
     }
@@ -588,6 +613,7 @@ mod tests {
                     uv: [0.0; 4],
                 }],
                 font: None,
+                clip: UiClip::NONE,
             },
         )
     }

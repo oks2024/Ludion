@@ -386,6 +386,9 @@ pub struct GroundMarkerInstance {
     pub style: GroundMarkerStyle,
     /// Seed for the flicker dropout, masked to 24 bits so it packs as an exact float integer.
     pub flicker_seed: u32,
+    /// Float offset of this marker's visibility profile in [`RenderScene::ground_marker_profiles`]
+    /// (below 2^24, so it rides a float lane exactly); `None` draws the marker unclipped.
+    pub clip: Option<u32>,
 }
 
 /// How far above a drop shadow's anchor the renderer starts looking for a receiving surface, in
@@ -912,6 +915,31 @@ pub struct TextRun {
     pub font: Option<FontDraw>,
 }
 
+/// One clip box of a [`UiClip`]: a rounded box in screen pixels. A `rect` clip has radius 0.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct UiClipBox {
+    /// Pixel-space `[x, y, w, h]`, top-left origin, +Y down.
+    pub rect_px: [f32; 4],
+    /// Corner radius in pixels, at most half the shorter side (a circle is a square box with half
+    /// its side).
+    pub radius_px: f32,
+}
+
+/// The analytic fragment clip of one UI instance: at most two [`UiClipBox`]es, innermost first,
+/// whose coverages intersect. An absent box clips nothing.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct UiClip {
+    /// The clip boxes, innermost first.
+    pub boxes: [Option<UiClipBox>; 2],
+}
+
+impl UiClip {
+    /// No clip.
+    pub const NONE: UiClip = UiClip {
+        boxes: [None, None],
+    };
+}
+
 /// One resolved screen-space UI element: a colored/textured rect, or a run of screen-space
 /// text. `ludion-engine`'s `extract()` resolves anchor + offset + size/measured-text into this plain
 /// pixel-space data — the renderer never sees an anchor or a canvas (boundary rule,
@@ -935,6 +963,8 @@ pub enum UiInstance {
         /// loose `texture:` PNG or an untextured fill; a packed atlas region is a sub-rect, the
         /// [`SpriteInstance::uv`] convention — so a run of rects sharing one atlas still batches.
         uv: [f32; 4],
+        /// The fragment clip from the element's `UiGroup` chain.
+        clip: UiClip,
     },
     /// A run of screen-space text, laid out in pixel space by extract (the same layout as
     /// [`TextRun`]).
@@ -947,6 +977,8 @@ pub enum UiInstance {
         quads: Vec<GlyphQuad>,
         /// The face's atlas, or `None` for the embedded 8x8 face.
         font: Option<FontDraw>,
+        /// The fragment clip from the element's `UiGroup` chain.
+        clip: UiClip,
     },
 }
 
@@ -1515,6 +1547,10 @@ pub struct RenderScene {
     /// the geometry standing on it and never paints over a character. Empty for a scene that authors
     /// none, which leaves the pass's recorded command stream exactly the pre-marker one.
     pub ground_markers: Vec<GroundMarkerInstance>,
+    /// The visibility profiles of the clipped markers, packed back to back. Each is a header
+    /// `[arc_start, arc_span, partial_alpha, bins]`, then `bins` radii, then `bins` partial radii;
+    /// [`GroundMarkerInstance::clip`] is the header's offset. Empty when no marker is clipped.
+    pub ground_marker_profiles: Vec<f32>,
     /// Projected drop shadows, in ascending-`EntityId` extract order. Empty for a scene that
     /// authors none, which draws no shadow pass and leaves the frame byte-identical.
     pub drop_shadows: Vec<DropShadowInstance>,
@@ -1607,6 +1643,7 @@ impl RenderScene {
             meshes: Vec::new(),
             sprites: Vec::new(),
             ground_markers: Vec::new(),
+            ground_marker_profiles: Vec::new(),
             drop_shadows: Vec::new(),
             decals: Vec::new(),
             debug_lines: Vec::new(),

@@ -63,9 +63,9 @@ use serde_json::Value;
 
 use crate::asset_cache::AssetCache;
 use crate::audio::{
-    AttachedVoice, AudioDistance, AudioLogEntry, AudioMessage, AudioPan, AudioQueue, Bus,
-    CategoryGains, ListenerPose, LoopId, MixLayer, Queued, SentLoop, VoiceId, audible_voice,
-    resync_is_current,
+    AttachedVoice, AudioCategory, AudioDistance, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
+    Bus, CategoryGains, DUCK_FLOOR_DB, DuckRule, ListenerPose, LoopId, ManualDuck, MixLayer,
+    Queued, SentLoop, VoiceId, audible_voice, db_to_gain, resync_is_current,
 };
 use crate::builtin_registry;
 use crate::components::{
@@ -555,6 +555,21 @@ pub struct Engine {
     /// Each sound a voice started on: its length in sim ticks (`None` when the file would not
     /// decode), read once per path. Content-derived, so it is no sim state.
     voice_ticks: StableMap<String, Option<u64>>,
+    /// The ducking rules ([`EngineBuilder::audio_duck`](crate::EngineBuilder::audio_duck)): authored,
+    /// so they survive a rebuild. Never hashed.
+    pub(crate) duck_rules: Vec<DuckRule>,
+    /// Live plain one-shots on a rule's `when` bus and the frame each ends.
+    duck_shots: Vec<(Bus, FrameIndex)>,
+    /// The live [`AudioQueue::duck_start`] ducks by key.
+    manual_ducks: StableMap<String, ManualDuck>,
+    /// Whether each rule's `when` bus was live at the last boundary.
+    rules_live: Vec<bool>,
+    /// The duck gain last sent per bus (indexed `bus as usize`); `1.0` is released.
+    duck_sent: [f32; 6],
+    /// This boundary's fade edges per bus: the longest attack of a source that turned on and the
+    /// longest release of one that turned off. Reset by `sync_ducks`.
+    duck_attack: [u32; 6],
+    duck_release: [u32; 6],
     /// Whether a host has enabled writing the profile to disk at the frame boundary
     /// ([`persist_profile`](crate::EngineBuilder::persist_profile)). Default `false`, so a
     /// replay/CI/test run fills the log but never clobbers or renames the machine's real
@@ -1001,6 +1016,13 @@ impl Engine {
             audible_emitters: StableMap::new(),
             attached_voices: StableMap::new(),
             voice_ticks: StableMap::new(),
+            duck_rules: Vec::new(),
+            duck_shots: Vec::new(),
+            manual_ducks: StableMap::new(),
+            rules_live: Vec::new(),
+            duck_sent: [1.0; 6],
+            duck_attack: [0; 6],
+            duck_release: [0; 6],
             profile_persistence: false,
             profile_off_disk: false,
             run_save: None,
@@ -1324,6 +1346,13 @@ impl Engine {
     #[cfg(test)]
     pub(crate) fn set_load_observer(&mut self, observer: Box<dyn LoadObserver>) {
         self.asset_cache.set_observer(Some(observer));
+    }
+
+    /// Rays the ground-marker clip has cast through this engine's extracts: a static clip's cached
+    /// profile costs none.
+    #[cfg(test)]
+    pub(crate) fn ground_marker_clip_rays(&self) -> u64 {
+        self.asset_cache.clip_rays_cast()
     }
 
     /// Whether a load observer is attached.
@@ -2095,6 +2124,7 @@ impl Engine {
         self.drain_settings(frame);
         self.sync_audio_emitters(frame);
         self.sync_attached_voices(frame);
+        self.sync_ducks(frame);
         self.drain_profile(frame);
         self.drain_input_bindings();
         self.drain_checkpoints(frame);
@@ -2372,7 +2402,12 @@ impl Engine {
             .flatten();
         for item in queued {
             match item {
-                Queued::Message(message) => self.emit_audio(frame, message),
+                Queued::Message(message) => {
+                    if let AudioMessage::OneShot(event) = &message {
+                        self.track_duck_shot(frame, event.category, &event.sound);
+                    }
+                    self.emit_audio(frame, message);
+                }
                 Queued::At {
                     mut event,
                     position,
@@ -2392,6 +2427,7 @@ impl Engine {
                     };
                     event.gain = gain;
                     event.pan = pan;
+                    self.track_duck_shot(frame, event.category, &event.sound);
                     self.emit_audio(frame, AudioMessage::OneShot(event));
                 }
                 Queued::On {
@@ -2413,6 +2449,7 @@ impl Engine {
                             id,
                             AttachedVoice {
                                 entity,
+                                bus: Bus::from(event.category),
                                 gain: event.gain,
                                 range,
                                 sent_gain: gain,
@@ -2437,7 +2474,126 @@ impl Engine {
                         self.emit_audio(frame, AudioMessage::VoiceStop { id, fade_frames });
                     }
                 }
+                Queued::DuckStart {
+                    key,
+                    buses,
+                    depth_db,
+                    attack,
+                } => {
+                    for &bus in &buses {
+                        let slot = &mut self.duck_attack[bus as usize];
+                        *slot = (*slot).max(attack);
+                    }
+                    let gain = db_to_gain(depth_db);
+                    let replaced = self.manual_ducks.insert(key, ManualDuck { buses, gain });
+                    for old in replaced.iter().flat_map(|duck| &duck.buses) {
+                        let slot = &mut self.duck_release[*old as usize];
+                        *slot = (*slot).max(attack);
+                    }
+                }
+                Queued::DuckEnd { key, release } => {
+                    if let Some(duck) = self.manual_ducks.remove(&key) {
+                        for bus in duck.buses {
+                            let slot = &mut self.duck_release[bus as usize];
+                            *slot = (*slot).max(release);
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    /// Records a plain one-shot on a rule's `when` bus as live until its WAV ends. The clip is read
+    /// only when a rule names its bus, so a game with no rule reads nothing it did not before.
+    fn track_duck_shot(&mut self, frame: FrameIndex, category: AudioCategory, sound: &str) {
+        let bus = Bus::from(category);
+        if !self.duck_rules.iter().any(|rule| rule.when == bus) {
+            return;
+        }
+        if let Some(ticks) = self.clip_ticks(sound).filter(|&ticks| ticks > 0) {
+            self.duck_shots.push((bus, FrameIndex(frame.0 + ticks)));
+        }
+    }
+
+    /// Emits a [`AudioMessage::Duck`] for each bus whose combined duck changed this boundary. A
+    /// rule is live while a plain one-shot or an audible attached voice sounds on its `when` bus; a
+    /// bus's target is the product of every live rule and manual duck naming it, floored at
+    /// [`DUCK_FLOOR_DB`]. The fade is the longest attack of a source that turned on when the target
+    /// fell, else the longest release of one that turned off. Rules, buses and the manual keys are
+    /// walked in a fixed order, so the stream is a pure function of the sim. A game with no rule and
+    /// no manual duck returns at once.
+    fn sync_ducks(&mut self, frame: FrameIndex) {
+        let mut attack = std::mem::take(&mut self.duck_attack);
+        let mut release = std::mem::take(&mut self.duck_release);
+        if self.duck_rules.is_empty()
+            && self.manual_ducks.is_empty()
+            && self.duck_sent.iter().all(|&gain| gain == 1.0)
+        {
+            return;
+        }
+        self.duck_shots.retain(|&(_, ends)| ends > frame);
+        self.rules_live.resize(self.duck_rules.len(), false);
+        let mut live = Vec::with_capacity(self.duck_rules.len());
+        for (index, rule) in self.duck_rules.iter().enumerate() {
+            let on = self.duck_shots.iter().any(|&(bus, _)| bus == rule.when)
+                || self
+                    .attached_voices
+                    .values()
+                    .any(|voice| voice.bus == rule.when && voice.sent_gain > 0.0);
+            if on != self.rules_live[index] {
+                let (slots, ticks) = if on {
+                    (&mut attack, rule.attack_ticks)
+                } else {
+                    (&mut release, rule.release_ticks)
+                };
+                for &bus in rule.duck {
+                    let slot = &mut slots[bus as usize];
+                    *slot = (*slot).max(ticks);
+                }
+            }
+            live.push(on);
+        }
+        self.rules_live = live;
+        let floor = db_to_gain(DUCK_FLOOR_DB);
+        for bus in Bus::ALL {
+            let mut product = 1.0f32;
+            let mut named = false;
+            for (rule, _) in self
+                .duck_rules
+                .iter()
+                .zip(&self.rules_live)
+                .filter(|&(_, &on)| on)
+            {
+                if rule.duck.contains(&bus) {
+                    product *= db_to_gain(rule.depth_db);
+                    named = true;
+                }
+            }
+            for duck in self.manual_ducks.values() {
+                if duck.buses.contains(&bus) {
+                    product *= duck.gain;
+                    named = true;
+                }
+            }
+            let target = if named { product.max(floor) } else { 1.0 };
+            let index = bus as usize;
+            if target == self.duck_sent[index] {
+                continue;
+            }
+            let fade_frames = if target < self.duck_sent[index] {
+                attack[index]
+            } else {
+                release[index]
+            };
+            self.duck_sent[index] = target;
+            self.emit_audio(
+                frame,
+                AudioMessage::Duck {
+                    bus,
+                    gain: target,
+                    fade_frames,
+                },
+            );
         }
     }
 
@@ -4122,6 +4278,13 @@ impl Engine {
         self.audible_emitters.clear();
         self.attached_voices.clear();
         self.voice_ticks.clear();
+        // The blanket stop below resets the sink's duck layer, so no `Duck` message goes out.
+        self.duck_shots.clear();
+        self.manual_ducks.clear();
+        self.rules_live.clear();
+        self.duck_sent = [1.0; 6];
+        self.duck_attack = [0; 6];
+        self.duck_release = [0; 6];
         let frame = self.frame();
         self.emit_audio(frame, AudioMessage::StopAllLoops);
     }

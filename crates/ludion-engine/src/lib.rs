@@ -66,6 +66,7 @@ mod field_diff;
 mod font_sheet;
 pub mod fonts;
 mod game_clock;
+mod ground_marker_clip;
 pub mod hierarchy;
 mod input_actions;
 mod input_bindings;
@@ -145,7 +146,7 @@ pub use assembly_mesh::{
 };
 pub use audio::{
     AudioCategory, AudioDistance, AudioEvent, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
-    Bus, CategoryGains, LoopId, MixLayer, VoiceId, play_sound,
+    Bus, CategoryGains, DUCK_FLOOR_DB, DuckRule, LoopId, MixLayer, VoiceId, play_sound,
 };
 pub use bisect::{
     BisectReport, ComponentDiff, DriveDone, EntityDiff, KeyframeDivergence, KeyframeDriftReport,
@@ -169,9 +170,9 @@ pub use components::{
     NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter,
     Perceiver, PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Require, Residue,
     SightPoint, SightTarget, SightZone, SkinBone, SpotLight, Sprite, SpriteBlend, Static, Text,
-    TileAppearance, Tilemap, Transform, UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiGroup,
-    UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack,
-    UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
+    TileAppearance, Tilemap, Transform, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase,
+    UiGroup, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat,
+    UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
 };
 pub use components::{
     AnimationLayer, AnimationLayers, BlendClock, LayerMode, LayerPhase, fade_layer, layer_weight,
@@ -197,6 +198,9 @@ pub use extract::set_clip_speed;
 pub use extract::{check_atlas_reference, extract, extract_at, mesh_grid_cell};
 pub use font_sheet::render_font_sheet;
 pub use fonts::FontLibrary;
+pub use ground_marker_clip::{
+    GroundMarkerClip, ProfileQuery, VisibilityProfile, ground_marker_profile, visibility_profile,
+};
 pub use hierarchy::{
     HierarchyFault, Keep, MAX_HIERARCHY_DEPTH, TransformHierarchy, WorldPose, reparent,
     world_affine, world_pose_transform, world_transform,
@@ -318,10 +322,11 @@ pub use run_save::{BuildStamp, ResumeOutcome, RunSave, RunSaveEntry, RunSaveRequ
 pub use scene_check::{
     expand_scene, font_table_faults, prefab_singleton_diagnostics, scene_atlas_diagnostics,
     scene_audio_diagnostics, scene_camera_offset_diagnostics, scene_camera_rig_diagnostics,
-    scene_engine_diagnostics, scene_font_diagnostics, scene_hierarchy_body_diagnostics,
-    scene_layer_diagnostics, scene_light_exposure_diagnostics, scene_local_light_diagnostics,
-    scene_motor_diagnostics, scene_physics_diagnostics, scene_prefab_clip_diagnostics,
-    scene_sensor_diagnostics, scene_sun_diagnostics, scene_surface_diagnostics,
+    scene_engine_diagnostics, scene_font_diagnostics, scene_ground_marker_clip_diagnostics,
+    scene_hierarchy_body_diagnostics, scene_layer_diagnostics, scene_light_exposure_diagnostics,
+    scene_local_light_diagnostics, scene_motor_diagnostics, scene_physics_diagnostics,
+    scene_prefab_clip_diagnostics, scene_sensor_diagnostics, scene_sun_diagnostics,
+    scene_surface_diagnostics,
 };
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
 pub use settings::{QualityPreset, Settings, SettingsView, WindowMode};
@@ -340,9 +345,10 @@ pub use sweep::{
 };
 pub use tick_observer::TickObserver;
 pub use trace::{
-    AiStatesRecord, AiTransitionRecord, GroundRecord, LaneRecord, MotorRecord, PlatformRecord,
-    ReportRecord, SensorRecord, SurfaceRecord, TraceChannel, TraceRecord, load_input_script, trace,
-    trace_with, write_jsonl,
+    AiStatesRecord, AiTransitionRecord, ForgetTraceRecord, GroundRecord, LaneRecord, MotorRecord,
+    NoiseTraceRecord, PerceptionRecord, PlatformRecord, RememberTraceRecord, ReportRecord,
+    SensorRecord, SightTraceRecord, SurfaceRecord, TraceChannel, TraceRecord, load_input_script,
+    trace, trace_with, write_jsonl,
 };
 pub use transition::{RESIDUE_MAX_RECORDS_PER_SCENE, RESIDUE_MAX_SCENES, SceneSwitch, SwitchTo};
 pub use voxel_mesh::{VoxelMeshStats, voxel_empty_lod_levels, voxel_mesh_stats};

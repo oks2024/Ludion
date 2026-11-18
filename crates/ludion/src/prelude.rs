@@ -193,6 +193,8 @@
 //!   [`AudioPan`] (`audio_pan`, default centred) places it across the stereo field, and
 //!   [`AudioDistance`] (`audio_distance`, default planar) lets height attenuate it. [`Bus`] and
 //!   [`MixLayer`] address the runtime mix (`AudioQueue::bus_gain`/`bus_pause`: `ludion docs audio-mix`).
+//!   [`DuckRule`] (`EngineBuilder::audio_duck`; `AudioQueue::duck_start`/`duck_end` for a
+//!   sequence's own) dips buses while a voice speaks, floored at [`DUCK_FLOOR_DB`].
 //!   [`AudioListener`] (with [`ListenerOrientation`]) moves the ear off the camera onto any entity:
 //!   `ludion docs audio-space`.
 //! - **Particles** — [`ParticleEmitter`] (with [`EmitShape`] and [`ParticleBlend`]): a visual effect
@@ -276,11 +278,11 @@ pub use ludion_engine::{
     ShakeConfig, Shutdown, SightPoint, SightSample, SightSampleRecord, SightTarget, SightZone,
     SkinBone, SpotLight, Springs, Sprite, SpriteBlend, Static, Stimulus, StimulusRecord, Subtitles,
     SurfaceNoise, SuspendInfo, SweepShape, SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry,
-    TrackRig, Transform, TransformHierarchy, TurnSpec, UiAnchorBehind, UiAnchorShow, UiClock,
-    UiEase, UiGroup, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat,
-    UiTweenTrack, UiWorldAnchor, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel,
-    ViewmodelLens, Visibility, Volley, VolleyCenter, VolleyShape, WindowMode, WorldPose, ZoneSweep,
-    add_fov_kick, add_kick, add_look, add_look_counts, add_trauma, advance_volleys,
+    TrackRig, Transform, TransformHierarchy, TurnSpec, UiAnchorBehind, UiAnchorShow, UiClipShape,
+    UiClock, UiEase, UiGroup, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField,
+    UiTweenRepeat, UiTweenTrack, UiWorldAnchor, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor,
+    Viewmodel, ViewmodelLens, Visibility, Volley, VolleyCenter, VolleyShape, WindowMode, WorldPose,
+    ZoneSweep, add_fov_kick, add_kick, add_look, add_look_counts, add_trauma, advance_volleys,
     animation_events, blend_clocks, builtin_registry, bullet_age, bullet_is_alive, bullet_position,
     camera_occluders, camera_relative, camera_relative_yaw, character_fit, check_path, crossfade,
     debug_draw, despawn_instance, dialogue_update, emit_noise, fade_layer, first_person_eye,
@@ -301,6 +303,10 @@ pub use ludion_engine::ui::UiNav;
 pub use ludion_engine::{
     Combine, Exposure, ExposureError, ExposureQuery, Facing, LightContribution, LightExposure,
     LightExposureResults, LightKind, MAX_EXPOSURE_POINTS, light_exposure, light_exposure_update,
+};
+pub use ludion_engine::{DUCK_FLOOR_DB, DuckRule};
+pub use ludion_engine::{
+    GroundMarkerClip, ProfileQuery, VisibilityProfile, ground_marker_profile, visibility_profile,
 };
 pub use ludion_engine::{
     PatrolFollower, PatrolMotion, PatrolPhase, PatrolResume, PatrolState, patrol_motion,
@@ -326,11 +332,11 @@ pub use single::SingleExt;
 pub use ludion_physics::{
     Blast, BlastHit, CharacterMotor, CharacterMotorState, ContactEvent, ContactPhase, ExitCause,
     Falloff, GroundHit, GroundProbe, JointBroken, LaneEnd, LaneFrame, LaneReport, LayerSet,
-    MotorError, MoveConstraint, MoveReport, PhysicsError, PhysicsWorld, PlatformCarry,
+    MotorError, MoveConstraint, MoveReport, PartSurface, PhysicsError, PhysicsWorld, PlatformCarry,
     PlatformPose, PointHit, Posture, PostureReport, PostureShape, QueryFilter, QueryHit,
     ResizeReport, ResumeReport, SensorEvent, SensorPhase, SurfaceHit, SurfaceId, SurfaceOverlay,
-    SurfaceTable, SurfaceTag, SurfaceVelocity, TurnReport, height_in_force, motor_capsule_segment,
-    motor_in_force, teleport_kinematic,
+    SurfacePart, SurfaceTable, SurfaceTag, SurfaceVelocity, TurnReport, height_in_force,
+    motor_capsule_segment, motor_in_force, teleport_kinematic,
 };
 pub use ludion_projectiles as projectiles;
 pub use ludion_spatial::{

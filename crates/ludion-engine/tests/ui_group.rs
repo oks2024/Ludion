@@ -3,15 +3,16 @@
 //! `Engine::extract_present_scene`; none needs a GPU.
 
 use ludion_components::ui::{
-    UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiGroup, UiTween, UiTweenField, UiTweenRepeat,
-    UiTweenTrack, UiWorldAnchor,
+    UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiTween, UiTweenField,
+    UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
 };
 use ludion_core::codes::code;
 use ludion_core::ids::EntityId;
+use ludion_core::time::{SimTime, TickRate};
 use ludion_engine::components::{Anchor, UiList, UiListItem, UiRect, UiText};
-use ludion_engine::ui::resolve_ui_rect;
-use ludion_engine::{Diagnostics, Engine};
-use ludion_renderer::{RenderScene, UiInstance};
+use ludion_engine::ui::{resolve_ui_rect, ui_hit};
+use ludion_engine::{Diagnostics, Engine, extract_at};
+use ludion_renderer::{QualityParams, RenderScene, UiClip, UiInstance};
 
 const SCENE: &str = "\
 format: 1
@@ -480,4 +481,332 @@ fn a_deep_chain_and_a_cycle_are_refused_by_check_scene() {
     );
     let found = diagnostics(cycle);
     assert!(found.iter().any(|d| d.code == code::UI_GROUP_CYCLE));
+}
+
+fn clips(scene: &RenderScene) -> Vec<UiClip> {
+    scene
+        .ui
+        .iter()
+        .map(|instance| match instance {
+            UiInstance::Rect { clip, .. } | UiInstance::Text { clip, .. } => *clip,
+        })
+        .collect()
+}
+
+fn clipping(shape: UiClipShape, group: Option<EntityId>) -> UiGroup {
+    UiGroup {
+        size: [100.0, 100.0],
+        clip: shape,
+        group,
+        ..UiGroup::default()
+    }
+}
+
+fn now(tick: u64) -> SimTime {
+    SimTime::from_ticks(tick, TickRate::DEFAULT)
+}
+
+fn hit(engine: &Engine, id: EntityId, cursor: [f32; 2]) -> bool {
+    ui_hit(engine.world(), id, engine.render_size(), cursor, now(0))
+}
+
+/// The centre is hit, and a point one pixel outside each side is not.
+fn assert_box(engine: &Engine, id: EntityId, rect: [f32; 4]) {
+    let (cx, cy) = (rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5);
+    assert!(hit(engine, id, [cx, cy]), "centre of {rect:?}");
+    assert!(
+        hit(engine, id, [rect[0] + 0.5, cy]),
+        "inside the left edge of {rect:?}"
+    );
+    for outside in [
+        [rect[0] - 1.0, cy],
+        [rect[0] + rect[2] + 1.0, cy],
+        [cx, rect[1] - 1.0],
+        [cx, rect[1] + rect[3] + 1.0],
+    ] {
+        assert!(!hit(engine, id, outside), "{outside:?} is outside {rect:?}");
+    }
+}
+
+#[test]
+fn a_clipped_groups_children_carry_its_clip_and_the_rest_carry_none() {
+    let mut engine = engine();
+    let clipped = group(&mut engine, clipping(UiClipShape::Rect, None));
+    let plain = group(&mut engine, clipping(UiClipShape::None, None));
+    spawn(
+        &mut engine,
+        UiRect {
+            order: 0,
+            ..child(Anchor::TopLeft, [50.0, 50.0], clipped)
+        },
+    );
+    spawn(
+        &mut engine,
+        UiRect {
+            order: 1,
+            ..child(Anchor::TopLeft, [50.0, 50.0], plain)
+        },
+    );
+    spawn(
+        &mut engine,
+        UiRect {
+            order: 2,
+            ..UiRect::default()
+        },
+    );
+    spawn(
+        &mut engine,
+        UiText {
+            text: "A".into(),
+            order: 3,
+            group: Some(clipped),
+            ..UiText::default()
+        },
+    );
+    let ps = scale(&engine);
+    let found = clips(&extract(&mut engine));
+    assert_eq!(found.len(), 4);
+    let own = found[0].boxes[0].expect("the clipped child carries the box");
+    assert_eq!(
+        (own.rect_px, own.radius_px),
+        (scaled([0.0, 0.0, 100.0, 100.0], ps), 0.0)
+    );
+    assert_eq!(found[0].boxes[1], None);
+    assert_eq!(found[1], UiClip::NONE);
+    assert_eq!(found[2], UiClip::NONE);
+    assert_eq!(found[3], found[0], "a text child carries the same clip");
+}
+
+#[test]
+fn a_rect_in_a_circle_in_a_rect_carries_both_boxes_inner_first() {
+    let mut engine = engine();
+    let outer = group(&mut engine, clipping(UiClipShape::Rect, None));
+    let inner = group(&mut engine, clipping(UiClipShape::Circle, Some(outer)));
+    spawn(&mut engine, child(Anchor::TopLeft, [200.0, 200.0], inner));
+    let found = clips(&extract(&mut engine));
+    let [inner_box, outer_box] = found[0].boxes.map(|b| b.expect("both boxes"));
+    assert_eq!(inner_box.radius_px, 50.0 * scale(&engine));
+    assert_eq!(outer_box.radius_px, 0.0);
+}
+
+#[test]
+fn ui_hit_follows_a_group_scale_tween_at_mid_tween() {
+    let mut engine = engine();
+    let g = group(&mut engine, top_right_group());
+    add(
+        &mut engine,
+        g,
+        UiTween {
+            tracks: vec![UiTweenTrack {
+                field: UiTweenField::Scale,
+                from: vec![1.0],
+                to: vec![0.5],
+                start: 0,
+                duration: 1.0,
+                ease: UiEase::Linear,
+                repeat: UiTweenRepeat::Once,
+                clock: UiClock::Real,
+            }],
+        },
+    );
+    let id = spawn(&mut engine, child(Anchor::TopLeft, [100.0, 100.0], g));
+    let at = now(30);
+    let drawn = extract_at(
+        engine.world(),
+        engine.render_size(),
+        ludion_assets::AssetRoot::content(engine.project_root()),
+        at,
+        QualityParams::FULL.particle_density,
+    )
+    .expect("extracts");
+    let rect = rects(&drawn)[0].0;
+    let full = scaled_child_expectation(&engine, 1.0);
+    assert!(
+        rect[2] < full[2] && rect[2] > full[2] * 0.5,
+        "mid-tween: {rect:?} vs {full:?}"
+    );
+    let probe = |cursor: [f32; 2]| ui_hit(engine.world(), id, engine.render_size(), cursor, at);
+    let (cx, cy) = (rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5);
+    assert!(probe([cx, cy]));
+    assert!(probe([rect[0] + 0.5, rect[1] + 0.5]));
+    assert!(!probe([rect[0] - 1.0, cy]));
+    assert!(!probe([rect[0] + rect[2] + 1.0, cy]));
+    assert!(!probe([cx, rect[1] + rect[3] + 1.0]));
+    // At tick 0 the child is still full size and reaches further up and left than mid-tween.
+    let past = [rect[0] - 2.0, cy];
+    assert!(ui_hit(
+        engine.world(),
+        id,
+        engine.render_size(),
+        past,
+        now(0)
+    ));
+}
+
+#[test]
+fn ui_hit_follows_a_top_level_world_anchor() {
+    let mut engine = engine();
+    let target = engine
+        .world()
+        .entities()
+        .nth(1)
+        .expect("the scene has a target");
+    let g = group(
+        &mut engine,
+        UiGroup {
+            anchor: Anchor::Center,
+            size: [40.0, 20.0],
+            ..UiGroup::default()
+        },
+    );
+    add(
+        &mut engine,
+        g,
+        UiWorldAnchor {
+            target,
+            world_offset: [0.0; 3],
+            show: UiAnchorShow::Always,
+            behind: UiAnchorBehind::Clamp,
+            margin: 48.0,
+            fade: None,
+        },
+    );
+    let id = spawn(
+        &mut engine,
+        UiRect {
+            group: Some(g),
+            fill_group: true,
+            ..UiRect::default()
+        },
+    );
+    let rect = rects(&extract(&mut engine))[0].0;
+    let canvas = resolve_ui_rect(Anchor::Center, [0.0; 2], [40.0, 20.0], engine.render_size());
+    assert!(rect[0] > canvas[0], "the group followed the target");
+    assert_box(&engine, id, rect);
+}
+
+#[test]
+fn ui_hit_is_false_for_an_invisible_group_dead_entity_and_bad_cursor() {
+    let mut engine = engine();
+    let g = group(
+        &mut engine,
+        UiGroup {
+            visible: false,
+            ..top_right_group()
+        },
+    );
+    let id = spawn(&mut engine, child(Anchor::TopLeft, [100.0, 100.0], g));
+    let b = resolve_ui_rect(
+        Anchor::TopRight,
+        [-24.0, 24.0],
+        [360.0, 360.0],
+        engine.render_size(),
+    );
+    let inside = [b[0] + 5.0, b[1] + 5.0];
+    assert!(!hit(&engine, id, inside));
+    add(&mut engine, g, top_right_group());
+    assert!(hit(&engine, id, inside));
+    assert!(!hit(&engine, id, [f32::NAN, 5.0]));
+    engine.world_mut().despawn(id).unwrap();
+    assert!(!hit(&engine, id, inside));
+}
+
+#[test]
+fn ui_hit_respects_the_clip_for_a_rect_text_and_list() {
+    let mut engine = engine();
+    let g = group(&mut engine, clipping(UiClipShape::Circle, None));
+    let ps = scale(&engine);
+    // A rect covering the box: its corner is clipped away, its centre is not.
+    let rect = spawn(
+        &mut engine,
+        UiRect {
+            group: Some(g),
+            fill_group: true,
+            ..UiRect::default()
+        },
+    );
+    assert!(hit(&engine, rect, [50.0 * ps, 50.0 * ps]));
+    assert!(
+        !hit(&engine, rect, [2.0 * ps, 2.0 * ps]),
+        "the box corner is outside the circle"
+    );
+    let text = spawn(
+        &mut engine,
+        UiText {
+            text: "WWWW".into(),
+            size: 20.0,
+            anchor: Anchor::Center,
+            group: Some(g),
+            ..UiText::default()
+        },
+    );
+    assert!(hit(&engine, text, [50.0 * ps, 50.0 * ps]));
+    assert!(!hit(&engine, text, [500.0 * ps, 500.0 * ps]));
+    let list = spawn(
+        &mut engine,
+        UiList {
+            items: vec![UiListItem {
+                text: "B".into(),
+                enabled: true,
+            }],
+            anchor: Anchor::Center,
+            group: Some(g),
+            ..UiList::default()
+        },
+    );
+    assert!(hit(&engine, list, [50.0 * ps, 50.0 * ps]));
+    assert!(!hit(&engine, list, [500.0 * ps, 500.0 * ps]));
+}
+
+#[test]
+fn three_clipping_levels_report_l2303_statically_and_at_runtime() {
+    let entity = |group: Option<usize>, component: &str, clip: bool| {
+        if !clip && group.is_none() {
+            return format!("  - components:\n      {component}: {{}}\n");
+        }
+        let mut out = format!("  - components:\n      {component}:\n");
+        if clip {
+            out.push_str("        clip: rect\n");
+        }
+        if let Some(i) = group {
+            out.push_str(&format!(
+                "        group:\n          index: {i}\n          generation: 0\n"
+            ));
+        }
+        out
+    };
+    let body = format!(
+        "{}{}{}{}",
+        entity(None, "UiGroup", true),
+        entity(Some(0), "UiGroup", true),
+        entity(Some(1), "UiGroup", true),
+        entity(Some(2), "UiRect", false),
+    );
+    let scene = ludion_scene::check(
+        &format!("format: 1\nentities:\n{body}"),
+        &ludion_engine::builtin_registry(),
+    )
+    .expect("the scene parses");
+    let found = ludion_engine::scene_engine_diagnostics(std::path::Path::new("."), &scene);
+    let paths: Vec<_> = found
+        .iter()
+        .filter(|d| d.code == code::UI_CLIP_NESTING)
+        .map(|d| d.path.as_deref().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "/entities/2/components/UiGroup/group",
+            "/entities/3/components/UiRect/group"
+        ]
+    );
+
+    let mut engine = engine();
+    let a = group(&mut engine, clipping(UiClipShape::Rect, None));
+    let b = group(&mut engine, clipping(UiClipShape::Rect, Some(a)));
+    let c = group(&mut engine, clipping(UiClipShape::Rect, Some(b)));
+    spawn(&mut engine, child(Anchor::TopLeft, [10.0, 10.0], c));
+    let found = clips(&extract(&mut engine));
+    assert!(found[0].boxes.iter().all(Option::is_some));
+    assert_eq!(reported(&engine, code::UI_CLIP_NESTING), 1);
 }

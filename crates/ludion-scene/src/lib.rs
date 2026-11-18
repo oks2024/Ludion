@@ -137,6 +137,7 @@ mod physics_layers;
 mod physics_surfaces;
 mod prefab;
 mod profile;
+mod rig_mask;
 mod rim;
 mod scalar;
 mod schema;
@@ -163,8 +164,7 @@ pub use blend_space::{
     BlendWeights, MAX_BLEND_POINTS, blend_weights_1d, blend_weights_2d, triangulate,
 };
 pub use character::{
-    BlendAt, BlendPoint, CHARACTER_FORMAT_VERSION, CharacterBlend, CharacterClip,
-    CharacterDocument, CharacterMask,
+    BlendAt, BlendPoint, CHARACTER_FORMAT_VERSION, CharacterBlend, CharacterClip, CharacterDocument,
 };
 pub use clip_eval::{
     ClipSampler, PartPose, clip_phase, flipbook_frame, joint_pose, part_pose, sample_channel,
@@ -212,6 +212,7 @@ pub use physics_layers::{DEFAULT_LAYER, LayerMatrix, MAX_LAYERS, SceneLayer};
 pub use physics_surfaces::MAX_SURFACES;
 pub use prefab::{PREFAB_FORMAT_VERSION, PrefabDocument};
 pub use profile::ProfileEnvelope;
+pub use rig_mask::RigMask;
 pub use rim::DocRim;
 pub use sculpt::{
     SCULPT_DEFAULT_RESOLUTION, SCULPT_DEFAULT_TRIANGLES, SCULPT_FORMAT_VERSION, SCULPT_MAX_REPEAT,
@@ -2332,25 +2333,26 @@ pub fn check_character_clips(
     character::check_clips(doc, clips, joints)
 }
 
-/// Resolves a character mask to one weight per skin joint. `joints` is `(name, parent index)` in
-/// skin order (parent-first). A listed joint takes its weight (1.0 without `weights`); with
-/// `descendants`, an unlisted joint inherits its nearest listed ancestor's weight; the rest are 0.
+/// Resolves a rig mask to one weight per skin joint or assembly part. `joints` is `(name, parent
+/// index)` in the rig's order (any order: ancestors are walked). A listed joint takes its weight
+/// (1.0 without `weights`); with `descendants`, an unlisted joint inherits its nearest listed
+/// ancestor's weight; the rest are 0.
 ///
 /// # Example
 /// ```
-/// use ludion_scene::{CharacterMask, resolve_character_mask};
-/// let mask = CharacterMask {
+/// use ludion_scene::{RigMask, resolve_rig_mask};
+/// let mask = RigMask {
 ///     name: "upper".into(),
 ///     joints: vec!["torso".into()],
 ///     descendants: true,
 ///     weights: vec![],
 /// };
 /// let joints = [("hips", None), ("torso", Some(0)), ("arm", Some(1)), ("leg", Some(0))];
-/// assert_eq!(resolve_character_mask(&mask, &joints), vec![0.0, 1.0, 1.0, 0.0]);
+/// assert_eq!(resolve_rig_mask(&mask, &joints), vec![0.0, 1.0, 1.0, 0.0]);
 /// ```
 #[must_use]
-pub fn resolve_character_mask(mask: &CharacterMask, joints: &[(&str, Option<u32>)]) -> Vec<f32> {
-    character::resolve_mask(mask, joints)
+pub fn resolve_rig_mask(mask: &RigMask, joints: &[(&str, Option<u32>)]) -> Vec<f32> {
+    rig_mask::resolve_mask(mask, joints)
 }
 
 /// Writes `doc` in canonical form (stable field order, LF endings, ryu shortest-round-trip floats;

@@ -87,6 +87,7 @@ fn floor(world: &mut World) -> EntityId {
             entity,
             SurfaceTag {
                 surface: "concrete".to_string(),
+                parts: vec![],
             },
         )
         .unwrap();

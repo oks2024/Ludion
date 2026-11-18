@@ -57,7 +57,7 @@ use crate::quality::{Quality, QualityParams};
 use crate::scene::{
     DebugSegment, DecalMaps, DropShadowInstance, FontDraw, GroundMarkerInstance, MapImage,
     MeshData, MeshShape, MeshTexture, MeshTextures, ParticleInstance, PostData, RenderScene,
-    SpriteInstance, TextureImage, TextureWrap, TonemapOperator, UiInstance,
+    SpriteInstance, TextureImage, TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance,
 };
 use crate::shader_reload::{
     ReloadTarget, build_ibl, build_mipgen, classify, pipeline_incompatible, validate_wgsl,
@@ -95,9 +95,10 @@ use crate::shader_gen::{
     ENV_BINDING, ENV_GROUP, ENV_SAMP_BINDING, EnvParams, IRRADIANCE_TEX_BINDING,
     LIGHT_LIST_BINDING, LIGHTS_BINDING, LIGHTS_GROUP, MATERIAL_ALPHA_MASK, MATERIAL_BASE_COLOR,
     MATERIAL_DOUBLE_SIDED, MATERIAL_EMISSIVE, MATERIAL_GROUP, MATERIAL_METALLIC_ROUGHNESS,
-    MATERIAL_NORMAL, MATERIAL_OCCLUSION, MeshMaterial, RECT_TEX_GROUP, ResolveParams,
-    SHADOW_VIEW_BINDING, SHADOW_VIEW_GROUP, SKY_GROUP, SPRITE_TEX_GROUP, SRC_TEX_GROUP, SUN_GROUP,
-    Sky, Sun, UI_GROUP, Ui, UpsampleParams, UpscaleParams,
+    MATERIAL_NORMAL, MATERIAL_OCCLUSION, MeshMaterial, PROFILES_BINDING, PROFILES_GROUP,
+    RECT_TEX_GROUP, ResolveParams, SHADOW_VIEW_BINDING, SHADOW_VIEW_GROUP, SKY_GROUP,
+    SPRITE_TEX_GROUP, SRC_TEX_GROUP, SUN_GROUP, Sky, Sun, UI_GROUP, Ui, UpsampleParams,
+    UpscaleParams,
 };
 // The clustered-forward light payload: the light array, the header uniform and the per-cell index
 // tables (`Plan/clustered-forward.md`). The renderer's job with them is upload and bind; which
@@ -173,6 +174,8 @@ struct GroundMarkerInstanceRaw {
     /// A wedge's `(inner_half_angle or -1, 0, 0, 0)`; a ring's `(thickness, fill, dashes, 0)`;
     /// `(-1, 0, 0, 0)` for disc and segment.
     extra: [f32; 4],
+    /// `(profile float offset or -1, 0, 0, 0)`; the offset is below 2^24, an exact float integer.
+    clip: [f32; 4],
 }
 
 /// One particle instance: the disc's centre, the camera basis it faces along, its linear HDR colour,
@@ -216,17 +219,22 @@ struct TextVertexRaw {
 
 /// One screen-space UI rect instance: a pixel-space rect `[x, y, w, h]` (top-left origin, +Y down),
 /// a linear RGBA tint, and the sampled UV sub-rect `[u0, v0, u1, v1]` (`[0, 0, 1, 1]` for a whole
-/// texture or an untextured fill, a packed region otherwise). Matches `ui_rect.wgsl`'s `VsIn`.
+/// texture or an untextured fill, a packed region otherwise), then the packed clip (see
+/// [`ui_clip_raw`]). Matches `ui_rect.wgsl`'s `VsIn`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct UiRectInstanceRaw {
     rect: [f32; 4],
     color: [f32; 4],
     uv: [f32; 4],
+    clip_a: [f32; 4],
+    clip_b: [f32; 4],
+    clip_r: [f32; 4],
 }
 
-/// One screen-space UI text vertex: a pixel-space position, an atlas UV, a linear RGBA color, and
-/// the SDF flag (0.0 bitmap, 1.0 signed-distance atlas). Matches `ui_text.wgsl`'s `VsIn`.
+/// One screen-space UI text vertex: a pixel-space position, an atlas UV, a linear RGBA color, the
+/// SDF flag (0.0 bitmap, 1.0 signed-distance atlas) and the packed clip. Matches `ui_text.wgsl`'s
+/// `VsIn`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct UiTextVertexRaw {
@@ -234,6 +242,19 @@ struct UiTextVertexRaw {
     uv: [f32; 2],
     color: [f32; 4],
     sdf: f32,
+    clip_a: [f32; 4],
+    clip_b: [f32; 4],
+    clip_r: [f32; 4],
+}
+
+/// Packs a [`UiClip`] as `[clip_a, clip_b, clip_r]`: each box's `[x, y, w, h]`, then
+/// `[radius_a, radius_b, on_a, on_b]` with the flags exactly `0.0` or `1.0`.
+fn ui_clip_raw(clip: &UiClip) -> [[f32; 4]; 3] {
+    let [a, b] = clip.boxes;
+    let rect = |slot: Option<UiClipBox>| slot.map_or([0.0; 4], |b| b.rect_px);
+    let radius = |slot: Option<UiClipBox>| slot.map_or(0.0, |b| b.radius_px);
+    let on = |slot: Option<UiClipBox>| f32::from(slot.is_some());
+    [rect(a), rect(b), [radius(a), radius(b), on(a), on(b)]]
 }
 
 /// One physical GPU texture plus its default view.
@@ -2796,6 +2817,25 @@ impl Renderer {
         if raws.is_empty() {
             return None;
         }
+        let dummy = [0.0_f32; 4];
+        let profiles = if scene.ground_marker_profiles.is_empty() {
+            &dummy[..]
+        } else {
+            &scene.ground_marker_profiles[..]
+        };
+        let profiles_buffer = init_buffer(
+            device,
+            wgpu::BufferUsages::STORAGE,
+            bytemuck::cast_slice(profiles),
+        );
+        let profiles_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ludion ground marker profiles bind group"),
+            layout: self.layouts.get(LayoutId::GroundMarkerProfiles),
+            entries: &[wgpu::BindGroupEntry {
+                binding: PROFILES_BINDING,
+                resource: profiles_buffer.as_entire_binding(),
+            }],
+        });
         Some(GroundMarkerDraw {
             instances: init_buffer(
                 device,
@@ -2803,6 +2843,7 @@ impl Renderer {
                 bytemuck::cast_slice(&raws),
             ),
             count: raws.len() as u32,
+            profiles_bg,
         })
     }
 
@@ -2952,15 +2993,20 @@ impl Renderer {
                         texture,
                         color,
                         uv,
+                        clip,
                     }) = scene.ui.get(i)
                     {
                         if *texture != tex {
                             break;
                         }
+                        let [clip_a, clip_b, clip_r] = ui_clip_raw(clip);
                         raws.push(UiRectInstanceRaw {
                             rect: *rect_px,
                             color: *color,
                             uv: *uv,
+                            clip_a,
+                            clip_b,
+                            clip_r,
                         });
                         i += 1;
                     }
@@ -2990,13 +3036,17 @@ impl Renderer {
                     let sdf = face.is_some_and(|f| f.sdf);
                     let mut verts: Vec<UiTextVertexRaw> = Vec::new();
                     while let Some(UiInstance::Text {
-                        color, quads, font, ..
+                        color,
+                        quads,
+                        font,
+                        clip,
+                        ..
                     }) = scene.ui.get(i)
                     {
                         if *font != face {
                             break;
                         }
-                        push_ui_text_verts(&mut verts, quads, *color, sdf);
+                        push_ui_text_verts(&mut verts, quads, *color, sdf, clip);
                         i += 1;
                     }
                     // A run of only empty/blank strings produces no vertices — nothing to draw.
@@ -3447,7 +3497,9 @@ fn push_ui_text_verts(
     quads: &[GlyphQuad],
     color: [f32; 4],
     sdf: bool,
+    clip: &UiClip,
 ) {
+    let [clip_a, clip_b, clip_r] = ui_clip_raw(clip);
     for q in quads {
         let [l, t, r, b] = q.pos;
         let [u0, v0, u1, v1] = q.uv;
@@ -3456,6 +3508,9 @@ fn push_ui_text_verts(
             uv: [u, v],
             color,
             sdf: f32::from(sdf),
+            clip_a,
+            clip_b,
+            clip_r,
         };
         let tl = vert(l, t, u0, v0);
         let tr = vert(r, t, u1, v0);
@@ -3522,6 +3577,9 @@ struct TextDraw {
 struct GroundMarkerDraw {
     instances: wgpu::Buffer,
     count: u32,
+    /// Group 1: the visibility profiles of the clipped markers, or a 16-byte dummy when none is
+    /// clipped (wgpu forbids a zero-size binding).
+    profiles_bg: wgpu::BindGroup,
 }
 
 /// The scene's debug lines as one `LineList` draw: two vertices per segment.
@@ -3600,6 +3658,7 @@ fn ground_marker_raws(markers: &[GroundMarkerInstance]) -> Vec<GroundMarkerInsta
                     (marker.flicker_seed & 0xFF_FFFF) as f32,
                 ],
                 extra,
+                clip: [marker.clip.map_or(-1.0, |at| at as f32), 0.0, 0.0, 0.0],
             }
         })
         .collect()
@@ -5620,6 +5679,7 @@ impl FrameRecorder<'_> {
         if let Some(markers) = &self.ground_marker_draw {
             rp.set_pipeline(self.r.pipeline(ShaderId::GroundMarker));
             rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
+            rp.set_bind_group(PROFILES_GROUP, &markers.profiles_bg, &[]);
             rp.set_vertex_buffer(0, markers.instances.slice(..));
             rp.draw(0..6, 0..markers.count);
         }
@@ -7259,7 +7319,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         // The camera to project the flat quad with, and nothing else: markers are unlit, so the
         // clustered light set they would otherwise compose has nothing to contribute.
         snippets: &[Snippet::Camera, Snippet::RoundedBox, Snippet::Quad],
-        layouts: &[Some(LayoutId::Camera)],
+        layouts: &[Some(LayoutId::Camera), Some(LayoutId::GroundMarkerProfiles)],
     },
     ShaderDesc {
         id: ShaderId::Sprite,
@@ -7967,10 +8027,12 @@ enum LayoutId {
     SmaaBlend,
     /// The medium march's group 1: the four baked GI volumes.
     MediumScatterGi,
+    /// The ground-marker pass's group 1: the clipped markers' visibility profiles.
+    GroundMarkerProfiles,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 45;
+const LAYOUT_COUNT: usize = 46;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -8163,6 +8225,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::MediumScatterGi,
         create: shader_gen::create_scatter_gi_scatter_gi_r_scatter_gi_g_scatter_gi_b_bgl,
+    },
+    LayoutDesc {
+        id: LayoutId::GroundMarkerProfiles,
+        create: shader_gen::create_profiles_bgl,
     },
 ];
 
@@ -8560,8 +8626,8 @@ const MESH_VERTEX_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0
 const MESH_INSTANCE_ATTRS: [wgpu::VertexAttribute; 14] = wgpu::vertex_attr_array![6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x4, 13 => Float32x4, 14 => Float32x4, 15 => Float32x4, 16 => Float32x4, 17 => Float32x4, 20 => Float32x4, 21 => Float32];
 /// Ground-marker per-instance attributes (`GroundMarkerInstanceRaw`): model columns 0-3, color 4,
 /// the rounded-box SDF's `(half_extent, radius, kind)` lane 5, the wedge lane 6, the inner colour 7,
-/// the style lanes 8-9 and the wedge/ring extra lane 10.
-const GROUND_MARKER_INSTANCE_ATTRS: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4];
+/// the style lanes 8-9, the wedge/ring extra lane 10 and the profile-offset lane 11.
+const GROUND_MARKER_INSTANCE_ATTRS: [wgpu::VertexAttribute; 12] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4];
 /// Sprite per-instance attributes (`SpriteInstanceRaw`: center/right/up/color, then the UV rect, the
 /// flags lane, the hit-flash lane, the tiling/scroll lane, and the medium scale), locations 0-8.
 const SPRITE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4, 5 => Uint32, 6 => Float32x4, 7 => Float32x4, 8 => Float32];
@@ -8571,12 +8637,11 @@ const PARTICLE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_ar
 /// Text per-vertex attributes (`TextVertexRaw`: position/uv/color/sdf), locations 0-3.
 const TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 4] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x4, 3 => Float32];
-/// UI-rect per-instance attributes (`UiRectInstanceRaw`: rect/color/uv-sub-rect), locations 0-2.
-const UI_RECT_INSTANCE_ATTRS: [wgpu::VertexAttribute; 3] =
-    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
-/// UI-text per-vertex attributes (`UiTextVertexRaw`: position/uv/color/sdf), locations 0-3.
-const UI_TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 4] =
-    wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32];
+/// UI-rect per-instance attributes (`UiRectInstanceRaw`: rect/color/uv-sub-rect/clip a, b, r),
+/// locations 0-5.
+const UI_RECT_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
+/// UI-text per-vertex attributes (`UiTextVertexRaw`: position/uv/color/sdf/clip a, b, r), locations 0-6.
+const UI_TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4];
 /// Debug-line per-vertex attributes (`DebugLineVertexRaw`: position/color), locations 0-1.
 const DEBUG_LINE_VERTEX_ATTRS: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
@@ -9996,7 +10061,7 @@ mod tests {
     fn bodies_are_snippet_free() {
         for id in [ShaderId::Text, ShaderId::UiText] {
             let body = id.body_source();
-            assert!(!body.contains("fn fs_main"));
+            assert!(!body.contains("fn glyph_coverage"));
             assert!(!body.contains("atlas_tex: texture_2d"));
         }
         // A snippet body must not itself redeclare a struct the snippet provides.
@@ -10404,7 +10469,7 @@ mod tests {
         for (text, glyphs, lines) in [("HI", 2, 1), ("HELLO", 5, 1), ("HI\nTHERE\nYOU", 5, 3)] {
             let mut verts = Vec::new();
             let quads = test_quads(text, cell);
-            push_ui_text_verts(&mut verts, &quads, [1.0; 4], false);
+            push_ui_text_verts(&mut verts, &quads, [1.0; 4], false, &UiClip::NONE);
             let (mut max_x, mut max_y) = (0.0_f32, 0.0_f32);
             for v in &verts {
                 max_x = max_x.max(v.position[0]);
@@ -10424,11 +10489,39 @@ mod tests {
     #[test]
     fn ui_text_verts_skip_empty_and_unmapped() {
         let mut verts = Vec::new();
-        push_ui_text_verts(&mut verts, &test_quads("", 8.0), [1.0; 4], false);
+        push_ui_text_verts(
+            &mut verts,
+            &test_quads("", 8.0),
+            [1.0; 4],
+            false,
+            &UiClip::NONE,
+        );
         assert!(verts.is_empty(), "empty string emits nothing");
         // 'é' has no glyph in the embedded face → no quad.
-        push_ui_text_verts(&mut verts, &test_quads("ééé", 8.0), [1.0; 4], false);
+        push_ui_text_verts(
+            &mut verts,
+            &test_quads("ééé", 8.0),
+            [1.0; 4],
+            false,
+            &UiClip::NONE,
+        );
         assert!(verts.is_empty(), "unmapped code points emit no quads");
+    }
+
+    /// An absent clip packs both on-flags as exactly 0.0, a present box sets only its own flag.
+    #[test]
+    fn ui_clip_raw_flags_follow_the_boxes() {
+        let [_, _, r] = ui_clip_raw(&UiClip::NONE);
+        assert_eq!((r[2], r[3]), (0.0, 0.0));
+        let one = UiClipBox {
+            rect_px: [1.0, 2.0, 3.0, 4.0],
+            radius_px: 1.5,
+        };
+        let [a, b, r] = ui_clip_raw(&UiClip {
+            boxes: [Some(one), None],
+        });
+        assert_eq!((a, b), ([1.0, 2.0, 3.0, 4.0], [0.0; 4]));
+        assert_eq!(r, [1.5, 0.0, 1.0, 0.0]);
     }
 
     /// One PNG read as a loose texture (premultiplied by the engine) and as an atlas colour map
@@ -10496,12 +10589,14 @@ mod tests {
             texture: None,
             color: [1.0, 1.0, 1.0, 1.0],
             uv: [0.0, 0.0, 1.0, 1.0],
+            clip: UiClip::NONE,
         };
         let text = UiInstance::Text {
             color: [1.0; 4],
             text: "A".to_string(),
             quads: test_quads("A", 8.0),
             font: None,
+            clip: UiClip::NONE,
         };
 
         // Two consecutive untextured rects → one batch of two instances.
@@ -10532,6 +10627,7 @@ mod tests {
             text: "A".to_string(),
             quads: test_quads("A", 8.0),
             font,
+            clip: UiClip::NONE,
         };
         scene.ui = vec![
             text_with(None),
@@ -10610,6 +10706,7 @@ mod tests {
             texture: None,
             color: [TINT[0] as f32, TINT[1] as f32, TINT[2] as f32, ALPHA as f32],
             uv: [0.0, 0.0, 1.0, 1.0],
+            clip: UiClip::NONE,
         }];
 
         let bare_img = renderer
@@ -10662,6 +10759,7 @@ mod tests {
             texture: None,
             color: [1.0, 0.0, 0.0, 1.0],
             uv: [0.0, 0.0, 1.0, 1.0],
+            clip: UiClip::NONE,
         }];
 
         let bare_img = renderer
@@ -12414,6 +12512,7 @@ mod tests {
                 inner_color: [0.9, 0.15, 0.1, 1.0],
                 style: crate::scene::GroundMarkerStyle::default(),
                 flicker_seed: 0,
+                clip: None,
             });
         let marked = renderer.render(&scene, size).expect("marked render");
 
@@ -12471,6 +12570,7 @@ mod tests {
                 inner_color: [0.2, 0.6, 0.9, 0.8],
                 style: crate::scene::GroundMarkerStyle::default(),
                 flicker_seed: 0,
+                clip: None,
             });
         let once = renderer.render(&scene, size).expect("segment render");
         let twice = renderer.render(&scene, size).expect("segment render again");
@@ -13114,6 +13214,7 @@ mod tests {
                 texture: None,
                 color: [1.0, 0.2, 0.1, 1.0],
                 uv: [0.0, 0.0, 1.0, 1.0],
+                clip: UiClip::NONE,
             },
             UiInstance::Text {
                 color: [1.0; 4],
@@ -13121,6 +13222,7 @@ mod tests {
                 quads: ludion_font::layout(ludion_font::FontFace::embedded(), "crisp", 11.0, 0.0)
                     .quads([9.0, 55.0], 11.0, ludion_font::YAxis::Down),
                 font: None,
+                clip: UiClip::NONE,
             },
         ];
 
@@ -13581,6 +13683,7 @@ mod tests {
             texture: None,
             color: [1.0, 1.0, 1.0, 1.0],
             uv: [0.0, 0.0, 1.0, 1.0],
+            clip: UiClip::NONE,
         }];
         let size = FrameSize::native(w, h);
         let off = renderer.render(&scene, size).expect("off render");
@@ -23195,6 +23298,7 @@ mod tests {
                 inner_color: [6.0, 0.5, 0.25, 0.75],
                 style: GroundMarkerStyle::default(),
                 flicker_seed: 0,
+                clip: None,
             },
             GroundMarkerInstance {
                 shape: GroundMarkerShape::Segment {
@@ -23206,6 +23310,7 @@ mod tests {
                 inner_color: [0.1, 0.2, 0.3, 1.0],
                 style: GroundMarkerStyle::default(),
                 flicker_seed: 0,
+                clip: None,
             },
         ];
         let raws = ground_marker_raws(&markers);
@@ -23243,10 +23348,32 @@ mod tests {
             inner_color: [1.0; 4],
             style: GroundMarkerStyle::default(),
             flicker_seed: 0,
+            clip: None,
         }]);
         assert_eq!(raws[0].shape, [0.0, 0.0, 4.0, 2.0]);
         assert_eq!(raws[0].wedge, [0.0; 4]);
         assert_eq!(raws[0].extra, [0.5, 1.0, 12.0, 0.0]);
+        assert_eq!(raws[0].clip, [-1.0, 0.0, 0.0, 0.0]);
+    }
+
+    /// A clipped marker packs its profile's float offset in lane 11, exactly.
+    #[test]
+    fn a_ground_marker_clip_packs_its_profile_offset() {
+        use crate::scene::{GroundMarkerInstance, GroundMarkerShape, GroundMarkerStyle};
+
+        let marker = |clip| GroundMarkerInstance {
+            shape: GroundMarkerShape::Disc { radius: 2.0 },
+            model: Mat4::IDENTITY,
+            color: [1.0; 4],
+            inner_color: [1.0; 4],
+            style: GroundMarkerStyle::default(),
+            flicker_seed: 0,
+            clip,
+        };
+        let raws = ground_marker_raws(&[marker(Some(0)), marker(Some(200)), marker(None)]);
+        assert_eq!(raws[0].clip, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(raws[1].clip, [200.0, 0.0, 0.0, 0.0]);
+        assert_eq!(raws[2].clip, [-1.0, 0.0, 0.0, 0.0]);
     }
 
     /// The two-zone half-angle rides `extra.x`, `grid: none` packs a zero grid width, and the seed
@@ -23273,6 +23400,7 @@ mod tests {
                 ..GroundMarkerStyle::default()
             },
             flicker_seed: 0xABCD_EF12,
+            clip: None,
         }]);
         assert_eq!(raws[0].extra, [0.3, 0.0, 0.0, 0.0]);
         assert_eq!(raws[0].inner_color, [1.0, 0.0, 0.0, 1.0]);
@@ -23301,6 +23429,7 @@ mod tests {
             inner_color: [0.25, 1.6, 0.6, 0.9],
             style: GroundMarkerStyle::default(),
             flicker_seed: 0,
+            clip: None,
         }]);
         assert_eq!(raws[0].shape, [0.0, 0.0, 7.0, 1.0]);
         assert_eq!(raws[0].wedge, [0.5, 3.0, 0.25, 1.0]);

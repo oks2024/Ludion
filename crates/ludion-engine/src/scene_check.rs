@@ -438,6 +438,88 @@ pub fn scene_surface_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                 .with_help(help),
             );
         }
+        diagnostics.extend(surface_part_diagnostics(
+            tag,
+            &at,
+            &declared,
+            component("Collider"),
+            component("Mesh"),
+        ));
+    }
+    diagnostics
+}
+
+/// The `L1690`/`L1694` of one `SurfaceTag`'s `parts` list: a part surface the scene does not declare,
+/// an integer key that is not a part of the entity's `compound` `Collider`, and a string key on an
+/// entity whose `Mesh` is not an `assembly`. Empty and repeated keys are the component
+/// validator's (`L1694`).
+fn surface_part_diagnostics(
+    tag: &serde_json::Value,
+    at: &str,
+    declared: &[&str],
+    collider: Option<&serde_json::Value>,
+    mesh: Option<&serde_json::Value>,
+) -> Vec<Diagnostic> {
+    let Some(parts) = tag.get("parts").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let compound_len = collider
+        .and_then(|value| serde_json::from_value::<ludion_spatial::Collider>(value.clone()).ok())
+        .and_then(|collider| match collider.shape {
+            ludion_spatial::Shape::Compound { parts } => Some(parts.len()),
+            _ => None,
+        });
+    let assembly = mesh
+        .and_then(|value| serde_json::from_value::<crate::components::Mesh>(value.clone()).ok())
+        .is_some_and(|mesh| matches!(mesh.shape, crate::components::MeshSource::Assembly(_)));
+    let mut diagnostics = Vec::new();
+    for (j, entry) in parts.iter().enumerate() {
+        let here = format!("{at}/parts/{j}");
+        if let Some(name) = entry.get("surface").and_then(serde_json::Value::as_str)
+            && !name.is_empty()
+            && !declared.contains(&name)
+        {
+            let help = match suggest::nearest(name, declared.iter().copied()) {
+                Some(candidate) => format!("nearest match is `{candidate}`"),
+                None => "declare it under `physics.surfaces`".to_string(),
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SURFACE_UNKNOWN,
+                    format!("surface `{name}` is not declared under `physics.surfaces`"),
+                )
+                .with_path(format!("{here}/surface"))
+                .with_help(help),
+            );
+        }
+        let bad = |message: String, help: &str| {
+            Diagnostic::new(code::SURFACE_PART_INVALID, message)
+                .with_path(format!("{here}/part"))
+                .with_help(help.to_string())
+        };
+        match entry.get("part") {
+            Some(key) if key.is_u64() => {
+                let index = key.as_u64().unwrap_or(0);
+                match compound_len {
+                    None => diagnostics.push(bad(
+                        format!("part index {index} needs a `compound` `Collider` on this entity"),
+                        "give the entity a `compound` collider, or name an assembly part instead",
+                    )),
+                    Some(len) if index >= len as u64 => diagnostics.push(bad(
+                        format!("part index {index} is past the compound's {len} parts"),
+                        "use an index below the compound's part count",
+                    )),
+                    Some(_) => {}
+                }
+            }
+            Some(key) if key.as_str().is_some_and(|name| !name.is_empty()) && !assembly => {
+                diagnostics.push(bad(
+                    format!("part name {key} needs a `Mesh` whose `shape` is `assembly`"),
+                    "name parts only on an assembly entity, or use a compound part index",
+                ));
+            }
+            _ => {}
+        }
     }
     diagnostics
 }
@@ -1068,6 +1150,84 @@ pub fn scene_light_exposure_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// The `L2342` a scene's `GroundMarkerClip`s earn: a layer name the scene does not declare, a clip on
+/// a `segment` marker (no apex to cast from), and a clip on an entity with no `GroundMarker`. The
+/// numeric fields are the component validator's. Silent for a scene with no clip.
+pub fn scene_ground_marker_clip_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let matrix = scene.physics.as_ref().map(|physics| physics.layer_matrix());
+    let declared: Vec<&str> = match &matrix {
+        Some(matrix) => matrix.names().iter().map(String::as_str).collect(),
+        None => vec![ludion_scene::DEFAULT_LAYER],
+    };
+    let mut diagnostics = Vec::new();
+    let mut reject = |path: String, message: String, help: String| {
+        diagnostics.push(
+            Diagnostic::new(code::GROUND_MARKER_CLIP_INVALID, message)
+                .with_path(path)
+                .with_help(help),
+        );
+    };
+    for (index, entity) in scene.entities.iter().enumerate() {
+        let Some((_, clip)) = entity
+            .components
+            .iter()
+            .find(|(name, _)| name == "GroundMarkerClip")
+        else {
+            continue;
+        };
+        let at = format!("/entities/{index}/components/GroundMarkerClip");
+        let shape = entity
+            .components
+            .iter()
+            .find(|(name, _)| name == "GroundMarker")
+            .map(|(_, marker)| {
+                marker
+                    .pointer("/shape/type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_owned()
+            });
+        match shape.as_deref() {
+            None => reject(
+                at.clone(),
+                "this `GroundMarkerClip` has no `GroundMarker` beside it, so there is nothing to clip"
+                    .into(),
+                "add a `GroundMarker`, or remove the clip".into(),
+            ),
+            Some("segment") => reject(
+                at.clone(),
+                "this `GroundMarkerClip` is on a `segment` marker, which has no apex to cast from"
+                    .into(),
+                "clip a `disc`, `ring` or `wedge` marker".into(),
+            ),
+            Some(_) => {}
+        }
+        for field in ["layers", "partial_layers"] {
+            let names = clip
+                .get(field)
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate();
+            for (j, name) in names {
+                let Some(name) = name.as_str().filter(|n| !declared.contains(n)) else {
+                    continue;
+                };
+                let help = match suggest::nearest(name, declared.iter().copied()) {
+                    Some(candidate) => format!("nearest match is `{candidate}`"),
+                    None => "declare it under `physics.layers`".to_string(),
+                };
+                reject(
+                    format!("{at}/{field}/{j}"),
+                    format!("clip layer `{name}` is not declared under `physics.layers`"),
+                    help,
+                );
+            }
+        }
+    }
+    diagnostics
+}
+
 /// Every `L1261` a checked scene's solver colliders report when the scene has no `physics:` block:
 /// the solver is never installed, so a 3D shape or a rigid body would silently do nothing. The
 /// claim rule is [`ludion_physics::claims`].
@@ -1385,6 +1545,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_sun_diagnostics(scene));
     diagnostics.extend(scene_local_light_diagnostics(scene));
     diagnostics.extend(scene_light_exposure_diagnostics(scene));
+    diagnostics.extend(scene_ground_marker_clip_diagnostics(scene));
     diagnostics.extend(scene_lens_and_sun_disc_diagnostics(scene));
     diagnostics.extend(crate::ui::group::scene_ui_group_diagnostics(scene));
     diagnostics.extend(scene_preload_diagnostics(project_root, scene));
@@ -1822,6 +1983,74 @@ entities:
 
         let sensor = format!("{solid}        sensor: true\n");
         assert!(scene_surface_diagnostics(&overlay_scene(&sensor, "concrete")).is_empty());
+    }
+
+    /// `surface_scene` with `parts` set on the entity-0 `SurfaceTag`.
+    fn parts_scene(body: &str, parts: serde_json::Value) -> Scene {
+        let mut scene = surface_scene(body, "concrete");
+        scene.entities[0].components.pop();
+        scene.entities[0].components.push((
+            "SurfaceTag".to_string(),
+            serde_json::json!({ "surface": "concrete", "parts": parts }),
+        ));
+        scene
+    }
+
+    const COMPOUND: &str = "entities:\n  - name: part\n    components:\n      Collider:\n        shape:\n          compound:\n            parts:\n              - shape:\n                  sphere:\n                    radius: 0.5\n              - shape:\n                  sphere:\n                    radius: 0.5\n        body: static\n";
+
+    #[test]
+    fn a_part_index_must_name_a_compound_part_and_a_declared_surface() {
+        let parts = serde_json::json!([
+            { "part": 1, "surface": "metal_grate" },
+            { "part": 2, "surface": "metal_grat" },
+        ]);
+        let found = scene_surface_diagnostics(&parts_scene(COMPOUND, parts));
+        let codes: Vec<_> = found.iter().map(|d| d.code).collect();
+        assert_eq!(
+            codes,
+            [code::SURFACE_UNKNOWN, code::SURFACE_PART_INVALID],
+            "{found:?}"
+        );
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/SurfaceTag/parts/1/surface")
+        );
+        assert_eq!(
+            found[0].help.as_deref(),
+            Some("nearest match is `metal_grate`")
+        );
+        assert_eq!(
+            found[1].path.as_deref(),
+            Some("/entities/0/components/SurfaceTag/parts/1/part")
+        );
+    }
+
+    #[test]
+    fn a_part_index_without_a_compound_is_l1694() {
+        let solid = collider("sphere:\n            radius: 0.5", "static", "default");
+        let parts = serde_json::json!([{ "part": 0, "surface": "metal_grate" }]);
+        let found = scene_surface_diagnostics(&parts_scene(&solid, parts));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code, code::SURFACE_PART_INVALID);
+    }
+
+    #[test]
+    fn a_part_name_needs_an_assembly_mesh() {
+        let parts = serde_json::json!([{ "part": "helmet", "surface": "metal_grate" }]);
+        let found = scene_surface_diagnostics(&parts_scene(COMPOUND, parts.clone()));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code, code::SURFACE_PART_INVALID);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/SurfaceTag/parts/0/part")
+        );
+
+        let mut scene = parts_scene(COMPOUND, parts);
+        scene.entities[0].components.push((
+            "Mesh".to_string(),
+            serde_json::json!({ "shape": { "assembly": "models/figure.assembly.yaml" } }),
+        ));
+        assert!(scene_surface_diagnostics(&scene).is_empty());
     }
 
     fn motor_scene(physics: &str, components: &str) -> Scene {

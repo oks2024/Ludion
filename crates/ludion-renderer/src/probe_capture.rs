@@ -60,6 +60,7 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
     out.particles.clear();
     out.texts.clear();
     out.ground_markers.clear();
+    out.ground_marker_profiles.clear();
     out.drop_shadows.clear();
     out.decals.clear();
     // Probes are lit by local lights unshadowed, like the GI bake. A face has no composite, so

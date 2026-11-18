@@ -199,6 +199,36 @@ fn drive_animation(world: &mut World, ctx: &SystemCtx) {
 }
 ```
 
+### Layers
+
+An `AnimationLayers` component plays a second clip over the base `Animation` on some parts only
+(`ludion docs animation-layers` has the component and the mask spelling). An assembly's masks name
+**parts**, and `descendants: true` walks the parent links, so a child authored before its parent is fine:
+
+```yaml
+masks:
+  arm_only:
+    joints:
+      - arm
+```
+
+```rust
+use ludion::prelude::*;
+
+// The scene lists a `wave` layer (clip `wave`, mask `arm_only`) at weight 0.
+fn wave(layers: &mut AnimationLayers, now: SimTime) {
+    fade_layer(layers, "wave", 1.0, 0.2, now);
+}
+```
+
+- **Override** blends each channel the layer clip keys toward the layer by `weight × mask` (verbatim
+  at 1). A channel it does not key keeps the base, and a part with no track in it is untouched.
+- **Additive** measures from the part's **rest**, because a rigid part's sample already is its change
+  from rest; `reference: <clip>` measures from that clip's first frame instead.
+- Layers read the base `hold` grid and are presentation only: `switch_to_ragdoll` samples the base
+  pose alone. `events: true` fires the layer clip's events with `ClipEvent.layer` set.
+- A layer that names a blend is skipped on an assembly.
+
 ### Live editing
 
 Under `ludion dev` (or any attached viewer) saving the assembly, **any** part, or **any** bound clip

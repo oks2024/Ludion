@@ -397,6 +397,11 @@ impl PerceptionResults {
         &self.heard[start..start + len]
     }
 
+    /// Every delivery of this tick, in `(listener, noise)` order: the numeric trace's noise lines.
+    pub(crate) fn heard_all(&self) -> &[HeardNoise] {
+        &self.heard
+    }
+
     /// Every noise delivered this tick, in noise-id order, with the radius the senses used.
     pub fn noises(&self) -> &[NoiseRecord] {
         &self.noises

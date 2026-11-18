@@ -57,7 +57,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::audio::{AudioDistance, AudioPan};
+use crate::audio::{AudioDistance, AudioPan, DuckRule};
 use crate::builtin_registry;
 use crate::docs::{DocKind, DocValidator};
 use crate::engine::{DEFAULT_RENDER_SIZE, Engine, SystemSpec};
@@ -119,6 +119,7 @@ pub struct EngineBuilder {
     category_gains: CategoryGains,
     audio_distance: AudioDistance,
     audio_pan: AudioPan,
+    duck_rules: Vec<DuckRule>,
     plane: Plane,
     render_size: Option<(u32, u32)>,
     anti_aliasing: AntiAliasing,
@@ -173,6 +174,7 @@ impl EngineBuilder {
             category_gains: CategoryGains::default(),
             audio_distance: AudioDistance::default(),
             audio_pan: AudioPan::default(),
+            duck_rules: Vec::new(),
             plane: Plane::default(),
             render_size: None,
             anti_aliasing: AntiAliasing::default(),
@@ -485,6 +487,28 @@ impl EngineBuilder {
     #[must_use]
     pub fn audio_distance(mut self, distance: AudioDistance) -> Self {
         self.audio_distance = distance;
+        self
+    }
+
+    /// Adds a ducking rule: while a sound on `rule.when` is live, the engine dips the buses in
+    /// `rule.duck` by `rule.depth_db` (see [`DuckRule`]). Callable more than once; rules multiply,
+    /// floored at [`DUCK_FLOOR_DB`](ludion_core::audio::DUCK_FLOOR_DB). `build` refuses a rule that
+    /// cannot run with `L5100`.
+    ///
+    /// Authored once on the game, not simulation state: no `WorldHash`, no replay, and a world
+    /// rebuild keeps the rules but resets every duck in flight.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{DuckRule, Engine};
+    ///
+    /// let engine = Engine::builder().audio_duck(DuckRule::default()).build()?;
+    /// # let _ = engine;
+    /// # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
+    /// ```
+    #[must_use]
+    pub fn audio_duck(mut self, rule: DuckRule) -> Self {
+        self.duck_rules.push(rule);
         self
     }
 
@@ -1325,6 +1349,7 @@ impl EngineBuilder {
                  .system(\"fire\", fire).query::<(&Loadout, &Transform)>()",
             ));
         }
+        crate::audio::validate_duck_rules(&self.duck_rules)?;
         if let Some(config) = &self.projectile_config {
             config.validate()?;
         }
@@ -1374,6 +1399,7 @@ impl EngineBuilder {
         engine.category_gains = self.category_gains;
         engine.audio_distance = self.audio_distance;
         engine.audio_pan = self.audio_pan;
+        engine.duck_rules = self.duck_rules;
         // Set before the mirror: `install_plane` copies the field onto the world, and every later
         // world (re)build re-runs it.
         engine.plane = self.plane;
@@ -1768,6 +1794,62 @@ mod tests {
             .unwrap();
         assert_eq!(engine.audio_pan(), AudioPan::Stereo);
         assert_eq!(engine.audio_distance(), AudioDistance::Spatial);
+    }
+
+    /// A valid ducking rule builds and rides the engine; each invalid shape is `L5100`.
+    #[test]
+    fn audio_duck_rules_are_validated_at_build() {
+        use crate::Bus;
+        let root = fresh_dir("duck-rules");
+        let valid = DuckRule::default();
+        let engine = Engine::builder()
+            .project_root(&root)
+            .audio_duck(valid)
+            .audio_duck(DuckRule {
+                when: Bus::Ui,
+                duck: &[Bus::Sfx],
+                ..valid
+            })
+            .build()
+            .unwrap();
+        assert_eq!(engine.duck_rules.len(), 2);
+
+        let bad = [
+            DuckRule {
+                depth_db: 1.0,
+                ..valid
+            },
+            DuckRule {
+                depth_db: f32::INFINITY,
+                ..valid
+            },
+            DuckRule {
+                when: Bus::Master,
+                ..valid
+            },
+            DuckRule {
+                when: Bus::Music,
+                ..valid
+            },
+            DuckRule { duck: &[], ..valid },
+            DuckRule {
+                duck: &[Bus::Master],
+                ..valid
+            },
+            DuckRule {
+                duck: &[Bus::Voice],
+                ..valid
+            },
+        ];
+        for rule in bad {
+            let error = Engine::builder()
+                .project_root(&root)
+                .audio_duck(rule)
+                .build()
+                .err()
+                .unwrap_or_else(|| panic!("{rule:?} builds"));
+            assert_eq!(error.code, code::AUDIO_DUCK_RULE_INVALID, "{rule:?}");
+        }
     }
 
     /// The mixdown a game authors reaches the built engine, where every host reads it; unauthored,

@@ -1,15 +1,17 @@
 //! The numeric trace: a per-tick JSON Lines record of a scene driven by an input script.
 //!
-//! Four channels. `motor` writes one line per [`CharacterMotor`] entity per tick — the tick, the
+//! Five channels. `motor` writes one line per [`CharacterMotor`] entity per tick — the tick, the
 //! entity's name, its feet and the tick's [`MoveReport`]. `sensors` writes one line per
 //! [`SensorEvent`] the tick's physics step produced. `ai` writes one line per `ludion-ai` state
-//! transition and `ai_states` one per agent per tick (`ludion docs ai`). One function, [`trace`], builds the records;
+//! transition and `ai_states` one per agent per tick (`ludion docs ai`). `perception` writes the sight, noise
+//! and memory changes of the engine's perception (`ludion docs perception`). One function, [`trace`], builds the records;
 //! `ludion trace`, a game binary's `--trace` and a game's `cargo test` ([`trace_with`]) all call it,
 //! so they print the same lines. Two runs of the same scene, script and build are byte-identical:
 //! compare two runs, never a committed trace.
 //!
 //! Floats are written by `serde_json` (ryu shortest round-trip), the same writer the wire uses.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::Path;
 use std::str::FromStr;
@@ -29,8 +31,9 @@ use ludion_sim::InputScript;
 use serde::Serialize;
 
 use crate::builder::EngineBuilder;
-use crate::components::{Name, Transform};
+use crate::components::{Name, Perceiver, Sense, StimulusRecord, Transform};
 use crate::engine::Engine;
+use crate::perception::PerceptionResults;
 
 /// A trace channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,15 +46,18 @@ pub enum TraceChannel {
     Ai,
     /// One line per `ludion-ai` agent per tick it ran, with its active path.
     AiStates,
+    /// One line per sight change, noise delivery and memory record appearing or vanishing.
+    Perception,
 }
 
 impl TraceChannel {
     /// Every channel, the default selection.
-    pub const ALL: [TraceChannel; 4] = [
+    pub const ALL: [TraceChannel; 5] = [
         TraceChannel::Motor,
         TraceChannel::Sensors,
         TraceChannel::Ai,
         TraceChannel::AiStates,
+        TraceChannel::Perception,
     ];
 }
 
@@ -64,8 +70,9 @@ impl FromStr for TraceChannel {
             "sensors" => Ok(TraceChannel::Sensors),
             "ai" => Ok(TraceChannel::Ai),
             "ai_states" => Ok(TraceChannel::AiStates),
+            "perception" => Ok(TraceChannel::Perception),
             other => Err(format!(
-                "unknown trace channel `{other}`; the channels are `motor`, `sensors`, `ai` and `ai_states`"
+                "unknown trace channel `{other}`; the channels are `motor`, `sensors`, `ai`, `ai_states` and `perception`"
             )),
         }
     }
@@ -109,6 +116,109 @@ pub enum TraceRecord {
     Ai(AiTransitionRecord),
     /// An agent's active path after a tick.
     AiStates(AiStatesRecord),
+    /// A perception change; the `event` field names which.
+    Perception(PerceptionRecord),
+}
+
+/// A perception line: the `event` field comes right after `channel`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum PerceptionRecord {
+    /// A `(perceiver, zone, target)` key whose `visible` changed.
+    Sight(SightTraceRecord),
+    /// One noise reaching one listener.
+    Noise(NoiseTraceRecord),
+    /// A `StimulusRecord` that appeared.
+    Remember(RememberTraceRecord),
+    /// A `StimulusRecord` that vanished.
+    Forget(ForgetTraceRecord),
+}
+
+/// A sight change: the key's `visible` differs from the previous traced tick. A key that dropped out
+/// of the results while visible prints `in_zone: false, visible: false` and no sample fields.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SightTraceRecord {
+    /// The frame index the tick ran as.
+    pub tick: u64,
+    /// The perceiver's `Name`, else its id.
+    pub perceiver: String,
+    /// The zone's `name`; its index when the zone is unnamed or the perceiver is gone.
+    pub zone: String,
+    /// The target's `Name`, else its id.
+    pub target: String,
+    /// Whether any sample point was inside the zone's wedge.
+    pub in_zone: bool,
+    /// Whether the target's `require` rule was met.
+    pub visible: bool,
+    /// The bitmask of seen sample points.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub points_visible: Option<u8>,
+    /// Metres from the eye to the target's origin.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distance: Option<f32>,
+    /// The nearest blocker of the lowest-index blocked point.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<String>,
+}
+
+/// One delivery of a noise to one listener.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct NoiseTraceRecord {
+    /// The frame index the tick ran as.
+    pub tick: u64,
+    /// The listener's `Name`, else its id.
+    pub listener: String,
+    /// The noise id.
+    pub noise: u64,
+    /// The noise kind.
+    pub kind: String,
+    /// What made it, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Metres from the ear to the noise.
+    pub distance: f32,
+    /// The radius this listener's ear applied.
+    pub effective_radius: f32,
+    /// The sound occluders counted between the noise and the ear.
+    pub occluders: u8,
+}
+
+/// A `StimulusRecord` that appeared.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RememberTraceRecord {
+    /// The frame index the tick ran as.
+    pub tick: u64,
+    /// The perceiver's `Name`, else its id.
+    pub perceiver: String,
+    /// What was sensed, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// `sight`, `hearing` or `custom:<k>`.
+    pub sense: String,
+    /// The noise kind of a hearing record.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    /// The record's `last_position`.
+    pub at: [f32; 3],
+}
+
+/// A `StimulusRecord` that vanished: the last value seen of it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ForgetTraceRecord {
+    /// The frame index the tick ran as.
+    pub tick: u64,
+    /// The perceiver's `Name`, else its id.
+    pub perceiver: String,
+    /// What was sensed, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// `sight`, `hearing` or `custom:<k>`.
+    pub sense: String,
+    /// The noise kind of a hearing record.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    /// The record's last `last_position`.
+    pub at: [f32; 3],
 }
 
 /// A motor entity's tick: where its feet are and, when game code moved it this tick, what the move did.
@@ -403,6 +513,167 @@ fn ai_records(world: &World, records: Vec<AiRecord>, out: &mut Vec<TraceRecord>)
     }
 }
 
+/// What the `perception` channel remembers of the previous traced tick, to print only changes.
+/// Nothing is recorded sim-side: the lines derive from `PerceptionResults` and the `StimulusRecord`
+/// entities.
+#[derive(Default)]
+struct PerceptionDiff {
+    /// The `(perceiver, zone, target)` keys that were visible; an absent key was not.
+    visible: BTreeMap<(EntityId, u8, EntityId), ()>,
+    /// Every `StimulusRecord` entity seen, with its last value.
+    records: BTreeMap<EntityId, StimulusRecord>,
+    /// The `results.tick()` whose noises were last printed.
+    last_tick: Option<u64>,
+}
+
+fn sense_label(sense: Sense) -> String {
+    match sense {
+        Sense::Sight => "sight".to_owned(),
+        Sense::Hearing => "hearing".to_owned(),
+        Sense::Custom(k) => format!("custom:{k}"),
+    }
+}
+
+fn zone_label(world: &World, perceiver: EntityId, zone: u8) -> String {
+    match world.get::<Perceiver>(perceiver) {
+        Ok(Some(p)) => match p.sight.get(usize::from(zone)) {
+            Some(z) if !z.name.is_empty() => z.name.clone(),
+            _ => zone.to_string(),
+        },
+        _ => zone.to_string(),
+    }
+}
+
+impl PerceptionDiff {
+    fn step(&mut self, world: &World, tick: u64, out: &mut Vec<TraceRecord>) {
+        if let Some(results) = world.resource::<PerceptionResults>() {
+            self.sight(world, results, tick, out);
+            if self.last_tick != Some(results.tick()) {
+                self.last_tick = Some(results.tick());
+                for heard in results.heard_all() {
+                    out.push(TraceRecord::Perception(PerceptionRecord::Noise(
+                        NoiseTraceRecord {
+                            tick,
+                            listener: label(world, heard.listener),
+                            noise: heard.noise.0,
+                            kind: heard.kind.clone(),
+                            source: heard.source.map(|s| label(world, s)),
+                            distance: heard.distance,
+                            effective_radius: heard.effective_radius,
+                            occluders: heard.occluders,
+                        },
+                    )));
+                }
+            }
+        }
+        self.memory(world, tick, out);
+    }
+
+    fn sight(
+        &mut self,
+        world: &World,
+        results: &PerceptionResults,
+        tick: u64,
+        out: &mut Vec<TraceRecord>,
+    ) {
+        let mut changed: BTreeMap<(EntityId, u8, EntityId), SightTraceRecord> = BTreeMap::new();
+        let mut now = BTreeMap::new();
+        for sample in results.samples() {
+            let key = (sample.perceiver, sample.zone, sample.target);
+            if sample.visible {
+                now.insert(key, ());
+            }
+            if sample.visible != self.visible.contains_key(&key) {
+                changed.insert(
+                    key,
+                    SightTraceRecord {
+                        tick,
+                        perceiver: label(world, sample.perceiver),
+                        zone: zone_label(world, sample.perceiver, sample.zone),
+                        target: label(world, sample.target),
+                        in_zone: sample.in_zone,
+                        visible: sample.visible,
+                        points_visible: Some(sample.points_visible),
+                        distance: Some(sample.distance),
+                        blocker: sample.blocker.map(|b| label(world, b)),
+                    },
+                );
+            }
+        }
+        for key in self.visible.keys() {
+            if !now.contains_key(key) && !changed.contains_key(key) {
+                changed.insert(
+                    *key,
+                    SightTraceRecord {
+                        tick,
+                        perceiver: label(world, key.0),
+                        zone: zone_label(world, key.0, key.1),
+                        target: label(world, key.2),
+                        in_zone: false,
+                        visible: false,
+                        points_visible: None,
+                        distance: None,
+                        blocker: None,
+                    },
+                );
+            }
+        }
+        self.visible = now;
+        out.extend(
+            changed
+                .into_values()
+                .map(|r| TraceRecord::Perception(PerceptionRecord::Sight(r))),
+        );
+    }
+
+    fn memory(&mut self, world: &World, tick: u64, out: &mut Vec<TraceRecord>) {
+        let mut current: BTreeMap<EntityId, StimulusRecord> = BTreeMap::new();
+        for entity in world.entities() {
+            if let Ok(Some(record)) = world.get::<StimulusRecord>(entity) {
+                current.insert(entity, record.clone());
+            }
+        }
+        let line = |record: &StimulusRecord| {
+            (
+                label(world, record.perceiver),
+                record.source.map(|s| label(world, s)),
+                sense_label(record.sense),
+            )
+        };
+        for (entity, record) in &self.records {
+            if !current.contains_key(entity) {
+                let (perceiver, source, sense) = line(record);
+                out.push(TraceRecord::Perception(PerceptionRecord::Forget(
+                    ForgetTraceRecord {
+                        tick,
+                        perceiver,
+                        source,
+                        sense,
+                        kind: record.kind.clone(),
+                        at: record.last_position,
+                    },
+                )));
+            }
+        }
+        for (entity, record) in &current {
+            if !self.records.contains_key(entity) {
+                let (perceiver, source, sense) = line(record);
+                out.push(TraceRecord::Perception(PerceptionRecord::Remember(
+                    RememberTraceRecord {
+                        tick,
+                        perceiver,
+                        source,
+                        sense,
+                        kind: record.kind.clone(),
+                        at: record.last_position,
+                    },
+                )));
+            }
+        }
+        self.records = current;
+    }
+}
+
 /// The variant name of a serialized machine event: a unit variant is a string, an externally tagged
 /// variant a one-key object. Empty when the payload has neither shape.
 fn event_name(payload: &serde_json::Value) -> String {
@@ -421,8 +692,10 @@ fn event_name(payload: &serde_json::Value) -> String {
 /// addressed to frame `N` applies at the start of tick `N`). Within a tick the `motor` lines come
 /// first, ordered by entity id, then the `sensors` lines in the physics world's `(sensor, other)`
 /// order, then the `ai` and `ai_states` lines as `ai_tick` recorded them (machines in schedule
-/// order, agents ascending; a tick the game held prints none), whatever order `channels` names them
-/// in. A motor line carries the `MoveReport` only when
+/// order, agents ascending; a tick the game held prints none), then the `perception` lines
+/// (`sight` changes by `(perceiver, zone, target)`, `noise` deliveries by `(listener, noise)` on a
+/// tick whose gameplay time advanced, then `forget` and `remember` lines by record entity), whatever
+/// order `channels` names them in. A motor line carries the `MoveReport` only when
 /// game code called `move_character` on that entity during the tick. A sensor line is the tick's own
 /// physics step. No physics world means no sensor lines.
 ///
@@ -494,12 +767,14 @@ pub fn trace(
     let sensors = channels.contains(&TraceChannel::Sensors);
     let ai = channels.contains(&TraceChannel::Ai);
     let ai_states = channels.contains(&TraceChannel::AiStates);
+    let perception_on = channels.contains(&TraceChannel::Perception);
     if ai || ai_states {
         engine
             .world_mut()
             .insert_resource(AiTrace::new(ai, ai_states));
     }
     let mut records = Vec::new();
+    let mut perception = perception_on.then(PerceptionDiff::default);
     for _ in 0..frames {
         let tick = engine.frame().as_u64();
         engine.execute(Command::SimStep(SimStepParams {
@@ -517,6 +792,9 @@ pub fn trace(
         {
             let taken = sink.take();
             ai_records(engine.world(), taken, &mut records);
+        }
+        if let Some(diff) = perception.as_mut() {
+            diff.step(engine.world(), tick, &mut records);
         }
     }
     Ok(records)
@@ -552,8 +830,26 @@ pub fn write_jsonl(records: &[TraceRecord], out: &mut impl Write) -> io::Result<
 
 #[cfg(test)]
 mod tests {
-    use super::event_name;
+    use super::{NoiseTraceRecord, PerceptionRecord, TraceRecord, event_name};
     use serde_json::json;
+
+    #[test]
+    fn a_perception_line_leads_with_channel_then_event_then_tick() {
+        let line = TraceRecord::Perception(PerceptionRecord::Noise(NoiseTraceRecord {
+            tick: 7,
+            listener: "guard".into(),
+            noise: 3,
+            kind: "footstep".into(),
+            source: None,
+            distance: 2.5,
+            effective_radius: 6.0,
+            occluders: 0,
+        }));
+        assert_eq!(
+            serde_json::to_string(&line).unwrap(),
+            r#"{"channel":"perception","event":"noise","tick":7,"listener":"guard","noise":3,"kind":"footstep","distance":2.5,"effective_radius":6.0,"occluders":0}"#
+        );
+    }
 
     #[test]
     fn event_name_reads_unit_and_tagged_variants() {

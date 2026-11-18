@@ -443,6 +443,29 @@ pub enum AudioMessage {
         /// The fade length in sim ticks.
         fade_frames: u32,
     },
+    /// Slew the engine-owned duck layer of a bus to `gain` over `fade_frames` sim ticks. The duck
+    /// layer multiplies with `authored x user x game x pause`; `gain` is linear in `[0, 1]`, the
+    /// product of every active duck on that bus (`1.0` releases it).
+    ///
+    /// ```
+    /// use ludion_core::audio::{AudioMessage, Bus};
+    ///
+    /// // "Music dips to about 35% over 6 ticks while a voice line plays."
+    /// let message = AudioMessage::Duck {
+    ///     bus: Bus::Music,
+    ///     gain: 0.35,
+    ///     fade_frames: 6,
+    /// };
+    /// assert_ne!(message, AudioMessage::StopAllLoops);
+    /// ```
+    Duck {
+        /// The bus ducked.
+        bus: Bus,
+        /// The target linear gain in `[0, 1]`.
+        gain: f32,
+        /// The slew length in sim ticks.
+        fade_frames: u32,
+    },
 }
 
 /// The identity of one attached voice (`AudioQueue::play_on`): a per-queue counter, reset when the
@@ -460,3 +483,6 @@ pub struct VoiceId(pub u64);
 
 /// The most stems a [`AudioMessage::MusicSet`] plays; stems past it are dropped with `L5006`.
 pub const MUSIC_STEMS_MAX: usize = 8;
+
+/// The deepest a bus's combined duck goes, in dB: stacked ducks multiply but never pass it.
+pub const DUCK_FLOOR_DB: f32 = -24.0;

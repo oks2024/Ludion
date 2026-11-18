@@ -1,6 +1,6 @@
 # Plan: Perception — sight zones, sample points, batched line of sight
 
-> **Waves 1–3 and W4a mechanized — sight, stimulus memory, hearing, and the sight stagger and ray budget ship; later waves are laid out below.**
+> **Waves 1–4 mechanized — sight, stimulus memory, hearing, the sight stagger and ray budget, and the `perception` trace channel ship; W5 is laid out below.**
 > Driven by Neon Shroud request 0001 (stealth AI senses). Game-facing doc: `ludion docs perception`.
 
 ## Design decisions
@@ -121,6 +121,26 @@
 35. **Counts.** `PerceptionResults::rays_cast()` (rays actually cast, re-casts included) and `deferred()` (due, not
     served, sorted). `engine.describe` gains `perception: { rays_cast, deferred }`, present once `PerceptionResults`
     exists (the `ai::describe_section` precedent).
+36. **The trace is derived in the driver.** `trace()` reads `PerceptionResults` and the `StimulusRecord`s after each
+    `SimStep` and diffs them against the previous tick's state, which it keeps in locals. Nothing is recorded sim-side
+    (unlike `AiTrace`): the results are already a derived per-tick resource, so a sim hook would add nothing. It is
+    unhashed, and it costs nothing when the channel is off.
+37. **Line vocabulary** (`channel: "perception"`, then `event`; after the ai lines within a tick): `sight` (one line per
+    `(perceiver, zone, target)` whose `visible` changed; absent means not visible; a key that dropped out of the results
+    while visible prints `in_zone: false, visible: false` without sample fields), `noise` (one line per delivery, in
+    `(listener, noise)` order, printed only on ticks where `results.tick()` advanced), `remember` / `forget` (a
+    `StimulusRecord` that appeared or vanished, forgets first; a forget prints the last value seen; refreshes are not
+    traced). Entities print through `trace::label`. The request asked for one line per *noise*; we print one per
+    *delivery*, because the delivery is what a guard reacts to and the noise is already in `results.noises()`.
+38. **Gallery placement.** `examples/gallery/perception.yaml` follows the `ragdoll-pose-blend` precedent: under a plain
+    `Engine::builder()` (`ludion test`, the spelling sweep) it is a static scene and its golden is the tick-0 render.
+    Perception runs only under the `perception_gallery` test builder, which installs `PerceptionConfig`, the intruder
+    route and its footsteps. Unlike ai (decision 15 of `Plan/ai-behaviour.md`), every component in the scene is
+    builtin, so the plain load succeeds.
+39. **The bench reports and does not gate.** `perception_bench.rs` is `#[ignore]` and run in release. It prints the
+    median and p95 of `perception_update` plus `rays_cast` at 1 and 8 threads and asserts only that the two `WorldHash`
+    traces are identical. The 0.5 ms target stays Proposed. The request's game-side `tests/gameplay.rs` scripted route
+    is the game's work.
 
 ## Waves
 
@@ -131,8 +151,8 @@
   occlusion via `sound_occluder_layers`, the surface multiplier by name in `PerceptionConfig`; decisions 21-28).
 - **W4a (shipped):** `period_ticks` stagger, ray budget and rotation cursor on a hashed `PerceptionState`, carried
   samples, `L4221`, `engine.describe` counts (decisions 29-35).
-- **W4b:** the `perception` trace channel, gallery `examples/gallery/perception.yaml`, the committed `WorldHash`
-  trace, the bench (30 x 2 x 12 x 3, 1 and 8 threads).
+- **W4b (shipped):** the `perception` trace channel, gallery `examples/gallery/perception.yaml`, the committed
+  `WorldHash` trace, the bench (30 x 2 x 12 x 3, 1 and 8 threads; decisions 36-39).
 - **W5:** debug draw category (rides request 0005), check-scene class and layer name checks.
 
 ## Out of scope (triggers recorded)
@@ -170,3 +190,15 @@ ray budget 2048 (decision 30) and the bench target 0.5 ms (W4b); no entity-ref c
   `PerceptionResults::rays_cast`/`deferred`; the `perception` key of `engine.describe`; `L4221`; tests in
   `crates/ludion-engine/tests/perception_budget.rs` (incl. the byte-identity proof against a world that never ran the
   update); `component_schemas.json` re-blessed. No wire schema, `SnapshotDoc` schema, trace, replay or golden moved.
+- **W4b mechanized (2026-11-18):** `TraceChannel::Perception` and `TraceRecord::Perception` (`sight`, `noise`, `remember`,
+  `forget`; `PerceptionRecord` and four structs in `ludion-engine`), derived in `trace()` from `PerceptionResults`
+  (`heard_all`, crate-private) and the `StimulusRecord`s, nothing sim-side (decisions 36-37); gallery scene
+  `examples/gallery/perception.yaml` with `perception.trace.txt` and `goldens/windows/perception.png` (blessed on the
+  RTX 3090 box; the macOS golden and the M4 reproduction of the trace are owed); tests
+  `crates/ludion-engine/tests/perception_trace.rs`, `perception_gallery.rs` (committed trace, 1/2/8 threads, restore at
+  tick 150, channel contents) and the ignored `perception_bench.rs`. Bench (release, 5950X + RTX 3090 box, 30 perceivers
+  x 2 zones x 12 targets x 3 points, 1080 rays per tick): `perception_update` medians over four runs on a box shared
+  with other builds: 0.68-1.21 ms at 1 thread, 0.64-0.96 ms at 8 threads (quietest run: 0.679 / p95 0.868 ms at 1,
+  0.644 / p95 0.815 ms at 8); an 8-thread run is not reliably faster at this size. The 0.5 ms target stays Proposed
+  and a quiet-box re-measure is owed. No wire schema, component
+  schema, replay or existing golden moved.

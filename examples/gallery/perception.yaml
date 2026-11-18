@@ -1,0 +1,387 @@
+# Feature: perception (`Perceiver`, `SightTarget`, `NoiseZone`; Plan/perception.md, Neon Shroud request 0001) -
+# a stealth corridor. Three guards watch a corridor along +X: guard-a faces down it with an inner and an outer
+# sight zone, guard-b stands against the north wall looking across it (hearing, memory), and a camera on the
+# end wall pans over it (period_ticks 2, so carried samples are hashed state). A cover_low crate, a cover_high
+# wall and a raised cover_overhead slab break the lines of sight; a NoiseZone muffles the second half.
+#
+# The gallery renders tick 0: a static corridor. The intruder walks, crouches and goes prone only under the
+# test builder of `ludion-engine`'s `perception_gallery` test, which installs `PerceptionConfig`, the route and the
+# footsteps, and traces the per-tick `WorldHash` against `perception.trace.txt`. Under a plain `Engine::builder()`
+# every component here is builtin and inert.
+format: 1
+name: "perception - Perceiver, SightTarget, NoiseZone: a stealth corridor, authored at tick 0"
+physics:
+  space: free
+  layers:
+    - name: wall
+    - name: cover_low
+    - name: cover_high
+    - name: cover_overhead
+entities:
+  - name: camera-view
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 26.0
+          - 16.0
+        rotation:
+          - -58.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 12.0
+          - 4.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.95
+          - 0.85
+        intensity: 3.0
+        range: 60.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 0.0
+          - 0.0
+        scale:
+          - 34.0
+          - 1.0
+          - 14.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.1
+          - 0.11
+          - 0.13
+          - 1.0
+  - name: wall-south
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 0.6
+          - -3.25
+        scale:
+          - 24.5
+          - 1.2
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.37
+          - 0.42
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 12.25
+              - 0.6
+              - 0.25
+        body: static
+        layer: wall
+  - name: wall-north
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 0.6
+          - 3.25
+        scale:
+          - 24.5
+          - 1.2
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.37
+          - 0.42
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 12.25
+              - 0.6
+              - 0.25
+        body: static
+        layer: wall
+  - name: wall-end
+    components:
+      Transform:
+        translation:
+          - 24.25
+          - 0.6
+          - 0.0
+        scale:
+          - 0.5
+          - 1.2
+          - 6.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.37
+          - 0.42
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.25
+              - 0.6
+              - 3.0
+        body: static
+        layer: wall
+  - name: crate-low
+    components:
+      Transform:
+        translation:
+          - 7.0
+          - 0.4
+          - 0.0
+        scale:
+          - 0.8
+          - 0.8
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.4
+          - 0.2
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.4
+              - 0.4
+              - 0.5
+        body: static
+        layer: cover_low
+  - name: wall-high
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 1.0
+          - 0.0
+        scale:
+          - 0.3
+          - 2.0
+          - 1.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.45
+          - 0.6
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.15
+              - 1.0
+              - 0.8
+        body: static
+        layer: cover_high
+  - name: slab-overhead
+    components:
+      Transform:
+        translation:
+          - 19.5
+          - 0.9
+          - 0.0
+        scale:
+          - 3.0
+          - 0.3
+          - 2.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.3
+          - 0.3
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 1.5
+              - 0.15
+              - 1.2
+        body: static
+        layer: cover_overhead
+  - name: noise-muffle
+    components:
+      Transform:
+        translation:
+          - 18.0
+          - 2.0
+          - 0.0
+      NoiseZone:
+        shape:
+          box:
+            half_extents:
+              - 6.0
+              - 2.0
+              - 3.0
+        multiplier: 0.5
+  - name: guard-a
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 0.0
+          - 0.0
+        rotation:
+          - 0.0
+          - -90.0
+          - 0.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.2
+          - 0.2
+          - 1.0
+      Perceiver:
+        eye:
+          - 0.0
+          - 1.6
+          - 0.0
+        sight:
+          - name: inner
+            range: 6.0
+            half_angle_deg: 60.0
+            detects:
+              - player
+          - name: outer
+            range: 14.0
+            half_angle_deg: 30.0
+            detects:
+              - player
+            range_by_visibility: true
+  - name: guard-b
+    components:
+      Transform:
+        translation:
+          - 11.0
+          - 0.0
+          - 2.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.9
+          - 0.5
+          - 0.15
+          - 1.0
+      Perceiver:
+        eye:
+          - 0.0
+          - 1.6
+          - 0.0
+        sight:
+          - name: side
+            range: 8.0
+            half_angle_deg: 60.0
+            detects:
+              - player
+        memory:
+          forget_sight_s: 2.0
+        hearing:
+          hears:
+            - footstep
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 23.5
+          - 3.5
+          - 0.0
+        rotation:
+          - 0.0
+          - 90.0
+          - 0.0
+        scale:
+          - 0.4
+          - 0.4
+          - 0.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.1
+          - 0.5
+          - 1.0
+      Perceiver:
+        look:
+          pitch_deg: 20.0
+        sight:
+          - name: lens
+            range: 18.0
+            half_angle_deg: 40.0
+            detects:
+              - player
+        sweep:
+          amplitude_deg: 25.0
+          period_s: 6.0
+          shape: sine
+        period_ticks: 2
+  - name: intruder
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.8
+          - 0.9
+          - 1.0
+      SightTarget:
+        class: player
+        points:
+          - offset:
+              - 0.0
+              - 1.6
+              - 0.0
+            blocked_by:
+              - wall
+              - cover_high
+              - cover_overhead
+          - offset:
+              - 0.0
+              - 1.0
+              - 0.0
+            blocked_by:
+              - wall
+              - cover_high
+              - cover_overhead
+          - offset:
+              - 0.0
+              - 0.4
+              - 0.0
+            blocked_by:
+              - wall
+              - cover_low
+              - cover_high
+              - cover_overhead

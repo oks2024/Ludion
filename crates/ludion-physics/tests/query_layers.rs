@@ -363,6 +363,39 @@ fn an_undeclared_query_layer_keeps_the_body_and_reports_once_until_fixed() {
     assert_eq!(ray(&sim, "tag"), 1);
 }
 
+#[test]
+fn the_static_query_fingerprint_sees_layer_edits_only() {
+    let mut sim = Sim::new();
+    let door = spawn(
+        &mut sim.world,
+        [0.0, 0.0, 0.0],
+        Body::new_static(),
+        "wall",
+        Some(query_layers(&["light_occluder"])),
+    );
+    sim.run(2);
+    let before = sim.physics().static_query_fingerprint();
+    sim.run(2);
+    assert_eq!(
+        sim.physics().static_query_fingerprint(),
+        before,
+        "untouched"
+    );
+
+    *sim.world.get_mut::<QueryLayers>(door).unwrap().unwrap() = query_layers(&["tag"]);
+    sim.run(1);
+    let masked = sim.physics().static_query_fingerprint();
+    assert_ne!(masked, before, "the query mask changed");
+
+    sim.world.get_mut::<Collider>(door).unwrap().unwrap().layer = Some("cover_low".to_string());
+    sim.run(1);
+    assert_ne!(
+        sim.physics().static_query_fingerprint(),
+        masked,
+        "the memberships changed"
+    );
+}
+
 /// A 24-box pile on a floor, half of it tagged when `tagged`; returns the poses, contacts and blob.
 fn pile(tagged: bool, edit_at: Option<u64>) -> (Vec<[u32; 7]>, Vec<ContactEvent>, Vec<u8>) {
     let mut sim = Sim::new();

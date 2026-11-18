@@ -345,6 +345,8 @@ struct WriteInputs {
     query_layers: Vec<(EntityId, LayerSet)>,
     /// Every entity's `SurfaceTag` name, entity-sorted: the surface side table.
     surface_tags: Vec<(EntityId, String)>,
+    /// Every entity's integer-keyed `SurfaceTag.parts`, entity-sorted; entities with none are absent.
+    surface_parts: Vec<(EntityId, Vec<(u32, String)>)>,
     /// Every entity's `SurfaceOverlay` (name, priority), entity-sorted.
     surface_overlays: Vec<(EntityId, String, i32)>,
     motor_rejections: Vec<(EntityId, DiagnosticCode, String)>,
@@ -372,6 +374,7 @@ impl PartialEq for WriteInputs {
             && self.ranks == other.ranks
             && self.query_layers == other.query_layers
             && self.surface_tags == other.surface_tags
+            && self.surface_parts == other.surface_parts
             && self.surface_overlays == other.surface_overlays
             && self.live.len() == other.live.len()
             && self.live.iter().zip(&other.live).all(|(a, b)| {
@@ -559,6 +562,12 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         .map(|(entity, (tag,))| (entity, tag.surface.clone()))
         .collect();
     surface_tags.sort_unstable_by_key(|(entity, _)| *entity);
+    let mut surface_parts: Vec<(EntityId, Vec<(u32, String)>)> = world
+        .query_ids::<(&SurfaceTag,)>()
+        .map(|(entity, (tag,))| (entity, tag.index_parts()))
+        .filter(|(_, parts)| !parts.is_empty())
+        .collect();
+    surface_parts.sort_unstable_by_key(|(entity, _)| *entity);
     let mut surface_overlays: Vec<(EntityId, String, i32)> = world
         .query_ids::<(&SurfaceOverlay,)>()
         .map(|(entity, (overlay,))| (entity, overlay.surface.clone(), overlay.priority))
@@ -580,6 +589,7 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         ranks,
         query_layers,
         surface_tags,
+        surface_parts,
         surface_overlays,
         motor_rejections,
         velocities,
@@ -686,7 +696,11 @@ fn write<P: PhysicsPose, R: ParentPose>(
     physics.set_ranks(&inputs.ranks);
     physics.apply_settings(settings);
     physics.set_query_layers(&inputs.query_layers);
-    physics.set_surface_tags(&inputs.surface_tags, &inputs.surface_overlays);
+    physics.set_surface_tags(
+        &inputs.surface_tags,
+        &inputs.surface_parts,
+        &inputs.surface_overlays,
+    );
     physics.last_write_frame = Some(ctx.frame.as_u64());
     physics.last_write_held = held;
     apply(world, &mut physics, &inputs);
@@ -742,7 +756,11 @@ pub fn prime<P: PhysicsPose, R: ParentPose>(
     physics.set_ranks(&inputs.ranks);
     physics.apply_settings(&settings);
     physics.set_query_layers(&inputs.query_layers);
-    physics.set_surface_tags(&inputs.surface_tags, &inputs.surface_overlays);
+    physics.set_surface_tags(
+        &inputs.surface_tags,
+        &inputs.surface_parts,
+        &inputs.surface_overlays,
+    );
     physics.last_write_frame = Some(frame.as_u64());
     physics.last_write_held = world.resource::<GameClock>().map(|clock| clock.held());
     apply(world, &mut physics, &inputs);

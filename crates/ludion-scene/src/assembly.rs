@@ -70,6 +70,7 @@ use serde_json::Value;
 
 use crate::envelope;
 use crate::part::PartDocument;
+use crate::rig_mask::{RigMask, emit_masks, parse_masks, validate_mask_names};
 use crate::scalar::{format_float, scalar_string};
 use crate::voxel::{PaletteEntry, VoxelDocument, single_glyph};
 use crate::yaml::{self, MapEntry, Node, NodeValue, pointer_token};
@@ -81,8 +82,8 @@ pub const ASSEMBLY_FORMAT_VERSION: u64 = 1;
 /// assembly's palette reads identically to a voxel model's.
 const EMPTY_GLYPH: char = '.';
 
-const ASSEMBLY_KEYS: [&str; 8] = [
-    "format", "kind", "name", "size", "palette", "parts", "clips", "joints",
+const ASSEMBLY_KEYS: [&str; 9] = [
+    "format", "kind", "name", "size", "palette", "parts", "clips", "joints", "masks",
 ];
 const PART_ENTRY_KEYS: [&str; 6] = ["name", "file", "parent", "place", "pivot", "mirror"];
 const ASSEMBLY_JOINT_KEYS: [&str; 4] = ["kind", "axis", "limits", "break_impulse"];
@@ -231,6 +232,9 @@ pub struct AssemblyDocument {
     /// the ragdoll switch fixes every non-root part to its parent — an authored `joints: {}` and an
     /// absent `joints` are the same thing, and both canonicalize to the key's absence.
     pub joints: Vec<AssemblyJoint>,
+    /// Part masks for `AnimationLayers`, sorted by name (the canonical order `emit` writes); each
+    /// mask's `joints` name parts. An absent `masks` is the empty list.
+    pub masks: Vec<RigMask>,
 }
 
 // --- Parsing (`L1137`) --------------------------------------------------------------------------
@@ -343,6 +347,9 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
             }
             "joints" => {
                 doc.joints = parse_joints(entry, &mut diagnostics);
+            }
+            "masks" => {
+                doc.masks = parse_masks(entry, code::ASSEMBLY_DOCUMENT_STRUCTURE, &mut diagnostics);
             }
             unknown => diagnostics.push(envelope::unknown_key(
                 unknown,
@@ -1370,7 +1377,43 @@ pub(crate) fn validate(doc: &AssemblyDocument) -> Vec<Diagnostic> {
     }
 
     validate_joints(doc, &mut diagnostics);
+    validate_mask_names(
+        &doc.masks,
+        code::ASSEMBLY_DATA_CONSISTENCY,
+        &mut diagnostics,
+    );
+    validate_mask_parts(doc, &mut diagnostics);
     diagnostics
+}
+
+/// The `masks` parts check (`L1138`): every listed name is a part of this assembly.
+fn validate_mask_parts(doc: &AssemblyDocument, diagnostics: &mut Vec<Diagnostic>) {
+    let names: Vec<&str> = doc.parts.iter().map(|p| p.name.as_str()).collect();
+    for mask in &doc.masks {
+        for (index, part) in mask.joints.iter().enumerate() {
+            if names.contains(&part.as_str()) {
+                continue;
+            }
+            let help = match suggest::nearest(part, names.iter().copied()) {
+                Some(candidate) => format!("nearest part is `{candidate}`"),
+                None => "a mask's `joints` name parts of this assembly".to_string(),
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::ASSEMBLY_DATA_CONSISTENCY,
+                    format!(
+                        "the mask `{}` lists `{part}`, which is not a part of this assembly",
+                        mask.name
+                    ),
+                )
+                .with_path(format!(
+                    "/masks/{}/joints/{index}",
+                    pointer_token(&mask.name)
+                ))
+                .with_help(help),
+            );
+        }
+    }
 }
 
 /// The `joints` half of [`validate`] (`L1184`/`ASSEMBLY_JOINT_INVALID`): each entry names a real,
@@ -2318,6 +2361,8 @@ pub(crate) fn emit(doc: &AssemblyDocument) -> String {
             }
         }
     }
+
+    emit_masks(&mut out, &doc.masks);
 
     out
 }

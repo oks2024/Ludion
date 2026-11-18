@@ -68,6 +68,7 @@ Both documents are strict-subset YAML: **block style only**, one entry per line.
 | `parts` | yes | the placed parts, in authored order — the order `/parts/<i>` pointers index |
 | `clips` | no | short name → clip document path (`ludion docs voxel-animation`) |
 | `joints` | no | child part name → joint spec, for `switch_to_ragdoll` — see Ragdoll joints below |
+| `masks` | no | mask name → `joints` (part names), `descendants`, `weights`: which parts an `AnimationLayers` layer touches (`ludion docs animation-layers`); an unknown part is `L1138` |
 
 One `parts` entry:
 
@@ -191,6 +192,8 @@ switched, so keep siblings apart even where a plug-into-parent overlap is fine.
 body per part, at its **current** pose: it reads gameplay time, so a mid-clip switch (a death blow)
 freezes the pose it died in, and every joint's limits count from that pose, not the rest one. The
 root entity survives — its id and every component but `Mesh`/`Animation`/`Collider`/`Velocity` stay.
+A root `SurfaceTag` is inherited: each part takes its `parts` entry's surface by part name, else the
+root's (`ludion docs collision`).
 
 ## Gotchas
 

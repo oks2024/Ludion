@@ -6,7 +6,14 @@
 // The `Camera` uniform (@group 0) is a shared snippet composed ahead of this file
 // (`shaders/snippets/camera.wgsl`) — see Plan/shader-bindgen.md decision 16. This body declares only
 // the vertex input and stage (text is unlit, so it composes no lights snippet). The atlas group and
-// the fragment stage come from `shaders/snippets/glyph.wgsl`, shared with `ui_text.wgsl`.
+// `glyph_coverage` come from `shaders/snippets/glyph.wgsl`, shared with `ui_text.wgsl`.
+
+struct VsOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) sdf: f32,
+};
 
 struct VsIn {
     @location(0) position: vec3<f32>,
@@ -46,12 +53,14 @@ fn vs_depth(in: VsIn) -> DepthOut {
     return out;
 }
 
-// The glyph coverage `glyph.wgsl`'s `fs_main` computes, kept here so that shared stage stays whole.
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let coverage = glyph_coverage(in.uv, in.sdf);
+    return vec4<f32>(in.color.rgb, in.color.a * coverage);
+}
+
 @fragment
 fn fs_depth(in: DepthOut) -> @location(0) vec4<f32> {
-    let a = textureSample(atlas_tex, atlas_sampler, in.uv).a;
-    let w = max(fwidth(a), 1e-4) * 0.7;
-    let sdf_cov = smoothstep(0.5 - w, 0.5 + w, a);
-    let coverage = select(a, sdf_cov, in.sdf > 0.5);
+    let coverage = glyph_coverage(in.uv, in.sdf);
     return transparent_layer(in.world, in.color.a * coverage, 1.0);
 }

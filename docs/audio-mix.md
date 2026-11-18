@@ -1,5 +1,5 @@
 ---
-description: Audio buses, runtime bus gain (settings sliders, ducking) and bus pause (pause menu)
+description: Audio buses, bus gain (settings sliders), ducking rules and bus pause (pause menu)
 ---
 
 # Audio mix
@@ -29,9 +29,10 @@ Observe: `engine.audio_log()` holds `AudioMessage::BusGain` / `BusPause`, stampe
 | --- | --- |
 | `Bus` | `Master`, `Sfx`, `Ambient`, `Voice`, `Ui`, `Music` |
 | `AudioCategory` → bus | `sfx`, `ambient`, `voice`, `ui` (an `AudioEmitter`'s `category:`); music is its own bus |
-| `MixLayer` | `User` (the player's setting), `Game` (ducking, scripted mixes) |
+| `MixLayer` | `User` (the player's setting), `Game` (scripted mixes) |
+| duck layer | engine-owned, never a `MixLayer`: `DuckRule`, `duck_start`/`duck_end` (§Ducking) |
 
-Effective gain of a bus is `authored × user × game × pause`, and every bus but `Master` is also
+Effective gain of a bus is `authored × user × game × duck × pause`, and every bus but `Master` is also
 multiplied by `Master`. `voice`, `ui` and `Master` have no authored field: they read `1.0`.
 
 ## Rules
@@ -47,13 +48,44 @@ multiplied by `Master`. `voice`, `ui` and `Master` have no authored field: they 
 - **Defaults are bit-identical.** With no bus call the stream and the mix are unchanged.
 - **Nothing here reaches `WorldHash`, snapshots or replays**; the log records what was asked for.
 
+## Ducking
+
+Dip the music and ambience while someone speaks, with no per-line code:
+
+```rust,ignore
+Engine::builder().audio_duck(DuckRule {
+    when: Bus::Voice, duck: &[Bus::Music, Bus::Ambient],
+    depth_db: -9.0, attack_ticks: 6, release_ticks: 30,   // DuckRule::default()
+})
+// and, for a sequence of your own:
+queue.duck_start("briefing", &[Bus::Music], -12.0, 10);   // key, buses, depth_db, attack ticks
+queue.duck_end("briefing", 45);                           // key, release ticks
+```
+
+Observe: `AudioMessage::Duck { bus, gain, fade_frames }` in `engine.audio_log()`, sent on each edge.
+
+- **A `when` bus is live** while a plain one-shot on it plays (timed by its WAV's length, read only when a
+  rule names that bus) or an attached voice (`play_on`) sounds. An attached voice counts only while audible:
+  a guard muttering out of earshot ducks nothing.
+- **Sources multiply**, rules and manual keys alike, floored at `DUCK_FLOOR_DB` (-24 dB). Two voices at once
+  duck once; a bus no live source names is exactly `1.0`.
+- **Edge fades**: the duck fades down over the `attack` of the source that turned on and back over the
+  `release` of the one that turned off (the longest if several flip together).
+- **A rebuild resets every duck** (a scene load, restore); rules persist. Starting a live key again
+  replaces it; `duck_end` on an unknown key does nothing; an empty bus slice queues nothing.
+- **`depth_db` never boosts**: above `0` clamps to `0`; NaN reads `0` (`L5005`).
+- **A manual duck may name `Master`**, to duck a whole cutscene; a rule may not.
+- **`L5100` refuses a bad rule at `build`**: `depth_db` not finite or above `0`; `when` of `Master` or `Music`
+  (no tracked end); `duck` empty, or naming `Master` or `when` itself.
+- No rule and no manual duck: the stream is unchanged. Nothing here reaches `WorldHash`, snapshots or replays.
+
 ## Gotchas
 
 - Pause only the buses you mean: `Ui` stays live while `Sfx`/`Ambient`/`Music` hold, which is what a
   pause menu wants; pausing `Master` holds everything.
 - The `User` layer's one writer is the player-settings drain (`Settings::request_bus_volume`, `ludion docs settings`); write `Game` yourself.
-- Ducking is a `Game`-layer gain; never write the `User` layer for it or the player's slider is lost
-  on the next rebuild.
+- The duck layer is engine-owned: duck through a rule or `duck_start`, never `bus_gain`. The `Game` layer
+  stays the game's, and the `User` layer the player's: a slider is never lost to a duck.
 
 ## Next
 

@@ -15,6 +15,10 @@
 //! A ragdoll snapshots rotation and translation only — rigid bodies don't scale, so a clip's `scale`
 //! channel is ignored here (`part_placements_with`'s `scale` flag off).
 //!
+//! A root `SurfaceTag` is inherited: each spawned part gets a tag with its `parts` entry's surface
+//! (matched by part name), else the root's `surface`; a name key matching no part is one `L1695`
+//! warning. The root keeps its tag.
+//!
 //! All-or-nothing: [`switch_to_ragdoll`] validates every precondition before it spawns or mutates
 //! anything, so a rejected switch leaves the world exactly as it was.
 //!
@@ -29,8 +33,10 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat4, Quat, Vec3};
 use ludion_core::math::{quat_to_euler_xyz_degrees, sqrt};
+use ludion_core::suggest::nearest;
 use ludion_core::time::GameTime;
 use ludion_ecs::{SemanticValidate, World};
+use ludion_physics::{SurfacePart, SurfaceTag};
 use ludion_scene::AssemblyJointKind;
 use ludion_spatial::{Body, Collider, Joint, JointKind, RigidBody, Shape, Velocity};
 
@@ -48,6 +54,9 @@ use crate::extract::{animation_pose, part_placements_with, rotation_quat};
 /// finite, or one of `assembly`'s part meshes has no vertices. Nothing is mutated when this fires; the
 /// message names `entity` (and its [`Name`] when it has one, so a game switching several figures in
 /// one tick can tell which was refused).
+///
+/// A root [`SurfaceTag`] is inherited per part by name (else the root's surface); an unmatched name
+/// key is an `L1695` warning, not a refusal.
 pub fn switch_to_ragdoll(
     world: &mut World,
     entity: EntityId,
@@ -143,7 +152,7 @@ pub fn switch_to_ragdoll(
     // --- Validated: every step below mutates the world. ---
 
     let (pose, fade) = animation_pose(world, entity, assembly, game_time.into());
-    let placements = part_placements_with(assembly, pose, fade.as_ref(), false);
+    let placements = part_placements_with(assembly, pose, fade.as_ref(), false, &[]);
     let q_root = rotation_quat(root_transform.rotation);
     let root_model = Mat4::from_scale_rotation_translation(
         Vec3::from(scale),
@@ -157,6 +166,11 @@ pub fn switch_to_ragdoll(
         .copied()
         .unwrap_or_default();
     let root_name = world.get::<Name>(entity).ok().flatten().cloned();
+    let root_tag = world.get::<SurfaceTag>(entity).ok().flatten().cloned();
+    let unmatched = root_tag
+        .as_ref()
+        .map(|tag| unmatched_part_keys(tag, assembly, world, entity))
+        .unwrap_or_default();
 
     let mut spawned = Vec::with_capacity(assembly.parts.len());
     for (index, part) in assembly.parts.iter().enumerate() {
@@ -252,6 +266,25 @@ pub fn switch_to_ragdoll(
                 .insert(id, Name(format!("{}/{}", name.0, part.name)))
                 .expect("just spawned");
         }
+        if let Some(tag) = &root_tag {
+            let surface = tag
+                .parts
+                .iter()
+                .find_map(|entry| match &entry.part {
+                    SurfacePart::Name(name) if *name == part.name => Some(entry.surface.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| tag.surface.clone());
+            world
+                .insert(
+                    id,
+                    SurfaceTag {
+                        surface,
+                        parts: vec![],
+                    },
+                )
+                .expect("just spawned");
+        }
         spawned.push(id);
     }
 
@@ -314,7 +347,58 @@ pub fn switch_to_ragdoll(
         .expect("checked alive above");
     crate::motor::suspend_motor_of(world, entity);
 
+    for (key, diagnostic) in unmatched {
+        crate::diagnostics::report_full(world, key, diagnostic);
+    }
     Ok(spawned)
+}
+
+/// The `L1695` help: the closest part name, else every part name.
+fn part_key_help(key: &str, names: &[&str]) -> String {
+    match nearest(key, names.iter().copied()) {
+        Some(near) => format!("the closest part is `{near}`"),
+        None => format!("the assembly's parts are {}", names.join(", ")),
+    }
+}
+
+/// One `L1695` warning (with its latch key) per `SurfaceTag.parts` name key that matches no part of
+/// `assembly`. Read-only, so it runs before the switch spawns anything.
+fn unmatched_part_keys(
+    tag: &SurfaceTag,
+    assembly: &AssemblyData,
+    world: &World,
+    entity: EntityId,
+) -> Vec<(String, Diagnostic)> {
+    let names: Vec<&str> = assembly
+        .parts
+        .iter()
+        .map(|part| part.name.as_str())
+        .collect();
+    let mut found = Vec::new();
+    for (j, entry) in tag.parts.iter().enumerate() {
+        let SurfacePart::Name(key) = &entry.part else {
+            continue;
+        };
+        if names.contains(&key.as_str()) {
+            continue;
+        }
+        let help = part_key_help(key, &names);
+        let latch = format!("{}:{key}", crate::diagnostics::offender_key(world, entity));
+        found.push((
+            latch,
+            Diagnostic::new(
+                code::SURFACE_PART_UNMATCHED,
+                format!(
+                    "`SurfaceTag` part `{key}` names no part of the assembly; every ragdoll part \
+                     took the root surface `{}`",
+                    tag.surface
+                ),
+            )
+            .with_path(format!("/parts/{j}/part"))
+            .with_help(help),
+        ));
+    }
+    found
 }
 
 /// `code::RAGDOLL_SWITCH_INVALID` — a refused switch, prefixed with `named` (the offending entity,
@@ -387,4 +471,22 @@ fn to_f32_3(v: [f64; 3]) -> [f32; 3] {
 
 fn to_f32_2(v: [f64; 2]) -> [f32; 2] {
     [v[0] as f32, v[1] as f32]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::part_key_help;
+
+    #[test]
+    fn an_unmatched_key_names_the_closest_part_else_lists_them() {
+        let names = ["torso", "helmet", "arm-hinge"];
+        assert_eq!(
+            part_key_help("helmt", &names),
+            "the closest part is `helmet`"
+        );
+        assert_eq!(
+            part_key_help("zzzzzzzz", &names),
+            "the assembly's parts are torso, helmet, arm-hinge"
+        );
+    }
 }

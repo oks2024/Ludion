@@ -99,7 +99,7 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   one-shots) count against the caps; `voices` holds ≤ 2×total, cutting the lowest fading voice. Loops
   are never stolen; the Router holds those past the total. `Mixer::new` reserves every container and
   `render` mixes in blocks; tests build a `Mixer` with other limits.
-- **Buses are a per-frame level buffer.** `Mixer.buses` (authored × user × game × pause envelopes) steps
+- **Buses are a per-frame level buffer.** `Mixer.buses` (authored × user × game × duck × pause envelopes; `duck` is sink-private, written only by `AudioMessage::Duck`) steps
   once per device frame into `bus_levels` (`6 × MIX_BLOCK_FRAMES`, reserved in `new`); non-master buses
   then multiply by master. Keep that float order: at default state every factor is exactly `1.0`, which
   is what keeps the dyadic sink tests bit-identical. A *held* bus (paused, fade finished) skips its

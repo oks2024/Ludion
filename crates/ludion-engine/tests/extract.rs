@@ -1277,6 +1277,7 @@ fn ui_rect_resolves_through_extract_exactly_like_the_pure_function() {
             texture,
             color,
             uv,
+            ..
         } => {
             assert_eq!(*rect_px, expected_px);
             assert_eq!(*texture, None);
@@ -2567,6 +2568,7 @@ fn ui_list_emits_its_background_then_its_lines_in_order() {
             texture,
             color,
             uv,
+            ..
         } => {
             assert_eq!(*rect_px, layout.background_px);
             assert_eq!(*texture, None);

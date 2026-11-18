@@ -238,6 +238,13 @@ Collider: { shape: { cylinder: { radius: 1.2, half_height: 0.05 } }, body: stati
 SurfaceOverlay: { surface: puddle, priority: 1 }
 ```
 
+One collider can carry several surfaces: `SurfaceTag { surface: concrete, parts: [{ part: 1, surface: metal_grate }, { part: helmet, surface: metal }] }`.
+An integer `part` indexes the entity's own `compound` collider parts: a hit reports the part whose shape is nearest the hit point (solid distance, lowest
+index on a tie), for every query and the motor alike. A string `part` names a `kind: assembly` part and applies to the bodies `switch_to_ragdoll` spawns
+(each takes its entry's surface, else the root's; a name matching no part is a warning, `L1695`). A part without an entry reports `surface`. Resolution
+order: overlay at the point, part, tag, `default_surface`. An empty or repeated key, an index past the compound or on a non-compound collider, or a name on
+a non-assembly entity is `L1694` (`check-scene`); a part named `"1"` must be quoted.
+
 ```rust
 if let Some(ground) = report.ground
     && let Some(id) = ground.surface

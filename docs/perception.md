@@ -196,6 +196,23 @@ Declare layers `wall`, `cover_low`, `cover_high`, `cover_overhead` under `physic
 
 Low cover hides crouch and prone from a ray that passes through it; high cover hides all three. Add `cover_overhead` to a prone point's `blocked_by` and `see_through: [cover_overhead]` on the inner zone so a guard close enough sees under a table.
 
+## Tracing
+
+The `perception` trace channel (`ludion docs verify-loop`) prints what changed, derived from the results and the records after each tick; nothing is recorded sim-side, so tracing cannot move the hash. Each line is `channel`, `event`, `tick`, then the fields:
+
+```
+{"channel":"perception","event":"sight","tick":31,"perceiver":"guard","zone":"narrow","target":"mark","in_zone":true,"visible":true,"points_visible":1,"distance":10.2}
+{"channel":"perception","event":"noise","tick":14,"listener":"guard","noise":0,"kind":"footstep","source":"mark","distance":2.7,"effective_radius":6.0,"occluders":0}
+{"channel":"perception","event":"remember","tick":31,"perceiver":"guard","source":"mark","sense":"sight","at":[-5.8,0.0,-10.0]}
+{"channel":"perception","event":"forget","tick":150,"perceiver":"guard","source":"mark","sense":"sight","at":[5.8,0.0,-10.0]}
+```
+
+- `sight`: one line per `(perceiver, zone, target)` whose `visible` changed since the previous traced tick; absent means not visible. A key that dropped out of the results while visible prints `in_zone: false, visible: false` and no sample fields. `zone` is the zone's `name` (its index when unnamed).
+- `noise`: one line per delivery (a noise heard by two listeners prints twice), ordered `(listener, noise)`. A tick the game held (`GameClock`) prints none, so a held frame repeats nothing.
+- `remember` and `forget`: a `StimulusRecord` that appeared or vanished; `sense` is `sight`, `hearing` or `custom:<k>`, `kind` appears for a hearing record, `at` is its `last_position` (a forget prints the last one seen). A refresh prints nothing.
+- Order within a tick: `sight`, `noise`, `forget`, then `remember`, after the `ai` lines.
+- `ludion trace` runs built-ins only, so it never ticks `perception_update`: use a game's `--trace` or `trace_with(builder, ..)` with `TraceChannel::Perception`.
+
 ## Gotchas
 
 - **An empty `blocked_by` means nothing can block the point:** no ray is cast and it is seen through walls. (An include-less physics filter would hit everything; the engine never builds one.)
@@ -211,4 +228,4 @@ Low cover hides crouch and prone from a ray that passes through it; high cover h
 
 ## Next
 
-`ludion docs collision-layers`, `ludion docs patrol`, `ludion docs systems`.
+Not built yet: the debug-draw category and `check-scene` class and layer name checks. `ludion docs collision-layers`, `ludion docs patrol`, `ludion docs systems`.

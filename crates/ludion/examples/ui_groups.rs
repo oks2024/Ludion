@@ -3,9 +3,9 @@
 //!
 //! The group is a 360 x 360 box in the top-right corner. Its children anchor inside the box rather
 //! than the canvas (`group: <the group>`), so the frame fills the box (`fill_group`) and the blips
-//! sit at fractions of it. A `UiTween` on the group scales and fades all three at once. The
-//! headless `main` prints each drawn instance (pixel rect and colour) at two frames of the
-//! pop-in.
+//! sit at fractions of it. A `UiTween` on the group scales and fades all three at once, and
+//! `clip: circle` cuts the frame to a round radar. The headless `main` prints each drawn instance
+//! (pixel rect and colour) at two frames of the pop-in, then `ui_hit` at the box centre and corner.
 //!
 //! ```text
 //! cargo run -p ludion --example ui_groups
@@ -13,7 +13,7 @@
 
 use ludion::prelude::*;
 use ludion_engine::components::ui::{
-    UiClock, UiEase, UiGroup, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack,
+    UiClipShape, UiClock, UiEase, UiGroup, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack,
 };
 use std::process::ExitCode;
 
@@ -43,8 +43,9 @@ fn pop_in() -> UiTween {
     }
 }
 
-/// Spawns the radar: the group, a frame covering its box and two blips anchored inside it.
-fn spawn_radar(world: &mut World) {
+/// Spawns the radar: the group, a frame covering its box and two blips anchored inside it. Returns
+/// the frame, whose hit-test sees the circular clip.
+fn spawn_radar(world: &mut World) -> EntityId {
     let group = world.spawn_presentation();
     world
         .insert(
@@ -53,6 +54,7 @@ fn spawn_radar(world: &mut World) {
                 anchor: Anchor::TopRight,
                 offset: [-24.0, 24.0],
                 size: [360.0, 360.0],
+                clip: UiClipShape::Circle,
                 ..UiGroup::default()
             },
         )
@@ -94,6 +96,7 @@ fn spawn_radar(world: &mut World) {
             )
             .unwrap();
     }
+    frame
 }
 
 // --- Headless demo `main` ------------------------------------------------------------------------
@@ -112,7 +115,7 @@ fn main() -> ExitCode {
         }
         return ExitCode::FAILURE;
     }
-    spawn_radar(engine.world_mut());
+    let frame = spawn_radar(engine.world_mut());
 
     for ticks in [1u64, 30] {
         engine
@@ -127,5 +130,19 @@ fn main() -> ExitCode {
             println!("  {instance:?}");
         }
     }
+
+    // The box is top-right at 1:1 canvas scale: its centre is inside the circle, its corner is not.
+    let (width, _) = engine.render_size();
+    let now = SimTime::from_ticks(engine.frame().as_u64(), TickRate::DEFAULT);
+    let viewport = engine.render_size();
+    let scale = viewport.1 as f32 / 1080.0;
+    let right = width as f32 - 24.0 * scale;
+    let centre = [right - 180.0 * scale, (24.0 + 180.0) * scale];
+    let corner = [right - 1.0, 24.0 * scale + 1.0];
+    println!(
+        "ui_hit centre {} corner {}",
+        math::ui_hit(engine.world(), frame, viewport, centre, now),
+        math::ui_hit(engine.world(), frame, viewport, corner, now),
+    );
     ExitCode::SUCCESS
 }

@@ -41,7 +41,14 @@ struct VsIn {
     @location(9) style_b: vec4<f32>,
     // A wedge's inner half-angle (-1 for none); a ring's (thickness, fill, dashes, 0).
     @location(10) extra: vec4<f32>,
+    // x = the float offset of this marker's line-of-sight profile in `profiles`, -1 for none.
+    @location(11) clip: vec4<f32>,
 };
+
+// The clipped markers' visibility profiles, packed back to back: a header (arc_start, arc_span,
+// partial_alpha, bins), then `bins` radii, then `bins` partial radii. A scene with no clipped
+// marker binds a dummy buffer.
+@group(1) @binding(0) var<storage, read> profiles: array<f32>;
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -54,6 +61,7 @@ struct VsOut {
     @location(5) @interpolate(flat) style_a: vec4<f32>,
     @location(6) @interpolate(flat) style_b: vec4<f32>,
     @location(7) @interpolate(flat) extra: vec4<f32>,
+    @location(8) @interpolate(flat) profile: vec4<f32>,
 };
 
 @vertex
@@ -74,6 +82,7 @@ fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
     out.style_a = in.style_a;
     out.style_b = in.style_b;
     out.extra = in.extra;
+    out.profile = in.clip;
     return out;
 }
 
@@ -191,6 +200,36 @@ fn ring_color(in: VsOut, wpp: f32) -> vec4<f32> {
     return vec4<f32>(in.color.rgb, in.color.a * coverage);
 }
 
+// The coverage left by the marker's line-of-sight profile at this fragment: out to the first
+// blocker's range along its bearing (interpolated between the two nearest bins, wrapping for a full
+// circle), dimmed to `partial_alpha` beyond the first partial blocker.
+fn clip_coverage(in: VsOut, wpp: f32) -> f32 {
+    let base = u32(in.profile.x);
+    let arc_start = profiles[base];
+    let arc_span = profiles[base + 1u];
+    let partial_alpha = profiles[base + 2u];
+    let bins = u32(profiles[base + 3u]);
+    let nb = f32(bins);
+    let r = length(in.local);
+    var t = (atan2(in.local.y, in.local.x) - arc_start) / arc_span * nb - 0.5;
+    var i0: u32;
+    var i1: u32;
+    if (arc_span > 6.28) {
+        t = t - nb * floor(t / nb);
+        i0 = min(u32(floor(t)), bins - 1u);
+        i1 = (i0 + 1u) % bins;
+    } else {
+        t = clamp(t, 0.0, nb - 1.0);
+        i0 = u32(floor(t));
+        i1 = min(i0 + 1u, bins - 1u);
+    }
+    let f = t - floor(t);
+    let radius = mix(profiles[base + 4u + i0], profiles[base + 4u + i1], f);
+    let partial = mix(profiles[base + 4u + bins + i0], profiles[base + 4u + bins + i1], f);
+    let visible = 1.0 - smoothstep(-wpp, wpp, r - radius);
+    return visible * mix(1.0, partial_alpha, smoothstep(-wpp, wpp, r - partial));
+}
+
 // One round of PCG: a cheap integer hash with good avalanche, so adjacent pixels decorrelate.
 fn pcg(v: u32) -> u32 {
     let s = v * 747796405u + 2891336453u;
@@ -214,6 +253,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let aa = max(fwidth(d), 1e-6);
         let coverage = 1.0 - smoothstep(-aa, aa, d);
         color = vec4<f32>(in.color.rgb, in.color.a * coverage);
+    }
+    if (in.profile.x >= 0.0) {
+        color.a = color.a * clip_coverage(in, wpp);
     }
     // Flicker: drop a `flicker` fraction of pixels, re-rolled every sim tick through the seed.
     if (in.style_b.z > 0.0) {

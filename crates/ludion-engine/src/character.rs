@@ -254,7 +254,7 @@ pub(crate) fn load_with_sources(
         .iter()
         .map(|mask| CharacterMaskData {
             name: mask.name.clone(),
-            weights: ludion_scene::resolve_character_mask(mask, &skin),
+            weights: ludion_scene::resolve_rig_mask(mask, &skin),
         })
         .collect();
     let blends = resolve_blends(&doc, &clips);

@@ -491,6 +491,10 @@ pub struct PhysicsWorld {
     surfaces: Option<SurfaceTable>,
     surface_tags: Vec<(EntityId, String)>,
     surface_ids: Vec<(EntityId, SurfaceId)>,
+    /// Integer-keyed `SurfaceTag.parts` (compound part index, name), entity-sorted, and the same
+    /// resolved to ids.
+    surface_parts: Vec<(EntityId, Vec<(u32, String)>)>,
+    part_ids: Vec<(EntityId, Vec<(u32, SurfaceId)>)>,
     /// Whether `surface_ids` was resolved with rejections queued; a restore resolves silently.
     surfaces_reported: bool,
     /// Each entity's authored `SurfaceOverlay` (entity-sorted) and the resolved list sorted
@@ -636,6 +640,8 @@ impl PhysicsWorld {
             surfaces: None,
             surface_tags: Vec::new(),
             surface_ids: Vec::new(),
+            surface_parts: Vec::new(),
+            part_ids: Vec::new(),
             surfaces_reported: true,
             surface_overlays: Vec::new(),
             overlay_ids: Vec::new(),
@@ -1080,6 +1086,38 @@ impl PhysicsWorld {
             })
     }
 
+    /// A fingerprint of everything a static-only visibility query reads from the statics: each
+    /// [`static_bodies`](PhysicsWorld::static_bodies) revision (handle and pose), its entity,
+    /// collision-group memberships, query-only mask and sensor flag. A moved, added, removed or
+    /// re-layered static changes it; an untouched world does not.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_physics::PhysicsWorld;
+    ///
+    /// let world = PhysicsWorld::new(TickRate::DEFAULT);
+    /// assert_eq!(world.static_query_fingerprint(), world.static_query_fingerprint());
+    /// ```
+    pub fn static_query_fingerprint(&self) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut fold = |value: u64| h = (h ^ value).wrapping_mul(0x0000_0100_0000_01b3);
+        for body in self.static_bodies() {
+            fold(body.revision);
+            fold(u64::from(body.entity.index()) | (u64::from(body.entity.generation()) << 32));
+            let Some(collider) = self
+                .entry(body.entity)
+                .and_then(|entry| self.rapier.colliders.get(entry.collider))
+            else {
+                continue;
+            };
+            fold(u64::from(collider.collision_groups().memberships.bits()));
+            fold(u64::from(self.query_mask(body.entity)));
+            fold(u64::from(collider.is_sensor()));
+        }
+        h
+    }
+
     /// The parry shape `entity`'s collider was built as, or `None` if it has no body.
     ///
     /// An entity gets no body when its authored shape cannot be built — a `convex` hull that
@@ -1481,6 +1519,8 @@ impl PhysicsWorld {
             surfaces: None,
             surface_tags: Vec::new(),
             surface_ids: Vec::new(),
+            surface_parts: Vec::new(),
+            part_ids: Vec::new(),
             surfaces_reported: true,
             surface_overlays: Vec::new(),
             overlay_ids: Vec::new(),
@@ -2741,13 +2781,18 @@ impl PhysicsWorld {
     pub(crate) fn set_surface_tags(
         &mut self,
         tags: &[(EntityId, String)],
+        parts: &[(EntityId, Vec<(u32, String)>)],
         overlays: &[(EntityId, String, i32)],
     ) {
-        if self.surfaces_reported && self.surface_tags == tags && self.surface_overlays == overlays
+        if self.surfaces_reported
+            && self.surface_tags == tags
+            && self.surface_parts == parts
+            && self.surface_overlays == overlays
         {
             return;
         }
         self.surface_tags = tags.to_vec();
+        self.surface_parts = parts.to_vec();
         self.surface_overlays = overlays.to_vec();
         self.resolve_surface_ids(true);
     }
@@ -2775,6 +2820,15 @@ impl PhysicsWorld {
             })
             .collect();
         tags.sort_unstable_by_key(|(entity, _)| *entity);
+        let mut parts: Vec<(EntityId, Vec<(u32, String)>)> = self
+            .entities()
+            .filter_map(|entity| match world.get::<crate::SurfaceTag>(entity) {
+                Ok(Some(tag)) => Some((entity, tag.index_parts())),
+                _ => None,
+            })
+            .filter(|(_, entries)| !entries.is_empty())
+            .collect();
+        parts.sort_unstable_by_key(|(entity, _)| *entity);
         let mut overlays: Vec<(EntityId, String, i32)> = self
             .entities()
             .filter_map(|entity| match world.get::<crate::SurfaceOverlay>(entity) {
@@ -2784,6 +2838,7 @@ impl PhysicsWorld {
             .collect();
         overlays.sort_unstable_by_key(|(entity, _, _)| *entity);
         self.surface_tags = tags;
+        self.surface_parts = parts;
         self.surface_overlays = overlays;
         self.resolve_surface_ids(false);
     }
@@ -2825,6 +2880,22 @@ impl PhysicsWorld {
                 None => rejections.push(self.undeclared_surface(*entity, "SurfaceOverlay", name)),
             }
         }
+        let mut part_ids = Vec::with_capacity(self.surface_parts.len());
+        for (entity, entries) in &self.surface_parts {
+            let mut resolved = Vec::with_capacity(entries.len());
+            for (index, name) in entries {
+                match self.surfaces.as_ref().and_then(|table| table.id(name)) {
+                    Some(id) => resolved.push((*index, id)),
+                    None => {
+                        rejections.push(self.undeclared_surface(*entity, "SurfaceTag part", name));
+                    }
+                }
+            }
+            if !resolved.is_empty() {
+                part_ids.push((*entity, resolved));
+            }
+        }
+        self.part_ids = part_ids;
         overlay_ids
             .sort_unstable_by_key(|&(entity, _, priority)| (std::cmp::Reverse(priority), entity));
         self.overlay_ids = overlay_ids;
@@ -2891,8 +2962,33 @@ impl PhysicsWorld {
         })
     }
 
+    /// The surface of the `compound` part of `entity`'s collider nearest `point` (solid distance,
+    /// lowest index on ties) when the entity's `SurfaceTag.parts` names that part, as of the last
+    /// completed step. Entities without part entries return before touching the solver.
+    fn part_at(&self, entity: EntityId, point: [f32; 3]) -> Option<SurfaceId> {
+        let at = self
+            .part_ids
+            .binary_search_by_key(&entity, |&(e, _)| e)
+            .ok()?;
+        let parts = &self.part_ids[at].1;
+        let &row = self.rows.get(&entity)?;
+        let collider = &self.rapier.colliders[self.table[row].collider];
+        let compound = collider.shape().as_compound()?;
+        let p = to_vector(point);
+        let mut best: Option<(f32, u32)> = None;
+        for (i, (pose, shape)) in compound.shapes().iter().enumerate() {
+            let d = shape.distance_to_point(&(collider.position() * pose), p, true);
+            if best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, i as u32));
+            }
+        }
+        let (_, nearest) = best?;
+        parts.iter().find(|(k, _)| *k == nearest).map(|&(_, id)| id)
+    }
+
     /// The surface a hit on `entity`'s collider at `point` reports: an overlay containing `point`,
-    /// else the entity's `SurfaceTag`, else the scene's `default_surface`, else `None`.
+    /// else the entity's `SurfaceTag` part nearest `point` (a `compound` collider only), else the
+    /// entity's `SurfaceTag`, else the scene's `default_surface`, else `None`.
     ///
     /// # Example
     /// ```
@@ -2905,7 +3001,9 @@ impl PhysicsWorld {
     /// assert_eq!(physics.surface_at(entity, [0.0; 3]), None);
     /// ```
     pub fn surface_at(&self, entity: EntityId, point: [f32; 3]) -> Option<SurfaceId> {
-        self.overlay_at(point).or_else(|| self.surface_of(entity))
+        self.overlay_at(point)
+            .or_else(|| self.part_at(entity, point))
+            .or_else(|| self.surface_of(entity))
     }
 
     /// The surface under `point`: an overlay containing it, else the surface of the nearest

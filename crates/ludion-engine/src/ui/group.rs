@@ -8,19 +8,23 @@
 
 use std::collections::BTreeMap;
 
-use ludion_components::ui::{UiGroup, UiWorldAnchor};
+use ludion_components::ui::{UiClipShape, UiGroup, UiWorldAnchor};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_ecs::World;
+use ludion_renderer::{UiClip, UiClipBox};
 use ludion_scene::Scene;
 
 use super::hud::{HudFrame, pre_group, world_anchor_delta};
-use super::{group_delta, resolve_ui_rect};
+use super::{group_delta, pixel_scale, resolve_ui_rect};
 use crate::hierarchy::WorldAffines;
 
 /// The most groups one element may sit inside.
 pub(crate) const MAX_GROUP_DEPTH: usize = 8;
+
+/// The most clipping groups that apply to one element (the innermost are kept).
+pub(crate) const MAX_CLIPS: usize = 2;
 
 /// A resolved group: its box in layout pixels and the composition it gives every descendant.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -37,6 +41,8 @@ pub(crate) struct GroupXf {
     pub visible: bool,
     /// How many groups this chain holds, this one included.
     pub depth: usize,
+    /// The clip this group and its ancestors give a descendant, innermost box first.
+    pub clip: UiClip,
 }
 
 /// One extract's memo of resolved groups (`None`: not a live, acyclic `UiGroup` chain within the
@@ -158,23 +164,117 @@ fn compose(
         opacity: 1.0,
         visible: true,
         depth: 0,
+        clip: UiClip::NONE,
     });
     let scale = motion.scale;
+    let composed_scale = outer.scale * scale;
+    let composed_offset = [
+        outer.scale * centre[0] * (1.0 - scale) + outer.offset[0],
+        outer.scale * centre[1] * (1.0 - scale) + outer.offset[1],
+    ];
+    let clip = compose_clip(
+        frame,
+        id,
+        group,
+        outer.clip,
+        box_px,
+        composed_scale,
+        composed_offset,
+        degraded,
+    );
     GroupXf {
         box_px,
-        scale: outer.scale * scale,
-        offset: [
-            outer.scale * centre[0] * (1.0 - scale) + outer.offset[0],
-            outer.scale * centre[1] * (1.0 - scale) + outer.offset[1],
-        ],
+        scale: composed_scale,
+        offset: composed_offset,
         opacity: outer.opacity * opacity,
         visible: outer.visible && visible,
         depth: outer.depth + 1,
+        clip,
     }
 }
 
-/// `L1615` (a `group` chain that loops), `L1616` (a chain of more than [`MAX_GROUP_DEPTH`] groups)
-/// and `L2302` (a `group` naming an entity with no `UiGroup`) for every `UiRect`, `UiText`, `UiList`
+/// The clip a group gives its descendants: its own box (under its composed affine) in front of the
+/// two innermost boxes it inherits, capped at [`MAX_CLIPS`] with `L2303` when one is dropped.
+#[allow(clippy::too_many_arguments)]
+fn compose_clip(
+    frame: &HudFrame<'_>,
+    id: EntityId,
+    group: &UiGroup,
+    inherited: UiClip,
+    box_px: [f32; 4],
+    scale: f32,
+    offset: [f32; 2],
+    degraded: &mut Vec<(String, Diagnostic)>,
+) -> UiClip {
+    let rect = [
+        box_px[0] * scale + offset[0],
+        box_px[1] * scale + offset[1],
+        box_px[2] * scale,
+        box_px[3] * scale,
+    ];
+    let shorter = rect[2].min(rect[3]);
+    let own = match group.clip {
+        UiClipShape::None => return inherited,
+        UiClipShape::Rect => UiClipBox {
+            rect_px: rect,
+            radius_px: 0.0,
+        },
+        UiClipShape::RoundedRect { corner_radius } => UiClipBox {
+            rect_px: rect,
+            radius_px: (corner_radius * pixel_scale(frame.viewport) * scale).min(shorter * 0.5),
+        },
+        UiClipShape::Circle => UiClipBox {
+            rect_px: [
+                rect[0] + (rect[2] - shorter) * 0.5,
+                rect[1] + (rect[3] - shorter) * 0.5,
+                shorter,
+                shorter,
+            ],
+            radius_px: shorter * 0.5,
+        },
+    };
+    if inherited.boxes[MAX_CLIPS - 1].is_some() {
+        let key = crate::diagnostics::offender_key(frame.world, id);
+        degraded.push((
+            format!("{key}/ui-clip-depth"),
+            Diagnostic::new(
+                code::UI_CLIP_NESTING,
+                format!(
+                    "{id} is a third clipping group in a chain, so the outermost clip is dropped"
+                ),
+            )
+            .with_help("keep at most two clipping groups in a chain; `ludion explain L2303`"),
+        ));
+    }
+    UiClip {
+        boxes: [Some(own), inherited.boxes[0]],
+    }
+}
+
+/// Whether the pixel point `p` is inside `clip`: inside every present box, the Rust twin of
+/// `ui_rect.wgsl`'s `clip_cov` (`d < 0`).
+pub(crate) fn clip_contains(clip: &UiClip, p: [f32; 2]) -> bool {
+    clip.boxes
+        .iter()
+        .flatten()
+        .all(|b| rounded_box_sdf(p, b) < 0.0)
+}
+
+/// The signed distance from `p` to the rounded box, negative inside.
+pub(crate) fn rounded_box_sdf(p: [f32; 2], b: &UiClipBox) -> f32 {
+    let [x, y, w, h] = b.rect_px;
+    let half = [w * 0.5, h * 0.5];
+    let q = [
+        (p[0] - (x + half[0])).abs() - half[0] + b.radius_px,
+        (p[1] - (y + half[1])).abs() - half[1] + b.radius_px,
+    ];
+    let outside = ludion_core::math::hypot(q[0].max(0.0), q[1].max(0.0));
+    outside + q[0].max(q[1]).min(0.0) - b.radius_px
+}
+
+/// `L1615` (a `group` chain that loops), `L1616` (a chain of more than [`MAX_GROUP_DEPTH`] groups),
+/// `L2302` (a `group` naming an entity with no `UiGroup`) and `L2303` (more than [`MAX_CLIPS`]
+/// clipping groups in a chain) for every `UiRect`, `UiText`, `UiList`
 /// and `UiGroup` in the scene. Pointers are `/entities/{i}/components/{Component}/group`.
 pub fn scene_ui_group_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     let group_of = |index: usize| -> Option<Option<usize>> {
@@ -184,6 +284,11 @@ pub fn scene_ui_group_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
             .iter()
             .find(|(name, _)| name == "UiGroup")?;
         Some(reference(value))
+    };
+    let clips = |value: &serde_json::Value| {
+        value
+            .get("clip")
+            .is_some_and(|clip| clip.as_str() != Some("none"))
     };
     let mut out = Vec::new();
     for (i, entity) in scene.entities.iter().enumerate() {
@@ -201,6 +306,7 @@ pub fn scene_ui_group_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
             let mut seen: Vec<usize> = Vec::new();
             let mut next = Some(first);
             let mut count = 0;
+            let mut clipping = usize::from(name == "UiGroup" && clips(value));
             while let Some(at) = next {
                 let Some(outer) = group_of(at) else {
                     if count == 0 {
@@ -216,6 +322,14 @@ pub fn scene_ui_group_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                     break;
                 };
                 count += 1;
+                if let Some((_, outer_value)) = scene
+                    .entities
+                    .get(at)
+                    .and_then(|e| e.components.iter().find(|(n, _)| n == "UiGroup"))
+                    && clips(outer_value)
+                {
+                    clipping += 1;
+                }
                 if count > MAX_GROUP_DEPTH {
                     out.push(
                         Diagnostic::new(
@@ -240,6 +354,16 @@ pub fn scene_ui_group_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                 }
                 seen.push(at);
                 next = outer;
+            }
+            if clipping > MAX_CLIPS {
+                out.push(
+                    Diagnostic::new(
+                        code::UI_CLIP_NESTING,
+                        format!("this element sits under {clipping} clipping groups; only the innermost {MAX_CLIPS} clip"),
+                    )
+                    .with_path(pointer.clone())
+                    .with_help("keep at most two clipping groups in a chain; `ludion explain L2303`"),
+                );
             }
         }
     }
@@ -417,6 +541,132 @@ mod tests {
         assert!(resolve(&world, &mut groups, a).is_none());
         assert!(resolve(&world, &mut groups, b).is_none());
         assert!(resolve(&world, &mut groups, c).is_none());
+    }
+
+    fn clipping(clip: UiClipShape, group: Option<EntityId>) -> UiGroup {
+        UiGroup {
+            size: [200.0, 100.0],
+            clip,
+            group,
+            ..UiGroup::default()
+        }
+    }
+
+    #[test]
+    fn rect_circle_and_rounded_clips_build_their_boxes() {
+        let mut world = World::new();
+        let rect = spawn(&mut world, clipping(UiClipShape::Rect, None));
+        let circle = spawn(&mut world, clipping(UiClipShape::Circle, None));
+        let rounded = spawn(
+            &mut world,
+            clipping(
+                UiClipShape::RoundedRect {
+                    corner_radius: 80.0,
+                },
+                None,
+            ),
+        );
+        let plain = spawn(&mut world, clipping(UiClipShape::None, None));
+        let mut groups = UiGroups::default();
+        let boxes = |xf: GroupXf| xf.clip.boxes;
+        let r = boxes(resolve(&world, &mut groups, rect).unwrap());
+        assert_eq!(r[0].unwrap().rect_px, [0.0, 0.0, 200.0, 100.0]);
+        assert_eq!((r[0].unwrap().radius_px, r[1]), (0.0, None));
+        let c = boxes(resolve(&world, &mut groups, circle).unwrap())[0].unwrap();
+        assert_eq!((c.rect_px, c.radius_px), ([50.0, 0.0, 100.0, 100.0], 50.0));
+        // 80 canvas units at the 1080p canvas scale 1, clamped to half the shorter side.
+        let rr = boxes(resolve(&world, &mut groups, rounded).unwrap())[0].unwrap();
+        assert_eq!(rr.radius_px, 50.0);
+        assert_eq!(
+            resolve(&world, &mut groups, plain).unwrap().clip,
+            UiClip::NONE
+        );
+    }
+
+    #[test]
+    fn a_scaled_group_scales_its_clip_box() {
+        let mut world = World::new();
+        let id = spawn(
+            &mut world,
+            UiGroup {
+                scale: 0.5,
+                ..clipping(
+                    UiClipShape::RoundedRect {
+                        corner_radius: 10.0,
+                    },
+                    None,
+                )
+            },
+        );
+        let mut groups = UiGroups::default();
+        let b = resolve(&world, &mut groups, id).unwrap().clip.boxes[0].unwrap();
+        // Scaled about the centre (100, 50): the 200x100 box becomes 100x50 at (50, 25).
+        assert_eq!(b.rect_px, [50.0, 25.0, 100.0, 50.0]);
+        assert_eq!(b.radius_px, 5.0);
+    }
+
+    #[test]
+    fn nested_clips_keep_the_inner_box_first_and_a_third_is_dropped() {
+        let mut world = World::new();
+        let a = spawn(&mut world, clipping(UiClipShape::Rect, None));
+        let b = spawn(&mut world, clipping(UiClipShape::Circle, Some(a)));
+        let mut groups = UiGroups::default();
+        let two = resolve(&world, &mut groups, b).unwrap().clip;
+        assert_eq!(
+            two.boxes[0].unwrap().radius_px,
+            50.0,
+            "the circle is innermost"
+        );
+        assert_eq!(two.boxes[1].unwrap().radius_px, 0.0);
+        let c = spawn(&mut world, clipping(UiClipShape::Rect, Some(b)));
+        let mut degraded = Vec::new();
+        let mut poses = WorldAffines::new();
+        let three = groups
+            .resolve(&frame(&world), &mut poses, c, &mut degraded)
+            .unwrap();
+        assert_eq!(three.clip.boxes[0].unwrap().radius_px, 0.0);
+        assert_eq!(
+            three.clip.boxes[1], two.boxes[0],
+            "the outermost box was dropped"
+        );
+        let codes: Vec<&str> = degraded.iter().map(|(_, d)| d.code.as_str()).collect();
+        assert_eq!(codes, ["L2303"]);
+    }
+
+    #[test]
+    fn clip_contains_is_half_open_at_the_edges() {
+        let rect = UiClip {
+            boxes: [
+                Some(UiClipBox {
+                    rect_px: [10.0, 10.0, 20.0, 20.0],
+                    radius_px: 0.0,
+                }),
+                None,
+            ],
+        };
+        assert!(
+            !clip_contains(&rect, [10.0, 20.0]),
+            "an exact edge is outside (d < 0)"
+        );
+        assert!(clip_contains(&rect, [10.5, 20.0]));
+        assert!(clip_contains(&rect, [20.0, 20.0]));
+        assert!(!clip_contains(&rect, [30.5, 20.0]));
+        assert!(!clip_contains(&rect, [9.5, 20.0]));
+        let circle = UiClip {
+            boxes: [
+                Some(UiClipBox {
+                    rect_px: [0.0, 0.0, 100.0, 100.0],
+                    radius_px: 50.0,
+                }),
+                None,
+            ],
+        };
+        assert!(clip_contains(&circle, [50.0, 50.0]));
+        assert!(
+            !clip_contains(&circle, [2.0, 2.0]),
+            "the box corner is outside the circle"
+        );
+        assert!(clip_contains(&UiClip::NONE, [-1e9, 1e9]));
     }
 
     fn scene(yaml: &str) -> Scene {

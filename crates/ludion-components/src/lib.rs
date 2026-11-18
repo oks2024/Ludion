@@ -39,6 +39,7 @@ use ludion_spatial::{
 pub mod animation_layers;
 pub mod audio;
 pub mod blend_clock;
+pub mod ground_marker_clip;
 pub mod lane;
 pub mod light_exposure;
 pub mod nav_link;
@@ -57,6 +58,7 @@ pub use animation_layers::{
 };
 pub use audio::{AudioListener, ListenerOrientation};
 pub use blend_clock::{BlendClock, LayerPhase};
+pub use ground_marker_clip::{GroundMarkerClip, MAX_CLIP_BINS, MIN_CLIP_BINS};
 pub use lane::{LaneConstraint, LaneEnds};
 pub use light_exposure::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
 pub use nav_link::NavLink;
@@ -71,8 +73,8 @@ pub use perception::{
 };
 pub use prefab::PrefabInstance;
 pub use ui::{
-    UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiGroup, UiNav, UiSlice, UiSliceCenter, UiTween,
-    UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
+    UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiNav, UiSlice,
+    UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
 };
 
 /// An entity's human-readable name — the world-side home of a scene entity's `name:` field.
@@ -6627,6 +6629,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<NavLink>("NavLink")
         .expect("unique");
+    // The ground-marker clip, appended after `NavLink`: read by `extract`, which casts the profile.
+    registry
+        .register_validated::<GroundMarkerClip>("GroundMarkerClip")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -7153,12 +7159,13 @@ mod tests {
                 "SightSampleRecord",
                 "UiGroup",
                 "NavLink",
+                "GroundMarkerClip",
             ]
         );
         assert_eq!(
             registry.len(),
-            77,
-            "appending `NavLink` grows the registry to 77"
+            78,
+            "appending `GroundMarkerClip` grows the registry to 78"
         );
     }
 

@@ -2569,6 +2569,7 @@ mod tests {
                 inner_color: [4.0, 0.4, 0.2, 0.6],
                 style: crate::scene::GroundMarkerStyle::default(),
                 flicker_seed: 0,
+                clip: None,
             });
         let marked = PostChain::for_scene(&scene);
         assert_eq!(

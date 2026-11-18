@@ -127,8 +127,8 @@ pub use scene::{
     LocalShadowData, LodSettings, MAX_GI_TEXTURE_AXIS, MapImage, MeshData, MeshInstance, MeshLod,
     MeshShape, MeshTexture, MeshTextures, ParticleInstance, PointLightData, PostData, ProbeWorld,
     RenderCamera, RenderScene, SkinJoint, SpotLightData, SpriteInstance, StaticRange,
-    SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap, TonemapOperator, UiInstance,
-    WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
+    SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap, TonemapOperator, UiClip,
+    UiClipBox, UiInstance, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
 };
 pub use shader_reload::{check_shader_reload, is_renderer_shader};
 pub use sun_cascade::{

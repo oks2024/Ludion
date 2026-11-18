@@ -122,9 +122,30 @@ pub struct AssemblyData {
     /// own) and sorted by child part name (the assembly document's own canonical order). The
     /// ragdoll switch (`crate::ragdoll`) is the one consumer; a plain assembly ignores this field.
     pub joints: Vec<ludion_scene::AssemblyJoint>,
+    /// The assembly's `masks:`, sorted by name, each resolved to one weight per part. Masks are pose
+    /// data like clips and stay out of the mesh content hash.
+    pub masks: Vec<AssemblyMaskData>,
+}
+
+/// One part mask resolved against the assembly's parts (`Plan/animation-layers.md` decision 26).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssemblyMaskData {
+    /// The short name an `AnimationLayer.mask` selects by.
+    pub name: String,
+    /// One weight per part, in authored order; part `i` is [`AssemblyData::parts`]`[i]`.
+    pub weights: Vec<f32>,
 }
 
 impl AssemblyData {
+    /// The resolved weights of the mask named `name` (one per part), or `None` when this assembly
+    /// defines no such mask.
+    pub fn mask(&self, name: &str) -> Option<&[f32]> {
+        self.masks
+            .iter()
+            .find(|mask| mask.name == name)
+            .map(|mask| mask.weights.as_slice())
+    }
+
     /// The clip bound under the short `name`, or `None` when this assembly binds no such clip.
     ///
     /// An unbound name is the caller's cue to render the rest pose: a clip name is chosen at
@@ -418,6 +439,18 @@ pub fn mesh_assembly(
             parent: parents[index],
         });
     }
+    let rig: Vec<(&str, Option<u32>)> = meshed
+        .iter()
+        .map(|part| (part.name.as_str(), part.parent.map(|p| p as u32)))
+        .collect();
+    let masks = assembly
+        .masks
+        .iter()
+        .map(|mask| AssemblyMaskData {
+            name: mask.name.clone(),
+            weights: ludion_scene::resolve_rig_mask(mask, &rig),
+        })
+        .collect();
     AssemblyData {
         size: assembly.size,
         parts: meshed,
@@ -432,6 +465,7 @@ pub fn mesh_assembly(
             })
             .collect(),
         joints: assembly.joints.clone(),
+        masks,
     }
 }
 
@@ -543,6 +577,7 @@ mod tests {
             parts,
             clips: Vec::new(),
             joints: Vec::new(),
+            masks: Vec::new(),
         }
     }
 

@@ -1,0 +1,221 @@
+# Feature: GroundMarkerClip (Plan/telegraphs-and-vfx.md, Neon Shroud request 0014 W2) - line-of-sight clip.
+# A two-zone vision cone at the origin faces +X past two sight_blocker pillars (the cone is cut along their
+# shadow) and a low_cover crate (the cone behind it dims to partial_alpha). A clipped ring on the far side
+# is cut by a wall. The profiles are cast at tick 0 from the static colliders (rays at height 0.9).
+format: 1
+name: "ground-marker-clip - GroundMarkerClip: a vision cone and a ring clipped by walls, dimmed by cover"
+physics:
+  space: free
+  layers:
+    - name: sight_blocker
+    - name: low_cover
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - -1.5
+          - 27.0
+          - 14.0
+        rotation:
+          - -62.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 12.0
+          - 4.0
+      PointLight:
+        color:
+          - 0.8
+          - 0.85
+          - 1.0
+        intensity: 2.0
+        range: 40.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 44.0
+          - 1.0
+          - 30.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.05
+          - 0.06
+          - 0.08
+          - 1.0
+  - name: pillar-north
+    components:
+      Transform:
+        translation:
+          - 4.0
+          - 1.5
+          - 2.5
+        scale:
+          - 1.0
+          - 3.0
+          - 3.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.37
+          - 0.42
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 1.5
+              - 1.5
+        body: static
+        layer: sight_blocker
+  - name: pillar-south
+    components:
+      Transform:
+        translation:
+          - 6.5
+          - 1.5
+          - -3.5
+        scale:
+          - 1.0
+          - 3.0
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.37
+          - 0.42
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 1.5
+              - 1.0
+        body: static
+        layer: sight_blocker
+  - name: crate
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 0.6
+          - -0.4
+        scale:
+          - 1.2
+          - 1.2
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.45
+          - 0.32
+          - 0.2
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.6
+              - 0.6
+              - 0.6
+        body: static
+        layer: low_cover
+  - name: wall-west
+    components:
+      Transform:
+        translation:
+          - -9.5
+          - 1.5
+          - 2.0
+        scale:
+          - 0.5
+          - 3.0
+          - 8.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.37
+          - 0.42
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.25
+              - 1.5
+              - 4.0
+        body: static
+        layer: sight_blocker
+  - name: guard-cone
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      GroundMarker:
+        shape:
+          type: wedge
+          half_angle_deg: 40.0
+          outer_radius: 11.0
+          inner_radius: 5.0
+          fill: 0.0
+          grid_spacing: 1.0
+          inner_half_angle_deg: 15.0
+        color:
+          - 0.25
+          - 1.6
+          - 0.6
+          - 0.9
+        inner_color:
+          - 2.0
+          - 0.4
+          - 0.15
+          - 0.9
+      GroundMarkerClip:
+        height: 0.9
+        bins: 128
+        layers:
+          - sight_blocker
+        partial_layers:
+          - low_cover
+        partial_alpha: 0.35
+  - name: noise-ring
+    components:
+      Transform:
+        translation:
+          - -6.5
+          - 0.0
+          - 2.0
+      GroundMarker:
+        shape:
+          type: ring
+          radius: 4.5
+          thickness: 0.3
+          fill: 0.3
+        color:
+          - 2.0
+          - 1.4
+          - 0.2
+          - 0.9
+      GroundMarkerClip:
+        height: 0.9
+        bins: 96
+        layers:
+          - sight_blocker
+        partial_alpha: 0.35

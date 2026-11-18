@@ -1,5 +1,5 @@
 ---
-description: UiGroup: a screen-space box whose scale, opacity and visibility compose onto the UI inside it
+description: UiGroup: a screen-space box whose scale, opacity, visibility and clip compose onto the UI inside it
 ---
 
 # UI groups
@@ -26,6 +26,7 @@ A child names it by entity ref: `UiRect: { anchor: center, size: [16, 16], group
 | `opacity` | `1` | multiplied into every descendant's alpha, `0..=1` (`L1614`) |
 | `visible` | `true` | `false` removes every descendant |
 | `group` | none | the outer group this one nests in |
+| `clip` | `none` | `rect`, `circle` or `rounded_rect: { corner_radius }` (canvas units, `>= 0`, else `L1614`); cuts descendants to the box |
 
 ## Rules
 
@@ -35,6 +36,23 @@ A child names it by entity ref: `UiRect: { anchor: center, size: [16, 16], group
 - **`fill: true` ignores `group`** and `fill_group` (`L1617`); `fill_group` without `group` is also `L1617`.
 - **A `group` that names a dead entity, an entity with no `UiGroup`, or a chain past 8** draws the element ungrouped and reports the degraded warning `L2302` once. `check-scene` reports a static reference to an entity without `UiGroup` as `L2302`.
 - A grouped element's own `UiTween` still applies inside the box, before the group's scale.
+
+## Clip
+
+`clip: rect` cuts every descendant to the group's box; `clip: circle` to the circle inscribed in it (a centred square of the shorter side); `clip: { rounded_rect: { corner_radius: 12 } }` to the box with rounded corners (the radius is clamped to half the shorter side). The clip scales with the group, so a pop-in scale tween shrinks the clip with its content. The edge is anti-aliased over one pixel; an unclipped group draws exactly as before.
+
+- **Nested clips intersect.** An element keeps the two innermost clipping groups in its chain; a third is dropped with the degraded warning `L2303` (and `check-scene` reports the chain statically).
+- A clip hides pixels, not entities: a clipped-away child still exists and still sorts by `order`.
+- There is no rotation or polygon clip.
+
+```yaml
+components:
+  UiGroup: { size: [300, 300], clip: circle }
+```
+
+## Hit-testing
+
+`ludion::math::ui_hit(world, entity, viewport, cursor, now) -> bool` answers whether the cursor (render-target pixels) is over a `UiRect`, `UiText` or `UiList` as extract draws it: the group delta, tweens, world anchor, group affine, visibility and clip. A `UiRect` is its resolved rect, a `UiText` the box of its glyphs, a `UiList` its panel (use `list_hit` for the item index of an ungrouped list). It is `false` for an invisible element or group, a world anchor that hides it, a dead entity, a non-finite cursor or a camera error; a point exactly on a clip edge is outside. It ignores `pixel_snap`.
 
 ## See also
 

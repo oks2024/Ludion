@@ -498,6 +498,44 @@ pub struct UiGroup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
     pub group: Option<EntityId>,
+    /// Cuts every descendant's pixels to the group's box, scaled with the group (default `none`).
+    #[serde(default, skip_serializing_if = "UiClipShape::is_none")]
+    pub clip: UiClipShape,
+}
+
+/// The shape a [`UiGroup`] clips its descendants to, externally tagged: `clip: rect`,
+/// `clip: circle` (the circle inscribed in the group's box) or
+/// `clip: { rounded_rect: { corner_radius: 12.0 } }` (canvas units, `>= 0`).
+///
+/// ```
+/// use ludion_components::UiClipShape;
+///
+/// let clip: UiClipShape = serde_json::from_value(serde_json::json!("rect")).unwrap();
+/// assert_eq!(clip, UiClipShape::Rect);
+/// assert!(UiClipShape::default().is_none());
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiClipShape {
+    /// No clip.
+    #[default]
+    None,
+    /// The group's box.
+    Rect,
+    /// The circle inscribed in the group's box.
+    Circle,
+    /// The group's box with rounded corners.
+    RoundedRect {
+        /// Corner radius in canvas units, finite and `>= 0`.
+        corner_radius: f32,
+    },
+}
+
+impl UiClipShape {
+    /// Whether this is [`UiClipShape::None`].
+    pub fn is_none(&self) -> bool {
+        matches!(self, UiClipShape::None)
+    }
 }
 
 impl Default for UiGroup {
@@ -510,6 +548,7 @@ impl Default for UiGroup {
             opacity: 1.0,
             visible: true,
             group: None,
+            clip: UiClipShape::None,
         }
     }
 }
@@ -520,8 +559,9 @@ fn is_true(value: &bool) -> bool {
 
 impl SemanticValidate for UiGroup {
     /// Rejects a `size` axis that is not strictly positive and finite (`L1118`, `/size/{i}`), a
-    /// `scale` that is non-finite or not above 0, and an `opacity` that is non-finite or outside
-    /// `0..=1` (`L1614`, `/scale`, `/opacity`).
+    /// `scale` that is non-finite or not above 0, an `opacity` that is non-finite or outside
+    /// `0..=1`, and a `rounded_rect` `corner_radius` that is non-finite or negative (`L1614`,
+    /// `/scale`, `/opacity`, `/clip/rounded_rect/corner_radius`).
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         if let Some(size) = value.get("size").and_then(Value::as_array) {
@@ -559,6 +599,19 @@ impl SemanticValidate for UiGroup {
             reject(
                 "/opacity",
                 "the `UiGroup` opacity must be finite and within 0..1",
+            );
+        }
+        if let Some(radius) = value
+            .get("clip")
+            .and_then(|clip| clip.get("rounded_rect"))
+            .and_then(|shape| shape.get("corner_radius"))
+            .and_then(Value::as_f64)
+            .map(engine_number)
+            && !(radius.is_finite() && radius >= 0.0)
+        {
+            reject(
+                "/clip/rounded_rect/corner_radius",
+                "the `UiGroup` clip corner_radius must be finite and at least 0",
             );
         }
         out
@@ -867,6 +920,39 @@ mod tests {
         });
         let parsed: UiGroup = serde_json::from_value(full.clone()).unwrap();
         assert_eq!(serde_json::to_value(&parsed).unwrap(), full);
+    }
+
+    #[test]
+    fn group_clip_round_trips_in_both_spellings() {
+        for clip in [
+            json!("rect"),
+            json!("circle"),
+            json!({ "rounded_rect": { "corner_radius": 12.0 } }),
+        ] {
+            let value = json!({
+                "anchor": "top_left", "offset": [0.0, 0.0], "size": [100.0, 100.0], "clip": clip
+            });
+            let parsed: UiGroup = serde_json::from_value(value.clone()).unwrap();
+            assert!(!parsed.clip.is_none());
+            assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+        }
+        let absent = serde_json::to_value(UiGroup::default()).unwrap();
+        assert!(absent.get("clip").is_none());
+    }
+
+    #[test]
+    fn group_clip_corner_radius_is_l1614() {
+        for radius in [-1.0, -0.001] {
+            let value = json!({ "clip": { "rounded_rect": { "corner_radius": radius } } });
+            let out = UiGroup::validate_semantics(&value);
+            assert_eq!(
+                pointers(&out, "L1614"),
+                ["/clip/rounded_rect/corner_radius"],
+                "{value}"
+            );
+        }
+        let ok = json!({ "clip": { "rounded_rect": { "corner_radius": 0.0 } } });
+        assert!(UiGroup::validate_semantics(&ok).is_empty());
     }
 
     #[test]

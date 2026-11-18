@@ -1,6 +1,6 @@
 # Plan: Audio Ambience — loops, positional emitters, category gains
 
-> Status: **Audio space and mix (Neon Shroud request 0023): Wave A3a SHIPPED (2026-11-18)** — `AudioQueue::play_on`/`voice_stop`, `VoiceId`, `AudioMessage::{VoiceStart, VoiceSync, VoiceStop}`, the sink's keyed voices (a finished one leaves the loop table), `ludion docs audio-space` §Attached voices (§Decision 11). No wire, hash or replay movement. **Wave A2 SHIPPED (2026-11-18)** — `AudioListener { orientation }` and `ListenerOrientation::{Camera, Listener}` (`camera` / `self`), `L1650` (runtime once + `check-scene`), `ludion docs audio-space` (§Decision 10). No wire, hash or replay movement; the component schema snapshot gained `AudioListener`. By-ear check owed with A1's. A3b (ducking) is next and reuses the engine's WAV-length cache. **Wave A1 SHIPPED (2026-11-18)** — `AudioCategory::{Voice, Ui}`, `Bus`, `MixLayer`, `AudioQueue::bus_gain`/`bus_pause`/`bus_resume`, `AudioMessage::{BusGain, BusPause}`, per-frame bus envelopes in the sink (held buses keep cursors, device reopen replays bus state), `ludion docs audio-mix` (§Decisions 7–9). No wire, hash or replay movement; the component schema snapshot gained the `voice` and `ui` consts. By-ear check on a real device is owed. Waves A3b–A6 not started.
+> Status: **Audio space and mix (Neon Shroud request 0023): Wave A3b SHIPPED (2026-11-18)** — `DuckRule`, `EngineBuilder::audio_duck`, `AudioQueue::duck_start`/`duck_end`, `AudioMessage::Duck`, the sink's duck layer, `L5100`, `ludion docs audio-mix` §Ducking. No wire, hash or replay movement. **Wave A3a SHIPPED (2026-11-18)** — `AudioQueue::play_on`/`voice_stop`, `VoiceId`, `AudioMessage::{VoiceStart, VoiceSync, VoiceStop}`, the sink's keyed voices (a finished one leaves the loop table), `ludion docs audio-space` §Attached voices (§Decision 11). No wire, hash or replay movement. **Wave A2 SHIPPED (2026-11-18)** — `AudioListener { orientation }` and `ListenerOrientation::{Camera, Listener}` (`camera` / `self`), `L1650` (runtime once + `check-scene`), `ludion docs audio-space` (§Decision 10). No wire, hash or replay movement; the component schema snapshot gained `AudioListener`. By-ear check owed with A1's. **Wave A1 SHIPPED (2026-11-18)** — `AudioCategory::{Voice, Ui}`, `Bus`, `MixLayer`, `AudioQueue::bus_gain`/`bus_pause`/`bus_resume`, `AudioMessage::{BusGain, BusPause}`, per-frame bus envelopes in the sink (held buses keep cursors, device reopen replays bus state), `ludion docs audio-mix` (§Decisions 7–9). No wire, hash or replay movement; the component schema snapshot gained the `voice` and `ui` consts. By-ear check on a real device is owed. Waves A4–A6 not started.
 > Earlier: **Adaptive multi-stem music SHIPPED (2026-11-09, Serious Isaac 0025, conservative)** — `AudioQueue::music_set(id,
 > stems, fade)` plays up to 8 Ogg stems (`MUSIC_STEMS_MAX`) on one shared playhead and
 > `music_stem_gain(stem, gain, fade)` slews one stem's gain in sim ticks. The sink decodes each stem with its
@@ -220,7 +220,7 @@ Numbered on from Decision 6. Codes: L5100–29 sink and runtime, L1650–69 scen
 9. **Pause.** `AudioMessage::BusPause` holds each voice's cursor (loops and music included). A world rebuild (`StopAllLoops`) resets the Game layer and the pauses, keeps the User layer, and drops the voices held on a paused bus.
 10. **`AudioListener`.** A component that moves the listener off the camera; absent means the camera, byte-identical. Amends Decision 3. Settled in A2: `orientation: camera` (default; pan axes from the lowest-id `Camera`) or `self` (the listener's own world rotation); with no camera the listener's own axes are used whatever `orientation` says; the lowest `EntityId` carrier wins and a second raises `L1650` (a warning; once at runtime, and in `check-scene`); distance is from the listener's world position through `Parent`, and the listener need not be a body.
 11. **Attached one-shots.** `play_on(entity, ...)` returns a `VoiceId`; the sim reads a WAV header for the clip length. Settled in A3a: ids are a per-queue counter, reset on rebuild; a voice starts even when inaudible (gain `0.0`) so a speaker walking into earshot is heard; it is tracked until `start + ceil(len)` ticks (`ceil(frames x tick_hz / sample_rate)`, integer math, read once per path through `load_wav`, so a full decode); a despawn stops it with the sink's ~10 ms ramp fade; an unreadable clip is sent but never tracked; a device reopen drops voices (the router re-declares loops only); no filter/send until A4 (Decision 13).
-12. **Ducking.** `DuckRule` plus manual `duck_start`/`duck_end`, with a `-24 dB` floor.
+12. **Ducking.** `DuckRule` plus manual `duck_start`/`duck_end`, with a `-24 dB` floor (`DUCK_FLOOR_DB`). Settled (A3b): the message is `Duck { bus, gain, fade_frames }`, applied as a sink-private fourth layer (`authored x user x game x duck x pause`), not a `MixLayer::Duck` (a public layer would let `bus_gain` write state the engine owns). Liveness is sim-side: plain one-shots on a `when` bus are timed by `voice_ticks`, attached voices count while tracked and audible. Sources multiply, floored at `DUCK_FLOOR_DB`; the fade is the attack of a source turning on or the release of one turning off. A rebuild resets ducks. `when` is never `Master` or `Music`; `L5100` refuses a bad rule at build.
 13. **`VoiceSpatial { filter, send }`** rides on messages; the sink applies per-voice biquads.
 14. **Occlusion.** Ray occlusion on `ray_cast` with 0002's masks, a round-robin budget per frame, smoothing in the engine.
 15. **`AudioZone`.** Box or sphere, priority, blend, beds via `LoopId::ZoneBed`, `bus_gains`; resolved at the frame boundary from the listener point, not from sensors.
@@ -233,7 +233,7 @@ Numbered on from Decision 6. Codes: L5100–29 sink and runtime, L1650–69 scen
 - **A1 — mix** (this plan's first wave): decisions 7–9, `AudioQueue::bus_gain`/`bus_pause`/`bus_resume`, the sink's per-bus envelopes.
 - **A2 — listener — SHIPPED 2026-11-18:** a new `crates/ludion-components/src/audio.rs`, `audio_listener` in `engine.rs`, a multi-carrier warning in L1650–69.
 - **A3a — attached voices — SHIPPED 2026-11-18** (decision 11: `play_on`, `VoiceId`, keyed voices in the sink, the WAV-length read).
-- **A3b — ducking** (decision 12: `MixLayer::Duck`, `DuckRule`, `duck_start`/`duck_end`); reuses A3a's `voice_ticks` WAV-length cache.
+- **A3b — ducking — SHIPPED 2026-11-18** (decision 12: `AudioMessage::Duck`, `DuckRule`, `duck_start`/`duck_end`, `L5100`); reuses A3a's `voice_ticks` WAV-length cache.
 - **A4 — `VoiceSpatial`, sink filters, occlusion** (13, 14): needs 0002's masks; `VoiceSpatial` on `AudioEvent` is a struct-literal break, an owner ruling.
 - **A5 — zones, reverb, presets** (15, 16, 18): gallery `examples/gallery/audio-zones.yaml`, `audio_mix_at`.
 - **A6 — `music_crossfade`** (17), after the ruling.
@@ -245,7 +245,9 @@ Numbered on from Decision 6. Codes: L5100–29 sink and runtime, L1650–69 scen
 - **The sim-side WAV read** for clip length (Decision 11).
 - **Reverb and occlusion in scope**, amending the Deferred bullet; HRTF and Doppler stay out.
 - **`music_crossfade`** (Decision 17).
-- **The duck depth default** of `-9 dB` (Decision 12).
+- **The duck depth default** of `-9 dB` (Decision 12; now `DuckRule::default()`).
+- **An attached voice ducks only while audible**: one out of earshot does not dip the music (Decision 12).
+- **The duck layer is sink-private**, not a `MixLayer` (Decision 12).
 
 ## Waves
 
@@ -317,6 +319,11 @@ Wave 3 lands.
 - **Loop fade-out on stop.** Shipped: a 10 ms stop fade and gain slew.
 - **Stereo pan.** In scope since 2026-11-01: a 3D consumer needs "from the right direction" (vigil
   did not), shipped as the opt-in `AudioPan` (see Status).
+- **Duck state across a restore.** A restore rebuilds the world today: its `StopAllLoops` resets every duck and
+  ends every voice, so nothing stays ducked and nothing needs re-deriving. Once a voice can outlive a restore,
+  the first `sync_ducks` after it re-derives each bus's target from voice liveness (the rules' live flags set
+  from the restored voices, fade `0`) rather than waiting for an edge. Trigger: request 0012's restore that
+  re-derives zone and duck state, or any voice that survives a restore.
 - **Reverb, geometry occlusion, HRTF, Doppler.** Reverb and occlusion proposed into scope (Decisions 14, 16; owner ruling owed); HRTF and Doppler stay out. Originally out of scope — §6.1 asks for "audible when near".
 
 ## Risks / open questions

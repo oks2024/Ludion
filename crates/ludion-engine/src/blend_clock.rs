@@ -109,8 +109,11 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
             && !animation.from.is_empty()
             && fade_weight(&animation, ctx.game_instant).is_some();
         let outgoing = fading.then(|| blend_named(&animation.from)).flatten();
+        // Unrecorded: engine-optional components must not demand a game's query declaration.
         let layer_blends: Vec<(&AnimationLayer, &CharacterBlendData)> = world
-            .component::<AnimationLayers>(id)
+            .get_unrecorded::<AnimationLayers>(id)
+            .ok()
+            .flatten()
             .map(|stack| {
                 stack
                     .layers
@@ -120,7 +123,11 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
                     .collect()
             })
             .unwrap_or_default();
-        let had = world.component::<BlendClock>(id).is_some();
+        let had = world
+            .get_unrecorded::<BlendClock>(id)
+            .ok()
+            .flatten()
+            .is_some();
         let base_blends = incoming.is_some() || outgoing.is_some();
         if !base_blends && layer_blends.is_empty() {
             if had {
@@ -130,7 +137,9 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
         }
         let name = incoming.map_or_else(String::new, |blend| blend.name.clone());
         let mut clock = world
-            .component::<BlendClock>(id)
+            .get_unrecorded::<BlendClock>(id)
+            .ok()
+            .flatten()
             .cloned()
             .unwrap_or_default();
         let fresh = !had;

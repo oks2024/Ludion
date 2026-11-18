@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1, W2a and W2b (sim) mechanized (2026-11-18); W2c–W6 not started.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a, W2b (sim) and A1 mechanized (2026-11-18); A2, A3, W2c–W6 not started.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -52,12 +52,27 @@ and `component_schemas.json` are the only wire-visible moves. The d2 amendment s
 No `WorldHash`, replay, trace, wire-schema or golden moved. A scene without a layer blend never carries a
 `BlendClock`; only `component_schemas.json` re-blessed.
 
+### A1 — part masks and `AnimationLayers` on voxel assemblies
+
+| file | role |
+|---|---|
+| `crates/ludion-scene/src/rig_mask.rs` | `RigMask` (was `CharacterMask`), the shared parser, name validation, emitter and ancestor-walking `resolve_mask`; `resolve_rig_mask` (was `resolve_character_mask`) |
+| `crates/ludion-scene/src/character.rs` | re-wired to the shared mask code; messages and `L1199`/`L1200` byte-identical |
+| `crates/ludion-scene/src/assembly.rs` | `masks:` after `joints:`: `AssemblyDocument.masks`, parse (`L1137`), unknown part and empty name (`L1138`), emit |
+| `crates/ludion-engine/src/assembly_mesh.rs` | `AssemblyData.masks` (`AssemblyMaskData`), `AssemblyData::mask`; masks stay out of the mesh content hash |
+| `crates/ludion-engine/src/extract.rs` | `assembly_layer_poses`, `layered_part_pose`, `part_placements_layered`; `part_placements_with` takes the layers; `blended_part_pose` wraps an `f64` core |
+| `crates/ludion-engine/src/animation_events.rs` | `walk_layers` and the baseless walk open to assemblies |
+| `crates/ludion-engine/tests/assembly_layers.rs` | neutrality, mask, unkeyed channel, descendants over a non-topological order, additive and `reference`, crossfading base, restore, hash neutrality, 1/2/8 threads, events |
+
+No component, `WorldHash`, replay, trace, wire-schema or golden moved; the component schema did not move.
+
 ## Trigger
 
 The game's characters do locomotion plus something else on one skin: carry a body, aim, peek around a
 corner, look at a stimulus, walk by stick deflection, take down a guard. `Plan/animation-clips.md`
 §Non-goals deferred layers, IK, root motion and a state graph, each with a trigger. Request 0007 fires
-all four: three skinned kinds (player, militia guard, android worker) share one driver shape.
+all four: three characters (player, militia guard, android worker), built as voxel assemblies (decision 25),
+share one driver shape.
 
 ## What exists (2026-11-18)
 
@@ -145,6 +160,24 @@ all four: three skinned kinds (player, militia guard, android worker) share one 
     indices into `Animation.params` are not built (decision 13): a layer owns its two params.
 24. **`hold` does not step layer blend phases** (decision 17, same trigger).
 
+25. **Assemblies are the game's rig** (owner ruling 2026-11-17, request 0007 §Summary). The shipped skinned
+    path stays for skinned games; each later wave lands on assemblies first.
+26. **Assembly `masks:` use decision 1's spelling, with `joints:` naming parts**, under `L1137`/`L1138`. The
+    request's `except:` is spelled by listing the excluded subtree root with weight 0 under
+    `descendants: true`. Resolution walks ancestors, because authored part order is not topological.
+27. **Assembly override** blends each channel the layer clip keys toward the layer by `k = weight × mask`,
+    verbatim at `k ≥ 1`. A channel it does not key keeps the base, and a part with no track is untouched.
+    This is the request's preference; it differs from skins, where a tracked joint's missing channel reads rest.
+28. **Assembly additive** measures from the part's **rest**, because a rigid part's sample already is its delta
+    from rest (request §2). A `reference: <clip>` replaces rest with that clip's first frame:
+    `R = R_base · slerp(I, r⁻¹ c, k)`, `T = T_base + k (c − r)`, `S = S_base · (1 + k (c/r − 1))`, with
+    `r = (I, 0, 1)` by default.
+29. **Layers on assemblies are presentation only**, read on the base `hold` grid (decision 5). The ragdoll
+    switch keeps sampling the base pose alone; trigger: a ragdoll that must start from a layered pose. Layer
+    events work on assemblies exactly as decision 22.
+30. **`excluded: local | model`** (legs staying planted under a torso lean) is deferred, an owner question.
+    Trigger: the owner confirms it, or a layered torso visibly swings the legs.
+
 ## Waves
 
 - **W1 (shipped).** Masks, `AnimationLayers`, composition in extract's `Skin` phase, `L1670`–`L1672`, docs.
@@ -152,8 +185,12 @@ all four: three skinned kinds (player, militia guard, android worker) share one 
   (decisions 13–19).
 - **W2b (sim, shipped).** A layer's `clip` naming a blend, layer `params`, `reference:`, layer `events`
   (decisions 20–24).
+- **A1 (shipped).** Assembly `masks:`, override and additive layers in the assembly path, layer events
+  (decisions 25–30).
+- **A2.** Assembly `blends:` and layer blends, sharing the blend parser through `ludion-scene`.
+- **A3.** Prefab-part layers and blends, in `prefab_part_poses`.
 - **W2c.** `render --model … --blend/--layer` strips (`model_sheet.rs` + CLI), gallery
-  `character-layers.yaml` and its goldens (pinned goldens owed).
+  `assembly-layers.yaml` and its goldens, after A2 so they show an assembly (pinned goldens owed).
 - **W3.** `AnimGraph` and `AnimGraphState` (decision 9).
 - **W4.** Look-at and two-bone IK (decision 10).
 - **W5.** Ground feet, the bench, profile counters (decision 11).
@@ -168,13 +205,12 @@ all four: three skinned kinds (player, militia guard, android worker) share one 
 - The `AnimGraph` helper against `animation-clips` decision 4 and `voxel-animation` decision 6 (no state
   machine asset): it is Rust, not data.
 - The W5 budget (≤0.5 ms for 32 characters).
-- The rig form: skinned `kind: character` or rigid-part `kind: assembly`. Masks would resolve part names,
-  layers would compose in the assembly and prefab-part paths, and `animation-clips` decision 10's merge
-  trigger fires.
+- `animation-clips` decision 10's merge trigger fired (a character feature assemblies also want); merging
+  `kind: character` and `kind: assembly` is not done here — Proposed, owner ruling owed.
 
 ## Non-goals
 
-- Layers on assemblies and prefab parts. **Trigger:** the rig-form ruling above.
+- Layers on prefab parts. **Trigger:** A3.
 - Per-layer anchors (`set_clip_speed` for a layer). **Trigger:** a layer clip that must change rate mid-clip.
 - Layer-to-layer blending (a crossfade inside one layer). **Trigger:** a layer whose clip switch visibly pops.
 - A masked crossfade of the base. **Trigger:** a base switch that must not touch the upper body.

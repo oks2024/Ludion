@@ -23,8 +23,11 @@
 //! and a world rebuild sends [`AudioMessage::StopAllLoops`] rather than diffing against one.
 
 pub use ludion_core::audio::{
-    AudioCategory, AudioEvent, AudioMessage, Bus, CategoryGains, LoopId, MixLayer, VoiceId,
+    AudioCategory, AudioEvent, AudioMessage, Bus, CategoryGains, DUCK_FLOOR_DB, LoopId, MixLayer,
+    VoiceId,
 };
+use ludion_core::codes::code;
+use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::time::FrameIndex;
 use ludion_ecs::World;
@@ -63,6 +66,16 @@ pub(crate) enum Queued {
     StopVoice {
         id: VoiceId,
         fade_frames: u32,
+    },
+    DuckStart {
+        key: String,
+        buses: Vec<Bus>,
+        depth_db: f32,
+        attack: u32,
+    },
+    DuckEnd {
+        key: String,
+        release: u32,
     },
 }
 
@@ -340,6 +353,46 @@ impl AudioQueue {
         self.push_pause(buses, false, fade_frames);
     }
 
+    /// Ducks `buses` by `depth_db` (clamped to at most `0.0`) over `attack_ticks` until
+    /// [`duck_end`](Self::duck_end) names the same `key`: a sequence's own duck, which multiplies with
+    /// any [`DuckRule`] and any other key, floored at 24 dB down. Starting a live key again replaces
+    /// it. `Bus::Master` is allowed here, to duck everything. An empty slice queues nothing. A rebuild
+    /// drops every manual duck.
+    ///
+    /// ```
+    /// # use ludion_engine::audio::{AudioQueue, Bus};
+    /// let mut queue = AudioQueue::default();
+    /// queue.duck_start("briefing", &[Bus::Music], -12.0, 10);
+    /// queue.duck_end("briefing", 45);
+    /// ```
+    pub fn duck_start(
+        &mut self,
+        key: impl Into<String>,
+        buses: &[Bus],
+        depth_db: f32,
+        attack_ticks: u32,
+    ) {
+        if buses.is_empty() {
+            return;
+        }
+        let key = key.into();
+        let depth_db = self.finite_gain(&format!("duck {key}"), depth_db).min(0.0);
+        self.pending.push(Queued::DuckStart {
+            key,
+            buses: buses.to_vec(),
+            depth_db,
+            attack: attack_ticks,
+        });
+    }
+
+    /// Releases the duck `key` over `release_ticks`. An unknown key is ignored.
+    pub fn duck_end(&mut self, key: impl Into<String>, release_ticks: u32) {
+        self.pending.push(Queued::DuckEnd {
+            key: key.into(),
+            release: release_ticks,
+        });
+    }
+
     fn push_pause(&mut self, buses: &[Bus], paused: bool, fade_frames: u32) {
         if buses.is_empty() {
             return;
@@ -491,11 +544,105 @@ pub(crate) fn resync_is_current(sent_gain: f32, sent_pan: f32, gain: f32, pan: f
 /// it was authored at, the last gain and pan sent, and the frame it ends.
 pub(crate) struct AttachedVoice {
     pub(crate) entity: EntityId,
+    pub(crate) bus: Bus,
     pub(crate) gain: f32,
     pub(crate) range: f32,
     pub(crate) sent_gain: f32,
     pub(crate) sent_pan: f32,
     pub(crate) ends: FrameIndex,
+}
+
+/// A rule that ducks buses while a sound on another bus is live
+/// ([`EngineBuilder::audio_duck`](crate::EngineBuilder::audio_duck)).
+///
+/// Liveness is tracked sim-side: a plain one-shot on `when` counts for its WAV's length, an attached
+/// voice ([`AudioQueue::play_on`]) while it is tracked and audible. While any source is live the
+/// engine sends [`AudioMessage::Duck`] for each bus in `duck`, fading in over `attack_ticks` and back
+/// out over `release_ticks`. Rules and manual ducks multiply, floored at
+/// [`DUCK_FLOOR_DB`](ludion_core::audio::DUCK_FLOOR_DB).
+///
+/// `when` is a bus with a tracked end — not [`Bus::Master`] or [`Bus::Music`]; `duck` is non-empty
+/// and names neither `Master` nor `when`; `depth_db` is finite and at most `0.0`. Anything else
+/// fails the build with `L5100`.
+///
+/// ```
+/// use ludion_engine::audio::{Bus, DuckRule};
+///
+/// // Music and ambience dip 9 dB under dialogue: the default.
+/// assert_eq!(DuckRule::default().when, Bus::Voice);
+/// let rule = DuckRule { depth_db: -6.0, ..DuckRule::default() };
+/// assert_eq!(rule.duck, &[Bus::Music, Bus::Ambient]);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DuckRule {
+    /// The bus whose sounds trigger the duck.
+    pub when: Bus,
+    /// The buses ducked while `when` is live.
+    pub duck: &'static [Bus],
+    /// How far they dip, in dB (`0.0` or below).
+    pub depth_db: f32,
+    /// Sim ticks to fade down when a source turns on.
+    pub attack_ticks: u32,
+    /// Sim ticks to fade back when the last source turns off.
+    pub release_ticks: u32,
+}
+
+impl Default for DuckRule {
+    fn default() -> DuckRule {
+        DuckRule {
+            when: Bus::Voice,
+            duck: &[Bus::Music, Bus::Ambient],
+            depth_db: -9.0,
+            attack_ticks: 6,
+            release_ticks: 30,
+        }
+    }
+}
+
+/// Refuses the first rule that cannot run (`L5100`), naming its index and the bad field.
+pub(crate) fn validate_duck_rules(rules: &[DuckRule]) -> Result<(), Diagnostic> {
+    const SHAPE: &str = "write it as DuckRule { when: Bus::Voice, duck: &[Bus::Music, Bus::Ambient], \
+                         depth_db: -9.0, attack_ticks: 6, release_ticks: 30 }: `depth_db` finite and at \
+                         most 0, `when` a bus other than Master or Music, `duck` non-empty without Master \
+                         or `when`";
+    for (index, rule) in rules.iter().enumerate() {
+        let problem = if !rule.depth_db.is_finite() || rule.depth_db > 0.0 {
+            format!(
+                "`depth_db` is {} but must be finite and at most 0",
+                rule.depth_db
+            )
+        } else if matches!(rule.when, Bus::Master | Bus::Music) {
+            format!(
+                "`when` is {:?}, which has no tracked sound length to time a duck by",
+                rule.when
+            )
+        } else if rule.duck.is_empty() {
+            "`duck` is empty, so the rule ducks nothing".to_string()
+        } else if rule.duck.contains(&Bus::Master) {
+            "`duck` names Master, which would duck every bus".to_string()
+        } else if rule.duck.contains(&rule.when) {
+            format!("`duck` names `when` ({:?}) itself", rule.when)
+        } else {
+            continue;
+        };
+        return Err(Diagnostic::new(
+            code::AUDIO_DUCK_RULE_INVALID,
+            format!("`audio_duck` rule {index}: {problem}"),
+        )
+        .with_help(SHAPE));
+    }
+    Ok(())
+}
+
+/// The linear gain of `db` decibels, through the pure-Rust `powf` the sim-side rules require.
+pub(crate) fn db_to_gain(db: f32) -> f32 {
+    ludion_core::math::powf(10.0, db / 20.0)
+}
+
+/// One live [`AudioQueue::duck_start`]: the buses it dips and the linear gain it holds them at.
+pub(crate) struct ManualDuck {
+    pub(crate) buses: Vec<Bus>,
+    pub(crate) gain: f32,
 }
 
 /// The gain an [`AudioEmitter`](crate::AudioEmitter) sounds at from `listener`: its authored `gain`
@@ -629,6 +776,7 @@ impl AudioLogEntry {
             | AudioMessage::StopAllLoops
             | AudioMessage::MusicStop { .. }
             | AudioMessage::BusGain { .. }
+            | AudioMessage::Duck { .. }
             | AudioMessage::BusPause { .. }
             | AudioMessage::VoiceSync { .. }
             | AudioMessage::VoiceStop { .. } => None,
@@ -643,6 +791,7 @@ impl AudioLogEntry {
             | AudioMessage::MusicPlay { gain, .. }
             | AudioMessage::MusicStemGain { gain, .. }
             | AudioMessage::BusGain { gain, .. }
+            | AudioMessage::Duck { gain, .. }
             | AudioMessage::VoiceStart { gain, .. }
             | AudioMessage::VoiceSync { gain, .. } => Some(*gain),
             AudioMessage::LoopStop { .. }
@@ -712,6 +861,70 @@ mod tests {
             panic!("two bus gains, got {messages:?}");
         };
         assert_eq!((*first, *second), (0.0, 0.5));
+    }
+
+    /// A NaN duck depth is recorded and queues `0.0` dB, a boost is clamped to `0.0`, and an empty
+    /// bus list queues nothing.
+    #[test]
+    fn a_manual_duck_depth_is_finite_and_never_a_boost() {
+        let mut queue = AudioQueue::default();
+        queue.duck_start("a", &[Bus::Music], f32::NAN, 1);
+        queue.duck_start("b", &[Bus::Music], 6.0, 1);
+        queue.duck_start("c", &[], -6.0, 1);
+        assert_eq!(queue.take_non_finite(), ["duck a"]);
+        let queued = queue.take();
+        let [
+            Queued::DuckStart {
+                depth_db: first, ..
+            },
+            Queued::DuckStart {
+                depth_db: second, ..
+            },
+        ] = queued.as_slice()
+        else {
+            panic!("two manual ducks, got {queued:?}");
+        };
+        assert_eq!((*first, *second), (0.0, 0.0));
+    }
+
+    /// A rule that cannot run is `L5100`, naming its index.
+    #[test]
+    fn an_invalid_duck_rule_is_l5100() {
+        let valid = DuckRule::default();
+        assert!(validate_duck_rules(&[valid, valid]).is_ok());
+        let bad = [
+            DuckRule {
+                depth_db: 3.0,
+                ..valid
+            },
+            DuckRule {
+                depth_db: f32::NAN,
+                ..valid
+            },
+            DuckRule {
+                when: Bus::Master,
+                ..valid
+            },
+            DuckRule {
+                when: Bus::Music,
+                duck: &[Bus::Sfx],
+                ..valid
+            },
+            DuckRule { duck: &[], ..valid },
+            DuckRule {
+                duck: &[Bus::Master],
+                ..valid
+            },
+            DuckRule {
+                duck: &[Bus::Voice],
+                ..valid
+            },
+        ];
+        for rule in bad {
+            let error = validate_duck_rules(&[valid, rule]).unwrap_err();
+            assert_eq!(error.code, code::AUDIO_DUCK_RULE_INVALID, "{rule:?}");
+            assert!(error.message.contains("rule 1"), "{}", error.message);
+        }
     }
 
     /// Pausing or resuming no buses is not a message.

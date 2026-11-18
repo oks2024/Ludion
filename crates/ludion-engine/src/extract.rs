@@ -30,6 +30,7 @@ use ludion_core::time::{FrameIndex, GameClock, GameTime, Q16_PER_TICK, SimTime, 
 use ludion_ecs::{ReadColumn, World};
 use ludion_protocol::command::ViewPose;
 use ludion_renderer::LodSettings;
+use ludion_renderer::UiClip;
 use ludion_renderer::{
     BlendData, CameraBlend, DebugSegment, DecalBlend, DecalInstance, DecalMaps, DecalReceivers,
     DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
@@ -144,6 +145,11 @@ pub(crate) trait SceneAssets {
     fn extract_end(&mut self, _phase: ExtractPhase) {}
     /// The extract's skin counters, inside the `Skin` bracket.
     fn extract_skin(&mut self, _counts: SkinCounts) {}
+    /// The memo of ground-marker visibility profiles; `None` for a loader with nowhere to keep it,
+    /// whose clipped markers cast fresh every extract.
+    fn clip_cache(&mut self) -> Option<&mut crate::ground_marker_clip::ClipCache> {
+        None
+    }
 }
 
 /// The cached loader: each asset resolves **through** the [`AssetCache`] (miss = load + decode once,
@@ -203,6 +209,9 @@ impl SceneAssets for CachedAssets<'_> {
         grid: Option<Arc<WorldVoxelGrid>>,
     ) -> Option<Arc<WorldVoxelGrid>> {
         self.cache.set_voxelization(signature, grid)
+    }
+    fn clip_cache(&mut self) -> Option<&mut crate::ground_marker_clip::ClipCache> {
+        Some(self.cache.clip_cache_mut())
     }
     fn observe_begin(&mut self, phase: LoadPhase) {
         if let Some(observer) = self.cache.observer_mut() {
@@ -993,15 +1002,7 @@ fn extract_inner(
             let hud_start = ui_entries.len();
             let rect_motion = ui::hud::pre_rect(&hud, id, rect, degraded);
             let rect = &*rect_motion;
-            let rect_px = ui::resolve_ui_rect_of(rect, viewport);
-            // `fill_group` covers the group's box; a group that cannot resolve leaves the canvas
-            // rect and `post` reports it.
-            let rect_px = match rect.group {
-                Some(group) if rect.fill_group && !rect.fill => groups
-                    .resolve(&hud, &mut poses, group, degraded)
-                    .map_or(rect_px, |g| g.box_px),
-                _ => rect_px,
-            };
+            let rect_px = ui::hud::rect_box(&hud, &mut poses, &mut groups, rect, degraded);
             // The UV sub-rect the rect samples. A loose `texture:` or an untextured fill samples the
             // whole image (byte-identical to the pre-atlas path); an `atlas` + `frame` reference
             // narrows it to that region, resolved through the same `resolve_atlas_frame` and the
@@ -1096,6 +1097,7 @@ fn extract_inner(
                     text: text.text.clone(),
                     quads,
                     font,
+                    clip: UiClip::NONE,
                 },
             ));
             let element = ui::hud::HudElement::Text;
@@ -1146,6 +1148,7 @@ fn extract_inner(
                             texture: None,
                             color: list.background,
                             uv: SpriteInstance::FULL_UV,
+                            clip: UiClip::NONE,
                         },
                     ));
                 }
@@ -1174,6 +1177,7 @@ fn extract_inner(
                             },
                             quads,
                             font,
+                            clip: UiClip::NONE,
                         },
                     ));
                 }
@@ -1351,10 +1355,11 @@ fn extract_inner(
                 ) else {
                     continue;
                 };
-                let (pose, crossfade) =
-                    animation_pose(world, mesh.id, &data, held_for(world, mesh.id, now));
+                let held_now = held_for(world, mesh.id, now);
+                let (pose, crossfade) = animation_pose(world, mesh.id, &data, held_now);
+                let layers = assembly_layer_poses(world, mesh.id, &data, held_now);
                 for (part, (local, local_normal)) in
-                    part_placements_faded(&data, pose, crossfade.as_ref())
+                    part_placements_layered(&data, pose, crossfade.as_ref(), &layers)
                         .into_iter()
                         .enumerate()
                 {
@@ -1534,8 +1539,15 @@ fn extract_inner(
     assets.extract_end(ExtractPhase::Gi);
 
     assets.extract_begin(ExtractPhase::Lights);
-    let (ground_markers, ground_marker_ids) =
-        extract_ground_markers(world, &ids, &visibility, &mut poses, sim_now);
+    let (ground_markers, ground_marker_ids, ground_marker_profiles) = extract_ground_markers(
+        world,
+        &ids,
+        &visibility,
+        &mut poses,
+        sim_now,
+        assets,
+        degraded,
+    );
     let (drop_shadows, drop_shadow_ids) =
         extract_drop_shadows(world, &ids, &visibility, &mut poses, &mesh_owners);
     let (light_ids, spot_light_ids): (Vec<EntityId>, Vec<EntityId>) = if collect {
@@ -1581,6 +1593,7 @@ fn extract_inner(
         meshes,
         sprites,
         ground_markers,
+        ground_marker_profiles,
         drop_shadows,
         decals,
         debug_lines: Vec::new(),
@@ -2041,13 +2054,26 @@ fn extract_ground_markers(
     visibility: &FrameVisibility,
     poses: &mut WorldAffines,
     now: SimTime,
-) -> (Vec<GroundMarkerInstance>, Vec<EntityId>) {
-    ids.iter()
+    assets: &mut dyn SceneAssets,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) -> (Vec<GroundMarkerInstance>, Vec<EntityId>, Vec<f32>) {
+    let mut pass = crate::ground_marker_clip::ClipPass::new(world, assets.clip_cache());
+    let (instances, markers): (Vec<_>, Vec<_>) = ids
+        .iter()
         .filter(|&&id| !visibility.hidden(id))
         .filter_map(|&id| {
             let marker = get::<GroundMarker>(world, id)?;
             let pose = render_pose(world, poses, id);
             let shape = scaled_shape(marker.shape, pose.scale()[0]);
+            let clip = get::<crate::components::GroundMarkerClip>(world, id).and_then(|clip| {
+                pass.clip(
+                    id,
+                    marker.shape,
+                    clip,
+                    (pose.translation(), pose.quat(), pose.scale()[0]),
+                    degraded,
+                )
+            });
             let translation = Vec3::from(pose.translation()) + Vec3::Y * GROUND_MARKER_LIFT;
             let style = marker.style.map_or_else(Default::default, |s| {
                 ludion_renderer::GroundMarkerStyle {
@@ -2069,11 +2095,13 @@ fn extract_ground_markers(
                     inner_color: marker.inner_color.unwrap_or(marker.color),
                     style,
                     flicker_seed: flicker_seed(id, now),
+                    clip,
                 },
                 id,
             ))
         })
-        .unzip()
+        .unzip();
+    (instances, markers, pass.finish())
 }
 
 /// The flicker dropout's per-(entity, sim tick) seed: a fixed integer mix of the entity slot,
@@ -5243,7 +5271,7 @@ fn scene_lod(world: &World, ids: &[EntityId]) -> LodSettings {
 /// `view` is the host's [`render.view`](crate::render_view) override when one is in force. It
 /// replaces the viewpoint and nothing else: the scene's camera is still resolved first, so an
 /// ambiguous world is still `L2101`, and its clip planes still shape the override's projection.
-fn resolve_camera(
+pub(crate) fn resolve_camera(
     world: &World,
     ids: &[EntityId],
     viewport: (u32, u32),
@@ -6357,7 +6385,7 @@ pub(crate) fn part_placements(
     assembly: &AssemblyData,
     pose: Option<(&ludion_scene::AnimationDocument, f64)>,
 ) -> Vec<(Mat4, Mat3)> {
-    part_placements_with(assembly, pose, None, true)
+    part_placements_with(assembly, pose, None, true, &[])
 }
 
 /// [`part_placements`] for the render site: the same pose, blended with `fade`'s outgoing clip when a
@@ -6367,7 +6395,18 @@ pub(crate) fn part_placements_faded(
     pose: ClipPose<'_>,
     fade: Option<&CrossfadePose<'_>>,
 ) -> Vec<(Mat4, Mat3)> {
-    part_placements_with(assembly, pose, fade, true)
+    part_placements_with(assembly, pose, fade, true, &[])
+}
+
+/// [`part_placements_faded`] with an entity's `AnimationLayers` composed over the base pose
+/// (`Plan/animation-layers.md` decisions 27-29). No layers is exactly [`part_placements_faded`].
+pub(crate) fn part_placements_layered(
+    assembly: &AssemblyData,
+    pose: ClipPose<'_>,
+    fade: Option<&CrossfadePose<'_>>,
+    layers: &[AssemblyLayerPose<'_>],
+) -> Vec<(Mat4, Mat3)> {
+    part_placements_with(assembly, pose, fade, true, layers)
 }
 
 /// [`part_placements`], with `scale` saying whether a clip's scale channel applies: the render path
@@ -6378,13 +6417,17 @@ pub(crate) fn part_placements_faded(
 /// While `fade` is `Some`, each part's two sampled poses blend in quaternion space (rotation through
 /// `ludion_scene::slerp`, translation and scale lerp, a channel one side lacks reading as that
 /// part's rest value).
+///
+/// `layers` compose over the base pose per part; a part no layer reaches takes the exact path it
+/// would without them, and the rest return applies only when there are no layers either.
 pub(crate) fn part_placements_with(
     assembly: &AssemblyData,
     pose: ClipPose<'_>,
     fade: Option<&CrossfadePose<'_>>,
     scale: bool,
+    layers: &[AssemblyLayerPose<'_>],
 ) -> Vec<(Mat4, Mat3)> {
-    if pose.is_none() && fade.is_none() {
+    if pose.is_none() && fade.is_none() && layers.is_empty() {
         return assembly
             .parts
             .iter()
@@ -6401,20 +6444,28 @@ pub(crate) fn part_placements_with(
     let locals: Vec<Mat4> = assembly
         .parts
         .iter()
-        .map(|part| {
+        .enumerate()
+        .map(|(index, part)| {
             let parent_offset = part
                 .parent
                 .map_or(Vec3::ZERO, |index| Vec3::from(assembly.parts[index].offset));
-            let (rotation, sampled_scale, sampled_translation) = match fade {
-                None => {
-                    let (clip, time) = pose.expect("a rest pose without a fade returned early");
+            let layered = layered_part_pose(index, &part.name, pose, fade, layers);
+            let (rotation, sampled_scale, sampled_translation) = match (layered, fade) {
+                (Some(layered), _) => (
+                    layered.rotation.map_or(Quat::IDENTITY, quat_from_f64),
+                    layered.scale,
+                    layered.translation,
+                ),
+                (None, None) => {
+                    let Some((clip, time)) = pose else {
+                        // Layers exist but none reaches this part, and nothing is playing.
+                        return Mat4::from_translation(Vec3::from(part.offset) - parent_offset);
+                    };
                     let sampled = ludion_scene::part_pose(clip, &part.name, time);
-                    let rotation = sampled.rotation.map_or(Quat::IDENTITY, |q| {
-                        Quat::from_xyzw(q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32)
-                    });
+                    let rotation = sampled.rotation.map_or(Quat::IDENTITY, quat_from_f64);
                     (rotation, sampled.scale, sampled.translation)
                 }
-                Some(fade) => blended_part_pose(pose, fade, &part.name),
+                (None, Some(fade)) => blended_part_pose(pose, fade, &part.name),
             };
             let pivot = Vec3::from(part.pivot);
             // Rotation about the pivot as one rigid transform, so an identity rotation yields the
@@ -6444,6 +6495,10 @@ pub(crate) fn part_placements_with(
     compose_chain(assembly, &locals, scaled)
 }
 
+fn quat_from_f64(q: [f64; 4]) -> Quat {
+    Quat::from_xyzw(q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32)
+}
+
 /// One part's rotation, scale and translation while a crossfade is in progress: the current and
 /// outgoing samples blended `fade.weight` of the way to the current one. A channel one side lacks
 /// contributes the part's rest value (identity rotation, zero translation, unit scale); a channel
@@ -6453,6 +6508,21 @@ fn blended_part_pose(
     fade: &CrossfadePose<'_>,
     part: &str,
 ) -> (Quat, Option<[f64; 3]>, Option<[f64; 3]>) {
+    let blended = blended_part_pose_f64(pose, fade, part);
+    (
+        blended.rotation.map_or(Quat::IDENTITY, quat_from_f64),
+        blended.scale,
+        blended.translation,
+    )
+}
+
+/// [`blended_part_pose`] before the rotation is cast to `f32`, so a layer composes over the exact
+/// `f64` blend.
+fn blended_part_pose_f64(
+    pose: ClipPose<'_>,
+    fade: &CrossfadePose<'_>,
+    part: &str,
+) -> ludion_scene::PartPose {
     let sample = |side: ClipPose<'_>| {
         side.map_or_else(ludion_scene::PartPose::default, |(clip, time)| {
             ludion_scene::part_pose(clip, part, time)
@@ -6468,18 +6538,176 @@ fn blended_part_pose(
         }
     };
     let rotation = match (from.rotation, to.rotation) {
-        (None, None) => Quat::IDENTITY,
+        (None, None) => None,
         (a, b) => {
             let identity = [0.0, 0.0, 0.0, 1.0];
-            let q = ludion_scene::slerp(a.unwrap_or(identity), b.unwrap_or(identity), w);
-            Quat::from_xyzw(q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32)
+            Some(ludion_scene::slerp(
+                a.unwrap_or(identity),
+                b.unwrap_or(identity),
+                w,
+            ))
         }
     };
-    (
+    ludion_scene::PartPose {
         rotation,
-        lerp3(from.scale, to.scale, 1.0),
-        lerp3(from.translation, to.translation, 0.0),
-    )
+        scale: lerp3(from.scale, to.scale, 1.0),
+        translation: lerp3(from.translation, to.translation, 0.0),
+    }
+}
+
+/// One `AnimationLayers` layer ready to pose an assembly: its clip at the layer's own clock, the
+/// reference an additive layer measures from (clip and time), the mask's per-part weights (`None` is
+/// every part), how it combines, and its weight now, in `(0, 1]`.
+pub(crate) struct AssemblyLayerPose<'a> {
+    pub clip: &'a ludion_scene::AnimationDocument,
+    pub t: f64,
+    pub reference: Option<(&'a ludion_scene::AnimationDocument, f64)>,
+    pub mask: Option<&'a [f32]>,
+    pub mode: LayerMode,
+    pub weight: f64,
+}
+
+/// The layers of `id`'s `AnimationLayers` that act on an assembly at `now` (the held time the base
+/// pose reads), in list order. A layer with no weight, an unbound clip, an unknown mask or an unknown
+/// `reference` is skipped silently, as a base `Animation` naming an unbound clip is, and a layer
+/// naming a blend does not act on an assembly. Empty — without allocating — when the entity has no
+/// `AnimationLayers`.
+pub(crate) fn assembly_layer_poses<'a>(
+    world: &World,
+    id: EntityId,
+    data: &'a AssemblyData,
+    now: GameTime,
+) -> Vec<AssemblyLayerPose<'a>> {
+    let Some(stack) = get::<AnimationLayers>(world, id) else {
+        return Vec::new();
+    };
+    stack
+        .layers
+        .iter()
+        .take(ludion_components::animation_layers::MAX_ANIMATION_LAYERS)
+        .filter_map(|layer| {
+            let weight = f64::from(layer_weight_at(layer, now));
+            if weight <= 0.0 || weight.is_nan() {
+                return None;
+            }
+            let clip = data.clip(&layer.clip)?;
+            let t = ludion_scene::clip_phase(
+                clip,
+                clock_elapsed(now, layer.started, layer.speed, None),
+            );
+            let mask = match layer.mask.as_str() {
+                "" => None,
+                name => Some(data.mask(name)?),
+            };
+            let reference = match layer.mode {
+                LayerMode::Additive if !layer.reference.is_empty() => {
+                    Some((data.clip(&layer.reference)?, 0.0))
+                }
+                _ => None,
+            };
+            Some(AssemblyLayerPose {
+                clip,
+                t,
+                reference,
+                mask,
+                mode: layer.mode,
+                weight,
+            })
+        })
+        .collect()
+}
+
+/// Part `index`'s base channels with `layers` composed over them, or `None` when no layer reaches the
+/// part (the layer clip has no track for it, or `weight × mask` is zero) — the caller then takes the
+/// exact base path. Channels are `f64`, cast where the base path casts.
+///
+/// Override blends each channel the layer clip keys toward the layer by `k = weight × mask`
+/// (verbatim at `k ≥ 1`); a channel it does not key keeps the base. Additive measures from the part's
+/// rest — a rigid part's sample already is its delta from rest — or from the reference clip's first
+/// frame: `R = R_base · slerp(I, r⁻¹ c, k)`, `T = T_base + k (c − r)`, `S = S_base · (1 + k (c / r − 1))`.
+fn layered_part_pose(
+    index: usize,
+    name: &str,
+    pose: ClipPose<'_>,
+    fade: Option<&CrossfadePose<'_>>,
+    layers: &[AssemblyLayerPose<'_>],
+) -> Option<ludion_scene::PartPose> {
+    let mut current: Option<ludion_scene::PartPose> = None;
+    for layer in layers {
+        let sample = ludion_scene::part_pose(layer.clip, name, layer.t);
+        if sample.rotation.is_none() && sample.translation.is_none() && sample.scale.is_none() {
+            continue;
+        }
+        let mask = layer
+            .mask
+            .map_or(1.0, |m| m.get(index).copied().unwrap_or(0.0));
+        let k = layer.weight * f64::from(mask);
+        if k <= 0.0 || k.is_nan() {
+            continue;
+        }
+        let base = current.get_or_insert_with(|| match fade {
+            Some(fade) => blended_part_pose_f64(pose, fade, name),
+            None => pose.map_or_else(ludion_scene::PartPose::default, |(clip, time)| {
+                ludion_scene::part_pose(clip, name, time)
+            }),
+        });
+        let identity = [0.0, 0.0, 0.0, 1.0];
+        match layer.mode {
+            LayerMode::Override => {
+                if let Some(c) = sample.rotation {
+                    base.rotation = Some(if k >= 1.0 {
+                        c
+                    } else {
+                        ludion_scene::slerp(base.rotation.unwrap_or(identity), c, k)
+                    });
+                }
+                if let Some(c) = sample.translation {
+                    let b = base.translation.unwrap_or([0.0; 3]);
+                    base.translation = Some(if k >= 1.0 {
+                        c
+                    } else {
+                        [0, 1, 2].map(|i| b[i] + (c[i] - b[i]) * k)
+                    });
+                }
+                if let Some(c) = sample.scale {
+                    let b = base.scale.unwrap_or([1.0; 3]);
+                    base.scale = Some(if k >= 1.0 {
+                        c
+                    } else {
+                        [0, 1, 2].map(|i| b[i] + (c[i] - b[i]) * k)
+                    });
+                }
+            }
+            LayerMode::Additive => {
+                let reference = layer
+                    .reference
+                    .map(|(clip, time)| ludion_scene::part_pose(clip, name, time))
+                    .unwrap_or_default();
+                if let Some(c) = sample.rotation {
+                    let r = reference.rotation.unwrap_or(identity);
+                    let delta = quat_mul(quat_conjugate(r), c);
+                    base.rotation = Some(quat_mul(
+                        base.rotation.unwrap_or(identity),
+                        ludion_scene::slerp(identity, delta, k),
+                    ));
+                }
+                if let Some(c) = sample.translation {
+                    let r = reference.translation.unwrap_or([0.0; 3]);
+                    let b = base.translation.unwrap_or([0.0; 3]);
+                    base.translation = Some([0, 1, 2].map(|i| b[i] + k * (c[i] - r[i])));
+                }
+                if let Some(c) = sample.scale {
+                    let r = reference.scale.unwrap_or([1.0; 3]);
+                    let b = base.scale.unwrap_or([1.0; 3]);
+                    base.scale = Some([0, 1, 2].map(|i| {
+                        let ratio = if r[i].abs() < 1e-12 { 1.0 } else { c[i] / r[i] };
+                        b[i] * (1.0 + k * (ratio - 1.0))
+                    }));
+                }
+            }
+        }
+    }
+    current
 }
 
 /// Composes each part's parent-relative transform down its chain to the root, memoized.
@@ -8679,6 +8907,7 @@ mod tests {
                 ],
                 clips,
                 joints: Vec::new(),
+                masks: Vec::new(),
             }
         }
 
@@ -8902,8 +9131,30 @@ mod tests {
             );
             assert_eq!(posed[0].1 * Vec3::X, Vec3::new(0.5, 0.0, 0.0));
 
-            let rigid = part_placements_with(&data, pose, None, false);
+            let rigid = part_placements_with(&data, pose, None, false, &[]);
             assert_eq!(rigid, part_placements(&data, None));
+        }
+
+        /// The ragdoll's and model sheet's entry points pass no layers, and an empty layer list on the
+        /// render entry is exactly the plain pose, rest return included.
+        #[test]
+        fn no_layers_is_the_plain_pose_bit_for_bit() {
+            let data = assembly(vec![clip(
+                "walk",
+                "arm",
+                [0.0; 3],
+                [90.0, 0.0, 0.0],
+                [0.0; 3],
+            )]);
+            let pose = Some((data.clip("walk").unwrap(), 0.4));
+            assert_eq!(
+                part_placements_layered(&data, pose, None, &[]),
+                part_placements(&data, pose)
+            );
+            assert_eq!(
+                part_placements_layered(&data, None, None, &[]),
+                part_placements(&data, None)
+            );
         }
 
         /// A child authored **before** its parent composes just as well: the chain is resolved by
@@ -8918,6 +9169,7 @@ mod tests {
                 ],
                 clips: vec![clip("walk", "arm", [0.0; 3], [0.0; 3], [0.0, 0.0, 3.0])],
                 joints: Vec::new(),
+                masks: Vec::new(),
             };
             let posed = part_placements(&data, Some((data.clip("walk").unwrap(), 1.0)));
             assert_eq!(posed[1].0, Mat4::from_translation(Vec3::new(0.0, 0.0, 3.0)));

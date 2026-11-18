@@ -44,6 +44,7 @@ fn settings(surfaces: Option<SurfaceTable>) -> PhysicsSettings {
 fn tag(name: &str) -> SurfaceTag {
     SurfaceTag {
         surface: name.to_string(),
+        parts: vec![],
     }
 }
 

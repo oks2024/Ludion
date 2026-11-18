@@ -92,29 +92,115 @@ impl SurfaceTable {
 /// `check-scene`. The name must be declared (`L1690`) and not empty (`L1691`). The solver never
 /// reads it: editing it takes effect from the next write with no body rebuilt.
 ///
+/// `parts` gives single parts their own surface. An integer key indexes the entity's own `compound`
+/// `Collider` parts: a hit reports the part whose shape lies nearest the hit point (lowest index on
+/// ties). A string key names a `kind: assembly` part and takes effect on the bodies
+/// `switch_to_ragdoll` spawns. Every other part reports `surface`. A part *named* `"1"` must be
+/// quoted in YAML, or it parses as the integer.
+///
 /// ```yaml
 /// components:
 ///   SurfaceTag:
 ///     surface: metal_grate
+///     parts:
+///       - { part: 1, surface: concrete }
+///       - { part: helmet, surface: metal }
 /// ```
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
 pub struct SurfaceTag {
     /// The declared surface name.
     pub surface: String,
+    /// Per-part overrides; a part without an entry reports `surface`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<PartSurface>,
+}
+
+/// One [`SurfaceTag::parts`] entry: a part key and the declared surface it reports.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+pub struct PartSurface {
+    /// An index into the entity's `compound` parts, or an assembly part name.
+    pub part: SurfacePart,
+    /// The declared surface name.
+    pub surface: String,
+}
+
+/// Which part a [`PartSurface`] names. `Index` comes first so `1` parses as an integer; a part
+/// named `"1"` must be quoted.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum SurfacePart {
+    /// A part of the entity's own `compound` collider.
+    Index(u32),
+    /// A part of a `kind: assembly` mesh.
+    Name(String),
+}
+
+impl SurfaceTag {
+    /// The integer-keyed entries (compound part index, surface name); string keys never reach the
+    /// physics world.
+    pub(crate) fn index_parts(&self) -> Vec<(u32, String)> {
+        self.parts
+            .iter()
+            .filter_map(|p| match &p.part {
+                SurfacePart::Index(i) => Some((*i, p.surface.clone())),
+                SurfacePart::Name(_) => None,
+            })
+            .collect()
+    }
 }
 
 impl SemanticValidate for SurfaceTag {
-    /// Rejects an empty name (`L1691`, pointer `/surface`). A wrong *shape* is the schema's job.
+    /// Rejects an empty name (`L1691`, pointer `/surface`), an empty part surface (`L1691`,
+    /// `/parts/<j>/surface`) and an empty or repeated part key (`L1694`, `/parts/<j>/part`). A wrong
+    /// *shape* is the schema's job.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
-        match value.get("surface").and_then(Value::as_str) {
-            Some("") => vec![
+        let mut found = Vec::new();
+        if value.get("surface").and_then(Value::as_str) == Some("") {
+            found.push(
                 Diagnostic::new(code::SURFACES_INVALID, "`SurfaceTag` `surface` is empty")
                     .with_path("/surface")
                     .with_help("name a surface `physics.surfaces` declares"),
-            ],
-            _ => Vec::new(),
+            );
         }
+        let Some(parts) = value.get("parts").and_then(Value::as_array) else {
+            return found;
+        };
+        for (j, entry) in parts.iter().enumerate() {
+            if entry.get("surface").and_then(Value::as_str) == Some("") {
+                found.push(
+                    Diagnostic::new(
+                        code::SURFACES_INVALID,
+                        "`SurfaceTag` part `surface` is empty",
+                    )
+                    .with_path(format!("/parts/{j}/surface"))
+                    .with_help("name a surface `physics.surfaces` declares"),
+                );
+            }
+            let Some(key) = entry.get("part") else {
+                continue;
+            };
+            if key.as_str() == Some("") {
+                found.push(
+                    Diagnostic::new(code::SURFACE_PART_INVALID, "`SurfaceTag` part key is empty")
+                        .with_path(format!("/parts/{j}/part"))
+                        .with_help("use a compound part index or an assembly part name"),
+                );
+            } else if parts[..j]
+                .iter()
+                .any(|earlier| earlier.get("part") == Some(key))
+            {
+                found.push(
+                    Diagnostic::new(
+                        code::SURFACE_PART_INVALID,
+                        format!("`SurfaceTag` part key {key} appears twice"),
+                    )
+                    .with_path(format!("/parts/{j}/part"))
+                    .with_help("give each part one entry"),
+                );
+            }
+        }
+        found
     }
 }
 
@@ -180,6 +266,41 @@ mod tests {
         assert_eq!(found[0].path.as_deref(), Some("/surface"));
         assert!(SurfaceTag::validate_semantics(&json!({ "surface": "dirt" })).is_empty());
         assert!(SurfaceTag::validate_semantics(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn part_entries_validate_their_surface_and_key() {
+        let tag = json!({ "surface": "a", "parts": [
+            { "part": 1, "surface": "" },
+            { "part": "", "surface": "b" },
+            { "part": 1, "surface": "b" },
+            { "part": "helmet", "surface": "b" },
+        ] });
+        let found = SurfaceTag::validate_semantics(&tag);
+        let at: Vec<_> = found
+            .iter()
+            .map(|d| (d.code, d.path.as_deref().unwrap()))
+            .collect();
+        assert_eq!(
+            at,
+            [
+                (code::SURFACES_INVALID, "/parts/0/surface"),
+                (code::SURFACE_PART_INVALID, "/parts/1/part"),
+                (code::SURFACE_PART_INVALID, "/parts/2/part"),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_integer_key_parses_as_an_index_and_a_quoted_one_as_a_name() {
+        let tag: SurfaceTag = serde_json::from_value(json!({ "surface": "a", "parts": [
+            { "part": 1, "surface": "b" }, { "part": "1", "surface": "c" },
+        ] }))
+        .unwrap();
+        assert_eq!(tag.parts[0].part, SurfacePart::Index(1));
+        assert_eq!(tag.parts[1].part, SurfacePart::Name("1".into()));
+        let bare = serde_json::to_value(SurfaceTag::default()).unwrap();
+        assert!(bare.get("parts").is_none());
     }
 
     #[test]

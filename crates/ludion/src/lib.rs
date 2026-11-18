@@ -209,7 +209,7 @@ pub(crate) struct RunArgs {
     /// With `--trace`, a JSON input script (the `ludion sim-hash --script` format) to drive the run.
     #[arg(long, value_name = "FILE", requires = "trace")]
     script: Option<PathBuf>,
-    /// With `--trace`, the comma-separated channels to print: `motor`, `sensors`, `ai`, `ai_states`.
+    /// With `--trace`, the comma-separated channels to print: `motor`, `sensors`, `ai`, `ai_states`, `perception`.
     /// Default: every channel.
     #[arg(long, value_delimiter = ',', requires = "trace")]
     channels: Vec<ludion_engine::TraceChannel>,

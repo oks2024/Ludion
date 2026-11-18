@@ -175,14 +175,18 @@ pub(crate) fn bare_driver(
     world.insert_resource(crate::FontLibrary::load(ludion_assets::AssetRoot::content(
         project_root,
     )));
-    SimDriver::new(
+    let mut driver = SimDriver::new(
         world,
         assemble_schedule(scene.physics.as_ref(), &[]),
         SimConfig {
             seed: scene.seed.unwrap_or(0),
             ..SimConfig::default()
         },
-    )
+    );
+    // Primed as the engine's load does, so a tick-0 extract can already cast through the statics.
+    let (tick_rate, frame) = (driver.tick_rate(), driver.frame());
+    prime(driver.world_mut(), scene.physics.as_ref(), tick_rate, frame);
+    driver
 }
 
 /// The physics triple's `engine.describe` entries — `physics_write`, `physics_step`,

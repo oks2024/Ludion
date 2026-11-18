@@ -42,7 +42,7 @@ white — an empty `GroundMarker: {}` draws something rather than nothing, the s
   `fill` (default 0) is the fraction of `outer_radius` filled from the apex — write it per frame as
   suspicion rises. `half_angle_deg` and `fill` are never scaled by `Transform.scale.x`; the radii and
   `grid_spacing` are. Line widths and opacities default to the original look and are
-  tuned by `style` (below). The wedge is not clipped by walls (the line-of-sight clip is W2).
+  tuned by `style` (below). A wedge is clipped by walls only with a `GroundMarkerClip` (below).
 - **The marker's lift off the ground is a fixed engine constant, not an authored field** — no scene
   picks an offset, so a marker lying flush on a floor never z-fights the geometry it marks.
 - **Draw order is fixed: after opaque meshes, before sprites and text.** A marker sits on the ground
@@ -86,6 +86,41 @@ interior from the centre at `style.fill_alpha`. `radius` and `thickness` scale w
 
 `flicker` in `[0, 1]` drops that fraction of the marker's pixels, re-rolled every sim tick. The seed is
 the entity and the sim tick, so a replay shows the same pattern; it is render-only and never hashed.
+
+## Line-of-sight clip
+
+A `GroundMarkerClip` beside a `disc`, `ring` or `wedge` clips the marker by the walls its apex can see:
+
+```yaml
+GroundMarker: { shape: { type: wedge, half_angle_deg: 40.0, outer_radius: 9.0 } }
+GroundMarkerClip: { bins: 128, layers: [sight_blocker], partial_layers: [low_cover] }
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `height` | 1.6 | Ray height above the entity origin, world units. |
+| `bins` | 96 | Rays across the arc (the full circle for a disc or ring), 8 to 512. |
+| `layers` | every layer | Layers whose colliders clip the marker. |
+| `partial_layers` | none | Layers that dim what lies behind them instead of clipping. |
+| `partial_alpha` | 0.35 | Coverage multiplier behind a partial hit, `[0, 1]`. |
+| `dynamic` | false | Also cast against dynamic colliders, every extract. |
+
+- **Extract casts the profile** at render time and the renderer clips the fill radially, interpolating
+  between bins. It is derived and render-only: never hashed, snapshotted or recorded, so a replay and
+  a restored run draw the same picture. `ludion render` needs no `--frames`: the cast sees the scene's
+  static colliders at tick 0.
+- **Static-only is cached.** With `dynamic: false` the profile is held until the marker's pose, shape,
+  spec or any static collider changes (an exact key, not a tolerance). `dynamic: true` recasts every
+  extract (`bins` rays, twice with `partial_layers`), so use it for the few markers that must see movers.
+- **The marker's own root collider never clips it** (the cast skips the hierarchy root).
+- **One cast, shared with sight.** `visibility_profile(&physics, &ProfileQuery)` is the same batched
+  `first_hits` call; `ground_marker_profile(world, id)` returns what the renderer would draw, uncached.
+  Sight (`ludion docs perception`) builds its filters the same way (`include_set` of the layer names) but
+  does not read profiles.
+- **Flat ground only:** the profile is a range per bearing in the marker's XZ plane, not a projection
+  onto stairs or slopes.
+- A segment has no apex: `L2342`, drawn unclipped. Bad `bins`, `height` or `partial_alpha`, an undeclared
+  layer, or a clip with no `GroundMarker`: `L2342`. A clip in a world with no physics: `L2343`.
 
 ## Gotchas
 

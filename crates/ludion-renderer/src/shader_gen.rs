@@ -2062,6 +2062,10 @@ pub const DEBUG_DEPTH_BINDING: u32 = 0;
 pub const LIGHTS_GROUP: u32 = 1;
 pub const LIGHTS_BINDING: u32 = 0;
 
+/// `profiles` — `@group(1) @binding(0)`, in `ground_marker.wgsl`.
+pub const PROFILES_GROUP: u32 = 1;
+pub const PROFILES_BINDING: u32 = 0;
+
 /// `proj_map` — `@group(1) @binding(0)`, in `projector.wgsl`.
 pub const PROJ_MAP_GROUP: u32 = 1;
 pub const PROJ_MAP_BINDING: u32 = 0;
@@ -3348,6 +3352,23 @@ pub fn create_pdbg_normal_pdbg_depth_pdbg_probe_list_probe_mask_bgl(
                 count: None,
             },
         ],
+    })
+}
+
+/// Bind group layout `profiles` (@group 1), from `ground_marker.wgsl`.
+pub fn create_profiles_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("profiles"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: PROFILES_BINDING,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(4),
+            },
+            count: None,
+        }],
     })
 }
 
@@ -4684,6 +4705,7 @@ pub const GROUND_MARKER_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (8, wgpu::VertexFormat::Float32x4),
     (9, wgpu::VertexFormat::Float32x4),
     (10, wgpu::VertexFormat::Float32x4),
+    (11, wgpu::VertexFormat::Float32x4),
 ];
 
 /// `mesh.wgsl`'s `vs_main` `@location` inputs, in location order.
@@ -4830,6 +4852,9 @@ pub const UI_RECT_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (0, wgpu::VertexFormat::Float32x4),
     (1, wgpu::VertexFormat::Float32x4),
     (2, wgpu::VertexFormat::Float32x4),
+    (3, wgpu::VertexFormat::Float32x4),
+    (4, wgpu::VertexFormat::Float32x4),
+    (5, wgpu::VertexFormat::Float32x4),
 ];
 
 /// `ui_text.wgsl`'s `vs_main` `@location` inputs, in location order.
@@ -4838,6 +4863,9 @@ pub const UI_TEXT_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (1, wgpu::VertexFormat::Float32x2),
     (2, wgpu::VertexFormat::Float32x4),
     (3, wgpu::VertexFormat::Float32),
+    (4, wgpu::VertexFormat::Float32x4),
+    (5, wgpu::VertexFormat::Float32x4),
+    (6, wgpu::VertexFormat::Float32x4),
 ];
 
 // --- Compute workgroup sizes (@workgroup_size per compute entry point) ---------------------------

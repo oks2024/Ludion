@@ -1548,3 +1548,249 @@ fn voice_logs_are_reproducible() {
     }
     assert_eq!(run("repro-a"), run("repro-b"));
 }
+
+// --- Ducking: DuckRule, duck_start / duck_end ---
+
+/// `10^(-9/20)`, the default rule's depth.
+const DUCK_9: f32 = 0.354_813_4;
+
+fn duck_engine(name: &str) -> Engine {
+    let mut engine = Engine::builder()
+        .project_root(voice_root(name))
+        .audio_duck(ludion_engine::DuckRule::default())
+        .build()
+        .expect("engine builds");
+    engine.load_inline_scene(VOICE_SCENE).expect("scene loads");
+    engine
+}
+
+/// Every `Duck` in the log: frame, bus, gain, fade.
+fn duck_messages(engine: &Engine) -> Vec<(u64, Bus, f32, u32)> {
+    engine
+        .audio_log()
+        .iter()
+        .filter_map(|entry| match entry.message {
+            AudioMessage::Duck {
+                bus,
+                gain,
+                fade_frames,
+            } => Some((entry.frame.as_u64(), bus, gain, fade_frames)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn push_on(engine: &mut Engine, category: AudioCategory, sound: &str) {
+    queue(engine).push(AudioEvent {
+        category,
+        ..AudioEvent::new(sound, 1.0)
+    });
+}
+
+fn step_n(engine: &mut Engine, ticks: u32) {
+    for _ in 0..ticks {
+        engine.advance_live();
+    }
+}
+
+fn near_gain(actual: f32, expected: f32) -> bool {
+    (actual - expected).abs() < 1e-5
+}
+
+/// A 30-tick voice one-shot ducks Music and Ambient at its frame (attack 6) and releases at its end
+/// (release 30), nothing else.
+#[test]
+fn a_voice_one_shot_ducks_then_releases_at_its_end() {
+    let mut engine = duck_engine("duck-oneshot");
+    push_on(&mut engine, AudioCategory::Voice, "short.wav");
+    step_n(&mut engine, 40);
+    let ducks = duck_messages(&engine);
+    assert_eq!(ducks.len(), 4, "{ducks:?}");
+    assert_eq!((ducks[0].0, ducks[0].1, ducks[0].3), (0, Bus::Ambient, 6));
+    assert_eq!((ducks[1].0, ducks[1].1, ducks[1].3), (0, Bus::Music, 6));
+    assert!(near_gain(ducks[0].2, DUCK_9) && near_gain(ducks[1].2, DUCK_9));
+    assert_eq!(
+        (ducks[2].0, ducks[2].1, ducks[2].2, ducks[2].3),
+        (30, Bus::Ambient, 1.0, 30)
+    );
+    assert_eq!(
+        (ducks[3].0, ducks[3].1, ducks[3].2, ducks[3].3),
+        (30, Bus::Music, 1.0, 30)
+    );
+}
+
+/// Two overlapping voice one-shots give one down and one up, at the later end.
+#[test]
+fn overlapping_voice_one_shots_duck_once() {
+    let mut engine = duck_engine("duck-overlap");
+    push_on(&mut engine, AudioCategory::Voice, "short.wav");
+    step_n(&mut engine, 10);
+    push_on(&mut engine, AudioCategory::Voice, "short.wav");
+    step_n(&mut engine, 50);
+    let ducks = duck_messages(&engine);
+    let frames: Vec<u64> = ducks.iter().map(|duck| duck.0).collect();
+    assert_eq!(frames, [0, 0, 40, 40], "{ducks:?}");
+    assert!(ducks[..2].iter().all(|duck| near_gain(duck.2, DUCK_9)));
+    assert!(ducks[2..].iter().all(|duck| duck.2 == 1.0));
+}
+
+/// A one-shot on another bus ducks nothing.
+#[test]
+fn an_sfx_one_shot_ducks_nothing() {
+    let mut engine = duck_engine("duck-sfx");
+    push_on(&mut engine, AudioCategory::Sfx, "short.wav");
+    step_n(&mut engine, 40);
+    assert!(duck_messages(&engine).is_empty());
+}
+
+/// An attached voice ducks from its start; `voice_stop` releases at that frame.
+#[test]
+fn an_attached_voice_ducks_until_it_stops() {
+    let mut engine = duck_engine("duck-attached");
+    let id = play_voice(&mut engine, GUARD, "long.wav");
+    step_n(&mut engine, 5);
+    queue(&mut engine).voice_stop(id, 6);
+    step_n(&mut engine, 3);
+    let ducks = duck_messages(&engine);
+    let frames: Vec<u64> = ducks.iter().map(|duck| duck.0).collect();
+    assert_eq!(frames, [0, 0, 5, 5], "{ducks:?}");
+    assert!(ducks[..2].iter().all(|duck| near_gain(duck.2, DUCK_9)));
+    assert!(ducks[2..].iter().all(|duck| duck.2 == 1.0 && duck.3 == 30));
+}
+
+/// Despawning the entity releases the duck too.
+#[test]
+fn despawning_an_attached_voice_releases_the_duck() {
+    let mut engine = duck_engine("duck-despawn");
+    play_voice(&mut engine, GUARD, "long.wav");
+    step_n(&mut engine, 3);
+    engine.world_mut().despawn(GUARD).expect("alive");
+    step_n(&mut engine, 3);
+    let frames: Vec<u64> = duck_messages(&engine).iter().map(|duck| duck.0).collect();
+    assert_eq!(frames, [0, 0, 3, 3]);
+}
+
+/// A voice out of earshot does not duck, and does once it walks in.
+#[test]
+fn an_inaudible_attached_voice_does_not_duck_until_it_is_heard() {
+    let mut engine = duck_engine("duck-earshot");
+    move_guard_to(&mut engine, 50.0);
+    play_voice(&mut engine, GUARD, "long.wav");
+    step_n(&mut engine, 5);
+    assert!(duck_messages(&engine).is_empty());
+    move_guard_to(&mut engine, 2.0);
+    step_n(&mut engine, 2);
+    let frames: Vec<u64> = duck_messages(&engine).iter().map(|duck| duck.0).collect();
+    assert_eq!(frames, [5, 5]);
+}
+
+/// A manual duck multiplies with a live rule; three deep clamp at the -24 dB floor; ending them
+/// releases in one step with the longest release.
+#[test]
+fn manual_ducks_multiply_with_a_rule_and_clamp_at_the_floor() {
+    let mut engine = duck_engine("duck-manual");
+    push_on(&mut engine, AudioCategory::Voice, "long.wav");
+    step_n(&mut engine, 2);
+    queue(&mut engine).duck_start("briefing", &[Bus::Music], -6.0, 10);
+    step_n(&mut engine, 2);
+    let music: Vec<(u64, f32, u32)> = duck_messages(&engine)
+        .into_iter()
+        .filter(|duck| duck.1 == Bus::Music)
+        .map(|duck| (duck.0, duck.2, duck.3))
+        .collect();
+    let both = DUCK_9 * 0.501_187_2;
+    assert_eq!(music.len(), 2, "{music:?}");
+    assert!(near_gain(music[1].1, both), "{music:?}");
+    assert_eq!((music[1].0, music[1].2), (2, 10));
+
+    queue(&mut engine).duck_start("a", &[Bus::Music], -12.0, 4);
+    queue(&mut engine).duck_start("b", &[Bus::Music], -12.0, 4);
+    step_n(&mut engine, 2);
+    let last = *duck_messages(&engine)
+        .iter()
+        .rfind(|duck| duck.1 == Bus::Music)
+        .expect("a music duck");
+    assert!(near_gain(last.2, 0.063_095_73), "floor: {last:?}");
+
+    queue(&mut engine).duck_end("a", 7);
+    queue(&mut engine).duck_end("b", 9);
+    queue(&mut engine).duck_end("briefing", 5);
+    queue(&mut engine).duck_end("unknown", 99);
+    step_n(&mut engine, 2);
+    let last = *duck_messages(&engine)
+        .iter()
+        .rfind(|duck| duck.1 == Bus::Music)
+        .expect("a music duck");
+    assert!(near_gain(last.2, DUCK_9), "only the rule remains: {last:?}");
+    assert_eq!(last.3, 9, "the longest release");
+}
+
+/// A manual duck works with no rule at all.
+#[test]
+fn a_manual_duck_needs_no_rule() {
+    let mut engine = engine();
+    queue(&mut engine).duck_start("cutscene", &[Bus::Master], -12.0, 3);
+    step_n(&mut engine, 1);
+    queue(&mut engine).duck_end("cutscene", 8);
+    step_n(&mut engine, 1);
+    let ducks = duck_messages(&engine);
+    assert_eq!(ducks.len(), 2, "{ducks:?}");
+    assert_eq!((ducks[0].1, ducks[0].3), (Bus::Master, 3));
+    assert_eq!((ducks[1].1, ducks[1].2, ducks[1].3), (Bus::Master, 1.0, 8));
+}
+
+/// A scene load mid-duck sends no further `Duck`; the next voice ducks afresh.
+#[test]
+fn a_scene_load_mid_duck_resets_without_a_message() {
+    let mut engine = duck_engine("duck-load");
+    push_on(&mut engine, AudioCategory::Voice, "long.wav");
+    step_n(&mut engine, 3);
+    assert_eq!(duck_messages(&engine).len(), 2);
+    engine.load_inline_scene(VOICE_SCENE).expect("scene loads");
+    step_n(&mut engine, 5);
+    assert!(duck_messages(&engine).is_empty());
+    push_on(&mut engine, AudioCategory::Voice, "long.wav");
+    step_n(&mut engine, 2);
+    assert_eq!(duck_messages(&engine).len(), 2);
+}
+
+/// A game with no rule logs no `Duck` for a voice one-shot: the stream is the one-shot alone.
+#[test]
+fn a_game_without_a_rule_never_ducks() {
+    let mut engine = voice_engine("duck-none", AudioPan::Centred);
+    push_on(&mut engine, AudioCategory::Voice, "short.wav");
+    step_n(&mut engine, 40);
+    let log: Vec<_> = engine.audio_log().iter().collect();
+    assert!(matches!(
+        log.as_slice(),
+        [AudioLogEntry {
+            message: AudioMessage::OneShot(_),
+            ..
+        }]
+    ));
+}
+
+/// Two identical runs produce identical logs, and a rule never moves the `WorldHash`.
+#[test]
+fn ducking_is_reproducible_and_never_hashed() {
+    fn script(mut engine: Engine) -> (Vec<AudioLogEntry>, Vec<u64>) {
+        let mut hashes = Vec::new();
+        for tick in 0..50 {
+            if tick == 3 {
+                push_on(&mut engine, AudioCategory::Voice, "short.wav");
+                queue(&mut engine).duck_start("k", &[Bus::Sfx], -6.0, 2);
+            }
+            if tick == 20 {
+                queue(&mut engine).duck_end("k", 5);
+            }
+            engine.advance_live();
+            hashes.push(engine.world_hash().unwrap().as_u64());
+        }
+        (engine.audio_log().iter().cloned().collect(), hashes)
+    }
+    let (log_a, hashes_a) = script(duck_engine("duck-repro-a"));
+    let (log_b, _) = script(duck_engine("duck-repro-b"));
+    assert_eq!(log_a, log_b);
+    let (_, hashes_plain) = script(voice_engine("duck-repro-c", AudioPan::Centred));
+    assert_eq!(hashes_a, hashes_plain);
+}

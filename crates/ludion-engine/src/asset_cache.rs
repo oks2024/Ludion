@@ -294,6 +294,8 @@ pub(crate) struct AssetCache {
     /// Part rests parsed from a prefab's held text, by the text's content hash: an instance poses
     /// against the text it was expanded from, which may differ from the file.
     prefab_rests: BTreeMap<u64, Arc<PartRests>>,
+    /// The clipped ground markers' visibility profiles; derived, never an asset on disk.
+    clip_cache: crate::ground_marker_clip::ClipCache,
     /// Loads that failed, by kind and the raw `rel` they were asked for, so the live frame stream does
     /// not re-read the disk every frame. A short-lived memo, never a verdict: see the module docs for
     /// what clears it.
@@ -359,6 +361,7 @@ impl AssetCache {
             characters: BTreeMap::new(),
             prefab_clips: BTreeMap::new(),
             prefab_rests: BTreeMap::new(),
+            clip_cache: Default::default(),
             failures: BTreeMap::new(),
             failure_passes: 0,
             atlases: BTreeMap::new(),
@@ -715,6 +718,17 @@ impl AssetCache {
             observer.reused(AssetKind::Character.load_kind(), &key);
         }
         Ok(self.characters.get(&key).expect("just inserted on a miss"))
+    }
+
+    /// The memo of ground-marker visibility profiles.
+    pub(crate) fn clip_cache_mut(&mut self) -> &mut crate::ground_marker_clip::ClipCache {
+        &mut self.clip_cache
+    }
+
+    #[cfg(test)]
+    /// Rays the ground-marker clip has cast through this cache.
+    pub(crate) fn clip_rays_cast(&self) -> u64 {
+        self.clip_cache.rays_cast()
     }
 
     /// The part rests of prefab source `text`, parsed once per distinct text; `None` when it does

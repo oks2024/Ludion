@@ -32,7 +32,6 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::paths::sibling_refusal;
 use ludion_core::suggest;
-use serde_json::Value;
 
 use crate::animation::{
     AnimationDocument, AnimationEvent, emit_events, parse_events, validate_event_list,
@@ -40,6 +39,7 @@ use crate::animation::{
 use crate::blend_space::{MAX_BLEND_POINTS, triangulate};
 use crate::envelope;
 use crate::fields::parse_number;
+use crate::rig_mask::{RigMask, emit_masks, parse_masks, validate_mask_names};
 use crate::scalar::{format_float, scalar_string};
 use crate::yaml::{self, MapEntry, NodeValue, pointer_token};
 
@@ -48,7 +48,6 @@ pub const CHARACTER_FORMAT_VERSION: u64 = 1;
 
 const CHARACTER_KEYS: [&str; 7] = ["format", "kind", "name", "mesh", "clips", "masks", "blends"];
 const CLIP_KEYS: [&str; 3] = ["clip", "speed", "events"];
-const MASK_KEYS: [&str; 3] = ["joints", "descendants", "weights"];
 const BLEND_KEYS: [&str; 2] = ["points", "sync"];
 const BLEND_POINT_KEYS: [&str; 2] = ["clip", "at"];
 
@@ -65,20 +64,6 @@ pub struct CharacterClip {
     /// Events for a clip that has none of its own, time-strictly-ascending as authored. Empty means
     /// absent.
     pub events: Vec<AnimationEvent>,
-}
-
-/// A named bone mask: which joints an `AnimationLayers` layer touches and how strongly
-/// (`Plan/animation-layers.md` decision 1).
-#[derive(Clone, Debug, PartialEq)]
-pub struct CharacterMask {
-    /// The short name a layer's `mask` selects by.
-    pub name: String,
-    /// The listed joints' names, in authored order.
-    pub joints: Vec<String>,
-    /// Whether an unlisted joint inherits its nearest listed ancestor's weight.
-    pub descendants: bool,
-    /// One weight in `[0, 1]` per listed joint; empty means every listed joint weighs 1.0.
-    pub weights: Vec<f64>,
 }
 
 /// Where a blend point sits: a number for a 1D blend, `[x, z]` for a 2D one.
@@ -121,7 +106,7 @@ pub struct CharacterDocument {
     /// Clip bindings, sorted by short name (the canonical order `emit` writes).
     pub clips: Vec<CharacterClip>,
     /// Bone masks, sorted by name (the canonical order `emit` writes).
-    pub masks: Vec<CharacterMask>,
+    pub masks: Vec<RigMask>,
     /// Blend spaces, sorted by name (the canonical order `emit` writes).
     pub blends: Vec<CharacterBlend>,
 }
@@ -215,7 +200,8 @@ pub(crate) fn parse(source: &str) -> Result<CharacterDocument, Vec<Diagnostic>> 
                 doc.clips = parse_clips(entry, &mut diagnostics);
             }
             "masks" => {
-                doc.masks = parse_masks(entry, &mut diagnostics);
+                doc.masks =
+                    parse_masks(entry, code::CHARACTER_DOCUMENT_STRUCTURE, &mut diagnostics);
             }
             "blends" => {
                 doc.blends = parse_blends(entry, &mut diagnostics);
@@ -384,146 +370,6 @@ fn parse_clip_entry(
         clip: clip?,
         speed,
         events,
-    })
-}
-
-/// Parses `masks`: a mapping of mask name to mask entry, returned sorted by name.
-fn parse_masks(entry: &MapEntry, diagnostics: &mut Vec<Diagnostic>) -> Vec<CharacterMask> {
-    let NodeValue::Mapping(entries) = &entry.node.value else {
-        diagnostics.push(
-            Diagnostic::new(
-                code::CHARACTER_DOCUMENT_STRUCTURE,
-                format!(
-                    "`masks` must be a mapping of mask name to mask entry, found {} (line {})",
-                    entry.node.value.type_phrase(),
-                    entry.node.line
-                ),
-            )
-            .with_path("/masks")
-            .with_help(
-                "write one entry per mask:\n  masks:\n    upper_body:\n      joints:\n        - torso\n      descendants: true",
-            ),
-        );
-        return Vec::new();
-    };
-    let mut out = Vec::with_capacity(entries.len());
-    for sub in entries {
-        let pointer = format!("/masks/{}", pointer_token(&sub.key));
-        if let Some(mask) = parse_mask_entry(sub, &pointer, diagnostics) {
-            out.push(mask);
-        }
-    }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
-}
-
-/// Parses one mask entry: a mapping with a required non-empty `joints` and optional
-/// `descendants`/`weights`.
-fn parse_mask_entry(
-    sub: &MapEntry,
-    pointer: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Option<CharacterMask> {
-    let NodeValue::Mapping(fields) = &sub.node.value else {
-        diagnostics.push(
-            Diagnostic::new(
-                code::CHARACTER_DOCUMENT_STRUCTURE,
-                format!(
-                    "a mask entry must be a mapping with `joints`, found {} (line {})",
-                    sub.node.value.type_phrase(),
-                    sub.node.line
-                ),
-            )
-            .with_path(pointer.to_string())
-            .with_help(
-                "write the entry under the mask's name:\n    upper_body:\n      joints:\n        - torso",
-            ),
-        );
-        return None;
-    };
-    let mut joints: Option<Vec<String>> = None;
-    let mut descendants = false;
-    let mut weights: Option<Vec<f64>> = None;
-    let mut failed = false;
-    for field in fields {
-        let field_pointer = format!("{pointer}/{}", field.key);
-        match field.key.as_str() {
-            "joints" => {
-                let before = diagnostics.len();
-                joints = parse_joint_names(&field.node, &field_pointer, diagnostics);
-                failed |= diagnostics.len() != before;
-            }
-            "descendants" => match &field.node.value {
-                NodeValue::Scalar(Value::Bool(value)) => descendants = *value,
-                other => {
-                    failed = true;
-                    diagnostics.push(
-                        Diagnostic::new(
-                            code::CHARACTER_DOCUMENT_STRUCTURE,
-                            format!(
-                                "`descendants` must be true or false, found {} (line {})",
-                                other.type_phrase(),
-                                field.node.line
-                            ),
-                        )
-                        .with_path(field_pointer)
-                        .with_help("write `descendants: true` or remove the key"),
-                    );
-                }
-            },
-            "weights" => {
-                let before = diagnostics.len();
-                weights = parse_mask_weights(&field.node, &field_pointer, diagnostics);
-                failed |= diagnostics.len() != before;
-            }
-            unknown => {
-                failed = true;
-                diagnostics.push(envelope::unknown_key(
-                    unknown,
-                    field,
-                    pointer,
-                    "a mask entry",
-                    MASK_KEYS,
-                    code::CHARACTER_DOCUMENT_STRUCTURE,
-                ));
-            }
-        }
-    }
-    let Some(joints) = joints else {
-        if !failed {
-            diagnostics.push(
-                Diagnostic::new(
-                    code::CHARACTER_DOCUMENT_STRUCTURE,
-                    "a mask entry is missing its required `joints`",
-                )
-                .with_path(pointer.to_string())
-                .with_help("add `joints`: a block list of joint names, one `- name` per line"),
-            );
-        }
-        return None;
-    };
-    if let Some(weights) = &weights
-        && weights.len() != joints.len()
-    {
-        diagnostics.push(
-            Diagnostic::new(
-                code::CHARACTER_DOCUMENT_STRUCTURE,
-                format!(
-                    "`weights` has {} entries but `joints` has {}",
-                    weights.len(),
-                    joints.len()
-                ),
-            )
-            .with_path(format!("{pointer}/weights"))
-            .with_help("give one weight per listed joint, in the same order"),
-        );
-        return None;
-    }
-    Some(CharacterMask {
-        name: sub.key.clone(),
-        joints,
-        descendants,
-        weights: weights.unwrap_or_default(),
     })
 }
 
@@ -824,138 +670,6 @@ fn parse_blend_at(
     }
 }
 
-/// Parses a non-empty sequence of unique joint-name strings.
-fn parse_joint_names(
-    node: &yaml::Node,
-    pointer: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Option<Vec<String>> {
-    let NodeValue::Sequence(items) = &node.value else {
-        diagnostics.push(
-            Diagnostic::new(
-                code::CHARACTER_DOCUMENT_STRUCTURE,
-                format!(
-                    "`joints` must be a sequence of joint names, found {} (line {})",
-                    node.value.type_phrase(),
-                    node.line
-                ),
-            )
-            .with_path(pointer.to_string())
-            .with_help("write one `- joint` line per joint under `joints:`"),
-        );
-        return None;
-    };
-    if items.is_empty() {
-        diagnostics.push(
-            Diagnostic::new(
-                code::CHARACTER_DOCUMENT_STRUCTURE,
-                "`joints` is declared but has zero entries",
-            )
-            .with_path(pointer.to_string())
-            .with_help("list at least one joint, or remove the mask"),
-        );
-        return None;
-    }
-    let before = diagnostics.len();
-    let mut names: Vec<String> = Vec::with_capacity(items.len());
-    for (index, item) in items.iter().enumerate() {
-        let item_pointer = format!("{pointer}/{index}");
-        let Some(name) = envelope::expect_string(
-            item,
-            &item_pointer,
-            "a joint name",
-            code::CHARACTER_DOCUMENT_STRUCTURE,
-            diagnostics,
-        ) else {
-            continue;
-        };
-        if names.contains(&name) {
-            diagnostics.push(
-                Diagnostic::new(
-                    code::CHARACTER_DOCUMENT_STRUCTURE,
-                    format!("the joint `{name}` is listed twice in one mask"),
-                )
-                .with_path(item_pointer)
-                .with_help("list each joint once"),
-            );
-        }
-        names.push(name);
-    }
-    (diagnostics.len() == before).then_some(names)
-}
-
-/// Parses a sequence of finite numbers in `[0, 1]`.
-fn parse_mask_weights(
-    node: &yaml::Node,
-    pointer: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Option<Vec<f64>> {
-    let NodeValue::Sequence(items) = &node.value else {
-        diagnostics.push(
-            Diagnostic::new(
-                code::CHARACTER_DOCUMENT_STRUCTURE,
-                format!(
-                    "`weights` must be a sequence of numbers, found {} (line {})",
-                    node.value.type_phrase(),
-                    node.line
-                ),
-            )
-            .with_path(pointer.to_string())
-            .with_help("write one `- 0.5` line per joint under `weights:`"),
-        );
-        return None;
-    };
-    let before = diagnostics.len();
-    let mut out = Vec::with_capacity(items.len());
-    for (index, item) in items.iter().enumerate() {
-        let item_pointer = format!("{pointer}/{index}");
-        let Some(weight) = parse_number(
-            item,
-            &item_pointer,
-            "a weight",
-            code::CHARACTER_DOCUMENT_STRUCTURE,
-            diagnostics,
-        ) else {
-            continue;
-        };
-        if !weight.is_finite() || !(0.0..=1.0).contains(&weight) {
-            diagnostics.push(
-                Diagnostic::new(
-                    code::CHARACTER_DOCUMENT_STRUCTURE,
-                    format!("a mask weight must be finite and within [0, 1], found {weight}"),
-                )
-                .with_path(item_pointer)
-                .with_help("0 leaves the joint on the base pose, 1 takes the layer fully"),
-            );
-        }
-        out.push(weight);
-    }
-    (diagnostics.len() == before).then_some(out)
-}
-
-/// Resolves a mask to one weight per skin joint, in skin order. `joints` is `(name, parent index)`
-/// per joint, parent-first. A listed joint takes its weight (1.0 without `weights`); with
-/// `descendants`, an unlisted joint inherits its nearest listed ancestor's weight; every other joint
-/// is 0.
-#[must_use]
-pub(crate) fn resolve_mask(mask: &CharacterMask, joints: &[(&str, Option<u32>)]) -> Vec<f32> {
-    let mut resolved: Vec<Option<f32>> = Vec::with_capacity(joints.len());
-    for (name, parent) in joints {
-        let listed = mask
-            .joints
-            .iter()
-            .position(|joint| joint == name)
-            .map(|i| mask.weights.get(i).map_or(1.0, |w| *w as f32));
-        let inherited = if mask.descendants {
-            parent.and_then(|p| resolved.get(p as usize).copied().flatten())
-        } else {
-            None
-        };
-        resolved.push(listed.or(inherited));
-    }
-    resolved.into_iter().map(|w| w.unwrap_or(0.0)).collect()
-}
-
 // --- Validation (`L1200`, `L1198`) --------------------------------------------------------------
 
 /// Validates data-consistency invariants of an already-parsed [`CharacterDocument`] (`L1200`): a
@@ -981,15 +695,11 @@ pub(crate) fn validate(doc: &CharacterDocument) -> Vec<Diagnostic> {
             .with_help("point `mesh` at the skinned mesh document, relative to this file"),
         );
     }
-    for mask in &doc.masks {
-        if mask.name.trim().is_empty() {
-            diagnostics.push(
-                Diagnostic::new(code::CHARACTER_DATA_CONSISTENCY, "a mask has an empty name")
-                    .with_path(format!("/masks/{}", pointer_token(&mask.name)))
-                    .with_help("name the mask the way a layer selects it — `upper_body`"),
-            );
-        }
-    }
+    validate_mask_names(
+        &doc.masks,
+        code::CHARACTER_DATA_CONSISTENCY,
+        &mut diagnostics,
+    );
     validate_blends(doc, &mut diagnostics);
     for clip in &doc.clips {
         let pointer = format!("/clips/{}", pointer_token(&clip.name));
@@ -1351,32 +1061,7 @@ pub(crate) fn emit(doc: &CharacterDocument) -> String {
             emit_events(&mut out, &clip.events, "    ");
         }
     }
-    if !doc.masks.is_empty() {
-        out.push_str("masks:\n");
-        let mut masks: Vec<&CharacterMask> = doc.masks.iter().collect();
-        masks.sort_by(|a, b| a.name.cmp(&b.name));
-        for mask in masks {
-            out.push_str("  ");
-            out.push_str(&scalar_string(&mask.name));
-            out.push_str(":\n    joints:\n");
-            for joint in &mask.joints {
-                out.push_str("      - ");
-                out.push_str(&scalar_string(joint));
-                out.push('\n');
-            }
-            if mask.descendants {
-                out.push_str("    descendants: true\n");
-            }
-            if !mask.weights.is_empty() {
-                out.push_str("    weights:\n");
-                for weight in &mask.weights {
-                    out.push_str("      - ");
-                    out.push_str(&format_float(*weight));
-                    out.push('\n');
-                }
-            }
-        }
-    }
+    emit_masks(&mut out, &doc.masks);
     if !doc.blends.is_empty() {
         out.push_str("blends:\n");
         let mut blends: Vec<&CharacterBlend> = doc.blends.iter().collect();

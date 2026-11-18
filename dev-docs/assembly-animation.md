@@ -16,9 +16,10 @@ unchanged is `crate::voxel_mesh` (`ludion devdocs scene-kind-documents` for its 
 - `crates/ludion-scene/src/assembly.rs` — the `kind: assembly` family (`L1137`/`L1138`) **plus** the cross-file pure functions the caller feeds resolved documents to: `check_parts`, `part_voxel`, `parent_indices`, `assembled_grid` → `AssembledGrid { voxel, owners }`, `overlap_lint` (`L1143`). `AssemblyPartEntry::pivot_in_mesh_frame` is the mirrored-frame carrier.
 - `crates/ludion-scene/src/part.rs` — `kind: part` (`L1139`/`L1140`): a voxel grid with no palette.
 - `crates/ludion-scene/src/animation.rs` — `kind: animation` (`L1141`/`L1142`, event data `L1198`): tracks name a *target* (part or joint), a `scale` channel, `events`, `generated_from`.
+- `crates/ludion-scene/src/rig_mask.rs` — `RigMask` and its parser/emitter/`resolve_mask`, shared by `kind: character` (joints) and `kind: assembly` (parts, `masks:`); resolution walks ancestors because assembly part order is not topological.
 - `crates/ludion-scene/src/clip_eval.rs` — the pure sampler: `clip_phase`, `part_pose` (quaternion rotation via `sample_rotation`), `sample_channel` (both find the segment by binary search), `ClipSampler` (a clip resolved against a skin's joints once, rotations as quaternions; the character palette samples through it). Knows nothing of assemblies, matrices, or the engine.
 - `crates/ludion-engine/src/assembly_mesh.rs` — `load`/`load_documents`/`load_with_sources`/`mesh_assembly` → `AssemblyData`. **Read its module doc first**: it carries the two-frames offset/pivot formulas.
-- `crates/ludion-engine/src/extract.rs` — `resolve_assembly`, `animation_pose`, `elapsed_seconds`, `part_placements`, `compose_chain`.
+- `crates/ludion-engine/src/extract.rs` — `resolve_assembly`, `animation_pose`, `elapsed_seconds`, `part_placements`, `compose_chain`, and the layer block after `blended_part_pose` (`assembly_layer_poses`, `layered_part_pose`).
 - `crates/ludion-engine/src/asset_cache.rs` — the `assemblies` map and the `dependents` map, which holds every kind's source-file edges.
 - `crates/ludion-engine/src/model_sheet.rs` — `ModelSheetRequest::{clip, time, strip}`, `ClipOutcome`/`PhaseReport`, and the posed gap rasterization (module doc).
 - `crates/ludion-engine/tests/assembly_animation.rs` — the visual-only proof; `crates/ludion-engine/examples/assembly_clip.rs` — the runtime shape end to end.
@@ -62,6 +63,13 @@ and takes **one** `extract_at` — so `n` phases come out of one evaluator run a
   branch the pivot rotation is built as one `Mat4::from_rotation_translation(r, pivot − r * pivot)`
   so an identity rotation yields the *exact* identity rather than a nearly-cancelling round trip —
   otherwise a clip that animates one limb would move every other part's last bits and churn goldens.
+- **Layers compose inside `part_placements_with`.** `part_placements_layered` is the extract arm's
+  entry; the ragdoll and `model_sheet` pass no layers, so they pose the base alone. Per part,
+  `layered_part_pose` returns `None` when no layer reaches it (no track, or `weight × mask` zero) and
+  the part then takes today's exact path; the rest return applies only when there are no layers
+  either. A scene without `AnimationLayers` is byte-identical, and `blended_part_pose` is a cast
+  wrapper over an `f64` core so a layer composes over the exact blend (override and additive rules:
+  `Plan/animation-layers.md` decisions 27-29).
 - **Translation is applied in the part's rest frame** (`T · R`, folded into the same `T` as the
   offset). Reversing the order bends a translation key by that part's own rotation; an exact-matrix
   test pins it.

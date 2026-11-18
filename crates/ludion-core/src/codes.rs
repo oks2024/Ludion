@@ -1207,6 +1207,15 @@ pub mod code {
     /// `sensor: true`, so it has no volume to contain a hit point. Raised by `check-scene`.
     pub const SURFACE_OVERLAY_NO_SENSOR: DiagnosticCode = DiagnosticCode::new("L1693");
 
+    /// `L1694` — a `SurfaceTag.parts` entry whose key is empty or repeated, whose integer key is
+    /// not a part of the entity's `compound` `Collider`, or whose string key is on an entity whose
+    /// `Mesh` is not an `assembly`.
+    pub const SURFACE_PART_INVALID: DiagnosticCode = DiagnosticCode::new("L1694");
+
+    /// `L1695` — a `SurfaceTag.parts` string key names no part of the assembly `switch_to_ragdoll`
+    /// switched; every part took the root surface. A warning.
+    pub const SURFACE_PART_UNMATCHED: DiagnosticCode = DiagnosticCode::new("L1695");
+
     /// `L1510` — a `Machine`'s `parent` fn does not form a tree under `ROOT`: `ROOT` has a parent,
     /// or some state's parent chain never reaches `ROOT`. Raised by `ludion-ai`'s `register_machine`.
     pub const AI_MACHINE_HIERARCHY: DiagnosticCode = DiagnosticCode::new("L1510");
@@ -1940,6 +1949,8 @@ pub mod code {
     pub const UI_GROUP_IGNORED: DiagnosticCode = DiagnosticCode::new("L1617");
     /// `L2302` — a UI element's `group` could not be resolved; drawn ungrouped.
     pub const UI_GROUP_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L2302");
+    /// `L2303` — more than two clipping groups in a UI element's chain; the outer ones are dropped.
+    pub const UI_CLIP_NESTING: DiagnosticCode = DiagnosticCode::new("L2303");
 
     /// `L1341` — a `Static` entity holds something the static path cannot; it takes the dynamic path.
     pub const STATIC_INELIGIBLE: DiagnosticCode = DiagnosticCode::new("L1341");
@@ -2134,6 +2145,14 @@ pub mod code {
     /// `L2341` — a `GroundMarker.style` field is out of range: `outline_px`/`grid_px` not positive
     /// and finite, or an alpha or `flicker` outside `[0, 1]`. Pointer `/style/<field>`.
     pub const GROUND_MARKER_STYLE_INVALID: DiagnosticCode = DiagnosticCode::new("L2341");
+
+    /// `L2342` — a `GroundMarkerClip` field is out of range (`bins`, `height`, `partial_alpha`), names
+    /// an undeclared layer, or sits on a segment marker or an entity with no `GroundMarker`.
+    pub const GROUND_MARKER_CLIP_INVALID: DiagnosticCode = DiagnosticCode::new("L2342");
+
+    /// `L2343` — a `GroundMarkerClip` is authored but the world has no physics, so the marker is
+    /// drawn unclipped. Raised by extract.
+    pub const GROUND_MARKER_CLIP_NO_PHYSICS: DiagnosticCode = DiagnosticCode::new("L2343");
 
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
@@ -2766,6 +2785,11 @@ pub mod code {
     /// **warning**: the stem is left out and the rest of the set plays. Raised by `ludion-audio`,
     /// once per set (again if the files change).
     pub const MUSIC_STEM_MISMATCHED: DiagnosticCode = DiagnosticCode::new("L5006");
+
+    /// `L5100` — an `audio_duck` rule cannot run: a `depth_db` that is not finite or is above 0, a
+    /// `when` bus of `Master` or `Music`, or a `duck` list that is empty or names `Master` or the
+    /// `when` bus. An **error**: `build` refuses it. Raised by `EngineBuilder::build`.
+    pub const AUDIO_DUCK_RULE_INVALID: DiagnosticCode = DiagnosticCode::new("L5100");
     /// `L5130` — `dialogue::say` named a line (or a line's speaker) no `kind: dialogue` doc defines.
     pub const DIALOGUE_UNKNOWN_LINE: DiagnosticCode = DiagnosticCode::new("L5130");
     /// `L5131` — a `world`-channel line was said without a live speaker entity.
@@ -4839,7 +4863,9 @@ Note the block-style collections: the crate's strict-YAML subset rejects non-emp
 earlier design sketches wrote them that way — write one entry per line instead.
 
 `format` must be `1`; `kind` must be exactly `assembly`; `size`, `palette`, and `parts` are
-required, `name` and `clips` are optional, and no other top-level key is recognized. A part entry
+required, `name`, `clips`, `joints` and `masks` are optional, and no other top-level key is
+recognized. A `masks` entry is a mapping with a non-empty `joints` list of part names and optional
+`descendants` and `weights` (one number in [0, 1] per listed part). A part entry
 takes `name`, `file`, `place`, and the optional `parent`, `pivot`, `mirror` — nothing else; in
 particular a part entry has no palette (the assembly owns the only one) and no size (the part file
 declares its own). The JSON Pointer names the offending key or list element; unknown-key messages
@@ -4870,7 +4896,9 @@ Within the document itself, one of:
   - the hierarchy has no root (every part declares a `parent`), more than one root, or a cycle —
     exactly one part must omit `parent`, and following `parent` from any part must reach it;
   - a `pivot` component is not finite;
-  - a `place` component falls outside the assembly's own `size` on that axis.
+  - a `place` component falls outside the assembly's own `size` on that axis;
+  - a mask has an empty name, or lists a part this assembly does not have (the message suggests the
+    nearest part).
 
 Across files — reported when the assembly is checked together with its resolved part documents:
 
@@ -7149,6 +7177,31 @@ An entity carries `SurfaceOverlay` but has no `Collider` the 3D solver claims wi
 
 Fix: give the entity a 3D `Collider` with `sensor: true` shaped like the patch (a box, sphere,
 cylinder, capsule, convex or compound), or remove `SurfaceOverlay`.",
+    },
+    CodeEntry {
+        code: code::SURFACE_PART_INVALID,
+        severity: Severity::Error,
+        title: "a surface tag part entry that names no part",
+        explanation: "\
+A `SurfaceTag.parts` entry has an empty or repeated key, an integer key that is not a part of the
+entity's `compound` `Collider` (no compound, or an index past its last part), or a string key on an
+entity whose `Mesh` is not an `assembly`. Raised by `check-scene` at
+`/entities/<index>/components/SurfaceTag/parts/<j>/part`; an empty or repeated key is also a
+semantic-validation error at `/parts/<j>/part`.
+
+Fix: use an integer below the compound's part count, or an assembly part name on an `assembly`
+entity; give each key once.",
+    },
+    CodeEntry {
+        code: code::SURFACE_PART_UNMATCHED,
+        severity: Severity::Warning,
+        title: "a surface tag part name that matches no assembly part",
+        explanation: "\
+A `SurfaceTag.parts` string key names no part of the assembly `switch_to_ragdoll` switched, so no
+ragdoll part took that entry's surface; every part took the root's `surface` instead. Reported once
+per entity and key; the switch itself succeeds.
+
+Fix: correct the key to one of the assembly's part names (the help names the closest).",
     },
     CodeEntry {
         code: code::AI_MACHINE_HIERARCHY,
@@ -9823,9 +9876,11 @@ Fix: shrink the `border` or `scale`, or enlarge the rect.",
         title: "a UI group has an out-of-range number",
         explanation: "\
 A `UiGroup` `scale` (pointer `/entities/{i}/components/UiGroup/scale`) is non-finite or not above zero,
-or its `opacity` is non-finite or outside 0..1. A scene with one is refused.
+or its `opacity` is non-finite or outside 0..1, or a `clip: { rounded_rect: { corner_radius } }` radius
+(pointer `.../UiGroup/clip/rounded_rect/corner_radius`) is non-finite or negative. A scene with one is
+refused.
 
-Fix: write a positive finite `scale` and an `opacity` between 0 and 1.",
+Fix: write a positive finite `scale`, an `opacity` between 0 and 1 and a `corner_radius` of 0 or more.",
     },
     CodeEntry {
         code: code::UI_GROUP_CYCLE,
@@ -9869,6 +9924,18 @@ A UI element's `group` names a dead entity or one without `UiGroup`, or its chai
 warning at render time; `check-scene` reports a static reference to an entity without `UiGroup`.
 
 Fix: point `group` at a live entity that carries `UiGroup`, within 8 levels.",
+    },
+    CodeEntry {
+        code: code::UI_CLIP_NESTING,
+        severity: Severity::Warning,
+        title: "a UI element sits under more than two clipping groups",
+        explanation: "\
+A UI element's `group` chain holds more than two groups whose `clip` is not `none`. The renderer
+intersects at most two clips per element: the two innermost are kept and the outer ones are dropped.
+Reported once per element as a degraded warning at render time; `check-scene` reports the chain
+statically.
+
+Fix: merge clipping groups, or move the element so at most two clipping groups enclose it.",
     },
     CodeEntry {
         code: code::STATIC_INELIGIBLE,
@@ -10634,6 +10701,37 @@ field to take its default.
 
     GroundMarker:
       style: { outline_px: 2.0, flicker: 0.5 }",
+    },
+    CodeEntry {
+        code: code::GROUND_MARKER_CLIP_INVALID,
+        severity: Severity::Error,
+        title: "GroundMarkerClip is not valid",
+        explanation: "A `GroundMarkerClip` field is out of range: `bins` is outside `[8, 512]`, `height` is not
+finite, or `partial_alpha` is outside `[0, 1]` (JSON Pointer `/bins`, `/height`, `/partial_alpha`). Scene
+check also raises it for a layer name the `physics.layers` table does not declare, for a clip on a
+`segment` marker (a segment has no apex to cast from), and for a clip on an entity with no
+`GroundMarker`.
+
+Fix: give `bins` a value in `[8, 512]`, `partial_alpha` a value in `[0, 1]`, name only declared layers,
+and put the clip beside a `disc`, `ring` or `wedge` `GroundMarker`.
+
+    GroundMarkerClip:
+      bins: 128
+      layers: [sight_blocker]
+      partial_layers: [low_cover]",
+    },
+    CodeEntry {
+        code: code::GROUND_MARKER_CLIP_NO_PHYSICS,
+        severity: Severity::Warning,
+        title: "GroundMarkerClip has no physics to cast through",
+        explanation: "A `GroundMarkerClip` is authored but the world has no physics, so there is nothing to
+cast the visibility profile through. The marker is drawn unclipped.
+
+Fix: declare a `physics:` block (with the layers the clip names) in the scene, or remove the
+`GroundMarkerClip`.
+
+    physics:
+      layers: [sight_blocker, low_cover]",
     },
     CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
@@ -12870,6 +12968,25 @@ Fix: export all stems of a set from one session at one sample rate and one lengt
 ones with silence), and keep a set to 8 stems or fewer.",
     },
     CodeEntry {
+        code: code::AUDIO_DUCK_RULE_INVALID,
+        severity: Severity::Error,
+        title: "an audio duck rule is invalid",
+        explanation: "\
+An `Engine::builder().audio_duck(rule)` rule cannot run, so `build` refuses it. The message names the
+rule's index and the bad field.
+
+A rule ducks the buses in `duck` by `depth_db` while any sound on its `when` bus is live. The engine
+only knows when a sound is live for the voice-like buses, so `when` may not be `Master` (it is the
+sum of the rest) or `Music` (streamed music has no tracked end). `depth_db` must be finite and at
+most 0: a duck never boosts. `duck` must name at least one bus, and may not name `Master` or the
+`when` bus itself, which would duck the very sound that triggers it.
+
+Fix: write the rule in the valid shape, e.g.
+
+    DuckRule { when: Bus::Voice, duck: &[Bus::Music, Bus::Ambient],
+               depth_db: -9.0, attack_ticks: 6, release_ticks: 30 }",
+    },
+    CodeEntry {
         code: code::DIALOGUE_CONFIG_INVALID,
         severity: Severity::Error,
         title: "the dialogue config is invalid",
@@ -13413,6 +13530,8 @@ mod tests {
         code::SURFACES_INVALID,
         code::SURFACE_TAG_UNCLAIMED,
         code::SURFACE_OVERLAY_NO_SENSOR,
+        code::SURFACE_PART_INVALID,
+        code::SURFACE_PART_UNMATCHED,
         code::AI_MACHINE_HIERARCHY,
         code::AI_MACHINE_INITIAL,
         code::AI_MACHINE_VARIANTS,
@@ -13602,6 +13721,7 @@ mod tests {
         code::UI_GROUP_TOO_DEEP,
         code::UI_GROUP_IGNORED,
         code::UI_GROUP_UNRESOLVED,
+        code::UI_CLIP_NESTING,
         code::STATIC_INELIGIBLE,
         code::STATIC_PARENT_NOT_STATIC,
         code::STATIC_REWRITTEN,
@@ -13641,6 +13761,8 @@ mod tests {
         code::GROUND_MARKER_WEDGE_INVALID,
         code::GROUND_MARKER_RING_INVALID,
         code::GROUND_MARKER_STYLE_INVALID,
+        code::GROUND_MARKER_CLIP_INVALID,
+        code::GROUND_MARKER_CLIP_NO_PHYSICS,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,
@@ -13770,6 +13892,7 @@ mod tests {
         code::AUDIO_VOICE_CAPS_INVALID,
         code::AUDIO_GAIN_NON_FINITE,
         code::MUSIC_STEM_MISMATCHED,
+        code::AUDIO_DUCK_RULE_INVALID,
         code::DIALOGUE_CONFIG_INVALID,
         code::STRINGS_DUPLICATE_KEY,
         code::DIALOGUE_DUPLICATE_LINE,
@@ -13924,6 +14047,7 @@ mod tests {
             code::PROFILE_SAVE_FAILED,
             code::SCHEDULE_MODULE_CONCENTRATION,
             code::QUERY_DRIFT_UNOBSERVED,
+            code::SURFACE_PART_UNMATCHED,
             code::AI_TRANSITION_CHAIN_CAPPED,
             code::AI_INBOX_OVERFLOW,
             code::AI_GROUP_MISSING,
@@ -13983,6 +14107,7 @@ mod tests {
             code::UI_SLICE_CLAMPED,
             code::UI_GROUP_IGNORED,
             code::UI_GROUP_UNRESOLVED,
+            code::UI_CLIP_NESTING,
             code::STATIC_INELIGIBLE,
             code::STATIC_PARENT_NOT_STATIC,
             code::STATIC_REWRITTEN,
@@ -13990,6 +14115,7 @@ mod tests {
             code::VOXEL_LOD_EMPTY_LEVEL,
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
+            code::GROUND_MARKER_CLIP_NO_PHYSICS,
             code::TRANSITION_CARRY_DEAD,
             code::TRANSITION_CARRY_ORPHANED,
             code::RESTORE_ENGINE_VERSION_DIFFERS,

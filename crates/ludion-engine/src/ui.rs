@@ -34,11 +34,13 @@
 //! then `top_left * scale` and `element_size * scale` give the pixel-space rect.
 
 pub(crate) mod group;
+pub(crate) mod hit;
 pub mod hud;
 
 use std::borrow::Cow;
 use std::ops::Range;
 
+pub use hit::ui_hit;
 pub use ludion_components::ui::UiNav;
 
 use crate::components::{Anchor, UiList, UiRect, UiText};

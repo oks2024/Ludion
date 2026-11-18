@@ -192,17 +192,22 @@ hashed and a replay shows the same pattern (the request asked for a renderer fra
 it deterministic).
 
 **12. The line-of-sight clip (W2, design of record).** A shared `visibility_profile` function (one
-filter, also called by 0001 sight) casts `bins` rays (8..=512) from the marker apex through physics and
-yields a range per bin. `GroundMarker.clip` opts in; the engine writes a derived `GroundMarkerClip`
-component; a game-scheduled `ground_marker::clip` system runs after physics. The renderer reads the
-profiles from one storage buffer with a per-instance offset, interpolating between bins; the fill is
-clipped radially only. An epsilon pose-skip cache avoids recasting a still marker; the cost is the
-`ground_marker_clip` profile key. The game's answers: flat ground for the slice, a `partial_layers`
-form for see-through blockers, binned rays with interpolation. Codes L2342 (clip `bins`/`height`/layer
-error) and L2343 (clip authored but the system is not scheduled, warning).
+filter construction, also used by 0001 sight) casts `bins` rays (8..=512) from the marker apex through
+physics and yields a range per bin. The authored component `GroundMarkerClip` sits beside `GroundMarker`
+and opts in. **Extract computes the profile** at render time and caches it in the loader's asset cache; the
+profile is derived, render-side, never hashed and never snapshotted. (The first draft had a game-scheduled
+`ground_marker::clip` system writing a derived component: `ludion render` and the gallery run no game
+schedule, so such a system could never be blessed as a golden, and it needed a restore gap and a
+"not scheduled" lint.) The cache key is exact (pose bits, spec, and a fingerprint of the static colliders'
+revisions), so a restored run reproduces an uninterrupted one bit for bit; `dynamic: true` never caches.
+The renderer reads the profiles from one storage buffer with a per-instance offset, interpolating between
+bins; the fill is clipped radially only. The game's answers: flat ground for the slice, a `partial_layers`
+form for see-through blockers, binned rays with interpolation. Codes L2342 (clip `bins`/`height`/
+`partial_alpha`/layer error, or a clip on a segment or without a `GroundMarker`) and L2343 (clip authored
+but the world has no physics, warning). `ground_marker_profile(world, id)` serves game reads, uncached.
 
-**13. Codes.** L2340–L2349 are taken for 0014: L2340 ring invalid, L2341 style invalid; L2342–L2343
-reserved for W2.
+**13. Codes.** L2340–L2349 are taken for 0014: L2340 ring invalid, L2341 style invalid; L2342 clip
+invalid; L2343 clip with no physics (warning).
 
 ## Waves
 
@@ -251,9 +256,14 @@ differences: `dash: {count}` is `dashes: u32`; the ring's `fill_alpha` field is 
 `style.fill_alpha`; ring/style get L2340/L2341 rather than extending L2113; the flicker seed is
 `(entity, sim tick)`.
 
-### W2 — line-of-sight clip (not started)
-Design of record: decision 12. Out of W1: physics casts, `GroundMarkerClip`, `visibility_profile`,
-perception sharing, the profile storage buffer and key, L2342/L2343.
+### Neon Shroud 0014 W2 — line-of-sight clip (shipped 2026-11-18, mechanized)
+Design of record: decision 12. `GroundMarkerClip`, `visibility_profile`, the extract-time profile and its
+exact cache, the profile storage buffer, L2342/L2343, the gallery scene `ground-marker-clip` (Windows
+golden blessed on the RTX 3090; **the macOS golden is owed** on the M4). Existing goldens, `WorldHash`,
+replays and the protocol schema do not move. Request differences: an extract-time profile instead of a
+scheduled system; a separate `GroundMarkerClip` component and no derived component; an exact cache key
+instead of an epsilon pose-skip; no `ground_marker_clip` profile key; L2343 repurposed (no physics);
+perception shares the function and filter construction but is not rewired to read profiles.
 
 ## Engine/game boundary
 
@@ -301,10 +311,13 @@ perception sharing, the profile storage buffer and key, L2342/L2343.
 
 - (a) Ring's trigger firing (amends decision 2).
 - (b) Decision 3's "shape and colour and nothing else" now admits `inner_color` and `style` (W1) and a
-  derived `GroundMarkerClip` (W2).
+  authored `GroundMarkerClip` component (W2).
 - (c) The engine owning the clip system and the renderer reading a profile buffer (the engine/game
   boundary section).
 - (d) The Sector wave's "not clipped (follow-up)" becomes W2.
+- (e) An extract-time profile instead of a scheduled system and a hashed derived component.
+- (f) `GroundMarkerClip` as its own component.
+- (g) Perception (0001) shares the function and filter construction but is not rewired to read profiles.
 
 ## Risks / open questions
 

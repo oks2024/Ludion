@@ -670,6 +670,7 @@ mod tests {
             inner_color: [1.0; 4],
             style: crate::scene::GroundMarkerStyle::default(),
             flicker_seed: 0,
+            clip: None,
         }
     }
 

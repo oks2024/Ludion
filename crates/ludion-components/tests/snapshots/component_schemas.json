@@ -4060,6 +4060,54 @@
       }
     }
   },
+  "GroundMarkerClip": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "GroundMarkerClip",
+    "description": "Clips the `GroundMarker` beside it by the walls its apex can see. `bins` rays fan across the\nmarker's arc (the full circle for a disc or ring) at `height` above the entity origin; the marker\nis drawn only out to the first hit per ray. A `partial_layers` hit does not clip but dims what lies\nbehind it to `partial_alpha`. `layers` empty means every layer; `partial_layers` empty means none.\nStatic colliders only unless `dynamic`, which casts every extract.\n\n```\nuse ludion_components::GroundMarkerClip;\n\nlet clip: GroundMarkerClip = serde_json::from_value(serde_json::json!({\n    \"bins\": 128,\n    \"layers\": [\"sight_blocker\"],\n    \"partial_layers\": [\"low_cover\"],\n}))\n.unwrap();\nassert_eq!(clip.height, 1.6);\nassert_eq!(clip.partial_alpha, 0.35);\nassert!(!clip.dynamic);\n```",
+    "type": "object",
+    "properties": {
+      "height": {
+        "description": "Ray height above the entity origin, in world units (default 1.6).",
+        "type": "number",
+        "format": "float",
+        "default": 1.600000023841858
+      },
+      "bins": {
+        "description": "Rays across the arc, 8 to 512 (default 96).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0,
+        "default": 96
+      },
+      "layers": {
+        "description": "Layers whose colliders clip the marker; empty means every layer.",
+        "$ref": "#/$defs/LayerSet"
+      },
+      "partial_layers": {
+        "description": "Layers whose colliders dim what lies behind them; empty means none.",
+        "$ref": "#/$defs/LayerSet"
+      },
+      "partial_alpha": {
+        "description": "The coverage multiplier behind a partial hit, in `[0, 1]` (default 0.35).",
+        "type": "number",
+        "format": "float",
+        "default": 0.3499999940395355
+      },
+      "dynamic": {
+        "description": "Cast against dynamic colliders too, every extract; false means static colliders only.",
+        "type": "boolean"
+      }
+    },
+    "$defs": {
+      "LayerSet": {
+        "description": "An ordered list of layer names, in the author's order (never sorted, so a scene's text does not\nchurn). Serializes as a plain list of strings.\n\n```\nuse ludion_physics::LayerSet;\n\nlet set = LayerSet::from(vec![\"light_occluder\".to_string()]);\nassert_eq!(set.as_slice(), [\"light_occluder\"]);\nassert!(!set.is_empty());\nassert_eq!(serde_json::to_string(&set).unwrap(), r#\"[\"light_occluder\"]\"#);\n```",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
   "Joint": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Joint",
@@ -8044,13 +8092,55 @@
   "SurfaceTag": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "SurfaceTag",
-    "description": "Tags the entity's collider with a surface declared under `physics.surfaces`. Every hit that\nnames the collider reports it (`surface` on a query hit, `MoveReport.ground.surface`). Put it\nbeside a solver-claimed `Collider` or a `CharacterMotor`; an entity with neither is `L1692` in\n`check-scene`. The name must be declared (`L1690`) and not empty (`L1691`). The solver never\nreads it: editing it takes effect from the next write with no body rebuilt.\n\n```yaml\ncomponents:\n  SurfaceTag:\n    surface: metal_grate\n```",
+    "description": "Tags the entity's collider with a surface declared under `physics.surfaces`. Every hit that\nnames the collider reports it (`surface` on a query hit, `MoveReport.ground.surface`). Put it\nbeside a solver-claimed `Collider` or a `CharacterMotor`; an entity with neither is `L1692` in\n`check-scene`. The name must be declared (`L1690`) and not empty (`L1691`). The solver never\nreads it: editing it takes effect from the next write with no body rebuilt.\n\n`parts` gives single parts their own surface. An integer key indexes the entity's own `compound`\n`Collider` parts: a hit reports the part whose shape lies nearest the hit point (lowest index on\nties). A string key names a `kind: assembly` part and takes effect on the bodies\n`switch_to_ragdoll` spawns. Every other part reports `surface`. A part *named* `\"1\"` must be\nquoted in YAML, or it parses as the integer.\n\n```yaml\ncomponents:\n  SurfaceTag:\n    surface: metal_grate\n    parts:\n      - { part: 1, surface: concrete }\n      - { part: helmet, surface: metal }\n```",
     "type": "object",
     "properties": {
       "surface": {
         "description": "The declared surface name.",
         "type": "string",
         "default": ""
+      },
+      "parts": {
+        "description": "Per-part overrides; a part without an entry reports `surface`.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/PartSurface"
+        }
+      }
+    },
+    "$defs": {
+      "PartSurface": {
+        "description": "One [`SurfaceTag::parts`] entry: a part key and the declared surface it reports.",
+        "type": "object",
+        "properties": {
+          "part": {
+            "description": "An index into the entity's `compound` parts, or an assembly part name.",
+            "$ref": "#/$defs/SurfacePart"
+          },
+          "surface": {
+            "description": "The declared surface name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "surface"
+        ]
+      },
+      "SurfacePart": {
+        "description": "Which part a [`PartSurface`] names. `Index` comes first so `1` parses as an integer; a part\nnamed `\"1\"` must be quoted.",
+        "anyOf": [
+          {
+            "description": "A part of the entity's own `compound` collider.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          {
+            "description": "A part of a `kind: assembly` mesh.",
+            "type": "string"
+          }
+        ]
       }
     }
   },
@@ -8352,6 +8442,10 @@
         "x-entity-ref": {
           "allow_self": false
         }
+      },
+      "clip": {
+        "description": "Cuts every descendant's pixels to the group's box, scaled with the group (default `none`).",
+        "$ref": "#/$defs/UiClipShape"
       }
     },
     "$defs": {
@@ -8402,6 +8496,49 @@
             "description": "The canvas's bottom-right corner; the element's own bottom-right corner sits there.",
             "type": "string",
             "const": "bottom_right"
+          }
+        ]
+      },
+      "UiClipShape": {
+        "description": "The shape a [`UiGroup`] clips its descendants to, externally tagged: `clip: rect`,\n`clip: circle` (the circle inscribed in the group's box) or\n`clip: { rounded_rect: { corner_radius: 12.0 } }` (canvas units, `>= 0`).\n\n```\nuse ludion_components::UiClipShape;\n\nlet clip: UiClipShape = serde_json::from_value(serde_json::json!(\"rect\")).unwrap();\nassert_eq!(clip, UiClipShape::Rect);\nassert!(UiClipShape::default().is_none());\n```",
+        "oneOf": [
+          {
+            "description": "No clip.",
+            "type": "string",
+            "const": "none"
+          },
+          {
+            "description": "The group's box.",
+            "type": "string",
+            "const": "rect"
+          },
+          {
+            "description": "The circle inscribed in the group's box.",
+            "type": "string",
+            "const": "circle"
+          },
+          {
+            "description": "The group's box with rounded corners.",
+            "type": "object",
+            "properties": {
+              "rounded_rect": {
+                "type": "object",
+                "properties": {
+                  "corner_radius": {
+                    "description": "Corner radius in canvas units, finite and `>= 0`.",
+                    "type": "number",
+                    "format": "float"
+                  }
+                },
+                "required": [
+                  "corner_radius"
+                ]
+              }
+            },
+            "required": [
+              "rounded_rect"
+            ],
+            "additionalProperties": false
           }
         ]
       }

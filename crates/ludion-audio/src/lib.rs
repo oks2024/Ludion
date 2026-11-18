@@ -481,6 +481,13 @@ enum VoiceCommand {
         gain: f32,
         frames: usize,
     },
+    /// Slew a bus's engine-owned duck layer (`bus` indexes [`Bus::ALL`]) over `frames` device
+    /// frames; `0` settles now.
+    Duck {
+        bus: usize,
+        gain: f32,
+        frames: usize,
+    },
     /// Hold or release the buses whose bit (`1 << index`) is set in `mask`; `0` frames settles now.
     BusPause {
         mask: u8,
@@ -915,6 +922,7 @@ struct Router {
 struct RouterBus {
     user: f32,
     game: f32,
+    duck: f32,
     paused: bool,
 }
 
@@ -922,6 +930,7 @@ impl RouterBus {
     const DEFAULT: RouterBus = RouterBus {
         user: 1.0,
         game: 1.0,
+        duck: 1.0,
         paused: false,
     };
 }
@@ -1223,6 +1232,7 @@ impl Router {
                 self.feed.stop(0);
                 for bus in &mut self.buses {
                     bus.game = 1.0;
+                    bus.duck = 1.0;
                     bus.paused = false;
                 }
                 VoiceCommand::StopAllLoops
@@ -1259,6 +1269,23 @@ impl Router {
                 VoiceCommand::BusGain {
                     bus: bus as usize,
                     layer,
+                    gain,
+                    frames: self.mix_frames(fade_frames),
+                }
+            }
+            AudioMessage::Duck {
+                bus,
+                gain,
+                fade_frames,
+            } => {
+                let gain = if gain.is_finite() {
+                    gain.clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                self.buses[bus as usize].duck = gain;
+                VoiceCommand::Duck {
+                    bus: bus as usize,
                     gain,
                     frames: self.mix_frames(fade_frames),
                 }
@@ -1302,14 +1329,36 @@ impl Router {
             if record == RouterBus::DEFAULT {
                 continue;
             }
-            for (layer, gain) in [(MixLayer::User, record.user), (MixLayer::Game, record.game)] {
-                if gain != 1.0 {
-                    let command = VoiceCommand::BusGain {
+            let layers = [
+                (
+                    record.user,
+                    VoiceCommand::BusGain {
                         bus: index,
-                        layer,
-                        gain,
+                        layer: MixLayer::User,
+                        gain: record.user,
                         frames: 0,
-                    };
+                    },
+                ),
+                (
+                    record.game,
+                    VoiceCommand::BusGain {
+                        bus: index,
+                        layer: MixLayer::Game,
+                        gain: record.game,
+                        frames: 0,
+                    },
+                ),
+                (
+                    record.duck,
+                    VoiceCommand::Duck {
+                        bus: index,
+                        gain: record.duck,
+                        frames: 0,
+                    },
+                ),
+            ];
+            for (gain, command) in layers {
+                if gain != 1.0 {
                     sent &= self.forward(commands, command);
                 }
             }
@@ -1563,12 +1612,13 @@ fn open_output() -> Result<(cpal::Device, cpal::SupportedStreamConfig), Diagnost
 const BUS_COUNT: usize = Bus::ALL.len();
 
 /// One bus on the callback side: the authored master and the runtime layers that multiply it.
-/// `pause` is `1.0` running and `0.0` held; the bus is *held* only once it has reached `0.0`, so a
-/// pause fades.
+/// `duck` is the engine-owned layer, never written through [`MixLayer`]. `pause` is `1.0` running
+/// and `0.0` held; the bus is *held* only once it has reached `0.0`, so a pause fades.
 struct BusState {
     authored: f32,
     user: Envelope,
     game: Envelope,
+    duck: Envelope,
     pause: Envelope,
     paused: bool,
 }
@@ -1579,6 +1629,7 @@ impl BusState {
             authored,
             user: Envelope::at(1.0),
             game: Envelope::at(1.0),
+            duck: Envelope::at(1.0),
             pause: Envelope::at(1.0),
             paused: false,
         }
@@ -1711,6 +1762,7 @@ impl Mixer {
                 });
                 for bus in &mut self.buses {
                     bus.game.slew_to(1.0, self.ramp_frames);
+                    bus.duck.slew_to(1.0, self.ramp_frames);
                     bus.paused = false;
                     bus.pause.slew_to(1.0, self.ramp_frames);
                 }
@@ -1727,6 +1779,7 @@ impl Mixer {
                     MixLayer::Game => state.game.steer(gain, frames),
                 }
             }
+            VoiceCommand::Duck { bus, gain, frames } => self.buses[bus].duck.steer(gain, frames),
             VoiceCommand::BusPause {
                 mask,
                 paused,
@@ -1754,12 +1807,15 @@ impl Mixer {
     }
 
     /// Steps every bus's envelopes one device frame at a time into `bus_levels`:
-    /// `authored x user x game x pause`, then each non-master bus times the master's.
+    /// `authored x user x game x duck x pause`, then each non-master bus times the master's.
     fn step_buses(&mut self, frames: usize) {
         for frame in 0..frames {
             for (index, state) in self.buses.iter_mut().enumerate() {
-                self.bus_levels[index * MIX_BLOCK_FRAMES + frame] =
-                    state.authored * state.user.next() * state.game.next() * state.pause.next();
+                self.bus_levels[index * MIX_BLOCK_FRAMES + frame] = state.authored
+                    * state.user.next()
+                    * state.game.next()
+                    * state.duck.next()
+                    * state.pause.next();
             }
             let master = self.bus_levels[frame];
             for index in 1..BUS_COUNT {
@@ -3249,6 +3305,104 @@ mod tests {
         };
         assert_eq!((*bus, *gain), (Bus::Music as usize, 0.5));
         assert_eq!(*mask, 1 << Bus::Ambient as usize);
+    }
+
+    fn duck(bus: Bus, gain: f32, frames: usize) -> VoiceCommand {
+        VoiceCommand::Duck {
+            bus: bus as usize,
+            gain,
+            frames,
+        }
+    }
+
+    /// The duck layer multiplies the user and game layers, fades onto its target, and a `Game` gain
+    /// never overwrites it.
+    #[test]
+    fn the_duck_layer_multiplies_fades_and_is_not_a_game_gain() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(VoiceCommand::LoopSync {
+            id: bed(),
+            voice: looping(&constant(1.0, 64), 1.0, AudioCategory::Sfx),
+        });
+        mixer.apply(bus_gain(Bus::Sfx, MixLayer::User, 0.5));
+        mixer.apply(bus_gain(Bus::Sfx, MixLayer::Game, 0.5));
+        mixer.apply(duck(Bus::Sfx, 0.5, 0));
+        assert_eq!(render(&mut mixer, 2), [0.125, 0.125]);
+        // A Game write leaves the duck where it was.
+        mixer.apply(bus_gain(Bus::Sfx, MixLayer::Game, 1.0));
+        assert_eq!(render(&mut mixer, 1), [0.25]);
+        // A fade lands exactly on its target, one step per device frame.
+        mixer.apply(duck(Bus::Sfx, 0.0, 4));
+        assert_eq!(render(&mut mixer, 5), [0.1875, 0.125, 0.0625, 0.0, 0.0]);
+    }
+
+    /// A rebuild returns the duck to unity and keeps the player's volume.
+    #[test]
+    fn stop_all_loops_releases_the_duck_and_keeps_the_user_layer() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(bus_gain(Bus::Sfx, MixLayer::User, 0.5));
+        mixer.apply(duck(Bus::Sfx, 0.25, 0));
+        mixer.apply(VoiceCommand::StopAllLoops);
+        render(&mut mixer, 8);
+        let sfx = &mixer.buses[Bus::Sfx as usize];
+        assert_eq!(sfx.duck.level, 1.0);
+        assert_eq!(sfx.user.level, 0.5);
+    }
+
+    /// The router clamps a duck gain, sends a non-finite one as unity, and keeps a ramp.
+    #[test]
+    fn the_router_clamps_duck_gains() {
+        let mut rig = rig(scratch_root("duck-clamp"));
+        for (gain, expect) in [(-1.0, 0.0), (f32::NAN, 1.0), (2.0, 1.0), (0.5, 0.5)] {
+            let command = rig.router.route(AudioMessage::Duck {
+                bus: Bus::Music,
+                gain,
+                fade_frames: 0,
+            });
+            match command {
+                Some(VoiceCommand::Duck { bus, gain, frames }) => {
+                    assert_eq!((bus, gain), (Bus::Music as usize, expect));
+                    assert_eq!(frames, ramp_frames(44100));
+                }
+                _ => panic!("a duck routes to its command"),
+            }
+        }
+    }
+
+    /// A reopened stream is told a non-unit duck, settled; a rebuild's reset is not replayed.
+    #[test]
+    fn a_replay_resends_a_non_unit_duck_settled() {
+        let mut rig = rig(scratch_root("duck-replay"));
+        rig.step(AudioMessage::Duck {
+            bus: Bus::Music,
+            gain: 0.25,
+            fade_frames: 6,
+        });
+        rig.step(AudioMessage::Duck {
+            bus: Bus::Ambient,
+            gain: 0.5,
+            fade_frames: 0,
+        });
+        rig.step(AudioMessage::StopAllLoops);
+        rig.step(AudioMessage::Duck {
+            bus: Bus::Music,
+            gain: 0.25,
+            fade_frames: 0,
+        });
+        while rig.mixer.commands.try_recv().is_ok() {}
+        assert!(rig.router.replay(&rig.commands));
+        let replayed: Vec<VoiceCommand> = rig.mixer.commands.try_iter().collect();
+        let [
+            VoiceCommand::Duck {
+                bus,
+                gain,
+                frames: 0,
+            },
+        ] = replayed.as_slice()
+        else {
+            panic!("only the music duck replays");
+        };
+        assert_eq!((*bus, *gain), (Bus::Music as usize, 0.25));
     }
 
     /// A paused music bus never touches the player: the position holds across more renders than the

@@ -148,6 +148,7 @@ fn assembly_doc() -> impl Strategy<Value = AssemblyDocument> {
                 parts,
                 clips,
                 joints: Vec::new(),
+                masks: Vec::new(),
             }
         })
 }
@@ -339,6 +340,7 @@ fn empty_collections_use_flow_empties() {
         parts: Vec::new(),
         clips: Vec::new(),
         joints: Vec::new(),
+        masks: Vec::new(),
     };
     let text = emit_assembly(&doc);
     assert_eq!(
@@ -1782,4 +1784,80 @@ fn non_positive_break_impulse_is_l1184() {
             "break_impulse {bad} must be rejected"
         );
     }
+}
+
+// --- Part masks (`masks:`, `Plan/animation-layers.md` decision 26) ----------------------------
+
+#[test]
+fn masks_round_trip_and_emit_idempotently() {
+    let source = format!(
+        "{}masks:\n  arm_only:\n    joints:\n      - arm\n    descendants: true\n    weights:\n      \
+         - 0.5\n",
+        two_part()
+    );
+    let doc = check_assembly(&source).expect("a valid mask");
+    assert_eq!(doc.masks.len(), 1);
+    assert_eq!(doc.masks[0].name, "arm_only");
+    assert_eq!(doc.masks[0].joints, vec!["arm".to_string()]);
+    assert!(doc.masks[0].descendants);
+    assert_eq!(doc.masks[0].weights, vec![0.5]);
+    let once = emit_assembly(&doc);
+    assert_eq!(once, source, "the authored text is already canonical");
+    assert_eq!(emit_assembly(&parse_assembly(&once).unwrap()), once);
+}
+
+#[test]
+fn absent_masks_emit_as_before() {
+    let doc = check_assembly(&two_part()).expect("valid");
+    assert!(doc.masks.is_empty());
+    assert!(!emit_assembly(&doc).contains("masks"));
+}
+
+#[test]
+fn mask_naming_an_unknown_part_is_l1138_with_the_nearest() {
+    let source = format!("{}masks:\n  m:\n    joints:\n      - arn\n", two_part());
+    let diagnostics = errors_for(&source);
+    assert!(has_code_at(&diagnostics, "L1138", "/masks/m/joints/0"));
+    let help = diagnostics
+        .iter()
+        .find(|d| d.code.as_str() == "L1138")
+        .and_then(|d| d.help.clone())
+        .unwrap_or_default();
+    assert!(help.contains("`arm`"), "{help}");
+}
+
+#[test]
+fn mask_weights_length_mismatch_is_l1137() {
+    let source = format!(
+        "{}masks:\n  m:\n    joints:\n      - arm\n    weights:\n      - 0.5\n      - 0.5\n",
+        two_part()
+    );
+    assert!(has_code_at(
+        &errors_for(&source),
+        "L1137",
+        "/masks/m/weights"
+    ));
+}
+
+#[test]
+fn mask_weight_outside_unit_range_is_l1137() {
+    let source = format!(
+        "{}masks:\n  m:\n    joints:\n      - arm\n    weights:\n      - 1.5\n",
+        two_part()
+    );
+    assert!(has_code_at(
+        &errors_for(&source),
+        "L1137",
+        "/masks/m/weights/0"
+    ));
+}
+
+#[test]
+fn mask_with_an_empty_name_is_l1138() {
+    let source = format!("{}masks:\n  \"\":\n    joints:\n      - arm\n", two_part());
+    assert!(
+        errors_for(&source)
+            .iter()
+            .any(|d| d.code.as_str() == "L1138")
+    );
 }

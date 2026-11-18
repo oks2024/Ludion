@@ -1,11 +1,14 @@
 # Plan: HUD motion and shapes — tweens, world anchors, rotation, clipping (Neon Shroud request 0020)
 
-> Status: **Waves 1, 2, 4a mechanized (2026-11-18)** — `UiGroup` (`group`, `fill_group`; scale, opacity,
+> Status: **Waves 1, 2, 4a, 4b mechanized (2026-11-18)** — `UiGroup` (`group`, `fill_group`; scale, opacity,
 > visibility composed through up to 8 levels; CPU only, only the component schema snapshot moved);
+> W4b: `UiGroup.clip` (`none | rect | circle | rounded_rect`, an analytic per-instance clip in
+> `ui_rect.wgsl`/`ui_text.wgsl`, nesting cap 2, `L2303`) and `ludion::math::ui_hit`; the `ui-groups` gallery
+> golden is blessed on the RTX 3090 (the macOS golden is owed on the M4);
 > `UiTween` and `UiWorldAnchor`, resolved in `extract`
 > (`ui/hud.rs`; the component and schema snapshots moved once, no golden, replay or protocol hash);
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
-> component schema snapshot moved). Waves 3, 4b and 5–7 are recorded below and not started. Owed: the
+> component schema snapshot moved). Waves 3 and 5–7 are recorded below and not started. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
 > marker (jitter under `present_interpolation`, decision 8).
 
@@ -116,6 +119,34 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
     `[0,1]`; `size` reuses `L1118`. `L1617` (warning) `fill_group` without `group`, or `fill` beside
     `group`/`fill_group`.
 
+25. **`UiGroup.clip`**, enum `UiClipShape` (externally tagged, snake_case, the `ProbeShape` pattern): `none`
+    (default, skipped when none), `rect`, `circle`, `rounded_rect: { corner_radius: f32 }` (canvas units, finite
+    and >= 0, else `L1614` at `/clip/rounded_rect/corner_radius`). YAML: `clip: rect` or
+    `clip: { rounded_rect: { corner_radius: 12.0 } }`.
+26. **One shape, a rounded box.** Every clip is a rounded box in screen px: `rect` has radius 0. `rounded_rect`
+    has radius `corner_radius * ps * S`, clamped to half the box's shorter side. `circle` is the inscribed circle:
+    a centred square of side `min(w,h)` with radius side/2. The box is the group's `box_px` under its own composed
+    affine (`[x*S+Ox, y*S+Oy, w*S, h*S]`, `S`/`O` the `GroupXf` scale/offset after this group composes), so a
+    pop-in scale tween shrinks the clip with the content.
+27. **Renderer data:** `ludion_renderer::UiClipBox { rect_px, radius_px }` and
+    `UiClip { boxes: [Option<UiClipBox>; 2] }` (innermost first, `UiClip::NONE`, `Default`). Both `UiInstance`
+    variants gain `clip: UiClip`. Rects carry it per instance and text per vertex, so batching is unchanged.
+28. **Coverage:** `d = rounded_box_sdf(frag_px, box, r)`, `cov = clamp(0.5 - d, 0, 1)`: pixel-exact on
+    integer-aligned rect edges, a one-pixel AA band otherwise. Two boxes give the `min` of the two coverages
+    (an intersection). An absent box gives exactly `1.0` through `select` (a flag, never a sentinel box) and
+    multiplies the alpha, so an unclipped instance is bit-identical.
+29. **Nesting cap 2.** An element keeps the two innermost clipping groups in its chain. A third or more is
+    dropped, with the warning `L2303` (degraded at runtime, keyed `"{key}/ui-clip-depth"`, and static from
+    `scene_ui_group_diagnostics`).
+30. **`ui_hit`:** `ludion::math::ui_hit(world, entity, viewport, cursor, now) -> bool` is true when the cursor is
+    in the half-open bounding box of the element's emitted instances after `hud::post` and inside its clip
+    (`d < 0`, the same SDF in Rust, `ui::clip_contains`). A `UiRect` is tested as its one resolved rect
+    (`hud::rect_box`, shared with extract); a `UiText` by its glyph quads; a `UiList` by its panel
+    `layout.background_px` (use `list_hit` for the item index, ungrouped only). An entity with several UI
+    components hits if any does. False for an invisible element or group, a world anchor that hides it, a dead
+    entity, a non-finite cursor or a camera error. The camera is `resolve_camera(.., None)` without
+    `pixel_snap`.
+
 ## Waves
 
 - **W1 — `UiTween`, `UiWorldAnchor`, resolved in extract.** CPU-only; the pass lives in
@@ -142,12 +173,14 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 Request amendments 1–7; the 12-o'clock clockwise angle convention (W3); the centre pivot for scale;
 the `real` default clock; the separate `UiEase`; the interpolation gap (decision 8); W2: `uv_rect` beside `slice` warns and `slice` wins, stretch-only
 edges, the proportional texel clamp rather than an error; W4a: the 8-level cap, `order` global (no block sort),
-a world anchor only on the outermost group, `fill` ignoring `group`.
+a world anchor only on the outermost group, `fill` ignoring `group`; W4b: the 2-clip cap (innermost kept), circle
+= the inscribed circle, the 1 px AA band, `ui_hit` on a list tests the panel, `ui_hit` ignores `pixel_snap`.
+Request differences: no rotation or polygon in `ui-groups` (W3); `ui_hit` does not return list items.
 
 ## Out of scope (triggers recorded)
 
-`UiShape`, rotation, the group `clip` (W4b), nine-slice edge tiling (trigger: frame art that visibly breaks
+`UiShape`, rotation, nine-slice edge tiling (trigger: frame art that visibly breaks
 when stretched), slicing `UiList`/`UiText`, text outline/shadow, `UiRadial`,
-`math::ui_hit`, anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
+anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see
 `Plan/font-assets.md` for the SDF outline path).

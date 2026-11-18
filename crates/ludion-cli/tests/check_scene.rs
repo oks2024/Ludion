@@ -275,6 +275,19 @@ fn an_overlay_on_a_solid_is_l1693() {
     );
 }
 
+/// A `SurfaceTag.parts` index past the entity's `compound` parts is `L1694` with the pointer.
+#[test]
+fn a_part_index_past_the_compound_is_l1694() {
+    let output = run_check_scene_args("surface-part-out-of-range.yaml", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1694"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("/entities/0/components/SurfaceTag/parts/0/part"),
+        "stderr was: {stderr}"
+    );
+}
+
 /// A layer on a 2D collider the solver does not claim is `L1187`.
 #[test]
 fn a_layer_on_an_unclaimed_collider_is_l1187() {

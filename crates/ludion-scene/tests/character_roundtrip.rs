@@ -6,7 +6,7 @@
 use ludion_core::diagnostics::Diagnostic;
 use ludion_scene::{
     AnimationDocument, check_animation, check_character, check_character_clips, emit_character,
-    parse_character, resolve_character_mask, validate_character,
+    parse_character, resolve_rig_mask, validate_character,
 };
 
 const CANONICAL: &str = "\
@@ -340,11 +340,11 @@ fn masks_resolve_listed_weights_and_descendants() {
         ("leg", Some(0)),
     ];
     assert_eq!(
-        resolve_character_mask(&doc.masks[0], &joints),
+        resolve_rig_mask(&doc.masks[0], &joints),
         vec![0.5, 0.0, 0.0, 0.0, 0.0]
     );
     assert_eq!(
-        resolve_character_mask(&doc.masks[1], &joints),
+        resolve_rig_mask(&doc.masks[1], &joints),
         vec![0.0, 1.0, 1.0, 1.0, 0.0]
     );
 }
