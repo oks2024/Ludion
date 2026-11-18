@@ -32,8 +32,8 @@ use ludion_core::time::FrameIndex;
 use ludion_ecs::{Parent, Registry, SemanticValidate};
 use ludion_physics::PhysicsPose;
 use ludion_spatial::{
-    Collider, GroundPosition, Joint, JointMotor, JointPoses, Plane, PoseBlend, SpatialVolume,
-    Velocity, WorldPosition,
+    Collider, GroundPosition, Joint, JointMotor, JointPoses, JointZero, Plane, PoseBlend,
+    SpatialVolume, Velocity, WorldPosition,
 };
 
 pub mod animation_layers;
@@ -42,6 +42,7 @@ pub mod blend_clock;
 pub mod ground_marker_clip;
 pub mod lane;
 pub mod light_exposure;
+pub mod mesh_blend;
 pub mod nav_link;
 pub mod nav_route;
 pub mod occluded_silhouette;
@@ -62,6 +63,7 @@ pub use blend_clock::{BlendClock, LayerPhase};
 pub use ground_marker_clip::{GroundMarkerClip, MAX_CLIP_BINS, MIN_CLIP_BINS};
 pub use lane::{LaneConstraint, LaneEnds};
 pub use light_exposure::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
+pub use mesh_blend::MeshBlend;
 pub use nav_link::NavLink;
 pub use nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
 pub use occluded_silhouette::{
@@ -77,8 +79,8 @@ pub use perception::{
 };
 pub use prefab::PrefabInstance;
 pub use ui::{
-    UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiNav, UiSlice,
-    UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
+    TextOutline, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiNav,
+    UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
 };
 
 /// An entity's human-readable name — the world-side home of a scene entity's `name:` field.
@@ -494,6 +496,11 @@ pub struct Mesh {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0.0, max = 1.0))]
     pub medium: Option<f32>,
+    /// Draws this mesh seen through (default none: opaque): see [`MeshBlend`]. `color`'s alpha is the
+    /// opacity. Not inherited down `Parent`: this entity's own `Mesh` only. Ignored with `L2360` on a
+    /// `Viewmodel` mesh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend: Option<MeshBlend>,
 }
 
 /// A rim term on a [`Mesh`]: adds `color · strength · (1 − n·v)^power` to the shaded colour. Unlit
@@ -545,6 +552,7 @@ impl Default for Mesh {
             scatter_color: [1.0; 3],
             rim: None,
             medium: None,
+            blend: None,
         }
     }
 }
@@ -5147,6 +5155,9 @@ pub struct UiText {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
     pub group: Option<EntityId>,
+    /// An outline drawn under the glyphs (default none). Ink only: layout and hit tests ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<TextOutline>,
 }
 
 impl Default for UiText {
@@ -5162,20 +5173,21 @@ impl Default for UiText {
             visible: true,
             font: None,
             group: None,
+            outline: None,
         }
     }
 }
 
 impl SemanticValidate for UiText {
-    /// Rejects a `size` that is not a strictly positive, finite number (`L1118`), pointer `/size`.
-    /// Defensive: runs on a schema-clean value; an absent `size` (default `24.0` is valid) adds
-    /// nothing.
+    /// Rejects a `size` that is not a strictly positive, finite number (`L1118`), pointer `/size`,
+    /// and a bad `outline` (`L1618`). Defensive: runs on a schema-clean value; an absent `size`
+    /// (default `24.0` is valid) adds nothing.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
-        let Some(size) = value.get("size").and_then(as_stored_f32) else {
-            return out;
-        };
-        require_positive_finite_ui_size(size, "/size", &mut out);
+        if let Some(size) = value.get("size").and_then(as_stored_f32) {
+            require_positive_finite_ui_size(size, "/size", &mut out);
+        }
+        ui::validate_text_outline(value, &mut out);
         out
     }
 }
@@ -5296,6 +5308,10 @@ pub struct UiList {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
     pub group: Option<EntityId>,
+    /// An outline drawn under every line's glyphs (default none). Ink only: the block's measure and
+    /// the background are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<TextOutline>,
 }
 
 impl Default for UiList {
@@ -5318,6 +5334,7 @@ impl Default for UiList {
             visible: true,
             font: None,
             group: None,
+            outline: None,
         }
     }
 }
@@ -5327,13 +5344,13 @@ impl SemanticValidate for UiList {
     /// the same glyph-cell height [`UiText`] validates, so it shares the code. `line_spacing` and
     /// `padding` carry their lower bound in the schema, so a bad value there is the ordinary `L1014`
     /// at the field. Defensive: runs on a schema-clean value; an absent `size` (default `24.0` is
-    /// valid) adds nothing.
+    /// valid) adds nothing. A bad `outline` is `L1618`.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
-        let Some(size) = value.get("size").and_then(as_stored_f32) else {
-            return out;
-        };
-        require_positive_finite_ui_size(size, "/size", &mut out);
+        if let Some(size) = value.get("size").and_then(as_stored_f32) {
+            require_positive_finite_ui_size(size, "/size", &mut out);
+        }
+        ui::validate_text_outline(value, &mut out);
         out
     }
 }
@@ -6641,6 +6658,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<OccludedSilhouette>("OccludedSilhouette")
         .expect("unique");
+    // The stored joint zero, appended after `OccludedSilhouette`: read by `ludion-physics` when it builds a joint.
+    registry
+        .register_validated::<JointZero>("JointZero")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -6649,11 +6670,12 @@ pub fn builtin_registry() -> Registry {
 }
 
 /// The built-ins whose engine-owned consumer is a sim-phase system.
-const SIM_ONLY_COMPONENTS: [&str; 33] = [
+const SIM_ONLY_COMPONENTS: [&str; 34] = [
     "Collider",
     "Velocity",
     "Joint",
     "JointMotor",
+    "JointZero",
     "CharacterMotor",
     "CharacterMotorState",
     "SurfaceVelocity",
@@ -6705,6 +6727,7 @@ mod tests {
             "Velocity",
             "Joint",
             "JointMotor",
+            "JointZero",
             "CharacterMotor",
             "CharacterMotorState",
             "SurfaceVelocity",
@@ -7169,12 +7192,13 @@ mod tests {
                 "NavLink",
                 "GroundMarkerClip",
                 "OccludedSilhouette",
+                "JointZero",
             ]
         );
         assert_eq!(
             registry.len(),
-            79,
-            "appending `OccludedSilhouette` grows the registry to 79"
+            80,
+            "appending `JointZero` grows the registry to 80"
         );
     }
 
@@ -9076,6 +9100,10 @@ mod tests {
             visible: false,
             font: Some("title".to_string()),
             group: Some(EntityId::new(3, 0)),
+            outline: Some(TextOutline {
+                width: 2.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+            }),
         };
         let json = serde_json::to_value(&text).unwrap();
         assert_eq!(json["anchor"], serde_json::json!("center"));
@@ -11022,9 +11050,50 @@ entities:
             visible: false,
             font: Some("body".to_string()),
             group: Some(EntityId::new(5, 0)),
+            outline: Some(TextOutline {
+                width: 1.5,
+                color: [0.0, 0.0, 0.0, 1.0],
+            }),
         };
         let json = serde_json::to_value(&list).unwrap();
         assert_eq!(serde_json::from_value::<UiList>(json).unwrap(), list);
+    }
+
+    /// An absent `outline` is not serialized; a bad one is `L1618` at its pointer, on both components.
+    #[test]
+    fn text_outline_validates_and_stays_absent() {
+        assert!(
+            serde_json::to_value(UiText::default())
+                .unwrap()
+                .get("outline")
+                .is_none()
+        );
+        assert!(
+            serde_json::to_value(UiList::default())
+                .unwrap()
+                .get("outline")
+                .is_none()
+        );
+        let pointers = |out: Vec<Diagnostic>| -> Vec<String> {
+            out.iter()
+                .filter(|d| d.code == code::UI_TEXT_OUTLINE_INVALID)
+                .filter_map(|d| d.path.clone())
+                .collect()
+        };
+        let ok = serde_json::json!({"outline": {"width": 2.0, "color": [0, 0, 0, 1]}});
+        assert!(UiText::validate_semantics(&ok).is_empty());
+        assert!(UiList::validate_semantics(&ok).is_empty());
+        let negative = serde_json::json!({"outline": {"width": -1.0, "color": [0, 0, 0, 1]}});
+        let huge = serde_json::json!({"outline": {"width": 1e300, "color": [0, 0, 0, 1]}});
+        let bad_color = serde_json::json!({"outline": {"width": 1.0, "color": [0, 1e300, 0, 1]}});
+        for (value, pointer) in [
+            (negative, "/outline/width"),
+            (huge, "/outline/width"),
+            (bad_color, "/outline/color"),
+        ] {
+            assert_eq!(pointers(UiText::validate_semantics(&value)), [pointer]);
+            assert_eq!(pointers(UiList::validate_semantics(&value)), [pointer]);
+        }
     }
 
     /// An empty `UiList: {}` deserializes to the documented default — the drift-safe path the scene

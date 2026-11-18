@@ -63,6 +63,8 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
     out.ground_marker_profiles.clear();
     // `retain` above shifts the mesh indices, and a face has no composite to draw it.
     out.silhouettes = Silhouettes::default();
+    // A blended mesh is never in a capture, as it is in no opaque consumer.
+    out.blended.clear();
     out.drop_shadows.clear();
     out.decals.clear();
     // Probes are lit by local lights unshadowed, like the GI bake. A face has no composite, so

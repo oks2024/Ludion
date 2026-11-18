@@ -188,6 +188,31 @@ fn fs_medium(in: VsOut, @builtin(front_facing) front_facing: bool) -> MediumOut 
     return MediumOut(c.color, flag_skinned(c.normal_roughness, in.fade.z), c.specular, vec4<f32>(in.medium, 0.0, 0.0, 0.0));
 }
 
+// The blended twins' colour: premultiplied by the opacity, so the alpha pipeline's
+// `(One, OneMinusSrcAlpha)` blend covers what is behind and the additive pipeline's `(One, One)` adds it.
+@fragment
+fn fs_blend(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let c = shade_fragment(in, front_facing, true);
+    return vec4<f32>(c.color.rgb * c.color.a, c.color.a);
+}
+
+// True only in the additive blend layer twin: the weight is the brightest channel the colour pass adds,
+// as the particle layer's is.
+override BLEND_ADDITIVE: bool = false;
+
+// The blended meshes' transparent layer: the same shading, reduced to the weight the colour pass
+// blended with (`particle.wgsl` `fs_depth`).
+@fragment
+fn fs_blend_layer(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let c = shade_fragment(in, front_facing, true);
+    var weight = clamp(c.color.a, 0.0, 1.0);
+    if (BLEND_ADDITIVE) {
+        let rgb = c.color.rgb * weight;
+        weight = weight * min(1.0, max(rgb.r, max(rgb.g, rgb.b)));
+    }
+    return transparent_layer(in.world_pos, weight, in.medium);
+}
+
 @fragment
 fn fs_capture(in: VsOut, @builtin(front_facing) front_facing: bool) -> CaptureOut {
     return shade_fragment(in, front_facing, false);
@@ -288,8 +313,10 @@ fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
     }
     let bx = u32(in.clip.x) % 4u;
     let by = u32(in.clip.y) % 4u;
-    if (eff_fade <= BAYER4[by * 4u + bx]) {
-        discard;
+    if (!BLENDED) {
+        if (eff_fade <= BAYER4[by * 4u + bx]) {
+            discard;
+        }
     }
 
     // The AO factor for this fragment, behind the same uniform flag `shade` branches on: an AO-off
@@ -379,6 +406,9 @@ fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
     // target would store as infinity (or saturate), and the bloom chain would smear it.
     var out: CaptureOut;
     out.color = vec4<f32>(hdr_safe(lit), in.color.a);
+    if (BLENDED) {
+        out.color.a = coverage * eff_fade;
+    }
     out.emissive = vec4<f32>(
         hdr_safe(mix(emissive, in.flash.rgb, clamp(in.flash.a, 0.0, 1.0))),
         0.0,

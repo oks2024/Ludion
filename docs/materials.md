@@ -1,5 +1,5 @@
 ---
-description: Material scalars, author surfaces, precedence, texture maps, cutout, emissive, wrap, rim light
+description: Material scalars, author surfaces, precedence, texture maps, cutout, blended meshes, emissive, rim
 ---
 
 # Materials
@@ -149,9 +149,9 @@ distance. It holds under `textures: source` and `cooked` alike; every other map 
 
 **Render-only:** a collider built from a cutout mesh stays solid, so a grating stays walkable. The GI
 voxelizer skips `mask` meshes, so light passes through a grating (`ludion docs global-illumination`).
-Voxel, sculpt and primitive meshes carry no UVs and cannot be cutout. `BLEND` (sorted transparency) is
-not supported: `ludion import` refuses it with `L1202`; glTF `MASK` and `doubleSided` map onto these
-keys. `examples/gallery/cutout-double-sided.yaml` shows it all; the Blender set-up is
+Voxel, sculpt and primitive meshes carry no UVs and cannot be cutout. glTF `BLEND` is refused with `L1202`
+by default, and under `--allow-lossy` it imports **opaque** with a warning; for a see-through mesh set
+`Mesh.blend` (below). glTF `MASK` and `doubleSided` map onto these keys. `examples/gallery/cutout-double-sided.yaml` shows it all; the Blender set-up is
 `ludion docs blender-craft`.
 
 ## A roughness × metallic sweep (copyable)
@@ -329,6 +329,42 @@ or a black `color` renders the same bytes as a scene without it.
 
 `Mesh.medium` (`[0, 1]`, default `1`, inherited down `Parent`) exempts a mesh from the fog medium:
 `ludion docs atmosphere --section "Exempting an object from the medium"`.
+
+## Blended meshes
+
+`Mesh.blend: alpha | additive` (absent = opaque) draws a mesh seen through, on every mesh kind: primitive,
+asset, voxel, sculpt, assembly, character. `color`'s alpha is the opacity; `Fade` multiplies it instead of
+dithering. It is not inherited down `Parent`, and an assembly is one entity, so all its parts blend.
+
+```yaml
+Mesh:
+  shape: cube
+  color: [0.45, 0.7, 0.8, 0.35]
+  roughness: 0.1
+  blend: alpha        # `additive`: adds the lit colour scaled by the opacity; brightens, never darkens
+```
+
+A blended mesh is lit like an opaque one, then drawn after the ground markers and before the sprites,
+sorted back to front **per entity** (an assembly's parts sort as one figure, by the view distance to the
+centre of their joint bounds; under an orthographic camera by depth along the view). It tests depth and
+writes none. Two interpenetrating panes do not sort exactly. Because it joins the transparent layer, fog,
+light shafts and depth of field read it at its own distance.
+
+| Consumer | Sees a blended mesh? |
+|---|---|
+| Depth pre-pass, ambient occlusion, SSR, decals | No: it writes no opaque depth, so they read what is behind it |
+| Sun and local shadows | No: it never casts a shadow, whatever `Visibility.cast_shadows` says |
+| GI voxelization, probe captures, `OccludedSilhouette` mask | No |
+| Sun and local-light shadows *on* it, sun, point and spot light | Yes: it is shaded like an opaque mesh |
+| Fog, shafts, depth of field, `Mesh.medium` | Yes, at its own distance |
+| Sprites, particles, text | Draw after it, in their own order: a sprite behind glass is painted over it |
+| `Static` | A `Static` blended mesh takes the dynamic path (`L1341`) |
+| `Viewmodel` | The `blend` is ignored with `L2360`: the mesh draws opaque |
+| Physics, perception | Unchanged: `blend` is render-only, so a pane blocks or passes sight and shots by its collider and layer, not by its look |
+
+Primitive glass: a thin cube (`scale: [3, 3, 0.08]`) with a low alpha and low `roughness`, in a frame of
+opaque cubes. Give the pane a collider on a layer that sight rays ignore if guards should see through it. `examples/gallery/glass-and-holograms.yaml` shows glass, an additive
+hologram, a ghost assembly and a faded pane.
 
 ## Next
 

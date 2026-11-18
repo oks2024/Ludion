@@ -243,7 +243,8 @@ so kerning needs a shaper or a GPOS reader.
 15. **Effects deferred.** Outline, shadow and glow wait for the trigger "a text surface a sitting
     judges unreadable over its background"; reserved shape `outline: { width, color }` /
     `shadow: { offset, color }` on the text components, skip-serialized. Stopgap: a second `UiText`
-    offset by 2 px.
+    offset by 2 px. The trigger fired for the outline (`Plan/ui-hud.md` W5a); the shadow is W5b and the glow stays
+    deferred.
 
 16. **Editor and protocol.** Wire unchanged (components cross as opaque JSON; 38 methods, schema
     hash unmoved). The bake is `generate-atlas`, which the editor host may already spawn with

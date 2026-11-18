@@ -54,6 +54,51 @@ orthographic camera.
    test, in scene order. The target follows the colour pass in both, so fog and CoC agree with what
    was painted.
 
+## Mesh path (Neon Shroud request 0016, Serious Isaac draft 0030)
+
+An external game needs glass, holograms and ghost figures: meshes seen through. The trigger in
+`Plan/engine-gap-map.md` (a committed asset that must be seen through) fired. Decisions continue the
+numbering above.
+
+5. **`Mesh.blend: alpha | additive`** on every mesh kind (primitive, asset, voxel, sculpt, assembly,
+   character). A blended mesh is lit like an opaque one and drawn in `transparents` after the ground
+   markers and before the sprites: back-to-front per entity, depth test on, depth write off. It joins
+   `transparent_depth`, so fog, shafts and DoF see it at its own distance. It is not inherited down
+   `Parent`; an assembly is one entity, so all its parts blend.
+6. **Excluded by construction.** Extract puts a blended instance in `RenderScene::blended`, never in
+   `RenderScene::meshes`, so the depth pre-pass, shadows, GI voxelization, the silhouette and
+   probe captures never see it. A scene with no `blend` has the same frame graph and pixels, and its
+   canonical text and `WorldHash` do not move.
+7. **Sort.** One key per entity (all parts of an assembly share a group): the view distance to the
+   centre of the group's world AABB, far first, ties by ascending group. Per-entity, not per-triangle:
+   two interpenetrating panes do not sort exactly.
+8. **Lighting.** Direct light, sun shadow and local shadows read as for an opaque mesh. Ambient
+   occlusion is off for a blended mesh (AO is a screen-space read of opaque depth).
+9. **Static, viewmodel.** A `Static` blended entity takes the dynamic path and reports `L1341`. A blend
+   on a `Viewmodel` mesh is ignored with `L2360`; it draws opaque.
+
+Waves:
+
+- **W1:** `Mesh.blend`, the side list, the sort, the pipelines, `transparent_depth` integration, the
+  `glass-and-holograms` gallery scene, docs.
+- **W2:** asset `alpha_mode: blend` (`L1110`/`L1111` extended; `Mesh.blend` overrides the document);
+  glTF `BLEND` imports as blend (`L1202` narrowed, the lossy fallback goes); indirect specular (sky
+  IBL and probes) on lit blended meshes; `lit: false`.
+- **W3:** `blend_depth: nearest`, a per-entity depth pre-pass in which an assembly is one figure, and
+  the ghost demo.
+- **Open, with trigger:** a merged distance sort with sprites and particles, if smoke behind office
+  glass reads wrong.
+
+**Proposed — owner ruling owed:**
+
+- (a) The trigger firing (dock office glass after the water), and the mesh path in decision 1.
+- (b) Meshes draw before sprites and particles; decision 4's "unchanged by design" gains this ordering
+  limit: a sprite behind glass is drawn over the glass's depth-off layer in sprite order, not by
+  distance.
+- (c) `Fade` multiplies opacity on a blended mesh instead of dithering.
+- (d) A blended mesh never casts a shadow, whatever `Visibility.cast_shadows` says.
+- (e) A blended mesh is never an SSR origin; it gets probe and sky specular in W2.
+
 ## Known errors
 
 - **Soft texels.** In-scatter is exact; the transmitted colour is off by `a(1-a)(S-B)(F_s-F_b)`,
@@ -109,3 +154,4 @@ tried on Metal, in the orthographic shaft tests, or on the reference game, and w
 - macOS goldens blessed for `fog-sprites`, `fog-sprites-ortho`, `dof-sprites`, `shafts-sprites`.
 - Windows: the same four first-blessed on the RTX 3090, and `night-street` re-blessed for the three
   pixels above. Mechanized; the human look and the Windows cost are in the owed ledger.
+- Mesh path (0016): W1 in progress.

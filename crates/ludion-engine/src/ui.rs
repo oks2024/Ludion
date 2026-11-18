@@ -43,14 +43,17 @@ use std::ops::Range;
 pub use hit::ui_hit;
 pub use ludion_components::ui::UiNav;
 
-use crate::components::{Anchor, UiList, UiRect, UiText};
+use crate::components::{Anchor, TextOutline, UiList, UiRect, UiText};
 use ludion_components::ui::{
     UiClock, UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat,
 };
+use ludion_core::codes::code;
+use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::time::TickRate;
 pub use ludion_font::FontFace;
 use ludion_font::{GlyphQuad, TextLayout, YAxis, fold_line_breaks, layout};
+use ludion_renderer::GlyphOutline;
 
 /// The reference canvas is always this many units tall; width is `CANVAS_HEIGHT * aspect`.
 const CANVAS_HEIGHT: f32 = 1080.0;
@@ -247,6 +250,72 @@ pub(crate) fn ui_text_draw(face: &FontFace, text: &UiText, viewport: (u32, u32))
     let (laid, rect) = ui_text_block(face, text, viewport);
     let cell_px = text.size * pixel_scale(viewport);
     laid.quads([rect[0], rect[1]], cell_px, YAxis::Down)
+}
+
+/// The most whole source pixels a bitmap outline dilates by.
+const BITMAP_OUTLINE_MAX: f32 = 4.0;
+
+/// Resolves a text `outline` to the renderer's atlas-texel form, or `None` when it draws nothing
+/// (no outline, width 0, alpha 0).
+///
+/// `ppt`, the screen pixels per atlas texel, is `size * scale * units_per_em / (em_px * line_units)`.
+/// An SDF face (`sdf_spread > 0`) reaches `width` texels-worth, at most its spread less one screen
+/// pixel of antialiasing; a bitmap face dilates by `round(width)` whole source pixels in `1..=4`.
+/// Either cap records the degraded `L2304`, keyed `"{key}/ui-outline-width"`, naming `face_name` and
+/// the widest outline in canvas units.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_outline(
+    face: &FontFace,
+    face_name: &str,
+    sdf_spread: u32,
+    outline: Option<&TextOutline>,
+    size_canvas: f32,
+    viewport: (u32, u32),
+    key: &str,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) -> Option<GlyphOutline> {
+    let outline = outline?;
+    if !(outline.width.is_finite() && outline.width > 0.0 && outline.color[3] > 0.0) {
+        return None;
+    }
+    let scale = pixel_scale(viewport);
+    let doc = face.document();
+    let ppt = size_canvas * scale * doc.units_per_em as f32
+        / (doc.atlas.em_px as f32 * face.line_units() as f32);
+    let texels = outline.width * scale / ppt;
+    let (resolved, widest) = if sdf_spread > 0 {
+        let max = (sdf_spread as f32 - 1.0 / ppt).max(0.0);
+        (texels.min(max), max)
+    } else {
+        (
+            texels.round().clamp(1.0, BITMAP_OUTLINE_MAX),
+            BITMAP_OUTLINE_MAX,
+        )
+    };
+    let capped = if sdf_spread > 0 {
+        texels > widest
+    } else {
+        texels.round() > widest
+    };
+    if capped {
+        degraded.push((
+            format!("{key}/ui-outline-width"),
+            Diagnostic::new(
+                code::UI_TEXT_OUTLINE_CLAMPED,
+                format!(
+                    "the outline width {} is more than the `{face_name}` face draws at this size; \
+                     clamped to {}",
+                    outline.width,
+                    widest * ppt / scale
+                ),
+            )
+            .with_help("lower `outline.width`; `ludion explain L2304`"),
+        ));
+    }
+    (resolved > 0.0).then_some(GlyphOutline {
+        color: outline.color,
+        texels: resolved,
+    })
 }
 
 /// Resolves a [`UiText`] to the pixel-space rect `[x, y, w, h]` of the block it draws — wrapped to
@@ -1088,6 +1157,119 @@ mod motion_tests {
 
 #[cfg(test)]
 mod tests {
+    /// The embedded face's outline: `ppt` is `size * scale * upe / (em_px * line_units)`, a bitmap
+    /// width rounds to whole source pixels (at least 1), an SDF width is the same width in texels, and
+    /// an unusable outline resolves to nothing.
+    #[test]
+    fn outline_resolves_to_atlas_texels() {
+        let face = FontFace::embedded();
+        let doc = face.document();
+        let ppt = |size: f32, scale: f32| {
+            size * scale * doc.units_per_em as f32
+                / (doc.atlas.em_px as f32 * face.line_units() as f32)
+        };
+        let outline = |width: f32, alpha: f32| TextOutline {
+            width,
+            color: [1.0, 0.0, 0.0, alpha],
+        };
+        let mut degraded = Vec::new();
+        let mut resolve = |spread: u32, o: &TextOutline, viewport| {
+            resolve_outline(
+                face,
+                "embedded",
+                spread,
+                Some(o),
+                24.0,
+                viewport,
+                "k",
+                &mut degraded,
+            )
+        };
+        // 1080p: scale 1. Two source pixels wide.
+        let two = 2.0 * ppt(24.0, 1.0);
+        assert_eq!(
+            resolve(0, &outline(two, 1.0), (1920, 1080)).unwrap().texels,
+            2.0
+        );
+        // 540p halves both the pixels per texel and the outline's pixels: the texels do not move.
+        let half = resolve(0, &outline(two, 1.0), (960, 540)).unwrap().texels;
+        assert_eq!(half, 2.0);
+        // A hairline still dilates by one source pixel.
+        assert_eq!(
+            resolve(0, &outline(0.01, 1.0), (1920, 1080))
+                .unwrap()
+                .texels,
+            1.0
+        );
+        // SDF: unrounded texels.
+        let sdf = resolve(16, &outline(two, 1.0), (1920, 1080))
+            .unwrap()
+            .texels;
+        assert!((sdf - 2.0).abs() < 1e-4, "{sdf}");
+        // Off.
+        assert!(resolve(0, &outline(0.0, 1.0), (1920, 1080)).is_none());
+        assert!(resolve(0, &outline(two, 0.0), (1920, 1080)).is_none());
+        assert!(
+            resolve_outline(
+                face,
+                "embedded",
+                0,
+                None,
+                24.0,
+                (1920, 1080),
+                "k",
+                &mut Vec::new()
+            )
+            .is_none()
+        );
+        assert!(degraded.is_empty(), "nothing above was clamped");
+    }
+
+    /// A bitmap width past 4 source pixels and an SDF width past the spread each record `L2304`
+    /// once, keyed by the element.
+    #[test]
+    fn outline_clamps_warn_once() {
+        let face = FontFace::embedded();
+        let doc = face.document();
+        let ppt =
+            24.0 * doc.units_per_em as f32 / (doc.atlas.em_px as f32 * face.line_units() as f32);
+        let wide = TextOutline {
+            width: 10.0 * ppt,
+            color: [1.0; 4],
+        };
+        let mut degraded = Vec::new();
+        let bitmap = resolve_outline(
+            face,
+            "embedded",
+            0,
+            Some(&wide),
+            24.0,
+            (1920, 1080),
+            "e1",
+            &mut degraded,
+        )
+        .unwrap();
+        assert_eq!(bitmap.texels, 4.0);
+        assert_eq!(degraded.len(), 1);
+        assert_eq!(degraded[0].0, "e1/ui-outline-width");
+        assert_eq!(degraded[0].1.code, code::UI_TEXT_OUTLINE_CLAMPED);
+        assert!(degraded[0].1.message.contains("embedded"));
+        let sdf = resolve_outline(
+            face,
+            "embedded",
+            4,
+            Some(&wide),
+            24.0,
+            (1920, 1080),
+            "e2",
+            &mut degraded,
+        )
+        .unwrap();
+        assert!((sdf.texels - (4.0 - 1.0 / ppt)).abs() < 1e-4);
+        assert_eq!(degraded.len(), 2);
+        assert_eq!(degraded[1].0, "e2/ui-outline-width");
+    }
+
     use super::*;
     use crate::components::UiListItem;
     use ludion_sim::{GamepadButton, InputState, Key};

@@ -125,6 +125,8 @@ source as PNG, so the script asserts every `bpy.data.images` entry is PNG before
 - **Wrap diffuse:** add the custom properties `ludion_wrap` (0 to 1) and `ludion_scatter_color` (three
   floats) to the material and export with `export_extras=True`; they land on `Mesh.wrap` / `scatter_color`
   (`ludion docs materials`).
+- **Surface tag:** a string custom property `ludion_surface` on the material (export with custom
+  properties on) tags that mesh's triangles for footstep and hit queries (`ludion docs collision`).
 - **Cutout holes:** the image's `Alpha` output feeds the Principled `Alpha` input through a threshold
   (`LESS_THAN` against the cutoff, then `1 −` that), which the exporter reads as glTF `MASK` with that
   `alphaCutoff`; pick a cutoff exact in f32 (`0.25`) so the document writes it unchanged. Plain alpha

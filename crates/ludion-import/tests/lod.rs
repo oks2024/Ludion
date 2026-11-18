@@ -7,6 +7,7 @@ use ludion_import::{ExternalFiles, Import, ImportOptions, LodSpec, import};
 struct Grid {
     n: usize,
     double_sided: bool,
+    surface: Option<&'static str>,
 }
 
 fn grid_bytes(n: usize) -> (Vec<u8>, usize, usize) {
@@ -68,7 +69,13 @@ fn gltf(grids: &[Grid], nodes: &[(&str, usize)]) -> String {
             r#"{{"bufferView":{},"componentType":5125,"count":{indices},"type":"SCALAR"}}"#,
             mesh * 2 + 1
         ));
-        materials.push(format!(r#"{{"doubleSided":{}}}"#, grid.double_sided));
+        let extras = grid.surface.map_or(String::new(), |name| {
+            format!(r#","extras":{{"ludion_surface":"{name}"}}"#)
+        });
+        materials.push(format!(
+            r#"{{"doubleSided":{}{extras}}}"#,
+            grid.double_sided
+        ));
         meshes.push(format!(
             r#"{{"name":"m{mesh}","primitives":[{{"attributes":{{"POSITION":{}}},"indices":{},"material":{mesh}}}]}}"#,
             mesh * 2,
@@ -118,6 +125,14 @@ fn plain(n: usize) -> Grid {
     Grid {
         n,
         double_sided: false,
+        surface: None,
+    }
+}
+
+fn tagged(n: usize, surface: &'static str) -> Grid {
+    Grid {
+        surface: Some(surface),
+        ..plain(n)
     }
 }
 
@@ -266,6 +281,7 @@ fn authored_chain_errors_are_readable() {
             Grid {
                 n: 4,
                 double_sided: true,
+                surface: None,
             },
         ],
         &[("rock", 0), ("rock_LOD1", 1)],
@@ -297,4 +313,59 @@ fn a_name_that_only_looks_like_a_level_is_an_ordinary_node() {
     let json = gltf(&[plain(4), plain(4)], &[("rock", 0), ("rock_LODge", 1)]);
     let import = run(&json, &[]).unwrap();
     assert_eq!(import.prefab.entities.len(), 2);
+}
+
+#[test]
+fn a_generated_chain_carries_the_bases_tag_on_every_level() {
+    let json = gltf(&[tagged(16, "rock")], &[("rock", 0)]);
+    let specs = [spec(0.25, Some(0.5)), spec(0.1, Some(0.25))];
+    let import = run(&json, &specs).unwrap();
+    assert_eq!(import.meshes.len(), 3);
+    for mesh in &import.meshes {
+        let surfaces = mesh.surfaces.as_ref().expect("every level is tagged");
+        assert_eq!(surfaces.names, ["rock"]);
+        assert_eq!(surfaces.runs, [[mesh.doc.triangle_count() as u32, 0]]);
+    }
+    let emit = || -> Vec<String> {
+        run(&json, &specs)
+            .unwrap()
+            .meshes
+            .iter()
+            .map(|m| {
+                format!(
+                    "{}
+{}",
+                    m.rel_path,
+                    ludion_scene::emit_mesh_with_surfaces(&m.doc, m.surfaces.as_ref())
+                )
+            })
+            .collect()
+    };
+    assert_eq!(emit(), emit());
+}
+
+#[test]
+fn authored_levels_must_agree_with_the_base_on_the_surface() {
+    let same = gltf(
+        &[tagged(8, "rock"), tagged(4, "rock")],
+        &[("rock", 0), ("rock_LOD1", 1)],
+    );
+    let import = run(&same, &[]).unwrap();
+    assert!(import.meshes.iter().all(|m| m.surfaces.is_some()));
+
+    for (grids, shown) in [
+        (
+            [tagged(8, "rock"), tagged(4, "grass")],
+            "[rock] against [grass]",
+        ),
+        ([tagged(8, "rock"), plain(4)], "[rock] against untagged"),
+    ] {
+        let json = gltf(&grids, &[("rock", 0), ("rock_LOD1", 1)]);
+        let errors = run(&json, &[]).expect_err("a surface mismatch");
+        let text = messages(&errors);
+        assert!(
+            text.contains("L1396") && text.contains(&format!("`surfaces`: {shown}")),
+            "{text}"
+        );
+    }
 }

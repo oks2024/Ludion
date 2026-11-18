@@ -465,6 +465,10 @@ fn resolve(
             skipped.dynamic.note(mesh.index);
             continue;
         }
+        // A blended mesh is seen through, so it neither occludes probe rays nor deposits albedo.
+        if mesh.blend.is_some() {
+            continue;
+        }
         let solid = match mesh.source {
             PlacedMeshSource::Primitive(MeshShape::Cube) => Solid::Cube,
             PlacedMeshSource::Primitive(MeshShape::Plane) => Solid::Box {

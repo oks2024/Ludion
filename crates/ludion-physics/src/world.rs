@@ -15,8 +15,8 @@ use ludion_core::suggest::nearest;
 use ludion_core::time::{FrameIndex, GameClock, TickRate};
 use ludion_ecs::World;
 use ludion_spatial::{
-    AxisLock, Body, Collider, CombineRule, CompoundPart, Joint, JointKind, JointMotor, Plane,
-    RigidBody, Shape, Velocity,
+    AxisLock, Body, Collider, CombineRule, CompoundPart, JointKind, JointMotor, Plane, RigidBody,
+    Shape, Velocity,
 };
 use rapier3d::parry::utils::PoseOpt;
 use rapier3d::prelude::{
@@ -30,8 +30,8 @@ use serde::{Deserialize, Serialize};
 use crate::contacts::{ContactEvent, ContactPhase};
 use crate::impulse::{BlastHit, ImpulseMiss, QueuedImpulse};
 use crate::joints::{
-    JointBroken, JointEntry, MotorRows, apply_motor, build_generic_joint, current_motor,
-    desired_motor, motor_off_target,
+    JointBroken, JointEntry, JointSource, MotorRows, apply_motor, build_generic_joint,
+    current_motor, desired_motor, motor_off_target,
 };
 use crate::layer_set::LayerSet;
 use crate::meshes::TriangleMesh;
@@ -2395,7 +2395,7 @@ impl PhysicsWorld {
     /// the queue must not grow it without bound); a changed `Joint` drops and rebuilds at the
     /// bodies' current poses; and a handle that is `None`, or no longer present in
     /// `rapier.impulse_joints` (a body rebuild or retirement cascaded its removal), is reattached.
-    pub(crate) fn reconcile_joints(&mut self, live: &[(EntityId, Joint)]) {
+    pub(crate) fn reconcile_joints(&mut self, live: &[(EntityId, JointSource)]) {
         // The binary searches below need entity order; the insert loop keeps `live`'s rank order.
         let mut carriers: Vec<EntityId> = live.iter().map(|(carrier, _)| *carrier).collect();
         carriers.sort_unstable();
@@ -2417,7 +2417,7 @@ impl PhysicsWorld {
         }
 
         for (carrier, joint) in live {
-            let bodies = self.joint_bodies(joint.a, joint.b);
+            let bodies = self.joint_bodies(joint.joint.a, joint.joint.b);
             match self.joint_rows.get(carrier).copied() {
                 None => {
                     let handle = bodies.map(|(a, b)| self.attach_joint(a, b, joint));
@@ -2488,7 +2488,7 @@ impl PhysicsWorld {
                 .binary_search_by_key(&carrier, |(id, _)| *id)
                 .ok()
                 .map(|i| &motors[i].1);
-            let desired = match desired_motor(&entry.source.kind, motor) {
+            let desired = match desired_motor(&entry.source.joint.kind, motor) {
                 Ok(rows) => {
                     if let Ok(at) = self.motor_mismatched.binary_search(&carrier) {
                         self.motor_mismatched.remove(at);
@@ -2558,7 +2558,7 @@ impl PhysicsWorld {
         &mut self,
         a: RigidBodyHandle,
         b: RigidBodyHandle,
-        joint: &Joint,
+        source: &JointSource,
     ) -> ImpulseJointHandle {
         let pa = *self
             .rapier
@@ -2572,7 +2572,7 @@ impl PhysicsWorld {
             .get(b)
             .expect("joint_bodies only returns live handles")
             .position();
-        let generic = build_generic_joint(pa, pb, joint);
+        let generic = build_generic_joint(pa, pb, &source.joint, source.zero.as_ref());
         self.rapier.insert_impulse_joint(a, b, generic)
     }
 
@@ -2593,7 +2593,7 @@ impl PhysicsWorld {
             .num_solver_iterations
             .max(1) as f32;
         for row in 0..self.joints.len() {
-            let Some(threshold) = self.joints[row].source.break_impulse else {
+            let Some(threshold) = self.joints[row].source.joint.break_impulse else {
                 continue;
             };
             let Some(handle) = self.joints[row].handle else {
@@ -2609,7 +2609,7 @@ impl PhysicsWorld {
             // `impulses` above — only in its limit's impulse once the ride hits an end stop. That
             // has to count too, or a slider slamming its limit can never break (a ball's/hinge's
             // *angular* limits are excluded on purpose: a break is a linear-impulse quantity).
-            if matches!(self.joints[row].source.kind, JointKind::Slider { .. }) {
+            if matches!(self.joints[row].source.joint.kind, JointKind::Slider { .. }) {
                 let limit = joint.data.limits[JointAxis::LinX as usize].impulse;
                 sum_sq += limit * limit;
             }
@@ -2619,8 +2619,8 @@ impl PhysicsWorld {
             }
             self.rapier.remove_impulse_joint(handle);
             let carrier = self.joints[row].carrier;
-            let a = self.joints[row].source.a;
-            let b = self.joints[row].source.b;
+            let a = self.joints[row].source.joint.a;
+            let b = self.joints[row].source.joint.b;
             self.joints[row].handle = None;
             self.joints[row].broken = true;
             self.joint_events.push(JointBroken {

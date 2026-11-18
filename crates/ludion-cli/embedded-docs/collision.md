@@ -246,7 +246,7 @@ order: overlay at the point, part, tag, `default_surface`. An empty or repeated 
 a non-assembly entity is `L1694` (`check-scene`); a part named `"1"` must be quoted.
 
 **Triangles and cells.** A `mesh` collider's document can tag its triangles (`surfaces: [concrete, metal_grate]` plus run-length
-`triangle_surfaces`, `ludion devdocs scene-kind-documents`): the names are local and matched to `physics.surfaces` at load. A heightfield tags
+`triangle_surfaces`, `ludion devdocs scene-kind-documents`): the names are local and matched to `physics.surfaces` at load. `ludion import` tags a document from its material's `extras.ludion_surface` (one tag per document, LOD levels carry the base's), never from material names. A heightfield tags
 cells on its `SurfaceTag`: `cells: { surfaces: [dirt, concrete], runs: [[40, 0], [8, 1], [16, 0]] }`, row-major, `(rows-1)*(cols-1)` of them.
 One rule for every query and the motor: the triangle (or cell) **nearest the hit point** in the collider's local frame wins; triangles within
 `1e-4` m of the best tie to the lowest index, and a point on a cell edge takes the higher-index cell. Resolution order: overlay, triangle or cell,

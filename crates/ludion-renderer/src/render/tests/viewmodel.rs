@@ -241,10 +241,11 @@ fn point(position: Vec3, intensity: f32, range: f32) -> crate::scene::PointLight
     }
 }
 
-/// The viewmodel and the `sun_cascades` view are pipeline constants, not uniform data: the composed
-/// mesh shader declares a `VIEWMODEL` and a `SUN_CASCADE_VIEW` override, each defaulting to false,
-/// so a pipeline built without constants shades the world with no debug tint, and neither the
-/// `Camera` nor the `Sun` uniform carries a field for them.
+/// The viewmodel, the `sun_cascades` view and the blended twins are pipeline constants, not uniform
+/// data: the composed mesh shader declares `VIEWMODEL`, `BLENDED`, `SUN_CASCADE_VIEW` and
+/// `BLEND_ADDITIVE` overrides, each defaulting to false, so a pipeline built without constants shades
+/// the world opaque with no debug tint, and neither the `Camera` nor the `Sun` uniform carries a field
+/// for them.
 #[test]
 fn the_mesh_overrides_default_to_the_world() {
     let module = naga::front::wgsl::parse_str(&builtin_composed(ShaderId::Mesh))
@@ -254,7 +255,15 @@ fn the_mesh_overrides_default_to_the_world() {
         .iter()
         .map(|(_, o)| o.name.as_deref())
         .collect();
-    assert_eq!(names, [Some("VIEWMODEL"), Some("SUN_CASCADE_VIEW")]);
+    assert_eq!(
+        names,
+        [
+            Some("VIEWMODEL"),
+            Some("BLENDED"),
+            Some("SUN_CASCADE_VIEW"),
+            Some("BLEND_ADDITIVE")
+        ]
+    );
     for (_, o) in module.overrides.iter() {
         let init = o.init.expect("each override has a default");
         assert!(

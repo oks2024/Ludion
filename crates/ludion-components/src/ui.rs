@@ -618,6 +618,63 @@ impl SemanticValidate for UiGroup {
     }
 }
 
+/// An outline drawn under the glyphs of a [`UiText`](crate::UiText) or [`UiList`]. A `width` of `0`,
+/// or a `color` alpha of `0`, draws nothing.
+///
+/// ```
+/// use ludion_components::TextOutline;
+///
+/// let outline: TextOutline =
+///     serde_json::from_value(serde_json::json!({ "width": 2.0, "color": [0.0, 0.0, 0.0, 1.0] })).unwrap();
+/// assert_eq!(outline.width, 2.0);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct TextOutline {
+    /// Outline thickness in canvas units, finite and `>= 0`. Clamped to what the face can draw
+    /// (`L2304`).
+    pub width: f32,
+    /// Linear straight RGBA of the outline.
+    pub color: [f32; 4],
+}
+
+/// Rejects an `outline` with a `width` that is non-finite or negative, or a non-finite `color`
+/// channel (`L1618`, `/outline/width`, `/outline/color`). Shared by `UiText` and `UiList`.
+pub(crate) fn validate_text_outline(value: &Value, out: &mut Vec<Diagnostic>) {
+    let Some(outline) = value.get("outline") else {
+        return;
+    };
+    let mut reject = |pointer: &str, what: &str| {
+        out.push(
+            Diagnostic::new(code::UI_TEXT_OUTLINE_INVALID, what.to_string())
+                .with_path(pointer)
+                .with_help("fix the field; `ludion explain L1618`"),
+        );
+    };
+    if let Some(width) = outline
+        .get("width")
+        .and_then(Value::as_f64)
+        .map(engine_number)
+        && !(width.is_finite() && width >= 0.0)
+    {
+        reject(
+            "/outline/width",
+            "the text outline width must be finite and at least 0",
+        );
+    }
+    if let Some(color) = outline.get("color").and_then(Value::as_array)
+        && color
+            .iter()
+            .filter_map(Value::as_f64)
+            .map(engine_number)
+            .any(|channel| !channel.is_finite())
+    {
+        reject(
+            "/outline/color",
+            "the text outline color must have finite channels",
+        );
+    }
+}
+
 fn is_default_center(value: &UiSliceCenter) -> bool {
     *value == UiSliceCenter::default()
 }

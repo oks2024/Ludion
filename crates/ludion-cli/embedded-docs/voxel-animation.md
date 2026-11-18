@@ -21,7 +21,10 @@ instead of a `Mesh`'s clips — `ludion docs sprite-animation` covers that bindi
      walk: anims/humanoid-walk.anim.yaml
    ```
 2. **Check it.** `ludion check-scene models/x.assembly.yaml` validates every bound clip and lists the
-   bindings (`clip walk: anims/humanoid-walk.anim.yaml`) — the names `--clip` and `Animation` accept.
+   bindings (`clip walk: anims/humanoid-walk.anim.yaml`) — the names `--clip` and `Animation` accept —
+   then each `masks:` entry (`mask arm_only: arm (descendants)`) and each `blends:` entry
+   (`blend locomotion (1D, sync foot_l): idle@0, walk@2`, with a 2D blend's triangles beneath); `--json`
+   adds `masks` and `blends` arrays when there are any.
    `ludion check-scene <clip>.anim.yaml` alone prints the clip's numbers: duration, loop, key counts
    per track, each channel's key-value range and, for a looping clip, the local seam (`t = 0` against
    `t = duration`). A clip with `generated_from` pointing at a glTF is re-imported: key counts before
@@ -46,6 +49,13 @@ instead of a `Mesh`'s clips — `ludion docs sprite-animation` covers that bindi
    blend as a strip: 5 phases, or `--strip n`, at fade weights 0 to 1, each printed as `weight <w>`
    under a `crossfade <from> -> <to>` header. `--time` is how far `from` has played when the fade
    begins. Output defaults to `<name>-<from>-<to>-crossfade.png`.
+   **`--blend <name>:<p0>[:<p1>]`** (assemblies and characters, not with `--clip` or `--crossfade`)
+   sweeps a blend: each `p` is a number or `lo..hi`, swept linearly over 5 phases (or `--strip n`).
+   Each phase prints `params [x, y], phase <cycles>` and its gap analysis, all at `--time`; output
+   defaults to `<name>-<blend>-blend.png`. **`--layer <clip>:<weight>[:<mask>[:override|additive]]`**
+   (repeatable, at most four, `L1670`) stacks layers over `--clip`, `--crossfade` or `--blend`, echoed as
+   `layers: …`, and the gap analysis poses through them; the output gains `-layered`. A prefab has no
+   blends or layers.
 4. **Wire it** from a game system that writes `Animation` when the *choice* changes.
 
 ## Format
@@ -228,6 +238,7 @@ fn wave(layers: &mut AnimationLayers, now: SimTime) {
 - Layers read the base `hold` grid and are presentation only: `switch_to_ragdoll` samples the base
   pose alone. `events: true` fires the layer clip's events with `ClipEvent.layer` set.
 - A layer `clip` may name a blend (below); its phase lives in `BlendClock.layers`.
+- `render --model --layer` previews a stack, and `check-scene` lists the masks (step 3 above).
 
 ### Blend spaces
 
@@ -269,6 +280,8 @@ blends:
   entity whose clip, crossfade source or layer names a blend; without it extract falls back to
   `elapsed * rate(params now)` and no events fire.
 - `switch_to_ragdoll` samples a blended base at the switch instant; layers stay excluded.
+- `render --model --blend` sweeps the parameters with no `BlendClock`: a sheet's phase is the stateless
+  `elapsed * rate(params)`, which is what an entity without a clock draws.
 
 ### Live editing
 
@@ -289,8 +302,9 @@ outside the mesh content hash, so nothing is re-uploaded to the GPU.
   and reads as a broken puppet; the axis conventions in `ludion docs voxel-assemblies` are the only defence.
 - **`--clip` refuses what it cannot pose** with `L1117`: a `.voxel.yaml`/`.mesh.yaml` model (one rigid
   piece), a name the model does not bind (the message lists the ones it does), a lineup, and
-  `--time`/`--strip` with no `--clip` or `--crossfade` at all. A malformed `--crossfade` spec is
-  `L1117` too.
+  `--time`/`--strip` with no `--clip`, `--crossfade` or `--blend` at all. A malformed `--crossfade`,
+  `--blend` or `--layer` spec is `L1117` too, as is a `--layer` with no base or an unknown blend, clip
+  or mask name.
 
 ## Next
 

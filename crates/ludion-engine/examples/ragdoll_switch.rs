@@ -3,6 +3,11 @@
 //! `Joint`, and the figure falls under the scene's `physics: {space: free}` gravity for another 120
 //! ticks — the part heights printed along the way.
 //!
+//! With `--limits-from-rest` the switch is `switch_to_ragdoll_with` and `LimitsFrom::Rest`: each
+//! joint also carries a `JointZero`, so its limits and any motor target count from the rig's rest
+//! pose rather than the pose the puppet was in at the switch. The arm hinge angle is printed at the
+//! end of the run.
+//!
 //! The switch is ordinary game code: a real game calls `switch_to_ragdoll` from a system, at
 //! `ctx.game_time` (`SystemCtx::game_time`) — a death blow, a stagger, a rope grab. This headless
 //! example drives the engine directly (no window, no GPU) and stands in for that system with the
@@ -15,14 +20,20 @@
 //!
 //! ```text
 //! cargo run -p ludion-engine --example ragdoll_switch
+//! cargo run -p ludion-engine --example ragdoll_switch -- --limits-from-rest
 //! ```
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ludion_core::ids::EntityId;
+use ludion_core::math::euler_xyz_degrees_to_quat;
+use ludion_core::math::glam::Quat;
 use ludion_core::time::{SimTime, TickRate};
-use ludion_engine::{Engine, Transform, load_assembly, switch_to_ragdoll};
+use ludion_engine::{
+    Engine, LimitsFrom, RagdollSwitch, Transform, load_assembly, switch_to_ragdoll,
+    switch_to_ragdoll_with,
+};
 
 // --- The content (copyable) ----------------------------------------------------------------------
 
@@ -212,7 +223,15 @@ fn main() -> ExitCode {
     // document order at generation 0.
     let puppet = EntityId::new(1, 0);
     let now = SimTime::from_ticks(engine.frame().0, TickRate::DEFAULT);
-    let spawned = match switch_to_ragdoll(engine.world_mut(), puppet, &data, now) {
+    let from_rest = std::env::args().any(|arg| arg == "--limits-from-rest");
+    let switched = if from_rest {
+        let mut opts = RagdollSwitch::default();
+        opts.limits_from = LimitsFrom::Rest;
+        switch_to_ragdoll_with(engine.world_mut(), puppet, &data, now, opts)
+    } else {
+        switch_to_ragdoll(engine.world_mut(), puppet, &data, now)
+    };
+    let spawned = match switched {
         Ok(spawned) => spawned,
         Err(diagnostic) => {
             eprintln!("{diagnostic}");
@@ -250,6 +269,21 @@ fn main() -> ExitCode {
             "{elapsed:>19}   {:>7.3}   {:>7.3}",
             torso.translation[1], arm.translation[1]
         );
+    }
+
+    if from_rest {
+        let rotation = |id| {
+            let transform = engine.world().get::<Transform>(id).unwrap().unwrap();
+            Quat::from_array(euler_xyz_degrees_to_quat(transform.rotation))
+        };
+        let relative = rotation(spawned[0]).inverse() * rotation(spawned[1]);
+        let relative = if relative.w < 0.0 {
+            -relative
+        } else {
+            relative
+        };
+        let angle = 2.0 * ludion_core::math::atan2(relative.z, relative.w).to_degrees();
+        println!("arm hinge angle from rest: {angle:.1} degrees");
     }
 
     let _ = std::fs::remove_dir_all(&root);

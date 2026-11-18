@@ -32,11 +32,11 @@ use ludion_protocol::command::ViewPose;
 use ludion_renderer::LodSettings;
 use ludion_renderer::UiClip;
 use ludion_renderer::{
-    BlendData, CameraBlend, DebugSegment, DecalBlend, DecalInstance, DecalMaps, DecalReceivers,
-    DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
-    GroundMarkerInstance, InstanceKey, LocalShadowData, MAX_SUN_CASCADES, MapImage, MeshData,
-    MeshInstance, MeshShape, MeshTexture, ParticleInstance, PointLightData, PostData, ProbeData,
-    ProbeVolume, ProjectileItem, QualityParams, RenderCamera, RenderScene, SkinJoint,
+    BlendData, BlendMode, BlendedMesh, CameraBlend, DebugSegment, DecalBlend, DecalInstance,
+    DecalMaps, DecalReceivers, DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT,
+    GiData, GroundMarkerInstance, InstanceKey, LocalShadowData, MAX_SUN_CASCADES, MapImage,
+    MeshData, MeshInstance, MeshShape, MeshTexture, ParticleInstance, PointLightData, PostData,
+    ProbeData, ProbeVolume, ProjectileItem, QualityParams, RenderCamera, RenderScene, SkinJoint,
     SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap,
     UiInstance, WorldVoxelGrid, aspect_ratio,
 };
@@ -48,12 +48,12 @@ use crate::character::CharacterData;
 use crate::components::{
     Animation, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
-    GroundMarkerGrid, GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, ParentJoint,
-    ParticleEmitter, PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Rim,
-    SkinBone, SpotLight, Sprite, SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList,
-    UiRect, UiText,
+    GroundMarkerGrid, GroundMarkerShape, MapWrap, Mesh, MeshBlend, MeshGrid, MeshSource,
+    ParentJoint, ParticleEmitter, PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe,
+    Rim, SkinBone, SpotLight, Sprite, SpriteBlend, Text, Tilemap, TonemapOperator, Transform,
+    UiList, UiRect, UiText,
 };
-use crate::components::{AnimationLayers, BlendClock, LayerMode, layer_weight_at};
+use crate::components::{AnimationLayer, AnimationLayers, BlendClock, LayerMode, layer_weight_at};
 use crate::docs::DocStore;
 use crate::extract_observer::{ExtractPhase, SkinCounts};
 use crate::fonts::FontLibrary;
@@ -1089,6 +1089,16 @@ fn extract_inner(
                 &mut path_index,
                 &mut errors,
             );
+            let outline = ui::resolve_outline(
+                face,
+                text.font.as_deref().unwrap_or("embedded"),
+                font.map_or(0, |f| f.spread_px),
+                text.outline.as_ref(),
+                text.size,
+                viewport,
+                &crate::diagnostics::offender_key(world, id),
+                degraded,
+            );
             ui_entries.push((
                 text.order,
                 id,
@@ -1098,6 +1108,7 @@ fn extract_inner(
                     quads,
                     font,
                     clip: UiClip::NONE,
+                    outline,
                 },
             ));
             let element = ui::hud::HudElement::Text;
@@ -1136,6 +1147,16 @@ fn extract_inner(
                     &mut textures,
                     &mut path_index,
                     &mut errors,
+                );
+                let outline = ui::resolve_outline(
+                    face,
+                    list.font.as_deref().unwrap_or("embedded"),
+                    font.map_or(0, |f| f.spread_px),
+                    list.outline.as_ref(),
+                    list.size,
+                    viewport,
+                    &crate::diagnostics::offender_key(world, id),
+                    degraded,
                 );
                 // The background and every line share one `(order, EntityId)` key; the sort below is
                 // stable, so emitting the panel first is what puts it behind its own text.
@@ -1178,6 +1199,7 @@ fn extract_inner(
                             quads,
                             font,
                             clip: UiClip::NONE,
+                            outline,
                         },
                     ));
                 }
@@ -1265,6 +1287,10 @@ fn extract_inner(
     let mut skin_jobs: Vec<SkinJob> = Vec::new();
     let mut skin_joints = 0usize;
     let mut inherit = MeshInherit::default();
+    // Blended instances, outside `meshes`; `blend_group` numbers their owning entities consecutively.
+    let mut blended: Vec<BlendedMesh> = Vec::new();
+    let mut blend_group: Option<(EntityId, u32)> = None;
+    let mut blend_viewmodel_reported: Vec<EntityId> = Vec::new();
     for mesh in &placed.meshes {
         // Hidden meshes stay in `placed` for the voxelizer (the static GI bake ignores `Visibility`)
         // but are never resolved, skinned or drawn.
@@ -1273,6 +1299,36 @@ fn extract_inner(
         }
         let (fade, rim, medium) = inherit.resolve(world, mesh);
         let cast_shadows = visibility.casts(mesh.id);
+        let blend = match mesh.blend {
+            Some(_) if viewmodel_frame.contains(mesh.id) => {
+                if !blend_viewmodel_reported.contains(&mesh.id) {
+                    blend_viewmodel_reported.push(mesh.id);
+                    let at = crate::diagnostics::offender_key(world, mesh.id);
+                    degraded.push((
+                        format!("{at}/blend-on-viewmodel"),
+                        Diagnostic::new(
+                            code::MESH_BLEND_ON_VIEWMODEL,
+                            format!(
+                                "{} has a `Mesh.blend` on a `Viewmodel` mesh; the mesh draws opaque",
+                                mesh.id
+                            ),
+                        )
+                        .with_help("remove `blend` from the viewmodel's mesh"),
+                    ));
+                }
+                None
+            }
+            other => other,
+        };
+        let group = match (blend, blend_group) {
+            (None, _) => 0,
+            (Some(_), Some((id, group))) if id == mesh.id => group,
+            (Some(_), last) => {
+                let group = last.map_or(0, |(_, g)| g + 1);
+                blend_group = Some((mesh.id, group));
+                group
+            }
+        };
         let mut character: Option<Arc<CharacterData>> = None;
         let shape = match mesh.source {
             PlacedMeshSource::Primitive(shape) => Some(shape),
@@ -1364,8 +1420,7 @@ fn extract_inner(
                         .enumerate()
                 {
                     let index = base + part;
-                    mesh_owners.push(mesh.id);
-                    meshes.push(MeshInstance {
+                    let instance = MeshInstance {
                         shape: MeshShape::Asset(index),
                         model: mesh.model * local,
                         normal_matrix: mesh.normal_matrix * local_normal,
@@ -1383,7 +1438,14 @@ fn extract_inner(
                         viewmodel: false,
                         rim: resolve_rim_lane(&mesh_assets, Some(index), rim),
                         medium,
-                    });
+                    };
+                    match blend {
+                        Some(mode) => blended.push(blended_mesh(instance, mode, group)),
+                        None => {
+                            mesh_owners.push(mesh.id);
+                            meshes.push(instance);
+                        }
+                    }
                 }
                 continue;
             }
@@ -1418,8 +1480,7 @@ fn extract_inner(
                 }
                 _ => 0,
             };
-            mesh_owners.push(mesh.id);
-            meshes.push(mesh_instance(
+            let instance = mesh_instance(
                 mesh,
                 shape,
                 &mesh_assets,
@@ -1428,7 +1489,14 @@ fn extract_inner(
                 medium,
                 cast_shadows,
                 bone_offset,
-            ));
+            );
+            match blend {
+                Some(mode) => blended.push(blended_mesh(instance, mode, group)),
+                None => {
+                    mesh_owners.push(mesh.id);
+                    meshes.push(instance);
+                }
+            }
         }
     }
 
@@ -1593,6 +1661,7 @@ fn extract_inner(
         mesh_assets,
         statics: static_flat.range,
         meshes,
+        blended,
         sprites,
         ground_markers,
         ground_marker_profiles,
@@ -3085,6 +3154,8 @@ pub(crate) struct PlacedMesh<'w> {
     pub(crate) rim: Option<Rim>,
     /// The `Mesh` component's own medium scale; inheritance down `Parent` is resolved at instance build.
     pub(crate) medium: Option<f32>,
+    /// The `Mesh` component's own blend; never inherited.
+    pub(crate) blend: Option<MeshBlend>,
     /// The normal matrix (object→world for normals): the model's upper-3×3 for a uniform scale, its
     /// inverse-transpose otherwise. See [`normal_matrix`].
     pub(crate) normal_matrix: Mat3,
@@ -3684,6 +3755,7 @@ pub(crate) fn placed_mesh<'a>(
         scatter_color: mesh.scatter_color,
         rim: mesh.rim,
         medium: mesh.medium,
+        blend: mesh.blend,
         source: placed_source(&mesh.shape),
         dynamic,
     }
@@ -5176,6 +5248,21 @@ pub(crate) fn mesh_instance(
     }
 }
 
+/// A blended instance: it never casts a shadow, whatever `Visibility` says.
+fn blended_mesh(instance: MeshInstance, mode: MeshBlend, group: u32) -> BlendedMesh {
+    BlendedMesh {
+        instance: MeshInstance {
+            cast_shadows: false,
+            ..instance
+        },
+        mode: match mode {
+            MeshBlend::Alpha => BlendMode::Alpha,
+            MeshBlend::Additive => BlendMode::Additive,
+        },
+        group,
+    }
+}
+
 /// The normal matrix for a mesh: the transform that carries object-space normals to world space.
 ///
 /// - **Uniform scale** (`sx == sy == sz`): the model's own upper-3×3. A similarity transform already
@@ -5521,6 +5608,7 @@ pub(crate) struct PlacedFont {
     doc: String,
     size: [u32; 2],
     sdf: bool,
+    spread_px: u32,
 }
 
 fn placed_font(fonts: &FontLibrary, name: Option<&str>) -> Option<PlacedFont> {
@@ -5532,6 +5620,7 @@ fn placed_font(fonts: &FontLibrary, name: Option<&str>) -> Option<PlacedFont> {
         doc: doc.to_string(),
         size: [atlas.width, atlas.height],
         sdf: face.document().mode == FontMode::Sdf,
+        spread_px: atlas.spread_px.unwrap_or(0),
     })
 }
 
@@ -5576,6 +5665,7 @@ fn resolve_font(
     Some(FontDraw {
         texture,
         sdf: font.sdf,
+        spread_px: font.spread_px,
     })
 }
 
@@ -6418,16 +6508,6 @@ pub(crate) fn part_placements(
     part_placements_with(assembly, pose, None, true, &[])
 }
 
-/// [`part_placements`] for the render site: the same pose, blended with `fade`'s outgoing clip when a
-/// crossfade is in progress.
-pub(crate) fn part_placements_faded(
-    assembly: &AssemblyData,
-    pose: ClipPose<'_>,
-    fade: Option<&CrossfadePose<'_>>,
-) -> Vec<(Mat4, Mat3)> {
-    part_placements_with(assembly, pose, fade, true, &[])
-}
-
 /// [`part_placements_faded`] with an entity's `AnimationLayers` composed over the base pose
 /// (`Plan/animation-layers.md` decisions 27-29). No layers is exactly [`part_placements_faded`].
 pub(crate) fn part_placements_layered(
@@ -6624,51 +6704,64 @@ pub(crate) fn assembly_layer_poses<'a>(
         .iter()
         .take(ludion_components::animation_layers::MAX_ANIMATION_LAYERS)
         .filter_map(|layer| {
-            let weight = f64::from(layer_weight_at(layer, now));
-            if weight <= 0.0 || weight.is_nan() {
-                return None;
-            }
-            let side = if let Some(clip) = data.clip(&layer.clip) {
-                let t = ludion_scene::clip_phase(
-                    clip,
-                    clock_elapsed(now, layer.started, layer.speed, None),
-                );
-                AssemblySide::single(Some((clip, t)))
-            } else {
-                let blend = data.blend(&layer.clip)?;
-                let rate = crate::blend_clock::blend_rate(blend, layer.params);
-                let live = clock.and_then(|c| {
-                    c.layers.iter().find(|entry| {
-                        entry.name == layer.name
-                            && entry.blend == layer.clip
-                            && entry.started == layer.started
-                    })
+            let live = clock.and_then(|c| {
+                c.layers.iter().find(|entry| {
+                    entry.name == layer.name
+                        && entry.blend == layer.clip
+                        && entry.started == layer.started
+                })
+            });
+            let live_phase = live.map(|entry| {
+                let rate = data.blend(&layer.clip).map_or(0.0, |blend| {
+                    crate::blend_clock::blend_rate(blend, layer.params)
                 });
-                let phase = live.map_or_else(
-                    || crate::blend_clock::layer_fallback_phase(blend, layer, now),
-                    |entry| entry.phase + rate * f64::from(layer.speed) * fraction,
-                );
-                AssemblySide::blend(data, blend, layer.params, phase)
-            };
-            let mask = match layer.mask.as_str() {
-                "" => None,
-                name => Some(data.mask(name)?),
-            };
-            let reference = match layer.mode {
-                LayerMode::Additive if !layer.reference.is_empty() => {
-                    Some((data.clip(&layer.reference)?, 0.0))
-                }
-                _ => None,
-            };
-            Some(AssemblyLayerPose {
-                side,
-                reference,
-                mask,
-                mode: layer.mode,
-                weight,
-            })
+                entry.phase + rate * f64::from(layer.speed) * fraction
+            });
+            assembly_layer_pose(data, layer, now, live_phase)
         })
         .collect()
+}
+
+/// One layer ready to pose `data` at `now`, or `None` when it has no weight, names no bound clip or
+/// blend, or an unknown mask or reference. A blend layer plays `live_phase` (its `BlendClock` entry,
+/// already advanced), else the stateless `elapsed * rate`.
+pub(crate) fn assembly_layer_pose<'a>(
+    data: &'a AssemblyData,
+    layer: &AnimationLayer,
+    now: GameTime,
+    live_phase: Option<f64>,
+) -> Option<AssemblyLayerPose<'a>> {
+    let weight = f64::from(layer_weight_at(layer, now));
+    if weight <= 0.0 || weight.is_nan() {
+        return None;
+    }
+    let side = if let Some(clip) = data.clip(&layer.clip) {
+        let t =
+            ludion_scene::clip_phase(clip, clock_elapsed(now, layer.started, layer.speed, None));
+        AssemblySide::single(Some((clip, t)))
+    } else {
+        let blend = data.blend(&layer.clip)?;
+        let phase = live_phase
+            .unwrap_or_else(|| crate::blend_clock::layer_fallback_phase(blend, layer, now));
+        AssemblySide::blend(data, blend, layer.params, phase)
+    };
+    let mask = match layer.mask.as_str() {
+        "" => None,
+        name => Some(data.mask(name)?),
+    };
+    let reference = match layer.mode {
+        LayerMode::Additive if !layer.reference.is_empty() => {
+            Some((data.clip(&layer.reference)?, 0.0))
+        }
+        _ => None,
+    };
+    Some(AssemblyLayerPose {
+        side,
+        reference,
+        mask,
+        mode: layer.mode,
+        weight,
+    })
 }
 
 /// Part `index`'s base channels with `layers` composed over them, or `None` when no layer reaches the
@@ -6791,7 +6884,7 @@ impl<'a> AssemblySide<'a> {
 
     /// The side of `blend` at `params` on shared `phase`: one entry per active point, each clip at
     /// the time the point plays on that phase.
-    fn blend(
+    pub(crate) fn blend(
         data: &'a AssemblyData,
         blend: &crate::blend_space::BlendSpaceData,
         params: [f32; 2],

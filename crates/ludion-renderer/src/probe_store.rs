@@ -121,6 +121,7 @@ pub(crate) fn world_key(
         ground_markers: _,
         ground_marker_profiles: _,
         silhouettes: _,
+        blended: _,
         drop_shadows: _,
         decals: _,
         debug_lines: _,

@@ -1850,3 +1850,137 @@ fn a_bad_wrap_extra_is_refused_naming_the_material() {
         );
     }
 }
+
+// --- Surface tags: `extras.ludion_surface` ---------------------------------------------------------
+
+fn tagged_import(material: &str) -> Import {
+    import_clean(&mesh_gltf(material, false))
+}
+
+#[test]
+fn a_surface_extra_tags_the_document_with_one_run() {
+    let import = tagged_import(r#"{"name":"Grate","extras":{"ludion_surface":"metal_grate"}}"#);
+    let expected = ludion_scene::MeshSurfaces {
+        names: vec!["metal_grate".to_owned()],
+        runs: vec![[1, 0]],
+    };
+    let mesh = &import.meshes[0];
+    assert_eq!(mesh.surfaces.as_ref(), Some(&expected));
+    let text = ludion_scene::emit_mesh_with_surfaces(&mesh.doc, mesh.surfaces.as_ref());
+    let (doc, surfaces) = ludion_scene::check_mesh_surfaces(&text).unwrap();
+    assert_eq!(doc, mesh.doc);
+    assert_eq!(surfaces, Some(expected));
+}
+
+#[test]
+fn no_surface_extra_leaves_the_bytes_as_before() {
+    for material in [
+        r#"{"name":"concrete"}"#,
+        r#"{"name":"skin","extras":{"ludion_wrap":0.5}}"#,
+    ] {
+        let import = tagged_import(material);
+        let mesh = &import.meshes[0];
+        assert_eq!(mesh.surfaces, None, "{material}");
+        assert_eq!(
+            ludion_scene::emit_mesh_with_surfaces(&mesh.doc, mesh.surfaces.as_ref()),
+            ludion_scene::emit_mesh(&mesh.doc),
+            "{material}"
+        );
+    }
+}
+
+#[test]
+fn a_bad_surface_extra_is_l1201_naming_the_material() {
+    for value in ["3", r#""""#, r#"["a"]"#] {
+        let json = mesh_gltf(
+            &format!(r#"{{"name":"Grate","extras":{{"ludion_surface":{value}}}}}"#),
+            false,
+        );
+        let errors = import(
+            json.as_bytes(),
+            ExternalFiles::Beside(Path::new(".")),
+            &ImportOptions::lossy(false),
+        )
+        .unwrap_err();
+        assert_eq!(errors[0].code.as_str(), "L1201", "{value}");
+        assert!(
+            errors[0].message.contains("Grate") && errors[0].message.contains("ludion_surface"),
+            "{value}: {}",
+            errors[0].message
+        );
+    }
+}
+
+/// Two meshes over one triangle, each on its own material.
+fn two_material_gltf(first: &str, second: &str) -> String {
+    let mut bytes = Vec::new();
+    for value in [0.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    let buffer_b64 = base64::encode(&bytes);
+    format!(
+        r#"{{"asset":{{"version":"2.0"}},"nodes":[{{"name":"a","mesh":0}},{{"name":"b","mesh":1}}],"meshes":[{{"name":"ma","primitives":[{{"attributes":{{"POSITION":0}},"material":0}}]}},{{"name":"mb","primitives":[{{"attributes":{{"POSITION":0}},"material":1}}]}}],"materials":[{first},{second}],"accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0.0,0.0,0.0],"max":[1.0,1.0,0.0]}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36}}],"buffers":[{{"byteLength":36,"uri":"data:application/octet-stream;base64,{buffer_b64}"}}]}}"#
+    )
+}
+
+#[test]
+fn two_tagged_materials_import_as_two_documents_with_one_tag_each() {
+    let json = two_material_gltf(
+        r#"{"extras":{"ludion_surface":"metal_grate"}}"#,
+        r#"{"extras":{"ludion_surface":"dirt"}}"#,
+    );
+    let import = import_clean(&json);
+    assert_eq!(import.meshes.len(), 2);
+    let names: Vec<&[String]> = import
+        .meshes
+        .iter()
+        .map(|m| m.surfaces.as_ref().unwrap().names.as_slice())
+        .collect();
+    assert_eq!(names, [["metal_grate"], ["dirt"]]);
+}
+
+#[test]
+fn import_gltf_writes_the_tag_pair_and_a_second_import_is_identical() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("import_surface_tags_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("floor.gltf");
+    std::fs::write(
+        &input,
+        mesh_gltf(
+            r#"{"name":"Grate","extras":{"ludion_surface":"metal_grate"}}"#,
+            false,
+        ),
+    )
+    .unwrap();
+    let out = dir.join("out");
+    let run = || ludion_import::import_gltf(&input, &out, &ImportOptions::lossy(false)).unwrap();
+    run();
+    let meshes: Vec<PathBuf> = std::fs::read_dir(out.join("meshes"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(meshes.len(), 1);
+    let first = std::fs::read_to_string(&meshes[0]).unwrap();
+    assert!(
+        first.contains(
+            "surfaces:
+  - metal_grate"
+        ),
+        "{first}"
+    );
+    assert!(
+        first.contains(
+            "triangle_surfaces:
+  - - 1
+    - 0"
+        ),
+        "{first}"
+    );
+    let (_, surfaces) = ludion_scene::check_mesh_surfaces(&first).unwrap();
+    assert_eq!(surfaces.unwrap().runs, [[1, 0]]);
+    run();
+    assert_eq!(std::fs::read_to_string(&meshes[0]).unwrap(), first);
+    let _ = std::fs::remove_dir_all(&dir);
+}

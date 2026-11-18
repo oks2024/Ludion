@@ -160,7 +160,8 @@ collinear 2D points, an unbound or non-looping point clip, or a `sync` event a p
   it poses and hashes exactly as before. The component itself is hashed state, like `Animation`.
 - An unknown clip or mask name, or a layer at weight 0, is a silent degrade — the layer does nothing.
 - A skin named by `SkinBone` parts refuses `AnimationLayers` (`L1672`); prefab parts ignore it.
-  An assembly takes layers, plain or blend, with its own `masks:` (`ludion docs voxel-animation`).
+  An assembly takes layers, plain or blend, with its own `masks:` (`ludion docs voxel-animation`);
+  `ludion render --model --blend/--layer` previews both and `check-scene` lists them.
 - A layer raises no `AnimationEvents` unless it sets `events: true`.
 - `ParentJoint` sockets and `posed_joint_world` read the layered pose.
 

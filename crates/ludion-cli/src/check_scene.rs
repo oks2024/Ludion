@@ -1367,7 +1367,7 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
             (vertices / 4, (part.mesh.indices.len() / 3) as u64, vertices)
         })
         .collect();
-    let fields = serde_json::json!({
+    let mut fields = serde_json::json!({
         "name": assembly.name,
         "size": assembly.size,
         "components": components,
@@ -1385,6 +1385,51 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
             serde_json::json!({ "name": clip.name, "file": clip.file })
         }).collect::<Vec<_>>(),
     });
+
+    // The rig arrays appear only when the document declares some, so a plain assembly's summary
+    // object (and the editor's committed sample of it) keeps its keys.
+    if !assembly.masks.is_empty() {
+        fields["masks"] = assembly
+            .masks
+            .iter()
+            .map(|mask| {
+                serde_json::json!({
+                    "name": mask.name,
+                    "joints": mask.joints,
+                    "descendants": mask.descendants,
+                    "weights": mask.weights,
+                })
+            })
+            .collect();
+    }
+    if !assembly.blends.is_empty() {
+        fields["blends"] = assembly
+            .blends
+            .iter()
+            .map(|blend| {
+                let resolved = data.blend(&blend.name);
+                let two_d = resolved.is_some_and(|resolved| resolved.two_d);
+                let points: Vec<_> = blend
+                    .points
+                    .iter()
+                    .map(|point| {
+                        let at = match point.at {
+                            ludion_scene::BlendAt::One(x) => serde_json::json!(x),
+                            ludion_scene::BlendAt::Two(at) => serde_json::json!(at),
+                        };
+                        serde_json::json!({ "clip": point.clip, "at": at })
+                    })
+                    .collect();
+                serde_json::json!({
+                    "name": blend.name,
+                    "sync": blend.sync,
+                    "dimension": if two_d { 2 } else { 1 },
+                    "points": points,
+                    "triangles": resolved.map(|resolved| resolved.triangles.clone()).unwrap_or_default(),
+                })
+            })
+            .collect();
+    }
 
     if reporter.json {
         for warning in connectivity.into_iter().chain(overlap) {
@@ -1418,6 +1463,54 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
     }
     for clip in &assembly.clips {
         println!("  clip {}: {}", clip.name, clip.file);
+    }
+    for mask in &assembly.masks {
+        let descendants = if mask.descendants {
+            " (descendants)"
+        } else {
+            ""
+        };
+        let weights = if mask.weights.is_empty() {
+            String::new()
+        } else {
+            let listed: Vec<String> = mask.weights.iter().map(f64::to_string).collect();
+            format!(", weights {}", listed.join(" "))
+        };
+        println!(
+            "  mask {}: {}{descendants}{weights}",
+            mask.name,
+            mask.joints.join(", ")
+        );
+    }
+    for blend in &assembly.blends {
+        let resolved = data.blend(&blend.name);
+        let two_d = resolved.is_some_and(|resolved| resolved.two_d);
+        let sync = blend
+            .sync
+            .as_ref()
+            .map_or(String::new(), |event| format!(", sync {event}"));
+        let points: Vec<String> = blend
+            .points
+            .iter()
+            .map(|point| match point.at {
+                ludion_scene::BlendAt::One(x) => format!("{}@{x}", point.clip),
+                ludion_scene::BlendAt::Two([x, y]) => format!("{}@({x},{y})", point.clip),
+            })
+            .collect();
+        println!(
+            "  blend {} ({}{sync}): {}",
+            blend.name,
+            if two_d { "2D" } else { "1D" },
+            points.join(", ")
+        );
+        if let Some(resolved) = resolved.filter(|resolved| resolved.two_d) {
+            let triangles: Vec<String> = resolved
+                .triangles
+                .iter()
+                .map(|[a, b, c]| format!("({a},{b},{c})"))
+                .collect();
+            println!("    triangles: {}", triangles.join(" "));
+        }
     }
     if let Some(warning) = connectivity {
         diagnostic::print(&warning);

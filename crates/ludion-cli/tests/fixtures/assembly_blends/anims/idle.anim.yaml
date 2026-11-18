@@ -1,0 +1,23 @@
+format: 1
+kind: animation
+name: idle
+duration: 2.0
+loop: true
+events:
+  - t: 0.5
+    name: foot_l
+  - t: 1.5
+    name: foot_r
+tracks:
+  arm:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 2.0
+        v:
+          - 5.0
+          - 0.0
+          - 0.0

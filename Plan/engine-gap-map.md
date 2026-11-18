@@ -53,6 +53,7 @@ settled plan, nothing built; **rejected** — closed by design.
   transmission or subsurface. Foliage, glass, fences and hair cards are out.
   *Amended 2026-11-02 (Clockout 0040): subsurface is approximated by `Mesh.wrap` / `scatter_color` (direct-light wrap diffuse with a tint, `docs/materials.md`); true subsurface and transmission stay a gap. Trigger: if the game's look test objects to the near-occluder cut, the next step is a whole-object band occlusion sample (object centre plus thickness toward the light, one extra lookup per light); not built.*
   *Amended 2026-10-30 (owner approval 2026-10-29, Clockout 0010): alpha-cutout (`alpha_mode: mask`) and double-sided meshes ship (Clockout 0010). Alpha-blend stays a gap; trigger: the first committed asset that must be seen through (e.g. the Noir skylight glass), a separate request with a sorted `transparents` mesh path.*
+  *Amended 2026-11-18 (Neon Shroud 0016): the trigger fired (dock office glass after the water). `Mesh.blend` (alpha | additive) is planned in `Plan/transparent-depth.md` "Mesh path"; proposed, owner ruling owed.*
 - **Textures** — PNG decoded to RGBA8 only; no BC/ASTC/KTX2 compression. Voxel texturing deferred
   (`Plan/textured-pbr.md`).
 - **Anti-aliasing and upscaling** — supersampling (`--scale`) plus SMAA 1x (`--aa`,

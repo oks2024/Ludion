@@ -177,6 +177,10 @@ pub struct Request<'a> {
     pub strip: Option<u32>,
     /// `--crossfade` (model mode): the `<from>:<to>:<seconds>` spec, parsed in `run_model`.
     pub crossfade: Option<&'a str>,
+    /// `--blend` (model mode): the `<name>:<p0>[:<p1>]` spec, parsed in `run_model`.
+    pub blend: Option<&'a str>,
+    /// `--layer` (model mode), repeatable: each `<clip>:<weight>[:<mask>[:<mode>]]`, parsed in `run_model`.
+    pub layers: &'a [String],
     /// `--hold` (model mode, with `--clip` or `--crossfade`): snap each phase to a multiple of N ticks.
     pub hold: Option<u32>,
     /// `--part` (model mode, a sculpt): frame the sheet on this named part.
@@ -820,6 +824,19 @@ fn run_model(request: &Request, model: &Path) -> ExitCode {
         Ok(crossfade) => crossfade,
         Err(diagnostic) => return report(model, &[diagnostic]),
     };
+    let blend = match request.blend.map(ludion_engine::parse_blend).transpose() {
+        Ok(blend) => blend,
+        Err(diagnostic) => return report(model, &[diagnostic]),
+    };
+    let layers: Result<Vec<_>, _> = request
+        .layers
+        .iter()
+        .map(|spec| ludion_engine::parse_layer(spec))
+        .collect();
+    let layers = match layers {
+        Ok(layers) => layers,
+        Err(diagnostic) => return report(model, &[diagnostic]),
+    };
     let out = request
         .out
         .map(Path::to_path_buf)
@@ -849,6 +866,8 @@ fn run_model(request: &Request, model: &Path) -> ExitCode {
         time: request.time,
         strip: request.strip,
         crossfade,
+        blend,
+        layers: &layers,
         hold: request.hold,
         part: request.part,
         isolate: request.isolate,
@@ -915,17 +934,36 @@ fn print_clip_report(clip: &ludion_engine::ClipOutcome) {
             clip.hz,
         );
     }
-    println!(
-        "clip {}: duration {}, loop {}, {} phase{} quantized to {} Hz ticks{held}",
-        clip.name,
-        clip.duration,
-        clip.looped,
-        clip.phases.len(),
-        if clip.phases.len() == 1 { "" } else { "s" },
-        clip.hz,
-    );
+    if let Some(blend) = &clip.blend {
+        println!(
+            "blend {blend}: one cycle {}s, {} phase{} quantized to {} Hz ticks{held}",
+            clip.duration,
+            clip.phases.len(),
+            if clip.phases.len() == 1 { "" } else { "s" },
+            clip.hz,
+        );
+    } else {
+        println!(
+            "clip {}: duration {}, loop {}, {} phase{} quantized to {} Hz ticks{held}",
+            clip.name,
+            clip.duration,
+            clip.looped,
+            clip.phases.len(),
+            if clip.phases.len() == 1 { "" } else { "s" },
+            clip.hz,
+        );
+    }
+    if !clip.layers.is_empty() {
+        println!("layers: {}", clip.layers.join(", "));
+    }
     for (index, phase) in clip.phases.iter().enumerate() {
         print!("  phase {index}: t {} (tick {})", phase.time, phase.tick);
+        if let Some([x, y]) = phase.params {
+            print!(", params [{x}, {y}]");
+        }
+        if let Some(cycles) = phase.phase {
+            print!(", phase {cycles:.3}");
+        }
         if let Some(weight) = phase.weight {
             print!(", weight {weight:.3}");
         }
@@ -1014,6 +1052,14 @@ fn default_sheet_out(model: &Path, request: &Request) -> PathBuf {
         Some(hold) if hold > 1 => format!("-hold{hold}"),
         _ => String::new(),
     };
+    let hold = format!(
+        "{hold}{}",
+        if request.layers.is_empty() {
+            ""
+        } else {
+            "-layered"
+        }
+    );
     // A malformed spec never reaches here: `run_model` refuses it first.
     if let Some(spec) = request
         .crossfade
@@ -1023,6 +1069,12 @@ fn default_sheet_out(model: &Path, request: &Request) -> PathBuf {
             "{name}-{}-{}-crossfade{hold}.png",
             spec.from, spec.to
         ));
+    }
+    if let Some(spec) = request
+        .blend
+        .and_then(|spec| ludion_engine::parse_blend(spec).ok())
+    {
+        return PathBuf::from(format!("{name}-{}-blend{hold}.png", spec.name));
     }
     match (request.clip, request.strip, request.part) {
         (Some(clip), Some(_), _) => PathBuf::from(format!("{name}-{clip}-strip{hold}.png")),

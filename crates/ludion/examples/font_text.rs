@@ -13,7 +13,7 @@
 //! cargo run -p ludion --example font_text
 //! ```
 
-use ludion::math::{FontFace, list_hit, measure_ui_text, wrap_ui_text};
+use ludion::math::{FontFace, list_hit, measure_ui_text, resolve_ui_text, wrap_ui_text};
 use ludion::prelude::*;
 use std::path::Path;
 use std::process::ExitCode;
@@ -81,6 +81,28 @@ fn main() -> ExitCode {
         "cursor on row 1: {:?}, below the list: {:?}",
         hovered_item(&library, &list, viewport, [4.0, 30.0]),
         hovered_item(&library, &list, viewport, [4.0, 80.0]),
+    );
+
+    // An outline is ink, not layout: the block measures and hit-tests exactly as without it.
+    let label = |outline| UiText {
+        text: text.to_string(),
+        font: Some("body".to_string()),
+        size: 24.0,
+        outline,
+        ..UiText::default()
+    };
+    let outlined = label(Some(TextOutline {
+        width: 2.0,
+        color: [0.0, 0.0, 0.0, 1.0],
+    }));
+    let face = library.face(Some("body"));
+    assert_eq!(
+        resolve_ui_text(face, &label(None), viewport),
+        resolve_ui_text(face, &outlined, viewport)
+    );
+    println!(
+        "outlined text keeps its block: {:?}",
+        resolve_ui_text(face, &outlined, viewport)
     );
 
     ExitCode::SUCCESS

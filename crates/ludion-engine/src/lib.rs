@@ -175,9 +175,10 @@ pub use components::{
     NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter,
     Perceiver, PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Require, Residue,
     SightPoint, SightTarget, SightZone, SkinBone, SpotLight, Sprite, SpriteBlend, Static, Text,
-    TileAppearance, Tilemap, Transform, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase,
-    UiGroup, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat,
-    UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
+    TextOutline, TileAppearance, Tilemap, Transform, UiAnchorBehind, UiAnchorShow, UiClipShape,
+    UiClock, UiEase, UiGroup, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField,
+    UiTweenRepeat, UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility,
+    builtin_registry, crossfade,
 };
 pub use components::{
     AnimationLayer, AnimationLayers, BlendClock, LayerMode, LayerPhase, fade_layer, layer_weight,
@@ -228,6 +229,7 @@ pub use ludion_camera::{
     add_look_counts, add_trauma, camera_relative, camera_relative_yaw, first_person_eye,
     look_from_counts, orbit_eye, resolve_zone, set_look, snap_rig,
 };
+pub use ludion_components::MeshBlend;
 pub use ludion_components::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
 pub use ludion_nav::PathStatus;
 pub use ludion_protocol::replay::GameIdentity;
@@ -238,10 +240,11 @@ pub use ludion_scene::{
 pub use ludion_sim::WorldHash;
 pub use mesh_check::scene_mesh_asset_diagnostics;
 pub use model_sheet::{
-    ClipCrossfade, ClipOutcome, CrossfadeSpec, DEFAULT_CROSSFADE_PHASES, MAX_LINEUP_MODELS,
-    MAX_STRIP_PHASES, MIN_STRIP_PHASES, ModelCamera, ModelChannel, ModelSheetRequest, ModelSweep,
-    ModelSweepOutcome, ModelView, PhaseGap, PhaseReport, PhaseStray, SheetOutcome, TrueSizeFraming,
-    fit_distance_for_aspect, model_camera, parse_crossfade, render_model_sheet,
+    BlendSweepSpec, ClipCrossfade, ClipOutcome, CrossfadeSpec, DEFAULT_CROSSFADE_PHASES, LayerSpec,
+    MAX_LINEUP_MODELS, MAX_STRIP_PHASES, MIN_STRIP_PHASES, ModelCamera, ModelChannel,
+    ModelSheetRequest, ModelSweep, ModelSweepOutcome, ModelView, PhaseGap, PhaseReport, PhaseStray,
+    SheetOutcome, Sweep, TrueSizeFraming, fit_distance_for_aspect, model_camera, parse_blend,
+    parse_crossfade, parse_layer, render_model_sheet,
 };
 pub use motor::{
     MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE,
@@ -305,7 +308,7 @@ pub use quality::{
     startup_quality_named,
 };
 pub use query_drift::{QueryDriftReport, check_query_drift_replay, check_query_drift_with};
-pub use ragdoll::switch_to_ragdoll;
+pub use ragdoll::{LimitsFrom, RagdollSwitch, switch_to_ragdoll, switch_to_ragdoll_with};
 pub use render::{
     BuilderRenderOutcome, RenderOutcome, dump_scene_graph_json, engine_at_frame, gpu_uploads,
     render_scene, render_scene_with_builder, render_scene_with_registry,

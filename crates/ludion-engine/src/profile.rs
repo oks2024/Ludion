@@ -4197,6 +4197,7 @@ gpu_frame_max_ms = 9.5
             transparent_cover: true,
             fog: true,
             silhouette: false,
+            blended: false,
             aa: ludion_renderer::AntiAliasing::Off,
         };
         // A debug view replaces the AA, so the SMAA passes are only producible with every view off.

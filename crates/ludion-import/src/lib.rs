@@ -63,6 +63,7 @@
 //! A material's `MASK` alpha mode with its `alphaCutoff` (default 0.5), and `doubleSided`, map onto
 //! the mesh document's `alpha_mode: mask` / `alpha_cutoff` and `double_sided: true`. A material's
 //! `extras.ludion_wrap` / `extras.ludion_scatter_color` map onto `Mesh.wrap` / `Mesh.scatter_color`.
+//! A material's `extras.ludion_surface` tags its mesh document's triangles with that surface name.
 //!
 //! Everything else — a texture on a second UV set or with per-axis wrap modes that disagree (a mesh
 //! document holds one mode for both), a `BLEND` alpha mode (`MASK` is the mapped alternative), a camera (a prefab carries none), a directional light, a morph target, an
@@ -205,7 +206,8 @@ impl Import {
             for mesh in &self.meshes {
                 write_file(
                     &out_dir.join(&mesh.rel_path),
-                    ludion_scene::emit_mesh(&mesh.doc).as_bytes(),
+                    ludion_scene::emit_mesh_with_surfaces(&mesh.doc, mesh.surfaces.as_ref())
+                        .as_bytes(),
                 )?;
             }
         }
@@ -279,8 +281,11 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), Diagnostic> {
 pub struct MeshArtifact {
     /// The output-relative path, e.g. `meshes/crystal.mesh.yaml`.
     pub rel_path: String,
-    /// The parsed, validated mesh document (emit with [`ludion_scene::emit_mesh`]).
+    /// The parsed, validated mesh document.
     pub doc: MeshDocument,
+    /// The document's surface tags, from its material's `extras.ludion_surface`; emit the pair with
+    /// [`ludion_scene::emit_mesh_with_surfaces`].
+    pub surfaces: Option<ludion_scene::MeshSurfaces>,
 }
 
 /// One `clips/*.anim.yaml` document plus its output-relative path and the reduction report.
@@ -917,6 +922,7 @@ fn resolve_primitive(
     finite(&[roughness], "roughnessFactor")?;
     finite(&[metallic], "metallicFactor")?;
     let (wrap, scatter_color) = material_wrap(&material, &offender)?;
+    let surface = material_surface(&material, &offender)?;
 
     let Some(doc) = build_mesh_document(mesh, primitive, textures, skin, inputs, state)? else {
         return Ok(None);
@@ -927,8 +933,10 @@ fn resolve_primitive(
         .unwrap_or_else(|| format!("mesh-{}", mesh.index()));
     let name = dedup_file_stem(&mut state.mesh_names, &sanitize(&base), mesh.index());
     let rel_path = format!("{MESH_DIR}/{name}.mesh.yaml");
+    let surfaces = lod::level_surfaces(surface.as_ref().map(std::slice::from_ref), &doc);
     state.meshes.push(MeshArtifact {
         rel_path: rel_path.clone(),
+        surfaces,
         doc: MeshDocument {
             // Re-name to the deduped, sanitized filename stem so the doc's `name:` and its path agree.
             name: Some(name),
@@ -996,6 +1004,30 @@ fn material_wrap(
         }
     }
     Ok((wrap, scatter))
+}
+
+/// A material's `extras.ludion_surface`, the surface name its mesh document is tagged with. Absent
+/// extras, extras that are not an object, and a missing key mean untagged; a present key that is not
+/// a non-empty string is refused naming the material.
+fn material_surface(
+    material: &gltf::Material,
+    offender: &str,
+) -> Result<Option<String>, Vec<Diagnostic>> {
+    let Some(raw) = material.extras() else {
+        return Ok(None);
+    };
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(raw.get()) else {
+        return Ok(None);
+    };
+    let Some(value) = map.get("ludion_surface") else {
+        return Ok(None);
+    };
+    match value.as_str().filter(|name| !name.is_empty()) {
+        Some(name) => Ok(Some(name.to_owned())),
+        None => Err(vec![malformed(format!(
+            "{offender}'s extras ludion_surface must be a non-empty surface name, found {value}"
+        ))]),
+    }
 }
 
 /// Reduces a glTF `emissiveFactor` to Ludion's scalar `Mesh.emissive`: an HDR intensity multiplier

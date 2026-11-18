@@ -211,13 +211,18 @@ use serde_json::Value;
 use crate::assembly_mesh::AssemblyData;
 use crate::builtin_registry;
 use crate::character::CharacterData;
-use crate::extract::{ClipPose, CrossfadePose, extract_at, part_placements, part_placements_faded};
+use crate::components::{AnimationLayer, AnimationLayers, LayerMode};
+use crate::extract::{
+    AssemblyLayerPose, AssemblySide, CrossfadePose, assembly_layer_pose, extract_at,
+    part_placements, part_placements_sides,
+};
 use crate::prefab_clips::PrefabClipData;
 use crate::sweep::MAX_SWEEP_CELLS;
 use crate::{
     Anchor, Animation, Camera, Environment, Mesh, MeshSource, PointLight, PostProcess, Projection,
     Transform, UiText,
 };
+use ludion_components::animation_layers::MAX_ANIMATION_LAYERS;
 
 /// A turntable view. [`ALL`](ModelView::ALL) is the canonical sheet order;
 /// [`DEFAULT`](ModelView::DEFAULT) is the set an empty request expands to.
@@ -434,6 +439,15 @@ pub struct ModelSheetRequest<'a> {
     /// weight — [`DEFAULT_CROSSFADE_PHASES`] of them unless [`strip`](Self::strip) says otherwise.
     /// Assembly, character and prefab documents, a single model, and no [`clip`](Self::clip).
     pub crossfade: Option<CrossfadeSpec<'a>>,
+    /// Render a blend space of an assembly or character at swept parameters, one phase per
+    /// parameter value — [`DEFAULT_CROSSFADE_PHASES`] of them for a range unless
+    /// [`strip`](Self::strip) says otherwise, one phase for plain values. Assembly and character
+    /// documents, a single model, and no [`clip`](Self::clip) or [`crossfade`](Self::crossfade).
+    pub blend: Option<BlendSweepSpec<'a>>,
+    /// Override and additive layers stacked over the base pose of [`clip`](Self::clip),
+    /// [`crossfade`](Self::crossfade) or [`blend`](Self::blend): at most
+    /// [`MAX_ANIMATION_LAYERS`], one assembly or character at a time (`L1670` past the cap).
+    pub layers: &'a [LayerSpec<'a>],
     /// Show each phase at the pose a game shows with `Animation.hold` = N: the phase tick snaps down
     /// to a multiple of N, the clip or fade taken to begin on a grid tick. `None` and `Some(1)` are
     /// every tick. Needs [`clip`](Self::clip) or [`crossfade`](Self::crossfade); `Some(0)` is `L1317`.
@@ -464,6 +478,8 @@ impl<'a> ModelSheetRequest<'a> {
             time: None,
             strip: None,
             crossfade: None,
+            blend: None,
+            layers: &[],
             hold: None,
             part: None,
             isolate: false,
@@ -528,6 +544,161 @@ pub fn parse_crossfade(spec: &str) -> Result<CrossfadeSpec<'_>, Diagnostic> {
     }
 }
 
+/// One blend parameter of a [`BlendSweepSpec`]: held at a value, or swept linearly across the
+/// strip's phases.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Sweep {
+    /// The same value at every phase.
+    At(f32),
+    /// `lo` at the first phase and `hi` at the last.
+    Range(f32, f32),
+}
+
+impl Sweep {
+    /// The value at phase `index` of `phases` (`phases` is at least 1).
+    fn at(self, index: u32, phases: u32) -> f32 {
+        match self {
+            Sweep::At(value) => value,
+            Sweep::Range(lo, hi) if phases > 1 => {
+                lo + (hi - lo) * (index as f32 / (phases - 1) as f32)
+            }
+            Sweep::Range(lo, _) => lo,
+        }
+    }
+}
+
+/// A parsed `--blend <name>:<p0>[:<p1>]`: a blend space and the parameters to evaluate it at.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlendSweepSpec<'a> {
+    /// The blend's short name, as the assembly or character declares it under `blends:`.
+    pub name: &'a str,
+    /// The first parameter (a 1D blend's only one).
+    pub p0: Sweep,
+    /// The second parameter of a 2D blend (`0` when omitted).
+    pub p1: Option<Sweep>,
+}
+
+/// A parsed `--layer <clip>:<weight>[:<mask>[:<mode>]]`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerSpec<'a> {
+    /// The layer's clip (or blend) short name.
+    pub clip: &'a str,
+    /// The layer's weight, in `[0, 1]`.
+    pub weight: f32,
+    /// The `masks:` entry the layer touches; `None` is every part.
+    pub mask: Option<&'a str>,
+    /// How the layer combines with the pose beneath it.
+    pub mode: LayerMode,
+}
+
+/// Parses a `name:p0[:p1]` blend spec, each `p` a number or a `lo..hi` range.
+///
+/// # Errors
+/// `L1117` if the spec has the wrong number of `:`-separated fields, an empty name, a parameter that
+/// is not a finite number, or a range that is not `lo..hi` of two finite numbers.
+pub fn parse_blend(spec: &str) -> Result<BlendSweepSpec<'_>, Diagnostic> {
+    const EXAMPLE: &str = "e.g. `--blend locomotion:0..2` sweeps one parameter across the strip, \
+                           `--blend aim:0.5:-1..1` holds the first and sweeps the second";
+    let refuse = |message: String| {
+        Diagnostic::new(code::MODEL_SHEET_INPUT, message).with_help(EXAMPLE.to_string())
+    };
+    let fields: Vec<&str> = spec.split(':').collect();
+    let (name, p0, p1) = match fields[..] {
+        [name, p0] => (name, p0, None),
+        [name, p0, p1] => (name, p0, Some(p1)),
+        _ => {
+            return Err(refuse(format!(
+                "`--blend {spec}` has {} `:`-separated field{}, but a blend is \
+                 `<name>:<p0>` or `<name>:<p0>:<p1>`",
+                fields.len(),
+                if fields.len() == 1 { "" } else { "s" }
+            )));
+        }
+    };
+    if name.is_empty() {
+        return Err(refuse(format!(
+            "`--blend {spec}` leaves the blend name empty: name the blend to sweep"
+        )));
+    }
+    let sweep = |text: &str| -> Result<Sweep, Diagnostic> {
+        let number = |part: &str| match part.parse::<f32>() {
+            Ok(value) if value.is_finite() => Ok(value),
+            _ => Err(refuse(format!(
+                "`--blend {spec}` has `{part}` where a finite number was expected"
+            ))),
+        };
+        match text.split_once("..") {
+            Some((lo, hi)) => Ok(Sweep::Range(number(lo)?, number(hi)?)),
+            None => Ok(Sweep::At(number(text)?)),
+        }
+    };
+    Ok(BlendSweepSpec {
+        name,
+        p0: sweep(p0)?,
+        p1: p1.map(sweep).transpose()?,
+    })
+}
+
+/// Parses a `clip:weight[:mask[:mode]]` layer spec.
+///
+/// # Errors
+/// `L1117` if the spec has more than four `:`-separated fields or fewer than two, an empty clip, a
+/// weight that is not a number in `[0, 1]`, or a mode other than `override` or `additive`.
+pub fn parse_layer(spec: &str) -> Result<LayerSpec<'_>, Diagnostic> {
+    const EXAMPLE: &str = "e.g. `--layer wave:1.0:arm_only` or `--layer breathe:0.5::additive` — the \
+                           clip, its weight in 0..1, an optional mask, an optional override|additive";
+    let refuse = |message: String| {
+        Diagnostic::new(code::MODEL_SHEET_INPUT, message).with_help(EXAMPLE.to_string())
+    };
+    let fields: Vec<&str> = spec.split(':').collect();
+    if !(2..=4).contains(&fields.len()) {
+        return Err(refuse(format!(
+            "`--layer {spec}` has {} `:`-separated field{}, but a layer is \
+             `<clip>:<weight>[:<mask>[:<mode>]]`",
+            fields.len(),
+            if fields.len() == 1 { "" } else { "s" }
+        )));
+    }
+    let clip = fields[0];
+    if clip.is_empty() {
+        return Err(refuse(format!(
+            "`--layer {spec}` leaves the clip name empty: name the clip the layer plays"
+        )));
+    }
+    let weight = match fields[1].parse::<f32>() {
+        Ok(weight) if weight.is_finite() && (0.0..=1.0).contains(&weight) => weight,
+        Ok(_) => {
+            return Err(refuse(format!(
+                "`--layer {spec}` has a weight of `{}`, outside the range 0 to 1",
+                fields[1]
+            )));
+        }
+        Err(_) => {
+            return Err(refuse(format!(
+                "`--layer {spec}` has a weight of `{}`, which is not a number",
+                fields[1]
+            )));
+        }
+    };
+    let mask = fields.get(2).copied().filter(|mask| !mask.is_empty());
+    let mode = match fields.get(3).copied() {
+        None | Some("" | "override") => LayerMode::Override,
+        Some("additive") => LayerMode::Additive,
+        Some(other) => {
+            return Err(refuse(format!(
+                "`--layer {spec}` has the mode `{other}`, but a layer's mode is `override` or \
+                 `additive`"
+            )));
+        }
+    };
+    Ok(LayerSpec {
+        clip,
+        weight,
+        mask,
+        mode,
+    })
+}
+
 /// The most models one lineup may carry. Past eight, each model's slice of the cell is too narrow
 /// for the comparison a lineup exists to make — and its caption no longer fits under it.
 pub const MAX_LINEUP_MODELS: usize = 8;
@@ -578,6 +749,11 @@ pub struct ClipOutcome {
     /// The crossfade this render blended, when it was one; `name`, `duration` and `looped` then
     /// describe its incoming clip.
     pub crossfade: Option<ClipCrossfade>,
+    /// The blend this render swept, when it was one; `name` is then the blend, `duration` one cycle
+    /// (`1 / rate` at the first phase's parameters) and `looped` is `true`.
+    pub blend: Option<String>,
+    /// The request's layers, each echoed as `clip weight mask mode` (`-` for no mask), bottom first.
+    pub layers: Vec<String>,
     /// The tick rate clip time was quantized against ([`TickRate::DEFAULT`]), in hertz.
     pub hz: u32,
     /// The pose cadence the phases were snapped to, in ticks (`1` when the request had none).
@@ -616,6 +792,11 @@ pub struct PhaseReport {
     /// The incoming clip's share of the blend at this phase, in `[0, 1]`; `None` outside a
     /// crossfade.
     pub weight: Option<f64>,
+    /// The blend parameters this phase evaluated; `None` outside a blend sweep.
+    pub params: Option<[f32; 2]>,
+    /// The blend's shared phase in unwrapped cycles (`elapsed × rate(params)`); `None` outside a
+    /// blend sweep.
+    pub phase: Option<f64>,
 }
 
 /// One piece of a posed model that is not connected to its main body, attributed to the parts that
@@ -754,7 +935,7 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
     check_part_flags(request)?;
     // A strip spends its one cell on phases exactly as a lineup spends it on models, so the two
     // share every layout decision from here down.
-    let fanned = request.strip.is_some() || request.crossfade.is_some();
+    let fanned = request.strip.is_some() || request.crossfade.is_some() || sweeps_blend(request);
     let row = lineup || fanned;
     // A row spends its one cell on subjects rather than angles, so it takes one view — and defaults
     // to the gameplay one, the angle the comparison is actually made at.
@@ -770,9 +951,10 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
         check_strip_shape(&views)?;
     }
     if let Some(sweep) = request.sweep {
-        let phases = request
-            .strip
-            .or_else(|| request.crossfade.map(|_| DEFAULT_CROSSFADE_PHASES));
+        let phases = request.strip.or_else(|| {
+            (request.crossfade.is_some() || sweeps_blend(request))
+                .then_some(DEFAULT_CROSSFADE_PHASES)
+        });
         check_sweep_shape(&sweep, &views, phases)?;
     }
 
@@ -784,15 +966,18 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
         .part
         .map(|name| resolve_part(&loaded[0], name))
         .transpose()?;
-    let posed = match (request.clip, request.crossfade) {
-        (Some(clip), _) => Some(resolve_clip(request, request.models[0], &loaded[0], clip)?),
-        (None, Some(spec)) => Some(resolve_crossfade(
+    let posed = match (request.clip, request.crossfade, request.blend) {
+        (Some(clip), _, _) => Some(resolve_clip(request, request.models[0], &loaded[0], clip)?),
+        (None, Some(spec), _) => Some(resolve_crossfade(
             request,
             request.models[0],
             &loaded[0],
             spec,
         )?),
-        (None, None) => None,
+        (None, None, Some(spec)) => {
+            Some(resolve_blend(request, request.models[0], &loaded[0], spec)?)
+        }
+        (None, None, None) => None,
     };
     let lift = request.rig.map(load_rig).transpose()?;
     // One entry per rendered *entity*: a strip stands the one model up once per phase, so its
@@ -844,9 +1029,11 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
         Some(posed) if fanned => posed
             .reports
             .iter()
-            .map(|report| match report.weight {
-                Some(weight) => format!("w {weight:.2}"),
-                None => format!("t {:.2}", report.time),
+            .map(|report| match (report.weight, report.params) {
+                (Some(weight), _) => format!("w {weight:.2}"),
+                (None, Some([x, y])) if posed.two_d => format!("p {x:.2} {y:.2}"),
+                (None, Some([x, _])) => format!("p {x:.2}"),
+                (None, None) => format!("t {:.2}", report.time),
             })
             .collect(),
         _ => loaded
@@ -870,6 +1057,8 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
                 Some(AnimationSpec {
                     clip: posed.name.as_str(),
                     started: phase.started,
+                    params: phase.params,
+                    layers: request.layers,
                     fade: phase.fade.map(|(from_started, fade_started)| FadeSpec {
                         from: posed.from.as_deref().unwrap_or_default(),
                         from_started,
@@ -987,6 +1176,23 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
                 from,
                 seconds: f64::from(posed.fade_seconds),
             }),
+            blend: posed.blend,
+            layers: request
+                .layers
+                .iter()
+                .map(|layer| {
+                    format!(
+                        "{} {:?} {} {}",
+                        layer.clip,
+                        layer.weight,
+                        layer.mask.unwrap_or("-"),
+                        match layer.mode {
+                            LayerMode::Override => "override",
+                            LayerMode::Additive => "additive",
+                        }
+                    )
+                })
+                .collect(),
             name: posed.name,
             duration: posed.duration,
             looped: posed.looped,
@@ -1057,6 +1263,45 @@ fn check_clip_flags(request: &ModelSheetRequest) -> Result<(), Vec<Diagnostic>> 
              of two",
         ));
     }
+    if request.blend.is_some() && (request.clip.is_some() || request.crossfade.is_some()) {
+        let other = if request.clip.is_some() {
+            "`--clip`"
+        } else {
+            "`--crossfade`"
+        };
+        return Err(refuse_clip(
+            format!(
+                "`--blend` and {other} both pose the model: a blend already names the clips it \
+                 plays"
+            ),
+            "use `--blend <name>:<p0>[:<p1>]` for a blend space, `--clip <name>` for one clip, or \
+             `--crossfade <from>:<to>:<seconds>` for the fade of two",
+        ));
+    }
+    if request.layers.len() > MAX_ANIMATION_LAYERS {
+        return Err(vec![
+            Diagnostic::new(
+                code::ANIMATION_LAYERS_TOO_MANY,
+                format!(
+                    "`--layer` was given {} times, but a stack holds at most {MAX_ANIMATION_LAYERS} \
+                     layers",
+                    request.layers.len()
+                ),
+            )
+            .with_help("drop a `--layer`, or fold two layers' clips into one"),
+        ]);
+    }
+    if !request.layers.is_empty()
+        && request.clip.is_none()
+        && request.crossfade.is_none()
+        && request.blend.is_none()
+    {
+        return Err(refuse_clip(
+            "`--layer` needs a base pose: layers compose over `--clip`, `--crossfade` or `--blend`"
+                .to_string(),
+            "name the base too, e.g. `--clip walk --layer wave:1.0:arm_only`",
+        ));
+    }
     if request.hold == Some(0) {
         return Err(vec![
             Diagnostic::new(
@@ -1066,7 +1311,7 @@ fn check_clip_flags(request: &ModelSheetRequest) -> Result<(), Vec<Diagnostic>> 
             .with_help("no flag, or `--hold 1`, plays every tick; 5 is 12 poses/s at 60 Hz"),
         ]);
     }
-    if request.clip.is_none() && request.crossfade.is_none() {
+    if request.clip.is_none() && request.crossfade.is_none() && request.blend.is_none() {
         let orphan = match (request.time, request.strip, request.hold) {
             (Some(_), _, _) => "`--time`",
             (None, Some(_), _) => "`--strip`",
@@ -1083,6 +1328,8 @@ fn check_clip_flags(request: &ModelSheetRequest) -> Result<(), Vec<Diagnostic>> 
     }
     let flag = if request.crossfade.is_some() {
         "`--crossfade`"
+    } else if request.blend.is_some() {
+        "`--blend`"
     } else {
         "`--clip`"
     };
@@ -2006,6 +2253,19 @@ struct AnimationSpec<'a> {
     clip: &'a str,
     started: u64,
     fade: Option<FadeSpec<'a>>,
+    /// The blend parameters `clip` is evaluated at when it names a blend.
+    params: [f32; 2],
+    /// The `AnimationLayers` the entity carries, all started at `started`.
+    layers: &'a [LayerSpec<'a>],
+}
+
+/// Whether the request sweeps a blend, so its phases are a strip.
+fn sweeps_blend(request: &ModelSheetRequest) -> bool {
+    request.blend.is_some_and(|blend| {
+        request.strip.is_some()
+            || matches!(blend.p0, Sweep::Range(..))
+            || matches!(blend.p1, Some(Sweep::Range(..)))
+    })
 }
 
 /// The crossfade fields of an [`AnimationSpec`]: what `crate::components::crossfade` would have
@@ -2022,6 +2282,8 @@ struct FadeSpec<'a> {
 struct PhaseStart {
     started: u64,
     fade: Option<(u64, u64)>,
+    /// The blend parameters under a blend sweep; `[0, 0]` elsewhere.
+    params: [f32; 2],
 }
 
 /// A resolved clip request: everything the render and the report need, decided entirely on the CPU.
@@ -2033,6 +2295,10 @@ struct Posed {
     /// A crossfade's outgoing clip, and its length in seconds (`0.0` outside one).
     from: Option<String>,
     fade_seconds: f32,
+    /// The swept blend's name, when the base is one (then `name` is the same).
+    blend: Option<String>,
+    /// Whether the swept blend is 2D, which sets how a phase's parameters are captioned.
+    two_d: bool,
     /// The frames each phase's own entity carries, in render order. All of them are read
     /// at the single [`now`](Self::now) tick, which is what lets one extract produce N poses.
     started: Vec<PhaseStart>,
@@ -2178,16 +2444,21 @@ impl<'a> ClipSource<'a> {
 
     /// One phase's report at clip time `time` (the incoming clip's), `tick` ticks in, for the pose
     /// the render will draw.
+    ///
+    /// An assembly poses through [`part_placements_sides`], the one implementation extract draws
+    /// with: `layers` compose over the base `pose` (and its `fade`) exactly as the entity's
+    /// `AnimationLayers` do.
     fn report(
         &self,
-        pose: ClipPose<'_>,
-        fade: Option<&CrossfadePose<'_>>,
+        pose: AssemblySide<'_>,
+        fade: Option<(AssemblySide<'_>, f64)>,
+        layers: &[AssemblyLayerPose<'_>],
         time: f64,
         tick: u64,
     ) -> Result<PhaseReport, Vec<Diagnostic>> {
         match self {
             ClipSource::Assembly(posing) => {
-                let posed = part_placements_faded(&posing.data, pose, fade);
+                let posed = part_placements_sides(&posing.data, pose, fade, true, layers);
                 phase_report(
                     &posing.assembly,
                     &posing.grid,
@@ -2203,9 +2474,81 @@ impl<'a> ClipSource<'a> {
                 components: None,
                 strays: Vec::new(),
                 weight: None,
+                params: None,
+                phase: None,
             }),
         }
     }
+
+    /// The blend space bound as `name`, or `None` (a prefab has none).
+    fn blend(&self, name: &str) -> Option<&crate::blend_space::BlendSpaceData> {
+        match self {
+            ClipSource::Assembly(posing) => posing.data.blend(name),
+            ClipSource::Character(data) => data.blend(name),
+            ClipSource::Prefab(_) => None,
+        }
+    }
+
+    /// Every blend name the model declares, for a refusal's suggestions.
+    fn blend_names(&self) -> Vec<&str> {
+        match self {
+            ClipSource::Assembly(posing) => posing
+                .data
+                .blends
+                .iter()
+                .map(|blend| blend.name.as_str())
+                .collect(),
+            ClipSource::Character(data) => data
+                .blends
+                .iter()
+                .map(|blend| blend.name.as_str())
+                .collect(),
+            ClipSource::Prefab(_) => Vec::new(),
+        }
+    }
+
+    /// The layers of an assembly posed at `now`, each as the entity's `AnimationLayers` entry would
+    /// read — the `started` frame is the phase's own, so a layer's clock is the base clock. Empty for
+    /// a character or prefab, which have no gap analysis to pose.
+    fn layer_poses<'s>(
+        &'s self,
+        specs: &[LayerSpec<'_>],
+        started: u64,
+        now: ludion_core::time::GameTime,
+    ) -> Vec<AssemblyLayerPose<'s>> {
+        let ClipSource::Assembly(posing) = self else {
+            return Vec::new();
+        };
+        layers_of(specs, started)
+            .iter()
+            .filter_map(|layer| assembly_layer_pose(&posing.data, layer, now, None))
+            .collect()
+    }
+}
+
+/// The `AnimationLayer`s `specs` stand for, all started at frame `started`. A layer is named for its
+/// clip, a repeat of a clip getting its position too, since a layer's name is unique in the stack.
+fn layers_of(specs: &[LayerSpec<'_>], started: u64) -> Vec<AnimationLayer> {
+    specs
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            let repeats = specs[..index].iter().any(|prior| prior.clip == spec.clip);
+            AnimationLayer {
+                name: if repeats {
+                    format!("{}-{index}", spec.clip)
+                } else {
+                    spec.clip.to_string()
+                },
+                clip: spec.clip.to_string(),
+                mask: spec.mask.unwrap_or_default().to_string(),
+                mode: spec.mode,
+                weight: spec.weight,
+                started: FrameIndex::new(started),
+                ..AnimationLayer::default()
+            }
+        })
+        .collect()
 }
 
 /// Resolves `name` against the model: checks it is an assembly, character or prefab that binds the name,
@@ -2222,6 +2565,7 @@ fn resolve_clip(
     let (noun, names) = clip_names(loaded, &format!("`--clip {name}`"))?;
     check_bound(noun, &names, name)?;
     let source = ClipSource::load(model, loaded)?;
+    check_layers(&source, noun, request.layers)?;
     let (clip, factor) = source.bound(name);
 
     let rate = TickRate::DEFAULT;
@@ -2238,8 +2582,9 @@ fn resolve_clip(
         // elapsed seconds are `(now − started) × seconds_per_tick`, and `clip_phase` wraps or
         // clamps them per the clip's own `loop:`.
         let time = tick as f64 * rate.seconds_per_tick() * factor;
-        let pose = Some((clip, ludion_scene::clip_phase(clip, time)));
-        reports.push(source.report(pose, None, time, tick)?);
+        let pose = AssemblySide::single(Some((clip, ludion_scene::clip_phase(clip, time))));
+        let layers = source.layer_poses(request.layers, now - tick, game_now(now));
+        reports.push(source.report(pose, None, &layers, time, tick)?);
     }
 
     Ok(Posed {
@@ -2248,11 +2593,14 @@ fn resolve_clip(
         looped: clip.looped,
         from: None,
         fade_seconds: 0.0,
+        blend: None,
+        two_d: false,
         started: ticks
             .iter()
             .map(|tick| PhaseStart {
                 started: now - tick,
                 fade: None,
+                params: [0.0; 2],
             })
             .collect(),
         now,
@@ -2279,6 +2627,7 @@ fn resolve_crossfade(
     check_bound(noun, &names, spec.from)?;
     check_bound(noun, &names, spec.to)?;
     let source = ClipSource::load(model, loaded)?;
+    check_layers(&source, noun, request.layers)?;
     let (from_clip, from_factor) = source.bound(spec.from);
     let (to_clip, to_factor) = source.bound(spec.to);
 
@@ -2306,12 +2655,20 @@ fn resolve_crossfade(
             from: Some((from_clip, ludion_scene::clip_phase(from_clip, from_time))),
             weight: raw,
         });
-        let mut report = source.report(to_pose, fade.as_ref(), to_time, tick)?;
+        let layers = source.layer_poses(request.layers, now - tick, game_now(now));
+        let mut report = source.report(
+            AssemblySide::single(to_pose),
+            fade.map(|fade| (AssemblySide::single(fade.from), fade.weight)),
+            &layers,
+            to_time,
+            tick,
+        )?;
         report.weight = Some(raw.min(1.0));
         reports.push(report);
         started.push(PhaseStart {
             started: now - tick,
             fade: Some((now - tick - lead, now - tick)),
+            params: [0.0; 2],
         });
     }
 
@@ -2321,8 +2678,194 @@ fn resolve_crossfade(
         looped: to_clip.looped,
         from: Some(spec.from.to_string()),
         fade_seconds: spec.seconds,
+        blend: None,
+        two_d: false,
         started,
         now,
+        reports,
+    })
+}
+
+/// The gameplay instant `tick` ticks in, which is what extract poses at when no `Animation.hold` is set.
+fn game_now(tick: u64) -> ludion_core::time::GameTime {
+    ludion_core::time::GameTime::from(SimTime::from_ticks(tick, TickRate::DEFAULT))
+}
+
+/// `L1117` for a prefab asked to blend or layer: its parts carry neither.
+fn refuse_prefab(what: &str) -> Vec<Diagnostic> {
+    refuse_clip(
+        format!(
+            "{what} cannot pose a prefab: a prefab's parts carry `Animation` clips only, with no \
+             `blends:` and no `AnimationLayers`"
+        ),
+        "point `--model` at the assembly or character that declares the blends and masks, or play a \
+         prefab clip with `--clip`",
+    )
+}
+
+/// "it declares `a`, `b`" — or "it declares none" — for a refusal that lists what a model has.
+fn declared(names: &[&str]) -> String {
+    if names.is_empty() {
+        return "it declares none".to_string();
+    }
+    let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
+    format!("it declares {}", quoted.join(", "))
+}
+
+/// `L1117` unless every layer names a clip or blend the model binds and a mask it declares.
+fn check_layers(
+    source: &ClipSource<'_>,
+    noun: &str,
+    specs: &[LayerSpec<'_>],
+) -> Result<(), Vec<Diagnostic>> {
+    if specs.is_empty() {
+        return Ok(());
+    }
+    if matches!(source, ClipSource::Prefab(_)) {
+        return Err(refuse_prefab("`--layer`"));
+    }
+    let list = |names: Vec<&str>| declared(&names);
+    let (clips, masks): (Vec<&str>, Vec<&str>) = match source {
+        ClipSource::Assembly(posing) => (
+            posing.data.clips.iter().map(|c| c.name.as_str()).collect(),
+            posing.data.masks.iter().map(|m| m.name.as_str()).collect(),
+        ),
+        ClipSource::Character(data) => (
+            data.clips.iter().map(|c| c.name.as_str()).collect(),
+            data.masks.iter().map(|m| m.name.as_str()).collect(),
+        ),
+        ClipSource::Prefab(_) => (Vec::new(), Vec::new()),
+    };
+    let blends = source.blend_names();
+    for spec in specs {
+        if !clips.contains(&spec.clip) && !blends.contains(&spec.clip) {
+            let known: Vec<&str> = clips.iter().chain(&blends).copied().collect();
+            return Err(refuse_clip(
+                format!(
+                    "`--layer {}:...` names no clip or blend of this {noun}: {}",
+                    spec.clip,
+                    list(known)
+                ),
+                &format!(
+                    "name a clip or blend the {noun} declares (`check-scene <model>.{noun}.yaml` lists them)"
+                ),
+            ));
+        }
+        if let Some(mask) = spec.mask
+            && !masks.contains(&mask)
+        {
+            return Err(refuse_clip(
+                format!(
+                    "`--layer {}:..:{mask}` names a mask this {noun} does not declare: {}",
+                    spec.clip,
+                    list(masks)
+                ),
+                &format!(
+                    "name a `masks:` entry of the {noun}, or leave the mask empty for every part \
+                     (`--layer {}:{}`)",
+                    spec.clip, spec.weight
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// [`resolve_clip`] for a blend sweep: every phase plays the blend on the one shared tick at its own
+/// parameters, and the report poses through [`AssemblySide::blend`] at the stateless phase
+/// `elapsed × rate(params)` — what extract reads for an entity with no `BlendClock`, so the strip
+/// and a running game agree.
+fn resolve_blend(
+    request: &ModelSheetRequest,
+    model: &Path,
+    loaded: &LoadedModel,
+    spec: BlendSweepSpec<'_>,
+) -> Result<Posed, Vec<Diagnostic>> {
+    let what = format!("`--blend {}`", spec.name);
+    let (noun, _) = clip_names(loaded, &what)?;
+    let source = ClipSource::load(model, loaded)?;
+    if matches!(source, ClipSource::Prefab(_)) {
+        return Err(refuse_prefab(&what));
+    }
+    check_layers(&source, noun, request.layers)?;
+    let Some(blend) = source.blend(spec.name) else {
+        return Err(refuse_clip(
+            format!(
+                "this {noun} declares no blend named `{}`: {}",
+                spec.name,
+                declared(&source.blend_names())
+            ),
+            &format!(
+                "name one of the `blends:` the {noun} declares (`check-scene <model>.{noun}.yaml` \
+                 lists them)"
+            ),
+        ));
+    };
+    if blend.two_d != spec.p1.is_some() {
+        let (shape, fix) = if blend.two_d {
+            ("2D", "give both parameters, e.g. `--blend NAME:0..1:-1..1`")
+        } else {
+            ("1D", "give one parameter, e.g. `--blend NAME:0..1`")
+        };
+        return Err(refuse_clip(
+            format!(
+                "`--blend {}` is {shape} and takes {} parameter{}",
+                spec.name,
+                if blend.two_d { "two" } else { "one" },
+                if blend.two_d { "s" } else { "" }
+            ),
+            fix,
+        ));
+    }
+
+    let rate = TickRate::DEFAULT;
+    let ranged = matches!(spec.p0, Sweep::Range(..)) || matches!(spec.p1, Some(Sweep::Range(..)));
+    let phases = request
+        .strip
+        .unwrap_or(if ranged { DEFAULT_CROSSFADE_PHASES } else { 1 });
+    let hold = request.hold.unwrap_or(1);
+    let tick = crate::extract::held_ticks(hold, quantize(request.time.unwrap_or(0.0), rate));
+    let elapsed = tick as f64 * rate.seconds_per_tick();
+    let layers = source.layer_poses(request.layers, 0, game_now(tick));
+
+    let mut started = Vec::with_capacity(phases as usize);
+    let mut reports = Vec::with_capacity(phases as usize);
+    let mut cycle = 0.0;
+    for index in 0..phases {
+        let params = [
+            spec.p0.at(index, phases),
+            spec.p1.map_or(0.0, |sweep| sweep.at(index, phases)),
+        ];
+        let blend_rate = crate::blend_clock::blend_rate(blend, params);
+        if index == 0 && blend_rate > 0.0 {
+            cycle = 1.0 / blend_rate;
+        }
+        let phase = elapsed * blend_rate;
+        let side = match &source {
+            ClipSource::Assembly(posing) => AssemblySide::blend(&posing.data, blend, params, phase),
+            _ => AssemblySide::EMPTY,
+        };
+        let mut report = source.report(side, None, &layers, elapsed, tick)?;
+        report.params = Some(params);
+        report.phase = Some(phase);
+        reports.push(report);
+        started.push(PhaseStart {
+            started: 0,
+            fade: None,
+            params,
+        });
+    }
+
+    Ok(Posed {
+        name: spec.name.to_string(),
+        duration: cycle,
+        looped: true,
+        from: None,
+        fade_seconds: 0.0,
+        blend: Some(spec.name.to_string()),
+        two_d: blend.two_d,
+        started,
+        now: tick,
         reports,
     })
 }
@@ -2458,6 +3001,8 @@ fn phase_report(
             components: Some(0),
             strays: Vec::new(),
             weight: None,
+            params: None,
+            phase: None,
         });
     }
 
@@ -2576,6 +3121,8 @@ fn phase_report(
         components: Some(components.len()),
         strays,
         weight: None,
+        params: None,
+        phase: None,
     })
 }
 
@@ -3686,6 +4233,14 @@ fn synthesize_scene(
         // clip faster, so a sheet never depends on a rate the file did not author.
         if let Some(Some(animation)) = animations.get(index) {
             components.push(typed("Animation", &animation_of(*animation)));
+            if !animation.layers.is_empty() {
+                components.push(typed(
+                    "AnimationLayers",
+                    &AnimationLayers {
+                        layers: layers_of(animation.layers, animation.started),
+                    },
+                ));
+            }
         }
         entities.push(entity(components));
     }
@@ -3822,6 +4377,7 @@ fn animation_of(spec: AnimationSpec) -> Animation {
     let mut animation = Animation {
         clip: spec.clip.to_string(),
         started: FrameIndex::new(spec.started),
+        params: spec.params,
         ..Animation::default()
     };
     if let Some(fade) = spec.fade {
@@ -4002,6 +4558,97 @@ mod tests {
                     .help
                     .as_deref()
                     .is_some_and(|help| help.contains("--crossfade run:idle:0.25")),
+                "{spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_blend_spec_parses_values_and_ranges() {
+        let one = parse_blend("locomotion:0..2").expect("a range");
+        assert_eq!(
+            (one.name, one.p0, one.p1),
+            ("locomotion", Sweep::Range(0.0, 2.0), None)
+        );
+        let two = parse_blend("aim:0.5:-1..1").expect("a value and a range");
+        assert_eq!(
+            (two.p0, two.p1),
+            (Sweep::At(0.5), Some(Sweep::Range(-1.0, 1.0)))
+        );
+    }
+
+    #[test]
+    fn a_swept_parameter_is_linear_across_the_phases() {
+        let sweep = Sweep::Range(0.0, 2.0);
+        assert_eq!(
+            (0..3).map(|i| sweep.at(i, 3)).collect::<Vec<_>>(),
+            [0.0, 1.0, 2.0]
+        );
+        assert_eq!(Sweep::At(0.7).at(2, 5), 0.7);
+        assert_eq!(sweep.at(0, 1), 0.0);
+    }
+
+    #[test]
+    fn a_malformed_blend_spec_is_refused_with_its_input() {
+        for spec in [
+            "locomotion",
+            "a:1:2:3",
+            ":1",
+            "a:",
+            "a:x",
+            "a:inf",
+            "a:NaN..1",
+            "a:0..",
+            "a:..1",
+            "a:0..1..2",
+        ] {
+            let diagnostic = parse_blend(spec).expect_err(spec);
+            assert_eq!(diagnostic.code, code::MODEL_SHEET_INPUT, "{spec}");
+            assert!(diagnostic.message.contains(spec), "{spec}");
+            assert!(
+                diagnostic
+                    .help
+                    .as_deref()
+                    .is_some_and(|help| help.contains("--blend locomotion:0..2")),
+                "{spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_layer_spec_parses_its_optional_fields() {
+        let bare = parse_layer("wave:1").expect("clip and weight");
+        assert_eq!(
+            (bare.clip, bare.weight, bare.mask, bare.mode),
+            ("wave", 1.0, None, LayerMode::Override)
+        );
+        let full = parse_layer("breathe:0.5:torso:additive").expect("every field");
+        assert_eq!((full.mask, full.mode), (Some("torso"), LayerMode::Additive));
+        let skipped = parse_layer("breathe:0.5::additive").expect("an empty mask");
+        assert_eq!((skipped.mask, skipped.mode), (None, LayerMode::Additive));
+    }
+
+    #[test]
+    fn a_malformed_layer_spec_is_refused_with_its_input() {
+        for spec in [
+            "wave",
+            ":1",
+            "wave:",
+            "wave:heavy",
+            "wave:1.5",
+            "wave:-0.1",
+            "wave:NaN",
+            "wave:1:m:replace",
+            "wave:1:m:override:x",
+        ] {
+            let diagnostic = parse_layer(spec).expect_err(spec);
+            assert_eq!(diagnostic.code, code::MODEL_SHEET_INPUT, "{spec}");
+            assert!(diagnostic.message.contains(spec), "{spec}");
+            assert!(
+                diagnostic
+                    .help
+                    .as_deref()
+                    .is_some_and(|help| help.contains("--layer wave:1.0:arm_only")),
                 "{spec}"
             );
         }
@@ -4368,6 +5015,8 @@ entities:
             clip: "open",
             started: 12,
             fade: None,
+            params: [0.0; 2],
+            layers: &[],
         };
         assert_eq!(keys(posed), ["clip", "started"]);
         let fading = AnimationSpec {

@@ -162,6 +162,68 @@ fn good_assembly_succeeds() {
     );
 }
 
+/// An assembly's `masks:` and `blends:` are listed after its clips, a 2D blend with its triangles; an
+/// assembly with neither prints no such line and its JSON carries no such key.
+#[test]
+fn assembly_lists_its_masks_and_blends() {
+    let path = fixture("assembly_blends/humanoid.assembly.yaml");
+    let output = run_check_scene(&path);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in [
+        "  mask arm_only: arm (descendants)
+",
+        "  blend cross (2D, sync foot_l): idle@(0,0), walk@(2,0), run@(0,2)
+    triangles: (0,1,2)
+",
+        "  blend locomotion (1D, sync foot_l): idle@0, walk@2, run@5
+",
+    ] {
+        assert!(stdout.contains(line), "missing {line:?} in: {stdout}");
+    }
+
+    let json = run_check_scene_args(&path, &["--json"]);
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).expect("one JSON object");
+    assert_eq!(
+        value["masks"],
+        serde_json::json!([{
+            "name": "arm_only", "joints": ["arm"], "descendants": true, "weights": []
+        }])
+    );
+    assert_eq!(value["blends"][0]["name"], "cross");
+    assert_eq!(value["blends"][0]["dimension"], 2);
+    assert_eq!(
+        value["blends"][0]["triangles"],
+        serde_json::json!([[0, 1, 2]])
+    );
+    assert_eq!(
+        value["blends"][0]["points"][1]["at"],
+        serde_json::json!([2.0, 0.0])
+    );
+    assert_eq!(value["blends"][1]["name"], "locomotion");
+    assert_eq!(value["blends"][1]["dimension"], 1);
+    assert_eq!(value["blends"][1]["sync"], "foot_l");
+    assert_eq!(value["blends"][1]["points"][2]["at"], 5.0);
+    assert_eq!(value["blends"][1]["triangles"], serde_json::json!([]));
+
+    let plain = fixture("assembly/good.assembly.yaml");
+    let stdout = String::from_utf8_lossy(&run_check_scene(&plain).stdout).into_owned();
+    assert!(
+        !stdout.contains("  mask ") && !stdout.contains("  blend "),
+        "{stdout}"
+    );
+    let json = run_check_scene_args(&plain, &["--json"]);
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).expect("one JSON object");
+    assert!(
+        value.get("masks").is_none() && value.get("blends").is_none(),
+        "{value}"
+    );
+}
+
 /// An assembly whose part draws a glyph the palette does not define is `L1138`, naming the glyph,
 /// the part, and its file — the cross-file check only `ludion_engine::load_assembly` can run.
 #[test]

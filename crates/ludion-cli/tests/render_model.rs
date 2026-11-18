@@ -2169,3 +2169,190 @@ fn needs_gpu_a_prefab_clip_at_time_zero_writes_the_rest_pose_bytes() {
         "a clip at t = 0 draws the rest pose"
     );
 }
+
+// --- Assembly `--blend` and `--layer` ------------------------------------------------------------
+
+/// The humanoid fixture: three parts, three looping clips, `arm_only` and the `locomotion` blend.
+/// Read-only; every test renders into its own work directory.
+fn blend_humanoid() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/assembly_blends/humanoid.assembly.yaml")
+}
+
+/// The component count a report line of `phase` names.
+fn components_of(stdout: &str, phase: usize) -> String {
+    let prefix = format!("  phase {phase}:");
+    let line = stdout
+        .lines()
+        .find(|line| line.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("no `{prefix}` line in: {stdout}"));
+    line.rsplit(", ")
+        .next()
+        .expect("a component count ends the line")
+        .to_string()
+}
+
+/// `--blend` beside `--clip` is a clap conflict, and a malformed spec, an unknown blend, a layer with no
+/// base, an unknown mask and a fifth layer are each readable errors that write no file. No GPU.
+#[test]
+fn blend_and_layer_misuse_is_readable() {
+    let model = blend_humanoid();
+    let model = model.to_str().unwrap();
+    let output = run_ludion(&[
+        "render",
+        "--model",
+        model,
+        "--clip",
+        "walk",
+        "--blend",
+        "locomotion:0",
+    ]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
+
+    let dir = target_tmpdir().join("blend_misuse");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let five: Vec<&str> = ["--layer", "run:1.0"].repeat(5);
+    let cases: [(&[&str], &str); 5] = [
+        (&["--blend", "locomotion"], "error[L1117]"),
+        (&["--blend", "gait:0..1"], "`locomotion`"),
+        (&["--layer", "run:1.0"], "needs a base pose"),
+        (&["--clip", "walk", "--layer", "run:1.0:legs"], "`arm_only`"),
+        (&[], "error[L1670]"),
+    ];
+    for (index, (extra, expected)) in cases.iter().enumerate() {
+        let mut args = vec!["render", "--model", model];
+        if index == 4 {
+            args.extend(["--clip", "walk"]);
+            args.extend(&five);
+        }
+        args.extend(*extra);
+        let output = run_ludion_in(&dir, &args);
+        assert!(!output.status.success(), "{extra:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "{extra:?}: {stderr}");
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("dir reads").count(),
+            0,
+            "an error must not produce an output file"
+        );
+    }
+}
+
+/// `--blend locomotion:0..2 --strip 3` names `<name>-<blend>-blend.png`, reports each phase's params,
+/// and the phase at the `walk` point poses like `walk` itself at its sync instant.
+#[test]
+fn needs_gpu_a_blend_sweep_names_its_output_and_reports_params() {
+    let dir = target_tmpdir().join("blend_sweep");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let model = blend_humanoid();
+    let model = model.to_str().unwrap();
+    let output = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--model",
+            model,
+            "--blend",
+            "locomotion:0..2",
+            "--strip",
+            "3",
+            "--width",
+            "480",
+            "--height",
+            "270",
+        ],
+    );
+    if !output.status.success() {
+        if is_no_adapter(&output) {
+            eprintln!("SKIPPED a_blend_sweep_names_its_output_and_reports_params: no GPU adapter");
+            return;
+        }
+        panic!(
+            "render --blend failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(dir.join("humanoid-locomotion-blend.png").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("blend locomotion: one cycle"), "{stdout}");
+    assert!(
+        stdout.contains("3 phases quantized to 60 Hz ticks"),
+        "{stdout}"
+    );
+    for (phase, params) in ["[0, 0]", "[1, 0]", "[2, 0]"].iter().enumerate() {
+        let line = stdout
+            .lines()
+            .find(|line| line.starts_with(&format!("  phase {phase}:")))
+            .unwrap_or_else(|| panic!("no phase {phase} in: {stdout}"));
+        assert!(
+            line.contains(&format!("params {params}, phase 0.000")),
+            "{line}"
+        );
+    }
+
+    // `walk` syncs on a quarter of its second: that is the instant the blend plays it at phase 0.
+    let walk = run_ludion_in(
+        &dir,
+        &[
+            "render", "--model", model, "--clip", "walk", "--time", "0.25", "--width", "480",
+            "--height", "270",
+        ],
+    );
+    assert!(
+        walk.status.success(),
+        "{}",
+        String::from_utf8_lossy(&walk.stderr)
+    );
+    let walk = String::from_utf8_lossy(&walk.stdout);
+    assert_eq!(components_of(&stdout, 2), components_of(&walk, 0));
+}
+
+/// `--layer` over a clip echoes the stack, appends `-layered` and reports the posed gap analysis.
+#[test]
+fn needs_gpu_a_layer_over_a_clip_echoes_the_stack() {
+    let dir = target_tmpdir().join("layer_echo");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let model = blend_humanoid();
+    let output = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--model",
+            model.to_str().unwrap(),
+            "--clip",
+            "walk",
+            "--layer",
+            "run:1.0:arm_only",
+            "--layer",
+            "idle:0.5::additive",
+            "--width",
+            "480",
+            "--height",
+            "270",
+        ],
+    );
+    if !output.status.success() {
+        if is_no_adapter(&output) {
+            eprintln!("SKIPPED a_layer_over_a_clip_echoes_the_stack: no GPU adapter");
+            return;
+        }
+        panic!(
+            "render --layer failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(dir.join("humanoid-walk-t0-layered.png").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("layers: run 1.0 arm_only override, idle 0.5 - additive"),
+        "{stdout}"
+    );
+    assert!(
+        components_of(&stdout, 0).ends_with("component")
+            || components_of(&stdout, 0).ends_with("components")
+    );
+}

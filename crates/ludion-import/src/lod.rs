@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
-use ludion_scene::{MAX_MESH_LODS, MeshDocument, MeshLodRef, MeshSkin, check_lod_level};
+use ludion_scene::{
+    MAX_MESH_LODS, MeshDocument, MeshLodRef, MeshSkin, MeshSurfaces, check_lod_level,
+};
 use meshopt::{SimplifyOptions, VertexDataAdapter, simplify, simplify_sloppy, typed_to_bytes};
 
 use crate::skin::SkinBinding;
@@ -196,13 +198,62 @@ pub(crate) fn generate_levels(
                     mesh: file,
                     screen_size: spec.screen_size,
                 });
-                levels.push(MeshArtifact { rel_path, doc });
+                let surfaces = level_surfaces(base.surfaces.as_ref().map(|s| &s.names[..]), &doc);
+                levels.push(MeshArtifact {
+                    rel_path,
+                    doc,
+                    surfaces,
+                });
             }
         }
         out.push(base);
         out.extend(levels);
     }
     Ok(out)
+}
+
+/// The tags of a document drawn from `names`: one run over all of its triangles, or `None` when it is
+/// untagged or has no triangles (a zero-count run is `L1696`).
+pub(crate) fn level_surfaces(names: Option<&[String]>, doc: &MeshDocument) -> Option<MeshSurfaces> {
+    let names = names?;
+    let count = doc.triangle_count();
+    (count > 0).then(|| MeshSurfaces {
+        names: names.to_vec(),
+        runs: vec![[
+            u32::try_from(count).expect("a mesh's triangle count fits its u32 indices"),
+            0,
+        ]],
+    })
+}
+
+/// `L1396` when an authored level's surface tags differ from its base's.
+fn surfaces_mismatch(
+    base: Option<&MeshSurfaces>,
+    level: Option<&MeshSurfaces>,
+    path: &str,
+    index: usize,
+) -> Option<Diagnostic> {
+    let names = |s: Option<&MeshSurfaces>| s.map(|s| s.names.clone());
+    let show = |s: &Option<Vec<String>>| {
+        s.as_ref()
+            .map_or_else(|| "untagged".to_owned(), |n| format!("[{}]", n.join(", ")))
+    };
+    let (base, level) = (names(base), names(level));
+    (base != level).then(|| {
+        Diagnostic::new(
+            code::MESH_LOD_LEVEL_MISMATCH,
+            format!(
+                "level {} `{path}` of this mesh differs from the base in `surfaces`: {} against {}",
+                index + 1,
+                show(&base),
+                show(&level)
+            ),
+        )
+        .with_path(format!("/lods/{index}/mesh"))
+        .with_help(
+            "give the level's material the same `ludion_surface` custom property as the base's, or none on both",
+        )
+    })
 }
 
 fn name_taken(rel_path: &str) -> Diagnostic {
@@ -464,9 +515,15 @@ pub(crate) fn attach_authored_levels(
                     .iter()
                     .position(|mesh| mesh.rel_path == base_path)
                     .unwrap_or(base_at);
-                let doc = &mut state.meshes[base_at].doc;
-                doc.lods.clone_from(&refs);
-                let found = check_lod_level(doc, &level.doc, index);
+                let base = &mut state.meshes[base_at];
+                base.doc.lods.clone_from(&refs);
+                let mut found = check_lod_level(&base.doc, &level.doc, index);
+                found.extend(surfaces_mismatch(
+                    base.surfaces.as_ref(),
+                    level.surfaces.as_ref(),
+                    &refs[index].mesh,
+                    index,
+                ));
                 if !found.is_empty() {
                     return Err(found);
                 }
@@ -644,6 +701,7 @@ mod tests {
         let artifact = |path: &str, doc: MeshDocument| MeshArtifact {
             rel_path: path.into(),
             doc,
+            surfaces: None,
         };
         let specs = [LodSpec {
             screen_size: 0.25,

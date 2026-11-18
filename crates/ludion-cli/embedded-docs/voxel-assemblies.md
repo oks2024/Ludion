@@ -191,10 +191,18 @@ switched, so keep siblings apart even where a plug-into-parent overlap is fine.
 
 `switch_to_ragdoll` (Rust, `ludion-engine`) turns a posed `kind: assembly` entity into one rigid
 body per part, at its **current** pose: it reads gameplay time, so a mid-clip switch (a death blow)
-freezes the pose it died in, and every joint's limits count from that pose, not the rest one. The
-root entity survives — its id and every component but `Mesh`/`Animation`/`Collider`/`Velocity` stay.
+freezes the pose it died in — layers included, so a layered assembly spawns at the pose that was drawn —
+and every joint's limits count from that pose, not the rest one. The root entity survives — its id and every component but `Mesh`/`Animation`/`Collider`/`Velocity` stay.
 A root `SurfaceTag` is inherited: each part takes its `parts` entry's surface by part name, else the
 root's (`ludion docs collision`).
+
+`switch_to_ragdoll_with(world, entity, assembly, game_time, opts)` takes a `RagdollSwitch`; build it
+from `RagdollSwitch::default()` and set `limits_from`. `LimitsFrom::Rest` stores a `JointZero` (the
+identity: parts have no rest rotation) on each joint carrier, so limits, `JointMotor` targets and
+`JointPoses` count from the **rig rest pose** however the body fell, and survive a rebuild, a
+snapshot restore and a save and reload. A switch pose outside a limit measured from rest is clamped
+by the solver on the first step — a bounded snap, not an error. The default, `LimitsFrom::SwitchPose`,
+is `switch_to_ragdoll` exactly. `ludion docs physics-joints` §Rules has `JointZero`.
 
 ## Gotchas
 

@@ -312,7 +312,13 @@ pub(crate) fn transform_instances(
 fn multiply_alpha(instances: &mut [UiEntry], opacity: f32) {
     for (_, _, instance) in instances {
         match instance {
-            UiInstance::Rect { color, .. } | UiInstance::Text { color, .. } => color[3] *= opacity,
+            UiInstance::Rect { color, .. } => color[3] *= opacity,
+            UiInstance::Text { color, outline, .. } => {
+                color[3] *= opacity;
+                if let Some(outline) = outline {
+                    outline.color[3] *= opacity;
+                }
+            }
         }
     }
 }
@@ -614,6 +620,7 @@ mod tests {
                 }],
                 font: None,
                 clip: UiClip::NONE,
+                outline: None,
             },
         )
     }

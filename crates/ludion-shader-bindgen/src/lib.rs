@@ -204,6 +204,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
         "mesh.wgsl",
         &[
             "camera.wgsl",
+            "transparent_layer.wgsl",
             "skin.wgsl",
             "cluster_grid.wgsl",
             "lights.wgsl",

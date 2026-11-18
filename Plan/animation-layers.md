@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1, W2a, W2b (sim), A1 and A2 mechanized (2026-11-18); A3, W2c–W6 not started.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a, W2b (sim), A1, A2 and W2c mechanized (2026-11-18); A3 deferred; W2d, W3–W6 not started.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -80,7 +80,19 @@ No component, `WorldHash`, replay, trace, wire-schema or golden moved; the compo
 | `crates/ludion-engine/tests/assembly_blends.rs` | cadence, point-equals-clip, 2D, hash neutrality, 1/2/8 threads, restore, crossfade, layer blend on a mask, no clock on a plain assembly, ragdoll switch, `L1138` refusals |
 
 No component, `WorldHash`, replay, trace, wire-schema or golden moved; the component schema did not move.
-`check-scene` does not list assembly blends yet.
+
+### W2c — `check-scene` masks and blends, `render --model --blend/--layer`
+
+| file | role |
+|---|---|
+| `crates/ludion-cli/src/check_scene.rs` | `run_assembly` lists `mask` and `blend` lines (2D triangles beneath) and emits `masks` and `blends` arrays in `--json` |
+| `crates/ludion-engine/src/model_sheet.rs` | `parse_blend`, `parse_layer`, `BlendSweepSpec`, `Sweep`, `LayerSpec`; `resolve_blend`, `check_layers`; `PhaseReport.params`/`phase`, `ClipOutcome.blend`/`layers`; each phase entity carries `AnimationLayers`; the report poses through `part_placements_sides` |
+| `crates/ludion-engine/src/extract.rs` | `assembly_layer_pose` (the per-layer body `assembly_layer_poses` maps over), `AssemblySide::blend` crate-visible; `part_placements_faded` retired |
+| `crates/ludion-cli/src/main.rs`, `render.rs` | `--blend`, repeatable `--layer`, `<name>-<blend>-blend.png`, the `-layered` suffix, the report lines |
+| `crates/ludion-engine/tests/model_sheet.rs`, `crates/ludion-cli/tests/check_scene_voxel_animation.rs`, `render_model.rs` | the sweep, the layered pose, the refusals, the listings |
+
+No component, `WorldHash`, replay, trace, wire-schema or golden moved. `check-scene` does not list a
+`kind: character`'s blends.
 
 ## Trigger
 
@@ -205,6 +217,13 @@ share one driver shape.
 34. **Layer blends on assemblies follow decision 20** (`BlendClock.layers`, `AnimationLayer.params`). An
     additive blend layer measures from rest unless `reference:` is set (decision 28).
 
+35. **`check-scene` lists an assembly's masks and blends** (points with `at`, `sync`, 2D triangles).
+    `render --model` sweeps a blend with `--blend <name>:<p0>[:<p1>]`, where each `p` is a number or `lo..hi`
+    swept linearly across the strip (default 5 phases), and stacks `--layer`s
+    `<clip>:<weight>[:<mask>[:override|additive]]` (at most 4, `L1670`) over `--clip`, `--crossfade` or
+    `--blend`. A sheet's blend phase is the stateless `elapsed · rate` (decision 18), and every assembly phase
+    keeps the gap analysis. Refusals are `L1117`, the model sheet's own code.
+
 ## Waves
 
 - **W1 (shipped).** Masks, `AnimationLayers`, composition in extract's `Skin` phase, `L1670`–`L1672`, docs.
@@ -216,9 +235,12 @@ share one driver shape.
   (decisions 25–30).
 - **A2 (shipped).** Assembly `blends:` and layer blends, sharing the blend parser through `ludion-scene`
   (decisions 31–34).
-- **A3.** Prefab-part layers and blends, in `prefab_part_poses`.
-- **W2c.** `render --model … --blend/--layer` strips (`model_sheet.rs` + CLI), gallery
-  `assembly-layers.yaml` and its goldens, after A2 so they show an assembly (pinned goldens owed).
+- **A3 (deferred).** Prefab-part layers and blends, in `prefab_part_poses`. **Trigger:** a prefab-part
+  character or prop needs layers or blends. Request 0007 targets assemblies, and a prefab whose root carries
+  an assembly `Mesh` already plays through the assembly path.
+- **W2c (shipped).** `check-scene` masks and blends, `render --model … --blend/--layer` strips
+  (`model_sheet.rs` + CLI; decision 35).
+- **W2d.** The gallery `assembly-layers.yaml` and its goldens (pinned goldens owed).
 - **W3.** `AnimGraph` and `AnimGraphState` (decision 9).
 - **W4.** Look-at and two-bone IK (decision 10).
 - **W5.** Ground feet, the bench, profile counters (decision 11).
@@ -238,7 +260,8 @@ share one driver shape.
 
 ## Non-goals
 
-- Layers on prefab parts. **Trigger:** A3.
+- Layers and blends on prefab parts, and `render --blend/--layer` on a prefab. **Trigger:** A3 (a prefab-part
+  character or prop needs layers or blends).
 - Per-layer anchors (`set_clip_speed` for a layer). **Trigger:** a layer clip that must change rate mid-clip.
 - Layer-to-layer blending (a crossfade inside one layer). **Trigger:** a layer whose clip switch visibly pops.
 - A masked crossfade of the base. **Trigger:** a base switch that must not touch the upper body.

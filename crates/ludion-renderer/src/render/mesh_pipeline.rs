@@ -4,8 +4,9 @@
 
 use super::{
     HDR_FORMAT, MESH_INSTANCE_ATTRS, MESH_VERTEX_ATTRS, MeshInstanceRaw, MeshVariant, MeshVertex,
-    OUTPUT_FORMAT, depth_state, mesh_primitive,
+    OUTPUT_FORMAT, depth_state, mesh_primitive, premultiplied_blend,
 };
+use crate::scene::BlendMode;
 
 /// The opaque scene pass's three targets, in the graph's declaration order: `scene` (HDR),
 /// `scene_normal` (HDR) and `scene_specular` (`OUTPUT_FORMAT`, sRGB 8-bit).
@@ -13,6 +14,9 @@ const SCENE: MeshFragment<'static> = MeshFragment {
     entry: "fs_main",
     formats: &[HDR_FORMAT, HDR_FORMAT, OUTPUT_FORMAT],
     constants: &[],
+    blend: None,
+    write_mask: wgpu::ColorWrites::ALL,
+    depth_write: true,
 };
 
 /// The scene pass of a frame with a mesh below `medium` 1: [`SCENE`]'s three targets plus
@@ -26,6 +30,9 @@ const MEDIUM: MeshFragment<'static> = MeshFragment {
         wgpu::TextureFormat::R8Unorm,
     ],
     constants: &[],
+    blend: None,
+    write_mask: wgpu::ColorWrites::ALL,
+    depth_write: true,
 };
 
 /// `variant` picks the winding and the culling ([`mesh_primitive`]).
@@ -62,6 +69,9 @@ pub(super) fn build_mesh_capture_pipeline(
         entry: "fs_capture",
         formats: &[HDR_FORMAT, HDR_FORMAT, OUTPUT_FORMAT, HDR_FORMAT],
         constants: &[],
+        blend: None,
+        write_mask: wgpu::ColorWrites::ALL,
+        depth_write: true,
     };
     build_mesh_pipeline_for(device, label, shader, layout, variant, capture)
 }
@@ -114,10 +124,12 @@ impl SceneTwins {
     }
 }
 
-/// The `sun_cascades` debug view's scene pipelines, `SUN_CASCADE_VIEW` true, for world draws and for
-/// the gun's. Built on the view's first frame, so a game that never opens it neither compiles them
-/// nor pays for the tint in any fragment. A shader reload builds a fresh, empty set.
+/// The mesh shader's lazily built twins: the `sun_cascades` debug view's scene pipelines,
+/// `SUN_CASCADE_VIEW` true, for world draws and for the gun's, and the blended meshes' ([`BlendTwins`]).
+/// Built on first use, so a game that never opens the view or blends neither compiles them nor pays
+/// for them in any fragment. A shader reload builds a fresh, empty set.
 pub(super) struct CascadeViewTwins {
+    pub(super) blend: BlendTwins,
     label: &'static str,
     shader: wgpu::ShaderModule,
     layout: wgpu::PipelineLayout,
@@ -132,6 +144,7 @@ impl CascadeViewTwins {
         layout: &wgpu::PipelineLayout,
     ) -> Self {
         CascadeViewTwins {
+            blend: BlendTwins::new(label, shader, layout),
             label,
             shader: shader.clone(),
             layout: layout.clone(),
@@ -159,12 +172,143 @@ impl CascadeViewTwins {
     }
 }
 
-/// A mesh pipeline's fragment stage: its entry point, colour targets and pipeline constants.
+/// The blended meshes' pipelines (`Mesh.blend`): the colour pass into the one HDR target, and the
+/// transparent layer's twins into `Rg16Float` or `Rgba16Float`, each for both modes and every
+/// [`MeshVariant`]. Built on the first blended frame, so a game that never blends neither compiles
+/// them nor pays for them. A shader reload builds a fresh, empty set.
+pub(super) struct BlendTwins {
+    label: &'static str,
+    shader: wgpu::ShaderModule,
+    layout: wgpu::PipelineLayout,
+    built: std::sync::OnceLock<BlendPipelines>,
+}
+
+struct BlendPipelines {
+    /// `[mode][variant]`.
+    color: [[wgpu::RenderPipeline; 4]; 2],
+    /// `[carries medium][mode][variant]`.
+    layer: [[[wgpu::RenderPipeline; 4]; 2]; 2],
+}
+
+impl BlendTwins {
+    pub(super) fn new(
+        label: &'static str,
+        shader: &wgpu::ShaderModule,
+        layout: &wgpu::PipelineLayout,
+    ) -> Self {
+        BlendTwins {
+            label,
+            shader: shader.clone(),
+            layout: layout.clone(),
+            built: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn pipelines(&self, device: &wgpu::Device) -> &BlendPipelines {
+        self.built.get_or_init(|| {
+            let build = |fragment: MeshFragment<'_>, variant| {
+                build_mesh_pipeline_for(
+                    device,
+                    self.label,
+                    &self.shader,
+                    &self.layout,
+                    variant,
+                    fragment,
+                )
+            };
+            let modes = [BlendMode::Alpha, BlendMode::Additive];
+            let color = modes.map(|mode| {
+                let fragment = MeshFragment {
+                    entry: "fs_blend",
+                    formats: &[HDR_FORMAT],
+                    constants: &[("BLENDED", 1.0)],
+                    blend: Some(match mode {
+                        BlendMode::Alpha => premultiplied_blend(),
+                        BlendMode::Additive => additive_blend(),
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                    depth_write: false,
+                };
+                MeshVariant::ALL.map(|variant| build(fragment, variant))
+            });
+            let layer = [false, true].map(|medium| {
+                modes.map(|mode| {
+                    let fragment = MeshFragment {
+                        entry: "fs_blend_layer",
+                        formats: if medium {
+                            &[wgpu::TextureFormat::Rgba16Float]
+                        } else {
+                            &[wgpu::TextureFormat::Rg16Float]
+                        },
+                        constants: match mode {
+                            BlendMode::Alpha => &[("BLENDED", 1.0)],
+                            BlendMode::Additive => &[("BLENDED", 1.0), ("BLEND_ADDITIVE", 1.0)],
+                        },
+                        blend: Some(premultiplied_blend()),
+                        write_mask: if medium {
+                            wgpu::ColorWrites::RED
+                                | wgpu::ColorWrites::GREEN
+                                | wgpu::ColorWrites::BLUE
+                        } else {
+                            wgpu::ColorWrites::RED | wgpu::ColorWrites::GREEN
+                        },
+                        depth_write: false,
+                    };
+                    MeshVariant::ALL.map(|variant| build(fragment, variant))
+                })
+            });
+            BlendPipelines { color, layer }
+        })
+    }
+
+    /// The colour pass's pipeline for `mode` and `variant`.
+    pub(super) fn color(
+        &self,
+        device: &wgpu::Device,
+        mode: BlendMode,
+        variant: MeshVariant,
+    ) -> &wgpu::RenderPipeline {
+        &self.pipelines(device).color[mode as usize][variant.index()]
+    }
+
+    /// The transparent layer's pipeline; `medium` selects the `Rgba16Float` layer that carries blue.
+    pub(super) fn layer(
+        &self,
+        device: &wgpu::Device,
+        mode: BlendMode,
+        variant: MeshVariant,
+        medium: bool,
+    ) -> &wgpu::RenderPipeline {
+        &self.pipelines(device).layer[usize::from(medium)][mode as usize][variant.index()]
+    }
+}
+
+/// `src + dst` on colour, destination alpha kept: the premultiplied colour is simply added.
+fn additive_blend() -> wgpu::BlendState {
+    wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        },
+    }
+}
+
+/// A mesh pipeline's fragment stage: its entry point, colour targets, blend and pipeline constants.
 #[derive(Clone, Copy)]
 struct MeshFragment<'a> {
     entry: &'a str,
     formats: &'a [wgpu::TextureFormat],
     constants: &'a [(&'a str, f64)],
+    /// Every target's blend; `None` for the opaque fragments.
+    blend: Option<wgpu::BlendState>,
+    write_mask: wgpu::ColorWrites,
+    depth_write: bool,
 }
 
 fn build_mesh_pipeline_for(
@@ -204,8 +348,8 @@ fn build_mesh_pipeline_for(
                 .map(|&format| {
                     Some(wgpu::ColorTargetState {
                         format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
+                        blend: fragment.blend,
+                        write_mask: fragment.write_mask,
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -215,7 +359,10 @@ fn build_mesh_pipeline_for(
             },
         }),
         primitive: mesh_primitive(variant),
-        depth_stencil: Some(depth_state(true, wgpu::CompareFunction::Less)),
+        depth_stencil: Some(depth_state(
+            fragment.depth_write,
+            wgpu::CompareFunction::Less,
+        )),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,

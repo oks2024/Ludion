@@ -124,8 +124,8 @@ fn validate_clips(import: &Import) -> Result<(), Vec<Diagnostic>> {
 /// Re-validates every emitted mesh document (defensive — the importer builds them valid).
 fn validate_meshes(import: &Import) -> Result<(), Vec<Diagnostic>> {
     for mesh in &import.meshes {
-        let text = ludion_scene::emit_mesh(&mesh.doc);
-        ludion_scene::check_mesh(&text)?;
+        let text = ludion_scene::emit_mesh_with_surfaces(&mesh.doc, mesh.surfaces.as_ref());
+        ludion_scene::check_mesh_surfaces(&text)?;
     }
     Ok(())
 }

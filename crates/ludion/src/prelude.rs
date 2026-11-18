@@ -149,9 +149,11 @@
 //!   keeps the [`BlendClock`] phase (and each layer's [`LayerPhase`]) of a character whose
 //!   `Animation.clip` or layer clip names a blend space, so its footstep events fire once per
 //!   stride at any speed (`ludion docs animation-layers`).
-//! - **Ragdolls** — [`switch_to_ragdoll`] promotes a posed `Mesh.shape: assembly` entity into one
-//!   `rigid` body entity per part, joined by [`Joint`]s (fixed to its parent unless the assembly's
-//!   `joints:` binds it to something else); the root entity survives, stripped of its drawing/physics
+//! - **Ragdolls** — [`switch_to_ragdoll`] (or [`switch_to_ragdoll_with`], whose
+//!   [`LimitsFrom::Rest`] measures joint limits and targets from the rig rest pose) promotes a posed
+//!   `Mesh.shape: assembly` entity into one `rigid` body entity per part, joined by [`Joint`]s (fixed
+//!   to its parent unless the assembly's `joints:` binds it to something else); the root entity
+//!   survives, stripped of its drawing/physics
 //!   components. [`AssemblyData`] (+ [`load_assembly`]) is the meshed model the switch reads —
 //!   whatever a game's asset cache already holds for the entity's `assembly` path.
 //!   [`switch_skin_to_ragdoll`] does the same for a skinned mesh: it spawns a parts prefab of
@@ -277,27 +279,29 @@ pub use ludion_engine::{
     RunRecording, RunRecordingConfig, RunSave, SceneSwitch, Sense, Settings, SettingsView,
     ShakeConfig, Shutdown, SightPoint, SightSample, SightSampleRecord, SightTarget, SightZone,
     SkinBone, SpotLight, Springs, Sprite, SpriteBlend, Static, Stimulus, StimulusRecord, Subtitles,
-    SurfaceNoise, SuspendInfo, SweepShape, SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry,
-    TrackRig, Transform, TransformHierarchy, TurnSpec, UiAnchorBehind, UiAnchorShow, UiClipShape,
-    UiClock, UiEase, UiGroup, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField,
-    UiTweenRepeat, UiTweenTrack, UiWorldAnchor, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor,
-    Viewmodel, ViewmodelLens, Visibility, Volley, VolleyCenter, VolleyShape, WindowMode, WorldPose,
-    ZoneSweep, add_fov_kick, add_kick, add_look, add_look_counts, add_trauma, advance_volleys,
-    animation_events, blend_clocks, builtin_registry, bullet_age, bullet_is_alive, bullet_position,
-    camera_occluders, camera_relative, camera_relative_yaw, character_fit, check_path, crossfade,
-    debug_draw, despawn_instance, dialogue_update, emit_noise, fade_layer, first_person_eye,
-    fits_character, forget, forget_all, lane_error_colour, lane_frame, lane_relative,
-    load_assembly, move_character, move_character_with, move_characters, nav_distance,
-    nav_link_done, nav_path, nav_project, nav_reachable, nav_steer, nav_update, orbit_eye,
-    path_follow, path_follower_motion, perception_update, play_layer, play_patterns, play_sound,
-    posed_joint_world, prepare_map, prepare_prefab, prewarm_prefab, probe_character_ground,
-    projectiles_step, reparent, report_diagnostic, report_full_diagnostic, report_stimulus,
-    resize_character, resume_character, revert_prefab, set_character_posture, set_clip_speed,
-    set_layer_params, set_look, snap_rig, spawn_map, spawn_prefab, spawn_projectile, stimuli,
-    suspend_character, switch_skin_to_ragdoll, switch_to_ragdoll, teleport_character,
-    turn_character, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
+    SurfaceNoise, SuspendInfo, SweepShape, SwitchTo, Text, TextOutline, TileAppearance, Tilemap,
+    TimelineEntry, TrackRig, Transform, TransformHierarchy, TurnSpec, UiAnchorBehind, UiAnchorShow,
+    UiClipShape, UiClock, UiEase, UiGroup, UiList, UiListItem, UiRect, UiText, UiTween,
+    UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor, VOLLEY_MAX_BULLETS, VOLLEY_SALT,
+    VerticalAnchor, Viewmodel, ViewmodelLens, Visibility, Volley, VolleyCenter, VolleyShape,
+    WindowMode, WorldPose, ZoneSweep, add_fov_kick, add_kick, add_look, add_look_counts,
+    add_trauma, advance_volleys, animation_events, blend_clocks, builtin_registry, bullet_age,
+    bullet_is_alive, bullet_position, camera_occluders, camera_relative, camera_relative_yaw,
+    character_fit, check_path, crossfade, debug_draw, despawn_instance, dialogue_update,
+    emit_noise, fade_layer, first_person_eye, fits_character, forget, forget_all,
+    lane_error_colour, lane_frame, lane_relative, load_assembly, move_character,
+    move_character_with, move_characters, nav_distance, nav_link_done, nav_path, nav_project,
+    nav_reachable, nav_steer, nav_update, orbit_eye, path_follow, path_follower_motion,
+    perception_update, play_layer, play_patterns, play_sound, posed_joint_world, prepare_map,
+    prepare_prefab, prewarm_prefab, probe_character_ground, projectiles_step, reparent,
+    report_diagnostic, report_full_diagnostic, report_stimulus, resize_character, resume_character,
+    revert_prefab, set_character_posture, set_clip_speed, set_layer_params, set_look, snap_rig,
+    spawn_map, spawn_prefab, spawn_projectile, stimuli, suspend_character, switch_skin_to_ragdoll,
+    switch_to_ragdoll, teleport_character, turn_character, unpack_prefab, validate_pattern_docs,
+    volley_hits, world_transform,
 };
 
+pub use ludion_engine::MeshBlend;
 pub use ludion_engine::VoiceId;
 pub use ludion_engine::ui::UiNav;
 pub use ludion_engine::{
@@ -308,6 +312,7 @@ pub use ludion_engine::{DUCK_FLOOR_DB, DuckRule};
 pub use ludion_engine::{
     GroundMarkerClip, ProfileQuery, VisibilityProfile, ground_marker_profile, visibility_profile,
 };
+pub use ludion_engine::{LimitsFrom, RagdollSwitch, switch_to_ragdoll_with};
 pub use ludion_engine::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
 pub use ludion_engine::{
     PatrolFollower, PatrolMotion, PatrolPhase, PatrolResume, PatrolState, patrol_motion,
@@ -342,8 +347,8 @@ pub use ludion_physics::{
 pub use ludion_projectiles as projectiles;
 pub use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, ContactMaterial, GroundPosition, Joint,
-    JointKind, JointMotor, JointPoses, NoParent, ParentPose, Plane, PoseBlend, RigidBody, Shape,
-    SpatialVolume, Velocity, VolumeShape, WorldPosition, spatial, spatial3d,
+    JointKind, JointMotor, JointPoses, JointZero, NoParent, ParentPose, Plane, PoseBlend,
+    RigidBody, Shape, SpatialVolume, Velocity, VolumeShape, WorldPosition, spatial, spatial3d,
 };
 
 pub use ludion_core::codes::code;

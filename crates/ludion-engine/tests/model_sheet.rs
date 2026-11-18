@@ -2118,6 +2118,184 @@ fn crossfade_request_errors_are_readable() {
     );
 }
 
+// --- Blend sweeps and layers -------------------------------------------------------------------
+
+/// The clip fixture's parts with two looping clips and a `slide` blend between them: `home` leaves the
+/// `nub` against the `body`, `far` holds it four cells clear, and `nub_only` masks it alone.
+fn write_blend_fixture(dir: &Path) -> PathBuf {
+    let held = |name: &str, x: f64| {
+        format!(
+            "format: 1\nkind: animation\nname: {name}\nduration: 1.0\nloop: true\ntracks:\n  nub:\n    \
+             translation:\n      - t: 0.0\n        v:\n          - {x:?}\n          - 0.0\n          - 0.0\n      \
+             - t: 1.0\n        v:\n          - {x:?}\n          - 0.0\n          - 0.0\n"
+        )
+    };
+    std::fs::create_dir_all(dir.join("parts")).expect("create parts dir");
+    std::fs::create_dir_all(dir.join("anims")).expect("create anims dir");
+    write_fixture(&dir.join("parts"), "body.part.yaml", CLIP_BODY_PART);
+    write_fixture(&dir.join("parts"), "nub.part.yaml", CLIP_NUB_PART);
+    write_fixture(&dir.join("anims"), "home.anim.yaml", &held("home", 0.0));
+    write_fixture(&dir.join("anims"), "far.anim.yaml", &held("far", 4.0));
+    let assembly = CLIP_ASSEMBLY.replace(
+        "clips:\n  snap: anims/snap.anim.yaml\n  swing: anims/swing.anim.yaml\n",
+        "clips:\n  home: anims/home.anim.yaml\n  far: anims/far.anim.yaml\nmasks:\n  nub_only:\n    \
+         joints:\n      - nub\nblends:\n  slide:\n    points:\n      - clip: home\n        at: 0.0\n      \
+         - clip: far\n        at: 1.0\n",
+    );
+    write_fixture(dir, "blend-fixture.assembly.yaml", &assembly)
+}
+
+fn blend(text: &str) -> Option<ludion_engine::BlendSweepSpec<'_>> {
+    Some(ludion_engine::parse_blend(text).expect("a well-formed spec"))
+}
+
+/// A swept blend reports each phase's parameters, and its ends pose as the point clips alone: the
+/// gap analysis of `slide` at 0 is `home`'s and at 1 is `far`'s.
+#[test]
+fn needs_gpu_a_blend_sweep_reports_params_and_poses_as_its_points() {
+    let dir = temp_dir("blend_sweep");
+    let model = write_blend_fixture(&dir);
+    let models = [model.as_path()];
+    let Some(outcome) = pose_or_skip(
+        "blend_sweep",
+        &ModelSheetRequest {
+            blend: blend("slide:0..1"),
+            strip: Some(3),
+            ..plain(&models, 480, 270)
+        },
+    ) else {
+        return;
+    };
+    let clip = outcome.clip.expect("a blend sweep reports its clip");
+    assert_eq!(clip.blend.as_deref(), Some("slide"));
+    assert!(clip.looped);
+    assert_eq!(
+        clip.phases
+            .iter()
+            .map(|phase| phase.params)
+            .collect::<Vec<_>>(),
+        [Some([0.0, 0.0]), Some([0.5, 0.0]), Some([1.0, 0.0])]
+    );
+    let alone = |name: &str| {
+        let outcome = pose_or_skip(
+            "blend_point",
+            &ModelSheetRequest {
+                clip: Some(name),
+                ..plain(&models, 480, 270)
+            },
+        )
+        .expect("adapter");
+        outcome.clip.expect("a clip reports").phases[0].components
+    };
+    assert_eq!(clip.phases[0].components, alone("home"));
+    assert_eq!(clip.phases[2].components, alone("far"));
+    assert_eq!(clip.phases[0].components, Some(1));
+    assert_eq!(clip.phases[2].components, Some(2));
+}
+
+/// A masked override layer moves the masked part and the gap analysis sees it; a weight of zero is
+/// no layer at all.
+#[test]
+fn needs_gpu_a_layer_over_a_clip_reports_the_layered_pose() {
+    let dir = temp_dir("layer_over_clip");
+    let model = write_blend_fixture(&dir);
+    let models = [model.as_path()];
+    let layers = [ludion_engine::parse_layer("far:1.0:nub_only").expect("a layer")];
+    let Some(outcome) = pose_or_skip(
+        "layer_over_clip",
+        &ModelSheetRequest {
+            clip: Some("home"),
+            layers: &layers,
+            ..plain(&models, 480, 270)
+        },
+    ) else {
+        return;
+    };
+    let clip = outcome.clip.expect("a layered sheet reports its clip");
+    assert_eq!(clip.layers, ["far 1.0 nub_only override"]);
+    assert_eq!(clip.phases[0].components, Some(2));
+
+    let off = [ludion_engine::parse_layer("far:0.0:nub_only").expect("a layer")];
+    let outcome = pose_or_skip(
+        "layer_off",
+        &ModelSheetRequest {
+            clip: Some("home"),
+            layers: &off,
+            ..plain(&models, 480, 270)
+        },
+    )
+    .expect("adapter");
+    assert_eq!(outcome.clip.expect("clip").phases[0].components, Some(1));
+}
+
+/// Blend and layer misuse needs no GPU.
+#[test]
+fn blend_and_layer_request_errors_are_readable() {
+    let dir = temp_dir("blend_errors");
+    let model = write_blend_fixture(&dir);
+    let models = [model.as_path()];
+    let layer = |text| [ludion_engine::parse_layer(text).expect("a layer")];
+
+    let errors = render_model_sheet(&ModelSheetRequest {
+        blend: blend("gait:0..1"),
+        ..plain(&models, 64, 64)
+    })
+    .unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1117");
+    assert!(errors[0].message.contains("`slide`"), "{errors:?}");
+
+    let errors = render_model_sheet(&ModelSheetRequest {
+        blend: blend("slide:0..1"),
+        clip: Some("home"),
+        ..plain(&models, 64, 64)
+    })
+    .unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1117");
+
+    let errors = render_model_sheet(&ModelSheetRequest {
+        blend: blend("slide:0:1"),
+        ..plain(&models, 64, 64)
+    })
+    .unwrap_err();
+    assert!(errors[0].message.contains("1D"), "{errors:?}");
+
+    let errors = render_model_sheet(&ModelSheetRequest {
+        layers: &layer("far:1.0"),
+        ..plain(&models, 64, 64)
+    })
+    .unwrap_err();
+    assert!(errors[0].message.contains("--layer"), "{errors:?}");
+
+    let errors = render_model_sheet(&ModelSheetRequest {
+        clip: Some("home"),
+        layers: &layer("far:1.0:legs"),
+        ..plain(&models, 64, 64)
+    })
+    .unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1117");
+    assert!(errors[0].message.contains("`nub_only`"), "{errors:?}");
+
+    let five = [ludion_engine::parse_layer("far:1.0").expect("a layer"); 5];
+    let errors = render_model_sheet(&ModelSheetRequest {
+        clip: Some("home"),
+        layers: &five,
+        ..plain(&models, 64, 64)
+    })
+    .unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1670");
+
+    let hinge = hinge();
+    let prefab = [hinge.as_path()];
+    let errors = render_model_sheet(&ModelSheetRequest {
+        clip: Some("snap"),
+        layers: &layer("snap:1.0"),
+        ..plain(&prefab, 64, 64)
+    })
+    .unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1117");
+    assert!(errors[0].message.contains("prefab"), "{errors:?}");
+}
+
 // --- Prefabs -----------------------------------------------------------------------------------
 
 /// The hinge prefab the node-clip import emits: `base`, `lid` and `latch`, with `open` and `snap`.

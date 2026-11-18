@@ -1242,6 +1242,10 @@ pub mod code {
     /// JSON Pointer names the offending field.
     pub const JOINT_MOTOR_INVALID: DiagnosticCode = DiagnosticCode::new("L1188");
 
+    /// `L1750` — a `JointZero` is structurally invalid: its `rotation` holds a non-finite element or
+    /// has a length under 1e-6, so it is not a quaternion. The JSON Pointer is `/rotation`.
+    pub const JOINT_ZERO_INVALID: DiagnosticCode = DiagnosticCode::new("L1750");
+
     /// `L1189` — a `Collider` whose shape is a `compound` is structurally invalid: `parts` is
     /// missing or empty, a part's `shape` is a `compound`, `heightfield`, `circle` or `aabb`, or a
     /// part `translation`/`rotation` element is beyond `f32` range. The JSON Pointer names the
@@ -1956,10 +1960,14 @@ pub mod code {
     pub const UI_GROUP_TOO_DEEP: DiagnosticCode = DiagnosticCode::new("L1616");
     /// `L1617` — a `group`, `fill_group` or `fill` combination that has no effect.
     pub const UI_GROUP_IGNORED: DiagnosticCode = DiagnosticCode::new("L1617");
+    /// `L1618` — a `UiText` or `UiList` `outline` has a non-finite or negative width, or a non-finite colour.
+    pub const UI_TEXT_OUTLINE_INVALID: DiagnosticCode = DiagnosticCode::new("L1618");
     /// `L2302` — a UI element's `group` could not be resolved; drawn ungrouped.
     pub const UI_GROUP_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L2302");
     /// `L2303` — more than two clipping groups in a UI element's chain; the outer ones are dropped.
     pub const UI_CLIP_NESTING: DiagnosticCode = DiagnosticCode::new("L2303");
+    /// `L2304` — a UI text outline wider than the face can draw; clamped.
+    pub const UI_TEXT_OUTLINE_CLAMPED: DiagnosticCode = DiagnosticCode::new("L2304");
 
     /// `L1341` — a `Static` entity holds something the static path cannot; it takes the dynamic path.
     pub const STATIC_INELIGIBLE: DiagnosticCode = DiagnosticCode::new("L1341");
@@ -2174,6 +2182,9 @@ pub mod code {
     /// `L2352` — a frame resolves more than 8 distinct silhouette styles; the extras are not drawn.
     /// Raised by extract.
     pub const OCCLUDED_SILHOUETTE_STYLE_LIMIT: DiagnosticCode = DiagnosticCode::new("L2352");
+
+    /// `L2360` — a `Mesh.blend` resolves onto a `Viewmodel` mesh, which is drawn opaque. Raised by extract.
+    pub const MESH_BLEND_ON_VIEWMODEL: DiagnosticCode = DiagnosticCode::new("L2360");
 
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
@@ -7368,6 +7379,27 @@ Fix: give `target` one number for a hinge or slider and three for a ball, and gi
     damping: 8.0",
     },
     CodeEntry {
+        code: code::JOINT_ZERO_INVALID,
+        severity: Severity::Error,
+        title: "joint zero is structurally invalid",
+        explanation: "\
+A `JointZero` component's `rotation` is not a quaternion the solver can measure a joint from.
+
+Two cases raise it, both at `/rotation`:
+
+  - an element is not finite;
+  - the four elements have a length under 1e-6, so the quaternion cannot be normalized.
+
+A `JointZero` stores the joint's zero rotation (`q_a⁻¹·q_b`, `[x, y, z, w]`) in place of the one the
+physics layer would capture from the bodies' pose at build. It does nothing without a `Joint` on
+the same entity.
+
+Fix: give `rotation` four finite numbers of a non-zero quaternion:
+
+  JointZero:
+    rotation: [0.0, 0.0, 0.0, 1.0]",
+    },
+    CodeEntry {
         code: code::COLLIDER_COMPOUND_INVALID,
         severity: Severity::Error,
         title: "compound collider is structurally invalid",
@@ -9966,6 +9998,18 @@ A `UiRect` has `fill_group: true` without a `group` (pointer
 Fix: set `group`, or drop `fill_group`; keep either `fill` or the group fields.",
     },
     CodeEntry {
+        code: code::UI_TEXT_OUTLINE_INVALID,
+        severity: Severity::Error,
+        title: "a UI text outline is invalid",
+        explanation: "\
+A `UiText` or `UiList` `outline` has a `width` that is not finite or is below 0 (pointer
+`/entities/{i}/components/{Component}/outline/width`), or a `color` with a non-finite channel
+(`.../outline/color`). A scene with one is refused.
+
+Fix: give `width` a finite value of 0 or more, in canvas units (0 draws no outline), and `color` finite
+linear straight RGBA.",
+    },
+    CodeEntry {
         code: code::UI_GROUP_UNRESOLVED,
         severity: Severity::Warning,
         title: "a UI element's group could not be resolved",
@@ -9989,12 +10033,25 @@ statically.
 Fix: merge clipping groups, or move the element so at most two clipping groups enclose it.",
     },
     CodeEntry {
+        code: code::UI_TEXT_OUTLINE_CLAMPED,
+        severity: Severity::Warning,
+        title: "a UI text outline is wider than the face can draw",
+        explanation: "\
+A `UiText` or `UiList` `outline.width` exceeds what its face can draw, so it is clamped. An SDF face
+draws up to its baked spread less one screen pixel; a bitmap face (the embedded 8x8 among them)
+draws 1 to 4 whole source pixels. Reported once per element as a degraded warning at render time; the
+message names the face and the maximum width in canvas units.
+
+Fix: lower `outline.width` to the stated maximum, or bake the face with a larger SDF spread.",
+    },
+    CodeEntry {
         code: code::STATIC_INELIGIBLE,
         severity: Severity::Warning,
         title: "a static entity cannot take the static path",
         explanation: "\
 An entity carries `Static` (pointer `/entities/{i}/components/Static`) but has something the static
-path cannot hold: a skinned `asset`, an `assembly`, `assembly_part` or `character` shape, or one of
+path cannot hold: a skinned `asset`, an `assembly`, `assembly_part` or `character` shape, a blended
+`Mesh` (`blend`), or one of
 `SkinBone`, `ParentJoint`, `Viewmodel`, `Sprite`, `ParticleEmitter`, `Text`, `Decal`, `PointLight`,
 `SpotLight`, `DirectionalLight`, `GroundMarker`, `Volley`, `PatternPlayer`. The message names the
 reason. The entity still draws, on the dynamic path. An entity that is posed every frame, by its
@@ -10818,6 +10875,17 @@ colour, outline, `when` and `bias`). The first 8 in scene order are drawn and me
 style get no silhouette. Raised once by extract.
 
 Fix: share styles between entities, for example one on a common `Parent`, so that a frame holds at most 8.",
+    },
+    CodeEntry {
+        code: code::MESH_BLEND_ON_VIEWMODEL,
+        severity: Severity::Warning,
+        title: "Mesh.blend on a Viewmodel mesh is ignored",
+        explanation: "A `Mesh` with `blend` is also a `Viewmodel` (directly or by inheritance). A viewmodel is
+drawn on its own near depth slice and is never blended, so the mesh draws opaque. Raised once per entity
+by extract.
+
+Fix: remove `blend` from the viewmodel's mesh, or move the blended mesh onto an entity that is not a
+viewmodel.",
     },
     CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
@@ -13624,6 +13692,7 @@ mod tests {
         code::AI_MACHINE_INITIAL,
         code::AI_MACHINE_VARIANTS,
         code::JOINT_MOTOR_INVALID,
+        code::JOINT_ZERO_INVALID,
         code::COLLIDER_COMPOUND_INVALID,
         code::MESH_SKIN_STRUCTURE,
         code::MESH_SKIN_DATA,
@@ -13808,8 +13877,10 @@ mod tests {
         code::UI_GROUP_CYCLE,
         code::UI_GROUP_TOO_DEEP,
         code::UI_GROUP_IGNORED,
+        code::UI_TEXT_OUTLINE_INVALID,
         code::UI_GROUP_UNRESOLVED,
         code::UI_CLIP_NESTING,
+        code::UI_TEXT_OUTLINE_CLAMPED,
         code::STATIC_INELIGIBLE,
         code::STATIC_PARENT_NOT_STATIC,
         code::STATIC_REWRITTEN,
@@ -13854,6 +13925,7 @@ mod tests {
         code::OCCLUDED_SILHOUETTE_INVALID,
         code::OCCLUDED_SILHOUETTE_ON_VIEWMODEL,
         code::OCCLUDED_SILHOUETTE_STYLE_LIMIT,
+        code::MESH_BLEND_ON_VIEWMODEL,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,
@@ -14200,6 +14272,7 @@ mod tests {
             code::UI_GROUP_IGNORED,
             code::UI_GROUP_UNRESOLVED,
             code::UI_CLIP_NESTING,
+            code::UI_TEXT_OUTLINE_CLAMPED,
             code::STATIC_INELIGIBLE,
             code::STATIC_PARENT_NOT_STATIC,
             code::STATIC_REWRITTEN,
@@ -14210,6 +14283,7 @@ mod tests {
             code::GROUND_MARKER_CLIP_NO_PHYSICS,
             code::OCCLUDED_SILHOUETTE_ON_VIEWMODEL,
             code::OCCLUDED_SILHOUETTE_STYLE_LIMIT,
+            code::MESH_BLEND_ON_VIEWMODEL,
             code::TRANSITION_CARRY_DEAD,
             code::TRANSITION_CARRY_ORPHANED,
             code::RESTORE_ENGINE_VERSION_DIFFERS,

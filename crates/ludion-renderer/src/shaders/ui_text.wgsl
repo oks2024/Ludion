@@ -23,6 +23,10 @@ struct VsIn {
     @location(4) clip_a: vec4<f32>,
     @location(5) clip_b: vec4<f32>,
     @location(6) clip_r: vec4<f32>,
+    // The outline: colour, the glyph's original uv rect, and (on, sdf edge or bitmap radius, 0, 0).
+    @location(7) ol_color: vec4<f32>,
+    @location(8) ol_rect: vec4<f32>,
+    @location(9) ol_param: vec4<f32>,
 };
 
 struct VsOut {
@@ -33,6 +37,9 @@ struct VsOut {
     @location(3) @interpolate(flat) cl_a: vec4<f32>,
     @location(4) @interpolate(flat) cl_b: vec4<f32>,
     @location(5) @interpolate(flat) cl_r: vec4<f32>,
+    @location(6) @interpolate(flat) ol_color: vec4<f32>,
+    @location(7) @interpolate(flat) ol_rect: vec4<f32>,
+    @location(8) @interpolate(flat) ol_param: vec4<f32>,
 };
 
 // Analytic UI clip: `a`/`b` are the two clip boxes `[x, y, w, h]` in pixels, `r` is
@@ -64,11 +71,48 @@ fn vs_main(in: VsIn) -> VsOut {
     out.cl_a = in.clip_a;
     out.cl_b = in.clip_b;
     out.cl_r = in.clip_r;
+    out.ol_color = in.ol_color;
+    out.ol_rect = in.ol_rect;
+    out.ol_param = in.ol_param;
     return out;
+}
+
+// A bitmap texel's alpha, or 0 outside the glyph's own uv rect so a neighbouring atlas glyph never
+// bleeds into the outline. `textureSampleLevel` keeps the tap loop legal in non-uniform flow.
+fn masked_alpha(uv: vec2<f32>, rect: vec4<f32>) -> f32 {
+    let inside = all(uv >= rect.xy) && all(uv <= rect.zw);
+    return select(0.0, textureSampleLevel(atlas_tex, atlas_sampler, uv, 0.0).a, inside);
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let coverage = glyph_coverage(in.uv, in.sdf);
-    return vec4<f32>(in.color.rgb, in.color.a * coverage * clip_cov(in.clip.xy, in.cl_a, in.cl_b, in.cl_r));
+    let clip = clip_cov(in.clip.xy, in.cl_a, in.cl_b, in.cl_r);
+    // Uniform-flow samples for the SDF path, before the outline branch.
+    let raw = textureSample(atlas_tex, atlas_sampler, in.uv).a;
+    let w = max(fwidth(raw), 1e-4) * 0.7;
+    if in.ol_param.x < 0.5 {
+        return vec4<f32>(in.color.rgb, in.color.a * coverage * clip);
+    }
+    var fill_cov: f32;
+    var out_cov: f32;
+    if in.sdf > 0.5 {
+        fill_cov = smoothstep(0.5 - w, 0.5 + w, raw);
+        out_cov = smoothstep(in.ol_param.y - w, in.ol_param.y + w, raw);
+    } else {
+        let texel = 1.0 / vec2<f32>(textureDimensions(atlas_tex, 0));
+        let k = i32(in.ol_param.y);
+        fill_cov = masked_alpha(in.uv, in.ol_rect);
+        out_cov = fill_cov;
+        for (var j = -k; j <= k; j = j + 1) {
+            for (var i = -k; i <= k; i = i + 1) {
+                out_cov = max(out_cov, masked_alpha(in.uv + vec2<f32>(f32(i), f32(j)) * texel, in.ol_rect));
+            }
+        }
+    }
+    let af = in.color.a * fill_cov;
+    let ao = in.ol_color.a * out_cov;
+    let a = af + ao * (1.0 - af);
+    let rgb = (in.color.rgb * af + in.ol_color.rgb * ao * (1.0 - af)) / max(a, 1e-6);
+    return vec4<f32>(rgb, a * clip);
 }

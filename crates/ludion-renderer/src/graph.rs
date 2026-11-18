@@ -914,6 +914,11 @@ pub struct PostChain {
     /// `Rgba16Float` and carries the weighted medium scale in B. Content, so `masked` keeps it. Split from
     /// [`mesh_medium`](PostChain::mesh_medium) because the two gate different resources.
     pub transparent_medium: bool,
+    /// The scene carries a blended mesh (`RenderScene::blended`): `transparents` and `transparent_depth`
+    /// declare the scene pass's lighting reads (the shadow map, the dynamic GI volume and the local
+    /// shadow atlas; never ambient occlusion) in its order. Content, so `masked` keeps it. `false`
+    /// leaves both passes with no reads, which is what keeps a blend-free frame's graph unchanged.
+    pub blended: bool,
 }
 
 impl PostChain {
@@ -1040,7 +1045,8 @@ impl PostChain {
             decal_receivers: !crate::projector::receiver_union(scene).is_empty(),
             transparent_cover: !scene.sprites.is_empty()
                 || !scene.particles.is_empty()
-                || !scene.texts.is_empty(),
+                || !scene.texts.is_empty()
+                || !scene.blended.is_empty(),
             fog: scene.post.is_some_and(|post| post.fog_density > 0.0),
             mesh_medium: medium && scene.meshes.iter().any(|m| m.medium < 1.0),
             transparent_medium: medium
@@ -1048,7 +1054,9 @@ impl PostChain {
                     || scene
                         .particles
                         .iter()
-                        .any(|p| !p.viewmodel && p.medium < 1.0)),
+                        .any(|p| !p.viewmodel && p.medium < 1.0)
+                    || scene.blended.iter().any(|b| b.instance.medium < 1.0)),
+            blended: !scene.blended.is_empty(),
             aa: AntiAliasing::Off,
             silhouette: !scene.silhouettes.meshes.is_empty(),
         }
@@ -1649,6 +1657,18 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         scene_reads.push(gi_dynamic);
     }
     scene_reads.extend(local_shadow_atlas);
+    // A blended mesh shades like the scene pass minus ambient occlusion, which reads opaque depth and
+    // so means nothing behind a surface the opaque pass never drew: its two passes read the same tail
+    // in the same order. A frame with none declares no reads there.
+    let blended_reads: Vec<ResourceId> = if chain.blended {
+        shadow_map
+            .into_iter()
+            .chain(gi_dynamic)
+            .chain(local_shadow_atlas)
+            .collect()
+    } else {
+        Vec::new()
+    };
     // The lit decals shade like the scene pass, so they read what it reads, after their own inputs.
     let decals_lit_tail = chain.lit_decals.then(|| scene_reads.clone());
     let scene_pass = graph.add_external_pass_with_depth(
@@ -1767,7 +1787,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     graph.add_external_pass_with_depth(
         pass::TRANSPARENTS,
         pass::TRANSPARENTS,
-        vec![],
+        blended_reads.clone(),
         vec![scene],
         scene_depth,
     );
@@ -1775,7 +1795,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         graph.add_external_pass_with_depth(
             pass::TRANSPARENT_DEPTH,
             pass::TRANSPARENT_DEPTH,
-            vec![],
+            blended_reads,
             vec![target],
             scene_depth,
         );
@@ -2692,6 +2712,8 @@ mod tests {
                 transparent_medium: false,
                 // Content like the decals: no quality switch removes a silhouette.
                 silhouette: bits & 1 != 0,
+                // Content too: no quality switch removes a blended mesh.
+                blended: bits & 1 != 0,
                 // A client setting: no quality preset masks it, so it varies with `ui` and survives.
                 aa: if bits & 1 != 0 {
                     AntiAliasing::Smaa

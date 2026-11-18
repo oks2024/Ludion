@@ -21,6 +21,8 @@ pub enum StaticIneligible {
     Shape(&'static str),
     /// A mesh asset with joints.
     SkinnedAsset,
+    /// A `Mesh` with `blend`, drawn in `transparents` rather than from the static prefix.
+    Blended,
     /// Posed every frame by the presentation pose table, which no write journals.
     Posed {
         /// The `Parent` ancestor that is posed, `None` when the entity itself is.
@@ -37,6 +39,7 @@ impl StaticIneligible {
             StaticIneligible::Component(name) => format!("it carries a `{name}`"),
             StaticIneligible::Shape(shape) => format!("its mesh shape is `{shape}`"),
             StaticIneligible::SkinnedAsset => "its mesh asset is skinned".to_string(),
+            StaticIneligible::Blended => "its `Mesh` is blended (`blend`)".to_string(),
             StaticIneligible::Posed { ancestor, by } => {
                 let source = match *by {
                     "Animation" => "its prefab root's `Animation`".to_string(),
@@ -73,20 +76,25 @@ const DISQUALIFYING: [&str; 13] = [
 /// The first reason an entity cannot be static, or `None` when it can. An entity with no `Mesh`
 /// or `MeshGrid` and no disqualifying component is a transform group: never ineligible. `has` answers whether the
 /// entity carries a component by name; `shapes` is its `Mesh.shape` plus every `MeshGrid.legend`
-/// mesh shape. A skinned `asset` needs the file and is the caller's check.
+/// mesh shape; `blended` is whether any of those meshes sets `blend`. A skinned `asset` needs the file
+/// and is the caller's check.
 pub(crate) fn static_ineligibility(
     has: &dyn Fn(&str) -> bool,
     shapes: &[&MeshSource],
+    blended: bool,
 ) -> Option<StaticIneligible> {
     if let Some(name) = DISQUALIFYING.iter().find(|name| has(name)) {
         return Some(StaticIneligible::Component(name));
     }
-    shapes.iter().find_map(|shape| match shape {
-        MeshSource::Assembly(_) => Some(StaticIneligible::Shape("assembly")),
-        MeshSource::AssemblyPart { .. } => Some(StaticIneligible::Shape("assembly_part")),
-        MeshSource::Character(_) => Some(StaticIneligible::Shape("character")),
-        _ => None,
-    })
+    shapes
+        .iter()
+        .find_map(|shape| match shape {
+            MeshSource::Assembly(_) => Some(StaticIneligible::Shape("assembly")),
+            MeshSource::AssemblyPart { .. } => Some(StaticIneligible::Shape("assembly_part")),
+            MeshSource::Character(_) => Some(StaticIneligible::Shape("character")),
+            _ => None,
+        })
+        .or(blended.then_some(StaticIneligible::Blended))
 }
 
 /// What poses a node from the presentation pose table, in the order the first one is named:
@@ -227,7 +235,8 @@ pub fn scene_static_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
         }
         let shapes: Vec<&MeshSource> = meshes.iter().map(|m| &m.shape).collect();
         let has = |name: &str| find(name).is_some();
-        let ineligible = static_ineligibility(&has, &shapes).or_else(|| {
+        let blended = meshes.iter().any(|m| m.blend.is_some());
+        let ineligible = static_ineligibility(&has, &shapes, blended).or_else(|| {
             meshes
                 .iter()
                 .filter(|m| matches!(m.shape, MeshSource::Asset(_)))

@@ -201,6 +201,18 @@ above post-processing, unaffected. `examples/gallery/ui-atlas-icons.yaml` is the
 of life icons and a jewel drawn from regions of the sprites gallery's committed atlas, proving a
 `UiRect` samples an atlas region exactly as a world `Sprite` does.
 
+## Outline
+
+`outline: { width, color }` on `UiText` and `UiList` draws ink under the glyphs in the same draw. `width` is canvas units
+(`0`, or a `color` alpha of `0`, draws nothing); `color` is linear straight RGBA. It is ink, not layout: measuring, wrapping and
+hit tests ignore it, and a group's opacity fades it with the text. A negative or non-finite value is `L1618`.
+
+- **SDF faces** take it from the distance field, up to the baked `spread_px` less one screen pixel.
+- **Bitmap faces** (the embedded 8x8 among them) dilate by `round(width)` whole source pixels, `1..=4`, as a square.
+- Wider than that clamps and warns `L2304` once per element, naming the face and the widest width.
+
+`examples/gallery/ui-text-outline.yaml` shows each case over bright bands; `cargo run -p ludion --example font_text` builds one.
+
 ## Moving elements
 
 `UiTween` animates opacity, offset, scale, size and colour closed-form (`ludion docs ui-tweens`); `UiWorldAnchor` pins an element to a 3D target and clamps it to the screen edge (`ludion docs ui-world-anchor`). Both resolve in `extract`: nothing is written per tick. A textured rect can sample a sub-rect (`uv_rect`) or draw as a nine-slice frame (`slice`): `ludion docs ui-nine-slice`. A `UiGroup` is a box other elements anchor, scale, fade and hide inside (`group: <ref>`): `ludion docs ui-groups`.

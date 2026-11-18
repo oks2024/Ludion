@@ -126,6 +126,7 @@ pub fn ui_hit(
             quads: ui_text_draw(face(text.font.as_deref()), &text, viewport),
             font: None,
             clip: UiClip::NONE,
+            outline: None,
         };
         if probe.hit(HudElement::Text, text.anchor, text.group, false, row) {
             return true;

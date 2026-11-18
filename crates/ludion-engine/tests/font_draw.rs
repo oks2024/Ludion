@@ -104,3 +104,73 @@ fn needs_gpu_baked_faces_draw_inside_their_resolved_rects() {
         );
     }
 }
+
+/// A red `outline:` block of `width` canvas units.
+fn outline_yaml(width: f32) -> String {
+    format!(
+        "        outline:\n          width: {width}\n          color:\n            - 1.0\n            - 0.0\n            - 0.0\n            - 1.0\n"
+    )
+}
+
+/// An outline draws under the glyph fill (size 64 at 960x540 puts the 8-unit embedded face on whole
+/// 4 px texels, so no pixel centre sits on a texel edge), on the embedded bitmap face and on an SDF face: a width of
+/// 0 renders the same bytes as no `outline` key, a red outline appears only outside the unoutlined
+/// ink, and every fully inked pixel is unchanged.
+#[test]
+fn needs_gpu_ui_text_outline_draws_under_the_fill() {
+    let dir = root("outline");
+    let scene = |outline: &str| {
+        let mut scene = CAMERA.to_string();
+        for (font, offset) in [("", [40.0, 60.0]), ("        font: body\n", [40.0, 260.0])] {
+            scene.push_str(&format!(
+                "  - components:\n      UiText:\n        text: \"Hamburg\"\n        size: 64\n{font}{outline}        offset:\n          - {}\n          - {}\n",
+                offset[0], offset[1]
+            ));
+        }
+        scene
+    };
+    let render = |name: &str, scene: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, scene).unwrap();
+        render_scene(&path, FrameSize::native(VIEWPORT.0, VIEWPORT.1), false)
+    };
+    let plain = match render("plain.yaml", &scene("")) {
+        Ok(outcome) => outcome,
+        Err(errors) if ludion_core::require_gpu::is_no_adapter(&errors) => {
+            eprintln!("SKIPPED: no GPU adapter available");
+            return;
+        }
+        Err(errors) => panic!("render failed: {errors:?}"),
+    };
+    let off = render("off.yaml", &scene(&outline_yaml(0.0))).unwrap();
+    assert!(
+        plain.image.rgba == off.image.rgba,
+        "a zero-width outline must render the bytes of no outline"
+    );
+
+    let outlined = render("outlined.yaml", &scene(&outline_yaml(4.0))).unwrap();
+    let backdrop = render("backdrop.yaml", CAMERA).unwrap();
+    let mut red = 0;
+    for (n, ((u, o), b)) in plain
+        .image
+        .rgba
+        .chunks(4)
+        .zip(outlined.image.rgba.chunks(4))
+        .zip(backdrop.image.rgba.chunks(4))
+        .enumerate()
+    {
+        let (px, py) = (n as u32 % 960, n as u32 / 960);
+        let inked = (0..3).any(|c| u[c].abs_diff(b[c]) > 16);
+        if o[0] > 200 && o[1] < 10 && o[2] < 10 {
+            assert!(
+                !inked,
+                "a red outline pixel {o:?} sits on unoutlined ink {u:?} at {px},{py}"
+            );
+            red += 1;
+        }
+        if u[..3].iter().all(|&c| c == 255) {
+            assert_eq!(o, u, "a fully inked pixel changed under the outline");
+        }
+    }
+    assert!(red > 100, "the outline drew only {red} red pixels");
+}

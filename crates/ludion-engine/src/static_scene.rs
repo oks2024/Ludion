@@ -403,8 +403,10 @@ fn classify(frame: &mut Frame<'_>, inherit: &mut MeshInherit, id: EntityId) -> C
     let grid = world.get::<MeshGrid>(id).ok().flatten();
     let group = mesh.is_none() && grid.is_none();
     let mut shapes: Vec<&MeshSource> = mesh.iter().map(|m| &m.shape).collect();
+    let mut blended = mesh.is_some_and(|m| m.blend.is_some());
     if let Some(grid) = grid {
         shapes.extend(grid.legend.values().map(|m| &m.shape));
+        blended |= grid.legend.values().any(|m| m.blend.is_some());
     }
     let has = |name: &str| match name {
         "Mesh" => mesh.is_some(),
@@ -425,7 +427,7 @@ fn classify(frame: &mut Frame<'_>, inherit: &mut MeshInherit, id: EntityId) -> C
         _ => false,
     };
     let subject = id.to_string();
-    if let Some(reason) = static_ineligibility(&has, &shapes) {
+    if let Some(reason) = static_ineligibility(&has, &shapes, blended) {
         return rejected(key, ineligible_diagnostic(&subject, &reason), "static");
     }
     if group {

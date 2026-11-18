@@ -4439,6 +4439,30 @@
       "poses"
     ]
   },
+  "JointZero": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "JointZero",
+    "description": "A stored zero for a [`Joint`](crate::Joint), carried by the joint's carrier entity beside it.\nWithout one, `ludion-physics` captures the joint's zero from the two bodies' relative pose at\nbuild, so the zero is wherever the bodies happened to be. With one, the joint's limits,\n[`JointMotor`](crate::JointMotor) `target` and [`JointPoses`](crate::JointPoses) are measured from\n`rotation` instead, and the stored value survives a body rebuild, a ragdoll retire and\nre-admission, a snapshot restore and a scene save and reload.\n\n`rotation` is the quaternion `[x, y, z, w]` of the joint's body `b` in body `a`'s frame that\ncounts as zero, `q_a⁻¹·q_b`. The default is the identity. The anchors keep coinciding at build;\nonly the rotation comes from the zero. A body that starts outside the limits measured from the\nzero is pulled back by the solver within the first step.\n\n```yaml\ncomponents:\n  JointZero:\n    rotation: [0.0, 0.0, 0.0, 1.0]\n```",
+    "type": "object",
+    "properties": {
+      "rotation": {
+        "description": "The rotation of `b` relative to `a` that is the joint's zero, as `[x, y, z, w]`.",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4,
+        "default": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    }
+  },
   "LaneConstraint": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "LaneConstraint",
@@ -4737,6 +4761,17 @@
         "format": "float",
         "minimum": 0.0,
         "maximum": 1.0
+      },
+      "blend": {
+        "description": "Draws this mesh seen through (default none: opaque): see [`MeshBlend`]. `color`'s alpha is the\nopacity. Not inherited down `Parent`: this entity's own `Mesh` only. Ignored with `L2360` on a\n`Viewmodel` mesh.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/MeshBlend"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "$defs": {
@@ -4905,6 +4940,21 @@
             ]
           }
         }
+      },
+      "MeshBlend": {
+        "description": "The blend of a [`Mesh`](crate::Mesh) that is seen through. `Mesh.color`'s alpha is the opacity;\n`Fade` multiplies it. A blended mesh is lit like an opaque one, drawn back to front per entity after\nthe ground markers and before the sprites, tests depth and writes none, casts no shadow and is\ninvisible to every opaque consumer (ambient occlusion, GI, reflections, the silhouette).\n\n```yaml\ncomponents:\n  Mesh:\n    shape: cube\n    color: [0.4, 0.7, 1.0, 0.35]\n    blend: alpha\n```\n\n```\nuse ludion_components::MeshBlend;\nassert_eq!(serde_json::to_string(&MeshBlend::Additive).unwrap(), \"\\\"additive\\\"\");\n```",
+        "oneOf": [
+          {
+            "description": "Premultiplied alpha: the mesh covers what is behind it by its opacity.",
+            "type": "string",
+            "const": "alpha"
+          },
+          {
+            "description": "Adds the lit colour scaled by its opacity: it brightens and never darkens.",
+            "type": "string",
+            "const": "additive"
+          }
+        ]
       }
     }
   },
@@ -5056,6 +5106,17 @@
             "format": "float",
             "minimum": 0.0,
             "maximum": 1.0
+          },
+          "blend": {
+            "description": "Draws this mesh seen through (default none: opaque): see [`MeshBlend`]. `color`'s alpha is the\nopacity. Not inherited down `Parent`: this entity's own `Mesh` only. Ignored with `L2360` on a\n`Viewmodel` mesh.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MeshBlend"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -5224,6 +5285,21 @@
             ]
           }
         }
+      },
+      "MeshBlend": {
+        "description": "The blend of a [`Mesh`](crate::Mesh) that is seen through. `Mesh.color`'s alpha is the opacity;\n`Fade` multiplies it. A blended mesh is lit like an opaque one, drawn back to front per entity after\nthe ground markers and before the sprites, tests depth and writes none, casts no shadow and is\ninvisible to every opaque consumer (ambient occlusion, GI, reflections, the silhouette).\n\n```yaml\ncomponents:\n  Mesh:\n    shape: cube\n    color: [0.4, 0.7, 1.0, 0.35]\n    blend: alpha\n```\n\n```\nuse ludion_components::MeshBlend;\nassert_eq!(serde_json::to_string(&MeshBlend::Additive).unwrap(), \"\\\"additive\\\"\");\n```",
+        "oneOf": [
+          {
+            "description": "Premultiplied alpha: the mesh covers what is behind it by its opacity.",
+            "type": "string",
+            "const": "alpha"
+          },
+          {
+            "description": "Adds the lit colour scaled by its opacity: it brightens and never darkens.",
+            "type": "string",
+            "const": "additive"
+          }
+        ]
       }
     }
   },
@@ -8843,6 +8919,17 @@
         "x-entity-ref": {
           "allow_self": false
         }
+      },
+      "outline": {
+        "description": "An outline drawn under every line's glyphs (default none). Ink only: the block's measure and\nthe background are unchanged.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TextOutline"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "$defs": {
@@ -8911,6 +8998,31 @@
             "default": true
           }
         }
+      },
+      "TextOutline": {
+        "description": "An outline drawn under the glyphs of a [`UiText`](crate::UiText) or [`UiList`]. A `width` of `0`,\nor a `color` alpha of `0`, draws nothing.\n\n```\nuse ludion_components::TextOutline;\n\nlet outline: TextOutline =\n    serde_json::from_value(serde_json::json!({ \"width\": 2.0, \"color\": [0.0, 0.0, 0.0, 1.0] })).unwrap();\nassert_eq!(outline.width, 2.0);\n```",
+        "type": "object",
+        "properties": {
+          "width": {
+            "description": "Outline thickness in canvas units, finite and `>= 0`. Clamped to what the face can draw\n(`L2304`).",
+            "type": "number",
+            "format": "float"
+          },
+          "color": {
+            "description": "Linear straight RGBA of the outline.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "width",
+          "color"
+        ]
       }
     }
   },
@@ -9259,6 +9371,17 @@
         "x-entity-ref": {
           "allow_self": false
         }
+      },
+      "outline": {
+        "description": "An outline drawn under the glyphs (default none). Ink only: layout and hit tests ignore it.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TextOutline"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "$defs": {
@@ -9310,6 +9433,31 @@
             "type": "string",
             "const": "bottom_right"
           }
+        ]
+      },
+      "TextOutline": {
+        "description": "An outline drawn under the glyphs of a [`UiText`](crate::UiText) or [`UiList`]. A `width` of `0`,\nor a `color` alpha of `0`, draws nothing.\n\n```\nuse ludion_components::TextOutline;\n\nlet outline: TextOutline =\n    serde_json::from_value(serde_json::json!({ \"width\": 2.0, \"color\": [0.0, 0.0, 0.0, 1.0] })).unwrap();\nassert_eq!(outline.width, 2.0);\n```",
+        "type": "object",
+        "properties": {
+          "width": {
+            "description": "Outline thickness in canvas units, finite and `>= 0`. Clamped to what the face can draw\n(`L2304`).",
+            "type": "number",
+            "format": "float"
+          },
+          "color": {
+            "description": "Linear straight RGBA of the outline.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "width",
+          "color"
         ]
       }
     }

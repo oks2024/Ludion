@@ -7,6 +7,11 @@
 // world fragment carries none of those branches.
 override VIEWMODEL: bool = false;
 
+// True only in the blended-mesh twins (`Mesh.blend`): the Bayer fade dither does not discard and
+// `shade_fragment` returns the opacity in alpha, the fade multiplied in. A pipeline constant, so an
+// opaque fragment carries none of it.
+override BLENDED: bool = false;
+
 // True only in the scene pass's `sun_cascades` debug-view twins: the lit colour is tinted by the cascade
 // that shades it. A pipeline constant, so a frame without the view carries no branch for it.
 override SUN_CASCADE_VIEW: bool = false;

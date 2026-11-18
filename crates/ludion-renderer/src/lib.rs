@@ -121,15 +121,15 @@ pub use projector::{
 pub use quality::{MAX_SUN_CASCADES, Quality, QualityParams};
 pub use render::{GpuUploads, Renderer, SHADER_SOURCE_DIR};
 pub use scene::{
-    CookedMap, DEFAULT_AMBIENT, DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment, DecalBlend,
-    DecalInstance, DecalMaps, DecalReceivers, DropShadowInstance, EnvironmentData, FontDraw,
-    GROUND_MARKER_LIFT, GiData, GroundMarkerInstance, GroundMarkerShape, GroundMarkerStyle,
-    LocalShadowData, LodSettings, MAX_GI_TEXTURE_AXIS, MAX_SILHOUETTE_STYLES, MapImage, MeshData,
-    MeshInstance, MeshLod, MeshShape, MeshTexture, MeshTextures, ParticleInstance, PointLightData,
-    PostData, ProbeWorld, RenderCamera, RenderScene, SilhouetteMesh, SilhouetteStyle, Silhouettes,
-    SkinJoint, SpotLightData, SpriteInstance, StaticRange, SunCascadeConfig, SunData, TextRun,
-    TextureImage, TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance, WorldVoxelGrid,
-    aspect_ratio, drop_shadow_fade,
+    BlendMode, BlendedMesh, CookedMap, DEFAULT_AMBIENT, DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment,
+    DecalBlend, DecalInstance, DecalMaps, DecalReceivers, DropShadowInstance, EnvironmentData,
+    FontDraw, GROUND_MARKER_LIFT, GiData, GlyphOutline, GroundMarkerInstance, GroundMarkerShape,
+    GroundMarkerStyle, LocalShadowData, LodSettings, MAX_GI_TEXTURE_AXIS, MAX_SILHOUETTE_STYLES,
+    MapImage, MeshData, MeshInstance, MeshLod, MeshShape, MeshTexture, MeshTextures,
+    ParticleInstance, PointLightData, PostData, ProbeWorld, RenderCamera, RenderScene,
+    SilhouetteMesh, SilhouetteStyle, Silhouettes, SkinJoint, SpotLightData, SpriteInstance,
+    StaticRange, SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap, TonemapOperator,
+    UiClip, UiClipBox, UiInstance, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
 };
 pub use shader_reload::{check_shader_reload, is_renderer_shader};
 pub use sun_cascade::{

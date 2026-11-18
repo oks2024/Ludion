@@ -1,19 +1,28 @@
-//! [`switch_to_ragdoll`]: promotes a posed `kind: assembly` entity into one `rigid` body entity per
-//! part, joined by [`Joint`]s — "a ragdoll is the assembly plus a joint list"
-//! (`Plan/physics.md` W3's ragdoll-authoring plan, decisions 1-6).
+//! [`switch_to_ragdoll`] and [`switch_to_ragdoll_with`]: promote a posed `kind: assembly` entity into
+//! one `rigid` body entity per part, joined by [`Joint`]s — "a ragdoll is the assembly plus a joint
+//! list" (`Plan/physics.md` W3's ragdoll-authoring plan, decisions 1-6).
 //!
 //! Game code decides *when* to call this — a death blow, a stagger, a rope grab — and hands it the
 //! meshed [`AssemblyData`] its own asset cache already holds (`ludion_engine::load_assembly`). The
 //! switch is otherwise pure ECS surgery: it reads the entity's current pose (rest, or mid-clip at the
-//! caller's `game_time`, through the very same `part_placements_sides` extraction draws with), spawns
-//! one entity per part at that pose's world transform, wires a [`Joint`] onto each non-root part
-//! (fixed to its parent by default, or whatever `assembly`'s `joints:` binds it to), and strips the
-//! root's drawing/physics components so it stops being drawn or simulated as the whole model — the
-//! root entity itself, and its other components, survive untouched, so game code that already holds
-//! its id keeps a live handle.
+//! caller's `game_time`, through the very same `part_placements_sides` extraction draws with, layers
+//! included), spawns one entity per part at that pose's world transform, wires a [`Joint`] onto each
+//! non-root part (fixed to its parent by default, or whatever `assembly`'s `joints:` binds it to),
+//! and strips the root's drawing/physics components so it stops being drawn or simulated as the whole
+//! model — the root entity itself, and its other components, survive untouched, so game code that
+//! already holds its id keeps a live handle.
 //!
 //! A ragdoll snapshots rotation and translation only — rigid bodies don't scale, so a clip's `scale`
-//! channel is ignored here (`part_placements_sides`'s `scale` flag off).
+//! channel is ignored here (`part_placements_sides`'s `scale` flag off). The sampled pose includes
+//! the entity's `AnimationLayers`, so a ragdoll spawns at the pose that was drawn; look-at, IK and
+//! ground placement are presentation only and are not in it.
+//!
+//! Where a joint's zero sits is the caller's choice ([`LimitsFrom`]). By default the physics layer
+//! captures each joint's zero from the posed bodies, so limits, `JointMotor` targets and
+//! `JointPoses` count from the switch pose. With [`LimitsFrom::Rest`] each joint carrier also gets
+//! a [`JointZero`] at the rig's rest rotation, so they count from rest however the body fell; a
+//! switch pose outside a limit measured from rest is pulled back to it by the solver on the first
+//! step, a bounded snap, and is not refused.
 //!
 //! A root `SurfaceTag` is inherited: each spawned part gets a tag with its `parts` entry's surface
 //! (matched by part name), else the root's `surface`; a name key matching no part is one `L1695`
@@ -38,15 +47,60 @@ use ludion_core::time::GameTime;
 use ludion_ecs::{SemanticValidate, World};
 use ludion_physics::{SurfacePart, SurfaceTag};
 use ludion_scene::AssemblyJointKind;
-use ludion_spatial::{Body, Collider, Joint, JointKind, RigidBody, Shape, Velocity};
+use ludion_spatial::{Body, Collider, Joint, JointKind, JointZero, RigidBody, Shape, Velocity};
 
 use crate::assembly_mesh::AssemblyData;
 use crate::components::{Animation, Mesh, MeshSource, Name, Transform};
-use crate::extract::{animation_pose, part_placements_sides, rotation_quat};
+use crate::extract::{animation_pose, assembly_layer_poses, part_placements_sides, rotation_quat};
+
+/// Where a posed switch measures its joints' zeros from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LimitsFrom {
+    /// The posed bodies' relative pose at the switch: limits, motor targets and joint poses count
+    /// from the pose the figure was drawn in.
+    #[default]
+    SwitchPose,
+    /// The rig's rest pose: each joint carrier gets a [`JointZero`] at the identity, so they count
+    /// from rest however the body fell.
+    Rest,
+}
+
+/// Options for [`switch_to_ragdoll_with`]. Build it from the default and set what you need, so a
+/// field added later does not break the call:
+///
+/// ```
+/// use ludion_engine::{LimitsFrom, RagdollSwitch};
+///
+/// let mut opts = RagdollSwitch::default();
+/// opts.limits_from = LimitsFrom::Rest;
+/// assert_eq!(opts.limits_from, LimitsFrom::Rest);
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RagdollSwitch {
+    /// Where the joints' zeros come from (default: the switch pose).
+    pub limits_from: LimitsFrom,
+}
 
 /// Switches `entity` from a posed `kind: assembly` model into one `rigid` [`Collider`] entity per
 /// part, joined by [`Joint`]s, and returns the spawned part entities in `assembly`'s authored order.
+/// The joints' zeros are captured from the switch pose; [`switch_to_ragdoll_with`] chooses otherwise.
 /// See the module docs for the whole contract.
+///
+/// # Errors
+/// As [`switch_to_ragdoll_with`].
+pub fn switch_to_ragdoll(
+    world: &mut World,
+    entity: EntityId,
+    assembly: &AssemblyData,
+    game_time: impl Into<GameTime>,
+) -> Result<Vec<EntityId>, Diagnostic> {
+    switch_to_ragdoll_with(world, entity, assembly, game_time, RagdollSwitch::default())
+}
+
+/// [`switch_to_ragdoll`] with [`RagdollSwitch`] options: with [`LimitsFrom::Rest`] every joint
+/// carrier also gets a [`JointZero`] at the rig's rest rotation (the identity: an assembly's parts
+/// have no rest rotation), so the limits, motor targets and joint poses are measured from rest.
 ///
 /// # Errors
 /// [`code::RAGDOLL_SWITCH_INVALID`] when `entity` is not alive, has no [`Transform`], its `Mesh.shape`
@@ -57,11 +111,12 @@ use crate::extract::{animation_pose, part_placements_sides, rotation_quat};
 ///
 /// A root [`SurfaceTag`] is inherited per part by name (else the root's surface); an unmatched name
 /// key is an `L1695` warning, not a refusal.
-pub fn switch_to_ragdoll(
+pub fn switch_to_ragdoll_with(
     world: &mut World,
     entity: EntityId,
     assembly: &AssemblyData,
     game_time: impl Into<GameTime>,
+    opts: RagdollSwitch,
 ) -> Result<Vec<EntityId>, Diagnostic> {
     if !world.is_alive(entity) {
         return Err(switch_invalid(
@@ -151,8 +206,10 @@ pub fn switch_to_ragdoll(
 
     // --- Validated: every step below mutates the world. ---
 
-    let (pose, fade) = animation_pose(world, entity, assembly, game_time.into());
-    let placements = part_placements_sides(assembly, pose, fade, false, &[]);
+    let now = game_time.into();
+    let (pose, fade) = animation_pose(world, entity, assembly, now);
+    let layers = assembly_layer_poses(world, entity, assembly, now);
+    let placements = part_placements_sides(assembly, pose, fade, false, &layers);
     let q_root = rotation_quat(root_transform.rotation);
     let root_model = Mat4::from_scale_rotation_translation(
         Vec3::from(scale),
@@ -229,6 +286,7 @@ pub fn switch_to_ragdoll(
                     scatter_color: root_mesh.scatter_color,
                     rim: root_mesh.rim,
                     medium: root_mesh.medium,
+                    blend: root_mesh.blend,
                 },
             )
             .expect("just spawned");
@@ -332,6 +390,11 @@ pub fn switch_to_ragdoll(
         world
             .insert(spawned[index], part_joint)
             .expect("just spawned");
+        if opts.limits_from == LimitsFrom::Rest {
+            world
+                .insert(spawned[index], JointZero::default())
+                .expect("just spawned");
+        }
     }
 
     world.remove::<Mesh>(entity).expect("checked alive above");

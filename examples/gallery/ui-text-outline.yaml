@@ -1,0 +1,268 @@
+# Feature: `outline` on UiText and UiList (Plan/ui-hud.md W5a): ink drawn under the glyph fill in the
+# one UI text draw, over saturated and white bands that stand in for a bright bloom scene.
+# - White band: Inter (SDF) at two widths; the outline comes from the distance field.
+# - Yellow band: Silkscreen (bitmap) at k=1 and k=2 whole source pixels.
+# - Magenta band: the embedded 8x8 face at k=1 and k=2, and an outlined UiList on the right.
+# - Cyan band: outlined text inside a scaled (0.8), half-opaque `UiGroup` with a `rect` clip cutting it.
+# No width here is clamped, so the scene is warning-free.
+format: 1
+name: "ui-text-outline - UiText and UiList outlines on SDF, bitmap and embedded faces"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 5.0
+      Camera: {}
+  - name: band-white
+    components:
+      UiRect:
+        offset:
+          - 0.0
+          - 0.0
+        size:
+          - 1920.0
+          - 270.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        order: 0
+  - name: band-yellow
+    components:
+      UiRect:
+        offset:
+          - 0.0
+          - 270.0
+        size:
+          - 1920.0
+          - 270.0
+        color:
+          - 1.0
+          - 0.85
+          - 0.1
+          - 1.0
+        order: 0
+  - name: band-magenta
+    components:
+      UiRect:
+        offset:
+          - 0.0
+          - 540.0
+        size:
+          - 1920.0
+          - 270.0
+        color:
+          - 1.0
+          - 0.1
+          - 0.6
+          - 1.0
+        order: 0
+  - name: band-cyan
+    components:
+      UiRect:
+        offset:
+          - 0.0
+          - 810.0
+        size:
+          - 1920.0
+          - 270.0
+        color:
+          - 0.1
+          - 0.9
+          - 1.0
+          - 1.0
+        order: 0
+  - name: inter-1
+    components:
+      UiText:
+        text: Outline Inter
+        size: 110.0
+        offset:
+          - 40.0
+          - 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        font: body
+        order: 1
+        outline:
+          width: 3.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 1.0
+  - name: inter-2
+    components:
+      UiText:
+        text: Outline Inter
+        size: 110.0
+        offset:
+          - 40.0
+          - 140.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        font: body
+        order: 1
+        outline:
+          width: 6.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 1.0
+  - name: silk-1
+    components:
+      UiText:
+        text: PIXEL K1
+        size: 40.0
+        offset:
+          - 40.0
+          - 290.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        font: pixel
+        order: 1
+        outline:
+          width: 4.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 1.0
+  - name: silk-2
+    components:
+      UiText:
+        text: PIXEL K2
+        size: 40.0
+        offset:
+          - 40.0
+          - 380.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        font: pixel
+        order: 1
+        outline:
+          width: 8.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 1.0
+  - name: embedded-1
+    components:
+      UiText:
+        text: EMBEDDED K1
+        size: 32.0
+        offset:
+          - 40.0
+          - 560.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        order: 1
+        outline:
+          width: 4.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 1.0
+  - name: embedded-2
+    components:
+      UiText:
+        text: EMBEDDED K2
+        size: 32.0
+        offset:
+          - 40.0
+          - 640.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        order: 1
+        outline:
+          width: 8.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 1.0
+  - name: menu
+    components:
+      UiList:
+        anchor: top_right
+        offset:
+          - -40.0
+          - 560.0
+        title: Menu
+        items:
+          - text: Resume
+          - text: Options
+          - text: Quit
+        size: 56.0
+        padding: 0.0
+        font: body
+        order: 1
+        outline:
+          width: 2.5
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 1.0
+  - name: clip-group
+    components:
+      UiGroup:
+        offset:
+          - 960.0
+          - 830.0
+        size:
+          - 880.0
+          - 200.0
+        scale: 0.8
+        opacity: 0.5
+        clip: rect
+  - name: clip-text
+    components:
+      UiText:
+        text: CLIPPED OUTLINE TEXT
+        size: 120.0
+        offset:
+          - 20.0
+          - 50.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        font: body
+        order: 2
+        outline:
+          width: 5.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 1.0
+        group:
+          index: 12
+          generation: 0

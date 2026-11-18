@@ -674,7 +674,8 @@ enum Command {
         #[arg(long, value_name = "NAME", conflicts_with = "scene")]
         clip: Option<String>,
         /// The clip instant to draw, in seconds (default `0`). Needs `--clip` (or `--crossfade`,
-        /// where it is how far the outgoing clip has played when the fade begins). Under `--model` the
+        /// where it is how far the outgoing clip has played when the fade begins, or `--blend`, where
+        /// it is the instant every phase plays at). Under `--model` the
         /// time is quantized to the nearest 60 Hz sim tick — a pose is only ever
         /// `(now - started) * seconds_per_tick` — and the printed report names the exact tick and
         /// seconds used; under `--atlas` it selects the flipbook entry showing at that second, and
@@ -682,8 +683,8 @@ enum Command {
         #[arg(long, value_name = "SECONDS", conflicts_with = "scene")]
         time: Option<f64>,
         /// Render N evenly spaced phases of the clip side by side in one image instead of one
-        /// instant — the contact sheet for a whole clip. Needs `--clip` or `--crossfade` (where it
-        /// sets the phase count, 5 by default); 2 to 8 phases under
+        /// instant — the contact sheet for a whole clip. Needs `--clip`, `--crossfade` or `--blend`
+        /// (where it sets the phase count, 5 by default); 2 to 8 phases under
         /// `--model`, 2 to 16 under `--atlas`. A looping clip spaces them `i * duration / N` (the
         /// last phase is not the first repeated); a one-shot spaces them `i * duration / (N - 1)`,
         /// showing both endpoints.
@@ -696,6 +697,24 @@ enum Command {
         /// when the fade begins. Conflicts with `--clip`; one model only.
         #[arg(long, value_name = "FROM:TO:SECONDS", conflicts_with_all = ["scene", "clip", "atlas", "sprite"])]
         crossfade: Option<String>,
+        /// Under `--model`, sweep a blend space of an assembly or character as a strip of phases:
+        /// `--blend locomotion:0..2` evaluates the 1D blend `locomotion` at parameters swept
+        /// linearly from 0 to 2 across five phases (`--strip N` for 2 to 8); `--blend aim:0.5:-1..1`
+        /// holds the first parameter of a 2D blend and sweeps the second; plain values give one
+        /// phase. Each phase prints its parameters, its shared phase in cycles and the gap analysis,
+        /// all at `--time`. `check-scene <model>.assembly.yaml` lists a model's blends and their
+        /// points. Conflicts with `--clip` and `--crossfade`; one model only; a prefab has no blends.
+        #[arg(long, value_name = "NAME:P0[:P1]", conflicts_with_all = ["scene", "clip", "crossfade", "atlas", "sprite"])]
+        blend: Option<String>,
+        /// Under `--model`, stack a layer over the pose of `--clip`, `--crossfade` or `--blend`:
+        /// `--layer wave:1.0:arm_only` plays the clip (or blend) `wave` at weight 1.0 over the part
+        /// mask `arm_only`; `--layer breathe:0.5::additive` is half an additive layer over every part.
+        /// The fields are `CLIP:WEIGHT[:MASK[:MODE]]` with a weight in 0 to 1 and a mode of `override`
+        /// (the default) or `additive`. Repeat the flag for more layers, bottom first, at most four
+        /// (`L1670`). The report echoes the stack and poses the gap analysis through it;
+        /// `check-scene <model>.assembly.yaml` lists the masks. A prefab has no layers.
+        #[arg(long, value_name = "CLIP:WEIGHT[:MASK[:MODE]]", conflicts_with_all = ["scene", "atlas", "sprite"])]
+        layer: Vec<String>,
         /// Under `--model`, show each `--clip`/`--crossfade` phase at the pose a game shows with
         /// `Animation.hold: N`: the phase snaps down to the last multiple of N ticks, so
         /// neighbouring phases can repeat a pose. 1 (the default) is every tick; 0 is `L1317`.
@@ -2193,6 +2212,8 @@ fn main() -> std::process::ExitCode {
             time,
             strip,
             crossfade,
+            blend,
+            layer,
             hold,
             part,
             isolate,
@@ -2313,6 +2334,8 @@ fn main() -> std::process::ExitCode {
                 time,
                 strip,
                 crossfade: crossfade.as_deref(),
+                blend: blend.as_deref(),
+                layers: &layer,
                 hold,
                 part: part.as_deref(),
                 isolate,

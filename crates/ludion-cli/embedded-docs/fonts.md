@@ -71,6 +71,7 @@ with no `font` keeps drawing with the embedded 8×8 face, so adding the table mo
   font units (Silkscreen: `em_px: 8`, `line_height: 1250` → 10 source pixels per line → crisp at
   `size` 10, 20, 30…). At 1080p, size 30 is exactly 3×3 screen pixels per source pixel; at half
   resolution the same text lands on 1.5 and is uneven.
+- **Outline.** An SDF face outlines up to its `spread_px` less one screen pixel; a bitmap face dilates by whole source pixels (1 to 4), so an outline is crisp where the face is. Past either limit it clamps with `L2304` (`ludion docs screen-ui`).
 - **Small SDF text** (≈12 px on screen) loses thin strokes; keep body text at 14 px or more.
 - **Measure with the face you draw with.** Every helper — `measure_ui_text`, `wrap_ui_text`,
   `measure_ui_list`, `list_hit`, `resolve_ui_text`/`resolve_ui_list` — takes the resolved `&FontFace`

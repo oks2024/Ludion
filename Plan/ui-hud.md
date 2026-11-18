@@ -1,6 +1,8 @@
 # Plan: HUD motion and shapes — tweens, world anchors, rotation, clipping (Neon Shroud request 0020)
 
-> Status: **Waves 1, 2, 4a, 4b mechanized (2026-11-18)** — `UiGroup` (`group`, `fill_group`; scale, opacity,
+> Status: **Waves 1, 2, 4a, 4b, 5a mechanized (2026-11-18)** — W5a: `outline` on `UiText`/`UiList` (decisions 31–36,
+> `L1618`, `L2304`, `ui_text.wgsl`; the `ui-text-outline` golden is blessed on the RTX 3090, the macOS golden is owed on the M4);
+> `UiGroup` (`group`, `fill_group`; scale, opacity,
 > visibility composed through up to 8 levels; CPU only, only the component schema snapshot moved);
 > W4b: `UiGroup.clip` (`none | rect | circle | rounded_rect`, an analytic per-instance clip in
 > `ui_rect.wgsl`/`ui_text.wgsl`, nesting cap 2, `L2303`) and `ludion::math::ui_hit`; the `ui-groups` gallery
@@ -8,7 +10,7 @@
 > `UiTween` and `UiWorldAnchor`, resolved in `extract`
 > (`ui/hud.rs`; the component and schema snapshots moved once, no golden, replay or protocol hash);
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
-> component schema snapshot moved). Waves 3 and 5–7 are recorded below and not started. Owed: the
+> component schema snapshot moved). Waves 3, 5b and 6–7 are recorded below and not started. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
 > marker (jitter under `present_interpolation`, decision 8).
 
@@ -147,6 +149,28 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
     entity, a non-finite cursor or a camera error. The camera is `resolve_camera(.., None)` without
     `pixel_snap`.
 
+31. **`TextOutline { width, color }`** is in `ludion-components` (the shape `Plan/font-assets.md` decision 15
+    reserved). `outline` on `UiText` and `UiList` is `#[serde(default, skip_serializing_if = "Option::is_none")]`.
+    A `width` that is non-finite or below 0, or a non-finite `color`, is `L1618` at `/outline/width` or
+    `/outline/color`. A width of `0` or a colour alpha of `0` draws nothing.
+32. **Texels, resolved in extract** (`ui::resolve_outline`). `ppt` (screen px per atlas texel) is
+    `size * ps * units_per_em / (em_px * line_units)`, invariant under a group scale. The width in texels is
+    `t = width * ps / ppt`. SDF: `t` clamps to `spread_px - 1/ppt`. Bitmap: `k = clamp(round(t), 1, 4)` whole
+    source pixels (at most 81 taps). Either clamp records the degraded warning `L2304`, keyed
+    `"{key}/ui-outline-width"`, naming the face (its name, or `embedded`) and the widest width in canvas units.
+33. **Renderer data:** `GlyphOutline { color, texels }` rides `UiInstance::Text.outline`, carried per vertex so
+    batching is unchanged; `FontDraw` gains `spread_px` (0 for bitmap). The SDF edge is
+    `e = 0.5 - texels / (2 * spread_px)`.
+34. **Quads.** SDF quads already pad by the spread and are not grown. A bitmap quad with an outline grows by `k`
+    texels per side in uv and pixels; the original glyph uv rect rides flat and every sample outside it reads 0,
+    so a neighbouring atlas glyph never bleeds in.
+35. **Shader composite** (fill over outline, straight alpha): `af = color.a * fill_cov`,
+    `ao = outline.a * out_cov`, `a = af + ao * (1 - af)`, `rgb = (color.rgb * af + outline.rgb * ao * (1 - af)) / a`,
+    output alpha times the clip. SDF `out_cov` is the same smoothstep at `e`; bitmap `out_cov` is the max of
+    masked samples over the `(2k+1)^2` taps. An unoutlined vertex returns the previous expression through an early
+    `if` on a flat flag after every uniform-flow sample, so text without an outline renders byte-identically.
+36. **Group opacity** multiplies the outline alpha (`hud.rs::multiply_alpha`); tweens of `color` leave it alone.
+
 ## Waves
 
 - **W1 — `UiTween`, `UiWorldAnchor`, resolved in extract.** CPU-only; the pass lives in
@@ -164,7 +188,8 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 - **W4b — the fragment clip and `math::ui_hit`:** a `UiInstance` field on both variants,
   `ui_rect.wgsl`/`ui_text.wgsl`, the `ui-groups` gallery golden; `ui_hit` walks groups, tweens, anchors
   and the clip.
-- **W5 — text outline and shadow** (SDF, and the dilation fallback for the bitmap face).
+- **W5a — text outline** (decisions 31–36): SDF from the field, bitmap by in-shader dilation; `ui-text-outline` golden.
+- **W5b — text shadow.**
 - **W6 — `UiRadial` and `UiRadialNav`,** with the 1/2/8-thread replay and the snapshot test.
 - **W7 — anchor blend keys under interpolation, `rotate_toward`, `distance.scale`, `camera`.**
 
@@ -173,14 +198,14 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 Request amendments 1–7; the 12-o'clock clockwise angle convention (W3); the centre pivot for scale;
 the `real` default clock; the separate `UiEase`; the interpolation gap (decision 8); W2: `uv_rect` beside `slice` warns and `slice` wins, stretch-only
 edges, the proportional texel clamp rather than an error; W4a: the 8-level cap, `order` global (no block sort),
-a world anchor only on the outermost group, `fill` ignoring `group`; W4b: the 2-clip cap (innermost kept), circle
+a world anchor only on the outermost group, `fill` ignoring `group`; W5a: the SDF max (spread less 1 px) with clamp-and-warn rather than an error, the bitmap dilation as a square kernel rounded with a minimum of 1, the cap of 4 source px, no outline on world `Text`, the shadow split to W5b; W4b: the 2-clip cap (innermost kept), circle
 = the inscribed circle, the 1 px AA band, `ui_hit` on a list tests the panel, `ui_hit` ignores `pixel_snap`.
 Request differences: no rotation or polygon in `ui-groups` (W3); `ui_hit` does not return list items.
 
 ## Out of scope (triggers recorded)
 
 `UiShape`, rotation, nine-slice edge tiling (trigger: frame art that visibly breaks
-when stretched), slicing `UiList`/`UiText`, text outline/shadow, `UiRadial`,
+when stretched), slicing `UiList`/`UiText`, text shadow (W5b), `UiRadial`,
 anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see
 `Plan/font-assets.md` for the SDF outline path).

@@ -1,0 +1,297 @@
+# Feature: Mesh.blend - meshes seen through. Left to right, behind a fog: (1) a lit tinted glass pane (alpha 0.35) in a wall
+# frame with a voxel figure and a sprite behind it (the sprite draws over the glass: meshes draw before sprites); (2) an additive
+# emissive green hologram curtain; (3) a voxel assembly figure at alpha 0.4, one figure whose parts sort together; (4) a pane at
+# alpha 0.8 under `Fade` 0.5, which multiplies the opacity instead of dithering, over a yellow cube. Blended meshes join the
+# transparent layer, so the fog reads each at its own distance. ludion docs materials.
+format: 1
+name: glass-and-holograms - Mesh.blend draws alpha and additive meshes through the transparent layer
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.7
+          - 14.5
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 40.0
+      PostProcess:
+        exposure: 0.9
+        tonemap: aces
+        fog_density: 0.03
+        fog_color:
+          - 0.3
+          - 0.36
+          - 0.48
+        fog_start: 6.0
+        fog_height: 0.0
+        fog_height_falloff: 0.115
+        fog_sky: 1.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - 10.0
+      DirectionalLight:
+        direction:
+          - -0.3
+          - -0.6
+          - -0.8
+        color:
+          - 1.0
+          - 0.95
+          - 0.9
+        intensity: 1.6
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 18.0
+          - 1.0
+          - 9.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.16
+          - 0.17
+          - 0.2
+          - 1.0
+        roughness: 0.9
+  - name: back-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - -4.0
+        scale:
+          - 18.0
+          - 6.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.1
+          - 0.11
+          - 0.14
+          - 1.0
+        roughness: 0.9
+  - name: frame-left
+    components:
+      Transform:
+        translation:
+          - -7.8
+          - 1.7
+          - 0.0
+        scale:
+          - 0.4
+          - 3.4
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.28
+          - 0.26
+          - 1.0
+        roughness: 0.9
+  - name: frame-right
+    components:
+      Transform:
+        translation:
+          - -4.2
+          - 1.7
+          - 0.0
+        scale:
+          - 0.4
+          - 3.4
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.28
+          - 0.26
+          - 1.0
+        roughness: 0.9
+  - name: frame-top
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 3.5
+          - 0.0
+        scale:
+          - 3.6
+          - 0.4
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.28
+          - 0.26
+          - 1.0
+        roughness: 0.9
+  - name: glass
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 1.7
+          - 0.0
+        scale:
+          - 3.2
+          - 3.0
+          - 0.08
+      Mesh:
+        shape: cube
+        color:
+          - 0.45
+          - 0.7
+          - 0.8
+          - 0.35
+        roughness: 0.1
+        blend: alpha
+  - name: behind-glass
+    components:
+      Transform:
+        translation:
+          - -6.6
+          - 0.0
+          - -1.2
+        scale:
+          - 0.1
+          - 0.1
+          - 0.1
+      Mesh:
+        shape:
+          voxel: voxels/rim-figure.voxel.yaml
+        color:
+          - 0.5
+          - 0.5
+          - 0.55
+          - 1.0
+  - name: sprite-behind-glass
+    components:
+      Transform:
+        translation:
+          - -5.2
+          - 1.4
+          - -1.5
+      Sprite:
+        atlas: sprites/gallery.atlas.yaml
+        frame: ship/idle
+        size:
+          - 1.6
+          - 1.6
+        billboard: true
+  - name: hologram
+    components:
+      Transform:
+        translation:
+          - -1.5
+          - 1.6
+          - 0.5
+        scale:
+          - 2.4
+          - 3.0
+          - 0.04
+      Mesh:
+        shape: cube
+        color:
+          - 0.1
+          - 1.0
+          - 0.4
+          - 0.5
+        roughness: 0.5
+        emissive: 2.0
+        blend: additive
+  - name: hologram-base
+    components:
+      Transform:
+        translation:
+          - -1.5
+          - 0.1
+          - 0.5
+        scale:
+          - 2.0
+          - 0.2
+          - 0.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.22
+          - 0.25
+          - 1.0
+        roughness: 0.9
+  - name: ghost
+    components:
+      Transform:
+        translation:
+          - 2.2
+          - 0.0
+          - 0.0
+        scale:
+          - 0.25
+          - 0.25
+          - 0.25
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.45
+          - 0.5
+          - 0.6
+          - 0.4
+        blend: alpha
+  - name: yellow-cube
+    components:
+      Transform:
+        translation:
+          - 5.6
+          - 0.9
+          - -1.2
+        scale:
+          - 1.2
+          - 1.2
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.9
+          - 0.85
+          - 0.2
+          - 1.0
+        roughness: 0.9
+  - name: faded-pane
+    components:
+      Transform:
+        translation:
+          - 5.6
+          - 1.7
+          - 0.0
+        scale:
+          - 2.2
+          - 3.0
+          - 0.08
+      Mesh:
+        shape: cube
+        color:
+          - 0.9
+          - 0.5
+          - 0.3
+          - 0.8
+        roughness: 0.3
+        blend: alpha
+      Fade:
+        fade: 0.5

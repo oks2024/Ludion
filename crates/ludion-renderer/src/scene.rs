@@ -891,6 +891,20 @@ pub struct FontDraw {
     pub texture: usize,
     /// Whether the atlas is a signed-distance field (`mode: sdf`).
     pub sdf: bool,
+    /// The SDF's baked spread in atlas texels; `0` for a bitmap face.
+    pub spread_px: u32,
+}
+
+/// An outline drawn under a UI text run's glyphs, resolved to the face's atlas texels.
+///
+/// On an SDF face `texels` is the outline's reach beyond the glyph edge, within the baked spread;
+/// on a bitmap face it is a whole number of source pixels (the dilation radius).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct GlyphOutline {
+    /// Linear straight RGBA of the outline.
+    pub color: [f32; 4],
+    /// Outline reach in atlas texels.
+    pub texels: f32,
 }
 
 /// A run of text placed in world space.
@@ -979,6 +993,8 @@ pub enum UiInstance {
         font: Option<FontDraw>,
         /// The fragment clip from the element's `UiGroup` chain.
         clip: UiClip,
+        /// An outline drawn under the glyphs, or `None`.
+        outline: Option<GlyphOutline>,
     },
 }
 
@@ -1548,6 +1564,28 @@ pub struct Silhouettes {
     pub meshes: Vec<SilhouetteMesh>,
 }
 
+/// How a [`BlendedMesh`] combines with what is behind it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BlendMode {
+    /// Premultiplied alpha, like a sprite.
+    Alpha,
+    /// Adds the lit colour scaled by its opacity.
+    Additive,
+}
+
+/// A mesh drawn seen-through, in `transparents`. Never in [`RenderScene::meshes`]: it is invisible to
+/// the depth pre-pass, shadows, GI, the silhouette mask and probe captures by construction.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct BlendedMesh {
+    /// The instance; `color[3]` is the opacity and `cast_shadows` is false.
+    pub instance: MeshInstance,
+    /// The blend.
+    pub mode: BlendMode,
+    /// The consecutive index of the owning entity in extract order: all parts of one assembly share
+    /// it, and the sort orders whole groups.
+    pub group: u32,
+}
+
 /// Everything the renderer needs to draw one frame — plain data, no ECS, no paths.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RenderScene {
@@ -1577,6 +1615,10 @@ pub struct RenderScene {
     pub statics: StaticRange,
     /// Low-poly meshes.
     pub meshes: Vec<MeshInstance>,
+    /// Blended meshes, in extract order (ascending entity, then part). Drawn in `transparents` after
+    /// the ground markers, back to front per group. Empty for a scene that authors none, which leaves
+    /// the frame graph and pixels as before.
+    pub blended: Vec<BlendedMesh>,
     /// Sprites and billboards.
     pub sprites: Vec<SpriteInstance>,
     /// Ground-anchored telegraph markers, in ascending-`EntityId` extract order. Drawn inside the
@@ -1681,6 +1723,7 @@ impl RenderScene {
             prewarm: Vec::new(),
             statics: StaticRange::default(),
             meshes: Vec::new(),
+            blended: Vec::new(),
             sprites: Vec::new(),
             ground_markers: Vec::new(),
             ground_marker_profiles: Vec::new(),

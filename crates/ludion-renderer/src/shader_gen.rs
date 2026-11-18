@@ -4926,6 +4926,9 @@ pub const UI_TEXT_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (4, wgpu::VertexFormat::Float32x4),
     (5, wgpu::VertexFormat::Float32x4),
     (6, wgpu::VertexFormat::Float32x4),
+    (7, wgpu::VertexFormat::Float32x4),
+    (8, wgpu::VertexFormat::Float32x4),
+    (9, wgpu::VertexFormat::Float32x4),
 ];
 
 // --- Compute workgroup sizes (@workgroup_size per compute entry point) ---------------------------
