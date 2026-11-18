@@ -6,7 +6,8 @@
 //! With `--limits-from-rest` the switch is `switch_to_ragdoll_with` and `LimitsFrom::Rest`: each
 //! joint also carries a `JointZero`, so its limits and any motor target count from the rig's rest
 //! pose rather than the pose the puppet was in at the switch. The arm hinge angle is printed at the
-//! end of the run.
+//! end of the run. With `--part-velocity` the switch also adds the drawn pose's own motion to each
+//! part's `Velocity` (`RagdollSwitch::part_velocity`), and the arm's spawn velocity is printed.
 //!
 //! The switch is ordinary game code: a real game calls `switch_to_ragdoll` from a system, at
 //! `ctx.game_time` (`SystemCtx::game_time`) — a death blow, a stagger, a rope grab. This headless
@@ -21,6 +22,7 @@
 //! ```text
 //! cargo run -p ludion-engine --example ragdoll_switch
 //! cargo run -p ludion-engine --example ragdoll_switch -- --limits-from-rest
+//! cargo run -p ludion-engine --example ragdoll_switch -- --part-velocity --limits-from-rest
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -34,6 +36,7 @@ use ludion_engine::{
     Engine, LimitsFrom, RagdollSwitch, Transform, load_assembly, switch_to_ragdoll,
     switch_to_ragdoll_with,
 };
+use ludion_spatial::Velocity;
 
 // --- The content (copyable) ----------------------------------------------------------------------
 
@@ -224,9 +227,13 @@ fn main() -> ExitCode {
     let puppet = EntityId::new(1, 0);
     let now = SimTime::from_ticks(engine.frame().0, TickRate::DEFAULT);
     let from_rest = std::env::args().any(|arg| arg == "--limits-from-rest");
-    let switched = if from_rest {
+    let part_velocity = std::env::args().any(|arg| arg == "--part-velocity");
+    let switched = if from_rest || part_velocity {
         let mut opts = RagdollSwitch::default();
-        opts.limits_from = LimitsFrom::Rest;
+        if from_rest {
+            opts.limits_from = LimitsFrom::Rest;
+        }
+        opts.part_velocity = part_velocity;
         switch_to_ragdoll_with(engine.world_mut(), puppet, &data, now, opts)
     } else {
         switch_to_ragdoll(engine.world_mut(), puppet, &data, now)
@@ -248,6 +255,14 @@ fn main() -> ExitCode {
             .collect::<Vec<_>>()
             .join(", ")
     );
+
+    if part_velocity {
+        let velocity = engine.world().get::<Velocity>(spawned[1]).unwrap().unwrap();
+        println!(
+            "arm spawn velocity: linear {:?}, angular {:?}",
+            velocity.linear, velocity.angular
+        );
+    }
 
     println!("ticks after switch   torso.y   arm.y");
     let switch_tick = engine.frame().0;

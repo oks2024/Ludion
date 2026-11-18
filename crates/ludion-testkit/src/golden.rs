@@ -88,6 +88,13 @@ pub struct GoldenTest {
     /// of phases, exactly `ludion render --crossfade FROM:TO:SECONDS` (five phases unless
     /// [`strip`](Self::strip) says otherwise). Conflicts with [`clip`](Self::clip).
     pub crossfade: Option<String>,
+    /// For an assembly or character source: sweep a blend space as a strip of phases, exactly
+    /// `ludion render --blend NAME:P0[:P1]` (five phases unless [`strip`](Self::strip) says
+    /// otherwise). Conflicts with [`clip`](Self::clip) and [`crossfade`](Self::crossfade).
+    pub blend: Option<String>,
+    /// Layers stacked over the base pose of the clip, crossfade or blend, one
+    /// `ludion render --layer CLIP:WEIGHT[:MASK[:MODE]]` spec each (at most four).
+    pub layers: Vec<String>,
     /// Hold each pose for this many sim ticks (stepped cadence), exactly `ludion render --hold N`.
     /// `None` is every tick.
     pub hold: Option<u32>,
@@ -143,6 +150,8 @@ impl std::fmt::Debug for GoldenTest {
             .field("time", &self.time)
             .field("strip", &self.strip)
             .field("crossfade", &self.crossfade)
+            .field("blend", &self.blend)
+            .field("layers", &self.layers)
             .field("hold", &self.hold)
             .field("frames", &self.frames)
             .field("debug_draw", &self.debug_draw)
@@ -207,6 +216,8 @@ impl GoldenTest {
             time: None,
             strip: None,
             crossfade: None,
+            blend: None,
+            layers: Vec::new(),
             hold: None,
             frames: 0,
             debug_draw: ludion_engine::DebugCategories::None,
@@ -453,12 +464,26 @@ impl GoldenTest {
                     .map(ludion_engine::parse_crossfade)
                     .transpose()
                     .map_err(|d| vec![d])?;
+                let blend = self
+                    .blend
+                    .as_deref()
+                    .map(ludion_engine::parse_blend)
+                    .transpose()
+                    .map_err(|d| vec![d])?;
+                let layers = self
+                    .layers
+                    .iter()
+                    .map(|spec| ludion_engine::parse_layer(spec))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|d| vec![d])?;
                 let outcome =
                     ludion_engine::render_model_sheet(&ludion_engine::ModelSheetRequest {
                         clip: self.clip.as_deref(),
                         time: self.time,
                         strip: self.strip,
                         crossfade,
+                        blend,
+                        layers: &layers,
                         hold: self.hold,
                         ..ludion_engine::ModelSheetRequest::new(
                             &[self.scene.as_path()],
@@ -1193,6 +1218,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn a_malformed_blend_or_layer_spec_surfaces_the_parse_diagnostic() {
+        let root = scratch_set("specs");
+        let model = root.join("m.assembly.yaml");
+        std::fs::write(&model, "format: 1\nkind: assembly\n").unwrap();
+        let mut test = GoldenTest::new(&model, root.join("m.png"));
+        test.blend = Some(":0..1".to_string());
+        let errors = test.render().expect_err("an unnamed blend is refused");
+        assert_eq!(errors[0].code.as_str(), "L1117", "{errors:?}");
+        test.blend = None;
+        test.layers = vec!["carry".to_string()];
+        let errors = test
+            .render()
+            .expect_err("a layer with no weight is refused");
+        assert_eq!(errors[0].code.as_str(), "L1117", "{errors:?}");
     }
 
     #[test]

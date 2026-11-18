@@ -71,6 +71,7 @@ fn probe_seed(name: &str) -> Value {
         "ParentJoint" => json!({ "joint": "j" }),
         "UiWorldAnchor" => json!({ "target": { "index": 0, "generation": 0 } }),
         "SightTarget" => json!({ "class": "c" }),
+        "RenderView" => json!({ "name": "v" }),
         "StimulusRecord" => json!({
             "perceiver": { "index": 0, "generation": 0 },
             "sense": "sight",

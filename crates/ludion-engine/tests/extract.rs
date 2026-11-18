@@ -1258,6 +1258,7 @@ fn ui_rect_resolves_through_extract_exactly_like_the_pure_function() {
         slice: None,
         group: None,
         fill_group: false,
+        view: None,
     };
     world.insert(e, rect.clone()).unwrap();
 

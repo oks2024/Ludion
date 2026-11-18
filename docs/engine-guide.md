@@ -30,6 +30,7 @@ report `L0008` from a game project.
 - `ludion docs visuals` — how a scene looks: eight topics, from materials to the imaging chain.
 - `ludion docs screen-ui` — `UiRect`/`UiText`: the reference canvas, anchors, and draw order.
 - `ludion docs ui-list` — `UiList`: the selectable menu, cursor, windowing.
+- `ludion docs ui-radial` — `UiRadial`: the tool wheel, angle selection, nav.
 - `ludion docs fonts` — baked TrueType faces and the `font` field.
 - `ludion docs audio` — sound as frame-stamped events, verified in text.
 - `ludion docs data-docs` — a game's declarative data as validated `kind:`-tagged files.

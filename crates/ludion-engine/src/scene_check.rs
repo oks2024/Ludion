@@ -198,6 +198,16 @@ pub fn scene_atlas_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagno
                     &format!("/entities/{index}/components/UiRect"),
                     value,
                 )),
+                "UiRadial" => {
+                    let items = value.get("items").and_then(serde_json::Value::as_array);
+                    for (k, item) in items.into_iter().flatten().enumerate() {
+                        diagnostics.extend(atlas_reference(
+                            project_root,
+                            &format!("/entities/{index}/components/UiRadial/items/{k}"),
+                            item,
+                        ));
+                    }
+                }
                 "Tilemap" => {
                     let Some(legend) = value.get("legend").and_then(serde_json::Value::as_object)
                     else {
@@ -1448,6 +1458,16 @@ pub fn scene_font_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagnos
                     }
                     fields
                 }
+                "UiRadial" => {
+                    let mut fields: Vec<(String, &str)> = Vec::new();
+                    if let Some(items) = value.get("items").and_then(serde_json::Value::as_array) {
+                        for (k, item) in items.iter().enumerate() {
+                            fields.extend(text_field(item, "text", &format!("items/{k}/text")));
+                            fields.extend(text_field(item, "detail", &format!("items/{k}/detail")));
+                        }
+                    }
+                    fields
+                }
                 _ => continue,
             };
             let base = format!("/entities/{index}/components/{name}");
@@ -1630,6 +1650,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_local_light_diagnostics(scene));
     diagnostics.extend(scene_light_exposure_diagnostics(scene));
     diagnostics.extend(crate::perception_check::scene_perception_diagnostics(scene));
+    diagnostics.extend(crate::secondary_view::scene_render_view_diagnostics(scene));
     diagnostics.extend(scene_ground_marker_clip_diagnostics(scene));
     diagnostics.extend(scene_lens_and_sun_disc_diagnostics(scene));
     diagnostics.extend(crate::ui::group::scene_ui_group_diagnostics(scene));

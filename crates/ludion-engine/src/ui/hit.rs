@@ -14,8 +14,8 @@ use ludion_renderer::{SpriteInstance, UiClip, UiInstance};
 
 use super::group::{UiGroups, clip_contains};
 use super::hud::{self, Grouping, HudElement, HudFrame, UiEntry};
-use super::{FontFace, ui_list_draw, ui_text_draw};
-use crate::components::{Anchor, UiList, UiRect, UiText};
+use super::{FontFace, radial_hit, radial_layout, ui_list_draw, ui_text_draw};
+use crate::components::{Anchor, UiList, UiRadial, UiRect, UiText};
 use crate::fonts::FontLibrary;
 use crate::hierarchy::WorldAffines;
 
@@ -25,7 +25,8 @@ use crate::hierarchy::WorldAffines;
 ///
 /// A `UiRect` is its one resolved rect, a `UiText` the bounding box of its glyph quads, a `UiList`
 /// its background panel (use [`list_hit`](crate::ui::list_hit) for the item index of an ungrouped
-/// list). An entity holding several UI components is hit when any of them is. The box is half-open
+/// list), a `UiRadial` its sectors and annulus ([`radial_hit`]; the group-placed box when grouped).
+/// An entity holding several UI components is hit when any of them is. The box is half-open
 /// and the clip test is `d < 0`, so a cursor exactly on a clip edge is outside.
 ///
 /// `false` for an invisible element or group, a world anchor that hides the element, a dead
@@ -110,6 +111,7 @@ pub fn ui_hit(
             color: rect.color,
             uv: SpriteInstance::FULL_UV,
             clip: UiClip::NONE,
+            view: None,
         };
         let element = HudElement::Rect { fill: rect.fill };
         if probe.hit(element, rect.anchor, rect.group, rect.fill_group, row) {
@@ -144,8 +146,33 @@ pub fn ui_hit(
             color: list.background,
             uv: SpriteInstance::FULL_UV,
             clip: UiClip::NONE,
+            view: None,
         };
         if probe.hit(HudElement::List, list.anchor, list.group, false, row) {
+            return true;
+        }
+    }
+    if let Some(radial) = world.get::<UiRadial>(entity).ok().flatten()
+        && radial.visible
+        && !radial.items.is_empty()
+    {
+        hud::pre_radial(&probe.frame, entity, &mut probe.degraded);
+        // Ungrouped, the wheel is its sectors; grouped, the box the group places and clips.
+        if radial.group.is_none() {
+            return radial_hit(radial, viewport, cursor).is_some();
+        }
+        let layout = radial_layout(radial, viewport);
+        let [cx, cy] = layout.center_px;
+        let r = layout.radius_outer_px;
+        let row = UiInstance::Rect {
+            rect_px: [cx - r, cy - r, 2.0 * r, 2.0 * r],
+            texture: None,
+            color: radial.color,
+            uv: SpriteInstance::FULL_UV,
+            clip: UiClip::NONE,
+            view: None,
+        };
+        if probe.hit(HudElement::Radial, radial.anchor, radial.group, false, row) {
             return true;
         }
     }

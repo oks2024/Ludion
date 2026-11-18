@@ -90,7 +90,9 @@ either half of the pair alone, is `L1151`; a region the atlas does not carry is 
 `check-scene` as well as extract. `size` stays the authored canvas units — a region supplies pixels
 and UVs, never the quad's extent — and rects sharing one atlas batch into one draw. `visible: false`
 (default `true`) skips a rect entirely — no draw, no texture resolution — the authored way to hide it
-rather than a zero-size or alpha-zero trick.
+rather than a zero-size or alpha-zero trick. `view: <name>` shows a secondary camera's texture instead of a
+`texture` or `atlas` (`ludion docs render-views`): it is the rect's whole image, and `texture`, `atlas`, `frame`,
+`slice` or `uv_rect` beside it is `L2373`.
 
 ```yaml
   - name: life-icon

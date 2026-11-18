@@ -60,6 +60,8 @@
 //!   [`math::resolve_ui_rect_of`] for the matching mouse-hit-test helper (or [`math::list_hit`] for a
 //!   `UiList`), and the engine guide's
 //!   "Screen-space UI" chapter (`ludion docs screen-ui`) and its `UiList` spoke (`ludion docs ui-list`).
+//!   [`UiRadial`] is the tool wheel: items on a ring picked by stick angle, cursor or mouse delta
+//!   through `UiRadial::navigate` and a [`UiRadialNav`] (`ludion docs ui-radial`).
 //! - **ECS surface** — [`World`] (and its `query`/`get`/`spawn` methods), [`Registry`], [`Schedule`],
 //!   [`SystemCtx`], [`Parent`], and the [`Component`] marker. A [`Transform`] is local under a
 //!   [`Parent`]: [`world_transform`] reads the composed [`WorldPose`] (never stored, never hashed)
@@ -302,8 +304,10 @@ pub use ludion_engine::{
 };
 
 pub use ludion_engine::MeshBlend;
+pub use ludion_engine::RenderView;
 pub use ludion_engine::VoiceId;
 pub use ludion_engine::ui::UiNav;
+pub use ludion_engine::{AimKind, RadialEvent, UiRadial, UiRadialItem, UiRadialNav};
 pub use ludion_engine::{
     Combine, Exposure, ExposureError, ExposureQuery, Facing, LightContribution, LightExposure,
     LightExposureResults, LightKind, MAX_EXPOSURE_POINTS, light_exposure, light_exposure_update,

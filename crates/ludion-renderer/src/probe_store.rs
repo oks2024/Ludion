@@ -145,6 +145,8 @@ pub(crate) fn world_key(
         bone_palette,
         // CPU-only lens data, always `None` here: `face_scene` drops the gun and its lens
         viewmodel: _,
+        // `face_scene` clears the secondary views: a capture draws one world, never a nested view
+        views: _,
     } = face_scene;
 
     let mut w = KeyWriter(Vec::new());

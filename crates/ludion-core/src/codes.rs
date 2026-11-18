@@ -1962,6 +1962,8 @@ pub mod code {
     pub const UI_GROUP_IGNORED: DiagnosticCode = DiagnosticCode::new("L1617");
     /// `L1618` — a `UiText` or `UiList` `outline` has a non-finite or negative width, or a non-finite colour.
     pub const UI_TEXT_OUTLINE_INVALID: DiagnosticCode = DiagnosticCode::new("L1618");
+    /// `L1619` — a `UiRadial` has a non-finite number, a bad radius, gap, deadzone, hysteresis or size, or more than 16 items.
+    pub const UI_RADIAL_INVALID: DiagnosticCode = DiagnosticCode::new("L1619");
     /// `L2302` — a UI element's `group` could not be resolved; drawn ungrouped.
     pub const UI_GROUP_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L2302");
     /// `L2303` — more than two clipping groups in a UI element's chain; the outer ones are dropped.
@@ -2077,8 +2079,8 @@ pub mod code {
     /// `ludion-renderer`'s `FrameSize::validate`.
     pub const RENDER_EXTENT_INVALID: DiagnosticCode = DiagnosticCode::new("L2012");
 
-    /// `L2101` — a scene contains more than one `Camera` component, so the renderer cannot choose
-    /// which one frames the shot. Raised by `ludion-engine`'s extract; the JSON Pointer names the
+    /// `L2101` — a scene contains more than one `Camera` without a `RenderView`, so the renderer cannot
+    /// choose which one frames the shot. Raised by `ludion-engine`'s extract; the JSON Pointer names the
     /// extra camera's entity. (Zero cameras is not an error — a documented default framing is used.)
     pub const RENDER_MULTIPLE_CAMERAS: DiagnosticCode = DiagnosticCode::new("L2101");
 
@@ -2185,6 +2187,22 @@ pub mod code {
 
     /// `L2360` — a `Mesh.blend` resolves onto a `Viewmodel` mesh, which is drawn opaque. Raised by extract.
     pub const MESH_BLEND_ON_VIEWMODEL: DiagnosticCode = DiagnosticCode::new("L2360");
+
+    /// `L2370` — a `RenderView` has an empty `name`, a `size` axis outside `16..=2048`, or no `Camera` on
+    /// its entity.
+    pub const RENDER_VIEW_INVALID: DiagnosticCode = DiagnosticCode::new("L2370");
+
+    /// `L2371` — two `RenderView`s share a `name`.
+    pub const RENDER_VIEW_NAME_DUPLICATE: DiagnosticCode = DiagnosticCode::new("L2371");
+
+    /// `L2372` — a `UiRect.view` names no `RenderView`.
+    pub const UI_RECT_VIEW_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L2372");
+
+    /// `L2373` — a `UiRect` sets `view` beside `texture`, `atlas`, `frame`, `slice` or `uv_rect`.
+    pub const UI_RECT_VIEW_CONFLICT: DiagnosticCode = DiagnosticCode::new("L2373");
+
+    /// `L2374` — more than 4 `RenderView`s are enabled; the extras are not rendered. Raised by extract.
+    pub const RENDER_VIEW_BUDGET: DiagnosticCode = DiagnosticCode::new("L2374");
 
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
@@ -10010,6 +10028,19 @@ Fix: give `width` a finite value of 0 or more, in canvas units (0 draws no outli
 linear straight RGBA.",
     },
     CodeEntry {
+        code: code::UI_RADIAL_INVALID,
+        severity: Severity::Error,
+        title: "a UiRadial is invalid",
+        explanation: "\
+A `UiRadial` has one of: a non-finite number; a `radius_inner` below 0 or a `radius_outer` that is not
+above it; a `gap_deg` or `hysteresis_deg` outside `[0, 360 / items)`; a `deadzone` outside `[0, 1)`; a
+`size` or `icon_size` that is not positive and finite; or more than 16 `items`. The pointer
+(`/entities/{i}/components/UiRadial/{field}`) names the field. A scene with one is refused.
+
+Fix: give the radii `0 <= radius_inner < radius_outer`, keep `gap_deg` and `hysteresis_deg` under one
+sector's span, `deadzone` below 1, and at most 16 items (the game builds items from what it owns).",
+    },
+    CodeEntry {
         code: code::UI_GROUP_UNRESOLVED,
         severity: Severity::Warning,
         title: "a UI element's group could not be resolved",
@@ -10472,8 +10503,8 @@ fits. Scale 4 on a 4K output is 15360 px and does not.",
         severity: Severity::Error,
         title: "scene has more than one camera",
         explanation: "\
-The scene contains more than one entity with a `Camera` component, so the renderer cannot decide
-which one frames the shot.
+The scene contains more than one entity with a `Camera` and no `RenderView`, so the renderer cannot
+decide which one frames the shot. A `Camera` beside a `RenderView` is a secondary view, not the main camera.
 
 Rendering needs exactly one camera. The camera's pose comes from its entity's `Transform`, and its
 `projection` (perspective or orthographic) comes from the `Camera` component. With two or more
@@ -10886,6 +10917,53 @@ by extract.
 
 Fix: remove `blend` from the viewmodel's mesh, or move the blended mesh onto an entity that is not a
 viewmodel.",
+    },
+    CodeEntry {
+        code: code::RENDER_VIEW_INVALID,
+        severity: Severity::Error,
+        title: "RenderView is not valid",
+        explanation: "A `RenderView` has an empty `name`, a `size` axis outside `16..=2048`, or sits on an entity without a
+`Camera` (JSON Pointer `/name`, `/size/<i>`, or the entity's components). A secondary view renders through the
+camera on its own entity.
+
+Fix: name the view, keep each size axis in `16..=2048`, and put the `RenderView` beside a `Camera`.
+
+    RenderView: { name: radar, size: [256, 256] }",
+    },
+    CodeEntry {
+        code: code::RENDER_VIEW_NAME_DUPLICATE,
+        severity: Severity::Error,
+        title: "two RenderViews share a name",
+        explanation: "Two `RenderView` components carry the same `name`, so a `UiRect.view` cannot say which one it shows
+(JSON Pointer `/name` of the second).
+
+Fix: give every view its own name.",
+    },
+    CodeEntry {
+        code: code::UI_RECT_VIEW_UNRESOLVED,
+        severity: Severity::Error,
+        title: "UiRect.view names no RenderView",
+        explanation: "A `UiRect` has a `view` that no `RenderView` carries (JSON Pointer `/view`). The rect draws nothing.
+
+Fix: spell the name as the `RenderView` does, or add the view.",
+    },
+    CodeEntry {
+        code: code::UI_RECT_VIEW_CONFLICT,
+        severity: Severity::Error,
+        title: "UiRect.view beside a texture source",
+        explanation: "A `UiRect` sets `view` together with `texture`, `atlas`, `frame`, `slice` or `uv_rect`. A view is the
+rect's whole image (JSON Pointer `/view`).
+
+Fix: keep `view` and remove the other texture fields, or drop `view`.",
+    },
+    CodeEntry {
+        code: code::RENDER_VIEW_BUDGET,
+        severity: Severity::Warning,
+        title: "more than 4 enabled RenderViews",
+        explanation: "More than 4 enabled `RenderView`s are in the scene. The first 4 in `(order, entity)` order render;
+each further one is skipped and a `UiRect` that shows it draws nothing. Raised once per skipped view by extract.
+
+Fix: disable views that are not on screen (`enabled: false`) or merge them.",
     },
     CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
@@ -13878,6 +13956,7 @@ mod tests {
         code::UI_GROUP_TOO_DEEP,
         code::UI_GROUP_IGNORED,
         code::UI_TEXT_OUTLINE_INVALID,
+        code::UI_RADIAL_INVALID,
         code::UI_GROUP_UNRESOLVED,
         code::UI_CLIP_NESTING,
         code::UI_TEXT_OUTLINE_CLAMPED,
@@ -13926,6 +14005,11 @@ mod tests {
         code::OCCLUDED_SILHOUETTE_ON_VIEWMODEL,
         code::OCCLUDED_SILHOUETTE_STYLE_LIMIT,
         code::MESH_BLEND_ON_VIEWMODEL,
+        code::RENDER_VIEW_INVALID,
+        code::RENDER_VIEW_NAME_DUPLICATE,
+        code::UI_RECT_VIEW_UNRESOLVED,
+        code::UI_RECT_VIEW_CONFLICT,
+        code::RENDER_VIEW_BUDGET,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,
@@ -14284,6 +14368,7 @@ mod tests {
             code::OCCLUDED_SILHOUETTE_ON_VIEWMODEL,
             code::OCCLUDED_SILHOUETTE_STYLE_LIMIT,
             code::MESH_BLEND_ON_VIEWMODEL,
+            code::RENDER_VIEW_BUDGET,
             code::TRANSITION_CARRY_DEAD,
             code::TRANSITION_CARRY_ORPHANED,
             code::RESTORE_ENGINE_VERSION_DIFFERS,

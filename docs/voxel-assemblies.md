@@ -204,6 +204,12 @@ snapshot restore and a save and reload. A switch pose outside a limit measured f
 by the solver on the first step — a bounded snap, not an error. The default, `LimitsFrom::SwitchPose`,
 is `switch_to_ragdoll` exactly. `ludion docs physics-joints` §Rules has `JointZero`.
 
+`part_velocity: true` adds the drawn pose's own motion to each part's `Velocity`, on top of the root's
+rigid velocity: a finite difference of the part's posed transform at the switch tick and one tick
+earlier, per gameplay second, so clips, blends, crossfades and layers all count (a staggering body
+keeps its stumble; a choked one goes limp). It defaults to `false`, which is `switch_to_ragdoll`
+exactly. A clip cut at the switch tick contributes only its own motion, and a rest figure adds none.
+
 ## Gotchas
 
 - **`--set`/`--sweep` reach an assembly's `palette:`** exactly as they do a voxel model's; the staged

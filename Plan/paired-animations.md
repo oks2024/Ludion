@@ -1,6 +1,6 @@
 # Plan: Paired animations and a posed ragdoll — rest-relative zeros, part velocity, the way back, `kind: paired`
 
-> Status: **W1 mechanized (2026-11-18); W2–W6 not started.** Driver: Neon Shroud request 0008
+> Status: **W1–W2 mechanized (2026-11-18); W3–W6 not started.** Driver: Neon Shroud request 0008
 > (`engine-requests/0008-paired-animations-and-posed-ragdoll.md`). A takedown aligns two voxel assemblies,
 > plays one clip on both, and ends with the target ragdolled at the pose it died in; the way back
 > (get-up) re-poses an assembly from a ragdoll. The design below was written from the tree on 2026-11-18,
@@ -25,6 +25,22 @@ before: no `WorldHash`, replay, trace, physics blob, wire-schema or golden moved
 `component_schemas.json` re-blessed. The one behaviour change is decision 4: a layered assembly's switch
 now samples its `AnimationLayers`; no game or replay called `switch_to_ragdoll` on a layered assembly, and
 without layers the sampled list is empty, so the output is unchanged by construction.
+
+### W2 — per-part clip velocity at the posed switch (`RagdollSwitch.part_velocity`)
+
+| file | role |
+|---|---|
+| `crates/ludion-engine/src/extract.rs` | `animation_pose_at` and `assembly_layer_poses_at` (`now`, `then`, `back`); `animation_pose` and `assembly_layer_poses` are the `back == 0` wrappers |
+| `crates/ludion-engine/src/ragdoll.rs` | `RagdollSwitch.part_velocity`; the earlier placements, the linear and angular finite difference (`rotation_rate`, f64 libm) |
+| `crates/ludion-engine/tests/ragdoll_velocity.rs`, `tests/it.rs` | drawn one-tick difference for a clip, a live blend, a crossfade, clip and blend layers; time-scaled, held, rest figure, default bit-identity, 1/2/8 threads |
+| `docs/voxel-assemblies.md` (+ embedded mirror), `crates/ludion-engine/examples/ragdoll_switch.rs` | §Ragdolls, `--part-velocity` |
+
+With `part_velocity: true` each part's `Velocity` adds `(center_now − center_then)/back` and the shortest-arc
+rotation rate to the root's rigid velocity, where `then` is one gameplay tick before the switch (the window
+shrinks before tick 1; zero length adds nothing). The default (`false`) never calls the new functions and the
+wrappers run today's arithmetic (`back` guards are `> 0.0`), so no replay, `WorldHash`, trace or golden moved;
+nothing is blessed. A hold does not reach physics (`docs/game-clock.md`), so held parts keep falling; the
+held switch's velocity equals the unheld one's at the same gameplay tick.
 
 ## Trigger
 
@@ -56,13 +72,20 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
 8. **The physics source is `JointSource { joint, zero }`**, compared as a whole every tick, so adding,
    editing or removing a zero rebuilds the joint. With no zero its JSON bytes are exactly the bare `Joint`'s,
    so the physics blob does not change and `replay_content_hash` does not move.
+9. **The earlier velocity sample is a closed form, not `BlendClock.prev` (approved by the Tech Lead).** A
+   live phase sampled at `now − 1 tick` reads the same `fraction` from `floor(now)`, so it would equal the
+   current phase and a blend's velocity would read zero. The earlier sample therefore winds the live phase
+   back by `rate · speed · back` on the current params, with `back` the window in gameplay seconds; clip
+   sides, crossfade weights and stateless blends are evaluated at `then`. `prev` is rejected: it is one
+   *sim* tick back (not one gameplay tick under a time scale or a hold), the outgoing side of a crossfade
+   has none, and it is `-1` on a restart tick. Exact for constant params, the common case.
 
 ## Waves
 
 - **W1 (shipped).** `JointZero`, `LimitsFrom`, `RagdollSwitch`, `switch_to_ragdoll_with`, layers in the
   switch pose, `L1750`, docs and the example flag (decisions 1–8).
-- **W2.** `part_velocity`: a two-sample clip finite difference. A live `BlendClock` side samples `prev`, not
-  `phase`, for the earlier sample (`extract.rs`, where `fraction` is relative to `floor(now)`).
+- **W2 (shipped).** `part_velocity`: a two-sample finite difference of the drawn pose, the earlier sample a
+  closed form (decision 9).
 - **W3.** Ragdoll → assembly: `switch_ragdoll_to_assembly`, `PoseSnapshot`, `Animation.from = "$pose"`, and
   the placement and face-up rule.
 - **W4.** The `kind: paired` document: the `KINDS` row, parse and validate, L-codes (0008's range

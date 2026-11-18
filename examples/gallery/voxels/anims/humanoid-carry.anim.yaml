@@ -1,0 +1,54 @@
+format: 1
+kind: animation
+name: humanoid-carry
+duration: 1.0
+loop: true
+tracks:
+  lower-arm-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 50.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 50.0
+          - 0.0
+          - 0.0
+  lower-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 50.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 50.0
+          - 0.0
+          - 0.0
+  upper-arm-l:
+    rotation:
+      - t: 0.0
+        v:
+          - -70.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - -70.0
+          - 0.0
+          - 0.0
+  upper-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - -70.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - -70.0
+          - 0.0
+          - 0.0

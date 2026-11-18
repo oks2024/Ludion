@@ -51,7 +51,7 @@ use crate::components::{
     GroundMarkerGrid, GroundMarkerShape, MapWrap, Mesh, MeshBlend, MeshGrid, MeshSource,
     ParentJoint, ParticleEmitter, PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe,
     Rim, SkinBone, SpotLight, Sprite, SpriteBlend, Text, Tilemap, TonemapOperator, Transform,
-    UiList, UiRect, UiText,
+    UiList, UiRadial, UiRect, UiText,
 };
 use crate::components::{AnimationLayer, AnimationLayers, BlendClock, LayerMode, layer_weight_at};
 use crate::docs::DocStore;
@@ -995,13 +995,22 @@ fn extract_inner(
         rate: sim_now.rate(),
     };
     let mut groups = ui::group::UiGroups::default();
+    let view_table = crate::secondary_view::extract_views(world, &ids, &mut errors, degraded);
     for (index, &id) in ids.iter().enumerate() {
         if let Some(rect) = get::<UiRect>(world, id)
             && rect.visible
+            && let shown = crate::secondary_view::resolve_rect_view(
+                &view_table,
+                rect.view.as_deref(),
+                index,
+                &mut errors,
+            )
+            && shown != crate::secondary_view::RectView::Hidden
         {
             let hud_start = ui_entries.len();
             let rect_motion = ui::hud::pre_rect(&hud, id, rect, degraded);
             let rect = &*rect_motion;
+            let view = shown.slot();
             let rect_px = ui::hud::rect_box(&hud, &mut poses, &mut groups, rect, degraded);
             // The UV sub-rect the rect samples. A loose `texture:` or an untextured fill samples the
             // whole image (byte-identical to the pre-atlas path); an `atlas` + `frame` reference
@@ -1052,6 +1061,7 @@ fn extract_inner(
                 texture,
                 uv,
                 region_texels,
+                view,
                 &mut ui_entries,
                 degraded,
             );
@@ -1170,6 +1180,7 @@ fn extract_inner(
                             color: list.background,
                             uv: SpriteInstance::FULL_UV,
                             clip: UiClip::NONE,
+                            view: None,
                         },
                     ));
                 }
@@ -1215,6 +1226,72 @@ fn extract_inner(
                 hud_start,
                 ui::hud::Grouping {
                     group: list.group,
+                    fill_group: false,
+                    groups: &mut groups,
+                    degraded: &mut *degraded,
+                },
+            );
+        }
+        if let Some(radial) = get::<UiRadial>(world, id)
+            && radial.visible
+        {
+            let hud_start = ui_entries.len();
+            ui::hud::pre_radial(&hud, id, degraded);
+            // An empty wheel draws nothing, as an empty list does.
+            if !radial.items.is_empty() {
+                let face = fonts.face(radial.font.as_deref());
+                let font = resolve_font(
+                    project_root,
+                    placed_font(&fonts, radial.font.as_deref()).as_ref(),
+                    TextureSite::Font(index, "UiRadial"),
+                    assets,
+                    &mut textures,
+                    &mut path_index,
+                    &mut errors,
+                );
+                let outline = ui::resolve_outline(
+                    face,
+                    radial.font.as_deref().unwrap_or("embedded"),
+                    font.map_or(0, |f| f.spread_px),
+                    radial.outline.as_ref(),
+                    radial.size,
+                    viewport,
+                    &crate::diagnostics::offender_key(world, id),
+                    degraded,
+                );
+                let drawn = ui::radial::radial_draw(
+                    face,
+                    radial,
+                    viewport,
+                    font,
+                    outline,
+                    &mut |item, entry| {
+                        let atlas = entry.atlas.as_deref()?;
+                        resolve_atlas_frame(
+                            project_root,
+                            atlas,
+                            entry.frame.as_deref(),
+                            TextureSite::UiRadialItem(index, item),
+                            assets,
+                            &mut atlases,
+                            &mut textures,
+                            &mut path_index,
+                            &mut errors,
+                        )
+                    },
+                );
+                ui_entries.extend(drawn.into_iter().map(|row| (radial.order, id, row)));
+            }
+            ui::hud::post(
+                &hud,
+                &mut poses,
+                id,
+                ui::hud::HudElement::Radial,
+                radial.anchor,
+                &mut ui_entries,
+                hud_start,
+                ui::hud::Grouping {
+                    group: radial.group,
                     fill_group: false,
                     groups: &mut groups,
                     degraded: &mut *degraded,
@@ -1684,6 +1761,7 @@ fn extract_inner(
         gi,
         bone_palette,
         viewmodel,
+        views: view_table.views,
     };
     if let Some(data) = scene.viewmodel.as_mut() {
         data.particles = scene
@@ -3356,6 +3434,8 @@ pub(crate) enum TextureSite {
     TilemapCell(usize, char),
     /// A screen-space `UiRect`'s `texture` field.
     UiRect(usize),
+    /// One item of a `UiRadial`: its `atlas` and `frame` pair.
+    UiRadialItem(usize, usize),
     /// The bullet kind a `Volley` names, whose `atlas`/`frame` pair lives in a `kind: pattern`
     /// document rather than on the component — so the pointer names the volley that reached it.
     Volley(usize),
@@ -3378,6 +3458,9 @@ impl TextureSite {
                 )
             }
             TextureSite::UiRect(index) => format!("/entities/{index}/components/UiRect"),
+            TextureSite::UiRadialItem(index, item) => {
+                format!("/entities/{index}/components/UiRadial/items/{item}")
+            }
             TextureSite::Volley(index) => format!("/entities/{index}/components/Volley"),
             TextureSite::Font(index, component) => {
                 format!("/entities/{index}/components/{component}")
@@ -5315,6 +5398,9 @@ pub(crate) fn rotation_quat(rotation_deg: [f32; 3]) -> Quat {
 ///   `render.bounds` reports `L2102` (a projected rect needs a real camera).
 /// - `Ok(Some(id))` — exactly one camera; use it.
 /// - `Err(L2101)` — more than one, the JSON Pointer naming the second camera's entity.
+///
+/// A camera beside a [`RenderView`](crate::components::RenderView) is a secondary view, not a main
+/// camera: it is neither counted nor returned.
 pub(crate) fn single_camera(
     world: &World,
     ids: &[EntityId],
@@ -5323,7 +5409,9 @@ pub(crate) fn single_camera(
         .iter()
         .copied()
         .enumerate()
-        .filter(|&(_, id)| world.has::<Camera>(id))
+        .filter(|&(_, id)| {
+            world.has::<Camera>(id) && !world.has::<crate::components::RenderView>(id)
+        })
         .collect();
 
     match cameras.as_slice() {
@@ -5332,12 +5420,12 @@ pub(crate) fn single_camera(
         [_, (second_index, _), ..] => Err(Diagnostic::new(
             code::RENDER_MULTIPLE_CAMERAS,
             format!(
-                "the scene has {} cameras, but rendering needs exactly one",
+                "the scene has {} main cameras (cameras without a `RenderView`), but rendering needs exactly one",
                 cameras.len()
             ),
         )
         .with_path(format!("/entities/{second_index}/components/Camera"))
-        .with_help("keep a single `Camera` component in the scene")),
+        .with_help("keep one `Camera` without a `RenderView`; a camera for a secondary view takes a `RenderView` (`ludion docs render-views`)")),
     }
 }
 
@@ -5945,6 +6033,20 @@ pub(crate) fn animation_pose<'a>(
     data: &'a AssemblyData,
     now: GameTime,
 ) -> (AssemblySide<'a>, Option<(AssemblySide<'a>, f64)>) {
+    animation_pose_at(world, id, data, now, now, 0.0)
+}
+
+/// [`animation_pose`] sampled `back` gameplay seconds before `now`: clip times and the crossfade
+/// weight read `then`, and a live blend phase is wound back by `rate · speed · back` on the same
+/// params. `back == 0.0` (with `then == now`) is exactly [`animation_pose`].
+pub(crate) fn animation_pose_at<'a>(
+    world: &World,
+    id: EntityId,
+    data: &'a AssemblyData,
+    now: GameTime,
+    then: GameTime,
+    back: f64,
+) -> (AssemblySide<'a>, Option<(AssemblySide<'a>, f64)>) {
     let Some(animation) = get::<Animation>(world, id) else {
         return (AssemblySide::EMPTY, None);
     };
@@ -5963,22 +6065,26 @@ pub(crate) fn animation_pose<'a>(
         };
         let rate = crate::blend_clock::blend_rate(blend, animation.params);
         let phase = phase.map_or(elapsed * rate, |(phase, speed)| {
-            phase + rate * f64::from(speed) * fraction
+            let mut advanced = phase + rate * f64::from(speed) * fraction;
+            if back > 0.0 {
+                advanced -= rate * f64::from(speed) * back;
+            }
+            advanced
         });
         AssemblySide::blend(data, blend, animation.params, phase)
     };
     let live = clock.filter(|c| c.blend == animation.clip && c.started == animation.started);
     let pose = side(
         &animation.clip,
-        clip_elapsed(animation, now),
+        clip_elapsed(animation, then),
         live.map(|c| (c.phase, animation.speed)),
     );
     let outgoing = clock.filter(|c| !c.from_blend.is_empty() && c.from_blend == animation.from);
-    let fade = fade_weight(animation, now).map(|weight| {
+    let fade = fade_weight(animation, then).map(|weight| {
         (
             side(
                 &animation.from,
-                from_clip_elapsed(animation, now),
+                from_clip_elapsed(animation, then),
                 outgoing.map(|c| (c.from_phase, animation.from_speed)),
             ),
             weight,
@@ -6693,6 +6799,20 @@ pub(crate) fn assembly_layer_poses<'a>(
     data: &'a AssemblyData,
     now: GameTime,
 ) -> Vec<AssemblyLayerPose<'a>> {
+    assembly_layer_poses_at(world, id, data, now, now, 0.0)
+}
+
+/// [`assembly_layer_poses`] sampled `back` gameplay seconds before `now`, as [`animation_pose_at`]
+/// does for the base pose: clip layers, weights and the stateless fallback read `then`, a live blend
+/// layer's phase is wound back by `rate · speed · back`.
+pub(crate) fn assembly_layer_poses_at<'a>(
+    world: &World,
+    id: EntityId,
+    data: &'a AssemblyData,
+    now: GameTime,
+    then: GameTime,
+    back: f64,
+) -> Vec<AssemblyLayerPose<'a>> {
     let Some(stack) = get::<AnimationLayers>(world, id) else {
         return Vec::new();
     };
@@ -6715,9 +6835,13 @@ pub(crate) fn assembly_layer_poses<'a>(
                 let rate = data.blend(&layer.clip).map_or(0.0, |blend| {
                     crate::blend_clock::blend_rate(blend, layer.params)
                 });
-                entry.phase + rate * f64::from(layer.speed) * fraction
+                let mut advanced = entry.phase + rate * f64::from(layer.speed) * fraction;
+                if back > 0.0 {
+                    advanced -= rate * f64::from(layer.speed) * back;
+                }
+                advanced
             });
-            assembly_layer_pose(data, layer, now, live_phase)
+            assembly_layer_pose(data, layer, then, live_phase)
         })
         .collect()
 }

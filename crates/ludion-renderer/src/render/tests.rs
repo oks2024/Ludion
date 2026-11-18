@@ -18,6 +18,7 @@ mod static_batch;
 mod transparent_dof;
 mod transparent_medium;
 mod viewmodel;
+mod views;
 
 /// The decision-16 mapping-drift guard: the string this crate composes and compiles for every
 /// shader (its snippets + body, from `include_str!`) must be byte-identical to what the bindgen
@@ -849,6 +850,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
         color: [1.0, 1.0, 1.0, 1.0],
         uv: [0.0, 0.0, 1.0, 1.0],
         clip: UiClip::NONE,
+        view: None,
     };
     let text = UiInstance::Text {
         color: [1.0; 4],
@@ -862,7 +864,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
     // Two consecutive untextured rects → one batch of two instances.
     let mut scene = RenderScene::empty((64, 64));
     scene.ui = vec![rect(0.0), rect(20.0)];
-    let batches = renderer.build_ui_batches(&scene, device, &[]);
+    let batches = renderer.build_ui_batches(&scene, device, &[], &[]);
     assert_eq!(batches.len(), 1);
     assert!(
         matches!(batches[0], UiBatch::Rects { count: 2, .. }),
@@ -871,7 +873,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
 
     // rect, text, rect → three batches (a kind change closes each batch).
     scene.ui = vec![rect(0.0), text, rect(20.0)];
-    let batches = renderer.build_ui_batches(&scene, device, &[]);
+    let batches = renderer.build_ui_batches(&scene, device, &[], &[]);
     assert_eq!(batches.len(), 3, "kinds never merge across the boundary");
     assert!(matches!(batches[0], UiBatch::Rects { .. }));
     assert!(matches!(batches[1], UiBatch::Text { .. }));
@@ -902,7 +904,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
         texture: renderer.atlas.texture.clone(),
         view: renderer.atlas.view.clone(),
     }];
-    let batches = renderer.build_ui_batches(&scene, device, &atlas);
+    let batches = renderer.build_ui_batches(&scene, device, &atlas, &[]);
     assert_eq!(batches.len(), 3, "a face change closes the text batch");
     assert!(batches.iter().all(|b| matches!(
         b,
@@ -969,6 +971,7 @@ fn needs_gpu_a_translucent_solid_ui_rect_composites_to_the_straight_alpha_result
         color: [TINT[0] as f32, TINT[1] as f32, TINT[2] as f32, ALPHA as f32],
         uv: [0.0, 0.0, 1.0, 1.0],
         clip: UiClip::NONE,
+        view: None,
     }];
 
     let bare_img = renderer
@@ -1022,6 +1025,7 @@ fn needs_gpu_overlay_draws_ui_over_the_scene() {
         color: [1.0, 0.0, 0.0, 1.0],
         uv: [0.0, 0.0, 1.0, 1.0],
         clip: UiClip::NONE,
+        view: None,
     }];
 
     let bare_img = renderer
@@ -3451,6 +3455,7 @@ fn needs_gpu_ui_is_rasterized_at_the_output_extent_below_native() {
             color: [1.0, 0.2, 0.1, 1.0],
             uv: [0.0, 0.0, 1.0, 1.0],
             clip: UiClip::NONE,
+            view: None,
         },
         UiInstance::Text {
             color: [1.0; 4],
@@ -3915,6 +3920,7 @@ fn needs_gpu_smaa_renders_under_a_ui_overlay() {
         color: [1.0, 1.0, 1.0, 1.0],
         uv: [0.0, 0.0, 1.0, 1.0],
         clip: UiClip::NONE,
+        view: None,
     }];
     let size = FrameSize::native(w, h);
     let off = renderer.render(&scene, size).expect("off render");

@@ -102,7 +102,7 @@ engine answers from sim state, with the renderer's own formulas.
 - `Facing::TwoSided` — trigger: a lit-billboard consumer.
 - GI sky visibility and bounce — trigger: an Area C reading that comes out wrong.
 - Penumbra rays (soft-shadow sampling) — trigger: a sitting judges the hard answer unreadable.
-- Render layers (request 0017).
+- Render layers (request 0017; `Plan/secondary-views.md` W2).
 - A per-light opt-out — rejected: "looks lit, isn't".
 
 ## Status

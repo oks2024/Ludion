@@ -51,6 +51,8 @@ pub mod patrol;
 pub mod patterns;
 pub mod perception;
 pub mod prefab;
+pub mod radial;
+pub mod render_view;
 pub mod ui;
 pub mod validators;
 
@@ -78,6 +80,8 @@ pub use perception::{
     SightPoint, SightSampleRecord, SightTarget, SightZone, StimulusRecord, SweepShape, ZoneSweep,
 };
 pub use prefab::PrefabInstance;
+pub use radial::{AimKind, MAX_RADIAL_ITEMS, RadialEvent, UiRadial, UiRadialItem, UiRadialNav};
+pub use render_view::{RENDER_VIEW_SIZE_RANGE, RenderView};
 pub use ui::{
     TextOutline, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiNav,
     UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
@@ -5019,6 +5023,10 @@ pub struct UiRect {
     /// Needs a `group` (`L1617`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub fill_group: bool,
+    /// The name of a [`RenderView`] whose texture the rect shows (default none). It is the rect's whole
+    /// image: `texture`, `atlas`, `frame`, `slice` and `uv_rect` beside it are `L2373`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
 }
 
 impl Default for UiRect {
@@ -5038,6 +5046,7 @@ impl Default for UiRect {
             slice: None,
             group: None,
             fill_group: false,
+            view: None,
         }
     }
 }
@@ -5067,6 +5076,7 @@ impl SemanticValidate for UiRect {
             }
             ui::ui_rect_sampling_diagnostics(object, &mut out);
             ui::ui_rect_group_diagnostics(object, &mut out);
+            render_view::ui_rect_view_diagnostics(object, &mut out);
         }
         out
     }
@@ -6662,6 +6672,14 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<JointZero>("JointZero")
         .expect("unique");
+    // The tool wheel, appended after `JointZero`: drawn by `extract`, moved by `UiRadial::navigate`.
+    registry
+        .register_validated::<UiRadial>("UiRadial")
+        .expect("unique");
+    // The secondary view, appended after `UiRadial`: read by `extract`, rendered into a texture a `UiRect.view` shows.
+    registry
+        .register_validated::<RenderView>("RenderView")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -7193,12 +7211,14 @@ mod tests {
                 "GroundMarkerClip",
                 "OccludedSilhouette",
                 "JointZero",
+                "UiRadial",
+                "RenderView",
             ]
         );
         assert_eq!(
             registry.len(),
-            80,
-            "appending `JointZero` grows the registry to 80"
+            82,
+            "appending `RenderView` grows the registry to 82"
         );
     }
 
@@ -8992,6 +9012,7 @@ mod tests {
             }),
             group: Some(EntityId::new(7, 0)),
             fill_group: true,
+            view: None,
         };
         let json = serde_json::to_value(&rect).unwrap();
         assert_eq!(json["uv_rect"], serde_json::json!([0.0, 0.25, 0.5, 1.0]));
@@ -9025,6 +9046,7 @@ mod tests {
             slice: None,
             group: None,
             fill_group: false,
+            view: None,
         };
         let json = serde_json::to_value(&rect).unwrap();
         assert_eq!(json["atlas"], serde_json::json!("sprites/hud.atlas.yaml"));

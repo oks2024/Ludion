@@ -63,8 +63,8 @@ settled plan, nothing built; **rejected** — closed by design.
 - **Exposure** — manual only; auto-exposure absent. `.cube` LUT grading deferred.
 - **Game-authored shaders** — absent: no custom WGSL surface, no material graph
   (`dev-docs/ludion-shader-bindgen.md`).
-- **Cameras** — exactly one (`L2101`): no render-to-texture, split screen, portals; minimap deferred
-  (a private plan).
+- **Cameras** — one main camera (`L2101`) plus up to 4 `RenderView` secondary views rendered into `UiRect`
+  textures (`Plan/secondary-views.md`; Proposed, owner ruling owed). No split screen or portals.
 - **Geometry** — ~~no decals~~ (shipped, Clockout 0012; `GroundMarker` stays the analytic telegraph), terrain renderer, foliage,
   morph targets (L1202), GPU-driven or indirect draws. MRT deferred.
 - **Particles** — CPU, unlit camera-facing discs. No GPU simulation, mesh particles, collision;

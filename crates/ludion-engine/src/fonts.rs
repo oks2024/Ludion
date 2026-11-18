@@ -15,7 +15,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_font::FontFace;
 use ludion_scene::FontsDocument;
 
-use crate::components::{Text, UiList, UiText};
+use crate::components::{Text, UiList, UiRadial, UiText};
 
 /// The table's file name at the content root.
 pub(crate) const FONTS_FILE: &str = "fonts.yaml";
@@ -265,6 +265,11 @@ pub(crate) fn report_font_faults(world: &mut ludion_ecs::World) {
     names.extend(
         world
             .query_ids::<(&UiList,)>()
+            .filter_map(|(_, (c,))| c.font.as_ref().filter(unknown).cloned()),
+    );
+    names.extend(
+        world
+            .query_ids::<(&UiRadial,)>()
             .filter_map(|(_, (c,))| c.font.as_ref().filter(unknown).cloned()),
     );
     for name in names {

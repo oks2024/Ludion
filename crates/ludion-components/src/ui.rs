@@ -909,7 +909,7 @@ pub(crate) fn ui_rect_sampling_diagnostics(
             "keep one of the two",
         );
     }
-    if !present("texture") && !present("atlas") {
+    if !present("texture") && !present("atlas") && !present("view") {
         for field in ["uv_rect", "slice"].into_iter().filter(|f| present(f)) {
             ignored(
                 &format!("/{field}"),

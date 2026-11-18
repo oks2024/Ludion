@@ -1,0 +1,30 @@
+format: 1
+kind: animation
+name: humanoid-idle
+duration: 1.2
+loop: true
+events:
+  - t: 0.0
+    name: foot_l
+  - t: 0.6
+    name: foot_r
+tracks:
+  torso:
+    translation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.6
+        v:
+          - 0.0
+          - 0.5
+          - 0.0
+        ease: smooth
+      - t: 1.2
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth

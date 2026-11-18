@@ -311,6 +311,7 @@ Runnable: `crates/ludion/examples/camera_offset.rs`.
 ## Gotchas
 
 - One rig per world, on a root camera.
+- Exactly one `Camera` without a `RenderView` is the main camera (`L2101` counts those). A `Camera` beside a `RenderView` is a secondary view: `ludion docs render-views`.
 - A game defining its own `CameraRig` type must name it explicitly (`use crate::…::CameraRig`): the prelude glob exports the engine's one, and vigil does exactly this.
 - Rig state saved in scene text resumes on load; a blend stamped later than the game clock (a mid-blend save reloaded at frame 0) is stale, so the rig snaps rather than freezing.
 - The late latch rebuilds the framed boom at the tick's collided length without casting again: the presenter has no physics.

@@ -979,6 +979,9 @@ pub enum UiInstance {
         uv: [f32; 4],
         /// The fragment clip from the element's `UiGroup` chain.
         clip: UiClip,
+        /// Index into [`RenderScene::views`]: the rect shows that view's texture. `texture` is `None`
+        /// whenever this is `Some`.
+        view: Option<u32>,
     },
     /// A run of screen-space text, laid out in pixel space by extract (the same layout as
     /// [`TextRun`]).
@@ -1586,6 +1589,20 @@ pub struct BlendedMesh {
     pub group: u32,
 }
 
+/// The most secondary views one frame renders.
+pub const MAX_RENDER_VIEWS: usize = 4;
+
+/// A secondary view: a camera drawn into its own texture that a [`UiInstance::Rect`] shows.
+#[derive(Clone, PartialEq, Debug)]
+pub struct RenderViewData {
+    /// The authored name, for introspection; a rect finds the view by index.
+    pub name: String,
+    /// The texture size `(width, height)` in texels.
+    pub size: (u32, u32),
+    /// The view's camera, built with the aspect of `size`.
+    pub camera: RenderCamera,
+}
+
 /// Everything the renderer needs to draw one frame — plain data, no ECS, no paths.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RenderScene {
@@ -1705,6 +1722,10 @@ pub struct RenderScene {
     /// The first-person viewmodel lens and the camera-local pose of each flagged mesh, `Some` only
     /// on a frame that draws at least one composed item. CPU-only: the GPU path ignores it.
     pub viewmodel: Option<crate::viewmodel::ViewmodelData>,
+    /// The secondary views this frame renders before the main one, enabled and within
+    /// [`MAX_RENDER_VIEWS`], in draw order. Empty for a scene that authors none, which adds no pass
+    /// and leaves the frame byte-identical.
+    pub views: Vec<RenderViewData>,
 }
 
 impl RenderScene {
@@ -1746,6 +1767,7 @@ impl RenderScene {
             gi: None,
             bone_palette: Vec::new(),
             viewmodel: None,
+            views: Vec::new(),
         }
     }
 }

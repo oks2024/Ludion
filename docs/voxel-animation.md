@@ -239,6 +239,7 @@ fn wave(layers: &mut AnimationLayers, now: SimTime) {
   pose alone. `events: true` fires the layer clip's events with `ClipEvent.layer` set.
 - A layer `clip` may name a blend (below); its phase lives in `BlendClock.layers`.
 - `render --model --layer` previews a stack, and `check-scene` lists the masks (step 3 above).
+- `examples/gallery/assembly-layers.yaml` shows a blend, a mid-fade override, an additive lean and a layer blend on `voxels/humanoid.assembly.yaml`.
 
 ### Blend spaces
 

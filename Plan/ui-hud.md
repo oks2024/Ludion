@@ -1,6 +1,7 @@
 # Plan: HUD motion and shapes — tweens, world anchors, rotation, clipping (Neon Shroud request 0020)
 
-> Status: **Waves 1, 2, 4a, 4b, 5a mechanized (2026-11-18)** — W5a: `outline` on `UiText`/`UiList` (decisions 31–36,
+> Status: **Waves 1, 2, 4a, 4b, 5a, 6a mechanized (2026-11-18)** — W6a: `UiRadial` (decisions 37–44, `L1619`,
+> `radial_layout`/`radial_hit`, `docs/ui-radial.md`; labels and icons only, wedges are W6b); W5a: `outline` on `UiText`/`UiList` (decisions 31–36,
 > `L1618`, `L2304`, `ui_text.wgsl`; the `ui-text-outline` golden is blessed on the RTX 3090, the macOS golden is owed on the M4);
 > `UiGroup` (`group`, `fill_group`; scale, opacity,
 > visibility composed through up to 8 levels; CPU only, only the component schema snapshot moved);
@@ -62,7 +63,7 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
    reverse is `L1036`), `world_offset`, `show: always | on_screen | off_screen`,
    `behind: clamp | hide`, `margin` (canvas units, default 48), `fade: [near, far]` metres (alpha 1 at
    `near`, 0 at `far`, multiplied into alpha). Deferred: `rotate_toward` (needs rotation, W3),
-   `distance.scale` and `camera` (request 0017).
+   `distance.scale` and `camera` (request 0017; `Plan/secondary-views.md`).
 10. **Validation:** a `UiTween` arity mismatch, non-finite value or negative `duration` is `L1610`; a
     `UiWorldAnchor` with non-finite numbers, a negative `margin` or a `fade` without `0 <= near < far`
     is `L1611`. Both are errors with JSON pointers into the track or field.
@@ -171,6 +172,40 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
     `if` on a flat flag after every uniform-flow sample, so text without an outline renders byte-identically.
 36. **Group opacity** multiplies the outline alpha (`hud.rs::multiply_alpha`); tweens of `color` leave it alone.
 
+37. **`UiRadial`** is a registered component in `ludion-components` (`radial.rs`), hashed on sim entities like
+    `UiList`. Fields: `anchor`, `offset`, `group`; `radius_inner` (90), `radius_outer` (220); `start_deg` (0),
+    `gap_deg` (2); `items: [{text, detail, atlas, frame, enabled}]`; `selected: Option<u32>`, `pointer: [f32; 2]`;
+    `deadzone` (0.45), `hysteresis_deg` (6); `size` (24), `font`, `icon_size` (48); `color`, `selected_color`,
+    `disabled_color`; `order`, `visible`, `outline`. Optional fields skip-serialize at their default. The box is a
+    `2·radius_outer` square under the `UiRect` pivot rule.
+38. **Angle convention:** clock degrees, 0 = 12 o'clock, clockwise positive. Up-positive `(x, y)` is
+    `θ = atan2(x, y)` in degrees wrapped to `[0, 360)`; a cursor offset (+Y down) is read as `(x, −y)`. Item `i` is
+    centred at `start_deg + i·span`, `span = 360/n`; the sector is `floor(rem_euclid(θ − start + span/2, 360) / span)`,
+    so an exact boundary goes to the clockwise sector. `gap_deg` is drawing and hit-test only.
+39. **`navigate(UiRadialNav) -> Option<RadialEvent>`** (`Activated(u32)`, `Cancelled`), in order: aim (`Stick`
+    magnitude vs `deadzone`; `Cursor { dead_radius_px }`; `Delta` accumulates into `pointer`, clamped to
+    `radius_outer`), deadzone hold, hysteresis (the selected sector widened by `hysteresis_deg/2` a side), a disabled
+    target changes nothing; `step` walks enabled items with wrap, the first step from none landing on the first
+    enabled item; `cancel` beats `activate`; either resets `pointer`, `selected` is kept. An empty wheel does nothing;
+    an out-of-range `selected` reads as none. Maths is `ludion_core::math` only.
+40. **`UiRadialNav { aim, aim_kind, step, activate, cancel }`**, `AimKind::{Stick, Cursor { dead_radius_px }, Delta}`,
+    constructors `from_stick` (stick-up is +y, as `left_stick()` reports), `from_cursor`, `from_delta` (+y down). The
+    game fills `step`/`activate`/`cancel`: no engine focus manager.
+41. **`L1619`** (error): a non-finite number, `radius_inner < 0` or `radius_outer ≤ radius_inner`, `gap_deg` or
+    `hysteresis_deg` outside `[0, span)`, `deadzone` outside `[0, 1)`, `size`/`icon_size` not positive and finite, more
+    than 16 items. The span is checked only with items; one item is allowed.
+42. **`radial_layout`/`radial_hit`** (`ui/radial.rs`, re-exported through `ludion::math`): pure, ungrouped.
+    `radial_layout` gives the centre, radii and per item `{ start_deg, sweep_deg, mid_px }`; `radial_hit` the item whose
+    sector (gap excluded, via `UiRadial::sector_hit`) and annulus `[r_in, r_out)` hold the cursor, disabled items
+    included. `ui_hit` tests an ungrouped wheel with `radial_hit` and a grouped one by its group-placed box.
+43. **Extract drawing:** per item an optional icon (`icon_size` square, `0.5·(size+icon_size)` above `mid_px`, from
+    the atlas frame, tinted by the item colour), the `text` centred on `mid_px`, the `detail` centred `size` below at
+    `0.75·size`. The colour is `disabled_color`, else `selected_color`, else `color`; `outline` applies to both lines.
+    The set shares the radial's `(order, EntityId)` key and goes through `hud::post` (`HudElement::Radial`) with
+    `group`. A `UiTween` or `UiWorldAnchor` on a radial is `L2300`: animate its group.
+44. **Hash:** `navigate` writes only `selected` and `pointer`, only on change; an idle wheel is bit-identical, and a
+    world without `UiRadial` extracts and hashes as before.
+
 ## Waves
 
 - **W1 — `UiTween`, `UiWorldAnchor`, resolved in extract.** CPU-only; the pass lives in
@@ -190,7 +225,12 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
   and the clip.
 - **W5a — text outline** (decisions 31–36): SDF from the field, bitmap by in-shader dilation; `ui-text-outline` golden.
 - **W5b — text shadow.**
-- **W6 — `UiRadial` and `UiRadialNav`,** with the 1/2/8-thread replay and the snapshot test.
+- Order, proposed: W6a → W3 → W6b.
+- **W6a — `UiRadial`, `UiRadialNav`, `radial_layout`/`radial_hit`** (decisions 37–44): CPU only, no renderer change;
+  item text, detail and icons through the existing UI instances; the 1/2/8-thread replay and the snapshot test
+  (`tests/ui_radial.rs`); `L1619`; docs `ui-radial`; example `ui_radial`. Only the component schema snapshot moved.
+- **W6b — wedge fills and strokes** on W3's shape pipeline, after W3: `fill`, `selected_fill`, `stroke` fields and the
+  `ui-radial` gallery golden. A rotated wheel is a rotated `UiGroup` (W3).
 - **W7 — anchor blend keys under interpolation, `rotate_toward`, `distance.scale`, `camera`.**
 
 ## Proposed — owner ruling owed
@@ -200,12 +240,17 @@ the `real` default clock; the separate `UiEase`; the interpolation gap (decision
 edges, the proportional texel clamp rather than an error; W4a: the 8-level cap, `order` global (no block sort),
 a world anchor only on the outermost group, `fill` ignoring `group`; W5a: the SDF max (spread less 1 px) with clamp-and-warn rather than an error, the bitmap dilation as a square kernel rounded with a minimum of 1, the cap of 4 source px, no outline on world `Text`, the shadow split to W5b; W4b: the 2-clip cap (innermost kept), circle
 = the inscribed circle, the 1 px AA band, `ui_hit` on a list tests the panel, `ui_hit` ignores `pixel_snap`.
-Request differences: no rotation or polygon in `ui-groups` (W3); `ui_hit` does not return list items.
+W6a: the clock-angle convention, the clockwise boundary rule, the gap ignored by stick selection, cancel beating activate,
+the pointer reset on close, the 16-item cap and allowing one item, the first step from none landing on the first enabled item,
+a delta aim read +y down, the icon placement and the `icon_size` and `detail` sizes (fields the request does not name), icons tinted
+by the item colour, the W6a → W3 → W6b order.
+Request differences: no rotation or polygon in `ui-groups` (W3); `ui_hit` does not return list items; W6a draws no wedge or stroke (W6b)
+and adds `icon_size`, `selected_color`, `visible` and `outline`.
 
 ## Out of scope (triggers recorded)
 
 `UiShape`, rotation, nine-slice edge tiling (trigger: frame art that visibly breaks
-when stretched), slicing `UiList`/`UiText`, text shadow (W5b), `UiRadial`,
+when stretched), slicing `UiList`/`UiText`, text shadow (W5b), `UiRadial` wedge and stroke drawing (W6b), sub-wheels, item-level `ui_hit`,
 anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see
 `Plan/font-assets.md` for the SDF outline path).

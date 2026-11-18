@@ -274,7 +274,7 @@ pub(crate) fn rounded_box_sdf(p: [f32; 2], b: &UiClipBox) -> f32 {
 
 /// `L1615` (a `group` chain that loops), `L1616` (a chain of more than [`MAX_GROUP_DEPTH`] groups),
 /// `L2302` (a `group` naming an entity with no `UiGroup`) and `L2303` (more than [`MAX_CLIPS`]
-/// clipping groups in a chain) for every `UiRect`, `UiText`, `UiList`
+/// clipping groups in a chain) for every `UiRect`, `UiText`, `UiList`, `UiRadial`
 /// and `UiGroup` in the scene. Pointers are `/entities/{i}/components/{Component}/group`.
 pub fn scene_ui_group_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     let group_of = |index: usize| -> Option<Option<usize>> {
@@ -293,7 +293,10 @@ pub fn scene_ui_group_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for (i, entity) in scene.entities.iter().enumerate() {
         for (name, value) in &entity.components {
-            if !matches!(name.as_str(), "UiRect" | "UiText" | "UiList" | "UiGroup") {
+            if !matches!(
+                name.as_str(),
+                "UiRect" | "UiText" | "UiList" | "UiRadial" | "UiGroup"
+            ) {
                 continue;
             }
             let Some(first) = reference(value) else {

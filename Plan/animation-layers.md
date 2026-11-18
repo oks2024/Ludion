@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1, W2a, W2b (sim), A1, A2 and W2c mechanized (2026-11-18); A3 deferred; W2d, W3–W6 not started.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a, W2b (sim), A1, A2, W2c and W2d mechanized (2026-11-18); A3 deferred; W3–W6 not started, W4 next; the macOS twins of the W2d goldens are owed to the M4.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -93,6 +93,20 @@ No component, `WorldHash`, replay, trace, wire-schema or golden moved; the compo
 
 No component, `WorldHash`, replay, trace, wire-schema or golden moved. `check-scene` does not list a
 `kind: character`'s blends.
+
+### W2d — the gallery humanoid, `assembly-layers` and two goldens
+
+| file | role |
+|---|---|
+| `examples/gallery/voxels/humanoid.assembly.yaml`, `voxels/anims/humanoid-{idle,walk,run,carry,lean}.anim.yaml` | the ragdoll's ten parts with looping `idle`/`walk`/`run` clips carrying `foot_l`/`foot_r`, a `carry` override clip, a `lean` additive clip, an `upper_body` mask and a 1D `locomotion` blend synced on `foot_l` |
+| `examples/gallery/assembly-layers.yaml`, `goldens/manifest.json` | five figures at frame 60: the blend at `[1, 0]` and `[3.5, 0]`, a `carry` layer mid-fade, an additive `lean` at 0.7, a layer blend; golden `assembly-layers.png` |
+| `crates/ludion-testkit/src/golden.rs` | `GoldenTest.blend` and `layers`, parsed by `parse_blend`/`parse_layer` as `crossfade` is |
+| `crates/ludion-testkit/tests/gallery.rs` | `humanoid_locomotion_blend_strip_test`: `locomotion:0..5` over six phases at 0.3 s; golden `humanoid-locomotion-blend-strip.png` |
+| `crates/ludion-engine/tests/gallery_assembly_layers.rs` | the humanoid and its clips are canonical, the scene validates, the blend figures fire `foot_l` and `foot_r` alternately |
+
+Both goldens are blessed on the RTX 3090 only; `goldens/macos/assembly-layers.png` and
+`humanoid-locomotion-blend-strip.png` are owed to the M4. Every strip phase reports 1 component. No
+engine behaviour, component, `WorldHash`, replay, wire-schema or existing golden moved.
 
 ## Trigger
 
@@ -240,7 +254,7 @@ share one driver shape.
   an assembly `Mesh` already plays through the assembly path.
 - **W2c (shipped).** `check-scene` masks and blends, `render --model … --blend/--layer` strips
   (`model_sheet.rs` + CLI; decision 35).
-- **W2d.** The gallery `assembly-layers.yaml` and its goldens (pinned goldens owed).
+- **W2d (shipped).** The gallery humanoid, `assembly-layers.yaml` and two goldens (macOS twins owed).
 - **W3.** `AnimGraph` and `AnimGraphState` (decision 9).
 - **W4.** Look-at and two-bone IK (decision 10).
 - **W5.** Ground feet, the bench, profile counters (decision 11).

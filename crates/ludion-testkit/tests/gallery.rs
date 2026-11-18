@@ -198,6 +198,22 @@ fn hinge_strip_test(clip: &str) -> GoldenTest {
     test
 }
 
+/// The gallery humanoid's `locomotion` blend swept from idle through walk to run (`0..5`) over six
+/// phases, all posed 0.3 s into the shared phase: one cell shows the blend space's pose range.
+fn humanoid_locomotion_blend_strip_test() -> GoldenTest {
+    let mut test = GoldenTest::new(
+        gallery_dir().join("voxels").join("humanoid.assembly.yaml"),
+        os_goldens().join("humanoid-locomotion-blend-strip.png"),
+    );
+    test.width = 900;
+    test.height = 600;
+    test.blend = Some("locomotion:0..5".to_string());
+    test.strip = Some(6);
+    test.time = Some(0.3);
+    test.ssim_threshold = 1.0;
+    test
+}
+
 /// The mannequin character crossfading `run` into `idle` over eight phases at `hold: 5`: the fade
 /// steps on the pose grid, so the first two cells repeat.
 fn mannequin_crossfade_hold_test() -> GoldenTest {
@@ -269,6 +285,15 @@ fn needs_gpu_mannequin_crossfade_hold_strip_matches_committed_golden_at_exactly_
     check_strip(
         mannequin_crossfade_hold_test(),
         "mannequin_crossfade_hold_strip",
+    );
+}
+
+/// The humanoid's blend sweep: idle through walk to run across six phases.
+#[test]
+fn needs_gpu_humanoid_locomotion_blend_strip_matches_committed_golden_at_exactly_one() {
+    check_strip(
+        humanoid_locomotion_blend_strip_test(),
+        "humanoid_locomotion_blend_strip",
     );
 }
 

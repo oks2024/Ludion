@@ -22,7 +22,8 @@
 //! `JointPoses` count from the switch pose. With [`LimitsFrom::Rest`] each joint carrier also gets
 //! a [`JointZero`] at the rig's rest rotation, so they count from rest however the body fell; a
 //! switch pose outside a limit measured from rest is pulled back to it by the solver on the first
-//! step, a bounded snap, and is not refused.
+//! step, a bounded snap, and is not refused. With [`RagdollSwitch::part_velocity`] each part also
+//! keeps the velocity of the pose it was drawn in, instead of starting limp.
 //!
 //! A root `SurfaceTag` is inherited: each spawned part gets a tag with its `parts` entry's surface
 //! (matched by part name), else the root's `surface`; a name key matching no part is one `L1695`
@@ -40,10 +41,11 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
-use ludion_core::math::glam::{Mat4, Quat, Vec3};
+use ludion_core::math::f64 as f64s;
+use ludion_core::math::glam::{DQuat, Mat4, Quat, Vec3};
 use ludion_core::math::{quat_to_euler_xyz_degrees, sqrt};
 use ludion_core::suggest::nearest;
-use ludion_core::time::GameTime;
+use ludion_core::time::{GameTime, Q16_PER_TICK};
 use ludion_ecs::{SemanticValidate, World};
 use ludion_physics::{SurfacePart, SurfaceTag};
 use ludion_scene::AssemblyJointKind;
@@ -51,7 +53,10 @@ use ludion_spatial::{Body, Collider, Joint, JointKind, JointZero, RigidBody, Sha
 
 use crate::assembly_mesh::AssemblyData;
 use crate::components::{Animation, Mesh, MeshSource, Name, Transform};
-use crate::extract::{animation_pose, assembly_layer_poses, part_placements_sides, rotation_quat};
+use crate::extract::{
+    animation_pose, animation_pose_at, assembly_layer_poses, assembly_layer_poses_at,
+    part_placements_sides, rotation_quat,
+};
 
 /// Where a posed switch measures its joints' zeros from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -74,12 +79,22 @@ pub enum LimitsFrom {
 /// let mut opts = RagdollSwitch::default();
 /// opts.limits_from = LimitsFrom::Rest;
 /// assert_eq!(opts.limits_from, LimitsFrom::Rest);
+/// opts.part_velocity = true;
+/// assert!(opts.part_velocity);
 /// ```
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RagdollSwitch {
     /// Where the joints' zeros come from (default: the switch pose).
     pub limits_from: LimitsFrom,
+    /// Adds the drawn pose's own motion to each part's `Velocity` (default `false`: the part takes
+    /// only the root's rigid velocity). The motion is a two-sample finite difference of the part's
+    /// posed world transform at `game_time` and one tick earlier, in radians and metres per gameplay
+    /// second, so clips, blends, crossfades and layers all count, and a held or time-scaled clock is
+    /// read in gameplay time. A clip cut at the switch tick contributes only its own motion: the
+    /// earlier sample clamps to the new clip's first frame. A rest figure, or a switch at tick 0,
+    /// adds nothing.
+    pub part_velocity: bool,
 }
 
 /// Switches `entity` from a posed `kind: assembly` model into one `rigid` [`Collider`] entity per
@@ -216,6 +231,18 @@ pub fn switch_to_ragdoll_with(
         q_root,
         Vec3::from(root_transform.translation),
     );
+    // The drawn pose one tick back, only when the caller asked for it: `(placements, seconds)`.
+    let earlier = opts.part_velocity.then(|| {
+        let step = Q16_PER_TICK.min(now.as_q16());
+        let then = GameTime::from_q16(now.as_q16() - step, now.rate());
+        let back = step as f64 / Q16_PER_TICK as f64 * now.rate().seconds_per_tick();
+        let (pose, fade) = animation_pose_at(world, entity, assembly, now, then, back);
+        let layers = assembly_layer_poses_at(world, entity, assembly, now, then, back);
+        (
+            part_placements_sides(assembly, pose, fade, false, &layers),
+            back,
+        )
+    });
     let root_velocity = world
         .get::<Velocity>(entity)
         .ok()
@@ -253,9 +280,38 @@ pub fn switch_to_ragdoll_with(
         let scaled_max = max * s;
         let local_center = (scaled_min + scaled_max) * 0.5;
         let world_center = translation + rotation_quat * local_center;
-        let linear = Vec3::from(root_velocity.linear)
+        let mut linear = Vec3::from(root_velocity.linear)
             + Vec3::from(root_velocity.angular)
                 .cross(world_center - Vec3::from(root_transform.translation));
+        let mut angular = root_velocity.angular;
+        if let Some((then_placements, back)) = &earlier
+            && *back > 0.0
+        {
+            let (then_local, then_rotation) = then_placements[index];
+            let then_translation = (root_model * then_local).w_axis.truncate();
+            let then_q = q_root * Quat::from_mat3(&then_rotation);
+            let then_len = sqrt(
+                then_q.x * then_q.x
+                    + then_q.y * then_q.y
+                    + then_q.z * then_q.z
+                    + then_q.w * then_q.w,
+            );
+            let then_q = Quat::from_xyzw(
+                then_q.x / then_len,
+                then_q.y / then_len,
+                then_q.z / then_len,
+                then_q.w / then_len,
+            );
+            let then_center = then_translation + then_q * local_center;
+            let clip_linear = (world_center.as_dvec3() - then_center.as_dvec3()) / *back;
+            let clip_angular = rotation_rate(rotation_quat, then_q, *back);
+            linear += clip_linear.as_vec3();
+            angular = [
+                angular[0] + clip_angular[0] as f32,
+                angular[1] + clip_angular[1] as f32,
+                angular[2] + clip_angular[2] as f32,
+            ];
+        }
 
         let id = world.spawn();
         world
@@ -315,7 +371,7 @@ pub fn switch_to_ragdoll_with(
                 id,
                 Velocity {
                     linear: linear.into(),
-                    angular: root_velocity.angular,
+                    angular,
                 },
             )
             .expect("just spawned");
@@ -476,6 +532,24 @@ pub(crate) fn switch_invalid(
         format!("{named}: {}", message.into()),
     )
     .with_help(help)
+}
+
+/// The angular velocity (radians per second, world frame) that turns `then` into `now` over `back`
+/// seconds along the shortest arc. `f64` with libm, never glam's `normalize` or `to_axis_angle`.
+fn rotation_rate(now: Quat, then: Quat, back: f64) -> [f64; 3] {
+    let widen = |q: Quat| DQuat::from_xyzw(q.x.into(), q.y.into(), q.z.into(), q.w.into());
+    let (a, b) = (widen(now), widen(then));
+    let mut d = a * DQuat::from_xyzw(-b.x, -b.y, -b.z, b.w);
+    if d.w < 0.0 {
+        d = DQuat::from_xyzw(-d.x, -d.y, -d.z, -d.w);
+    }
+    let s = f64s::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    let scale = if s < 1e-12 {
+        2.0 / back
+    } else {
+        2.0 * f64s::atan2(s, d.w) / s / back
+    };
+    [d.x * scale, d.y * scale, d.z * scale]
 }
 
 /// The axis-aligned bounding box of `positions` (flat xyz triples, the part-mesh frame), or `None`

@@ -33,6 +33,14 @@ fn fixtures(name: &str) -> Vec<Value> {
         "SkinBone" => vec![json!({ "skin": entity_ref(), "bone": "b" })],
         "UiWorldAnchor" => vec![json!({ "target": entity_ref() })],
         "UiGroup" => vec![json!({ "group": entity_ref() })],
+        "UiRadial" => vec![
+            json!({}),
+            json!({
+                "group": entity_ref(),
+                "selected": 1,
+                "items": [{ "text": "a", "detail": "b", "atlas": "i.atlas.yaml", "frame": "f", "enabled": false }],
+            }),
+        ],
         "SightTarget" => vec![json!({ "class": "c" })],
         "StimulusRecord" => vec![
             json!({ "perceiver": entity_ref(), "sense": "sight", "last_position": [0.0, 0.0, 0.0] }),
@@ -86,6 +94,10 @@ fn fixtures(name: &str) -> Vec<Value> {
             json!({ "shape": { "type": "segment", "length": 2.0, "width": 1.0 } }),
         ],
         "OccludedSilhouette" => vec![json!({}), json!({ "outline": {}, "when": "always" })],
+        "RenderView" => vec![
+            json!({ "name": "v" }),
+            json!({ "name": "v", "size": [64, 32], "enabled": false, "order": -1 }),
+        ],
         "ReflectionProbe" => vec![
             json!({ "shape": { "box": { "extent": [1.0, 1.0, 1.0] } } }),
             json!({ "shape": { "sphere": { "radius": 2.0 } } }),

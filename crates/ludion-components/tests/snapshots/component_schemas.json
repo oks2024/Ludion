@@ -7433,6 +7433,45 @@
       }
     }
   },
+  "RenderView": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "RenderView",
+    "description": "Renders the world through the `Camera` on this entity into its own texture of `size` texels, every\nframe it is `enabled`, in the same frame. A `UiRect` shows it by naming it in `view`. A `Camera`\nbeside a `RenderView` is never the main camera. At most 4 enabled views render per frame.\n\n```\nuse ludion_components::RenderView;\n\nlet view: RenderView = serde_json::from_value(serde_json::json!({ \"name\": \"radar\" })).unwrap();\nassert_eq!(view.size, [256, 256]);\nassert!(view.enabled);\nassert_eq!(view.order, 0);\n```",
+    "type": "object",
+    "properties": {
+      "name": {
+        "description": "The name a `UiRect.view` uses; unique per scene, not empty.",
+        "type": "string"
+      },
+      "size": {
+        "description": "The texture size `[width, height]` in texels, each axis in `16..=2048` (default `[256, 256]`).",
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "default": [
+          256,
+          256
+        ]
+      },
+      "enabled": {
+        "description": "Whether the view renders (default true).",
+        "type": "boolean"
+      },
+      "order": {
+        "description": "Draw order among views, lowest first; ties go by entity (default 0).",
+        "type": "integer",
+        "format": "int32"
+      }
+    },
+    "required": [
+      "name"
+    ]
+  },
   "Residue": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Residue",
@@ -9026,6 +9065,326 @@
       }
     }
   },
+  "UiRadial": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "UiRadial",
+    "description": "A tool wheel: up to 16 items on a ring, the selected one chosen by aim. Screen space, like\n[`UiList`](crate::UiList): it shares `UiRect`'s 1080-unit canvas and pivot rule, over a square box\n`2 * radius_outer` wide, so the wheel centre is the box centre.\n\nAngles are clock degrees: 0 is 12 o'clock and positive is clockwise. Item `i` is centred at\n`start_deg + i * 360 / n`. [`navigate`](UiRadial::navigate) moves `selected` and `pointer`, the only\nfields it writes, and reports an activation as its return value.\n\n```\nuse ludion_components::{UiRadial, UiRadialItem};\n\nlet radial: UiRadial = serde_json::from_value(serde_json::json!({\n    \"items\": [{ \"text\": \"AXE\" }, { \"text\": \"BOW\" }]\n})).unwrap();\nassert_eq!(radial.radius_outer, 220.0);\nassert_eq!(radial.selected, None);\n```",
+    "type": "object",
+    "properties": {
+      "anchor": {
+        "description": "Which canvas point (and box pivot) the wheel is placed at (default [`Anchor::TopLeft`]).",
+        "$ref": "#/$defs/Anchor",
+        "default": "top_left"
+      },
+      "offset": {
+        "description": "Offset from the anchor point, in canvas units, **+Y down** (default `[0, 0]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "default": [
+          0.0,
+          0.0
+        ]
+      },
+      "group": {
+        "description": "The [`UiGroup`](crate::UiGroup) the wheel anchors inside, instead of the canvas (default none).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "radius_inner": {
+        "description": "Inner radius in canvas units (default `90`).",
+        "type": "number",
+        "format": "float",
+        "default": 90.0
+      },
+      "radius_outer": {
+        "description": "Outer radius in canvas units, above `radius_inner` (default `220`).",
+        "type": "number",
+        "format": "float",
+        "default": 220.0
+      },
+      "start_deg": {
+        "description": "Clock degrees of item 0's centre (default `0`).",
+        "type": "number",
+        "format": "float",
+        "default": 0.0
+      },
+      "gap_deg": {
+        "description": "Degrees left empty between sectors, in `[0, 360 / items)`; drawing and `radial_hit` only\n(default `2`).",
+        "type": "number",
+        "format": "float",
+        "default": 2.0
+      },
+      "items": {
+        "description": "The choices, clockwise from `start_deg` (default empty: an empty wheel draws nothing).",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/UiRadialItem"
+        },
+        "default": []
+      },
+      "selected": {
+        "description": "The selected item (default none). An index past the end reads as none.",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint32",
+        "minimum": 0
+      },
+      "pointer": {
+        "description": "The accumulated pointer offset of a delta aim, in canvas units, +Y down (default `[0, 0]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "default": [
+          0.0,
+          0.0
+        ]
+      },
+      "deadzone": {
+        "description": "Aim magnitude below which `selected` holds, in `[0, 1)` (default `0.45`).",
+        "type": "number",
+        "format": "float",
+        "default": 0.44999998807907104
+      },
+      "hysteresis_deg": {
+        "description": "Degrees past a sector's edge, per side, that the selected item is kept (default `6`, total\nwidening; `3` each side).",
+        "type": "number",
+        "format": "float",
+        "default": 6.0
+      },
+      "size": {
+        "description": "Label glyph cell height in canvas units (default `24`).",
+        "type": "number",
+        "format": "float",
+        "default": 24.0
+      },
+      "font": {
+        "description": "Logical face name from `fonts.yaml` (default the table's default face).",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "icon_size": {
+        "description": "Icon edge in canvas units (default `48`).",
+        "type": "number",
+        "format": "float",
+        "default": 48.0
+      },
+      "color": {
+        "description": "Linear RGBA of an ordinary item's text (default opaque white).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4,
+        "default": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "selected_color": {
+        "description": "Linear RGBA of the selected item's text (default a warm highlight).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4,
+        "default": [
+          1.0,
+          0.8999999761581421,
+          0.4000000059604645,
+          1.0
+        ]
+      },
+      "disabled_color": {
+        "description": "Linear RGBA of a disabled item's text; outranks `selected_color` (default a dimmed grey).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4,
+        "default": [
+          0.4000000059604645,
+          0.4000000059604645,
+          0.4000000059604645,
+          1.0
+        ]
+      },
+      "order": {
+        "description": "Draw order: higher draws later (default `0`).",
+        "type": "integer",
+        "format": "int32",
+        "default": 0
+      },
+      "visible": {
+        "description": "Whether the wheel draws at all (default `true`).",
+        "type": "boolean",
+        "default": true
+      },
+      "outline": {
+        "description": "An outline under every text line's glyphs (default none).",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TextOutline"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "$defs": {
+      "Anchor": {
+        "description": "Which of the nine canvas points a screen-space UI element ([`UiRect`], [`UiText`]) pins to — and,\nequally, which point of the element's own extent sits on it (its own pivot). For example,\n[`Anchor::BottomRight`] pins the element's bottom-right corner to the canvas's bottom-right\ncorner (a corner HUD needs no size arithmetic); [`Anchor::Center`] centers the element on the\ncanvas center with zero offset. There is no separate `pivot` field — one anchor names both ends.\n\n**Every variant carries a doc comment.** This is load-bearing, not style: `schemars` only emits\nthe `oneOf`-of-`const` schema shape (which the editor inspector needs to render a dropdown) when\nevery variant of a unit-only enum is doc-commented — an undocumented variant collapses the whole\nschema to a bare `{\"enum\": [...]}`, which falls to the raw-JSON textarea instead.",
+        "oneOf": [
+          {
+            "description": "The canvas's top-left corner; the element's own top-left corner sits there.",
+            "type": "string",
+            "const": "top_left"
+          },
+          {
+            "description": "The canvas's top edge, horizontally centered; the element's own top-center point sits there.",
+            "type": "string",
+            "const": "top_center"
+          },
+          {
+            "description": "The canvas's top-right corner; the element's own top-right corner sits there.",
+            "type": "string",
+            "const": "top_right"
+          },
+          {
+            "description": "The canvas's left edge, vertically centered; the element's own center-left point sits there.",
+            "type": "string",
+            "const": "center_left"
+          },
+          {
+            "description": "The canvas's center; the element's own center sits there.",
+            "type": "string",
+            "const": "center"
+          },
+          {
+            "description": "The canvas's right edge, vertically centered; the element's own center-right point sits there.",
+            "type": "string",
+            "const": "center_right"
+          },
+          {
+            "description": "The canvas's bottom-left corner; the element's own bottom-left corner sits there.",
+            "type": "string",
+            "const": "bottom_left"
+          },
+          {
+            "description": "The canvas's bottom edge, horizontally centered; the element's own bottom-center point sits\nthere.",
+            "type": "string",
+            "const": "bottom_center"
+          },
+          {
+            "description": "The canvas's bottom-right corner; the element's own bottom-right corner sits there.",
+            "type": "string",
+            "const": "bottom_right"
+          }
+        ]
+      },
+      "UiRadialItem": {
+        "description": "One choice on a [`UiRadial`]: a label, an optional second line and icon, and whether it can be picked.",
+        "type": "object",
+        "properties": {
+          "text": {
+            "description": "The label, drawn at the item's mid-radius (default `\"\"`). Always one row.",
+            "type": "string",
+            "default": ""
+          },
+          "detail": {
+            "description": "A smaller line under the label (default none).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "atlas": {
+            "description": "The atlas an icon is drawn from, relative to the content root (default none: no icon).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frame": {
+            "description": "The atlas frame the icon shows (default the whole atlas).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Whether the item can be selected and activated (default `true`). A disabled item is drawn in\n`disabled_color` and never selected by aim or step.",
+            "type": "boolean"
+          }
+        }
+      },
+      "TextOutline": {
+        "description": "An outline drawn under the glyphs of a [`UiText`](crate::UiText) or [`UiList`]. A `width` of `0`,\nor a `color` alpha of `0`, draws nothing.\n\n```\nuse ludion_components::TextOutline;\n\nlet outline: TextOutline =\n    serde_json::from_value(serde_json::json!({ \"width\": 2.0, \"color\": [0.0, 0.0, 0.0, 1.0] })).unwrap();\nassert_eq!(outline.width, 2.0);\n```",
+        "type": "object",
+        "properties": {
+          "width": {
+            "description": "Outline thickness in canvas units, finite and `>= 0`. Clamped to what the face can draw\n(`L2304`).",
+            "type": "number",
+            "format": "float"
+          },
+          "color": {
+            "description": "Linear straight RGBA of the outline.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "width",
+          "color"
+        ]
+      }
+    }
+  },
   "UiRect": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "UiRect",
@@ -9173,6 +9532,13 @@
       "fill_group": {
         "description": "Cover the [`group`](UiRect::group)'s box, as `fill` covers the canvas (default `false`).\nNeeds a `group` (`L1617`).",
         "type": "boolean"
+      },
+      "view": {
+        "description": "The name of a [`RenderView`] whose texture the rect shows (default none). It is the rect's whole\nimage: `texture`, `atlas`, `frame`, `slice` and `uv_rect` beside it are `L2373`.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "$defs": {

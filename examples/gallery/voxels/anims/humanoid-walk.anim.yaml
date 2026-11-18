@@ -1,0 +1,160 @@
+format: 1
+kind: animation
+name: humanoid-walk
+duration: 1.0
+loop: true
+events:
+  - t: 0.0
+    name: foot_l
+  - t: 0.5
+    name: foot_r
+tracks:
+  lower-arm-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 15.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 15.0
+          - 0.0
+          - 0.0
+  lower-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 15.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 15.0
+          - 0.0
+          - 0.0
+  lower-leg-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.75
+        v:
+          - -35.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  lower-leg-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.25
+        v:
+          - -35.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-arm-l:
+    rotation:
+      - t: 0.0
+        v:
+          - -25.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 25.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 1.0
+        v:
+          - -25.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 25.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - -25.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 1.0
+        v:
+          - 25.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-leg-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 30.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - -30.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 1.0
+        v:
+          - 30.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-leg-r:
+    rotation:
+      - t: 0.0
+        v:
+          - -30.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 30.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 1.0
+        v:
+          - -30.0
+          - 0.0
+          - 0.0
+        ease: smooth

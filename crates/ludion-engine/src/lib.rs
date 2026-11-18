@@ -124,6 +124,7 @@ mod scene_check;
 mod scene_physics;
 mod scene_session;
 mod sculpt_mesh;
+mod secondary_view;
 mod settings;
 mod shutdown;
 mod silhouette;
@@ -167,6 +168,7 @@ pub use character::{
 };
 pub use checkpoints::{CheckpointConfig, CheckpointInfo, Checkpoints, RestoreOutcome};
 pub use commands::sim::step_in_batches;
+pub use components::{AimKind, RadialEvent, UiRadial, UiRadialItem, UiRadialNav};
 pub use components::{
     Anchor, Animation, AudioEmitter, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, EmitShape, Environment, Fade, GiDynamic,
@@ -230,6 +232,7 @@ pub use ludion_camera::{
     look_from_counts, orbit_eye, resolve_zone, set_look, snap_rig,
 };
 pub use ludion_components::MeshBlend;
+pub use ludion_components::RenderView;
 pub use ludion_components::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
 pub use ludion_nav::PathStatus;
 pub use ludion_protocol::replay::GameIdentity;
@@ -342,6 +345,7 @@ pub use scene_check::{
     scene_surface_diagnostics,
 };
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
+pub use secondary_view::scene_render_view_diagnostics;
 pub use settings::{QualityPreset, Settings, SettingsView, WindowMode, settings_window_mode_at};
 pub use shutdown::Shutdown;
 pub use skin_bone::scene_skin_bone_diagnostics;

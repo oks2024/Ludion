@@ -7,5 +7,6 @@
   "sprite-uv-scroll": { "frames": 30 },
   "character-socket": { "frames": 60 },
   "crowd-animation": { "frames": 90 },
-  "occluded-silhouette": { "frames": 20 }
+  "occluded-silhouette": { "frames": 20 },
+  "assembly-layers": { "frames": 60 }
 }

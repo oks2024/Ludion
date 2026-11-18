@@ -52,11 +52,15 @@ pub(crate) enum HudElement {
     Rect { fill: bool },
     Text,
     List,
+    Radial,
     Group,
 }
 
 impl HudElement {
     fn supports(self, field: UiTweenField) -> bool {
+        if self == HudElement::Radial {
+            return false;
+        }
         match field {
             UiTweenField::Opacity | UiTweenField::Offset => true,
             UiTweenField::Scale => !matches!(self, HudElement::List),
@@ -91,6 +95,7 @@ fn element_name(element: HudElement) -> &'static str {
         HudElement::Rect { .. } => "UiRect",
         HudElement::Text => "UiText",
         HudElement::List => "UiList",
+        HudElement::Radial => "UiRadial",
         HudElement::Group => "UiGroup",
     }
 }
@@ -102,17 +107,30 @@ fn sample(
     degraded: &mut Vec<(String, Diagnostic)>,
 ) -> Samples {
     let mut out = Samples::default();
-    if let HudElement::Rect { fill: true } = element
-        && frame.world.has::<UiWorldAnchor>(id)
+    if matches!(
+        element,
+        HudElement::Rect { fill: true } | HudElement::Radial
+    ) && frame.world.has::<UiWorldAnchor>(id)
     {
         let key = crate::diagnostics::offender_key(frame.world, id);
+        let (what, help) = if element == HudElement::Radial {
+            (
+                "a `UiRadial`",
+                "put the `UiWorldAnchor` on the wheel's `UiGroup`; `ludion explain L2300`",
+            )
+        } else {
+            (
+                "a `fill: true` rect",
+                "drop `fill` and size the rect, or remove the `UiWorldAnchor`; `ludion explain L2300`",
+            )
+        };
         degraded.push((
             format!("{key}/ui-anchor-fill"),
             Diagnostic::new(
                 code::UI_MOTION_UNSUPPORTED,
-                format!("{id} carries a `UiWorldAnchor` on a `fill: true` rect, which ignores its anchor"),
+                format!("{id} carries a `UiWorldAnchor` on {what}, which ignores its anchor"),
             )
-            .with_help("drop `fill` and size the rect, or remove the `UiWorldAnchor`; `ludion explain L2300`"),
+            .with_help(help),
         ));
     }
     let Some(tween) = frame.world.get::<UiTween>(id).ok().flatten() else {
@@ -136,7 +154,7 @@ fn sample(
                     element_name(element),
                 ),
             )
-            .with_help("`color` needs a `UiRect` or `UiText`, `scale` a `UiRect`, `UiText` or `UiGroup`, `size` a `UiRect` or `UiGroup`; `ludion explain L2300`"),
+            .with_help("`color` needs a `UiRect` or `UiText`, `scale` a `UiRect`, `UiText` or `UiGroup`, `size` a `UiRect` or `UiGroup`, and a `UiRadial` takes none (tween its group); `ludion explain L2300`"),
         ));
     }
     let at = |field: UiTweenField| {
@@ -235,6 +253,16 @@ pub(crate) fn pre_list<'a>(
         }
     }
     Cow::Owned(out)
+}
+
+/// Reports what a `UiTween` or `UiWorldAnchor` on a wheel asks for (`L2300`). A `UiRadial` takes none of
+/// it; its group animates it.
+pub(crate) fn pre_radial(
+    frame: &HudFrame<'_>,
+    id: EntityId,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) {
+    sample(frame, id, HudElement::Radial, degraded);
 }
 
 /// A group's own numbers at this frame, its tracks applied: the offset and size to resolve, and the
@@ -371,7 +399,7 @@ pub(crate) fn post(
         _ => None,
     };
     let world_anchor = match element {
-        HudElement::Rect { fill: true } => None,
+        HudElement::Rect { fill: true } | HudElement::Radial => None,
         _ if group_xf.is_some() => None,
         _ => world.get::<UiWorldAnchor>(id).ok().flatten(),
     };
@@ -547,6 +575,7 @@ pub(crate) fn emit_rect(
     texture: Option<usize>,
     uv: [f32; 4],
     region_texels: Option<[f32; 2]>,
+    view: Option<u32>,
     entries: &mut Vec<UiEntry>,
     degraded: &mut Vec<(String, Diagnostic)>,
 ) {
@@ -560,6 +589,7 @@ pub(crate) fn emit_rect(
                 color: rect.color,
                 uv,
                 clip: UiClip::NONE,
+                view,
             },
         )
     };
@@ -602,6 +632,7 @@ mod tests {
                 color: [1.0; 4],
                 uv: [0.0, 0.0, 1.0, 1.0],
                 clip: UiClip::NONE,
+                view: None,
             },
         )
     }
@@ -700,6 +731,7 @@ mod tests {
             texture,
             [0.0, 0.0, 1.0, 1.0],
             texels,
+            None,
             &mut entries,
             &mut degraded,
         );
