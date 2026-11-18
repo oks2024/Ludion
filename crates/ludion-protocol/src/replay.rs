@@ -56,6 +56,7 @@
 //! holds none, and a replay without it accepts no `L4007` at all. A reader older than this kind
 //! refuses a file that carries one (`L3010`, unknown kind) instead of replaying it strictly.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 
 use ludion_core::codes::code;
@@ -124,6 +125,7 @@ pub enum SceneRef {
 ///     render_extent: None,
 ///     replay_content_hash: None,
 ///     game: None,
+///     save_docs: Default::default(),
 /// };
 /// assert_eq!(header.seed, 7);
 /// ```
@@ -169,6 +171,13 @@ pub struct ReplayHeader {
     /// so a session header keeps its bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game: Option<GameIdentity>,
+    /// Per-machine save documents in force at record time, keyed by save-doc kind
+    /// (`input-bindings`), valued with their canonical text: the at-start state a replay installs
+    /// instead of reading the machine's own file, so a committed session reproduces on any machine.
+    /// Outside `replay_content_hash`. **Additive within [`REPLAY_FORMAT_VERSION`] `1`, no bump**, the
+    /// same posture as `profile`; omitted when empty, so a header without one keeps its bytes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub save_docs: BTreeMap<String, String>,
 }
 
 /// The game build a replay was recorded by, as carried in a [`ReplayHeader`].
@@ -331,6 +340,7 @@ impl ReplayRecord {
 ///     render_extent: None,
 ///     replay_content_hash: None,
 ///     game: None,
+///     save_docs: Default::default(),
 /// };
 ///
 /// let mut buffer = Vec::new();
@@ -1262,6 +1272,7 @@ mod tests {
             render_extent: None,
             replay_content_hash: None,
             game: None,
+            save_docs: Default::default(),
         }
     }
 

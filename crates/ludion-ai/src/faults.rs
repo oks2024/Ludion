@@ -15,7 +15,8 @@ pub struct AiFault {
     pub entity: EntityId,
     /// The registered code: `L4120`–`L4124`.
     pub code: DiagnosticCode,
-    /// What happened, in terms a level designer can act on.
+    /// What happened, in terms a level designer can act on. It does not name `entity`: the drain
+    /// prefixes the entity's name.
     pub message: String,
 }
 

@@ -71,7 +71,9 @@ use ludion_scene::AnimationEvent;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Animation, Mesh, MeshSource, Sprite};
+use crate::blend_clock::blend_crossings;
+use crate::character::CharacterBlendData;
+use crate::components::{Animation, BlendClock, Mesh, MeshSource, Sprite};
 use crate::extract::clock_elapsed;
 use crate::prefab::PrefabInstance;
 
@@ -102,6 +104,8 @@ pub(crate) struct AnimationLibrary {
     /// Keyed by model kind and path; `Err` holds the loader's diagnostics for a model that failed
     /// to load.
     models: BTreeMap<Model, Result<BTreeMap<String, ClipTiming>, Vec<Diagnostic>>>,
+    /// The blend spaces of each loaded character, by character path (`blend_clock`).
+    blends: BTreeMap<String, Vec<CharacterBlendData>>,
 }
 
 /// A model that binds clips, with its path: the `Mesh.shape` of an assembly or character, or an
@@ -127,6 +131,7 @@ impl AnimationLibrary {
         AnimationLibrary {
             root,
             models: BTreeMap::new(),
+            blends: BTreeMap::new(),
         }
     }
 
@@ -160,6 +165,7 @@ impl AnimationLibrary {
                 }
                 Model::Character(_) => crate::character::load(AssetRoot::content(&self.root), rel)
                     .map(|data| {
+                        self.blends.insert(rel.to_string(), data.blends.clone());
                         data.clips
                             .iter()
                             .map(|b| timing(&b.name, &b.clip, b.speed, &b.events))
@@ -182,6 +188,15 @@ impl AnimationLibrary {
             Ok(timings) => Ok(timings),
             Err(error) => Err(error),
         }
+    }
+}
+
+impl AnimationLibrary {
+    /// The blend spaces of the character at `rel`, loading it on first use; empty for a character
+    /// that failed to load or defines none.
+    pub(crate) fn blends(&mut self, rel: &str) -> &[CharacterBlendData] {
+        let _ = self.timings(&Model::Character(rel.to_string()));
+        self.blends.get(rel).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -344,6 +359,19 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
             }
         };
         let Some(timing) = timing else {
+            if let Model::Character(rel) = &model
+                && let Some(clock) = world.component::<BlendClock>(id)
+                && let Some(blend) = library.blends(rel).iter().find(|blend| blend.name == *clip)
+                && clock.blend == *clip
+            {
+                let mut names = Vec::new();
+                blend_crossings(blend, animation.params, clock, &mut names);
+                fired.extend(names.into_iter().map(|name| ClipEvent {
+                    entity: id,
+                    clip: clip.clone(),
+                    name,
+                }));
+            }
             continue;
         };
         let started = animation.started.as_u64();

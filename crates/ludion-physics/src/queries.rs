@@ -385,12 +385,13 @@ impl PhysicsWorld {
             if filter.drops(self, entity, collider) {
                 return None;
             }
+            let point = advance(origin, unit_dir, hit.time_of_impact);
             Some(QueryHit {
                 entity,
                 distance: hit.time_of_impact,
-                point: advance(origin, unit_dir, hit.time_of_impact),
+                point,
                 normal: from_vector(hit.normal),
-                surface: self.surface_of(entity),
+                surface: self.surface_at(entity, point),
             })
         };
         let end = to_vector(advance(origin, unit_dir, max_distance));
@@ -544,12 +545,13 @@ impl PhysicsWorld {
                 return;
             };
             let hit = hit.transform1_by(pose);
+            let point = from_vector(hit.witness1);
             hits.push(QueryHit {
                 entity,
                 distance: hit.time_of_impact,
-                point: from_vector(hit.witness1),
+                point,
                 normal: from_vector(hit.normal1),
-                surface: self.surface_of(entity),
+                surface: self.surface_at(entity, point),
             });
         });
         sort_hits(&mut hits);
@@ -663,11 +665,12 @@ impl PhysicsWorld {
             let offset = closest - center;
             let distance = sqrt(offset.x * offset.x + offset.y * offset.y + offset.z * offset.z);
             if distance <= max_distance {
+                let point = from_vector(closest);
                 hits.push(PointHit {
                     entity,
                     distance,
-                    point: from_vector(closest),
-                    surface: self.surface_of(entity),
+                    point,
+                    surface: self.surface_at(entity, point),
                 });
             }
         }

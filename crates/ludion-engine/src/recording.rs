@@ -401,6 +401,7 @@ mod tests {
             render_extent: None,
             replay_content_hash: None,
             game: None,
+            save_docs: Default::default(),
         };
         let sink = Box::new(Vec::new()) as Box<dyn Write + Send>;
         let writer = ludion_protocol::replay::ReplayWriter::new(sink, &header).unwrap();

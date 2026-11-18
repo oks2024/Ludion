@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1 mechanized (2026-11-18); W2–W6 not started.** Driver: Neon Shroud request 0007
+> Status: **W1 and W2a mechanized (2026-11-18); W2b–W6 not started.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -21,6 +21,22 @@
 Codes: `L1670` `ANIMATION_LAYERS_TOO_MANY`, `L1671` `ANIMATION_LAYER_INVALID`, `L1672`
 `ANIMATION_LAYERS_ON_SKIN_BONE_SKIN`. A scene without `AnimationLayers` poses bit-identically: no
 `WorldHash`, replay, trace, wire-schema or golden moved. Only `component_schemas.json` re-blessed.
+
+### W2a — blend spaces, `Animation.params`, `BlendClock`, `blend_clocks`
+
+| file | role |
+|---|---|
+| `crates/ludion-scene/src/blend_space.rs` | `triangulate`, `blend_weights_1d`/`_2d`, `BlendWeights` |
+| `crates/ludion-scene/src/character.rs` | `blends:` parse (`L1199`), validate and point checks (`L1200`), `emit` |
+| `crates/ludion-components/src/blend_clock.rs`, `lib.rs` | `BlendClock` (appended last, sim-only), `Animation.params` (omitted at `[0, 0]`) |
+| `crates/ludion-engine/src/character.rs` | `CharacterData.blends` (`CharacterBlendData`, `BlendPointData`: weights, rate, point time) |
+| `crates/ludion-engine/src/blend_clock.rs` | the `blend_clocks` system, `blend_crossings` |
+| `crates/ludion-engine/src/animation_events.rs`, `extract.rs` | the library's blend map and the blend event slot; `PoseSide`/`PoseFade`, the N-way joint blend |
+| `crates/ludion-engine/tests/blend_spaces.rs` | cadence, point pose, neutrality, threads, restore, crossfade, load errors |
+
+Blend errors reuse `L1199`/`L1200`. A scene without a blend poses and hashes as before; `Animation` text
+and `component_schemas.json` are the only wire-visible moves. The d2 amendment ships in its opt-in form
+(only a blend-using entity hashes a `BlendClock`), still "Proposed — owner ruling owed".
 
 ## Trigger
 
@@ -75,13 +91,32 @@ all four: three skinned kinds (player, militia guard, android worker) share one 
     `ProfileReport` counters (a schema move, re-blessed there).
 12. **Root motion** (W6): a `ludion_root_motion` extras flag at import and `root_motion_delta`, a deterministic
     sim read of clip data through the libm sampler.
+13. **Blend points** are `clip` plus `at`: a number is 1D (`params[0]`), a block list `[x, z]` is 2D
+    (`params[0..2]`). The dimension is inferred and every point must agree; there are no param names.
+14. **Weights.** 1D is linear between the sorted neighbours and clamps at the ends. 2D is barycentric over
+    a deterministic triangulation: every index triple `a<b<c`, non-degenerate, with no point strictly inside
+    its circumcircle, accepted in lexicographic order and skipped if it overlaps an accepted one. A query
+    takes the triangle whose closest point to it is nearest, ties to the first, and clamps outside the hull.
+    At most 16 points.
+15. **Phase** φ is unwrapped cycles. A point clip `i` plays at `frac(φ + sᵢ) · durᵢ`, `sᵢ = t_syncᵢ / durᵢ`
+    (0 without `sync`). The rate is `Animation.speed · Σ wᵢ · binding_speedᵢ / durᵢ` per game second,
+    integrated by `blend_clocks` with `game_dt`. A restart (new `(clip, started)`) sets φ to the stateless
+    value `elapsed · rate` (so a fresh clock agrees with decision 18) and parks `prev` at `-1`.
+16. **Blend events.** A blend emits the dominant point's effective events (max weight, ties to the lower
+    index), each at phase position `frac(e/durᵢ − sᵢ)`, fired on crossings in `(prev, φ]`; `prev = -1` on a
+    restart tick opens the window at phase 0 inclusive. Events report the **blend** name as `ClipEvent.clip`.
+17. **`hold` does not step a blend's phase** (W2a limit; trigger: a held-cadence character on a blend).
+18. **With no `BlendClock`** (system not registered) extract falls back to `φ = elapsed · rate(params now)`:
+    stateless, exact while the params hold still, used by tools; no events fire.
+19. **A blend name may not equal a clip name** (`Animation.clip` resolves both).
 
 ## Waves
 
 - **W1 (shipped).** Masks, `AnimationLayers`, composition in extract's `Skin` phase, `L1670`–`L1672`, docs.
-- **W2.** 1D/2D blend spaces, `Animation.params`, `BlendClock`, blend events, a layer's `clip` naming a blend,
-  layer `events`, `reference:`, `render --blend/--layer` strips, gallery `character-layers.yaml` (pinned
-  goldens owed).
+- **W2a (shipped).** 1D/2D blend spaces, `Animation.params`, `BlendClock`, `blend_clocks`, blend events
+  (decisions 13–19).
+- **W2b.** A layer's `clip` naming a blend, layer `events`, `reference:`, `render --blend/--layer` strips,
+  gallery `character-layers.yaml` (pinned goldens owed).
 - **W3.** `AnimGraph` and `AnimGraphState` (decision 9).
 - **W4.** Look-at and two-bone IK (decision 10).
 - **W5.** Ground feet, the bench, profile counters (decision 11).

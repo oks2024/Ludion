@@ -184,7 +184,7 @@ reports errors rather than an empty result: a non-finite or negative input, a `r
 a unit quaternion, or a query shape the solver cannot build, is
 `Err(PhysicsError::QueryInput | QueryShape)`. `only_fixed()` keeps static colliders only. A straight-down `ray_cast` through a `heightfield` vertex or cell
 edge always hits; a slanted ray lying exactly in a grid plane can miss at a shared edge or vertex.
-Every hit carries `surface: Option<SurfaceId>` (`SurfaceTag`, else `physics.default_surface`; `ludion docs collision`); `surface_of(entity)` answers the same for a `ContactEvent`'s entities.
+Every hit carries `surface: Option<SurfaceId>` (`SurfaceTag`, else `physics.default_surface`; `ludion docs collision`); `surface_of(entity)` answers the same for a `ContactEvent`'s entities. A `SurfaceOverlay` containing a hit's point wins first: `surface_at(entity, point)` resolves one point and `surface_under(point, reach, &filter)` answers "what is under here" (overlay, else a downward ray).
 
 **First hit.** `first_hit`/`first_hits` sweep a sphere (radius 0 is a ray) along a segment and return
 the nearest `SweepHit` by `(t, entity)` with no allocation. `sweep_filter` resolves a `QueryFilter`

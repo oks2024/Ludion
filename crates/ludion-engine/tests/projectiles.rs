@@ -579,3 +579,106 @@ fn settling_gibs_restore_mid_flight_bit_identically() {
     restore(&mut resumed, snapshot).unwrap();
     assert_eq!(trace(&mut resumed, 30), reference[50..], "ticks 51..80");
 }
+
+// ---- a gameplay scale ----
+
+const SCALE_SCENE: &str = "format: 1\nseed: 5\nphysics:\n  space: free\nentities: []\n";
+/// The frame the lone shot is fired on: after the first scaled fold, so every stepped tick of the
+/// shot's life runs at the same scale.
+const FIRED_AT: u64 = 1;
+/// The frame a held run marks frozen (folded into the next tick).
+const HOLD_AT: u64 = 10;
+
+/// Requests a quarter-speed gameplay clock every frame.
+fn quarter(world: &mut World, _ctx: &SystemCtx) {
+    if let Some(clock) = world.resource_mut::<ludion_core::time::GameClock>() {
+        clock.scale(0.25);
+    }
+}
+
+fn hold_once(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == HOLD_AT
+        && let Some(clock) = world.resource_mut::<ludion_core::time::GameClock>()
+    {
+        clock.hold();
+    }
+}
+
+fn fire_one(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == FIRED_AT {
+        let mut desc = ProjectileDesc::new([0.0, 5.0, 0.0], [12.0, 0.0, 0.0]);
+        desc.gravity_scale = 1.0;
+        desc.lifetime = 0.5;
+        spawn_projectile(world, desc);
+    }
+}
+
+/// The lone shot's position after each frame (`None` once it has expired).
+fn flight(scaled: bool, held: bool, frames: usize) -> Vec<Option<[f32; 3]>> {
+    let mut builder = Engine::builder();
+    if scaled {
+        builder = builder.system("quarter", quarter);
+    }
+    if held {
+        builder = builder.system("hold_once", hold_once);
+    }
+    let mut engine = builder
+        .projectiles(config())
+        .system("fire_one", fire_one)
+        .system("projectiles_step", projectiles_step)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(SCALE_SCENE).unwrap();
+    (0..frames)
+        .map(|_| {
+            engine.advance_live();
+            let pool = engine.world().resource::<Projectiles>().unwrap().pool();
+            pool.ids().next().and_then(|id| pool.position(id))
+        })
+        .collect()
+}
+
+#[test]
+fn a_quarter_scale_shot_lives_four_times_the_ticks_and_lands_where_the_unscaled_one_does() {
+    let unscaled = flight(false, false, 60);
+    let scaled = flight(true, false, 240);
+    let died = |run: &[Option<[f32; 3]>]| run.iter().position(|p| p.is_none());
+    let alive_from = |run: &[Option<[f32; 3]>]| run.iter().position(|p| p.is_some()).unwrap();
+    let lifetime = |run: &[Option<[f32; 3]>]| {
+        let start = alive_from(run);
+        died(&run[start..]).unwrap()
+    };
+    let (short, long) = (lifetime(&unscaled), lifetime(&scaled));
+    assert!(
+        (long as i64 - 4 * short as i64).abs() <= 4,
+        "a quarter-scale shot lives {long} ticks against {short} unscaled"
+    );
+
+    // Matched gameplay time: `n` unscaled ticks of flight, `4 n` scaled ones.
+    let n = 20;
+    let at = |run: &[Option<[f32; 3]>], frames: usize| run[FIRED_AT as usize + frames - 1].unwrap();
+    let (a, b) = (at(&unscaled, n), at(&scaled, 4 * n));
+    // Semi-implicit Euler: the step size moves the vertical drop by about `g * t * (dt - dt/4) / 2`.
+    for axis in 0..3 {
+        assert!(
+            (a[axis] - b[axis]).abs() < 0.1,
+            "axis {axis}: unscaled {a:?} vs scaled {b:?}; measured bound 0.1 m after {n} ticks"
+        );
+    }
+    assert!(
+        (a[0] - b[0]).abs() < 1e-3,
+        "the flat axis is exact: {a:?} vs {b:?}"
+    );
+}
+
+#[test]
+fn a_held_frame_freezes_a_scaled_shot() {
+    let run = flight(true, true, 40);
+    let held = HOLD_AT as usize + 1;
+    assert_eq!(
+        run[held],
+        run[held - 1],
+        "a held tick does not move the shot"
+    );
+    assert_ne!(run[held + 1], run[held], "the tick after it does");
+}

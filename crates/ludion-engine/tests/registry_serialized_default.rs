@@ -36,6 +36,13 @@ fn fixtures(name: &str) -> Vec<Value> {
             json!({ "perceiver": entity_ref(), "sense": "sight", "last_position": [0.0, 0.0, 0.0] }),
             json!({ "perceiver": entity_ref(), "sense": { "custom": 3 }, "last_position": [0.0, 0.0, 0.0] }),
         ],
+        "NoiseZone" => vec![
+            json!({ "shape": { "sphere": { "radius": 1.0 } } }),
+            json!({ "shape": { "box": { "half_extents": [1.0, 1.0, 1.0] } } }),
+        ],
+        "PendingNoise" => vec![
+            json!({ "id": 0, "at": [0.0, 0.0, 0.0], "radius": 1.0, "loudness": 1.0, "kind": "k" }),
+        ],
         "Joint" => vec![
             joint(json!({ "fixed": {} })),
             joint(json!({ "hinge": { "axis": [0.0, 1.0, 0.0], "limits": [-1.0, 1.0] } })),

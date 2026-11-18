@@ -468,7 +468,7 @@ pub(crate) fn audible_gain(
 
 /// The listener's pose for stereo placement: where the ear is, and which way is right and up.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct AudioListener {
+pub(crate) struct ListenerPose {
     pub(crate) position: [f32; 3],
     pub(crate) right: [f32; 3],
     pub(crate) up: [f32; 3],
@@ -484,7 +484,7 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 /// never moves a sound sideways: dead ahead, behind and straight overhead are exactly `0.0`. Inside
 /// [`PAN_INNER_RADIUS`] the side is scaled down linearly by `len / PAN_INNER_RADIUS`, so a sound on
 /// top of the listener is centred and the pan never jumps as it passes through them.
-pub(crate) fn stereo_pan(listener: &AudioListener, at: [f32; 3]) -> f32 {
+pub(crate) fn stereo_pan(listener: &ListenerPose, at: [f32; 3]) -> f32 {
     let d = [
         at[0] - listener.position[0],
         at[1] - listener.position[1],
@@ -509,7 +509,7 @@ pub(crate) fn stereo_pan(listener: &AudioListener, at: [f32; 3]) -> f32 {
 pub(crate) fn audible_voice(
     gain: f32,
     range: f32,
-    listener: &AudioListener,
+    listener: &ListenerPose,
     at: [f32; 3],
     distance: AudioDistance,
     pan: AudioPan,
@@ -782,8 +782,8 @@ mod tests {
     }
 
     /// A listener at the origin looking down `-Z`: right is `+X`, up is `+Y`.
-    fn facing_north() -> AudioListener {
-        AudioListener {
+    fn facing_north() -> ListenerPose {
+        ListenerPose {
             position: [0.0; 3],
             right: [1.0, 0.0, 0.0],
             up: [0.0, 1.0, 0.0],
@@ -795,7 +795,7 @@ mod tests {
         let listener = facing_north();
         assert!(stereo_pan(&listener, [4.0, 0.0, -1.0]) > 0.9);
         assert!(stereo_pan(&listener, [-4.0, 0.0, -1.0]) < -0.9);
-        let turned = AudioListener {
+        let turned = ListenerPose {
             right: [-1.0, 0.0, 0.0],
             ..listener
         };

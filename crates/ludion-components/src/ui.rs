@@ -420,6 +420,43 @@ pub struct UiWorldAnchor {
     pub fade: Option<[f32; 2]>,
 }
 
+/// What a nine-slice does with its middle piece.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UiSliceCenter {
+    /// The centre stretches over the rect (default).
+    #[default]
+    Stretch,
+    /// The centre is not drawn, leaving a frame.
+    Hidden,
+}
+
+/// A nine-slice frame for a textured [`UiRect`](crate::UiRect): the corners keep their size, the
+/// edges stretch along one axis and the centre stretches or is hidden.
+///
+/// ```
+/// use ludion_components::ui::{UiSlice, UiSliceCenter};
+///
+/// let slice: UiSlice = serde_json::from_value(serde_json::json!({ "border": [4, 4, 4, 4] })).unwrap();
+/// assert_eq!(slice.scale, 1.0);
+/// assert_eq!(slice.center, UiSliceCenter::Stretch);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct UiSlice {
+    /// `[left, top, right, bottom]` in source texels of the texture or atlas region, each `>= 0`.
+    pub border: [f32; 4],
+    /// Canvas units per source texel for the corners, `> 0` (default `1`).
+    #[serde(default = "one_f32", skip_serializing_if = "is_one_f32")]
+    pub scale: f32,
+    /// What the middle piece does (default `stretch`).
+    #[serde(default, skip_serializing_if = "is_default_center")]
+    pub center: UiSliceCenter,
+}
+
+fn is_default_center(value: &UiSliceCenter) -> bool {
+    *value == UiSliceCenter::default()
+}
+
 fn is_zero_u64(value: &u64) -> bool {
     *value == 0
 }
@@ -576,10 +613,166 @@ impl SemanticValidate for UiWorldAnchor {
     }
 }
 
+/// `L1612` / `L1613` for a `UiRect`'s `uv_rect` and `slice`, pushed onto `out`. Pointers are relative
+/// to the component (`/uv_rect/{i}`, `/slice/border/{i}`, `/slice/scale`, `/uv_rect`, `/slice`).
+pub(crate) fn ui_rect_sampling_diagnostics(
+    object: &serde_json::Map<String, Value>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let present = |field: &str| object.get(field).is_some_and(|v| !v.is_null());
+    let number = |value: &Value| value.as_f64().map(engine_number);
+    let mut invalid = |pointer: String, what: String| {
+        out.push(
+            Diagnostic::new(code::UI_RECT_SAMPLING_INVALID, what)
+                .with_path(pointer)
+                .with_help("fix the field; `ludion explain L1612`"),
+        );
+    };
+    if let Some(uv) = object.get("uv_rect").and_then(Value::as_array) {
+        let values: Vec<Option<f64>> = uv.iter().map(number).collect();
+        for (i, value) in values.iter().enumerate() {
+            if let Some(v) = value
+                && !(v.is_finite() && (0.0..=1.0).contains(v))
+            {
+                invalid(
+                    format!("/uv_rect/{i}"),
+                    format!("`uv_rect` component {i} must be finite and within 0..1"),
+                );
+            }
+        }
+        if let [Some(u0), Some(v0), Some(u1), Some(v1)] = values.as_slice() {
+            for (axis, lo, hi, at) in [("u", u0, u1, 0), ("v", v0, v1, 1)] {
+                if lo >= hi {
+                    invalid(
+                        format!("/uv_rect/{at}"),
+                        format!("`uv_rect` needs {axis}0 < {axis}1 so the sub-rect has an area"),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(slice) = object.get("slice").and_then(Value::as_object) {
+        let border = slice.get("border").and_then(Value::as_array);
+        for (i, v) in border.into_iter().flatten().enumerate() {
+            if let Some(v) = number(v)
+                && !(v.is_finite() && v >= 0.0)
+            {
+                invalid(
+                    format!("/slice/border/{i}"),
+                    format!("`slice.border` component {i} must be finite and at least 0"),
+                );
+            }
+        }
+        if let Some(scale) = slice.get("scale").and_then(number)
+            && !(scale.is_finite() && scale > 0.0)
+        {
+            invalid(
+                "/slice/scale".into(),
+                "`slice.scale` must be finite and above 0".into(),
+            );
+        }
+    }
+    let mut ignored = |pointer: &str, what: String, help: &str| {
+        out.push(
+            Diagnostic::new(code::UI_RECT_SAMPLING_IGNORED, what)
+                .with_path(pointer)
+                .with_help(help),
+        );
+    };
+    if present("uv_rect") && present("slice") {
+        ignored(
+            "/uv_rect",
+            "this `UiRect` has both `uv_rect` and `slice`; `slice` wins and `uv_rect` is ignored"
+                .into(),
+            "keep one of the two",
+        );
+    }
+    if !present("texture") && !present("atlas") {
+        for field in ["uv_rect", "slice"].into_iter().filter(|f| present(f)) {
+            ignored(
+                &format!("/{field}"),
+                format!("this `UiRect` has no `texture` or `atlas`, so `{field}` is ignored"),
+                "add a `texture`, or an `atlas` and `frame`, or remove the field",
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn sampling(value: Value) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        ui_rect_sampling_diagnostics(value.as_object().unwrap(), &mut out);
+        out
+    }
+
+    fn pointers(diagnostics: &[Diagnostic], code: &str) -> Vec<String> {
+        diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == code)
+            .map(|d| d.path.clone().unwrap_or_default())
+            .collect()
+    }
+
+    #[test]
+    fn slice_round_trips_and_skips_defaults() {
+        let parsed: UiSlice =
+            serde_json::from_value(json!({ "border": [1.0, 2.0, 3.0, 4.0] })).unwrap();
+        assert_eq!(parsed.scale, 1.0);
+        assert_eq!(parsed.center, UiSliceCenter::Stretch);
+        assert_eq!(
+            serde_json::to_value(&parsed).unwrap(),
+            json!({ "border": [1.0, 2.0, 3.0, 4.0] })
+        );
+        let full = json!({ "border": [1.0, 2.0, 3.0, 4.0], "scale": 2.0, "center": "hidden" });
+        let parsed: UiSlice = serde_json::from_value(full.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), full);
+    }
+
+    #[test]
+    fn sampling_valid_fields_add_nothing() {
+        assert!(
+            sampling(json!({ "texture": "a.png", "uv_rect": [0.0, 0.0, 0.5, 1.0] })).is_empty()
+        );
+        assert!(
+            sampling(
+                json!({ "atlas": "a.atlas", "slice": { "border": [4, 4, 4, 4], "scale": 2.0 } })
+            )
+            .is_empty()
+        );
+        assert!(sampling(json!({})).is_empty());
+    }
+
+    #[test]
+    fn sampling_invalid_pointers() {
+        let d = sampling(json!({ "texture": "a.png", "uv_rect": [0.0, 0.0, 1.5, 1.0] }));
+        assert_eq!(pointers(&d, "L1612"), ["/uv_rect/2"]);
+        let d = sampling(json!({ "texture": "a.png", "uv_rect": [0.5, 0.0, 0.5, 0.2] }));
+        assert_eq!(pointers(&d, "L1612"), ["/uv_rect/0"]);
+        let d = sampling(json!({ "texture": "a.png", "uv_rect": [0.0, 0.5, 1.0, 0.25] }));
+        assert_eq!(pointers(&d, "L1612"), ["/uv_rect/1"]);
+        let d = sampling(
+            json!({ "texture": "a.png", "slice": { "border": [1, -1, 1, 1], "scale": 0.0 } }),
+        );
+        assert_eq!(pointers(&d, "L1612"), ["/slice/border/1", "/slice/scale"]);
+    }
+
+    #[test]
+    fn sampling_ignored_cases() {
+        let d = sampling(json!({
+            "texture": "a.png",
+            "uv_rect": [0.0, 0.0, 0.5, 1.0],
+            "slice": { "border": [1, 1, 1, 1] }
+        }));
+        assert_eq!(pointers(&d, "L1613"), ["/uv_rect"]);
+        let d = sampling(
+            json!({ "uv_rect": [0.0, 0.0, 0.5, 1.0], "slice": { "border": [1, 1, 1, 1] } }),
+        );
+        assert_eq!(pointers(&d, "L1613"), ["/uv_rect", "/uv_rect", "/slice"]);
+    }
 
     #[test]
     fn from_actions_reads_the_map_and_falls_back_per_field() {

@@ -152,7 +152,7 @@ pub fn send<M: Machine>(world: &mut World, to: EntityId, event: M::Event) -> boo
             to,
             code::AI_SEND_NO_MIND,
             format!(
-                "an event was sent to {to}, which has no `{}Mind`; it was dropped",
+                "an event was sent here, but the entity has no `{}Mind`; it was dropped",
                 M::NAME
             ),
         );
@@ -170,7 +170,7 @@ pub(crate) fn overflow_fault<M: Machine>(world: &mut World, to: EntityId) {
         to,
         code::AI_INBOX_OVERFLOW,
         format!(
-            "the `{}Mind` inbox of {to} is full ({} events); the oldest event was dropped",
+            "its `{}Mind` inbox is full ({} events); the oldest event was dropped",
             M::NAME,
             M::INBOX_CAPACITY
         ),

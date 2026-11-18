@@ -63,11 +63,13 @@ use serde_json::Value;
 
 use crate::asset_cache::AssetCache;
 use crate::audio::{
-    AudioDistance, AudioListener, AudioLogEntry, AudioMessage, AudioPan, AudioQueue, Bus,
-    CategoryGains, LoopId, MixLayer, Queued, SentLoop, audible_voice,
+    AudioDistance, AudioLogEntry, AudioMessage, AudioPan, AudioQueue, Bus, CategoryGains,
+    ListenerPose, LoopId, MixLayer, Queued, SentLoop, audible_voice,
 };
 use crate::builtin_registry;
-use crate::components::{AudioEmitter, Camera, Name, ReflectionProbe, Transform};
+use crate::components::{
+    AudioEmitter, AudioListener, Camera, ListenerOrientation, Name, ReflectionProbe, Transform,
+};
 use crate::cooked_maps::TextureSource;
 use crate::dispatch::Dispatched;
 use crate::docs::{DocKind, DocValidator, PreparedDocs};
@@ -232,6 +234,9 @@ pub struct Engine {
     /// The game's perception config ([`EngineBuilder::perception`](crate::EngineBuilder::perception)),
     /// already validated at build; `None` installs no results.
     pub(crate) perception_config: Option<crate::PerceptionConfig>,
+    /// The game's dialogue config ([`EngineBuilder::dialogue`](crate::EngineBuilder::dialogue)),
+    /// already validated at build; `None` installs nothing.
+    pub(crate) dialogue_config: Option<crate::DialogueConfig>,
     pub(crate) input_actions: bool,
     /// How the pool is drawn ([`EngineBuilder::projectile_visuals`](crate::EngineBuilder::projectile_visuals)).
     pub(crate) projectile_draw: crate::projectile_draw::ProjectileDraw,
@@ -387,6 +392,15 @@ pub struct Engine {
     settings: crate::settings::SettingsDoc,
     /// Whether the settings file is read at build and written on `save()`.
     pub(crate) settings_persistence: bool,
+    /// Whether the input bindings file is read at build and written on `Actions::save()`.
+    pub(crate) input_bindings_persistence: bool,
+    /// The player's input overrides at start: the file read at build, or a replay header's entry.
+    /// Applied to every fresh `Actions` (a build, load or restore); a carried one keeps its own.
+    input_bindings_at_start: ludion_sim::actions::InputBindingsDoc,
+    /// Whether the at-start overrides' apply warnings were already reported to `boot_warnings`.
+    input_bindings_reported: bool,
+    /// The last failed input bindings write (`L4278`), cleared by a successful one.
+    input_bindings_save_error: Option<Diagnostic>,
     /// The anti-aliasing mode the settings file or a request chose, below the host's `--aa` flag.
     anti_aliasing_settings: Option<AntiAliasing>,
     /// Whether a host flag named the quality, so a settings request persists but does not apply
@@ -879,6 +893,7 @@ impl Engine {
             projectile_config: None,
             nav_config: None,
             perception_config: None,
+            dialogue_config: None,
             input_actions: false,
             projectile_draw: crate::projectile_draw::ProjectileDraw::default(),
             doc_validation_warnings: Vec::new(),
@@ -924,6 +939,10 @@ impl Engine {
             cursor_lock_sender: None,
             settings: crate::settings::SettingsDoc::default(),
             settings_persistence: false,
+            input_bindings_persistence: false,
+            input_bindings_at_start: ludion_sim::actions::InputBindingsDoc::default(),
+            input_bindings_reported: false,
+            input_bindings_save_error: None,
             anti_aliasing_settings: None,
             quality_pinned: false,
             window_mode_sender: None,
@@ -2056,6 +2075,7 @@ impl Engine {
         self.drain_settings(frame);
         self.sync_audio_emitters(frame);
         self.drain_profile(frame);
+        self.drain_input_bindings();
         self.drain_checkpoints(frame);
         self.drain_run_save(frame);
         self.take_host_requests();
@@ -3377,6 +3397,7 @@ impl Engine {
             doc_texts: std::mem::replace(&mut self.doc_texts, doc_texts),
             profile_off_disk: self.profile_off_disk,
             profile_text: self.emit_profile_text(),
+            input_bindings: self.input_bindings_at_start.clone(),
             speed: self.driver.speed(),
             render_size: self.render_size,
             return_to: return_to.to_string(),
@@ -3497,6 +3518,7 @@ impl Engine {
             doc_texts,
             profile_off_disk,
             profile_text,
+            input_bindings,
             speed,
             render_size,
             return_to,
@@ -3507,6 +3529,7 @@ impl Engine {
         } = playback.saved;
         self.doc_texts = doc_texts;
         self.profile_off_disk = profile_off_disk;
+        self.input_bindings_at_start = input_bindings;
         self.playback = None;
         self.playback_name = None;
         self.replay_scene_text = None;
@@ -4030,7 +4053,122 @@ impl Engine {
             return;
         }
         let rate = self.tick_rate();
-        crate::input_actions::install(self.driver.world_mut(), rate);
+        if crate::input_actions::install(self.driver.world_mut(), rate) {
+            self.apply_input_bindings_at_start();
+        }
+    }
+
+    /// Applies the at-start overrides to the world's fresh `Actions`; the warnings reach
+    /// `boot_warnings` once, at the first install.
+    fn apply_input_bindings_at_start(&mut self) {
+        if self.input_bindings_at_start.actions.is_empty() {
+            return;
+        }
+        let doc = self.input_bindings_at_start.clone();
+        let Some(actions) = self
+            .driver
+            .world_mut()
+            .resource_mut::<ludion_sim::actions::Actions>()
+        else {
+            return;
+        };
+        let warnings = actions.apply_overrides(&doc);
+        if !std::mem::replace(&mut self.input_bindings_reported, true) {
+            self.boot_warnings.extend(warnings);
+        }
+    }
+
+    /// Reads the input bindings file at build when persistence is on: the overrides become the
+    /// at-start overrides, a file that cannot be honored is backed up and defaulted (`L4277`) into
+    /// `boot_warnings`. Runs before the first [`install_input_actions`](Engine::install_input_actions).
+    /// A no-op without [`persist_input_bindings`](crate::EngineBuilder::persist_input_bindings).
+    pub(crate) fn load_input_bindings(&mut self) {
+        if !self.input_bindings_persistence || !self.input_actions || self.profile_off_disk {
+            return;
+        }
+        let path = self
+            .save_root()
+            .join(crate::input_bindings::INPUT_BINDINGS_PATH);
+        crate::player_profile::sweep_temps(&path);
+        let (doc, warnings) = crate::input_bindings::load(&path);
+        self.boot_warnings.extend(warnings);
+        self.input_bindings_at_start = doc;
+    }
+
+    /// Installs a replay header's at-start input overrides (`None` for none) **without touching
+    /// disk**: the recorded overrides replace whatever the boot file-load put in place, and the
+    /// world's `Actions` is rebuilt from the map with them, so a recording reproduces on a machine
+    /// whose file differs or is absent. A no-op for a game without `input_actions()`.
+    pub(crate) fn install_input_bindings_from_text(&mut self, text: Option<&str>) {
+        if !self.input_actions {
+            return;
+        }
+        let (doc, warnings) = match text {
+            Some(text) => crate::input_bindings::parse_text(text),
+            None => Default::default(),
+        };
+        self.boot_warnings.extend(warnings);
+        self.input_bindings_at_start = doc;
+        self.input_bindings_reported = false;
+        self.driver
+            .world_mut()
+            .remove_resource::<ludion_sim::actions::Actions>();
+        self.install_input_actions();
+    }
+
+    /// The canonical text of the input overrides in force now (the world's `Actions`, else the
+    /// at-start ones), `None` when there are none. A recording armed after a rebind carries them.
+    fn input_bindings_text(&self) -> Option<String> {
+        let overrides = match self
+            .driver
+            .world()
+            .resource::<ludion_sim::actions::Actions>()
+        {
+            Some(actions) => actions.overrides(),
+            None => &self.input_bindings_at_start,
+        };
+        (!overrides.actions.is_empty()).then(|| crate::input_bindings::emit(overrides))
+    }
+
+    /// The last failed input bindings write (`L4278`); `None` if the last write succeeded or none
+    /// was attempted. The [`profile_save_error`](Engine::profile_save_error) mold.
+    pub fn input_bindings_save_error(&self) -> Option<&Diagnostic> {
+        self.input_bindings_save_error.as_ref()
+    }
+
+    /// Writes the input bindings file when a system called `Actions::save()`, at the frame
+    /// boundary, crash-durably. Without persistence (or while a replay plays) the request is
+    /// consumed silently. A failure is a non-fatal `L4278` on both sinks (the `drain_profile` pair)
+    /// and the previous whole file stays.
+    fn drain_input_bindings(&mut self) {
+        let Some(text) = crate::input_bindings::drain_save(self.driver.world_mut()) else {
+            return;
+        };
+        if !self.input_bindings_persistence || !self.input_actions || self.profile_off_disk {
+            return;
+        }
+        let path = self
+            .save_root()
+            .join(crate::input_bindings::INPUT_BINDINGS_PATH);
+        match ludion_core::atomic::write_durable(&path, text) {
+            Ok(()) => self.input_bindings_save_error = None,
+            Err(error) => {
+                let diagnostic = Diagnostic::new(
+                    code::INPUT_BINDINGS_SAVE_FAILED,
+                    format!(
+                        "the input bindings could not be written to `{}`: {error}",
+                        path.display()
+                    ),
+                )
+                .with_help(
+                    "the previous whole file stays on disk; check the save location is writable and \
+                     call `Actions::save()` again",
+                );
+                eprintln!("{diagnostic}");
+                self.push_event(Event::Log(LogEvent::from_diagnostic(diagnostic.clone())));
+                self.input_bindings_save_error = Some(diagnostic);
+            }
+        }
     }
 
     /// Installs the configured [`PerceptionConfig`](crate::PerceptionConfig) and an empty
@@ -4044,6 +4182,21 @@ impl Engine {
         let world = self.driver.world_mut();
         world.insert_resource(config.clone());
         world.insert_resource(crate::PerceptionResults::default());
+    }
+
+    /// Installs the configured [`DialogueConfig`](crate::DialogueConfig) and empty derived
+    /// resources (events, subtitles, string index) into the current world. Called after every world
+    /// (re)build; the line queue itself is entities, so a restored world keeps it. A no-op for a game
+    /// that did not opt in.
+    pub(crate) fn install_dialogue(&mut self) {
+        let Some(config) = &self.dialogue_config else {
+            return;
+        };
+        let world = self.driver.world_mut();
+        world.insert_resource(config.clone());
+        world.insert_resource(crate::DialogueEvents::default());
+        world.insert_resource(crate::Subtitles::default());
+        world.insert_resource(crate::dialogue::StringIndex::default());
     }
 
     /// Installs a fresh (empty) [`Shutdown`](crate::Shutdown) resource into the current world so game
@@ -4527,6 +4680,7 @@ impl Engine {
         // Disjoint field borrows (the extract_render_scene pattern): the content root, doc-kind list
         // and validators are read while the world is borrowed mutably to receive the stores. Boot
         // never re-applies a reload log, so it passes none.
+        let save_dir = self.save_dir();
         let prepared = crate::docs::prepare_docs(
             &self.project_root,
             &self.doc_kinds,
@@ -4534,6 +4688,7 @@ impl Engine {
             &self.doc_validators,
             &self.doc_texts,
             &crate::docs::DocReloadLog::default(),
+            Some(&save_dir),
             self.driver.world_mut(),
         )?;
         self.commit_docs(prepared);
@@ -4551,6 +4706,7 @@ impl Engine {
         world: &mut World,
         reloads: &crate::docs::DocReloadLog,
     ) -> Result<PreparedDocs, Vec<Diagnostic>> {
+        let save_dir = self.save_dir();
         crate::docs::prepare_docs(
             &self.project_root,
             &self.doc_kinds,
@@ -4558,6 +4714,7 @@ impl Engine {
             &self.doc_validators,
             &self.doc_texts,
             reloads,
+            Some(&save_dir),
             world,
         )
     }
@@ -4746,6 +4903,11 @@ impl Engine {
             return Ok(None);
         };
         if self.doc_texts.contains_key(&key) {
+            return Ok(None);
+        }
+        if crate::docs::save_dir_key(&self.project_root, &self.save_dir())
+            .is_some_and(|save_key| crate::docs::key_under_save_dir(&key, &save_key))
+        {
             return Ok(None);
         }
         let peeked = crate::docs::peek_reload_kind(&key, &source)?;
@@ -5308,6 +5470,11 @@ impl Engine {
     /// project root.
     pub fn save_root(&self) -> &Path {
         self.save_root.as_deref().unwrap_or(&self.project_root)
+    }
+
+    /// The directory every engine save file lives under: `<save_root>/save`.
+    pub fn save_dir(&self) -> PathBuf {
+        self.save_root().join("save")
     }
 
     /// This game's audio mixdown: the master gain each bus is mixed through, as the builder
@@ -6705,7 +6872,7 @@ impl Engine {
                 entry
             })
             .collect();
-        serde_json::json!({
+        let mut doc = serde_json::json!({
             "engine_version": ENGINE_VERSION,
             "protocol_version": PROTOCOL_VERSION,
             "schema_hash": schema::schema_hash().to_string(),
@@ -6731,7 +6898,11 @@ impl Engine {
                 None => Value::Null,
             },
             "protocol": schema::protocol_schema(),
-        })
+        });
+        if let Some(ai) = crate::ai::describe_section(self.driver.world()) {
+            doc["ai"] = ai;
+        }
+        doc
     }
 
     /// The `queries` array for one system in `engine.describe`: each declared query as
@@ -7199,6 +7370,12 @@ impl Engine {
             }),
             replay_content_hash: Some(crate::replay_compat::replay_content_hash()),
             game: None,
+            save_docs: self
+                .input_bindings_text()
+                .map(|text| {
+                    BTreeMap::from([(crate::input_bindings::INPUT_BINDINGS_KIND.to_string(), text)])
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -8130,6 +8307,7 @@ impl Engine {
         self.install_projectiles();
         self.install_nav();
         self.install_perception();
+        self.install_dialogue();
         self.install_input_actions();
         if matches!(
             kind,
@@ -8431,29 +8609,81 @@ pub(crate) fn authored_names(scene: &Scene) -> StableSet<String> {
         .collect()
 }
 
-/// Where the ear is: the world position of the lowest-`EntityId` entity carrying a [`Camera`], or
-/// `None` when the world has none.
+/// Where the ear is, or `None` when the world has neither an [`AudioListener`] nor a [`Camera`].
 ///
-/// There is no separate `Listener` component — every scene that renders already says where the
-/// viewpoint is, and a second way to say it would be a second thing to keep in sync. A camera with no
-/// [`Transform`] listens from the origin facing the default orientation (`+X` right, `+Y` up), exactly
-/// as it renders from there. The camera's rotation gives the stereo axes.
-fn audio_listener(world: &mut World) -> Option<AudioListener> {
+/// The lowest-`EntityId` [`AudioListener`] wins: its world position is the ear, and a second carrier
+/// reports `L1650` once. Its axes come from the lowest-id [`Camera`] under
+/// [`ListenerOrientation::Camera`] (the default), or from its own world rotation under
+/// [`ListenerOrientation::Listener`] and when the world has no camera. With no [`AudioListener`] the
+/// camera is the ear, exactly as it renders: a camera with no [`Transform`] listens from the origin
+/// facing the default orientation (`+X` right, `+Y` up).
+fn audio_listener(world: &mut World) -> Option<ListenerPose> {
+    // A typed join over the `AudioListener` storage, not a per-entity probe of every live entity —
+    // free in a scene with none, and `query_ids` yields ascending `EntityId` so the first row is the
+    // lowest.
+    let mut ears = world.query_ids::<(&AudioListener,)>().map(|(id, _)| id);
+    let first = ears.next();
+    let second = ears.next();
+    drop(ears);
+    let Some(ear) = first else {
+        let (position, rotation) = camera_ear(world)?;
+        return Some(listener_pose(position, rotation));
+    };
+    if let Some(other) = second {
+        crate::diagnostics::report(
+            world,
+            code::AUDIO_LISTENER_DUPLICATE,
+            "audio_listener",
+            format!(
+                "{ear} and {other} both carry an `AudioListener`; only {ear} is heard from: keep \
+                 one listener"
+            ),
+        );
+    }
+    let orientation = world
+        .get::<AudioListener>(ear)
+        .ok()
+        .flatten()
+        .map_or(ListenerOrientation::Camera, |listener| listener.orientation);
+    let own = crate::hierarchy::world_transform(world, ear);
+    let position = own.map_or([0.0; 3], |pose| pose.trs.translation);
+    let own_rotation = own.map(|pose| pose.trs.rotation);
+    let rotation = match orientation {
+        ListenerOrientation::Listener => own_rotation,
+        ListenerOrientation::Camera => match camera_ear(world) {
+            Some((_, camera_rotation)) => camera_rotation,
+            None => own_rotation,
+        },
+    };
+    Some(listener_pose(position, rotation))
+}
+
+/// The lowest-`EntityId` [`Camera`]'s world position and rotation (`None` rotation: no [`Transform`]),
+/// or `None` when the world has no camera.
+fn camera_ear(world: &mut World) -> Option<([f32; 3], Option<[f32; 4]>)> {
     // A typed join over the `Camera` storage, not a per-entity probe of every live entity — free in
     // a scene with none, and `query_ids` yields ascending `EntityId` so the first row is the lowest.
     let (id, _) = world.query_ids::<(&Camera,)>().next()?;
     Some(match crate::hierarchy::world_transform(world, id) {
-        Some(pose) => AudioListener {
-            position: pose.trs.translation,
-            right: ludion_core::math::quat_rotate(pose.trs.rotation, [1.0, 0.0, 0.0]),
-            up: ludion_core::math::quat_rotate(pose.trs.rotation, [0.0, 1.0, 0.0]),
+        Some(pose) => (pose.trs.translation, Some(pose.trs.rotation)),
+        None => ([0.0; 3], None),
+    })
+}
+
+/// The stereo axes of an ear at `position` turned by `rotation`; `None` is the default orientation.
+fn listener_pose(position: [f32; 3], rotation: Option<[f32; 4]>) -> ListenerPose {
+    match rotation {
+        Some(rotation) => ListenerPose {
+            position,
+            right: ludion_core::math::quat_rotate(rotation, [1.0, 0.0, 0.0]),
+            up: ludion_core::math::quat_rotate(rotation, [0.0, 1.0, 0.0]),
         },
-        None => AudioListener {
-            position: [0.0; 3],
+        None => ListenerPose {
+            position,
             right: [1.0, 0.0, 0.0],
             up: [0.0, 1.0, 0.0],
         },
-    })
+    }
 }
 
 #[cfg(test)]
@@ -8518,6 +8748,7 @@ entities: []
             render_extent: None,
             replay_content_hash: None,
             game: None,
+            save_docs: Default::default(),
         };
         let error = ludion_protocol::replay::ReplayWriter::new(&mut sink, &header)
             .err()

@@ -94,6 +94,26 @@
 21. **`save()`** raises a one-shot flag read by `take_save_request()`; the sim layer writes nothing.
 22. **`UiNav::from_actions`** reads the reserved `ui_prev`, `ui_next`, `ui_activate` actions; a field whose
     action is undefined keeps `from_input`'s default. `ui_back` is read through `actions.pressed`.
+23. **The overrides file (W2b).** `<save_root>/save/input-bindings.yaml`, `format: 1`, `kind: input-bindings`,
+    body an `InputBindingsDoc`, canonical via `emit_doc`. It is read leniently: a missing file is no overrides;
+    a bad envelope (`L1636`), bad YAML, a value of the wrong shape or a newer `format` is renamed to
+    `input-bindings.yaml.bak.<hash>` and the defaults start with one `L4277`; a single bad action never
+    resets the file, `apply_overrides` drops it (`L4273`/`L4274`) and applies the rest. A game always boots.
+    It is written only on `Actions::save()`, at the frame boundary, crash-durably; a failure is a non-fatal
+    `L4278` and the previous file stays.
+24. **The host switch.** `persist_input_bindings()` (the `persist_profile`/`persist_settings` mold) gates both
+    the read and the write, and needs `input_actions()`. Tests, replays and `--check-docs` leave it off; the
+    facade's live boot chains it. Without it `save()` is consumed silently.
+25. **At-start overrides.** With the switch on, the file is read at build into the engine's at-start overrides,
+    applied to every **fresh** `Actions` (a build, a load, a restore); a carried one (a switch, a checkpoint)
+    keeps its own. So a restore after a mid-session rebind reverts to the at-start overrides; exact
+    continuation is the Proposed snapshot field. The apply warnings reach `boot_warnings` once, at build.
+26. **Recording and replay.** A recording's `ReplayHeader` carries the at-start overrides as canonical text in
+    the generic `save_docs` map (key `input-bindings`), omitted when empty. `save_docs` is outside
+    `replay_content_hash` and the protocol schema hash, so no pinned artifact moves; it is the one header slot
+    for per-machine save documents, which the settings wave reuses for settings-at-start. A replay installs the
+    header's entry (or the defaults when absent) and never reads, writes or backs up the file, so a
+    committed recording reproduces on any machine.
 
 ## Waves
 
@@ -106,10 +126,10 @@
 - **W2a — rebinding, sim side (shipped):** rebind/unbind/reset, capture with conflict resolution,
   `locked` enforcement, `InputBindingsDoc` with lenient `apply_overrides`, the `save()` flag,
   `UiNav::from_actions`; `L4272`–`L4276`. No file, no engine change.
-- **W2b — persistence:** `persist_input_bindings()`, `<save_root>/save/input-bindings.yaml`
+- **W2b — persistence (shipped):** `persist_input_bindings()`, `<save_root>/save/input-bindings.yaml`
   (`kind: input-bindings`, loaded leniently through `open_envelope` + `backup_file` and `apply_overrides`),
-  the save drain, `ReplayHeader.input_bindings` (outside `replay_content_hash`), replay installing it and
-  never writing, the `rebind_menu` example.
+  the save drain, `ReplayHeader.save_docs["input-bindings"]` (outside `replay_content_hash`), replay
+  installing it and never reading or writing the file, the doc walk skipping `<save_root>/save`, the `rebind_menu` example; `L1636`, `L4277`, `L4278`.
 - **W3 — devices, glyphs and the full key set:** the whole keyboard appended after `Alt` plus `Back`/`Forward` (one corpus re-record), the window keymap and mouse mapping for them, recorded `gamepad_connected{family}` / `gamepad_disconnected`,
   `last_device` / `device_changed`, `Actions::source`, a glyph table (`glyph_name`), a focus event
   (Proposed).
@@ -136,6 +156,14 @@ keyboard with a held key and the latch, Escape, a trigger, two presses by `Ord`)
 the last-binding refusal, Keep, a locked other action), lenient overrides, the save flag and a scripted
 capture-and-swap that replays identically; `UiNav::from_actions` has a doctest and a unit test. No
 `WorldHash`, trace, replay, golden or schema moved.
+
+**W2b**: the overrides persist. `persist_input_bindings()` reads the lenient file at build and writes it
+on `Actions::save()`; recordings carry the at-start overrides in `ReplayHeader.save_docs` and a replay
+installs them from there. Tests cover save and reload, a lenient boot (`L4273`, `L4274`), a malformed file
+backed up (`L4277`), the switch off (file neither read nor written), header-wins replay on a machine whose
+file differs or is absent, no `save_docs` key without overrides, a restore reverting to the at-start
+overrides, and the `replay_content_hash` and protocol schema hash staying put. The `rebind_menu` example
+plays a rebind across two boots. No `WorldHash`, trace, replay, golden or schema moved.
 
 ## Proposed — owner ruling owed
 

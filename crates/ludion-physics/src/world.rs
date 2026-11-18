@@ -36,6 +36,7 @@ use crate::joints::{
 use crate::layer_set::LayerSet;
 use crate::meshes::TriangleMesh;
 use crate::motor::{LaneReport, MoveReport};
+use crate::queries::QueryFilter;
 use crate::sensors::SensorEvent;
 use crate::surface_tag::{SurfaceId, SurfaceTable};
 use crate::systems::{CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, PhysicsSettings};
@@ -492,6 +493,10 @@ pub struct PhysicsWorld {
     surface_ids: Vec<(EntityId, SurfaceId)>,
     /// Whether `surface_ids` was resolved with rejections queued; a restore resolves silently.
     surfaces_reported: bool,
+    /// Each entity's authored `SurfaceOverlay` (entity-sorted) and the resolved list sorted
+    /// `(Reverse(priority), entity)`: the first overlay containing a point wins.
+    surface_overlays: Vec<(EntityId, String, i32)>,
+    overlay_ids: Vec<(EntityId, SurfaceId, i32)>,
     pub(crate) plane: Option<Plane>,
     tick_rate: TickRate,
     sleep_after_ticks: u32,
@@ -632,6 +637,8 @@ impl PhysicsWorld {
             surface_tags: Vec::new(),
             surface_ids: Vec::new(),
             surfaces_reported: true,
+            surface_overlays: Vec::new(),
+            overlay_ids: Vec::new(),
             plane: None,
             tick_rate,
             sleep_after_ticks: DEFAULT_SLEEP_AFTER_TICKS,
@@ -710,17 +717,19 @@ impl PhysicsWorld {
         self.tick_rate
     }
 
-    /// The seconds gameplay time advanced into the tick a motor is being moved in: one tick when
-    /// the previous frame was not held, `0` when it was (the clock a `PathFollower` reads).
+    /// The seconds gameplay time advanced into the tick a motor is being moved in: `0` when the
+    /// previous frame was held, otherwise one tick scaled by the clock's applied scale (the clock
+    /// a `PathFollower` reads).
     pub fn gameplay_dt(&self, world: &World) -> f32 {
-        let held_now = world.resource::<GameClock>().map(|clock| clock.held());
+        let clock = world.resource::<GameClock>();
+        let held_now = clock.map(|clock| clock.held());
         if held_now
             .zip(self.last_write_held)
             .is_some_and(|(now, last)| now > last)
         {
             0.0
         } else {
-            seconds_per_tick(self.tick_rate)
+            seconds_per_tick(self.tick_rate) * clock.map_or(1.0, |clock| clock.applied_scale())
         }
     }
 
@@ -1473,6 +1482,8 @@ impl PhysicsWorld {
             surface_tags: Vec::new(),
             surface_ids: Vec::new(),
             surfaces_reported: true,
+            surface_overlays: Vec::new(),
+            overlay_ids: Vec::new(),
             plane: snapshot.plane.map(Plane::from),
             tick_rate,
             sleep_after_ticks: DEFAULT_SLEEP_AFTER_TICKS,
@@ -2727,11 +2738,17 @@ impl PhysicsWorld {
 
     /// Replaces the surface-tag side table; `tags` is entity-sorted. Skipped when equal; otherwise
     /// stored and resolved against the current surface table.
-    pub(crate) fn set_surface_tags(&mut self, tags: &[(EntityId, String)]) {
-        if self.surfaces_reported && self.surface_tags == tags {
+    pub(crate) fn set_surface_tags(
+        &mut self,
+        tags: &[(EntityId, String)],
+        overlays: &[(EntityId, String, i32)],
+    ) {
+        if self.surfaces_reported && self.surface_tags == tags && self.surface_overlays == overlays
+        {
             return;
         }
         self.surface_tags = tags.to_vec();
+        self.surface_overlays = overlays.to_vec();
         self.resolve_surface_ids(true);
     }
 
@@ -2758,38 +2775,59 @@ impl PhysicsWorld {
             })
             .collect();
         tags.sort_unstable_by_key(|(entity, _)| *entity);
+        let mut overlays: Vec<(EntityId, String, i32)> = self
+            .entities()
+            .filter_map(|entity| match world.get::<crate::SurfaceOverlay>(entity) {
+                Ok(Some(o)) => Some((entity, o.surface.clone(), o.priority)),
+                _ => None,
+            })
+            .collect();
+        overlays.sort_unstable_by_key(|(entity, _, _)| *entity);
         self.surface_tags = tags;
+        self.surface_overlays = overlays;
         self.resolve_surface_ids(false);
     }
 
-    /// Resolves each entity's `SurfaceTag` to an id under the current surface table. An entity
-    /// naming an undeclared surface gets no id (its hits report the default) and one `L1690`
-    /// rejection, and keeps its body.
+    /// The `L1690` rejection for `entity`'s `component` naming the undeclared surface `name`.
+    fn undeclared_surface(&self, entity: EntityId, component: &str, name: &str) -> ShapeRejection {
+        let declared: &[String] = self.surfaces.as_ref().map_or(&[], SurfaceTable::names);
+        let hint = match nearest(name, declared.iter().map(String::as_str)) {
+            Some(near) => format!("nearest match is `{near}`"),
+            None => "declare it under `physics.surfaces`".to_string(),
+        };
+        ShapeRejection {
+            entity,
+            code: code::SURFACE_UNKNOWN,
+            reason: format!(
+                "`{component}` surface `{name}` names no surface the scene's \
+                 `physics.surfaces` declares; {hint}"
+            ),
+            related: Vec::new(),
+        }
+    }
+
+    /// Resolves each entity's `SurfaceTag` and `SurfaceOverlay` to ids under the current surface
+    /// table. An entity naming an undeclared surface gets no id (a tag's hits report the default,
+    /// an overlay is inert) and one `L1690` rejection, and keeps its body.
     fn resolve_surface_ids(&mut self, report: bool) {
         let mut ids = Vec::with_capacity(self.surface_tags.len());
         let mut rejections = Vec::new();
         for (entity, name) in &self.surface_tags {
             match self.surfaces.as_ref().and_then(|table| table.id(name)) {
                 Some(id) => ids.push((*entity, id)),
-                None => {
-                    let declared: &[String] =
-                        self.surfaces.as_ref().map_or(&[], SurfaceTable::names);
-                    let hint = match nearest(name, declared.iter().map(String::as_str)) {
-                        Some(near) => format!("nearest match is `{near}`"),
-                        None => "declare it under `physics.surfaces`".to_string(),
-                    };
-                    rejections.push(ShapeRejection {
-                        entity: *entity,
-                        code: code::SURFACE_UNKNOWN,
-                        reason: format!(
-                            "`SurfaceTag` surface `{name}` names no surface the scene's \
-                             `physics.surfaces` declares; {hint}"
-                        ),
-                        related: Vec::new(),
-                    });
-                }
+                None => rejections.push(self.undeclared_surface(*entity, "SurfaceTag", name)),
             }
         }
+        let mut overlay_ids = Vec::with_capacity(self.surface_overlays.len());
+        for (entity, name, priority) in &self.surface_overlays {
+            match self.surfaces.as_ref().and_then(|table| table.id(name)) {
+                Some(id) => overlay_ids.push((*entity, id, *priority)),
+                None => rejections.push(self.undeclared_surface(*entity, "SurfaceOverlay", name)),
+            }
+        }
+        overlay_ids
+            .sort_unstable_by_key(|&(entity, _, priority)| (std::cmp::Reverse(priority), entity));
+        self.overlay_ids = overlay_ids;
         self.surface_ids = ids;
         self.surfaces_reported = report;
         if report {
@@ -2832,6 +2870,73 @@ impl PhysicsWorld {
             .map(|i| self.surface_ids[i].1)
             .ok()
             .or_else(|| self.surfaces.as_ref()?.default())
+    }
+
+    /// The surface of the first `SurfaceOverlay` (highest priority, then lowest entity) whose
+    /// sensor volume contains `point`, as of the last completed step. An overlay with no body is
+    /// skipped.
+    fn overlay_at(&self, point: [f32; 3]) -> Option<SurfaceId> {
+        let p = to_vector(point);
+        self.overlay_ids.iter().find_map(|&(entity, id, _)| {
+            let &row = self.rows.get(&entity)?;
+            let collider = &self.rapier.colliders[self.table[row].collider];
+            let aabb = collider.compute_aabb();
+            let inside_box = p.x >= aabb.mins.x
+                && p.y >= aabb.mins.y
+                && p.z >= aabb.mins.z
+                && p.x <= aabb.maxs.x
+                && p.y <= aabb.maxs.y
+                && p.z <= aabb.maxs.z;
+            (inside_box && collider.shape().contains_point(collider.position(), p)).then_some(id)
+        })
+    }
+
+    /// The surface a hit on `entity`'s collider at `point` reports: an overlay containing `point`,
+    /// else the entity's `SurfaceTag`, else the scene's `default_surface`, else `None`.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_ecs::World;
+    /// use ludion_physics::PhysicsWorld;
+    ///
+    /// let physics = PhysicsWorld::new(TickRate::DEFAULT);
+    /// let entity = World::new().spawn();
+    /// assert_eq!(physics.surface_at(entity, [0.0; 3]), None);
+    /// ```
+    pub fn surface_at(&self, entity: EntityId, point: [f32; 3]) -> Option<SurfaceId> {
+        self.overlay_at(point).or_else(|| self.surface_of(entity))
+    }
+
+    /// The surface under `point`: an overlay containing it, else the surface of the nearest
+    /// collider a downward ray of `reach` meets through `filter` (resolved by
+    /// [`surface_at`](PhysicsWorld::surface_at) at the hit point). `Ok(None)` when nothing is
+    /// under it. A footstep system and noise emission share this one answer.
+    ///
+    /// `point` must be finite and `reach` finite and non-negative; anything else is
+    /// [`PhysicsError::QueryInput`].
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_physics::{PhysicsWorld, QueryFilter};
+    ///
+    /// let world = PhysicsWorld::new(TickRate::DEFAULT);
+    /// let under = world.surface_under([0.0, 1.0, 0.0], 2.0, &QueryFilter::new()).unwrap();
+    /// assert_eq!(under, None);
+    /// ```
+    pub fn surface_under(
+        &self,
+        point: [f32; 3],
+        reach: f32,
+        filter: &QueryFilter,
+    ) -> Result<Option<SurfaceId>, PhysicsError> {
+        crate::queries::check_ray(point, [0.0, -1.0, 0.0], reach)?;
+        if let Some(id) = self.overlay_at(point) {
+            return Ok(Some(id));
+        }
+        let hits = self.ray_cast(point, [0.0, -1.0, 0.0], reach, filter)?;
+        Ok(hits.first().and_then(|hit| hit.surface))
     }
 
     /// `entity`'s query-only layer bitmask; `0` when it has none or names an undeclared layer.

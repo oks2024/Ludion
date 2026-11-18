@@ -18,7 +18,7 @@ use crate::motor::{
     CharacterMotor, CharacterMotorState, check_in_force, check_postures, in_force, lying_centre,
     lying_rotation, motor_invalid, posture_unknown, yaw_of,
 };
-use crate::surface_tag::{SurfaceTable, SurfaceTag};
+use crate::surface_tag::{SurfaceOverlay, SurfaceTable, SurfaceTag};
 use crate::world::{DEFAULT_GRAVITY, MeshInput, PhysicsWorld, ShapeRejection, mesh_hash_of};
 use ludion_spatial::ParentPose;
 
@@ -345,6 +345,8 @@ struct WriteInputs {
     query_layers: Vec<(EntityId, LayerSet)>,
     /// Every entity's `SurfaceTag` name, entity-sorted: the surface side table.
     surface_tags: Vec<(EntityId, String)>,
+    /// Every entity's `SurfaceOverlay` (name, priority), entity-sorted.
+    surface_overlays: Vec<(EntityId, String, i32)>,
     motor_rejections: Vec<(EntityId, DiagnosticCode, String)>,
     velocities: Vec<(EntityId, Velocity)>,
     plane: Option<Plane>,
@@ -370,6 +372,7 @@ impl PartialEq for WriteInputs {
             && self.ranks == other.ranks
             && self.query_layers == other.query_layers
             && self.surface_tags == other.surface_tags
+            && self.surface_overlays == other.surface_overlays
             && self.live.len() == other.live.len()
             && self.live.iter().zip(&other.live).all(|(a, b)| {
                 (a.0, a.1, a.2, &a.3) == (b.0, b.1, b.2, &b.3) && mesh_input_eq(&a.4, &b.4)
@@ -556,6 +559,11 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         .map(|(entity, (tag,))| (entity, tag.surface.clone()))
         .collect();
     surface_tags.sort_unstable_by_key(|(entity, _)| *entity);
+    let mut surface_overlays: Vec<(EntityId, String, i32)> = world
+        .query_ids::<(&SurfaceOverlay,)>()
+        .map(|(entity, (overlay,))| (entity, overlay.surface.clone(), overlay.priority))
+        .collect();
+    surface_overlays.sort_unstable_by_key(|(entity, _, _)| *entity);
     let colliders = if physics.is_none() {
         live.iter()
             .filter_map(|(entity, ..)| match world.get::<Collider>(*entity) {
@@ -572,6 +580,7 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         ranks,
         query_layers,
         surface_tags,
+        surface_overlays,
         motor_rejections,
         velocities,
         plane,
@@ -677,7 +686,7 @@ fn write<P: PhysicsPose, R: ParentPose>(
     physics.set_ranks(&inputs.ranks);
     physics.apply_settings(settings);
     physics.set_query_layers(&inputs.query_layers);
-    physics.set_surface_tags(&inputs.surface_tags);
+    physics.set_surface_tags(&inputs.surface_tags, &inputs.surface_overlays);
     physics.last_write_frame = Some(ctx.frame.as_u64());
     physics.last_write_held = held;
     apply(world, &mut physics, &inputs);
@@ -733,7 +742,7 @@ pub fn prime<P: PhysicsPose, R: ParentPose>(
     physics.set_ranks(&inputs.ranks);
     physics.apply_settings(&settings);
     physics.set_query_layers(&inputs.query_layers);
-    physics.set_surface_tags(&inputs.surface_tags);
+    physics.set_surface_tags(&inputs.surface_tags, &inputs.surface_overlays);
     physics.last_write_frame = Some(frame.as_u64());
     physics.last_write_held = world.resource::<GameClock>().map(|clock| clock.held());
     apply(world, &mut physics, &inputs);
@@ -814,8 +823,17 @@ fn motor_rows<P: PhysicsPose>(world: &mut World) -> Vec<MotorRow> {
 
 /// Advances the solver by one fixed timestep. A world with no [`PhysicsWorld`] resource has
 /// nothing to step — no collider in it has been claimed yet.
-fn step(world: &mut World, _ctx: &SystemCtx) {
+///
+/// A gameplay scale `0 < s < 1` (`GameClock::scale`) runs the step at `s` of the timestep,
+/// composing by minimum with any scale the game set; a held tick (`s == 0`) and an unscaled
+/// one (`s == 1`) call nothing, so a hold still does not reach physics.
+fn step(world: &mut World, ctx: &SystemCtx) {
+    let scale = ctx.game_scale();
     if let Some(physics) = world.resource_mut::<PhysicsWorld>() {
+        if scale > 0.0 && scale < 1.0 {
+            // Clamped to the solver's own minimum; the in-range scale cannot be rejected.
+            let _ = physics.scale_time(scale.max(crate::MIN_TIME_SCALE));
+        }
         physics.step();
     }
 }

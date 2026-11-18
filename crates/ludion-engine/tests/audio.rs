@@ -1087,3 +1087,186 @@ fn a_world_rebuild_keeps_the_audio_placement() {
     assert_eq!(engine.audio_distance(), AudioDistance::Spatial);
     assert_eq!(bell_pans(&engine), vec![1.0]);
 }
+
+// --- The listener component: `AudioListener` ---
+
+/// A camera at the origin (yawed `camera_yaw` degrees) and the bell 4 units east of it, then
+/// `extra` entities appended — entity ids are document order: camera `e0v0`, bell `e1v0`.
+fn listener_scene(camera_yaw: f32, extra: &str) -> String {
+    let bell = BELL_SCENE.replace(
+        "      Transform: {}\n      Camera: {}\n",
+        &format!(
+            "      Transform:\n        rotation:\n          - 0.0\n          - {camera_yaw}\n          - 0.0\n      Camera: {{}}\n"
+        ),
+    );
+    format!("{bell}{extra}")
+}
+
+fn listener_engine(pan: AudioPan, scene: &str) -> Engine {
+    let mut engine = Engine::builder()
+        .audio_pan(pan)
+        .build()
+        .expect("engine builds");
+    engine.load_inline_scene(scene).expect("scene loads");
+    engine
+}
+
+fn bell_gains(engine: &Engine) -> Vec<f32> {
+    loop_messages(engine, BELL)
+        .iter()
+        .filter_map(|message| match message {
+            AudioMessage::LoopSync { gain, .. } => Some(*gain),
+            _ => None,
+        })
+        .collect()
+}
+
+const EAR_AT_3: &str = "  - name: ear
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 0.0
+          - 0.0
+      AudioListener: {}
+";
+
+fn near(actual: f32, expected: f32) -> bool {
+    (actual - expected).abs() < 1e-5
+}
+
+/// A listener far from the camera: the bell is 1 unit from the ear (gain `0.9`), not 4 from the
+/// camera (`0.6`).
+#[test]
+fn an_emitter_is_measured_from_the_listener_not_the_camera() {
+    let mut engine = listener_engine(AudioPan::Centred, &listener_scene(0.0, EAR_AT_3));
+    engine.advance_live();
+    let gains = bell_gains(&engine);
+    assert!(gains.len() == 1 && near(gains[0], 0.9), "{gains:?}");
+}
+
+/// A listener parented to a mover rides it: moving the parent changes the measured distance.
+#[test]
+fn a_listener_under_a_moving_parent_follows_it() {
+    let ear = "  - name: mover
+    components:
+      Transform: {}
+  - name: ear
+    components:
+      Parent:
+        index: 2
+        generation: 0
+      Transform:
+        translation:
+          - 3.0
+          - 0.0
+          - 0.0
+      AudioListener: {}
+";
+    let mut engine = listener_engine(AudioPan::Centred, &listener_scene(0.0, ear));
+    engine.advance_live();
+    engine
+        .world_mut()
+        .get_mut::<ludion_engine::Transform>(EntityId::new(2, 0))
+        .expect("the mover is alive")
+        .expect("the mover has a Transform")
+        .translation = [4.0, 0.0, 0.0]; // the ear is now at x = 7, three from the bell
+    engine.advance_live();
+    let gains = bell_gains(&engine);
+    assert!(
+        gains.len() == 2 && near(gains[0], 0.9) && near(gains[1], 0.7),
+        "{gains:?}"
+    );
+}
+
+/// Under `orientation: camera` the pan follows the camera's right vector (a camera yawed 90 degrees
+/// has the bell dead ahead: centre); under `self` it follows the listener's own (right: full right).
+#[test]
+fn listener_orientation_picks_whose_axes_pan() {
+    let ear = |orientation: &str| {
+        format!(
+            "  - name: ear
+    components:
+      Transform: {{}}
+      AudioListener:
+        orientation: {orientation}
+"
+        )
+    };
+    let mut by_camera = listener_engine(AudioPan::Stereo, &listener_scene(90.0, &ear("camera")));
+    by_camera.advance_live();
+    let pans = bell_pans(&by_camera);
+    assert!(pans.len() == 1 && pans[0].abs() < 1e-5, "{pans:?}");
+
+    let mut by_self = listener_engine(AudioPan::Stereo, &listener_scene(90.0, &ear("self")));
+    by_self.advance_live();
+    assert_eq!(bell_pans(&by_self), vec![1.0]);
+}
+
+/// A listener with no camera in the world: the emitter syncs (a camera-less world otherwise syncs
+/// nothing), at its distance from the listener.
+#[test]
+fn a_listener_alone_listens_without_a_camera() {
+    let scene = "format: 1
+entities:
+  - name: ear
+    components:
+      Transform: {}
+      AudioListener: {}
+  - name: bell
+    components:
+      Transform:
+        translation:
+          - 4.0
+          - 0.0
+          - 0.0
+      AudioEmitter:
+        sound: sounds/bell.wav
+        range: 10.0
+";
+    let mut engine = listener_engine(AudioPan::Centred, scene);
+    engine.advance_live();
+    let gains = bell_gains(&engine);
+    assert!(gains.len() == 1 && near(gains[0], 0.6), "{gains:?}");
+}
+
+/// A positional one-shot resolves against the listener.
+#[test]
+fn play_at_resolves_against_the_listener() {
+    let mut engine = listener_engine(AudioPan::Centred, &listener_scene(0.0, EAR_AT_3));
+    queue(&mut engine).play_at("hit.wav", 1.0, [4.0, 0.0, 0.0], 10.0);
+    engine.advance_live();
+    let shots = one_shots(&engine);
+    assert!(shots.len() == 1 && near(shots[0].2, 0.9), "{shots:?}");
+}
+
+/// Two listeners: the lowest id is heard from, and `L1650` is reported once however many ticks run.
+#[test]
+fn two_listeners_hear_from_the_lowest_id_and_report_l1650_once() {
+    let second = "  - name: ear-two
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 0.0
+          - 0.0
+      AudioListener: {}
+";
+    let scene = listener_scene(0.0, &format!("{EAR_AT_3}{second}"));
+    let mut engine = listener_engine(AudioPan::Centred, &scene);
+    for _ in 0..4 {
+        engine.advance_live();
+    }
+    let gains = bell_gains(&engine);
+    assert!(gains.len() == 1 && near(gains[0], 0.9), "{gains:?}");
+    let diagnostics = engine
+        .world()
+        .resource::<ludion_engine::Diagnostics>()
+        .expect("Diagnostics installed");
+    assert_eq!(
+        diagnostics
+            .reported(ludion_core::codes::code::AUDIO_LISTENER_DUPLICATE)
+            .count(),
+        1
+    );
+}

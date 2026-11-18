@@ -32,8 +32,7 @@ while one is pending.
 
 **Consequences.** Sleep counts simulated seconds: `sleep_after_ticks` takes `1 / scale` times the ticks. Resting-contact impulses and joint `break_impulse` are compared per step, so they shrink with `dt`,
 and a joint that breaks under sustained load at full speed may hold in slow motion. Kinematic bodies follow the
-ECS pose, not the scale: a full per-tick target in a scaled step pushes rigid bodies at `1 / scale` times
-the speed, so scale your kinematic motion by the same factor.
+ECS pose: one driven by `ctx.game_dt` (a `PathFollower`) is already scaled and, under a gameplay scale, pushes at its true speed; one written from `ctx.dt` pushes at `1 / scale` times the speed, so scale it by the same factor.
 
 **Impacts.** An impact's impulse is the `Started` impulse at any scale (pinned by
 `an_impact_impulse_survives_time_scale`). A pair starts the first step it touches (penetrating or
@@ -47,8 +46,10 @@ resting contact.
 
 Joints keep their full-speed gain: a scaled step corrects a joint's drift at the full-speed rate per simulated second, not amplified by `1 / scale`, so a ragdoll landing into a hit-stop settles as unscaled and an impact's joint stretch closes at the slowed rate.
 
-**A hold does not reach physics:** `GameClock::hold` (`ludion docs game-clock`) and `Speed` do not slow
-bodies; call `freeze()` on the same frames.
+**A gameplay scale drives the step.** Under `GameClock::scale(s)` (`ludion docs game-clock`) the step runs at `dt × s` with no game call, min-composed with any `scale_time` the game made; `s` is clamped up to `MIN_TIME_SCALE` (`1e-3`, a hair above the clock's `1/1024`). An unscaled clock calls nothing, so nothing moves.
+
+**A hold does not reach physics:** `GameClock::hold` and `Speed` do not slow
+bodies; pair `freeze()` with `hold()` on the same frames.
 
 A hit-stop then slow motion is two frame counters in a hashed component: `freeze()` while `hit_stop > 0`,
 else `scale_time(0.25)` while `slow_mo > 0` (the doctest on `PhysicsWorld::scale_time`).

@@ -183,6 +183,153 @@ pub struct Perceiver {
     /// Keeps a [`StimulusRecord`] per sensed source; unset remembers nothing (default none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<PerceiverMemory>,
+    /// Hears noises emitted with `emit_noise`; unset hears nothing (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hearing: Option<Hearing>,
+}
+
+/// How a [`Perceiver`] hears: an ear offset, a sensitivity and the noise kinds it listens for.
+///
+/// ```
+/// use ludion_components::Hearing;
+///
+/// let ears: Hearing = serde_json::from_value(serde_json::json!({ "hears": ["footstep"] })).unwrap();
+/// assert_eq!(ears.sensitivity, 1.0);
+/// assert_eq!(ears.ear, [0.0; 3]);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct Hearing {
+    /// The ear in the entity's local frame, metres (default `[0, 0, 0]`).
+    #[serde(default, skip_serializing_if = "is_zero_vec3")]
+    pub ear: [f32; 3],
+    /// Scales every noise's radius for this listener (default `1.0`; finite, not negative).
+    #[serde(
+        default = "default_visibility",
+        skip_serializing_if = "is_default_visibility"
+    )]
+    pub sensitivity: f32,
+    /// The `PerceptionConfig` noise kinds the listener hears, one or more, each once.
+    #[serde(default)]
+    pub hears: Vec<String>,
+}
+
+/// The volume of a [`NoiseZone`], in the zone entity's world pose.
+///
+/// ```
+/// use ludion_components::NoiseZoneShape;
+///
+/// let shape: NoiseZoneShape = serde_json::from_value(serde_json::json!({ "sphere": { "radius": 4.0 } })).unwrap();
+/// assert_eq!(shape, NoiseZoneShape::Sphere { radius: 4.0 });
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NoiseZoneShape {
+    /// A box oriented by the entity's rotation.
+    Box {
+        /// Half the box's size along each local axis, metres (finite and above 0).
+        half_extents: [f32; 3],
+    },
+    /// A sphere about the entity's origin.
+    Sphere {
+        /// Metres (finite and above 0).
+        radius: f32,
+    },
+}
+
+/// A volume that scales the radius of the noises emitted inside it: rain, a loud street, a muffled
+/// carpet. Among the zones containing a noise and matching its kind the highest `priority` wins;
+/// multipliers never stack.
+///
+/// ```yaml
+/// components:
+///   NoiseZone:
+///     shape:
+///       box:
+///         half_extents:
+///           - 20.0
+///           - 5.0
+///           - 20.0
+///     multiplier: 0.5
+///     kinds:
+///       - footstep
+/// ```
+///
+/// ```
+/// use ludion_components::NoiseZone;
+///
+/// let rain: NoiseZone = serde_json::from_value(serde_json::json!({
+///     "shape": { "sphere": { "radius": 30.0 } }, "multiplier": 0.5,
+/// }))
+/// .unwrap();
+/// assert!(rain.kinds.is_empty() && rain.priority == 0);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct NoiseZone {
+    /// The volume.
+    pub shape: NoiseZoneShape,
+    /// Scales the radius of a noise inside (default `1.0`; finite, not negative).
+    #[serde(
+        default = "default_visibility",
+        skip_serializing_if = "is_default_visibility"
+    )]
+    pub multiplier: f32,
+    /// The noise kinds the zone applies to; empty means every kind (default `[]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<String>,
+    /// The higher one wins where zones overlap; ties go to the lowest entity (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_priority")]
+    pub priority: i32,
+}
+
+/// A noise `emit_noise` has queued and `perception_update` has not yet delivered. It is a runtime
+/// entity, so a snapshot between emission and delivery loses nothing.
+///
+/// ```
+/// use ludion_components::PendingNoise;
+///
+/// let noise: PendingNoise = serde_json::from_value(serde_json::json!({
+///     "id": 3, "at": [1.0, 0.0, 2.0], "radius": 8.0, "loudness": 1.0, "kind": "footstep",
+/// }))
+/// .unwrap();
+/// assert!(noise.source.is_none() && !noise.occlusion);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct PendingNoise {
+    /// The monotonic noise id; delivery order.
+    pub id: u64,
+    /// Where it was made, world metres.
+    pub at: [f32; 3],
+    /// Metres it carries before zones, surface and sensitivity.
+    pub radius: f32,
+    /// How loud it was, passed to the listener.
+    pub loudness: f32,
+    /// A `PerceptionConfig` noise kind.
+    pub kind: String,
+    /// What made it (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub source: Option<EntityId>,
+    /// The surface it was made on, a physics `SurfaceId` (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<u16>,
+    /// Whether sound occluders between the noise and a listener shrink its radius (default `false`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub occlusion: bool,
+}
+
+/// The singleton `perception_update` and `emit_noise` keep their counters in, spawned on the first
+/// noise. Hashed and snapshotted.
+///
+/// ```
+/// use ludion_components::PerceptionState;
+///
+/// assert_eq!(PerceptionState::default().next_noise_id, 0);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct PerceptionState {
+    /// The id the next emitted noise gets (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_tick")]
+    pub next_noise_id: u64,
 }
 
 /// How long a [`Perceiver`] remembers what it sensed, and how much. Times are gameplay seconds, so a
@@ -299,6 +446,9 @@ pub struct StimulusRecord {
     /// The lowest sight zone index that saw the source on the last sighting (default `0`).
     #[serde(default, skip_serializing_if = "is_zero_zone")]
     pub zone: u8,
+    /// The noise kind of a hearing record; empty for every other sense (default `""`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
 }
 
 /// How many of a [`SightTarget`]'s sample points must be seen for the target to count as seen.
@@ -410,6 +560,9 @@ fn is_zero_tick(value: &u64) -> bool {
 fn is_zero_zone(value: &u8) -> bool {
     *value == 0
 }
+fn is_zero_priority(value: &i32) -> bool {
+    *value == 0
+}
 fn default_forget_sight_s() -> f32 {
     12.0
 }
@@ -488,6 +641,37 @@ impl Found {
                 .with_path(pointer)
                 .with_help(help.to_string()),
         );
+    }
+
+    /// Rejects an empty or repeated name in `value[field]`, and an empty list when `needs_one`.
+    fn names_listed(
+        &mut self,
+        value: &Value,
+        base: &str,
+        field: &str,
+        needs_one: bool,
+        help: &str,
+    ) {
+        let names = value.get(field).and_then(Value::as_array);
+        if needs_one && names.is_none_or(Vec::is_empty) {
+            self.reject(
+                format!("{base}/{field}"),
+                format!("`{field}` needs at least one name"),
+                help,
+            );
+        }
+        let mut seen: Vec<&str> = Vec::new();
+        for (i, name) in names.into_iter().flatten().enumerate() {
+            let Some(name) = name.as_str() else { continue };
+            if name.is_empty() || seen.contains(&name) {
+                self.reject(
+                    format!("{base}/{field}/{i}"),
+                    format!("`{field}[{i}]` is empty or repeats `{name}`"),
+                    help,
+                );
+            }
+            seen.push(name);
+        }
     }
 
     /// Rejects `value[field]` when it is present, a number, and `fails` it.
@@ -665,6 +849,78 @@ impl SemanticValidate for Perceiver {
             }
             found.out.extend(bad.out);
         }
+        if let Some(hearing) = value.get("hearing").filter(|h| h.is_object()) {
+            let mut bad = Found::new(code::HEARING_INVALID, "Perceiver");
+            let help = "see `ludion docs perception`; `ludion explain L1576`";
+            if let Some(ear) = hearing.get("ear").and_then(Value::as_array) {
+                for (i, c) in ear.iter().enumerate() {
+                    if number(c).is_some_and(|n| !n.is_finite()) {
+                        bad.reject(
+                            format!("/hearing/ear/{i}"),
+                            "`ear` must be finite".into(),
+                            help,
+                        );
+                    }
+                }
+            }
+            bad.number_where(
+                hearing,
+                "/hearing",
+                "sensitivity",
+                |n| !(n.is_finite() && n >= 0.0),
+                "must be finite and not negative",
+                help,
+            );
+            bad.names_listed(hearing, "/hearing", "hears", true, help);
+            found.out.extend(bad.out);
+        }
+        found.out
+    }
+}
+
+impl SemanticValidate for NoiseZone {
+    /// Rejects what a schema cannot (`L1575`, pointer into the field): a box half extent or sphere
+    /// radius that is not finite and above 0, a negative or non-finite `multiplier`, and an empty or
+    /// repeated `kinds` entry.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut found = Found::new(code::NOISE_ZONE_INVALID, "NoiseZone");
+        let help = "see `ludion docs perception`; `ludion explain L1575`";
+        if let Some(shape) = value.get("shape") {
+            if let Some(extents) = shape
+                .get("box")
+                .and_then(|b| b.get("half_extents"))
+                .and_then(Value::as_array)
+            {
+                for (i, c) in extents.iter().enumerate() {
+                    if number(c).is_some_and(|n| !(n.is_finite() && n > 0.0)) {
+                        found.reject(
+                            format!("/shape/box/half_extents/{i}"),
+                            "`half_extents` must be finite and above 0".into(),
+                            help,
+                        );
+                    }
+                }
+            }
+            if let Some(sphere) = shape.get("sphere") {
+                found.number_where(
+                    sphere,
+                    "/shape/sphere",
+                    "radius",
+                    |n| !(n.is_finite() && n > 0.0),
+                    "must be finite and above 0",
+                    help,
+                );
+            }
+        }
+        found.number_where(
+            value,
+            "",
+            "multiplier",
+            |n| !(n.is_finite() && n >= 0.0),
+            "must be finite and not negative",
+            help,
+        );
+        found.names_listed(value, "", "kinds", false, help);
         found.out
     }
 }
@@ -965,6 +1221,54 @@ mod tests {
             "last_position": [0.0, 1e39, 0.0], "strength": 1e39,
         }));
         assert_eq!(paths(bad), ["/last_position/1", "/strength"]);
+    }
+
+    #[test]
+    fn hearing_fields_out_of_range_name_their_pointers() {
+        let ok = perceiver(json!({ "hearing": { "hears": ["footstep"] } }));
+        assert!(Perceiver::validate_semantics(&ok).is_empty());
+        let parsed: Perceiver = serde_json::from_value(ok.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), ok);
+        let bad = Perceiver::validate_semantics(&perceiver(json!({
+            "hearing": { "ear": [0.0, 1e39, 0.0], "sensitivity": -1.0, "hears": ["a", "a", ""] },
+        })));
+        assert_eq!(bad[0].code, code::HEARING_INVALID);
+        assert_eq!(
+            paths(bad),
+            [
+                "/hearing/ear/1",
+                "/hearing/sensitivity",
+                "/hearing/hears/1",
+                "/hearing/hears/2"
+            ]
+        );
+        let none = perceiver(json!({ "hearing": { "hears": [] } }));
+        assert_eq!(
+            paths(Perceiver::validate_semantics(&none)),
+            ["/hearing/hears"]
+        );
+    }
+
+    #[test]
+    fn zone_fields_out_of_range_name_their_pointers_for_noise_zones() {
+        let clean = json!({ "shape": { "box": { "half_extents": [1.0, 2.0, 3.0] } } });
+        assert!(NoiseZone::validate_semantics(&clean).is_empty());
+        let parsed: NoiseZone = serde_json::from_value(clean.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), clean);
+        let bad = NoiseZone::validate_semantics(&json!({
+            "shape": { "box": { "half_extents": [1.0, 0.0, 1.0] } },
+            "multiplier": -0.5, "kinds": ["a", "a"],
+        }));
+        assert_eq!(bad[0].code, code::NOISE_ZONE_INVALID);
+        assert_eq!(
+            paths(bad),
+            ["/shape/box/half_extents/1", "/multiplier", "/kinds/1"]
+        );
+        let sphere = json!({ "shape": { "sphere": { "radius": 0.0 } }, "kinds": [""] });
+        assert_eq!(
+            paths(NoiseZone::validate_semantics(&sphere)),
+            ["/shape/sphere/radius", "/kinds/0"]
+        );
     }
 
     #[test]

@@ -300,6 +300,7 @@ pub(crate) struct PreparedDocs {
 /// against the current schema.
 ///
 /// `inline` is the engine's builder-supplied docs, merged over the walk by key.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_docs(
     root: &Path,
     doc_kinds: &[DocKind],
@@ -307,9 +308,10 @@ pub(crate) fn prepare_docs(
     validators: &[DocValidator],
     inline: &BTreeMap<String, InlineDoc>,
     reloads: &DocReloadLog,
+    save_dir: Option<&Path>,
     world: &mut World,
 ) -> Result<PreparedDocs, Vec<Diagnostic>> {
-    let skips = load_doc_stores(root, doc_kinds, game_kinds, inline, world)?;
+    let skips = load_doc_stores(root, doc_kinds, game_kinds, inline, save_dir, world)?;
     let mut warnings = Vec::new();
     if !validators.is_empty() || doc_kinds.iter().any(|dk| dk.singleton) {
         let (errors, reported): (Vec<_>, Vec<_>) =
@@ -733,6 +735,7 @@ pub(crate) fn load_doc_stores(
     doc_kinds: &[DocKind],
     game_kinds: bool,
     inline: &BTreeMap<String, InlineDoc>,
+    save_dir: Option<&Path>,
     world: &mut World,
 ) -> Result<DocSkips, Vec<Diagnostic>> {
     if doc_kinds.is_empty() && inline.is_empty() {
@@ -740,7 +743,7 @@ pub(crate) fn load_doc_stores(
     }
 
     // A shadowed file is not even read, so an inline doc also wins over a malformed file.
-    let mut files = content_root_yaml(root);
+    let mut files = content_root_yaml(root, save_dir);
     files.retain(|(key, _)| !inline.contains_key(key));
 
     let mut per_kind: BTreeMap<&str, BTreeMap<String, Value>> = BTreeMap::new();
@@ -831,29 +834,60 @@ pub(crate) fn load_doc_stores(
 
 /// Every `*.yaml` file the content-root walk reads, keyed by slash-normalized path relative to `root`
 /// and sorted by key. Dot-directories, `target/` and `node_modules/` are skipped: build output and
-/// engine scratch are not content. The boot walk and the facade's `--check-docs` both use this, so
-/// the files a host counts are exactly the files the engine validated.
+/// engine scratch are not content. So is `save_dir` (the engine's `<save_root>/save`, see
+/// `Engine::save_dir`) when it lies under `root`: saved player state is not content, and the lenient
+/// save loads own it. The boot walk and the facade's `--check-docs` both use this, so the files a
+/// host counts are exactly the files the engine validated.
 ///
 /// # Example
 /// ```
 /// let root = std::env::temp_dir().join(format!("ludion-content-root-yaml-{}", std::process::id()));
-/// for rel in ["a.yaml", "target/b.yaml", ".ludion/c.yaml"] {
+/// for rel in ["a.yaml", "target/b.yaml", ".ludion/c.yaml", "save/x.yaml"] {
 ///     let path = root.join(rel);
 ///     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
 ///     std::fs::write(path, "format: 1\n").unwrap();
 /// }
-/// let keys: Vec<String> = ludion_engine::content_root_yaml(&root)
-///     .into_iter()
-///     .map(|(key, _)| key)
-///     .collect();
-/// assert_eq!(keys, ["a.yaml"]);
+/// let keys = |skip: Option<&std::path::Path>| -> Vec<String> {
+///     ludion_engine::content_root_yaml(&root, skip)
+///         .into_iter()
+///         .map(|(key, _)| key)
+///         .collect()
+/// };
+/// assert_eq!(keys(None), ["a.yaml", "save/x.yaml"]);
+/// assert_eq!(keys(Some(&root.join("save"))), ["a.yaml"]);
 /// std::fs::remove_dir_all(&root).unwrap();
 /// ```
-pub fn content_root_yaml(root: &Path) -> Vec<(String, PathBuf)> {
+pub fn content_root_yaml(root: &Path, save_dir: Option<&Path>) -> Vec<(String, PathBuf)> {
+    let skip = save_dir.and_then(|dir| save_dir_key(root, dir));
     let mut files = Vec::new();
-    collect_yaml(root, root, &mut files);
+    collect_yaml(root, root, skip.as_deref(), &mut files);
     files.sort_by(|a, b| a.0.cmp(&b.0));
     files
+}
+
+/// The slash-normalized key of `save_dir` relative to `root`, or `None` when it lies outside the
+/// content root (a `save_root` set elsewhere). Falls back to canonical paths when one side is
+/// relative and the other absolute. The walk and the doc reload share this rule.
+pub(crate) fn save_dir_key(root: &Path, save_dir: &Path) -> Option<String> {
+    let rel = match save_dir.strip_prefix(root) {
+        Ok(rel) => rel.to_path_buf(),
+        Err(_) => save_dir
+            .canonicalize()
+            .ok()?
+            .strip_prefix(root.canonicalize().ok()?)
+            .ok()?
+            .to_path_buf(),
+    };
+    let key = rel.to_string_lossy().replace('\\', "/");
+    (!key.is_empty()).then_some(key)
+}
+
+/// Whether the doc `key` lies at or under the save directory's relative key.
+pub(crate) fn key_under_save_dir(key: &str, save_key: &str) -> bool {
+    key == save_key
+        || key
+            .strip_prefix(save_key)
+            .is_some_and(|r| r.starts_with('/'))
 }
 
 /// Recursively collects every `*.yaml` file under `dir`, keyed by its slash-normalized path relative
@@ -861,7 +895,7 @@ pub fn content_root_yaml(root: &Path) -> Vec<(String, PathBuf)> {
 /// dot-directories — `.ludion/` is the engine's own scratch/output convention and never holds
 /// content, so a stray scratch YAML there must not fail a game's boot. The caller sorts, so the
 /// arbitrary `read_dir` order does not leak.
-fn collect_yaml(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
+fn collect_yaml(root: &Path, dir: &Path, skip: Option<&str>, out: &mut Vec<(String, PathBuf)>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -876,7 +910,14 @@ fn collect_yaml(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
             {
                 continue;
             }
-            collect_yaml(root, &path, out);
+            if let Some(skip) = skip
+                && path
+                    .strip_prefix(root)
+                    .is_ok_and(|rel| rel.to_string_lossy().replace('\\', "/") == skip)
+            {
+                continue;
+            }
+            collect_yaml(root, &path, skip, out);
         } else if path.extension().and_then(|e| e.to_str()) == Some("yaml")
             && let Ok(rel) = path.strip_prefix(root)
         {

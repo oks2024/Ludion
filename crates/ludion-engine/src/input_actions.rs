@@ -44,19 +44,23 @@ pub fn validate_input_actions(world: &World) -> Vec<Diagnostic> {
 
 /// Inserts an [`Actions`] compiled from the store's single document at `rate`, unless the world
 /// already holds one (a `carry_resource` moved it across a switch) or the document is absent or
-/// invalid (the build already refused that).
-pub(crate) fn install(world: &mut World, rate: TickRate) {
+/// invalid (the build already refused that). Returns whether it inserted a fresh one.
+pub(crate) fn install(world: &mut World, rate: TickRate) -> bool {
     if world.resource::<Actions>().is_some() {
-        return;
+        return false;
     }
     let Some(doc) = world
         .resource::<DocStore<InputActionsDoc>>()
         .and_then(DocStore::single)
     else {
-        return;
+        return false;
     };
-    if let Ok(map) = ActionMap::compile(doc, rate) {
-        world.insert_resource(Actions::new(map));
+    match ActionMap::compile(doc, rate) {
+        Ok(map) => {
+            world.insert_resource(Actions::new(map));
+            true
+        }
+        Err(_) => false,
     }
 }
 

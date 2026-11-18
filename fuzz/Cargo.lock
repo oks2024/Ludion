@@ -749,6 +749,7 @@ dependencies = [
  "ludion-ecs",
  "schemars",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -108,6 +108,29 @@ impl Machine for Guard {
 //          .system("guard_ai", ludion::ai::ai_tick::<Guard>)
 ```
 
+## Tracing and describe
+
+`ludion trace --scene <FILE> --frames <N> --channels ai,ai_states` (or a game's `--trace`, or
+`ludion_engine::trace_with` in a test; `ludion docs verify-loop`) prints two channels, one JSON line each:
+
+```
+{"channel":"ai","tick":10,"entity":"leader","machine":"Guard","from":["Root","Patrol"],"to":["Root","Investigate"],"cause":"event:Noise","event":"Noise"}
+{"channel":"ai_states","tick":10,"entity":"leader","machine":"Guard","path":["Root","Investigate"]}
+```
+
+- `ai`: one line per transition, `from`/`to` the active path (empty `from` for a start; `from == to`
+  for a `Restart`). `cause` is `start`, `event:<Name>` (the variant name; `event` holds the payload as
+  JSON), `update`, or `chain` (a `cx.go` from `enter`/`exit`, or a transition after the start). A no-op `Go` and a capped
+  transition print nothing. `ai_states`: one line per agent per tick it ran.
+- A tick the game held (paused, scale zero) prints no ai lines. `tick` is the frame the tick ran as.
+  State and event names are serde names, so `#[serde(rename_all)]` shows in the trace.
+- Tracing never moves the `WorldHash`. Lines run machines in schedule order, agents ascending.
+
+`engine.describe` gains an `ai` key once a machine has ticked (absent otherwise):
+`{"machines":[{machine, component, root, leaf_first, inbox_capacity, game_tick, states:[{state, parent,
+initial}], agents:[{entity, name, path, entered, ticks_in, inbox, dropped}]}]}`. `ticks_in[i]` is
+`game_tick - entered[i]`.
+
 ## Gotchas
 
 - Register the blackboard yourself; `register_machine` registers only the mind and the squad

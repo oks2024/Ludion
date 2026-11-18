@@ -159,6 +159,7 @@ mod tests {
             render_extent: None,
             replay_content_hash: Some(replay_content_hash()),
             game: None,
+            save_docs: Default::default(),
         }
     }
 
@@ -230,6 +231,31 @@ mod tests {
             ludion_physics::PHYSICS_BLOB_VERSION
         );
         assert!(document["input_event"].to_string().contains("\"Left\""));
+    }
+
+    #[test]
+    fn save_docs_stay_outside_the_content_hash_and_the_header_bytes() {
+        let document = content_schema().to_string();
+        assert!(
+            !document.contains("save_docs"),
+            "save_docs is outside the content schema"
+        );
+
+        let empty = serde_json::to_value(header()).unwrap();
+        assert!(empty.get("save_docs").is_none(), "an empty map is omitted");
+        let back: ReplayHeader = serde_json::from_value(empty).unwrap();
+        assert!(
+            back.save_docs.is_empty(),
+            "a header without the key reads empty"
+        );
+
+        let carrying = ReplayHeader {
+            save_docs: [("input-bindings".to_string(), "text".to_string())].into(),
+            ..header()
+        };
+        let value = serde_json::to_value(&carrying).unwrap();
+        assert_eq!(value["save_docs"]["input-bindings"], "text");
+        assert!(check(&carrying).is_ok(), "the content gate ignores it");
     }
 
     #[test]

@@ -1,0 +1,12 @@
+{"channel":"ai","tick":0,"entity":"leader","machine":"Guard","from":[],"to":["Root","Patrol"],"cause":"start"}
+{"channel":"ai","tick":0,"entity":"flank-a","machine":"Guard","from":[],"to":["Root","Patrol"],"cause":"start"}
+{"channel":"ai","tick":0,"entity":"flank-b","machine":"Guard","from":[],"to":["Root","Patrol"],"cause":"start"}
+{"channel":"ai","tick":10,"entity":"leader","machine":"Guard","from":["Root","Patrol"],"to":["Root","Investigate"],"cause":"event:Noise","event":"Noise"}
+{"channel":"ai","tick":10,"entity":"flank-a","machine":"Guard","from":["Root","Patrol"],"to":["Root","Investigate"],"cause":"event:Noise","event":"Noise"}
+{"channel":"ai","tick":10,"entity":"flank-b","machine":"Guard","from":["Root","Patrol"],"to":["Root","Investigate"],"cause":"event:Noise","event":"Noise"}
+{"channel":"ai","tick":70,"entity":"leader","machine":"Guard","from":["Root","Investigate"],"to":["Root","Return"],"cause":"update"}
+{"channel":"ai","tick":70,"entity":"flank-a","machine":"Guard","from":["Root","Investigate"],"to":["Root","Return"],"cause":"update"}
+{"channel":"ai","tick":70,"entity":"flank-b","machine":"Guard","from":["Root","Investigate"],"to":["Root","Return"],"cause":"update"}
+{"channel":"ai","tick":100,"entity":"leader","machine":"Guard","from":["Root","Return"],"to":["Root","Patrol"],"cause":"update"}
+{"channel":"ai","tick":100,"entity":"flank-a","machine":"Guard","from":["Root","Return"],"to":["Root","Patrol"],"cause":"update"}
+{"channel":"ai","tick":100,"entity":"flank-b","machine":"Guard","from":["Root","Return"],"to":["Root","Patrol"],"cause":"update"}

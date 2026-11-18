@@ -69,10 +69,9 @@ fn slow_while_aiming(world: &mut World, _ctx: &SystemCtx) {
 | `!game_advanced()` | held ticks only |
 
 - **Stamps stay whole frames.** `ctx.game_frame` is the floor of `ctx.game_instant`: a `started` stamp is a floor frame, so an effect started mid-slow begins up to one gameplay frame early. Read `game_instant` (`ticks_since(started)`) for fractional age.
-- **Follows the scale:** everything that integrates `ctx.game_dt` — `PathFollower`, camera rig springs, projectile pools, `ludion-ai` state machines (`ai_tick` runs every tick time moves: integrate `ctx.game_dt`) — and every closed form, which reads the exact fractional instant and so slows smoothly: volley bullets, particle emitters, assembly and character clips (phase, crossfade weight), `ParentJoint` sockets, the ragdoll switch pose and animation events (each fires once, in order, on the tick its clip time is crossed). The pattern timeline fires once per crossed gameplay frame (`game_frames_crossed()`). `ludion-ai` `Timer`/`Cooldown` count whole gameplay frames: `just_expired` fires once, on the crossing tick.
+- **Follows the scale:** the physics step (it runs at `dt × s`, min-composed with the game's own `scale_time`; `ludion docs physics-time-scale`), the motor's `PhysicsWorld::gameplay_dt` (`dt × s`) and everything that integrates `ctx.game_dt` — `PathFollower` (a kinematic platform pushes at its true speed), camera rig springs, projectile pools, `ludion-ai` state machines (`ai_tick` runs every tick time moves: integrate `ctx.game_dt`) — and every closed form, which reads the exact fractional instant and so slows smoothly: volley bullets, particle emitters, assembly and character clips (phase, crossfade weight), `ParentJoint` sockets, the ragdoll switch pose and animation events (each fires once, in order, on the tick its clip time is crossed). The pattern timeline fires once per crossed gameplay frame (`game_frames_crossed()`). `ludion-ai` `Timer`/`Cooldown` count whole gameplay frames: `just_expired` fires once, on the crossing tick.
 - **Pass `ctx.game_instant` to the evaluators.** They take `impl Into<GameTime>`: `ctx.game_time` still compiles but steps in whole frames under a scale.
 - **`set_clip_speed` keeps a whole-frame anchor** (`ClipAnchor.frame`): a speed change applies on the floor gameplay frame, so the pose jumps by the fraction times the speed difference.
-- **Does not follow yet:** physics keeps its full step, and the motor's `PhysicsWorld::gameplay_dt` returns a whole tick on a scaled frame. A game must not scale while it relies on either.
 - The scale stays out of `WorldHash`, like `hold`; the clock rides `engine.snapshot` and is omitted while it excludes nothing.
 
 ## Rules
@@ -140,3 +139,4 @@ fn slow_while_aiming(world: &mut World, _ctx: &SystemCtx) {
 - `ludion docs particles` — `ParticleEmitter`'s live window, the other closed-form evaluator.
 - `ludion docs sprite-animation` — flipbook/clip playback through `Animation`.
 - `ludion docs scene-transitions` — `carry_resource`, and what does and doesn't survive a switch.
+- `ludion docs dialogue` — a line with `holds_gameplay: true` holds this clock while it plays.

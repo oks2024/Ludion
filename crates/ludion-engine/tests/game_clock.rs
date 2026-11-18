@@ -42,7 +42,7 @@ const HELD: u64 = HOLD_TO - HOLD_FROM + 1;
 
 /// A ring every six frames for the whole run, each bullet outliving it — so the census at the end
 /// is every volley ever fired, and a volley fired one frame early or late is visible in it.
-const STORM: &str = "\
+pub(crate) const STORM: &str = "\
 format: 1
 kind: pattern
 bullets:
@@ -202,7 +202,7 @@ fn playing(dir: &Path, freezes: bool) -> Engine {
     engine
 }
 
-fn advance(engine: &mut Engine, ticks: u64) {
+pub(crate) fn advance(engine: &mut Engine, ticks: u64) {
     engine
         .execute(Command::SimStep(SimStepParams { ticks, hash: false }))
         .expect("the sim steps");
@@ -247,7 +247,7 @@ fn bullet_kind(engine: &Engine, volley: &Volley) -> BulletKind {
 /// One volley's identity — what it is, when it fired in *gameplay* frames, and the stream it draws
 /// from — with every live bullet's position at gameplay time.
 #[derive(Clone, PartialEq, Eq, Debug)]
-struct VolleyField {
+pub(crate) struct VolleyField {
     bullet: String,
     started: u64,
     seed: u64,
@@ -258,7 +258,7 @@ struct VolleyField {
 
 /// The whole observable field: two runs agreeing on it agree on what the player sees and on what a
 /// hit test would score.
-fn field(engine: &Engine) -> Vec<VolleyField> {
+pub(crate) fn field(engine: &Engine) -> Vec<VolleyField> {
     let now = game_now(engine);
     let plane = Plane::of(engine.world());
     volleys(engine)
@@ -285,7 +285,7 @@ fn field(engine: &Engine) -> Vec<VolleyField> {
         .collect()
 }
 
-fn drawn(engine: &Engine) -> RenderScene {
+pub(crate) fn drawn(engine: &Engine) -> RenderScene {
     extract_at(
         engine.world(),
         (320, 180),
@@ -493,7 +493,7 @@ fn a_scaled_snapshot_round_trips() {
 // --- Closed forms under a scale ----------------------------------------------------------------
 
 /// One-part assembly playing a one-shot `swing` with a mid-clip `hit` event.
-const ASSEMBLY: &str = "\
+pub(crate) const ASSEMBLY: &str = "\
 format: 1
 kind: assembly
 name: fixture
@@ -519,7 +519,7 @@ clips:
   swing: anims/swing.anim.yaml
 ";
 
-const SWING: &str = "\
+pub(crate) const SWING: &str = "\
 format: 1
 kind: animation
 name: swing
@@ -548,7 +548,7 @@ tracks:
 /// The turret and a swinging assembly, plus a plume whose particles are born and die only on
 /// multiples of ten ticks (rate 6/s, a fixed two-second life), so no birth or death falls inside
 /// a single tick of the mid-ramp check.
-const SCALED_SCENE: &str = "\
+pub(crate) const SCALED_SCENE: &str = "\
 format: 1
 seed: 5
 entities:
@@ -605,9 +605,9 @@ entities:
 ";
 
 #[derive(Default)]
-struct EventLog(Vec<String>);
+pub(crate) struct EventLog(pub(crate) Vec<String>);
 
-fn record_events(world: &mut World, _ctx: &SystemCtx) {
+pub(crate) fn record_events(world: &mut World, _ctx: &SystemCtx) {
     let fired: Vec<String> = world
         .resource::<AnimationEvents>()
         .map(|events| events.iter().map(|e| e.name.clone()).collect())
@@ -666,7 +666,7 @@ fn instant_q16(engine: &Engine) -> u64 {
         .as_q16()
 }
 
-fn events_of(engine: &Engine) -> Vec<String> {
+pub(crate) fn events_of(engine: &Engine) -> Vec<String> {
     engine
         .world()
         .resource::<EventLog>()
@@ -675,7 +675,7 @@ fn events_of(engine: &Engine) -> Vec<String> {
 }
 
 /// Steps one tick at a time until gameplay time reads `target_q16` exactly.
-fn advance_to_instant(engine: &mut Engine, target_q16: u64) {
+pub(crate) fn advance_to_instant(engine: &mut Engine, target_q16: u64) {
     for _ in 0..4000 {
         if instant_q16(engine) == target_q16 {
             return;

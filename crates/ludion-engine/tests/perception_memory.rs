@@ -86,6 +86,7 @@ fn walker(at: [f32; 3]) -> String {
 fn builder() -> EngineBuilder {
     Engine::builder().perception(PerceptionConfig {
         classes: vec!["player".into(), "decoy".into()],
+        ..Default::default()
     })
 }
 

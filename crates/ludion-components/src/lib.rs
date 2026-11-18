@@ -37,6 +37,8 @@ use ludion_spatial::{
 };
 
 pub mod animation_layers;
+pub mod audio;
+pub mod blend_clock;
 pub mod lane;
 pub mod light_exposure;
 pub mod nav_route;
@@ -52,6 +54,8 @@ pub use animation_layers::{
     AnimationLayer, AnimationLayers, LayerMode, fade_layer, layer_weight, layer_weight_at,
     play_layer,
 };
+pub use audio::{AudioListener, ListenerOrientation};
+pub use blend_clock::BlendClock;
 pub use lane::{LaneConstraint, LaneEnds};
 pub use light_exposure::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
 pub use nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
@@ -59,13 +63,14 @@ pub use path_follow::{PathFollower, PathMode, PathOrient};
 pub use patrol::{PatrolFollower, PatrolPhase, PatrolResume, PatrolState};
 pub use patterns::{PatternPlayer, VOLLEY_MAX_BULLETS, Volley, VolleyShape};
 pub use perception::{
-    Look, PERCEIVER_MEMORY_MAX_RECORDS, PERCEPTION_MAX_PARTS, Perceiver, PerceiverMemory, Require,
-    Sense, SightPoint, SightTarget, SightZone, StimulusRecord, SweepShape, ZoneSweep,
+    Hearing, Look, NoiseZone, NoiseZoneShape, PERCEIVER_MEMORY_MAX_RECORDS, PERCEPTION_MAX_PARTS,
+    PendingNoise, Perceiver, PerceiverMemory, PerceptionState, Require, Sense, SightPoint,
+    SightTarget, SightZone, StimulusRecord, SweepShape, ZoneSweep,
 };
 pub use prefab::PrefabInstance;
 pub use ui::{
-    UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiNav, UiTween, UiTweenField, UiTweenRepeat,
-    UiTweenTrack, UiWorldAnchor,
+    UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiNav, UiSlice, UiSliceCenter, UiTween,
+    UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
 };
 
 /// An entity's human-readable name — the world-side home of a scene entity's `name:` field.
@@ -4716,6 +4721,15 @@ pub struct UiRect {
     /// like over a sized rect. The one exception to "UI anchors, never stretches".
     #[serde(default, skip_serializing_if = "is_false")]
     pub fill: bool,
+    /// The sub-rect of the texture (or atlas region) the rect samples, `[u0, v0, u1, v1]` in 0..1
+    /// with a top-left origin (default none: the whole image). Ignored beside [`slice`](UiRect::slice)
+    /// (`L1613`) and needs a `texture` or `atlas`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uv_rect: Option<[f32; 4]>,
+    /// Draw the rect as a nine-slice frame (default none): corners keep their size, edges and centre
+    /// stretch. Wins over [`uv_rect`](UiRect::uv_rect) and needs a `texture` or `atlas`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slice: Option<ui::UiSlice>,
 }
 
 impl Default for UiRect {
@@ -4731,6 +4745,8 @@ impl Default for UiRect {
             order: 0,
             visible: true,
             fill: false,
+            uv_rect: None,
+            slice: None,
         }
     }
 }
@@ -4758,6 +4774,7 @@ impl SemanticValidate for UiRect {
             if object.get("fill").and_then(Value::as_bool) == Some(true) {
                 out.extend(ui_rect_fill_ignored(object));
             }
+            ui::ui_rect_sampling_diagnostics(object, &mut out);
         }
         out
     }
@@ -5138,6 +5155,12 @@ pub struct Animation {
     /// from Rust reads as `1`.
     #[serde(default = "one_u32", skip_serializing_if = "is_one_u32")]
     pub hold: u32,
+    /// The blend-space parameters (default `[0, 0]`; omitted from the saved text at its default).
+    /// When `clip` names a blend of the character, `params[0]` drives a 1D blend and
+    /// `params[0..2]` a 2D one (`ludion docs animation-layers`); otherwise inert. Write it every
+    /// tick the value changes: the weights follow it at once and the phase keeps its place.
+    #[serde(default, skip_serializing_if = "is_zero_params")]
+    pub params: [f32; 2],
 }
 
 impl Default for Animation {
@@ -5154,6 +5177,7 @@ impl Default for Animation {
             fade_started: FrameIndex::ZERO,
             fade: 0.0,
             hold: 1,
+            params: [0.0; 2],
         }
     }
 }
@@ -5230,6 +5254,10 @@ fn is_one(value: &f32) -> bool {
 #[allow(clippy::float_cmp)]
 fn is_zero(value: &f32) -> bool {
     *value == 0.0
+}
+
+fn is_zero_params(value: &[f32; 2]) -> bool {
+    is_zero(&value[0]) && is_zero(&value[1])
 }
 
 /// Drives a part entity's spawn pose from one rest joint of a skinned mesh: `skin` names the skinned
@@ -6267,6 +6295,29 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<ludion_physics::SurfaceTag>("SurfaceTag")
         .expect("unique");
+    // The audio listener, appended after `SurfaceTag`: where positional sound is measured from, read by the engine's audio path.
+    registry
+        .register::<AudioListener>("AudioListener")
+        .expect("unique");
+    // The surface overlay, appended after `AudioListener`: a sensor volume that overrides the surface a hit reports.
+    registry
+        .register_validated::<ludion_physics::SurfaceOverlay>("SurfaceOverlay")
+        .expect("unique");
+    // The hearing trio, appended after `SurfaceOverlay`: a noise-scaling volume, a queued noise and
+    // the noise counter, read by `perception_update`.
+    registry
+        .register_validated::<NoiseZone>("NoiseZone")
+        .expect("unique");
+    registry
+        .register::<PendingNoise>("PendingNoise")
+        .expect("unique");
+    registry
+        .register::<PerceptionState>("PerceptionState")
+        .expect("unique");
+    // The blend-space phase, appended after `SurfaceOverlay`: written by `blend_clocks`, read by `animation_events` and `extract`.
+    registry
+        .register::<BlendClock>("BlendClock")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -6275,7 +6326,7 @@ pub fn builtin_registry() -> Registry {
 }
 
 /// The built-ins whose engine-owned consumer is a sim-phase system.
-const SIM_ONLY_COMPONENTS: [&str; 25] = [
+const SIM_ONLY_COMPONENTS: [&str; 30] = [
     "Collider",
     "Velocity",
     "Joint",
@@ -6301,6 +6352,11 @@ const SIM_ONLY_COMPONENTS: [&str; 25] = [
     "LightExposure",
     "StimulusRecord",
     "SurfaceTag",
+    "SurfaceOverlay",
+    "NoiseZone",
+    "PendingNoise",
+    "PerceptionState",
+    "BlendClock",
 ];
 
 #[cfg(test)]
@@ -6344,6 +6400,11 @@ mod tests {
             "LightExposure",
             "StimulusRecord",
             "SurfaceTag",
+            "SurfaceOverlay",
+            "NoiseZone",
+            "PendingNoise",
+            "PerceptionState",
+            "BlendClock",
         ];
         expected.sort_unstable();
         assert_eq!(marked, expected);
@@ -6387,11 +6448,27 @@ mod tests {
             fade_started: FrameIndex(30),
             fade: 0.25,
             hold: 3,
+            params: [2.5, -1.0],
         };
         let json = serde_json::to_value(&animation).unwrap();
         assert_eq!(
             serde_json::from_value::<Animation>(json).unwrap(),
             animation
+        );
+    }
+
+    /// `params` is omitted at its default, so a default `Animation` keeps its old text.
+    #[test]
+    fn animation_params_are_omitted_at_zero() {
+        let json = serde_json::to_value(Animation::default()).unwrap();
+        assert!(json.get("params").is_none());
+        let set = Animation {
+            params: [0.0, 3.0],
+            ..Animation::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&set).unwrap()["params"],
+            serde_json::json!([0.0, 3.0])
         );
     }
 
@@ -6751,12 +6828,18 @@ mod tests {
                 "CameraZone",
                 "AnimationLayers",
                 "SurfaceTag",
+                "AudioListener",
+                "SurfaceOverlay",
+                "NoiseZone",
+                "PendingNoise",
+                "PerceptionState",
+                "BlendClock",
             ]
         );
         assert_eq!(
             registry.len(),
-            67,
-            "appending SurfaceTag grows the registry to 67"
+            73,
+            "appending `BlendClock` grows the registry to 73"
         );
     }
 
@@ -8542,8 +8625,22 @@ mod tests {
             order: 5,
             visible: false,
             fill: true,
+            uv_rect: Some([0.0, 0.25, 0.5, 1.0]),
+            slice: Some(ui::UiSlice {
+                border: [1.0, 2.0, 3.0, 4.0],
+                scale: 2.0,
+                center: ui::UiSliceCenter::Hidden,
+            }),
         };
         let json = serde_json::to_value(&rect).unwrap();
+        assert_eq!(json["uv_rect"], serde_json::json!([0.0, 0.25, 0.5, 1.0]));
+        assert_eq!(json["slice"]["center"], serde_json::json!("hidden"));
+        assert!(
+            serde_json::to_value(UiRect::default())
+                .unwrap()
+                .get("slice")
+                .is_none()
+        );
         assert_eq!(json["anchor"], serde_json::json!("bottom_right"));
         assert_eq!(serde_json::from_value::<UiRect>(json).unwrap(), rect);
     }
@@ -8563,6 +8660,8 @@ mod tests {
             order: 2,
             visible: true,
             fill: false,
+            uv_rect: None,
+            slice: None,
         };
         let json = serde_json::to_value(&rect).unwrap();
         assert_eq!(json["atlas"], serde_json::json!("sprites/hud.atlas.yaml"));

@@ -192,6 +192,7 @@ pub(crate) struct SavedHost {
     pub(crate) doc_texts: BTreeMap<String, InlineDoc>,
     pub(crate) profile_off_disk: bool,
     pub(crate) profile_text: Option<String>,
+    pub(crate) input_bindings: ludion_sim::actions::InputBindingsDoc,
     pub(crate) speed: Speed,
     pub(crate) render_size: (u32, u32),
     pub(crate) return_to: String,

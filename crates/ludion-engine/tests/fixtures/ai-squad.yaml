@@ -1,0 +1,36 @@
+# Feature: ludion-ai - a three-guard squad on a toy `Guard` machine (`crates/ludion-engine/tests/ai.rs`).
+# Perception (the test's `hear` system) sends the leader a `Noise` at tick 10; the shout spreads, the
+# squad investigates for 1 s of gameplay time, returns for 0.5 s, then patrols again. The
+# `GuardMind` component exists only in that test's engine, so the scene lives beside its committed
+# traces (`ai-squad.trace.txt`, `ai-squad.ai.jsonl`) and not in the gallery's plain-engine sweep.
+format: 1
+seed: 3
+entities:
+  - name: squad
+    components:
+      Group:
+        kind: patrol
+  - name: leader
+    components:
+      GuardMind: {}
+      GroupMember:
+        group:
+          index: 0
+          generation: 0
+        role: 0
+  - name: flank-a
+    components:
+      GuardMind: {}
+      GroupMember:
+        group:
+          index: 0
+          generation: 0
+        role: 1
+  - name: flank-b
+    components:
+      GuardMind: {}
+      GroupMember:
+        group:
+          index: 0
+          generation: 0
+        role: 2

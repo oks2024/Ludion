@@ -37,6 +37,7 @@ mod assembly_mesh;
 mod asset_cache;
 pub mod audio;
 pub mod bisect;
+mod blend_clock;
 mod bounds;
 pub mod builder;
 mod camera_latch;
@@ -53,6 +54,7 @@ mod cooked_maps;
 mod cursor_lock;
 mod debug_draw;
 pub mod diagnostics;
+pub mod dialogue;
 mod dispatch;
 mod docs;
 pub mod egress;
@@ -66,6 +68,7 @@ pub mod fonts;
 mod game_clock;
 pub mod hierarchy;
 mod input_actions;
+mod input_bindings;
 mod instantiate;
 pub mod interpolation;
 mod lane;
@@ -148,11 +151,12 @@ pub use bisect::{
     RunConfig, WorldCapture, WorldDiff, bisect_divergence, first_divergent_frame,
     localize_divergence, verify_replay_keyframes, world_diff,
 };
+pub use blend_clock::blend_clocks;
 pub use builder::{CursorMode, EngineBuilder};
 pub use camera_zone::camera_occluders;
 pub use character::{
-    CharacterClipData, CharacterData, CharacterMaskData, ClipContact, JointHeight, contact_heights,
-    load as load_character,
+    BlendPointData, CharacterBlendData, CharacterClipData, CharacterData, CharacterMaskData,
+    ClipContact, JointHeight, contact_heights, load as load_character,
 };
 pub use checkpoints::{CheckpointConfig, CheckpointInfo, Checkpoints, RestoreOutcome};
 pub use commands::sim::step_in_batches;
@@ -169,15 +173,20 @@ pub use components::{
     builtin_registry, crossfade,
 };
 pub use components::{
-    AnimationLayer, AnimationLayers, LayerMode, fade_layer, layer_weight, play_layer,
+    AnimationLayer, AnimationLayers, BlendClock, LayerMode, fade_layer, layer_weight, play_layer,
 };
-pub use components::{Look, PerceiverMemory, Sense, StimulusRecord, SweepShape, ZoneSweep};
+pub use components::{AudioListener, ListenerOrientation};
+pub use components::{
+    Hearing, Look, NoiseZone, NoiseZoneShape, PendingNoise, PerceiverMemory, PerceptionState,
+    Sense, StimulusRecord, SweepShape, ZoneSweep,
+};
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
 pub use diagnostics::{
     Diagnostics, report as report_diagnostic, report_full as report_full_diagnostic,
 };
+pub use dialogue::{DialogueConfig, DialogueEvents, Subtitles, dialogue_update};
 pub use dispatch::{Dispatched, dispatch};
 pub use docs::{DocStore, content_root_yaml, is_engine_kind};
 pub use egress::{Egress, EgressChannels, EgressEvent, EgressFrame};
@@ -247,8 +256,9 @@ pub use patterns::{
     volley_hits,
 };
 pub use perception::{
-    PerceptionConfig, PerceptionResults, SightSample, Stimulus, forget, forget_all,
-    perception_update, report_stimulus, stimuli,
+    HeardNoise, Noise, NoiseId, NoiseRecord, PerceptionConfig, PerceptionResults, SightSample,
+    Stimulus, SurfaceNoise, emit_noise, forget, forget_all, perception_update, report_stimulus,
+    stimuli,
 };
 pub use perf_live::{
     FrameSample, LIVE_SEQUENTIAL_NAMES, LiveGpuProfile, LivePerf, PROFILE_WINDOW_FRAMES,
@@ -327,8 +337,9 @@ pub use sweep::{
 };
 pub use tick_observer::TickObserver;
 pub use trace::{
-    GroundRecord, LaneRecord, MotorRecord, PlatformRecord, ReportRecord, SensorRecord,
-    SurfaceRecord, TraceChannel, TraceRecord, load_input_script, trace, trace_with, write_jsonl,
+    AiStatesRecord, AiTransitionRecord, GroundRecord, LaneRecord, MotorRecord, PlatformRecord,
+    ReportRecord, SensorRecord, SurfaceRecord, TraceChannel, TraceRecord, load_input_script, trace,
+    trace_with, write_jsonl,
 };
 pub use transition::{RESIDUE_MAX_RECORDS_PER_SCENE, RESIDUE_MAX_SCENES, SceneSwitch, SwitchTo};
 pub use voxel_mesh::{VoxelMeshStats, voxel_empty_lod_levels, voxel_mesh_stats};

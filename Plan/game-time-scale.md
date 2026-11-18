@@ -1,6 +1,6 @@
 # Gameplay time scale — a fractional `GameClock`
 
-> **Status:** Wave 1 shipped in the working tree (see Status). Waves 2–4 planned.
+> **Status:** Waves 1–4 shipped in the working tree (see Status). Owner rulings (a)–(f) below remain owed.
 >
 > Neon Shroud request 0011 (`engine-requests/0011-gameplay-time-scale.md`, audited at engine r2369).
 > Siblings: `docs/game-clock.md` (the hold this extends), `Plan/checkpoints.md` decision 3 (`rebased`),
@@ -90,11 +90,40 @@ the next deliberate corpus re-record.
 - **W2 (shipped)** the closed forms in `ludion-engine` read `game_instant`: `extract.rs` particles, clip phase and
   volleys; `animation_events`; `parent_joint`; `ragdoll`; `patterns` (the timeline walks
   `game_frames_crossed`, volley age is fractional); the `ludion-projectiles` bullet evaluators.
-- **W3** physics: the engine calls `scale_time(s)` inside the step frame; opt-in
-  `GameClock::hold_reaches_physics`; `PhysicsWorld::gameplay_dt` scaled.
-- **W4** the acceptance run in `tests/game_clock.rs` (volley, emitter, skinned clip with events,
-  platform with rider, dynamic body, chase camera at s=0.25), a `WorldHash` trace, a mid-slow-down
+- **W3 (shipped)** physics: the `step` system calls `scale_time(s)` for `0 < s < 1` (no opt-in; a hold
+  still does not reach physics); `PhysicsWorld::gameplay_dt` scaled; the kinematic and projectile
+  paths pinned by tests.
+- **W4 (shipped)** the acceptance run in `tests/game_time_scale.rs` (volley, emitter, animated clip with
+  events, platform with rider, dynamic body at s=0.25), a `WorldHash` trace, a mid-slow-down
   restore, and 1/2/8-thread identity.
+
+## Decisions (W3, W4)
+
+**15. The step hook is automatic.** `ludion-physics`'s `step` system reads `ctx.game_scale()` and, for
+`0 < s < 1`, calls `scale_time(s.max(MIN_TIME_SCALE))` before the step, composing by `min` with the
+game's own call. It is issued and consumed inside the step, so the `to_bytes` guard never sees it, and
+nothing enters the snapshot or `WorldHash`.
+
+**16. No `hold_reaches_physics` opt-in.** `PhysicsWorld::freeze()` beside `hold()` already is that
+switch; a second would be a second way to do one thing. A hold calls nothing on physics.
+
+**17. `MIN_TIME_SCALE` clamp.** `GameClock::MIN_SCALE` (1/1024) is a hair below physics' `MIN_TIME_SCALE`
+(1e-3); physics clamps up to its own floor, a 2.4% mismatch at the extreme only. Neither constant moves.
+
+**18. The motor reads the applied scale.** `gameplay_dt` is `0` after a held frame, else
+`seconds_per_tick × applied_scale()` (`× 1.0` exactly when unscaled).
+
+**19. No committed `.trace.txt` for the scale.** The gallery trace gates tick the built-in schedule with
+no game systems and never scale. The in-test `WorldHash` trace with a restore and 1/2/8-thread identity
+(`tests/game_time_scale.rs`) is the trace of record.
+
+**20. No chase camera in the acceptance scene.** A rig needs a `kind: path` track plus a target, which
+is over budget. Camera springs integrate `game_dt` (they follow by construction), but no scaled-camera
+test pins them. The acceptance run lives in `tests/game_time_scale.rs`, not `game_clock.rs`.
+
+**21. Physics matches at a measured bound, not f32 epsilon.** A smaller step changes semi-implicit
+Euler's error. The measured gaps are ~0.1 m on a fall (bound 0.15 m in the acceptance run), 0.03 m
+for the platform and 0.1 m for its rider. Closed forms match exactly.
 
 ## Proposed — owner ruling owed
 
@@ -106,6 +135,9 @@ the next deliberate corpus re-record.
 - (d) `MIN_SCALE` 1/1024.
 - (e) Fold `slowed_q16`, `pending_q16` and `step_q16` into the snapshot schema at the next deliberate
   corpus re-record (decision 9); folding now would move `replay_content_hash` and force a corpus re-record.
+- (f) No GameClock::hold_reaches_physics opt-in (the request's §3 / open question 4): freeze() beside
+  hold() covers it (decision 16). If the owner wants the request's API: a GameClock bool that makes the
+  step system call freeze() on a held tick; it touches GameClock's snapshot field.
 
 ## Out of scope
 
@@ -119,3 +151,7 @@ reopens when a game needs it.
 - **W1:** in the working tree, rev to be filled by the tech lead.
 - **W2:** in the working tree, rev to be filled by the tech lead. `ludion-projectiles` bullet evaluators
   were not part of it and still read whole ticks.
+- **W3:** in the working tree, rev to be filled by the tech lead.
+- **W4:** in the working tree, rev to be filled by the tech lead.
+- **Owner rulings owed:** (a)–(e) in "Proposed" above. (b) is applied conservatively: `Plan/physics.md`
+  §Time scale carries the amendment line.

@@ -104,6 +104,8 @@ struct Rig {
     log: Log,
     frame: u64,
     clock: bool,
+    /// A gameplay scale requested before every tick's fold (needs the clock).
+    scale: Option<f32>,
 }
 
 impl Rig {
@@ -193,6 +195,7 @@ impl Rig {
             log,
             frame: 0,
             clock,
+            scale: None,
         }
     }
 
@@ -201,6 +204,9 @@ impl Rig {
             if self.clock
                 && let Some(clock) = self.world.resource_mut::<GameClock>()
             {
+                if let Some(scale) = self.scale {
+                    clock.scale(scale);
+                }
                 clock.advance();
             }
             tick(&mut self.world, &mut self.schedule, self.frame);
@@ -774,6 +780,42 @@ fn a_held_gameplay_frame_carries_no_surface_velocity() {
     assert_eq!(at(21).platform.surface, [0.0; 3]);
     assert_ne!(at(20).platform.surface, [0.0; 3]);
     assert_ne!(at(22).platform.surface, [0.0; 3]);
+}
+
+#[test]
+fn a_scaled_gameplay_frame_carries_a_scaled_surface_velocity() {
+    let belt_rig = |scale: Option<f32>, hold_at: Option<u64>| {
+        let mut rig = Rig::with(
+            |world| belt_scene(world).0,
+            None,
+            1,
+            hold_at.or(Some(u64::MAX)),
+        );
+        rig.scale = scale;
+        rig.run(40);
+        rig.reports()
+    };
+    let surface_at = |reports: &[(u64, MoveReport)], frame: u64| {
+        reports
+            .iter()
+            .find(|(f, _)| *f == frame)
+            .unwrap()
+            .1
+            .platform
+            .surface
+    };
+    let full = surface_at(&belt_rig(None, None), 20);
+    let quarter = surface_at(&belt_rig(Some(0.25), None), 20);
+    assert_ne!(full, [0.0; 3]);
+    for axis in 0..3 {
+        assert!(
+            (quarter[axis] - full[axis] * 0.25).abs() < 1e-5,
+            "axis {axis}: {quarter:?} vs {full:?}"
+        );
+    }
+    // A hold still wins: a held frame carries nothing, scaled or not.
+    let held = surface_at(&belt_rig(Some(0.25), Some(20)), 21);
+    assert_eq!(held, [0.0; 3]);
 }
 
 fn determinism_run() -> String {

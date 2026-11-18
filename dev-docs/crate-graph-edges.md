@@ -30,8 +30,7 @@ ludion                 → ai, assets{watch}(wire), audio, core, ecs, engine, na
       projectiles, protocol, render-graph, scene, server(wire), sim, spatial,
       window(window)  [clap(wire), crossbeam-channel, ctrlc, schemars, serde, serde_json, wgpu,
       winit(window)]
-ludion-ai              → core, ecs  [schemars, serde]
-    dev: (none)  [serde_json]
+ludion-ai              → core, ecs  [schemars, serde, serde_json]
 ludion-assets          → core  [crossbeam-channel(watch), ktx2, notify(watch), png, serde,
       xxhash-rust]
     dev: (none)  [serde_json]

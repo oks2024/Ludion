@@ -231,7 +231,23 @@ fresh press is latched — the key just pressed to capture never fires the actio
 **Overrides** are an `InputBindingsDoc` (`actions: {name: [bindings]}`). `apply_overrides(&doc)` is
 lenient, per action, and returns warnings at `/actions/<name>`: `L4273` unknown action, `L4272` locked,
 `L4274` does not compile (that action keeps its defaults). `save()` raises a flag and
-`take_save_request()` clears it; the engine does not persist it. Codes: `L4272`–`L4276`.
+`take_save_request()` clears it. Codes: `L4272`–`L4276`.
+
+**Saving.** `Engine::builder().persist_input_bindings()` (with `input_actions()`; `ludion::run` sets it)
+stores the overrides in `<save_root>/save/input-bindings.yaml` (`format: 1`, `kind: input-bindings`, the
+`InputBindingsDoc` body). `actions.save()` writes it at the frame boundary; nothing else does, and a write
+failure is a non-fatal `L4278` (read it with `engine.input_bindings_save_error()`). The boot read is
+lenient and the game always boots: a bad action is dropped with `L4273`/`L4274` and the rest applies; a
+file that cannot be honored (`L1636` envelope, bad YAML, a newer `format`) is renamed to
+`input-bindings.yaml.bak.<hash>`, the defaults apply and `engine.boot_warnings()` holds one `L4277`.
+
+The file is read once, at build, as the **overrides at start**; every fresh `Actions` (a build, a load, a
+restore) starts from them, a carried one (a scene switch, a checkpoint) keeps its own. A restore after a
+mid-session rebind therefore reverts to the overrides at start. Without the switch a test, a replay or
+`--check-docs` never reads or writes the file. A recording carries the overrides at start in its header
+(`save_docs`, omitted when there are none) and a replay installs those, so it reproduces on a machine whose
+file differs or is absent. The example `cargo run -p ludion --example rebind_menu` is a controls screen:
+a `UiList` row per action, `capture` on activation, `save` once bound, and a second boot showing the rebind.
 
 ## Headless is quiescent, not broken
 

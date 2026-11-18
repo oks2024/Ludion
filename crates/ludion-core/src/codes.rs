@@ -614,6 +614,26 @@ pub mod code {
     /// `L1700` — a player settings file (`save/settings.yaml`) has a malformed `format`/`kind`
     /// envelope, so the engine backs it up and starts from defaults.
     pub const SETTINGS_ENVELOPE: DiagnosticCode = DiagnosticCode::new("L1700");
+    /// `L1710` — the `Engine::builder().dialogue` config is invalid: an empty `default_locale`, or a
+    /// reading-time constant that is negative or not finite.
+    pub const DIALOGUE_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1710");
+    /// `L1711` — a string key is defined twice for one locale across the `kind: strings` docs.
+    pub const STRINGS_DUPLICATE_KEY: DiagnosticCode = DiagnosticCode::new("L1711");
+    /// `L1712` — a dialogue line id is defined in more than one `kind: dialogue` doc.
+    pub const DIALOGUE_DUPLICATE_LINE: DiagnosticCode = DiagnosticCode::new("L1712");
+    /// `L1713` — a speaker id is defined in more than one `kind: dialogue` doc.
+    pub const DIALOGUE_DUPLICATE_SPEAKER: DiagnosticCode = DiagnosticCode::new("L1713");
+    /// `L1714` — a dialogue line names a speaker no `kind: dialogue` doc defines.
+    pub const DIALOGUE_UNKNOWN_SPEAKER: DiagnosticCode = DiagnosticCode::new("L1714");
+    /// `L1715` — a line `text` or speaker `name` key is missing from the default locale's strings.
+    pub const STRING_KEY_MISSING_DEFAULT: DiagnosticCode = DiagnosticCode::new("L1715");
+    /// `L1716` — a translation uses different `{placeholders}` than the default locale's text. A
+    /// warning.
+    pub const STRINGS_PLACEHOLDER_MISMATCH: DiagnosticCode = DiagnosticCode::new("L1716");
+    /// `L1717` — an authored line is invalid: `duration_ticks: 0`, or a cue at or past its duration.
+    pub const DIALOGUE_LINE_INVALID: DiagnosticCode = DiagnosticCode::new("L1717");
+    /// `L1718` — a `kind: strings` doc has an empty `locale`.
+    pub const STRINGS_LOCALE_INVALID: DiagnosticCode = DiagnosticCode::new("L1718");
     /// `L4340` — the settings file could not be loaded, so the engine backed it up and started from
     /// defaults.
     pub const SETTINGS_RESET: DiagnosticCode = DiagnosticCode::new("L4340");
@@ -773,6 +793,10 @@ pub mod code {
     /// meaningful falloff. The `COLLIDER_NON_POSITIVE_EXTENT` analog for the positional-audio
     /// component; raised by `ludion-engine`'s semantic validator, pointer `/range`.
     pub const AUDIO_EMITTER_NON_POSITIVE_RANGE: DiagnosticCode = DiagnosticCode::new("L1136");
+
+    /// `L1650` — more than one entity carries an `AudioListener`. Raised by `check-scene` and once at
+    /// runtime; only the lowest entity id is heard from.
+    pub const AUDIO_LISTENER_DUPLICATE: DiagnosticCode = DiagnosticCode::new("L1650");
 
     /// `L1137` — an assembly document (`*.assembly.yaml`, `kind: assembly`) is malformed: a
     /// required key is missing or has the wrong type at any level, the document (or a part entry)
@@ -1178,6 +1202,10 @@ pub mod code {
     /// `L1692` — a `SurfaceTag` on an entity with neither a solver-claimed `Collider` nor a
     /// `CharacterMotor`, so no hit can ever report it. Raised by `check-scene`.
     pub const SURFACE_TAG_UNCLAIMED: DiagnosticCode = DiagnosticCode::new("L1692");
+
+    /// `L1693` — a `SurfaceOverlay` on an entity without a solver-claimed `Collider` with
+    /// `sensor: true`, so it has no volume to contain a hit point. Raised by `check-scene`.
+    pub const SURFACE_OVERLAY_NO_SENSOR: DiagnosticCode = DiagnosticCode::new("L1693");
 
     /// `L1510` — a `Machine`'s `parent` fn does not form a tree under `ROOT`: `ROOT` has a parent,
     /// or some state's parent chain never reaches `ROOT`. Raised by `ludion-ai`'s `register_machine`.
@@ -1834,6 +1862,15 @@ pub mod code {
     /// `L1574` — `report_stimulus` dropped a stimulus: the perceiver is dead or has no `memory`, or
     /// `at` or `strength` is not finite. A warning, once per cause.
     pub const STIMULUS_REPORT_INVALID: DiagnosticCode = DiagnosticCode::new("L1574");
+    /// `L1575` — a `NoiseZone` field is invalid: a non-finite or non-positive extent or radius, a
+    /// negative or non-finite multiplier, or an empty or repeated `kinds` entry.
+    pub const NOISE_ZONE_INVALID: DiagnosticCode = DiagnosticCode::new("L1575");
+    /// `L1576` — a `Perceiver` `hearing` field is invalid: a non-finite ear, a negative or
+    /// non-finite sensitivity, or an empty, empty-named or repeated `hears` list.
+    pub const HEARING_INVALID: DiagnosticCode = DiagnosticCode::new("L1576");
+    /// `L1577` — `emit_noise` dropped a noise: a non-finite or negative `at`, `radius` or
+    /// `loudness`. A warning, once per cause.
+    pub const NOISE_INVALID: DiagnosticCode = DiagnosticCode::new("L1577");
     /// `L4220` — the `Engine::builder().perception` config is invalid: no more than 32 classes, each
     /// non-empty and unique.
     pub const PERCEPTION_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L4220");
@@ -1863,6 +1900,14 @@ pub mod code {
     pub const INPUT_CAPTURE_IMPOSSIBLE: DiagnosticCode = DiagnosticCode::new("L4275");
     /// `L4276` — there is no binding capture to resolve, or no conflict is pending.
     pub const INPUT_CAPTURE_IDLE: DiagnosticCode = DiagnosticCode::new("L4276");
+    /// `L1636` — the input bindings file (`save/input-bindings.yaml`) has a malformed
+    /// `format`/`kind` envelope, so the engine backs it up and starts from the default bindings.
+    pub const INPUT_BINDINGS_ENVELOPE: DiagnosticCode = DiagnosticCode::new("L1636");
+    /// `L4277` — the input bindings file could not be loaded, so the engine backed it up and
+    /// started from the default bindings.
+    pub const INPUT_BINDINGS_RESET: DiagnosticCode = DiagnosticCode::new("L4277");
+    /// `L4278` — the input bindings file could not be written to disk.
+    pub const INPUT_BINDINGS_SAVE_FAILED: DiagnosticCode = DiagnosticCode::new("L4278");
 
     /// `L1610` — a `UiTween` track has the wrong `from`/`to` arity, a non-finite value or a negative
     /// `duration`.
@@ -1871,6 +1916,12 @@ pub mod code {
     pub const UI_WORLD_ANCHOR_INVALID: DiagnosticCode = DiagnosticCode::new("L1611");
     /// `L2300` — a `UiTween` or `UiWorldAnchor` names something its element cannot take; skipped.
     pub const UI_MOTION_UNSUPPORTED: DiagnosticCode = DiagnosticCode::new("L2300");
+    /// `L1612` — a `UiRect` `uv_rect` or `slice` holds a bad number.
+    pub const UI_RECT_SAMPLING_INVALID: DiagnosticCode = DiagnosticCode::new("L1612");
+    /// `L1613` — a `UiRect` `uv_rect` or `slice` is ignored.
+    pub const UI_RECT_SAMPLING_IGNORED: DiagnosticCode = DiagnosticCode::new("L1613");
+    /// `L2301` — a `UiRect` nine-slice border does not fit its region or rect; drawn clamped.
+    pub const UI_SLICE_CLAMPED: DiagnosticCode = DiagnosticCode::new("L2301");
 
     /// `L1341` — a `Static` entity holds something the static path cannot; it takes the dynamic path.
     pub const STATIC_INELIGIBLE: DiagnosticCode = DiagnosticCode::new("L1341");
@@ -2682,6 +2733,22 @@ pub mod code {
     /// **warning**: the stem is left out and the rest of the set plays. Raised by `ludion-audio`,
     /// once per set (again if the files change).
     pub const MUSIC_STEM_MISMATCHED: DiagnosticCode = DiagnosticCode::new("L5006");
+    /// `L5130` — `dialogue::say` named a line (or a line's speaker) no `kind: dialogue` doc defines.
+    pub const DIALOGUE_UNKNOWN_LINE: DiagnosticCode = DiagnosticCode::new("L5130");
+    /// `L5131` — a `world`-channel line was said without a live speaker entity.
+    pub const DIALOGUE_NO_SPEAKER: DiagnosticCode = DiagnosticCode::new("L5131");
+    /// `L5132` — a string had no text in the active locale and fell back to the default locale's.
+    /// A warning, once per locale and key.
+    pub const STRING_FELL_BACK: DiagnosticCode = DiagnosticCode::new("L5132");
+    /// `L5133` — a string key is in no locale, so the key itself is shown. A warning, once per key.
+    pub const STRING_MISSING: DiagnosticCode = DiagnosticCode::new("L5133");
+    /// `L5134` — a string has a `{placeholder}` the caller passed no argument for; it stays
+    /// literal. A warning, once per placeholder.
+    pub const STRING_ARG_MISSING: DiagnosticCode = DiagnosticCode::new("L5134");
+    /// `L5135` — `dialogue::say_sequence` got an empty sequence or a speakers list of another length.
+    pub const DIALOGUE_SEQUENCE_INVALID: DiagnosticCode = DiagnosticCode::new("L5135");
+    /// `L5136` — a dialogue call was made on an engine that did not opt in with `.dialogue()`.
+    pub const DIALOGUE_NOT_ENABLED: DiagnosticCode = DiagnosticCode::new("L5136");
 }
 
 /// One row of the diagnostic-code table: the code, its severity, a short title, and a long-form
@@ -5443,6 +5510,17 @@ zero — the distance, in world units, past which the sound should no longer be 
 emitter without removing it, set `gain: 0.0` (or remove the component) instead.",
     },
     CodeEntry {
+        code: code::AUDIO_LISTENER_DUPLICATE,
+        severity: Severity::Warning,
+        title: "more than one audio listener",
+        explanation: "More than one entity carries an `AudioListener`. A world has one ear, so one listener. `ludion
+check-scene` names both entities at `/entities/<i>/components/AudioListener`; at runtime only the
+listener on the lowest entity id is heard from and the rest are ignored.
+
+Fix: keep one `AudioListener`, on the entity the sound should be measured from (a child of the player at
+head height, say).",
+    },
+    CodeEntry {
         code: code::MODEL_SHEET_INPUT,
         severity: Severity::Error,
         title: "model view harness input is not a renderable model",
@@ -7028,6 +7106,18 @@ nothing. Raised by `check-scene` at `/entities/<index>/components/SurfaceTag`.
 Fix: add a 3D `Collider` (or a `CharacterMotor`) to the entity, or remove `SurfaceTag`.",
     },
     CodeEntry {
+        code: code::SURFACE_OVERLAY_NO_SENSOR,
+        severity: Severity::Error,
+        title: "a surface overlay without a sensor volume",
+        explanation: "\
+An entity carries `SurfaceOverlay` but has no `Collider` the 3D solver claims with
+`sensor: true`, so the overlay has no volume and would never apply. Raised by `check-scene` at
+`/entities/<index>/components/SurfaceOverlay`.
+
+Fix: give the entity a 3D `Collider` with `sensor: true` shaped like the patch (a box, sphere,
+cylinder, capsule, convex or compound), or remove `SurfaceOverlay`.",
+    },
+    CodeEntry {
         code: code::AI_MACHINE_HIERARCHY,
         severity: Severity::Error,
         title: "a machine's parent function is not a tree under ROOT",
@@ -7355,9 +7445,12 @@ A `kind: character` document does not have the shape the format requires. One of
     mapping, a clip entry a mapping with a string `clip`, `speed` a number, `events` a sequence of
     `{t, name}` mappings);
   - a clip entry is missing its `clip` path;
+  - a `blends` entry is not a mapping with `points` (two to sixteen `{clip, at}` entries, every `at`
+    a finite number or all of them an `[x, z]` block list) and an optional `sync` string;
   - a key is not part of the format (the diagnostic suggests the nearest valid key).
 
-The JSON Pointer names the offending key or entry (`/mesh`, `/clips/walk/clip`, `/clips/walk/speed`).
+The JSON Pointer names the offending key or entry (`/mesh`, `/clips/walk/clip`, `/clips/walk/speed`,
+`/blends/locomotion/points/1/at`).
 
 Fix: write `format: 1`, `kind: character`, `mesh: <path to the skinned mesh document>`, then one
 `clips:` entry per clip, each with a `clip:` path and optionally `speed:` and `events:`. Data problems
@@ -7377,10 +7470,14 @@ A well-shaped `kind: character` document holds values that do not hang together.
   - a clip track animates a joint the character's mesh does not have (the diagnostic names the joint
     and the nearest one the mesh has);
   - the character's mesh document has no skin, so there is nothing for the clips to drive;
-  - a mask has a blank name, or lists a joint the mesh does not have.
+  - a mask has a blank name, or lists a joint the mesh does not have;
+  - a blend has the name of a clip binding, two points at one position, or 2D points that are all
+    collinear; one of its points names a clip that is not bound, a clip that does not loop, or (with
+    `sync`) a clip with no event of that name.
 
 The JSON Pointer names the offending value (`/mesh`, `/clips/<name>/clip`, `/clips/<name>/speed`,
-`/clips/<name>/events`, `/masks/<name>/joints/<i>`).
+`/clips/<name>/events`, `/masks/<name>/joints/<i>`, `/blends/<name>/points/<i>/clip`,
+`/blends/<name>/sync`).
 
 Fix: point `mesh` at a skinned mesh document (an imported glTF with a skin), give every path, keep
 `speed` positive, put a clip's events in either the clip or the overlay, and rename the clip's tracks
@@ -9318,11 +9415,47 @@ Fix: give the perceiver `memory:` (see `ludion docs perception`), and pass finit
         severity: Severity::Error,
         title: "perception config is invalid",
         explanation: "\
-`Engine::builder().perception(config)` was given a `classes` list that holds more than 32 names, an
-empty name or a repeated name (pointer `/classes/{j}`). Each class is one bit of a mask, so the list is
-capped at 32. `build` refuses the config.
+`Engine::builder().perception(config)` was given a `classes` or `noise_kinds` list that holds more than
+32 names, an empty name or a repeated name (pointer `/classes/{j}`, `/noise_kinds/{j}`). Each name is
+one bit of a mask, so a list is capped at 32. It is also refused for a `surface_noise` entry with an
+empty or repeated `surface` or a negative or non-finite `multiplier` (`/surface_noise/{j}/...`), an
+`occlusion_factor` outside [0, 1] or a `max_occluders` outside 1 to 8. `build` refuses the config.
 
-Fix: list each class once, at most 32.",
+Fix: list each name once, at most 32, and keep the numbers in range.",
+    },
+    CodeEntry {
+        code: code::NOISE_ZONE_INVALID,
+        severity: Severity::Error,
+        title: "a noise zone is invalid",
+        explanation: "\
+A `NoiseZone` field is out of range (pointer `/entities/{i}/components/NoiseZone/{field}`): a box
+`half_extents` entry or a sphere `radius` that is not finite and above 0, a `multiplier` that is
+negative or not finite, or an empty or repeated `kinds` entry. A scene with one is refused.
+
+Fix: correct the named field. An empty `kinds` list already means every kind.",
+    },
+    CodeEntry {
+        code: code::HEARING_INVALID,
+        severity: Severity::Error,
+        title: "a perceiver's hearing is invalid",
+        explanation: "\
+A `Perceiver` `hearing` field is out of range (pointer `/entities/{i}/components/Perceiver/hearing/{field}`):
+an `ear` that is not finite, a `sensitivity` that is negative or not finite, or a `hears` list that is
+empty or holds an empty or repeated kind. A scene with one is refused.
+
+Fix: correct the named field. To hear nothing, omit `hearing`.",
+    },
+    CodeEntry {
+        code: code::NOISE_INVALID,
+        severity: Severity::Warning,
+        title: "an emitted noise was dropped",
+        explanation: "\
+`emit_noise` was given an `at`, `radius` or `loudness` that is not finite or is negative, so the noise
+is dropped and nothing hears it. Reported once. (An undeclared `kind` is `L1572`.)
+
+This is a **warning**.
+
+Fix: pass finite, non-negative numbers; see `ludion docs perception`.",
     },
     CodeEntry {
         code: code::PATROL_ROUTE_UNLOADED,
@@ -9482,6 +9615,47 @@ Fix: capture a button action with a valid slot; resolve with Swap (when we repla
 Fix: call it only when `capture_result()` is `Conflict`.",
     },
     CodeEntry {
+        code: code::INPUT_BINDINGS_ENVELOPE,
+        severity: Severity::Warning,
+        title: "input bindings file envelope is malformed",
+        explanation: "\
+The player's input bindings file (`save/input-bindings.yaml`) has no valid `format`/`kind` envelope:
+`format` is missing or not an integer, `kind` is missing or not `input-bindings`, or the document is
+not a mapping. The engine backs the file up (`input-bindings.yaml.bak.<hash>`), starts from the
+default bindings and reports `L4277`.
+
+Fix: nothing is required; the next `Actions::save()` writes a fresh file. To recover the old
+bindings, open the backup and copy them across; a minimal file is:
+
+  format: 1
+  kind: input-bindings",
+    },
+    CodeEntry {
+        code: code::INPUT_BINDINGS_RESET,
+        severity: Severity::Warning,
+        title: "input bindings file could not be loaded — defaulted",
+        explanation: "\
+The player's input bindings file (`save/input-bindings.yaml`) could not be honored at all: it is not
+parseable, its envelope is malformed (`L1636`), a value has the wrong shape, or its `format` is newer
+than this engine reads. The engine renamed it aside as `input-bindings.yaml.bak.<hash>` and started
+from the default bindings. The game still boots and the player's bytes are kept. A single bad action
+never resets the file: it is dropped with `L4273` or `L4274` and the rest applies.
+
+Fix: nothing is required. To recover the old bindings, reconcile the backup with the new file by hand.",
+    },
+    CodeEntry {
+        code: code::INPUT_BINDINGS_SAVE_FAILED,
+        severity: Severity::Warning,
+        title: "input bindings file could not be written to disk",
+        explanation: "\
+A game system called `Actions::save()` and the engine could not write `save/input-bindings.yaml` at
+the frame boundary: the save directory is missing or not writable, or the disk is full. The write is
+staged to a hidden `.tmp` sibling and renamed, so the previous whole file stays on disk. The new
+bindings still apply to this session.
+
+Fix: make `save/` writable and call `save()` again.",
+    },
+    CodeEntry {
         code: code::UI_TWEEN_INVALID,
         severity: Severity::Error,
         title: "a UI tween track is invalid",
@@ -9515,6 +9689,40 @@ anchor. The track or anchor is skipped and the element draws as if it were absen
 entity and field, as a degraded warning at render time.
 
 Fix: move the track to an element that takes it, or remove it.",
+    },
+    CodeEntry {
+        code: code::UI_RECT_SAMPLING_INVALID,
+        severity: Severity::Error,
+        title: "a UI rect sampling field is invalid",
+        explanation: "\
+A `UiRect` `uv_rect` (pointer `/entities/{i}/components/UiRect/uv_rect/{n}`) has a non-finite value, a
+value outside 0..1, or `u0 >= u1` / `v0 >= v1`; a `slice.border` value is negative or non-finite; or
+`slice.scale` is non-finite or not above zero. A scene with one is refused.
+
+Fix: write `uv_rect: [u0, v0, u1, v1]` inside 0..1 with the minimum below the maximum, borders of zero
+or more texels, and a positive `scale`.",
+    },
+    CodeEntry {
+        code: code::UI_RECT_SAMPLING_IGNORED,
+        severity: Severity::Warning,
+        title: "a UI rect sampling field is ignored",
+        explanation: "\
+A `UiRect` has both `uv_rect` and `slice` (`slice` wins and `uv_rect` is ignored, pointer
+`/entities/{i}/components/UiRect/uv_rect`), or has either field with neither `texture` nor `atlas`, so
+there is nothing to sample.
+
+Fix: keep one of `uv_rect` and `slice`, and give the rect a `texture` or an `atlas` and `frame`.",
+    },
+    CodeEntry {
+        code: code::UI_SLICE_CLAMPED,
+        severity: Severity::Warning,
+        title: "a UI nine-slice was drawn clamped",
+        explanation: "\
+A `UiRect` `slice` has borders larger than the texture or atlas region, or corners (border x `scale`
+x the canvas pixel scale) larger than the rect. The borders shrink proportionally so the corners fit.
+Reported once per entity, as a degraded warning at render time.
+
+Fix: shrink the `border` or `scale`, or enlarge the rect.",
     },
     CodeEntry {
         code: code::STATIC_INELIGIBLE,
@@ -12486,6 +12694,176 @@ Fix: export all stems of a set from one session at one sample rate and one lengt
 ones with silence), and keep a set to 8 stems or fewer.",
     },
     CodeEntry {
+        code: code::DIALOGUE_CONFIG_INVALID,
+        severity: Severity::Error,
+        title: "the dialogue config is invalid",
+        explanation: "\
+`Engine::builder().dialogue(config)` was given a config the engine cannot run: an empty
+`default_locale`, or a reading-time constant (`base_s`, `per_char_s`, `min_s`) that is negative or
+not finite. `build` refuses it.
+
+Fix: give `default_locale` a locale tag such as `en`, and finite non-negative reading constants.",
+    },
+    CodeEntry {
+        code: code::STRINGS_DUPLICATE_KEY,
+        severity: Severity::Error,
+        title: "a string key is defined twice",
+        explanation: "\
+Two `kind: strings` docs of one locale define the same key (pointer
+`strings/{doc path}/strings/{key}`, at the later document). A string table is one flat map per locale,
+so the second definition would silently shadow or lose the first.
+
+Fix: delete one definition, or rename the key.",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_DUPLICATE_LINE,
+        severity: Severity::Error,
+        title: "a dialogue line id is defined twice",
+        explanation: "\
+Two `kind: dialogue` docs define a line with the same id (pointer
+`dialogue/{doc path}/lines/{id}`, at the later document). `say` resolves a line by id across every
+dialogue doc, so the id must be unique.
+
+Fix: rename one line.",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_DUPLICATE_SPEAKER,
+        severity: Severity::Error,
+        title: "a speaker id is defined twice",
+        explanation: "\
+Two `kind: dialogue` docs define a speaker with the same id (pointer
+`dialogue/{doc path}/speakers/{id}`, at the later document).
+
+Fix: rename one speaker, or delete the duplicate.",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_UNKNOWN_SPEAKER,
+        severity: Severity::Error,
+        title: "a dialogue line names an unknown speaker",
+        explanation: "\
+A line's `speaker` is not the id of any speaker in the loaded `kind: dialogue` docs (pointer
+`dialogue/{doc path}/lines/{id}/speaker`).
+
+Fix: add the speaker under `speakers:`, or correct the id.",
+    },
+    CodeEntry {
+        code: code::STRING_KEY_MISSING_DEFAULT,
+        severity: Severity::Error,
+        title: "a string key is missing from the default locale",
+        explanation: "\
+A dialogue line `text` or a speaker `name` is a string-table key, and the default locale has no
+text for it (pointer `dialogue/{doc path}/lines/{id}/text` or `.../speakers/{id}/name`). The default
+locale is the fallback for every other one, so it must hold every key.
+
+Fix: add the key to a `kind: strings` doc whose `locale` is the config's `default_locale`.",
+    },
+    CodeEntry {
+        code: code::STRINGS_PLACEHOLDER_MISMATCH,
+        severity: Severity::Warning,
+        title: "a translation uses different placeholders",
+        explanation: "\
+A string in a non-default locale uses a different set of `{name}` placeholders than the default
+locale's text (pointer `strings/{doc path}/strings/{key}`). The line is filled from one list of
+arguments, so a translation that drops a placeholder loses the value and one that adds a placeholder
+shows it unfilled.
+
+Fix: make the translation use the same placeholders. Literal braces are written `{{` and `}}`.",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_LINE_INVALID,
+        severity: Severity::Error,
+        title: "a dialogue line is invalid",
+        explanation: "\
+An authored line cannot play as written: `duration_ticks` is 0 (a line lasts at least one tick), or
+a cue's `at` is at or past the line's `duration_ticks` (pointer
+`dialogue/{doc path}/lines/{id}/duration_ticks` or `.../cues/{name}`), so the cue could never fire.
+
+Fix: lengthen the line, or move the cue earlier.",
+    },
+    CodeEntry {
+        code: code::STRINGS_LOCALE_INVALID,
+        severity: Severity::Error,
+        title: "a strings doc has an empty locale",
+        explanation: "\
+A `kind: strings` doc has an empty `locale` (pointer `strings/{doc path}/locale`), so its keys
+belong to no locale.
+
+Fix: set `locale:` to a tag such as `en` or `fr`.",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_UNKNOWN_LINE,
+        severity: Severity::Error,
+        title: "a dialogue line is unknown",
+        explanation: "\
+`dialogue::say` (or `say_with`, `say_sequence`) named a line id that no loaded `kind: dialogue` doc
+defines, or a line whose speaker no doc defines. Nothing was queued.
+
+Fix: check the id against the `lines:` of your dialogue docs, and that the docs sit under the content
+root.",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_NO_SPEAKER,
+        severity: Severity::Error,
+        title: "a world line has no speaker",
+        explanation: "\
+A line spoken by a `world`-channel speaker was said without a live speaker entity. Its slot is
+per speaker entity, so without one it has nowhere to queue. Nothing was queued.
+
+Fix: pass `Some(entity)` to `say_with` (or the sequence's speakers list), or give the speaker the
+`radio` or `ui` channel.",
+    },
+    CodeEntry {
+        code: code::STRING_FELL_BACK,
+        severity: Severity::Warning,
+        title: "a string fell back to the default locale",
+        explanation: "\
+A string key has no text in the active locale, so the default locale's text is shown instead. A
+warning, reported once per locale and key.
+
+Fix: add the key to a `kind: strings` doc for the active locale.",
+    },
+    CodeEntry {
+        code: code::STRING_MISSING,
+        severity: Severity::Warning,
+        title: "a string key is missing everywhere",
+        explanation: "\
+A string key is in no locale's table, so the key itself is shown in its place. A warning, reported
+once per key.
+
+Fix: add the key to a `kind: strings` doc, or correct the key.",
+    },
+    CodeEntry {
+        code: code::STRING_ARG_MISSING,
+        severity: Severity::Warning,
+        title: "a string placeholder has no argument",
+        explanation: "\
+A string has a `{name}` placeholder that the caller passed no argument for, so it stays as written.
+A warning, reported once per key and placeholder.
+
+Fix: pass the argument in `say_with`'s `args` or `format_text`'s, or remove the placeholder. Literal
+braces are written `{{` and `}}`.",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_SEQUENCE_INVALID,
+        severity: Severity::Error,
+        title: "a dialogue sequence is invalid",
+        explanation: "\
+`dialogue::say_sequence` was given no lines, or a speakers list whose length differs from the lines
+list. Nothing was queued.
+
+Fix: pass one speaker slot per line (`None` for a line with no speaker entity).",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_NOT_ENABLED,
+        severity: Severity::Error,
+        title: "dialogue is not enabled",
+        explanation: "\
+A `dialogue::say` call (or `say_with`, `say_sequence`) reached an engine that did not opt in, so
+there is no config, no bank and no queue.
+
+Fix: add `.dialogue(DialogueConfig::default())` to `Engine::builder()`.",
+    },
+    CodeEntry {
         code: code::PROTOCOL_CALL_TIMED_OUT,
         severity: Severity::Error,
         title: "a call timed out waiting for its reply",
@@ -12784,6 +13162,7 @@ mod tests {
         code::SPRITE_EFFECT_INVALID,
         code::COLLIDER_NON_POSITIVE_EXTENT,
         code::AUDIO_EMITTER_NON_POSITIVE_RANGE,
+        code::AUDIO_LISTENER_DUPLICATE,
         code::MODEL_SHEET_INPUT,
         code::UI_ELEMENT_NON_POSITIVE_SIZE,
         code::DOC_ENVELOPE_INVALID,
@@ -12857,6 +13236,7 @@ mod tests {
         code::SURFACE_UNKNOWN,
         code::SURFACES_INVALID,
         code::SURFACE_TAG_UNCLAIMED,
+        code::SURFACE_OVERLAY_NO_SENSOR,
         code::AI_MACHINE_HIERARCHY,
         code::AI_MACHINE_INITIAL,
         code::AI_MACHINE_VARIANTS,
@@ -13014,6 +13394,9 @@ mod tests {
         code::PERCEPTION_NAME_UNKNOWN,
         code::PERCEIVER_MEMORY_INVALID,
         code::STIMULUS_REPORT_INVALID,
+        code::NOISE_ZONE_INVALID,
+        code::HEARING_INVALID,
+        code::NOISE_INVALID,
         code::INPUT_BINDING_SOURCES,
         code::INPUT_BINDING_SOURCE_KIND,
         code::INPUT_BINDING_MODIFIER,
@@ -13027,9 +13410,15 @@ mod tests {
         code::INPUT_OVERRIDE_INVALID,
         code::INPUT_CAPTURE_IMPOSSIBLE,
         code::INPUT_CAPTURE_IDLE,
+        code::INPUT_BINDINGS_ENVELOPE,
+        code::INPUT_BINDINGS_RESET,
+        code::INPUT_BINDINGS_SAVE_FAILED,
         code::UI_TWEEN_INVALID,
         code::UI_WORLD_ANCHOR_INVALID,
         code::UI_MOTION_UNSUPPORTED,
+        code::UI_RECT_SAMPLING_INVALID,
+        code::UI_RECT_SAMPLING_IGNORED,
+        code::UI_SLICE_CLAMPED,
         code::STATIC_INELIGIBLE,
         code::STATIC_PARENT_NOT_STATIC,
         code::STATIC_REWRITTEN,
@@ -13193,6 +13582,22 @@ mod tests {
         code::AUDIO_VOICE_CAPS_INVALID,
         code::AUDIO_GAIN_NON_FINITE,
         code::MUSIC_STEM_MISMATCHED,
+        code::DIALOGUE_CONFIG_INVALID,
+        code::STRINGS_DUPLICATE_KEY,
+        code::DIALOGUE_DUPLICATE_LINE,
+        code::DIALOGUE_DUPLICATE_SPEAKER,
+        code::DIALOGUE_UNKNOWN_SPEAKER,
+        code::STRING_KEY_MISSING_DEFAULT,
+        code::STRINGS_PLACEHOLDER_MISMATCH,
+        code::DIALOGUE_LINE_INVALID,
+        code::STRINGS_LOCALE_INVALID,
+        code::DIALOGUE_UNKNOWN_LINE,
+        code::DIALOGUE_NO_SPEAKER,
+        code::STRING_FELL_BACK,
+        code::STRING_MISSING,
+        code::STRING_ARG_MISSING,
+        code::DIALOGUE_SEQUENCE_INVALID,
+        code::DIALOGUE_NOT_ENABLED,
     ];
 
     #[test]
@@ -13304,6 +13709,7 @@ mod tests {
             code::DOC_SET_OVER_CAPACITY,
             code::FONT_GLYPH_MISSING,
             code::VOXEL_COMMENT_DROPPED,
+            code::AUDIO_LISTENER_DUPLICATE,
             code::DOC_KIND_NOT_REGISTERED,
             code::SCULPT_PART_UNRESOLVED,
             code::SCULPT_DISCONNECTED,
@@ -13371,13 +13777,19 @@ mod tests {
             code::VIEWMODEL_LENS_NOT_ON_CAMERA,
             code::PERCEPTION_NAME_UNKNOWN,
             code::STIMULUS_REPORT_INVALID,
+            code::NOISE_INVALID,
             code::PATROL_ROUTE_UNLOADED,
             code::PATROL_POINT_UNREACHABLE,
             code::PATROL_WITHOUT_AGENT,
             code::INPUT_ACTION_UNKNOWN,
             code::INPUT_OVERRIDE_UNKNOWN,
             code::INPUT_OVERRIDE_INVALID,
+            code::INPUT_BINDINGS_ENVELOPE,
+            code::INPUT_BINDINGS_RESET,
+            code::INPUT_BINDINGS_SAVE_FAILED,
             code::UI_MOTION_UNSUPPORTED,
+            code::UI_RECT_SAMPLING_IGNORED,
+            code::UI_SLICE_CLAMPED,
             code::STATIC_INELIGIBLE,
             code::STATIC_PARENT_NOT_STATIC,
             code::STATIC_REWRITTEN,
@@ -13414,6 +13826,10 @@ mod tests {
             code::MUSIC_TRACK_UNPLAYABLE,
             code::AUDIO_GAIN_NON_FINITE,
             code::MUSIC_STEM_MISMATCHED,
+            code::STRINGS_PLACEHOLDER_MISMATCH,
+            code::STRING_FELL_BACK,
+            code::STRING_MISSING,
+            code::STRING_ARG_MISSING,
             code::SERVER_EVENTS_DROPPED,
         ];
         let registered: Vec<DiagnosticCode> = CODES

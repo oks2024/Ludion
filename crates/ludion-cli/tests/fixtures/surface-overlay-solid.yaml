@@ -1,0 +1,17 @@
+format: 1
+seed: 1
+physics:
+  space: free
+  surfaces:
+    - concrete
+    - puddle
+entities:
+  - name: puddle
+    components:
+      Collider:
+        shape:
+          sphere:
+            radius: 0.5
+        body: static
+      SurfaceOverlay:
+        surface: puddle

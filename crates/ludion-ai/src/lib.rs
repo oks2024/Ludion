@@ -59,6 +59,7 @@ mod machine;
 mod mind;
 mod tick;
 mod timer;
+mod trace;
 
 pub use faults::{AiFault, AiFaults};
 pub use group::{Group, GroupMember, members};
@@ -66,3 +67,6 @@ pub use machine::{Cx, Machine, Step};
 pub use mind::{Mind, active_path, register_machine, send};
 pub use tick::{MAX_TRANSITIONS_PER_TICK, ai_tick};
 pub use timer::{Cooldown, Timer};
+pub use trace::{
+    AgentInfo, AiCause, AiRecord, AiRoster, AiState, AiTrace, AiTransition, MachineInfo, StateInfo,
+};

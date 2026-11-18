@@ -18,7 +18,9 @@ use ludion_core::time::TickRate;
 use ludion_ecs::World;
 use ludion_renderer::UiInstance;
 
-use super::{canvas_anchor_px, place_world_anchor, ui_tween_sample};
+use super::{
+    canvas_anchor_px, nine_slice, pixel_scale, place_world_anchor, sub_uv, ui_tween_sample,
+};
 use crate::components::{Anchor, UiList, UiRect, UiText};
 use crate::hierarchy::WorldAffines;
 
@@ -374,6 +376,58 @@ fn placement(
     Some((placed, alpha))
 }
 
+/// Pushes the draw rows of one resolved `UiRect`: a nine-slice of nine rects when it carries a
+/// `slice` and a texture, else one rect whose uv is `uv_rect` narrowed into `uv` (the loose
+/// texture or atlas-region uv). `region_texels` is the sampled region size in texels. A `uv_rect`
+/// beside a `slice` is ignored, and so are both without a texture.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_rect(
+    frame: &HudFrame<'_>,
+    id: EntityId,
+    rect: &UiRect,
+    rect_px: [f32; 4],
+    texture: Option<usize>,
+    uv: [f32; 4],
+    region_texels: Option<[f32; 2]>,
+    entries: &mut Vec<UiEntry>,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) {
+    let row = |rect_px: [f32; 4], uv: [f32; 4]| {
+        (
+            rect.order,
+            id,
+            UiInstance::Rect {
+                rect_px,
+                texture,
+                color: rect.color,
+                uv,
+            },
+        )
+    };
+    let (Some(_), Some(texels)) = (texture, region_texels) else {
+        entries.push(row(rect_px, uv));
+        return;
+    };
+    if let Some(slice) = &rect.slice {
+        let nine = nine_slice(rect_px, uv, texels, slice, pixel_scale(frame.viewport));
+        if nine.clamped {
+            let key = crate::diagnostics::offender_key(frame.world, id);
+            degraded.push((
+                format!("{key}/ui-slice-clamped"),
+                Diagnostic::new(
+                    code::UI_SLICE_CLAMPED,
+                    format!("{id} has a `UiRect` `slice` larger than its region or rect; it is drawn clamped"),
+                )
+                .with_help("shrink the `border` or `scale`, or enlarge the rect; `ludion explain L2301`"),
+            ));
+        }
+        entries.extend(nine.pieces.into_iter().map(|(r, uv)| row(r, uv)));
+    } else {
+        let uv = rect.uv_rect.map_or(uv, |sub| sub_uv(uv, sub));
+        entries.push(row(rect_px, uv));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,5 +512,103 @@ mod tests {
         assert!(HudElement::Text.supports(UiTweenField::Scale));
         assert!(!HudElement::List.supports(UiTweenField::Color));
         assert!(HudElement::List.supports(UiTweenField::Opacity));
+    }
+
+    fn emit(
+        rect: &UiRect,
+        texture: Option<usize>,
+        texels: Option<[f32; 2]>,
+    ) -> (Vec<UiEntry>, Vec<(String, Diagnostic)>) {
+        let world = World::new();
+        let frame = HudFrame {
+            world: &world,
+            view: Mat4::IDENTITY,
+            projection: Mat4::IDENTITY,
+            viewport: (1920, 1080),
+            real_frame: 0,
+            game_frame: 0,
+            rate: TickRate::DEFAULT,
+        };
+        let (mut entries, mut degraded) = (Vec::new(), Vec::new());
+        emit_rect(
+            &frame,
+            EntityId::new(3, 0),
+            rect,
+            [0.0, 0.0, 120.0, 60.0],
+            texture,
+            [0.0, 0.0, 1.0, 1.0],
+            texels,
+            &mut entries,
+            &mut degraded,
+        );
+        (entries, degraded)
+    }
+
+    fn slice(border: f32) -> ludion_components::ui::UiSlice {
+        ludion_components::ui::UiSlice {
+            border: [border; 4],
+            scale: 1.0,
+            center: ludion_components::ui::UiSliceCenter::Stretch,
+        }
+    }
+
+    #[test]
+    fn uv_rect_narrows_one_rect() {
+        let rect = UiRect {
+            uv_rect: Some([0.0, 0.0, 0.5, 1.0]),
+            ..UiRect::default()
+        };
+        let (entries, degraded) = emit(&rect, Some(0), Some([12.0, 12.0]));
+        assert_eq!(entries.len(), 1);
+        let UiInstance::Rect { uv, rect_px, .. } = &entries[0].2 else {
+            unreachable!()
+        };
+        assert_eq!(*uv, [0.0, 0.0, 0.5, 1.0]);
+        assert_eq!(*rect_px, [0.0, 0.0, 120.0, 60.0]);
+        assert!(degraded.is_empty());
+    }
+
+    #[test]
+    fn slice_emits_nine_and_ignores_uv_rect() {
+        let rect = UiRect {
+            uv_rect: Some([0.0, 0.0, 0.5, 1.0]),
+            slice: Some(slice(4.0)),
+            ..UiRect::default()
+        };
+        let (entries, degraded) = emit(&rect, Some(0), Some([12.0, 12.0]));
+        assert_eq!(entries.len(), 9);
+        let UiInstance::Rect { uv, .. } = &entries[8].2 else {
+            unreachable!()
+        };
+        assert_eq!(uv[2], 1.0);
+        assert!(degraded.is_empty());
+    }
+
+    #[test]
+    fn untextured_rect_is_unchanged() {
+        let rect = UiRect {
+            uv_rect: Some([0.0, 0.0, 0.5, 1.0]),
+            slice: Some(slice(4.0)),
+            ..UiRect::default()
+        };
+        let (entries, _) = emit(&rect, None, None);
+        assert_eq!(entries.len(), 1);
+        let UiInstance::Rect { uv, texture, .. } = &entries[0].2 else {
+            unreachable!()
+        };
+        assert_eq!((*uv, *texture), ([0.0, 0.0, 1.0, 1.0], None));
+    }
+
+    #[test]
+    fn clamped_slice_reports_l2301_once() {
+        let rect = UiRect {
+            slice: Some(slice(40.0)),
+            ..UiRect::default()
+        };
+        let (entries, degraded) = emit(&rect, Some(0), Some([12.0, 12.0]));
+        assert!(!entries.is_empty());
+        assert_eq!(degraded.len(), 1);
+        assert_eq!(degraded[0].1.code.as_str(), "L2301");
+        assert!(degraded[0].0.ends_with("/ui-slice-clamped"));
     }
 }

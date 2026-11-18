@@ -14,7 +14,8 @@ prints its `L1119`/`L1120` diagnostics to stderr and exits non-zero; a game that
 exits 0 when its content root holds no data-docs, and a data-doc whose kind nothing registered fails
 (`L1155`) — a doc nothing validated is not validated. An engine-owned registration such as
 `.patterns()` validates its docs, so a patterns-only game passes; build output (`target/`,
-`node_modules/`, dot-directories) is never walked. It reuses the **exact in-process validation
+`node_modules/`, dot-directories) and the save directory `<save_root>/save` (player state, not
+content) are never walked. It reuses the **exact in-process validation
 the live engine runs**, so CI and runtime agree by construction — there is no separate schema file to drift. (`ludion check-scene`
 stays engine-kind-only: it validates a single scene or engine-kind file and hard-rejects an unknown
 `kind:`, because it cannot know a game's types without loading the game binary — which is why the doc

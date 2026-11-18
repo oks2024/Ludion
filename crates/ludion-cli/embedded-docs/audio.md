@@ -118,8 +118,9 @@ nearer it is. It is the sound analog of `PointLight` — the position is the ent
   plane** (`x`, `z`) by default — height does not attenuate. A 3D game opts into full distance with
   `EngineBuilder::audio_distance(AudioDistance::Spatial)`. `range` is a hard cutoff: exactly `0` at
   `range` and beyond.
-- **The listener is the camera** — specifically the lowest-`EntityId` entity carrying one. There is no
-  separate listener component. A scene with no camera syncs nothing that tick.
+- **The listener is the camera** by default — the lowest-`EntityId` entity carrying one. An
+  `AudioListener` entity moves the ear elsewhere (`ludion docs audio-space`). A world with neither
+  syncs nothing that tick.
 - **Going inaudible is a stop.** Despawn the entity, remove the component, mute it, or walk out of
   `range`, and the loop stops on that tick. This liveness diff is what the manual `loop_start` path
   does not have, so an emitter needs no cleanup discipline at all.
@@ -128,7 +129,7 @@ nearer it is. It is the sound analog of `PointLight` — the position is the ent
   changes; the sink holds the loop between.
 - **Pan is opt-in.** By default every positional sound is centred (`pan == 0.0`) and one gain scales
   every channel. `EngineBuilder::audio_pan(AudioPan::Stereo)` gives each `LoopSync` and positional
-  `OneShot` a `pan` from `-1.0` (left) to `1.0` (right): the offset to the camera, projected onto its
+  `OneShot` a `pan` from `-1.0` (left) to `1.0` (right): the offset to the listener (the camera by default), projected onto its
   horizontal plane, against its right vector — so dead ahead, behind and overhead are `0.0`, and a
   sound within half a unit of the listener scales toward centre instead of jumping sides. The sink
   applies a constant-power law (10 ms slew) on a two-channel device only; a mono or surround device
@@ -158,7 +159,7 @@ queue.play_at("sounds/impact.wav", 1.0, impact_position, 12.0); // sound, gain, 
   `audio_messages` shows a `OneShot` at `gain × falloff`, indistinguishable from a `play()` at that gain
   — with `pan` set too under `AudioPan::Stereo`. An `AudioEvent` struct literal (the ambient
   one-shot) names `pan: 0.0`.
-- **Out of range, below audibility, or with no camera, nothing is sent.** A dropped one-shot is not
+- **Out of range, below audibility, or with no listener (no camera, no `AudioListener`), nothing is sent.** A dropped one-shot is not
   retried on a later frame.
 - **`push_at(event, position, range)`** places an ambient one-shot, as `push` does for a global one.
 

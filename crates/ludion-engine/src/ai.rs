@@ -5,10 +5,12 @@
 //! [`crate::diagnostics::report_full`], once per `(code, entity)` by the engine's own latch. A no-op
 //! on a world where no machine ever faulted.
 
-use ludion_ai::AiFaults;
+use ludion_ai::{AiFaults, AiRoster};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_ecs::World;
+use serde_json::{Value, json};
 
+use crate::components::Name;
 use crate::scene_physics::entity_label;
 
 /// Reports every fault `ai_tick` and `send` queued since the last drain.
@@ -22,6 +24,55 @@ pub(crate) fn report_faults(world: &mut World) {
         let diagnostic = Diagnostic::new(fault.code, format!("{named}: {}", fault.message));
         crate::diagnostics::report_full(world, key, diagnostic);
     }
+}
+
+/// The `ai` key of `engine.describe`: every machine `ai_tick` has run, with its hierarchy and live
+/// agents (`entity`, `name`, `path`, `entered`, `ticks_in` = the machine's `game_tick` minus each
+/// `entered`, `inbox`, `dropped`). `None` while no machine has ticked, so a world without ai
+/// describes byte-identically to one before this key existed.
+pub(crate) fn describe_section(world: &World) -> Option<Value> {
+    let roster = world.resource::<AiRoster>()?;
+    let machines: Vec<Value> = roster
+        .machines
+        .iter()
+        .map(|machine| {
+            let agents: Vec<Value> = machine
+                .agents(world)
+                .into_iter()
+                .map(|agent| {
+                    let name = match world.get::<Name>(agent.entity) {
+                        Ok(Some(name)) => Some(name.0.clone()),
+                        _ => None,
+                    };
+                    let ticks_in: Vec<u64> = agent
+                        .entered
+                        .iter()
+                        .map(|entered| machine.game_tick.saturating_sub(*entered))
+                        .collect();
+                    json!({
+                        "entity": agent.entity,
+                        "name": name,
+                        "path": agent.path,
+                        "entered": agent.entered,
+                        "ticks_in": ticks_in,
+                        "inbox": agent.inbox,
+                        "dropped": agent.dropped,
+                    })
+                })
+                .collect();
+            json!({
+                "machine": machine.machine,
+                "component": machine.component,
+                "root": machine.root,
+                "leaf_first": machine.leaf_first,
+                "inbox_capacity": machine.inbox_capacity,
+                "game_tick": machine.game_tick,
+                "states": machine.states,
+                "agents": agents,
+            })
+        })
+        .collect();
+    Some(json!({ "machines": machines }))
 }
 
 #[cfg(test)]
@@ -59,6 +110,32 @@ mod tests {
                 Flip::Root => {}
             }
         }
+    }
+
+    #[test]
+    fn describe_carries_an_ai_key_only_once_a_machine_has_ticked() {
+        let mut engine = Engine::builder()
+            .components(register_machine::<Flip>)
+            .system("flip_ai", ai_tick::<Flip>)
+            .build()
+            .expect("boots");
+        engine
+            .load_inline_scene(
+                "format: 1
+seed: 1
+entities:
+  - name: flipper
+    components:
+      FlipMind: {}
+",
+            )
+            .expect("loads");
+        assert!(engine.describe_document().get("ai").is_none());
+        engine.advance_live();
+        let doc = engine.describe_document();
+        let machine = &doc["ai"]["machines"][0];
+        assert_eq!(machine["machine"], "Flip");
+        assert_eq!(machine["agents"][0]["name"], "flipper");
     }
 
     #[test]

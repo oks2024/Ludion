@@ -1,5 +1,5 @@
 ---
-description: Bone masks on a character and AnimationLayers — masked override and additive clips on the base pose
+description: Bone masks, AnimationLayers and blend spaces on a skinned character
 ---
 
 # Animation layers
@@ -89,6 +89,52 @@ fn aim_on(layers: &mut AnimationLayers, now: SimTime) {
 Pass `ctx.game_time`. Both return `false` when no layer has that name; `fade_layer` to the current
 target and `play_layer` of the current clip write nothing.
 
+## Blend spaces
+
+A `blends:` map in the character document mixes point clips by a parameter — a walk-to-run space, a
+strafe cross. `Animation.clip` (and a crossfade's `from`) may name a blend; `Animation.params` drives it.
+
+```yaml
+clips:
+  idle: { clip: clips/idle.anim.yaml, events: [{ t: 0.5, name: foot_l }, { t: 1.5, name: foot_r }] }
+  walk: { clip: clips/walk.anim.yaml }
+  run:  { clip: clips/run.anim.yaml }
+blends:
+  locomotion:
+    sync: foot_l
+    points:
+      - clip: idle
+        at: 0
+      - clip: walk
+        at: 2
+      - clip: run
+        at: 5
+```
+
+- **Points.** Two to sixteen `clip` (a binding name) and `at`. `at: 4` is a 1D point read from
+  `params[0]`; an `at` block list of two numbers is a 2D point read from `params[0..2]`. Every point of a
+  blend has the same dimension and a unique position. A point clip must loop.
+- **Weights.** 1D is linear between the sorted neighbours and clamps at the ends. 2D is barycentric
+  over a deterministic triangulation of the points (every non-degenerate triple with an empty
+  circumcircle, taken in index order, skipping overlaps) and clamps to the hull. A query on a point
+  gives that clip alone, exactly.
+- **Phase.** All point clips advance on one shared phase in cycles. With `sync: foot_l`, each clip is
+  offset so its `foot_l` lands on phase 0 (without `sync`, its start does). The rate is
+  `Animation.speed * sum(weight * binding speed / duration)` per gameplay second, so a cadence follows
+  the params with no pose jump.
+- **Events.** The point with the largest weight (ties to the lower index) fires its events as the
+  phase crosses them, so `foot_l` and `foot_r` fire once per stride at every speed. `ClipEvent.clip`
+  is the blend's name. A crossfade's outgoing side never emits.
+- **Registration.** Register `blend_clocks` after whatever writes `Animation` and before
+  `animation_events`, declaring `.query::<(&Animation, &Mesh)>()` and `.query::<(&mut BlendClock,)>()`.
+  It keeps a hashed `BlendClock` only on an entity whose clip names a blend. Without it, extract falls
+  back to `elapsed * rate(params now)`: exact while the params hold still, and no events fire.
+- **Limits.** `hold` does not step a blend's phase. A blend may not share a clip binding's name.
+  Blends on assemblies and prefabs, and a layer naming a blend, are not supported.
+
+Errors: `L1199` for a malformed `blends:` entry, `L1200` for a duplicate position, a name clash,
+collinear 2D points, an unbound or non-looping point clip, or a `sync` event a point clip lacks.
+
 ## What it does not do
 
 - **Presentation only.** No system reads the component; the pose is never hashed, and a scene without
@@ -96,7 +142,7 @@ target and `play_layer` of the current clip write nothing.
 - An unknown clip or mask name, or a layer at weight 0, is a silent degrade — the layer does nothing.
 - A skin named by `SkinBone` parts refuses `AnimationLayers` (`L1672`); assemblies and prefab parts
   ignore it.
-- Layer clips raise no `AnimationEvents` yet.
+- Layer clips raise no `AnimationEvents` yet, and a layer's `clip` cannot name a blend.
 - `ParentJoint` sockets and `posed_joint_world` read the layered pose.
 
 ## Next

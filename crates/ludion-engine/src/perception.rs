@@ -22,7 +22,8 @@
 use std::collections::BTreeMap;
 
 use ludion_components::{
-    Perceiver, PerceiverMemory, Require, Sense, SightTarget, StimulusRecord, SweepShape, ZoneSweep,
+    NoiseZone, NoiseZoneShape, PendingNoise, Perceiver, PerceiverMemory, PerceptionState, Require,
+    Sense, SightTarget, StimulusRecord, SweepShape, ZoneSweep,
 };
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -30,7 +31,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math;
 use ludion_core::suggest::nearest;
 use ludion_ecs::{SystemCtx, World};
-use ludion_physics::{LayerSet, PhysicsWorld, QueryFilter, Sweep};
+use ludion_physics::{LayerSet, PhysicsWorld, QueryFilter, SurfaceId, Sweep};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -42,56 +43,164 @@ const RAD_TO_DEG: f32 = 180.0 / core::f32::consts::PI;
 /// Most classes a config declares: each is one bit of a `u32`.
 const MAX_CLASSES: usize = 32;
 
-/// The class names perception knows. A [`SightTarget`]'s `class` and a zone's `detects` name them.
+/// The class names perception knows, and the noise settings. A [`SightTarget`]'s `class` and a
+/// zone's `detects` name the classes; a [`Noise`]'s `kind` and a `hears` list name the noise kinds.
 ///
 /// # Example
 /// ```
 /// use ludion_engine::PerceptionConfig;
 ///
-/// let config = PerceptionConfig { classes: vec!["player".into(), "decoy".into()] };
+/// let config = PerceptionConfig {
+///     classes: vec!["player".into(), "decoy".into()],
+///     noise_kinds: vec!["footstep".into()],
+///     ..Default::default()
+/// };
 /// assert!(config.validate().is_ok());
-/// assert!(PerceptionConfig { classes: vec!["a".into(), "a".into()] }.validate().is_err());
+/// let twice = PerceptionConfig { classes: vec!["a".into(), "a".into()], ..Default::default() };
+/// assert!(twice.validate().is_err());
 /// ```
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PerceptionConfig {
     /// The declared classes, at most 32, each non-empty and unique.
     pub classes: Vec<String>,
+    /// The declared noise kinds, at most 32, each non-empty and unique (default `[]`).
+    #[serde(default)]
+    pub noise_kinds: Vec<String>,
+    /// Radius multipliers by physics surface name; an unlisted surface is ×1 (default `[]`).
+    #[serde(default)]
+    pub surface_noise: Vec<SurfaceNoise>,
+    /// The layers whose colliders muffle a noise that has `occlusion`; empty means no occlusion
+    /// (default `[]`).
+    #[serde(default)]
+    pub sound_occluder_layers: LayerSet,
+    /// The radius factor per occluder between a noise and a listener, in [0, 1] (default `0.5`).
+    #[serde(default = "default_occlusion_factor")]
+    pub occlusion_factor: f32,
+    /// Most occluders that count against one noise, 1 to 8 (default `2`).
+    #[serde(default = "default_max_occluders")]
+    pub max_occluders: u32,
+}
+
+fn default_occlusion_factor() -> f32 {
+    0.5
+}
+
+fn default_max_occluders() -> u32 {
+    2
+}
+
+impl Default for PerceptionConfig {
+    fn default() -> Self {
+        Self {
+            classes: Vec::new(),
+            noise_kinds: Vec::new(),
+            surface_noise: Vec::new(),
+            sound_occluder_layers: LayerSet::default(),
+            occlusion_factor: default_occlusion_factor(),
+            max_occluders: default_max_occluders(),
+        }
+    }
+}
+
+/// A noise radius multiplier for one physics surface, by the name `physics.surfaces` declares.
+///
+/// # Example
+/// ```
+/// use ludion_engine::SurfaceNoise;
+///
+/// let grate = SurfaceNoise { surface: "metal_grate".into(), multiplier: 1.5 };
+/// assert_eq!(grate.multiplier, 1.5);
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SurfaceNoise {
+    /// A declared surface name.
+    pub surface: String,
+    /// Scales the noise radius on that surface (finite, not negative).
+    pub multiplier: f32,
 }
 
 impl PerceptionConfig {
-    /// Checks the class list.
+    /// Checks the class and noise-kind lists and the noise numbers.
     ///
     /// # Errors
-    /// `L4220`, pointer `/classes` for a list over 32 names or `/classes/{j}` for an empty or
-    /// repeated name.
+    /// `L4220`, pointer `/classes` or `/noise_kinds` for a list over 32 names, `/classes/{j}` or
+    /// `/noise_kinds/{j}` for an empty or repeated name, `/surface_noise/{j}/surface` or
+    /// `/surface_noise/{j}/multiplier`, `/occlusion_factor`, or `/max_occluders`.
     pub fn validate(&self) -> Result<(), Diagnostic> {
         let invalid = |path: String, what: String| {
             Diagnostic::new(code::PERCEPTION_CONFIG_INVALID, what)
                 .with_path(path)
-                .with_help("list each class once, at most 32; see `ludion docs perception`")
+                .with_help("list each name once, at most 32; see `ludion docs perception`")
         };
-        if self.classes.len() > MAX_CLASSES {
+        for (field, names) in [
+            ("classes", &self.classes),
+            ("noise_kinds", &self.noise_kinds),
+        ] {
+            if names.len() > MAX_CLASSES {
+                return Err(invalid(
+                    format!("/{field}"),
+                    format!(
+                        "perception `{field}` holds {} names; the most is {MAX_CLASSES}",
+                        names.len()
+                    ),
+                ));
+            }
+            for (j, name) in names.iter().enumerate() {
+                if name.is_empty() {
+                    return Err(invalid(
+                        format!("/{field}/{j}"),
+                        format!("perception `{field}[{j}]` is empty"),
+                    ));
+                }
+                if names[..j].contains(name) {
+                    return Err(invalid(
+                        format!("/{field}/{j}"),
+                        format!("perception `{field}[{j}]` repeats `{name}`"),
+                    ));
+                }
+            }
+        }
+        for (j, entry) in self.surface_noise.iter().enumerate() {
+            if entry.surface.is_empty()
+                || self.surface_noise[..j]
+                    .iter()
+                    .any(|e| e.surface == entry.surface)
+            {
+                return Err(invalid(
+                    format!("/surface_noise/{j}/surface"),
+                    format!(
+                        "perception `surface_noise[{j}].surface` is empty or repeats `{}`",
+                        entry.surface
+                    ),
+                ));
+            }
+            if !(entry.multiplier.is_finite() && entry.multiplier >= 0.0) {
+                return Err(invalid(
+                    format!("/surface_noise/{j}/multiplier"),
+                    format!(
+                        "perception `surface_noise[{j}].multiplier` {} must be finite and not negative",
+                        entry.multiplier
+                    ),
+                ));
+            }
+        }
+        if !(0.0..=1.0).contains(&self.occlusion_factor) {
             return Err(invalid(
-                "/classes".into(),
+                "/occlusion_factor".into(),
                 format!(
-                    "perception `classes` holds {} names; the most is {MAX_CLASSES}",
-                    self.classes.len()
+                    "perception `occlusion_factor` {} must be in [0, 1]",
+                    self.occlusion_factor
                 ),
             ));
         }
-        for (j, name) in self.classes.iter().enumerate() {
-            if name.is_empty() {
-                return Err(invalid(
-                    format!("/classes/{j}"),
-                    format!("perception `classes[{j}]` is empty"),
-                ));
-            }
-            if self.classes[..j].contains(name) {
-                return Err(invalid(
-                    format!("/classes/{j}"),
-                    format!("perception `classes[{j}]` repeats `{name}`"),
-                ));
-            }
+        if !(1..=8).contains(&self.max_occluders) {
+            return Err(invalid(
+                "/max_occluders".into(),
+                format!(
+                    "perception `max_occluders` {} must be in 1 to 8",
+                    self.max_occluders
+                ),
+            ));
         }
         Ok(())
     }
@@ -142,6 +251,93 @@ pub struct PerceptionResults {
     tick: u64,
     samples: Vec<SightSample>,
     facings: Vec<(EntityId, u8, [f32; 3])>,
+    heard: Vec<HeardNoise>,
+    noises: Vec<NoiseRecord>,
+}
+
+/// The id [`emit_noise`] gave a noise; ids rise by one per accepted noise.
+///
+/// # Example
+/// ```
+/// use ludion_engine::NoiseId;
+///
+/// assert!(NoiseId(1) < NoiseId(2));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NoiseId(pub u64);
+
+/// A noise a game emits with [`emit_noise`].
+///
+/// # Example
+/// ```
+/// use ludion_engine::Noise;
+///
+/// let step = Noise {
+///     at: [2.0, 0.0, 1.0], radius: 6.0, loudness: 0.8, kind: "footstep".into(),
+///     source: None, surface: None, occlusion: true,
+/// };
+/// assert_eq!(step.kind, "footstep");
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct Noise {
+    /// Where it was made, world metres (finite).
+    pub at: [f32; 3],
+    /// Metres it carries before zones, surface and sensitivity (finite, not negative).
+    pub radius: f32,
+    /// How loud it was; listeners read it back and memory stores it as `strength` (finite, not negative).
+    pub loudness: f32,
+    /// A declared `PerceptionConfig.noise_kinds` name.
+    pub kind: String,
+    /// What made it; `None` for an anonymous one, which merges per `(listener, kind)` in memory.
+    pub source: Option<EntityId>,
+    /// The surface it was made on, e.g. `MoveReport.ground.surface`; scaled by `surface_noise`.
+    pub surface: Option<SurfaceId>,
+    /// Whether `sound_occluder_layers` colliders between it and a listener shrink its radius.
+    pub occlusion: bool,
+}
+
+/// One delivery of a noise to one listener.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct HeardNoise {
+    /// The entity that heard it.
+    pub listener: EntityId,
+    /// The noise.
+    pub noise: NoiseId,
+    /// Where it was made.
+    pub at: [f32; 3],
+    /// Its kind.
+    pub kind: String,
+    /// How loud it was.
+    pub loudness: f32,
+    /// What made it, when known.
+    pub source: Option<EntityId>,
+    /// Metres from the listener's ear to `at`.
+    pub distance: f32,
+    /// The radius this listener's ear applied: zone, surface, sensitivity and occluders included.
+    pub effective_radius: f32,
+    /// The sound occluders counted between the noise and the ear, after the `max_occluders` cap;
+    /// 0 when the noise or config has no occlusion.
+    pub occluders: u8,
+}
+
+/// One noise as the tick delivered it, from the source's side.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct NoiseRecord {
+    /// The noise.
+    pub id: NoiseId,
+    /// Where it was made.
+    pub at: [f32; 3],
+    /// Its kind.
+    pub kind: String,
+    /// How loud it was.
+    pub loudness: f32,
+    /// What made it, when known.
+    pub source: Option<EntityId>,
+    /// The radius after the zone and surface multipliers, before any listener's sensitivity or
+    /// occluders: the number to draw a ring from.
+    pub effective_radius: f32,
 }
 
 impl PerceptionResults {
@@ -174,9 +370,25 @@ impl PerceptionResults {
             .ok()?;
         Some(self.facings[at].2)
     }
+
+    /// The noises delivered this tick to `listener`, sorted by noise id.
+    pub fn heard(&self, listener: EntityId) -> &[HeardNoise] {
+        let start = self.heard.partition_point(|h| h.listener < listener);
+        let len = self.heard[start..]
+            .iter()
+            .take_while(|h| h.listener == listener)
+            .count();
+        &self.heard[start..start + len]
+    }
+
+    /// Every noise delivered this tick, in noise-id order, with the radius the senses used.
+    pub fn noises(&self) -> &[NoiseRecord] {
+        &self.noises
+    }
 }
 
-/// Rebuilds [`PerceptionResults`] from every enabled [`Perceiver`] and [`SightTarget`], then refreshes
+/// Rebuilds [`PerceptionResults`] from every enabled [`Perceiver`] and [`SightTarget`], delivers every
+/// pending [`Noise`] (see [`emit_noise`]) to the listeners that hear it, then refreshes
 /// and ages the [`StimulusRecord`]s of every perceiver with `memory`. A no-op in a
 /// game that configured no perception. A zone's `detects` names and a target's `class` must be in
 /// the [`PerceptionConfig`], and `blocked_by` / `see_through` names must be declared physics layers;
@@ -191,7 +403,7 @@ impl PerceptionResults {
 /// use ludion_engine::{Engine, PerceptionConfig, perception_update};
 ///
 /// let engine = Engine::builder()
-///     .perception(PerceptionConfig { classes: vec!["player".into()] })
+///     .perception(PerceptionConfig { classes: vec!["player".into()], ..Default::default() })
 ///     .system("perception_update", perception_update)
 ///     .build()
 ///     .unwrap();
@@ -316,11 +528,15 @@ pub fn perception_update(world: &mut World, ctx: &SystemCtx) {
         results.samples = frame.finish(drafts);
     }
     results.facings.sort_by_key(|(e, z, _)| (*e, *z));
+    let heard = hear(world, &config, &mut reports);
+    results.heard = heard.heard;
+    results.noises = heard.noises;
     update_memory(
         world,
         ctx.game_frame.as_u64(),
         ctx.game_time.rate().hz(),
         &results.samples,
+        heard.refreshes,
     );
     world.insert_resource(results);
     for (key, diagnostic) in reports {
@@ -349,8 +565,29 @@ pub struct Stimulus {
     pub strength: f32,
 }
 
-/// `(perceiver, sense, source)`: the identity of one memory record. `None` sorts first.
-type RecordKey = (EntityId, Sense, Option<EntityId>);
+/// `(perceiver, sense, source, kind)`: the identity of one memory record. `None` sorts first. The
+/// noise kind is part of the identity only for an anonymous record, and is empty otherwise.
+type RecordKey = (EntityId, Sense, Option<EntityId>, String);
+
+fn record_key(record: &StimulusRecord) -> RecordKey {
+    let kind = if record.source.is_none() {
+        record.kind.clone()
+    } else {
+        String::new()
+    };
+    (record.perceiver, record.sense, record.source, kind)
+}
+
+/// One sensing to fold into memory: from a sight sample, or a delivered noise.
+struct Refresh {
+    perceiver: EntityId,
+    sense: Sense,
+    source: Option<EntityId>,
+    kind: String,
+    at: [f32; 3],
+    strength: f32,
+    zone: u8,
+}
 
 /// A record as stored, and as it will be after the tick's pass.
 struct Slot {
@@ -380,19 +617,29 @@ fn forget_ticks(memory: &PerceiverMemory, sense: Sense, hz: u32) -> u64 {
 /// `(sense, source)` ascending.
 fn evictions(records: &[(RecordKey, u64)], max: usize) -> Vec<RecordKey> {
     let mut order: Vec<&(RecordKey, u64)> = records.iter().collect();
-    order.sort_by_key(|((_, sense, source), last)| (*last, *sense, *source));
+    order.sort_by(|a, b| {
+        let rank = |(key, last): &(RecordKey, u64)| (*last, key.1, key.2, key.3.clone());
+        rank(a).cmp(&rank(b))
+    });
     order
         .into_iter()
         .take(records.len().saturating_sub(max))
-        .map(|(key, _)| *key)
+        .map(|(key, _)| key.clone())
         .collect()
 }
 
 /// The memory pass of [`perception_update`]: orphans despawn, visible targets refresh or create
 /// their sight record, `sensed_now` follows `last_sensed_tick`, aged records are forgotten, each
-/// perceiver is trimmed to `max_records`, and new records spawn in key order. A world with no memory
-/// and no records is not touched.
-fn update_memory(world: &mut World, now: u64, hz: u32, samples: &[SightSample]) {
+/// perceiver is trimmed to `max_records`, and new records spawn in key order. `hearings` are the
+/// tick's noise deliveries, folded in after sight. A world with no memory and no records is not
+/// touched.
+fn update_memory(
+    world: &mut World,
+    now: u64,
+    hz: u32,
+    samples: &[SightSample],
+    hearings: Vec<Refresh>,
+) {
     let memories: BTreeMap<EntityId, PerceiverMemory> = world
         .query_ids::<(&Perceiver,)>()
         .filter_map(|(id, (p,))| p.memory.map(|m| (id, m)))
@@ -409,7 +656,7 @@ fn update_memory(world: &mut World, now: u64, hz: u32, samples: &[SightSample]) 
     let mut doomed: Vec<EntityId> = Vec::new();
     let mut slots: BTreeMap<RecordKey, Slot> = BTreeMap::new();
     for (entity, record) in stored {
-        let key = (record.perceiver, record.sense, record.source);
+        let key = record_key(&record);
         if !memories.contains_key(&record.perceiver) || slots.contains_key(&key) {
             doomed.push(entity);
             continue;
@@ -433,48 +680,86 @@ fn update_memory(world: &mut World, now: u64, hz: u32, samples: &[SightSample]) 
         seen.entry((sample.perceiver, sample.target))
             .or_insert(sample.zone);
     }
+    let mut refreshes: Vec<Refresh> = Vec::new();
     for ((perceiver, target), zone) in seen {
         let Some(at) = pose(world, target).map(|p| p.origin) else {
             continue;
         };
-        let slot = slots
-            .entry((perceiver, Sense::Sight, Some(target)))
-            .or_insert_with(|| Slot {
-                entity: None,
-                before: None,
-                record: StimulusRecord {
-                    perceiver,
-                    source: Some(target),
-                    sense: Sense::Sight,
-                    last_position: at,
-                    last_direction: [0.0; 3],
-                    first_sensed_tick: now,
-                    last_sensed_tick: now,
-                    sensed_now: true,
-                    strength: 1.0,
-                    zone,
-                },
-            });
+        refreshes.push(Refresh {
+            perceiver,
+            sense: Sense::Sight,
+            source: Some(target),
+            kind: String::new(),
+            at,
+            strength: 1.0,
+            zone,
+        });
+    }
+    refreshes.extend(
+        hearings
+            .into_iter()
+            .filter(|h| memories.contains_key(&h.perceiver)),
+    );
+    for refresh in refreshes {
+        let Refresh {
+            perceiver,
+            sense,
+            source,
+            kind,
+            at,
+            strength,
+            zone,
+        } = refresh;
+        let key = (
+            perceiver,
+            sense,
+            source,
+            if source.is_none() {
+                kind.clone()
+            } else {
+                String::new()
+            },
+        );
+        let slot = slots.entry(key).or_insert_with(|| Slot {
+            entity: None,
+            before: None,
+            record: StimulusRecord {
+                perceiver,
+                source,
+                sense,
+                last_position: at,
+                last_direction: [0.0; 3],
+                first_sensed_tick: now,
+                last_sensed_tick: now,
+                sensed_now: true,
+                strength,
+                zone,
+                kind: kind.clone(),
+            },
+        });
         let record = &mut slot.record;
-        let moved = sub(at, record.last_position);
-        let distance = length(moved);
-        if distance > 1e-4 {
-            record.last_direction = [
-                moved[0] / distance,
-                moved[1] / distance,
-                moved[2] / distance,
-            ];
+        if sense == Sense::Sight {
+            let moved = sub(at, record.last_position);
+            let distance = length(moved);
+            if distance > 1e-4 {
+                record.last_direction = [
+                    moved[0] / distance,
+                    moved[1] / distance,
+                    moved[2] / distance,
+                ];
+            }
         }
         record.last_position = at;
         record.last_sensed_tick = now;
-        record.strength = 1.0;
+        record.strength = strength;
         record.zone = zone;
+        record.kind = kind;
     }
 
     for slot in slots.values_mut() {
         slot.record.sensed_now = slot.record.last_sensed_tick == now;
     }
-    slots.retain(|(perceiver, sense, _), slot| {
+    slots.retain(|(perceiver, sense, _, _), slot| {
         let age = now.saturating_sub(slot.record.last_sensed_tick);
         let forgotten = age >= forget_ticks(&memories[perceiver], *sense, hz);
         if forgotten && let Some(entity) = slot.entity {
@@ -485,7 +770,7 @@ fn update_memory(world: &mut World, now: u64, hz: u32, samples: &[SightSample]) 
 
     let listed: Vec<(RecordKey, u64)> = slots
         .iter()
-        .map(|(key, slot)| (*key, slot.record.last_sensed_tick))
+        .map(|(key, slot)| (key.clone(), slot.record.last_sensed_tick))
         .collect();
     for group in listed.chunk_by(|a, b| a.0.0 == b.0.0) {
         let max = memories[&group[0].0.0].max_records as usize;
@@ -541,7 +826,7 @@ fn update_memory(world: &mut World, now: u64, hz: u32, samples: &[SightSample]) 
 /// };
 /// let perceiver = Perceiver {
 ///     enabled: true, eye: [0.0; 3], look: Default::default(), sight: vec![zone], sweep: None,
-///     memory: Some(PerceiverMemory::default()),
+///     memory: Some(PerceiverMemory::default()), hearing: None,
 /// };
 /// world.insert(guard, perceiver).unwrap();
 ///
@@ -599,16 +884,16 @@ pub fn report_stimulus(
         .filter(|(_, (r,))| r.perceiver == perceiver)
         .map(|(id, (r,))| (id, r.clone()))
         .collect();
+    let key: RecordKey = (perceiver, stimulus.sense, stimulus.source, String::new());
     let existing = mine
         .iter()
-        .filter(|(_, r)| r.sense == stimulus.sense && r.source == stimulus.source)
+        .filter(|(_, r)| record_key(r) == key)
         .map(|(id, _)| *id)
         .min();
     let mut listed: Vec<(RecordKey, u64)> = mine
         .iter()
-        .map(|(_, r)| ((r.perceiver, r.sense, r.source), r.last_sensed_tick))
+        .map(|(_, r)| (record_key(r), r.last_sensed_tick))
         .collect();
-    let key = (perceiver, stimulus.sense, stimulus.source);
     match existing {
         Some(entity) => {
             if let Ok(Some(record)) = world.get_mut::<StimulusRecord>(entity) {
@@ -634,6 +919,7 @@ pub fn report_stimulus(
                     sensed_now: true,
                     strength: stimulus.strength,
                     zone: 0,
+                    kind: String::new(),
                 },
             );
         }
@@ -644,7 +930,7 @@ pub fn report_stimulus(
         .filter_map(|evicted| {
             world
                 .query_ids::<(&StimulusRecord,)>()
-                .find(|(_, (r,))| (r.perceiver, r.sense, r.source) == evicted)
+                .find(|(_, (r,))| record_key(r) == evicted)
                 .map(|(id, _)| id)
         })
         .collect();
@@ -712,6 +998,306 @@ pub fn forget_all(world: &mut World, perceiver: EntityId) {
         .map(|(id, _)| id)
         .collect();
     let _ = world.despawn_many(&doomed);
+}
+
+/// Queues `noise` for [`perception_update`] to deliver to every listener (a [`Perceiver`] with
+/// `hearing`) that hears its kind within reach, and returns its [`NoiseId`]. A noise emitted before
+/// the update in a tick is delivered that tick, one emitted after it the next. The reach of one
+/// listener is `radius × NoiseZone multiplier × surface multiplier × sensitivity ×
+/// occlusion_factor^occluders`. Pending noises are entities, so a snapshot between emission and
+/// delivery loses nothing.
+///
+/// Returns `None` when nothing was queued: a game with no perception config (silently), a
+/// non-finite or negative `at`, `radius` or `loudness` (`L1577`, once), or an undeclared `kind`
+/// (`L1572`, once per name).
+///
+/// # Example
+/// ```
+/// use ludion_core::time::{FrameIndex, TickRate};
+/// use ludion_ecs::{SystemCtx, World};
+/// use ludion_engine::{Noise, PerceptionConfig, emit_noise};
+///
+/// let mut world = World::new();
+/// world.insert_resource(PerceptionConfig {
+///     noise_kinds: vec!["footstep".into()],
+///     ..Default::default()
+/// });
+/// let ctx = SystemCtx::new(FrameIndex::new(0), TickRate::DEFAULT);
+/// let step = Noise {
+///     at: [1.0, 0.0, 0.0], radius: 6.0, loudness: 1.0, kind: "footstep".into(),
+///     source: None, surface: None, occlusion: false,
+/// };
+/// assert!(emit_noise(&mut world, &ctx, step.clone()).is_some());
+/// let bang = Noise { kind: "bang".into(), ..step };
+/// assert!(emit_noise(&mut world, &ctx, bang).is_none());
+/// ```
+pub fn emit_noise(world: &mut World, _ctx: &SystemCtx, noise: Noise) -> Option<NoiseId> {
+    let config = world.resource::<PerceptionConfig>()?;
+    let kind_declared = config.noise_kinds.contains(&noise.kind);
+    let near = nearest(&noise.kind, config.noise_kinds.iter().map(String::as_str))
+        .map(|n| format!("did you mean `{n}`? "))
+        .unwrap_or_default();
+    let numbers = noise
+        .at
+        .iter()
+        .chain([&noise.radius, &noise.loudness])
+        .all(|n| n.is_finite())
+        && noise.radius >= 0.0
+        && noise.loudness >= 0.0;
+    if !numbers {
+        let diagnostic = Diagnostic::new(
+            code::NOISE_INVALID,
+            "`emit_noise` dropped a noise: `at`, `radius` or `loudness` is not finite or is negative",
+        )
+        .with_help("pass finite, non-negative numbers; see `ludion docs perception`");
+        report_full(world, "noise/not_finite".to_string(), diagnostic);
+        return None;
+    }
+    if !kind_declared {
+        let diagnostic = Diagnostic::new(
+            code::PERCEPTION_NAME_UNKNOWN,
+            format!(
+                "noise kind `{}` is not declared in the `PerceptionConfig`; the noise was dropped",
+                noise.kind
+            ),
+        )
+        .with_help(format!(
+            "{near}declare noise kinds in `PerceptionConfig.noise_kinds`"
+        ));
+        report_full(world, format!("noise/kind:{}", noise.kind), diagnostic);
+        return None;
+    }
+    let existing = world
+        .query_ids::<(&PerceptionState,)>()
+        .map(|(id, _)| id)
+        .min();
+    let state = existing.unwrap_or_else(|| {
+        let entity = world.spawn();
+        let _ = world.insert(entity, PerceptionState::default());
+        entity
+    });
+    let id = world
+        .get_mut::<PerceptionState>(state)
+        .ok()
+        .flatten()
+        .map(|s| {
+            let id = s.next_noise_id;
+            s.next_noise_id += 1;
+            id
+        })?;
+    let entity = world.spawn();
+    let _ = world.insert(
+        entity,
+        PendingNoise {
+            id,
+            at: noise.at,
+            radius: noise.radius,
+            loudness: noise.loudness,
+            kind: noise.kind,
+            source: noise.source,
+            surface: noise.surface.map(|s| s.0),
+            occlusion: noise.occlusion,
+        },
+    );
+    Some(NoiseId(id))
+}
+
+/// What the hearing pass produced.
+#[derive(Default)]
+struct HearingPass {
+    heard: Vec<HeardNoise>,
+    noises: Vec<NoiseRecord>,
+    refreshes: Vec<Refresh>,
+}
+
+/// A [`NoiseZone`] with its world pose, for containment tests.
+struct ZoneAt {
+    zone: NoiseZone,
+    origin: [f32; 3],
+    rotation: [f32; 4],
+}
+
+/// Whether `point` is inside `shape` in the pose `origin`/`rotation` (scale is ignored). Boundaries
+/// are inclusive.
+fn zone_contains(
+    shape: &NoiseZoneShape,
+    origin: [f32; 3],
+    rotation: [f32; 4],
+    point: [f32; 3],
+) -> bool {
+    let delta = sub(point, origin);
+    match shape {
+        NoiseZoneShape::Sphere { radius } => length(delta) <= *radius,
+        NoiseZoneShape::Box { half_extents } => {
+            let conjugate = [-rotation[0], -rotation[1], -rotation[2], rotation[3]];
+            let local = math::quat_rotate(conjugate, delta);
+            (0..3).all(|i| local[i].abs() <= half_extents[i])
+        }
+    }
+}
+
+/// The multiplier of the zone that governs a noise of `kind` at `at`: among the zones containing
+/// `at` whose `kinds` include `kind` (empty means all), the highest `priority`, ties to the first in
+/// `zones` (sorted by entity). Multipliers never stack; no zone is ×1.
+fn zone_multiplier(zones: &[ZoneAt], at: [f32; 3], kind: &str) -> f32 {
+    let mut best: Option<&ZoneAt> = None;
+    for zone in zones {
+        let matches = zone.zone.kinds.is_empty() || zone.zone.kinds.iter().any(|k| k == kind);
+        if matches
+            && zone_contains(&zone.zone.shape, zone.origin, zone.rotation, at)
+            && best.is_none_or(|b| zone.zone.priority > b.zone.priority)
+        {
+            best = Some(zone);
+        }
+    }
+    best.map_or(1.0, |z| z.zone.multiplier)
+}
+
+/// The hearing pass of [`perception_update`]: every pending noise, in id order, is delivered to each
+/// enabled listener that hears its kind within reach (listeners ascending), then despawned. A world
+/// with no pending noise is not touched.
+fn hear(
+    world: &mut World,
+    config: &PerceptionConfig,
+    reports: &mut Vec<(String, Diagnostic)>,
+) -> HearingPass {
+    let mut pending: Vec<(EntityId, PendingNoise)> = world
+        .query_ids::<(&PendingNoise,)>()
+        .map(|(id, (n,))| (id, n.clone()))
+        .collect();
+    if pending.is_empty() {
+        return HearingPass::default();
+    }
+    pending.sort_by_key(|(entity, n)| (n.id, *entity));
+    let mut zone_ids: Vec<(EntityId, NoiseZone)> = world
+        .query_ids::<(&NoiseZone,)>()
+        .map(|(id, (z,))| (id, z.clone()))
+        .collect();
+    zone_ids.sort_by_key(|(id, _)| *id);
+    let zones: Vec<ZoneAt> = zone_ids
+        .into_iter()
+        .filter_map(|(id, zone)| {
+            let pose = pose(world, id)?;
+            Some(ZoneAt {
+                zone,
+                origin: pose.origin,
+                rotation: pose.rotation,
+            })
+        })
+        .collect();
+    let mut listener_ids: Vec<(EntityId, ludion_components::Hearing, bool)> = world
+        .query_ids::<(&Perceiver,)>()
+        .filter(|(_, (p,))| p.enabled)
+        .filter_map(|(id, (p,))| Some((id, p.hearing.clone()?, p.memory.is_some())))
+        .collect();
+    listener_ids.sort_by_key(|(id, _, _)| *id);
+    let listeners: Vec<(EntityId, ludion_components::Hearing, bool, [f32; 3])> = listener_ids
+        .into_iter()
+        .filter_map(|(id, hearing, memory)| {
+            let ear = pose(world, id)?.with_eye(hearing.ear).origin;
+            Some((id, hearing, memory, ear))
+        })
+        .collect();
+
+    let mut out = HearingPass::default();
+    {
+        let physics = world.resource::<PhysicsWorld>();
+        let occludes = !config.sound_occluder_layers.is_empty();
+        for (_, noise) in &pending {
+            if !config.noise_kinds.contains(&noise.kind) {
+                continue;
+            }
+            let surface = noise
+                .surface
+                .and_then(|s| physics.and_then(|p| p.surface_name(SurfaceId(s))))
+                .and_then(|name| config.surface_noise.iter().find(|e| e.surface == name))
+                .map_or(1.0, |e| e.multiplier);
+            let radius = noise.radius * zone_multiplier(&zones, noise.at, &noise.kind) * surface;
+            out.noises.push(NoiseRecord {
+                id: NoiseId(noise.id),
+                at: noise.at,
+                kind: noise.kind.clone(),
+                loudness: noise.loudness,
+                source: noise.source,
+                effective_radius: radius,
+            });
+            for (listener, hearing, memory, ear) in &listeners {
+                if !hearing.hears.contains(&noise.kind) {
+                    continue;
+                }
+                let reach = radius * hearing.sensitivity;
+                let to_ear = sub(*ear, noise.at);
+                let distance = length(to_ear);
+                if distance > reach {
+                    continue;
+                }
+                let mut effective = reach;
+                let mut occluders = 0u8;
+                if noise.occlusion
+                    && occludes
+                    && distance > 1e-6
+                    && let Some(physics) = physics
+                {
+                    let filter = QueryFilter::new().include_set(&config.sound_occluder_layers);
+                    let hits = physics.ray_cast(noise.at, to_ear, distance, &filter);
+                    let hits = hits.unwrap_or_else(|error| {
+                        reports.push((
+                            "noise/occluder_layers".to_string(),
+                            Diagnostic::new(
+                                code::PERCEPTION_NAME_UNKNOWN,
+                                format!(
+                                    "perception `sound_occluder_layers` is not usable: {error}"
+                                ),
+                            )
+                            .with_help("declare the layers under `physics.layers`"),
+                        ));
+                        Vec::new()
+                    });
+                    let mut blockers: Vec<EntityId> = hits
+                        .iter()
+                        .map(|h| h.entity)
+                        .filter(|e| Some(*e) != noise.source && e != listener)
+                        .collect();
+                    blockers.sort();
+                    blockers.dedup();
+                    let count = blockers.len().min(config.max_occluders as usize);
+                    for _ in 0..count {
+                        effective *= config.occlusion_factor;
+                    }
+                    occluders = count as u8;
+                }
+                if distance > effective {
+                    continue;
+                }
+                out.heard.push(HeardNoise {
+                    listener: *listener,
+                    noise: NoiseId(noise.id),
+                    at: noise.at,
+                    kind: noise.kind.clone(),
+                    loudness: noise.loudness,
+                    source: noise.source,
+                    distance,
+                    effective_radius: effective,
+                    occluders,
+                });
+                if *memory {
+                    out.refreshes.push(Refresh {
+                        perceiver: *listener,
+                        sense: Sense::Hearing,
+                        source: noise.source,
+                        kind: noise.kind.clone(),
+                        at: noise.at,
+                        strength: noise.loudness,
+                        zone: 0,
+                    });
+                }
+            }
+        }
+    }
+    out.heard.sort_by_key(|h| (h.listener, h.noise));
+    let consumed: Vec<EntityId> = pending.iter().map(|(entity, _)| *entity).collect();
+    let _ = world.despawn_many(&consumed);
+    out
 }
 
 /// One sample under construction.
@@ -1243,21 +1829,118 @@ mod tests {
     #[test]
     fn a_config_names_the_field_it_refuses() {
         let path = |classes: Vec<String>| {
-            PerceptionConfig { classes }
-                .validate()
-                .unwrap_err()
-                .path
-                .unwrap_or_default()
+            PerceptionConfig {
+                classes,
+                ..Default::default()
+            }
+            .validate()
+            .unwrap_err()
+            .path
+            .unwrap_or_default()
         };
         assert_eq!(path((0..33).map(|n| n.to_string()).collect()), "/classes");
         assert_eq!(path(vec!["a".into(), String::new()]), "/classes/1");
         assert_eq!(path(vec!["a".into(), "b".into(), "a".into()]), "/classes/2");
         assert!(
             PerceptionConfig {
-                classes: (0..32).map(|n| n.to_string()).collect()
+                classes: (0..32).map(|n| n.to_string()).collect(),
+                ..Default::default()
             }
             .validate()
             .is_ok()
         );
+    }
+
+    #[test]
+    fn a_config_refuses_bad_noise_settings() {
+        let path = |edit: &dyn Fn(&mut PerceptionConfig)| {
+            let mut config = PerceptionConfig {
+                noise_kinds: vec!["footstep".into()],
+                ..Default::default()
+            };
+            edit(&mut config);
+            config.validate().unwrap_err().path.unwrap_or_default()
+        };
+        assert_eq!(
+            path(&|c| c.noise_kinds = (0..33).map(|n| n.to_string()).collect()),
+            "/noise_kinds"
+        );
+        assert_eq!(
+            path(&|c| c.noise_kinds.push("footstep".into())),
+            "/noise_kinds/1"
+        );
+        let entry = |surface: &str, multiplier: f32| SurfaceNoise {
+            surface: surface.into(),
+            multiplier,
+        };
+        assert_eq!(
+            path(&|c| c.surface_noise = vec![entry("a", 1.0), entry("a", 1.0)]),
+            "/surface_noise/1/surface"
+        );
+        assert_eq!(
+            path(&|c| c.surface_noise = vec![entry("a", -1.0)]),
+            "/surface_noise/0/multiplier"
+        );
+        assert_eq!(path(&|c| c.occlusion_factor = 1.5), "/occlusion_factor");
+        assert_eq!(path(&|c| c.max_occluders = 9), "/max_occluders");
+        assert_eq!(path(&|c| c.max_occluders = 0), "/max_occluders");
+    }
+
+    fn zone_at(shape: NoiseZoneShape, origin: [f32; 3], priority: i32, mult: f32) -> ZoneAt {
+        ZoneAt {
+            zone: NoiseZone {
+                shape,
+                multiplier: mult,
+                kinds: Vec::new(),
+                priority,
+            },
+            origin,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+
+    #[test]
+    fn zones_contain_inclusively_and_a_box_follows_its_rotation() {
+        let identity = [0.0, 0.0, 0.0, 1.0];
+        let sphere = NoiseZoneShape::Sphere { radius: 2.0 };
+        assert!(zone_contains(
+            &sphere,
+            [1.0, 0.0, 0.0],
+            identity,
+            [3.0, 0.0, 0.0]
+        ));
+        assert!(!zone_contains(
+            &sphere,
+            [1.0, 0.0, 0.0],
+            identity,
+            [3.1, 0.0, 0.0]
+        ));
+        let slab = NoiseZoneShape::Box {
+            half_extents: [4.0, 1.0, 1.0],
+        };
+        assert!(zone_contains(&slab, [0.0; 3], identity, [4.0, 1.0, -1.0]));
+        assert!(!zone_contains(&slab, [0.0; 3], identity, [0.0, 0.0, 3.0]));
+        // A quarter turn about +Y swings the long axis from X to -Z.
+        let half = core::f32::consts::FRAC_1_SQRT_2;
+        let turned = [0.0, half, 0.0, half];
+        assert!(zone_contains(&slab, [0.0; 3], turned, [0.0, 0.0, 3.5]));
+        assert!(!zone_contains(&slab, [0.0; 3], turned, [3.5, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn the_highest_priority_zone_wins_and_ties_go_to_the_first() {
+        let big = NoiseZoneShape::Sphere { radius: 10.0 };
+        let zones = [
+            zone_at(big, [0.0; 3], 0, 0.5),
+            zone_at(big, [0.0; 3], 0, 0.25),
+            zone_at(big, [0.0; 3], 3, 2.0),
+            zone_at(big, [50.0, 0.0, 0.0], 9, 7.0),
+        ];
+        assert_eq!(zone_multiplier(&zones, [0.0; 3], "x"), 2.0);
+        assert_eq!(zone_multiplier(&zones[..2], [0.0; 3], "x"), 0.5);
+        assert_eq!(zone_multiplier(&zones, [0.0, 20.0, 0.0], "x"), 1.0);
+        let mut quiet = zone_at(big, [0.0; 3], 0, 0.1);
+        quiet.zone.kinds = vec!["footstep".into()];
+        assert_eq!(zone_multiplier(&[quiet], [0.0; 3], "bang"), 1.0);
     }
 }

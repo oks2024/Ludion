@@ -107,6 +107,7 @@ use serde_json::Value;
 mod animation;
 mod assembly;
 mod atlas;
+mod blend_space;
 mod character;
 mod clip_eval;
 mod doc;
@@ -158,7 +159,13 @@ pub use atlas::{
     ATLAS_FORMAT_VERSION, ATLAS_SOURCE_FORMAT_VERSION, AtlasDocument, AtlasFilter, AtlasRegion,
     AtlasSourceDocument, AtlasSourceInput, Flipbook,
 };
-pub use character::{CHARACTER_FORMAT_VERSION, CharacterClip, CharacterDocument, CharacterMask};
+pub use blend_space::{
+    BlendWeights, MAX_BLEND_POINTS, blend_weights_1d, blend_weights_2d, triangulate,
+};
+pub use character::{
+    BlendAt, BlendPoint, CHARACTER_FORMAT_VERSION, CharacterBlend, CharacterClip,
+    CharacterDocument, CharacterMask,
+};
 pub use clip_eval::{
     ClipSampler, PartPose, clip_phase, flipbook_frame, joint_pose, part_pose, sample_channel,
     sample_rotation, slerp, track as clip_track,
@@ -2815,5 +2822,39 @@ pub fn open_settings(source: &str) -> Result<ProfileEnvelope, Vec<Diagnostic>> {
         source,
         "settings",
         ludion_core::codes::code::SETTINGS_ENVELOPE,
+    )
+}
+
+// --- Input-bindings documents (`save/input-bindings.yaml`, `kind: input-bindings`) --------------
+//
+// The player's rebinds share the same lenient envelope open; the engine's `input_bindings`
+// module owns the per-action leniency (`Plan/input-actions.md`).
+
+/// Opens an input-bindings document leniently: validates and strips its `format`/`kind` envelope
+/// (`kind: input-bindings`) and returns the remaining field map plus the declared `format`,
+/// **without** compiling any binding. The canonical *write* is [`emit_doc`] with
+/// `kind: input-bindings`.
+///
+/// # Errors
+/// `L1636` for a malformed envelope (a missing/non-integer `format`, a missing/non-`input-bindings`
+/// `kind`, a non-mapping document); `L1001`–`L1009` for strict-YAML violations.
+///
+/// # Example
+/// ```
+/// let source = "format: 1\nkind: input-bindings\nactions:\n  jump:\n    bindings: []\n";
+/// let doc = ludion_scene::open_input_bindings(source).expect("a well-formed envelope");
+/// assert_eq!(doc.format, 1);
+/// assert!(doc.fields["actions"]["jump"].is_object());
+///
+/// // A `kind: settings` file is an L1636 — the engine backs it up and starts from the defaults.
+/// let wrong = "format: 1\nkind: settings\n";
+/// let diagnostics = ludion_scene::open_input_bindings(wrong).unwrap_err();
+/// assert_eq!(diagnostics[0].code.as_str(), "L1636");
+/// ```
+pub fn open_input_bindings(source: &str) -> Result<ProfileEnvelope, Vec<Diagnostic>> {
+    profile::open_envelope(
+        source,
+        "input-bindings",
+        ludion_core::codes::code::INPUT_BINDINGS_ENVELOPE,
     )
 }

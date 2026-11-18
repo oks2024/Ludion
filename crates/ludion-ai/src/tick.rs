@@ -9,7 +9,8 @@ use ludion_ecs::{SystemCtx, World};
 use crate::faults::fault;
 use crate::group::{Group, GroupMember};
 use crate::machine::{Cx, Machine, Step};
-use crate::mind::{Mind, overflow_fault, path_to};
+use crate::mind::{Mind, active_path, overflow_fault, path_to};
+use crate::trace::{AiCause, AiRecord, AiState, AiTrace, AiTransition, path_names, roster_upsert};
 
 /// The most transitions one agent makes in one tick (its start excluded). A machine that flips
 /// between states on entry stops here and raises `L4120`.
@@ -38,12 +39,48 @@ pub const MAX_TRANSITIONS_PER_TICK: u32 = 8;
 /// Agents spawned during the tick start on the next one. Inside a callback the agent's own `Mind`
 /// and blackboard are out of the world: use [`Cx::bb`](crate::Cx::bb).
 pub fn ai_tick<M: Machine>(world: &mut World, ctx: &SystemCtx) {
+    roster_upsert::<M>(world, ctx);
     if !ctx.game_advanced() {
         return;
     }
+    let (transitions, states) = world
+        .resource::<AiTrace>()
+        .map_or((false, false), |t| (t.transitions, t.states));
     let agents: Vec<EntityId> = world.query_ids::<(&Mind<M>,)>().map(|(id, _)| id).collect();
     for agent in agents {
-        run_agent::<M>(world, ctx, agent);
+        run_agent::<M>(world, ctx, agent, transitions);
+        if states {
+            record_state::<M>(world, ctx, agent);
+        }
+    }
+}
+
+fn record_state<M: Machine>(world: &mut World, ctx: &SystemCtx, agent: EntityId) {
+    if !world.is_alive(agent) || world.component::<Mind<M>>(agent).is_none() {
+        return;
+    }
+    let path = path_names(active_path::<M>(world, agent));
+    if let Some(trace) = world.resource_mut::<AiTrace>() {
+        trace.push(AiRecord::State(AiState {
+            tick: ctx.frame.as_u64(),
+            entity: agent,
+            machine: M::NAME,
+            path,
+        }));
+    }
+}
+
+fn record_transition<M: Machine>(cx: &mut Cx<'_, M>, from: Vec<String>, cause: AiCause) {
+    let record = AiRecord::Transition(AiTransition {
+        tick: cx.ctx.frame.as_u64(),
+        entity: cx.agent,
+        machine: M::NAME,
+        from,
+        to: path_names(cx.active.iter().map(|(s, _)| *s)),
+        cause,
+    });
+    if let Some(trace) = cx.world.resource_mut::<AiTrace>() {
+        trace.push(record);
     }
 }
 
@@ -51,7 +88,7 @@ fn has_blackboard<M: Machine>() -> bool {
     TypeId::of::<M::Blackboard>() != TypeId::of::<()>()
 }
 
-fn run_agent<M: Machine>(world: &mut World, ctx: &SystemCtx, agent: EntityId) {
+fn run_agent<M: Machine>(world: &mut World, ctx: &SystemCtx, agent: EntityId, tracing: bool) {
     if !world.is_alive(agent) {
         return;
     }
@@ -80,6 +117,8 @@ fn run_agent<M: Machine>(world: &mut World, ctx: &SystemCtx, agent: EntityId) {
         own_inbox: Vec::new(),
         transitions: 0,
         capped: false,
+        tracing,
+        cause: None,
     };
     drive(&mut cx, &mut mind);
 
@@ -115,7 +154,7 @@ fn resolve_group(world: &mut World, agent: EntityId, name: &str) -> Option<Entit
         agent,
         code::AI_GROUP_MISSING,
         format!(
-            "{agent} (`{name}Mind`) is a member of {group}, which is gone or has no `Group`; \
+            "its `{name}Mind` is a member of {group}, which is gone or has no `Group`; \
              it runs without a squad"
         ),
     );
@@ -132,12 +171,20 @@ fn drive<M: Machine>(cx: &mut Cx<'_, M>, mind: &mut Mind<M>) {
             return;
         }
         let step = walk(cx, |cx, s| M::on_event(cx, s, event));
+        if cx.tracing {
+            cx.cause = Some(AiCause::Event(
+                serde_json::to_value(event).unwrap_or(serde_json::Value::Null),
+            ));
+        }
         apply(cx, step);
     }
     if !cx.world.is_alive(cx.agent) {
         return;
     }
     let step = walk(cx, |cx, s| M::update(cx, s));
+    if cx.tracing {
+        cx.cause = Some(AiCause::Update);
+    }
     apply(cx, step);
 }
 
@@ -151,9 +198,8 @@ fn start<M: Machine>(cx: &mut Cx<'_, M>, mind: &Mind<M>) {
             cx.agent,
             code::AI_STATE_NOT_LISTED,
             format!(
-                "`{}Mind` of {} starts in {:?}, which `{}::ALL` does not list; it starts from {:?}",
+                "its `{}Mind` starts in {:?}, which `{}::ALL` does not list; it starts from {:?}",
                 M::NAME,
-                cx.agent,
                 mind.state,
                 M::NAME,
                 M::ROOT
@@ -172,6 +218,9 @@ fn start<M: Machine>(cx: &mut Cx<'_, M>, mind: &Mind<M>) {
         M::enter(cx, s);
     }
     follow_initial(cx);
+    if cx.tracing {
+        record_transition(cx, Vec::new(), AiCause::Start);
+    }
 }
 
 /// Enters the `initial` chain below the active leaf.
@@ -214,6 +263,7 @@ fn apply<M: Machine>(cx: &mut Cx<'_, M>, step: Step<M>) {
         Step::Restart(t) => cx.pending = Some((t, true)),
     }
     settle(cx);
+    cx.cause = None;
 }
 
 /// Applies pending requests until none is left (or the per-tick cap ends the chain).
@@ -239,17 +289,20 @@ fn transition<M: Machine>(cx: &mut Cx<'_, M>, target: M, restart: bool) {
             cx.agent,
             code::AI_TRANSITION_CHAIN_CAPPED,
             format!(
-                "`{}Mind` of {} made more than {MAX_TRANSITIONS_PER_TICK} transitions in one tick \
+                "its `{}Mind` made more than {MAX_TRANSITIONS_PER_TICK} transitions in one tick \
                  (stopped at {:?}, refused {target:?}); its `enter`/`exit` callbacks likely send it \
                  back and forth",
                 M::NAME,
-                cx.agent,
                 active.last()
             ),
         );
         return;
     }
     cx.transitions += 1;
+    let traced = cx.tracing.then(|| {
+        let cause = cx.cause.take().unwrap_or(AiCause::Chain);
+        (path_names(active.iter().copied()), cause)
+    });
 
     let target_path = path_to(target);
     let keep = on_path.unwrap_or_else(|| {
@@ -270,4 +323,7 @@ fn transition<M: Machine>(cx: &mut Cx<'_, M>, target: M, restart: bool) {
         M::enter(cx, s);
     }
     follow_initial(cx);
+    if let Some((from, cause)) = traced {
+        record_transition(cx, from, cause);
+    }
 }

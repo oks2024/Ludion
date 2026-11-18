@@ -118,10 +118,60 @@ impl SemanticValidate for SurfaceTag {
     }
 }
 
+/// A patch of ground that overrides the surface of whatever lies inside it: a puddle, a rug, a
+/// wet patch. Put it on an entity with a solver-claimed sensor `Collider` (`L1693` otherwise).
+/// Any hit whose point lies inside one or more overlays reports the highest `priority`'s surface,
+/// ties to the lowest `EntityId`. The name must be declared (`L1690`) and not empty (`L1691`).
+/// Tags only: an overlay never reaches the solver.
+///
+/// ```yaml
+/// components:
+///   Collider: { shape: { cylinder: { radius: 1.2, half_height: 0.05 } }, body: static, sensor: true }
+///   SurfaceOverlay: { surface: puddle, priority: 1 }
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct SurfaceOverlay {
+    /// The declared surface name.
+    pub surface: String,
+    /// The higher priority wins where overlays overlap; ties go to the lowest entity.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub priority: i32,
+}
+
+fn is_zero(value: &i32) -> bool {
+    *value == 0
+}
+
+impl SemanticValidate for SurfaceOverlay {
+    /// Rejects an empty name (`L1691`, pointer `/surface`). A wrong *shape* is the schema's job.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        match value.get("surface").and_then(Value::as_str) {
+            Some("") => vec![
+                Diagnostic::new(
+                    code::SURFACES_INVALID,
+                    "`SurfaceOverlay` `surface` is empty",
+                )
+                .with_path("/surface")
+                .with_help("name a surface `physics.surfaces` declares"),
+            ],
+            _ => Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn an_empty_overlay_surface_is_l1691() {
+        let found = SurfaceOverlay::validate_semantics(&json!({ "surface": "" }));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path.as_deref(), Some("/surface"));
+        assert!(SurfaceOverlay::validate_semantics(&json!({ "surface": "puddle" })).is_empty());
+    }
 
     #[test]
     fn an_empty_surface_is_l1691() {

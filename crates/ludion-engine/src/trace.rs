@@ -1,8 +1,9 @@
 //! The numeric trace: a per-tick JSON Lines record of a scene driven by an input script.
 //!
-//! Two channels. `motor` writes one line per [`CharacterMotor`] entity per tick — the tick, the
+//! Four channels. `motor` writes one line per [`CharacterMotor`] entity per tick — the tick, the
 //! entity's name, its feet and the tick's [`MoveReport`]. `sensors` writes one line per
-//! [`SensorEvent`] the tick's physics step produced. One function, [`trace`], builds the records;
+//! [`SensorEvent`] the tick's physics step produced. `ai` writes one line per `ludion-ai` state
+//! transition and `ai_states` one per agent per tick (`ludion docs ai`). One function, [`trace`], builds the records;
 //! `ludion trace`, a game binary's `--trace` and a game's `cargo test` ([`trace_with`]) all call it,
 //! so they print the same lines. Two runs of the same scene, script and build are byte-identical:
 //! compare two runs, never a committed trace.
@@ -13,6 +14,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::str::FromStr;
 
+use ludion_ai::{AiCause, AiRecord, AiTrace};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
@@ -37,11 +39,20 @@ pub enum TraceChannel {
     Motor,
     /// One line per sensor event of the tick.
     Sensors,
+    /// One line per `ludion-ai` state transition, with its cause.
+    Ai,
+    /// One line per `ludion-ai` agent per tick it ran, with its active path.
+    AiStates,
 }
 
 impl TraceChannel {
     /// Every channel, the default selection.
-    pub const ALL: [TraceChannel; 2] = [TraceChannel::Motor, TraceChannel::Sensors];
+    pub const ALL: [TraceChannel; 4] = [
+        TraceChannel::Motor,
+        TraceChannel::Sensors,
+        TraceChannel::Ai,
+        TraceChannel::AiStates,
+    ];
 }
 
 impl FromStr for TraceChannel {
@@ -51,8 +62,10 @@ impl FromStr for TraceChannel {
         match name {
             "motor" => Ok(TraceChannel::Motor),
             "sensors" => Ok(TraceChannel::Sensors),
+            "ai" => Ok(TraceChannel::Ai),
+            "ai_states" => Ok(TraceChannel::AiStates),
             other => Err(format!(
-                "unknown trace channel `{other}`; the channels are `motor` and `sensors`"
+                "unknown trace channel `{other}`; the channels are `motor`, `sensors`, `ai` and `ai_states`"
             )),
         }
     }
@@ -92,6 +105,10 @@ pub enum TraceRecord {
     Motor(MotorRecord),
     /// A sensor transition.
     Sensors(SensorRecord),
+    /// An agent's state transition.
+    Ai(AiTransitionRecord),
+    /// An agent's active path after a tick.
+    AiStates(AiStatesRecord),
 }
 
 /// A motor entity's tick: where its feet are and, when game code moved it this tick, what the move did.
@@ -206,6 +223,39 @@ pub struct SensorRecord {
     pub cause: Option<&'static str>,
 }
 
+/// One `ludion-ai` state transition.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AiTransitionRecord {
+    /// The frame index the tick ran as.
+    pub tick: u64,
+    /// The agent's `Name`, else its id.
+    pub entity: String,
+    /// The machine's `NAME`.
+    pub machine: &'static str,
+    /// The active path before, root first; empty for a start.
+    pub from: Vec<String>,
+    /// The active path after.
+    pub to: Vec<String>,
+    /// `start`, `event:<Name>`, `update` or `chain`.
+    pub cause: String,
+    /// The event as JSON, for an `event` cause.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event: Option<serde_json::Value>,
+}
+
+/// One `ludion-ai` agent's active path after a tick it ran.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AiStatesRecord {
+    /// The frame index the tick ran as.
+    pub tick: u64,
+    /// The agent's `Name`, else its id.
+    pub entity: String,
+    /// The machine's `NAME`.
+    pub machine: &'static str,
+    /// The active path, root first.
+    pub path: Vec<String>,
+}
+
 /// An entity's `Name`, else its id; a despawned id has no name and prints as its id.
 fn label(world: &World, entity: EntityId) -> String {
     match world.get::<Name>(entity) {
@@ -315,12 +365,64 @@ fn sensor_records(world: &World, tick: u64, out: &mut Vec<TraceRecord>) {
     }
 }
 
+fn ai_records(world: &World, records: Vec<AiRecord>, out: &mut Vec<TraceRecord>) {
+    for record in records {
+        out.push(match record {
+            AiRecord::Transition(t) => {
+                let (cause, event) = match t.cause {
+                    AiCause::Start => ("start".to_owned(), None),
+                    AiCause::Event(payload) => {
+                        let name = event_name(&payload);
+                        let cause = if name.is_empty() {
+                            "event".to_owned()
+                        } else {
+                            format!("event:{name}")
+                        };
+                        (cause, Some(payload))
+                    }
+                    AiCause::Update => ("update".to_owned(), None),
+                    AiCause::Chain => ("chain".to_owned(), None),
+                };
+                TraceRecord::Ai(AiTransitionRecord {
+                    tick: t.tick,
+                    entity: label(world, t.entity),
+                    machine: t.machine,
+                    from: t.from,
+                    to: t.to,
+                    cause,
+                    event,
+                })
+            }
+            AiRecord::State(s) => TraceRecord::AiStates(AiStatesRecord {
+                tick: s.tick,
+                entity: label(world, s.entity),
+                machine: s.machine,
+                path: s.path,
+            }),
+        });
+    }
+}
+
+/// The variant name of a serialized machine event: a unit variant is a string, an externally tagged
+/// variant a one-key object. Empty when the payload has neither shape.
+fn event_name(payload: &serde_json::Value) -> String {
+    match payload {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Object(map) if map.len() == 1 => {
+            map.keys().next().cloned().unwrap_or_default()
+        }
+        _ => String::new(),
+    }
+}
+
 /// Drives `engine` through `script` for `frames` ticks and returns the trace records of `channels`.
 ///
 /// Each tick is stepped alone, then read: `tick` is the frame index the tick ran as (an input
 /// addressed to frame `N` applies at the start of tick `N`). Within a tick the `motor` lines come
 /// first, ordered by entity id, then the `sensors` lines in the physics world's `(sensor, other)`
-/// order, whatever order `channels` names them in. A motor line carries the `MoveReport` only when
+/// order, then the `ai` and `ai_states` lines as `ai_tick` recorded them (machines in schedule
+/// order, agents ascending; a tick the game held prints none), whatever order `channels` names them
+/// in. A motor line carries the `MoveReport` only when
 /// game code called `move_character` on that entity during the tick. A sensor line is the tick's own
 /// physics step. No physics world means no sensor lines.
 ///
@@ -390,6 +492,13 @@ pub fn trace(
 
     let motor = channels.contains(&TraceChannel::Motor);
     let sensors = channels.contains(&TraceChannel::Sensors);
+    let ai = channels.contains(&TraceChannel::Ai);
+    let ai_states = channels.contains(&TraceChannel::AiStates);
+    if ai || ai_states {
+        engine
+            .world_mut()
+            .insert_resource(AiTrace::new(ai, ai_states));
+    }
     let mut records = Vec::new();
     for _ in 0..frames {
         let tick = engine.frame().as_u64();
@@ -402,6 +511,12 @@ pub fn trace(
         }
         if sensors {
             sensor_records(engine.world(), tick, &mut records);
+        }
+        if (ai || ai_states)
+            && let Some(sink) = engine.world_mut().resource_mut::<AiTrace>()
+        {
+            let taken = sink.take();
+            ai_records(engine.world(), taken, &mut records);
         }
     }
     Ok(records)
@@ -433,4 +548,18 @@ pub fn write_jsonl(records: &[TraceRecord], out: &mut impl Write) -> io::Result<
         out.write_all(b"\n")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::event_name;
+    use serde_json::json;
+
+    #[test]
+    fn event_name_reads_unit_and_tagged_variants() {
+        assert_eq!(event_name(&json!("Noise")), "Noise");
+        assert_eq!(event_name(&json!({"Saw": {"who": 3}})), "Saw");
+        assert_eq!(event_name(&json!({"a": 1, "b": 2})), "");
+        assert_eq!(event_name(&json!(7)), "");
+    }
 }

@@ -354,3 +354,146 @@ fn a_scene_restored_mid_freeze_after_a_rebuild_reproduces_the_uninterrupted_trac
         );
     }
 }
+
+// ---- a gameplay scale drives the step ----
+
+/// A forty-metre straight path along +x.
+const LIFT: &str = "format: 1\nkind: path\nname: lift\ninterpolation: linear\nclosed: false\npoints:\n  - - 0.0\n    - -0.25\n    - 0.0\n  - - 40.0\n    - -0.25\n    - 0.0\n";
+/// Platform speed in metres per gameplay second.
+const PLATFORM_SPEED: f32 = 2.0;
+/// Unscaled ticks and the scaled ticks that cover the same gameplay time once the first (unscaled)
+/// tick has run: the scale requested on frame 0 folds into frame 1.
+const SHORT: usize = 61;
+const LONG: usize = 1 + 4 * (SHORT - 1);
+
+/// A faller high above nothing, a kinematic slab on a path and a crate resting on it.
+fn scale_scene() -> String {
+    "format: 1\nseed: 5\nphysics:\n  space: free\nentities:\n  - name: faller\n    components:\n      Transform:\n        translation:\n          - 8.0\n          - 30.0\n          - 0.0\n      Collider:\n        shape:\n          box:\n            half_extents:\n              - 0.4\n              - 0.4\n              - 0.4\n        body:\n          rigid:\n            mass: 1.0\n      Velocity: {}\n  - name: slab\n    components:\n      Transform: {}\n      PathFollower:\n        path: lift.path.yaml\n        speed: 2.0\n        mode: loop\n      Collider:\n        shape:\n          box:\n            half_extents:\n              - 3.0\n              - 0.25\n              - 3.0\n        body: kinematic\n  - name: cargo\n    components:\n      Transform:\n        translation:\n          - 0.0\n          - 0.41\n          - 0.0\n      Collider:\n        shape:\n          box:\n            half_extents:\n              - 0.4\n              - 0.4\n              - 0.4\n        body:\n          rigid:\n            mass: 1.0\n      Velocity: {}\n".to_string()
+}
+
+/// Requests a quarter-speed gameplay clock every frame.
+fn quarter_clock(world: &mut World, _ctx: &SystemCtx) {
+    if let Some(clock) = world.resource_mut::<ludion_core::time::GameClock>() {
+        clock.scale(0.25);
+    }
+}
+
+fn idle(_world: &mut World, _ctx: &SystemCtx) {}
+
+fn lift_engine(name: &str, system: fn(&mut World, &SystemCtx)) -> Engine {
+    let root = fresh_dir(name);
+    std::fs::write(root.join("lift.path.yaml"), LIFT).unwrap();
+    let mut engine = Engine::builder()
+        .project_root(root)
+        .components(|reg| reg.register::<SlowMo>("SlowMo"))
+        .system("slow_mo", system)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(&scale_scene()).unwrap();
+    engine
+}
+
+fn named(engine: &Engine, name: &str) -> EntityId {
+    let world = engine.world();
+    world
+        .entities()
+        .find(|&id| matches!(world.get::<ludion_engine::Name>(id), Ok(Some(n)) if n.0 == name))
+        .unwrap_or_else(|| panic!("the scene has `{name}`"))
+}
+
+fn pose(engine: &Engine, name: &str) -> [f32; 3] {
+    let id = named(engine, name);
+    engine
+        .world()
+        .get::<ludion_engine::Transform>(id)
+        .unwrap()
+        .unwrap()
+        .translation
+}
+
+fn linear_velocity(engine: &Engine, name: &str) -> [f32; 3] {
+    let id = named(engine, name);
+    engine
+        .world()
+        .get::<ludion_spatial::Velocity>(id)
+        .unwrap()
+        .unwrap()
+        .linear
+}
+
+fn advance_ticks(engine: &mut Engine, ticks: usize) {
+    for _ in 0..ticks {
+        engine.advance_live();
+    }
+}
+
+/// The same scene at quarter speed for `LONG` ticks and unscaled for `SHORT`.
+fn matched_pair(tag: &str) -> (Engine, Engine) {
+    let mut unscaled = lift_engine(&format!("{tag}-unscaled"), idle);
+    advance_ticks(&mut unscaled, SHORT);
+    let mut scaled = lift_engine(&format!("{tag}-scaled"), quarter_clock);
+    advance_ticks(&mut scaled, LONG);
+    (unscaled, scaled)
+}
+
+#[test]
+fn a_scaled_fall_lands_where_the_unscaled_one_does_up_to_the_step_size() {
+    let (unscaled, scaled) = matched_pair("fall");
+    let (a, b) = (pose(&unscaled, "faller"), pose(&scaled, "faller"));
+    assert!(30.0 - a[1] > 2.0, "the faller fell: {a:?}");
+    // Semi-implicit Euler: the quarter-size step moves the drop by about g * t * (dt - dt/4) / 2.
+    assert!(
+        (a[1] - b[1]).abs() < 0.1,
+        "unscaled {a:?} vs scaled {b:?}; measured bound 0.1 m after a {} m drop",
+        30.0 - a[1]
+    );
+    assert!((a[0] - b[0]).abs() < 1e-4 && (a[2] - b[2]).abs() < 1e-4);
+}
+
+#[test]
+fn a_kinematic_platform_pushes_its_cargo_at_its_true_speed_under_a_scale() {
+    let (unscaled, scaled) = matched_pair("carry");
+    let (rest, slow) = (
+        linear_velocity(&unscaled, "cargo")[0],
+        linear_velocity(&scaled, "cargo")[0],
+    );
+    assert!(
+        rest > 0.5 * PLATFORM_SPEED,
+        "the cargo rides the platform: {rest}"
+    );
+    assert!(
+        slow < 1.5 * PLATFORM_SPEED,
+        "the scaled push is not 4x ({slow} vs the platform's {PLATFORM_SPEED})"
+    );
+    assert!(
+        (rest - slow).abs() < 0.3,
+        "unscaled cargo speed {rest} vs scaled {slow}; measured bound 0.3 m/s"
+    );
+}
+
+#[test]
+fn a_snapshot_taken_mid_scale_resumes_bit_identically() {
+    const TOTAL: usize = 200;
+    const AT: usize = 120;
+    let mut reference = lift_engine("mid-scale-reference", quarter_clock);
+    let expected = traced(&mut reference, TOTAL);
+    let distinct: BTreeSet<u64> = expected.iter().copied().collect();
+    assert!(
+        distinct.len() > MIN_DISTINCT,
+        "{} distinct hashes",
+        distinct.len()
+    );
+
+    let mut first = lift_engine("mid-scale-first", quarter_clock);
+    traced(&mut first, AT);
+    let document = snapshot_of(&mut first);
+
+    let mut resumed = lift_engine("mid-scale-resumed", quarter_clock);
+    restore(&mut resumed, document);
+    assert_eq!(
+        resumed.world_hash().unwrap().as_u64(),
+        expected[AT - 1],
+        "the restore boundary itself matches"
+    );
+    assert_eq!(traced(&mut resumed, TOTAL - AT), expected[AT..]);
+}

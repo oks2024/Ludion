@@ -227,6 +227,17 @@ so a live edit applies from the next write with no rebuild. Every hit naming a c
 `L1690` (one rejection at runtime, hits report the default, the body is kept); a tag with no collider is `L1692` in `check-scene`.
 `physics.surface_of(entity)` names a contact's surface from a `ContactEvent`'s entity. The engine stores no per-surface scalar: footstep tables are game data.
 
+A puddle or rug is a `SurfaceOverlay { surface, priority }` on a solver-claimed sensor `Collider` (`L1693` otherwise): any hit whose point lies
+inside it reports the overlay's surface, ahead of the tag and the default. Overlapping overlays: highest `priority` (an `i32`, default 0), ties to the
+lowest entity. Queries pass through the sensor; the pose is the last completed step's. A puddle prefab is the `coat` decal plus the overlay.
+`physics.surface_at(entity, point)` is that resolution for one point; `physics.surface_under(point, reach, &filter)` is the overlay at `point`, else the
+surface of the nearest collider a downward ray of `reach` meets (`Ok(None)` when nothing is under): a footstep system's one call.
+
+```yaml
+Collider: { shape: { cylinder: { radius: 1.2, half_height: 0.05 } }, body: static, sensor: true }
+SurfaceOverlay: { surface: puddle, priority: 1 }
+```
+
 ```rust
 if let Some(ground) = report.ground
     && let Some(id) = ground.surface

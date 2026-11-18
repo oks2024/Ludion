@@ -41,15 +41,36 @@
 11. **Event delivery order falls out of ascending entity order.** A send to an agent not yet run this tick
     is seen this tick; to one already run, next tick; to oneself, next tick. Inbox capacity is 16 per
     machine (`INBOX_CAPACITY`); overflow drops the oldest and counts it in `Mind.dropped` (`L4121`).
+12. **The trace is fed by `ai_tick` into an opt-in `AiTrace`.** The trace driver inserts the resource;
+    `ai_tick` appends only when it is present, so the cost with tracing off is one resource lookup per
+    call. It is never registered, hashed or snapshotted (the `AiFaults` pattern), and names come from
+    serde (`#[serde(rename_all)]` machines trace the names their scenes use), not `Debug`.
+13. **Cause vocabulary: `start`, `event:<Name>`, `update`, `chain`.** `<Name>` is the event's variant
+    name (the request's spelling); the payload rides beside it in the `event` key. The per-tick channel
+    is `ai_states`, not the request's `ai:states`: trace channels have no sub-channel syntax and an
+    alias would be a second way (Pillar 6). The first
+    transition of an event or update walk takes that cause; every later transition of the same settle,
+    and one settled right after the start, is `chain`. A no-op `Go` and a capped transition record
+    nothing. A tick the game held records nothing, so a held frame prints no ai lines.
+14. **Live introspection rides `engine.describe`'s `ai` key**, present only when an `AiRoster` exists
+    (a machine has ticked), so a world without ai describes byte-identically. There is no `ai.describe`
+    command: a new `Command` variant moves `replay_schema_hash` and would refuse every committed `.lrp`
+    (`L3010`), a corpus re-record.
+15. **The squad scene is an engine test fixture, not a gallery scene.** The gallery is a builtin-only
+    sweep (`ludion test` and `committed_scene_spelling.rs` load every `examples/gallery/*.yaml` with a
+    plain `Engine::builder()`), so a scene bearing `GuardMind` fails there and a new scene owes pinned
+    goldens. It lives at `crates/ludion-engine/tests/fixtures/ai-squad.yaml` beside its committed
+    `ai-squad.trace.txt` (per-tick `WorldHash`) and `ai-squad.ai.jsonl` (the `ai` channel).
 
 ## Waves
 
 - **W1 — shipped.** `ludion-ai` (`Machine`, `Step`, `Mind`, `Cx`, `ai_tick`, `register_machine`, `send`,
   `members`, `Timer`, `Cooldown`, `Group`, `GroupMember`, `AiFaults`), the engine fault drain, the
   `ludion::ai` facade module, `docs/ai.md`, `crates/ludion/examples/ai_squad.rs`.
-- **W2 — not started.** An `ai` trace channel (a record resource drained by
-  `crates/ludion-engine/src/trace.rs`, the `AiFaults` pattern), an `ai.describe` query plus an
-  `engine.describe` section, and a gallery scene `examples/gallery/ai-squad.yaml` with a `WorldHash` trace.
+- **W2 — shipped** (decisions 12–15). The `ai` and `ai_states` trace channels
+  (`crates/ludion-ai/src/trace.rs`, `crates/ludion-engine/src/trace.rs`), the `engine.describe` `ai`
+  section (`crates/ludion-engine/src/ai.rs`), the squad fixture and its committed traces, and the
+  fault messages naming the entity once.
 - **W3 — not started.** A `MemberLeft` event and ref-carrying events, after the entity-ref-collection
   subtask below.
 
@@ -62,6 +83,8 @@
 - **Game gameplay-time scale** (request 0011). Timers follow whatever representation 0011 gives gameplay
   time; this plan couples to it by reading `ctx.game_time` and nothing else.
 - Perception (request 0001) and navigation (request 0004) are separate plans.
+- **Blackboard timers via `Describe`.** Trigger: a tool needs timers without reading the blackboard
+  component through `entity.get`.
 
 ## Proposed — owner ruling owed
 
@@ -75,6 +98,10 @@
   `validate.rs`, `instantiate.rs`) and `ludion-engine` (`collapse.rs`, `transition.rs`, `prefab_ops.rs`,
   `commands/entity.rs`): a cross-cutting subtask of its own, with request 0001's memory as the natural
   trigger. Not built here.
+- **An `ai.describe` command.** It rides the next replay-corpus re-record, because a `Command` variant
+  moves `replay_schema_hash`; until then `engine.describe`'s `ai` key serves.
+- **Gallery placement of the squad scene.** A gallery scene needs a game-registered machine in the
+  plain sweep, plus pinned goldens.
 - **`broadcast` excludes the sender** (`Cx::broadcast`); the free `members` lists everyone. A game that
   wants the sender included sends to itself explicitly.
 
@@ -84,3 +111,9 @@
   the exact tick, groups, registration refusals), the engine drain, `docs/ai.md`, an engine test
   (`crates/ludion-engine/tests/ai.rs`: squad on a toy machine, expected states on expected ticks,
   two-run `WorldHash` identity, snapshot/restore mid-timer). No pinned artifact moved.
+- **W2 shipped** (Neon Shroud request 0003): `AiTrace`/`AiRoster` in `ludion-ai`, the `ai`/`ai_states`
+  channels in `ludion trace` and a game's `--trace`, the `engine.describe` `ai` key, the squad fixture
+  (`crates/ludion-engine/tests/fixtures/ai-squad.{yaml,trace.txt,ai.jsonl}`; blessed on the pinned
+  Windows box, the M4 must reproduce both byte-identically), `ludion-ai` trace tests, `docs/ai.md`
+  Tracing and describe. Deviations from the request: no `ai.describe` command and no gallery scene
+  (decisions 14, 15; both Proposed). No pinned artifact moved.

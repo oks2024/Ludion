@@ -997,6 +997,15 @@ pub(crate) fn install_replay(
         engine.install_profile_from_text(profile);
     }
 
+    // Always installed, even when the header carries none: a replay never reads
+    // `save/input-bindings.yaml`, and a recording without overrides means the defaults.
+    engine.install_input_bindings_from_text(
+        header
+            .save_docs
+            .get(crate::input_bindings::INPUT_BINDINGS_KIND)
+            .map(String::as_str),
+    );
+
     Ok(())
 }
 

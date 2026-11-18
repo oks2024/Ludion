@@ -157,6 +157,7 @@ fn builder() -> EngineBuilder {
     Engine::builder()
         .perception(PerceptionConfig {
             classes: vec!["player".into(), "decoy".into()],
+            ..Default::default()
         })
         .system("perception_update", perception_update)
 }
@@ -668,6 +669,7 @@ fn a_walker_appears_and_disappears_behind_a_wall_on_the_expected_ticks() {
     let mut engine = Engine::builder()
         .perception(PerceptionConfig {
             classes: vec!["player".into()],
+            ..Default::default()
         })
         .system("walk", walk)
         .system("perception_update", perception_update)
@@ -731,6 +733,7 @@ fn the_sweep_follows_its_closed_form_and_freezes_under_a_hold() {
     let mut engine = Engine::builder()
         .perception(PerceptionConfig {
             classes: vec!["player".into()],
+            ..Default::default()
         })
         .system("hold_window", hold_window)
         .system("perception_update", perception_update)

@@ -1,6 +1,6 @@
 # Plan: Audio Ambience — loops, positional emitters, category gains
 
-> Status: **Audio space and mix (Neon Shroud request 0023): Wave A1 SHIPPED (2026-11-18)** — `AudioCategory::{Voice, Ui}`, `Bus`, `MixLayer`, `AudioQueue::bus_gain`/`bus_pause`/`bus_resume`, `AudioMessage::{BusGain, BusPause}`, per-frame bus envelopes in the sink (held buses keep cursors, device reopen replays bus state), `ludion docs audio-mix` (§Decisions 7–9). No wire, hash or replay movement; the component schema snapshot gained the `voice` and `ui` consts. By-ear check on a real device is owed. Waves A2–A6 not started.
+> Status: **Audio space and mix (Neon Shroud request 0023): Wave A2 SHIPPED (2026-11-18)** — `AudioListener { orientation }` and `ListenerOrientation::{Camera, Listener}` (`camera` / `self`), `L1650` (runtime once + `check-scene`), `ludion docs audio-space` (§Decision 10). No wire, hash or replay movement; the component schema snapshot gained `AudioListener`. By-ear check owed with A1's. A3 splits into A3a (`play_on`) and A3b (ducking). **Wave A1 SHIPPED (2026-11-18)** — `AudioCategory::{Voice, Ui}`, `Bus`, `MixLayer`, `AudioQueue::bus_gain`/`bus_pause`/`bus_resume`, `AudioMessage::{BusGain, BusPause}`, per-frame bus envelopes in the sink (held buses keep cursors, device reopen replays bus state), `ludion docs audio-mix` (§Decisions 7–9). No wire, hash or replay movement; the component schema snapshot gained the `voice` and `ui` consts. By-ear check on a real device is owed. Waves A2–A6 not started.
 > Earlier: **Adaptive multi-stem music SHIPPED (2026-11-09, Serious Isaac 0025, conservative)** — `AudioQueue::music_set(id,
 > stems, fade)` plays up to 8 Ogg stems (`MUSIC_STEMS_MAX`) on one shared playhead and
 > `music_stem_gain(stem, gain, fade)` slews one stem's gain in sim ticks. The sink decodes each stem with its
@@ -218,7 +218,7 @@ Numbered on from Decision 6. Codes: L5100–29 sink and runtime, L1650–69 scen
 7. **Buses.** `AudioCategory` gains `Voice` and `Ui`; a `Bus` enum (`Master | Sfx | Ambient | Voice | Ui | Music`) names every mixdown bus, with `From<AudioCategory>`. The master bus multiplies every other bus.
 8. **Runtime gain.** A sim-emitted `AudioMessage::BusGain { bus, layer, gain, fade_frames }` with two layers, `User` (a settings slider) and `Game` (ducking, scripted mixes). Effective gain = `authored x user x game x pause`. Amends Decision 6 and Deferred "runtime gain": both triggers fired (0022 settings, ducking).
 9. **Pause.** `AudioMessage::BusPause` holds each voice's cursor (loops and music included). A world rebuild (`StopAllLoops`) resets the Game layer and the pauses, keeps the User layer, and drops the voices held on a paused bus.
-10. **`AudioListener`.** A component that moves the listener off the camera; absent means the camera, byte-identical. Amends Decision 3.
+10. **`AudioListener`.** A component that moves the listener off the camera; absent means the camera, byte-identical. Amends Decision 3. Settled in A2: `orientation: camera` (default; pan axes from the lowest-id `Camera`) or `self` (the listener's own world rotation); with no camera the listener's own axes are used whatever `orientation` says; the lowest `EntityId` carrier wins and a second raises `L1650` (a warning; once at runtime, and in `check-scene`); distance is from the listener's world position through `Parent`, and the listener need not be a body.
 11. **Attached one-shots.** `play_on(entity, ...)` returns a `VoiceId`; the sim reads a WAV header for the clip length.
 12. **Ducking.** `DuckRule` plus manual `duck_start`/`duck_end`, with a `-24 dB` floor.
 13. **`VoiceSpatial { filter, send }`** rides on messages; the sink applies per-voice biquads.
@@ -231,8 +231,9 @@ Numbered on from Decision 6. Codes: L5100–29 sink and runtime, L1650–69 scen
 ## Waves — audio space and mix
 
 - **A1 — mix** (this plan's first wave): decisions 7–9, `AudioQueue::bus_gain`/`bus_pause`/`bus_resume`, the sink's per-bus envelopes.
-- **A2 — listener:** a new `crates/ludion-components/src/audio.rs`, `audio_listener` in `engine.rs`, a multi-carrier warning in L1650–69.
-- **A3 — attached voices and ducking** (decisions 11, 12).
+- **A2 — listener — SHIPPED 2026-11-18:** a new `crates/ludion-components/src/audio.rs`, `audio_listener` in `engine.rs`, a multi-carrier warning in L1650–69.
+- **A3a — attached voices** (decision 11: `play_on`, `VoiceId`, keyed voices in the sink, the WAV-length read).
+- **A3b — ducking** (decision 12: `MixLayer::Duck`, `DuckRule`, `duck_start`/`duck_end`).
 - **A4 — `VoiceSpatial`, sink filters, occlusion** (13, 14): needs 0002's masks; `VoiceSpatial` on `AudioEvent` is a struct-literal break, an owner ruling.
 - **A5 — zones, reverb, presets** (15, 16, 18): gallery `examples/gallery/audio-zones.yaml`, `audio_mix_at`.
 - **A6 — `music_crossfade`** (17), after the ruling.

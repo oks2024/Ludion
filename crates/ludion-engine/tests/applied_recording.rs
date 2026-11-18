@@ -161,6 +161,7 @@ fn header() -> ReplayHeader {
         render_extent: None,
         replay_content_hash: Some(ludion_engine::replay_content_hash()),
         game: None,
+        save_docs: Default::default(),
     }
 }
 

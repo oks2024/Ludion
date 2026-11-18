@@ -1,16 +1,16 @@
 ---
-description: Guard sight and memory: Perceiver zones, SightTarget points, line of sight, StimulusRecord ghosts
+description: Guard senses: Perceiver sight zones, SightTarget, noises and NoiseZone, StimulusRecord memory
 ---
 
-# Perception (sight and memory)
+# Perception (sight, hearing and memory)
 
 **Scope:** who sees whom each tick: `Perceiver` zones, `SightTarget` sample points, and the
-`PerceptionResults` a game's AI reads, and the `StimulusRecord` a perceiver keeps of what it sensed. Cover and layers are `ludion docs collision-layers`; the
+`PerceptionResults` a game's AI reads, the noises it hears, and the `StimulusRecord` a perceiver keeps of what it sensed. Cover and layers are `ludion docs collision-layers`; the
 guard's route is `ludion docs patrol`.
 
 ## The loop
 
-1. `Engine::builder().perception(PerceptionConfig { classes: vec!["player".into()] })`: the class names (at most 32). `build` refuses a bad list with `L4220`.
+1. `Engine::builder().perception(PerceptionConfig { classes: vec!["player".into()], ..Default::default() })`: the class names (at most 32), and the hearing settings below. `build` refuses a bad config with `L4220`.
 2. Schedule `.system("perception_update", perception_update)` **after whatever moves perceivers and targets**, and declare its queries: `.query::<(&Perceiver,)>().query::<(&SightTarget,)>().query::<(&StimulusRecord,)>()`.
 3. Read `world.resource::<PerceptionResults>()`: `sight(perceiver)` (a slice), `samples()`, `zone_facing(perceiver, zone)`.
 4. `ludion check-scene` validates both components; `ludion explain L1570` for a refusal.
@@ -55,6 +55,7 @@ components:
 | `sight` | 1 to 8 zones | required |
 | `sweep` | `amplitude_deg`, `period_s`, `dwell_s`, `phase_s`, `shape` (`ping_pong_linear` \| `sine`) added to every zone's yaw | none |
 | `memory` | keeps `StimulusRecord`s, see Memory | none |
+| `hearing` | hears `emit_noise` noises, see Hearing | none |
 
 | `sight[]` field | Meaning | Default |
 | --- | --- | --- |
@@ -127,6 +128,46 @@ A perceiver with `memory` keeps one `StimulusRecord` **entity** per `(perceiver,
 - Records are hashed and snapshotted like any entity, so a restore rejoins the uninterrupted run.
 - `L1573` bad `memory` (or a non-finite record); `L1574` (warning, once per cause) `report_stimulus` dropped a stimulus: dead perceiver, no `memory`, or a non-finite `at` or `strength`.
 
+## Hearing
+
+```yaml
+components:
+  Perceiver:
+    hearing:
+      ear:
+        - 0.0
+        - 1.6
+        - 0.0
+      sensitivity: 1.0
+      hears:
+        - footstep
+        - gunshot
+  NoiseZone:
+    shape:
+      box:
+        half_extents:
+          - 20.0
+          - 5.0
+          - 20.0
+    multiplier: 0.5
+    kinds:
+      - footstep
+    priority: 0
+```
+
+Declare the kinds on the config: `PerceptionConfig { noise_kinds, surface_noise: vec![SurfaceNoise { surface, multiplier }], sound_occluder_layers, occlusion_factor (0.5), max_occluders (2), .. }`. A game then calls `emit_noise(world, ctx, Noise { at, radius, loudness, kind, source, surface, occlusion }) -> Option<NoiseId>` (`surface` is the `SurfaceId` of `MoveReport.ground.surface`). `perception_update` delivers it to every enabled perceiver with `hearing` that lists the kind and whose ear (`ear`, local) is within
+
+`radius × NoiseZone × surface_noise × sensitivity × occlusion_factor^occluders`.
+
+- **Zone.** Among the `NoiseZone`s that contain `at` and list the kind (empty `kinds` = all) the highest `priority` wins, ties to the lowest entity; multipliers never stack. `shape` is a `box` (oriented by the entity's rotation, scale ignored) or a `sphere`, boundaries inclusive. Rain is one big `NoiseZone` with `multiplier` below 1.
+- **Surface.** `surface_noise` maps a `physics.surfaces` name to a multiplier; `None` or an unlisted surface is ×1.
+- **Occlusion.** Only for `occlusion: true` and a non-empty `sound_occluder_layers`: one ray from `at` to the ear counts the distinct colliders on those layers (not the source or the listener), up to `max_occluders`, each multiplying the reach by `occlusion_factor`. Put walls and doors on a layer such as `sound_occluder`: one layer set for what muffles sound, shared by hearing and audio occlusion.
+- **Timing.** A noise emitted before `perception_update` in a tick is delivered that tick; one emitted after it, the next. Each noise is delivered once, in `NoiseId` order. Pending noises are entities (`PendingNoise`, plus a `PerceptionState` counter), so a snapshot between emission and delivery loses nothing.
+- **Results.** `results.heard(listener)`: `HeardNoise { listener, noise, at, kind, loudness, source, distance, effective_radius, occluders }` (the listener's own reach), sorted by noise id. `results.noises()`: `NoiseRecord { id, at, kind, loudness, source, effective_radius }` with the source-side radius (zone and surface applied), the number to draw a ring from. `HeardNoise.occluders` is the occluder count after the `max_occluders` cap, for drawing muffled rings.
+- **Memory.** A listener with `memory` gets a hearing `StimulusRecord` per delivery, keyed `(listener, hearing, source)`; an anonymous noise merges per `(listener, hearing, kind)` (`StimulusRecord.kind`). `strength` is the loudness.
+- **Codes.** `L1575` bad `NoiseZone`; `L1576` bad `hearing`; `L1577` (warning, once) `emit_noise` dropped a non-finite or negative `at`, `radius` or `loudness`; an undeclared `kind` is `L1572`.
+- A world that never emits and has no `NoiseZone` hashes as before.
+
 ## Cover recipe
 
 Declare layers `wall`, `cover_low`, `cover_high`, `cover_overhead` under `physics.layers` and put props on them. One target per posture, each with a point at its height:
@@ -147,6 +188,8 @@ Low cover hides crouch and prone from a ray that passes through it; high cover h
 - Results are not hashed or snapshotted; a restored world fills them on the next tick. Records are, because they are entities.
 - Records are runtime entities: `scene.save` of a *running* world writes them like any spawned entity. A dead source keeps its record until it ages out.
 - A perceiver never sees itself: a target equal to the perceiver is skipped.
+- An empty `sound_occluder_layers` means no occlusion, not "everything occludes".
+- Surface multipliers are surface *names* in the perception config, not a physics property.
 
 ## Next
 

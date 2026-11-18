@@ -110,7 +110,7 @@ worst frame and p99 (`ludion docs running`).
 
 A per-tick JSON Lines record of a scene driven by an input script, for asserting on motion without a
 picture. Three entry points print the same lines: `ludion trace --scene <FILE> [--script <FILE>]
---frames <N> [--channels motor,sensors]` (built-ins only, no game systems), `cargo run -p <game> --
+--frames <N> [--channels motor,sensors,ai,ai_states]` (built-ins only, no game systems), `cargo run -p <game> --
 --trace <N> [--scene …] [--script …] [--channels …]` (the game's systems run, so its motors move), and
 `ludion_engine::trace_with(builder, scene, &script, frames, &channels)` in a `cargo test`, with
 `write_jsonl` to print. The script is `ludion sim-hash --script`'s format (`ludion docs systems`).
@@ -129,6 +129,8 @@ picture. Three entry points print the same lines: `ludion trace --scene <FILE> [
   latency a game system sees). Entities print as their `name`, else `e<index>v<generation>`.
 - Floats are shortest round-trip, so two runs of one build are byte-identical. Compare two runs;
   never commit a trace as a golden.
+- `ai` and `ai_states` (one line per agent state transition, and per agent per tick) follow the sensor
+  lines; fields in `ludion docs ai`.
 
 ## Gotchas
 

@@ -342,7 +342,8 @@ pub fn scene_layer_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     diagnostics
 }
 
-/// Every `L1690`/`L1692` a checked scene's `SurfaceTag`s report: a surface the scene's
+/// Every `L1690`/`L1692`/`L1693` a checked scene's `SurfaceTag`s and `SurfaceOverlay`s report
+/// (an overlay on an entity without a solver-claimed sensor `Collider` is `L1693`): a surface the scene's
 /// `physics.surfaces` does not declare (with the nearest declared name), and a tag on an entity
 /// with neither a solver-claimed `Collider` nor a `CharacterMotor`, where no hit could report it.
 /// An empty name is the component validator's (`L1691`). A scene with no `physics:` block declares
@@ -362,6 +363,42 @@ pub fn scene_surface_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                 .find(|(name, _)| name == wanted)
                 .map(|(_, value)| value)
         };
+        if let Some(overlay) = component("SurfaceOverlay") {
+            let at = format!("/entities/{index}/components/SurfaceOverlay");
+            let sensor = component("Collider")
+                .and_then(|value| {
+                    serde_json::from_value::<ludion_spatial::Collider>(value.clone()).ok()
+                })
+                .is_some_and(|collider| collider.sensor && ludion_physics::claims(&collider));
+            if !sensor {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::SURFACE_OVERLAY_NO_SENSOR,
+                        "this `SurfaceOverlay` has no solver-claimed `Collider` with `sensor: true` \
+                         beside it, so it has no volume to contain a point",
+                    )
+                    .with_path(at.clone())
+                    .with_help("add a 3D `Collider` with `sensor: true`, or remove `SurfaceOverlay`"),
+                );
+            }
+            if let Some(name) = overlay.get("surface").and_then(serde_json::Value::as_str)
+                && !name.is_empty()
+                && !declared.contains(&name)
+            {
+                let help = match suggest::nearest(name, declared.iter().copied()) {
+                    Some(candidate) => format!("nearest match is `{candidate}`"),
+                    None => "declare it under `physics.surfaces`".to_string(),
+                };
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::SURFACE_UNKNOWN,
+                        format!("surface `{name}` is not declared under `physics.surfaces`"),
+                    )
+                    .with_path(format!("{at}/surface"))
+                    .with_help(help),
+                );
+            }
+        }
         let Some(tag) = component("SurfaceTag") else {
             continue;
         };
@@ -676,6 +713,37 @@ pub fn scene_camera_rig_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                 .with_path(format!("/entities/{index}/components/CameraZone"))
                 .with_help("add a `Collider` with `sensor: true` and the zone's shape"),
             );
+        }
+    }
+    diagnostics
+}
+
+/// The `L1650` a checked scene's audio listeners report: a second `AudioListener` (the pointer is at
+/// the second, the message names both entities; the runtime hears from the lowest id).
+pub fn scene_audio_listener_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut first: Option<usize> = None;
+    for (index, entity) in scene.entities.iter().enumerate() {
+        if !entity
+            .components
+            .iter()
+            .any(|(name, _)| name == "AudioListener")
+        {
+            continue;
+        }
+        match first {
+            None => first = Some(index),
+            Some(earlier) => diagnostics.push(
+                Diagnostic::new(
+                    code::AUDIO_LISTENER_DUPLICATE,
+                    format!(
+                        "entities {earlier} and {index} both carry an `AudioListener`; only the \
+                         first is heard from"
+                    ),
+                )
+                .with_path(format!("/entities/{index}/components/AudioListener"))
+                .with_help("keep one `AudioListener`, on the entity sound is measured from"),
+            ),
         }
     }
     diagnostics
@@ -1312,6 +1380,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_motor_diagnostics(scene));
     diagnostics.extend(scene_physics_scale_diagnostics(scene));
     diagnostics.extend(scene_camera_rig_diagnostics(scene));
+    diagnostics.extend(scene_audio_listener_diagnostics(scene));
     diagnostics.extend(scene_camera_offset_diagnostics(scene));
     diagnostics.extend(scene_sun_diagnostics(scene));
     diagnostics.extend(scene_local_light_diagnostics(scene));
@@ -1709,6 +1778,49 @@ entities:
         assert!(scene_surface_diagnostics(&surface_scene(&body, "concrete")).is_empty());
         let motor = "entities:\n  - name: hero\n    components:\n      CharacterMotor: {}\n";
         assert!(scene_surface_diagnostics(&surface_scene(motor, "metal_grate")).is_empty());
+    }
+
+    /// `surface_scene` with a `SurfaceOverlay` instead of a `SurfaceTag` on entity 0.
+    fn overlay_scene(body: &str, surface: &str) -> Scene {
+        let mut scene = surface_scene(body, "concrete");
+        scene.entities[0].components.pop();
+        scene.entities[0].components.push((
+            "SurfaceOverlay".to_string(),
+            serde_json::json!({ "surface": surface }),
+        ));
+        scene
+    }
+
+    #[test]
+    fn a_surface_overlay_needs_a_sensor_collider_and_a_declared_surface() {
+        let solid = collider("sphere:\n            radius: 0.5", "static", "default");
+        let found = scene_surface_diagnostics(&overlay_scene(&solid, "concret"));
+        let codes: Vec<_> = found.iter().map(|d| d.code).collect();
+        assert_eq!(
+            codes,
+            [code::SURFACE_OVERLAY_NO_SENSOR, code::SURFACE_UNKNOWN],
+            "{found:?}"
+        );
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/SurfaceOverlay")
+        );
+        assert_eq!(
+            found[1].path.as_deref(),
+            Some("/entities/0/components/SurfaceOverlay/surface")
+        );
+        assert_eq!(
+            found[1].help.as_deref(),
+            Some("nearest match is `concrete`")
+        );
+
+        let bare = "entities:\n  - name: part\n    components: {}\n";
+        let found = scene_surface_diagnostics(&overlay_scene(bare, "concrete"));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::SURFACE_OVERLAY_NO_SENSOR);
+
+        let sensor = format!("{solid}        sensor: true\n");
+        assert!(scene_surface_diagnostics(&overlay_scene(&sensor, "concrete")).is_empty());
     }
 
     fn motor_scene(physics: &str, components: &str) -> Scene {
@@ -2223,6 +2335,41 @@ entities:
         );
         assert!(found[0].message.contains("0 and 1"), "{}", found[0].message);
         assert!(!found[0].message.contains("  "), "{}", found[0].message);
+    }
+
+    #[test]
+    fn one_audio_listener_is_clean() {
+        let scene = rig_scene(
+            "  - name: ear
+    components:
+      AudioListener: {}
+  - name: other
+    components: {}
+",
+        );
+        assert!(scene_audio_listener_diagnostics(&scene).is_empty());
+    }
+
+    #[test]
+    fn a_second_audio_listener_is_l1650_naming_both_entities() {
+        let scene = rig_scene(
+            "  - name: a
+    components:
+      AudioListener: {}
+  - name: b
+    components:
+      AudioListener:
+        orientation: self
+",
+        );
+        let found = scene_audio_listener_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::AUDIO_LISTENER_DUPLICATE);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/1/components/AudioListener")
+        );
+        assert!(found[0].message.contains("0 and 1"), "{}", found[0].message);
     }
 
     #[test]

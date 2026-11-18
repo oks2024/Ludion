@@ -90,6 +90,13 @@ pub const KINDS: &[KindEntry] = &[
         model_sheet: false,
     },
     KindEntry {
+        name: "input-bindings",
+        noun: "a player input bindings save",
+        check: KindCheck::Elsewhere("the engine loads it leniently at boot (`ludion docs input`)"),
+        doc_store: false,
+        model_sheet: false,
+    },
+    KindEntry {
         name: "map",
         noun: "a map source",
         check: KindCheck::Elsewhere(
@@ -727,6 +734,7 @@ indices:
         }
         assert!(kind_entry(crate::profile::PROFILE_KIND).is_some());
         assert!(kind_entry("settings").is_some());
+        assert!(kind_entry("input-bindings").is_some());
     }
 
     #[test]

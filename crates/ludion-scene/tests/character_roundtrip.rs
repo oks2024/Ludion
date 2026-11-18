@@ -348,3 +348,152 @@ fn masks_resolve_listed_weights_and_descendants() {
         vec![0.0, 1.0, 1.0, 1.0, 0.0]
     );
 }
+
+const BLENDED: &str = "\
+format: 1
+kind: character
+mesh: goblin.mesh.yaml
+clips:
+  idle:
+    clip: clips/idle.anim.yaml
+  run:
+    clip: clips/run.anim.yaml
+blends:
+  cross:
+    points:
+      - clip: idle
+        at:
+          - 0.0
+          - 0.0
+      - clip: run
+        at:
+          - 2.0
+          - 0.0
+      - clip: run
+        at:
+          - 0.0
+          - 2.0
+  locomotion:
+    sync: foot_l
+    points:
+      - clip: idle
+        at: 0.0
+      - clip: run
+        at: 4.5
+";
+
+#[test]
+fn blended_character_round_trips_and_sorts() {
+    let doc = check_character(BLENDED).expect("valid");
+    assert_eq!(doc.blends.len(), 2);
+    assert_eq!(doc.blends[1].sync.as_deref(), Some("foot_l"));
+    assert_eq!(emit_character(&doc), BLENDED);
+}
+
+#[test]
+fn blend_structure_errors_carry_pointers() {
+    let base = "format: 1\nkind: character\nmesh: m.yaml\nblends:\n  b:\n";
+    let case = |body: &str| structure_errors(&format!("{base}{body}"));
+    let two = "    points:\n      - clip: a\n        at: 0\n      - clip: b\n        at: 1\n";
+    assert!(has(&case("    bogus: 1\n"), "L1199", "/blends/b/bogus"));
+    assert!(has(&case("    sync: x\n"), "L1199", "/blends/b"));
+    assert!(has(
+        &case("    points:\n      - clip: a\n        at: 0\n"),
+        "L1199",
+        "/blends/b/points"
+    ));
+    let many: String = (0..17)
+        .map(|i| format!("      - clip: a\n        at: {i}\n"))
+        .collect();
+    assert!(has(
+        &case(&format!("    points:\n{many}")),
+        "L1199",
+        "/blends/b/points"
+    ));
+    assert!(has(
+        &case(
+            "    points:\n      - clip: a\n        at: 0\n      - clip: b\n        at:\n          - 1\n          - 2\n"
+        ),
+        "L1199",
+        "/blends/b/points/1/at"
+    ));
+    assert!(has(
+        &case("    points:\n      - clip: a\n        at: 0\n      - clip: b\n        at: fast\n"),
+        "L1199",
+        "/blends/b/points/1/at"
+    ));
+    assert!(has(
+        &case(
+            "    points:\n      - clip: a\n        at: 0\n      - clip: b\n        zz: 1\n        at: 1\n"
+        ),
+        "L1199",
+        "/blends/b/points/1/zz"
+    ));
+    assert!(
+        structure_errors(&format!("{base}{two}    sync: 1\n"))
+            .iter()
+            .any(|d| d.code.as_str() == "L1199")
+    );
+}
+
+#[test]
+fn blend_data_errors_are_l1200() {
+    let base =
+        "format: 1\nkind: character\nmesh: m.yaml\nclips:\n  run:\n    clip: r.yaml\nblends:\n";
+    let dup =
+        "  b:\n    points:\n      - clip: run\n        at: 1\n      - clip: run\n        at: 1\n";
+    assert!(has(
+        &data_errors(&format!("{base}{dup}")),
+        "L1200",
+        "/blends/b/points/1/at"
+    ));
+    let clash =
+        "  run:\n    points:\n      - clip: run\n        at: 0\n      - clip: run\n        at: 1\n";
+    assert!(has(
+        &data_errors(&format!("{base}{clash}")),
+        "L1200",
+        "/blends/run"
+    ));
+    let line = "  b:\n    points:\n      - clip: run\n        at: [0, 0]\n      - clip: run\n        at: [1, 1]\n      - clip: run\n        at: [2, 2]\n";
+    let _ = line;
+    let line = "  b:\n    points:\n      - clip: run\n        at:\n          - 0\n          - 0\n      - clip: run\n        at:\n          - 1\n          - 1\n      - clip: run\n        at:\n          - 2\n          - 2\n";
+    assert!(has(
+        &data_errors(&format!("{base}{line}")),
+        "L1200",
+        "/blends/b/points"
+    ));
+}
+
+#[test]
+fn blend_cross_file_errors_are_l1200_with_nearest() {
+    let events = "events:\n  - t: 0.2\n    name: foot_l\n";
+    let doc = check_character(BLENDED).expect("valid");
+    let clips = [clip(events, 1.0, "hip"), clip(events, 1.0, "hip")];
+    assert!(check_character_clips(&doc, &clips, &["hip"]).is_empty());
+
+    let no_sync = [clip(events, 1.0, "hip"), clip("", 1.0, "hip")];
+    let errors = check_character_clips(&doc, &no_sync, &["hip"]);
+    assert!(has(&errors, "L1200", "/blends/locomotion/sync"));
+
+    let unbound = BLENDED.replace(
+        "- clip: run\n        at: 4.5",
+        "- clip: rn\n        at: 4.5",
+    );
+    let doc = check_character(&unbound).expect("valid");
+    let errors = check_character_clips(&doc, &clips, &["hip"]);
+    assert!(has(&errors, "L1200", "/blends/locomotion/points/1/clip"));
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.help.as_deref().unwrap_or("").contains("`run`"))
+    );
+
+    let mut once = clip(events, 1.0, "hip");
+    once.looped = false;
+    let errors = check_character_clips(&doc_with_sync_removed(), &[once.clone(), once], &["hip"]);
+    assert!(has(&errors, "L1200", "/blends/locomotion/points/0/clip"));
+}
+
+fn doc_with_sync_removed() -> ludion_scene::CharacterDocument {
+    check_character(&BLENDED.replace("    sync: foot_l\n", "")).expect("valid")
+}

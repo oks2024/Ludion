@@ -85,12 +85,24 @@
 //! // The centre ray of a camera aimed at the origin hits the ground back at the origin.
 //! assert!(aim[0].abs() < 0.1 && aim[1].abs() < 0.1);
 //! ```
+//!
+//! [`nine_slice`] splits a resolved `UiRect` into the nine pieces `extract` draws for its `slice`;
+//! [`sub_uv`] narrows an image region to a `uv_rect`.
+//!
+//! ```
+//! use ludion::math::nine_slice;
+//! use ludion_engine::components::ui::{UiSlice, UiSliceCenter};
+//!
+//! let slice = UiSlice { border: [4.0; 4], scale: 1.0, center: UiSliceCenter::Hidden };
+//! let nine = nine_slice([0.0, 0.0, 120.0, 60.0], [0.0, 0.0, 1.0, 1.0], [12.0, 12.0], &slice, 1.0);
+//! assert_eq!(nine.pieces.len(), 8); // the hidden centre is skipped
+//! ```
 
 pub use ludion_core::math::*;
 pub use ludion_engine::ui::{
-    FontFace, WorldAnchorPlacement, canvas_anchor_px, list_hit, measure_ui_list, measure_ui_text,
-    place_world_anchor, resolve_ui_list, resolve_ui_rect, resolve_ui_rect_of, resolve_ui_text,
-    ui_list_window, ui_tween_sample, wrap_ui_text,
+    FontFace, NineSlice, WorldAnchorPlacement, canvas_anchor_px, list_hit, measure_ui_list,
+    measure_ui_text, nine_slice, place_world_anchor, resolve_ui_list, resolve_ui_rect,
+    resolve_ui_rect_of, resolve_ui_text, sub_uv, ui_list_window, ui_tween_sample, wrap_ui_text,
 };
 pub use ludion_engine::{ModelCamera, ModelView, fit_distance_for_aspect, model_camera};
 

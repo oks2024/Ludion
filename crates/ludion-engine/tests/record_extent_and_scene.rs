@@ -273,6 +273,7 @@ fn a_legacy_command_scene_load_still_replays_from_disk() {
         render_extent: None,
         replay_content_hash: Some(ludion_engine::replay_content_hash()),
         game: None,
+        save_docs: Default::default(),
     };
     let mut bytes = Vec::new();
     let mut writer = ReplayWriter::new(&mut bytes, &header).unwrap();
@@ -306,6 +307,7 @@ fn a_hostile_header_extent_is_refused_by_render_size() {
         }),
         replay_content_hash: Some(ludion_engine::replay_content_hash()),
         game: None,
+        save_docs: Default::default(),
     };
     let mut bytes = Vec::new();
     ReplayWriter::new(&mut bytes, &header)
@@ -339,6 +341,7 @@ fn a_failing_scene_load_record_names_its_frame_and_path() {
         render_extent: None,
         replay_content_hash: Some(ludion_engine::replay_content_hash()),
         game: None,
+        save_docs: Default::default(),
     };
     let mut bytes = Vec::new();
     let mut writer = ReplayWriter::new(&mut bytes, &header).unwrap();

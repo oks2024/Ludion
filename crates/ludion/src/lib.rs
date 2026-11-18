@@ -114,6 +114,8 @@ pub use host::{HostOptions, host_scene};
 /// Agent behaviour: hierarchical state machines, gameplay-time timers, squads (`ludion docs ai`).
 pub use ludion_ai as ai;
 pub use ludion_core::collections;
+/// String tables, the dialogue line queue and subtitles (`ludion docs dialogue`).
+pub use ludion_engine::dialogue;
 /// The walkability grid and flow-field types behind [`prelude::Nav`].
 pub use ludion_nav as nav;
 
@@ -207,7 +209,8 @@ pub(crate) struct RunArgs {
     /// With `--trace`, a JSON input script (the `ludion sim-hash --script` format) to drive the run.
     #[arg(long, value_name = "FILE", requires = "trace")]
     script: Option<PathBuf>,
-    /// With `--trace`, the comma-separated channels to print: `motor`, `sensors`. Default: both.
+    /// With `--trace`, the comma-separated channels to print: `motor`, `sensors`, `ai`, `ai_states`.
+    /// Default: every channel.
     #[arg(long, value_delimiter = ',', requires = "trace")]
     channels: Vec<ludion_engine::TraceChannel>,
     /// With `--profile` or `--profile-replay`, also check the report against a TOML budget file (an
@@ -884,10 +887,16 @@ pub(crate) fn prepare_game_engine(
     // this: `ludion serve` hosts arbitrary scenes with no game systems, so it never persists a
     // profile. `--record` inherits persistence — it takes this same path.
     let engine = match restore {
-        None => builder.persist_profile().load_scene_file(scene),
-        Some(snapshot) => {
-            boot_from_snapshot(builder.persist_profile(), scene, snapshot, dev_session)
-        }
+        None => builder
+            .persist_profile()
+            .persist_input_bindings()
+            .load_scene_file(scene),
+        Some(snapshot) => boot_from_snapshot(
+            builder.persist_profile().persist_input_bindings(),
+            scene,
+            snapshot,
+            dev_session,
+        ),
     };
     let mut engine = match engine {
         Ok(engine) => engine,
@@ -1567,7 +1576,7 @@ fn run_profile(
 }
 
 /// Runs `--trace`: the game's engine (its systems running) driven by the optional input script,
-/// the [`ludion_engine::trace`] records printed as JSON Lines. No channel named means both.
+/// the [`ludion_engine::trace`] records printed as JSON Lines. No channel named means every channel.
 #[cfg(feature = "wire")]
 fn run_trace(
     builder: EngineBuilder,
@@ -1805,7 +1814,7 @@ fn run_check_docs(builder: EngineBuilder, scene: &Path) -> ExitCode {
     }
 
     let root = engine.project_root();
-    let counted = count_data_docs(root);
+    let counted = count_data_docs(root, &engine.save_dir());
     let doc_count: usize = counted.values().sum();
     let kinds: Vec<&String> = counted.keys().collect();
     let unregistered: Vec<(&String, usize)> = counted
@@ -1867,7 +1876,8 @@ fn run_check_docs(builder: EngineBuilder, scene: &Path) -> ExitCode {
 }
 
 /// Counts, per kind, every `*.yaml` the engine's content-root walk reads
-/// ([`ludion_engine::content_root_yaml`]: build output and dot-directories are not content) whose
+/// ([`ludion_engine::content_root_yaml`]: build output, dot-directories and the save directory are
+/// not content) whose
 /// top-level `kind:` names a game data-doc (present, and not an engine-owned kind). Purely a
 /// reporting walk: by the time `--check-docs` calls this, building the engine has already performed
 /// the real validation, so every file of a registered kind counted here is known-valid.
@@ -1876,9 +1886,9 @@ fn run_check_docs(builder: EngineBuilder, scene: &Path) -> ExitCode {
 /// [`ludion_engine::is_engine_kind`] — the same test the engine's own content-root walk skips by —
 /// so there is no second copy to drift.
 #[cfg(feature = "wire")]
-fn count_data_docs(root: &Path) -> BTreeMap<String, usize> {
+fn count_data_docs(root: &Path, save_dir: &Path) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
-    for (_, path) in ludion_engine::content_root_yaml(root) {
+    for (_, path) in ludion_engine::content_root_yaml(root, Some(save_dir)) {
         let Ok(source) = std::fs::read_to_string(&path) else {
             continue;
         };

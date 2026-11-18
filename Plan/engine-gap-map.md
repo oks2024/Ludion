@@ -109,7 +109,8 @@ settled plan, nothing built; **rejected** — closed by design.
 - Text: an embedded 8×8 ASCII bitmap face plus baked TTF faces with SDF (`Plan/font-assets.md`); no
   layout engine, widget tree, theming or clipping (`Plan/ui-widgets.md`, `Plan/phase-14-ui.md`; clipping
   and motion are `Plan/ui-hud.md`).
-  Accessibility absent. Localization and accessibility wait on a post-M7 grilling.
+  Accessibility absent. Localization and accessibility wait on a post-M7 grilling (string tables and
+  subtitles: `Plan/dialogue.md`).
 
 ### Shipping
 

@@ -79,6 +79,16 @@
         "type": "integer",
         "format": "uint32",
         "minimum": 0
+      },
+      "params": {
+        "description": "The blend-space parameters (default `[0, 0]`; omitted from the saved text at its default).\nWhen `clip` names a blend of the character, `params[0]` drives a 1D blend and\n`params[0..2]` a 2D one (`ludion docs animation-layers`); otherwise inert. Write it every\ntick the value changes: the weights follow it at once and the phase keeps its place.",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2
       }
     },
     "$defs": {
@@ -262,6 +272,84 @@
           }
         ],
         "default": "ambient"
+      }
+    }
+  },
+  "AudioListener": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "AudioListener",
+    "description": "Marks the entity every positional sound is measured from: distance falls off from its world\nposition, and the stereo pan takes its axes from [`ListenerOrientation`]. Without one in the\nworld the camera is the listener. With several, the lowest `EntityId` wins and `L1650` warns.\n\n```yaml\n- name: player-ear\n  components:\n    Parent: { index: 1, generation: 0 }   # the player: the second entity in the scene\n    Transform: { translation: [0.0, 1.6, 0.0] }   # head height, local to the parent\n    AudioListener: {}\n```\n\n```\nuse ludion_components::{AudioListener, ListenerOrientation};\n\nlet ear: AudioListener = serde_json::from_value(serde_json::json!({})).unwrap();\nassert_eq!(ear.orientation, ListenerOrientation::Camera);\nlet own: AudioListener =\n    serde_json::from_value(serde_json::json!({ \"orientation\": \"self\" })).unwrap();\nassert_eq!(own.orientation, ListenerOrientation::Listener);\n```",
+    "type": "object",
+    "properties": {
+      "orientation": {
+        "description": "Whose axes pan the sound (default `camera`).",
+        "$ref": "#/$defs/ListenerOrientation",
+        "default": "camera"
+      }
+    },
+    "$defs": {
+      "ListenerOrientation": {
+        "description": "Whose axes place a sound across the stereo field.\n\n```\nuse ludion_components::ListenerOrientation;\n\nlet own: ListenerOrientation = serde_json::from_value(serde_json::json!(\"self\")).unwrap();\nassert_eq!(own, ListenerOrientation::Listener);\nassert_eq!(serde_json::to_value(ListenerOrientation::Camera).unwrap(), \"camera\");\n```",
+        "oneOf": [
+          {
+            "description": "Left and right follow the lowest-`EntityId` `Camera`, so a sound pans as the screen shows it.",
+            "type": "string",
+            "const": "camera"
+          },
+          {
+            "description": "Left and right follow this entity's own world rotation (`+X` right, `+Y` up).",
+            "type": "string",
+            "const": "self"
+          }
+        ]
+      }
+    }
+  },
+  "BlendClock": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "BlendClock",
+    "description": "The phase of a character whose `Animation.clip` names a blend space. **Written by\n`blend_clocks`**: a game reads it and never inserts one. It is hashed sim state, so a restored\nworld resumes the stride it was in.\n\n`phase` counts unwrapped cycles of the blend's shared normalized phase; `prev` is the phase the\nprevious gameplay tick ended on, so `animation_events` fires the crossings in `(prev, phase]`;\nit is `-1` on the tick the phase restarted, so that window opens at phase `0` inclusive.\n`started` is the `Animation.started` this phase belongs to and `reset` the gameplay frame it\nrestarted at. While a crossfade leaves another blend,\n`from_blend` and `from_phase` carry its phase.\n\n```yaml\ncomponents:\n  BlendClock:\n    blend: locomotion\n    started: 12\n    reset: 12\n    phase: 3.25\n    prev: 3.2\n```\n\n```\nuse ludion_components::BlendClock;\n\nlet clock = BlendClock::default();\nassert_eq!(clock.phase, 0.0);\nassert!(serde_json::to_value(&clock).unwrap().get(\"from_blend\").is_none());\n```",
+    "type": "object",
+    "properties": {
+      "blend": {
+        "description": "The blend this phase belongs to (default `\"\"`).",
+        "type": "string",
+        "default": ""
+      },
+      "started": {
+        "description": "The `Animation.started` the phase was stamped for (default frame `0`).",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0,
+        "default": 0
+      },
+      "reset": {
+        "description": "The gameplay frame the phase was last zeroed at (default frame `0`).",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0,
+        "default": 0
+      },
+      "phase": {
+        "description": "Unwrapped phase cycles (default `0.0`).",
+        "type": "number",
+        "format": "double",
+        "default": 0.0
+      },
+      "prev": {
+        "description": "The phase at the end of the previous gameplay tick; `-1` on a restart tick (default `0.0`).",
+        "type": "number",
+        "format": "double",
+        "default": 0.0
+      },
+      "from_blend": {
+        "description": "The outgoing blend of a crossfade, when it is one (default `\"\"` — none).",
+        "type": "string"
+      },
+      "from_phase": {
+        "description": "The outgoing blend's phase (default `0.0`).",
+        "type": "number",
+        "format": "double"
       }
     }
   },
@@ -5011,6 +5099,96 @@
       }
     }
   },
+  "NoiseZone": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "NoiseZone",
+    "description": "A volume that scales the radius of the noises emitted inside it: rain, a loud street, a muffled\ncarpet. Among the zones containing a noise and matching its kind the highest `priority` wins;\nmultipliers never stack.\n\n```yaml\ncomponents:\n  NoiseZone:\n    shape:\n      box:\n        half_extents:\n          - 20.0\n          - 5.0\n          - 20.0\n    multiplier: 0.5\n    kinds:\n      - footstep\n```\n\n```\nuse ludion_components::NoiseZone;\n\nlet rain: NoiseZone = serde_json::from_value(serde_json::json!({\n    \"shape\": { \"sphere\": { \"radius\": 30.0 } }, \"multiplier\": 0.5,\n}))\n.unwrap();\nassert!(rain.kinds.is_empty() && rain.priority == 0);\n```",
+    "type": "object",
+    "properties": {
+      "shape": {
+        "description": "The volume.",
+        "$ref": "#/$defs/NoiseZoneShape"
+      },
+      "multiplier": {
+        "description": "Scales the radius of a noise inside (default `1.0`; finite, not negative).",
+        "type": "number",
+        "format": "float"
+      },
+      "kinds": {
+        "description": "The noise kinds the zone applies to; empty means every kind (default `[]`).",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "priority": {
+        "description": "The higher one wins where zones overlap; ties go to the lowest entity (default `0`).",
+        "type": "integer",
+        "format": "int32"
+      }
+    },
+    "required": [
+      "shape"
+    ],
+    "$defs": {
+      "NoiseZoneShape": {
+        "description": "The volume of a [`NoiseZone`], in the zone entity's world pose.\n\n```\nuse ludion_components::NoiseZoneShape;\n\nlet shape: NoiseZoneShape = serde_json::from_value(serde_json::json!({ \"sphere\": { \"radius\": 4.0 } })).unwrap();\nassert_eq!(shape, NoiseZoneShape::Sphere { radius: 4.0 });\n```",
+        "oneOf": [
+          {
+            "description": "A box oriented by the entity's rotation.",
+            "type": "object",
+            "properties": {
+              "box": {
+                "type": "object",
+                "properties": {
+                  "half_extents": {
+                    "description": "Half the box's size along each local axis, metres (finite and above 0).",
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                  }
+                },
+                "required": [
+                  "half_extents"
+                ]
+              }
+            },
+            "required": [
+              "box"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "A sphere about the entity's origin.",
+            "type": "object",
+            "properties": {
+              "sphere": {
+                "type": "object",
+                "properties": {
+                  "radius": {
+                    "description": "Metres (finite and above 0).",
+                    "type": "number",
+                    "format": "float"
+                  }
+                },
+                "required": [
+                  "radius"
+                ]
+              }
+            },
+            "required": [
+              "sphere"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  },
   "Parent": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Parent",
@@ -5578,6 +5756,89 @@
       }
     }
   },
+  "PendingNoise": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PendingNoise",
+    "description": "A noise `emit_noise` has queued and `perception_update` has not yet delivered. It is a runtime\nentity, so a snapshot between emission and delivery loses nothing.\n\n```\nuse ludion_components::PendingNoise;\n\nlet noise: PendingNoise = serde_json::from_value(serde_json::json!({\n    \"id\": 3, \"at\": [1.0, 0.0, 2.0], \"radius\": 8.0, \"loudness\": 1.0, \"kind\": \"footstep\",\n}))\n.unwrap();\nassert!(noise.source.is_none() && !noise.occlusion);\n```",
+    "type": "object",
+    "properties": {
+      "id": {
+        "description": "The monotonic noise id; delivery order.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "at": {
+        "description": "Where it was made, world metres.",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "radius": {
+        "description": "Metres it carries before zones, surface and sensitivity.",
+        "type": "number",
+        "format": "float"
+      },
+      "loudness": {
+        "description": "How loud it was, passed to the listener.",
+        "type": "number",
+        "format": "float"
+      },
+      "kind": {
+        "description": "A `PerceptionConfig` noise kind.",
+        "type": "string"
+      },
+      "source": {
+        "description": "What made it (default none).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "surface": {
+        "description": "The surface it was made on, a physics `SurfaceId` (default none).",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint16",
+        "minimum": 0,
+        "maximum": 65535
+      },
+      "occlusion": {
+        "description": "Whether sound occluders between the noise and a listener shrink its radius (default `false`).",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "at",
+      "radius",
+      "loudness",
+      "kind"
+    ]
+  },
   "Perceiver": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Perceiver",
@@ -5626,6 +5887,17 @@
         "anyOf": [
           {
             "$ref": "#/$defs/PerceiverMemory"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "hearing": {
+        "description": "Hears noises emitted with `emit_noise`; unset hears nothing (default none).",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Hearing"
           },
           {
             "type": "null"
@@ -5789,6 +6061,49 @@
             "minimum": 0
           }
         }
+      },
+      "Hearing": {
+        "description": "How a [`Perceiver`] hears: an ear offset, a sensitivity and the noise kinds it listens for.\n\n```\nuse ludion_components::Hearing;\n\nlet ears: Hearing = serde_json::from_value(serde_json::json!({ \"hears\": [\"footstep\"] })).unwrap();\nassert_eq!(ears.sensitivity, 1.0);\nassert_eq!(ears.ear, [0.0; 3]);\n```",
+        "type": "object",
+        "properties": {
+          "ear": {
+            "description": "The ear in the entity's local frame, metres (default `[0, 0, 0]`).",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "sensitivity": {
+            "description": "Scales every noise's radius for this listener (default `1.0`; finite, not negative).",
+            "type": "number",
+            "format": "float"
+          },
+          "hears": {
+            "description": "The `PerceptionConfig` noise kinds the listener hears, one or more, each once.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        }
+      }
+    }
+  },
+  "PerceptionState": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PerceptionState",
+    "description": "The singleton `perception_update` and `emit_noise` keep their counters in, spawned on the first\nnoise. Hashed and snapshotted.\n\n```\nuse ludion_components::PerceptionState;\n\nassert_eq!(PerceptionState::default().next_noise_id, 0);\n```",
+    "type": "object",
+    "properties": {
+      "next_noise_id": {
+        "description": "The id the next emitted noise gets (default `0`).",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
       }
     }
   },
@@ -7137,6 +7452,10 @@
         "format": "uint8",
         "minimum": 0,
         "maximum": 255
+      },
+      "kind": {
+        "description": "The noise kind of a hearing record; empty for every other sense (default `\"\"`).",
+        "type": "string"
       }
     },
     "required": [
@@ -7174,6 +7493,24 @@
             "additionalProperties": false
           }
         ]
+      }
+    }
+  },
+  "SurfaceOverlay": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "SurfaceOverlay",
+    "description": "A patch of ground that overrides the surface of whatever lies inside it: a puddle, a rug, a\nwet patch. Put it on an entity with a solver-claimed sensor `Collider` (`L1693` otherwise).\nAny hit whose point lies inside one or more overlays reports the highest `priority`'s surface,\nties to the lowest `EntityId`. The name must be declared (`L1690`) and not empty (`L1691`).\nTags only: an overlay never reaches the solver.\n\n```yaml\ncomponents:\n  Collider: { shape: { cylinder: { radius: 1.2, half_height: 0.05 } }, body: static, sensor: true }\n  SurfaceOverlay: { surface: puddle, priority: 1 }\n```",
+    "type": "object",
+    "properties": {
+      "surface": {
+        "description": "The declared surface name.",
+        "type": "string",
+        "default": ""
+      },
+      "priority": {
+        "description": "The higher priority wins where overlays overlap; ties go to the lowest entity.",
+        "type": "integer",
+        "format": "int32"
       }
     }
   },
@@ -7731,6 +8068,30 @@
       "fill": {
         "description": "Cover the whole render target (default `false`): the rect resolves to `[0, 0, width, height]`\npixels at any extent or aspect, and `anchor`, `offset` and `size` are ignored (`L1316` warns\nwhen `offset` or `size` is authored non-default). A texture or atlas frame stretches over it\nlike over a sized rect. The one exception to \"UI anchors, never stretches\".",
         "type": "boolean"
+      },
+      "uv_rect": {
+        "description": "The sub-rect of the texture (or atlas region) the rect samples, `[u0, v0, u1, v1]` in 0..1\nwith a top-left origin (default none: the whole image). Ignored beside [`slice`](UiRect::slice)\n(`L1613`) and needs a `texture` or `atlas`.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4
+      },
+      "slice": {
+        "description": "Draw the rect as a nine-slice frame (default none): corners keep their size, edges and centre\nstretch. Wins over [`uv_rect`](UiRect::uv_rect) and needs a `texture` or `atlas`.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/UiSlice"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "$defs": {
@@ -7781,6 +8142,49 @@
             "description": "The canvas's bottom-right corner; the element's own bottom-right corner sits there.",
             "type": "string",
             "const": "bottom_right"
+          }
+        ]
+      },
+      "UiSlice": {
+        "description": "A nine-slice frame for a textured [`UiRect`](crate::UiRect): the corners keep their size, the\nedges stretch along one axis and the centre stretches or is hidden.\n\n```\nuse ludion_components::ui::{UiSlice, UiSliceCenter};\n\nlet slice: UiSlice = serde_json::from_value(serde_json::json!({ \"border\": [4, 4, 4, 4] })).unwrap();\nassert_eq!(slice.scale, 1.0);\nassert_eq!(slice.center, UiSliceCenter::Stretch);\n```",
+        "type": "object",
+        "properties": {
+          "border": {
+            "description": "`[left, top, right, bottom]` in source texels of the texture or atlas region, each `>= 0`.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "scale": {
+            "description": "Canvas units per source texel for the corners, `> 0` (default `1`).",
+            "type": "number",
+            "format": "float"
+          },
+          "center": {
+            "description": "What the middle piece does (default `stretch`).",
+            "$ref": "#/$defs/UiSliceCenter"
+          }
+        },
+        "required": [
+          "border"
+        ]
+      },
+      "UiSliceCenter": {
+        "description": "What a nine-slice does with its middle piece.",
+        "oneOf": [
+          {
+            "description": "The centre stretches over the rect (default).",
+            "type": "string",
+            "const": "stretch"
+          },
+          {
+            "description": "The centre is not drawn, leaving a frame.",
+            "type": "string",
+            "const": "hidden"
           }
         ]
       }

@@ -10,6 +10,7 @@ use serde::de::DeserializeOwned;
 
 use crate::group;
 use crate::mind;
+use crate::trace::AiCause;
 
 /// What a callback asks the machine to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +123,8 @@ pub struct Cx<'a, M: Machine> {
     pub(crate) own_inbox: Vec<M::Event>,
     pub(crate) transitions: u32,
     pub(crate) capped: bool,
+    pub(crate) tracing: bool,
+    pub(crate) cause: Option<AiCause>,
 }
 
 impl<M: Machine> Cx<'_, M> {

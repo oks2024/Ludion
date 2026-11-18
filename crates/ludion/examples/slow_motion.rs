@@ -4,7 +4,8 @@
 //! **The game asks, the clock folds.** `slow_window` calls `GameClock::scale(0.25)` on every frame it
 //! wants slowed, exactly as a pause calls `hold()`. The engine's `path_follow` integrates
 //! `ctx.game_dt`, which the clock shrinks to `dt × 0.25`, so the platform needs no change.
-//! Physics, the motor and the closed-form evaluators do not follow the scale yet
+//! Physics, the motor and the closed-form evaluators follow it too: the physics step runs at
+//! `dt × s`, the motor's `gameplay_dt` is scaled, and closed forms read the fractional instant
 //! (`ludion docs game-clock`).
 //!
 //! Everything above the `main` divider is copyable into a real game.

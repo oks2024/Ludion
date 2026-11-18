@@ -60,14 +60,44 @@
 19. **Anonymous stimuli (`source: None`) merge per `(perceiver, sense)`.** W3 adds the noise `kind` to the key, additively.
 20. **Spawn ordering.** New records spawn in ascending `(perceiver, sense, source)` order after the tick's despawns, so
     entity ids are a pure function of the run. A perceiver without `memory` spawns nothing: W1 worlds are byte-identical.
+21. **Surface multiplier is perception-owned data, keyed by surface name (W3).** Request 0009's `physics.surfaces`
+    declares names only, so the scalar lives in `PerceptionConfig.surface_noise: Vec<SurfaceNoise { surface, multiplier }>`.
+    `Noise.surface: Option<SurfaceId>` comes from the game (its footstep system has `MoveReport.ground.surface`) and is
+    resolved through `PhysicsWorld::surface_name`; an unlisted surface or `None` is x1. This drops the dependency on
+    0009 W2.
+22. **`NoiseZone` has its own analytic shape (W3):** `shape: { box: { half_extents } } | { sphere: { radius } }` in the
+    entity's world pose (box oriented by the rotation, scale ignored), no sensor collider and no physics read. Among the
+    zones that contain `at` and whose `kinds` include the noise kind (empty = all) the highest `priority` wins, ties go to
+    the lowest entity, and multipliers never stack.
+23. **One entity per pending noise (W3).** `PendingNoise` (its `source` a marked `Option<EntityRefSchema>`) is the
+    decision-14 rule again: no ref list. A singleton `PerceptionState { next_noise_id }` entity (hashed) holds the
+    monotonic `NoiseId`. Both spawn lazily on the first `emit_noise`, so absent state is byte-identical. The budget
+    cursor (W4) joins `PerceptionState`.
+24. **Delivery order (W3):** noises in `NoiseId` order, listeners ascending. `perception_update` consumes and despawns
+    every pending noise, in id order, so a noise emitted before the update in a tick lands that tick and one emitted
+    after it the next.
+25. **Occlusion (W3):** only when `noise.occlusion` and `sound_occluder_layers` is non-empty (an empty include set means
+    everything hits, so it is skipped). One `ray_cast` from `at` to the ear against those layers counts distinct
+    entities, less the source and the listener, capped at `max_occluders` (2); each multiplies the reach by
+    `occlusion_factor` (0.5). The ray is skipped when the ear is beyond `radius x zone x surface x sensitivity`.
+    The reach is `radius x zone x surface x sensitivity x occlusion_factor^occluders`, applied by repeated multiplication.
+26. **Hearing memory (W3):** a delivery refreshes `(listener, Hearing, source)` for a listener with `memory`.
+    `StimulusRecord.kind` (set on hearing records) joins the key **only when `source` is `None`**, so an anonymous noise
+    merges per `(listener, Hearing, kind)` (the decision-19 addition). `strength` is the loudness, `last_position` the `at`.
+27. **Config (W3):** `noise_kinds` (at most 32, the `classes` rules), `surface_noise`, `sound_occluder_layers`,
+    `occlusion_factor` (in [0, 1]), `max_occluders` (1 to 8), all `#[serde(default)]`; `PerceptionConfig` loses `Eq`
+    and `Default` is a hand impl. A bad one is `L4220`.
+28. **Invalid noise (W3):** a non-finite or negative `at`/`radius`/`loudness` drops the noise in `emit_noise` with
+    `L1577` (warning, once); an undeclared `kind` drops it with `L1572` (once per name). `L1575` bad `NoiseZone`,
+    `L1576` bad `hearing`.
 
 ## Waves
 
 - **W1 (this):** sight — components, config, results, `perception_update`, `L1570`/`L1571`/`L1572`/`L4220`, docs.
 - **W2 (shipped):** stimulus memory (`StimulusRecord` entities, `report_stimulus`, `stimuli`, `forget`/`forget_all`,
   despawn with the perceiver, snapshot rejoin).
-- **W3:** hearing (`emit_noise`, `PendingNoise` on an engine entity, `NoiseZone`, occlusion via a `sound_occluder`
-  convention, the surface-tag multiplier read from request 0009's tag, so W3 waits on 0009).
+- **W3 (shipped, Neon Shroud request 0001):** hearing (`emit_noise`, `PendingNoise` on an engine entity, `NoiseZone`,
+  occlusion via `sound_occluder_layers`, the surface multiplier by name in `PerceptionConfig`; decisions 21-28).
 - **W4:** `period_ticks` stagger, ray budget and rotation cursor on a hashed `PerceptionState`, `L4221`, the
   `perception` trace channel, `engine.describe` counts, gallery `examples/gallery/perception.yaml`, the committed
   `WorldHash` trace, the bench (30 x 2 x 12 x 3).
@@ -79,6 +109,9 @@
 - Nav-path sound occlusion: trigger is W3 landing with a game that needs it.
 
 ## Proposed — owner ruling owed
+
+`SurfaceSel::Under`: a `surface_under` convenience over request 0009 W2 so a game can name the surface at a point
+instead of passing `MoveReport.ground.surface`; not built, the game passes the id today.
 
 The gap-map pointer; the pitch sign (decision 3); the vertical default of 45 degrees; wedge versus cone; the default
 ray budget 2048 and the bench target 0.5 ms (W4); no entity-ref collection (decision 2).
@@ -93,3 +126,9 @@ ray budget 2048 and the bench target 0.5 ms (W4); no entity-ref collection (deci
   components, sim-only); `report_stimulus`, `stimuli`, `forget`, `forget_all`, `Stimulus` in `ludion-engine`; the memory
   pass inside `perception_update`; `L1573` / `L1574`; tests in `crates/ludion-engine/tests/perception_memory.rs`;
   `component_schemas.json` re-blessed. No wire schema, trace, replay or golden moved.
+- **W3 mechanized (2026-11-18):** `Hearing`, `Perceiver.hearing`, `NoiseZone` (+ `NoiseZoneShape`), `PendingNoise`,
+  `PerceptionState` (three components appended, all sim-only) and `StimulusRecord.kind`; `Noise`, `NoiseId`,
+  `emit_noise`, `HeardNoise`, `NoiseRecord`, `SurfaceNoise`, `PerceptionResults::heard`/`noises`, the hearing pass in
+  `perception_update` and the generalized memory refresh; `L1575`/`L1576`/`L1577`; tests in
+  `crates/ludion-engine/tests/perception_hearing.rs`; `component_schemas.json` re-blessed. No wire schema, trace, replay
+  or golden moved.

@@ -51,7 +51,7 @@ use crate::components::{
     PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Rim, SkinBone, SpotLight,
     Sprite, SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText,
 };
-use crate::components::{AnimationLayers, LayerMode, layer_weight_at};
+use crate::components::{AnimationLayers, BlendClock, LayerMode, layer_weight_at};
 use crate::docs::DocStore;
 use crate::extract_observer::{ExtractPhase, SkinCounts};
 use crate::fonts::FontLibrary;
@@ -1026,16 +1026,24 @@ fn extract_inner(
                 ),
                 (None, None) => None,
             };
-            ui_entries.push((
-                rect.order,
+            let region_texels = texture.map(|index| {
+                let image = &textures[index];
+                [
+                    ((uv[2] - uv[0]) * image.width as f32).round(),
+                    ((uv[3] - uv[1]) * image.height as f32).round(),
+                ]
+            });
+            ui::hud::emit_rect(
+                &hud,
                 id,
-                UiInstance::Rect {
-                    rect_px,
-                    texture,
-                    color: rect.color,
-                    uv,
-                },
-            ));
+                rect,
+                rect_px,
+                texture,
+                uv,
+                region_texels,
+                &mut ui_entries,
+                degraded,
+            );
             let element = ui::hud::HudElement::Rect { fill: rect.fill };
             ui::hud::post(
                 &hud,
@@ -3946,7 +3954,7 @@ pub(crate) fn skin_palette(
     out: &mut Vec<Mat4>,
 ) -> PalettePath {
     let held_now = held_for(world, skin, now);
-    let (pose, crossfade) = character.map_or((None, None), |data| {
+    let (pose, crossfade) = character.map_or((PoseSide::EMPTY, None), |data| {
         character_pose(world, skin, data, held_now)
     });
     let layers = character.map_or_else(Vec::new, |data| layer_poses(world, skin, data, held_now));
@@ -3955,15 +3963,20 @@ pub(crate) fn skin_palette(
             posed_palette(joints, skin_model, followed, scratch, out);
             PalettePath::Followed
         }
-        _ if pose.is_none() && crossfade.is_none() && layers.is_empty() => {
+        _ if pose.is_empty() && crossfade.is_none() && layers.is_empty() => {
             out.extend(joints.iter().map(|joint| joint.rest));
             PalettePath::Rest
         }
         _ => {
-            sampled_palette_layered(joints, pose, crossfade.as_ref(), &layers, scratch, out);
+            sampled_palette_sides(joints, pose, crossfade.as_ref(), &layers, scratch, out);
             PalettePath::Sampled {
                 fading: crossfade.is_some(),
                 layers: layers.len() as u8,
+                blend_extra: (pose.count().saturating_sub(1)
+                    + crossfade
+                        .as_ref()
+                        .map_or(0, |fade| fade.from.count().saturating_sub(1)))
+                    as u8,
             }
         }
     }
@@ -3977,8 +3990,13 @@ pub(crate) enum PalettePath {
     /// `SkinBone` followers drove the bones.
     Followed,
     /// The character's clip was sampled; `fading` when a crossfade blended a second clip, and
-    /// `layers` animation layers composed over it.
-    Sampled { fading: bool, layers: u8 },
+    /// `layers` animation layers composed over it; `blend_extra` counts the blend-space entries
+    /// beyond one per side.
+    Sampled {
+        fading: bool,
+        layers: u8,
+        blend_extra: u8,
+    },
 }
 
 impl PalettePath {
@@ -4055,8 +4073,13 @@ fn pose_skins(
                 counts.joints_sampled += match path {
                     PalettePath::Rest => 0,
                     PalettePath::Followed => joints.len() as u64,
-                    PalettePath::Sampled { fading, layers } => {
-                        joints.len() as u64 * (1 + u64::from(fading) + u64::from(layers))
+                    PalettePath::Sampled {
+                        fading,
+                        layers,
+                        blend_extra,
+                    } => {
+                        joints.len() as u64
+                            * (1 + u64::from(fading) + u64::from(layers) + u64::from(blend_extra))
                     }
                 };
             }
@@ -4488,22 +4511,46 @@ pub(crate) fn sampled_palette_layered(
     posed_model: &mut Vec<Mat4>,
     out: &mut Vec<Mat4>,
 ) {
+    let fade = fade.map(|fade| PoseFade {
+        from: PoseSide::single(fade.from),
+        weight: fade.weight,
+    });
+    sampled_palette_sides(
+        joints,
+        PoseSide::single(pose),
+        fade.as_ref(),
+        layers,
+        posed_model,
+        out,
+    );
+}
+
+/// [`sampled_palette_layered`] over [`PoseSide`]s: each side may be a blend of several weighted
+/// clips. A side of one weight-1 entry samples exactly as a plain clip.
+pub(crate) fn sampled_palette_sides(
+    joints: &[SkinJoint],
+    pose: PoseSide<'_>,
+    fade: Option<&PoseFade<'_>>,
+    layers: &[LayerPose<'_>],
+    posed_model: &mut Vec<Mat4>,
+    out: &mut Vec<Mat4>,
+) {
     posed_model.clear();
-    fn bound<'a>(side: ClipPose<'a, ClipSampler>, targets: usize) -> ClipPose<'a, ClipSampler> {
-        side.filter(|(sampler, _)| sampler.targets() == targets)
-    }
-    let pose = bound(pose, joints.len());
-    let fade = fade.map(|fade| CrossfadePose {
-        from: bound(fade.from, joints.len()),
+    let pose = pose.bound(joints.len());
+    let fade = fade.map(|fade| PoseFade {
+        from: fade.from.bound(joints.len()),
         weight: fade.weight,
     });
     let fade = fade.as_ref();
     for (index, joint) in joints.iter().enumerate() {
-        let sample =
-            |side: ClipPose<'_, ClipSampler>| side.and_then(|(sampler, t)| sampler.pose(index, t));
         let sampled = match fade {
-            None => sample(pose),
-            Some(fade) => blended_joint_pose(joint, sample(fade.from), sample(pose), fade.weight),
+            None => pose.sample(index, joint),
+            Some(fade) => blended_joint_pose(
+                joint,
+                fade.from.sample(index, joint),
+                pose.sample(index, joint),
+                fade.weight,
+            ),
         };
         let sampled = if layers.is_empty() {
             sampled
@@ -4528,6 +4575,105 @@ pub(crate) fn sampled_palette_layered(
         };
         out.push(model * joint.inverse_bind);
         posed_model.push(model);
+    }
+}
+
+/// One side of a character pose: up to three weighted clip samples (a plain clip is one entry of
+/// weight 1; a blend-space point set is up to three), each `(sampler, clip time, weight)`.
+#[derive(Clone, Copy)]
+pub(crate) struct PoseSide<'a> {
+    entries: [Option<(&'a ClipSampler, f64, f64)>; 3],
+}
+
+/// The outgoing side of a crossfade and the incoming side's share `weight` in `[0, 1)`.
+pub(crate) struct PoseFade<'a> {
+    pub from: PoseSide<'a>,
+    pub weight: f64,
+}
+
+impl<'a> PoseSide<'a> {
+    /// No clip: the rest pose.
+    pub(crate) const EMPTY: PoseSide<'static> = PoseSide { entries: [None; 3] };
+
+    /// A plain clip side, weight 1.
+    pub(crate) fn single(side: ClipPose<'a, ClipSampler>) -> Self {
+        PoseSide {
+            entries: [side.map(|(sampler, t)| (sampler, t, 1.0)), None, None],
+        }
+    }
+
+    /// A weighted side from up to three entries.
+    pub(crate) fn weighted(entries: [Option<(&'a ClipSampler, f64, f64)>; 3]) -> Self {
+        PoseSide { entries }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.iter().all(Option::is_none)
+    }
+
+    pub(crate) fn count(&self) -> usize {
+        self.entries.iter().flatten().count()
+    }
+
+    /// The side without any sampler bound to a different joint count than `targets` (stale after a
+    /// reload that changed the skin).
+    fn bound(self, targets: usize) -> Self {
+        PoseSide {
+            entries: self
+                .entries
+                .map(|entry| entry.filter(|(sampler, _, _)| sampler.targets() == targets)),
+        }
+    }
+
+    /// Joint `index`'s sampled channels. One weight-1 entry is the sampler's answer verbatim; more
+    /// blend in entry order, rotation by running slerp (`w / accumulated`), translation and scale
+    /// by weighted sum, a channel an entry lacks reading as the joint's rest. `None` when no entry
+    /// has a track for the joint.
+    fn sample(&self, index: usize, joint: &SkinJoint) -> Option<ludion_scene::PartPose> {
+        let first = self.entries.iter().flatten().next()?;
+        if self.count() == 1 && first.2 == 1.0 {
+            return first.0.pose(index, first.1);
+        }
+        let widen = |v: Vec3| [v.x, v.y, v.z].map(f64::from);
+        let rest_q = [
+            joint.rest_rotation.x,
+            joint.rest_rotation.y,
+            joint.rest_rotation.z,
+            joint.rest_rotation.w,
+        ]
+        .map(f64::from);
+        let (rest_t, rest_s) = (widen(joint.rest_translation), widen(joint.rest_scale));
+        let mut tracked = false;
+        let mut accumulated = 0.0;
+        let mut rotation = rest_q;
+        let mut translation = [0.0; 3];
+        let mut scale = [0.0; 3];
+        for &(sampler, t, weight) in self.entries.iter().flatten() {
+            let sample = sampler.pose(index, t);
+            tracked |= sample.is_some();
+            let sample = sample.unwrap_or_default();
+            let q = sample.rotation.unwrap_or(rest_q);
+            let before = accumulated;
+            accumulated += weight;
+            rotation = if before == 0.0 {
+                q
+            } else {
+                ludion_scene::slerp(rotation, q, weight / accumulated)
+            };
+            let (v, k) = (
+                sample.translation.unwrap_or(rest_t),
+                sample.scale.unwrap_or(rest_s),
+            );
+            for axis in 0..3 {
+                translation[axis] += weight * v[axis];
+                scale[axis] += weight * k[axis];
+            }
+        }
+        tracked.then_some(ludion_scene::PartPose {
+            rotation: Some(rotation),
+            translation: Some(translation),
+            scale: Some(scale),
+        })
     }
 }
 
@@ -5584,7 +5730,7 @@ pub(crate) struct CrossfadePose<'a, C = ludion_scene::AnimationDocument> {
 /// The incoming side's share of an active crossfade at `now`, or `None` when the animation is not
 /// fading: no `fade`, or `fade_started + fade` has passed, so the plain incoming pose is drawn.
 /// Derived from tick counts like [`clock_ticks`]; a `fade_started` in the future reads as `0`.
-fn fade_weight(animation: &Animation, now: GameTime) -> Option<f64> {
+pub(crate) fn fade_weight(animation: &Animation, now: GameTime) -> Option<f64> {
     let fade = f64::from(animation.fade);
     if !(fade > 0.0 && fade.is_finite()) {
         return None;
@@ -5602,23 +5748,54 @@ pub(crate) fn character_pose<'a>(
     id: EntityId,
     data: &'a CharacterData,
     now: GameTime,
-) -> (
-    ClipPose<'a, ClipSampler>,
-    Option<CrossfadePose<'a, ClipSampler>>,
-) {
+) -> (PoseSide<'a>, Option<PoseFade<'a>>) {
     let Some(animation) = get::<Animation>(world, id) else {
-        return (None, None);
+        return (PoseSide::EMPTY, None);
     };
-    let side = |name: &str, elapsed: f64| {
-        let binding = data.clip(name)?;
-        Some((
-            &binding.sampler,
-            ludion_scene::clip_phase(&binding.clip, elapsed * binding.speed),
-        ))
+    // A blend's phase reads the entity's `BlendClock` (advanced by the fraction of a tick `now` is
+    // past the clock's tick), else the stateless `elapsed * rate`.
+    let clock = get::<BlendClock>(world, id);
+    let fraction =
+        now.ticks_since(FrameIndex::new(now.ticks_floor())) * now.rate().seconds_per_tick();
+    let side = |name: &str, elapsed: f64, phase: Option<(f64, f32)>| {
+        if let Some(binding) = data.clip(name) {
+            return PoseSide::single(Some((
+                &binding.sampler,
+                ludion_scene::clip_phase(&binding.clip, elapsed * binding.speed),
+            )));
+        }
+        let Some(blend) = data.blend(name) else {
+            return PoseSide::EMPTY;
+        };
+        let rate = crate::blend_clock::blend_rate(blend, animation.params);
+        let phase = phase.map_or(elapsed * rate, |(phase, speed)| {
+            phase + rate * f64::from(speed) * fraction
+        });
+        let weights = blend.weights(animation.params);
+        let mut entries = [None; 3];
+        for (slot, (index, weight)) in entries.iter_mut().zip(weights.iter()) {
+            let point = &blend.points[usize::from(index)];
+            *slot = Some((
+                &data.clips[point.clip].sampler,
+                blend.point_time(index, phase),
+                weight,
+            ));
+        }
+        PoseSide::weighted(entries)
     };
-    let pose = side(&animation.clip, clip_elapsed(animation, now));
-    let fade = fade_weight(animation, now).map(|weight| CrossfadePose {
-        from: side(&animation.from, from_clip_elapsed(animation, now)),
+    let live = clock.filter(|c| c.blend == animation.clip && c.started == animation.started);
+    let pose = side(
+        &animation.clip,
+        clip_elapsed(animation, now),
+        live.map(|c| (c.phase, animation.speed)),
+    );
+    let outgoing = clock.filter(|c| !c.from_blend.is_empty() && c.from_blend == animation.from);
+    let fade = fade_weight(animation, now).map(|weight| PoseFade {
+        from: side(
+            &animation.from,
+            from_clip_elapsed(animation, now),
+            outgoing.map(|c| (c.from_phase, animation.from_speed)),
+        ),
         weight,
     });
     (pose, fade)
@@ -8204,6 +8381,7 @@ mod tests {
                 mesh: String::new(),
                 clips: Vec::new(),
                 masks: Vec::new(),
+                blends: Vec::new(),
             })
         }
 

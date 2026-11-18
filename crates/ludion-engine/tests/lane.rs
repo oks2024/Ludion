@@ -1048,7 +1048,7 @@ fn the_motor_trace_carries_the_lane_fields() {
         .iter()
         .filter_map(|record| match record {
             TraceRecord::Motor(motor) => motor.report.as_ref()?.lane.as_ref(),
-            TraceRecord::Sensors(_) => None,
+            TraceRecord::Sensors(_) | TraceRecord::Ai(_) | TraceRecord::AiStates(_) => None,
         })
         .collect();
     assert_eq!(

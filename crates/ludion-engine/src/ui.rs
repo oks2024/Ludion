@@ -41,7 +41,9 @@ use std::ops::Range;
 pub use ludion_components::ui::UiNav;
 
 use crate::components::{Anchor, UiList, UiRect, UiText};
-use ludion_components::ui::{UiClock, UiTween, UiTweenField, UiTweenRepeat};
+use ludion_components::ui::{
+    UiClock, UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat,
+};
 use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::time::TickRate;
 pub use ludion_font::FontFace;
@@ -609,6 +611,111 @@ pub fn canvas_anchor_px(anchor: Anchor, viewport: (u32, u32)) -> [f32; 2] {
         fraction[0] * canvas_width(viewport) * scale,
         fraction[1] * CANVAS_HEIGHT * scale,
     ]
+}
+
+/// The pieces of a nine-slice, row-major from the top-left, and whether any border was clamped.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NineSlice {
+    /// One `(rect_px, uv)` per drawn piece: `[x, y, w, h]` pixels and `[u0, v0, u1, v1]`.
+    pub pieces: Vec<([f32; 4], [f32; 4])>,
+    /// A border exceeded its region in texels, or the corners exceeded the rect in pixels.
+    pub clamped: bool,
+}
+
+/// The sub-rect `uv_rect` of an image region: `lerp(region, uv_rect)` per axis. `region` and the
+/// result are `[u0, v0, u1, v1]`; `FULL_UV` as the region returns `uv_rect` unchanged.
+///
+/// # Example
+///
+/// ```
+/// use ludion_engine::ui::sub_uv;
+///
+/// assert_eq!(sub_uv([0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 0.5, 1.0]), [0.0, 0.0, 0.5, 1.0]);
+/// assert_eq!(sub_uv([0.5, 0.0, 1.0, 0.5], [0.0, 0.0, 0.5, 1.0]), [0.5, 0.0, 0.75, 0.5]);
+/// ```
+pub fn sub_uv(region: [f32; 4], uv_rect: [f32; 4]) -> [f32; 4] {
+    let lerp = |lo: f32, hi: f32, t: f32| lo + (hi - lo) * t;
+    [
+        lerp(region[0], region[2], uv_rect[0]),
+        lerp(region[1], region[3], uv_rect[1]),
+        lerp(region[0], region[2], uv_rect[2]),
+        lerp(region[1], region[3], uv_rect[3]),
+    ]
+}
+
+/// Splits a resolved rect into the nine rects of a nine-slice frame.
+///
+/// `rect_px` is `[x, y, w, h]`, `uv` the region's `[u0, v0, u1, v1]`, `region_texels` its size in
+/// texels and `pixel_scale` the canvas-to-pixel factor. Corners are `border x slice.scale x
+/// pixel_scale` pixels; borders wider than the region shrink proportionally, as do corners wider than
+/// the rect (`clamped`). Neighbouring pieces share their edges bit-exactly. A zero-width or
+/// zero-height piece is skipped, and `center: hidden` skips the middle.
+///
+/// # Example
+///
+/// ```
+/// use ludion_engine::components::ui::{UiSlice, UiSliceCenter};
+/// use ludion_engine::ui::nine_slice;
+///
+/// let slice = UiSlice { border: [4.0; 4], scale: 1.0, center: UiSliceCenter::Stretch };
+/// let nine = nine_slice([0.0, 0.0, 120.0, 60.0], [0.0, 0.0, 1.0, 1.0], [12.0, 12.0], &slice, 1.0);
+/// assert_eq!(nine.pieces.len(), 9);
+/// assert_eq!(nine.pieces[0].0, [0.0, 0.0, 4.0, 4.0]);
+/// assert!(!nine.clamped);
+/// ```
+pub fn nine_slice(
+    rect_px: [f32; 4],
+    uv: [f32; 4],
+    region_texels: [f32; 2],
+    slice: &UiSlice,
+    pixel_scale: f32,
+) -> NineSlice {
+    let [x, y, w, h] = rect_px;
+    let [u0, v0, u1, v1] = uv;
+    let [rw, rh] = region_texels;
+    let [mut l, mut t, mut r, mut b] = slice.border;
+    let mut clamped = false;
+    // Shrinks a pair of borders so they fit `limit`; true when it had to.
+    let fit = |lo: &mut f32, hi: &mut f32, limit: f32| {
+        let sum = *lo + *hi;
+        if sum > limit {
+            let k = limit / sum;
+            *lo *= k;
+            *hi *= k;
+            true
+        } else {
+            false
+        }
+    };
+    clamped |= fit(&mut l, &mut r, rw);
+    clamped |= fit(&mut t, &mut b, rh);
+    let px = slice.scale * pixel_scale;
+    let (mut lp, mut rp, mut tp, mut bp) = (l * px, r * px, t * px, b * px);
+    clamped |= fit(&mut lp, &mut rp, w);
+    clamped |= fit(&mut tp, &mut bp, h);
+    let fraction = |texels: f32, region: f32| if region > 0.0 { texels / region } else { 0.0 };
+    let xs = [x, x + lp, x + w - rp, x + w];
+    let ys = [y, y + tp, y + h - bp, y + h];
+    let (du, dv) = (u1 - u0, v1 - v0);
+    let us = [u0, u0 + fraction(l, rw) * du, u1 - fraction(r, rw) * du, u1];
+    let vs = [v0, v0 + fraction(t, rh) * dv, v1 - fraction(b, rh) * dv, v1];
+    let mut pieces = Vec::with_capacity(9);
+    for row in 0..3 {
+        for col in 0..3 {
+            if row == 1 && col == 1 && slice.center == UiSliceCenter::Hidden {
+                continue;
+            }
+            let (pw, ph) = (xs[col + 1] - xs[col], ys[row + 1] - ys[row]);
+            if pw <= 0.0 || ph <= 0.0 {
+                continue;
+            }
+            pieces.push((
+                [xs[col], ys[row], pw, ph],
+                [us[col], vs[row], us[col + 1], vs[row + 1]],
+            ));
+        }
+    }
+    NineSlice { pieces, clamped }
 }
 
 /// Samples the tracks of `tween` that animate `field` at the given frames, or `None` when no track
@@ -2001,5 +2108,185 @@ mod tests {
             button: GamepadButton::East,
         });
         assert_eq!(UiNav::from_input(&input), UiNav::default());
+    }
+}
+
+#[cfg(test)]
+mod slice_tests {
+    use super::*;
+
+    const FULL: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+    fn slice(border: [f32; 4], scale: f32, center: UiSliceCenter) -> UiSlice {
+        UiSlice {
+            border,
+            scale,
+            center,
+        }
+    }
+
+    fn stretch(border: [f32; 4]) -> UiSlice {
+        slice(border, 1.0, UiSliceCenter::Stretch)
+    }
+
+    #[test]
+    fn symmetric_border_gives_exact_edges_and_uvs() {
+        let nine = nine_slice(
+            [10.0, 20.0, 120.0, 60.0],
+            FULL,
+            [12.0, 12.0],
+            &stretch([4.0; 4]),
+            1.0,
+        );
+        assert!(!nine.clamped);
+        assert_eq!(nine.pieces.len(), 9);
+        let third = 4.0 / 12.0;
+        assert_eq!(
+            nine.pieces[0],
+            ([10.0, 20.0, 4.0, 4.0], [0.0, 0.0, third, third])
+        );
+        assert_eq!(
+            nine.pieces[4],
+            (
+                [14.0, 24.0, 112.0, 52.0],
+                [third, third, 1.0 - third, 1.0 - third]
+            )
+        );
+        assert_eq!(
+            nine.pieces[8],
+            (
+                [126.0, 76.0, 4.0, 4.0],
+                [1.0 - third, 1.0 - third, 1.0, 1.0]
+            )
+        );
+    }
+
+    #[test]
+    fn center_hidden_gives_eight_pieces() {
+        let nine = nine_slice(
+            [0.0, 0.0, 100.0, 100.0],
+            FULL,
+            [12.0, 12.0],
+            &slice([4.0; 4], 1.0, UiSliceCenter::Hidden),
+            1.0,
+        );
+        assert_eq!(nine.pieces.len(), 8);
+        assert!(
+            nine.pieces
+                .iter()
+                .all(|(r, _)| r[2] != 92.0 || r[3] != 92.0)
+        );
+    }
+
+    #[test]
+    fn zero_borders_skip_pieces() {
+        let rect = [5.0, 6.0, 40.0, 20.0];
+        let nine = nine_slice(rect, FULL, [8.0, 8.0], &stretch([0.0; 4]), 1.0);
+        assert_eq!(nine.pieces, vec![(rect, FULL)]);
+        let nine = nine_slice(rect, FULL, [8.0, 8.0], &stretch([4.0, 0.0, 4.0, 0.0]), 1.0);
+        assert_eq!(nine.pieces.len(), 3);
+    }
+
+    #[test]
+    fn texel_clamp_is_proportional() {
+        let fits = nine_slice(
+            [0.0, 0.0, 100.0, 100.0],
+            FULL,
+            [8.0, 8.0],
+            &stretch([6.0, 0.0, 2.0, 0.0]),
+            1.0,
+        );
+        assert!(!fits.clamped, "a border sum equal to the region fits");
+        let over = nine_slice(
+            [0.0, 0.0, 100.0, 100.0],
+            FULL,
+            [8.0, 8.0],
+            &stretch([12.0, 0.0, 4.0, 0.0]),
+            1.0,
+        );
+        assert!(over.clamped);
+        assert_eq!(over.pieces[0].1[2], 0.75);
+        assert_eq!(over.pieces[0].0[2], 6.0);
+    }
+
+    #[test]
+    fn pixel_clamp_keeps_the_uv_split() {
+        let nine = nine_slice(
+            [0.0, 0.0, 4.0, 100.0],
+            FULL,
+            [12.0, 12.0],
+            &stretch([4.0; 4]),
+            1.0,
+        );
+        assert!(nine.clamped);
+        let (rect, uv) = nine.pieces[0];
+        assert_eq!(rect[2], 2.0);
+        assert_eq!(uv[2], 4.0 / 12.0);
+        // The middle column has no width, so only two columns draw.
+        assert_eq!(nine.pieces.len(), 6);
+    }
+
+    #[test]
+    fn scale_and_pixel_scale_multiply() {
+        let nine = nine_slice(
+            [0.0, 0.0, 400.0, 200.0],
+            FULL,
+            [12.0, 12.0],
+            &slice([4.0; 4], 2.0, UiSliceCenter::Stretch),
+            1.5,
+        );
+        assert!(!nine.clamped);
+        assert_eq!(nine.pieces[0].0, [0.0, 0.0, 12.0, 12.0]);
+    }
+
+    #[test]
+    fn adjacent_pieces_share_edges_bit_exactly() {
+        let nine = nine_slice(
+            [0.3, 0.7, 133.7, 61.3],
+            FULL,
+            [13.0, 11.0],
+            &stretch([3.0, 2.0, 5.0, 3.0]),
+            1.37,
+        );
+        for row in 0..3 {
+            for col in 0..2 {
+                let (a, au) = nine.pieces[row * 3 + col];
+                let (b, bu) = nine.pieces[row * 3 + col + 1];
+                assert_eq!((a[0] + a[2]).to_bits(), b[0].to_bits(), "x edge");
+                assert_eq!(au[2].to_bits(), bu[0].to_bits(), "u edge");
+            }
+        }
+        for row in 0..2 {
+            for col in 0..3 {
+                let (a, av) = nine.pieces[row * 3 + col];
+                let (b, bv) = nine.pieces[(row + 1) * 3 + col];
+                assert_eq!((a[1] + a[3]).to_bits(), b[1].to_bits(), "y edge");
+                assert_eq!(av[3].to_bits(), bv[1].to_bits(), "v edge");
+            }
+        }
+    }
+
+    #[test]
+    fn atlas_region_splits_inside_its_uv() {
+        let region = [0.5, 0.25, 0.75, 0.5];
+        let nine = nine_slice(
+            [0.0, 0.0, 100.0, 100.0],
+            region,
+            [16.0, 16.0],
+            &stretch([4.0; 4]),
+            1.0,
+        );
+        assert_eq!(nine.pieces[0].1, [0.5, 0.25, 0.5625, 0.3125]);
+        assert_eq!(nine.pieces[8].1, [0.6875, 0.4375, 0.75, 0.5]);
+    }
+
+    #[test]
+    fn sub_uv_of_full_is_identity() {
+        let uv = [0.1, 0.2, 0.6, 0.9];
+        assert_eq!(sub_uv(FULL, uv), uv);
+        assert_eq!(
+            sub_uv([0.5, 0.0, 1.0, 1.0], [0.0, 0.0, 0.5, 1.0]),
+            [0.5, 0.0, 0.75, 1.0]
+        );
     }
 }

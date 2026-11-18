@@ -211,7 +211,7 @@ pub use motor::{
 pub use pose::PhysicsPose;
 pub use queries::{PointHit, QueryFilter, QueryHit};
 pub use sensors::{ExitCause, SensorEvent, SensorPhase};
-pub use surface_tag::{MAX_SURFACES, SurfaceId, SurfaceTable, SurfaceTag};
+pub use surface_tag::{MAX_SURFACES, SurfaceId, SurfaceOverlay, SurfaceTable, SurfaceTag};
 pub use sweep::{Sweep, SweepFilter, SweepHit};
 pub use systems::{
     CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, DEFAULT_SOLVER_ITERATIONS,

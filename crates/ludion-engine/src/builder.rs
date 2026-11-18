@@ -106,6 +106,7 @@ pub struct EngineBuilder {
     save_root: Option<PathBuf>,
     profile_persistence: bool,
     settings_persistence: bool,
+    input_bindings_persistence: bool,
     profile_off_disk: bool,
     run_save: bool,
     checkpoints: Option<crate::CheckpointConfig>,
@@ -141,6 +142,7 @@ pub struct EngineBuilder {
     projectile_config: Option<crate::ProjectileConfig>,
     nav_config: Option<crate::NavConfig>,
     perception_config: Option<crate::PerceptionConfig>,
+    dialogue_config: Option<crate::DialogueConfig>,
     input_actions: bool,
     projectile_visuals: Option<crate::ProjectileVisuals>,
     profile_kind: Option<ProfileKind>,
@@ -158,6 +160,7 @@ impl EngineBuilder {
             save_root: None,
             profile_persistence: false,
             settings_persistence: false,
+            input_bindings_persistence: false,
             profile_off_disk: false,
             run_save: false,
             checkpoints: None,
@@ -189,6 +192,7 @@ impl EngineBuilder {
             projectile_config: None,
             nav_config: None,
             perception_config: None,
+            dialogue_config: None,
             input_actions: false,
             projectile_visuals: None,
             profile_kind: None,
@@ -246,6 +250,31 @@ impl EngineBuilder {
     #[must_use]
     pub fn persist_settings(mut self) -> Self {
         self.settings_persistence = true;
+        self
+    }
+
+    /// Enables the player's persisted input rebinds (default off): with
+    /// [`input_actions`](EngineBuilder::input_actions), `<save_root>/save/input-bindings.yaml` is
+    /// read at build (leniently; a file that cannot be honored is backed up and defaulted, `L4277`)
+    /// and [`Actions::save`](ludion_sim::Actions::save) writes it at the frame boundary. Without it
+    /// the file is never read or written, so a test, a replay or `--check-docs` never touches the
+    /// machine's real file; a replay installs the overrides its header carries instead.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::Engine;
+    ///
+    /// let dir = std::env::temp_dir().join("ludion-persist-input-bindings-doc");
+    /// let engine = Engine::builder()
+    ///     .save_root(&dir)
+    ///     .persist_input_bindings()
+    ///     .build()
+    ///     .unwrap();
+    /// assert!(engine.boot_warnings().is_empty());
+    /// ```
+    #[must_use]
+    pub fn persist_input_bindings(mut self) -> Self {
+        self.input_bindings_persistence = true;
         self
     }
 
@@ -1081,19 +1110,64 @@ impl EngineBuilder {
     /// use ludion_engine::{Engine, PerceptionConfig, perception_update};
     ///
     /// let engine = Engine::builder()
-    ///     .perception(PerceptionConfig { classes: vec!["player".into()] })
+    ///     .perception(PerceptionConfig { classes: vec!["player".into()], ..Default::default() })
     ///     .system("perception_update", perception_update)
     ///     .build()
     ///     .unwrap();
     /// # let _ = engine;
     ///
-    /// let too_many = PerceptionConfig { classes: (0..33).map(|n| n.to_string()).collect() };
+    /// let too_many = PerceptionConfig {
+    ///     classes: (0..33).map(|n| n.to_string()).collect(),
+    ///     ..Default::default()
+    /// };
     /// assert!(Engine::builder().perception(too_many).build().is_err());
     /// ```
     #[must_use]
     pub fn perception(mut self, config: crate::PerceptionConfig) -> Self {
         self.perception_config = Some(config);
         self
+    }
+
+    /// Opts into dialogue (`ludion docs dialogue`): registers the `kind: strings` and
+    /// `kind: dialogue` documents, their validator, and the `DialogueLine` and `DialogueControl`
+    /// components, and installs `config` with empty [`DialogueEvents`](crate::DialogueEvents) and
+    /// [`Subtitles`](crate::Subtitles) at every world build. Schedule
+    /// [`dialogue_update`](crate::dialogue_update) after the systems that call
+    /// [`dialogue::say`](crate::dialogue::say). The last call wins; [`build`](EngineBuilder::build)
+    /// refuses an invalid config with `L1710`.
+    ///
+    /// Nothing here is a built-in component, so a game that never speaks hashes exactly as it did
+    /// before opting in.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{DialogueConfig, Engine, dialogue_update};
+    ///
+    /// let engine = Engine::builder()
+    ///     .dialogue(DialogueConfig::default())
+    ///     .system("dialogue_update", dialogue_update)
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = engine;
+    ///
+    /// let blank = DialogueConfig { default_locale: String::new(), ..DialogueConfig::default() };
+    /// assert!(Engine::builder().dialogue(blank).build().is_err());
+    /// ```
+    #[must_use]
+    pub fn dialogue(mut self, config: crate::DialogueConfig) -> Self {
+        use crate::dialogue::{
+            DIALOGUE_KIND, DialogueControl, DialogueDoc, DialogueLine, STRINGS_KIND, StringsDoc,
+            validate_dialogue_docs,
+        };
+        let default_locale = config.default_locale.clone();
+        self.dialogue_config = Some(config);
+        self.components(|registry| {
+            registry.register::<DialogueLine>("DialogueLine")?;
+            registry.register::<DialogueControl>("DialogueControl")
+        })
+        .doc_kind_engine_owned::<StringsDoc>(STRINGS_KIND)
+        .doc_kind_engine_owned::<DialogueDoc>(DIALOGUE_KIND)
+        .validate_docs(move |world| validate_dialogue_docs(world, &default_locale))
     }
 
     /// Sets how the projectile pool is drawn: a table from shot `tag` to a look (billboard streak,
@@ -1260,6 +1334,9 @@ impl EngineBuilder {
         if let Some(config) = &self.perception_config {
             config.validate()?;
         }
+        if let Some(config) = &self.dialogue_config {
+            config.validate()?;
+        }
         if let Some(visuals) = &self.projectile_visuals {
             visuals.validate()?;
             visuals.check_assets(&project_root)?;
@@ -1293,6 +1370,7 @@ impl EngineBuilder {
         engine.profile_persistence = self.profile_persistence;
         engine.profile_off_disk = self.profile_off_disk;
         engine.settings_persistence = self.settings_persistence;
+        engine.input_bindings_persistence = self.input_bindings_persistence;
         engine.category_gains = self.category_gains;
         engine.audio_distance = self.audio_distance;
         engine.audio_pan = self.audio_pan;
@@ -1316,6 +1394,7 @@ impl EngineBuilder {
         engine.projectile_config = self.projectile_config;
         engine.nav_config = self.nav_config;
         engine.perception_config = self.perception_config;
+        engine.dialogue_config = self.dialogue_config;
         engine.input_actions = self.input_actions;
         if let Some(visuals) = self.projectile_visuals {
             engine.projectile_draw.visuals = visuals;
@@ -1323,12 +1402,15 @@ impl EngineBuilder {
         engine.install_projectiles();
         engine.install_nav();
         engine.install_perception();
+        engine.install_dialogue();
         // Populate the data-doc stores into the initial (pre-scene-load) world so a game driven
         // before any `scene.load` still sees its docs; a malformed doc — or a broken cross-reference
         // a registered validation pass reports as an error — fails the build here (the collapsed
         // diagnostic carries every one as `related`).
         engine.install_docs().map_err(crate::commands::collapse)?;
-        // After `install_docs`: it compiles the action map from the doc store that call fills.
+        // After `install_docs`: it compiles the action map from the doc store that call fills. The
+        // file is read first, so the first install sees the at-start overrides.
+        engine.load_input_bindings();
         engine.install_input_actions();
         engine.sweep_profile_debris();
         engine.load_settings();

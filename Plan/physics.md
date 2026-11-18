@@ -596,6 +596,9 @@ min-compose, freeze, the frozen frame, sleep in simulated time, the snapshot gua
 in `ludion-engine` (snapshot resume mid slow motion, 1/2/8 threads); the doctest on `scale_time` is the
 hit-stop and slow-motion blast `ludion docs physics` shows.
 
+Amended (Neon Shroud request 0011): a `GameClock::scale` drives `scale_time` automatically; a hold still
+does not reach physics. See `Plan/game-time-scale.md` decisions 15–18.
+
 **Contact point and normal (external-game request 0007), 2026-09-25 (Lore rev 870).** What exists: a `Started`
 `ContactEvent` carries `point` and `normal` (`[f32; 3]`, `[0.0; 3]` on a `Stopped`), in `world.rs`'s
 `contact_point`. Rulings, each with its why:
