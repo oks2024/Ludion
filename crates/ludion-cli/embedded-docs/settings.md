@@ -1,5 +1,5 @@
 ---
-description: Player settings — volumes, quality, anti-aliasing, window mode; the request/view resources and the save file
+description: Player settings — volumes, quality, AA, window mode; the request/view resources and the save file
 ---
 
 # Player settings

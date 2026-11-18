@@ -4168,7 +4168,7 @@ impl Engine {
     /// `drain_profile` pair) and the previous whole file stays.
     fn write_settings(&mut self) {
         let path = self.save_root().join(crate::settings::SETTINGS_PATH);
-        if let Err(error) = ludion_core::atomic::write_durable(&path, &self.settings.emit()) {
+        if let Err(error) = ludion_core::atomic::write_durable(&path, self.settings.emit()) {
             let diagnostic = Diagnostic::new(
                 code::SETTINGS_SAVE_FAILED,
                 format!(

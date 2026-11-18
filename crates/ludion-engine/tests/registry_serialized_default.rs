@@ -32,6 +32,10 @@ fn fixtures(name: &str) -> Vec<Value> {
         "SkinBone" => vec![json!({ "skin": entity_ref(), "bone": "b" })],
         "UiWorldAnchor" => vec![json!({ "target": entity_ref() })],
         "SightTarget" => vec![json!({ "class": "c" })],
+        "StimulusRecord" => vec![
+            json!({ "perceiver": entity_ref(), "sense": "sight", "last_position": [0.0, 0.0, 0.0] }),
+            json!({ "perceiver": entity_ref(), "sense": { "custom": 3 }, "last_position": [0.0, 0.0, 0.0] }),
+        ],
         "Joint" => vec![
             joint(json!({ "fixed": {} })),
             joint(json!({ "hinge": { "axis": [0.0, 1.0, 0.0], "limits": [-1.0, 1.0] } })),

@@ -24,6 +24,9 @@ const CONCRETE: SurfaceId = SurfaceId(0);
 const GRATE: SurfaceId = SurfaceId(1);
 const DIRT: SurfaceId = SurfaceId(2);
 
+/// Each step's x position and the ground surface the motor reported there.
+type SurfaceLog = Arc<Mutex<Vec<(f32, Option<SurfaceId>)>>>;
+
 fn table() -> SurfaceTable {
     SurfaceTable::new(
         vec!["concrete".into(), "metal_grate".into(), "dirt".into()],
@@ -132,7 +135,7 @@ fn a_motor_walking_the_strips_reports_each_surface() {
     let mut world = World::new();
     strips(&mut world);
     let hero = motor(&mut world, [0.5, 0.0, 0.0]);
-    let log: Arc<Mutex<Vec<(f32, Option<SurfaceId>)>>> = Arc::default();
+    let log: SurfaceLog = Arc::default();
     let sink = Arc::clone(&log);
     let mut schedule = Schedule::new();
     schedule.add_system_shared(

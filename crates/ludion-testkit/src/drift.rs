@@ -39,6 +39,8 @@
 //! `ParentJoint` is seeded for the same reason: its `joint` names a specific joint, and an empty
 //! default name would load without error.
 //! `SightTarget` is seeded likewise: its `class` names what the zones detect, with no honest default.
+//! `StimulusRecord` is seeded too: its `perceiver`, `sense` and `last_position` are what every record
+//! is written with, with no honest default.
 //! `PrefabInstance` is seeded the same way: its `source`, `part` and `root` are provenance
 //! `spawn_prefab` always writes, with no honest default.
 
@@ -68,6 +70,11 @@ fn probe_seed(name: &str) -> Value {
         "ParentJoint" => json!({ "joint": "j" }),
         "UiWorldAnchor" => json!({ "target": { "index": 0, "generation": 0 } }),
         "SightTarget" => json!({ "class": "c" }),
+        "StimulusRecord" => json!({
+            "perceiver": { "index": 0, "generation": 0 },
+            "sense": "sight",
+            "last_position": [0.0, 0.0, 0.0],
+        }),
         "PrefabInstance" => json!({
             "source": "p.prefab.yaml",
             "part": "a",

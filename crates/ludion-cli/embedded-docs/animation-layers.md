@@ -1,5 +1,5 @@
 ---
-description: Bone masks on a character and AnimationLayers — masked override and additive clips over the base pose
+description: Bone masks on a character and AnimationLayers — masked override and additive clips on the base pose
 ---
 
 # Animation layers

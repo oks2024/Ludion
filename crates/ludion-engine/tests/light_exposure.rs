@@ -597,9 +597,7 @@ fn the_component_reads_like_a_direct_call_through_the_pose() {
         + &entity(
             "posed",
             [5.0, 0.0, 0.0],
-            &format!(
-                "        rotation:\n          - 0.0\n          - 0.0\n          - 90.0\n        scale:\n          - 2.0\n          - 2.0\n          - 2.0\n      LightExposure:\n        points:\n          -\n            - 0.0\n            - 1.0\n            - 0.0\n        facing:\n          normal:\n            - 0.0\n            - 1.0\n            - 0.0\n        combine: mean\n"
-            ),
+            "        rotation:\n          - 0.0\n          - 0.0\n          - 90.0\n        scale:\n          - 2.0\n          - 2.0\n          - 2.0\n      LightExposure:\n        points:\n          -\n            - 0.0\n            - 1.0\n            - 0.0\n        facing:\n          normal:\n            - 0.0\n            - 1.0\n            - 0.0\n        combine: mean\n",
         );
     let mut e = scene_engine(&entities);
     let (plain, posed) = (named(&mut e, "plain"), named(&mut e, "posed"));
