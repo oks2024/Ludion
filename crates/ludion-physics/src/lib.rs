@@ -186,6 +186,7 @@ mod motor;
 mod pose;
 mod queries;
 mod sensors;
+mod surface_tag;
 mod sweep;
 mod systems;
 mod time_scale;
@@ -201,14 +202,16 @@ pub use meshes::{ColliderMeshes, MeshLoader, TriangleMesh};
 pub use motor::{
     CharacterMotor, CharacterMotorState, GroundHit, GroundProbe, LaneEnd, LaneFrame, LaneReport,
     MotorError, MoveConstraint, MoveReport, PlatformCarry, PlatformPose, Posture, PostureReport,
-    PostureShape, ResizeReport, ResumeReport, SurfaceHit, SurfaceVelocity, character_fit,
-    fits_character, ground_probe_reach, height_in_force, motor_in_force, move_character,
-    move_character_with, move_characters, probe_character_ground, resize_character,
-    resume_character, set_character_posture, suspend_character, teleport_character,
+    PostureShape, ResizeReport, ResumeReport, SurfaceHit, SurfaceVelocity, TurnReport,
+    character_fit, fits_character, ground_probe_reach, height_in_force, motor_capsule_segment,
+    motor_in_force, move_character, move_character_with, move_characters, probe_character_ground,
+    resize_character, resume_character, set_character_posture, suspend_character,
+    teleport_character, turn_character,
 };
 pub use pose::PhysicsPose;
 pub use queries::{PointHit, QueryFilter, QueryHit};
 pub use sensors::{ExitCause, SensorEvent, SensorPhase};
+pub use surface_tag::{MAX_SURFACES, SurfaceId, SurfaceTable, SurfaceTag};
 pub use sweep::{Sweep, SweepFilter, SweepHit};
 pub use systems::{
     CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, DEFAULT_SOLVER_ITERATIONS,

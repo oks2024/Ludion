@@ -67,6 +67,33 @@
     held across a load or restore needs a fresh press and never fires a spurious gesture.
 14. **Unknown names report `L4270` once each**, drained at the frame boundary into `Diagnostics`
     (key `input-actions/<name>`), with the nearest action names, or all of them when fewer than eight.
+15. **Rebuild model (W2a).** `ActionMap` keeps its source `InputActionsDoc` and `TickRate`; `Actions`
+    keeps the defaults and an `InputBindingsDoc` of overrides. Every mutation builds the effective doc
+    (defaults, each overridden action's `bindings` replaced), recompiles it, and on success swaps the map
+    in, keeping gesture state, this tick's outputs and reads for what is still tracked. On error nothing
+    changes and the compile errors return. `overrides()` holds only actions that differ from the defaults.
+16. **The latch generalises** (replaces decision 13's "first resolve"): an input with no gesture-state
+    entry that is at level with no down edge this tick is latched; a trigger with no entry at or above
+    `press` too. A layer's first resolve has no entries, so W1b is unchanged; an input newly tracked
+    after a rebind is covered, so the key pressed to capture does not fire on the next tick.
+    `restore_state` suppresses the latch for its next resolve.
+17. **Capture** (`capture`, `capture_result`, `cancel_capture`, `resolve_conflict`): button actions only;
+    resolved inside `resolve` after the gesture step. A cancel input wins; otherwise the first press edge
+    of the slot's device class by `Ord` (keys, mouse buttons, pad buttons; a trigger button becomes
+    `trigger: left|right`). `Index(i)` replaces binding `i` (`i == len` appends); `Keyboard`/`Pad`
+    replace the first binding of that class or append; `keep_gesture` copies the replaced gesture.
+18. **Conflict policy.** The same source and gesture on another button action in the same `context` is a
+    `Conflict`, the candidate stays pending. `Swap` gives the other action the binding we replaced (or
+    removes its binding if we appended); `Replace` removes it; `Keep` cancels. Both edits apply atomically,
+    nothing may leave an action with no bindings (`L4275`), and a locked other action allows only `Keep`
+    (`L4272`). An existing own binding is `Unchanged`.
+19. **`locked` is enforced:** every direct edit, capture or override of a locked action is `L4272`.
+20. **Lenient overrides.** `apply_overrides` replaces the current overrides and judges each action alone,
+    returning warnings at `/actions/<name>`: `L4273` unknown, `L4272` locked, `L4274` does not compile
+    (including against another override); that action keeps its defaults.
+21. **`save()`** raises a one-shot flag read by `take_save_request()`; the sim layer writes nothing.
+22. **`UiNav::from_actions`** reads the reserved `ui_prev`, `ui_next`, `ui_activate` actions; a field whose
+    action is undefined keeps `from_input`'s default. `ui_back` is read through `actions.pressed`.
 
 ## Waves
 
@@ -76,8 +103,13 @@
   doc-singleton kind registered like `patterns()`, install beside `install_nav`,
   `carry_resource::<Actions>()`, the latch rule, unknown names drained into `Diagnostics` as `L4270`,
   facade prelude, a runnable example. The snapshot field for `ActionState` moved to Proposed (below).
-- **W2 — rebinding:** capture, `kind: input-bindings` overrides, the effective table in the `.lrp` header
-  and keyframes, `UiNav::from_actions`, a rebind-menu example. Enforces `locked: true`.
+- **W2a — rebinding, sim side (shipped):** rebind/unbind/reset, capture with conflict resolution,
+  `locked` enforcement, `InputBindingsDoc` with lenient `apply_overrides`, the `save()` flag,
+  `UiNav::from_actions`; `L4272`–`L4276`. No file, no engine change.
+- **W2b — persistence:** `persist_input_bindings()`, `<save_root>/save/input-bindings.yaml`
+  (`kind: input-bindings`, loaded leniently through `open_envelope` + `backup_file` and `apply_overrides`),
+  the save drain, `ReplayHeader.input_bindings` (outside `replay_content_hash`), replay installing it and
+  never writing, the `rebind_menu` example.
 - **W3 — devices, glyphs and the full key set:** the whole keyboard appended after `Alt` plus `Back`/`Forward` (one corpus re-record), the window keymap and mouse mapping for them, recorded `gamepad_connected{family}` / `gamepad_disconnected`,
   `last_device` / `device_changed`, `Actions::source`, a glyph table (`glyph_name`), a focus event
   (Proposed).
@@ -98,7 +130,19 @@ tap and hold, the keyboard route, a bad document's `L1632` at its re-pathed poin
 `L4270`, the restore latch, a hold carried across a switch, and a 1/2/8-thread hash trace. No snapshot,
 schema, replay or golden moved.
 
+**W2a**: rebinding is sim-side and in-memory. Tests (`ludion-sim/tests/rebind.rs`) cover round trips
+with minimal overrides, an invalid rebind leaving the map unchanged, every locked refusal, capture (pad,
+keyboard with a held key and the latch, Escape, a trigger, two presses by `Ord`), conflicts (Swap, Replace,
+the last-binding refusal, Keep, a locked other action), lenient overrides, the save flag and a scripted
+capture-and-swap that replays identically; `UiNav::from_actions` has a doctest and a unit test. No
+`WorldHash`, trace, replay, golden or schema moved.
+
 ## Proposed — owner ruling owed
+
+- **`UiNav.back` (breaking).** `UiNav` is built by struct literal in games and docs, so a new field breaks
+  every one. W2a ships `from_actions` with no `back` field; games read `ui_back` through `actions.pressed`.
+- **Overrides in snapshot keyframes.** Mid-session overrides need a `SnapshotDoc` field, which moves
+  `snapshot_schema()` and rides W3's one corpus re-record, like `ActionState`.
 
 - **A snapshot field for `ActionState`** (exact mid-gesture continuation across `engine.restore`, a
   replay seek and a bisect keyframe). A new `SnapshotDoc` field changes `snapshot_schema()`, which

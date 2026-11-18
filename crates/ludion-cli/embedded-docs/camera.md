@@ -4,7 +4,7 @@ description: CameraRig (sim path-rail camera, blends, shake) and CameraOffset (p
 
 # Camera rigs
 
-**Scope:** the `CameraRig` component on a scene's camera entity: the `track` mode (the camera rides a `kind: path` rail after a target), the `first_person` mode (a rigid eye, game-written look), the `chase` and `follow` boom modes, timed blends between configurations, `snap_rig`, trauma shake, `camera_relative` for a stick, the `camera` debug draw, `L1304`–`L1309`, and the presentation `CameraOffset` (`L1332`–`L1334`). The path document is `ludion docs path`; the gameplay clock is `ludion docs game-clock`; the character the camera follows is `ludion docs motor`.
+**Scope:** the `CameraRig` component on a scene's camera entity: the `track` mode (the camera rides a `kind: path` rail after a target), the `first_person` mode (a rigid eye, game-written look), the `chase` and `follow` boom modes, timed blends between configurations, `snap_rig`, trauma shake, `camera_relative` for a stick, the `camera` debug draw, `L1304`–`L1309`, `CameraZone` (rig switching by volume, `L1553`–`L1555`), `camera_occluders`, and the presentation `CameraOffset` (`L1332`–`L1334`). The path document is `ludion docs path`; the gameplay clock is `ludion docs game-clock`; the character the camera follows is `ludion docs motor`.
 
 A rig is **sim**: it writes the camera's `Transform` (and the perspective `fov_y_deg`) from a system, so the pose is hashed, replayed and safe to unproject through. That is why a `CameraRig` camera is not presentation (`ludion docs presentation`).
 
@@ -212,6 +212,29 @@ Runnable: `crates/ludion/examples/first_person_kick.rs`.
 
 The target is projected onto the rail (the nearest point within `search_window` of last tick's); the path's no-roll frame there gives the axes. The desired eye is `point + offset.x * right + offset.y * up + offset.z * back`, **zero roll**: the camera never rolls with the rail (a game-written `roll_deg` still applies post-aim). The eye and the yaw/pitch toward the focus then chase it on critically damped springs. Look-ahead shifts the **focus only**, never the projection. While `grounded` the vertical anchor follows the target's height; airborne it holds until the target leaves `up_slack`/`down_slack`.
 
+## Zones
+
+A `CameraZone` on a sensor volume swaps the rig's config while the rig's target stands in it. Put it beside a `Collider` with `sensor: true` (`L1554` in `check-scene` otherwise).
+
+```yaml
+      Collider: { shape: { box: { half_extents: [4.0, 3.0, 4.0] } }, body: static, sensor: true }
+      CameraZone:
+        priority: 1            # higher wins where zones overlap
+        rig: { mode: { chase: { distance: 8.0 } }, blend_in: { seconds: 0.6 } }
+```
+
+- **Membership is the target's origin inside the sensor**, recomputed from physics every tick (a 1 cm sphere probe), not event-driven. A respawn, teleport, restore or load is right by construction. Zone bounds draw in the `colliders` debug category; `camera` draws a cross at the active zone and a line to the target.
+- **Priority:** the highest wins, the lowest entity id breaking a tie (`L1555`, once per pair).
+- **Base:** entering from no zone remembers the config in force; leaving every zone restores it. Zone to zone blends over the incoming `blend_in`; the base is not touched.
+- **A game write to `CameraRig::rig` inside a zone becomes the base** and is never fought; it applies on exit.
+- **Snap and respawn:** `snap_rig` or a load with the target inside a zone cuts straight to the zone's `rig`, no blend.
+- A live edit to the active zone's `rig` applies at the next zone change. `RigState.zone`/`base` are engine-written and hashed. A world with no `CameraZone` does no query and no work. Without physics, zones are skipped (`L1553`).
+- For switch-and-stay (never revert), keep a game component and copy its `RigConfig` into `rig` on `Entered`, as `games/character-course` does (`CameraGate`).
+
+## Occluders
+
+`camera_occluders(world, camera, &layers, radius) -> Result<Vec<EntityId>, PhysicsError>` sphere-casts from the rig's focus to the posed eye (skipping the target) and returns the entities on `layers`, sorted and deduplicated. It is a pure read, one tick behind like `camera_relative`; `Ok(vec![])` with no rig, pose, target or physics; a bad layer name is `Err`. Hiding them stays the game's job: feed the list to a `Fade` with hysteresis (fade in on the tick an entity is listed, hold a few ticks after it leaves), see `crates/ludion/examples/occlusion_fade.rs` and `crates/ludion/examples/camera_zones.rs`.
+
 ## Blend and snap
 
 - A write to `rig` that differs from `state.last_applied` starts a blend over the **incoming** `blend_in`, from the frozen current pose. A write mid-blend starts from the blended pose, not the old source.
@@ -252,6 +275,9 @@ On `L1304`–`L1307` and `L1309` the rig **holds its pose**; on `L1308` the lowe
 | L1550 | the collision cast was rejected, e.g. an undeclared layer name (pointer `/rig/collision`; the stage is skipped) |
 | L1551 | `collision.enabled` in a world with no physics (warning, once) |
 | L1552 | pivot and target both inside geometry; the boom holds at `min_distance` (warning, once) |
+| L1553 | `CameraZone` entities in a world with no physics (warning, once) |
+| L1554 | a `CameraZone` without a `Collider` with `sensor: true` (`check-scene`) |
+| L1555 | the target is in two top-priority zones; the lower id wins (warning, once per pair) |
 | L1308 | more than one `CameraRig`; only the lowest entity id runs |
 | L1309 | the camera entity has a `Parent` (the rig writes a world-space pose) |
 | L1332 | a `CameraOffset` field is non-finite |

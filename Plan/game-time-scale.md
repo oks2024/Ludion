@@ -49,6 +49,28 @@ No evaluator-signature churn while other tracks edit those files; the retype sta
 `ctx.game_scale()` and `ctx.game_frames_crossed()` (0 or 1, always 1 on an unscaled advanced tick)
 are the guards.
 
+**10. The evaluators retype additively** (supersedes the deferral in 6). Each public closed form takes
+`impl Into<GameTime>` (`bullet_age`, `bullet_position`, `bullet_is_alive`, `volley_hits`, `live_window`,
+`particles::evaluate`, `switch_to_ragdoll`), with `From<SimTime> for GameTime` for whole ticks, so a caller
+passing `ctx.game_time` still compiles and gets floor-time results; `ctx.game_instant` gets the fractional
+ones. For an integer instant every expression gives the same bits as before (`GameTime::ticks_since`
+replaces the integer delta, comparisons run in Q16), so no trace, golden or replay moves.
+
+**11. `held` passes a fractional instant through when `hold <= 1`.** Snapping to the floor would kill
+fractional time for every default animation; only a stop-motion `hold > 1` snaps, to a whole tick.
+
+**12. `set_clip_speed` keeps `now: SimTime`.** `ClipAnchor.frame` is a whole `FrameIndex` in the locked
+component schema, so a speed change applies on the floor gameplay frame, with a sub-frame pose jump of
+fraction × speed difference. A fractional anchor is out of scope.
+
+**13. The timeline and `Timer::just_expired` guard on `game_frames_crossed() > 0`.** Identical unscaled;
+under a scale it fires once per crossed gameplay frame instead of on every tick of a repeated frame.
+`ai_tick` keeps `game_advanced()`: machine callbacks integrate `ctx.game_dt`.
+
+**14. Animation events resume on the same gameplay tick.** `AnimationWalk.tick` stays the floor
+gameplay tick; a walk at the same tick resumes from the record, so clip time advances fractionally and
+each event fires once, in order, on the sim tick that crosses it.
+
 **7. No scale above 1** (OQ3). **Hold stays off physics by default** (OQ4). **No audio by default**,
 pitch handed to request 0023 (OQ5). **One clock, no per-entity dilation** (OQ6).
 
@@ -65,7 +87,7 @@ the next deliberate corpus re-record.
 
 - **W1 (shipped)** the clock, `GameTime`, `SystemCtx` fields, driver fold, `L4260`, docs, the
   `slow_motion` example. `game_dt` integrators follow; nothing else does.
-- **W2** the closed forms in `ludion-engine` read `game_instant`: `extract.rs` particles, clip phase and
+- **W2 (shipped)** the closed forms in `ludion-engine` read `game_instant`: `extract.rs` particles, clip phase and
   volleys; `animation_events`; `parent_joint`; `ragdoll`; `patterns` (the timeline walks
   `game_frames_crossed`, volley age is fractional); the `ludion-projectiles` bullet evaluators.
 - **W3** physics: the engine calls `scale_time(s)` inside the step frame; opt-in
@@ -95,3 +117,5 @@ reopens when a game needs it.
 ## Status
 
 - **W1:** in the working tree, rev to be filled by the tech lead.
+- **W2:** in the working tree, rev to be filled by the tech lead. `ludion-projectiles` bullet evaluators
+  were not part of it and still read whole ticks.

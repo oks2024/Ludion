@@ -27,7 +27,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat4, Quat, Vec3};
 use ludion_core::math::{cos, exp_m1 as expm1, powf, sin, sqrt};
 use ludion_core::rng::DeterministicRng;
-use ludion_core::time::{FrameIndex, SimTime};
+use ludion_core::time::{FrameIndex, GameTime};
 use ludion_renderer::ParticleInstance;
 
 use crate::components::{
@@ -412,14 +412,15 @@ pub(crate) enum Stream {
 /// and the burst gets only what room is left. The semantic validator already rejects an over-cap
 /// emitter at check time (`L2107`), but a component built in Rust never passes through a
 /// validator, and a render loop must not be freezable from game code.
-pub fn live_window(emitter: &ParticleEmitter, now: SimTime) -> (Range<i64>, u32) {
+pub fn live_window(emitter: &ParticleEmitter, now: impl Into<GameTime>) -> (Range<i64>, u32) {
+    let now = now.into();
     let (continuous, burst) = unclamped_burst_window(emitter, now);
     let room = i64::from(PARTICLE_MAX_LIVE_PER_EMITTER) - (continuous.end - continuous.start);
     (continuous, burst.min(u32::try_from(room).unwrap_or(0)))
 }
 
 /// [`live_window`] with the continuous range capped but the burst count as authored.
-fn unclamped_burst_window(emitter: &ParticleEmitter, now: SimTime) -> (Range<i64>, u32) {
+fn unclamped_burst_window(emitter: &ParticleEmitter, now: GameTime) -> (Range<i64>, u32) {
     let ticks = ticks_since(now, emitter.started);
     let hz = f64::from(now.rate().hz());
     let life_max = f64::from(emitter.life[0].max(emitter.life[1]).max(0.0));
@@ -471,18 +472,18 @@ fn unclamped_burst_window(emitter: &ParticleEmitter, now: SimTime) -> (Range<i64
 pub fn evaluate(
     emitter: &ParticleEmitter,
     transform: &Transform,
-    now: SimTime,
+    now: impl Into<GameTime>,
     density: f32,
     basis: CameraBasis,
 ) -> impl Iterator<Item = ParticleInstance> {
-    evaluate_keyed(emitter, transform, now, density, basis).map(|(_, particle)| particle)
+    evaluate_keyed(emitter, transform, now.into(), density, basis).map(|(_, particle)| particle)
 }
 
 /// [`evaluate`] with each particle's stream, for the presenter's cross-tick correspondence.
 pub(crate) fn evaluate_keyed(
     emitter: &ParticleEmitter,
     transform: &Transform,
-    now: SimTime,
+    now: GameTime,
     density: f32,
     basis: CameraBasis,
 ) -> impl Iterator<Item = (Stream, ParticleInstance)> {
@@ -517,7 +518,12 @@ pub(crate) fn instance_key(
 /// An upper bound on how many particles [`evaluate`] yields for the same arguments: the live
 /// window's continuous length plus its burst count. `evaluate` drops dead and below-floor particles
 /// after the window, so the bound is exact only for an emitter that drops none.
-pub(crate) fn live_bound(emitter: &ParticleEmitter, now: SimTime, density: f32) -> usize {
+pub(crate) fn live_bound(
+    emitter: &ParticleEmitter,
+    now: impl Into<GameTime>,
+    density: f32,
+) -> usize {
+    let now = now.into();
     let emitter = thinned(emitter, density);
     let (continuous, burst) = live_window(&emitter, now);
     usize::try_from(continuous.end - continuous.start).unwrap_or(0) + burst as usize
@@ -548,7 +554,7 @@ impl EmitterContext {
     fn new(
         emitter: ParticleEmitter,
         transform: &Transform,
-        now: SimTime,
+        now: GameTime,
         basis: CameraBasis,
     ) -> Self {
         let cone = 1.0 - cos(emitter.spread_deg.clamp(0.0, 180.0).to_radians());
@@ -715,30 +721,18 @@ fn thinned(emitter: &ParticleEmitter, density: f32) -> ParticleEmitter {
 /// Seconds from `started` to `now`, **signed** — a `started` in the future is a negative elapsed,
 /// which is what lets an endless emitter's window run below index zero.
 ///
-/// Derived from the exact tick counts on every call and never accumulated (`clock_ticks`'s
-/// discipline in `extract`), and computed in unsigned arithmetic on both sides so no tick count can
-/// wrap on its way through a signed integer.
-fn seconds_since(now: SimTime, started: FrameIndex) -> f64 {
-    let seconds_per_tick = now.rate().seconds_per_tick();
-    let (now_ticks, started_ticks) = (now.ticks(), started.as_u64());
-    if now_ticks >= started_ticks {
-        (now_ticks - started_ticks) as f64 * seconds_per_tick
-    } else {
-        -((started_ticks - now_ticks) as f64 * seconds_per_tick)
-    }
+/// Derived from the exact Q16 count on every call and never accumulated (`clock_ticks`'s discipline
+/// in `extract`); a whole-tick `now` gives the same bits as the integer difference.
+fn seconds_since(now: GameTime, started: FrameIndex) -> f64 {
+    now.ticks_since(started) * now.rate().seconds_per_tick()
 }
 
-/// Whole ticks from `started` to `now`, **signed**, in unsigned arithmetic like [`seconds_since`].
-/// The live/dead decisions multiply by this exact count and divide last (see `flipbook_frame`),
-/// so the tick count itself never carries a rounded second. A lifetime that is not exact in `f32`
-/// (0.1 s at 60 Hz) can still keep a particle one tick longer than its ideal boundary.
-fn ticks_since(now: SimTime, started: FrameIndex) -> f64 {
-    let (now_ticks, started_ticks) = (now.ticks(), started.as_u64());
-    if now_ticks >= started_ticks {
-        (now_ticks - started_ticks) as f64
-    } else {
-        -((started_ticks - now_ticks) as f64)
-    }
+/// Ticks from `started` to `now`, **signed** and fractional under a gameplay-time scale. The
+/// live/dead decisions multiply by this exact count and divide last (see `flipbook_frame`), so the
+/// tick count itself never carries a rounded second. A lifetime that is not exact in `f32` (0.1 s
+/// at 60 Hz) can still keep a particle one tick longer than its ideal boundary.
+fn ticks_since(now: GameTime, started: FrameIndex) -> f64 {
+    now.ticks_since(started)
 }
 
 /// A particle index from a floating-point bound, saturating well inside the range `f64` represents
@@ -761,7 +755,7 @@ mod tests {
 
     use super::*;
     use ludion_core::math::f64 as math64;
-    use ludion_core::time::TickRate;
+    use ludion_core::time::{SimTime, TickRate};
 
     const BASIS: CameraBasis = CameraBasis {
         right: Vec3::X,
@@ -1530,5 +1524,65 @@ mod tests {
             basis.right
         );
         assert!((basis.up - Vec3::Y).length() < 1e-6, "{}", basis.up);
+    }
+
+    /// The helpers the window reads give the same bits for a whole-tick `GameTime` as the integer
+    /// arithmetic they replaced, over a sweep that crosses `started` in both directions.
+    #[test]
+    fn whole_tick_helpers_are_bit_identical_to_the_integer_arithmetic() {
+        let spt = TickRate::DEFAULT.seconds_per_tick();
+        for now in (0u64..400).chain([100_000, 9_999_999]) {
+            for started in [0u64, 1, 59, 60, 200, 399, 400, 10_000_000] {
+                let t = GameTime::from(at(now));
+                let (old_ticks, old_seconds) = if now >= started {
+                    ((now - started) as f64, (now - started) as f64 * spt)
+                } else {
+                    (-((started - now) as f64), -((started - now) as f64 * spt))
+                };
+                let started = FrameIndex::new(started);
+                assert_eq!(ticks_since(t, started).to_bits(), old_ticks.to_bits());
+                assert_eq!(seconds_since(t, started).to_bits(), old_seconds.to_bits());
+            }
+        }
+    }
+
+    /// At scale 0.25 a gameplay tick is four sim ticks: the quarter-tick instants reproduce the
+    /// whole-tick window at their floor, and an in-between one for a continuous emitter lies between
+    /// its neighbours.
+    #[test]
+    fn a_fractional_instant_walks_between_whole_ticks() {
+        const Q: u64 = ludion_core::time::Q16_PER_TICK;
+        let emitter = ParticleEmitter {
+            rate: 10.0,
+            life: [1.0, 1.0],
+            burst: 0,
+            duration: 0.0,
+            started: FrameIndex::new(0),
+            ..ParticleEmitter::default()
+        };
+        for k in [0u64, 1, 5, 60, 61] {
+            let whole = GameTime::from_q16(k * Q, TickRate::DEFAULT);
+            let quarter_steps = GameTime::from_q16(4 * k * (Q / 4), TickRate::DEFAULT);
+            assert_eq!(
+                live_window(&emitter, quarter_steps),
+                live_window(&emitter, whole)
+            );
+            assert_eq!(live_window(&emitter, whole), live_window(&emitter, at(k)));
+        }
+        // Rate 10 at 60 Hz releases a particle every 6 ticks: the window's newest index steps at
+        // tick 6 on the whole-tick grid, but a quarter tick before it is still the old window.
+        let before = live_window(&emitter, at(5)).0.end;
+        let just_before = live_window(
+            &emitter,
+            GameTime::from_q16(6 * Q - Q / 4, TickRate::DEFAULT),
+        )
+        .0
+        .end;
+        let at_six = live_window(&emitter, at(6)).0.end;
+        assert_eq!(before, just_before);
+        assert!(at_six > just_before);
+        // Elapsed seconds sit strictly between the neighbouring ticks.
+        let t = |q| seconds_since(GameTime::from_q16(q, TickRate::DEFAULT), FrameIndex::new(0));
+        assert!(t(5 * Q) < t(5 * Q + Q / 4) && t(5 * Q + Q / 4) < t(6 * Q));
     }
 }

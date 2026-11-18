@@ -51,6 +51,7 @@ multiplied by `Master`. `voice`, `ui` and `Master` have no authored field: they 
 
 - Pause only the buses you mean: `Ui` stays live while `Sfx`/`Ambient`/`Music` hold, which is what a
   pause menu wants; pausing `Master` holds everything.
+- The `User` layer's one writer is the player-settings drain (`Settings::request_bus_volume`, `ludion docs settings`); write `Game` yourself.
 - Ducking is a `Game`-layer gain; never write the `User` layer for it or the player's slider is lost
   on the next rebuild.
 

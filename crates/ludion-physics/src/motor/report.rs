@@ -4,6 +4,8 @@ use std::fmt;
 
 use ludion_core::ids::EntityId;
 
+use crate::surface_tag::SurfaceId;
+
 /// The walkable-or-not surface a motor stands on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GroundHit {
@@ -18,6 +20,8 @@ pub struct GroundHit {
     pub walkable: bool,
     /// The cast distance from the final pose down to the surface, in metres.
     pub distance: f32,
+    /// The hit collider's surface tag; `None` when untagged and no `default_surface`.
+    pub surface: Option<SurfaceId>,
 }
 
 /// What [`probe_character_ground`](crate::probe_character_ground) found.
@@ -39,6 +43,8 @@ pub struct SurfaceHit {
     pub point: [f32; 3],
     /// World-space surface normal, pointing out of the obstacle.
     pub normal: [f32; 3],
+    /// The hit collider's surface tag; `None` when untagged and no `default_surface`.
+    pub surface: Option<SurfaceId>,
 }
 
 /// What moving ground did to the motor this tick. Default (no `entity`) when no carry ran: the
@@ -167,6 +173,17 @@ pub struct ResumeReport {
     pub resumed: bool,
     /// The lowest-id collider that kept the capsule from fitting; the motor stays suspended and
     /// the pose unchanged then.
+    pub blocked_by: Option<EntityId>,
+}
+
+/// What one `turn_character` call did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TurnReport {
+    /// The yaw the pose has after the call, radians about +Y: the requested one, or the last clear
+    /// 15-degree sub-step toward it when something blocked the turn.
+    pub yaw: f32,
+    /// The lowest-id collider that stopped a lying turn; `None` when the turn completed.
     pub blocked_by: Option<EntityId>,
 }
 

@@ -65,7 +65,7 @@ use std::path::PathBuf;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
-use ludion_core::time::{FrameIndex, SimTime};
+use ludion_core::time::{FrameIndex, GameTime};
 use ludion_ecs::{SystemCtx, World};
 use ludion_scene::AnimationEvent;
 use schemars::JsonSchema;
@@ -309,8 +309,8 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
     };
     let mut record = world.remove_resource::<AnimationWalk>();
 
-    let now = ctx.game_time;
-    let ticks = now.ticks();
+    let now = ctx.game_instant;
+    let ticks = now.ticks_floor();
     let mut failures = Vec::new();
     let mut walked = Vec::new();
     // Entities in ascending id order: a mesh model, else the instance's prefab for a root part.
@@ -352,7 +352,7 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
         }
         let frame = FrameIndex::new(started);
         let (speed, anchor) = (animation.speed, animation.anchor);
-        let at = |time: SimTime| clock_elapsed(time, frame, speed, anchor.as_ref()) * timing.speed;
+        let at = |time: GameTime| clock_elapsed(time, frame, speed, anchor.as_ref()) * timing.speed;
         let t_now = at(now);
         let old = record.as_mut().and_then(|record| {
             let index = record.clips.binary_search_by_key(&id, |c| c.entity).ok()?;
@@ -360,14 +360,17 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
         });
         let resumed = old
             .as_ref()
-            .filter(|(tick, last)| tick + 1 == ticks && last.clip == *clip && last.started == frame)
+            // A scaled clock repeats a gameplay tick across sim ticks, so the same tick resumes too.
+            .filter(|(tick, last)| {
+                (*tick == ticks || tick + 1 == ticks) && last.clip == *clip && last.started == frame
+            })
             .map(|(_, last)| last.t);
         let prev = match resumed {
             Some(t) => Some(t),
             // Started this tick, or stamped after last tick's walk: nothing has been walked yet.
             None if started + 1 >= ticks => None,
             // Already running when first seen (a load, a switch, a restore from an older snapshot).
-            None => Some(at(SimTime::from_ticks(ticks - 1, now.rate()))),
+            None => Some(at(GameTime::from_ticks(ticks - 1, now.rate()))),
         };
         // A raw `speed` write that lowers the speed pulls clip time back below the point already
         // walked; keeping the furthest point fires nothing until the clock passes it again.

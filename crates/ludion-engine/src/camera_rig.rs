@@ -208,6 +208,7 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         _ => None,
     };
     let mut rig = rig;
+    crate::camera_zone::apply(world, entity, &mut rig, target, target_position);
     let cut = rig.state.snap || rig.state.last_applied.is_none();
     let physics = world.resource::<PhysicsWorld>();
     let no_physics = rig.rig.collision.enabled && physics.is_none();

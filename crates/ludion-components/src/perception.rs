@@ -1,8 +1,10 @@
 //! The [`Perceiver`] and [`SightTarget`] components: who looks, through which sight zones, and what
-//! can be seen, from which sample points. `perception_update` in `ludion-engine` reads them.
+//! can be seen, from which sample points. `perception_update` in `ludion-engine` reads them. A
+//! perceiver with [`PerceiverMemory`] keeps one [`StimulusRecord`] entity per thing it sensed.
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
+use ludion_core::ids::EntityId;
 use ludion_core::number::engine_number;
 use ludion_ecs::SemanticValidate;
 use ludion_physics::LayerSet;
@@ -12,6 +14,9 @@ use serde_json::Value;
 
 /// Most sight zones a [`Perceiver`] holds, and most sample points a [`SightTarget`] holds.
 pub const PERCEPTION_MAX_PARTS: usize = 8;
+
+/// Most `max_records` a [`PerceiverMemory`] allows.
+pub const PERCEIVER_MEMORY_MAX_RECORDS: u32 = 64;
 
 /// A facing offset from the entity's own rotation, in degrees. Yaw 0 looks along the entity's −Z,
 /// **positive yaw turns left** and **positive pitch looks down**: the camera rig's convention.
@@ -175,6 +180,125 @@ pub struct Perceiver {
     /// A yaw sweep over gameplay time, applied to every zone (default none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep: Option<ZoneSweep>,
+    /// Keeps a [`StimulusRecord`] per sensed source; unset remembers nothing (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<PerceiverMemory>,
+}
+
+/// How long a [`Perceiver`] remembers what it sensed, and how much. Times are gameplay seconds, so a
+/// held `GameClock` stops the forgetting.
+///
+/// ```
+/// use ludion_components::PerceiverMemory;
+///
+/// let memory: PerceiverMemory = serde_json::from_value(serde_json::json!({})).unwrap();
+/// assert_eq!(memory, PerceiverMemory::default());
+/// assert_eq!((memory.forget_sight_s, memory.forget_hearing_s, memory.max_records), (12.0, 8.0, 8));
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct PerceiverMemory {
+    /// Seconds after the last sighting before a sight record is forgotten (default `12.0`).
+    #[serde(
+        default = "default_forget_sight_s",
+        skip_serializing_if = "is_default_forget_sight"
+    )]
+    pub forget_sight_s: f32,
+    /// Seconds after the last report before a hearing or custom record is forgotten (default `8.0`).
+    #[serde(
+        default = "default_forget_hearing_s",
+        skip_serializing_if = "is_default_forget_hearing"
+    )]
+    pub forget_hearing_s: f32,
+    /// Most records kept; the least recently sensed is evicted first, 1 to 64 (default `8`).
+    #[serde(
+        default = "default_max_records",
+        skip_serializing_if = "is_default_max_records"
+    )]
+    pub max_records: u32,
+}
+
+impl Default for PerceiverMemory {
+    fn default() -> Self {
+        Self {
+            forget_sight_s: default_forget_sight_s(),
+            forget_hearing_s: default_forget_hearing_s(),
+            max_records: default_max_records(),
+        }
+    }
+}
+
+/// The channel a stimulus arrived on. Orders `sight`, `hearing`, then `custom` by number.
+///
+/// ```
+/// use ludion_components::Sense;
+///
+/// let custom: Sense = serde_json::from_value(serde_json::json!({ "custom": 3 })).unwrap();
+/// assert_eq!(custom, Sense::Custom(3));
+/// assert!(Sense::Sight < Sense::Hearing && Sense::Hearing < custom);
+/// ```
+#[derive(
+    Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Sense {
+    /// Seen by a [`Perceiver`]'s sight zones.
+    Sight,
+    /// Heard, reported by the game.
+    Hearing,
+    /// A game-defined channel, numbered by the game.
+    Custom(u32),
+}
+
+/// One thing a [`Perceiver`] sensed and still remembers: the ghost marker. `perception_update` and
+/// `report_stimulus` write it; the game reads `last_position` of a record whose `sensed_now` is
+/// `false` to search where the source was last seen. It is a runtime entity, hashed and snapshotted
+/// like any other, and despawns with its perceiver or when forgotten.
+///
+/// ```
+/// use ludion_components::{Sense, StimulusRecord};
+///
+/// let record: StimulusRecord = serde_json::from_value(serde_json::json!({
+///     "perceiver": { "index": 0, "generation": 0 }, "sense": "sight", "last_position": [1.0, 0.0, 2.0],
+///     "first_sensed_tick": 10, "last_sensed_tick": 40,
+/// }))
+/// .unwrap();
+/// assert_eq!(record.sense, Sense::Sight);
+/// assert!(record.source.is_none() && !record.sensed_now);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct StimulusRecord {
+    /// The perceiver that remembers.
+    #[schemars(with = "ludion_ecs::EntityRefSchema")]
+    pub perceiver: EntityId,
+    /// What was sensed; none for an anonymous stimulus (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub source: Option<EntityId>,
+    /// The channel.
+    pub sense: Sense,
+    /// Where the source was when last sensed, world metres.
+    pub last_position: [f32; 3],
+    /// The unit direction the source last moved, or `[0, 0, 0]` when unknown (default `[0, 0, 0]`).
+    #[serde(default, skip_serializing_if = "is_zero_vec3")]
+    pub last_direction: [f32; 3],
+    /// The gameplay tick the record was created on (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_tick")]
+    pub first_sensed_tick: u64,
+    /// The gameplay tick the source was last sensed on (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_tick")]
+    pub last_sensed_tick: u64,
+    /// Whether the source was sensed this tick: true iff `last_sensed_tick` is the current tick (default `false`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sensed_now: bool,
+    /// How strong the last stimulus was; sight is always `1.0` (default `1.0`).
+    #[serde(
+        default = "default_visibility",
+        skip_serializing_if = "is_default_visibility"
+    )]
+    pub strength: f32,
+    /// The lowest sight zone index that saw the source on the last sighting (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_zone")]
+    pub zone: u8,
 }
 
 /// How many of a [`SightTarget`]'s sample points must be seen for the target to count as seen.
@@ -279,6 +403,30 @@ pub struct SightTarget {
 
 fn is_zero(value: &f32) -> bool {
     *value == 0.0
+}
+fn is_zero_tick(value: &u64) -> bool {
+    *value == 0
+}
+fn is_zero_zone(value: &u8) -> bool {
+    *value == 0
+}
+fn default_forget_sight_s() -> f32 {
+    12.0
+}
+fn is_default_forget_sight(value: &f32) -> bool {
+    *value == 12.0
+}
+fn default_forget_hearing_s() -> f32 {
+    8.0
+}
+fn is_default_forget_hearing(value: &f32) -> bool {
+    *value == 8.0
+}
+fn default_max_records() -> u32 {
+    8
+}
+fn is_default_max_records(value: &u32) -> bool {
+    *value == 8
 }
 fn is_zero_vec3(value: &[f32; 3]) -> bool {
     *value == [0.0; 3]
@@ -493,6 +641,61 @@ impl SemanticValidate for Perceiver {
                 );
             }
         }
+        if let Some(memory) = value.get("memory").filter(|m| m.is_object()) {
+            let mut bad = Found::new(code::PERCEIVER_MEMORY_INVALID, "Perceiver");
+            let help = "see `ludion docs perception`; `ludion explain L1573`";
+            for field in ["forget_sight_s", "forget_hearing_s"] {
+                bad.number_where(
+                    memory,
+                    "/memory",
+                    field,
+                    |n| !(n.is_finite() && n >= 0.0),
+                    "must be finite and not negative",
+                    help,
+                );
+            }
+            if let Some(n) = memory.get("max_records").and_then(Value::as_u64)
+                && !(1..=u64::from(PERCEIVER_MEMORY_MAX_RECORDS)).contains(&n)
+            {
+                bad.reject(
+                    "/memory/max_records".into(),
+                    format!("`max_records` {n} must be in 1 to {PERCEIVER_MEMORY_MAX_RECORDS}"),
+                    help,
+                );
+            }
+            found.out.extend(bad.out);
+        }
+        found.out
+    }
+}
+
+impl SemanticValidate for StimulusRecord {
+    /// Rejects a non-finite `last_position`, `last_direction` or `strength` (`L1573`); a record is
+    /// engine-written, so only a hand-edited scene or snapshot can carry one.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut found = Found::new(code::PERCEIVER_MEMORY_INVALID, "StimulusRecord");
+        let help = "see `ludion docs perception`; `ludion explain L1573`";
+        for field in ["last_position", "last_direction"] {
+            if let Some(vector) = value.get(field).and_then(Value::as_array) {
+                for (i, c) in vector.iter().enumerate() {
+                    if number(c).is_some_and(|n| !n.is_finite()) {
+                        found.reject(
+                            format!("/{field}/{i}"),
+                            format!("`{field}` must be finite"),
+                            help,
+                        );
+                    }
+                }
+            }
+        }
+        found.number_where(
+            value,
+            "",
+            "strength",
+            |n| !n.is_finite(),
+            "is not finite",
+            help,
+        );
         found.out
     }
 }
@@ -717,6 +920,51 @@ mod tests {
         assert_eq!(fraction(1.0), 0);
         assert_eq!(fraction(0.0), 1);
         assert_eq!(fraction(0.001), 0);
+    }
+
+    #[test]
+    fn memory_fields_out_of_range_name_their_pointers() {
+        let bad = Perceiver::validate_semantics(&perceiver(json!({
+            "memory": { "forget_sight_s": -1.0, "forget_hearing_s": 1e39, "max_records": 0 },
+        })));
+        assert_eq!(bad[0].code, code::PERCEIVER_MEMORY_INVALID);
+        assert_eq!(
+            paths(bad),
+            [
+                "/memory/forget_sight_s",
+                "/memory/forget_hearing_s",
+                "/memory/max_records"
+            ]
+        );
+        let many = perceiver(json!({ "memory": { "max_records": 65 } }));
+        assert_eq!(
+            paths(Perceiver::validate_semantics(&many)),
+            ["/memory/max_records"]
+        );
+        let edges = perceiver(json!({ "memory": { "forget_sight_s": 0.0, "max_records": 64 } }));
+        assert!(Perceiver::validate_semantics(&edges).is_empty());
+    }
+
+    #[test]
+    fn a_default_memory_round_trips_as_an_empty_map() {
+        let value = perceiver(json!({ "memory": {} }));
+        let parsed: Perceiver = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(parsed.memory, Some(PerceiverMemory::default()));
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+    }
+
+    #[test]
+    fn a_record_round_trips_and_refuses_non_finite_numbers() {
+        let value = json!({
+            "perceiver": { "index": 1, "generation": 0 }, "sense": { "custom": 2 }, "last_position": [1.0, 2.0, 3.0],
+            "last_sensed_tick": 5, "strength": 0.5,
+        });
+        let parsed: StimulusRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+        let bad = StimulusRecord::validate_semantics(&json!({
+            "last_position": [0.0, 1e39, 0.0], "strength": 1e39,
+        }));
+        assert_eq!(paths(bad), ["/last_position/1", "/strength"]);
     }
 
     #[test]

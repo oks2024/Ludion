@@ -63,8 +63,8 @@ use serde_json::Value;
 
 use crate::asset_cache::AssetCache;
 use crate::audio::{
-    AudioDistance, AudioListener, AudioLogEntry, AudioMessage, AudioPan, AudioQueue, CategoryGains,
-    LoopId, Queued, SentLoop, audible_voice,
+    AudioDistance, AudioListener, AudioLogEntry, AudioMessage, AudioPan, AudioQueue, Bus,
+    CategoryGains, LoopId, MixLayer, Queued, SentLoop, audible_voice,
 };
 use crate::builtin_registry;
 use crate::components::{AudioEmitter, Camera, Name, ReflectionProbe, Transform};
@@ -379,6 +379,22 @@ pub struct Engine {
     /// The window host's channel for [`cursor_lock_game`](Engine::cursor_lock_request) changes
     /// ([`set_cursor_lock_sender`](Engine::set_cursor_lock_sender)); unset headless.
     cursor_lock_sender: Option<crossbeam_channel::Sender<bool>>,
+    /// The player settings in force: the file read at build (when
+    /// [`persist_settings`](crate::EngineBuilder::persist_settings) is on) plus every
+    /// [`Settings`](crate::Settings) request since — the source of the [`SettingsView`](crate::SettingsView)
+    /// each world carries. Lives here so a rebuild or restore does not roll it back; never hashed or
+    /// snapshotted.
+    settings: crate::settings::SettingsDoc,
+    /// Whether the settings file is read at build and written on `save()`.
+    pub(crate) settings_persistence: bool,
+    /// The anti-aliasing mode the settings file or a request chose, below the host's `--aa` flag.
+    anti_aliasing_settings: Option<AntiAliasing>,
+    /// Whether a host flag named the quality, so a settings request persists but does not apply
+    /// ([`pin_quality`](Engine::pin_quality)).
+    quality_pinned: bool,
+    /// The window host's channel for window-mode changes
+    /// ([`set_window_mode_sender`](Engine::set_window_mode_sender)); unset headless.
+    window_mode_sender: Option<crossbeam_channel::Sender<crate::WindowMode>>,
     /// The host's render quality setting ([`set_quality`](Engine::set_quality)) — which optional
     /// effects to draw, plus the label of the choice that produced them. Default
     /// [`QualitySetting::default`] (everything the scene authors, labelled `"full"`). A client
@@ -906,6 +922,11 @@ impl Engine {
             anti_aliasing_game: None,
             cursor_lock_game: None,
             cursor_lock_sender: None,
+            settings: crate::settings::SettingsDoc::default(),
+            settings_persistence: false,
+            anti_aliasing_settings: None,
+            quality_pinned: false,
+            window_mode_sender: None,
             quality: QualitySetting::default(),
             textures: TextureSource::default(),
             cook_resolved: false,
@@ -977,6 +998,7 @@ impl Engine {
         engine.install_shutdown();
         engine.install_render_settings();
         engine.install_cursor_lock();
+        engine.install_settings();
         engine.install_debug_draw();
         engine.install_game_clock(GameClock::default());
         engine.install_diagnostics(crate::Diagnostics::default());
@@ -1211,14 +1233,16 @@ impl Engine {
     }
 
     /// The anti-aliasing mode this engine renders with: the game's runtime request, else the host's
-    /// [`set_anti_aliasing`](Engine::set_anti_aliasing), else the builder default, else `Off`
+    /// [`set_anti_aliasing`](Engine::set_anti_aliasing), else the player's settings file or
+    /// [`Settings`](crate::Settings) request, else the builder default, else `Off`
     /// ([`resolve_anti_aliasing`](crate::resolve_anti_aliasing)). Resolved on read from three
     /// separately held values, so the order they are set in never matters.
     pub fn anti_aliasing(&self) -> AntiAliasing {
         crate::resolve_anti_aliasing(
             self.anti_aliasing_game,
             self.anti_aliasing_override,
-            self.anti_aliasing_default,
+            self.anti_aliasing_settings
+                .unwrap_or(self.anti_aliasing_default),
         )
     }
 
@@ -2029,6 +2053,7 @@ impl Engine {
         crate::input_actions::drain_unknown(self.driver.world_mut());
         self.drain_diagnostics();
         self.drain_audio(frame);
+        self.drain_settings(frame);
         self.sync_audio_emitters(frame);
         self.drain_profile(frame);
         self.drain_checkpoints(frame);
@@ -4048,6 +4073,118 @@ impl Engine {
             .insert_resource(crate::CursorLock::default());
     }
 
+    /// Installs a fresh (empty) [`Settings`](crate::Settings) request resource and a
+    /// [`SettingsView`](crate::SettingsView) of the settings in force into the current world, the
+    /// [`install_cursor_lock`](Engine::install_cursor_lock) mold.
+    fn install_settings(&mut self) {
+        let view = crate::SettingsView::from_doc(&self.settings);
+        let world = self.driver.world_mut();
+        world.insert_resource(crate::Settings::default());
+        world.insert_resource(view);
+    }
+
+    /// Reads the settings file at build when persistence is on: warnings go to `boot_warnings`, the
+    /// file's quality and anti-aliasing apply before any renderer exists, and the world's view is
+    /// refreshed. A no-op without [`persist_settings`](crate::EngineBuilder::persist_settings).
+    pub(crate) fn load_settings(&mut self) {
+        if !self.settings_persistence {
+            return;
+        }
+        let path = self.save_root().join(crate::settings::SETTINGS_PATH);
+        crate::player_profile::sweep_temps(&path);
+        let (doc, warnings) = crate::settings::load(&path);
+        self.boot_warnings.extend(warnings);
+        self.settings = doc;
+        self.anti_aliasing_settings = self.settings.anti_aliasing();
+        if let Some(preset) = self.settings.graphics.quality
+            && let Some(setting) = QualitySetting::preset(preset.name())
+        {
+            self.set_quality(setting);
+        }
+        self.install_settings();
+    }
+
+    /// Applies the game's pending [`Settings`](crate::Settings) requests at the frame boundary:
+    /// volumes to the `User` mix layer (logged, only on change), anti-aliasing and quality to the
+    /// engine's render state, the window mode to the armed host channel (only on change), then the
+    /// one write a `save()` asks for. Host state: nothing here is hashed or snapshotted.
+    fn drain_settings(&mut self, frame: FrameIndex) {
+        let requests = match self.driver.world_mut().resource_mut::<crate::Settings>() {
+            Some(settings) if settings.is_pending() => settings.take(),
+            _ => return,
+        };
+        for bus in Bus::ALL {
+            if let Some(gain) = requests.volumes[bus as usize]
+                && gain != self.settings.volume(bus)
+            {
+                self.settings.set_volume(bus, gain);
+                self.emit_audio(
+                    frame,
+                    AudioMessage::BusGain {
+                        bus,
+                        layer: MixLayer::User,
+                        gain,
+                        fade_frames: 0,
+                    },
+                );
+            }
+        }
+        if let Some(mode) = requests.anti_aliasing {
+            self.settings.graphics.anti_aliasing = Some(mode.name().to_string());
+            self.anti_aliasing_settings = Some(mode);
+        }
+        if let Some(preset) = requests.quality
+            && self.settings.graphics.quality != Some(preset)
+        {
+            self.settings.graphics.quality = Some(preset);
+            if !self.quality_pinned
+                && let Some(setting) = QualitySetting::preset(preset.name())
+            {
+                self.set_quality(setting);
+            }
+        }
+        if let Some(mode) = requests.window
+            && self.settings.display.window != Some(mode)
+        {
+            self.settings.display.window = Some(mode);
+            if let Some(sender) = &self.window_mode_sender {
+                let _ = sender.send(mode);
+            }
+        }
+        let view = crate::SettingsView::from_doc(&self.settings);
+        if let Some(resource) = self
+            .driver
+            .world_mut()
+            .resource_mut::<crate::SettingsView>()
+        {
+            *resource = view;
+        }
+        if requests.save && self.settings_persistence {
+            self.write_settings();
+        }
+    }
+
+    /// Writes the settings file crash-durably; a failure is a non-fatal `L4343` on both sinks (the
+    /// `drain_profile` pair) and the previous whole file stays.
+    fn write_settings(&mut self) {
+        let path = self.save_root().join(crate::settings::SETTINGS_PATH);
+        if let Err(error) = ludion_core::atomic::write_durable(&path, &self.settings.emit()) {
+            let diagnostic = Diagnostic::new(
+                code::SETTINGS_SAVE_FAILED,
+                format!(
+                    "the player settings could not be written to `{}`: {error}",
+                    path.display()
+                ),
+            )
+            .with_help(
+                "the previous whole file stays on disk; check the save location is writable and call \
+                 `Settings::save()` again",
+            );
+            eprintln!("{diagnostic}");
+            self.push_event(Event::Log(LogEvent::from_diagnostic(diagnostic)));
+        }
+    }
+
     /// Installs a fresh (empty) [`DebugDraw`](crate::DebugDraw) resource into the current world. Called
     /// after every world (re)build, the [`install_shutdown`](Engine::install_shutdown) mold; excluded
     /// from the world hash and from snapshots.
@@ -4907,8 +5044,43 @@ impl Engine {
     /// installs this before the engine moves onto the sim thread; a headless/test engine leaves it
     /// unset and still fills the log. Playback is strictly downstream — it never feeds back into the
     /// sim.
+    ///
+    /// Seeds the sink with the player's saved volumes: one `User`-layer `BusGain` per bus whose
+    /// settings value is not `1.0`, sent but not logged (host delivery, not a sim message). A default
+    /// settings file sends nothing.
     pub fn set_audio_sender(&mut self, sender: crossbeam_channel::Sender<AudioMessage>) {
+        for bus in Bus::ALL {
+            let gain = self.settings.volume(bus);
+            if gain != 1.0 {
+                let _ = sender.send(AudioMessage::BusGain {
+                    bus,
+                    layer: MixLayer::User,
+                    gain,
+                    fade_frames: 0,
+                });
+            }
+        }
         self.audio_sender = Some(sender);
+    }
+
+    /// Wires the one-directional channel to the window host: each change of the player's window mode
+    /// ([`Settings::request_window_mode`](crate::Settings::request_window_mode)) is sent here, once
+    /// per change. A headless/test engine leaves it unset and the request is a silent no-op. The mode
+    /// the settings file chose at boot is [`settings_window_mode`](Engine::settings_window_mode).
+    pub fn set_window_mode_sender(&mut self, sender: crossbeam_channel::Sender<crate::WindowMode>) {
+        self.window_mode_sender = Some(sender);
+    }
+
+    /// The window mode the player chose (the settings file at build, then every request), `None`
+    /// before any choice.
+    pub fn settings_window_mode(&self) -> Option<crate::WindowMode> {
+        self.settings.display.window
+    }
+
+    /// Marks the quality as named by a host flag (`--quality`, `LUDION_QUALITY`): a
+    /// [`Settings`](crate::Settings) quality request still persists but no longer applies.
+    pub fn pin_quality(&mut self) {
+        self.quality_pinned = true;
     }
 
     /// Wires the one-directional channel to the window host: each change of the game's
@@ -7980,6 +8152,7 @@ impl Engine {
         self.install_shutdown();
         self.install_render_settings();
         self.install_cursor_lock();
+        self.install_settings();
         self.install_debug_draw();
         // A restore resumes the gameplay time it captured, not a clock level with the frame counter.
         self.install_game_clock(match &kind {

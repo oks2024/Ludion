@@ -16,7 +16,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::Trs;
 use ludion_core::math::glam::{DMat4, Mat4, Vec3};
 use ludion_core::suggest;
-use ludion_core::time::{GameClock, SimTime};
+use ludion_core::time::{GameClock, GameTime, SimTime};
 use ludion_ecs::{Parent, Phase, World};
 use ludion_renderer::SkinJoint;
 use ludion_scene::{MeshJoint, Scene, SceneEntity};
@@ -337,7 +337,7 @@ pub fn posed_joint_world(
     }
     let now = world
         .resource::<GameClock>()
-        .map_or(now, |clock| clock.game_time(now));
+        .map_or_else(|| GameTime::from(now), |clock| clock.game_instant(now));
     let skin_model = affine_mat4(&skin_affine);
 
     let mut parts: Vec<(&str, Mat4)> = Vec::new();

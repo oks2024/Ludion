@@ -6,9 +6,10 @@ use ludion_core::math::sin_cos;
 use ludion_ecs::World;
 use ludion_spatial::Shape;
 
-use super::component::{CharacterMotor, CharacterMotorState, check, motor_in_force};
+use super::component::{CharacterMotor, CharacterMotorState, check, in_force, motor_in_force};
 use super::mover::motor_filter;
 use super::report::{MotorError, ResizeReport};
+use super::shape::{InForce, lying_centre, lying_rotation};
 use crate::pose::PhysicsPose;
 use crate::systems::teleport_kinematic;
 use crate::world::PhysicsWorld;
@@ -58,10 +59,13 @@ fn validate(entity: EntityId, motor: &CharacterMotor, height: f32) -> Result<(),
     })
 }
 
+/// `resizing` is `resize_character`: a lying posture has no height to set. Any other caller asks
+/// whether an upright capsule of `height` fits, which a lying motor answers with its base shape.
 fn checked<P: PhysicsPose>(
     world: &World,
     entity: EntityId,
     height: f32,
+    resizing: bool,
 ) -> Result<Checked, MotorError> {
     let (motor, feet) = motor_of::<P>(world, entity)?;
     if world.resource::<PhysicsWorld>().is_none() {
@@ -72,7 +76,18 @@ fn checked<P: PhysicsPose>(
         height: None,
         ..state.cloned().unwrap_or_default()
     };
-    let posture = motor_in_force(&motor, Some(&shape));
+    let mut force = in_force(&motor, Some(&shape));
+    if force.lying.is_some() {
+        if resizing {
+            return Err(MotorError::InvalidHeight {
+                entity,
+                height,
+                reason: "a lying posture has no height; change posture instead".to_owned(),
+            });
+        }
+        force = in_force(&motor, None);
+    }
+    let posture = force.motor;
     validate(entity, &posture, height)?;
     let current = motor_in_force(&motor, state).height;
     Ok(Checked {
@@ -109,6 +124,37 @@ pub(super) fn headroom(
         .min()
 }
 
+/// The lowest-id collider overlapping the motor's capsule in force standing on `feet` facing `yaw`,
+/// `None` when it fits. An upright capsule is [`headroom`] at its own height (`yaw` is unused); a
+/// lying one is its yawed horizontal capsule lifted by the skin, like the upright test.
+pub(super) fn fit_blocker(
+    physics: &PhysicsWorld,
+    entity: EntityId,
+    force: &InForce,
+    feet: [f32; 3],
+    yaw: f32,
+) -> Option<EntityId> {
+    let Some(lying) = &force.lying else {
+        return headroom(physics, entity, &force.motor, feet, force.motor.height);
+    };
+    let shape = Shape::Capsule {
+        half_height: lying.half_segment(),
+        radius: lying.radius,
+    };
+    let mut centre = lying_centre(lying, feet, yaw);
+    centre[1] += force.motor.skin_width;
+    physics
+        .overlap(
+            &shape,
+            centre,
+            lying_rotation(yaw),
+            &motor_filter(physics, entity, &force.motor),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .min()
+}
+
 /// Sets the height in force of `entity`'s motor capsule to `height`, metres, feet to crown.
 ///
 /// A height at or below the current one always succeeds and leaves the feet where they are (the pose
@@ -117,6 +163,7 @@ pub(super) fn headroom(
 /// lowest entity id. The solver capsule is rebuilt by the next physics write pass. A height that
 /// would make the motor invalid (below `2 * radius + 0.001`, not finite, or not above
 /// `step_height`) is [`MotorError::InvalidHeight`]; growing past the authored `height` is allowed.
+/// A lying posture has no height: it is `InvalidHeight` too, and `set_character_posture` changes it.
 ///
 /// The test reads the state as of the last completed step, so a ceiling despawned in tick N still
 /// blocks in tick N and is gone in tick N + 1. It works on a suspended motor too: it only changes
@@ -144,7 +191,7 @@ pub fn resize_character<P: PhysicsPose>(
         motor,
         feet,
         current,
-    } = checked::<P>(world, entity, height)?;
+    } = checked::<P>(world, entity, height, true)?;
     if height > current {
         let blocker = world
             .resource::<PhysicsWorld>()
@@ -176,7 +223,8 @@ pub fn resize_character<P: PhysicsPose>(
 
 /// Whether a capsule of `height` fits at `entity`'s feet: the test [`resize_character`] runs before
 /// it grows, without changing anything. A height at or below the current one fits. It works on a
-/// suspended motor too.
+/// suspended motor too. While the motor lies, it asks whether an upright capsule of `height` and the
+/// motor's own radius fits at the feet: the stand-up test.
 ///
 /// ```no_run
 /// # use ludion_ecs::{SystemCtx, World};
@@ -195,7 +243,7 @@ pub fn fits_character<P: PhysicsPose>(
         motor,
         feet,
         current,
-    } = checked::<P>(world, entity, height)?;
+    } = checked::<P>(world, entity, height, false)?;
     if height <= current {
         return Ok(true);
     }

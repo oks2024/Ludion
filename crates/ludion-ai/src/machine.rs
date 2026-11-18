@@ -88,7 +88,8 @@ pub trait Machine:
     fn enter(_cx: &mut Cx<'_, Self>, _s: Self) {}
     /// Runs when `s` is exited.
     fn exit(_cx: &mut Cx<'_, Self>, _s: Self) {}
-    /// Runs once per gameplay tick for each active level, after the events.
+    /// Runs on every tick gameplay time moves, for each active level, after the events. Under a
+    /// gameplay-time scale integrate `ctx.game_dt`, not a fixed step.
     fn update(_cx: &mut Cx<'_, Self>, _s: Self) -> Step<Self> {
         Step::Stay
     }

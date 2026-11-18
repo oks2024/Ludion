@@ -36,6 +36,7 @@ Three control surfaces; the first that has an opinion wins, top to bottom:
 |---|---|---|
 | Runtime choice | a game system, `RenderSettings::request_anti_aliasing` | the session, across world rebuilds |
 | Host | `--aa off\|smaa`, or `Engine::set_anti_aliasing` | the process |
+| Player settings | `Settings::request_anti_aliasing` or `graphics.anti_aliasing` in `save/settings.yaml` (`ludion docs settings`) | saved on `save()`; sits below `--aa`, above the builder default |
 | Builder default | `EngineBuilder::anti_aliasing` | the game's default |
 | (none) | — | `off` |
 

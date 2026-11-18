@@ -416,6 +416,18 @@ fn an_animated_skin_is_l1197() {
     );
 }
 
+/// `L1672`: the skin entity carries `AnimationLayers`.
+#[test]
+fn a_layered_skin_is_l1672() {
+    let (_engine, dir) = engine_with_rig("layered-skin");
+    let skin_extra = "      AnimationLayers:\n        layers:\n          - name: upper\n";
+    assert_raises(
+        &scene(&skinned(skin_extra), SKIN_BONE_CHILD),
+        &dir,
+        code::ANIMATION_LAYERS_ON_SKIN_BONE_SKIN,
+    );
+}
+
 /// An out-of-range `skin` never reaches a `SkinBone`-specific pass: `SkinBone.skin` is an
 /// `EntityRefSchema` field, so `ludion_scene::check`'s generic entity-reference pass refuses it
 /// first, as `L1017`.

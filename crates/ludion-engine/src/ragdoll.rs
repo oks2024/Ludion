@@ -29,7 +29,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat4, Quat, Vec3};
 use ludion_core::math::{quat_to_euler_xyz_degrees, sqrt};
-use ludion_core::time::SimTime;
+use ludion_core::time::GameTime;
 use ludion_ecs::{SemanticValidate, World};
 use ludion_scene::AssemblyJointKind;
 use ludion_spatial::{Body, Collider, Joint, JointKind, RigidBody, Shape, Velocity};
@@ -52,7 +52,7 @@ pub fn switch_to_ragdoll(
     world: &mut World,
     entity: EntityId,
     assembly: &AssemblyData,
-    game_time: SimTime,
+    game_time: impl Into<GameTime>,
 ) -> Result<Vec<EntityId>, Diagnostic> {
     if !world.is_alive(entity) {
         return Err(switch_invalid(
@@ -142,7 +142,7 @@ pub fn switch_to_ragdoll(
 
     // --- Validated: every step below mutates the world. ---
 
-    let (pose, fade) = animation_pose(world, entity, assembly, game_time);
+    let (pose, fade) = animation_pose(world, entity, assembly, game_time.into());
     let placements = part_placements_with(assembly, pose, fade.as_ref(), false);
     let q_root = rotation_quat(root_transform.rotation);
     let root_model = Mat4::from_scale_rotation_translation(

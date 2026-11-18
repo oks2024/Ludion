@@ -6,7 +6,7 @@
 > the lane constraint (`LaneConstraint`, `ludion docs lane`): a lateral hold to a `kind: path` corridor, and the fifth the
 > track camera rig (`CameraRig`, `ludion-camera`, `ludion docs camera`), proved on the course's behind and side rigs. A first-person game's
 > request added the `first_person` mode (look deltas, pitch clamp, `aim()`) and post-aim kick, roll and FOV channels. `chase` and `follow` are
-> mechanized (Neon Shroud request 0010, W3a: decisions 29–32), as are the collision stage, the framing channel and the chase recenter (W3b: decisions 33–36); zones, occlusion, decision 16 and the vigil migration remain open; `manual` is dropped (decision 12, amended).
+> mechanized (Neon Shroud request 0010, W3a: decisions 29–32), as are the collision stage, the framing channel and the chase recenter (W3b: decisions 33–36), and the engine `CameraZone` with the occluder query (W3c: decisions 37–39); the gallery chase scene (W3d), decision 16 and the vigil migration remain open; `manual` is dropped (decision 12, amended).
 > Neon Shroud request 0006 (2026-11-18): N1 `suspend_character` / `resume_character` / `character_fit` is mechanized (decision 26); N2 postures and N3 carry are Proposed, owner ruling owed (decisions 27–28).
 > W1 holds mesh colliders, `kind: path` with its sampler queries, `PathFollower` (motion readout, wrap
 > teleports, `orient`) and world-space debug draw including the `colliders` category and `axes`. The
@@ -293,12 +293,26 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
     and never pitches. API: `set_character_posture`, `character_fit` with a posture (the `posture`
     parameter of decision 26 starts to mean something), `turn_character` in 15° destination-tested
     sub-steps; `MoveReport.posture`; `CharacterMotorState.posture`.
-    - **Amendments needed:** decision 5's capsule "never tilts or yaws" in `docs/motor.md`, and the
-      non-goal "Motor modes beyond ground and air", whose trigger (a GDD asking) fired. This adds shapes,
-      not modes.
+    - **Amendments:** decision 5's capsule "never tilts or yaws" and the non-goal "Motor modes beyond
+      ground and air", whose trigger (a GDD asking) fired: **shipped additive, owner review owed** — only
+      a `lying` posture yaws; upright motors are bit-identical (no trace, replay or golden moved). This
+      adds shapes, not modes.
     - N2 is split: **N2a** (shipped, mechanized) the data model plus upright postures; **N2b**
-      (**Proposed**) the `lying` shape through every sweep in `mover.rs`, the write-pass rotation,
-      `turn_character` and the decision-5 amendment above.
+      (mechanized) the `lying` shape through every sweep in `mover.rs`, the write-pass rotation,
+      `turn_character` and the amendment above.
+    - **N2b rules.** `lying: { length, radius, offset? }`, `offset` default 0, `|offset| <= length/2 - radius`
+      so the feet stay under the axis (every ray-down probe stays valid). Forward is local −Z; the yaw is
+      the pose rotation's twist about +Y (`carry::yaw_delta`), never pitch or roll. The capsule's
+      rotation is `q_yaw * q_x(90°)`, its centre `feet + offset*forward + (0, radius, 0)`, its
+      half-segment `length/2 - radius`; `motor_in_force` reports `radius` and `height = 2*radius`.
+      Upright code paths keep their exact arithmetic (branch, never a generalized offset). Fit test:
+      any switch to, from or between lying postures is tested at the current feet and yaw; an upright to
+      upright switch keeps N2a's rule. `turn_character` turns an upright motor at once; a lying one in
+      sub-steps of at most 15° (destination-tested, shortest way round), stopping at the first blocked
+      step and naming the blocker; rigid props block a lying turn; pitch never. `resize_character` on a
+      lying posture is `InvalidHeight`; `fits_character` while lying asks the stand-up question with the
+      base radius. Open questions answered: the game's offset preference kept (default 0, authored
+      per posture), no pitch to the ground normal, 15° steps, and no drop-spot helper.
     - **N2a rules.** Format `postures: { crouch: { shape: { upright: { height, radius? } }, step_height?,
       slope_limit_deg?, snap_distance? } }`; `shape:` mirrors `Collider.shape`, so `lying` joins without a
       breaking change. Empty `postures` and a `None` posture are omitted from saved text, so no hash,
@@ -437,6 +451,24 @@ game crate, and the tooling knows `games/*`).
     default: after `delay` gameplay seconds with no look, and while the target's horizontal speed is at
     least `min_speed`, the yaw damps (`half_life`) along the shortest arc toward the heading behind the
     motion. A nonzero look restarts the wait.
+37. **Engine camera zones** (Neon Shroud request 0010, W3c; mechanized; the "Engine camera zones" non-goal
+    promoted, still Proposed — owner ruling owed, item 1). `CameraZone { priority, rig }` sits beside a
+    sensor `Collider`. Membership is stateless: each tick, before `step_rig`, a 1 cm sphere overlap at the
+    target's origin finds the zones (so a respawn, teleport, restore or load is correct with nothing to
+    hash). The highest priority wins, then the lowest `EntityId`; a top-priority tie is `L1555`.
+    `RigState` gains `zone` and `base` (hashed, skipped at default). Entering from no zone stores the
+    config in force as the base, a zone change copies the zone's `rig` so the existing blend runs over its
+    `blend_in`, leaving restores the base, and a game write inside a zone becomes the base (item 4).
+    No `CameraZone` in the world means no query and no state touched. `L1553` no physics, `L1554`
+    check-scene without a sensor. `CameraZone` registers at the registry's end (the append-only order).
+38. **The occluder query** (0010 W3c; mechanized; item 6). `camera_occluders(world, camera, &layers,
+    radius)` sphere-casts from the rig focus to the posed eye, excluding the target, and returns the
+    sorted, deduplicated entities. It is a function, not a `RigState` field: an entity list in a
+    component is `L1392`, and a non-hashed resource would differ after a restore. One tick behind, like
+    `camera_relative`. The `Fade` policy stays in the game.
+39. **The course's gate is renamed `CameraGate`** (0010 W3c). The engine took the name `CameraZone`; the
+    course's switch-and-stay component keeps its semantics under the new name. Its hashes moved (component
+    names are hashed) and `run.lrp` was re-recorded; no golden moved.
 
 ### W3 — Camera rigs and vigil
 
@@ -444,7 +476,7 @@ Items 1, 2 and 5 are mechanized for the track subset (`ludion-camera`, `ludion d
 behind/side rigs, zones, snap and respawn trauma (`games/character-course`, `tests/camera.rs`); a chase section is open.
 W3's remaining work splits (Neon Shroud request 0010): **W3a** `chase`, `follow` and `enter_pitch_deg`
 (mechanized, decisions 29–32); **W3b** the collision stage, the framing channel and the chase recenter (mechanized, decisions 33–36); **W3c** the engine
-`CameraZone`, the `occluders` list, `examples/gallery/camera-chase.yaml` and the course's chase section.
+`CameraZone` and the occluder query (mechanized, decisions 37–39); **W3d** `examples/gallery/camera-chase.yaml` (its trace and golden, pinned blesses owed) and the course's chase section (re-recording the course corpus a second time).
 
 **Proposed — owner ruling owed** (Neon Shroud request 0010):
 1. Promote the non-goal "Engine camera zones" to a decision; the trigger fired.
@@ -490,7 +522,8 @@ W3's remaining work splits (Neon Shroud request 0010): **W3a** `chase`, `follow`
   Docs: `docs/motor.md` §Suspend and resume.
 - **N2a — upright postures** (mechanized; decision 27). `Posture`, `PostureShape`, `set_character_posture`,
   `motor_in_force`, `MoveReport.posture`, `L1540`/`L4170`. Docs: `docs/motor.md` §Postures.
-- **N2b — the `lying` shape** (**Proposed**, decision 27).
+- **N2b — the `lying` shape** (mechanized; decision 27). `PostureShape::Lying`, `turn_character`,
+  `TurnReport`, `motor_capsule_segment`. Docs: `docs/motor.md` §Postures.
 - **N3 — carry** (**Proposed**, decision 28).
 
 ### Exit (human gate, owed)
@@ -510,16 +543,18 @@ collapsed.
 - **A full 3D lock** (vertical constrained too: the hero glued to the curve, as in rail grinding with no
   ground under it). **Trigger:** a game asks. Express it as a `constrain: lateral | full` field added
   later; the lane ships `lateral` only, and a rail with collision is already served by it.
-- **Per-triangle surface tags** (ice, footsteps, kill surfaces). **Trigger:** a moveset or audio need.
+- **Per-triangle surface tags** — lifted as tags only (ice, footsteps): see `Plan/surface-tags.md`.
   Kill zones are sensor volumes.
-- **Motor modes beyond ground and air** (swimming, ladders, ledge grab, wall jump). **Trigger:** a GDD
+- **Motor modes beyond ground and air** (swimming, ladders, ledge grab, wall jump); the `lying` posture
+  is a shape, shipped additive, owner review owed. **Trigger:** a GDD
   asks. New modes extend `MoveReport`.
 - **Dynamic bodies pushing the character.** **Trigger:** a moveset needs knockback from physics.
 - **Tilting platforms** (pitch and roll riding). **Trigger:** a level needs one.
 - **More rig variants:** a framing dead zone, a static look-at rig, a guide-plus-camera track.
   **Trigger:** a level or game the shipped modes plus `manual` can't serve without repetition.
-- **Engine camera zones.** **Trigger:** a second game repeats the zone pattern (fired by Neon Shroud
-  request 0010; W3c, Proposed above).
+- **Engine camera zones** — now decision 37 (Proposed, owner ruling owed).
+- **`exit_blend`** (a zone's own blend when leaving it; the incoming config's `blend_in` is used).
+  **Trigger:** a game needs a different leave blend than enter blend.
 - **Convex-hull generation** for rigid-body meshes (unchanged from `Plan/physics.md`).
 - **Touch input** for the reference controller. **Trigger:** iOS M3 resumes.
 - **Wrapping rapier's `KinematicCharacterController`** (decision 3).

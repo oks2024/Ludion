@@ -316,6 +316,12 @@ struct ScenePhysicsDoc {
     sleep_after_ticks: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     layers: Vec<SceneLayerDoc>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
+    surfaces: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    default_surface: Option<String>,
 }
 
 /// One `physics.layers` entry in the snapshot's `scene_physics` field.
@@ -342,6 +348,8 @@ impl From<&ScenePhysics> for ScenePhysicsDoc {
                     ignores: layer.ignores.clone(),
                 })
                 .collect(),
+            surfaces: physics.surfaces.clone(),
+            default_surface: physics.default_surface.clone(),
         }
     }
 }
@@ -374,6 +382,8 @@ impl TryFrom<ScenePhysicsDoc> for ScenePhysics {
                     ignores: layer.ignores,
                 })
                 .collect(),
+            surfaces: doc.surfaces,
+            default_surface: doc.default_surface,
         })
     }
 }
@@ -1115,6 +1125,7 @@ fn restore_with(
         // before that, and the wake order follows the restored spawn ranks.
         physics.sync_spawn_ranks(&world);
         physics.sync_query_layers(&world);
+        physics.sync_surface_tags(&world);
         // The decoded solver has no layer table until the next physics write; a game system that
         // moves a character before then would ignore `physics.layers`.
         if let Some(scene) = &scene_physics {
@@ -1343,5 +1354,17 @@ fn migrate_component(
                 removed,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod surface_schema_tests {
+    /// The replay header hashes this schema: the surface fields are skipped from it so every
+    /// committed replay keeps its content hash (`Plan/surface-tags.md`).
+    #[test]
+    fn the_snapshot_schema_omits_the_surface_fields() {
+        let schema = super::snapshot_schema().to_string();
+        assert!(!schema.contains("\"surfaces\""), "{schema}");
+        assert!(!schema.contains("default_surface"), "{schema}");
     }
 }

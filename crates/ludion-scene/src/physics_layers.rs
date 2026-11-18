@@ -192,6 +192,8 @@ mod tests {
             stabilization_iterations: None,
             sleep_after_ticks: None,
             layers,
+            surfaces: Vec::new(),
+            default_surface: None,
         }
     }
 

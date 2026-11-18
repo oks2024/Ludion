@@ -325,8 +325,7 @@ here may be justified by an editor need, and no editor-private surface appears i
   text. Until then: a separate anchored `UiRect` driven from `selected`.
 - **Engine-side focus across several live lists** (tab order, focus stack) — trigger: one screen with
   two simultaneously navigable lists.
-- **Action mapping / rebindable menu keys** — unchanged non-goal (`UiNav`'s fields are public);
-  trigger unchanged: a second game wanting remapping.
+- **Action mapping / rebindable menu keys** — resolved by `UiNav::from_actions`; see `Plan/input-actions.md`.
 - **Analog-stick navigation** (needs a repeat latch, i.e. hidden state) — trigger: a sitting judging
   d-pad-only navigation wrong.
 - **Nine-slice / theming / UI animation** — `UiRect.texture` already stretches; trigger: authored

@@ -187,7 +187,7 @@ category as `AudioQueue`) of last tick's synced handles, diffs against this tick
 manual `loop_start`/`loop_stop` has no safety net: a forgotten `loop_stop` leaks, like forgetting to
 clear any other engine resource-request flag.
 
-**6. Category is a tag the sink applies gain to, not sim-observed state.** `AudioMessage`/`AudioEvent`
+*(The runtime setter for the player's volumes is `Plan/settings.md`.)* **6. Category is a tag the sink applies gain to, not sim-observed state.** `AudioMessage`/`AudioEvent`
 gain `category: AudioCategory` (`Sfx` | `Ambient`; `Sfx` default, matching `.play()`'s existing call
 sites). The per-category *master* gain, though, lives in `AudioSink`, not `World`/`AudioQueue` — it's
 a mixdown/output concern (which bus is how loud), same category as "which device to open," not

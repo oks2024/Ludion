@@ -73,10 +73,10 @@ impl Timer {
         self.deadline.is_some_and(|d| now(ctx) >= d)
     }
 
-    /// Whether the deadline is exactly this gameplay tick: true for one advancing tick, never on a
-    /// held one.
+    /// Whether the deadline is exactly this gameplay tick, on the tick that crossed into it: true
+    /// once, never on a held tick and never twice under a gameplay-time scale.
     pub fn just_expired(&self, ctx: &SystemCtx) -> bool {
-        ctx.game_advanced() && self.deadline == Some(now(ctx))
+        ctx.game_frames_crossed() > 0 && self.deadline == Some(now(ctx))
     }
 
     /// Gameplay ticks left; `0` once expired or when stopped.

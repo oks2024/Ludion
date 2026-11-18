@@ -6,6 +6,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::number::engine_number;
 use ludion_ecs::SemanticValidate;
+use ludion_sim::actions::{ActionName, Actions};
 use ludion_sim::{GamepadButton, InputState, Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -17,8 +18,8 @@ use crate::{UiList, UiListItem};
 ///
 /// Built from an [`InputState`] by [`UiNav::from_input`] under the engine's fixed bindings, or by
 /// hand — the fields are public precisely so a game with its own bindings never needs an engine
-/// change. There is no action-mapping layer and no engine-side focus manager: exactly one list is
-/// navigated per frame, the one the game chooses to call.
+/// change. [`UiNav::from_actions`] reads the action layer instead. There is no engine-side focus
+/// manager: exactly one list is navigated per frame, the one the game chooses to call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UiNav {
     /// Move the cursor to the previous selectable item.
@@ -59,6 +60,48 @@ impl UiNav {
             activate: input.was_pressed(Key::Enter)
                 || input.was_pressed(Key::Space)
                 || pad.was_pressed(GamepadButton::South),
+        }
+    }
+
+    /// Reads this frame's menu intent from the action layer, so a player's rebinds reach the menus.
+    ///
+    /// The reserved action names are `ui_prev`, `ui_next`, `ui_activate` and `ui_back`. Each field
+    /// whose action the map defines is that action's [`pressed`](Actions::pressed); a field whose
+    /// action is undefined keeps [`from_input`](UiNav::from_input)'s default, so a map may define
+    /// only some. `ui_back` has no field: read it with `actions.pressed(ActionName::new("ui_back"))`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ludion_components::UiNav;
+    /// use ludion_core::time::TickRate;
+    /// use ludion_sim::actions::{ActionMap, Actions, InputActionsDoc};
+    /// use ludion_sim::{InputEvent, InputState, Key};
+    ///
+    /// let doc: InputActionsDoc = serde_json::from_value(serde_json::json!({
+    ///     "actions": { "ui_next": { "kind": "button", "bindings": [{ "key": "S" }] } }
+    /// })).unwrap();
+    /// let mut actions = Actions::new(ActionMap::compile(&doc, TickRate::DEFAULT).unwrap());
+    /// let mut input = InputState::default();
+    /// input.begin_tick();
+    /// input.apply(InputEvent::KeyDown { key: Key::S });
+    /// actions.resolve(&input);
+    /// assert!(UiNav::from_actions(&actions, &input).next);
+    /// ```
+    pub fn from_actions(actions: &Actions, input: &InputState) -> Self {
+        let default = Self::from_input(input);
+        let read = |name: &'static str, fallback: bool| {
+            let name = ActionName::new(name);
+            if actions.contains(name) {
+                actions.pressed(name)
+            } else {
+                fallback
+            }
+        };
+        UiNav {
+            prev: read("ui_prev", default.prev),
+            next: read("ui_next", default.next),
+            activate: read("ui_activate", default.activate),
         }
     }
 }
@@ -537,6 +580,35 @@ impl SemanticValidate for UiWorldAnchor {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn from_actions_reads_the_map_and_falls_back_per_field() {
+        use ludion_core::time::TickRate;
+        use ludion_sim::InputEvent;
+        use ludion_sim::actions::{ActionMap, InputActionsDoc};
+
+        let doc: InputActionsDoc = serde_json::from_value(json!({
+            "actions": { "ui_next": { "kind": "button", "bindings": [{ "key": "S" }] } }
+        }))
+        .unwrap();
+        let mut actions = Actions::new(ActionMap::compile(&doc, TickRate::DEFAULT).unwrap());
+        let mut input = InputState::default();
+        input.begin_tick();
+        input.apply(InputEvent::KeyDown { key: Key::S });
+        input.apply(InputEvent::KeyDown { key: Key::Up });
+        actions.resolve(&input);
+        let nav = UiNav::from_actions(&actions, &input);
+        assert!(nav.next, "the rebound key reads");
+        assert!(
+            nav.prev,
+            "an undefined `ui_prev` falls back to the default Up key"
+        );
+        assert!(!nav.activate);
+        assert!(
+            actions.take_unknown().is_empty(),
+            "from_actions never reports L4270"
+        );
+    }
 
     fn tween(track: Value) -> Value {
         json!({ "tracks": [track] })

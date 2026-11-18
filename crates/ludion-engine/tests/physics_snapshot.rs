@@ -435,3 +435,65 @@ fn a_motor_moved_on_the_first_tick_after_a_restore_still_honours_the_layers() {
         uninterrupted.world_hash().unwrap().as_u64()
     );
 }
+
+/// A tagged floor under a scene that declares two surfaces and a default.
+const SURFACE_FLOOR: &str = "format: 1
+seed: 3
+physics:
+  space: free
+  surfaces:
+    - concrete
+    - metal_grate
+  default_surface: concrete
+entities:
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 10.0
+              - 0.5
+              - 10.0
+        body: static
+      SurfaceTag:
+        surface: metal_grate
+";
+
+/// The declared surfaces ride the snapshot's `scene_physics` field, and a restored world answers a
+/// surface lookup before its first physics write.
+#[test]
+fn declared_surfaces_survive_a_snapshot_and_restore() {
+    let mut first = game("surfaces-first").build().expect("boots");
+    first.load_inline_scene(SURFACE_FLOOR).unwrap();
+    for _ in 0..3 {
+        first.advance_live();
+    }
+    let document = snapshot_of(&mut first);
+    assert_eq!(
+        document["scene_physics"]["surfaces"],
+        serde_json::json!(["concrete", "metal_grate"])
+    );
+    assert_eq!(document["scene_physics"]["default_surface"], "concrete");
+
+    let mut resumed = game("surfaces-resumed").build().expect("boots");
+    resumed.load_inline_scene(SURFACE_FLOOR).unwrap();
+    restore(&mut resumed, document);
+    let floor = resumed
+        .world_mut()
+        .query_ids::<(&ludion_physics::SurfaceTag,)>()
+        .map(|(id, _)| id)
+        .next()
+        .expect("the floor keeps its tag");
+    let physics = resumed
+        .world()
+        .resource::<ludion_physics::PhysicsWorld>()
+        .expect("a restored physics world");
+    let id = physics.surface_of(floor).expect("tagged");
+    assert_eq!(physics.surface_name(id), Some("metal_grate"));
+}

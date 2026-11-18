@@ -15,7 +15,7 @@ use crate::mind::{Mind, overflow_fault, path_to};
 /// between states on entry stops here and raises `L4120`.
 pub const MAX_TRANSITIONS_PER_TICK: u32 = 8;
 
-/// Runs every `Mind<M>` for one gameplay tick. Register it once per machine:
+/// Runs every `Mind<M>` on each tick gameplay time moves (under a scale, integrate `ctx.game_dt`). Register it once per machine:
 /// `schedule.add_system("guard_ai", |w, ctx| ai_tick::<Guard>(w, ctx))`, after the systems that
 /// send events and before the ones that read the state.
 ///

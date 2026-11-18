@@ -24,7 +24,7 @@
 //! displacement a tick to `move_character` (the stick goes through `camera_relative` and `lane_relative`,
 //! blended by the lane's weight); crouching is `resize_character`, and a fall or a crush
 //! respawns with `teleport_character`. The camera is the engine's `CameraRig`: a rail behind the hero
-//! on the main lane, a [`CameraZone`] sensor that blends to a side-on rig along the lane section and
+//! on the main lane, a [`CameraGate`] sensor that blends to a side-on rig along the lane section and
 //! back, a snap and a trauma pulse on respawn; the stick is `camera_relative`
 //! (`ludion docs camera`). Every tunable is scene data on [`Runner`]. The motor's
 //! dimensions come from the hero's `CharacterMotor`, never from a constant here.
@@ -152,12 +152,12 @@ pub struct Checkpoint {
     serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug, PartialEq, Default,
 )]
 #[serde(default)]
-pub struct CameraZone {
+pub struct CameraGate {
     /// The configuration the camera's `CameraRig` takes.
     pub rig: RigConfig,
 }
 
-impl SemanticValidate for CameraZone {
+impl SemanticValidate for CameraGate {
     /// Delegates `rig` to the engine's range rules (`L1304`), pointers under `/rig`.
     fn validate_semantics(value: &serde_json::Value) -> Vec<Diagnostic> {
         let rig = value.get("rig").cloned().unwrap_or_default();
@@ -189,7 +189,7 @@ fn camera_entity(world: &mut World) -> Option<EntityId> {
         .map(|(entity, _)| entity)
 }
 
-/// Applies the [`LaneSwitch`], [`Checkpoint`] and [`CameraZone`] sensors the hero entered in the last
+/// Applies the [`LaneSwitch`], [`Checkpoint`] and [`CameraGate`] sensors the hero entered in the last
 /// physics step. Runs before [`controller`] so the tick's move sees the new lane state.
 pub fn triggers(world: &mut World, _ctx: &SystemCtx) {
     let Some(hero) = world
@@ -219,7 +219,7 @@ pub fn triggers(world: &mut World, _ctx: &SystemCtx) {
         {
             state.checkpoint = Some(checkpoint.feet);
         }
-        if let Ok(Some(zone)) = world.get::<CameraZone>(sensor).map(|z| z.cloned())
+        if let Ok(Some(zone)) = world.get::<CameraGate>(sensor).map(|z| z.cloned())
             && let Some(camera) = camera_entity(world)
             && let Ok(Some(rig)) = world.get_mut::<CameraRig>(camera)
         {
@@ -357,7 +357,7 @@ pub fn register(registry: &mut Registry) -> Result<(), Diagnostic> {
     registry.register::<Spin>("Spin")?;
     registry.register::<LaneSwitch>("LaneSwitch")?;
     registry.register::<Checkpoint>("Checkpoint")?;
-    registry.register_validated::<CameraZone>("CameraZone")
+    registry.register_validated::<CameraGate>("CameraGate")
 }
 
 /// This game's full component registry: the built-ins plus this game's components.

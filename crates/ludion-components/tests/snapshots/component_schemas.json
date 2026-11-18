@@ -121,6 +121,97 @@
       }
     }
   },
+  "AnimationLayers": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "AnimationLayers",
+    "description": "Override and additive clip layers over a skinned `kind: character`'s base `Animation`.\n\nLayers are evaluated in list order over the base pose (at most four, `L1670`). An override layer\nblends toward its clip by `weight` × the bone mask's weight for each joint; a joint the clip has no\ntrack for stays as it was. An additive layer adds its clip's change from its first frame. Each\nlayer has its own clock (`started`, `speed`) and its weight ramps from `from_weight` over `fade`\nseconds from `changed`; both use the base `Animation.hold` grid.\n\n**Presentation only.** Extract composes the layers into the skin palette; no system reads the\ncomponent, and a scene without it poses exactly as before. It is ordinary hashed sim state, so\nwrite it only when a choice changes. A `SkinBone`-driven skin refuses it (`L1672`); an assembly or\nprefab part ignores it. Layer clips raise no events.\n\n```yaml\ncomponents:\n  Animation:\n    clip: run\n  AnimationLayers:\n    layers:\n      - name: upper\n        clip: aim\n        mask: upper_body\n        weight: 1.0\n```\n\n```\nuse ludion_components::{AnimationLayers, AnimationLayer, fade_layer, layer_weight};\nuse ludion_core::time::{SimTime, TickRate};\n\nlet mut layers = AnimationLayers {\n    layers: vec![AnimationLayer { name: \"upper\".into(), clip: \"aim\".into(), ..Default::default() }],\n};\nlet now = SimTime::from_ticks(60, TickRate::DEFAULT);\nassert!(fade_layer(&mut layers, \"upper\", 1.0, 0.5, now));\n// Half the fade later the layer is half on.\nlet later = SimTime::from_ticks(75, TickRate::DEFAULT);\nassert_eq!(layer_weight(&layers.layers[0], later), 0.5);\n```",
+    "type": "object",
+    "properties": {
+      "layers": {
+        "description": "The layers, bottom first (default none; at most four).",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/AnimationLayer"
+        },
+        "default": []
+      }
+    },
+    "$defs": {
+      "AnimationLayer": {
+        "description": "One layer of an [`AnimationLayers`]: a clip, the bone mask it touches, and a weight that ramps.\n\nThe weight is `weight` once `fade` seconds have passed since `changed`; before that it lerps from\n`from_weight`. Use [`fade_layer`] to change it without a jump.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The layer's name, unique within the component; [`fade_layer`] and [`play_layer`] select by it.",
+            "type": "string"
+          },
+          "clip": {
+            "description": "The clip's short name, as bound in the character's `clips:` map (default `\"\"` — nothing\nplays). An unknown name is a silent degrade, as for `Animation`.",
+            "type": "string",
+            "default": ""
+          },
+          "mask": {
+            "description": "The character's `masks:` entry this layer touches (default `\"\"` — the whole skin). An\nunknown name is a silent degrade: the layer does nothing.",
+            "type": "string"
+          },
+          "mode": {
+            "description": "How the layer combines with the pose beneath it (default `override`).",
+            "$ref": "#/$defs/LayerMode"
+          },
+          "weight": {
+            "description": "The target weight in `[0, 1]` (default `0` — the layer is off; `L1671` outside the range).",
+            "type": "number",
+            "format": "float"
+          },
+          "from_weight": {
+            "description": "The weight the ramp starts from at `changed` (default `0`; `L1671` outside `[0, 1]`).",
+            "type": "number",
+            "format": "float"
+          },
+          "changed": {
+            "description": "The frame the weight ramp began at (default frame `0`).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "fade": {
+            "description": "The ramp's length in seconds; `0` (default) jumps straight to `weight` (`L1671` when negative\nor not finite).",
+            "type": "number",
+            "format": "float"
+          },
+          "started": {
+            "description": "The frame the layer's clip started at; its clock is measured from it (default frame `0`).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "speed": {
+            "description": "The clip's playback rate multiplier (default `1.0`; `L1671` when negative or not finite).",
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "LayerMode": {
+        "description": "How a layer's clip combines with the pose beneath it.",
+        "oneOf": [
+          {
+            "description": "Blends toward the layer's channels by the layer's weight; a joint the layer clip has no\ntrack for is left alone.",
+            "type": "string",
+            "const": "override"
+          },
+          {
+            "description": "Adds the layer clip's change from its own first frame on top of the pose beneath it.",
+            "type": "string",
+            "const": "additive"
+          }
+        ]
+      }
+    }
+  },
   "AudioEmitter": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "AudioEmitter",
@@ -1275,6 +1366,41 @@
             "type": "number",
             "format": "double",
             "default": 0.0
+          },
+          "zone": {
+            "description": "The [`CameraZone`](crate::CameraZone) entity whose `rig` drives this rig; `None` outside\nevery zone. Written by the engine each tick from the target's position.",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "index",
+              "generation"
+            ],
+            "x-entity-ref": {
+              "allow_self": false
+            }
+          },
+          "base": {
+            "description": "The configuration in force before the first zone, restored when the target leaves every\nzone; `None` outside zones.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RigConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -1356,6 +1482,527 @@
             ],
             "format": "float",
             "default": null
+          }
+        }
+      }
+    }
+  },
+  "CameraZone": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "CameraZone",
+    "description": "A sensor volume that drives the scene's [`CameraRig`] while the rig's target origin is inside\nit. Put it beside a `Collider` with `sensor: true`; the highest `priority` among the zones the\ntarget stands in wins, the lowest entity id breaking a tie.\n\n```\nuse ludion_camera::CameraZone;\n\nlet zone: CameraZone = serde_json::from_value(serde_json::json!({\n    \"priority\": 2,\n    \"rig\": { \"focus_offset\": [0.0, 1.5, 0.0] },\n}))\n.unwrap();\nassert_eq!(zone.priority, 2);\nassert_eq!(zone.rig.focus_offset, [0.0, 1.5, 0.0]);\n```",
+    "type": "object",
+    "properties": {
+      "priority": {
+        "description": "Higher wins where zones overlap.",
+        "type": "integer",
+        "format": "int32",
+        "default": 0
+      },
+      "rig": {
+        "description": "The configuration the camera's `CameraRig` takes while this zone is active; it blends over\nits own `blend_in`.",
+        "$ref": "#/$defs/RigConfig",
+        "default": {
+          "mode": {
+            "track": {
+              "path": "",
+              "offset": [
+                0.0,
+                2.200000047683716,
+                4.5
+              ],
+              "search_window": 3.0
+            }
+          },
+          "focus_offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "springs": {
+            "position_half_life": 0.15000000596046448,
+            "rotation_half_life": 0.10000000149011612
+          },
+          "look_ahead": {
+            "distance": 1.0,
+            "full_speed": 6.0,
+            "half_life": 0.30000001192092896
+          },
+          "vertical_anchor": {
+            "up_slack": 1.5,
+            "down_slack": 1.0,
+            "half_life": 0.25
+          },
+          "fov_y_deg": null,
+          "blend_in": {
+            "seconds": 1.0,
+            "curve": "ease_in_out"
+          }
+        }
+      }
+    },
+    "$defs": {
+      "RigConfig": {
+        "description": "The authored configuration of a rig. A game component can embed one (a zone's rig) and copy it\ninto [`CameraRig::rig`] to switch.",
+        "type": "object",
+        "properties": {
+          "mode": {
+            "description": "How the camera is placed.",
+            "$ref": "#/$defs/RigMode",
+            "default": {
+              "track": {
+                "path": "",
+                "offset": [
+                  0.0,
+                  2.200000047683716,
+                  4.5
+                ],
+                "search_window": 3.0
+              }
+            }
+          },
+          "focus_offset": {
+            "description": "The look point relative to the target origin, in metres.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "springs": {
+            "description": "The position and rotation springs.",
+            "$ref": "#/$defs/Springs",
+            "default": {
+              "position_half_life": 0.15000000596046448,
+              "rotation_half_life": 0.10000000149011612
+            }
+          },
+          "look_ahead": {
+            "description": "The focus shift toward the direction of travel.",
+            "$ref": "#/$defs/LookAhead",
+            "default": {
+              "distance": 1.0,
+              "full_speed": 6.0,
+              "half_life": 0.30000001192092896
+            }
+          },
+          "vertical_anchor": {
+            "description": "How the camera's height follows the target through jumps.",
+            "$ref": "#/$defs/VerticalAnchor",
+            "default": {
+              "up_slack": 1.5,
+              "down_slack": 1.0,
+              "half_life": 0.25
+            }
+          },
+          "fov_y_deg": {
+            "description": "Vertical field of view in degrees; `None` leaves the camera's projection alone.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "default": null
+          },
+          "blend_in": {
+            "description": "The blend used when this configuration becomes the active one.",
+            "$ref": "#/$defs/BlendIn",
+            "default": {
+              "seconds": 1.0,
+              "curve": "ease_in_out"
+            }
+          },
+          "collision": {
+            "description": "The sphere-cast collision stage that keeps the eye out of geometry; off by default.",
+            "$ref": "#/$defs/RigCollisionConfig"
+          }
+        }
+      },
+      "RigMode": {
+        "description": "The placement mode of a rig. Externally tagged: `mode: { track: { .. } }`.",
+        "oneOf": [
+          {
+            "description": "Ride a level-authored path: the target is projected onto it and the camera sits at an offset\nin the path's frame.",
+            "type": "object",
+            "properties": {
+              "track": {
+                "$ref": "#/$defs/TrackRig"
+              }
+            },
+            "required": [
+              "track"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The eye rides the target rigidly; yaw and pitch are game-written look deltas on\n[`CameraRig::look_deg`], unsmoothed.",
+            "type": "object",
+            "properties": {
+              "first_person": {
+                "$ref": "#/$defs/FirstPersonRig"
+              }
+            },
+            "required": [
+              "first_person"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The boom orbits the target: the pivot is sprung toward the focus, yaw and pitch are\ngame-written look deltas on [`CameraRig::look_deg`], unsmoothed.",
+            "type": "object",
+            "properties": {
+              "chase": {
+                "$ref": "#/$defs/ChaseRig"
+              }
+            },
+            "required": [
+              "chase"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The boom holds a fixed world yaw, pitch and distance from the sprung pivot.",
+            "type": "object",
+            "properties": {
+              "follow": {
+                "$ref": "#/$defs/FollowRig"
+              }
+            },
+            "required": [
+              "follow"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "TrackRig": {
+        "description": "The `track` mode.",
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "Content-relative `kind: path` file; empty is inert (the rig holds its pose).",
+            "type": "string",
+            "x-asset-path": true,
+            "default": ""
+          },
+          "offset": {
+            "description": "The eye offset in the path frame, in metres: `+x` right, `+y` up, `+z` back (against the\ntangent).",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              2.200000047683716,
+              4.5
+            ]
+          },
+          "search_window": {
+            "description": "Metres of arc length either side of the last projection searched each tick.",
+            "type": "number",
+            "format": "float",
+            "default": 3.0
+          }
+        }
+      },
+      "FirstPersonRig": {
+        "description": "The `first_person` mode.",
+        "type": "object",
+        "properties": {
+          "eye_offset": {
+            "description": "The eye offset from the target origin in the yaw frame (not pitched), in metres: `+x`\nright, `+y` up, `+z` back.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              1.600000023841858,
+              0.0
+            ]
+          },
+          "pitch_limit_deg": {
+            "description": "The pitch clamp in degrees either way; in `(0, 90)`.",
+            "type": "number",
+            "format": "float",
+            "default": 89.0
+          },
+          "enter_pitch_deg": {
+            "description": "The pitch in degrees a snap or switch into `first_person` starts at (clamped on the next\nlook); `None` carries the current pitch.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          }
+        }
+      },
+      "ChaseRig": {
+        "description": "The `chase` mode: a boom of `distance` metres from the pivot, orbited by look input.",
+        "type": "object",
+        "properties": {
+          "distance": {
+            "description": "Boom length from the pivot to the eye, in metres; above 0.",
+            "type": "number",
+            "format": "float",
+            "default": 6.0
+          },
+          "pitch_deg": {
+            "description": "The pitch in degrees (positive looks down) a snap or switch into `chase` starts at.",
+            "type": "number",
+            "format": "float",
+            "default": 20.0
+          },
+          "pitch_min_deg": {
+            "description": "The lowest pitch look can reach, in degrees; in `(-90, 90)`.",
+            "type": "number",
+            "format": "float",
+            "default": -30.0
+          },
+          "pitch_max_deg": {
+            "description": "The highest pitch look can reach, in degrees; in `(-90, 90)` and at least `pitch_min_deg`\n(equal gives a fixed pitch).",
+            "type": "number",
+            "format": "float",
+            "default": 70.0
+          },
+          "yaw_deg": {
+            "description": "The yaw in degrees a snap or switch into `chase` starts at; `None` carries the current yaw.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "default": null
+          },
+          "look_pitch": {
+            "description": "Whether `look_deg[1]` moves the pitch; `false` consumes and drops it.",
+            "type": "boolean",
+            "default": true
+          },
+          "recenter": {
+            "description": "Turns the yaw back behind the target's motion once look has been idle.",
+            "$ref": "#/$defs/Recenter"
+          }
+        }
+      },
+      "Recenter": {
+        "description": "The chase recenter: after `delay` gameplay seconds with no look, the yaw turns back behind the\ntarget's horizontal motion.",
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "description": "Whether the recenter runs.",
+            "type": "boolean",
+            "default": false
+          },
+          "delay": {
+            "description": "Gameplay seconds without look input before it starts.",
+            "type": "number",
+            "format": "float",
+            "default": 1.5
+          },
+          "half_life": {
+            "description": "Seconds for the yaw error to halve.",
+            "type": "number",
+            "format": "float",
+            "default": 0.6000000238418579
+          },
+          "min_speed": {
+            "description": "Horizontal target speed in metres per second below which it does not turn.",
+            "type": "number",
+            "format": "float",
+            "default": 1.0
+          }
+        }
+      },
+      "FollowRig": {
+        "description": "The `follow` mode: a fixed world yaw, pitch and distance from the sprung pivot.",
+        "type": "object",
+        "properties": {
+          "yaw_deg": {
+            "description": "World yaw in degrees (0 puts the eye on the pivot's +Z side).",
+            "type": "number",
+            "format": "float",
+            "default": 0.0
+          },
+          "pitch_deg": {
+            "description": "Pitch in degrees, positive looks down; in `(-90, 90)`.",
+            "type": "number",
+            "format": "float",
+            "default": 45.0
+          },
+          "distance": {
+            "description": "Boom length from the pivot to the eye, in metres; above 0.",
+            "type": "number",
+            "format": "float",
+            "default": 10.0
+          }
+        }
+      },
+      "Springs": {
+        "description": "Critically damped spring half-lives, in gameplay seconds (`0` is rigid).",
+        "type": "object",
+        "properties": {
+          "position_half_life": {
+            "description": "Seconds for the eye position error to halve.",
+            "type": "number",
+            "format": "float",
+            "default": 0.15000000596046448
+          },
+          "rotation_half_life": {
+            "description": "Seconds for the yaw and pitch error to halve.",
+            "type": "number",
+            "format": "float",
+            "default": 0.10000000149011612
+          }
+        }
+      },
+      "LookAhead": {
+        "description": "Focus shift toward the target's horizontal direction of travel. It moves the focus only, never\nthe path projection.",
+        "type": "object",
+        "properties": {
+          "distance": {
+            "description": "Maximum horizontal shift of the focus, in metres.",
+            "type": "number",
+            "format": "float",
+            "default": 1.0
+          },
+          "full_speed": {
+            "description": "Horizontal target speed in metres per second at which the full distance applies.",
+            "type": "number",
+            "format": "float",
+            "default": 6.0
+          },
+          "half_life": {
+            "description": "Seconds for the shift to halve toward its goal.",
+            "type": "number",
+            "format": "float",
+            "default": 0.30000001192092896
+          }
+        }
+      },
+      "VerticalAnchor": {
+        "description": "The vertical anchor: while grounded it follows the target's height; airborne it holds until the\ntarget leaves the slack.",
+        "type": "object",
+        "properties": {
+          "up_slack": {
+            "description": "Metres the target may rise above the anchor while airborne before the anchor follows.",
+            "type": "number",
+            "format": "float",
+            "default": 1.5
+          },
+          "down_slack": {
+            "description": "Metres the target may drop below the anchor while airborne before the anchor follows.",
+            "type": "number",
+            "format": "float",
+            "default": 1.0
+          },
+          "half_life": {
+            "description": "Seconds for the anchor to halve toward its goal.",
+            "type": "number",
+            "format": "float",
+            "default": 0.25
+          }
+        }
+      },
+      "BlendIn": {
+        "description": "The blend a configuration plays when it becomes active.",
+        "type": "object",
+        "properties": {
+          "seconds": {
+            "description": "Gameplay seconds the blend takes; `0` cuts.",
+            "type": "number",
+            "format": "float",
+            "default": 1.0
+          },
+          "curve": {
+            "description": "The easing of the blend.",
+            "$ref": "#/$defs/BlendCurve",
+            "default": "ease_in_out"
+          }
+        }
+      },
+      "BlendCurve": {
+        "description": "The easing of a blend.",
+        "oneOf": [
+          {
+            "description": "Constant rate.",
+            "type": "string",
+            "const": "linear"
+          },
+          {
+            "description": "Smoothstep: slow in, slow out.",
+            "type": "string",
+            "const": "ease_in_out"
+          }
+        ]
+      },
+      "RigCollisionConfig": {
+        "description": "The collision stage of a rig: a sphere cast from the pivot (or focus, on `track`) to the eye\npulls the boom in at once and eases it back out after a hold. Ignored in `first_person`. It\nlives on the config so a zone can swap it.",
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "description": "Whether the stage runs.",
+            "type": "boolean",
+            "default": false
+          },
+          "radius": {
+            "description": "Radius of the cast sphere in metres; above 0.",
+            "type": "number",
+            "format": "float",
+            "default": 0.30000001192092896
+          },
+          "include_layers": {
+            "description": "Physics layer names the cast hits; empty hits every layer.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "ignore_layers": {
+            "description": "Physics layer names the cast passes through.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "min_distance": {
+            "description": "The shortest boom a hit can pull in to, in metres.",
+            "type": "number",
+            "format": "float",
+            "default": 0.6000000238418579
+          },
+          "skin": {
+            "description": "Metres kept between the hit and the eye.",
+            "type": "number",
+            "format": "float",
+            "default": 0.05000000074505806
+          },
+          "recover_delay": {
+            "description": "Gameplay seconds the pulled-in boom holds before easing back out.",
+            "type": "number",
+            "format": "float",
+            "default": 0.15000000596046448
+          },
+          "recover_half_life": {
+            "description": "Seconds for the remaining boom error to halve while recovering.",
+            "type": "number",
+            "format": "float",
+            "default": 0.3499999940395355
           }
         }
       }
@@ -1494,6 +2141,40 @@
             },
             "required": [
               "upright"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "A horizontal capsule along the character's facing (local `-Z`), resting on the ground: prone\nand crawl. It yaws with the entity's `Transform` and never pitches or rolls. The capsule's\ncentre is `offset` ahead of the feet along the facing and a radius above them.",
+            "type": "object",
+            "properties": {
+              "lying": {
+                "type": "object",
+                "properties": {
+                  "length": {
+                    "description": "The capsule's full length, tip to tip, in metres (more than `2 * radius`).",
+                    "type": "number",
+                    "format": "float"
+                  },
+                  "radius": {
+                    "description": "The capsule radius, in metres (finite, `> 0`); it is also half the body's height.",
+                    "type": "number",
+                    "format": "float"
+                  },
+                  "offset": {
+                    "description": "How far ahead of the feet the capsule's centre lies, in metres; negative is behind\n(default `0`; at most `length / 2 - radius` in magnitude, so the feet stay under the axis).",
+                    "type": "number",
+                    "format": "float"
+                  }
+                },
+                "required": [
+                  "length",
+                  "radius"
+                ]
+              }
+            },
+            "required": [
+              "lying"
             ],
             "additionalProperties": false
           }
@@ -3348,6 +4029,106 @@
       }
     }
   },
+  "LightExposure": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "LightExposure",
+    "description": "A subject whose light exposure `light_exposure_update` reads every tick into\n`LightExposureResults`. `points` are **entity-local offsets**, mapped through the entity's world\npose; `facing.normal` is world-space. `occluder_layers` absent means static colliders only (the\nsubject excluded); present means exactly those layers.\n\n```\nuse ludion_components::{Combine, Facing, LightExposure};\n\nlet subject: LightExposure = serde_json::from_value(serde_json::json!({\n    \"points\": [[0.0, 0.3, 0.0], [0.0, 1.6, 0.0]],\n    \"combine\": \"mean\",\n    \"occluder_layers\": [\"light_occluder\"],\n}))\n.unwrap();\nassert_eq!(subject.points.len(), 2);\nassert_eq!(subject.facing, Facing::Omni);\nassert_eq!(subject.combine, Combine::Mean);\nassert_eq!(subject.occluder_layers.unwrap().as_slice(), [\"light_occluder\"]);\n```",
+    "type": "object",
+    "properties": {
+      "points": {
+        "description": "1 to 16 entity-local sample points (default `[[0, 0, 0]]`).",
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "float"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "default": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ]
+      },
+      "facing": {
+        "description": "The surface orientation at every point (default `omni`).",
+        "$ref": "#/$defs/Facing"
+      },
+      "combine": {
+        "description": "How the points collapse (default `max`).",
+        "$ref": "#/$defs/Combine"
+      },
+      "occluder_layers": {
+        "description": "The layers whose colliders block a shadow ray; absent means static colliders only.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LayerSet"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "$defs": {
+      "Facing": {
+        "description": "The surface orientation a point is lit as.\n\n```\nuse ludion_components::Facing;\n\nlet omni: Facing = serde_json::from_value(serde_json::json!(\"omni\")).unwrap();\nassert_eq!(omni, Facing::Omni);\nlet up: Facing = serde_json::from_value(serde_json::json!({ \"normal\": [0.0, 1.0, 0.0] })).unwrap();\nassert_eq!(up, Facing::Normal([0.0, 1.0, 0.0]));\n```",
+        "oneOf": [
+          {
+            "description": "`n·l = 1` for every light: the light a body of unknown orientation could receive at most.",
+            "type": "string",
+            "const": "omni"
+          },
+          {
+            "description": "A surface with this normal (any non-zero length): `max(n·l, 0)`.",
+            "type": "object",
+            "properties": {
+              "normal": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              }
+            },
+            "required": [
+              "normal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Combine": {
+        "description": "How several points collapse into one reading.",
+        "oneOf": [
+          {
+            "description": "The point with the largest `total`, whole; ties go to the first in authored order.",
+            "type": "string",
+            "const": "max"
+          },
+          {
+            "description": "The componentwise mean of the per-point readings.",
+            "type": "string",
+            "const": "mean"
+          }
+        ]
+      },
+      "LayerSet": {
+        "description": "An ordered list of layer names, in the author's order (never sorted, so a scene's text does not\nchurn). Serializes as a plain list of strings.\n\n```\nuse ludion_physics::LayerSet;\n\nlet set = LayerSet::from(vec![\"light_occluder\".to_string()]);\nassert_eq!(set.as_slice(), [\"light_occluder\"]);\nassert!(!set.is_empty());\nassert_eq!(serde_json::to_string(&set).unwrap(), r#\"[\"light_occluder\"]\"#);\n```",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
   "Mesh": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Mesh",
@@ -4753,6 +5534,17 @@
             "type": "null"
           }
         ]
+      },
+      "memory": {
+        "description": "Keeps a [`StimulusRecord`] per sensed source; unset remembers nothing (default none).",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PerceiverMemory"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "$defs": {
@@ -4889,6 +5681,28 @@
             "const": "sine"
           }
         ]
+      },
+      "PerceiverMemory": {
+        "description": "How long a [`Perceiver`] remembers what it sensed, and how much. Times are gameplay seconds, so a\nheld `GameClock` stops the forgetting.\n\n```\nuse ludion_components::PerceiverMemory;\n\nlet memory: PerceiverMemory = serde_json::from_value(serde_json::json!({})).unwrap();\nassert_eq!(memory, PerceiverMemory::default());\nassert_eq!((memory.forget_sight_s, memory.forget_hearing_s, memory.max_records), (12.0, 8.0, 8));\n```",
+        "type": "object",
+        "properties": {
+          "forget_sight_s": {
+            "description": "Seconds after the last sighting before a sight record is forgotten (default `12.0`).",
+            "type": "number",
+            "format": "float"
+          },
+          "forget_hearing_s": {
+            "description": "Seconds after the last report before a hearing or custom record is forgotten (default `8.0`).",
+            "type": "number",
+            "format": "float"
+          },
+          "max_records": {
+            "description": "Most records kept; the least recently sensed is evicted first, 1 to 64 (default `8`).",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
       }
     }
   },
@@ -6134,6 +6948,161 @@
     "description": "Marks a renderable that does not move, so the renderer can keep it in a persistent buffer.\nAuthored `Static: {}`; a field-less flag, so any extra field raises the ordinary `L1014`.\n\nEligible: a `Mesh` with a primitive shape, an unskinned `asset`, a `voxel` or `sculpt` model\n(LOD chains included), or a `MeshGrid`, mirrored placements included. Anything else (a skinned\nasset, `assembly`, `assembly_part`, `character`, `SkinBone`, `ParentJoint`, `Viewmodel`, a\nsprite, particle emitter, text, decal, light, `GroundMarker`, `Volley`, `PatternPlayer`) is\nreported `L1341` and takes the dynamic path. A `Static` with no renderable is a transform\ngroup: never reported, and its `Static` children stay static. Every `Parent` ancestor must be\n`Static` too; otherwise the entity is reported `L1342` and takes the dynamic path, since a\nstatic under a moving parent would go stale.\n\nWrites stay legal: a written static entity is re-placed. One written on 30 consecutive frames\nis reported once (`L1343`); remove `Static` from it. On a sim entity the flag is hashed like any\nother component.\n\n```yaml\ncomponents:\n  Transform:\n    position: [4.0, 0.0, 2.0]\n  Static: {}\n  Mesh:\n    shape: cube\n```",
     "type": "object",
     "properties": {}
+  },
+  "StimulusRecord": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "StimulusRecord",
+    "description": "One thing a [`Perceiver`] sensed and still remembers: the ghost marker. `perception_update` and\n`report_stimulus` write it; the game reads `last_position` of a record whose `sensed_now` is\n`false` to search where the source was last seen. It is a runtime entity, hashed and snapshotted\nlike any other, and despawns with its perceiver or when forgotten.\n\n```\nuse ludion_components::{Sense, StimulusRecord};\n\nlet record: StimulusRecord = serde_json::from_value(serde_json::json!({\n    \"perceiver\": { \"index\": 0, \"generation\": 0 }, \"sense\": \"sight\", \"last_position\": [1.0, 0.0, 2.0],\n    \"first_sensed_tick\": 10, \"last_sensed_tick\": 40,\n}))\n.unwrap();\nassert_eq!(record.sense, Sense::Sight);\nassert!(record.source.is_none() && !record.sensed_now);\n```",
+    "type": "object",
+    "properties": {
+      "perceiver": {
+        "description": "The perceiver that remembers.",
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "source": {
+        "description": "What was sensed; none for an anonymous stimulus (default none).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "sense": {
+        "description": "The channel.",
+        "$ref": "#/$defs/Sense"
+      },
+      "last_position": {
+        "description": "Where the source was when last sensed, world metres.",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "last_direction": {
+        "description": "The unit direction the source last moved, or `[0, 0, 0]` when unknown (default `[0, 0, 0]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "first_sensed_tick": {
+        "description": "The gameplay tick the record was created on (default `0`).",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "last_sensed_tick": {
+        "description": "The gameplay tick the source was last sensed on (default `0`).",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "sensed_now": {
+        "description": "Whether the source was sensed this tick: true iff `last_sensed_tick` is the current tick (default `false`).",
+        "type": "boolean"
+      },
+      "strength": {
+        "description": "How strong the last stimulus was; sight is always `1.0` (default `1.0`).",
+        "type": "number",
+        "format": "float"
+      },
+      "zone": {
+        "description": "The lowest sight zone index that saw the source on the last sighting (default `0`).",
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0,
+        "maximum": 255
+      }
+    },
+    "required": [
+      "perceiver",
+      "sense",
+      "last_position"
+    ],
+    "$defs": {
+      "Sense": {
+        "description": "The channel a stimulus arrived on. Orders `sight`, `hearing`, then `custom` by number.\n\n```\nuse ludion_components::Sense;\n\nlet custom: Sense = serde_json::from_value(serde_json::json!({ \"custom\": 3 })).unwrap();\nassert_eq!(custom, Sense::Custom(3));\nassert!(Sense::Sight < Sense::Hearing && Sense::Hearing < custom);\n```",
+        "oneOf": [
+          {
+            "description": "Seen by a [`Perceiver`]'s sight zones.",
+            "type": "string",
+            "const": "sight"
+          },
+          {
+            "description": "Heard, reported by the game.",
+            "type": "string",
+            "const": "hearing"
+          },
+          {
+            "description": "A game-defined channel, numbered by the game.",
+            "type": "object",
+            "properties": {
+              "custom": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "custom"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  },
+  "SurfaceTag": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "SurfaceTag",
+    "description": "Tags the entity's collider with a surface declared under `physics.surfaces`. Every hit that\nnames the collider reports it (`surface` on a query hit, `MoveReport.ground.surface`). Put it\nbeside a solver-claimed `Collider` or a `CharacterMotor`; an entity with neither is `L1692` in\n`check-scene`. The name must be declared (`L1690`) and not empty (`L1691`). The solver never\nreads it: editing it takes effect from the next write with no body rebuilt.\n\n```yaml\ncomponents:\n  SurfaceTag:\n    surface: metal_grate\n```",
+    "type": "object",
+    "properties": {
+      "surface": {
+        "description": "The declared surface name.",
+        "type": "string",
+        "default": ""
+      }
+    }
   },
   "SurfaceVelocity": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

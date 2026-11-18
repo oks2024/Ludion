@@ -317,10 +317,14 @@ clip file layout are settled in W1 and W2 and recorded in Status.
 
 - A declarative animation state machine or graph. **Trigger:** a second character whose driver
   Rust visibly repeats the first's.
+  *Taken up by `Plan/animation-layers.md` (Neon Shroud request 0007).*
 - Masked or additive layers. **Trigger:** a clip that must play over another on part of the body.
+  *Taken up by `Plan/animation-layers.md` (Neon Shroud request 0007).*
 - Root motion. **Trigger:** a move whose displacement can't be matched by code.
+  *Taken up by `Plan/animation-layers.md` (Neon Shroud request 0007).*
 - IK (foot placement, look-at). **Trigger:** visible foot sliding or floating on slopes that the
   sitting rejects.
+  *Taken up by `Plan/animation-layers.md` (Neon Shroud request 0007).*
 - Proportion retargeting.
 - Morph targets (they stay `L1202`).
 - A sim-side bone query. **Trigger:** gameplay that must read a bone. `posed_joint_world` (Clockout 0028) is a presentation read, refused from sim with `L0028`, so it does not fire this trigger.

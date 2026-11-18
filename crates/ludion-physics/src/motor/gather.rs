@@ -350,8 +350,9 @@ mod tests {
                 bits(&physics.ray_hits(at, direction, length, &filter, None))
             );
 
-            let contacts =
-                |g: Option<&Gather>| physics.capsule_contacts(&*wide, at, prediction, &filter, g);
+            let contacts = |g: Option<&Gather>| {
+                physics.capsule_contacts(&*wide, at, identity, prediction, &filter, g)
+            };
             let (a, b) = (contacts(Some(&gather)), contacts(None));
             assert_eq!(a.len(), b.len());
             found += a.len() + swept.len() + rays.len();

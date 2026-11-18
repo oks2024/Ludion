@@ -3,17 +3,19 @@
 use ludion_core::ids::EntityId;
 use ludion_ecs::World;
 
-use super::component::{CharacterMotor, CharacterMotorState, check, motor_in_force, posture_motor};
+use super::component::{CharacterMotorState, check_in_force, in_force, posture_motor};
 use super::report::{MotorError, PostureReport};
-use super::resize::{headroom, motor_of};
+use super::resize::{fit_blocker, motor_of};
+use super::shape::{InForce, yaw_of};
 use crate::pose::PhysicsPose;
 use crate::world::PhysicsWorld;
 
 /// Puts `entity`'s motor in the posture `posture`, one of the names under its `postures`; `None` is
 /// the motor's own shape.
 ///
-/// A posture that is taller or wider than the shape in force is first tested against the world with
-/// the capsule at the feet: when a collider is inside it, nothing changes and
+/// A posture that is taller or wider than the shape in force, or any switch to, from or between
+/// `lying` postures, is first tested against the world with the capsule at the feet (a lying one at
+/// the pose's yaw): when a collider is inside it, nothing changes and
 /// [`PostureReport::blocked_by`] names the blocker with the lowest entity id (the report's `posture`
 /// is the one still in force). Otherwise the posture is set and any
 /// [`resize_character`](crate::resize_character) height override is cleared, because the posture
@@ -44,6 +46,12 @@ pub fn set_character_posture<P: PhysicsPose>(
     posture: Option<&str>,
 ) -> Result<PostureReport, MotorError> {
     let (motor, feet) = motor_of::<P>(world, entity)?;
+    let rotation = world
+        .get::<P>(entity)
+        .ok()
+        .flatten()
+        .map(|pose| pose.rotation_quat())
+        .ok_or(MotorError::NoPose(entity))?;
     let state = world.get::<CharacterMotorState>(entity).ok().flatten();
     if state.is_some_and(|state| state.suspended) {
         return Err(MotorError::Suspended(entity));
@@ -53,24 +61,26 @@ pub fn set_character_posture<P: PhysicsPose>(
             entity,
             posture: name.to_owned(),
         })?,
-        None => CharacterMotor {
-            postures: Default::default(),
-            ..motor.clone()
-        },
+        None => in_force(&motor, None),
     };
-    if let Err((pointer, reason)) = check(&target) {
+    if let Err((pointer, reason)) = check_in_force(&target) {
         return Err(MotorError::InvalidMotor {
             entity,
             reason: format!("{pointer}: {reason}"),
         });
     }
-    let in_force = motor_in_force(&motor, state);
+    let current = in_force(&motor, state);
     let held = state.and_then(|state| state.posture.clone());
-    if target.height > in_force.height || target.radius > in_force.radius {
+    if needs_test(&current, &target) {
         let physics = world
             .resource::<PhysicsWorld>()
             .ok_or(MotorError::NoPhysicsWorld)?;
-        if let Some(blocker) = headroom(physics, entity, &target, feet, target.height) {
+        let yaw = if target.lying.is_some() {
+            yaw_of(rotation)
+        } else {
+            0.0
+        };
+        if let Some(blocker) = fit_blocker(physics, entity, &target, feet, yaw) {
             return Ok(PostureReport {
                 posture: held,
                 blocked_by: Some(blocker),
@@ -94,4 +104,13 @@ pub fn set_character_posture<P: PhysicsPose>(
         posture: stored,
         blocked_by: None,
     })
+}
+
+/// Whether a switch is tested against the world: always when either shape lies, else when the
+/// target is taller or wider than the shape in force.
+fn needs_test(current: &InForce, target: &InForce) -> bool {
+    current.lying.is_some()
+        || target.lying.is_some()
+        || target.motor.height > current.motor.height
+        || target.motor.radius > current.motor.radius
 }

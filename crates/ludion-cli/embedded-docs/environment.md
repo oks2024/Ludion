@@ -129,6 +129,8 @@ surface. Its own fields, calibration, and dump instruments are `ludion docs glob
 
 ## Occlusion fade: dither, top-fade, cutaway
 
+A rig camera's occluders come from `camera_occluders` (`ludion docs camera`).
+
 `Fade` is a second, independent opt-in component — render-only, per-instance, and orthogonal to
 `Environment` (a scene can carry either, both, or neither). It drives a deterministic screen-door
 discard (a 4×4 Bayer dither) on the opaque mesh pipeline: no blend state change, no depth-write

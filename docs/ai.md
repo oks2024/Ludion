@@ -36,7 +36,8 @@ Consts: `LEAF_FIRST` (default root first), `INBOX_CAPACITY` (16).
 
 ## The dispatch contract
 
-`ai_tick` returns at once on a tick the game held. Per agent, in ascending entity order:
+`ai_tick` runs every tick gameplay time moves and returns at once on a held one; under a
+`GameClock::scale`, integrate `ctx.game_dt` in callbacks. Per agent, in ascending entity order:
 
 1. **Start.** No `entered` stamp: enter `ROOT` down to the authored `state`, then follow `initial`. A
    `state` outside `ALL` is `L4124` and starts at `ROOT`.
@@ -58,7 +59,8 @@ Agents spawned during a tick start on the next one.
 ## Rules
 
 - **Time is gameplay time.** `Timer`, `Cooldown`, `Cx::time_in` read `ctx.game_time`; they freeze
-  while the game holds, and the absolute deadlines survive a snapshot restore.
+  while the game holds, and the absolute deadlines survive a snapshot restore. They count whole
+  gameplay frames: under a time scale `just_expired` still fires once, on the crossing tick.
 - **Events are ref-free.** An `EntityRefSchema` field inside the event type is refused at registration
   (`L1392`, the inbox is a list). Keep the reference in one marked blackboard field and send a tag.
 - **The take-out trap.** Inside a callback the agent's own `Mind` and blackboard are out of the world

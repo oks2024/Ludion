@@ -5,7 +5,8 @@ description: light_exposure — how much authored light reaches a point, from si
 # Light exposure: the renderer's light model, read from the sim
 
 **Scope:** `light_exposure`, `ExposureQuery`, `Facing`, `Combine`, `Exposure`, `LightContribution`,
-`ExposureError` and `L4250`. The lights are `ludion docs lighting`; the sky is `ludion docs environment`;
+`ExposureError`, the `LightExposure` component, `light_exposure_update`, `LightExposureResults` and
+`L4250`–`L4252`. The lights are `ludion docs lighting`; the sky is `ludion docs environment`;
 the shadow rays use `ludion docs collision-layers` filters.
 
 `light_exposure(&World, &ExposureQuery) -> Result<Exposure, ExposureError>` answers "how lit is this
@@ -69,6 +70,35 @@ emissive, `Mesh.wrap`, fog. The sim pose differs from the render pose by up to o
 `L4250` (`ludion explain L4250`): no points, over 16, a non-finite point (`/points/<i>`), a zero or
 non-finite `Normal` (`/facing`). A filter naming an undeclared layer is `ExposureError::Query`.
 
+## Scene-authored path
+
+```yaml
+- name: guard_target
+  components:
+    Transform: { translation: [0, 0, 0] }
+    LightExposure:
+      points: [[0, 0.3, 0], [0, 1.6, 0]]   # entity-local; default [[0, 0, 0]]
+      facing: { normal: [0, 1, 0] }        # world-space; default omni
+      combine: mean                        # default max
+      occluder_layers: [light_occluder]    # absent: static colliders only
+```
+
+Schedule `.system("light_exposure_update", light_exposure_update)` **after physics and after whatever
+moves lights and subjects**, before the systems that read. Each tick it rebuilds `LightExposureResults`
+(a derived resource: not hashed, not snapshotted); read it with `results.reading(entity)` (`None` for no
+`Transform`, a faulted subject, or no component), `results.readings()` (ascending `EntityId`) and
+`results.tick()`. The system's profile time shows under its own name.
+
+- Points are entity-local offsets mapped through the world pose (rotation, scale, translation); posture
+  is the game rewriting `points`.
+- `occluder_layers` absent: static colliders only, the subject excluded. Present: exactly those layers
+  (declared under `physics.layers`), the subject excluded.
+- A fault is reported once per subject and gives it no reading: an undeclared layer is `L1186`
+  (`/occluder_layers`), a malformed field `L4250`.
+- `check-scene` warns `L4251` for a light on a `presentation: true` entity (drawn, never counted) and
+  `L4252` for `occluder_layers` that no 3D collider carries (`Collider.layer`, `default`, or
+  `QueryLayers`).
+
 ## Example
 
 ```rust
@@ -86,4 +116,4 @@ fn lit(world: &World, body: EntityId, at: [f32; 3]) -> bool {
 }
 ```
 
-Runnable: `crates/ludion/examples/light_exposure.rs`.
+Runnable, with the authored component too: `crates/ludion/examples/light_exposure.rs`.

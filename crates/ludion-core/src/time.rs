@@ -235,10 +235,16 @@ impl GameTime {
     /// let t = GameTime::from_q16(65536 + 16384, TickRate::DEFAULT);
     /// assert_eq!(t.ticks_crossed(16384), 0);
     /// assert_eq!(t.ticks_crossed(32768), 1);
+    /// // The first tick enters frame 0; a held tick crosses nothing.
+    /// let zero = GameTime::from_q16(0, TickRate::DEFAULT);
+    /// assert_eq!(zero.ticks_crossed(65536), 1);
+    /// assert_eq!(zero.ticks_crossed(0), 0);
     /// ```
     pub const fn ticks_crossed(self, step_q16: u32) -> u64 {
-        let before = self.q16.saturating_sub(step_q16 as u64);
-        self.q16 / Q16_PER_TICK - before / Q16_PER_TICK
+        let now = self.q16 as i128;
+        let q = Q16_PER_TICK as i128;
+        // A signed floor: the tick that enters frame 0 from before it crosses 1.
+        (now.div_euclid(q) - (now - step_q16 as i128).div_euclid(q)) as u64
     }
 
     /// The whole-tick [`SimTime`] at or before this instant.
@@ -284,6 +290,34 @@ impl GameTime {
     pub fn ticks_since(self, started: FrameIndex) -> f64 {
         let delta = i128::from(self.q16) - i128::from(started.as_u64()) * i128::from(Q16_PER_TICK);
         delta as f64 / 65536.0
+    }
+}
+
+/// A whole-tick [`SimTime`] is the same instant as a [`GameTime`] with no fraction, so an evaluator
+/// taking `impl Into<GameTime>` accepts either.
+///
+/// ```
+/// use ludion_core::time::{GameTime, SimTime, TickRate};
+/// let t = SimTime::from_ticks(3, TickRate::DEFAULT);
+/// assert_eq!(GameTime::from(t), GameTime::from_ticks(3, TickRate::DEFAULT));
+/// ```
+impl From<SimTime> for GameTime {
+    fn from(t: SimTime) -> Self {
+        GameTime::from_ticks(t.ticks(), t.rate())
+    }
+}
+
+/// A [`GameTime`] equals a [`SimTime`] when it is that whole tick at the same rate.
+///
+/// ```
+/// use ludion_core::time::{GameTime, SimTime, TickRate};
+/// let t = SimTime::from_ticks(3, TickRate::DEFAULT);
+/// assert!(GameTime::from(t) == t);
+/// assert!(GameTime::from_q16(3 * 65536 + 1, TickRate::DEFAULT) != t);
+/// ```
+impl PartialEq<SimTime> for GameTime {
+    fn eq(&self, other: &SimTime) -> bool {
+        *self == GameTime::from(*other)
     }
 }
 
@@ -846,6 +880,29 @@ mod tests {
         assert_eq!(t.ticks_since(FrameIndex::new(2)), 3.25);
         assert_eq!(t.ticks_since(FrameIndex::new(6)), -0.75);
         assert_eq!(t.floor().ticks(), 5);
+    }
+
+    #[test]
+    fn whole_tick_ticks_since_is_bit_identical_to_the_integer_delta() {
+        for now in [0u64, 1, 7, 59, 60, 1000, 123_456_789] {
+            for started in [0u64, 1, 5, 60, 999, 123_456_790] {
+                let t = GameTime::from(SimTime::from_ticks(now, TickRate::DEFAULT));
+                let old = (now as i64 - started as i64) as f64;
+                assert_eq!(
+                    t.ticks_since(FrameIndex::new(started)).to_bits(),
+                    old.to_bits(),
+                    "{now} - {started}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_first_tick_crosses_into_frame_zero() {
+        let zero = GameTime::from_q16(0, TickRate::DEFAULT);
+        assert_eq!(zero.ticks_crossed(Q as u32), 1, "unscaled");
+        assert_eq!(zero.ticks_crossed(Q as u32 / 4), 1, "at 0.25");
+        assert_eq!(zero.ticks_crossed(0), 0, "held");
     }
 
     #[test]

@@ -124,3 +124,7 @@ passes cleanly once the stale dir is removed.
 - **Left.** `Import::write` documented without a doctest — it writes a directory tree to disk
   (needs a temp dir and a fully built plan); the module example plus the `import` doctest cover the
   primary workflow, so a filesystem-touching doctest here would be noise, not documentation.
+
+## Addendum — surface tags (2026-11-18)
+
+`ludion-physics`: `QueryHit`, `PointHit`, `GroundHit` and `SurfaceHit` gain a public `surface: Option<SurfaceId>` field. An additive change, not `#[non_exhaustive]`: no game constructs these literals (`Plan/surface-tags.md` decision 6).

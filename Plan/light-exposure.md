@@ -1,6 +1,6 @@
 # Plan: light exposure — a sim-side answer to "how lit is this point"
 
-> Status: **W1 mechanized (2026-11-18); W2 and W3 not started.** Neon Shroud request 0013
+> Status: **W1 and W2 mechanized (2026-11-18); W3 not started.** Neon Shroud request 0013
 > (`engine-requests/0013-light-exposure-query.md`, read-only), audited at engine r2369. The game's stealth
 > perception (request 0001) needs the authored light at a body's position from its own system, without
 > a rendered frame. Related: `Plan/spot-light.md`, `Plan/shadow-mapping.md`, `Plan/physics.md`.
@@ -63,13 +63,37 @@ engine answers from sim state, with the renderer's own formulas.
    for W2.
 10. **Sim pose vs render pose.** The query uses the tick pose and the renderer the interpolated one, so
     they differ by up to one tick of motion. The docs say so.
+11. **Readings are a derived resource, not a hashed component.** Mirrors `PerceptionResults`:
+    `light_exposure_update` rebuilds `LightExposureResults` every tick from hashed state, so it is not
+    hashed and not snapshotted. One pattern for derived sensor state, no snapshot or schema field, and
+    the replay is identical by construction. The request's hashed `LightExposureReading` component is
+    **Proposed, owner ruling owed**; trigger: a trace or HUD that must show the reading inside the hash.
+12. **The component's default occluders.** `occluder_layers` absent means static colliders only, the
+    subject excluded (`QueryFilter::new().only_fixed().exclude(subject)`); present means
+    `include_set(layers).exclude(subject)`. The request's default, applied at the authored layer; the
+    function keeps "the filter as given" (decision 6). **Proposed, owner ruling owed**, with decision 6.
+13. **One type per concept.** `Facing` and `Combine` live in `ludion-components` with serde and
+    `rename_all = "snake_case"` (`omni` | `{ normal: [x,y,z] }`, `max` | `mean`); `ludion_engine`
+    re-exports them, so `ludion_engine::Facing` and the prelude are unchanged.
+14. **Points are entity-local offsets**, mapped through the subject's exact world affine (rotation,
+    scale, translation, shear kept). A subject with no `Transform` has no reading. `facing.normal` is
+    world-space, like `SpotLight.direction`. Posture is the game rewriting `points`.
+15. **Runtime faults** go through `report_full`, keyed by subject, latched: an undeclared
+    `occluder_layers` name is `L1186` at `/occluder_layers`, and the subject has no reading that tick.
+16. **Codes.** `L4251` (warning): a light on a `presentation: true` entity in a scene with any
+    `LightExposure`, "drawn but never counts". `L4252` (warning): `occluder_layers` that no 3D-claimed
+    collider carries (`Collider.layer`, `default` when absent, or `QueryLayers`). An undeclared name
+    reuses `L1186`; field validation reuses `L4250`. This replaces decision 9's reading of `L4252` as a
+    casting light whose filter matches nothing: the function takes a caller's filter, so only the
+    authored layers can be checked.
 
 ## Waves
 
 - **W1 — the function (engine).** `light_model.rs`, extract's clamps through it, `light_exposure`,
   `L4250`, `docs/light-exposure.md`, the facade example, tests incl. determinism across thread counts.
-- **W2 — the component.** `LightExposure`/`LightExposureReading` components, an engine system, a
-  profile key, check-scene warnings (`L4251`, `L4252`), a WorldHash trace.
+- **W2 — the component (shipped).** `LightExposure`, `light_exposure_update`, `LightExposureResults`,
+  check-scene warnings (`L4251`, `L4252`), a WorldHash trace test. The hashed `LightExposureReading`
+  stays Proposed (decision 11).
 - **W3 — the agreement gate.** `--debug-view irradiance`, a gallery scene, goldens pinned on both OSes
   and the rendered-vs-CPU agreement test. Owed to the pinned machines.
 
@@ -88,3 +112,9 @@ engine answers from sim state, with the renderer's own formulas.
   (bit-identical; existing tests unmodified). `sky_irradiance` falls back to `up = Y` at exactly `±X`
   where the shader's basis degenerates (its cube texels never land there; a query can). The renderer's
   GPU goldens are the Tech Lead's check that extract moved no pixel.
+- W2 (2026-11-18): `LightExposure` (sim-only, appended after `SightTarget`), `Facing`/`Combine` moved to
+  `ludion-components`, `light_exposure_update` and `LightExposureResults`, `scene_light_exposure_diagnostics`
+  (`L4251`, `L4252`, `L1186` reuse), docs and example extended. Tests: validator, YAML scenes through
+  the engine (pose mapping, default and authored occluders, a latched fault, byte-identity without the
+  component), and a 60-tick trace identical at 1/2/8 threads and across snapshot/restore. No trace,
+  replay, golden or wire-schema hash moved.

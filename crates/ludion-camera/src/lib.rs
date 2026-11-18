@@ -43,6 +43,7 @@ mod spring;
 mod step;
 mod track;
 mod validate;
+mod zone;
 
 pub use collision::RigCollision;
 pub use first_person::first_person_eye;
@@ -57,3 +58,4 @@ pub use rig::{
 pub use step::{ResolvedCamera, RigInput, RigOutput, resolved_camera, step_rig};
 pub use track::{rig_focus, track_eye};
 pub use validate::{invalid_config, invalid_field};
+pub use zone::{CameraZone, resolve_zone};

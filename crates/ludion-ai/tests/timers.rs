@@ -75,3 +75,34 @@ fn timers_serialize_compactly() {
     let c: Cooldown = serde_json::from_str("{}").unwrap();
     assert_eq!(c.ready_at, 0);
 }
+
+#[test]
+fn a_scaled_clock_reports_just_expired_on_exactly_one_tick() {
+    let mut clock = GameClock::default();
+    let mut timer = Timer::default();
+    timer.start(&ctx(0), 0.25); // deadline: gameplay tick 15
+    let mut just = Vec::new();
+    let mut expired_after = None;
+    for frame in 0..200 {
+        clock.scale(0.25);
+        let advanced = clock.advance();
+        let c = ctx(frame).with_clock(&clock, advanced);
+        if timer.just_expired(&c) {
+            just.push(frame);
+        }
+        if timer.expired(&c) {
+            expired_after.get_or_insert(frame);
+        } else {
+            assert!(
+                expired_after.is_none(),
+                "expired never reverts (frame {frame})"
+            );
+        }
+    }
+    assert_eq!(just.len(), 1, "fired on frames {just:?}");
+    assert_eq!(
+        Some(just[0]),
+        expired_after,
+        "the crossing tick is the first expired one"
+    );
+}

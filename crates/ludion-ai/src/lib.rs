@@ -3,7 +3,7 @@
 //!
 //! A game implements [`Machine`] for an enum (its variants are the states, its `parent` fn the
 //! hierarchy, its callbacks plain Rust), registers it with [`register_machine`], and schedules
-//! [`ai_tick`] once. Each agent carries a [`Mind`]; [`Timer`] and [`Cooldown`] count gameplay ticks;
+//! [`ai_tick`] once. Each agent carries a [`Mind`]; [`Timer`] and [`Cooldown`] count whole gameplay frames;
 //! [`Group`] and [`GroupMember`] make squads whose members can be sent events with [`send`] or
 //! [`Cx::broadcast`]. `ludion docs ai` is the guide.
 //!

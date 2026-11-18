@@ -63,6 +63,11 @@ clips:
   `leg_length × (scale − 1)`; a `min` below zero in `check-scene <character>`'s `contact` lines is a foot through the
   floor. The mannequin's `jump` keeps `drop = 0.52 × (sy − 1) + air` for exactly this.
 
+## Layers
+
+A character document may declare `masks:` (named joint sets), and an entity may carry `AnimationLayers` to play
+masked override or additive clips over its base `Animation`; `ludion docs animation-layers`.
+
 ## Crossfade
 
 - Call `crossfade(&mut animation, clip, seconds, ctx.game_frame)` instead of writing `clip`: the
@@ -73,7 +78,8 @@ clips:
   from (the cycle below picks the next clip after `run` from it).
 - To change speed mid-clip call `set_clip_speed(&mut animation, speed, ctx.game_time)`: clip time stays
   continuous for the pose and for events. It moves the incoming side only; a fading-out clip keeps the
-  rate it had. Write `speed` directly only together with a new `started`.
+  rate it had. Write `speed` directly only together with a new `started`. Under `GameClock::scale` a speed change applies on the floor gameplay frame, so the pose jumps by the
+  fraction times the speed difference (`ludion docs game-clock`).
 - A sprite flipbook cannot crossfade: `L1209`.
 
 ## Stepped playback
@@ -174,6 +180,7 @@ cargo run -p ludion-testkit --example character_cycle -- --scene examples/galler
 
 ## Next
 
+- `ludion docs animation-layers` — bone masks and masked override/additive layers over the base clip.
 - `ludion docs hierarchy` — `Parent` and `ParentJoint` rules.
 - `ludion docs voxel-animation` — clip strips and rigid assemblies.
 - `ludion docs components` — the `Animation` component's fields and defaults.

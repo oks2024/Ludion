@@ -5,10 +5,12 @@ use ludion_core::codes::code;
 use ludion_core::ids::EntityId;
 use ludion_core::math::glam::Vec3;
 use ludion_core::par;
-use ludion_ecs::{Parent, World};
+use ludion_ecs::{Parent, SystemCtx, World};
+use ludion_engine::diagnostics::Diagnostics;
 use ludion_engine::{
-    Combine, DirectionalLight, Engine, Environment, Exposure, ExposureError, ExposureQuery, Facing,
-    MAX_EXPOSURE_POINTS, PointLight, SpotLight, Transform, Visibility, light_exposure,
+    Combine, DirectionalLight, Engine, EngineBuilder, Environment, Exposure, ExposureError,
+    ExposureQuery, Facing, LightExposure, LightExposureResults, MAX_EXPOSURE_POINTS, PointLight,
+    SpotLight, Transform, Visibility, light_exposure, light_exposure_update, world_affine,
 };
 use ludion_physics::QueryFilter;
 use ludion_protocol::command::EngineRestoreParams;
@@ -513,4 +515,387 @@ fn a_sun_and_a_point_light_on_one_entity_both_count() {
         ]
         .to_vec()
     );
+}
+
+// --- the scene-authored path: `LightExposure` read by `light_exposure_update` ---
+
+const LAYERS: &str = "  layers:\n    - name: light_occluder\n";
+
+/// A scene document: free-space physics with one declared layer, then the entities' YAML.
+fn doc(entities: &str) -> String {
+    format!("format: 1\nseed: 1\nphysics:\n  space: free\n{LAYERS}entities:\n{entities}")
+}
+
+/// An entity with a `Transform` at `at` and `rest` (components already indented to 6).
+fn entity(name: &str, at: [f32; 3], rest: &str) -> String {
+    format!(
+        "  - name: {name}\n    components:\n      Transform:\n        translation:\n          - {:?}\n          - {:?}\n          - {:?}\n{rest}",
+        at[0], at[1], at[2]
+    )
+}
+
+fn point_lamp(name: &str, at: [f32; 3], range: f32) -> String {
+    entity(
+        name,
+        at,
+        &format!("      PointLight:\n        range: {range}\n        cast_shadows: true\n"),
+    )
+}
+
+fn wall(name: &str, at: [f32; 3], body: &str, extra: &str) -> String {
+    let body = if body == "rigid" {
+        "\n          rigid:\n            mass: 1.0"
+    } else {
+        body
+    };
+    entity(
+        name,
+        at,
+        &format!(
+            "      Collider:\n        shape:\n          box:\n            half_extents:\n              - 2.0\n              - 0.1\n              - 2.0\n        body: {body}\n{extra}"
+        ),
+    )
+}
+
+fn subject(name: &str, at: [f32; 3], exposure: &str) -> String {
+    entity(name, at, &format!("      LightExposure:\n{exposure}"))
+}
+
+const TWO_POINTS: &str = "        points:\n          -\n            - 0.0\n            - 0.3\n            - 0.0\n          -\n            - 0.0\n            - 1.6\n            - 0.0\n";
+
+fn builder() -> EngineBuilder {
+    Engine::builder().system("light_exposure_update", light_exposure_update)
+}
+
+fn scene_engine(entities: &str) -> Engine {
+    let mut e = builder().build().expect("boots");
+    e.load_inline_scene(&doc(entities))
+        .expect("the scene loads");
+    // The solver sees the colliders from the tick after they load.
+    e.advance_live();
+    e.advance_live();
+    e
+}
+
+fn named(e: &mut Engine, wanted: &str) -> EntityId {
+    e.world_mut()
+        .query_ids::<(&ludion_engine::Name,)>()
+        .find(|(_, (n,))| n.0 == wanted)
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| panic!("no entity named {wanted}"))
+}
+
+fn results(e: &Engine) -> &LightExposureResults {
+    e.world().resource::<LightExposureResults>().unwrap()
+}
+
+#[test]
+fn the_component_reads_like_a_direct_call_through_the_pose() {
+    let entities = point_lamp("lamp", [0.0, 4.0, 0.0], 12.0)
+        + &wall("roof", [0.0, 2.0, 0.0], "static", "")
+        + &subject("plain", [0.0, 0.0, 0.0], TWO_POINTS)
+        + &entity(
+            "posed",
+            [5.0, 0.0, 0.0],
+            &format!(
+                "        rotation:\n          - 0.0\n          - 0.0\n          - 90.0\n        scale:\n          - 2.0\n          - 2.0\n          - 2.0\n      LightExposure:\n        points:\n          -\n            - 0.0\n            - 1.0\n            - 0.0\n        facing:\n          normal:\n            - 0.0\n            - 1.0\n            - 0.0\n        combine: mean\n"
+            ),
+        );
+    let mut e = scene_engine(&entities);
+    let (plain, posed) = (named(&mut e, "plain"), named(&mut e, "posed"));
+    let direct = |id: EntityId, local: &[[f32; 3]], facing, combine| {
+        let affine = world_affine(e.world(), id).unwrap();
+        let points: Vec<[f32; 3]> = local.iter().map(|p| affine.transform_point(*p)).collect();
+        let filter = QueryFilter::new().only_fixed().exclude(id);
+        read(e.world(), &points, facing, &filter, combine)
+    };
+    let want = direct(
+        plain,
+        &[[0.0, 0.3, 0.0], [0.0, 1.6, 0.0]],
+        Facing::Omni,
+        Combine::Max,
+    );
+    assert_eq!(bits(results(&e).reading(plain).unwrap()), bits(&want));
+    assert!(
+        want.lights.iter().all(|l| l.occluded),
+        "the roof blocks the lamp"
+    );
+    let want = direct(posed, &[[0.0, 1.0, 0.0]], UP, Combine::Mean);
+    assert_eq!(bits(results(&e).reading(posed).unwrap()), bits(&want));
+    let moved = affine_point(&e, posed, [0.0, 1.0, 0.0]);
+    assert!(
+        (moved[0] - 3.0).abs() < 1e-4 && moved[1].abs() < 1e-4,
+        "{moved:?}"
+    );
+    assert_eq!(results(&e).readings().len(), 2);
+    assert!(results(&e).reading(EntityId::new(999, 0)).is_none());
+}
+
+fn affine_point(e: &Engine, id: EntityId, p: [f32; 3]) -> [f32; 3] {
+    world_affine(e.world(), id).unwrap().transform_point(p)
+}
+
+#[test]
+fn a_rotated_scaled_parent_maps_the_points() {
+    let mut e = scene_engine(&point_lamp("lamp", [0.0, 4.0, 0.0], 12.0));
+    let parent = e.world_mut().spawn();
+    e.world_mut()
+        .insert(
+            parent,
+            Transform {
+                translation: [1.0, 0.0, 0.0],
+                rotation: [0.0, 90.0, 0.0],
+                scale: [2.0, 2.0, 2.0],
+            },
+        )
+        .unwrap();
+    let child = e.world_mut().spawn();
+    e.world_mut().insert(child, Parent(parent)).unwrap();
+    e.world_mut()
+        .insert(
+            child,
+            Transform {
+                translation: [0.5, 0.0, 0.0],
+                ..Transform::default()
+            },
+        )
+        .unwrap();
+    e.world_mut()
+        .insert(
+            child,
+            LightExposure {
+                points: vec![[0.0, 0.0, 1.0]],
+                ..LightExposure::default()
+            },
+        )
+        .unwrap();
+    e.advance_live();
+    let world_point = affine_point(&e, child, [0.0, 0.0, 1.0]);
+    assert_ne!(world_point, [0.0, 0.0, 1.0]);
+    let filter = QueryFilter::new().only_fixed().exclude(child);
+    let want = read(
+        e.world(),
+        &[world_point],
+        Facing::Omni,
+        &filter,
+        Combine::Max,
+    );
+    assert_eq!(bits(results(&e).reading(child).unwrap()), bits(&want));
+}
+
+fn occluded(e: &Engine, id: EntityId) -> bool {
+    let x = results(e).reading(id).unwrap();
+    assert!(!x.lights.is_empty(), "the lamp reaches the subject");
+    x.lights.iter().all(|l| l.occluded)
+}
+
+#[test]
+fn default_occluders_are_static_colliders_and_the_subject_is_excluded() {
+    let lit = |blocker: &str| {
+        let entities = point_lamp("lamp", [0.0, 4.0, 0.0], 12.0)
+            + blocker
+            + &subject(
+                "s",
+                [0.0; 3],
+                "        points:\n          -\n            - 0.0\n            - 0.0\n            - 0.0\n",
+            );
+        let mut e = scene_engine(&entities);
+        let s = named(&mut e, "s");
+        occluded(&e, s)
+    };
+    assert!(
+        !lit(&wall("box", [0.0, 2.0, 0.0], "rigid", "")),
+        "a rigid body does not occlude"
+    );
+    assert!(
+        lit(&wall("roof", [0.0, 2.0, 0.0], "static", "")),
+        "a static wall does"
+    );
+    let own = entity(
+        "s",
+        [0.0; 3],
+        "      Collider:\n        shape:\n          box:\n            half_extents:\n              - 0.5\n              - 0.5\n              - 0.5\n        body: static\n      LightExposure: {}\n",
+    );
+    let mut e = scene_engine(&(point_lamp("lamp", [0.0, 4.0, 0.0], 12.0) + &own));
+    let s = named(&mut e, "s");
+    assert!(
+        !occluded(&e, s),
+        "the subject's own static collider never occludes"
+    );
+}
+
+#[test]
+fn authored_occluder_layers_replace_the_static_default() {
+    let tagged = "      QueryLayers:\n        layers:\n          - light_occluder\n";
+    let entities = point_lamp("lamp_a", [0.0, 4.0, 0.0], 6.0)
+        + &point_lamp("lamp_b", [10.0, 4.0, 0.0], 6.0)
+        + &wall("plain_wall", [0.0, 2.0, 0.0], "static", "")
+        + &wall("tagged_wall", [10.0, 2.0, 0.0], "static", tagged)
+        + &subject(
+            "a",
+            [0.0; 3],
+            "        occluder_layers:\n          - light_occluder\n",
+        )
+        + &subject(
+            "b",
+            [10.0, 0.0, 0.0],
+            "        occluder_layers:\n          - light_occluder\n",
+        );
+    let mut e = scene_engine(&entities);
+    let (a, b) = (named(&mut e, "a"), named(&mut e, "b"));
+    assert!(!occluded(&e, a), "the untagged wall is not an occluder");
+    assert!(occluded(&e, b), "the tagged wall is");
+}
+
+#[test]
+fn an_undeclared_occluder_layer_gives_no_reading_and_one_latched_l1186() {
+    let entities = point_lamp("lamp", [0.0, 4.0, 0.0], 12.0)
+        + &wall("far", [20.0, 0.0, 0.0], "static", "")
+        + &subject(
+            "bad",
+            [0.0; 3],
+            "        occluder_layers:\n          - nope\n",
+        )
+        + &subject(
+            "good",
+            [3.0, 0.0, 0.0],
+            "        points:\n          -\n            - 0.0\n            - 0.0\n            - 0.0\n",
+        );
+    let mut e = scene_engine(&entities);
+    for _ in 0..2 {
+        e.advance_live();
+    }
+    let (bad, good) = (named(&mut e, "bad"), named(&mut e, "good"));
+    assert!(results(&e).reading(bad).is_none());
+    assert!(results(&e).reading(good).is_some());
+    let reported = e
+        .world()
+        .resource::<Diagnostics>()
+        .unwrap()
+        .reported(code::COLLIDER_LAYER_UNKNOWN)
+        .count();
+    assert_eq!(reported, 1);
+}
+
+fn hashes(with_system: bool) -> Vec<u64> {
+    let entities = point_lamp("lamp", [0.0, 4.0, 0.0], 12.0)
+        + &wall("box", [0.0, 2.0, 0.0], "rigid", "")
+        + &entity("walker", [3.0, 0.0, 0.0], "");
+    let mut b = Engine::builder();
+    if with_system {
+        b = b.system("light_exposure_update", light_exposure_update);
+    }
+    let mut e = b.build().expect("boots");
+    e.load_inline_scene(&doc(&entities)).unwrap();
+    (0..30)
+        .map(|_| {
+            e.advance_live();
+            e.world_hash().unwrap().as_u64()
+        })
+        .collect()
+}
+
+#[test]
+fn a_scene_without_the_component_hashes_the_same_with_the_system_scheduled() {
+    assert_eq!(hashes(true), hashes(false));
+}
+
+/// Sweeps the casting spot's direction and cuts its intensity at tick 30, from the frame alone.
+fn sweep_lamp(world: &mut World, ctx: &SystemCtx) {
+    let frame = ctx.frame.as_u64();
+    let a = frame as f32 * 0.1;
+    let ids: Vec<EntityId> = world
+        .query_ids::<(&SpotLight,)>()
+        .map(|(id, _)| id)
+        .collect();
+    for id in ids {
+        let l = world.get_mut::<SpotLight>(id).unwrap().unwrap();
+        l.direction = [
+            ludion_core::math::sin(a),
+            -1.0,
+            ludion_core::math::cos(a) * 0.5,
+        ];
+        l.intensity = if frame >= 30 { 0.0 } else { 1.0 };
+    }
+}
+
+fn trace_engine() -> Engine {
+    let entities = entity(
+        "lamp",
+        [0.0, 2.0, 0.0],
+        "      SpotLight:\n        direction:\n          - 0.0\n          - -1.0\n          - 0.0\n        inner_angle: 15.0\n        outer_angle: 40.0\n        range: 12.0\n        cast_shadows: true\n",
+    ) + &wall("post", [3.0, 1.0, 0.0], "static", "")
+        + &subject(
+            "s",
+            [0.0; 3],
+            "        points:\n          -\n            - 0.0\n            - 0.0\n            - 0.0\n          -\n            - 2.0\n            - 0.0\n            - 1.0\n          -\n            - -1.0\n            - 0.0\n            - 0.5\n        facing:\n          normal:\n            - 0.0\n            - 1.0\n            - 0.0\n        combine: mean\n",
+        );
+    let mut e = Engine::builder()
+        .system("sweep_lamp", sweep_lamp)
+        .system("light_exposure_update", light_exposure_update)
+        .build()
+        .expect("boots");
+    e.load_inline_scene(&doc(&entities)).unwrap();
+    e
+}
+
+/// `(results tick, world hash, reading bits, lit lights)` for one advanced tick.
+fn record(e: &mut Engine) -> (u64, u64, Vec<u32>, usize) {
+    e.advance_live();
+    let s = named(e, "s");
+    let hash = e.world_hash().unwrap().as_u64();
+    let x = results(e).reading(s).unwrap();
+    (results(e).tick(), hash, bits(x), x.lights.len())
+}
+
+fn trace() -> Vec<(u64, u64, Vec<u32>, usize)> {
+    let mut e = trace_engine();
+    (0..60).map(|_| record(&mut e)).collect()
+}
+
+#[test]
+fn the_exposure_trace_is_thread_invariant_and_cuts_at_tick_30() {
+    let one = par::with_threads(1, trace);
+    assert_eq!(one, par::with_threads(2, trace));
+    assert_eq!(one, par::with_threads(8, trace));
+    assert!(
+        one.iter().any(|t| t.3 > 0),
+        "the lamp lit the subject at some tick"
+    );
+    for (tick, _, _, lit) in &one {
+        if *tick >= 30 {
+            assert_eq!(*lit, 0, "the lamp reads 0 from tick {tick}");
+        }
+    }
+    assert!(
+        one.iter().filter(|t| t.0 < 30).any(|t| t.3 > 0),
+        "and contributed before the cut"
+    );
+}
+
+#[test]
+fn the_exposure_trace_survives_a_snapshot_and_restore() {
+    let mut first = trace_engine();
+    let mut tail = Vec::new();
+    let mut snapshot = None;
+    for tick in 0..60 {
+        if tick == 20 {
+            snapshot = Some(match first.execute(Command::EngineSnapshot).unwrap().body {
+                ResponseBody::Snapshot { snapshot } => snapshot,
+                other => panic!("expected a snapshot, got {other:?}"),
+            });
+        }
+        let r = record(&mut first);
+        if tick >= 20 {
+            tail.push(r);
+        }
+    }
+    let mut resumed = trace_engine();
+    resumed
+        .execute(Command::EngineRestore(EngineRestoreParams {
+            snapshot: snapshot.unwrap(),
+        }))
+        .unwrap();
+    let replay: Vec<_> = (20..60).map(|_| record(&mut resumed)).collect();
+    assert_eq!(replay, tail);
 }

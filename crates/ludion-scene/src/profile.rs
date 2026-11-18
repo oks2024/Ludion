@@ -22,7 +22,7 @@
 //! Strict-YAML syntax errors surface the shared `L100x` codes, exactly as elsewhere.
 
 use ludion_core::codes::code;
-use ludion_core::diagnostics::{Diagnostic, value_phrase};
+use ludion_core::diagnostics::{Diagnostic, DiagnosticCode, value_phrase};
 use serde_json::{Map, Value};
 
 use crate::parse::node_to_value;
@@ -56,31 +56,43 @@ pub struct ProfileEnvelope {
 /// diagnostic with a JSON Pointer at the offending key where one exists. A strict-YAML syntax or
 /// strictness violation surfaces the shared `L1001`–`L1009` codes.
 pub(crate) fn open_profile(source: &str) -> Result<ProfileEnvelope, Vec<Diagnostic>> {
+    open_envelope(source, PROFILE_KIND, code::PROFILE_LOAD_FAILED)
+}
+
+/// The lenient `format`/`kind` envelope open every per-machine save file shares (`profile`,
+/// `settings`): validates only the envelope for `kind`, reports a bad one as `code`.
+pub(crate) fn open_envelope(
+    source: &str,
+    kind: &str,
+    code: DiagnosticCode,
+) -> Result<ProfileEnvelope, Vec<Diagnostic>> {
     let root = yaml::parse_document(source).map_err(|diagnostic| vec![diagnostic])?;
     let Some(root) = root else {
         return Err(vec![
             Diagnostic::new(
-                code::PROFILE_LOAD_FAILED,
-                "the profile is empty; it needs at least `format: 1` and `kind: profile`",
+                code,
+                format!("the {kind} is empty; it needs at least `format: 1` and `kind: {kind}`"),
             )
             .with_path("")
-            .with_help("a minimal profile is:\n  format: 1\n  kind: profile"),
+            .with_help(format!("a minimal {kind} is:\n  format: 1\n  kind: {kind}")),
         ]);
     };
     let Value::Object(map) = node_to_value(&root) else {
         return Err(vec![
             Diagnostic::new(
-                code::PROFILE_LOAD_FAILED,
-                format!("the profile must be a mapping (line {})", root.line),
+                code,
+                format!("the {kind} must be a mapping (line {})", root.line),
             )
             .with_path("")
-            .with_help("start the file with the top-level keys `format:` and `kind: profile`"),
+            .with_help(format!(
+                "start the file with the top-level keys `format:` and `kind: {kind}`"
+            )),
         ]);
     };
 
     let mut diagnostics = Vec::new();
-    let format = check_format(&map, &mut diagnostics);
-    check_kind(&map, &mut diagnostics);
+    let format = check_format(&map, kind, code, &mut diagnostics);
+    check_kind(&map, kind, code, &mut diagnostics);
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
@@ -102,13 +114,18 @@ pub(crate) fn open_profile(source: &str) -> Result<ProfileEnvelope, Vec<Diagnost
 /// The declared `format` version, or `None` (with a diagnostic pushed) if it is missing or not a
 /// non-negative integer. A version other than the engine's is *not* rejected here — it is returned
 /// for the engine's lenient migration to back-up-and-default on.
-fn check_format(map: &Map<String, Value>, diagnostics: &mut Vec<Diagnostic>) -> Option<u64> {
+fn check_format(
+    map: &Map<String, Value>,
+    kind: &str,
+    code: DiagnosticCode,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<u64> {
     match map.get("format") {
         None => {
             diagnostics.push(
                 Diagnostic::new(
-                    code::PROFILE_LOAD_FAILED,
-                    "the profile is missing the required key `format`",
+                    code,
+                    format!("the {kind} is missing the required key `format`"),
                 )
                 .with_path("")
                 .with_help("add `format: 1` as the first line"),
@@ -120,8 +137,8 @@ fn check_format(map: &Map<String, Value>, diagnostics: &mut Vec<Diagnostic>) -> 
             None => {
                 diagnostics.push(
                     Diagnostic::new(
-                        code::PROFILE_LOAD_FAILED,
-                        format!("the profile's `format` must be a non-negative integer, found {n}"),
+                        code,
+                        format!("the {kind}'s `format` must be a non-negative integer, found {n}"),
                     )
                     .with_path("/format")
                     .with_help("set `format: 1`"),
@@ -132,9 +149,9 @@ fn check_format(map: &Map<String, Value>, diagnostics: &mut Vec<Diagnostic>) -> 
         Some(other) => {
             diagnostics.push(
                 Diagnostic::new(
-                    code::PROFILE_LOAD_FAILED,
+                    code,
                     format!(
-                        "the profile's `format` must be an integer, found {}",
+                        "the {kind}'s `format` must be an integer, found {}",
                         value_phrase(other)
                     ),
                 )
@@ -146,37 +163,42 @@ fn check_format(map: &Map<String, Value>, diagnostics: &mut Vec<Diagnostic>) -> 
     }
 }
 
-fn check_kind(map: &Map<String, Value>, diagnostics: &mut Vec<Diagnostic>) {
+fn check_kind(
+    map: &Map<String, Value>,
+    kind: &str,
+    code: DiagnosticCode,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     match map.get("kind") {
         None => diagnostics.push(
             Diagnostic::new(
-                code::PROFILE_LOAD_FAILED,
-                "the profile is missing the required key `kind`",
+                code,
+                format!("the {kind} is missing the required key `kind`"),
             )
             .with_path("")
-            .with_help("add `kind: profile`"),
+            .with_help(format!("add `kind: {kind}`")),
         ),
-        Some(Value::String(found)) if found == PROFILE_KIND => {}
+        Some(Value::String(found)) if found == kind => {}
         Some(Value::String(found)) => diagnostics.push(
             Diagnostic::new(
-                code::PROFILE_LOAD_FAILED,
+                code,
                 format!(
-                    "this document declares `kind: {found}`, but a profile must be `kind: profile`"
+                    "this document declares `kind: {found}`, but a {kind} must be `kind: {kind}`"
                 ),
             )
             .with_path("/kind")
-            .with_help("set `kind: profile`"),
+            .with_help(format!("set `kind: {kind}`")),
         ),
         Some(other) => diagnostics.push(
             Diagnostic::new(
-                code::PROFILE_LOAD_FAILED,
+                code,
                 format!(
-                    "the profile's `kind` must be the string `profile`, found {}",
+                    "the {kind}'s `kind` must be the string `{kind}`, found {}",
                     value_phrase(other)
                 ),
             )
             .with_path("/kind")
-            .with_help("set `kind: profile`"),
+            .with_help(format!("set `kind: {kind}`")),
         ),
     }
 }

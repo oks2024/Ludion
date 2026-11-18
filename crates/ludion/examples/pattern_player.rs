@@ -110,7 +110,15 @@ fn count_hits(world: &mut World, ctx: &SystemCtx) {
                 continue;
             };
             for &(target, centre, radius) in &targets {
-                let hits = volley_hits(volley, origin, kind, ctx.game_time, plane, centre, radius);
+                let hits = volley_hits(
+                    volley,
+                    origin,
+                    kind,
+                    ctx.game_instant,
+                    plane,
+                    centre,
+                    radius,
+                );
                 landed.extend(hits.map(|bullet| (id, target, bullet)));
             }
         }

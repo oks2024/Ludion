@@ -124,8 +124,11 @@ model and pivot rule; the canvas coordinate model, `UiRect` and `UiText` themsel
   previous item, `Key::Down`/`GamepadButton::DpadDown` to the next, and `Key::Enter`/`Key::Space`/
   `GamepadButton::South` activates the item under the cursor. It reads **discrete edges only**
   (`was_pressed`, never `is_held`) — one press is one step, and a held direction does not repeat. A
-  game wanting different keys builds a `UiNav { prev, next, activate }` by hand; the fields are
-  public for exactly that.
+  game wanting different keys builds a `UiNav { prev, next, activate }` by hand (the fields are
+  public), or defines the reserved actions `ui_prev`, `ui_next`, `ui_activate` and `ui_back` in its
+  input map and calls `UiNav::from_actions(&actions, input)`: each field reads its action's `pressed`,
+  and a field whose action is undefined keeps the `from_input` default. `ui_back` has no field; read
+  it with `actions.pressed(ActionName::new("ui_back"))`, so a rebind reaches every menu.
 - **`next`/`prev` wrap at the ends and skip disabled items.** Stepping past the last item lands on
   the first and vice versa; an item with `enabled: false` is never a stepping destination. A list
   whose items are all disabled keeps its cursor exactly where it was and `navigate` never returns

@@ -342,6 +342,69 @@ pub fn scene_layer_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// Every `L1690`/`L1692` a checked scene's `SurfaceTag`s report: a surface the scene's
+/// `physics.surfaces` does not declare (with the nearest declared name), and a tag on an entity
+/// with neither a solver-claimed `Collider` nor a `CharacterMotor`, where no hit could report it.
+/// An empty name is the component validator's (`L1691`). A scene with no `physics:` block declares
+/// nothing, so any non-empty tag is unknown.
+pub fn scene_surface_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let declared: Vec<&str> = scene
+        .physics
+        .as_ref()
+        .map(|physics| physics.surfaces.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let mut diagnostics = Vec::new();
+    for (index, entity) in scene.entities.iter().enumerate() {
+        let component = |wanted: &str| {
+            entity
+                .components
+                .iter()
+                .find(|(name, _)| name == wanted)
+                .map(|(_, value)| value)
+        };
+        let Some(tag) = component("SurfaceTag") else {
+            continue;
+        };
+        let at = format!("/entities/{index}/components/SurfaceTag");
+        let claimed = component("CharacterMotor").is_some()
+            || component("Collider")
+                .and_then(|value| {
+                    serde_json::from_value::<ludion_spatial::Collider>(value.clone()).ok()
+                })
+                .as_ref()
+                .is_some_and(ludion_physics::claims);
+        if !claimed {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SURFACE_TAG_UNCLAIMED,
+                    "this `SurfaceTag` has no solver-claimed `Collider` or `CharacterMotor` beside \
+                     it, so no hit can report its surface",
+                )
+                .with_path(at.clone())
+                .with_help("add a 3D `Collider` or a `CharacterMotor`, or remove `SurfaceTag`"),
+            );
+        }
+        let Some(name) = tag.get("surface").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !name.is_empty() && !declared.contains(&name) {
+            let help = match suggest::nearest(name, declared.iter().copied()) {
+                Some(candidate) => format!("nearest match is `{candidate}`"),
+                None => "declare it under `physics.surfaces`".to_string(),
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SURFACE_UNKNOWN,
+                    format!("surface `{name}` is not declared under `physics.surfaces`"),
+                )
+                .with_path(format!("{at}/surface"))
+                .with_help(help),
+            );
+        }
+    }
+    diagnostics
+}
+
 /// The `L1186`/`L1500`/`L1501` of an entity's `QueryLayers`: an entry the scene does not declare, an
 /// entry naming the entity's own body layer (a query already sees it), and the component on an
 /// entity with neither a claimed `Collider` nor a `CharacterMotor`. Empty and repeated entries are
@@ -544,9 +607,9 @@ pub fn scene_motor_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     diagnostics
 }
 
-/// Every `L1307`/`L1308`/`L1309` a checked scene's camera rigs report: a `CameraRig` on an
+/// Every `L1307`/`L1308`/`L1309`/`L1554` a checked scene's camera rigs report: a `CameraRig` on an
 /// entity with no `Camera`, a second rig (the pointer is at the second, the message names both
-/// entities) and a rig on an entity with a `Parent`. The field rules (`L1304`) are reported
+/// entities), a rig on an entity with a `Parent` and a `CameraZone` with no sensor collider. The field rules (`L1304`) are reported
 /// elsewhere.
 pub fn scene_camera_rig_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -590,6 +653,28 @@ pub fn scene_camera_rig_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                 )
                 .with_path(format!("{at}/Parent"))
                 .with_help("make the camera a root"),
+            );
+        }
+    }
+    for (index, entity) in scene.entities.iter().enumerate() {
+        let has = |wanted: &str| entity.components.iter().any(|(name, _)| name == wanted);
+        if !has("CameraZone") {
+            continue;
+        }
+        let sensor = entity
+            .components
+            .iter()
+            .find(|(name, _)| name == "Collider")
+            .is_some_and(|(_, value)| value.get("sensor").and_then(|v| v.as_bool()) == Some(true));
+        if !sensor {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::CAMERA_ZONE_WITHOUT_SENSOR,
+                    "this `CameraZone` has no `Collider` with `sensor: true`, so no target can \
+                     enter it",
+                )
+                .with_path(format!("/entities/{index}/components/CameraZone"))
+                .with_help("add a `Collider` with `sensor: true` and the zone's shape"),
             );
         }
     }
@@ -783,6 +868,131 @@ pub fn scene_local_light_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
                 .with_path(format!("/entities/{index}/components/{name}/{field}"))
                 .with_help(
                     "set `cast_shadows: true`, or remove `shadow_distance` and `shadow_fade`",
+                ),
+            );
+        }
+    }
+    diagnostics
+}
+
+/// What a scene's `LightExposure` subjects get wrong: `L4251` (a warning) for each light on a
+/// `presentation: true` entity, which is drawn but never counted; `L4252` (a warning) for an
+/// `occluder_layers` that names no layer any 3D-claimed collider carries, through `Collider.layer`
+/// (`default` when absent) or `QueryLayers`; and the `L1186` for an undeclared name. Silent for a
+/// scene with no `LightExposure`.
+pub fn scene_light_exposure_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let component = |entity: &ludion_scene::SceneEntity, wanted: &str| {
+        entity
+            .components
+            .iter()
+            .find(|(name, _)| name == wanted)
+            .map(|(_, value)| value.clone())
+    };
+    let subjects: Vec<(usize, Vec<String>)> = scene
+        .entities
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entity)| {
+            let value = component(entity, "LightExposure")?;
+            let layers = value
+                .get("occluder_layers")
+                .and_then(serde_json::Value::as_array)
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter_map(|n| n.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some((index, layers))
+        })
+        .collect();
+    if subjects.is_empty() {
+        return Vec::new();
+    }
+    let mut diagnostics = Vec::new();
+    for (index, entity) in scene.entities.iter().enumerate() {
+        if !entity.presentation {
+            continue;
+        }
+        for name in ["PointLight", "SpotLight", "DirectionalLight"] {
+            if component(entity, name).is_some() {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::LIGHT_EXPOSURE_PRESENTATION_LIGHT,
+                        format!(
+                            "this `{name}` is on a `presentation: true` entity: it is drawn but \
+                             never counts toward exposure"
+                        ),
+                    )
+                    .with_path(format!("/entities/{index}/components/{name}"))
+                    .with_help(
+                        "drop `presentation: true` if the light should count, or add a sim-side \
+                         light for what should",
+                    ),
+                );
+            }
+        }
+    }
+    let matrix = scene.physics.as_ref().map(|physics| physics.layer_matrix());
+    let declared: Vec<&str> = match &matrix {
+        Some(matrix) => matrix.names().iter().map(String::as_str).collect(),
+        None => vec![ludion_scene::DEFAULT_LAYER],
+    };
+    let mut carried: Vec<String> = Vec::new();
+    for entity in &scene.entities {
+        let Some(collider) = component(entity, "Collider")
+            .and_then(|v| serde_json::from_value::<ludion_spatial::Collider>(v).ok())
+            .filter(ludion_physics::claims)
+        else {
+            continue;
+        };
+        carried.push(
+            collider
+                .layer
+                .clone()
+                .unwrap_or_else(|| ludion_scene::DEFAULT_LAYER.to_owned()),
+        );
+        if let Some(extra) = component(entity, "QueryLayers")
+            .as_ref()
+            .and_then(|v| v.get("layers"))
+            .and_then(serde_json::Value::as_array)
+        {
+            carried.extend(extra.iter().filter_map(|n| n.as_str().map(str::to_owned)));
+        }
+    }
+    for (index, layers) in subjects {
+        if layers.is_empty() {
+            continue;
+        }
+        let at = format!("/entities/{index}/components/LightExposure/occluder_layers");
+        for (j, name) in layers.iter().enumerate() {
+            if !name.is_empty() && !declared.contains(&name.as_str()) {
+                diagnostics.push(unknown_layer(
+                    name,
+                    &declared,
+                    format!("{at}/{j}"),
+                    "light occluder",
+                ));
+            }
+        }
+        if !layers.iter().any(|name| carried.contains(name)) {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::LIGHT_EXPOSURE_OCCLUDERS_UNMATCHED,
+                    format!(
+                        "no 3D collider in this scene is on {}: nothing can occlude this \
+                         subject's lights",
+                        layers
+                            .iter()
+                            .map(|n| format!("`{n}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+                .with_path(at)
+                .with_help(
+                    "set `Collider.layer` or `QueryLayers` on the occluders, or correct the names",
                 ),
             );
         }
@@ -1095,6 +1305,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     let mut diagnostics = scene_atlas_diagnostics(project_root, scene);
     diagnostics.extend(scene_font_diagnostics(project_root, scene));
     diagnostics.extend(scene_layer_diagnostics(scene));
+    diagnostics.extend(scene_surface_diagnostics(scene));
     diagnostics.extend(scene_sensor_diagnostics(scene));
     diagnostics.extend(scene_hierarchy_body_diagnostics(scene));
     diagnostics.extend(scene_physics_diagnostics(scene));
@@ -1104,6 +1315,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_camera_offset_diagnostics(scene));
     diagnostics.extend(scene_sun_diagnostics(scene));
     diagnostics.extend(scene_local_light_diagnostics(scene));
+    diagnostics.extend(scene_light_exposure_diagnostics(scene));
     diagnostics.extend(scene_lens_and_sun_disc_diagnostics(scene));
     diagnostics.extend(scene_preload_diagnostics(project_root, scene));
     // The mesh-asset pass reports a missing skinned mesh at its entity; the skin-bone and
@@ -1449,6 +1661,56 @@ entities:
         assert!(scene_layer_diagnostics(&query_layers_scene(motor, &["default"])).is_empty());
     }
 
+    const SURFACES: &str =
+        "physics:\n  space: free\n  surfaces:\n    - concrete\n    - metal_grate\n";
+
+    /// A checked scene with `SURFACES` and the entities in `body`, then `SurfaceTag` pushed onto
+    /// entity 0 by hand (the component is registered with the engine's registry separately).
+    fn surface_scene(body: &str, surface: &str) -> Scene {
+        let mut scene = ludion_scene::check(
+            &format!("format: 1\nseed: 1\n{SURFACES}{body}"),
+            &crate::builtin_registry(),
+        )
+        .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"));
+        scene.entities[0].components.push((
+            "SurfaceTag".to_string(),
+            serde_json::json!({ "surface": surface }),
+        ));
+        scene
+    }
+
+    #[test]
+    fn surface_tags_report_unknown_and_unclaimed() {
+        let body = "entities:\n  - name: part\n    components: {}\n";
+        let found = scene_surface_diagnostics(&surface_scene(body, "metal_grat"));
+        let codes: Vec<_> = found.iter().map(|d| d.code).collect();
+        assert_eq!(
+            codes,
+            [code::SURFACE_TAG_UNCLAIMED, code::SURFACE_UNKNOWN],
+            "{found:?}"
+        );
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/SurfaceTag")
+        );
+        assert_eq!(
+            found[1].path.as_deref(),
+            Some("/entities/0/components/SurfaceTag/surface")
+        );
+        assert_eq!(
+            found[1].help.as_deref(),
+            Some("nearest match is `metal_grate`")
+        );
+    }
+
+    #[test]
+    fn a_declared_surface_beside_a_collider_or_motor_is_clean() {
+        let body = collider("sphere:\n            radius: 0.5", "static", "default");
+        assert!(scene_surface_diagnostics(&surface_scene(&body, "concrete")).is_empty());
+        let motor = "entities:\n  - name: hero\n    components:\n      CharacterMotor: {}\n";
+        assert!(scene_surface_diagnostics(&surface_scene(motor, "metal_grate")).is_empty());
+    }
+
     fn motor_scene(physics: &str, components: &str) -> Scene {
         let source = format!(
             "format: 1\nseed: 1\n{physics}entities:\n  - name: hero\n    components:\n{components}  - name: base\n    components: {{}}\n"
@@ -1693,6 +1955,65 @@ entities:
         );
     }
 
+    /// A checked scene with `LAYERS`: a subject whose `LightExposure` has `exposure`, a static box
+    /// on `layer`, and `extra` entities.
+    fn exposure_scene(exposure: &str, layer: &str, extra: &str) -> Scene {
+        let source = format!(
+            "format: 1\nseed: 1\n{LAYERS}entities:\n  - name: subject\n    components:\n      \
+             LightExposure:\n{exposure}  - name: box\n    components:\n      Collider:\n        \
+             shape:\n          box:\n            half_extents:\n              - 1.0\n              \
+             - 1.0\n              - 1.0\n        body: static\n        layer: {layer}\n{extra}"
+        );
+        ludion_scene::check(&source, &crate::builtin_registry())
+            .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"))
+    }
+
+    #[test]
+    fn light_exposure_warns_about_presentation_lights_and_unmatched_layers() {
+        let layers = "        occluder_layers:\n          - dummy\n";
+        let codes = |scene: &Scene| -> Vec<_> {
+            scene_light_exposure_diagnostics(scene)
+                .iter()
+                .map(|d| d.code)
+                .collect()
+        };
+        assert!(codes(&exposure_scene(layers, "dummy", "")).is_empty());
+        let no_layers = "        combine: max\n";
+        assert!(codes(&exposure_scene(no_layers, "default", "")).is_empty());
+        let unmatched = scene_light_exposure_diagnostics(&exposure_scene(layers, "default", ""));
+        assert_eq!(unmatched.len(), 1, "{unmatched:?}");
+        assert_eq!(unmatched[0].code, code::LIGHT_EXPOSURE_OCCLUDERS_UNMATCHED);
+        assert_eq!(
+            unmatched[0].path.as_deref(),
+            Some("/entities/0/components/LightExposure/occluder_layers")
+        );
+        let typo = "        occluder_layers:\n          - dummi\n";
+        assert_eq!(
+            codes(&exposure_scene(typo, "dummy", "")),
+            [
+                code::COLLIDER_LAYER_UNKNOWN,
+                code::LIGHT_EXPOSURE_OCCLUDERS_UNMATCHED
+            ]
+        );
+        let lamp =
+            "  - name: glow\n    presentation: true\n    components:\n      PointLight: {}\n";
+        let presented = scene_light_exposure_diagnostics(&exposure_scene(layers, "dummy", lamp));
+        assert_eq!(presented.len(), 1, "{presented:?}");
+        assert_eq!(presented[0].code, code::LIGHT_EXPOSURE_PRESENTATION_LIGHT);
+        assert_eq!(
+            presented[0].path.as_deref(),
+            Some("/entities/2/components/PointLight")
+        );
+    }
+
+    #[test]
+    fn a_scene_without_light_exposure_has_no_light_exposure_diagnostics() {
+        let lamp = "format: 1\nentities:\n  - presentation: true\n    components:\n      \
+                    PointLight: {}\n";
+        let scene = ludion_scene::check(lamp, &crate::builtin_registry()).expect("fixture");
+        assert!(scene_light_exposure_diagnostics(&scene).is_empty());
+    }
+
     fn local_scene(component: &str, light: &str) -> Scene {
         let source = format!("format: 1\nentities:\n  - components:\n      {component}:\n{light}");
         ludion_scene::check(&source, &crate::builtin_registry())
@@ -1815,6 +2136,52 @@ entities:
 ",
         );
         assert!(scene_camera_rig_diagnostics(&scene).is_empty());
+    }
+
+    #[test]
+    fn a_zone_without_a_sensor_is_l1554() {
+        let scene = rig_scene(
+            "  - name: bare
+    components:
+      CameraZone: {}
+  - name: solid
+    components:
+      CameraZone: {}
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 1.0
+              - 1.0
+              - 1.0
+  - name: ok
+    components:
+      CameraZone: {}
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 1.0
+              - 1.0
+              - 1.0
+        sensor: true
+",
+        );
+        let found = scene_camera_rig_diagnostics(&scene);
+        assert_eq!(found.len(), 2);
+        assert!(
+            found
+                .iter()
+                .all(|d| d.code == code::CAMERA_ZONE_WITHOUT_SENSOR)
+        );
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/CameraZone")
+        );
+        assert_eq!(
+            found[1].path.as_deref(),
+            Some("/entities/1/components/CameraZone")
+        );
     }
 
     #[test]

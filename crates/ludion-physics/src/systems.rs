@@ -15,9 +15,10 @@ use crate::PhysicsPose;
 use crate::layer_set::{LayerSet, QueryLayers};
 use crate::meshes::ColliderMeshes;
 use crate::motor::{
-    CharacterMotor, CharacterMotorState, check, check_postures, motor_in_force, motor_invalid,
-    posture_unknown,
+    CharacterMotor, CharacterMotorState, check_in_force, check_postures, in_force, lying_centre,
+    lying_rotation, motor_invalid, posture_unknown, yaw_of,
 };
+use crate::surface_tag::{SurfaceTable, SurfaceTag};
 use crate::world::{DEFAULT_GRAVITY, MeshInput, PhysicsWorld, ShapeRejection, mesh_hash_of};
 use ludion_spatial::ParentPose;
 
@@ -147,6 +148,8 @@ pub struct PhysicsSettings {
     /// The declared collision layers, or `None` for a scene declaring none: every collider then
     /// keeps the solver's default groups and only `default` (or no `layer`) is a valid layer name.
     pub layers: Option<CollisionLayers>,
+    /// The declared surfaces, or `None` for a scene declaring none: hits then report no surface.
+    pub surfaces: Option<SurfaceTable>,
 }
 
 impl PhysicsSettings {
@@ -159,6 +162,7 @@ impl PhysicsSettings {
             stabilization_iterations: DEFAULT_STABILIZATION_ITERATIONS,
             sleep_after_ticks: DEFAULT_SLEEP_AFTER_TICKS,
             layers: None,
+            surfaces: None,
         }
     }
 }
@@ -339,6 +343,8 @@ struct WriteInputs {
     ranks: Vec<(EntityId, u64)>,
     /// Every entity's `QueryLayers`, entity-sorted: the query-only side table.
     query_layers: Vec<(EntityId, LayerSet)>,
+    /// Every entity's `SurfaceTag` name, entity-sorted: the surface side table.
+    surface_tags: Vec<(EntityId, String)>,
     motor_rejections: Vec<(EntityId, DiagnosticCode, String)>,
     velocities: Vec<(EntityId, Velocity)>,
     plane: Option<Plane>,
@@ -363,6 +369,7 @@ impl PartialEq for WriteInputs {
         self.teleports == other.teleports
             && self.ranks == other.ranks
             && self.query_layers == other.query_layers
+            && self.surface_tags == other.surface_tags
             && self.live.len() == other.live.len()
             && self.live.iter().zip(&other.live).all(|(a, b)| {
                 (a.0, a.1, a.2, &a.3) == (b.0, b.1, b.2, &b.3) && mesh_input_eq(&a.4, &b.4)
@@ -496,7 +503,7 @@ fn gather<P: PhysicsPose, R: ParentPose>(
                 live.push((
                     row.entity,
                     row.centre,
-                    [0.0, 0.0, 0.0, 1.0],
+                    row.rotation,
                     stale.then_some(collider),
                     Ok(None),
                 ));
@@ -544,6 +551,11 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         .map(|(entity, (query,))| (entity, query.layers.clone()))
         .collect();
     query_layers.sort_unstable_by_key(|(entity, _)| *entity);
+    let mut surface_tags: Vec<(EntityId, String)> = world
+        .query_ids::<(&SurfaceTag,)>()
+        .map(|(entity, (tag,))| (entity, tag.surface.clone()))
+        .collect();
+    surface_tags.sort_unstable_by_key(|(entity, _)| *entity);
     let colliders = if physics.is_none() {
         live.iter()
             .filter_map(|(entity, ..)| match world.get::<Collider>(*entity) {
@@ -559,6 +571,7 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         live,
         ranks,
         query_layers,
+        surface_tags,
         motor_rejections,
         velocities,
         plane,
@@ -664,6 +677,7 @@ fn write<P: PhysicsPose, R: ParentPose>(
     physics.set_ranks(&inputs.ranks);
     physics.apply_settings(settings);
     physics.set_query_layers(&inputs.query_layers);
+    physics.set_surface_tags(&inputs.surface_tags);
     physics.last_write_frame = Some(ctx.frame.as_u64());
     physics.last_write_held = held;
     apply(world, &mut physics, &inputs);
@@ -719,6 +733,7 @@ pub fn prime<P: PhysicsPose, R: ParentPose>(
     physics.set_ranks(&inputs.ranks);
     physics.apply_settings(&settings);
     physics.set_query_layers(&inputs.query_layers);
+    physics.set_surface_tags(&inputs.surface_tags);
     physics.last_write_frame = Some(frame.as_u64());
     physics.last_write_held = world.resource::<GameClock>().map(|clock| clock.held());
     apply(world, &mut physics, &inputs);
@@ -736,6 +751,8 @@ pub fn prime<P: PhysicsPose, R: ParentPose>(
 struct MotorRow {
     entity: EntityId,
     centre: [f32; 3],
+    /// The body's rotation: identity for an upright capsule, the yawed lying one otherwise.
+    rotation: [f32; 4],
     collider: Result<Collider, String>,
     /// Parked by `suspend_character`: the row gets no body.
     suspended: bool,
@@ -746,29 +763,47 @@ struct MotorRow {
 /// Every `CharacterMotor` with a pose, ascending by entity. The pose is the **feet**; the body
 /// centre sits half the height in force above it.
 fn motor_rows<P: PhysicsPose>(world: &mut World) -> Vec<MotorRow> {
-    let motors: Vec<(EntityId, CharacterMotor, [f32; 3])> = world
+    let motors: Vec<(EntityId, CharacterMotor, [f32; 3], [f32; 4])> = world
         .query_ids::<(&CharacterMotor, &P)>()
-        .map(|(entity, (motor, pose))| (entity, motor.clone(), pose.translation()))
+        .map(|(entity, (motor, pose))| {
+            (
+                entity,
+                motor.clone(),
+                pose.translation(),
+                pose.rotation_quat(),
+            )
+        })
         .collect();
     motors
         .into_iter()
-        .map(|(entity, motor, feet)| {
+        .map(|(entity, motor, feet, rotation)| {
             let state = world.get::<CharacterMotorState>(entity).ok().flatten();
-            let overridden = motor_in_force(&motor, state);
-            let height = overridden.height;
-            let collider = match check(&overridden)
+            let force = in_force(&motor, state);
+            let height = force.motor.height;
+            let collider = match check_in_force(&force)
                 .map_err(|(pointer, reason)| (pointer.to_string(), reason))
                 .and_then(|()| check_postures(&motor))
             {
-                Ok(()) => Ok(overridden.solver_collider(height)),
+                Ok(()) => Ok(force.solver_collider()),
                 Err((pointer, reason)) => Err(motor_invalid(&reason, &pointer).message),
+            };
+            let (centre, rotation) = match &force.lying {
+                Some(lying) => {
+                    let yaw = yaw_of(rotation);
+                    (lying_centre(lying, feet, yaw), lying_rotation(yaw))
+                }
+                None => (
+                    [feet[0], feet[1] + height / 2.0, feet[2]],
+                    [0.0, 0.0, 0.0, 1.0],
+                ),
             };
             let posture_fallback = posture_unknown(&motor, state)
                 .then(|| state.and_then(|state| state.posture.clone()))
                 .flatten();
             MotorRow {
                 entity,
-                centre: [feet[0], feet[1] + height / 2.0, feet[2]],
+                centre,
+                rotation,
                 collider,
                 suspended: state.is_some_and(|state| state.suspended),
                 posture_fallback,

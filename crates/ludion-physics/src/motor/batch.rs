@@ -94,13 +94,14 @@ pub fn move_characters<P: PhysicsPose, R: ParentPose>(
             for slot in chunk {
                 let prepared = &slot.prepared;
                 slot.outcome = Some(
-                    Solver::new(world, physics, slot.entity, &prepared.checked).solve(
-                        prepared.feet,
-                        prepared.displacement,
-                        prepared.was_grounded,
-                        None,
-                        prepared.carry.as_ref(),
-                    ),
+                    Solver::new(world, physics, slot.entity, &prepared.checked, prepared.yaw)
+                        .solve(
+                            prepared.feet,
+                            prepared.displacement,
+                            prepared.was_grounded,
+                            None,
+                            prepared.carry.as_ref(),
+                        ),
                 );
             }
         });

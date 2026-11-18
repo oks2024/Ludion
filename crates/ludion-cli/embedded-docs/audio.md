@@ -253,6 +253,7 @@ fn game() -> EngineBuilder {
 ## Next
 
 - `ludion docs audio-mix` — runtime bus gain, settings sliders, pause menus.
+- `ludion docs settings` — the player's saved volumes, quality, anti-aliasing and window mode.
 - `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs verify-loop` — the `cargo test` verification loop.
 - `ludion docs running` — hosting a scene and observing it.

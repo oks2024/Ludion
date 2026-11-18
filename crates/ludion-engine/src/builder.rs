@@ -105,6 +105,7 @@ pub struct EngineBuilder {
     project_root: PathBuf,
     save_root: Option<PathBuf>,
     profile_persistence: bool,
+    settings_persistence: bool,
     profile_off_disk: bool,
     run_save: bool,
     checkpoints: Option<crate::CheckpointConfig>,
@@ -156,6 +157,7 @@ impl EngineBuilder {
             project_root: PathBuf::from("."),
             save_root: None,
             profile_persistence: false,
+            settings_persistence: false,
             profile_off_disk: false,
             run_save: false,
             checkpoints: None,
@@ -224,6 +226,26 @@ impl EngineBuilder {
     #[must_use]
     pub fn persist_profile(mut self) -> Self {
         self.profile_persistence = true;
+        self
+    }
+
+    /// Enables the per-machine player settings file (default off): `<save_root>/save/settings.yaml` is
+    /// read at build (leniently; a file that cannot be honored is backed up and defaulted, `L4340`),
+    /// and [`Settings::save`](crate::Settings::save) writes it at the frame boundary. Without it the
+    /// file is never read or written and a [`Settings`](crate::Settings) request only applies to the
+    /// session, so a test or replay never touches the machine's real file.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::Engine;
+    ///
+    /// let dir = std::env::temp_dir().join("ludion-persist-settings-doc");
+    /// let engine = Engine::builder().save_root(&dir).persist_settings().build().unwrap();
+    /// assert!(engine.boot_warnings().is_empty());
+    /// ```
+    #[must_use]
+    pub fn persist_settings(mut self) -> Self {
+        self.settings_persistence = true;
         self
     }
 
@@ -1270,6 +1292,7 @@ impl EngineBuilder {
         // Before `install_profile`: the boot load decides on it whether an unloadable save is renamed.
         engine.profile_persistence = self.profile_persistence;
         engine.profile_off_disk = self.profile_off_disk;
+        engine.settings_persistence = self.settings_persistence;
         engine.category_gains = self.category_gains;
         engine.audio_distance = self.audio_distance;
         engine.audio_pan = self.audio_pan;
@@ -1308,6 +1331,7 @@ impl EngineBuilder {
         // After `install_docs`: it compiles the action map from the doc store that call fills.
         engine.install_input_actions();
         engine.sweep_profile_debris();
+        engine.load_settings();
         // Load the registered profile into the same initial world (or default it). Never fails the
         // build — an unloadable save is backed up and defaulted, reported via `profile_migration`.
         engine.install_profile();
@@ -1617,6 +1641,8 @@ mod tests {
             stabilization_iterations: None,
             sleep_after_ticks: None,
             layers: Vec::new(),
+            surfaces: Vec::new(),
+            default_surface: None,
         };
         let schedule = engine.build_schedule(Some(&physics));
         let order: Vec<&str> = schedule.system_names().collect();

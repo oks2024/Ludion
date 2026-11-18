@@ -163,8 +163,8 @@ you take by hand (the file is the pattern's only truth; there is no wire method 
           let doc = world.resource::<DocStore<PatternDoc>>().unwrap().get(&volley.pattern).unwrap();
           let kind = doc.bullets[&volley.bullet].clone();
           for index in 0..volley.count {
-              if bullet_is_alive(&volley, &kind, index, ctx.game_time) {
-                  let at = bullet_position(&volley, &origin, &kind, index, ctx.game_time, plane);
+              if bullet_is_alive(&volley, &kind, index, ctx.game_instant) {
+                  let at = bullet_position(&volley, &origin, &kind, index, ctx.game_instant, plane);
                   // spawn a score item / an FX burst at `at` ([f32; 3], no `glam` needed)
               }
           }
@@ -173,9 +173,9 @@ you take by hand (the file is the pattern's only truth; there is no wire method 
   }
   ```
 - **Every evaluator reads gameplay time, and `started` is a gameplay frame.** `bullet_age`,
-  `bullet_is_alive`, `bullet_position` and `volley_hits` take `ctx.game_time`, never `ctx.time`;
+  `bullet_is_alive`, `bullet_position` and `volley_hits` take `ctx.game_instant`, never `ctx.time`;
   `started` (on `PatternPlayer` and on a fired `Volley`) comes from `ctx.game_frame`, never `ctx.frame`. A game holding its `GameClock` freezes the whole field:
-  `play_patterns` returns on `!ctx.game_advanced()`, so a hold neither re-fires a timeline entry nor
+  `play_patterns` returns on `game_frames_crossed() == 0`, so a hold neither re-fires a timeline entry nor
   skips one whose frame passed while frozen (`ludion docs game-clock`).
 - **Opt in through `.patterns()`.** `Engine::builder().patterns()` registers `PatternDoc` under
   `kind: pattern` and its validator — the same `doc_kind`/`validate_docs` mechanism any game data-doc

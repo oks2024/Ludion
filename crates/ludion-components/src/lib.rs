@@ -36,7 +36,9 @@ use ludion_spatial::{
     Velocity, WorldPosition,
 };
 
+pub mod animation_layers;
 pub mod lane;
+pub mod light_exposure;
 pub mod nav_route;
 pub mod path_follow;
 pub mod patrol;
@@ -46,14 +48,19 @@ pub mod prefab;
 pub mod ui;
 pub mod validators;
 
+pub use animation_layers::{
+    AnimationLayer, AnimationLayers, LayerMode, fade_layer, layer_weight, layer_weight_at,
+    play_layer,
+};
 pub use lane::{LaneConstraint, LaneEnds};
+pub use light_exposure::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
 pub use nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
 pub use path_follow::{PathFollower, PathMode, PathOrient};
 pub use patrol::{PatrolFollower, PatrolPhase, PatrolResume, PatrolState};
 pub use patterns::{PatternPlayer, VOLLEY_MAX_BULLETS, Volley, VolleyShape};
 pub use perception::{
-    Look, PERCEPTION_MAX_PARTS, Perceiver, Require, SightPoint, SightTarget, SightZone, SweepShape,
-    ZoneSweep,
+    Look, PERCEIVER_MEMORY_MAX_RECORDS, PERCEPTION_MAX_PARTS, Perceiver, PerceiverMemory, Require,
+    Sense, SightPoint, SightTarget, SightZone, StimulusRecord, SweepShape, ZoneSweep,
 };
 pub use prefab::PrefabInstance;
 pub use ui::{
@@ -6137,6 +6144,27 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<SightTarget>("SightTarget")
         .expect("unique");
+    // The light-exposure subject, appended after `SightTarget`: read by `light_exposure_update`.
+    registry
+        .register_validated::<LightExposure>("LightExposure")
+        .expect("unique");
+    // The memory record, appended after `LightExposure`: one entity per remembered stimulus, written by `perception_update`.
+    registry
+        .register_validated::<StimulusRecord>("StimulusRecord")
+        .expect("unique");
+    // The camera zone, appended after `StimulusRecord`: a sensor volume that swaps the rig's config;
+    // validated through its embedded `RigConfig`.
+    registry
+        .register_validated::<ludion_camera::CameraZone>("CameraZone")
+        .expect("unique");
+    // The animation layer stack, appended last: presentation-only, composed by `extract`.
+    registry
+        .register_validated::<AnimationLayers>("AnimationLayers")
+        .expect("unique");
+    // The surface tag, appended after `AnimationLayers`: read by physics hits, never the solver.
+    registry
+        .register_validated::<ludion_physics::SurfaceTag>("SurfaceTag")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -6145,7 +6173,7 @@ pub fn builtin_registry() -> Registry {
 }
 
 /// The built-ins whose engine-owned consumer is a sim-phase system.
-const SIM_ONLY_COMPONENTS: [&str; 22] = [
+const SIM_ONLY_COMPONENTS: [&str; 25] = [
     "Collider",
     "Velocity",
     "Joint",
@@ -6168,6 +6196,9 @@ const SIM_ONLY_COMPONENTS: [&str; 22] = [
     "PatrolState",
     "Perceiver",
     "SightTarget",
+    "LightExposure",
+    "StimulusRecord",
+    "SurfaceTag",
 ];
 
 #[cfg(test)]
@@ -6208,6 +6239,9 @@ mod tests {
             "PatrolState",
             "Perceiver",
             "SightTarget",
+            "LightExposure",
+            "StimulusRecord",
+            "SurfaceTag",
         ];
         expected.sort_unstable();
         assert_eq!(marked, expected);
@@ -6610,12 +6644,17 @@ mod tests {
                 "PatrolState",
                 "Perceiver",
                 "SightTarget",
+                "LightExposure",
+                "StimulusRecord",
+                "CameraZone",
+                "AnimationLayers",
+                "SurfaceTag",
             ]
         );
         assert_eq!(
             registry.len(),
-            62,
-            "appending SightTarget grows the registry to 62"
+            67,
+            "appending SurfaceTag grows the registry to 67"
         );
     }
 
@@ -10291,9 +10330,11 @@ entities:
                 "CameraRig",
                 vec![
                     "/rig/mode/track/path".into(),
+                    "/state/base/mode/track/path".into(),
                     "/state/last_applied/mode/track/path".into(),
                 ],
             ),
+            ("CameraZone", vec!["/rig/mode/track/path".into()]),
             ("PatternPlayer", vec!["/pattern".into()]),
             ("Volley", vec!["/pattern".into()]),
             (

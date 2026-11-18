@@ -1,17 +1,17 @@
 ---
-description: Guard sight: Perceiver zones, SightTarget sample points, batched line of sight, PerceptionResults
+description: Guard sight and memory: Perceiver zones, SightTarget points, line of sight, StimulusRecord ghosts
 ---
 
-# Perception (sight)
+# Perception (sight and memory)
 
 **Scope:** who sees whom each tick: `Perceiver` zones, `SightTarget` sample points, and the
-`PerceptionResults` a game's AI reads. Cover and layers are `ludion docs collision-layers`; the
+`PerceptionResults` a game's AI reads, and the `StimulusRecord` a perceiver keeps of what it sensed. Cover and layers are `ludion docs collision-layers`; the
 guard's route is `ludion docs patrol`.
 
 ## The loop
 
 1. `Engine::builder().perception(PerceptionConfig { classes: vec!["player".into()] })`: the class names (at most 32). `build` refuses a bad list with `L4220`.
-2. Schedule `.system("perception_update", perception_update)` **after whatever moves perceivers and targets**, and declare its queries: `.query::<(&Perceiver,)>().query::<(&SightTarget,)>()`.
+2. Schedule `.system("perception_update", perception_update)` **after whatever moves perceivers and targets**, and declare its queries: `.query::<(&Perceiver,)>().query::<(&SightTarget,)>().query::<(&StimulusRecord,)>()`.
 3. Read `world.resource::<PerceptionResults>()`: `sight(perceiver)` (a slice), `samples()`, `zone_facing(perceiver, zone)`.
 4. `ludion check-scene` validates both components; `ludion explain L1570` for a refusal.
 
@@ -54,6 +54,7 @@ components:
 | `look` | `yaw_deg`, `pitch_deg` from the entity's rotation | `0, 0` |
 | `sight` | 1 to 8 zones | required |
 | `sweep` | `amplitude_deg`, `period_s`, `dwell_s`, `phase_s`, `shape` (`ping_pong_linear` \| `sine`) added to every zone's yaw | none |
+| `memory` | keeps `StimulusRecord`s, see Memory | none |
 
 | `sight[]` field | Meaning | Default |
 | --- | --- | --- |
@@ -93,6 +94,39 @@ components:
 - **Sweep** is a closed form of gameplay time: `ping_pong_linear` runs −amplitude to +amplitude, dwells, returns, dwells (`period_s > 2 * dwell_s`); `sine` needs `dwell_s: 0`.
 - **Codes.** `L1570` bad `Perceiver`; `L1571` bad `SightTarget`; `L4220` bad config; `L1572` (warning, once per name) an undeclared class or layer: the zone detects nothing of that class, a point with an unknown `blocked_by` layer is never seen, an unknown `see_through` layer is dropped.
 
+## Memory
+
+```yaml
+components:
+  Perceiver:
+    sight:
+      - range: 12.0
+        half_angle_deg: 60.0
+    memory:
+      forget_sight_s: 12.0
+      forget_hearing_s: 8.0
+      max_records: 8
+```
+
+A perceiver with `memory` keeps one `StimulusRecord` **entity** per `(perceiver, sense, source)`. `perception_update` refreshes the sight record every tick the target is `visible`; a game feeds hearing or a custom sense with `report_stimulus(world, ctx, perceiver, Stimulus { sense, source, at, strength })`. Read them with `stimuli(world, perceiver)` (sorted `(sense, source)`); `forget(world, perceiver, source)` and `forget_all` drop them. Without `memory` nothing spawns and a world hashes as before.
+
+| `StimulusRecord` field | Meaning |
+| --- | --- |
+| `perceiver`, `source` | marked entity refs; `source` is none for an anonymous stimulus |
+| `sense` | `sight`, `hearing` or `{ custom: n }` |
+| `last_position`, `last_direction` | where it was last sensed; the unit move since the previous sighting (sight only, else unchanged; `[0,0,0]` at creation) |
+| `first_sensed_tick`, `last_sensed_tick` | gameplay ticks |
+| `sensed_now` | true iff `last_sensed_tick` is this tick |
+| `strength`, `zone` | `1.0` for sight; the lowest zone that saw it |
+
+**Ghost recipe:** search where a source was last seen by reading `last_position` of a record with `sensed_now: false`.
+
+- **Forgetting.** A record goes when `now - last_sensed_tick >= ticks(forget_s)` (`forget_sight_s` for sight, `forget_hearing_s` for hearing and custom; at least 1 tick). Ticks are gameplay time, so a held `GameClock` never forgets: the deadline moves by the hold's length.
+- **Eviction.** Above `max_records` (1 to 64), the least recently sensed goes, ties by `(sense, source)`, anonymous first.
+- Anonymous stimuli merge per `(perceiver, sense)`. Records are despawned with their perceiver, in the next update.
+- Records are hashed and snapshotted like any entity, so a restore rejoins the uninterrupted run.
+- `L1573` bad `memory` (or a non-finite record); `L1574` (warning, once per cause) `report_stimulus` dropped a stimulus: dead perceiver, no `memory`, or a non-finite `at` or `strength`.
+
 ## Cover recipe
 
 Declare layers `wall`, `cover_low`, `cover_high`, `cover_overhead` under `physics.layers` and put props on them. One target per posture, each with a point at its height:
@@ -110,7 +144,8 @@ Low cover hides crouch and prone from a ray that passes through it; high cover h
 - **An empty `blocked_by` means nothing can block the point:** no ray is cast and it is seen through walls. (An include-less physics filter would hit everything; the engine never builds one.)
 - A world with no `PhysicsWorld` (no colliders) casts no rays: every in-wedge point is seen.
 - A facing never `look`s: the zone follows the entity's rotation, so a body that never turns sees only along its start direction.
-- Results are not hashed or snapshotted; a restored world fills them on the next tick.
+- Results are not hashed or snapshotted; a restored world fills them on the next tick. Records are, because they are entities.
+- Records are runtime entities: `scene.save` of a *running* world writes them like any spawned entity. A dead source keeps its record until it ages out.
 - A perceiver never sees itself: a target equal to the perceiver is skipped.
 
 ## Next

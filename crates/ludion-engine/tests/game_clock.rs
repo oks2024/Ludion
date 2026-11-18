@@ -18,11 +18,12 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ludion_core::time::{GameClock, SimTime, TickRate};
+use ludion_core::time::{GameClock, Q16_PER_TICK, SimTime, TickRate};
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
-    BulletKind, DocStore, Engine, EngineBuilder, PatternDoc, QualityParams, Transform, Volley,
-    advance_volleys, bullet_is_alive, bullet_position, extract_at, play_patterns,
+    Animation, AnimationEvents, BulletKind, DocStore, Engine, EngineBuilder, Mesh, PatternDoc,
+    PrefabInstance, QualityParams, Sprite, Transform, Volley, advance_volleys, animation_events,
+    bullet_is_alive, bullet_position, extract_at, play_patterns,
 };
 use ludion_protocol::command::{EngineRestoreParams, SimStepParams};
 use ludion_protocol::{Command, ResponseBody};
@@ -485,6 +486,293 @@ fn a_scaled_snapshot_round_trips() {
     let mut unscaled = playing(&dir, false);
     advance(&mut unscaled, 30);
     assert!(snapshot_of(&mut unscaled).get("game_clock").is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// --- Closed forms under a scale ----------------------------------------------------------------
+
+/// One-part assembly playing a one-shot `swing` with a mid-clip `hit` event.
+const ASSEMBLY: &str = "\
+format: 1
+kind: assembly
+name: fixture
+size:
+  - 1
+  - 1
+  - 1
+palette:
+  A:
+    color:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 1.0
+parts:
+  - name: body
+    file: parts/body.part.yaml
+    place:
+      - 0
+      - 0
+      - 0
+clips:
+  swing: anims/swing.anim.yaml
+";
+
+const SWING: &str = "\
+format: 1
+kind: animation
+name: swing
+duration: 0.5
+loop: false
+events:
+  - t: 0.0
+    name: swing
+  - t: 0.25
+    name: hit
+tracks:
+  body:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 90.0
+          - 0.0
+          - 0.0
+";
+
+/// The turret and a swinging assembly, plus a plume whose particles are born and die only on
+/// multiples of ten ticks (rate 6/s, a fixed two-second life), so no birth or death falls inside
+/// a single tick of the mid-ramp check.
+const SCALED_SCENE: &str = "\
+format: 1
+seed: 5
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.0
+          - 8.0
+      Camera: {}
+  - name: turret
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      PatternPlayer:
+        pattern: patterns/storm.yaml
+        started: 0
+  - name: plume
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 0.0
+          - 0.0
+      ParticleEmitter:
+        rate: 6.0
+        life:
+          - 2.0
+          - 2.0
+        speed:
+          - 0.5
+          - 1.5
+        spread_deg: 40.0
+        gravity: 0.0
+        start_size: 0.3
+        end_size: 0.8
+        seed: 11
+  - name: swinger
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape:
+          assembly: models/fixture.assembly.yaml
+      Animation:
+        clip: swing
+";
+
+#[derive(Default)]
+struct EventLog(Vec<String>);
+
+fn record_events(world: &mut World, _ctx: &SystemCtx) {
+    let fired: Vec<String> = world
+        .resource::<AnimationEvents>()
+        .map(|events| events.iter().map(|e| e.name.clone()).collect())
+        .unwrap_or_default();
+    if world.resource::<EventLog>().is_none() {
+        world.insert_resource(EventLog::default());
+    }
+    world.resource_mut::<EventLog>().unwrap().0.extend(fired);
+}
+
+fn quarter_speed(world: &mut World, _ctx: &SystemCtx) {
+    world.resource_mut::<GameClock>().unwrap().scale(0.25);
+}
+
+fn scaled_game(dir: &Path, scaled: bool) -> Engine {
+    let mut builder = Engine::builder().patterns();
+    if scaled {
+        builder = builder.system("quarter_speed", quarter_speed);
+    }
+    let mut engine = builder
+        .system("play_patterns", play_patterns)
+        .system("advance_volleys", advance_volleys)
+        .system("animation_events", animation_events)
+        .query::<(&Animation, &Mesh)>()
+        .query::<(&Animation, &Sprite)>()
+        .query::<(&Animation, &PrefabInstance)>()
+        .system("record_events", record_events)
+        .project_root(dir)
+        .build()
+        .expect("the documents validate");
+    for (rel, text) in [
+        ("models/fixture.assembly.yaml", ASSEMBLY),
+        ("models/anims/swing.anim.yaml", SWING),
+        (
+            "models/parts/body.part.yaml",
+            "format: 1\nkind: part\nsize:\n  - 1\n  - 1\n  - 1\nslices:\n  -\n    - \"A\"\n",
+        ),
+    ] {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    engine
+        .load_inline_scene(SCALED_SCENE)
+        .expect("the scene loads");
+    engine
+}
+
+fn instant_q16(engine: &Engine) -> u64 {
+    let now = SimTime::from_ticks(engine.frame().as_u64(), TICK);
+    engine
+        .world()
+        .resource::<GameClock>()
+        .unwrap()
+        .game_instant(now)
+        .as_q16()
+}
+
+fn events_of(engine: &Engine) -> Vec<String> {
+    engine
+        .world()
+        .resource::<EventLog>()
+        .map(|log| log.0.clone())
+        .unwrap_or_default()
+}
+
+/// Steps one tick at a time until gameplay time reads `target_q16` exactly.
+fn advance_to_instant(engine: &mut Engine, target_q16: u64) {
+    for _ in 0..4000 {
+        if instant_q16(engine) == target_q16 {
+            return;
+        }
+        advance(engine, 1);
+        assert!(
+            instant_q16(engine) <= target_q16,
+            "gameplay time overshot {target_q16}"
+        );
+    }
+    panic!("gameplay time never reached {target_q16}");
+}
+
+/// A run at scale 0.25 and an unscaled run meet at the same gameplay time with the identical
+/// picture (particles, bullets, the clip pose), the same volleys and the same events, each
+/// fired once — and in between, a particle moves a fraction of a tick, not in whole-frame jumps.
+#[test]
+fn a_quarter_speed_run_matches_an_unscaled_run_at_equal_gameplay_time() {
+    let dir = root("scaled_ab");
+    let target = 60 * Q16_PER_TICK;
+
+    let mut slow = scaled_game(&dir, true);
+    advance_to_instant(&mut slow, target);
+    assert!(
+        slow.frame().as_u64() >= 4 * 59,
+        "a quarter-speed run ticks about 4x as often"
+    );
+
+    let mut full = scaled_game(&dir, false);
+    advance_to_instant(&mut full, target);
+    assert_eq!(full.frame().as_u64(), 60);
+
+    let picture = drawn(&full);
+    assert!(
+        !picture.particles.is_empty() && !picture.meshes.is_empty(),
+        "the fixture draws particles and the assembly"
+    );
+    assert_eq!(
+        drawn(&slow),
+        picture,
+        "same particles, sprites and clip pose"
+    );
+
+    let expected = field(&full);
+    assert!(
+        expected.len() >= 8,
+        "the storm fired {} volleys",
+        expected.len()
+    );
+    assert_eq!(
+        field(&slow),
+        expected,
+        "the timeline fired once per gameplay frame"
+    );
+
+    let names = events_of(&full);
+    assert_eq!(
+        names,
+        ["swing", "hit", "end"],
+        "each event fires once, in order"
+    );
+    assert_eq!(events_of(&slow), names);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Half a gameplay frame into the slow run, every particle sits strictly between its positions on
+/// the two neighbouring whole gameplay frames of an unscaled run: the plume glides.
+#[test]
+fn a_scaled_plume_glides_between_whole_gameplay_frames() {
+    let dir = root("scaled_glide");
+    let base = 33;
+
+    let mut full = scaled_game(&dir, false);
+    advance_to_instant(&mut full, base * Q16_PER_TICK);
+    let before = drawn(&full).particles;
+    advance(&mut full, 1);
+    let after = drawn(&full).particles;
+
+    let mut slow = scaled_game(&dir, true);
+    advance_to_instant(&mut slow, base * Q16_PER_TICK + Q16_PER_TICK / 2);
+    let mid = drawn(&slow).particles;
+
+    assert!(!before.is_empty(), "the plume is live");
+    assert_eq!(before.len(), after.len());
+    assert_eq!(before.len(), mid.len());
+    for ((a, m), b) in before.iter().zip(&mid).zip(&after) {
+        let between = |lo: f32, v: f32, hi: f32| v > lo.min(hi) && v < lo.max(hi);
+        assert!(
+            between(a.center.x, m.center.x, b.center.x)
+                || between(a.center.z, m.center.z, b.center.z),
+            "{:?} not strictly between {:?} and {:?}",
+            m.center,
+            a.center,
+            b.center
+        );
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }

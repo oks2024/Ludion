@@ -24,7 +24,7 @@
 //! place are game code calling [`volley_hits`] and setting kill bits.
 //!
 //! **Every clock here is the gameplay one.** A timeline walks `ctx.game_frame`, a volley's
-//! `started` is a gameplay frame, and every evaluator takes `ctx.game_time` — so a game holding its
+//! `started` is a gameplay frame, and every evaluator takes `ctx.game_instant` — so a game holding its
 //! [`GameClock`](ludion_core::time::GameClock) freezes the whole field: no entry fires, no bullet
 //! moves, nothing expires, and what a system hit-tests is exactly what the frame draws. A game that
 //! never holds is unaffected, `game_*` being sim time exactly.
@@ -39,7 +39,7 @@ use ludion_core::math::glam::Vec3;
 use ludion_core::math::{atan2, cos, sin};
 use ludion_core::rng::DeterministicRng;
 use ludion_core::suggest;
-use ludion_core::time::{FrameIndex, SimTime, TickRate};
+use ludion_core::time::{FrameIndex, GameTime, Q16_PER_TICK, TickRate};
 use ludion_ecs::{SystemCtx, World};
 use ludion_spatial::Plane;
 use schemars::JsonSchema;
@@ -391,30 +391,31 @@ fn frames_seconds(frames: u32, rate: TickRate) -> f32 {
     (f64::from(frames) * rate.seconds_per_tick()) as f32
 }
 
-/// Whole ticks from `started` to `now`, or `None` before `started` — the exact integer a bullet's
-/// `life` is compared with, so a frame count never round-trips through seconds.
-fn ticks_since(now: SimTime, started: FrameIndex) -> Option<u64> {
-    now.ticks().checked_sub(started.as_u64())
+/// Q16 ticks from `started` to `now`, or `None` before `started` — the exact integer a bullet's
+/// `life` (in whole ticks, times [`Q16_PER_TICK`]) is compared with, so a frame count never
+/// round-trips through seconds.
+fn age_q16(now: GameTime, started: FrameIndex) -> Option<u64> {
+    now.as_q16()
+        .checked_sub(started.as_u64().saturating_mul(Q16_PER_TICK))
+}
+
+/// Whether a bullet of `life` ticks has outlived `age` (a Q16 age).
+fn expired(age: u64, life: u32) -> bool {
+    age >= u64::from(life) * Q16_PER_TICK
 }
 
 /// Signed seconds between `started` and `now` — [`crate::particles`]'s own helper, mirrored so the
 /// two evaluators measure age the same way.
-fn seconds_since(now: SimTime, started: FrameIndex) -> f64 {
-    let seconds_per_tick = now.rate().seconds_per_tick();
-    let (now_ticks, started_ticks) = (now.ticks(), started.as_u64());
-    if now_ticks >= started_ticks {
-        (now_ticks - started_ticks) as f64 * seconds_per_tick
-    } else {
-        -((started_ticks - now_ticks) as f64 * seconds_per_tick)
-    }
+fn seconds_since(now: GameTime, started: FrameIndex) -> f64 {
+    now.ticks_since(started) * now.rate().seconds_per_tick()
 }
 
 /// How long `volley` has been in flight at `game_now`, in seconds — **negative** before it fires.
 ///
-/// `game_now` is **gameplay** time: a system passes `ctx.game_time`, never `ctx.time`, so a bullet
+/// `game_now` is **gameplay** time: a system passes `ctx.game_instant`, never `ctx.time`, so a bullet
 /// stops ageing while the game is held (a volley's `started` is a gameplay frame too).
-pub fn bullet_age(volley: &Volley, game_now: SimTime) -> f32 {
-    seconds_since(game_now, volley.started) as f32
+pub fn bullet_age(volley: &Volley, game_now: impl Into<GameTime>) -> f32 {
+    seconds_since(game_now.into(), volley.started) as f32
 }
 
 /// The launch angle (radians, `0` along the plane's first axis) and speed of bullet `index`.
@@ -535,7 +536,7 @@ pub(crate) fn bullet_motion(
 
 /// Where bullet `index` of `volley` is at `game_now`, given the volley's captured `origin`.
 ///
-/// `game_now` is **gameplay** time: a system passes `ctx.game_time`, never `ctx.time`, so the
+/// `game_now` is **gameplay** time: a system passes `ctx.game_instant`, never `ctx.time`, so the
 /// position it computes is the one the frame draws — held or not. `origin` is the `Transform` the
 /// volley fired from, the plain-array idiom every other game-facing call uses (`volley_hits`,
 /// `spatial::overlaps`, `Transform.translation`) — a game never needs `glam` for this.
@@ -544,9 +545,10 @@ pub fn bullet_position(
     origin: &Transform,
     kind: &BulletKind,
     index: u32,
-    game_now: SimTime,
+    game_now: impl Into<GameTime>,
     plane: Plane,
 ) -> [f32; 3] {
+    let game_now = game_now.into();
     bullet_motion(
         volley,
         Vec3::from(origin.translation),
@@ -562,20 +564,25 @@ pub fn bullet_position(
 /// Whether bullet `index` is on the field at `game_now`: inside the volley's `count`, within its
 /// kind's `life`, not yet fired-in-the-future, and carrying no kill bit.
 ///
-/// `game_now` is **gameplay** time: a system passes `ctx.game_time`, never `ctx.time`, so a held
+/// `game_now` is **gameplay** time: a system passes `ctx.game_instant`, never `ctx.time`, so a held
 /// game's bullets neither expire nor appear.
-pub fn bullet_is_alive(volley: &Volley, kind: &BulletKind, index: u32, game_now: SimTime) -> bool {
+pub fn bullet_is_alive(
+    volley: &Volley,
+    kind: &BulletKind,
+    index: u32,
+    game_now: impl Into<GameTime>,
+) -> bool {
     if index >= volley.count || volley.is_killed(index) {
         return false;
     }
-    ticks_since(game_now, volley.started).is_some_and(|age| age < u64::from(kind.life))
+    age_q16(game_now.into(), volley.started).is_some_and(|age| !expired(age, kind.life))
 }
 
 /// Every live bullet of `volley` whose in-plane position at `game_now` lies within
 /// `radius + kind.hit_radius` of `centre` — the pure overlap query a game's hit systems run, and
 /// the one that must agree with what the frame draws (it evaluates the same `bullet_motion`).
 ///
-/// `game_now` is **gameplay** time: a system passes `ctx.game_time`, never `ctx.time`. Passing sim
+/// `game_now` is **gameplay** time: a system passes `ctx.game_instant`, never `ctx.time`. Passing sim
 /// time would hit-test a field the frozen frame is not drawing.
 ///
 /// `centre` is a point in the plane's own two axes, the pair
@@ -585,11 +592,12 @@ pub fn volley_hits(
     volley: &Volley,
     origin: &Transform,
     kind: &BulletKind,
-    game_now: SimTime,
+    game_now: impl Into<GameTime>,
     plane: Plane,
     centre: [f32; 2],
     radius: f32,
 ) -> impl Iterator<Item = u32> {
+    let game_now = game_now.into();
     let origin = Vec3::from(origin.translation);
     let age = bullet_age(volley, game_now);
     let axes = plane.axes();
@@ -714,7 +722,7 @@ pub(crate) fn report_unrun_patterns(world: &mut World, game_systems: bool) {
 /// neither re-fires an entry nor silently passes one whose frame went by while it was frozen.
 pub fn play_patterns(world: &mut World, ctx: &SystemCtx) {
     mark_ran(world, |ran| &mut ran.play);
-    if !ctx.game_advanced() {
+    if ctx.game_frames_crossed() == 0 {
         return;
     }
     let mut spawns: Vec<(Transform, Volley)> = Vec::new();
@@ -1009,8 +1017,8 @@ pub fn advance_volleys(world: &mut World, ctx: &SystemCtx) {
                 continue;
             };
             if volley.all_killed()
-                || ticks_since(ctx.game_time, volley.started)
-                    .is_some_and(|age| age >= u64::from(kind.life))
+                || age_q16(ctx.game_instant, volley.started)
+                    .is_some_and(|age| expired(age, kind.life))
             {
                 reap.push(id);
             }
@@ -1545,6 +1553,7 @@ fn validate_play<'a>(
 mod tests {
     use super::*;
     use crate::Engine;
+    use ludion_core::time::SimTime;
     use ludion_ecs::SemanticValidate;
     use std::path::{Path, PathBuf};
 
@@ -1878,6 +1887,61 @@ mod tests {
         let origin = Transform::default();
         let at = bullet_position(&volley, &origin, &kind, 0, now(60), Plane::Xz);
         assert!((at[0] - 6.0).abs() < 1e-4, "{at:?}");
+    }
+
+    #[test]
+    fn a_fractional_instant_lies_between_its_whole_tick_neighbours() {
+        const Q: u64 = ludion_core::time::Q16_PER_TICK;
+        let kind = BulletKind {
+            life: 100,
+            ..BulletKind::default()
+        };
+        let volley = ring(1, 0.0, 6.0);
+        let origin = Transform::default();
+        let pos = |g: GameTime| bullet_position(&volley, &origin, &kind, 0, g, Plane::Xz)[0];
+        let whole = |t: u64| GameTime::from_ticks(t, TICK);
+        let mid = GameTime::from_q16(10 * Q + Q / 2, TICK);
+        assert!(pos(whole(10)) < pos(mid) && pos(mid) < pos(whole(11)));
+        assert_eq!(
+            bullet_age(&volley, mid),
+            (10.5 * TICK.seconds_per_tick()) as f32
+        );
+    }
+
+    #[test]
+    fn integer_instants_match_the_whole_tick_calls_and_the_life_boundary() {
+        let kind = BulletKind {
+            life: 20,
+            ..BulletKind::default()
+        };
+        let volley = ring(3, 0.0, 2.0);
+        let origin = Transform::default();
+        for t in 0..40u64 {
+            let g = GameTime::from_ticks(t, TICK);
+            assert_eq!(
+                bullet_age(&volley, g).to_bits(),
+                bullet_age(&volley, at_frame(t)).to_bits()
+            );
+            assert_eq!(
+                bullet_position(&volley, &origin, &kind, 1, g, Plane::Xz),
+                bullet_position(&volley, &origin, &kind, 1, at_frame(t), Plane::Xz)
+            );
+            assert_eq!(bullet_is_alive(&volley, &kind, 0, g), t < 20, "tick {t}");
+        }
+        // The last Q16 before the boundary is alive, the boundary itself is not.
+        let q = ludion_core::time::Q16_PER_TICK;
+        assert!(bullet_is_alive(
+            &volley,
+            &kind,
+            0,
+            GameTime::from_q16(20 * q - 1, TICK)
+        ));
+        assert!(!bullet_is_alive(
+            &volley,
+            &kind,
+            0,
+            GameTime::from_q16(20 * q, TICK)
+        ));
     }
 
     // --- the components ---

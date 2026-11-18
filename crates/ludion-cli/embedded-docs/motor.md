@@ -19,7 +19,7 @@ The worked example is `games/character-course`: its `src/lib.rs` controller is t
 
 ## Format
 
-`CharacterMotor`, all lengths in metres. The origin is the **feet**: the capsule body's centre sits `height / 2` above the entity's translation, and the capsule never tilts or yaws with the model. The motor owns its kinematic capsule body; a `Collider` on the same entity is refused (L1295).
+`CharacterMotor`, all lengths in metres. The origin is the **feet**: the capsule body's centre sits `height / 2` above the entity's translation, and an upright capsule never tilts or yaws with the model (only a `lying` posture yaws, see §Postures). The motor owns its kinematic capsule body; a `Collider` on the same entity is refused (L1295).
 
 | field | default | Clockout 1 m preset | valid |
 | --- | --- | --- | --- |
@@ -65,8 +65,8 @@ A motor that ended its last call grounded on a `static` or `kinematic` support (
 | `MoveReport` field | a moveset reads it for |
 | --- | --- |
 | `grounded`, `landed` | walk or fall; `landed` = began airborne, ended grounded (the thud, the double-jump reset) |
-| `ground` (entity, point, normal, `walkable`, `distance`) | what it stands on; a steep floor is reported with `walkable: false` |
-| `ceiling`, `walls` | head bump (zero vertical speed); one wall per entity and plane, sorted by travel distance then entity |
+| `ground` (entity, point, normal, `walkable`, `distance`, `surface`) | what it stands on; a steep floor is reported with `walkable: false`; `surface` is the collider's `SurfaceTag` or the scene default (`ludion docs collision`) |
+| `ceiling`, `walls` | head bump (zero vertical speed); one wall per entity and plane, sorted by travel distance then entity; each `SurfaceHit` carries `surface` too |
 | `stepped` | the climb of this tick (above) |
 | `platform` (entity, translation, yaw, surface) | what carried it; default (no entity) when no carry ran or the move was stuck |
 | `moved`, `height`, `posture` | the feet's total movement incl. depenetration and carry; the capsule height used; the posture in force (`None` = the motor's own shape) |
@@ -95,9 +95,11 @@ CharacterMotor:
 ```
 
 - A posture is a named upright capsule plus optional tunable overrides. `CharacterMotorState.posture` names the one in force; `None` is the motor's own shape. `motor_in_force(motor, state)` returns the motor the solver, the write pass and the fit tests all use: the posture applied, then the `resize_character` height override on top.
+- **`lying`** is a horizontal capsule along the facing (local −Z) for prone and crawl: `shape: { lying: { length: 1.7, radius: 0.17, offset: 0.35 } }`. It yaws with the entity's `Transform` (the twist about +Y; never pitch or roll), its centre is `offset` ahead of the feet and a radius above them, and `offset` (default 0) must satisfy `|offset| <= length/2 - radius` so the feet stay under the axis. In `motor_in_force` its `radius` is the lying radius and `height` is `2 * radius`. Every query (moves, batches, ground probe, fits, the physics body) uses it; `step_height` must stay below `2 * radius`. Bad fields are L1294 at `/postures/<n>/shape/lying/{length,radius,offset}`.
 - Names are non-empty with no `/` or `~`. A bad posture is L1294 at its own pointer (`/postures/crouch/shape/upright/height`, `/postures/crouch/step_height`); a field it inherits from the motor is reported at `/postures/crouch` and says so.
-- `set_character_posture(world, hero, Some("crouch"))` → `PostureReport { posture, blocked_by }`. Checks in order: `NoMotor`, `NoPose`, `Suspended` (resume takes a posture), `UnknownPosture`, `InvalidMotor`. A posture taller or wider than the shape in force is fit-tested at the feet first: a blocker leaves everything unchanged and `blocked_by` names the lowest-id collider (last completed step, as for resize). Otherwise the posture is set and any height override cleared. `None` stands back up. Same posture again is a success.
-- `resize_character` works on top of a posture; the next posture change clears its override.
+- `set_character_posture(world, hero, Some("crouch"))` → `PostureReport { posture, blocked_by }`. Checks in order: `NoMotor`, `NoPose`, `Suspended` (resume takes a posture), `UnknownPosture`, `InvalidMotor`. A posture taller or wider than the shape in force, and any switch to, from or between `lying` postures (tested at the pose's yaw), is fit-tested at the feet first: a blocker leaves everything unchanged and `blocked_by` names the lowest-id collider (last completed step, as for resize). Otherwise the posture is set and any height override cleared. `None` stands back up. Same posture again is a success.
+- `resize_character` works on top of a posture; the next posture change clears its override. On a lying posture it is `InvalidHeight` (change posture instead); `fits_character` while lying asks whether an upright capsule of that height and the motor's radius fits (the stand-up test).
+- `turn_character(world, hero, yaw)` → `TurnReport { yaw, blocked_by }`. An upright motor turns at once. A lying one turns in steps of at most 15°, each destination fit-tested; the first blocked step stops it, `yaw` is what was written and `blocked_by` names the blocker (rigid props block too). `NoMotor`, `NoPose`, `Suspended`, non-finite yaw, then `NoPhysicsWorld` when a test is needed.
 - `MoveReport.posture` says which posture the move used. A `CharacterMotorState.posture` naming an undeclared posture is L1540 in check-scene and L4170 at runtime (once per entity); the motor runs its base shape.
 
 ```rust
@@ -107,6 +109,8 @@ if let Ok(report) = set_character_posture(world, hero, want) {
     if report.blocked_by.is_some() { /* still crouched under the ceiling */ }
 }
 ```
+
+Prone and crawl recipe: while the key is held, `set_character_posture(world, hero, Some("prone"))`, a `blocked_by` goes in the prompt; `move_character` along the facing crawls (the lying body's tip never overlaps a wall: it slides like the upright one); turn with `turn_character`, never a raw `Transform` yaw write; on release `set_character_posture(world, hero, None)` and retry each tick while `blocked_by` is `Some`.
 
 ## Suspend and resume
 
@@ -167,6 +171,7 @@ Category `motor` (`DebugCategories::parse("motor")`), drawn only by `ludion_engi
 
 ## Gotchas
 
+- **A raw `Transform` yaw write while lying is a move**, untested: depenetration resolves the overlap next tick. Use `turn_character`; props block a lying turn, and a thin collider can slip between two 15° steps.
 - **Registered after physics:** a motor system registered after the engine's physics systems stamps reports with the wrong frame; register it before.
 - **A moveset that sums `stepped` per call** under-counts a slow climb; sum across ticks.
 - **Not modelled:** carry from `rigid` supports, surface velocity on dynamic bodies, curved belts (straight segments only), airborne step-up, platform pitch and roll (only yaw carries).

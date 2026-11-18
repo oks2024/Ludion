@@ -13,10 +13,17 @@
 //! through [`PhysicsWorld::first_hits`], so the result is the same at any thread count. Results are
 //! derived state: not hashed, not snapshotted. Transforms are current; line of sight reads the last
 //! completed physics step.
+//!
+//! A perceiver with `memory` also keeps one [`StimulusRecord`] entity per `(perceiver, sense,
+//! source)`: sight refreshes it every tick the target is visible, [`report_stimulus`] refreshes it for
+//! hearing and custom senses, and it is forgotten after `forget_*_s` of gameplay time. Records are
+//! ordinary entities, so they are hashed and snapshotted.
 
 use std::collections::BTreeMap;
 
-use ludion_components::{Perceiver, Require, SightTarget, SweepShape, ZoneSweep};
+use ludion_components::{
+    Perceiver, PerceiverMemory, Require, Sense, SightTarget, StimulusRecord, SweepShape, ZoneSweep,
+};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
@@ -169,7 +176,8 @@ impl PerceptionResults {
     }
 }
 
-/// Rebuilds [`PerceptionResults`] from every enabled [`Perceiver`] and [`SightTarget`]. A no-op in a
+/// Rebuilds [`PerceptionResults`] from every enabled [`Perceiver`] and [`SightTarget`], then refreshes
+/// and ages the [`StimulusRecord`]s of every perceiver with `memory`. A no-op in a
 /// game that configured no perception. A zone's `detects` names and a target's `class` must be in
 /// the [`PerceptionConfig`], and `blocked_by` / `see_through` names must be declared physics layers;
 /// otherwise `L1572` is reported once per name and the zone or point detects or sees nothing.
@@ -308,10 +316,402 @@ pub fn perception_update(world: &mut World, ctx: &SystemCtx) {
         results.samples = frame.finish(drafts);
     }
     results.facings.sort_by_key(|(e, z, _)| (*e, *z));
+    update_memory(
+        world,
+        ctx.game_frame.as_u64(),
+        ctx.game_time.rate().hz(),
+        &results.samples,
+    );
     world.insert_resource(results);
     for (key, diagnostic) in reports {
         report_full(world, key, diagnostic);
     }
+}
+
+/// A stimulus a game reports to a perceiver's memory: hearing, or a custom sense.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Sense, Stimulus};
+///
+/// let noise = Stimulus { sense: Sense::Hearing, source: None, at: [4.0, 0.0, -2.0], strength: 0.5 };
+/// assert_eq!(noise.sense, Sense::Hearing);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stimulus {
+    /// The channel.
+    pub sense: Sense,
+    /// What made it; `None` for an anonymous one, which merges per `(perceiver, sense)`.
+    pub source: Option<EntityId>,
+    /// Where it came from, world metres (finite).
+    pub at: [f32; 3],
+    /// How strong it was (finite).
+    pub strength: f32,
+}
+
+/// `(perceiver, sense, source)`: the identity of one memory record. `None` sorts first.
+type RecordKey = (EntityId, Sense, Option<EntityId>);
+
+/// A record as stored, and as it will be after the tick's pass.
+struct Slot {
+    entity: Option<EntityId>,
+    before: Option<StimulusRecord>,
+    record: StimulusRecord,
+}
+
+/// Seconds to whole ticks at `hz`, rounding up with slack for the `f32` representation error (the
+/// rule `ludion-ai`'s timers use): `0.3` s at 60 Hz is 18 ticks, not 19.
+fn seconds_to_ticks(seconds: f32, hz: u32) -> u64 {
+    let x = f64::from(seconds.max(0.0)) * f64::from(hz);
+    (x - x * 1e-6).ceil() as u64
+}
+
+/// Ticks of silence after which a record of `sense` is forgotten; at least 1, so a record sensed this
+/// tick is never forgotten on it.
+fn forget_ticks(memory: &PerceiverMemory, sense: Sense, hz: u32) -> u64 {
+    let seconds = match sense {
+        Sense::Sight => memory.forget_sight_s,
+        Sense::Hearing | Sense::Custom(_) => memory.forget_hearing_s,
+    };
+    seconds_to_ticks(seconds, hz).max(1)
+}
+
+/// The keys of the records to evict so `records` fits `max`: least recently sensed first, ties by
+/// `(sense, source)` ascending.
+fn evictions(records: &[(RecordKey, u64)], max: usize) -> Vec<RecordKey> {
+    let mut order: Vec<&(RecordKey, u64)> = records.iter().collect();
+    order.sort_by_key(|((_, sense, source), last)| (*last, *sense, *source));
+    order
+        .into_iter()
+        .take(records.len().saturating_sub(max))
+        .map(|(key, _)| *key)
+        .collect()
+}
+
+/// The memory pass of [`perception_update`]: orphans despawn, visible targets refresh or create
+/// their sight record, `sensed_now` follows `last_sensed_tick`, aged records are forgotten, each
+/// perceiver is trimmed to `max_records`, and new records spawn in key order. A world with no memory
+/// and no records is not touched.
+fn update_memory(world: &mut World, now: u64, hz: u32, samples: &[SightSample]) {
+    let memories: BTreeMap<EntityId, PerceiverMemory> = world
+        .query_ids::<(&Perceiver,)>()
+        .filter_map(|(id, (p,))| p.memory.map(|m| (id, m)))
+        .collect();
+    let mut stored: Vec<(EntityId, StimulusRecord)> = world
+        .query_ids::<(&StimulusRecord,)>()
+        .map(|(id, (r,))| (id, r.clone()))
+        .collect();
+    if memories.is_empty() && stored.is_empty() {
+        return;
+    }
+    stored.sort_by_key(|(id, _)| *id);
+
+    let mut doomed: Vec<EntityId> = Vec::new();
+    let mut slots: BTreeMap<RecordKey, Slot> = BTreeMap::new();
+    for (entity, record) in stored {
+        let key = (record.perceiver, record.sense, record.source);
+        if !memories.contains_key(&record.perceiver) || slots.contains_key(&key) {
+            doomed.push(entity);
+            continue;
+        }
+        slots.insert(
+            key,
+            Slot {
+                entity: Some(entity),
+                before: Some(record.clone()),
+                record,
+            },
+        );
+    }
+
+    // Samples sort by (perceiver, zone, target), so the first visible one of a pair has the lowest zone.
+    let mut seen: BTreeMap<(EntityId, EntityId), u8> = BTreeMap::new();
+    for sample in samples
+        .iter()
+        .filter(|s| s.visible && memories.contains_key(&s.perceiver))
+    {
+        seen.entry((sample.perceiver, sample.target))
+            .or_insert(sample.zone);
+    }
+    for ((perceiver, target), zone) in seen {
+        let Some(at) = pose(world, target).map(|p| p.origin) else {
+            continue;
+        };
+        let slot = slots
+            .entry((perceiver, Sense::Sight, Some(target)))
+            .or_insert_with(|| Slot {
+                entity: None,
+                before: None,
+                record: StimulusRecord {
+                    perceiver,
+                    source: Some(target),
+                    sense: Sense::Sight,
+                    last_position: at,
+                    last_direction: [0.0; 3],
+                    first_sensed_tick: now,
+                    last_sensed_tick: now,
+                    sensed_now: true,
+                    strength: 1.0,
+                    zone,
+                },
+            });
+        let record = &mut slot.record;
+        let moved = sub(at, record.last_position);
+        let distance = length(moved);
+        if distance > 1e-4 {
+            record.last_direction = [
+                moved[0] / distance,
+                moved[1] / distance,
+                moved[2] / distance,
+            ];
+        }
+        record.last_position = at;
+        record.last_sensed_tick = now;
+        record.strength = 1.0;
+        record.zone = zone;
+    }
+
+    for slot in slots.values_mut() {
+        slot.record.sensed_now = slot.record.last_sensed_tick == now;
+    }
+    slots.retain(|(perceiver, sense, _), slot| {
+        let age = now.saturating_sub(slot.record.last_sensed_tick);
+        let forgotten = age >= forget_ticks(&memories[perceiver], *sense, hz);
+        if forgotten && let Some(entity) = slot.entity {
+            doomed.push(entity);
+        }
+        !forgotten
+    });
+
+    let listed: Vec<(RecordKey, u64)> = slots
+        .iter()
+        .map(|(key, slot)| (*key, slot.record.last_sensed_tick))
+        .collect();
+    for group in listed.chunk_by(|a, b| a.0.0 == b.0.0) {
+        let max = memories[&group[0].0.0].max_records as usize;
+        for key in evictions(group, max) {
+            if let Some(Slot {
+                entity: Some(entity),
+                ..
+            }) = slots.remove(&key)
+            {
+                doomed.push(entity);
+            }
+        }
+    }
+
+    doomed.sort();
+    let _ = world.despawn_many(&doomed);
+    for slot in slots.into_values() {
+        match slot.entity {
+            Some(entity) if slot.before.as_ref() != Some(&slot.record) => {
+                if let Ok(Some(stored)) = world.get_mut::<StimulusRecord>(entity) {
+                    *stored = slot.record;
+                }
+            }
+            Some(_) => {}
+            None => {
+                let entity = world.spawn();
+                let _ = world.insert(entity, slot.record);
+            }
+        }
+    }
+}
+
+/// Refreshes or creates `perceiver`'s record of `stimulus` now, so a game can feed hearing or a
+/// custom sense (sight feeds itself). The record is keyed `(perceiver, sense, source)`; an anonymous
+/// stimulus (`source: None`) merges per `(perceiver, sense)`. It sets `sensed_now`, `last_position`,
+/// `strength` and `last_sensed_tick`, leaves `last_direction` alone, and trims the perceiver to its
+/// `max_records`. A dead perceiver, one with no `memory`, or a non-finite `at` or `strength` drops the
+/// stimulus and reports `L1574` once per cause.
+///
+/// # Example
+/// ```
+/// use ludion_components::{Perceiver, PerceiverMemory, Sense, SightZone};
+/// use ludion_core::time::{FrameIndex, TickRate};
+/// use ludion_ecs::{SystemCtx, World};
+/// use ludion_engine::{Stimulus, report_stimulus, stimuli};
+///
+/// let mut world = World::new();
+/// let guard = world.spawn();
+/// let zone = SightZone {
+///     name: String::new(), range: 5.0, half_angle_deg: 60.0, vertical_half_angle_deg: 45.0,
+///     detects: vec![], see_through: Default::default(), see_through_max_range: 0.0,
+///     range_by_visibility: false, visibility_clamp: None,
+/// };
+/// let perceiver = Perceiver {
+///     enabled: true, eye: [0.0; 3], look: Default::default(), sight: vec![zone], sweep: None,
+///     memory: Some(PerceiverMemory::default()),
+/// };
+/// world.insert(guard, perceiver).unwrap();
+///
+/// let ctx = SystemCtx::new(FrameIndex::new(30), TickRate::DEFAULT);
+/// let bang = Stimulus { sense: Sense::Hearing, source: None, at: [3.0, 0.0, 1.0], strength: 1.0 };
+/// report_stimulus(&mut world, &ctx, guard, bang);
+/// let heard = stimuli(&mut world, guard);
+/// assert_eq!(heard.len(), 1);
+/// assert!(heard[0].1.sensed_now && heard[0].1.last_position == [3.0, 0.0, 1.0]);
+/// ```
+pub fn report_stimulus(
+    world: &mut World,
+    ctx: &SystemCtx,
+    perceiver: EntityId,
+    stimulus: Stimulus,
+) {
+    let cause = if !world.is_alive(perceiver) {
+        Some(("dead", format!("perceiver {perceiver:?} is not alive")))
+    } else if stimulus.at.iter().any(|c| !c.is_finite()) || !stimulus.strength.is_finite() {
+        Some((
+            "not_finite",
+            "the stimulus `at` or `strength` is not finite".to_string(),
+        ))
+    } else {
+        None
+    };
+    let memory = world
+        .get::<Perceiver>(perceiver)
+        .ok()
+        .flatten()
+        .and_then(|p| p.memory);
+    let cause = cause.or_else(|| {
+        memory.is_none().then(|| {
+            (
+                "no_memory",
+                format!("perceiver {perceiver:?} has no `Perceiver` with `memory`"),
+            )
+        })
+    });
+    if let Some((key, message)) = cause {
+        let diagnostic = Diagnostic::new(
+            code::STIMULUS_REPORT_INVALID,
+            format!("`report_stimulus` dropped a stimulus: {message}"),
+        )
+        .with_help(
+            "give the perceiver `memory:` and pass finite numbers; see `ludion docs perception`",
+        );
+        report_full(world, format!("stimulus:{key}"), diagnostic);
+        return;
+    }
+    let Some(memory) = memory else { return };
+    let now = ctx.game_frame.as_u64();
+    let mine: Vec<(EntityId, StimulusRecord)> = world
+        .query_ids::<(&StimulusRecord,)>()
+        .filter(|(_, (r,))| r.perceiver == perceiver)
+        .map(|(id, (r,))| (id, r.clone()))
+        .collect();
+    let existing = mine
+        .iter()
+        .filter(|(_, r)| r.sense == stimulus.sense && r.source == stimulus.source)
+        .map(|(id, _)| *id)
+        .min();
+    let mut listed: Vec<(RecordKey, u64)> = mine
+        .iter()
+        .map(|(_, r)| ((r.perceiver, r.sense, r.source), r.last_sensed_tick))
+        .collect();
+    let key = (perceiver, stimulus.sense, stimulus.source);
+    match existing {
+        Some(entity) => {
+            if let Ok(Some(record)) = world.get_mut::<StimulusRecord>(entity) {
+                record.last_position = stimulus.at;
+                record.last_sensed_tick = now;
+                record.sensed_now = true;
+                record.strength = stimulus.strength;
+            }
+            listed.retain(|(k, _)| *k != key);
+        }
+        None => {
+            let entity = world.spawn();
+            let _ = world.insert(
+                entity,
+                StimulusRecord {
+                    perceiver,
+                    source: stimulus.source,
+                    sense: stimulus.sense,
+                    last_position: stimulus.at,
+                    last_direction: [0.0; 3],
+                    first_sensed_tick: now,
+                    last_sensed_tick: now,
+                    sensed_now: true,
+                    strength: stimulus.strength,
+                    zone: 0,
+                },
+            );
+        }
+    }
+    listed.push((key, now));
+    let doomed: Vec<EntityId> = evictions(&listed, memory.max_records as usize)
+        .into_iter()
+        .filter_map(|evicted| {
+            world
+                .query_ids::<(&StimulusRecord,)>()
+                .find(|(_, (r,))| (r.perceiver, r.sense, r.source) == evicted)
+                .map(|(id, _)| id)
+        })
+        .collect();
+    let _ = world.despawn_many(&doomed);
+}
+
+/// `perceiver`'s remembered records with their entities, sorted by `(sense, source)` (`None` first).
+/// Read `last_position` of one whose `sensed_now` is `false` to search where it was last sensed.
+///
+/// # Example
+/// ```
+/// use ludion_ecs::World;
+/// use ludion_engine::stimuli;
+///
+/// let mut world = World::new();
+/// let nobody = world.spawn();
+/// assert!(stimuli(&mut world, nobody).is_empty());
+/// ```
+pub fn stimuli(world: &mut World, perceiver: EntityId) -> Vec<(EntityId, StimulusRecord)> {
+    let mut found: Vec<(EntityId, StimulusRecord)> = world
+        .query_ids::<(&StimulusRecord,)>()
+        .filter(|(_, (r,))| r.perceiver == perceiver)
+        .map(|(id, (r,))| (id, r.clone()))
+        .collect();
+    found.sort_by_key(|(id, r)| (r.sense, r.source, *id));
+    found
+}
+
+/// Forgets every record `perceiver` holds of `source` (`None` is the anonymous ones), across senses.
+///
+/// # Example
+/// ```
+/// use ludion_ecs::World;
+/// use ludion_engine::{forget, stimuli};
+///
+/// let mut world = World::new();
+/// let guard = world.spawn();
+/// forget(&mut world, guard, None);
+/// assert!(stimuli(&mut world, guard).is_empty());
+/// ```
+pub fn forget(world: &mut World, perceiver: EntityId, source: Option<EntityId>) {
+    let doomed: Vec<EntityId> = stimuli(world, perceiver)
+        .into_iter()
+        .filter(|(_, r)| r.source == source)
+        .map(|(id, _)| id)
+        .collect();
+    let _ = world.despawn_many(&doomed);
+}
+
+/// Forgets everything `perceiver` remembers.
+///
+/// # Example
+/// ```
+/// use ludion_ecs::World;
+/// use ludion_engine::{forget_all, stimuli};
+///
+/// let mut world = World::new();
+/// let guard = world.spawn();
+/// forget_all(&mut world, guard);
+/// assert!(stimuli(&mut world, guard).is_empty());
+/// ```
+pub fn forget_all(world: &mut World, perceiver: EntityId) {
+    let doomed: Vec<EntityId> = stimuli(world, perceiver)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    let _ = world.despawn_many(&doomed);
 }
 
 /// One sample under construction.

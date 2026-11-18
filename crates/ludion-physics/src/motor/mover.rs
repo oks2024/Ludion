@@ -12,9 +12,12 @@ use ludion_spatial::ParentPose;
 use rapier3d::prelude::{BoundingVolume, SharedShape};
 
 use super::carry::{rigid_carry, rotate, rotate_yaw};
-use super::component::{CharacterMotor, CharacterMotorState, PlatformPose, check, motor_in_force};
+use super::component::{
+    CharacterMotor, CharacterMotorState, PlatformPose, check_in_force, in_force,
+};
 use super::gather::Gather;
 use super::report::{GroundHit, GroundProbe, MotorError, MoveReport, PlatformCarry, SurfaceHit};
+use super::shape::{InForce, forward, lying_rotation, yaw_of};
 use super::surface::SurfaceVelocity;
 use super::sweep::{Capsule, Contact};
 use crate::pose::PhysicsPose;
@@ -158,7 +161,7 @@ pub fn move_character_with<P: PhysicsPose, R: ParentPose>(
         let physics = world
             .resource::<PhysicsWorld>()
             .ok_or(MotorError::NoPhysicsWorld)?;
-        let solver = Solver::new(&*world, physics, entity, &prepared.checked);
+        let solver = Solver::new(&*world, physics, entity, &prepared.checked, prepared.yaw);
         let outcome = solver.solve(
             prepared.feet,
             displacement,
@@ -182,7 +185,9 @@ pub fn move_character_with<P: PhysicsPose, R: ParentPose>(
 pub(super) struct Prepared {
     pub(super) feet: [f32; 3],
     pub(super) displacement: [f32; 3],
-    pub(super) checked: CharacterMotor,
+    pub(super) checked: InForce,
+    /// The pose's yaw; read only for a lying posture, else `0`.
+    pub(super) yaw: f32,
     pub(super) was_grounded: bool,
     pub(super) carry: Option<CarryPlan>,
     pub(super) tick: u64,
@@ -200,11 +205,11 @@ pub(super) fn prepare<P: PhysicsPose, R: ParentPose>(
         .flatten()
         .cloned()
         .ok_or(MotorError::NoMotor(entity))?;
-    let feet = world
+    let (feet, rotation) = world
         .get::<P>(entity)
         .ok()
         .flatten()
-        .map(|pose| pose.translation())
+        .map(|pose| (pose.translation(), pose.rotation_quat()))
         .ok_or(MotorError::NoPose(entity))?;
     if world
         .get::<CharacterMotorState>(entity)
@@ -219,13 +224,18 @@ pub(super) fn prepare<P: PhysicsPose, R: ParentPose>(
     }
     let state = world.get::<CharacterMotorState>(entity).ok().flatten();
     let was_grounded = state.is_some_and(|state| state.grounded);
-    let checked = motor_in_force(&motor, state);
-    if let Err((pointer, reason)) = check(&checked) {
+    let checked = in_force(&motor, state);
+    if let Err((pointer, reason)) = check_in_force(&checked) {
         return Err(MotorError::InvalidMotor {
             entity,
             reason: format!("{pointer}: {reason}"),
         });
     }
+    let yaw = if checked.lying.is_some() {
+        yaw_of(rotation)
+    } else {
+        0.0
+    };
     let physics = world
         .resource::<PhysicsWorld>()
         .ok_or(MotorError::NoPhysicsWorld)?;
@@ -235,6 +245,7 @@ pub(super) fn prepare<P: PhysicsPose, R: ParentPose>(
         feet,
         displacement,
         checked,
+        yaw,
         was_grounded,
         carry,
         tick,
@@ -355,17 +366,18 @@ pub fn probe_character_ground<P: PhysicsPose>(
         .flatten()
         .cloned()
         .ok_or(MotorError::NoMotor(entity))?;
-    world
+    let rotation = world
         .get::<P>(entity)
         .ok()
         .flatten()
+        .map(|pose| pose.rotation_quat())
         .ok_or(MotorError::NoPose(entity))?;
     if !feet.iter().all(|c| c.is_finite()) {
         return Err(MotorError::NonFiniteFeet(feet));
     }
     let state = world.get::<CharacterMotorState>(entity).ok().flatten();
-    let checked = motor_in_force(&motor, state);
-    if let Err((pointer, reason)) = check(&checked) {
+    let checked = in_force(&motor, state);
+    if let Err((pointer, reason)) = check_in_force(&checked) {
         return Err(MotorError::InvalidMotor {
             entity,
             reason: format!("{pointer}: {reason}"),
@@ -374,7 +386,12 @@ pub fn probe_character_ground<P: PhysicsPose>(
     let physics = world
         .resource::<PhysicsWorld>()
         .ok_or(MotorError::NoPhysicsWorld)?;
-    let solver = Solver::new(world, physics, entity, &checked);
+    let yaw = if checked.lying.is_some() {
+        yaw_of(rotation)
+    } else {
+        0.0
+    };
+    let solver = Solver::new(world, physics, entity, &checked, yaw);
     let lift = solver.step_height;
     let origin = [feet[0], feet[1] + lift, feet[2]];
     let reach = lift + solver.snap + solver.skin;
@@ -531,6 +548,18 @@ pub(super) struct Solver<'a> {
     step_height: f32,
     max_slides: u32,
     cos_limit: f32,
+    /// The capsule's rotation: identity for an upright motor, the yawed lying rotation otherwise.
+    rotation: [f32; 4],
+    lying: Option<LyingAxis>,
+}
+
+/// A lying capsule's axis in the world: the facing, the centre's offset ahead of the feet and the
+/// half-length of the segment between the caps.
+#[derive(Clone, Copy)]
+struct LyingAxis {
+    forward: [f32; 3],
+    offset: f32,
+    half_segment: f32,
 }
 
 impl<'a> Solver<'a> {
@@ -538,10 +567,14 @@ impl<'a> Solver<'a> {
         world: &'a World,
         physics: &'a PhysicsWorld,
         entity: EntityId,
-        motor: &CharacterMotor,
+        force: &InForce,
+        yaw: f32,
     ) -> Self {
+        let motor = &force.motor;
         let capsule = Capsule {
-            half_height: motor.half_height_for(motor.height),
+            half_height: force
+                .lying
+                .map_or_else(|| motor.half_height_for(motor.height), |l| l.half_segment()),
             radius: motor.radius,
         };
         let margin = 2.0 * motor.skin_width + 1e-3;
@@ -571,6 +604,14 @@ impl<'a> Solver<'a> {
             step_height: motor.step_height,
             max_slides: motor.max_slides,
             cos_limit: cos(motor.slope_limit_deg.to_radians()),
+            rotation: force
+                .lying
+                .map_or([0.0, 0.0, 0.0, 1.0], |_| lying_rotation(yaw)),
+            lying: force.lying.map(|lying| LyingAxis {
+                forward: forward(yaw),
+                offset: lying.offset,
+                half_segment: lying.half_segment(),
+            }),
         }
     }
 
@@ -590,14 +631,36 @@ impl<'a> Solver<'a> {
                 + GATHER_SLACK;
             let capsule = self
                 .shape
-                .compute_aabb(&to_pose(self.center(start), [0.0, 0.0, 0.0, 1.0]));
+                .compute_aabb(&to_pose(self.center(start), self.rotation));
             let bounds = capsule.loosened(reach);
             Rc::new(self.physics.gather(bounds, &self.filter))
         });
     }
 
     fn center(&self, feet: [f32; 3]) -> [f32; 3] {
-        [feet[0], feet[1] + self.height / 2.0, feet[2]]
+        match &self.lying {
+            None => [feet[0], feet[1] + self.height / 2.0, feet[2]],
+            Some(axis) => [
+                feet[0] + axis.offset * axis.forward[0],
+                feet[1] + self.height / 2.0,
+                feet[2] + axis.offset * axis.forward[2],
+            ],
+        }
+    }
+
+    /// The point of a lying capsule's axis nearest `point` in the horizontal plane, at the height of
+    /// `at`: the origin a rim ray looks away from.
+    fn axis_near(&self, at: [f32; 3], point: [f32; 3]) -> [f32; 3] {
+        let Some(axis) = &self.lying else { return at };
+        let centre = self.center(at);
+        let along = ((point[0] - centre[0]) * axis.forward[0]
+            + (point[2] - centre[2]) * axis.forward[2])
+            .clamp(-axis.half_segment, axis.half_segment);
+        [
+            centre[0] + along * axis.forward[0],
+            at[1],
+            centre[2] + along * axis.forward[2],
+        ]
     }
 
     fn classify(&self, normal: [f32; 3]) -> Class {
@@ -642,6 +705,7 @@ impl<'a> Solver<'a> {
         self.physics.cast_capsule(
             &*self.shape,
             self.center(feet),
+            self.rotation,
             direction,
             length,
             &self.filter,
@@ -667,6 +731,7 @@ impl<'a> Solver<'a> {
         let mut contacts = self.physics.capsule_contacts(
             &*self.inflated,
             self.center(feet),
+            self.rotation,
             0.0,
             &self.filter,
             self.gathered(),
@@ -697,6 +762,7 @@ impl<'a> Solver<'a> {
             .capsule_contacts(
                 &*self.wide,
                 self.center(feet),
+                self.rotation,
                 margin / 2.0,
                 &self.filter,
                 self.gathered(),
@@ -940,6 +1006,7 @@ impl<'a> Solver<'a> {
                 entity: hit.entity,
                 point: hit.point,
                 normal,
+                surface: hit.surface,
             };
             let class = self.classify(normal);
             let mut next = match class {
@@ -1108,6 +1175,11 @@ impl<'a> Solver<'a> {
     /// capsule resting on an edge touches only the edge, and its cast normal there is tilted off
     /// the face it stands on; this finds the face. Returns that face's normal.
     fn rim_support(&self, point: [f32; 3], axis: [f32; 3], entity: EntityId) -> Option<[f32; 3]> {
+        let axis = if self.lying.is_some() {
+            self.axis_near(axis, point)
+        } else {
+            axis
+        };
         let away = normalize([point[0] - axis[0], 0.0, point[2] - axis[2]]);
         let origin = [
             point[0] + away[0] * 1e-3,
@@ -1177,6 +1249,7 @@ impl<'a> Solver<'a> {
                 normal,
                 walkable,
                 distance: hit.distance,
+                surface: hit.surface,
             }),
             grounded,
             feet,

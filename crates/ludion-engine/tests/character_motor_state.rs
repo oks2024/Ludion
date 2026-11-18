@@ -243,3 +243,110 @@ fn an_undeclared_posture_falls_back_to_the_base_shape_and_reports_once() {
         .unwrap_or_default();
     assert_eq!(reported.len(), 1, "{reported:?}");
 }
+
+const CRAWL_SCENE: &str = "format: 1
+seed: 5
+physics:
+  space: free
+entities:
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 20.0
+              - 0.5
+              - 20.0
+        body: static
+  - name: hero
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 5.0
+      CharacterMotor:
+        radius: 0.3
+        height: 1.75
+        postures:
+          prone:
+            shape:
+              lying:
+                length: 1.7
+                radius: 0.17
+                offset: 0.35
+            step_height: 0.06
+";
+
+/// Goes prone on tick 3 and crawls from tick 4, turning toward -X halfway: every tick is a pure
+/// function of the world, so a restored engine must continue it bit for bit.
+fn crawl(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+    let hero = world
+        .query_ids::<(&CharacterMotor,)>()
+        .next()
+        .map(|(entity, _)| entity)
+        .expect("a motor");
+    let frame = ctx.frame.as_u64();
+    if frame == 3 {
+        let report = ludion_engine::set_character_posture(world, hero, Some("prone")).unwrap();
+        assert_eq!(report.posture.as_deref(), Some("prone"));
+    }
+    if frame == 15 {
+        let _ = ludion_engine::turn_character(world, hero, 0.6);
+    }
+    let step = if frame >= 4 {
+        [0.0, -0.1, -0.04]
+    } else {
+        [0.0, -0.1, 0.0]
+    };
+    let _ = ludion_engine::move_character(world, hero, step);
+}
+
+fn crawler(name: &str) -> Engine {
+    let mut engine = game(name).system("crawl", crawl).build().expect("boots");
+    engine.load_inline_scene(CRAWL_SCENE).unwrap();
+    engine
+}
+
+#[test]
+fn a_snapshot_mid_crawl_continues_identically() {
+    let mut original = crawler("crawl-original");
+    let reference = trace(&mut original, 40);
+    let hero = named(&mut original, "hero");
+    assert_eq!(
+        state_of(&mut original, hero).and_then(|state| state.posture),
+        Some("prone".to_string())
+    );
+
+    let mut snapshotted = crawler("crawl-snapshotted");
+    assert_eq!(trace(&mut snapshotted, 20), reference[..20]);
+    let document = match snapshotted.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+
+    let mut resumed = crawler("crawl-resumed");
+    match resumed
+        .execute(Command::EngineRestore(EngineRestoreParams {
+            snapshot: document,
+        }))
+        .unwrap()
+        .body
+    {
+        ResponseBody::Restored { .. } => {}
+        other => panic!("expected a restore, got {other:?}"),
+    }
+    let hero = named(&mut resumed, "hero");
+    assert_eq!(
+        state_of(&mut resumed, hero).and_then(|state| state.posture),
+        Some("prone".to_string())
+    );
+    assert_eq!(resumed.world_hash().unwrap().as_u64(), reference[19]);
+    assert_eq!(trace(&mut resumed, 20), reference[20..]);
+}

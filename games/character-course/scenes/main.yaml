@@ -341,7 +341,7 @@ entities:
         sensor: true
       LaneSwitch:
         engage: true
-      CameraZone:
+      CameraGate:
         rig:
           mode:
             track:
@@ -395,7 +395,7 @@ entities:
         body: static
         sensor: true
       LaneSwitch: {}
-      CameraZone:
+      CameraGate:
         rig:
           mode:
             track:

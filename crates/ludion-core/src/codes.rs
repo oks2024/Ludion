@@ -611,6 +611,21 @@ pub mod code {
     /// lenient profile migration. A **warning**, not a hard failure — boot never blocks on it.
     pub const PROFILE_LOAD_FAILED: DiagnosticCode = DiagnosticCode::new("L1121");
 
+    /// `L1700` — a player settings file (`save/settings.yaml`) has a malformed `format`/`kind`
+    /// envelope, so the engine backs it up and starts from defaults.
+    pub const SETTINGS_ENVELOPE: DiagnosticCode = DiagnosticCode::new("L1700");
+    /// `L4340` — the settings file could not be loaded, so the engine backed it up and started from
+    /// defaults.
+    pub const SETTINGS_RESET: DiagnosticCode = DiagnosticCode::new("L4340");
+    /// `L4341` — the settings file has a key the engine does not know; dropped, or an unknown bus
+    /// name kept.
+    pub const SETTINGS_KEY_DROPPED: DiagnosticCode = DiagnosticCode::new("L4341");
+    /// `L4342` — a settings value was out of range, not a number or not a known name, and was
+    /// replaced.
+    pub const SETTINGS_VALUE_CLAMPED: DiagnosticCode = DiagnosticCode::new("L4342");
+    /// `L4343` — the settings file could not be written at a frame boundary.
+    pub const SETTINGS_SAVE_FAILED: DiagnosticCode = DiagnosticCode::new("L4343");
+
     /// `L1122` — a saved player profile could not be written to disk at a frame boundary. The engine
     /// stages the canonical text to a hidden `.tmp` sibling, syncs it to disk and renames it over
     /// `save/profile.yaml`, so a whole save stays on disk — this diagnostic means that staged write,
@@ -1151,6 +1166,19 @@ pub mod code {
     /// `CharacterMotor`, so no query can ever see its extra layers. Raised by `check-scene`.
     pub const QUERY_LAYERS_UNCLAIMED: DiagnosticCode = DiagnosticCode::new("L1501");
 
+    /// `L1690` — a `SurfaceTag.surface` or the scene's `physics.default_surface` names no surface
+    /// that `physics.surfaces` declares. The JSON Pointer is
+    /// `/entities/<i>/components/SurfaceTag/surface` or `/physics/default_surface`.
+    pub const SURFACE_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1690");
+
+    /// `L1691` — a `physics.surfaces` entry is empty or repeated, the list holds more than 256
+    /// names, or a `SurfaceTag.surface` is empty.
+    pub const SURFACES_INVALID: DiagnosticCode = DiagnosticCode::new("L1691");
+
+    /// `L1692` — a `SurfaceTag` on an entity with neither a solver-claimed `Collider` nor a
+    /// `CharacterMotor`, so no hit can ever report it. Raised by `check-scene`.
+    pub const SURFACE_TAG_UNCLAIMED: DiagnosticCode = DiagnosticCode::new("L1692");
+
     /// `L1510` — a `Machine`'s `parent` fn does not form a tree under `ROOT`: `ROOT` has a parent,
     /// or some state's parent chain never reaches `ROOT`. Raised by `ludion-ai`'s `register_machine`.
     pub const AI_MACHINE_HIERARCHY: DiagnosticCode = DiagnosticCode::new("L1510");
@@ -1232,6 +1260,18 @@ pub mod code {
     /// clip track naming a joint the mesh lacks, or a mesh with no skin. Raised by `ludion-scene`
     /// and the engine's character loader.
     pub const CHARACTER_DATA_CONSISTENCY: DiagnosticCode = DiagnosticCode::new("L1200");
+
+    /// `L1670` — an `AnimationLayers` component holds more than four layers. Pointed at `/layers`.
+    pub const ANIMATION_LAYERS_TOO_MANY: DiagnosticCode = DiagnosticCode::new("L1670");
+
+    /// `L1671` — an `AnimationLayers` layer is invalid: a duplicate or empty `name`, a `weight` or
+    /// `from_weight` outside `[0, 1]`, or a negative or non-finite `fade` or `speed`. Pointed at
+    /// `/layers/<i>/<field>`.
+    pub const ANIMATION_LAYER_INVALID: DiagnosticCode = DiagnosticCode::new("L1671");
+
+    /// `L1672` — a `SkinBone`-driven skin carries an `AnimationLayers`: its pose comes from the
+    /// parts, so layers have nothing to compose over. Raised once per skin.
+    pub const ANIMATION_LAYERS_ON_SKIN_BONE_SKIN: DiagnosticCode = DiagnosticCode::new("L1672");
 
     /// `L1201` — a glTF input could not be read or parsed: the file is unreadable, or its bytes are
     /// not a valid `.gltf`/`.glb` document (bad JSON, a failed structural validation, or a buffer/
@@ -1650,6 +1690,18 @@ pub mod code {
     /// `min_distance`. A warning raised once per rig.
     pub const CAMERA_RIG_COLLISION_STUCK: DiagnosticCode = DiagnosticCode::new("L1552");
 
+    /// `L1553` — a `CameraZone` exists but the world has no `PhysicsWorld`, so no zone can contain
+    /// the target. A warning raised once; zones are skipped.
+    pub const CAMERA_ZONE_NO_PHYSICS: DiagnosticCode = DiagnosticCode::new("L1553");
+
+    /// `L1554` — a `CameraZone` entity has no `Collider` with `sensor: true`, so nothing can enter
+    /// it. Raised by `check-scene`.
+    pub const CAMERA_ZONE_WITHOUT_SENSOR: DiagnosticCode = DiagnosticCode::new("L1554");
+
+    /// `L1555` — the target stands in two `CameraZone`s of the same top priority; the lower entity
+    /// id wins. A warning raised once per pair.
+    pub const CAMERA_ZONE_EQUAL_PRIORITY: DiagnosticCode = DiagnosticCode::new("L1555");
+
     /// `L1311` — an asset path inside a `kind: prefab` document, or a nested `prefab:` entry, is not
     /// a relative path (absolute, drive or scheme prefix, NUL, or a malformed `..` segment). Raised
     /// by prefab validation.
@@ -1776,6 +1828,12 @@ pub mod code {
     /// `L1572` — perception named a class or a layer the world does not declare, so the zone or the
     /// sample point detects or sees nothing. A warning, once per name.
     pub const PERCEPTION_NAME_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1572");
+    /// `L1573` — a `Perceiver` `memory` field is invalid: a non-finite or negative forget time, or a
+    /// `max_records` of 0 or above 64.
+    pub const PERCEIVER_MEMORY_INVALID: DiagnosticCode = DiagnosticCode::new("L1573");
+    /// `L1574` — `report_stimulus` dropped a stimulus: the perceiver is dead or has no `memory`, or
+    /// `at` or `strength` is not finite. A warning, once per cause.
+    pub const STIMULUS_REPORT_INVALID: DiagnosticCode = DiagnosticCode::new("L1574");
     /// `L4220` — the `Engine::builder().perception` config is invalid: no more than 32 classes, each
     /// non-empty and unique.
     pub const PERCEPTION_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L4220");
@@ -1795,6 +1853,16 @@ pub mod code {
     pub const INPUT_ACTION_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L4270");
     /// `L4271` — a restored input-action state is inconsistent with the loaded map.
     pub const INPUT_STATE_INVALID: DiagnosticCode = DiagnosticCode::new("L4271");
+    /// `L4272` — a rebind, capture or unbind named a `locked` input action.
+    pub const INPUT_ACTION_LOCKED: DiagnosticCode = DiagnosticCode::new("L4272");
+    /// `L4273` — an input-binding override names an action the map does not define; it is dropped.
+    pub const INPUT_OVERRIDE_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L4273");
+    /// `L4274` — an input-binding override does not compile; that action keeps its default bindings.
+    pub const INPUT_OVERRIDE_INVALID: DiagnosticCode = DiagnosticCode::new("L4274");
+    /// `L4275` — a binding capture or conflict resolution is impossible.
+    pub const INPUT_CAPTURE_IMPOSSIBLE: DiagnosticCode = DiagnosticCode::new("L4275");
+    /// `L4276` — there is no binding capture to resolve, or no conflict is pending.
+    pub const INPUT_CAPTURE_IDLE: DiagnosticCode = DiagnosticCode::new("L4276");
 
     /// `L1610` — a `UiTween` track has the wrong `from`/`to` arity, a non-finite value or a negative
     /// `duration`.
@@ -2559,6 +2627,16 @@ pub mod code {
     /// (`/points/<i>`), or a `Normal` facing that is zero or non-finite (`/facing`). An error
     /// returned to the caller, never a panic.
     pub const LIGHT_EXPOSURE_INVALID: DiagnosticCode = DiagnosticCode::new("L4250");
+
+    /// `L4251` — a `PointLight`, `SpotLight` or `DirectionalLight` on a `presentation: true` entity
+    /// in a scene that has a `LightExposure`: it is drawn but never counts toward exposure, because
+    /// the exposure system reads sim entities only. A **warning**, raised by `check-scene`.
+    pub const LIGHT_EXPOSURE_PRESENTATION_LIGHT: DiagnosticCode = DiagnosticCode::new("L4251");
+
+    /// `L4252` — a `LightExposure`'s `occluder_layers` names no layer that any 3D-claimed collider
+    /// in the scene carries (`Collider.layer`, `default` when absent, or `QueryLayers`), so nothing
+    /// can occlude. A **warning**, raised by `check-scene`.
+    pub const LIGHT_EXPOSURE_OCCLUDERS_UNMATCHED: DiagnosticCode = DiagnosticCode::new("L4252");
 
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
@@ -5652,6 +5730,67 @@ every part `bone` name a bone in the list. An unrigged model needs exactly one b
     - name: root",
     },
     CodeEntry {
+        code: code::SETTINGS_ENVELOPE,
+        severity: Severity::Warning,
+        title: "settings file envelope is malformed",
+        explanation: "\
+The player settings file (`save/settings.yaml`) has no valid `format`/`kind` envelope: `format` is
+missing or not an integer, `kind` is missing or not `settings`, or the document is not a mapping. The
+engine backs the file up (`settings.yaml.bak.<hash>`), starts from defaults and reports `L4340`.
+
+Fix: nothing is required; the next `save()` writes a fresh file. To recover the old values, open the
+backup and copy them across; a minimal file is:
+
+  format: 1
+  kind: settings",
+    },
+    CodeEntry {
+        code: code::SETTINGS_RESET,
+        severity: Severity::Warning,
+        title: "settings file could not be loaded — defaulted",
+        explanation: "\
+The player settings file (`save/settings.yaml`) could not be honored at all: it is not parseable,
+its envelope is malformed (`L1700`), a value has the wrong shape, or its `format` is newer than this
+engine reads. The engine renamed it aside as `settings.yaml.bak.<hash>` and started from defaults. The
+game still boots and the player's bytes are kept.
+
+Fix: nothing is required. To recover the old values, reconcile the backup with the new file by hand.",
+    },
+    CodeEntry {
+        code: code::SETTINGS_KEY_DROPPED,
+        severity: Severity::Warning,
+        title: "settings file has an unknown key",
+        explanation: "\
+The settings file has a key the engine does not know (pointer `/audio/volume`, say): a typo or a key a
+newer build wrote. It is dropped on load. An unknown *bus name* under `/audio/buses` is kept and
+written back, so a game's own buses survive, but it is reported once.
+
+Fix: correct the key (the message lists the known keys) or delete the line.",
+    },
+    CodeEntry {
+        code: code::SETTINGS_VALUE_CLAMPED,
+        severity: Severity::Warning,
+        title: "a settings value was replaced",
+        explanation: "\
+A settings value was out of range, not a number or not a known name. A volume outside `0..=1` is
+clamped, a NaN volume is replaced by `1.0`, and an unknown `quality` preset or `anti_aliasing` name is
+ignored (the field stays unset). The pointer names the value.
+
+Fix: write a volume between 0 and 1 and a name from `ludion docs settings`.",
+    },
+    CodeEntry {
+        code: code::SETTINGS_SAVE_FAILED,
+        severity: Severity::Warning,
+        title: "settings file could not be written to disk",
+        explanation: "\
+A game system called `Settings::save()` and the engine could not write `save/settings.yaml` at the
+frame boundary: the save directory is missing or not writable, or the disk is full. The write is staged
+to a hidden `.tmp` sibling and renamed, so the previous whole file stays on disk. The requested values
+still apply to this session.
+
+Fix: make `save/` writable and call `save()` again.",
+    },
+    CodeEntry {
         code: code::PROFILE_LOAD_FAILED,
         severity: Severity::Warning,
         title: "saved profile could not be loaded — defaulted",
@@ -6845,6 +6984,44 @@ An entity carries `QueryLayers` but has neither a `Collider` the 3D solver claim
 Fix: add a 3D `Collider` (or a `CharacterMotor`) to the entity, or remove `QueryLayers`.",
     },
     CodeEntry {
+        code: code::SURFACE_UNKNOWN,
+        severity: Severity::Error,
+        title: "a surface tag names no declared surface",
+        explanation: "\
+A `SurfaceTag.surface` (at `/entities/<index>/components/SurfaceTag/surface`) or the scene's
+`physics.default_surface` (at `/physics/default_surface`) names a surface that `physics.surfaces`
+does not declare. At runtime the entity keeps its body and its hits report the scene's default
+surface, with one rejection per distinct cause.
+
+Fix: add the name to `physics.surfaces`, or correct the spelling (the message names the nearest
+declared surface):
+
+  physics:
+    surfaces: [concrete, metal_grate]
+    default_surface: concrete",
+    },
+    CodeEntry {
+        code: code::SURFACES_INVALID,
+        severity: Severity::Error,
+        title: "the scene's surface list is malformed",
+        explanation: "\
+A `physics.surfaces` entry is empty or repeats an earlier entry, the list holds more than 256
+names, or a `SurfaceTag.surface` is empty. The JSON Pointer names the offending entry.
+
+Fix: give each surface one unique, non-empty name; keep the list to 256 or fewer.",
+    },
+    CodeEntry {
+        code: code::SURFACE_TAG_UNCLAIMED,
+        severity: Severity::Error,
+        title: "a surface tag on an entity no hit can report",
+        explanation: "\
+An entity carries `SurfaceTag` but has neither a `Collider` the 3D solver claims nor a
+`CharacterMotor`, so no query or ground probe ever reaches it and the tag would silently do
+nothing. Raised by `check-scene` at `/entities/<index>/components/SurfaceTag`.
+
+Fix: add a 3D `Collider` (or a `CharacterMotor`) to the entity, or remove `SurfaceTag`.",
+    },
+    CodeEntry {
         code: code::AI_MACHINE_HIERARCHY,
         severity: Severity::Error,
         title: "a machine's parent function is not a tree under ROOT",
@@ -7193,14 +7370,56 @@ A well-shaped `kind: character` document holds values that do not hang together.
     in one place);
   - a clip track animates a joint the character's mesh does not have (the diagnostic names the joint
     and the nearest one the mesh has);
-  - the character's mesh document has no skin, so there is nothing for the clips to drive.
+  - the character's mesh document has no skin, so there is nothing for the clips to drive;
+  - a mask has a blank name, or lists a joint the mesh does not have.
 
 The JSON Pointer names the offending value (`/mesh`, `/clips/<name>/clip`, `/clips/<name>/speed`,
-`/clips/<name>/events`).
+`/clips/<name>/events`, `/masks/<name>/joints/<i>`).
 
 Fix: point `mesh` at a skinned mesh document (an imported glTF with a skin), give every path, keep
 `speed` positive, put a clip's events in either the clip or the overlay, and rename the clip's tracks
 (or re-export it from the same rig) so every target is a joint of the mesh.",
+    },
+    CodeEntry {
+        code: code::ANIMATION_LAYERS_TOO_MANY,
+        severity: Severity::Error,
+        title: "AnimationLayers holds too many layers",
+        explanation: "\
+An `AnimationLayers` component lists more than four layers. Every layer is another clip sampled per
+skinned entity per frame, so the list is capped at four.
+
+Pointed at `/layers` of the component.
+
+Fix: drop a layer, or merge two layers that never play together into one and switch its `clip` with
+`play_layer`.",
+    },
+    CodeEntry {
+        code: code::ANIMATION_LAYER_INVALID,
+        severity: Severity::Error,
+        title: "an AnimationLayers layer is invalid",
+        explanation: "\
+One layer of an `AnimationLayers` component holds a value the compositor cannot use. One of:
+
+  - `name` is empty or repeats an earlier layer's name;
+  - `weight` or `from_weight` is outside `[0, 1]` or not finite;
+  - `fade` or `speed` is negative or not finite.
+
+Pointed at `/layers/<i>/<field>`.
+
+Fix: give each layer a unique non-empty name, keep weights in `[0, 1]` and `fade`/`speed` finite and
+non-negative.",
+    },
+    CodeEntry {
+        code: code::ANIMATION_LAYERS_ON_SKIN_BONE_SKIN,
+        severity: Severity::Error,
+        title: "AnimationLayers on a SkinBone-driven skin",
+        explanation: "\
+A skin named by `SkinBone` parts also carries an `AnimationLayers`. Such a skin is posed by its parts'
+rest poses, so there is no base pose for layers to compose over.
+
+Raised once per skin, pointed at that skin entity's `AnimationLayers` component.
+
+Fix: remove `AnimationLayers` from the skin, or remove every `SkinBone` part that names it.",
     },
     CodeEntry {
         code: code::IMPORT_INVALID_GLTF,
@@ -8643,6 +8862,36 @@ Fix: move the pivot out of the geometry, or put the target's child colliders on 
 `collision.ignore_layers`.",
     },
     CodeEntry {
+        code: code::CAMERA_ZONE_NO_PHYSICS,
+        severity: Severity::Warning,
+        title: "a camera zone exists in a world with no physics",
+        explanation: "A `CameraZone` is in the world, but there is no `PhysicsWorld`, so the overlap query that decides
+which zone the rig's target stands in cannot run. The rig reports this once and runs on its own
+`rig` as if there were no zones.
+
+Fix: add physics to the game, or remove the `CameraZone` entities.",
+    },
+    CodeEntry {
+        code: code::CAMERA_ZONE_WITHOUT_SENSOR,
+        severity: Severity::Error,
+        title: "a camera zone has no sensor collider",
+        explanation: "A `CameraZone` entity has no `Collider` with `sensor: true`. A zone is the volume of its sensor:
+the rig takes the zone's `rig` while the target's origin is inside it, so with no sensor the zone
+never activates.
+
+Fix: add `Collider` with `sensor: true` and the zone's shape beside the `CameraZone`.",
+    },
+    CodeEntry {
+        code: code::CAMERA_ZONE_EQUAL_PRIORITY,
+        severity: Severity::Warning,
+        title: "two camera zones of the same priority overlap the target",
+        explanation: "The rig's target stands inside two `CameraZone`s that share the highest `priority`. The zone on
+the lower entity id wins, which is deterministic but easy to get wrong when a zone is respawned. It
+is reported once per pair.
+
+Fix: give the zones distinct `priority` values, or stop them overlapping.",
+    },
+    CodeEntry {
         code: code::PREFAB_ASSET_PATH,
         severity: Severity::Error,
         title: "a path in a prefab is not a relative path",
@@ -9034,6 +9283,31 @@ This is a **warning**.
 Fix: declare the class in `PerceptionConfig.classes`, or the layer under `physics.layers`.",
     },
     CodeEntry {
+        code: code::PERCEIVER_MEMORY_INVALID,
+        severity: Severity::Error,
+        title: "a perceiver's memory is invalid",
+        explanation: "\
+A `Perceiver` `memory` field is out of range (pointer `/entities/{i}/components/Perceiver/memory/{field}`):
+`forget_sight_s` or `forget_hearing_s` is negative or not finite, or `max_records` is 0 or above 64. A
+`StimulusRecord` with a non-finite `last_position`, `last_direction` or `strength` is refused the same
+way. A scene with one is refused.
+
+Fix: correct the named field. To keep no memory at all, omit `memory` instead of writing a zero.",
+    },
+    CodeEntry {
+        code: code::STIMULUS_REPORT_INVALID,
+        severity: Severity::Warning,
+        title: "a reported stimulus was dropped",
+        explanation: "\
+`report_stimulus` was called for an entity that is not alive, that has no `Perceiver` with a `memory`,
+or with an `at` or `strength` that is not finite. The stimulus is dropped and nothing is remembered.
+Reported once per cause.
+
+This is a **warning**.
+
+Fix: give the perceiver `memory:` (see `ludion docs perception`), and pass finite numbers.",
+    },
+    CodeEntry {
         code: code::PERCEPTION_CONFIG_INVALID,
         severity: Severity::Error,
         title: "perception config is invalid",
@@ -9148,6 +9422,58 @@ down, or a pending tap on an input with no `double_tap` binding). Entries for in
 longer binds are dropped silently; this is for the ones that are corrupt.
 
 Fix: restore a state saved from the same input map, or drop the state and let the gestures restart.",
+    },
+    CodeEntry {
+        code: code::INPUT_ACTION_LOCKED,
+        severity: Severity::Error,
+        title: "an input action is locked",
+        explanation: "\
+A rebind, capture, unbind or reset named an action whose `locked: true` flag forbids player changes
+(also: a conflict resolution that would swap or replace a binding of a locked action).
+
+Fix: leave the action alone, or drop `locked` from its `kind: input-actions` entry. Resolve a conflict
+with a locked action by keeping the existing binding.",
+    },
+    CodeEntry {
+        code: code::INPUT_OVERRIDE_UNKNOWN,
+        severity: Severity::Warning,
+        title: "an input-binding override names an unknown action",
+        explanation: "\
+An input-bindings override (pointer `/actions/{name}`) names an action the loaded input map does not
+define, so it is dropped. A renamed or removed action leaves such entries in a player's saved bindings.
+
+Fix: nothing for a player's file (the entry is ignored); otherwise correct the action name.",
+    },
+    CodeEntry {
+        code: code::INPUT_OVERRIDE_INVALID,
+        severity: Severity::Warning,
+        title: "an input-binding override does not compile",
+        explanation: "\
+An override (pointer `/actions/{name}`) holds a binding that does not fit the action's kind, names no or
+several sources, or duplicates another action's source and gesture in the same context. That action
+keeps its default bindings; the other overrides still apply.
+
+Fix: correct or delete the entry, or call `reset` on the action.",
+    },
+    CodeEntry {
+        code: code::INPUT_CAPTURE_IMPOSSIBLE,
+        severity: Severity::Error,
+        title: "a binding capture is impossible",
+        explanation: "\
+Capture needs a `button` action and a slot index at most the action's binding count. Resolving a
+conflict with Replace, or with Swap that appended, is refused when it would leave the other action with
+no bindings.
+
+Fix: capture a button action with a valid slot; resolve with Swap (when we replaced a binding) or Keep.",
+    },
+    CodeEntry {
+        code: code::INPUT_CAPTURE_IDLE,
+        severity: Severity::Error,
+        title: "no binding capture or conflict is pending",
+        explanation: "\
+`resolve_conflict` was called while no capture was waiting on a conflict.
+
+Fix: call it only when `capture_result()` is `Conflict`.",
     },
     CodeEntry {
         code: code::UI_TWEEN_INVALID,
@@ -11995,6 +12321,31 @@ Fix: pass between 1 and 16 finite points, and a non-zero finite normal (or `Faci
 See `ludion docs light-exposure`.",
     },
     CodeEntry {
+        code: code::LIGHT_EXPOSURE_PRESENTATION_LIGHT,
+        severity: Severity::Warning,
+        title: "presentation light never counts toward light exposure",
+        explanation: "\
+A scene with a `LightExposure` subject has a `PointLight`, `SpotLight` or `DirectionalLight` on an
+entity marked `presentation: true` (pointer `/entities/{i}/components/{PointLight|SpotLight|DirectionalLight}`).
+The light is drawn, but `light_exposure_update` reads sim entities only, so the light is never
+counted in any reading: what the player sees and what a guard perceives disagree.
+
+Fix: drop `presentation: true` from the light if it should count (it then joins the world hash), or
+leave it when the light is decoration and add a sim-side light for what should count.",
+    },
+    CodeEntry {
+        code: code::LIGHT_EXPOSURE_OCCLUDERS_UNMATCHED,
+        severity: Severity::Warning,
+        title: "light exposure occluder layers match no collider",
+        explanation: "\
+A `LightExposure` sets `occluder_layers`, but no 3D-claimed collider in the scene is on any of
+those layers (through `Collider.layer`, `default` when absent, or `QueryLayers`), so a shadow ray
+can never be blocked (pointer `/entities/{i}/components/LightExposure/occluder_layers`).
+
+Fix: put the occluders on the named layer (`Collider.layer` or `QueryLayers`), or correct the
+names; remove `occluder_layers` to count static colliders only.",
+    },
+    CodeEntry {
         code: code::AUDIO_DEVICE_UNAVAILABLE,
         severity: Severity::Warning,
         title: "no audio output device available",
@@ -12424,6 +12775,11 @@ mod tests {
         code::SCULPT_BONE_TREE,
         code::PROFILE_LOAD_FAILED,
         code::PROFILE_SAVE_FAILED,
+        code::SETTINGS_ENVELOPE,
+        code::SETTINGS_RESET,
+        code::SETTINGS_KEY_DROPPED,
+        code::SETTINGS_VALUE_CLAMPED,
+        code::SETTINGS_SAVE_FAILED,
         code::RUN_SAVE_WRITE_FAILED,
         code::RUN_SAVE_RESUME_REFUSED,
         code::RUN_RECORDING_FAILED,
@@ -12477,6 +12833,9 @@ mod tests {
         code::COLLIDER_LAYER_UNCLAIMED,
         code::QUERY_LAYERS_INVALID,
         code::QUERY_LAYERS_UNCLAIMED,
+        code::SURFACE_UNKNOWN,
+        code::SURFACES_INVALID,
+        code::SURFACE_TAG_UNCLAIMED,
         code::AI_MACHINE_HIERARCHY,
         code::AI_MACHINE_INITIAL,
         code::AI_MACHINE_VARIANTS,
@@ -12492,6 +12851,9 @@ mod tests {
         code::ANIMATION_EVENT_INVALID,
         code::CHARACTER_DOCUMENT_STRUCTURE,
         code::CHARACTER_DATA_CONSISTENCY,
+        code::ANIMATION_LAYERS_TOO_MANY,
+        code::ANIMATION_LAYER_INVALID,
+        code::ANIMATION_LAYERS_ON_SKIN_BONE_SKIN,
         code::IMPORT_INVALID_GLTF,
         code::IMPORT_UNSUPPORTED_FEATURE,
         code::IMPORT_OUTPUT_IO,
@@ -12593,6 +12955,9 @@ mod tests {
         code::CAMERA_RIG_COLLISION_QUERY,
         code::CAMERA_RIG_COLLISION_NO_PHYSICS,
         code::CAMERA_RIG_COLLISION_STUCK,
+        code::CAMERA_ZONE_NO_PHYSICS,
+        code::CAMERA_ZONE_WITHOUT_SENSOR,
+        code::CAMERA_ZONE_EQUAL_PRIORITY,
         code::PREFAB_ASSET_PATH,
         code::LOCAL_LIGHT_INVALID_SHADOW,
         code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
@@ -12626,6 +12991,8 @@ mod tests {
         code::PERCEIVER_INVALID,
         code::SIGHT_TARGET_INVALID,
         code::PERCEPTION_NAME_UNKNOWN,
+        code::PERCEIVER_MEMORY_INVALID,
+        code::STIMULUS_REPORT_INVALID,
         code::INPUT_BINDING_SOURCES,
         code::INPUT_BINDING_SOURCE_KIND,
         code::INPUT_BINDING_MODIFIER,
@@ -12634,6 +13001,11 @@ mod tests {
         code::INPUT_ACTION_INVALID,
         code::INPUT_ACTION_UNKNOWN,
         code::INPUT_STATE_INVALID,
+        code::INPUT_ACTION_LOCKED,
+        code::INPUT_OVERRIDE_UNKNOWN,
+        code::INPUT_OVERRIDE_INVALID,
+        code::INPUT_CAPTURE_IMPOSSIBLE,
+        code::INPUT_CAPTURE_IDLE,
         code::UI_TWEEN_INVALID,
         code::UI_WORLD_ANCHOR_INVALID,
         code::UI_MOTION_UNSUPPORTED,
@@ -12790,6 +13162,8 @@ mod tests {
         code::PHYSICS_SCALE_UNGATED,
         code::POSE_BLEND_POSE_MISSING,
         code::LIGHT_EXPOSURE_INVALID,
+        code::LIGHT_EXPOSURE_PRESENTATION_LIGHT,
+        code::LIGHT_EXPOSURE_OCCLUDERS_UNMATCHED,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,
@@ -12927,6 +13301,11 @@ mod tests {
             code::GAME_SCALE_INVALID,
             code::REPLAY_PLAYBACK_FAILED,
             code::PROFILE_SAVE_FAILED,
+            code::SETTINGS_ENVELOPE,
+            code::SETTINGS_RESET,
+            code::SETTINGS_KEY_DROPPED,
+            code::SETTINGS_VALUE_CLAMPED,
+            code::SETTINGS_SAVE_FAILED,
             code::SCHEDULE_MODULE_CONCENTRATION,
             code::QUERY_DRIFT_UNOBSERVED,
             code::AI_TRANSITION_CHAIN_CAPPED,
@@ -12958,6 +13337,8 @@ mod tests {
             code::CAMERA_RIG_TARGET_MISSING,
             code::CAMERA_RIG_COLLISION_NO_PHYSICS,
             code::CAMERA_RIG_COLLISION_STUCK,
+            code::CAMERA_ZONE_NO_PHYSICS,
+            code::CAMERA_ZONE_EQUAL_PRIORITY,
             code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
             code::UI_RECT_FILL_IGNORES_PLACEMENT,
             code::LOCAL_LIGHT_SHADOW_FADE_UNUSED,
@@ -12967,10 +13348,13 @@ mod tests {
             code::VIEWMODEL_NO_CAMERA,
             code::VIEWMODEL_LENS_NOT_ON_CAMERA,
             code::PERCEPTION_NAME_UNKNOWN,
+            code::STIMULUS_REPORT_INVALID,
             code::PATROL_ROUTE_UNLOADED,
             code::PATROL_POINT_UNREACHABLE,
             code::PATROL_WITHOUT_AGENT,
             code::INPUT_ACTION_UNKNOWN,
+            code::INPUT_OVERRIDE_UNKNOWN,
+            code::INPUT_OVERRIDE_INVALID,
             code::UI_MOTION_UNSUPPORTED,
             code::STATIC_INELIGIBLE,
             code::STATIC_PARENT_NOT_STATIC,
@@ -13001,6 +13385,8 @@ mod tests {
             code::PROJECTILE_RESTORE_CAPACITY,
             code::PHYSICS_SCALE_UNGATED,
             code::POSE_BLEND_POSE_MISSING,
+            code::LIGHT_EXPOSURE_PRESENTATION_LIGHT,
+            code::LIGHT_EXPOSURE_OCCLUDERS_UNMATCHED,
             code::AUDIO_DEVICE_UNAVAILABLE,
             code::AUDIO_STREAM_FAILED,
             code::MUSIC_TRACK_UNPLAYABLE,

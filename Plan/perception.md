@@ -1,6 +1,6 @@
 # Plan: Perception — sight zones, sample points, batched line of sight
 
-> **Wave 1 mechanized — sight ships; later waves are laid out below.**
+> **Waves 1–2 mechanized — sight and stimulus memory ship; later waves are laid out below.**
 > Driven by Neon Shroud request 0001 (stealth AI senses). Game-facing doc: `ludion docs perception`.
 
 ## Design decisions
@@ -41,14 +41,33 @@
     no-op (the `nav_update` mold). `enabled: false` gives no samples. `evaluated_tick` is the current gameplay tick.
 12. **Freshness:** transforms are current, LoS reads the last completed physics step.
 13. **Scene files are block-style YAML**, so every authored example (docs, doc comments) is block style.
+14. **One entity per memory record, single marked refs (W2).** `perceiver` is a marked `EntityRefSchema` and `source` an
+    `Option<EntityRefSchema>`. This fits `L1392` with no ref collection (decision 2).
+15. **Times are gameplay ticks (`u64`), not `SimTime`.** The `ludion-ai` `Timer` precedent: serializable, exact, and
+    they survive restore because `GameClock` rides snapshots. Seconds convert with `ceil(x - x * 1e-6)`, a private copy of
+    that rule (no `ludion-ai` dependency). A held `GameClock` stops `now`, so nothing is forgotten during a hold.
+16. **`sensed_now` is true iff `last_sensed_tick == now`.** `perception_update` clears it on every record whose
+    `last_sensed_tick < now`, so a `report_stimulus` before or after the update in one tick reads `true` until the next one.
+17. **Sight refresh.** Each `visible` `SightSample` refreshes the record keyed `(perceiver, Sight, Some(target))`:
+    `last_position` is the target's world origin, `zone` the lowest visible zone index that tick, `strength` 1,
+    `last_direction` the normalized `new - old last_position` when the move exceeds 1e-4 m (else unchanged; `[0,0,0]` at
+    creation). `first_sensed_tick` is set once.
+18. **Forgetting and eviction run in `perception_update` after the refresh.** A record is despawned when
+    `now - last_sensed_tick >= ticks(forget_s)`: sight uses `forget_sight_s`, hearing and custom `forget_hearing_s`. Then,
+    per perceiver, while count > `max_records`, the least recently sensed goes, ties by `(sense, source)` ascending
+    (`None` first). Records whose perceiver is dead or has no `memory` are despawned. A record whose `source` died is
+    kept and ages out (the generational id never aliases). Spawns and despawns run in sorted key order.
+19. **Anonymous stimuli (`source: None`) merge per `(perceiver, sense)`.** W3 adds the noise `kind` to the key, additively.
+20. **Spawn ordering.** New records spawn in ascending `(perceiver, sense, source)` order after the tick's despawns, so
+    entity ids are a pure function of the run. A perceiver without `memory` spawns nothing: W1 worlds are byte-identical.
 
 ## Waves
 
 - **W1 (this):** sight — components, config, results, `perception_update`, `L1570`/`L1571`/`L1572`/`L4220`, docs.
-- **W2:** stimulus memory (`StimulusRecord` entities, `report_stimulus`, `forget`/`forget_all`, despawn with the
-  perceiver, snapshot rejoin).
+- **W2 (shipped):** stimulus memory (`StimulusRecord` entities, `report_stimulus`, `stimuli`, `forget`/`forget_all`,
+  despawn with the perceiver, snapshot rejoin).
 - **W3:** hearing (`emit_noise`, `PendingNoise` on an engine entity, `NoiseZone`, occlusion via a `sound_occluder`
-  convention, the 0009 surface hook).
+  convention, the surface-tag multiplier read from request 0009's tag, so W3 waits on 0009).
 - **W4:** `period_ticks` stagger, ray budget and rotation cursor on a hashed `PerceptionState`, `L4221`, the
   `perception` trace channel, `engine.describe` counts, gallery `examples/gallery/perception.yaml`, the committed
   `WorldHash` trace, the bench (30 x 2 x 12 x 3).
@@ -70,3 +89,7 @@ ray budget 2048 and the bench target 0.5 ms (W4); no entity-ref collection (deci
   `Require`, `Look`) appended to the builtin registry (62 components, both sim-only); `PerceptionConfig` /
   `PerceptionResults` / `perception_update` with `Engine::builder().perception`; tests in `crates/ludion-engine/tests/perception.rs`
   and the unit modules; `component_schemas.json` re-blessed (two components). No wire schema, trace, replay or golden moved.
+- **W2 mechanized (2026-11-18):** `PerceiverMemory`, `Perceiver.memory`, `Sense` and the `StimulusRecord` component (63
+  components, sim-only); `report_stimulus`, `stimuli`, `forget`, `forget_all`, `Stimulus` in `ludion-engine`; the memory
+  pass inside `perception_update`; `L1573` / `L1574`; tests in `crates/ludion-engine/tests/perception_memory.rs`;
+  `component_schemas.json` re-blessed. No wire schema, trace, replay or golden moved.

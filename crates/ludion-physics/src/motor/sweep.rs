@@ -11,8 +11,6 @@ use crate::queries::{QueryHit, check_cast, check_ray};
 use crate::sweep::SweepFilter;
 use crate::world::{PhysicsWorld, entity_from_bits, from_vector, shape_builder, to_pose};
 
-const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-
 /// How far along the cast direction a hit's normal must oppose it to count as blocking: a surface
 /// the capsule only touches while moving away reports distance 0 and is skipped.
 const BLOCKING: f32 = -1e-4;
@@ -61,14 +59,15 @@ impl PhysicsWorld {
         &self,
         capsule: &dyn ParryShape,
         center: [f32; 3],
+        rotation: [f32; 4],
         direction: [f32; 3],
         length: f32,
         filter: &SweepFilter,
         gather: Option<&Gather>,
         skip: impl Fn(&QueryHit) -> bool,
     ) -> Option<QueryHit> {
-        let unit_dir = check_cast(center, IDENTITY, direction, length).ok()?;
-        let hits = self.shape_hits(capsule, center, IDENTITY, unit_dir, length, filter, gather);
+        let unit_dir = check_cast(center, rotation, direction, length).ok()?;
+        let hits = self.shape_hits(capsule, center, rotation, unit_dir, length, filter, gather);
         hits.into_iter().find(|hit| {
             let along = hit.normal[0] * direction[0]
                 + hit.normal[1] * direction[1]
@@ -85,11 +84,12 @@ impl PhysicsWorld {
         &self,
         shape: &dyn ParryShape,
         center: [f32; 3],
+        rotation: [f32; 4],
         prediction: f32,
         filter: &SweepFilter,
         gather: Option<&Gather>,
     ) -> Vec<Contact> {
-        let at = to_pose(center, IDENTITY);
+        let at = to_pose(center, rotation);
         let aabb = shape.compute_aabb(&at).loosened(prediction);
         let pipeline = self.rapier.query_pipeline();
         let mut contacts = Vec::new();

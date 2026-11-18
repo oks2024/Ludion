@@ -14,7 +14,7 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::math::glam::Vec3;
-use ludion_ecs::World;
+use ludion_ecs::{SystemCtx, World};
 use ludion_physics::{PhysicsError, PhysicsWorld, QueryFilter};
 use ludion_renderer::DEFAULT_AMBIENT;
 use ludion_renderer::light_model::{
@@ -22,31 +22,11 @@ use ludion_renderer::light_model::{
 };
 
 use crate::components::{DirectionalLight, Environment, PointLight, SpotLight, Visibility};
+use crate::diagnostics::report_full;
 use crate::extract::local_shadow;
-use crate::hierarchy::{inherited_visibility, world_transform};
+use crate::hierarchy::{inherited_visibility, world_affine, world_transform};
 
-/// The most points one query may carry.
-pub const MAX_EXPOSURE_POINTS: usize = 16;
-
-/// The surface orientation a point is lit as.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub enum Facing {
-    /// `n·l = 1` for every light: the light a body of unknown orientation could receive at most.
-    #[default]
-    Omni,
-    /// A surface with this normal (any non-zero length): `max(n·l, 0)`.
-    Normal([f32; 3]),
-}
-
-/// How several points collapse into one reading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Combine {
-    /// The point with the largest `total`, whole; ties go to the first in authored order.
-    #[default]
-    Max,
-    /// The componentwise mean of the per-point readings.
-    Mean,
-}
+pub use ludion_components::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
 
 /// One query: where, how the surface faces, what may occlude, how to combine.
 #[derive(Debug, Clone, Copy)]
@@ -414,7 +394,7 @@ fn read_point(
 /// How much authored light reaches the query's points, from sim state.
 ///
 /// ```
-/// use ludion_ecs::World;
+/// use ludion_ecs::{SystemCtx, World};
 /// use ludion_engine::{ExposureQuery, Facing, Combine, light_exposure};
 /// use ludion_engine::components::{PointLight, Transform};
 /// use ludion_physics::QueryFilter;
@@ -515,4 +495,112 @@ fn combine(lamps: &[Lamp], readings: &[PointReading], ambient: Vec3, how: Combin
         ambient: ambient.to_array(),
         lights,
     }
+}
+
+/// Every subject's reading this tick, derived by [`light_exposure_update`]: rebuilt each run from
+/// hashed state, so it is neither hashed nor snapshotted.
+///
+/// ```
+/// use ludion_engine::LightExposureResults;
+///
+/// let results = LightExposureResults::default();
+/// assert!(results.readings().is_empty());
+/// assert!(results.reading(ludion_core::ids::EntityId { index: 1, generation: 0 }).is_none());
+/// ```
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LightExposureResults {
+    tick: u64,
+    readings: Vec<(EntityId, Exposure)>,
+}
+
+impl LightExposureResults {
+    /// The gameplay tick the readings were computed on.
+    pub fn tick(&self) -> u64 {
+        self.tick
+    }
+
+    /// Every reading, ascending by subject `EntityId`.
+    pub fn readings(&self) -> &[(EntityId, Exposure)] {
+        &self.readings
+    }
+
+    /// `entity`'s reading, or `None` when it carries no `LightExposure`, has no `Transform`, or
+    /// its query failed this tick.
+    pub fn reading(&self, entity: EntityId) -> Option<&Exposure> {
+        self.readings
+            .binary_search_by_key(&entity, |(id, _)| *id)
+            .ok()
+            .map(|i| &self.readings[i].1)
+    }
+}
+
+/// Reads every `LightExposure` subject into [`LightExposureResults`].
+///
+/// Schedule it after physics and after whatever moves lights and subjects, and before the systems
+/// that read the results. The results are derived: a run replaces them wholesale. Occluders are
+/// static colliders only (the subject excluded) unless `occluder_layers` is set. A fault (an
+/// undeclared layer, `L1186`; a malformed field, `L4250`) is reported once per subject and gives
+/// that subject no reading.
+///
+/// ```
+/// use ludion_engine::{Engine, light_exposure_update};
+///
+/// let engine = Engine::builder()
+///     .system("light_exposure_update", light_exposure_update)
+///     .build()
+///     .unwrap();
+/// # let _ = engine;
+/// ```
+pub fn light_exposure_update(world: &mut World, ctx: &SystemCtx) {
+    let mut subjects: Vec<(EntityId, LightExposure)> = world
+        .query_ids::<(&LightExposure,)>()
+        .map(|(id, (s,))| (id, s.clone()))
+        .collect();
+    subjects.sort_by_key(|(id, _)| *id);
+    let mut results = LightExposureResults {
+        tick: ctx.game_frame.as_u64(),
+        readings: Vec::with_capacity(subjects.len()),
+    };
+    let mut faults: Vec<(String, Diagnostic)> = Vec::new();
+    for (id, subject) in &subjects {
+        let Some(affine) = world_affine(world, *id) else {
+            continue;
+        };
+        let points: Vec<[f32; 3]> = subject
+            .points
+            .iter()
+            .map(|p| affine.transform_point(*p))
+            .collect();
+        let filter = match &subject.occluder_layers {
+            Some(layers) => QueryFilter::new().include_set(layers).exclude(*id),
+            None => QueryFilter::new().only_fixed().exclude(*id),
+        };
+        let query = ExposureQuery {
+            points: &points,
+            facing: subject.facing,
+            occluders: &filter,
+            combine: subject.combine,
+        };
+        match light_exposure(world, &query) {
+            Ok(exposure) => results.readings.push((*id, exposure)),
+            Err(ExposureError::Invalid(d)) => faults.push((fault_key(*id), d)),
+            Err(ExposureError::Query(e)) => faults.push((
+                fault_key(*id),
+                Diagnostic::new(
+                    code::COLLIDER_LAYER_UNKNOWN,
+                    format!("light occluder query failed: {e}"),
+                )
+                .with_path("/occluder_layers")
+                .with_help("declare the layer under `physics.layers`"),
+            )),
+        }
+    }
+    world.insert_resource(results);
+    for (key, diagnostic) in faults {
+        report_full(world, key, diagnostic);
+    }
+}
+
+fn fault_key(entity: EntityId) -> String {
+    format!("light_exposure/{entity}")
 }

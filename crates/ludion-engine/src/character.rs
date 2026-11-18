@@ -48,9 +48,29 @@ pub struct CharacterData {
     pub mesh: String,
     /// The bound clips, sorted by short name (the character document's own canonical order).
     pub clips: Vec<CharacterClipData>,
+    /// The bone masks, sorted by name, each resolved to one weight per skin joint.
+    pub masks: Vec<CharacterMaskData>,
+}
+
+/// One bone mask resolved against the mesh's joints (`Plan/animation-layers.md` decision 1).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CharacterMaskData {
+    /// The short name an `AnimationLayer.mask` selects by.
+    pub name: String,
+    /// One weight per skin joint, in skin order; joint `i` is palette entry `i`.
+    pub weights: Vec<f32>,
 }
 
 impl CharacterData {
+    /// The resolved weights of the mask named `name` (one per skin joint), or `None` when this
+    /// character defines no such mask.
+    pub fn mask(&self, name: &str) -> Option<&[f32]> {
+        self.masks
+            .iter()
+            .find(|mask| mask.name == name)
+            .map(|mask| mask.weights.as_slice())
+    }
+
     /// The clip bound under the short `name`, or `None` when this character binds no such clip — the
     /// caller's cue to draw the rest pose, since a clip name is chosen at runtime by game logic.
     pub fn clip(&self, name: &str) -> Option<&CharacterClipData> {
@@ -147,7 +167,20 @@ pub(crate) fn load_with_sources(
             clip,
         })
         .collect();
-    Ok((CharacterData { mesh, clips }, sources))
+    let skin: Vec<(&str, Option<u32>)> = mesh_joints
+        .iter()
+        .flatten()
+        .map(|joint| (joint.name.as_str(), joint.parent))
+        .collect();
+    let masks = doc
+        .masks
+        .iter()
+        .map(|mask| CharacterMaskData {
+            name: mask.name.clone(),
+            weights: ludion_scene::resolve_character_mask(mask, &skin),
+        })
+        .collect();
+    Ok((CharacterData { mesh, clips, masks }, sources))
 }
 
 /// Sampling rate of the [`contact_heights`] report, in samples per clip second.

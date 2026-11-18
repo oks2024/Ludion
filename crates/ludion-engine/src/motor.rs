@@ -6,7 +6,8 @@ use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, World};
 use ludion_physics::{
     CharacterMotor, CharacterMotorState, GroundProbe, MotorError, MoveConstraint, MoveReport,
-    PostureReport, ResizeReport, ResumeReport, ground_probe_reach, motor_in_force,
+    PhysicsPose, PostureReport, ResizeReport, ResumeReport, TurnReport, ground_probe_reach,
+    motor_capsule_segment, motor_in_force,
 };
 
 use crate::components::Transform;
@@ -194,6 +195,27 @@ pub fn set_character_posture(
     ludion_physics::set_character_posture::<Transform>(world, entity, posture)
 }
 
+/// Turns the motor to face `yaw`, testing a lying body in 15-degree steps; see
+/// [`ludion_physics::turn_character`].
+///
+/// ```no_run
+/// # use ludion_core::ids::EntityId;
+/// # use ludion_engine::turn_character;
+/// # use ludion_ecs::{SystemCtx, World};
+/// fn face_east(world: &mut World, _ctx: &SystemCtx, hero: EntityId) {
+///     if let Ok(report) = turn_character(world, hero, -std::f32::consts::FRAC_PI_2) {
+///         if report.blocked_by.is_some() { /* a wall is in the way of the prone body */ }
+///     }
+/// }
+/// ```
+pub fn turn_character(
+    world: &mut World,
+    entity: EntityId,
+    yaw: f32,
+) -> Result<TurnReport, MotorError> {
+    ludion_physics::turn_character::<Transform>(world, entity, yaw)
+}
+
 /// Whether a capsule of `height` fits at the feet; see [`ludion_physics::fits_character`].
 ///
 /// ```no_run
@@ -351,25 +373,23 @@ fn draw(
     displacement: [f32; 3],
     report: &MoveReport,
 ) {
-    let Some(feet) = world
+    let Some((feet, rotation)) = world
         .get::<Transform>(entity)
         .ok()
         .flatten()
-        .map(|pose| pose.translation)
+        .map(|pose| (pose.translation, pose.rotation_quat()))
     else {
         return;
     };
     let Some(motor) = world.get::<CharacterMotor>(entity).ok().flatten().cloned() else {
         return;
     };
-    let motor = motor_in_force(
-        &motor,
-        world
-            .get::<ludion_physics::CharacterMotorState>(entity)
-            .ok()
-            .flatten(),
-    );
-    let radius = motor.radius;
+    let state = world
+        .get::<ludion_physics::CharacterMotorState>(entity)
+        .ok()
+        .flatten();
+    let (from, to, radius) = motor_capsule_segment(&motor, state, feet, rotation);
+    let motor = motor_in_force(&motor, state);
     let colour = if report.stuck {
         MOTOR_STUCK
     } else if report.grounded {
@@ -381,7 +401,7 @@ fn draw(
     let reach = ground_probe_reach(&motor, was_grounded, displacement);
     let normal = |n: [f32; 3]| n.map(|c| c * NORMAL_LENGTH);
     let mut pen = debug_draw(world, CATEGORY);
-    pen.capsule(up(radius), up(report.height - radius), radius, colour);
+    pen.capsule(from, to, radius, colour);
     if let Some(ground) = report.ground {
         pen.ray(ground.point, normal(ground.normal), MOTOR_GROUND_NORMAL);
     }

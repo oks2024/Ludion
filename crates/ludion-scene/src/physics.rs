@@ -16,16 +16,19 @@ use ludion_core::suggest;
 use crate::envelope;
 use crate::parse::expect_u64;
 use crate::physics_layers::{SceneLayer, check_layers};
+use crate::physics_surfaces::{check_surfaces, parse_default_surface, parse_surfaces};
 use crate::yaml::{MapEntry, Node, NodeValue};
 
 /// The keys a scene's `physics:` block accepts, in canonical emission order.
-pub(crate) const PHYSICS_KEYS: [&str; 6] = [
+pub(crate) const PHYSICS_KEYS: [&str; 8] = [
     "space",
     "gravity",
     "solver_iterations",
     "stabilization_iterations",
     "sleep_after_ticks",
     "layers",
+    "surfaces",
+    "default_surface",
 ];
 
 /// The keys one `physics.layers` entry accepts.
@@ -80,6 +83,11 @@ pub struct ScenePhysics {
     /// The named collision layers a collider's `layer` may name, in declaration order; empty when
     /// the scene declares none. [`ScenePhysics::layer_matrix`] resolves them.
     pub layers: Vec<SceneLayer>,
+    /// The named surfaces a `SurfaceTag` may name, in declaration order (the order is the
+    /// surface id); empty when the scene declares none.
+    pub surfaces: Vec<String>,
+    /// The surface any untagged collider hit reports, or `None`. Must name a declared surface.
+    pub default_surface: Option<String>,
 }
 
 /// Parses a scene's `physics:` block. `None` on a structural or value failure — always after
@@ -112,6 +120,9 @@ pub(crate) fn parse_physics(
     let mut sleep_after_ticks = None;
     let mut layers = Vec::new();
     let mut layers_ok = true;
+    let mut surfaces = Vec::new();
+    let mut default_surface = None;
+    let mut surfaces_ok = true;
 
     for entry in entries {
         match entry.key.as_str() {
@@ -135,6 +146,14 @@ pub(crate) fn parse_physics(
             "layers" => match parse_layers(entry, diagnostics) {
                 Some(parsed) => layers = parsed,
                 None => layers_ok = false,
+            },
+            "surfaces" => match parse_surfaces(entry, diagnostics) {
+                Some(parsed) => surfaces = parsed,
+                None => surfaces_ok = false,
+            },
+            "default_surface" => match parse_default_surface(entry, diagnostics) {
+                Some(parsed) => default_surface = Some(parsed),
+                None => surfaces_ok = false,
             },
             unknown => diagnostics.push(envelope::unknown_key(
                 unknown,
@@ -167,7 +186,15 @@ pub(crate) fn parse_physics(
         return None;
     }
 
-    if !layers_ok {
+    if surfaces_ok {
+        let checked = check_surfaces(&surfaces, default_surface.as_deref(), "/physics");
+        if !checked.is_empty() {
+            diagnostics.extend(checked);
+            return None;
+        }
+    }
+
+    if !layers_ok || !surfaces_ok {
         return None;
     }
     Some(ScenePhysics {
@@ -177,6 +204,8 @@ pub(crate) fn parse_physics(
         stabilization_iterations,
         sleep_after_ticks,
         layers,
+        surfaces,
+        default_surface,
     })
 }
 
@@ -499,6 +528,11 @@ pub fn validate_physics(physics: &ScenePhysics, base: &str) -> Vec<Diagnostic> {
         }
     }
     diagnostics.extend(check_layers(&physics.layers, base));
+    diagnostics.extend(check_surfaces(
+        &physics.surfaces,
+        physics.default_surface.as_deref(),
+        base,
+    ));
     diagnostics
 }
 

@@ -11,7 +11,7 @@ use ludion_core::time::{FrameIndex, TickRate};
 use ludion_ecs::{Parent, Phase, Schedule, World};
 use ludion_physics::{
     CharacterMotor, CollisionLayers, MIRROR, PhysicsSettings, PhysicsSpace, PhysicsWorld, STEP,
-    WRITE, WireBody,
+    SurfaceId, SurfaceTable, WRITE, WireBody,
 };
 use ludion_renderer::DebugSegment;
 use ludion_scene::{ScenePhysics, ScenePhysicsSpace};
@@ -94,6 +94,14 @@ pub(crate) fn settings(physics: &ScenePhysics) -> PhysicsSettings {
             .map(|index| matrix.ignores_mask(index))
             .collect();
         settings.layers = Some(CollisionLayers::new(matrix.names().to_vec(), masks));
+    }
+    if !physics.surfaces.is_empty() {
+        let default = physics
+            .default_surface
+            .as_ref()
+            .and_then(|name| physics.surfaces.iter().position(|s| s == name))
+            .map(|index| SurfaceId(index as u16));
+        settings.surfaces = Some(SurfaceTable::new(physics.surfaces.clone(), default));
     }
     settings
 }
@@ -250,6 +258,12 @@ pub(crate) fn report_rejections(world: &mut World) {
         } else if rejection.code == code::CHARACTER_MOTOR_INVALID {
             format!(
                 "{named}: {}; it gets no body until its CharacterMotor changes",
+                rejection.reason
+            )
+        } else if rejection.code == code::SURFACE_UNKNOWN {
+            format!(
+                "{named}: {}; its hits report the default surface until its SurfaceTag or the \
+                 scene's physics.surfaces changes",
                 rejection.reason
             )
         } else {
@@ -774,6 +788,8 @@ mod tests {
             stabilization_iterations: None,
             sleep_after_ticks: None,
             layers,
+            surfaces: Vec::new(),
+            default_surface: None,
         }
     }
 

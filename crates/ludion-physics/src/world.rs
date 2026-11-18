@@ -37,6 +37,7 @@ use crate::layer_set::LayerSet;
 use crate::meshes::TriangleMesh;
 use crate::motor::{LaneReport, MoveReport};
 use crate::sensors::SensorEvent;
+use crate::surface_tag::{SurfaceId, SurfaceTable};
 use crate::systems::{CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, PhysicsSettings};
 
 /// Gravity applied to every rigid body when nothing else is asked for: one standard gravity down
@@ -483,6 +484,14 @@ pub struct PhysicsWorld {
     /// Whether `query_masks` was resolved with rejections queued; a restore resolves silently
     /// (the layer table is not applied yet) and the next write reports.
     query_reported: bool,
+    /// The scene's declared surfaces, each entity's authored `SurfaceTag` name (entity-sorted) and
+    /// the same list resolved to ids. Hits report them; the solver never does. Not part of the
+    /// snapshot (the write refills them); never hashed.
+    surfaces: Option<SurfaceTable>,
+    surface_tags: Vec<(EntityId, String)>,
+    surface_ids: Vec<(EntityId, SurfaceId)>,
+    /// Whether `surface_ids` was resolved with rejections queued; a restore resolves silently.
+    surfaces_reported: bool,
     pub(crate) plane: Option<Plane>,
     tick_rate: TickRate,
     sleep_after_ticks: u32,
@@ -619,6 +628,10 @@ impl PhysicsWorld {
             query_layers: Vec::new(),
             query_masks: Vec::new(),
             query_reported: true,
+            surfaces: None,
+            surface_tags: Vec::new(),
+            surface_ids: Vec::new(),
+            surfaces_reported: true,
             plane: None,
             tick_rate,
             sleep_after_ticks: DEFAULT_SLEEP_AFTER_TICKS,
@@ -734,6 +747,10 @@ impl PhysicsWorld {
             self.layers.clone_from(&settings.layers);
             self.reapply_groups();
             self.resolve_query_masks(true);
+        }
+        if settings.surfaces != self.surfaces {
+            self.surfaces.clone_from(&settings.surfaces);
+            self.resolve_surface_ids(true);
         }
     }
 
@@ -1452,6 +1469,10 @@ impl PhysicsWorld {
             query_layers: Vec::new(),
             query_masks: Vec::new(),
             query_reported: true,
+            surfaces: None,
+            surface_tags: Vec::new(),
+            surface_ids: Vec::new(),
+            surfaces_reported: true,
             plane: snapshot.plane.map(Plane::from),
             tick_rate,
             sleep_after_ticks: DEFAULT_SLEEP_AFTER_TICKS,
@@ -2704,6 +2725,115 @@ impl PhysicsWorld {
         }
     }
 
+    /// Replaces the surface-tag side table; `tags` is entity-sorted. Skipped when equal; otherwise
+    /// stored and resolved against the current surface table.
+    pub(crate) fn set_surface_tags(&mut self, tags: &[(EntityId, String)]) {
+        if self.surfaces_reported && self.surface_tags == tags {
+            return;
+        }
+        self.surface_tags = tags.to_vec();
+        self.resolve_surface_ids(true);
+    }
+
+    /// Refreshes the surface tags from `world`; call it after a restore, before
+    /// [`apply_settings`](PhysicsWorld::apply_settings), so a hit answers before the first write.
+    /// The write refreshes them itself every tick.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_ecs::World;
+    /// use ludion_physics::PhysicsWorld;
+    ///
+    /// let mut physics = PhysicsWorld::new(TickRate::DEFAULT);
+    /// physics.sync_surface_tags(&World::new());
+    /// assert_eq!(physics.surface_id("concrete"), None);
+    /// ```
+    pub fn sync_surface_tags(&mut self, world: &World) {
+        let mut tags: Vec<(EntityId, String)> = self
+            .entities()
+            .filter_map(|entity| match world.get::<crate::SurfaceTag>(entity) {
+                Ok(Some(tag)) => Some((entity, tag.surface.clone())),
+                _ => None,
+            })
+            .collect();
+        tags.sort_unstable_by_key(|(entity, _)| *entity);
+        self.surface_tags = tags;
+        self.resolve_surface_ids(false);
+    }
+
+    /// Resolves each entity's `SurfaceTag` to an id under the current surface table. An entity
+    /// naming an undeclared surface gets no id (its hits report the default) and one `L1690`
+    /// rejection, and keeps its body.
+    fn resolve_surface_ids(&mut self, report: bool) {
+        let mut ids = Vec::with_capacity(self.surface_tags.len());
+        let mut rejections = Vec::new();
+        for (entity, name) in &self.surface_tags {
+            match self.surfaces.as_ref().and_then(|table| table.id(name)) {
+                Some(id) => ids.push((*entity, id)),
+                None => {
+                    let declared: &[String] =
+                        self.surfaces.as_ref().map_or(&[], SurfaceTable::names);
+                    let hint = match nearest(name, declared.iter().map(String::as_str)) {
+                        Some(near) => format!("nearest match is `{near}`"),
+                        None => "declare it under `physics.surfaces`".to_string(),
+                    };
+                    rejections.push(ShapeRejection {
+                        entity: *entity,
+                        code: code::SURFACE_UNKNOWN,
+                        reason: format!(
+                            "`SurfaceTag` surface `{name}` names no surface the scene's \
+                             `physics.surfaces` declares; {hint}"
+                        ),
+                        related: Vec::new(),
+                    });
+                }
+            }
+        }
+        self.surface_ids = ids;
+        self.surfaces_reported = report;
+        if report {
+            for rejection in rejections {
+                self.queue_rejection(rejection);
+            }
+        }
+    }
+
+    /// The id of the declared surface `name`, or `None` when the scene declares no such surface.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_physics::{PhysicsSettings, PhysicsSpace, PhysicsWorld, SurfaceId, SurfaceTable};
+    ///
+    /// let mut world = PhysicsWorld::new(TickRate::DEFAULT);
+    /// world.apply_settings(&PhysicsSettings {
+    ///     surfaces: Some(SurfaceTable::new(vec!["concrete".into()], None)),
+    ///     ..PhysicsSettings::new(PhysicsSpace::Free)
+    /// });
+    /// assert_eq!(world.surface_id("concrete"), Some(SurfaceId(0)));
+    /// assert_eq!(world.surface_name(SurfaceId(0)), Some("concrete"));
+    /// ```
+    pub fn surface_id(&self, name: &str) -> Option<SurfaceId> {
+        self.surfaces.as_ref()?.id(name)
+    }
+
+    /// The declared name of `id`, or `None` when out of range.
+    pub fn surface_name(&self, id: SurfaceId) -> Option<&str> {
+        self.surfaces.as_ref()?.name(id)
+    }
+
+    /// The surface `entity`'s collider reports: its `SurfaceTag`, else the scene's
+    /// `default_surface`, else `None`. What a `ContactEvent` consumer calls to name a contact's
+    /// surface.
+    pub fn surface_of(&self, entity: EntityId) -> Option<SurfaceId> {
+        self.surface_ids
+            .binary_search_by_key(&entity, |&(e, _)| e)
+            .map(|i| self.surface_ids[i].1)
+            .ok()
+            .or_else(|| self.surfaces.as_ref()?.default())
+    }
+
     /// `entity`'s query-only layer bitmask; `0` when it has none or names an undeclared layer.
     pub(crate) fn query_mask(&self, entity: EntityId) -> u32 {
         self.query_masks
@@ -3527,6 +3657,7 @@ mod tests {
             stabilization_iterations: 2,
             sleep_after_ticks: 7,
             layers: None,
+            surfaces: None,
         });
         assert_eq!(world.gravity(), [1.0, 2.0, 3.0]);
         assert_eq!(world.solver_iterations(), 1);

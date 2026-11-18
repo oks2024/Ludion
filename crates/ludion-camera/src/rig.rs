@@ -760,4 +760,13 @@ pub struct RigState {
     pub pose: Option<Pose>,
     /// Gameplay seconds the shake noise has advanced.
     pub shake_time: f64,
+    /// The [`CameraZone`](crate::CameraZone) entity whose `rig` drives this rig; `None` outside
+    /// every zone. Written by the engine each tick from the target's position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub zone: Option<EntityId>,
+    /// The configuration in force before the first zone, restored when the target leaves every
+    /// zone; `None` outside zones.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<RigConfig>,
 }

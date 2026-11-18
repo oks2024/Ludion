@@ -112,6 +112,24 @@ impl QualitySetting {
     /// never told anything resolves to, and the only setting a calibrated budget describes.
     pub const FULL_LABEL: &'static str = "full";
 
+    /// The setting a preset name selects, labelled with that name lowercased; `None` for any other
+    /// name. Reads no environment, unlike [`resolve_startup_quality`].
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::QualitySetting;
+    ///
+    /// assert_eq!(QualitySetting::preset("Medium").unwrap().label, "medium");
+    /// assert!(QualitySetting::preset("ultra").is_none());
+    /// ```
+    pub fn preset(name: &str) -> Option<QualitySetting> {
+        Some(QualitySetting {
+            quality: Quality::preset(name)?,
+            params: QualityParams::preset(name)?,
+            label: name.to_ascii_lowercase(),
+        })
+    }
+
     /// Everything the scene authors, at every axis's ceiling, labelled `"full"`.
     ///
     /// Named rather than left to [`Default`] because callers that must not vary with a machine — the

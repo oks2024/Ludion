@@ -42,6 +42,7 @@ pub mod builder;
 mod camera_latch;
 mod camera_offset;
 mod camera_rig;
+mod camera_zone;
 mod character;
 mod checkpoints;
 mod collapse;
@@ -115,6 +116,7 @@ mod scene_check;
 mod scene_physics;
 mod scene_session;
 mod sculpt_mesh;
+mod settings;
 mod shutdown;
 mod skin_bone;
 mod skin_ragdoll;
@@ -147,8 +149,9 @@ pub use bisect::{
     localize_divergence, verify_replay_keyframes, world_diff,
 };
 pub use builder::{CursorMode, EngineBuilder};
+pub use camera_zone::camera_occluders;
 pub use character::{
-    CharacterClipData, CharacterData, ClipContact, JointHeight, contact_heights,
+    CharacterClipData, CharacterData, CharacterMaskData, ClipContact, JointHeight, contact_heights,
     load as load_character,
 };
 pub use checkpoints::{CheckpointConfig, CheckpointInfo, Checkpoints, RestoreOutcome};
@@ -165,7 +168,10 @@ pub use components::{
     UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility,
     builtin_registry, crossfade,
 };
-pub use components::{Look, SweepShape, ZoneSweep};
+pub use components::{
+    AnimationLayer, AnimationLayers, LayerMode, fade_layer, layer_weight, play_layer,
+};
+pub use components::{Look, PerceiverMemory, Sense, StimulusRecord, SweepShape, ZoneSweep};
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
@@ -192,15 +198,15 @@ pub use lane::{
     LaneConstraint, LaneEnds, LaneInput, lane_error_colour, lane_frame, lane_relative,
 };
 pub use light_exposure::{
-    Combine, Exposure, ExposureError, ExposureQuery, Facing, LightContribution, LightKind,
-    MAX_EXPOSURE_POINTS, light_exposure,
+    Combine, Exposure, ExposureError, ExposureQuery, Facing, LightContribution, LightExposure,
+    LightExposureResults, LightKind, MAX_EXPOSURE_POINTS, light_exposure, light_exposure_update,
 };
 pub use ludion_camera::{
-    Aim, BlendCurve, BlendIn, CameraRig, ChaseRig, FirstPersonRig, FollowRig, Framing, KickConfig,
-    LookAhead, Recenter, RigCollision, RigCollisionConfig, RigConfig, RigMode, RigState,
-    ShakeConfig, Springs, TrackRig, VerticalAnchor, add_fov_kick, add_kick, add_look,
+    Aim, BlendCurve, BlendIn, CameraRig, CameraZone, ChaseRig, FirstPersonRig, FollowRig, Framing,
+    KickConfig, LookAhead, Recenter, RigCollision, RigCollisionConfig, RigConfig, RigMode,
+    RigState, ShakeConfig, Springs, TrackRig, VerticalAnchor, add_fov_kick, add_kick, add_look,
     add_look_counts, add_trauma, camera_relative, camera_relative_yaw, first_person_eye,
-    look_from_counts, orbit_eye, set_look, snap_rig,
+    look_from_counts, orbit_eye, resolve_zone, set_look, snap_rig,
 };
 pub use ludion_nav::PathStatus;
 pub use ludion_protocol::replay::GameIdentity;
@@ -220,7 +226,7 @@ pub use motor::{
     MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE,
     MOTOR_STUCK, MOTOR_WALL, character_fit, fits_character, move_character, move_character_with,
     move_characters, probe_character_ground, resize_character, resume_character,
-    set_character_posture, suspend_character, teleport_character,
+    set_character_posture, suspend_character, teleport_character, turn_character,
 };
 pub use nav::{
     Nav, NavConfig, NavPath, PathRequest, nav_distance, nav_path, nav_project, nav_reachable,
@@ -240,7 +246,10 @@ pub use patterns::{
     bullet_age, bullet_is_alive, bullet_position, play_patterns, validate_pattern_docs,
     volley_hits,
 };
-pub use perception::{PerceptionConfig, PerceptionResults, SightSample, perception_update};
+pub use perception::{
+    PerceptionConfig, PerceptionResults, SightSample, Stimulus, forget, forget_all,
+    perception_update, report_stimulus, stimuli,
+};
 pub use perf_live::{
     FrameSample, LIVE_SEQUENTIAL_NAMES, LiveGpuProfile, LivePerf, PROFILE_WINDOW_FRAMES,
     ProfileSamples, ProfileWindowData,
@@ -297,11 +306,12 @@ pub use scene_check::{
     expand_scene, font_table_faults, prefab_singleton_diagnostics, scene_atlas_diagnostics,
     scene_audio_diagnostics, scene_camera_offset_diagnostics, scene_camera_rig_diagnostics,
     scene_engine_diagnostics, scene_font_diagnostics, scene_hierarchy_body_diagnostics,
-    scene_layer_diagnostics, scene_local_light_diagnostics, scene_motor_diagnostics,
-    scene_physics_diagnostics, scene_prefab_clip_diagnostics, scene_sensor_diagnostics,
-    scene_sun_diagnostics,
+    scene_layer_diagnostics, scene_light_exposure_diagnostics, scene_local_light_diagnostics,
+    scene_motor_diagnostics, scene_physics_diagnostics, scene_prefab_clip_diagnostics,
+    scene_sensor_diagnostics, scene_sun_diagnostics, scene_surface_diagnostics,
 };
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
+pub use settings::{QualityPreset, Settings, SettingsView, WindowMode};
 pub use shutdown::Shutdown;
 pub use skin_bone::scene_skin_bone_diagnostics;
 pub use skin_ragdoll::switch_skin_to_ragdoll;

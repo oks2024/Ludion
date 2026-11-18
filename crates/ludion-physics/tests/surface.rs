@@ -684,6 +684,7 @@ fn a_body_without_its_own_sleep_ticks_falls_back_to_the_settings_value() {
             stabilization_iterations: 1,
             sleep_after_ticks: 2,
             layers: None,
+            surfaces: None,
         },
     );
     for frame in 0..10 {

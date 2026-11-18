@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+use super::shape::{InForce, Lying};
+
 /// A character controller's capsule and tunables. The physics write pass gives every motor entity
 /// one kinematic capsule body whose **origin is the character's feet**: the body centre sits
 /// `height / 2` above the entity's translation, and the capsule never tilts or yaws with the model.
@@ -91,6 +93,23 @@ pub enum PostureShape {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         radius: Option<f32>,
     },
+    /// A horizontal capsule along the character's facing (local `-Z`), resting on the ground: prone
+    /// and crawl. It yaws with the entity's `Transform` and never pitches or rolls. The capsule's
+    /// centre is `offset` ahead of the feet along the facing and a radius above them.
+    Lying {
+        /// The capsule's full length, tip to tip, in metres (more than `2 * radius`).
+        length: f32,
+        /// The capsule radius, in metres (finite, `> 0`); it is also half the body's height.
+        radius: f32,
+        /// How far ahead of the feet the capsule's centre lies, in metres; negative is behind
+        /// (default `0`; at most `length / 2 - radius` in magnitude, so the feet stay under the axis).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        offset: f32,
+    },
+}
+
+fn is_zero(value: &f32) -> bool {
+    *value == 0.0
 }
 
 impl Default for CharacterMotor {
@@ -175,6 +194,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 /// The capsule height in force: the state's override when it has one, else the motor's `height`.
+/// For a lying posture it is the body's height, `2 * radius`.
 pub fn height_in_force(motor: &CharacterMotor, state: Option<&CharacterMotorState>) -> f32 {
     motor_in_force(motor, state).height
 }
@@ -182,6 +202,9 @@ pub fn height_in_force(motor: &CharacterMotor, state: Option<&CharacterMotorStat
 /// The motor as it stands: the posture in force applied (its shape and tunables), then the state's
 /// height override on top. The result has no `postures` of its own. A posture the motor does not
 /// declare falls back to the base motor.
+///
+/// A `lying` posture is a horizontal capsule this struct cannot express: `radius` is its radius and
+/// `height` is `2 * radius`, the body's height; the state's height override does not apply to it.
 ///
 /// ```no_run
 /// # use ludion_physics::{motor_in_force, CharacterMotor, CharacterMotorState};
@@ -193,29 +216,57 @@ pub fn motor_in_force(
     motor: &CharacterMotor,
     state: Option<&CharacterMotorState>,
 ) -> CharacterMotor {
+    in_force(motor, state).motor
+}
+
+/// The in-force motor with the posture's lying shape alongside, when it has one.
+pub(crate) fn in_force(motor: &CharacterMotor, state: Option<&CharacterMotorState>) -> InForce {
     let mut effective = CharacterMotor {
         postures: BTreeMap::new(),
         ..motor.clone()
     };
+    let mut lying = None;
     if let Some(posture) = state
         .and_then(|state| state.posture.as_deref())
         .and_then(|name| motor.postures.get(name))
     {
-        apply_posture(&mut effective, posture);
+        lying = apply_posture(&mut effective, posture);
     }
-    if let Some(height) = state.and_then(|state| state.height) {
+    if lying.is_none()
+        && let Some(height) = state.and_then(|state| state.height)
+    {
         effective.height = height;
     }
-    effective
+    InForce {
+        motor: effective,
+        lying,
+    }
 }
 
-/// `motor` with `posture`'s shape and tunables applied.
-pub(crate) fn apply_posture(motor: &mut CharacterMotor, posture: &Posture) {
-    let PostureShape::Upright { height, radius } = &posture.shape;
-    motor.height = *height;
-    if let Some(radius) = radius {
-        motor.radius = *radius;
-    }
+/// `motor` with `posture`'s shape and tunables applied; the lying shape when the posture has one.
+pub(crate) fn apply_posture(motor: &mut CharacterMotor, posture: &Posture) -> Option<Lying> {
+    let lying = match &posture.shape {
+        PostureShape::Upright { height, radius } => {
+            motor.height = *height;
+            if let Some(radius) = radius {
+                motor.radius = *radius;
+            }
+            None
+        }
+        PostureShape::Lying {
+            length,
+            radius,
+            offset,
+        } => {
+            motor.radius = *radius;
+            motor.height = 2.0 * *radius;
+            Some(Lying {
+                length: *length,
+                radius: *radius,
+                offset: *offset,
+            })
+        }
+    };
     if let Some(value) = posture.step_height {
         motor.step_height = value;
     }
@@ -225,18 +276,22 @@ pub(crate) fn apply_posture(motor: &mut CharacterMotor, posture: &Posture) {
     if let Some(value) = posture.snap_distance {
         motor.snap_distance = value;
     }
+    lying
 }
 
 /// The motor with the named posture applied and no height override; `None` when the motor declares
 /// no such posture.
-pub(crate) fn posture_motor(motor: &CharacterMotor, name: &str) -> Option<CharacterMotor> {
+pub(crate) fn posture_motor(motor: &CharacterMotor, name: &str) -> Option<InForce> {
     let posture = motor.postures.get(name)?;
     let mut effective = CharacterMotor {
         postures: BTreeMap::new(),
         ..motor.clone()
     };
-    apply_posture(&mut effective, posture);
-    Some(effective)
+    let lying = apply_posture(&mut effective, posture);
+    Some(InForce {
+        motor: effective,
+        lying,
+    })
 }
 
 /// Whether `state` names a posture `motor` does not declare.
@@ -262,14 +317,28 @@ pub(crate) fn check_postures(motor: &CharacterMotor) -> Result<(), (String, Stri
             postures: BTreeMap::new(),
             ..motor.clone()
         };
-        apply_posture(&mut effective, posture);
-        let PostureShape::Upright { radius, .. } = &posture.shape;
-        if let Err((field, reason)) = check(&effective) {
-            let own = match field {
-                "/radius" => radius
+        let lying = apply_posture(&mut effective, posture);
+        let (checked, radius_at, height_at) = match (&posture.shape, &lying) {
+            (PostureShape::Upright { radius, .. }, _) => (
+                check(&effective),
+                radius
                     .is_some()
                     .then(|| format!("{at}/shape/upright/radius")),
-                "/height" => Some(format!("{at}/shape/upright/height")),
+                Some(format!("{at}/shape/upright/height")),
+            ),
+            (_, Some(lying)) => (
+                check_lying(lying).and_then(|()| check_tunables(&effective)),
+                Some(format!("{at}/shape/lying/radius")),
+                None,
+            ),
+            (_, None) => continue,
+        };
+        if let Err((field, reason)) = checked {
+            let own = match field {
+                "/radius" => radius_at,
+                "/height" => height_at,
+                "/length" => Some(format!("{at}/shape/lying/length")),
+                "/offset" => Some(format!("{at}/shape/lying/offset")),
                 "/step_height" => posture.step_height.map(|_| format!("{at}/step_height")),
                 "/slope_limit_deg" => posture
                     .slope_limit_deg
@@ -293,7 +362,6 @@ pub(crate) fn check_postures(motor: &CharacterMotor) -> Result<(), (String, Stri
 /// the reason; `Ok` when the motor is usable.
 pub(crate) fn check(motor: &CharacterMotor) -> Result<(), (&'static str, String)> {
     let positive = |value: f32| value.is_finite() && value > 0.0;
-    let non_negative = |value: f32| value.is_finite() && value >= 0.0;
     if !positive(motor.radius) {
         return Err((
             "/radius",
@@ -315,6 +383,14 @@ pub(crate) fn check(motor: &CharacterMotor) -> Result<(), (&'static str, String)
             ),
         ));
     }
+    check_tunables(motor)
+}
+
+/// The fields of `motor` that do not depend on its capsule's shape: the slope, step, snap and skin
+/// distances and `max_slides` (the step against `motor.height`).
+fn check_tunables(motor: &CharacterMotor) -> Result<(), (&'static str, String)> {
+    let positive = |value: f32| value.is_finite() && value > 0.0;
+    let non_negative = |value: f32| value.is_finite() && value >= 0.0;
     if !(motor.slope_limit_deg.is_finite()
         && motor.slope_limit_deg > 0.0
         && motor.slope_limit_deg < 90.0)
@@ -370,6 +446,48 @@ pub(crate) fn check(motor: &CharacterMotor) -> Result<(), (&'static str, String)
         ));
     }
     Ok(())
+}
+
+/// A lying shape's own fields: the first out of range, as its pointer under the shape and the reason.
+fn check_lying(lying: &Lying) -> Result<(), (&'static str, String)> {
+    let Lying {
+        length,
+        radius,
+        offset,
+    } = *lying;
+    if !(radius.is_finite() && radius > 0.0) {
+        return Err((
+            "/radius",
+            format!("`radius` is {radius}; it must be finite and > 0"),
+        ));
+    }
+    if !(length.is_finite() && length > 2.0 * radius + 1e-3) {
+        return Err((
+            "/length",
+            format!(
+                "`length` {length} must be finite and longer than the two caps of a `radius` {radius} capsule (`2 * radius`)"
+            ),
+        ));
+    }
+    let reach = length / 2.0 - radius;
+    if !(offset.is_finite() && offset.abs() <= reach) {
+        return Err((
+            "/offset",
+            format!(
+                "`offset` is {offset}; it must be finite and at most `length / 2 - radius` ({reach}) in magnitude, so the feet stay under the capsule's axis"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// [`check`] for the motor in force: an upright one exactly as `check`, a lying one its own fields
+/// and every tunable against its body height, `2 * radius`.
+pub(crate) fn check_in_force(force: &InForce) -> Result<(), (&'static str, String)> {
+    match &force.lying {
+        None => check(&force.motor),
+        Some(lying) => check_lying(lying).and_then(|()| check_tunables(&force.motor)),
+    }
 }
 
 impl SemanticValidate for CharacterMotor {
@@ -517,6 +635,93 @@ mod tests {
                 "{posture}"
             );
         }
+    }
+
+    #[test]
+    fn each_bad_lying_field_names_its_pointer() {
+        let lying = |fields: Value| json!({"shape": {"lying": fields}});
+        for (posture, pointer) in [
+            (
+                lying(json!({"length": 1.7, "radius": 0.0})),
+                "/postures/crouch/shape/lying/radius",
+            ),
+            (
+                lying(json!({"length": 0.3, "radius": 0.17})),
+                "/postures/crouch/shape/lying/length",
+            ),
+            (
+                lying(json!({"length": 1.7, "radius": 0.17, "offset": 0.7})),
+                "/postures/crouch/shape/lying/offset",
+            ),
+            (
+                lying(json!({"length": 1.7, "radius": 0.17, "offset": -0.7})),
+                "/postures/crouch/shape/lying/offset",
+            ),
+            (
+                json!({"shape": {"lying": {"length": 1.7, "radius": 0.17}}, "step_height": 0.4}),
+                "/postures/crouch/step_height",
+            ),
+            (
+                json!({"shape": {"lying": {"length": 1.7, "radius": 0.17}}, "slope_limit_deg": 90.0}),
+                "/postures/crouch/slope_limit_deg",
+            ),
+            (
+                json!({"shape": {"lying": {"length": 1.7, "radius": 0.17}}, "snap_distance": -1.0}),
+                "/postures/crouch/snap_distance",
+            ),
+        ] {
+            assert_eq!(
+                codes_at(with_posture(posture.clone())),
+                vec![("L1294".to_string(), Some(pointer.to_string()))],
+                "{posture}"
+            );
+        }
+        let fine = lying(json!({"length": 1.7, "radius": 0.17, "offset": 0.68}));
+        assert!(CharacterMotor::validate_semantics(&with_posture(fine)).is_empty());
+    }
+
+    #[test]
+    fn an_inherited_step_that_is_too_tall_for_a_lying_body_is_reported_at_the_posture() {
+        // the inherited step_height 0.3 is not below the lying body's height, 0.2.
+        let found = CharacterMotor::validate_semantics(&with_posture(
+            json!({"shape": {"lying": {"length": 1.0, "radius": 0.1}}}),
+        ));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path.as_deref(), Some("/postures/crouch"));
+    }
+
+    #[test]
+    fn a_lying_motor_in_force_has_the_lying_radius_and_twice_it_for_height() {
+        let mut motor = CharacterMotor::default();
+        motor.postures.insert(
+            "prone".into(),
+            Posture {
+                shape: PostureShape::Lying {
+                    length: 1.7,
+                    radius: 0.17,
+                    offset: 0.0,
+                },
+                step_height: Some(0.06),
+                slope_limit_deg: None,
+                snap_distance: None,
+            },
+        );
+        let state = CharacterMotorState {
+            posture: Some("prone".into()),
+            height: Some(1.0),
+            ..Default::default()
+        };
+        let force = in_force(&motor, Some(&state));
+        assert_eq!(
+            (
+                force.motor.radius,
+                force.motor.height,
+                force.motor.step_height
+            ),
+            (0.17, 2.0 * 0.17, 0.06)
+        );
+        assert!(force.lying.is_some());
+        assert!(check_in_force(&force).is_ok());
     }
 
     #[test]

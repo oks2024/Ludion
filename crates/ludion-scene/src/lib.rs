@@ -133,6 +133,7 @@ mod path;
 mod patrol;
 mod physics;
 mod physics_layers;
+mod physics_surfaces;
 mod prefab;
 mod profile;
 mod rim;
@@ -157,7 +158,7 @@ pub use atlas::{
     ATLAS_FORMAT_VERSION, ATLAS_SOURCE_FORMAT_VERSION, AtlasDocument, AtlasFilter, AtlasRegion,
     AtlasSourceDocument, AtlasSourceInput, Flipbook,
 };
-pub use character::{CHARACTER_FORMAT_VERSION, CharacterClip, CharacterDocument};
+pub use character::{CHARACTER_FORMAT_VERSION, CharacterClip, CharacterDocument, CharacterMask};
 pub use clip_eval::{
     ClipSampler, PartPose, clip_phase, flipbook_frame, joint_pose, part_pose, sample_channel,
     sample_rotation, slerp, track as clip_track,
@@ -201,6 +202,7 @@ pub use path::{
 pub use patrol::{PATROL_FORMAT_VERSION, PatrolDocument, PatrolLook, PatrolMode, PatrolPoint};
 pub use physics::{ScenePhysics, ScenePhysicsSpace, validate_physics};
 pub use physics_layers::{DEFAULT_LAYER, LayerMatrix, MAX_LAYERS, SceneLayer};
+pub use physics_surfaces::MAX_SURFACES;
 pub use prefab::{PREFAB_FORMAT_VERSION, PrefabDocument};
 pub use profile::ProfileEnvelope;
 pub use rim::DocRim;
@@ -2323,6 +2325,27 @@ pub fn check_character_clips(
     character::check_clips(doc, clips, joints)
 }
 
+/// Resolves a character mask to one weight per skin joint. `joints` is `(name, parent index)` in
+/// skin order (parent-first). A listed joint takes its weight (1.0 without `weights`); with
+/// `descendants`, an unlisted joint inherits its nearest listed ancestor's weight; the rest are 0.
+///
+/// # Example
+/// ```
+/// use ludion_scene::{CharacterMask, resolve_character_mask};
+/// let mask = CharacterMask {
+///     name: "upper".into(),
+///     joints: vec!["torso".into()],
+///     descendants: true,
+///     weights: vec![],
+/// };
+/// let joints = [("hips", None), ("torso", Some(0)), ("arm", Some(1)), ("leg", Some(0))];
+/// assert_eq!(resolve_character_mask(&mask, &joints), vec![0.0, 1.0, 1.0, 0.0]);
+/// ```
+#[must_use]
+pub fn resolve_character_mask(mask: &CharacterMask, joints: &[(&str, Option<u32>)]) -> Vec<f32> {
+    character::resolve_mask(mask, joints)
+}
+
 /// Writes `doc` in canonical form (stable field order, LF endings, ryu shortest-round-trip floats;
 /// clips sorted by short name, `speed: 1.0` canonicalized to the key's absence). Byte-idempotent.
 ///
@@ -2760,4 +2783,37 @@ pub fn deserialize_doc<T: serde::de::DeserializeOwned>(fields: Value) -> Result<
 /// ```
 pub fn open_profile(source: &str) -> Result<ProfileEnvelope, Vec<Diagnostic>> {
     profile::open_profile(source)
+}
+
+// --- Player-settings documents (`save/settings.yaml`, `kind: settings`) ------------------------
+//
+// The per-machine settings file shares the profile's lenient envelope open; the engine's
+// `settings` module owns the field-level leniency (`Plan/settings.md`).
+
+/// Opens a player-settings document leniently: validates and strips its `format`/`kind` envelope
+/// (`kind: settings`) and returns the remaining field map plus the declared `format`, **without**
+/// running the strict field checker. The canonical *write* is [`emit_doc`] with `kind: settings`.
+///
+/// # Errors
+/// `L1700` for a malformed envelope (a missing/non-integer `format`, a missing/non-`settings`
+/// `kind`, a non-mapping document); `L1001`–`L1009` for strict-YAML violations.
+///
+/// # Example
+/// ```
+/// let source = "format: 1\nkind: settings\naudio:\n  master: 0.5\n";
+/// let settings = ludion_scene::open_settings(source).expect("a well-formed settings envelope");
+/// assert_eq!(settings.format, 1);
+/// assert_eq!(settings.fields["audio"]["master"], serde_json::json!(0.5));
+///
+/// // A `kind: profile` file is an L1700 — the engine backs it up and starts from defaults.
+/// let wrong = "format: 1\nkind: profile\n";
+/// let diagnostics = ludion_scene::open_settings(wrong).unwrap_err();
+/// assert_eq!(diagnostics[0].code.as_str(), "L1700");
+/// ```
+pub fn open_settings(source: &str) -> Result<ProfileEnvelope, Vec<Diagnostic>> {
+    profile::open_envelope(
+        source,
+        "settings",
+        ludion_core::codes::code::SETTINGS_ENVELOPE,
+    )
 }

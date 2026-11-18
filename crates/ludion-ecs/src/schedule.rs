@@ -521,6 +521,18 @@ mod tests {
     }
 
     #[test]
+    fn the_first_tick_enters_frame_zero() {
+        let unscaled = SystemCtx::new(FrameIndex::ZERO, TickRate::DEFAULT);
+        assert_eq!(unscaled.game_frames_crossed(), 1);
+
+        let mut clock = GameClock::default();
+        clock.scale(0.25);
+        let advanced = clock.advance();
+        let ctx = SystemCtx::new(FrameIndex::ZERO, TickRate::DEFAULT).with_clock(&clock, advanced);
+        assert_eq!(ctx.game_frames_crossed(), 1, "frame 0 at 0.25");
+    }
+
+    #[test]
     fn a_held_ctx_crosses_nothing() {
         let mut clock = GameClock::default();
         clock.hold();

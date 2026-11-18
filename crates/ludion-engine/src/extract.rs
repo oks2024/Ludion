@@ -26,7 +26,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat3, Mat4, Quat, Vec3};
 use ludion_core::math::{Affine3, Trs, euler_xyz_degrees_to_quat, quat_to_euler_xyz_degrees};
 use ludion_core::par;
-use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
+use ludion_core::time::{FrameIndex, GameClock, GameTime, Q16_PER_TICK, SimTime, TickRate};
 use ludion_ecs::{ReadColumn, World};
 use ludion_protocol::command::ViewPose;
 use ludion_renderer::LodSettings;
@@ -51,6 +51,7 @@ use crate::components::{
     PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Rim, SkinBone, SpotLight,
     Sprite, SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText,
 };
+use crate::components::{AnimationLayers, LayerMode, layer_weight_at};
 use crate::docs::DocStore;
 use crate::extract_observer::{ExtractPhase, SkinCounts};
 use crate::fonts::FontLibrary;
@@ -743,7 +744,7 @@ fn extract_inner(
     let sim_now = now;
     let now = world
         .resource::<GameClock>()
-        .map_or(now, |clock| clock.game_time(now));
+        .map_or_else(|| GameTime::from(now), |clock| clock.game_instant(now));
     let ids: Vec<EntityId> = world
         .entities()
         .chain(world.presentation_entities())
@@ -980,7 +981,7 @@ fn extract_inner(
         projection: camera.projection,
         viewport,
         real_frame: sim_now.ticks(),
-        game_frame: now.ticks(),
+        game_frame: now.ticks_floor(),
         rate: sim_now.rate(),
     };
     for (index, &id) in ids.iter().enumerate() {
@@ -2285,7 +2286,7 @@ fn extract_particles(
     ids: &[EntityId],
     visibility: &FrameVisibility,
     poses: &mut WorldAffines,
-    now: SimTime,
+    now: GameTime,
     particle_density: f32,
     basis: CameraBasis,
     viewmodel: Option<(&crate::viewmodel::FrameViewmodel, Mat4)>,
@@ -2412,7 +2413,7 @@ fn extract_volleys(
     textures: &mut Vec<Arc<TextureImage>>,
     path_index: &mut StableMap<String, usize>,
     degraded: &mut Vec<(String, Diagnostic)>,
-    now: SimTime,
+    now: GameTime,
     basis: CameraBasis,
     out: &mut Vec<SpriteInstance>,
     mut bullet_keys: Option<&mut Vec<(InstanceKey, u32)>>,
@@ -3275,7 +3276,7 @@ pub(crate) fn place_uncached<'w>(
         &mut assets,
         &mut atlases,
         &mut poses,
-        now,
+        GameTime::from(now),
     )
 }
 
@@ -3363,7 +3364,7 @@ pub(crate) fn asset_refs(world: &World, project_root: AssetRoot<'_>) -> AssetRef
         &mut RefLoader,
         &mut atlases,
         &mut poses,
-        SimTime::from_ticks(0, TickRate::DEFAULT),
+        GameTime::from_ticks(0, TickRate::DEFAULT),
     );
     let mut refs = AssetRefs::default();
     for sprite in &placed.sprites {
@@ -3430,7 +3431,7 @@ pub(crate) fn place<'w>(
     assets: &mut dyn SceneAssets,
     atlases: &mut AtlasCache,
     poses: &mut WorldAffines,
-    now: SimTime,
+    now: GameTime,
 ) -> Placed<'w> {
     let (skin_followers, _) = place_poses(world, ids, assets, poses, now);
     place_with(
@@ -3456,7 +3457,7 @@ pub(crate) fn place_poses<'w>(
     ids: &[EntityId],
     assets: &mut dyn SceneAssets,
     poses: &mut WorldAffines,
-    now: SimTime,
+    now: GameTime,
 ) -> (SkinFollowers<'w>, SocketPalettes) {
     prefab_part_poses(world, ids, assets, now, poses);
     pose_sockets(world, ids, assets, poses, now)
@@ -3570,7 +3571,7 @@ pub(crate) fn place_with<'w>(
     assets: &mut dyn SceneAssets,
     atlases: &mut AtlasCache,
     poses: &mut WorldAffines,
-    now: SimTime,
+    now: GameTime,
     skin_followers: StableMap<EntityId, Vec<(&'w str, Mat4)>>,
     skip: &dyn Fn(EntityId) -> bool,
 ) -> Placed<'w> {
@@ -3926,26 +3927,29 @@ pub(crate) fn skin_palette(
     character: Option<&CharacterData>,
     skin_model: Mat4,
     followed: Option<&[(&str, Mat4)]>,
-    now: SimTime,
+    now: GameTime,
     scratch: &mut Vec<Mat4>,
     out: &mut Vec<Mat4>,
 ) -> PalettePath {
+    let held_now = held_for(world, skin, now);
     let (pose, crossfade) = character.map_or((None, None), |data| {
-        character_pose(world, skin, data, held_for(world, skin, now))
+        character_pose(world, skin, data, held_now)
     });
+    let layers = character.map_or_else(Vec::new, |data| layer_poses(world, skin, data, held_now));
     match followed {
         Some(followed) if !followed.is_empty() => {
             posed_palette(joints, skin_model, followed, scratch, out);
             PalettePath::Followed
         }
-        _ if pose.is_none() && crossfade.is_none() => {
+        _ if pose.is_none() && crossfade.is_none() && layers.is_empty() => {
             out.extend(joints.iter().map(|joint| joint.rest));
             PalettePath::Rest
         }
         _ => {
-            sampled_palette(joints, pose, crossfade.as_ref(), scratch, out);
+            sampled_palette_layered(joints, pose, crossfade.as_ref(), &layers, scratch, out);
             PalettePath::Sampled {
                 fading: crossfade.is_some(),
+                layers: layers.len() as u8,
             }
         }
     }
@@ -3958,8 +3962,9 @@ pub(crate) enum PalettePath {
     Rest,
     /// `SkinBone` followers drove the bones.
     Followed,
-    /// The character's clip was sampled; `fading` when a crossfade blended a second clip.
-    Sampled { fading: bool },
+    /// The character's clip was sampled; `fading` when a crossfade blended a second clip, and
+    /// `layers` animation layers composed over it.
+    Sampled { fading: bool, layers: u8 },
 }
 
 impl PalettePath {
@@ -3996,7 +4001,7 @@ fn pose_skins(
     world: &World,
     jobs: &[SkinJob],
     mesh_assets: &[Arc<MeshData>],
-    now: SimTime,
+    now: GameTime,
     socketed: &SocketPalettes,
 ) -> (Vec<Mat4>, SkinCounts) {
     let total: usize = jobs
@@ -4036,8 +4041,8 @@ fn pose_skins(
                 counts.joints_sampled += match path {
                     PalettePath::Rest => 0,
                     PalettePath::Followed => joints.len() as u64,
-                    PalettePath::Sampled { fading } => {
-                        joints.len() as u64 * if fading { 2 } else { 1 }
+                    PalettePath::Sampled { fading, layers } => {
+                        joints.len() as u64 * (1 + u64::from(fading) + u64::from(layers))
                     }
                 };
             }
@@ -4075,7 +4080,7 @@ pub(crate) fn posed_joint_model(
     character: Option<&CharacterData>,
     skin_model: Mat4,
     followed: Option<&[(&str, Mat4)]>,
-    now: SimTime,
+    now: GameTime,
     joint: &str,
 ) -> Option<Mat4> {
     let index = joints.iter().position(|j| j.name == joint)?;
@@ -4142,7 +4147,7 @@ fn pose_sockets<'w>(
     ids: &[EntityId],
     assets: &mut dyn SceneAssets,
     poses: &mut WorldAffines,
-    now: SimTime,
+    now: GameTime,
 ) -> (SkinFollowers<'w>, SocketPalettes) {
     let mut sockets: Vec<(usize, EntityId, EntityId)> = Vec::new();
     for &id in ids {
@@ -4261,7 +4266,7 @@ fn pose_each(
     assets: &mut dyn SceneAssets,
     poses: &mut WorldAffines,
     followers: &StableMap<EntityId, Vec<(&str, Mat4)>>,
-    now: SimTime,
+    now: GameTime,
     store: &mut SocketPalettes,
 ) -> bool {
     *store = SocketPalettes::default();
@@ -4455,6 +4460,20 @@ pub(crate) fn sampled_palette(
     posed_model: &mut Vec<Mat4>,
     out: &mut Vec<Mat4>,
 ) {
+    sampled_palette_layered(joints, pose, fade, &[], posed_model, out);
+}
+
+/// [`sampled_palette`] with `layers` composed over each joint's base pose, in order. With no layers
+/// the path is exactly [`sampled_palette`]'s; a joint no layer touches keeps its base `local`
+/// bit-for-bit.
+pub(crate) fn sampled_palette_layered(
+    joints: &[SkinJoint],
+    pose: ClipPose<'_, ClipSampler>,
+    fade: Option<&CrossfadePose<'_, ClipSampler>>,
+    layers: &[LayerPose<'_>],
+    posed_model: &mut Vec<Mat4>,
+    out: &mut Vec<Mat4>,
+) {
     posed_model.clear();
     fn bound<'a>(side: ClipPose<'a, ClipSampler>, targets: usize) -> ClipPose<'a, ClipSampler> {
         side.filter(|(sampler, _)| sampler.targets() == targets)
@@ -4471,6 +4490,11 @@ pub(crate) fn sampled_palette(
         let sampled = match fade {
             None => sample(pose),
             Some(fade) => blended_joint_pose(joint, sample(fade.from), sample(pose), fade.weight),
+        };
+        let sampled = if layers.is_empty() {
+            sampled
+        } else {
+            layered_joint_pose(joint, index, joints.len(), sampled, layers).or(sampled)
         };
         let local = match sampled {
             None => joint.rest_local,
@@ -4524,6 +4548,161 @@ fn blended_joint_pose(
         translation: lerp3(from.translation, to.translation, joint.rest_translation),
         scale: lerp3(from.scale, to.scale, joint.rest_scale),
     })
+}
+
+/// One `AnimationLayers` layer ready to sample: its clip at the layer's own clock, the mask's
+/// per-joint weights (`None` is the whole skin), how it combines, and its weight now, in `(0, 1]`.
+pub(crate) struct LayerPose<'a> {
+    pub pose: ClipPose<'a, ClipSampler>,
+    pub mask: Option<&'a [f32]>,
+    pub mode: LayerMode,
+    pub weight: f64,
+}
+
+/// The layers of `id`'s `AnimationLayers` that act at `now` (the held time the base pose reads), in
+/// list order. A layer with no weight, an unbound clip or an unknown mask is skipped silently, as a
+/// base `Animation` naming an unbound clip is. Empty — without allocating — when the entity has no
+/// `AnimationLayers`.
+pub(crate) fn layer_poses<'a>(
+    world: &World,
+    id: EntityId,
+    data: &'a CharacterData,
+    now: GameTime,
+) -> Vec<LayerPose<'a>> {
+    let Some(stack) = get::<AnimationLayers>(world, id) else {
+        return Vec::new();
+    };
+    stack
+        .layers
+        .iter()
+        .take(ludion_components::animation_layers::MAX_ANIMATION_LAYERS)
+        .filter_map(|layer| {
+            let weight = f64::from(layer_weight_at(layer, now));
+            if weight <= 0.0 || weight.is_nan() {
+                return None;
+            }
+            let binding = data.clip(&layer.clip)?;
+            let mask = match layer.mask.as_str() {
+                "" => None,
+                name => Some(data.mask(name)?),
+            };
+            let elapsed = clock_elapsed(now, layer.started, layer.speed, None) * binding.speed;
+            Some(LayerPose {
+                pose: Some((
+                    &binding.sampler,
+                    ludion_scene::clip_phase(&binding.clip, elapsed),
+                )),
+                mask,
+                mode: layer.mode,
+                weight,
+            })
+        })
+        .collect()
+}
+
+/// One joint's channels after `layers` compose over its `base` sample, or `None` when no layer
+/// reaches the joint (it has no track in the layer clip, or `weight × mask` is zero) — the caller
+/// then keeps `base` untouched. Every channel is carried as `f64`, a missing one reading as the
+/// joint's rest value.
+///
+/// Override blends toward the layer's channels by `weight × mask` (exactly 1 takes them verbatim);
+/// additive adds the layer's change from its own first frame: rotation `base ⊗ slerp(I, r⁻¹ ⊗ c, k)`,
+/// translation `base + k (c − r)`, scale `base × (1 + k (c / r − 1))`.
+fn layered_joint_pose(
+    joint: &SkinJoint,
+    index: usize,
+    joint_count: usize,
+    base: Option<ludion_scene::PartPose>,
+    layers: &[LayerPose<'_>],
+) -> Option<ludion_scene::PartPose> {
+    let widen = |v: Vec3| [v.x, v.y, v.z].map(f64::from);
+    let rest_q = [
+        joint.rest_rotation.x,
+        joint.rest_rotation.y,
+        joint.rest_rotation.z,
+        joint.rest_rotation.w,
+    ]
+    .map(f64::from);
+    let channels = |pose: Option<ludion_scene::PartPose>| {
+        let pose = pose.unwrap_or_default();
+        (
+            pose.rotation.unwrap_or(rest_q),
+            pose.translation
+                .unwrap_or_else(|| widen(joint.rest_translation)),
+            pose.scale.unwrap_or_else(|| widen(joint.rest_scale)),
+        )
+    };
+    let mut current: Option<([f64; 4], [f64; 3], [f64; 3])> = None;
+    for layer in layers {
+        let Some((sampler, t)) = layer.pose else {
+            continue;
+        };
+        if sampler.targets() != joint_count {
+            continue;
+        }
+        let Some(sample) = sampler.pose(index, t) else {
+            continue;
+        };
+        let mask = layer
+            .mask
+            .map_or(1.0, |m| m.get(index).copied().unwrap_or(0.0));
+        let k = layer.weight * f64::from(mask);
+        if k <= 0.0 || k.is_nan() {
+            continue;
+        }
+        let (rotation, translation, scale) = current.get_or_insert_with(|| channels(base));
+        let (c_rot, c_trans, c_scale) = channels(Some(sample));
+        match layer.mode {
+            LayerMode::Override if k >= 1.0 => {
+                (*rotation, *translation, *scale) = (c_rot, c_trans, c_scale);
+            }
+            LayerMode::Override => {
+                *rotation = ludion_scene::slerp(*rotation, c_rot, k);
+                for i in 0..3 {
+                    translation[i] += (c_trans[i] - translation[i]) * k;
+                    scale[i] += (c_scale[i] - scale[i]) * k;
+                }
+            }
+            LayerMode::Additive => {
+                let (r_rot, r_trans, r_scale) = channels(sampler.pose(index, 0.0));
+                let delta = quat_mul(quat_conjugate(r_rot), c_rot);
+                *rotation = quat_mul(
+                    *rotation,
+                    ludion_scene::slerp([0.0, 0.0, 0.0, 1.0], delta, k),
+                );
+                for i in 0..3 {
+                    translation[i] += k * (c_trans[i] - r_trans[i]);
+                    let ratio = if r_scale[i].abs() < 1e-12 {
+                        1.0
+                    } else {
+                        c_scale[i] / r_scale[i]
+                    };
+                    scale[i] *= 1.0 + k * (ratio - 1.0);
+                }
+            }
+        }
+    }
+    current.map(|(rotation, translation, scale)| ludion_scene::PartPose {
+        rotation: Some(rotation),
+        translation: Some(translation),
+        scale: Some(scale),
+    })
+}
+
+/// The Hamilton product `a ⊗ b` of two `[x, y, z, w]` quaternions (plain arithmetic, no
+/// transcendentals).
+fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+    ]
+}
+
+/// The conjugate of a unit `[x, y, z, w]` quaternion, which is its inverse.
+fn quat_conjugate(q: [f64; 4]) -> [f64; 4] {
+    [-q[0], -q[1], -q[2], q[3]]
 }
 
 /// The instance rim lane `(color·strength, power)` for a resolved rim; all-zero is no rim.
@@ -5361,7 +5540,7 @@ pub(crate) fn animation_pose<'a>(
     world: &World,
     id: EntityId,
     data: &'a AssemblyData,
-    now: SimTime,
+    now: GameTime,
 ) -> (ClipPose<'a>, Option<CrossfadePose<'a>>) {
     let Some(animation) = get::<Animation>(world, id) else {
         return (None, None);
@@ -5391,13 +5570,13 @@ pub(crate) struct CrossfadePose<'a, C = ludion_scene::AnimationDocument> {
 /// The incoming side's share of an active crossfade at `now`, or `None` when the animation is not
 /// fading: no `fade`, or `fade_started + fade` has passed, so the plain incoming pose is drawn.
 /// Derived from tick counts like [`clock_ticks`]; a `fade_started` in the future reads as `0`.
-fn fade_weight(animation: &Animation, now: SimTime) -> Option<f64> {
+fn fade_weight(animation: &Animation, now: GameTime) -> Option<f64> {
     let fade = f64::from(animation.fade);
     if !(fade > 0.0 && fade.is_finite()) {
         return None;
     }
-    let ticks = now.ticks().saturating_sub(animation.fade_started.as_u64());
-    let weight = ticks as f64 * now.rate().seconds_per_tick() / fade;
+    let ticks = now.ticks_since(animation.fade_started).max(0.0);
+    let weight = ticks * now.rate().seconds_per_tick() / fade;
     (weight < 1.0).then_some(weight)
 }
 
@@ -5408,7 +5587,7 @@ pub(crate) fn character_pose<'a>(
     world: &World,
     id: EntityId,
     data: &'a CharacterData,
-    now: SimTime,
+    now: GameTime,
 ) -> (
     ClipPose<'a, ClipSampler>,
     Option<CrossfadePose<'a, ClipSampler>>,
@@ -5471,7 +5650,7 @@ fn prefab_part_poses(
     world: &World,
     ids: &[EntityId],
     assets: &mut dyn SceneAssets,
-    now: SimTime,
+    now: GameTime,
     poses: &mut WorldAffines,
 ) {
     let mut plays: BTreeMap<EntityId, PrefabPlay> = BTreeMap::new();
@@ -5634,7 +5813,7 @@ fn flipbook_frame_name(
     sprite: &Sprite,
     assets: &mut dyn SceneAssets,
     atlases: &mut AtlasCache,
-    now: SimTime,
+    now: GameTime,
 ) -> Option<String> {
     let atlas = sprite.atlas.as_deref()?;
     sprite.frame.as_deref()?;
@@ -5665,33 +5844,41 @@ fn flipbook_frame_name(
 /// saturates to zero rather than wrapping into an enormous positive time. A flipbook keeps the
 /// ticks so its frame can divide by the rate last; seconds are [`clock_elapsed`].
 pub(crate) fn clock_ticks(
-    now: SimTime,
+    now: impl Into<GameTime>,
     started: FrameIndex,
     speed: f32,
     anchor: Option<&ClipAnchor>,
 ) -> f64 {
+    let now = now.into();
     let (base, origin) = match anchor {
         Some(anchor) if anchor.started == started => (anchor.ticks, anchor.frame),
         _ => (0.0, started),
     };
-    let played = now.ticks().saturating_sub(origin.as_u64());
-    base + played as f64 * f64::from(speed)
+    let played = now.ticks_since(origin).max(0.0);
+    base + played * f64::from(speed)
 }
 
 /// The clip clock in seconds: [`clock_ticks`] at the sim's seconds-per-tick.
 pub(crate) fn clock_elapsed(
-    now: SimTime,
+    now: impl Into<GameTime>,
     started: FrameIndex,
     speed: f32,
     anchor: Option<&ClipAnchor>,
 ) -> f64 {
+    let now = now.into();
     clock_ticks(now, started, speed, anchor) * now.rate().seconds_per_tick()
 }
 
 /// `now` snapped down to the animation's pose grid: the last tick that is a multiple of `hold`
 /// (a 0 reads as 1). Applied only where extract poses; events and the ragdoll keep the exact tick.
-pub(crate) fn held(animation: &Animation, now: SimTime) -> SimTime {
-    SimTime::from_ticks(held_ticks(animation.hold, now.ticks()), now.rate())
+/// A `hold` of 1 or less is no grid, so the fractional instant passes through; a stop-motion `hold`
+/// snaps to a whole tick.
+pub(crate) fn held(animation: &Animation, now: impl Into<GameTime>) -> GameTime {
+    let now = now.into();
+    if animation.hold <= 1 {
+        return now;
+    }
+    GameTime::from_ticks(held_ticks(animation.hold, now.ticks_floor()), now.rate())
 }
 
 /// `ticks` snapped down to the last multiple of `hold` (a 0 reads as 1) — the pose grid itself.
@@ -5701,7 +5888,7 @@ pub(crate) fn held_ticks(hold: u32, ticks: u64) -> u64 {
 }
 
 /// [`held`] for an entity's own `Animation`; `now` unchanged when it has none.
-fn held_for(world: &World, id: EntityId, now: SimTime) -> SimTime {
+fn held_for(world: &World, id: EntityId, now: GameTime) -> GameTime {
     get::<Animation>(world, id).map_or(now, |animation| held(animation, now))
 }
 
@@ -5709,7 +5896,7 @@ fn held_for(world: &World, id: EntityId, now: SimTime) -> SimTime {
 /// grid ticks, the clock is that anchor's `grid_ticks`, the pose the grid tick showed. Exact-tick reads
 /// (`now >= anchor.frame`) never take that branch.
 fn pose_clock_ticks(
-    now: SimTime,
+    now: GameTime,
     started: FrameIndex,
     speed: f32,
     anchor: Option<&ClipAnchor>,
@@ -5721,7 +5908,7 @@ fn pose_clock_ticks(
         ..
     }) = anchor
         && s == started
-        && now.ticks() < frame.as_u64()
+        && now.as_q16() < frame.as_u64().saturating_mul(Q16_PER_TICK)
     {
         return grid;
     }
@@ -5729,9 +5916,9 @@ fn pose_clock_ticks(
 }
 
 /// The incoming clip's clock in ticks (before any character binding speed).
-pub(crate) fn clip_ticks(animation: &Animation, now: SimTime) -> f64 {
+pub(crate) fn clip_ticks(animation: &Animation, now: impl Into<GameTime>) -> f64 {
     pose_clock_ticks(
-        now,
+        now.into(),
         animation.started,
         animation.speed,
         animation.anchor.as_ref(),
@@ -5744,7 +5931,9 @@ pub(crate) fn clip_ticks(animation: &Animation, now: SimTime) -> f64 {
 /// churn the world hash. Before the clip has played a tick (`now` at or before `started`) the rate
 /// simply applies from `started`.
 ///
-/// It takes `now` as [`SimTime`] (`ctx.game_time`), not a frame. It moves the incoming side only:
+/// It takes `now` as [`SimTime`] (`ctx.game_time`), not a frame: a speed change applies on the floor
+/// gameplay frame, so under a time scale the pose jumps by the fraction times the speed difference.
+/// It moves the incoming side only:
 /// during a crossfade the outgoing clip keeps the rate and anchor it had when the fade began.
 /// Writing `speed` directly is only right together with a new `started`. Under a `hold`, a call between
 /// two steps changes the pose only from the next step.
@@ -5768,14 +5957,16 @@ pub fn set_clip_speed(animation: &mut Animation, speed: f32, now: SimTime) {
     if speed == animation.speed {
         return;
     }
-    if now.ticks() <= animation.started.as_u64() {
+    let now_ticks = now.ticks();
+    let now = GameTime::from(now);
+    if now_ticks <= animation.started.as_u64() {
         animation.anchor = None;
     } else {
         let grid = held(animation, now);
         let grid_ticks = (grid != now).then(|| clip_ticks(animation, grid));
         animation.anchor = Some(crate::components::ClipAnchor {
             started: animation.started,
-            frame: ludion_core::time::FrameIndex::new(now.ticks()),
+            frame: ludion_core::time::FrameIndex::new(now_ticks),
             ticks: clip_ticks(animation, now),
             grid_ticks,
         });
@@ -5784,7 +5975,8 @@ pub fn set_clip_speed(animation: &mut Animation, speed: f32, now: SimTime) {
 }
 
 /// The incoming clip's elapsed seconds (before any character binding speed).
-pub(crate) fn clip_elapsed(animation: &Animation, now: SimTime) -> f64 {
+pub(crate) fn clip_elapsed(animation: &Animation, now: impl Into<GameTime>) -> f64 {
+    let now = now.into();
     pose_clock_ticks(
         now,
         animation.started,
@@ -5794,7 +5986,8 @@ pub(crate) fn clip_elapsed(animation: &Animation, now: SimTime) -> f64 {
 }
 
 /// The outgoing clip's elapsed seconds.
-pub(crate) fn from_clip_elapsed(animation: &Animation, now: SimTime) -> f64 {
+pub(crate) fn from_clip_elapsed(animation: &Animation, now: impl Into<GameTime>) -> f64 {
+    let now = now.into();
     pose_clock_ticks(
         now,
         animation.from_started,
@@ -6526,6 +6719,200 @@ mod tests {
         let q = ludion_scene::sample_rotation(&keys, 0.5).unwrap();
         let want = Quat::from_xyzw(q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32);
         assert!(close(out[0], Mat4::from_quat(want)));
+    }
+
+    /// A clip with a rotation track on both joints of [`two_joint_rig`].
+    fn both_joints_clip(degrees: f64) -> AnimationDocument {
+        let track = |target: &str| AnimationTrack {
+            target: target.to_string(),
+            rotation: vec![linear(0.0, [0.0; 3]), linear(1.0, [0.0, 0.0, degrees])],
+            translation: Vec::new(),
+            scale: Vec::new(),
+        };
+        AnimationDocument {
+            duration: 1.0,
+            tracks: vec![track("root"), track("child")],
+            ..Default::default()
+        }
+    }
+
+    fn bits(m: Mat4) -> [u32; 16] {
+        m.to_cols_array().map(f32::to_bits)
+    }
+
+    fn layer<'a>(
+        sampler: &'a ClipSampler,
+        t: f64,
+        mode: LayerMode,
+        weight: f64,
+        mask: Option<&'a [f32]>,
+    ) -> LayerPose<'a> {
+        LayerPose {
+            pose: Some((sampler, t)),
+            mask,
+            mode,
+            weight,
+        }
+    }
+
+    /// No layers is today's path, and a layer whose clip has no track for a joint leaves that joint's
+    /// base entry bit-identical.
+    #[test]
+    fn layers_that_do_not_reach_a_joint_leave_it_bit_identical() {
+        let joints = two_joint_rig();
+        let base = both_joints_clip(60.0);
+        let base_sampler = sampler_for(&joints, &base);
+        let mut want = Vec::new();
+        sampled_palette(
+            &joints,
+            Some((&base_sampler, 0.4)),
+            None,
+            &mut Vec::new(),
+            &mut want,
+        );
+        let mut empty = Vec::new();
+        sampled_palette_layered(
+            &joints,
+            Some((&base_sampler, 0.4)),
+            None,
+            &[],
+            &mut Vec::new(),
+            &mut empty,
+        );
+        assert_eq!(
+            empty.iter().map(|m| bits(*m)).collect::<Vec<_>>(),
+            want.iter().map(|m| bits(*m)).collect::<Vec<_>>()
+        );
+
+        // The layer clip tracks only `child`: `root` is untouched.
+        let layer_clip = sampled_clip(
+            "child",
+            vec![linear(0.0, [0.0; 3]), linear(1.0, [0.0, 90.0, 0.0])],
+            Vec::new(),
+        );
+        let layer_sampler = sampler_for(&joints, &layer_clip);
+        let mut layered = Vec::new();
+        sampled_palette_layered(
+            &joints,
+            Some((&base_sampler, 0.4)),
+            None,
+            &[layer(&layer_sampler, 0.5, LayerMode::Override, 1.0, None)],
+            &mut Vec::new(),
+            &mut layered,
+        );
+        assert_eq!(bits(layered[0]), bits(want[0]));
+        assert_ne!(bits(layered[1]), bits(want[1]));
+    }
+
+    /// A weight-1 override over the whole skin draws exactly the layer clip played alone.
+    #[test]
+    fn a_full_override_layer_equals_the_clip_played_alone() {
+        let joints = two_joint_rig();
+        let base = both_joints_clip(60.0);
+        let over = both_joints_clip(-40.0);
+        let (base_sampler, over_sampler) =
+            (sampler_for(&joints, &base), sampler_for(&joints, &over));
+        let mut alone = Vec::new();
+        sampled_palette(
+            &joints,
+            Some((&over_sampler, 0.7)),
+            None,
+            &mut Vec::new(),
+            &mut alone,
+        );
+        let mut layered = Vec::new();
+        sampled_palette_layered(
+            &joints,
+            Some((&base_sampler, 0.2)),
+            None,
+            &[layer(
+                &over_sampler,
+                0.7,
+                LayerMode::Override,
+                1.0,
+                Some(&[1.0, 1.0]),
+            )],
+            &mut Vec::new(),
+            &mut layered,
+        );
+        assert_eq!(
+            layered.iter().map(|m| bits(*m)).collect::<Vec<_>>(),
+            alone.iter().map(|m| bits(*m)).collect::<Vec<_>>()
+        );
+    }
+
+    /// A mask weight of zero keeps a joint on the base pose; half blends halfway.
+    #[test]
+    fn an_override_layer_follows_the_mask() {
+        let joints = two_joint_rig();
+        let base = both_joints_clip(0.0);
+        let over = both_joints_clip(90.0);
+        let (base_sampler, over_sampler) =
+            (sampler_for(&joints, &base), sampler_for(&joints, &over));
+        let mask = [0.0_f32, 0.5];
+        let mut out = Vec::new();
+        sampled_palette_layered(
+            &joints,
+            Some((&base_sampler, 1.0)),
+            None,
+            &[layer(
+                &over_sampler,
+                1.0,
+                LayerMode::Override,
+                1.0,
+                Some(&mask),
+            )],
+            &mut Vec::new(),
+            &mut out,
+        );
+        assert!(close(out[0], joints[0].rest));
+        // Child: halfway to 90 degrees about Z, on top of its rest translation.
+        let want = Mat4::from_rotation_translation(
+            Quat::from_rotation_z(45f32.to_radians()),
+            Vec3::new(0.0, 1.0, 0.0),
+        );
+        assert!(close(out[1], want), "{:?}", out[1]);
+    }
+
+    /// An additive layer sampled at its own first frame adds nothing; later it adds its change.
+    #[test]
+    fn an_additive_layer_at_its_first_frame_is_the_base() {
+        let joints = two_joint_rig();
+        let base = both_joints_clip(30.0);
+        let add = both_joints_clip(40.0);
+        let (base_sampler, add_sampler) = (sampler_for(&joints, &base), sampler_for(&joints, &add));
+        let mut plain = Vec::new();
+        sampled_palette(
+            &joints,
+            Some((&base_sampler, 1.0)),
+            None,
+            &mut Vec::new(),
+            &mut plain,
+        );
+        let mut at_zero = Vec::new();
+        sampled_palette_layered(
+            &joints,
+            Some((&base_sampler, 1.0)),
+            None,
+            &[layer(&add_sampler, 0.0, LayerMode::Additive, 1.0, None)],
+            &mut Vec::new(),
+            &mut at_zero,
+        );
+        for (a, b) in at_zero.iter().zip(&plain) {
+            assert!(a.abs_diff_eq(*b, 1e-5), "{a:?} vs {b:?}");
+        }
+        // At the end of the layer clip its 40 degrees stack on the base's 30 (root yaw about Z).
+        let mut stacked = Vec::new();
+        sampled_palette_layered(
+            &joints,
+            Some((&base_sampler, 1.0)),
+            None,
+            &[layer(&add_sampler, 1.0, LayerMode::Additive, 1.0, None)],
+            &mut Vec::new(),
+            &mut stacked,
+        );
+        let want = Mat4::from_quat(Quat::from_rotation_z(70f32.to_radians()));
+        assert!(stacked[0].abs_diff_eq(want, 1e-4), "{:?}", stacked[0]);
     }
 
     /// The palette as it was before the sampler: every joint looked up by name in the clip each call.
@@ -7802,6 +8189,7 @@ mod tests {
             Arc::new(CharacterData {
                 mesh: String::new(),
                 clips: Vec::new(),
+                masks: Vec::new(),
             })
         }
 
@@ -7887,6 +8275,43 @@ mod tests {
             assert_eq!(held_ticks(5, 14), 10);
             assert_eq!(held_ticks(5, 15), 15);
             assert_eq!(held_ticks(0, 7), 7);
+        }
+
+        #[test]
+        fn held_passes_a_fractional_instant_through_unless_stop_motion() {
+            let q = ludion_core::time::Q16_PER_TICK;
+            let now = GameTime::from_q16(7 * q + q / 4, TickRate::DEFAULT);
+            let smooth = Animation::default();
+            assert_eq!(held(&smooth, now), now);
+            let one = Animation {
+                hold: 1,
+                ..Animation::default()
+            };
+            assert_eq!(held(&one, now), now);
+            let stop_motion = Animation {
+                hold: 3,
+                ..Animation::default()
+            };
+            assert_eq!(
+                held(&stop_motion, now),
+                GameTime::from_ticks(6, TickRate::DEFAULT)
+            );
+        }
+
+        #[test]
+        fn fractional_clock_ticks_match_integers_on_whole_ticks() {
+            let q = ludion_core::time::Q16_PER_TICK;
+            for now in [0u64, 3, 60, 1000] {
+                for started in [0u64, 3, 600] {
+                    let whole = GameTime::from_ticks(now, TickRate::DEFAULT);
+                    let old = now.saturating_sub(started) as f64 * f64::from(0.75f32);
+                    let got = clock_ticks(whole, FrameIndex::new(started), 0.75, None);
+                    assert_eq!(got.to_bits(), old.to_bits(), "{now}/{started}");
+                }
+            }
+            let half = GameTime::from_q16(10 * q + q / 2, TickRate::DEFAULT);
+            assert_eq!(clock_ticks(half, FrameIndex::new(4), 1.0, None), 6.5);
+            assert_eq!(clock_ticks(half, FrameIndex::new(40), 1.0, None), 0.0);
         }
 
         /// An empty mesh — the evaluator never reads geometry, only `offset`/`pivot`/`parent`.

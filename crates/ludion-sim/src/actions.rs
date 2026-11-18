@@ -78,6 +78,18 @@ pub struct InputActionsDoc {
     pub actions: StableMap<String, ActionDoc>,
 }
 
+/// A player's binding overrides: for each overridden action, its whole replacement `bindings` list.
+///
+/// The `kind: input-bindings` file body (the engine strips the envelope). Only actions whose
+/// bindings differ from the map's defaults appear, see [`Actions::overrides`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InputBindingsDoc {
+    /// The overridden actions' bindings, keyed by action name.
+    #[schemars(with = "std::collections::BTreeMap<String, Vec<BindingDoc>>")]
+    pub actions: StableMap<String, Vec<BindingDoc>>,
+}
+
 /// Gesture thresholds in seconds. Compiled to ticks at the sim's tick rate, rounding half up,
 /// minimum one tick.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -354,6 +366,8 @@ struct GestureTicks {
 /// table of physical inputs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ActionMap {
+    doc: InputActionsDoc,
+    rate: TickRate,
     ticks: GestureTicks,
     inputs: Vec<PhysicalInput>,
     flags: Vec<InputFlags>,
@@ -606,11 +620,23 @@ impl ActionMap {
             })
             .collect();
         Ok(ActionMap {
+            doc: doc.clone(),
+            rate,
             ticks,
             inputs,
             flags,
             actions,
         })
+    }
+
+    /// The document this map was compiled from (with any overrides applied).
+    pub fn doc(&self) -> &InputActionsDoc {
+        &self.doc
+    }
+
+    /// The tick rate the gesture times were compiled at.
+    pub fn rate(&self) -> TickRate {
+        self.rate
     }
 
     /// The action names, sorted.
@@ -623,7 +649,7 @@ impl ActionMap {
         &self.inputs
     }
 
-    fn find(&self, name: &str) -> Option<usize> {
+    pub(crate) fn find(&self, name: &str) -> Option<usize> {
         self.actions
             .binary_search_by(|a| a.name.as_str().cmp(name))
             .ok()
@@ -881,7 +907,7 @@ pub struct InputGesture {
     from = "Vec<(PhysicalInput, InputGesture)>",
     into = "Vec<(PhysicalInput, InputGesture)>"
 )]
-pub struct ActionState(StableMap<PhysicalInput, InputGesture>);
+pub struct ActionState(pub(crate) StableMap<PhysicalInput, InputGesture>);
 
 impl From<Vec<(PhysicalInput, InputGesture)>> for ActionState {
     fn from(entries: Vec<(PhysicalInput, InputGesture)>) -> Self {
@@ -959,9 +985,15 @@ pub struct Actions {
     outs: Vec<GestureOut>,
     reads: Vec<ActionOut>,
     unknown: Mutex<Unknown>,
-    /// Whether the layer has resolved a tick (or been given a state); a fresh layer latches inputs
-    /// already held on its first tick.
-    primed: bool,
+    /// The defaults the overrides apply to.
+    pub(crate) base: InputActionsDoc,
+    pub(crate) overrides: InputBindingsDoc,
+    pub(crate) save_requested: bool,
+    /// Set by `restore_state`: the next resolve latches nothing, as the restored state is the
+    /// whole truth about what was down.
+    restored: bool,
+    pub(crate) capture: Option<crate::rebind::PendingCapture>,
+    pub(crate) capture_result: crate::rebind::CaptureResult,
 }
 
 impl Actions {
@@ -970,13 +1002,55 @@ impl Actions {
         let inputs = map.inputs.len();
         let actions = map.actions.len();
         Self {
+            base: map.doc.clone(),
+            overrides: InputBindingsDoc::default(),
+            save_requested: false,
+            restored: false,
+            capture: None,
+            capture_result: crate::rebind::CaptureResult::Idle,
             map,
             state: ActionState::default(),
             outs: vec![GestureOut::default(); inputs],
             reads: vec![ActionOut::default(); actions],
             unknown: Mutex::new(Unknown::default()),
-            primed: false,
         }
+    }
+
+    /// Swaps in a recompiled map, keeping gesture state, this tick's outputs and reads for what the
+    /// new map still tracks. An input newly tracked has no state entry, so the latch rule holds it
+    /// until it is released and pressed again.
+    pub(crate) fn install_map(&mut self, map: ActionMap) {
+        let old_outs: StableMap<PhysicalInput, GestureOut> = self
+            .map
+            .inputs
+            .iter()
+            .copied()
+            .zip(self.outs.iter().copied())
+            .collect();
+        let old_reads: StableMap<&str, ActionOut> = self
+            .map
+            .actions
+            .iter()
+            .map(|a| a.name.as_str())
+            .zip(self.reads.iter().copied())
+            .collect();
+        let outs = map
+            .inputs
+            .iter()
+            .map(|p| old_outs.get(p).copied().unwrap_or_default())
+            .collect();
+        let reads = map
+            .actions
+            .iter()
+            .map(|a| old_reads.get(&a.name.as_str()).copied().unwrap_or_default())
+            .collect();
+        self.state.0 = std::mem::take(&mut self.state.0)
+            .into_iter()
+            .filter(|(p, _)| map.inputs.binary_search(p).is_ok())
+            .collect();
+        self.outs = outs;
+        self.reads = reads;
+        self.map = map;
     }
 
     /// The compiled map.
@@ -1016,25 +1090,26 @@ impl Actions {
             kept.insert(input, gesture);
         }
         self.state = ActionState(kept);
-        self.primed = true;
+        self.restored = true;
         Ok(())
     }
 
     /// Advances every gesture one tick against `input` and recomputes every action's reads.
     /// Call exactly once per tick, after the tick's events are applied.
     ///
-    /// On a layer's first tick, an input already at level with no down edge that tick (a key held
-    /// across a load or restore) is **latched**: it fires nothing and reads inactive until released.
-    /// Wheel steps are never latched.
+    /// An input with no state yet (every input on a layer's first tick, one newly tracked after a
+    /// rebind) that is already at level with no down edge that tick (a key held across a load or
+    /// restore, the key just pressed to capture a binding) is **latched**: it fires nothing and reads
+    /// inactive until released. Wheel steps are never latched.
     pub fn resolve(&mut self, input: &InputState) {
         let ticks = self.map.ticks;
-        let first = !self.primed;
-        self.primed = true;
+        let restored = std::mem::take(&mut self.restored);
         for (at, physical) in self.map.inputs.iter().enumerate() {
             let flags = self.map.flags[at];
+            let untracked = !restored && !self.state.0.contains_key(physical);
             let gesture = self.state.0.entry(*physical).or_default();
             let level = read_level(*physical, gesture.down, input);
-            if first && level && !has_down_edge(*physical, input) {
+            if untracked && level && !has_down_edge(*physical, input) {
                 gesture.latched = true;
             }
             if !level {
@@ -1054,6 +1129,12 @@ impl Actions {
         for (read, action) in self.reads.iter_mut().zip(&self.map.actions) {
             *read = read_action(action, &self.outs, input, ticks);
         }
+        self.resolve_capture(input);
+    }
+
+    /// Whether the map defines `name`. Unlike a read, it never reports `L4270`.
+    pub fn contains(&self, name: ActionName) -> bool {
+        self.map.find(name.0).is_some()
     }
 
     fn lookup(&self, name: ActionName) -> Option<&ActionOut> {

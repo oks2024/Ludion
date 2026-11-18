@@ -75,10 +75,12 @@ pub mod actions;
 pub mod driver;
 pub mod hash;
 pub mod input;
+pub mod rebind;
 pub mod run_state;
 
 pub use actions::{
-    ActionMap, ActionName, ActionState, Actions, InputActionsDoc, unknown_action_diagnostic,
+    ActionMap, ActionName, ActionState, Actions, InputActionsDoc, InputBindingsDoc,
+    unknown_action_diagnostic,
 };
 pub use driver::{DriverRestore, PastFrameInject, SimConfig, SimDriver};
 pub use hash::{HashReport, NonFinite, WorldHash, non_finite_count};

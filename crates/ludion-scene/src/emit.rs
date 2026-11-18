@@ -76,7 +76,7 @@ pub(crate) fn emit(scene: &Scene, registry: &Registry) -> String {
 
 /// Writes `physics` at indent 2, field order `space`, `gravity`, `solver_iterations`,
 /// `stabilization_iterations`, `sleep_after_ticks`, `layers` (declaration order, `ignores` omitted
-/// when empty), skipping absent fields — a hand-authored block round-trips minimally.
+/// when empty), `surfaces`, `default_surface`, skipping absent fields — a hand-authored block round-trips minimally.
 fn emit_physics(out: &mut String, physics: &ScenePhysics) {
     out.push_str("physics:\n");
     out.push_str("  space: ");
@@ -120,6 +120,19 @@ fn emit_physics(out: &mut String, physics: &ScenePhysics) {
                 }
             }
         }
+    }
+    if !physics.surfaces.is_empty() {
+        out.push_str("  surfaces:\n");
+        for surface in &physics.surfaces {
+            out.push_str("    - ");
+            out.push_str(&scalar_string(surface));
+            out.push('\n');
+        }
+    }
+    if let Some(default_surface) = &physics.default_surface {
+        out.push_str("  default_surface: ");
+        out.push_str(&scalar_string(default_surface));
+        out.push('\n');
     }
 }
 

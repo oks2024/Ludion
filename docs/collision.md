@@ -219,6 +219,22 @@ rebuild ran, queries still see its old position until the next frame's rebuild. 
 accordingly (rebuild first is the common case). A snapshot restore or replay seek carries the index,
 so a reader scheduled before the rebuild continues exactly.
 
+**Surfaces.** A scene names its surfaces once, `physics: { surfaces: [concrete, metal_grate, dirt], default_surface: dirt }`
+(order is the `SurfaceId`, at most 256; an empty or repeated entry is `L1691`, a default that is not declared `L1690`).
+`SurfaceTag { surface: metal_grate }` beside a solver-claimed `Collider` or a `CharacterMotor` tags that collider; the solver never reads it,
+so a live edit applies from the next write with no rebuild. Every hit naming a collider carries `surface: Option<SurfaceId>` — `QueryHit`,
+`PointHit`, `MoveReport.ground` and `walls`/`ceiling` — resolved tag, else `default_surface`, else `None`. A tag naming an undeclared surface is
+`L1690` (one rejection at runtime, hits report the default, the body is kept); a tag with no collider is `L1692` in `check-scene`.
+`physics.surface_of(entity)` names a contact's surface from a `ContactEvent`'s entity. The engine stores no per-surface scalar: footstep tables are game data.
+
+```rust
+if let Some(ground) = report.ground
+    && let Some(id) = ground.surface
+{
+    let name = physics.surface_name(id); // "metal_grate": pick the footstep from your table
+}
+```
+
 ## Next
 
 - `ludion docs physics` — rigid bodies: the `physics:` block, forces, contact events, solver queries.

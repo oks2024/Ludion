@@ -5,6 +5,11 @@
 //! `cast_shadows: true`, through the filter it is given as written: here the static scenery, never
 //! the subject. The wall carries a collider, so it stops the lamp.
 //!
+//! **Or author it.** The subject also carries `LightExposure: {}`, and the game schedules
+//! `light_exposure_update`, which reads every such subject each tick into `LightExposureResults`
+//! (default occluders: static colliders only, the subject excluded). `main` asserts the two
+//! readings agree.
+//!
 //! Everything above the `main` divider is copyable into a real game.
 //!
 //! Run it headless (prints the reading with the wall, then without):
@@ -64,6 +69,7 @@ pub fn game() -> EngineBuilder {
             Ok(())
         })
         .system("check", check)
+        .system("light_exposure_update", light_exposure_update)
 }
 
 /// A shadow-casting spot over a subject; `{wall}` is a slab between them, or nothing.
@@ -111,6 +117,7 @@ entities:
   - name: subject
     components:
       Subject:
+      LightExposure: {{}}
       Transform: {{}}
 {wall}"
     )
@@ -118,7 +125,8 @@ entities:
 
 // --- Headless demo `main` ------------------------------------------------------------------------
 
-fn run(wall: bool) -> Result<(f32, bool), String> {
+/// The function's reading, then the authored component's, both after the same two ticks.
+fn run(wall: bool) -> Result<(f32, bool, f32), String> {
     let mut engine = game().build().map_err(|d| d.to_string())?;
     engine.load_inline_scene(&scene(wall)).map_err(|ds| {
         ds.iter()
@@ -136,16 +144,28 @@ fn run(wall: bool) -> Result<(f32, bool), String> {
         .world()
         .resource::<Verdict>()
         .ok_or("check did not run")?;
-    Ok((verdict.total, verdict.shadowed))
+    let subject = engine.world().single::<Subject>().ok_or("no subject")?;
+    let authored = engine
+        .world()
+        .resource::<LightExposureResults>()
+        .and_then(|results| results.reading(subject))
+        .ok_or("light_exposure_update did not read the subject")?;
+    Ok((verdict.total, verdict.shadowed, authored.total))
 }
 
 fn main() -> ExitCode {
-    let (Ok((lit, lit_shadowed)), Ok((dark, dark_shadowed))) = (run(false), run(true)) else {
+    let (Ok((lit, lit_shadowed, lit_authored)), Ok((dark, dark_shadowed, dark_authored))) =
+        (run(false), run(true))
+    else {
         eprintln!("the scene did not run");
         return ExitCode::FAILURE;
     };
     println!("no wall: total {lit:.3}, shadowed {lit_shadowed}");
     println!("wall:    total {dark:.3}, shadowed {dark_shadowed}");
+    if lit_authored != lit || dark_authored != dark {
+        eprintln!("the authored component and the function disagree");
+        return ExitCode::FAILURE;
+    }
     if lit_shadowed || !dark_shadowed || lit <= dark {
         eprintln!("the wall did not shadow the subject");
         return ExitCode::FAILURE;

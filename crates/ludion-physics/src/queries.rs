@@ -11,6 +11,7 @@ use rapier3d::parry::shape::Shape as ParryShape;
 use rapier3d::prelude::{Aabb, Ball, BoundingVolume, Collider, Pose, Ray, RayIntersection};
 
 use crate::motor::Gather;
+use crate::surface_tag::SurfaceId;
 use crate::sweep::SweepFilter;
 use crate::world::{
     PhysicsError, PhysicsWorld, entity_from_bits, from_vector, shape_builder, to_pose, to_vector,
@@ -32,6 +33,8 @@ pub struct QueryHit {
     /// World-space normal at `point`, pointing out of the hit collider. Parry reports a zero
     /// vector for a ray whose origin starts inside the shape.
     pub normal: [f32; 3],
+    /// The hit collider's surface tag; `None` when untagged and the scene has no `default_surface`.
+    pub surface: Option<SurfaceId>,
 }
 
 /// One hit from [`PhysicsWorld::closest_points`].
@@ -46,6 +49,8 @@ pub struct PointHit {
     pub distance: f32,
     /// World-space closest point on the collider's surface; the query point itself when inside.
     pub point: [f32; 3],
+    /// The hit collider's surface tag; `None` when untagged and the scene has no `default_surface`.
+    pub surface: Option<SurfaceId>,
 }
 
 /// Slack on a ray segment's box when deciding whether a gather covers it: the slab test rounds its
@@ -385,6 +390,7 @@ impl PhysicsWorld {
                 distance: hit.time_of_impact,
                 point: advance(origin, unit_dir, hit.time_of_impact),
                 normal: from_vector(hit.normal),
+                surface: self.surface_of(entity),
             })
         };
         let end = to_vector(advance(origin, unit_dir, max_distance));
@@ -543,6 +549,7 @@ impl PhysicsWorld {
                 distance: hit.time_of_impact,
                 point: from_vector(hit.witness1),
                 normal: from_vector(hit.normal1),
+                surface: self.surface_of(entity),
             });
         });
         sort_hits(&mut hits);
@@ -660,6 +667,7 @@ impl PhysicsWorld {
                     entity,
                     distance,
                     point: from_vector(closest),
+                    surface: self.surface_of(entity),
                 });
             }
         }
@@ -682,6 +690,7 @@ mod tests {
             distance,
             point: [0.0; 3],
             normal: [0.0; 3],
+            surface: None,
         }
     }
 

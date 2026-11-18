@@ -209,6 +209,23 @@ fn an_undeclared_layer_is_l1186() {
     );
 }
 
+/// A `SurfaceTag` naming an undeclared surface is `L1690` with the pointer and the nearest match.
+#[test]
+fn an_undeclared_surface_is_l1690() {
+    let output = run_check_scene_args("surfaces-unknown.yaml", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1690"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("/entities/0/components/SurfaceTag/surface"),
+        "stderr was: {stderr}"
+    );
+    assert!(
+        stderr.contains("nearest match is `metal_grate`"),
+        "stderr was: {stderr}"
+    );
+}
+
 /// A layer on a 2D collider the solver does not claim is `L1187`.
 #[test]
 fn a_layer_on_an_unclaimed_collider_is_l1187() {

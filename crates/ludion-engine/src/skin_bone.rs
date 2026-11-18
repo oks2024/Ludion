@@ -109,6 +109,7 @@ pub(crate) fn spawn_poses(
     let mut seen_pairs: BTreeMap<(usize, String), usize> = BTreeMap::new();
     let mut reported_animated: std::collections::BTreeSet<usize> =
         std::collections::BTreeSet::new();
+    let mut reported_layered: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     let mut reported_mesh_errors: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
     let mut mesh_cache: BTreeMap<String, Result<Option<Vec<MeshJoint>>, Vec<Diagnostic>>> =
@@ -150,6 +151,14 @@ pub(crate) fn spawn_poses(
             && reported_animated.insert(skin_index)
         {
             diagnostics.push(animated_skin(skin_index, skin_entity));
+        }
+        if skin_entity
+            .components
+            .iter()
+            .any(|(name, _)| name == "AnimationLayers")
+            && reported_layered.insert(skin_index)
+        {
+            diagnostics.push(layered_skin(skin_index, skin_entity));
         }
 
         let mesh_rel = match skinned_mesh_path(project_root, skin_entity) {
@@ -399,6 +408,23 @@ fn animated_skin(skin_index: usize, skin_entity: &SceneEntity) -> Diagnostic {
     .with_help(
         "remove this skin entity's `Animation` component, or remove every `SkinBone` part that \
          names it",
+    )
+}
+
+/// `L1672` — a skin also carries an `AnimationLayers`, reported once per skin.
+fn layered_skin(skin_index: usize, skin_entity: &SceneEntity) -> Diagnostic {
+    Diagnostic::new(
+        code::ANIMATION_LAYERS_ON_SKIN_BONE_SKIN,
+        format!(
+            "{} carries `AnimationLayers` but is also named by a `SkinBone` part: its pose comes \
+             from the parts, so layers have nothing to compose over",
+            named(skin_entity, skin_index)
+        ),
+    )
+    .with_path(format!("/entities/{skin_index}/components/AnimationLayers"))
+    .with_help(
+        "remove this skin entity's `AnimationLayers` component, or remove every `SkinBone` part \
+         that names it",
     )
 }
 

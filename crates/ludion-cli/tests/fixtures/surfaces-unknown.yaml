@@ -1,0 +1,17 @@
+format: 1
+seed: 1
+physics:
+  space: free
+  surfaces:
+    - concrete
+    - metal_grate
+entities:
+  - name: floor
+    components:
+      Collider:
+        shape:
+          sphere:
+            radius: 0.5
+        body: static
+      SurfaceTag:
+        surface: metal_grat

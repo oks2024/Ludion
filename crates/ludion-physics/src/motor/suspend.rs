@@ -4,9 +4,10 @@
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, World};
 
-use super::component::{CharacterMotor, CharacterMotorState, check, motor_in_force, posture_motor};
+use super::component::{CharacterMotorState, check_in_force, in_force, posture_motor};
 use super::report::{MotorError, ResumeReport};
-use super::resize::{headroom, motor_of, place};
+use super::resize::{fit_blocker, motor_of, place};
+use super::shape::InForce;
 use crate::pose::PhysicsPose;
 use crate::world::PhysicsWorld;
 
@@ -61,7 +62,7 @@ fn target<P: PhysicsPose>(
     world: &World,
     entity: EntityId,
     posture: Option<&str>,
-) -> Result<CharacterMotor, MotorError> {
+) -> Result<InForce, MotorError> {
     let (motor, _) = motor_of::<P>(world, entity)?;
     match posture {
         Some(name) => posture_motor(&motor, name).ok_or_else(|| MotorError::UnknownPosture {
@@ -77,7 +78,7 @@ fn target<P: PhysicsPose>(
                     .and_then(|state| state.height),
                 ..CharacterMotorState::default()
             };
-            Ok(motor_in_force(&motor, Some(&base)))
+            Ok(in_force(&motor, Some(&base)))
         }
     }
 }
@@ -88,9 +89,10 @@ fn blocker(
     world: &World,
     entity: EntityId,
     feet: [f32; 3],
-    resting: &CharacterMotor,
+    yaw: f32,
+    resting: &InForce,
 ) -> Result<Option<EntityId>, MotorError> {
-    if let Err((pointer, reason)) = check(resting) {
+    if let Err((pointer, reason)) = check_in_force(resting) {
         return Err(MotorError::InvalidMotor {
             entity,
             reason: format!("{pointer}: {reason}"),
@@ -99,7 +101,7 @@ fn blocker(
     let physics = world
         .resource::<PhysicsWorld>()
         .ok_or(MotorError::NoPhysicsWorld)?;
-    Ok(headroom(physics, entity, resting, feet, resting.height))
+    Ok(fit_blocker(physics, entity, resting, feet, yaw))
 }
 
 /// Whether `entity`'s capsule fits standing on `feet`: the lowest-id collider in the way, `None`
@@ -108,7 +110,8 @@ fn blocker(
 ///
 /// `posture` is `None` for the motor's own shape (at the height override, while no posture is in
 /// force) or the name of one of its `postures`, tested without a height override; a name the motor
-/// does not declare is [`MotorError::UnknownPosture`]. Works on a live or suspended motor.
+/// does not declare is [`MotorError::UnknownPosture`]. A lying shape is tested at `yaw`, the facing the
+/// motor would have there. Works on a live or suspended motor.
 ///
 /// ```no_run
 /// # use ludion_ecs::{SystemCtx, World};
@@ -131,9 +134,11 @@ pub fn character_fit<P: PhysicsPose>(
     if !feet.iter().all(|c| c.is_finite()) {
         return Err(MotorError::NonFiniteFeet(feet));
     }
-    let _ = yaw;
     let resting = target::<P>(world, entity, posture)?;
-    blocker(world, entity, feet, &resting)
+    if resting.lying.is_some() && !yaw.is_finite() {
+        return Err(MotorError::NonFiniteTeleport { feet, yaw });
+    }
+    blocker(world, entity, feet, yaw, &resting)
 }
 
 /// Brings a suspended motor back with its feet at `feet`, facing `yaw` (radians about +Y), when the
@@ -145,7 +150,7 @@ pub fn character_fit<P: PhysicsPose>(
 /// [`MotorError::Parented`]: reparent it to the root first; one that is not suspended is
 /// [`MotorError::NotSuspended`]. `posture` is the shape to wake in: `Some(name)` tests that
 /// declared posture and sets it (the height override is cleared); `None` tests the motor's own
-/// shape and keeps a height override only if no posture was in force. `yaw` has no effect on the fit of an upright capsule.
+/// shape and keeps a height override only if no posture was in force. `yaw` has no effect on the fit of an upright capsule; a lying one is tested at it.
 ///
 /// Call it from a system registered **before** [`install`](crate::install)'s.
 ///
@@ -182,7 +187,7 @@ pub fn resume_character<P: PhysicsPose>(
     if !suspended {
         return Err(MotorError::NotSuspended(entity));
     }
-    if let Some(blocker) = blocker(world, entity, feet, &resting)? {
+    if let Some(blocker) = blocker(world, entity, feet, yaw, &resting)? {
         return Ok(ResumeReport {
             resumed: false,
             blocked_by: Some(blocker),

@@ -69,15 +69,17 @@ fn slow_while_aiming(world: &mut World, _ctx: &SystemCtx) {
 | `!game_advanced()` | held ticks only |
 
 - **Stamps stay whole frames.** `ctx.game_frame` is the floor of `ctx.game_instant`: a `started` stamp is a floor frame, so an effect started mid-slow begins up to one gameplay frame early. Read `game_instant` (`ticks_since(started)`) for fractional age.
-- **Follows the scale now:** everything that integrates `ctx.game_dt` — `PathFollower`, camera rig springs, projectile pools, `ludion-ai` timers and cooldowns.
-- **Does not follow yet:** the closed-form evaluators (`bullet_position`, particle emitters, animation clips and events, parent joints, ragdolls, pattern timelines) step in whole gameplay frames, so they advance only on ticks that cross a frame. Physics keeps its full step, and the motor's `PhysicsWorld::gameplay_dt` returns a whole tick on a scaled frame. A game must not scale while it relies on any of these.
+- **Follows the scale:** everything that integrates `ctx.game_dt` — `PathFollower`, camera rig springs, projectile pools, `ludion-ai` state machines (`ai_tick` runs every tick time moves: integrate `ctx.game_dt`) — and every closed form, which reads the exact fractional instant and so slows smoothly: volley bullets, particle emitters, assembly and character clips (phase, crossfade weight), `ParentJoint` sockets, the ragdoll switch pose and animation events (each fires once, in order, on the tick its clip time is crossed). The pattern timeline fires once per crossed gameplay frame (`game_frames_crossed()`). `ludion-ai` `Timer`/`Cooldown` count whole gameplay frames: `just_expired` fires once, on the crossing tick.
+- **Pass `ctx.game_instant` to the evaluators.** They take `impl Into<GameTime>`: `ctx.game_time` still compiles but steps in whole frames under a scale.
+- **`set_clip_speed` keeps a whole-frame anchor** (`ClipAnchor.frame`): a speed change applies on the floor gameplay frame, so the pose jumps by the fraction times the speed difference.
+- **Does not follow yet:** physics keeps its full step, and the motor's `PhysicsWorld::gameplay_dt` returns a whole tick on a scaled frame. A game must not scale while it relies on either.
 - The scale stays out of `WorldHash`, like `hold`; the clock rides `engine.snapshot` and is omitted while it excludes nothing.
 
 ## Rules
 
 - **Every closed-form evaluator reads gameplay time, and every `started` stamp is a gameplay
   frame.** `bullet_age`/`bullet_is_alive`/`bullet_position`/`volley_hits` take a `game_now`
-  parameter — pass `ctx.game_time`, never `ctx.time`. `PatternPlayer.started`,
+  parameter — pass `ctx.game_instant`, never `ctx.time`. `PatternPlayer.started`,
   `ParticleEmitter.started` and `Animation.started` all want `ctx.game_frame`, never `ctx.frame`:
   on an unheld run the two are equal, so an existing stamp is unaffected; on a held run a
   `ctx.frame` stamp lands in the future and the effect starts late.
@@ -87,12 +89,12 @@ fn slow_while_aiming(world: &mut World, _ctx: &SystemCtx) {
   during a hold. Latch it in an unguarded system ahead of the guarded one, and consume the latch on
   the next advanced frame.
 - `play_patterns` walks the timeline on `ctx.game_frame` and returns immediately on
-  `!ctx.game_advanced()`, so a hold neither re-fires a timeline entry nor skips one whose frame
+  `game_frames_crossed() == 0` (held ticks, and the ticks of a scale between frames), so a hold neither re-fires a timeline entry nor skips one whose frame
   passed while frozen. `advance_volleys` still runs every tick (reaping is idempotent) but ages on
-  `ctx.game_time`, so nothing expires during a hold — a volley fired on the first held frame has
+  `ctx.game_instant`, so nothing expires during a hold — a volley fired on the first held frame has
   negative age until the thaw and is neither drawn nor hit-testable until then.
 - **Cancel is a despawn over a `Volley` query**, and what appears in a cancelled bullet's place is
-  the game's own spawn at `bullet_position(…, ctx.game_time, …)` — the loop is under Rules in
+  the game's own spawn at `bullet_position(…, ctx.game_instant, …)` — the loop is under Rules in
   `ludion docs patterns`.
 
 - Animation playback — flipbooks and assembly clips alike — follows the gameplay clock too: one
@@ -114,7 +116,7 @@ fn slow_while_aiming(world: &mut World, _ctx: &SystemCtx) {
 
 ## Gotchas
 
-- Passing `ctx.time` instead of `ctx.game_time` to a pattern evaluator ages and hit-tests bullets
+- Passing `ctx.time` instead of `ctx.game_instant` to a pattern evaluator ages and hit-tests bullets
   through a hold — they keep moving on a frozen screen and a hit test scores against where they
   "would" be, not where they're drawn.
 - Over the wire, a client stamps `started` from the response envelope's `game_frame`, never its

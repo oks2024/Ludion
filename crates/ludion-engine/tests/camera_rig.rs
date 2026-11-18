@@ -14,8 +14,8 @@ use ludion_core::time::GameClock;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
-    Camera, CameraOffset, CameraRig, DebugCategories, Egress, EgressChannels, Engine, Name,
-    RigMode, Transform, add_kick, add_look, add_trauma, set_look, snap_rig,
+    Camera, CameraOffset, CameraRig, ChaseRig, DebugCategories, Egress, EgressChannels, Engine,
+    Name, RigConfig, RigMode, Transform, add_kick, add_look, add_trauma, set_look, snap_rig,
 };
 use ludion_protocol::command::{
     EngineRestoreParams, SimStepParams, StreamSubscribeParams, SubscribeMode,
@@ -1716,4 +1716,308 @@ fn a_snapshot_restore_mid_pull_in_and_mid_framing_resumes_the_same_hashes() {
             i + 1
         );
     }
+}
+
+// ---- camera zones (L1553-L1555) and the occluder query ----
+
+/// A chase rig 5 m behind a hero at x = `hero_x`, with `zones` as extra entities.
+fn zone_scene(physics: &str, hero_x: f32, zones: &str) -> String {
+    format!(
+        "format: 1\nseed: 3\n{physics}entities:\n  - name: cam\n    components:\n      Transform: {{}}\n      Camera: {{}}\n      CameraRig:\n        target:\n          index: 1\n          generation: 0\n        rig:\n          mode:\n            chase:\n              distance: 5.0\n  - name: hero\n    components:\n      Transform:\n        translation:\n          - {hero_x:?}\n          - 0.0\n          - 0.0\n{zones}"
+    )
+}
+
+/// A sensor box covering x in `[from, to]` whose rig is a chase at `distance`.
+fn zone(name: &str, from: f32, to: f32, priority: i32, distance: f32) -> String {
+    format!(
+        "  - name: {name}\n    components:\n      Transform:\n        translation:\n          - {:?}\n          - 0.0\n          - 0.0\n      Collider:\n        shape:\n          box:\n            half_extents:\n              - {:?}\n              - 5.0\n              - 5.0\n        body: static\n        sensor: true\n      CameraZone:\n        priority: {priority}\n        rig:\n          mode:\n            chase:\n              distance: {distance:?}\n",
+        (from + to) / 2.0,
+        (to - from) / 2.0,
+    )
+}
+
+/// The chase distance of `rig`'s authored config.
+fn chase_distance(rig: &CameraRig) -> f32 {
+    match &rig.rig.mode {
+        RigMode::Chase(chase) => chase.distance,
+        other => panic!("expected a chase rig, got {other:?}"),
+    }
+}
+
+/// The hero walks +x at 6 m/s and parks at x = 20.
+fn walk_to_twenty(world: &mut World, ctx: &SystemCtx) {
+    let hero = named(world, "hero");
+    world
+        .get_mut::<Transform>(hero)
+        .unwrap()
+        .unwrap()
+        .translation = [(0.1 * ctx.frame.as_u64() as f32).min(20.0), 0.0, 0.0];
+}
+
+fn zone_engine(tag: &str, scene: &str, systems: Systems) -> Engine {
+    engine_for(tag, &[], scene, systems)
+}
+
+fn nested_zones() -> String {
+    zone("outer", 5.0, 15.0, 1, 8.0) + &zone("inner", 10.5, 13.5, 2, 3.0)
+}
+
+#[test]
+fn walking_through_nested_zones_hits_each_in_turn() {
+    let scene = zone_scene(PHYSICS, 0.0, &nested_zones());
+    let mut engine = zone_engine("zone-nest", &scene, &[("walk", walk_to_twenty)]);
+    let (outer, inner) = (
+        named(engine.world(), "outer"),
+        named(engine.world(), "inner"),
+    );
+    let mut seen = Vec::new();
+    for _ in 0..260 {
+        engine.advance_live();
+        let zone = rig_of(&engine).state.zone;
+        if seen.last() != Some(&zone) {
+            seen.push(zone);
+        }
+    }
+    assert_eq!(
+        seen,
+        [None, Some(outer), Some(inner), Some(outer), None],
+        "enter, nest, back out through the lower zone, back to the base"
+    );
+    advance(&mut engine, 200);
+    let rig = rig_of(&engine);
+    assert_eq!(chase_distance(&rig), 5.0, "the base is back");
+    assert!(rig.state.base.is_none());
+    let hero = [20.0, 0.0, 0.0];
+    assert!(
+        (distance(eye_of(&engine), hero) - 5.0).abs() < 1e-2,
+        "the eye settles on the base boom"
+    );
+}
+
+#[test]
+fn equal_priority_zones_report_l1555_once_and_the_lower_id_wins() {
+    let zones = zone("a", 5.0, 15.0, 1, 8.0) + &zone("b", 5.0, 15.0, 1, 3.0);
+    let scene = zone_scene(PHYSICS, 8.0, &zones);
+    let engine = zone_engine("zone-tie", &scene, &[]);
+    let a = named(engine.world(), "a");
+    let lines = log_lines(engine, 30);
+    assert_eq!(reported(&lines, "L1555").len(), 1, "{lines:?}");
+    let mut engine = zone_engine("zone-tie-run", &scene, &[]);
+    advance(&mut engine, 5);
+    assert_eq!(rig_of(&engine).state.zone, Some(a));
+}
+
+fn write_fov_at_80(world: &mut World, ctx: &SystemCtx) {
+    walk_to_twenty(world, ctx);
+    if ctx.frame.as_u64() == 80 {
+        let cam = named(world, "cam");
+        world.get_mut::<CameraRig>(cam).unwrap().unwrap().rig = RigConfig {
+            mode: RigMode::Chase(ChaseRig {
+                distance: 6.0,
+                ..ChaseRig::default()
+            }),
+            fov_y_deg: Some(33.0),
+            ..RigConfig::default()
+        };
+    }
+}
+
+#[test]
+fn a_game_write_inside_a_zone_survives_and_becomes_the_base() {
+    let scene = zone_scene(PHYSICS, 0.0, &zone("z", 2.0, 15.0, 1, 8.0));
+    let mut engine = zone_engine("zone-write", &scene, &[("walk", write_fov_at_80)]);
+    advance(&mut engine, 90);
+    let rig = rig_of(&engine);
+    assert!(rig.state.zone.is_some());
+    assert_eq!(rig.rig.fov_y_deg, Some(33.0), "the write is not fought");
+    assert_eq!(rig.state.base.as_ref().unwrap().fov_y_deg, Some(33.0));
+    advance(&mut engine, 120);
+    let rig = rig_of(&engine);
+    assert_eq!(rig.state.zone, None);
+    assert_eq!(rig.rig.fov_y_deg, Some(33.0), "the write is the base");
+    assert_eq!(chase_distance(&rig), 6.0);
+}
+
+fn teleport_in_and_snap(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == 20 {
+        let hero = named(world, "hero");
+        world
+            .get_mut::<Transform>(hero)
+            .unwrap()
+            .unwrap()
+            .translation = [10.0, 0.0, 0.0];
+        let cam = named(world, "cam");
+        snap_rig(world.get_mut::<CameraRig>(cam).unwrap().unwrap());
+    }
+}
+
+#[test]
+fn a_teleport_with_a_snap_into_a_zone_cuts_straight_to_it() {
+    let scene = zone_scene(PHYSICS, 0.0, &zone("z", 5.0, 15.0, 1, 8.0));
+    let mut engine = zone_engine("zone-snap", &scene, &[("tp", teleport_in_and_snap)]);
+    let z = named(engine.world(), "z");
+    advance(&mut engine, 21);
+    let rig = rig_of(&engine);
+    assert_eq!(rig.state.zone, Some(z));
+    assert!(rig.state.blend.is_none(), "a snap starts no blend");
+    assert!(
+        (distance(eye_of(&engine), [10.0, 0.0, 0.0]) - 8.0).abs() < 1e-3,
+        "the eye is on the zone's boom at once"
+    );
+}
+
+#[test]
+fn a_load_with_the_target_inside_a_zone_starts_on_its_rig() {
+    let scene = zone_scene(PHYSICS, 10.0, &zone("z", 5.0, 15.0, 1, 8.0));
+    let mut engine = zone_engine("zone-load", &scene, &[]);
+    let z = named(engine.world(), "z");
+    advance(&mut engine, 1);
+    let rig = rig_of(&engine);
+    assert_eq!(rig.state.zone, Some(z));
+    assert!(rig.state.blend.is_none());
+    assert!((distance(eye_of(&engine), [10.0, 0.0, 0.0]) - 8.0).abs() < 1e-3);
+}
+
+fn despawn_zone_at_60(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == 60 {
+        let zone = named(world, "z");
+        world.despawn(zone).expect("the zone despawns");
+    }
+}
+
+#[test]
+fn a_despawned_active_zone_falls_back_to_the_base() {
+    let scene = zone_scene(PHYSICS, 8.0, &zone("z", 5.0, 15.0, 1, 8.0));
+    let mut engine = zone_engine("zone-despawn", &scene, &[("kill", despawn_zone_at_60)]);
+    advance(&mut engine, 50);
+    assert!(rig_of(&engine).state.zone.is_some());
+    advance(&mut engine, 20);
+    let rig = rig_of(&engine);
+    assert_eq!(rig.state.zone, None);
+    assert_eq!(chase_distance(&rig), 5.0);
+}
+
+#[test]
+fn zones_without_physics_report_l1553_once_and_the_rig_runs_on_its_own_config() {
+    let scene = zone_scene(
+        "",
+        8.0,
+        "  - name: z\n    components:\n      CameraZone: {}\n",
+    );
+    let lines = log_lines(zone_engine("zone-nophys-log", &scene, &[]), 30);
+    assert_eq!(reported(&lines, "L1553").len(), 1, "{lines:?}");
+    let mut engine = zone_engine("zone-nophys", &scene, &[]);
+    advance(&mut engine, 5);
+    assert_eq!(rig_of(&engine).state.zone, None);
+}
+
+fn zone_hashes(tag: &str) -> Vec<u64> {
+    let scene = zone_scene(PHYSICS, 0.0, &nested_zones());
+    let mut engine = zone_engine(tag, &scene, &[("walk", walk_to_twenty)]);
+    (0..260)
+        .map(|_| {
+            engine.advance_live();
+            engine.world_hash().unwrap().as_u64()
+        })
+        .collect()
+}
+
+#[test]
+fn a_zone_run_hashes_the_same_twice_and_at_one_and_eight_threads() {
+    let first = zone_hashes("zone-hash-a");
+    assert_eq!(first, zone_hashes("zone-hash-b"));
+    let distinct: std::collections::BTreeSet<u64> = first.iter().copied().collect();
+    assert!(distinct.len() > 100, "a flat trace proves nothing");
+    #[allow(clippy::disallowed_methods)]
+    let [one, eight] = std::thread::scope(|scope| {
+        [(1, "zone-hash-t1"), (8, "zone-hash-t8")]
+            .map(|(n, tag)| scope.spawn(move || par::with_threads(n, || zone_hashes(tag))))
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+            })
+    });
+    assert_eq!(one, eight);
+    assert_eq!(one, first);
+}
+
+#[test]
+fn a_snapshot_restore_inside_a_zone_mid_blend_resumes_the_same_hashes() {
+    const AT: usize = 70;
+    let scene = zone_scene(PHYSICS, 0.0, &nested_zones());
+    let build = |tag| zone_engine(tag, &scene, &[("walk", walk_to_twenty)]);
+    let mut reference = build("zone-restore-ref");
+    let hashes: Vec<u64> = (0..200)
+        .map(|_| {
+            reference.advance_live();
+            reference.world_hash().unwrap().as_u64()
+        })
+        .collect();
+
+    let mut before = build("zone-restore-a");
+    advance(&mut before, AT);
+    let rig = rig_of(&before);
+    assert!(
+        rig.state.zone.is_some() && rig.state.blend.is_some(),
+        "mid-blend in a zone"
+    );
+    let snapshot = match before.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let mut resumed = build("zone-restore-b");
+    resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
+    assert_eq!(resumed.world_hash().unwrap().as_u64(), hashes[AT - 1]);
+    for (i, expected) in hashes[AT..].iter().enumerate() {
+        resumed.advance_live();
+        assert_eq!(
+            resumed.world_hash().unwrap().as_u64(),
+            *expected,
+            "tick {} after the restore",
+            i + 1
+        );
+    }
+}
+
+#[test]
+fn camera_occluders_returns_the_sorted_props_between_the_eye_and_the_target() {
+    let probe = zone_engine("occluder-probe", &zone_scene(PHYSICS, 0.0, ""), &[]);
+    let mut probe = probe;
+    advance(&mut probe, 3);
+    let eye = eye_of(&probe);
+    let mid = [eye[0] / 2.0, eye[1] / 2.0, eye[2] / 2.0];
+    let props = wall("prop_b", mid, [0.3, 0.3, 0.3], "wall")
+        + &wall(
+            "prop_a",
+            [mid[0], mid[1] + 0.1, mid[2]],
+            [0.3, 0.3, 0.3],
+            "wall",
+        )
+        + &wall(
+            "ghost",
+            [mid[0] + 0.1, mid[1], mid[2]],
+            [0.3, 0.3, 0.3],
+            "ghost",
+        )
+        + &wall("far", [30.0, 0.0, 30.0], [0.3, 0.3, 0.3], "wall");
+    let mut engine = zone_engine("occluder", &zone_scene(PHYSICS, 0.0, &props), &[]);
+    advance(&mut engine, 3);
+    let world = engine.world();
+    let cam = named(world, "cam");
+    let layers = ludion_physics::LayerSet::from(vec!["wall".to_string()]);
+    let found = ludion_engine::camera_occluders(world, cam, &layers, 0.2).unwrap();
+    let mut expected = vec![named(world, "prop_a"), named(world, "prop_b")];
+    expected.sort_unstable();
+    assert_eq!(
+        found, expected,
+        "the ghost layer and the far prop are ignored"
+    );
+
+    let bad = ludion_physics::LayerSet::from(vec!["nowhere".to_string()]);
+    assert!(ludion_engine::camera_occluders(world, cam, &bad, 0.2).is_err());
+    let none = ludion_engine::camera_occluders(world, named(world, "hero"), &layers, 0.2);
+    assert_eq!(none.unwrap(), vec![], "no rig on the hero");
 }

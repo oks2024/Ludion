@@ -22,7 +22,7 @@ ludion = { path = "../../crates/ludion" }
 # The component derives are the game's own dependencies — the facade does not re-export them.
 serde = { workspace = true }
 schemars = { workspace = true }
-# `CameraZone`'s semantic validator takes a JSON value.
+# `CameraGate`'s semantic validator takes a JSON value.
 serde_json = { workspace = true }
 
 [dev-dependencies]

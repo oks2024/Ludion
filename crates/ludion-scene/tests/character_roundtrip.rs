@@ -6,7 +6,7 @@
 use ludion_core::diagnostics::Diagnostic;
 use ludion_scene::{
     AnimationDocument, check_animation, check_character, check_character_clips, emit_character,
-    parse_character, validate_character,
+    parse_character, resolve_character_mask, validate_character,
 };
 
 const CANONICAL: &str = "\
@@ -258,4 +258,93 @@ fn clean_character_has_no_cross_file_findings() {
     let doc = check_character(CANONICAL).expect("valid");
     let clips = [clip("", 1.0, "hip"), clip("", 1.0, "hip")];
     assert!(check_character_clips(&doc, &clips, &["hip"]).is_empty());
+}
+
+const MASKED: &str = "\
+format: 1
+kind: character
+mesh: goblin.mesh.yaml
+clips:
+  idle:
+    clip: clips/idle.anim.yaml
+masks:
+  lower:
+    joints:
+      - hip
+    weights:
+      - 0.5
+  upper_body:
+    joints:
+      - torso
+      - head
+    descendants: true
+";
+
+#[test]
+fn masked_character_round_trips_and_sorts() {
+    let doc = check_character(MASKED).expect("valid");
+    assert_eq!(doc.masks.len(), 2);
+    assert_eq!(doc.masks[1].name, "upper_body");
+    assert!(doc.masks[1].descendants);
+    assert_eq!(doc.masks[0].weights, vec![0.5]);
+    assert_eq!(emit_character(&doc), MASKED);
+}
+
+#[test]
+fn mask_structure_errors_carry_pointers() {
+    let base = "format: 1\nkind: character\nmesh: m.yaml\nmasks:\n  a:\n";
+    let case = |body: &str| structure_errors(&format!("{base}{body}"));
+    assert!(has(&case("    joints: []\n"), "L1199", "/masks/a/joints"));
+    assert!(has(&case("    descendants: true\n"), "L1199", "/masks/a"));
+    assert!(has(
+        &case("    joints:\n      - x\n    bogus: 1\n"),
+        "L1199",
+        "/masks/a/bogus"
+    ));
+    assert!(has(
+        &case("    joints:\n      - x\n      - x\n"),
+        "L1199",
+        "/masks/a/joints/1"
+    ));
+    assert!(has(
+        &case("    joints:\n      - x\n    weights:\n      - 1\n      - 1\n"),
+        "L1199",
+        "/masks/a/weights"
+    ));
+    assert!(has(
+        &case("    joints:\n      - x\n    weights:\n      - 1.5\n"),
+        "L1199",
+        "/masks/a/weights/0"
+    ));
+    assert!(has(&case("    joints: x\n"), "L1199", "/masks/a/joints"));
+}
+
+#[test]
+fn mask_unknown_joint_is_l1200_with_nearest() {
+    let doc = check_character(MASKED).expect("valid");
+    let clips = [clip("", 1.0, "hip")];
+    let errors = check_character_clips(&doc, &clips, &["hip", "torso", "hed"]);
+    assert_eq!(errors.len(), 1);
+    assert!(has(&errors, "L1200", "/masks/upper_body/joints/1"));
+    assert!(errors[0].help.as_deref().unwrap_or("").contains("`hed`"));
+}
+
+#[test]
+fn masks_resolve_listed_weights_and_descendants() {
+    let doc = check_character(MASKED).expect("valid");
+    let joints = [
+        ("hip", None),
+        ("torso", Some(0)),
+        ("arm", Some(1)),
+        ("head", Some(1)),
+        ("leg", Some(0)),
+    ];
+    assert_eq!(
+        resolve_character_mask(&doc.masks[0], &joints),
+        vec![0.5, 0.0, 0.0, 0.0, 0.0]
+    );
+    assert_eq!(
+        resolve_character_mask(&doc.masks[1], &joints),
+        vec![0.0, 1.0, 1.0, 1.0, 0.0]
+    );
 }

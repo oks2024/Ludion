@@ -288,6 +288,8 @@ entities: []
             stabilization_iterations: Some(2),
             sleep_after_ticks: Some(45),
             layers: Vec::new(),
+            surfaces: Vec::new(),
+            default_surface: None,
         })
     );
     let canonical = emit(&scene, &registry);
@@ -428,6 +430,8 @@ fn validate_physics_reruns_the_parsers_value_checks_under_the_given_base() {
         stabilization_iterations: None,
         sleep_after_ticks: None,
         layers: Vec::new(),
+        surfaces: Vec::new(),
+        default_surface: None,
     };
     let diagnostics = validate_physics(&bad_iterations, "/scene_physics");
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
@@ -444,6 +448,8 @@ fn validate_physics_reruns_the_parsers_value_checks_under_the_given_base() {
         stabilization_iterations: None,
         sleep_after_ticks: None,
         layers: Vec::new(),
+        surfaces: Vec::new(),
+        default_surface: None,
     };
     let diagnostics = validate_physics(&bad_gravity, "/scene_physics");
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
@@ -460,6 +466,8 @@ fn validate_physics_reruns_the_parsers_value_checks_under_the_given_base() {
         stabilization_iterations: Some(2),
         sleep_after_ticks: Some(45),
         layers: Vec::new(),
+        surfaces: Vec::new(),
+        default_surface: None,
     };
     assert!(validate_physics(&valid, "/scene_physics").is_empty());
 }
@@ -659,6 +667,8 @@ fn validate_physics_reruns_the_layer_checks_under_the_given_base() {
                 ignores: Vec::new(),
             },
         ],
+        surfaces: Vec::new(),
+        default_surface: None,
     };
     let diagnostics = validate_physics(&block, "/scene_physics");
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
@@ -764,4 +774,39 @@ fn a_non_boolean_presentation_flag_is_l1009() {
     .unwrap_err();
     assert_eq!(errors[0].code.as_str(), "L1009");
     assert_eq!(errors[0].path.as_deref(), Some("/entities/0/presentation"));
+}
+
+#[test]
+fn surfaces_and_default_round_trip_canonically() {
+    let registry = registry();
+    let source = "format: 1\nphysics:\n  space: free\n  surfaces:\n    - concrete\n    - metal_grate\n  default_surface: concrete\nentities: []\n";
+    let scene = parse(source).expect("valid surfaces parse");
+    let physics = scene.physics.as_ref().expect("physics block");
+    assert_eq!(physics.surfaces, ["concrete", "metal_grate"]);
+    assert_eq!(physics.default_surface.as_deref(), Some("concrete"));
+    assert_eq!(emit(&scene, &registry), source);
+}
+
+#[test]
+fn an_empty_or_repeated_surface_is_l1691() {
+    let diagnostics =
+        parse("format: 1\nphysics:\n  space: free\n  surfaces:\n    - a\n    - a\nentities: []\n")
+            .expect_err("a repeated surface must fail");
+    assert!(
+        diagnostics.iter().any(|d| d.code.as_str() == "L1691"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn an_undeclared_default_surface_is_l1690() {
+    let diagnostics = parse(
+        "format: 1\nphysics:\n  space: free\n  surfaces:\n    - a\n  default_surface: b\nentities: []\n",
+    )
+    .expect_err("an undeclared default must fail");
+    let found = diagnostics
+        .iter()
+        .find(|d| d.code.as_str() == "L1690")
+        .expect("L1690");
+    assert_eq!(found.path.as_deref(), Some("/physics/default_surface"));
 }

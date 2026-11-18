@@ -526,6 +526,11 @@ fn all_zero_bits_x2(values: &[f32; 2]) -> bool {
 }
 
 impl MouseState {
+    /// Buttons that went down this tick, in `Ord` order.
+    pub(crate) fn pressed_buttons(&self) -> impl Iterator<Item = MouseButton> + '_ {
+        self.pressed.iter().copied()
+    }
+
     fn is_idle(&self) -> bool {
         self.held.is_empty()
             && self.pressed.is_empty()
@@ -618,6 +623,11 @@ fn is_trigger_button(button: GamepadButton) -> bool {
 }
 
 impl GamepadState {
+    /// Buttons that went down this tick, in `Ord` order.
+    pub(crate) fn pressed_buttons(&self) -> impl Iterator<Item = GamepadButton> + '_ {
+        self.pressed.iter().copied()
+    }
+
     fn is_idle(&self) -> bool {
         self.held.is_empty()
             && self.pressed.is_empty()
@@ -811,6 +821,11 @@ pub struct InputState {
 }
 
 impl InputState {
+    /// Keys that went down this tick, in `Ord` order.
+    pub(crate) fn pressed_keys(&self) -> impl Iterator<Item = Key> + '_ {
+        self.pressed.iter().copied()
+    }
+
     /// Whether the state equals the default — what a snapshot omits.
     ///
     /// Counts held keys, analogs and the cursor position, so a parked cursor keeps it false. It is

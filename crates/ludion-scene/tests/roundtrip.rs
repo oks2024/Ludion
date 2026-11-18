@@ -172,6 +172,27 @@ fn scene_layers() -> impl Strategy<Value = Vec<SceneLayer>> {
     })
 }
 
+const SURFACE_POOL: [&str; 4] = ["concrete", "metal_grate", "dirt", "puddle"];
+
+/// A few declared surfaces and an optional default drawn from them.
+fn scene_surfaces() -> impl Strategy<Value = (Vec<String>, Option<String>)> {
+    proptest::sample::subsequence(SURFACE_POOL.to_vec(), 0..=SURFACE_POOL.len())
+        .prop_flat_map(|surfaces| {
+            let default = if surfaces.is_empty() {
+                Just(None).boxed()
+            } else {
+                proptest::option::of(proptest::sample::select(surfaces.clone())).boxed()
+            };
+            (Just(surfaces), default)
+        })
+        .prop_map(|(surfaces, default)| {
+            (
+                surfaces.into_iter().map(str::to_string).collect(),
+                default.map(str::to_string),
+            )
+        })
+}
+
 fn scene_physics() -> impl Strategy<Value = Option<ScenePhysics>> {
     proptest::option::of(
         (
@@ -186,6 +207,7 @@ fn scene_physics() -> impl Strategy<Value = Option<ScenePhysics>> {
             proptest::option::of(1u32..=64),
             proptest::option::of(any::<u32>()),
             scene_layers(),
+            scene_surfaces(),
         )
             .prop_map(
                 |(
@@ -195,6 +217,7 @@ fn scene_physics() -> impl Strategy<Value = Option<ScenePhysics>> {
                     stabilization_iterations,
                     sleep_after_ticks,
                     layers,
+                    (surfaces, default_surface),
                 )| {
                     ScenePhysics {
                         space,
@@ -203,6 +226,8 @@ fn scene_physics() -> impl Strategy<Value = Option<ScenePhysics>> {
                         stabilization_iterations,
                         sleep_after_ticks,
                         layers,
+                        surfaces,
+                        default_surface,
                     }
                 },
             ),

@@ -7,7 +7,7 @@ A greybox obstacle course for the character motor and the reference run/jump/cro
 
 - `src/lib.rs` — `Runner` (tunables, scene data), `RunnerState` (hashed), `Spin`, and the
   lane section's `LaneSwitch` (a sensor that engages or releases the hero's `LaneConstraint`) and
-  `Checkpoint` (a sensor that sets the respawn feet) and `CameraZone` (a sensor that switches the engine `CameraRig`'s config); the systems `spin` → `triggers` → `controller`; `game()`, `registry()`.
+  `Checkpoint` (a sensor that sets the respawn feet) and `CameraGate` (a sensor that switches the engine `CameraRig`'s config); the systems `spin` → `triggers` → `controller`; `game()`, `registry()`.
 - `scenes/main.yaml` — the course: collision mesh entity, render meshes, the conveyor, path platform,
   turntable and press (kinematic scene entities), the lane section's sensors and belt past the end
   pad (x 29..52: ramp, pit, drop, belt), the hero, lights, camera.

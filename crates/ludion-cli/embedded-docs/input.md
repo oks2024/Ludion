@@ -192,7 +192,7 @@ Modifiers: `gesture` on a button source (not a wheel step); `press`/`release` on
 0.5 and 0.7 × `press`; a trigger presses at or above `press` and releases below `release`);
 `deadzone` on `stick` only (radial, default 0.2); `scale`, `invert_x`, `invert_y` on analog sources
 (`invert_x` negates an `axis1` source's one value). An axis action reads its first non-zero binding in
-binding order. `context` scopes the duplicate check; `locked` is parsed and carried. Compile errors,
+binding order. `context` scopes the duplicate check; `locked` forbids rebinding (below). Compile errors,
 all at once with a JSON Pointer: `L1630` zero or several sources, `L1631` source does not fit the kind,
 `L1632` modifier does not fit the source, `L1633` value out of range, `L1634` same input and gesture
 twice in one context, `L1635` empty bindings or a bad name.
@@ -208,6 +208,30 @@ press cancels it — that latency is the cost of telling the two apart. Threshol
 (seconds rounded half up at the tick rate, minimum 1), never `game_dt`: a `GameClock` hold or slow
 motion never stretches one. `Actions::state()` and `restore_state()` carry a mid-gesture state; the
 engine's snapshot does not yet, so a restore starts the layer fresh (the latch above).
+
+### Rebinding
+
+All sim-side and in-memory, so a replay reproduces it; every change recompiles the defaults plus the
+overrides, and a map that does not compile changes nothing (the errors come back). By action name:
+`bindings(name)`, `rebind(name, i, binding)` (`i == len` appends), `unbind`, `reset`, `reset_all`,
+`overrides()` (only actions that differ from the defaults). An action keeps at least one binding, and
+a `locked: true` action refuses every edit (`L4272`).
+
+**Capture** binds the next press: `capture(name, slot, CaptureOptions::default())` (`button` actions;
+slot `Index(i)`, `Keyboard` or `Pad`), then read `capture_result()` — `Pending`, `Bound`, `Unchanged`,
+`Conflict { with }`, `Cancelled`. Inputs already held at the call are ignored; two presses in one tick
+pick the smaller by `Ord` (keys, mouse buttons, pad buttons); a trigger pull binds `trigger`. `Escape`
+(and `cancel_pad`) cancel; `keep_gesture` (default) gives the new binding the replaced one's gesture.
+A press another action in the same `context` already has is a `Conflict`: `resolve_conflict` with
+`Swap` (the other action takes the replaced binding), `Replace` (it loses its binding) or `Keep`; a
+locked other action allows only `Keep`, and nothing may leave an action empty (`L4275`).
+**The latch after a binding:** an input newly tracked has no gesture state, so one that is held with no
+fresh press is latched — the key just pressed to capture never fires the action until pressed again.
+
+**Overrides** are an `InputBindingsDoc` (`actions: {name: [bindings]}`). `apply_overrides(&doc)` is
+lenient, per action, and returns warnings at `/actions/<name>`: `L4273` unknown action, `L4272` locked,
+`L4274` does not compile (that action keeps its defaults). `save()` raises a flag and
+`take_save_request()` clears it; the engine does not persist it. Codes: `L4272`–`L4276`.
 
 ## Headless is quiescent, not broken
 
