@@ -227,7 +227,48 @@ fn wave(layers: &mut AnimationLayers, now: SimTime) {
   from rest; `reference: <clip>` measures from that clip's first frame instead.
 - Layers read the base `hold` grid and are presentation only: `switch_to_ragdoll` samples the base
   pose alone. `events: true` fires the layer clip's events with `ClipEvent.layer` set.
-- A layer that names a blend is skipped on an assembly.
+- A layer `clip` may name a blend (below); its phase lives in `BlendClock.layers`.
+
+### Blend spaces
+
+A `blends:` map in the assembly document mixes point clips by a parameter — a walk-to-run space, a
+strafe cross. `Animation.clip`, a crossfade's `from` or an `AnimationLayer.clip` may name a blend;
+`Animation.params` (a layer's own `params`) drives it.
+
+```yaml
+clips:
+  idle: anims/idle.anim.yaml
+  run: anims/run.anim.yaml
+  walk: anims/walk.anim.yaml
+blends:
+  locomotion:
+    sync: foot_l
+    points:
+      - clip: idle
+        at: 0
+      - clip: walk
+        at: 2
+      - clip: run
+        at: 5
+```
+
+- **Points.** Two to sixteen `clip` (a name bound under `clips:`) and `at`: a number is a 1D point read
+  from `params[0]`, a block list of two numbers a 2D point read from `params[0..2]`. One dimension per
+  blend, unique positions, a point clip must loop, and a blend may not share a clip binding's name.
+- **Pose.** Weights are linear (1D) or barycentric (2D, at most three active points). Parts blend in
+  weight order: rotation by running slerp, translation and scale by weighted sum, a channel no active
+  clip keys left unset so an untouched part keeps its exact rest. A query on a point is that clip alone,
+  bit for bit.
+- **Phase.** All point clips advance on one shared phase. With `sync: foot_l` each clip is offset so its
+  own `foot_l` event lands on phase 0 (an assembly clip has no events overlay, so the event is in the
+  clip document). The rate is `Animation.speed * sum(weight / duration)` cycles per gameplay second.
+- **Events.** The heaviest point fires its events as the phase crosses them: `foot_l` and `foot_r` fire
+  once per stride at every speed, with `ClipEvent.clip` the blend's name.
+- **Registration.** Register `blend_clocks` after whatever writes `Animation` or `AnimationLayers` and
+  before `animation_events` (`ludion docs animation-layers`). It keeps a hashed `BlendClock` only on an
+  entity whose clip, crossfade source or layer names a blend; without it extract falls back to
+  `elapsed * rate(params now)` and no events fire.
+- `switch_to_ragdoll` samples a blended base at the switch instant; layers stay excluded.
 
 ### Live editing
 

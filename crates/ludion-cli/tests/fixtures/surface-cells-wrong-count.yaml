@@ -1,0 +1,37 @@
+format: 1
+seed: 1
+physics:
+  space: free
+  surfaces:
+    - dirt
+    - concrete
+entities:
+  - name: ground
+    components:
+      Collider:
+        shape:
+          heightfield:
+            rows: 3
+            cols: 3
+            heights:
+              - 0.0
+              - 0.0
+              - 0.0
+              - 0.0
+              - 0.0
+              - 0.0
+              - 0.0
+              - 0.0
+              - 0.0
+        body: static
+      SurfaceTag:
+        surface: dirt
+        cells:
+          surfaces:
+            - dirt
+            - concrete
+          runs:
+            - - 3
+              - 0
+            - - 3
+              - 1

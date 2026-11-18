@@ -120,11 +120,12 @@ ssao_samples = 4
 
 ## Rules
 
-- **Precedence is `--quality` → `LUDION_QUALITY` → a packaged default → `full`.** The packaged
+- **Precedence is `--quality` → `LUDION_QUALITY` → the player's `settings.yaml` → a packaged default → `full`.** The packaged
   default is what an exported app ships with (`[ios] quality`, `ludion docs export`; `"low"` is how
   iOS turns SSR off, and the report's descriptor carries `ssr`, `ssr_scale` and `ibl_specular_size`). An explicit
   setting wins outright and lower sources are not read for validity, so a flag works on a box whose
-  `LUDION_QUALITY` is malformed. Absent, empty or whitespace counts as not chosen.
+  `LUDION_QUALITY` is malformed. Absent, empty or whitespace counts as not chosen. A flag or the
+  variable also pins the quality over the file.
 - **A game can request a preset** through `Settings::request_quality` (`ludion docs settings`): it applies at the next render, persists on `save()`, and does nothing once a host flag has pinned the quality.
 - **Desktop has no packaged default.** `[ios] quality` is the only one, so a desktop game runs at
   `full` unless the player's flag or environment says otherwise. No preset lowers `ssr_scale`

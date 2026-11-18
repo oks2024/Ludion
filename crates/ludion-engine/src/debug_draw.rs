@@ -48,6 +48,13 @@ pub(crate) const NAV_GRID: &str = "nav:grid";
 pub(crate) const NAV_ROUTES: &str = "nav:routes";
 pub(crate) const NAV_FLOW: &str = "nav:flow";
 
+/// The host-side `perception` category and its sub-filters; `perception` alone enables all four parts.
+pub(crate) const PERCEPTION: &str = "perception";
+pub(crate) const PERCEPTION_ZONES: &str = "perception:zones";
+pub(crate) const PERCEPTION_RAYS: &str = "perception:rays";
+pub(crate) const PERCEPTION_NOISES: &str = "perception:noises";
+pub(crate) const PERCEPTION_MEMORY: &str = "perception:memory";
+
 /// The category name that stands for every category in [`DebugCategories`]; no system may draw under it.
 const ALL: &str = "all";
 
@@ -607,6 +614,20 @@ impl DebugCategories {
     }
 }
 
+/// Draws with a [`DebugPen`] into a scratch [`DebugDraw`] and returns the lines, so a host-side view
+/// shares the primitives' chord counts and degenerate-input rules.
+pub(crate) fn pen_lines(
+    category: &'static str,
+    draw: impl FnOnce(&mut DebugPen<'_>),
+) -> Vec<DebugSegment> {
+    let mut scratch = DebugDraw::default();
+    draw(&mut DebugPen {
+        draw: Some(&mut scratch),
+        category,
+    });
+    scratch.pending.remove(category).unwrap_or_default()
+}
+
 /// The last completed tick's segments in the categories `filter` enables, in category order.
 ///
 /// The `hierarchy` category is drawn here from the live world rather than by a system, so it is
@@ -614,7 +635,9 @@ impl DebugCategories {
 /// `probes`, `colliders` (every physics body's wireframe) and `nav` are drawn the same way. `nav`
 /// shows the grid, the `NavRoute` polylines and the cached flow arrows; `nav:grid`, `nav:routes` and
 /// `nav:flow` pick one part. Grid nodes and arrows within 30 m of the game camera are drawn (all when
-/// there is no camera); routes are never culled. `local_shadows`
+/// there is no camera); routes are never culled. `perception` is drawn the same way from the last
+/// tick's `PerceptionResults`: `perception:zones`, `perception:rays`, `perception:noises` and
+/// `perception:memory` pick one part. `local_shadows`
 /// is the exception: the engine appends it after extract, because it needs the camera's grants.
 pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegment> {
     if *filter == DebugCategories::None {
@@ -661,13 +684,25 @@ pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegm
             .or_default()
             .extend(crate::nav::debug_lines(world, parts, eye));
     }
+    let parts = crate::perception_debug::PerceptionDebugParts {
+        zones: filter.enables(PERCEPTION) || filter.enables(PERCEPTION_ZONES),
+        rays: filter.enables(PERCEPTION) || filter.enables(PERCEPTION_RAYS),
+        noises: filter.enables(PERCEPTION) || filter.enables(PERCEPTION_NOISES),
+        memory: filter.enables(PERCEPTION) || filter.enables(PERCEPTION_MEMORY),
+    };
+    if parts.zones || parts.rays || parts.noises || parts.memory {
+        categories
+            .entry(PERCEPTION)
+            .or_default()
+            .extend(crate::perception_debug::debug_lines(world, parts));
+    }
     categories.into_values().flatten().collect()
 }
 
 /// The categories the world has drawn: what [`DebugDraw::drawn`] lists plus `hierarchy` when any
 /// entity has a `Parent`, `probes` when any has a `ReflectionProbe` and `colliders` when the
 /// physics world holds a body, `nav`, `nav:grid`, `nav:routes` and `nav:flow` when there is something
-/// to draw for them, `local_shadows` when any point or spot light casts and `cull` when
+/// to draw for them, `perception` and its four sub-filters likewise, `local_shadows` when any point or spot light casts and `cull` when
 /// any entity has a `Mesh`, sorted.
 pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = world
@@ -683,6 +718,7 @@ pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
         names.push(COLLIDERS);
     }
     names.extend(crate::nav::debug_present(world));
+    names.extend(crate::perception_debug::debug_present(world));
     if crate::extract::any_local_shadow_caster(world) {
         names.push(LOCAL_SHADOWS);
     }
@@ -1576,5 +1612,185 @@ mod tests {
         assert_eq!(count("nav:routes,nav:flow"), routes + flow);
         assert_eq!(count("motor"), 0);
         assert_eq!(count(""), 0);
+    }
+
+    #[test]
+    fn pen_lines_matches_the_pens_own_chords() {
+        let mut world = world();
+        let own = count(&mut world, |pen| {
+            pen.circle([0.0; 3], [0.0, 1.0, 0.0], 2.0, RED);
+        });
+        let drawn = pen_lines("x", |pen| {
+            pen.circle([0.0; 3], [0.0, 1.0, 0.0], 2.0, RED);
+        });
+        assert_eq!(drawn.len(), own);
+        assert!(
+            pen_lines("x", |pen| {
+                pen.circle([0.0; 3], [0.0, 1.0, 0.0], -1.0, RED);
+            })
+            .is_empty()
+        );
+    }
+
+    const GREEN: [f32; 4] = crate::perception_debug::SEEN;
+
+    /// A guard at the origin facing -Z with one zone, a runner 10 m away with a clear point and a
+    /// point behind a wall, memory on, and a listener-side `bang` emitted before the last tick.
+    fn perception_engine() -> crate::Engine {
+        let root = std::env::temp_dir().join(format!(
+            "ludion-debug-draw-perception-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut engine = crate::Engine::builder()
+            .project_root(&root)
+            .perception(crate::PerceptionConfig {
+                classes: vec!["player".into()],
+                noise_kinds: vec!["bang".into()],
+                ..crate::PerceptionConfig::default()
+            })
+            .system("perception_update", crate::perception_update)
+            .build()
+            .unwrap();
+        let yaml = "format: 1\nseed: 1\nphysics:\n  space: free\n  layers:\n    - name: wall\nentities:\n  \
+            - name: guard\n    components:\n      Transform: {}\n      Perceiver:\n        eye:\n          - 0.0\n          \
+            - 0.2\n          - 0.0\n        memory: {}\n        hearing:\n          hears:\n            - bang\n        \
+            sight:\n          - name: main\n            range: 20.0\n            half_angle_deg: 60.0\n  \
+            - name: runner\n    components:\n      Transform:\n        translation:\n          - 0.0\n          - 0.0\n          \
+            - -10.0\n      SightTarget:\n        class: player\n        points:\n          - offset:\n              - 0.0\n              \
+            - 0.2\n              - 0.0\n            blocked_by:\n              - wall\n          - offset:\n              - 0.0\n              \
+            - 3.0\n              - 0.0\n            blocked_by:\n              - wall\n  \
+            - name: wall1\n    components:\n      Transform:\n        translation:\n          - 0.0\n          - 1.5\n          \
+            - -5.0\n      Collider:\n        shape:\n          box:\n            half_extents:\n              - 2.0\n              \
+            - 0.5\n              - 0.1\n        body: static\n        layer: wall\n";
+        engine.load_inline_scene(yaml).unwrap();
+        engine.advance_live();
+        engine.advance_live();
+        let bang = crate::Noise {
+            at: [1.0, 0.0, 0.0],
+            radius: 6.0,
+            loudness: 1.0,
+            kind: "bang".into(),
+            source: None,
+            surface: None,
+            occlusion: false,
+        };
+        let ctx = ludion_ecs::SystemCtx::new(
+            ludion_core::time::FrameIndex::new(0),
+            ludion_core::time::TickRate::DEFAULT,
+        );
+        assert!(crate::emit_noise(engine.world_mut(), &ctx, bang).is_some());
+        engine.advance_live();
+        engine
+    }
+
+    fn lines_under(engine: &mut crate::Engine, filter: &str) -> Vec<DebugSegment> {
+        engine.set_debug_draw(DebugCategories::parse(filter));
+        lines(engine)
+    }
+
+    #[test]
+    fn the_perception_category_draws_zones_rays_noises_and_memory_with_sub_filters() {
+        let mut engine = perception_engine();
+        assert!(
+            lines(&mut engine).is_empty(),
+            "nothing is enabled by default"
+        );
+        let drawn = engine.debug_draw_drawn();
+        for name in [
+            PERCEPTION,
+            PERCEPTION_ZONES,
+            PERCEPTION_RAYS,
+            PERCEPTION_NOISES,
+            PERCEPTION_MEMORY,
+        ] {
+            assert!(drawn.contains(&name), "{name} missing from {drawn:?}");
+        }
+        let all = lines_under(&mut engine, "perception").len();
+        let zones = lines_under(&mut engine, "perception:zones").len();
+        let rays = lines_under(&mut engine, "perception:rays").len();
+        let noises = lines_under(&mut engine, "perception:noises").len();
+        let memory = lines_under(&mut engine, "perception:memory").len();
+        assert!(zones > 0 && rays > 0 && noises > 0 && memory > 0);
+        assert_eq!(all, zones + rays + noises + memory);
+        assert_eq!(lines_under(&mut engine, "motor").len(), 0);
+    }
+
+    #[test]
+    fn a_seen_point_draws_a_green_ray_and_a_blocked_point_a_red_one() {
+        let mut engine = perception_engine();
+        let rays = lines_under(&mut engine, "perception:rays");
+        let seen = rays.iter().filter(|s| s.color == GREEN).count();
+        let blocked = rays
+            .iter()
+            .filter(|s| s.color == crate::perception_debug::BLOCKED)
+            .count();
+        assert_eq!(seen, 1, "one clear point");
+        assert!(blocked >= 1, "the walled point and its blocker cross");
+    }
+
+    #[test]
+    fn a_visible_zone_is_green_and_a_disabled_perceiver_draws_no_zone() {
+        let mut engine = perception_engine();
+        let zones = lines_under(&mut engine, "perception:zones");
+        assert!(zones.iter().all(|s| s.color == GREEN));
+        let guard = engine
+            .world_mut()
+            .query_ids::<(&crate::Perceiver,)>()
+            .next()
+            .map(|(id, _)| id)
+            .unwrap();
+        engine
+            .world_mut()
+            .get_mut::<crate::Perceiver>(guard)
+            .unwrap()
+            .unwrap()
+            .enabled = false;
+        assert!(lines_under(&mut engine, "perception:zones").is_empty());
+    }
+
+    #[test]
+    fn perception_debug_never_moves_the_world_hash_or_the_extract() {
+        let hashes = |enabled: bool| {
+            let mut engine = perception_engine();
+            let mut trace = Vec::new();
+            for _ in 0..10 {
+                if enabled {
+                    lines_under(&mut engine, "perception");
+                }
+                engine.advance_live();
+                trace.push(engine.world_hash().unwrap().as_u64());
+            }
+            trace
+        };
+        assert_eq!(hashes(true), hashes(false));
+    }
+
+    #[test]
+    fn a_disabled_category_leaves_the_extracted_scene_untouched() {
+        let mut toggled = perception_engine();
+        let mut never = perception_engine();
+        toggled.set_debug_draw(DebugCategories::parse("perception"));
+        assert!(!lines(&mut toggled).is_empty());
+        toggled.set_debug_draw(DebugCategories::None);
+        let after = toggled.extract_render_scene(64, 64).unwrap();
+        let baseline = never.extract_render_scene(64, 64).unwrap();
+        assert!(
+            after.debug_lines.is_empty(),
+            "empty under the default filter"
+        );
+        assert_eq!(after, baseline);
+
+        toggled.set_debug_draw(DebugCategories::parse("colliders"));
+        let collider_lines = lines(&mut toggled);
+        assert_eq!(
+            collider_lines,
+            crate::scene_physics::collider_debug_lines(toggled.world())
+        );
+        never.set_debug_draw(DebugCategories::parse("colliders"));
+        assert_eq!(
+            toggled.extract_render_scene(64, 64).unwrap(),
+            never.extract_render_scene(64, 64).unwrap()
+        );
     }
 }

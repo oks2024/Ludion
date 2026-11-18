@@ -83,7 +83,7 @@ pub enum AlphaMode {
     },
 }
 
-const MESH_KEYS: [&str; 26] = [
+const MESH_KEYS: [&str; 28] = [
     "format",
     "kind",
     "name",
@@ -109,6 +109,8 @@ const MESH_KEYS: [&str; 26] = [
     "weights",
     "bone_indices",
     "lods",
+    "surfaces",
+    "triangle_surfaces",
     "indices",
 ];
 
@@ -397,8 +399,40 @@ impl MeshDocument {
     }
 }
 
+/// The most local surface names one mesh document may list.
+const MAX_MESH_SURFACES: usize = 256;
+
+/// Per-triangle surface tags that travel beside a [`MeshDocument`] (the `surfaces` and
+/// `triangle_surfaces` keys): local names, and `[count, local index]` runs in triangle order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshSurfaces {
+    /// The local surface names, matched to the scene's `physics.surfaces` at load.
+    pub names: Vec<String>,
+    /// Run-length `[count, local index]` pairs over the triangles, in triangle order.
+    pub runs: Vec<[u32; 2]>,
+}
+
+impl MeshSurfaces {
+    /// The local name index of each triangle, the runs expanded.
+    pub fn per_triangle(&self) -> Vec<u16> {
+        let total: usize = self.runs.iter().map(|run| run[0] as usize).sum();
+        let mut out = Vec::with_capacity(total);
+        for [count, index] in &self.runs {
+            out.extend(std::iter::repeat_n(*index as u16, *count as usize));
+        }
+        out
+    }
+}
+
 /// Parses strict-subset YAML into a [`MeshDocument`], checking structure/shape only (`L1110`).
 pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
+    parse_with_surfaces(source).map(|(doc, _)| doc)
+}
+
+/// [`parse`], also returning the `surfaces`/`triangle_surfaces` tags when the document has them.
+pub(crate) fn parse_with_surfaces(
+    source: &str,
+) -> Result<(MeshDocument, Option<MeshSurfaces>), Vec<Diagnostic>> {
     let root = yaml::parse_document(source).map_err(|diagnostic| vec![diagnostic])?;
     let Some(root) = root else {
         return Err(vec![
@@ -447,6 +481,9 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
     let mut alpha_mask = false;
     let mut alpha_cutoff: Option<f64> = None;
     let mut alpha_cutoff_line = 0;
+    let mut surface_names: Option<Vec<String>> = None;
+    let mut surface_runs: Option<Vec<[u32; 2]>> = None;
+    let mut surface_key_seen: Option<&str> = None;
 
     for entry in &entries {
         match entry.key.as_str() {
@@ -670,6 +707,14 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
                     lods = parsed;
                 }
             }
+            "surfaces" => {
+                surface_key_seen.get_or_insert("/surfaces");
+                surface_names = parse_surface_names(&entry.node, &mut diagnostics);
+            }
+            "triangle_surfaces" => {
+                surface_key_seen.get_or_insert("/triangle_surfaces");
+                surface_runs = parse_surface_runs(&entry.node, &mut diagnostics);
+            }
             "indices" => {
                 indices_seen = true;
                 if let Some(values) = expect_index_list(
@@ -778,11 +823,92 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
         }
     }
 
+    let has_names = entries.iter().any(|entry| entry.key == "surfaces");
+    let has_runs = entries.iter().any(|entry| entry.key == "triangle_surfaces");
+    if has_names != has_runs {
+        let (present, absent) = if has_names {
+            ("surfaces", "triangle_surfaces")
+        } else {
+            ("triangle_surfaces", "surfaces")
+        };
+        diagnostics.push(
+            Diagnostic::new(
+                code::MESH_SURFACES_INVALID,
+                format!("`{present}` needs `{absent}` beside it; the two keys go together"),
+            )
+            .with_path(surface_key_seen.unwrap_or("/surfaces"))
+            .with_help(format!("add `{absent}`, or remove `{present}`")),
+        );
+    }
+    let surfaces = match (surface_names, surface_runs) {
+        (Some(names), Some(runs)) => Some(MeshSurfaces { names, runs }),
+        _ => None,
+    };
+
     if diagnostics.is_empty() {
-        Ok(doc)
+        Ok((doc, surfaces))
     } else {
         Err(diagnostics)
     }
+}
+
+/// Parses `surfaces`: a sequence of local surface names.
+fn parse_surface_names(node: &Node, diagnostics: &mut Vec<Diagnostic>) -> Option<Vec<String>> {
+    let items = expect_sequence(node, "/surfaces", "surfaces", diagnostics)?;
+    let before = diagnostics.len();
+    let names: Vec<String> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            envelope::expect_string(
+                item,
+                &format!("/surfaces/{index}"),
+                "a surface name",
+                code::MESH_SURFACES_INVALID,
+                diagnostics,
+            )
+        })
+        .collect();
+    (diagnostics.len() == before).then_some(names)
+}
+
+/// Parses `triangle_surfaces`: a sequence of `[count, local index]` integer pairs.
+fn parse_surface_runs(node: &Node, diagnostics: &mut Vec<Diagnostic>) -> Option<Vec<[u32; 2]>> {
+    let items = expect_sequence(node, "/triangle_surfaces", "triangle_surfaces", diagnostics)?;
+    let before = diagnostics.len();
+    let mut runs = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let pointer = format!("/triangle_surfaces/{index}");
+        let pair = match &item.value {
+            NodeValue::Sequence(pair) if pair.len() == 2 => {
+                let value = |node: &Node| match &node.value {
+                    NodeValue::Scalar(Value::Number(n)) => n
+                        .as_u64()
+                        .filter(|v| *v <= u64::from(u32::MAX))
+                        .map(|v| v as u32),
+                    _ => None,
+                };
+                value(&pair[0]).zip(value(&pair[1]))
+            }
+            _ => None,
+        };
+        match pair {
+            Some((count, local)) => runs.push([count, local]),
+            None => diagnostics.push(
+                Diagnostic::new(
+                    code::MESH_SURFACES_INVALID,
+                    format!(
+                        "`triangle_surfaces[{index}]` must be a pair of non-negative integers, \
+                         `[count, local index]` (line {})",
+                        item.line
+                    ),
+                )
+                .with_path(pointer)
+                .with_help("write each run as two lines: `- - 12` then `  - 0`"),
+            ),
+        }
+    }
+    (diagnostics.len() == before).then_some(runs)
 }
 
 fn missing_key(key: &str, help: &str) -> Diagnostic {
@@ -1874,6 +2000,75 @@ fn push_degenerate_vectors(
     }
 }
 
+/// Validates a document's surface tags (`L1696`): names non-empty, unique and at most 256, runs
+/// non-zero with in-range local indices, and counts summing to the triangle count.
+pub(crate) fn validate_surfaces(doc: &MeshDocument, surfaces: &MeshSurfaces) -> Vec<Diagnostic> {
+    let invalid = |message: String, pointer: String, help: &str| {
+        Diagnostic::new(code::MESH_SURFACES_INVALID, message)
+            .with_path(pointer)
+            .with_help(help.to_string())
+    };
+    let mut diagnostics = Vec::new();
+    if surfaces.names.len() > MAX_MESH_SURFACES {
+        diagnostics.push(invalid(
+            format!(
+                "`surfaces` lists {} names, more than the {MAX_MESH_SURFACES} a mesh may tag",
+                surfaces.names.len()
+            ),
+            "/surfaces".to_string(),
+            "merge surfaces so the mesh names at most 256",
+        ));
+    }
+    for (index, name) in surfaces.names.iter().enumerate() {
+        if name.is_empty() {
+            diagnostics.push(invalid(
+                format!("`surfaces[{index}]` is empty"),
+                format!("/surfaces/{index}"),
+                "name the surface, or remove the entry",
+            ));
+        } else if surfaces.names[..index].contains(name) {
+            diagnostics.push(invalid(
+                format!("`surfaces[{index}]` repeats `{name}`"),
+                format!("/surfaces/{index}"),
+                "list each surface once and point runs at its single index",
+            ));
+        }
+    }
+    let mut total: u64 = 0;
+    for (index, [count, local]) in surfaces.runs.iter().enumerate() {
+        total += u64::from(*count);
+        if *count == 0 {
+            diagnostics.push(invalid(
+                format!("`triangle_surfaces[{index}]` has a zero count"),
+                format!("/triangle_surfaces/{index}"),
+                "drop the empty run",
+            ));
+        }
+        if *local as usize >= surfaces.names.len() {
+            diagnostics.push(invalid(
+                format!(
+                    "`triangle_surfaces[{index}]` names local surface {local}, but `surfaces` \
+                     lists {}",
+                    surfaces.names.len()
+                ),
+                format!("/triangle_surfaces/{index}"),
+                "use an index below the length of `surfaces`",
+            ));
+        }
+    }
+    let triangles = doc.triangle_count() as u64;
+    if total != triangles {
+        diagnostics.push(invalid(
+            format!(
+                "`triangle_surfaces` counts sum to {total}, but the mesh has {triangles} triangles"
+            ),
+            "/triangle_surfaces".to_string(),
+            "the run counts must cover every triangle exactly once, in index order",
+        ));
+    }
+    diagnostics
+}
+
 fn check_material_list(
     values: Option<&[f64]>,
     field: &str,
@@ -2280,6 +2475,11 @@ pub(crate) fn budget_warning(doc: &MeshDocument) -> Option<Diagnostic> {
 /// three together), `indices`, each flat list one entry per line, ryu
 /// shortest-round-trip floats — the mesh analog of [`crate::emit`].
 pub(crate) fn emit(doc: &MeshDocument) -> String {
+    emit_with_surfaces(doc, None)
+}
+
+/// [`emit`] with the `surfaces`/`triangle_surfaces` keys, written right before `indices`.
+pub(crate) fn emit_with_surfaces(doc: &MeshDocument, surfaces: Option<&MeshSurfaces>) -> String {
     let mut out = String::new();
     out.push_str("format: 1\n");
     out.push_str("kind: mesh\n");
@@ -2348,6 +2548,26 @@ pub(crate) fn emit(doc: &MeshDocument) -> String {
             out.push_str("\n    screen_size: ");
             out.push_str(&format_float(lod.screen_size));
             out.push('\n');
+        }
+    }
+    if let Some(surfaces) = surfaces {
+        out.push_str(if surfaces.names.is_empty() {
+            "surfaces: []\n"
+        } else {
+            "surfaces:\n"
+        });
+        for name in &surfaces.names {
+            out.push_str("  - ");
+            out.push_str(&scalar_string(name));
+            out.push('\n');
+        }
+        out.push_str(if surfaces.runs.is_empty() {
+            "triangle_surfaces: []\n"
+        } else {
+            "triangle_surfaces:\n"
+        });
+        for [count, local] in &surfaces.runs {
+            out.push_str(&format!("  - - {count}\n    - {local}\n"));
         }
     }
     write_index_list(&mut out, "indices", &doc.indices);

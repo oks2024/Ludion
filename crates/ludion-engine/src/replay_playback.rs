@@ -193,6 +193,8 @@ pub(crate) struct SavedHost {
     pub(crate) profile_off_disk: bool,
     pub(crate) profile_text: Option<String>,
     pub(crate) input_bindings: ludion_sim::actions::InputBindingsDoc,
+    pub(crate) settings: crate::settings::SettingsDoc,
+    pub(crate) anti_aliasing_settings: Option<ludion_renderer::AntiAliasing>,
     pub(crate) speed: Speed,
     pub(crate) render_size: (u32, u32),
     pub(crate) return_to: String,

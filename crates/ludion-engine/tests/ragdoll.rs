@@ -818,6 +818,7 @@ fn ragdoll_parts_inherit_the_root_surface_tag_by_part_name() {
     let tag = SurfaceTag {
         surface: "cloth".to_string(),
         parts: vec![part_tag("arm-ball", "metal")],
+        cells: None,
     };
     let (mut world, figure) = tagged_figure(Some(tag.clone()));
     let spawned = switch_to_ragdoll(
@@ -877,6 +878,7 @@ fn a_mistyped_part_key_warns_once_and_falls_back_to_the_root_surface() {
     let tag = SurfaceTag {
         surface: "cloth".to_string(),
         parts: vec![part_tag("arm-bal", "metal")],
+        cells: None,
     };
     let (mut world, figure) = tagged_figure(Some(tag));
     let spawned = switch_to_ragdoll(

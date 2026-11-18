@@ -31,6 +31,9 @@ const SETTINGS_FORMAT: u64 = 1;
 /// Where the file lives, relative to the save root.
 pub(crate) const SETTINGS_PATH: &str = "save/settings.yaml";
 
+/// The `kind:` of the file, and its key in a replay header's `save_docs`.
+pub(crate) const SETTINGS_KIND: &str = "settings";
+
 /// The window modes a game can ask the window host for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -217,6 +220,29 @@ pub(crate) fn load(path: &Path) -> (SettingsDoc, Vec<Diagnostic>) {
     }
 }
 
+/// Parses embedded text (a replay header's `save_docs` entry) the way [`load`] parses the file, but
+/// never touches disk: unparseable text is the defaults with one `L4340`.
+pub(crate) fn parse_text(text: &str) -> (SettingsDoc, Vec<Diagnostic>) {
+    let mut diagnostics = Vec::new();
+    match parse(text, &mut diagnostics) {
+        Ok(doc) => (doc, diagnostics),
+        Err(reason) => (
+            SettingsDoc::default(),
+            vec![reset_diagnostic(
+                &reason,
+                "the recorded settings were not installed",
+            )],
+        ),
+    }
+}
+
+/// The window mode the file under `save_root` names, if it parses. A missing or unloadable file is
+/// `None`: this peek never backs up and never warns (the engine's own build reports once).
+pub fn settings_window_mode_at(save_root: &Path) -> Option<WindowMode> {
+    let text = std::fs::read_to_string(save_root.join(SETTINGS_PATH)).ok()?;
+    parse(&text, &mut Vec::new()).ok()?.display.window
+}
+
 /// Backs the file up (when asked) and builds the one `L4340`.
 fn reset(path: &Path, reason: &str, backup: bool) -> Diagnostic {
     let kept = if backup {
@@ -229,6 +255,10 @@ fn reset(path: &Path, reason: &str, backup: bool) -> Diagnostic {
     } else {
         "the file is untouched".to_string()
     };
+    reset_diagnostic(reason, &kept)
+}
+
+fn reset_diagnostic(reason: &str, kept: &str) -> Diagnostic {
     Diagnostic::new(
         code::SETTINGS_RESET,
         format!("`settings.yaml` was not loaded: {reason}; defaults apply and {kept}"),
@@ -770,6 +800,47 @@ mod tests {
             SettingsDoc::default().emit(),
             "format: 1\nkind: settings\naudio:\n  master: 1.0\n"
         );
+    }
+
+    #[test]
+    fn parse_text_round_trips_emit_and_never_touches_disk() {
+        let mut doc = SettingsDoc::default();
+        doc.set_volume(Bus::Music, 0.25);
+        doc.graphics.quality = Some(QualityPreset::Low);
+        let (back, diagnostics) = parse_text(&doc.emit());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(back, doc);
+
+        let (doc, diagnostics) = parse_text("format: 1\nkind: settings\n  audio: [\n");
+        assert_eq!(doc, SettingsDoc::default());
+        assert_eq!(codes(&diagnostics), ["L4340"]);
+    }
+
+    #[test]
+    fn the_window_peek_reads_a_valid_file_and_never_backs_up_a_bad_one() {
+        let root = scratch("peek").parent().unwrap().to_path_buf();
+        assert_eq!(settings_window_mode_at(&root), None, "no file");
+        let path = root.join(SETTINGS_PATH);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "format: 1\nkind: settings\ndisplay:\n  window: borderless_fullscreen\n",
+        )
+        .unwrap();
+        assert_eq!(
+            settings_window_mode_at(&root),
+            Some(WindowMode::BorderlessFullscreen)
+        );
+        let garbage = "format: 1\nkind: settings\n  audio: [\n";
+        std::fs::write(&path, garbage).unwrap();
+        assert_eq!(settings_window_mode_at(&root), None, "garbage");
+        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["settings.yaml"], "no backup was made");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), garbage);
     }
 
     #[test]

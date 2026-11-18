@@ -18,6 +18,9 @@
 //   5. exposure                     — the camera's own gain
 //   6. tonemap                      — HDR to display
 //   7. grade                        — display-referred (see the grading section below)
+//   7b. silhouette                  — display-referred: an `OccludedSilhouette`'s tint and outline, so
+//                                     it is not fogged, defocused or bloomed, yet is still vignetted
+//                                     and grained like the image it is drawn into
 //   8. vignette                     — display-referred: a lens darkening of the finished image
 //   9. grain                        — the emulsion: light passes the lens, *then* it is recorded
 //  10. dither                       — strictly last; it hides the *output* quantization
@@ -145,7 +148,13 @@
 // under fog; otherwise the recorder binds the same 1x1 stand-in and `composite.medium_gi.y` is zero, so
 // no scale below is applied.
 @group(0) @binding(7) var scene_medium_tex: texture_2d<f32>;
-@group(0) @binding(8) var samp: sampler;
+// The occluded-silhouette mask (R8Unorm style index, `silhouette_mask.wgsl`) and its own depth, at the
+// render extent — the sixth and seventh **optional** inputs, behind `scene_medium_tex`. They exist when
+// a mesh resolves an `OccludedSilhouette`; otherwise the recorder binds 1x1 stand-ins and
+// `composite.silhouette.x` is zero, so `apply_silhouette` below never reads them.
+@group(0) @binding(8) var silhouette_mask_tex: texture_2d<f32>;
+@group(0) @binding(9) var silhouette_depth_tex: texture_depth_2d;
+@group(0) @binding(10) var samp: sampler;
 
 // The selector values `Composite.tonemap` carries, one per `PostProcess.tonemap` variant. The
 // shader-bindgen hoists integer consts into `shader_gen`, so the recorder maps its `TonemapOperator`
@@ -273,8 +282,17 @@ struct Composite {
     // (`medium_scatter.wgsl`); `.y` nonzero when `scene_medium_tex` is real; `.z` nonzero when the
     // transparent layer carries a coverage-weighted medium scale in B; `.w` is pad.
     medium_gi: vec4<u32>,
+    // `.x` nonzero when the silhouette mask is real; `.y` nonzero when any style has an outline; `.z`
+    // the widest outline radius in render pixels; `.w` the style count.
+    silhouette: vec4<u32>,
+    // The camera's forward axis (`.w` unused). `view_forward` is zero for a perspective camera, and the
+    // hidden test measures both depths along this one axis, so it works for either projection.
+    silhouette_forward: vec4<f32>,
+    // Per style, two lanes: `color`, then `(outline radius in render pixels (0 = none), outline alpha,
+    // bias, always)`. The `OccludedSilhouette`'s style index is 1-based into this table.
+    silhouette_styles: array<vec4<f32>, 16>,
 };
-@group(0) @binding(9) var<uniform> composite: Composite;
+@group(0) @binding(11) var<uniform> composite: Composite;
 
 // The extinguished fraction of the same ray with its optical depth scaled by `m`: T^m = exp(-m·τ).
 fn medium_scaled(extinguished: f32, m: f32) -> f32 {
@@ -605,6 +623,68 @@ fn grade(color_in: vec3<f32>) -> vec3<f32> {
 // while still reaching from dead centre to the edge midpoints.
 const CORNER_DISTANCE: f32 = 1.4142135;
 
+// --- Occluded silhouette ----------------------------------------------------------------------------
+//
+// Step 7b (`Plan/occluded-silhouette.md`): a pure per-pixel function of the mask, its depth and the
+// scene depth, so it folds in here. A mask pixel is *hidden* when the scene's own surface is nearer
+// along the view axis than the silhouetted mesh by more than `bias`; where the mesh is the front
+// surface the two depths are equal, so self-occlusion needs no special case.
+
+fn silhouette_view_z(uv: vec2<f32>, depth: f32) -> f32 {
+    return dot(world_from_depth(uv, depth) - composite.cam_pos, composite.silhouette_forward.xyz);
+}
+
+// The 1-based style index of the mask at `p`, or 0 where nothing was drawn.
+fn silhouette_style_at(p: vec2<i32>) -> u32 {
+    if (textureLoad(silhouette_depth_tex, p, 0) >= 1.0) { return 0u; }
+    return u32(round(textureLoad(silhouette_mask_tex, p, 0).r * 255.0));
+}
+
+// The style index at `p` when the pixel is *filled* (hidden, or any mask pixel under `always`), else 0.
+fn silhouette_filled(p: vec2<i32>, dims: vec2<f32>) -> u32 {
+    let k = silhouette_style_at(p);
+    if (k == 0u || k > composite.silhouette.w) { return 0u; }
+    let params = composite.silhouette_styles[(k - 1u) * 2u + 1u];
+    if (params.w != 0.0) { return k; }
+    let uv = (vec2<f32>(p) + 0.5) / dims;
+    let mask_z = silhouette_view_z(uv, textureLoad(silhouette_depth_tex, p, 0));
+    let scene_z = silhouette_view_z(uv, textureLoad(scene_depth_tex, p, 0));
+    if (scene_z < mask_z - params.z) { return k; }
+    return 0u;
+}
+
+fn apply_silhouette(color: vec3<f32>, p: vec2<i32>) -> vec3<f32> {
+    let dims = vec2<f32>(textureDimensions(silhouette_mask_tex));
+    let k = silhouette_filled(p, dims);
+    if (k != 0u) {
+        let tint = composite.silhouette_styles[(k - 1u) * 2u];
+        return mix(color, tint.rgb, tint.a);
+    }
+    // The outline is an outer dilation: only a pixel outside every mask takes it, so a visible body
+    // pixel is never outlined.
+    if (composite.silhouette.y == 0u || silhouette_style_at(p) != 0u) { return color; }
+    var dirs = array<vec2<i32>, 8>(
+        vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1),
+        vec2<i32>(1, 1), vec2<i32>(-1, 1), vec2<i32>(1, -1), vec2<i32>(-1, -1),
+    );
+    let size = vec2<i32>(dims);
+    let reach = i32(composite.silhouette.z);
+    for (var step = 1; step <= reach; step = step + 1) {
+        for (var d = 0; d < 8; d = d + 1) {
+            let q = p + dirs[d] * step;
+            if (q.x < 0 || q.y < 0 || q.x >= size.x || q.y >= size.y) { continue; }
+            let hit = silhouette_filled(q, dims);
+            if (hit == 0u) { continue; }
+            let params = composite.silhouette_styles[(hit - 1u) * 2u + 1u];
+            if (params.x > 0.0 && f32(step) <= params.x) {
+                let tint = composite.silhouette_styles[(hit - 1u) * 2u];
+                return mix(color, tint.rgb, params.y);
+            }
+        }
+    }
+    return color;
+}
+
 fn apply_vignette(color: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     let d = length((uv - vec2<f32>(0.5)) * 2.0);
     let falloff = smoothstep(composite.vignette_radius, CORNER_DISTANCE, d);
@@ -866,6 +946,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         hdr = hdr * composite.exposure;
     }
     var color = grade(apply_tonemap(composite.tonemap, hdr));
+    if (composite.silhouette.x != 0u) {
+        color = apply_silhouette(color, vec2<i32>(in.pos.xy));
+    }
     if (composite.vignette != 0.0) {
         color = apply_vignette(color, in.uv);
     }

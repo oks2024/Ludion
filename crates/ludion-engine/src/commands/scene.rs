@@ -242,6 +242,16 @@ fn check_document(engine: &Engine, document: &str) -> (bool, Vec<Diagnostic>) {
                     .into_iter()
                     .map(|d| expanded.locate(d)),
             );
+            if let Some(config) = engine.world().resource::<crate::PerceptionConfig>() {
+                diagnostics.extend(
+                    crate::perception_check::scene_perception_name_diagnostics(
+                        &expanded.scene,
+                        config,
+                    )
+                    .into_iter()
+                    .map(|d| expanded.locate(d)),
+                );
+            }
             diagnostics.extend(crate::scene_check::scene_prefab_clip_diagnostics(
                 root,
                 engine.registry(),

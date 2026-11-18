@@ -1,6 +1,6 @@
 # Plan: Perception — sight zones, sample points, batched line of sight
 
-> **Waves 1–4 mechanized — sight, stimulus memory, hearing, the sight stagger and ray budget, and the `perception` trace channel ship; W5 is laid out below.**
+> **Waves 1–5 mechanized — sight, stimulus memory, hearing, the sight stagger and ray budget, the `perception` trace channel, the `perception` debug-draw category and the check-scene name checks ship.**
 > Driven by Neon Shroud request 0001 (stealth AI senses). Game-facing doc: `ludion docs perception`.
 
 ## Design decisions
@@ -141,6 +141,28 @@
     median and p95 of `perception_update` plus `rays_cast` at 1 and 8 threads and asserts only that the two `WorldHash`
     traces are identical. The 0.5 ms target stays Proposed. The request's game-side `tests/gameplay.rs` scripted route
     is the game's work.
+40. **`perception` is a host-side category** (the `Plan/debug-draw.md` decision 2 precedent). It is drawn in
+    `debug_draw::segments` from the world at extraction and is never in `DebugDraw`, so no system can draw or branch on
+    it, and nothing is hashed, snapshotted or recorded. The sub-filters are `perception:zones`, `perception:rays`,
+    `perception:noises` and `perception:memory`. Geometry comes from the current transforms, verdicts from the last
+    completed tick's results; a staggered perceiver's rays show its carried verdict against the current points.
+41. **What is drawn.** Zones: every perceiver with a `zone_facing`; green when any sample is `visible`, amber when any
+    is `in_zone`, otherwise grey; the authored `range`; a frustum wedge when both half-angles are at most 90 degrees,
+    otherwise a flat wedge about +Y at eye height. Rays: eye to each world sample point of every `in_zone` sample,
+    green when its bit is in `points_visible`, otherwise red, plus a red cross at the blocker's origin; no hit point,
+    because results don't store one. Noises: a horizontal circle of `effective_radius` per noise and a line from `at` to
+    each listener's ear per delivery. Memory: a cross at each `last_position`, bright when `sensed_now`, dim (x0.4)
+    otherwise; sight cyan, hearing yellow, custom magenta.
+42. **Pen reuse host-side.** A crate-private `debug_draw::pen_lines(category, |pen| ...)` draws into a scratch
+    `DebugDraw` and returns its pending lines, so host-side views share the primitives' chord counts and degenerate-input
+    rules. `nav` keeps its raw segments.
+43. **Static checks mirror the runtime's `L1572` sites.** The layer pass (`see_through`, `blocked_by` against
+    `physics.layers`) runs inside `scene_engine_diagnostics`; the class and kind pass (`detects`, `SightTarget.class`,
+    `hears`, `NoiseZone.kinds`) needs a `PerceptionConfig`, so only the engine-bearing clients (`scene.check`, a game's
+    `--check-scene`) run it. `ludion check-scene` links no game and checks layers only. Every occurrence is reported at
+    its pointer, with the nearest match.
+44. **No golden.** The built-in render host runs no system, so it has no `PerceptionResults`; tests count segments and
+    assert colours. This is the owed game-free host of `Plan/debug-draw.md`.
 
 ## Waves
 
@@ -153,7 +175,8 @@
   samples, `L4221`, `engine.describe` counts (decisions 29-35).
 - **W4b (shipped):** the `perception` trace channel, gallery `examples/gallery/perception.yaml`, the committed
   `WorldHash` trace, the bench (30 x 2 x 12 x 3, 1 and 8 threads; decisions 36-39).
-- **W5:** debug draw category (rides request 0005), check-scene class and layer name checks.
+- **W5 (shipped):** the `perception` debug-draw category and the check-scene class, kind and layer name checks
+  (decisions 40-44).
 
 ## Out of scope (triggers recorded)
 
@@ -202,3 +225,8 @@ ray budget 2048 (decision 30) and the bench target 0.5 ms (W4b); no entity-ref c
   0.644 / p95 0.815 ms at 8); an 8-thread run is not reliably faster at this size. The 0.5 ms target stays Proposed
   and a quiet-box re-measure is owed. No wire schema, component
   schema, replay or existing golden moved.
+- **W5 mechanized (2026-11-18):** `perception_debug.rs` (the `perception` category and its four sub-filters, drawn at
+  extraction through `debug_draw::pen_lines`), `perception_check.rs` (`scene_perception_diagnostics`,
+  `scene_perception_name_diagnostics`; `L1572` per occurrence with the nearest match); tests in
+  `crates/ludion-engine/tests/perception_check.rs` and `debug_draw.rs` (incl. the world-hash and extract-unchanged
+  proofs). No component, wire schema, replay, golden or hash moved.

@@ -14,11 +14,12 @@ use ludion_spatial::{Body, Collider, Joint, JointMotor, Plane, Shape, Velocity};
 use crate::PhysicsPose;
 use crate::layer_set::{LayerSet, QueryLayers};
 use crate::meshes::ColliderMeshes;
+use crate::meshes::TriangleMesh;
 use crate::motor::{
     CharacterMotor, CharacterMotorState, check_in_force, check_postures, in_force, lying_centre,
     lying_rotation, motor_invalid, posture_unknown, yaw_of,
 };
-use crate::surface_tag::{SurfaceOverlay, SurfaceTable, SurfaceTag};
+use crate::surface_tag::{CellSurfaces, SurfaceOverlay, SurfaceTable, SurfaceTag};
 use crate::world::{DEFAULT_GRAVITY, MeshInput, PhysicsWorld, ShapeRejection, mesh_hash_of};
 use ludion_spatial::ParentPose;
 
@@ -333,6 +334,48 @@ pub(crate) fn spawn_ranks(
     ranks
 }
 
+/// The live mesh colliders whose document tags triangles, entity-sorted.
+fn tagged_meshes(live: &[Claimed]) -> Vec<(EntityId, Arc<TriangleMesh>)> {
+    let mut tagged: Vec<(EntityId, Arc<TriangleMesh>)> = live
+        .iter()
+        .filter_map(|(entity, _, _, _, mesh)| match mesh {
+            Ok(Some(mesh)) if !mesh.triangle_surfaces.is_empty() => {
+                Some((*entity, Arc::clone(mesh)))
+            }
+            _ => None,
+        })
+        .collect();
+    tagged.sort_unstable_by_key(|(entity, _)| *entity);
+    tagged
+}
+
+/// Refills the physics world's tagged-mesh side table from the entities' mesh colliders. A restore
+/// installs the [`ColliderMeshes`] library after the tags are refreshed, so the engine calls this
+/// right after, and a hit answers before the first write.
+pub fn sync_mesh_surfaces(world: &mut World) {
+    let Some(mut meshes) = world.remove_resource::<ColliderMeshes>() else {
+        return;
+    };
+    let live: Vec<Claimed> = world
+        .query_ids::<(&Collider,)>()
+        .filter(|(_, (collider,))| claims(collider))
+        .map(|(entity, (collider,))| {
+            (
+                entity,
+                [0.0; 3],
+                [0.0, 0.0, 0.0, 1.0],
+                None,
+                resolve_mesh(Some(&mut meshes), collider),
+            )
+        })
+        .collect();
+    world.insert_resource(meshes);
+    let tagged = tagged_meshes(&live);
+    if let Some(physics) = world.resource_mut::<PhysicsWorld>() {
+        physics.set_mesh_surfaces(&tagged);
+    }
+}
+
 /// Everything [`write`] reads out of the world for one tick, gathered before any solver call so a
 /// prime made at scene commit can be compared against what tick 1 would have fed the solver.
 struct WriteInputs {
@@ -349,6 +392,10 @@ struct WriteInputs {
     surface_parts: Vec<(EntityId, Vec<(u32, String)>)>,
     /// Every entity's `SurfaceOverlay` (name, priority), entity-sorted.
     surface_overlays: Vec<(EntityId, String, i32)>,
+    /// Every entity's `SurfaceTag.cells`, entity-sorted; entities with none are absent.
+    surface_cells: Vec<(EntityId, CellSurfaces)>,
+    /// Every live mesh collider whose document tags triangles, entity-sorted.
+    mesh_surfaces: Vec<(EntityId, Arc<TriangleMesh>)>,
     motor_rejections: Vec<(EntityId, DiagnosticCode, String)>,
     velocities: Vec<(EntityId, Velocity)>,
     plane: Option<Plane>,
@@ -376,6 +423,13 @@ impl PartialEq for WriteInputs {
             && self.surface_tags == other.surface_tags
             && self.surface_parts == other.surface_parts
             && self.surface_overlays == other.surface_overlays
+            && self.surface_cells == other.surface_cells
+            && self.mesh_surfaces.len() == other.mesh_surfaces.len()
+            && self
+                .mesh_surfaces
+                .iter()
+                .zip(&other.mesh_surfaces)
+                .all(|(a, b)| a.0 == b.0 && a.1.hash == b.1.hash)
             && self.live.len() == other.live.len()
             && self.live.iter().zip(&other.live).all(|(a, b)| {
                 (a.0, a.1, a.2, &a.3) == (b.0, b.1, b.2, &b.3) && mesh_input_eq(&a.4, &b.4)
@@ -573,6 +627,12 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         .map(|(entity, (overlay,))| (entity, overlay.surface.clone(), overlay.priority))
         .collect();
     surface_overlays.sort_unstable_by_key(|(entity, _, _)| *entity);
+    let mut surface_cells: Vec<(EntityId, CellSurfaces)> = world
+        .query_ids::<(&SurfaceTag,)>()
+        .filter_map(|(entity, (tag,))| tag.cells.clone().map(|cells| (entity, cells)))
+        .collect();
+    surface_cells.sort_unstable_by_key(|(entity, _)| *entity);
+    let mesh_surfaces = tagged_meshes(&live);
     let colliders = if physics.is_none() {
         live.iter()
             .filter_map(|(entity, ..)| match world.get::<Collider>(*entity) {
@@ -591,6 +651,8 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         surface_tags,
         surface_parts,
         surface_overlays,
+        surface_cells,
+        mesh_surfaces,
         motor_rejections,
         velocities,
         plane,
@@ -700,6 +762,8 @@ fn write<P: PhysicsPose, R: ParentPose>(
         &inputs.surface_tags,
         &inputs.surface_parts,
         &inputs.surface_overlays,
+        &inputs.surface_cells,
+        &inputs.mesh_surfaces,
     );
     physics.last_write_frame = Some(ctx.frame.as_u64());
     physics.last_write_held = held;
@@ -760,6 +824,8 @@ pub fn prime<P: PhysicsPose, R: ParentPose>(
         &inputs.surface_tags,
         &inputs.surface_parts,
         &inputs.surface_overlays,
+        &inputs.surface_cells,
+        &inputs.mesh_surfaces,
     );
     physics.last_write_frame = Some(frame.as_u64());
     physics.last_write_held = world.resource::<GameClock>().map(|clock| clock.held());

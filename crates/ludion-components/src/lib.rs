@@ -44,6 +44,7 @@ pub mod lane;
 pub mod light_exposure;
 pub mod nav_link;
 pub mod nav_route;
+pub mod occluded_silhouette;
 pub mod path_follow;
 pub mod patrol;
 pub mod patterns;
@@ -63,6 +64,9 @@ pub use lane::{LaneConstraint, LaneEnds};
 pub use light_exposure::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
 pub use nav_link::NavLink;
 pub use nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
+pub use occluded_silhouette::{
+    MAX_OUTLINE_PX, OccludedSilhouette, SilhouetteOutline, SilhouetteWhen,
+};
 pub use path_follow::{PathFollower, PathMode, PathOrient};
 pub use patrol::{PatrolFollower, PatrolPhase, PatrolResume, PatrolState};
 pub use patterns::{PatternPlayer, VOLLEY_MAX_BULLETS, Volley, VolleyShape};
@@ -6633,6 +6637,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<GroundMarkerClip>("GroundMarkerClip")
         .expect("unique");
+    // The occluded silhouette, appended after `GroundMarkerClip`: read by `extract` into the mask pass.
+    registry
+        .register_validated::<OccludedSilhouette>("OccludedSilhouette")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -7160,12 +7168,13 @@ mod tests {
                 "UiGroup",
                 "NavLink",
                 "GroundMarkerClip",
+                "OccludedSilhouette",
             ]
         );
         assert_eq!(
             registry.len(),
-            78,
-            "appending `GroundMarkerClip` grows the registry to 78"
+            79,
+            "appending `OccludedSilhouette` grows the registry to 79"
         );
     }
 

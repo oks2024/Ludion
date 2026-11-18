@@ -877,6 +877,7 @@ pub(crate) fn prepare_game_engine(
     restore: Option<&Path>,
     dev_session: Option<&Path>,
     quality: ludion_engine::QualitySetting,
+    quality_named: bool,
     textures: TextureSource,
     probes: ProbeSource,
     render_size: Option<(u32, u32)>,
@@ -890,9 +891,13 @@ pub(crate) fn prepare_game_engine(
         None => builder
             .persist_profile()
             .persist_input_bindings()
+            .persist_settings()
             .load_scene_file(scene),
         Some(snapshot) => boot_from_snapshot(
-            builder.persist_profile().persist_input_bindings(),
+            builder
+                .persist_profile()
+                .persist_input_bindings()
+                .persist_settings(),
             scene,
             snapshot,
             dev_session,
@@ -914,8 +919,9 @@ pub(crate) fn prepare_game_engine(
     engine.set_scene_session_file(dev_session.map(Path::to_path_buf));
 
     // A host switch, applied before the engine moves onto the sim thread: an attached client sees
-    // this machine's quality through `engine.describe` and can never negotiate it.
-    engine.set_quality(quality);
+    // this machine's quality through `engine.describe` and can never negotiate it. A quality a flag or
+    // the environment named wins; otherwise the player's settings file chose one at build.
+    engine.apply_startup_quality(quality, quality_named);
     // Likewise a host switch, pixels only: where imported mesh maps are read from.
     engine.set_textures(textures);
     engine.set_probes(probes);
@@ -1363,6 +1369,11 @@ fn run_check_scene(builder: EngineBuilder, scene: &Path) -> ExitCode {
     }
     let found = ludion_engine::scene_engine_diagnostics(engine.project_root(), document);
     let mut found = located(found);
+    if let Some(config) = engine.world().resource::<ludion_engine::PerceptionConfig>() {
+        found.extend(located(ludion_engine::scene_perception_name_diagnostics(
+            document, config,
+        )));
+    }
     found.extend(ludion_engine::scene_prefab_clip_diagnostics(
         engine.project_root(),
         engine.registry(),

@@ -16,8 +16,8 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::{FrameIndex, GameTime};
 use ludion_ecs::{SystemCtx, World};
 
-use crate::animation_events::AnimationLibrary;
-use crate::character::CharacterBlendData;
+use crate::animation_events::{AnimationLibrary, Model};
+use crate::blend_space::BlendSpaceData;
 use crate::components::{
     Animation, AnimationLayer, AnimationLayers, BlendClock, LayerPhase, Mesh, MeshSource,
 };
@@ -29,24 +29,20 @@ use ludion_components::animation_layers::MAX_ANIMATION_LAYERS;
 const MAX_CYCLES_PER_TICK: i64 = 64;
 
 /// The phase rate of `blend` at `animation.params`, in cycles per second before `Animation.speed`.
-pub(crate) fn blend_rate(blend: &CharacterBlendData, params: [f32; 2]) -> f64 {
+pub(crate) fn blend_rate(blend: &BlendSpaceData, params: [f32; 2]) -> f64 {
     blend.rate(&blend.weights(params))
 }
 
 /// The stateless phase of a blend at `now`: `elapsed * rate(params now)`. What extract reads when no
 /// [`BlendClock`] matches the animation, and where a fresh clock starts.
-pub(crate) fn fallback_phase(
-    blend: &CharacterBlendData,
-    animation: &Animation,
-    now: GameTime,
-) -> f64 {
+pub(crate) fn fallback_phase(blend: &BlendSpaceData, animation: &Animation, now: GameTime) -> f64 {
     clip_elapsed(animation, now) * blend_rate(blend, animation.params)
 }
 
 /// The stateless phase of a layer's blend at `now`: `elapsed * rate(layer params now)`. What extract
 /// reads when no [`BlendClock`] layer entry matches, and where a fresh entry starts.
 pub(crate) fn layer_fallback_phase(
-    blend: &CharacterBlendData,
+    blend: &BlendSpaceData,
     layer: &AnimationLayer,
     now: GameTime,
 ) -> f64 {
@@ -91,16 +87,21 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
     };
     let ticks = ctx.game_instant.ticks_floor();
     let seconds = f64::from(ctx.game_dt);
-    let mut candidates: Vec<(EntityId, Animation, String)> = world
+    let mut candidates: Vec<(EntityId, Animation, Model)> = world
         .query_ids::<(&Animation, &Mesh)>()
         .filter_map(|(id, (animation, mesh))| match &mesh.shape {
-            MeshSource::Character(rel) => Some((id, animation.clone(), rel.clone())),
+            MeshSource::Character(rel) => {
+                Some((id, animation.clone(), Model::Character(rel.clone())))
+            }
+            MeshSource::Assembly(rel) => {
+                Some((id, animation.clone(), Model::Assembly(rel.clone())))
+            }
             _ => None,
         })
         .collect();
     candidates.sort_by_key(|(id, _, _)| *id);
-    for (id, animation, rel) in candidates {
-        let blends = library.blends(&rel);
+    for (id, animation, model) in candidates {
+        let blends = library.blends(&model);
         let blend_named = |name: &str| blends.iter().find(|blend| blend.name == name);
         let incoming = (!animation.clip.is_empty())
             .then(|| blend_named(&animation.clip))
@@ -110,7 +111,7 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
             && fade_weight(&animation, ctx.game_instant).is_some();
         let outgoing = fading.then(|| blend_named(&animation.from)).flatten();
         // Unrecorded: engine-optional components must not demand a game's query declaration.
-        let layer_blends: Vec<(&AnimationLayer, &CharacterBlendData)> = world
+        let layer_blends: Vec<(&AnimationLayer, &BlendSpaceData)> = world
             .get_unrecorded::<AnimationLayers>(id)
             .ok()
             .flatten()
@@ -238,7 +239,7 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
 /// 0 inclusive (`[0, phase]`). Each event sits at phase position `frac(t / duration - sync)`, so a synced event
 /// lands at phase 0 and fires once per cycle at any rate. At most [`MAX_CYCLES_PER_TICK`] cycles.
 pub(crate) fn blend_crossings(
-    blend: &CharacterBlendData,
+    blend: &BlendSpaceData,
     params: [f32; 2],
     (prev, now): (f64, f64),
     out: &mut Vec<String>,
@@ -279,14 +280,14 @@ mod tests {
     use ludion_scene::AnimationEvent;
 
     use super::*;
-    use crate::character::BlendPointData;
+    use crate::blend_space::BlendPointData;
 
-    fn blend(sync: f64) -> CharacterBlendData {
+    fn blend(sync: f64) -> BlendSpaceData {
         let event = |t: f64, name: &str| AnimationEvent {
             t,
             name: name.to_string(),
         };
-        CharacterBlendData {
+        BlendSpaceData {
             name: "loco".into(),
             two_d: false,
             triangles: Vec::new(),
@@ -313,7 +314,7 @@ mod tests {
         }
     }
 
-    fn fired(blend: &CharacterBlendData, clock: &BlendClock) -> Vec<String> {
+    fn fired(blend: &BlendSpaceData, clock: &BlendClock) -> Vec<String> {
         let mut out = Vec::new();
         blend_crossings(blend, [0.0; 2], (clock.prev, clock.phase), &mut out);
         out

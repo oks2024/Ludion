@@ -445,6 +445,90 @@ pub fn scene_surface_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
             component("Collider"),
             component("Mesh"),
         ));
+        diagnostics.extend(surface_cell_diagnostics(
+            tag,
+            &at,
+            &declared,
+            component("Collider"),
+        ));
+    }
+    diagnostics
+}
+
+/// The `L1690`/`L1696` of one `SurfaceTag`'s `cells` table: a cell surface the scene does not
+/// declare, `cells` on an entity whose `Collider` is not a `heightfield`, and run counts that miss
+/// the grid's `(rows-1)*(cols-1)` cells. An empty or repeated name, a zero count and an out-of-range
+/// index are the component validator's (`L1696`).
+fn surface_cell_diagnostics(
+    tag: &serde_json::Value,
+    at: &str,
+    declared: &[&str],
+    collider: Option<&serde_json::Value>,
+) -> Vec<Diagnostic> {
+    let Some(cells) = tag.get("cells") else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    let names = cells
+        .get("surfaces")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for (k, name) in names.iter().enumerate() {
+        let Some(name) = name.as_str().filter(|name| !name.is_empty()) else {
+            continue;
+        };
+        if !declared.contains(&name) {
+            let help = match suggest::nearest(name, declared.iter().copied()) {
+                Some(candidate) => format!("nearest match is `{candidate}`"),
+                None => "declare it under `physics.surfaces`".to_string(),
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::SURFACE_UNKNOWN,
+                    format!("surface `{name}` is not declared under `physics.surfaces`"),
+                )
+                .with_path(format!("{at}/cells/surfaces/{k}"))
+                .with_help(help),
+            );
+        }
+    }
+    let grid = collider
+        .and_then(|value| serde_json::from_value::<ludion_spatial::Collider>(value.clone()).ok())
+        .and_then(|collider| match collider.shape {
+            ludion_spatial::Shape::Heightfield { rows, cols, .. } => Some((rows, cols)),
+            _ => None,
+        });
+    let bad = |message: String, help: &str| {
+        Diagnostic::new(code::MESH_SURFACES_INVALID, message)
+            .with_path(format!("{at}/cells"))
+            .with_help(help.to_string())
+    };
+    let Some((rows, cols)) = grid else {
+        diagnostics.push(bad(
+            "`cells` needs a `heightfield` `Collider` on this entity".to_string(),
+            "tag a mesh collider's triangles in its mesh document instead, or remove `cells`",
+        ));
+        return diagnostics;
+    };
+    let expected = u64::from(rows.saturating_sub(1)) * u64::from(cols.saturating_sub(1));
+    let total: u64 = cells
+        .get("runs")
+        .and_then(serde_json::Value::as_array)
+        .map(|runs| {
+            runs.iter()
+                .filter_map(|run| run.get(0).and_then(serde_json::Value::as_u64))
+                .sum()
+        })
+        .unwrap_or(0);
+    if total != expected {
+        diagnostics.push(bad(
+            format!(
+                "`cells` run counts sum to {total}, but the {rows}\u{d7}{cols} heightfield has \
+                 {expected} cells"
+            ),
+            "the runs must cover every cell exactly once, row-major",
+        ));
     }
     diagnostics
 }
@@ -1545,6 +1629,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_sun_diagnostics(scene));
     diagnostics.extend(scene_local_light_diagnostics(scene));
     diagnostics.extend(scene_light_exposure_diagnostics(scene));
+    diagnostics.extend(crate::perception_check::scene_perception_diagnostics(scene));
     diagnostics.extend(scene_ground_marker_clip_diagnostics(scene));
     diagnostics.extend(scene_lens_and_sun_disc_diagnostics(scene));
     diagnostics.extend(crate::ui::group::scene_ui_group_diagnostics(scene));
@@ -2051,6 +2136,48 @@ entities:
             serde_json::json!({ "shape": { "assembly": "models/figure.assembly.yaml" } }),
         ));
         assert!(scene_surface_diagnostics(&scene).is_empty());
+    }
+
+    const HEIGHTFIELD: &str = "entities:\n  - name: ground\n    components:\n      Collider:\n        shape:\n          heightfield:\n            rows: 3\n            cols: 3\n            heights:\n              - 0\n              - 0\n              - 0\n              - 0\n              - 0\n              - 0\n              - 0\n              - 0\n              - 0\n        body: static\n";
+
+    fn cells_scene(body: &str, cells: serde_json::Value) -> Scene {
+        let mut scene = surface_scene(body, "concrete");
+        let tag = scene.entities[0].components.last_mut().expect("the tag");
+        tag.1 = serde_json::json!({ "surface": "concrete", "cells": cells });
+        scene
+    }
+
+    #[test]
+    fn heightfield_cells_must_cover_the_grid_and_name_declared_surfaces() {
+        let ok = serde_json::json!({ "surfaces": ["concrete", "metal_grate"], "runs": [[3, 0], [1, 1]] });
+        assert!(scene_surface_diagnostics(&cells_scene(HEIGHTFIELD, ok)).is_empty());
+
+        let short = serde_json::json!({ "surfaces": ["concrete"], "runs": [[3, 0]] });
+        let found = scene_surface_diagnostics(&cells_scene(HEIGHTFIELD, short));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code, code::MESH_SURFACES_INVALID);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/SurfaceTag/cells")
+        );
+
+        let unknown = serde_json::json!({ "surfaces": ["metal_grat"], "runs": [[4, 0]] });
+        let found = scene_surface_diagnostics(&cells_scene(HEIGHTFIELD, unknown));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code, code::SURFACE_UNKNOWN);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/SurfaceTag/cells/surfaces/0")
+        );
+    }
+
+    #[test]
+    fn cells_on_a_non_heightfield_collider_are_l1696() {
+        let solid = collider("sphere:\n            radius: 0.5", "static", "default");
+        let cells = serde_json::json!({ "surfaces": ["concrete"], "runs": [[1, 0]] });
+        let found = scene_surface_diagnostics(&cells_scene(&solid, cells));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code, code::MESH_SURFACES_INVALID);
     }
 
     fn motor_scene(physics: &str, components: &str) -> Scene {

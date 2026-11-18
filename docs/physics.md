@@ -65,7 +65,7 @@ only reaches the solver when its body is `rigid`. Collision ignores `Transform.s
 | `friction`, `restitution`, `*_combine` (any body kind), `linear_damping`, `angular_damping`, `gravity_scale`, `sleep_after_ticks`, `sleep_threshold`, `sleep_angular_threshold` | in place |
 | shape, body kind, `mass`, `lock`, `layer` | rebuild |
 
-`SurfaceTag` is not part of `Collider`: an edit applies from the next write with no rebuild and no wake.
+`SurfaceTag` is not part of `Collider`: an edit (`cells` included) applies from the next write with no rebuild and no wake. A tag edit in a mesh collider's document is a new document hash, so the body rebuilds.
 
 In place wakes the body (a static or kinematic edit wakes what touches it); its handle, `Joint` zeros (`ludion docs physics-joints`)
 and contacts survive, and the new values govern the next step. A rebuild replaces the body at its current pose

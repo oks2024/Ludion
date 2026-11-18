@@ -741,3 +741,143 @@ fn vertex_budget_warning_does_not_fail_validation() {
     let checked = check_mesh(&text).expect("over-budget meshes still check clean");
     assert!(ludion_scene::mesh_budget_warning(&checked).is_some());
 }
+
+// --- Surface tags (`surfaces` / `triangle_surfaces`) ------------------------------------------
+
+mod surface_tags {
+    use ludion_scene::{
+        MeshSurfaces, check_mesh, check_mesh_surfaces, emit_mesh, emit_mesh_with_surfaces,
+    };
+
+    const QUAD: &str = "\
+format: 1
+kind: mesh
+positions:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+";
+    const INDICES: &str = "\
+indices:
+  - 0
+  - 1
+  - 2
+  - 0
+  - 2
+  - 3
+";
+    const TAGS: &str = "\
+surfaces:
+  - concrete
+  - metal_grate
+triangle_surfaces:
+  - - 1
+    - 0
+  - - 1
+    - 1
+";
+
+    fn doc(tags: &str) -> String {
+        format!("{QUAD}{tags}{INDICES}")
+    }
+
+    fn codes(source: &str) -> Vec<(String, Option<String>)> {
+        check_mesh(source)
+            .expect_err("should be invalid")
+            .iter()
+            .map(|d| (d.code.to_string(), d.path.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn tagged_document_round_trips_byte_identically() {
+        let source = doc(TAGS);
+        let (mesh, surfaces) = check_mesh_surfaces(&source).expect("valid");
+        let surfaces = surfaces.expect("tagged");
+        assert_eq!(surfaces.per_triangle(), vec![0, 1]);
+        assert_eq!(emit_mesh_with_surfaces(&mesh, Some(&surfaces)), source);
+    }
+
+    #[test]
+    fn untagged_document_emits_its_old_bytes() {
+        let source = doc("");
+        let (mesh, surfaces) = check_mesh_surfaces(&source).expect("valid");
+        assert!(surfaces.is_none());
+        assert_eq!(emit_mesh_with_surfaces(&mesh, None), source);
+        assert_eq!(emit_mesh(&mesh), source);
+    }
+
+    #[test]
+    fn emit_mesh_omits_the_tags() {
+        let source = doc(TAGS);
+        let mesh = check_mesh(&source).expect("valid");
+        assert_eq!(emit_mesh(&mesh), doc(""));
+    }
+
+    #[test]
+    fn invalid_tag_lists_are_l1696() {
+        let cases: [(&str, &str); 7] = [
+            ("surfaces:\n  - a\n", "/surfaces"),
+            (
+                "surfaces:\n  - a\n  - a\ntriangle_surfaces:\n  - - 2\n    - 0\n",
+                "/surfaces/1",
+            ),
+            (
+                "surfaces:\n  - \"\"\ntriangle_surfaces:\n  - - 2\n    - 0\n",
+                "/surfaces/0",
+            ),
+            (
+                "surfaces:\n  - a\ntriangle_surfaces:\n  - - 0\n    - 0\n  - - 2\n    - 0\n",
+                "/triangle_surfaces/0",
+            ),
+            (
+                "surfaces:\n  - a\ntriangle_surfaces:\n  - - 2\n    - 1\n",
+                "/triangle_surfaces/0",
+            ),
+            (
+                "surfaces:\n  - a\ntriangle_surfaces:\n  - - 1\n    - 0\n",
+                "/triangle_surfaces",
+            ),
+            (
+                "triangle_surfaces:\n  - - 2\n    - 0\n",
+                "/triangle_surfaces",
+            ),
+        ];
+        for (tags, pointer) in cases {
+            let source = doc(tags);
+            let found = codes(&source);
+            assert!(
+                found.contains(&("L1696".to_string(), Some(pointer.to_string()))),
+                "{tags:?}: expected L1696 at {pointer}, got {found:?}"
+            );
+            assert!(check_mesh_surfaces(&source).is_err());
+        }
+    }
+
+    #[test]
+    fn more_than_256_names_is_l1696() {
+        let names: String = (0..257).map(|i| format!("  - n{i}\n")).collect();
+        let source = doc(&format!(
+            "surfaces:\n{names}triangle_surfaces:\n  - - 2\n    - 0\n"
+        ));
+        assert!(codes(&source).contains(&("L1696".to_string(), Some("/surfaces".to_string()))));
+    }
+
+    #[test]
+    fn per_triangle_expands_runs() {
+        let surfaces = MeshSurfaces {
+            names: vec!["a".into(), "b".into()],
+            runs: vec![[2, 1], [1, 0]],
+        };
+        assert_eq!(surfaces.per_triangle(), vec![1, 1, 0]);
+    }
+}

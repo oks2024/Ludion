@@ -98,6 +98,10 @@ impl SurfaceTable {
 /// `switch_to_ragdoll` spawns. Every other part reports `surface`. A part *named* `"1"` must be
 /// quoted in YAML, or it parses as the integer.
 ///
+/// `cells` tags a `heightfield` collider per cell (`cells: { surfaces: [dirt, concrete], runs:
+/// [[40, 0], [8, 1]] }`, row-major, `(rows-1)*(cols-1)` cells); a mesh collider's triangles are
+/// tagged in its mesh document instead.
+///
 /// ```yaml
 /// components:
 ///   SurfaceTag:
@@ -114,6 +118,31 @@ pub struct SurfaceTag {
     /// Per-part overrides; a part without an entry reports `surface`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<PartSurface>,
+    /// Per-cell surfaces for a `heightfield` collider; a cell outside the table reports the part,
+    /// then `surface`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cells: Option<CellSurfaces>,
+}
+
+/// A heightfield's per-cell surface table: local names, and `[count, local index]` runs over the
+/// `(rows-1)*(cols-1)` cells in row-major order.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+pub struct CellSurfaces {
+    /// The surface names the runs index; each must be declared under `physics.surfaces`.
+    pub surfaces: Vec<String>,
+    /// Run-length `[count, index into surfaces]` pairs, row-major over the cells.
+    pub runs: Vec<[u32; 2]>,
+}
+
+impl CellSurfaces {
+    /// The index into [`surfaces`](Self::surfaces) of each cell, the runs expanded.
+    pub fn per_cell(&self) -> Vec<u16> {
+        let mut out = Vec::new();
+        for [count, index] in &self.runs {
+            out.extend(std::iter::repeat_n(*index as u16, *count as usize));
+        }
+        out
+    }
 }
 
 /// One [`SurfaceTag::parts`] entry: a part key and the declared surface it reports.
@@ -163,6 +192,7 @@ impl SemanticValidate for SurfaceTag {
                     .with_help("name a surface `physics.surfaces` declares"),
             );
         }
+        found.extend(validate_cells(value.get("cells")));
         let Some(parts) = value.get("parts").and_then(Value::as_array) else {
             return found;
         };
@@ -202,6 +232,68 @@ impl SemanticValidate for SurfaceTag {
         }
         found
     }
+}
+
+/// `L1696` for a malformed `cells` table: an empty or repeated name, a zero count, or a local
+/// index past the name list. The cell total is checked against the grid by `check-scene`.
+fn validate_cells(cells: Option<&Value>) -> Vec<Diagnostic> {
+    let Some(cells) = cells else {
+        return Vec::new();
+    };
+    let invalid = |message: String, pointer: String, help: &str| {
+        Diagnostic::new(code::MESH_SURFACES_INVALID, message)
+            .with_path(pointer)
+            .with_help(help.to_string())
+    };
+    let mut found = Vec::new();
+    let names: Vec<&str> = cells
+        .get("surfaces")
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    for (i, name) in names.iter().enumerate() {
+        if name.is_empty() {
+            found.push(invalid(
+                format!("`SurfaceTag` cells surface {i} is empty"),
+                format!("/cells/surfaces/{i}"),
+                "name a surface `physics.surfaces` declares",
+            ));
+        } else if names[..i].contains(name) {
+            found.push(invalid(
+                format!("`SurfaceTag` cells surface `{name}` appears twice"),
+                format!("/cells/surfaces/{i}"),
+                "list each surface once and point runs at its single index",
+            ));
+        }
+    }
+    let runs = cells
+        .get("runs")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for (k, run) in runs.iter().enumerate() {
+        let count = run.get(0).and_then(Value::as_u64);
+        let index = run.get(1).and_then(Value::as_u64);
+        if count == Some(0) {
+            found.push(invalid(
+                format!("`SurfaceTag` cells run {k} has a zero count"),
+                format!("/cells/runs/{k}"),
+                "drop the empty run",
+            ));
+        }
+        if index.is_some_and(|index| index as usize >= names.len()) {
+            found.push(invalid(
+                format!(
+                    "`SurfaceTag` cells run {k} names local surface {}, but `surfaces` lists {}",
+                    index.unwrap_or(0),
+                    names.len()
+                ),
+                format!("/cells/runs/{k}"),
+                "use an index below the length of `cells.surfaces`",
+            ));
+        }
+    }
+    found
 }
 
 /// A patch of ground that overrides the surface of whatever lies inside it: a puddle, a rug, a

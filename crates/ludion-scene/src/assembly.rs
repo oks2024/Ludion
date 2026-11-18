@@ -68,8 +68,12 @@ use ludion_core::paths::sibling_refusal;
 use ludion_core::suggest;
 use serde_json::Value;
 
+use crate::animation::AnimationDocument;
 use crate::envelope;
 use crate::part::PartDocument;
+use crate::rig_blend::{
+    BlendSpace, check_blend_points, emit_blends, parse_blends, validate_blends,
+};
 use crate::rig_mask::{RigMask, emit_masks, parse_masks, validate_mask_names};
 use crate::scalar::{format_float, scalar_string};
 use crate::voxel::{PaletteEntry, VoxelDocument, single_glyph};
@@ -82,8 +86,8 @@ pub const ASSEMBLY_FORMAT_VERSION: u64 = 1;
 /// assembly's palette reads identically to a voxel model's.
 const EMPTY_GLYPH: char = '.';
 
-const ASSEMBLY_KEYS: [&str; 9] = [
-    "format", "kind", "name", "size", "palette", "parts", "clips", "joints", "masks",
+const ASSEMBLY_KEYS: [&str; 10] = [
+    "format", "kind", "name", "size", "palette", "parts", "clips", "joints", "masks", "blends",
 ];
 const PART_ENTRY_KEYS: [&str; 6] = ["name", "file", "parent", "place", "pivot", "mirror"];
 const ASSEMBLY_JOINT_KEYS: [&str; 4] = ["kind", "axis", "limits", "break_impulse"];
@@ -235,6 +239,9 @@ pub struct AssemblyDocument {
     /// Part masks for `AnimationLayers`, sorted by name (the canonical order `emit` writes); each
     /// mask's `joints` name parts. An absent `masks` is the empty list.
     pub masks: Vec<RigMask>,
+    /// Blend spaces over the bound clips, sorted by name (the canonical order `emit` writes). An
+    /// absent `blends` is the empty list.
+    pub blends: Vec<BlendSpace>,
 }
 
 // --- Parsing (`L1137`) --------------------------------------------------------------------------
@@ -350,6 +357,10 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
             }
             "masks" => {
                 doc.masks = parse_masks(entry, code::ASSEMBLY_DOCUMENT_STRUCTURE, &mut diagnostics);
+            }
+            "blends" => {
+                doc.blends =
+                    parse_blends(entry, code::ASSEMBLY_DOCUMENT_STRUCTURE, &mut diagnostics);
             }
             unknown => diagnostics.push(envelope::unknown_key(
                 unknown,
@@ -1383,6 +1394,13 @@ pub(crate) fn validate(doc: &AssemblyDocument) -> Vec<Diagnostic> {
         &mut diagnostics,
     );
     validate_mask_parts(doc, &mut diagnostics);
+    let names: Vec<&str> = doc.clips.iter().map(|clip| clip.name.as_str()).collect();
+    validate_blends(
+        &doc.blends,
+        &names,
+        code::ASSEMBLY_DATA_CONSISTENCY,
+        &mut diagnostics,
+    );
     diagnostics
 }
 
@@ -1686,6 +1704,46 @@ pub(crate) fn parent_indices(doc: &AssemblyDocument) -> Vec<Option<usize>> {
 }
 
 // --- Cross-file composition (`L1138`) -----------------------------------------------------------
+
+/// Checks the assembly's blends against its resolved clip documents (`L1138`): every point clip is
+/// bound, loops, and (with `sync`) carries the sync event among its own `events`.
+///
+/// `clips` is aligned by index with [`AssemblyDocument::clips`]. A length mismatch is a caller bug,
+/// reported as one diagnostic with no further checking.
+pub(crate) fn check_blends(
+    assembly: &AssemblyDocument,
+    clips: &[AnimationDocument],
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    if clips.len() != assembly.clips.len() {
+        diagnostics.push(
+            Diagnostic::new(
+                code::ASSEMBLY_DATA_CONSISTENCY,
+                format!(
+                    "{} resolved clip documents were supplied for an assembly binding {} clips",
+                    clips.len(),
+                    assembly.clips.len()
+                ),
+            )
+            .with_path("/clips"),
+        );
+        return diagnostics;
+    }
+    let names: Vec<&str> = assembly
+        .clips
+        .iter()
+        .map(|clip| clip.name.as_str())
+        .collect();
+    check_blend_points(
+        &assembly.blends,
+        &names,
+        clips,
+        |slot| &clips[slot].events,
+        code::ASSEMBLY_DATA_CONSISTENCY,
+        &mut diagnostics,
+    );
+    diagnostics
+}
 
 /// Checks an assembly against its resolved part documents (`L1138`): every glyph a part draws with
 /// is defined by the assembly's palette (decision 4 — parts have no palette of their own), and
@@ -2363,6 +2421,7 @@ pub(crate) fn emit(doc: &AssemblyDocument) -> String {
     }
 
     emit_masks(&mut out, &doc.masks);
+    emit_blends(&mut out, &doc.blends);
 
     out
 }

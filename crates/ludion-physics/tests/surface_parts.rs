@@ -103,6 +103,7 @@ fn compound_floor(world: &mut World, parts: Vec<PartSurface>) -> EntityId {
             SurfaceTag {
                 surface: "concrete".to_string(),
                 parts,
+                cells: None,
             },
         )
         .unwrap();
@@ -274,6 +275,7 @@ fn an_out_of_range_index_and_a_non_compound_collider_report_the_entity_surface()
             SurfaceTag {
                 surface: "concrete".to_string(),
                 parts: vec![part(0, "metal_grate")],
+                cells: None,
             },
         )
         .unwrap();

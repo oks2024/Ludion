@@ -137,6 +137,7 @@ mod physics_layers;
 mod physics_surfaces;
 mod prefab;
 mod profile;
+mod rig_blend;
 mod rig_mask;
 mod rim;
 mod scalar;
@@ -163,9 +164,7 @@ pub use atlas::{
 pub use blend_space::{
     BlendWeights, MAX_BLEND_POINTS, blend_weights_1d, blend_weights_2d, triangulate,
 };
-pub use character::{
-    BlendAt, BlendPoint, CHARACTER_FORMAT_VERSION, CharacterBlend, CharacterClip, CharacterDocument,
-};
+pub use character::{CHARACTER_FORMAT_VERSION, CharacterClip, CharacterDocument};
 pub use clip_eval::{
     ClipSampler, PartPose, clip_phase, flipbook_frame, joint_pose, part_pose, sample_channel,
     sample_rotation, slerp, track as clip_track,
@@ -193,8 +192,8 @@ pub use map::{
 pub use mesh::{
     AlphaMode, DEFAULT_ALPHA_CUTOFF, DEGENERATE_VECTOR_LENGTH_SQUARED, JointRest, MAX_MESH_LODS,
     MESH_FORMAT_VERSION, MESH_JOINT_LIMIT, MESH_VERTEX_BUDGET, MeshDocument, MeshJoint, MeshLodRef,
-    MeshSkin, MeshTextures, SKIN_WEIGHT_SUM_TOLERANCE, TextureRef, TextureWrap, check_lod_level,
-    read_mesh_joints, rest_model_matrices,
+    MeshSkin, MeshSurfaces, MeshTextures, SKIN_WEIGHT_SUM_TOLERANCE, TextureRef, TextureWrap,
+    check_lod_level, read_mesh_joints, rest_model_matrices,
 };
 pub use mesh_edit::{
     MESH_EDIT_FORMAT_VERSION, MeshEditDocument, MeshEditKey, MeshEditMap, MeshEditOp,
@@ -212,6 +211,7 @@ pub use physics_layers::{DEFAULT_LAYER, LayerMatrix, MAX_LAYERS, SceneLayer};
 pub use physics_surfaces::MAX_SURFACES;
 pub use prefab::{PREFAB_FORMAT_VERSION, PrefabDocument};
 pub use profile::ProfileEnvelope;
+pub use rig_blend::{BlendAt, BlendPoint, BlendSpace};
 pub use rig_mask::RigMask;
 pub use rim::DocRim;
 pub use sculpt::{
@@ -795,10 +795,57 @@ pub fn validate_mesh(doc: &MeshDocument) -> Vec<Diagnostic> {
 /// # Errors
 /// Everything [`parse_mesh`] and [`validate_mesh`] can report.
 pub fn check_mesh(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
-    let doc = parse_mesh(source)?;
-    let diagnostics = validate_mesh(&doc);
+    check_mesh_surfaces(source).map(|(doc, _)| doc)
+}
+
+/// [`check_mesh`] that also returns the document's `surfaces`/`triangle_surfaces` tags, validated
+/// (`L1696`). A tool that reads a mesh document and writes one back must carry the tags with
+/// [`emit_mesh_with_surfaces`]; [`emit_mesh`] omits them.
+///
+/// # Errors
+/// Everything [`check_mesh`] reports, plus `L1696` for a malformed tag list.
+///
+/// # Example
+/// ```
+/// let source = "\
+/// format: 1
+/// kind: mesh
+/// positions:
+///   - 0.0
+///   - 0.0
+///   - 0.0
+///   - 1.0
+///   - 0.0
+///   - 0.0
+///   - 0.0
+///   - 1.0
+///   - 0.0
+/// surfaces:
+///   - concrete
+///   - metal_grate
+/// triangle_surfaces:
+///   - - 1
+///     - 1
+/// indices:
+///   - 0
+///   - 1
+///   - 2
+/// ";
+/// let (mesh, surfaces) = ludion_scene::check_mesh_surfaces(source).expect("the mesh is valid");
+/// let surfaces = surfaces.expect("the mesh is tagged");
+/// assert_eq!(surfaces.per_triangle(), vec![1]);
+/// assert_eq!(ludion_scene::emit_mesh_with_surfaces(&mesh, Some(&surfaces)), source);
+/// ```
+pub fn check_mesh_surfaces(
+    source: &str,
+) -> Result<(MeshDocument, Option<MeshSurfaces>), Vec<Diagnostic>> {
+    let (doc, surfaces) = mesh::parse_with_surfaces(source)?;
+    let mut diagnostics = validate_mesh(&doc);
+    if let Some(surfaces) = &surfaces {
+        diagnostics.extend(mesh::validate_surfaces(&doc, surfaces));
+    }
     if diagnostics.is_empty() {
-        Ok(doc)
+        Ok((doc, surfaces))
     } else {
         Err(diagnostics)
     }
@@ -843,6 +890,12 @@ pub fn mesh_budget_warning(doc: &MeshDocument) -> Option<Diagnostic> {
 /// ```
 pub fn emit_mesh(doc: &MeshDocument) -> String {
     mesh::emit(doc)
+}
+
+/// [`emit_mesh`] with the `surfaces`/`triangle_surfaces` keys when `surfaces` is `Some`; see
+/// [`check_mesh_surfaces`] for a round-trip example.
+pub fn emit_mesh_with_surfaces(doc: &MeshDocument, surfaces: Option<&MeshSurfaces>) -> String {
+    mesh::emit_with_surfaces(doc, surfaces)
 }
 
 // --- Mesh-edit documents (`meshes/*.mesh-edit.yaml`) --------------------------------------------
@@ -2179,6 +2232,22 @@ pub fn check_assembly_parts(
     parts: &[PartDocument],
 ) -> Vec<Diagnostic> {
     assembly::check_parts(assembly, parts)
+}
+
+/// Checks an assembly's `blends:` against its resolved clip documents: every point clip is bound,
+/// loops, and (with `sync`) has the sync event among its own `events` (an assembly has no overlay).
+///
+/// `clips` is aligned by index with [`AssemblyDocument::clips`], like [`check_assembly_parts`]. Pure
+/// and IO-free.
+///
+/// # Errors (returned, not `Result`)
+/// `L1138` diagnostics pointing into the *assembly* document (`/blends/<name>/...`); an empty vector
+/// means every blend holds.
+pub fn check_assembly_blends(
+    assembly: &AssemblyDocument,
+    clips: &[AnimationDocument],
+) -> Vec<Diagnostic> {
+    assembly::check_blends(assembly, clips)
 }
 
 /// The voxel document the engine meshes for one part of an assembly: the assembly's palette over

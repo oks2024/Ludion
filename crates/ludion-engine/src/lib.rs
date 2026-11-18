@@ -38,6 +38,7 @@ mod asset_cache;
 pub mod audio;
 pub mod bisect;
 mod blend_clock;
+mod blend_space;
 mod bounds;
 pub mod builder;
 mod camera_latch;
@@ -88,6 +89,8 @@ mod path_follow;
 mod patrol;
 pub mod patterns;
 mod perception;
+mod perception_check;
+mod perception_debug;
 pub mod perf_live;
 mod player_profile;
 mod pose_blend;
@@ -123,6 +126,7 @@ mod scene_session;
 mod sculpt_mesh;
 mod settings;
 mod shutdown;
+mod silhouette;
 mod skin_bone;
 mod skin_ragdoll;
 mod snapshot;
@@ -154,11 +158,12 @@ pub use bisect::{
     localize_divergence, verify_replay_keyframes, world_diff,
 };
 pub use blend_clock::blend_clocks;
+pub use blend_space::{BlendPointData, BlendSpaceData};
 pub use builder::{CursorMode, EngineBuilder};
 pub use camera_zone::camera_occluders;
 pub use character::{
-    BlendPointData, CharacterBlendData, CharacterClipData, CharacterData, CharacterMaskData,
-    ClipContact, JointHeight, contact_heights, load as load_character,
+    CharacterClipData, CharacterData, CharacterMaskData, ClipContact, JointHeight, contact_heights,
+    load as load_character,
 };
 pub use checkpoints::{CheckpointConfig, CheckpointInfo, Checkpoints, RestoreOutcome};
 pub use commands::sim::step_in_batches;
@@ -223,6 +228,7 @@ pub use ludion_camera::{
     add_look_counts, add_trauma, camera_relative, camera_relative_yaw, first_person_eye,
     look_from_counts, orbit_eye, resolve_zone, set_look, snap_rig,
 };
+pub use ludion_components::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
 pub use ludion_nav::PathStatus;
 pub use ludion_protocol::replay::GameIdentity;
 pub use ludion_scene::Mirror;
@@ -266,6 +272,7 @@ pub use perception::{
     Stimulus, SurfaceNoise, emit_noise, forget, forget_all, perception_update, report_stimulus,
     stimuli,
 };
+pub use perception_check::{scene_perception_diagnostics, scene_perception_name_diagnostics};
 pub use perf_live::{
     FrameSample, LIVE_SEQUENTIAL_NAMES, LiveGpuProfile, LivePerf, PROFILE_WINDOW_FRAMES,
     ProfileSamples, ProfileWindowData,
@@ -293,7 +300,10 @@ pub use profile::{
 };
 pub use projectile_draw::{ProjectileLook, ProjectileVisual, ProjectileVisuals};
 pub use projectiles::{ProjectileConfig, Projectiles, projectiles_step, spawn_projectile};
-pub use quality::{QUALITY_ENV, QualitySetting, resolve_render_scale, resolve_startup_quality};
+pub use quality::{
+    QUALITY_ENV, QualitySetting, resolve_render_scale, resolve_startup_quality,
+    startup_quality_named,
+};
 pub use query_drift::{QueryDriftReport, check_query_drift_replay, check_query_drift_with};
 pub use ragdoll::switch_to_ragdoll;
 pub use render::{
@@ -329,7 +339,7 @@ pub use scene_check::{
     scene_surface_diagnostics,
 };
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
-pub use settings::{QualityPreset, Settings, SettingsView, WindowMode};
+pub use settings::{QualityPreset, Settings, SettingsView, WindowMode, settings_window_mode_at};
 pub use shutdown::Shutdown;
 pub use skin_bone::scene_skin_bone_diagnostics;
 pub use skin_ragdoll::switch_skin_to_ragdoll;

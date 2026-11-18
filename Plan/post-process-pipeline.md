@@ -976,7 +976,8 @@ engine hard-codes. The engine ships neutral defaults and orthogonal operators.
   lit shader. Until then an AO-enabled frame rasterizes geometry twice, which is opt-in.
 - **Stylized depth/normal outlines** — an art-direction decision. The normal target exists after
   wave 7; the build is cheap whenever the direction is chosen. It would also be the second consumer
-  that earns the prepass its own budget group.
+  that earns the prepass its own budget group. The per-entity `OccludedSilhouette`
+  (`Plan/occluded-silhouette.md`) does not settle this.
 - **FXAA as a cheap AA path** — trigger: the first platform that cannot afford supersampling
   (see `Plan/console-strategy.md`). Stays deferred; the trigger was read as met by a shipped window
   that cannot supersample, and answered by SMAA 1x (Clockout request 0009), not FXAA.

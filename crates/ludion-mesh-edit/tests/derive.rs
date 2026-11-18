@@ -892,3 +892,26 @@ fn an_oversized_base_colour_map_points_at_map_not_size() {
     assert_eq!(refused[0].code.as_str(), "L1174");
     assert_eq!(refused[0].path.as_deref(), Some("/ops/0/map"));
 }
+
+/// A tagged source's triangles are unchanged by the derive, so its `surfaces`/`triangle_surfaces`
+/// ride into the derived document, and the re-derive is byte-identical (the drift gate's check).
+#[test]
+fn a_tagged_source_keeps_its_surface_tags() {
+    let dir = tree("tagged");
+    let (mesh, _) = ludion_scene::check_mesh_surfaces(PLATE_MESH).expect("the plate is valid");
+    let triangles = mesh.triangle_count() as u32;
+    let tags = ludion_scene::MeshSurfaces {
+        names: vec!["concrete".to_string(), "metal_grate".to_string()],
+        runs: vec![[triangles - 1, 0], [1, 1]],
+    };
+    let tagged = ludion_scene::emit_mesh_with_surfaces(&mesh, Some(&tags));
+    write(&dir.join("meshes/plate.mesh.yaml"), tagged.as_bytes());
+
+    let first = derived(&dir);
+    let document = std::str::from_utf8(first.files()[0].1).expect("the document is text");
+    let (_, carried) =
+        ludion_scene::check_mesh_surfaces(document).expect("the derived mesh checks");
+    assert_eq!(carried, Some(tags));
+    let second = derived(&dir);
+    assert_eq!(first.files()[0].1, second.files()[0].1);
+}

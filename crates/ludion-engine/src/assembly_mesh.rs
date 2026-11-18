@@ -63,6 +63,7 @@ use ludion_renderer::MeshData;
 use ludion_scene::{AnimationDocument, AssemblyDocument, AssemblyPartEntry, PartDocument};
 
 use crate::asset_cache::{SourceFiles, fold_source_hashes};
+use crate::blend_space::{BlendSpaceData, BoundClip, resolve_blends};
 
 /// One meshed part of an assembly: its own geometry plus where that geometry rests and what it turns
 /// about. Everything is in voxel units (1 voxel = 1 unit).
@@ -125,6 +126,9 @@ pub struct AssemblyData {
     /// The assembly's `masks:`, sorted by name, each resolved to one weight per part. Masks are pose
     /// data like clips and stay out of the mesh content hash.
     pub masks: Vec<AssemblyMaskData>,
+    /// The assembly's `blends:`, sorted by name, each resolved against the bound clips (speed 1, a
+    /// clip's own events). Pose data like clips: outside the mesh content hash.
+    pub blends: Vec<BlendSpaceData>,
 }
 
 /// One part mask resolved against the assembly's parts (`Plan/animation-layers.md` decision 26).
@@ -144,6 +148,11 @@ impl AssemblyData {
             .iter()
             .find(|mask| mask.name == name)
             .map(|mask| mask.weights.as_slice())
+    }
+
+    /// The blend space named `name`, or `None` when this assembly defines no such blend.
+    pub fn blend(&self, name: &str) -> Option<&BlendSpaceData> {
+        self.blends.iter().find(|blend| blend.name == name)
     }
 
     /// The clip bound under the short `name`, or `None` when this assembly binds no such clip.
@@ -226,11 +235,14 @@ fn read_clips(
             Err(mut errors) => diagnostics.append(&mut errors),
         }
     }
-    if diagnostics.is_empty() {
-        Ok(clips)
-    } else {
-        Err(diagnostics)
+    if !diagnostics.is_empty() {
+        return Err(diagnostics);
     }
+    let cross = ludion_scene::check_assembly_blends(assembly, &clips);
+    if !cross.is_empty() {
+        return Err(cross);
+    }
+    Ok(clips)
 }
 
 /// Reads and validates one clip document at `root`/`rel`.
@@ -451,6 +463,18 @@ pub fn mesh_assembly(
             weights: ludion_scene::resolve_rig_mask(mask, &rig),
         })
         .collect();
+    let bound: Vec<BoundClip<'_>> = assembly
+        .clips
+        .iter()
+        .zip(clips)
+        .map(|(binding, clip)| BoundClip {
+            name: &binding.name,
+            duration: clip.duration,
+            speed: 1.0,
+            events: &clip.events,
+        })
+        .collect();
+    let blends = resolve_blends(&assembly.blends, &bound);
     AssemblyData {
         size: assembly.size,
         parts: meshed,
@@ -466,6 +490,7 @@ pub fn mesh_assembly(
             .collect(),
         joints: assembly.joints.clone(),
         masks,
+        blends,
     }
 }
 
@@ -578,6 +603,7 @@ mod tests {
             clips: Vec::new(),
             joints: Vec::new(),
             masks: Vec::new(),
+            blends: Vec::new(),
         }
     }
 

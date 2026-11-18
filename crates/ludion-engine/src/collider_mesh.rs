@@ -23,16 +23,23 @@ pub(crate) fn library(root: PathBuf) -> ColliderMeshes {
 /// Reads and validates the mesh at `rel`. A document with several faults returns the first as the
 /// diagnostic, the rest attached as its `related`.
 fn load(root: AssetRoot<'_>, rel: &str) -> Result<TriangleMesh, Diagnostic> {
-    let (document, hash) = crate::mesh_asset::read_document(root, rel).map_err(|diagnostics| {
-        let mut faults = diagnostics.into_iter();
-        let first = faults.next().unwrap_or_else(|| {
-            Diagnostic::new(
-                code::MESH_DOCUMENT_STRUCTURE,
-                format!("mesh asset `{rel}` is not a valid mesh document"),
-            )
-        });
-        faults.fold(first, Diagnostic::with_related)
-    })?;
+    let ((document, tags), hash) =
+        crate::mesh_asset::with_mesh_source(root, rel, ludion_scene::check_mesh_surfaces).map_err(
+            |diagnostics| {
+                let mut faults = diagnostics.into_iter();
+                let first = faults.next().unwrap_or_else(|| {
+                    Diagnostic::new(
+                        code::MESH_DOCUMENT_STRUCTURE,
+                        format!("mesh asset `{rel}` is not a valid mesh document"),
+                    )
+                });
+                faults.fold(first, Diagnostic::with_related)
+            },
+        )?;
+    let (surfaces, triangle_surfaces) = tags.map_or_else(Default::default, |tags| {
+        let per_triangle = tags.per_triangle();
+        (tags.names, per_triangle)
+    });
     Ok(TriangleMesh {
         vertices: document
             .positions
@@ -45,5 +52,7 @@ fn load(root: AssetRoot<'_>, rel: &str) -> Result<TriangleMesh, Diagnostic> {
             .map(|t| [t[0], t[1], t[2]])
             .collect(),
         hash,
+        surfaces,
+        triangle_surfaces,
     })
 }

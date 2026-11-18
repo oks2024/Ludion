@@ -289,6 +289,17 @@ pub fn resolve_startup_quality(
     )
 }
 
+/// Whether a flag (`explicit`) or [`QUALITY_ENV`] names a startup quality at all: the host's choice
+/// then pins the quality over the player's settings file.
+pub fn startup_quality_named(explicit: Option<&str>) -> bool {
+    named_by(explicit, std::env::var(QUALITY_ENV).ok().as_deref())
+}
+
+/// The pure half of [`startup_quality_named`], over an explicitly supplied environment value.
+fn named_by(explicit: Option<&str>, env: Option<&str>) -> bool {
+    chosen(explicit).is_some() || chosen(env).is_some()
+}
+
 /// The pure half of [`resolve_startup_quality`]: the same precedence over an explicitly supplied
 /// environment value, so the chain is testable without mutating the process environment.
 fn resolve_setting(
@@ -752,6 +763,16 @@ mod tests {
             assert_eq!(setting.label, "full");
         }
         assert_eq!(resolved(Some("  "), None), QualitySetting::default());
+    }
+
+    /// A flag or the environment naming anything pins; blank values name nothing.
+    #[test]
+    fn a_startup_quality_is_named_by_a_flag_or_the_environment() {
+        assert!(!named_by(None, None));
+        assert!(!named_by(Some("  "), Some("")));
+        assert!(named_by(Some("low"), None));
+        assert!(named_by(None, Some("high")));
+        assert!(named_by(Some("low"), Some("high")));
     }
 
     /// A flag must work on a box whose environment is malformed, so the explicit path never consults

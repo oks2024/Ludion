@@ -120,6 +120,7 @@ pub(crate) fn world_key(
         sprites: _,
         ground_markers: _,
         ground_marker_profiles: _,
+        silhouettes: _,
         drop_shadows: _,
         decals: _,
         debug_lines: _,

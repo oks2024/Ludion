@@ -149,6 +149,7 @@ fn assembly_doc() -> impl Strategy<Value = AssemblyDocument> {
                 clips,
                 joints: Vec::new(),
                 masks: Vec::new(),
+                blends: Vec::new(),
             }
         })
 }
@@ -341,6 +342,7 @@ fn empty_collections_use_flow_empties() {
         clips: Vec::new(),
         joints: Vec::new(),
         masks: Vec::new(),
+        blends: Vec::new(),
     };
     let text = emit_assembly(&doc);
     assert_eq!(
@@ -1860,4 +1862,154 @@ fn mask_with_an_empty_name_is_l1138() {
             .iter()
             .any(|d| d.code.as_str() == "L1138")
     );
+}
+
+// --- Blend spaces (`blends:`, `Plan/animation-layers.md` decisions 13-19 and 31) ----------------
+
+const BLEND_CLIPS: &str =
+    "clips:\n  idle: idle.anim.yaml\n  run: run.anim.yaml\n  walk: walk.anim.yaml\n";
+
+fn blend_source(blends: &str) -> String {
+    format!("{}{BLEND_CLIPS}{blends}", two_part())
+}
+
+/// A clip document with `loop`, and a `foot_l` event when `sync` is set.
+fn blend_clip(looped: bool, sync: bool) -> ludion_scene::AnimationDocument {
+    let events = if sync {
+        "events:\n  - t: 0.0\n    name: foot_l\n"
+    } else {
+        ""
+    };
+    ludion_scene::check_animation(&format!(
+        "format: 1\nkind: animation\nduration: 1.0\nloop: {looped}\n{events}tracks:\n  arm:\n    \
+         translation:\n      - t: 0.0\n        v:\n          - 0.0\n          - 0.0\n          - \
+         0.0\n"
+    ))
+    .expect("a valid clip")
+}
+
+fn blend_diagnostics(blends: &str, clips: &[ludion_scene::AnimationDocument]) -> Vec<Diagnostic> {
+    let doc = check_assembly(&blend_source(blends)).expect("a valid assembly");
+    ludion_scene::check_assembly_blends(&doc, clips)
+}
+
+fn three_clips() -> Vec<ludion_scene::AnimationDocument> {
+    vec![
+        blend_clip(true, true),
+        blend_clip(true, true),
+        blend_clip(true, true),
+    ]
+}
+
+#[test]
+fn a_1d_and_a_2d_blend_round_trip_and_emit_idempotently() {
+    let source = blend_source(
+        "blends:\n  cross:\n    points:\n      - clip: idle\n        at:\n          - 0.0\n          \
+         - 0.0\n      - clip: run\n        at:\n          - 1.0\n          - 0.0\n      - clip: \
+         walk\n        at:\n          - 0.0\n          - 1.0\n  locomotion:\n    sync: foot_l\n    \
+         points:\n      - clip: idle\n        at: 0.0\n      - clip: run\n        at: 4.0\n",
+    );
+    let doc = check_assembly(&source).expect("valid blends");
+    assert_eq!(doc.blends.len(), 2);
+    assert_eq!(doc.blends[0].name, "cross");
+    assert_eq!(doc.blends[1].sync.as_deref(), Some("foot_l"));
+    let once = emit_assembly(&doc);
+    assert_eq!(once, source, "the authored text is already canonical");
+    assert_eq!(emit_assembly(&parse_assembly(&once).unwrap()), once);
+}
+
+#[test]
+fn absent_blends_emit_as_before() {
+    let doc = check_assembly(&two_part()).expect("valid");
+    assert!(doc.blends.is_empty());
+    assert!(!emit_assembly(&doc).contains("blends"));
+}
+
+#[test]
+fn a_blend_with_fewer_than_two_points_is_l1137() {
+    let source = blend_source("blends:\n  b:\n    points:\n      - clip: idle\n        at: 0.0\n");
+    assert!(has_code_at(
+        &errors_for(&source),
+        "L1137",
+        "/blends/b/points"
+    ));
+}
+
+#[test]
+fn a_blend_named_like_a_clip_is_l1138() {
+    let source = blend_source(
+        "blends:\n  run:\n    points:\n      - clip: idle\n        at: 0.0\n      - clip: walk\n        at: 1.0\n",
+    );
+    assert!(has_code_at(&errors_for(&source), "L1138", "/blends/run"));
+}
+
+#[test]
+fn two_points_at_one_position_are_l1138() {
+    let source = blend_source(
+        "blends:\n  b:\n    points:\n      - clip: idle\n        at: 1.0\n      - clip: walk\n        at: 1.0\n",
+    );
+    assert!(has_code_at(
+        &errors_for(&source),
+        "L1138",
+        "/blends/b/points/1/at"
+    ));
+}
+
+#[test]
+fn collinear_2d_points_are_l1138() {
+    let source = blend_source(
+        "blends:\n  b:\n    points:\n      - clip: idle\n        at:\n          - 0.0\n          - 0.0\n      \
+         - clip: run\n        at:\n          - 1.0\n          - 0.0\n      - clip: walk\n        at:\n          - 2.0\n          - 0.0\n",
+    );
+    assert!(has_code_at(
+        &errors_for(&source),
+        "L1138",
+        "/blends/b/points"
+    ));
+}
+
+#[test]
+fn an_unbound_point_clip_is_l1138_with_the_nearest() {
+    let diagnostics = blend_diagnostics(
+        "blends:\n  b:\n    points:\n      - clip: idl\n        at: 0.0\n      - clip: run\n        at: 1.0\n",
+        &three_clips(),
+    );
+    assert!(has_code_at(
+        &diagnostics,
+        "L1138",
+        "/blends/b/points/0/clip"
+    ));
+    let help = diagnostics[0].help.clone().unwrap_or_default();
+    assert!(help.contains("`idle`"), "{help}");
+}
+
+#[test]
+fn a_non_looping_point_clip_is_l1138() {
+    let mut clips = three_clips();
+    clips[1] = blend_clip(false, true);
+    let diagnostics = blend_diagnostics(
+        "blends:\n  b:\n    points:\n      - clip: idle\n        at: 0.0\n      - clip: run\n        at: 1.0\n",
+        &clips,
+    );
+    assert!(has_code_at(
+        &diagnostics,
+        "L1138",
+        "/blends/b/points/1/clip"
+    ));
+}
+
+#[test]
+fn a_point_clip_without_the_sync_event_is_l1138() {
+    let mut clips = three_clips();
+    clips[1] = blend_clip(true, false);
+    let diagnostics = blend_diagnostics(
+        "blends:\n  b:\n    sync: foot_l\n    points:\n      - clip: idle\n        at: 0.0\n      - clip: run\n        at: 1.0\n",
+        &clips,
+    );
+    assert!(has_code_at(&diagnostics, "L1138", "/blends/b/sync"));
+    assert!(blend_diagnostics(
+        "blends:\n  b:\n    sync: foot_l\n    points:\n      - clip: idle\n        at: 0.0\n      - clip: walk\n        at: 1.0\n",
+        &three_clips(),
+    )
+    .is_empty());
 }

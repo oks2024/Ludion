@@ -1216,6 +1216,15 @@ pub mod code {
     /// switched; every part took the root surface. A warning.
     pub const SURFACE_PART_UNMATCHED: DiagnosticCode = DiagnosticCode::new("L1695");
 
+    /// `L1696` — a mesh document's `surfaces`/`triangle_surfaces` keys or a `SurfaceTag.cells`
+    /// table are malformed (one key without the other, an empty or repeated name, a zero run, an
+    /// index out of range, or run counts that miss the triangle or cell count).
+    pub const MESH_SURFACES_INVALID: DiagnosticCode = DiagnosticCode::new("L1696");
+
+    /// `L1697` — a mesh document's `surfaces` names a surface the scene's `physics.surfaces`
+    /// does not declare; those triangles fall through to part, entity and default. A warning.
+    pub const MESH_SURFACE_UNDECLARED: DiagnosticCode = DiagnosticCode::new("L1697");
+
     /// `L1510` — a `Machine`'s `parent` fn does not form a tree under `ROOT`: `ROOT` has a parent,
     /// or some state's parent chain never reaches `ROOT`. Raised by `ludion-ai`'s `register_machine`.
     pub const AI_MACHINE_HIERARCHY: DiagnosticCode = DiagnosticCode::new("L1510");
@@ -2153,6 +2162,18 @@ pub mod code {
     /// `L2343` — a `GroundMarkerClip` is authored but the world has no physics, so the marker is
     /// drawn unclipped. Raised by extract.
     pub const GROUND_MARKER_CLIP_NO_PHYSICS: DiagnosticCode = DiagnosticCode::new("L2343");
+
+    /// `L2350` — an `OccludedSilhouette` field is out of range: a colour channel outside `[0, 1]`,
+    /// `outline.px` outside `(0, 8]`, `outline.alpha` outside `[0, 1]`, or a negative or non-finite `bias`.
+    pub const OCCLUDED_SILHOUETTE_INVALID: DiagnosticCode = DiagnosticCode::new("L2350");
+
+    /// `L2351` — an `OccludedSilhouette` resolves onto a `Viewmodel` mesh, which is never silhouetted.
+    /// Raised by extract.
+    pub const OCCLUDED_SILHOUETTE_ON_VIEWMODEL: DiagnosticCode = DiagnosticCode::new("L2351");
+
+    /// `L2352` — a frame resolves more than 8 distinct silhouette styles; the extras are not drawn.
+    /// Raised by extract.
+    pub const OCCLUDED_SILHOUETTE_STYLE_LIMIT: DiagnosticCode = DiagnosticCode::new("L2352");
 
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
@@ -7204,6 +7225,32 @@ per entity and key; the switch itself succeeds.
 Fix: correct the key to one of the assembly's part names (the help names the closest).",
     },
     CodeEntry {
+        code: code::MESH_SURFACES_INVALID,
+        severity: Severity::Error,
+        title: "a malformed per-triangle or per-cell surface list",
+        explanation: "\
+A mesh document's `surfaces`/`triangle_surfaces` keys (or a `SurfaceTag.cells` table) are
+malformed: only one of the two mesh keys is present, a name is empty or repeated, there are more
+than 256 names, a run has a zero count or a local index past the name list, or the run counts do
+not sum to the mesh's triangle count (a heightfield's `(rows-1)*(cols-1)` cells). Raised at
+`/surfaces` or `/triangle_surfaces/<k>` in the mesh document, or at `/cells/...` on `SurfaceTag`.
+
+Fix: give both keys together, name each surface once, and make the run counts cover every
+triangle (or cell) exactly once.",
+    },
+    CodeEntry {
+        code: code::MESH_SURFACE_UNDECLARED,
+        severity: Severity::Warning,
+        title: "a mesh surface name the scene does not declare",
+        explanation: "\
+A mesh document's `surfaces` list names a surface the scene's `physics.surfaces` does not
+declare. The triangles tagged with that name fall through to the part, entity and default surface.
+Reported by `check-scene` at the mesh's path and once per name at runtime.
+
+Fix: declare the name in `physics.surfaces`, or correct it to one of the declared names (the help
+names the closest).",
+    },
+    CodeEntry {
         code: code::AI_MACHINE_HIERARCHY,
         severity: Severity::Error,
         title: "a machine's parent function is not a tree under ROOT",
@@ -9478,6 +9525,10 @@ Fix: correct the named field; give the target at least one point (`offset: [0, 1
 name. Conservatively, the zone detects nothing of that class, and a sample point with an unknown
 `blocked_by` layer is not seen; an unknown `see_through` layer is dropped. Reported once per name.
 
+`check-scene` reports it too, once per occurrence at its JSON Pointer: layers everywhere, and classes (`detects`,
+`SightTarget.class`) and noise kinds (`hears`, `NoiseZone.kinds`) only under a game's `PerceptionConfig` (a game's
+`--check-scene`, the wire's `scene.check` on a game host), not in `ludion check-scene`.
+
 This is a **warning**.
 
 Fix: declare the class in `PerceptionConfig.classes`, or the layer under `physics.layers`.",
@@ -10732,6 +10783,41 @@ Fix: declare a `physics:` block (with the layers the clip names) in the scene, o
 
     physics:
       layers: [sight_blocker, low_cover]",
+    },
+    CodeEntry {
+        code: code::OCCLUDED_SILHOUETTE_INVALID,
+        severity: Severity::Error,
+        title: "OccludedSilhouette is not valid",
+        explanation: "An `OccludedSilhouette` field is out of range: a `color` channel is outside `[0, 1]`,
+`outline.px` is outside `(0, 8]`, `outline.alpha` is outside `[0, 1]`, or `bias` is negative or not
+finite (JSON Pointer `/color/<i>`, `/outline/px`, `/outline/alpha`, `/bias`).
+
+Fix: give each field a value in its range.
+
+    OccludedSilhouette:
+      color: [1, 1, 1, 0.55]
+      outline: { px: 2, alpha: 1 }",
+    },
+    CodeEntry {
+        code: code::OCCLUDED_SILHOUETTE_ON_VIEWMODEL,
+        severity: Severity::Warning,
+        title: "OccludedSilhouette on a Viewmodel mesh is ignored",
+        explanation: "An `OccludedSilhouette` resolves onto a mesh that carries a `Viewmodel`, directly or by
+inheritance. A viewmodel is drawn on its own near depth slice and is never in the silhouette mask, so
+nothing is drawn for it. Raised once per entity by extract.
+
+Fix: remove the `OccludedSilhouette` from the viewmodel's entity or its ancestors, or put it on a
+sibling that is not a viewmodel.",
+    },
+    CodeEntry {
+        code: code::OCCLUDED_SILHOUETTE_STYLE_LIMIT,
+        severity: Severity::Warning,
+        title: "more than 8 silhouette styles in one frame",
+        explanation: "A frame resolves more than 8 distinct `OccludedSilhouette` styles (a style is the exact
+colour, outline, `when` and `bias`). The first 8 in scene order are drawn and meshes with a ninth or later
+style get no silhouette. Raised once by extract.
+
+Fix: share styles between entities, for example one on a common `Parent`, so that a frame holds at most 8.",
     },
     CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
@@ -13532,6 +13618,8 @@ mod tests {
         code::SURFACE_OVERLAY_NO_SENSOR,
         code::SURFACE_PART_INVALID,
         code::SURFACE_PART_UNMATCHED,
+        code::MESH_SURFACES_INVALID,
+        code::MESH_SURFACE_UNDECLARED,
         code::AI_MACHINE_HIERARCHY,
         code::AI_MACHINE_INITIAL,
         code::AI_MACHINE_VARIANTS,
@@ -13763,6 +13851,9 @@ mod tests {
         code::GROUND_MARKER_STYLE_INVALID,
         code::GROUND_MARKER_CLIP_INVALID,
         code::GROUND_MARKER_CLIP_NO_PHYSICS,
+        code::OCCLUDED_SILHOUETTE_INVALID,
+        code::OCCLUDED_SILHOUETTE_ON_VIEWMODEL,
+        code::OCCLUDED_SILHOUETTE_STYLE_LIMIT,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,
@@ -14048,6 +14139,7 @@ mod tests {
             code::SCHEDULE_MODULE_CONCENTRATION,
             code::QUERY_DRIFT_UNOBSERVED,
             code::SURFACE_PART_UNMATCHED,
+            code::MESH_SURFACE_UNDECLARED,
             code::AI_TRANSITION_CHAIN_CAPPED,
             code::AI_INBOX_OVERFLOW,
             code::AI_GROUP_MISSING,
@@ -14116,6 +14208,8 @@ mod tests {
             code::VOLLEY_INVALID,
             code::RENDER_PLACEMENT_NON_FINITE,
             code::GROUND_MARKER_CLIP_NO_PHYSICS,
+            code::OCCLUDED_SILHOUETTE_ON_VIEWMODEL,
+            code::OCCLUDED_SILHOUETTE_STYLE_LIMIT,
             code::TRANSITION_CARRY_DEAD,
             code::TRANSITION_CARRY_ORPHANED,
             code::RESTORE_ENGINE_VERSION_DIFFERS,

@@ -6,5 +6,6 @@
   "sprite-flipbook": { "frames": 23 },
   "sprite-uv-scroll": { "frames": 30 },
   "character-socket": { "frames": 60 },
-  "crowd-animation": { "frames": 90 }
+  "crowd-animation": { "frames": 90 },
+  "occluded-silhouette": { "frames": 20 }
 }

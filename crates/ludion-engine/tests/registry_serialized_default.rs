@@ -84,6 +84,7 @@ fn fixtures(name: &str) -> Vec<Value> {
             json!({ "shape": { "type": "disc", "radius": 1.0 } }),
             json!({ "shape": { "type": "segment", "length": 2.0, "width": 1.0 } }),
         ],
+        "OccludedSilhouette" => vec![json!({}), json!({ "outline": {}, "when": "always" })],
         "ReflectionProbe" => vec![
             json!({ "shape": { "box": { "extent": [1.0, 1.0, 1.0] } } }),
             json!({ "shape": { "sphere": { "radius": 2.0 } } }),

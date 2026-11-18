@@ -5599,6 +5599,86 @@
       }
     }
   },
+  "OccludedSilhouette": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "OccludedSilhouette",
+    "description": "Draws the entity's meshes in `color` wherever a nearer surface hides them, with an optional outline\naround the hidden region. A mesh without its own takes its nearest ancestor's, like `Fade`. The tint\nis blended after the tonemap, so it is not fogged, blurred or bloomed; vignette and grain still apply.\nAt most 8 distinct styles are drawn per frame.\n\n```\nuse ludion_components::{OccludedSilhouette, SilhouetteWhen};\n\nlet silhouette: OccludedSilhouette = serde_json::from_value(serde_json::json!({\n    \"outline\": { \"px\": 2.0 },\n}))\n.unwrap();\nassert_eq!(silhouette.color, [1.0, 1.0, 1.0, 0.55]);\nassert_eq!(silhouette.when, SilhouetteWhen::Hidden);\nassert_eq!(silhouette.outline.unwrap().alpha, 1.0);\n```",
+    "type": "object",
+    "properties": {
+      "color": {
+        "description": "Display-referred colour `[r, g, b, a]`, each in `[0, 1]` (default white at 0.55).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4,
+        "default": [
+          1.0,
+          1.0,
+          1.0,
+          0.550000011920929
+        ]
+      },
+      "outline": {
+        "description": "An outer outline around the filled region; absent means none.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SilhouetteOutline"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "when": {
+        "description": "`hidden` (default) tints only occluded pixels; `always` tints every pixel of the meshes.",
+        "$ref": "#/$defs/SilhouetteWhen"
+      },
+      "bias": {
+        "description": "How far behind the occluder a pixel must be to count as hidden, in view-space units (default 0.05).",
+        "type": "number",
+        "format": "float",
+        "default": 0.05000000074505806
+      }
+    },
+    "$defs": {
+      "SilhouetteOutline": {
+        "description": "The outline of an [`OccludedSilhouette`].",
+        "type": "object",
+        "properties": {
+          "px": {
+            "description": "Width in pixels at 1080p, in `(0, 8]`; scales with the render height (default 2).",
+            "type": "number",
+            "format": "float",
+            "default": 2.0
+          },
+          "alpha": {
+            "description": "Outline opacity in `[0, 1]` (default 1).",
+            "type": "number",
+            "format": "float",
+            "default": 1.0
+          }
+        }
+      },
+      "SilhouetteWhen": {
+        "description": "When an [`OccludedSilhouette`] draws.",
+        "oneOf": [
+          {
+            "description": "Only where a nearer surface hides the mesh.",
+            "type": "string",
+            "const": "hidden"
+          },
+          {
+            "description": "Everywhere the mesh is drawn.",
+            "type": "string",
+            "const": "always"
+          }
+        ]
+      }
+    }
+  },
   "Parent": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Parent",
@@ -8092,7 +8172,7 @@
   "SurfaceTag": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "SurfaceTag",
-    "description": "Tags the entity's collider with a surface declared under `physics.surfaces`. Every hit that\nnames the collider reports it (`surface` on a query hit, `MoveReport.ground.surface`). Put it\nbeside a solver-claimed `Collider` or a `CharacterMotor`; an entity with neither is `L1692` in\n`check-scene`. The name must be declared (`L1690`) and not empty (`L1691`). The solver never\nreads it: editing it takes effect from the next write with no body rebuilt.\n\n`parts` gives single parts their own surface. An integer key indexes the entity's own `compound`\n`Collider` parts: a hit reports the part whose shape lies nearest the hit point (lowest index on\nties). A string key names a `kind: assembly` part and takes effect on the bodies\n`switch_to_ragdoll` spawns. Every other part reports `surface`. A part *named* `\"1\"` must be\nquoted in YAML, or it parses as the integer.\n\n```yaml\ncomponents:\n  SurfaceTag:\n    surface: metal_grate\n    parts:\n      - { part: 1, surface: concrete }\n      - { part: helmet, surface: metal }\n```",
+    "description": "Tags the entity's collider with a surface declared under `physics.surfaces`. Every hit that\nnames the collider reports it (`surface` on a query hit, `MoveReport.ground.surface`). Put it\nbeside a solver-claimed `Collider` or a `CharacterMotor`; an entity with neither is `L1692` in\n`check-scene`. The name must be declared (`L1690`) and not empty (`L1691`). The solver never\nreads it: editing it takes effect from the next write with no body rebuilt.\n\n`parts` gives single parts their own surface. An integer key indexes the entity's own `compound`\n`Collider` parts: a hit reports the part whose shape lies nearest the hit point (lowest index on\nties). A string key names a `kind: assembly` part and takes effect on the bodies\n`switch_to_ragdoll` spawns. Every other part reports `surface`. A part *named* `\"1\"` must be\nquoted in YAML, or it parses as the integer.\n\n`cells` tags a `heightfield` collider per cell (`cells: { surfaces: [dirt, concrete], runs:\n[[40, 0], [8, 1]] }`, row-major, `(rows-1)*(cols-1)` cells); a mesh collider's triangles are\ntagged in its mesh document instead.\n\n```yaml\ncomponents:\n  SurfaceTag:\n    surface: metal_grate\n    parts:\n      - { part: 1, surface: concrete }\n      - { part: helmet, surface: metal }\n```",
     "type": "object",
     "properties": {
       "surface": {
@@ -8106,6 +8186,17 @@
         "items": {
           "$ref": "#/$defs/PartSurface"
         }
+      },
+      "cells": {
+        "description": "Per-cell surfaces for a `heightfield` collider; a cell outside the table reports the part,\nthen `surface`.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CellSurfaces"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "$defs": {
@@ -8140,6 +8231,37 @@
             "description": "A part of a `kind: assembly` mesh.",
             "type": "string"
           }
+        ]
+      },
+      "CellSurfaces": {
+        "description": "A heightfield's per-cell surface table: local names, and `[count, local index]` runs over the\n`(rows-1)*(cols-1)` cells in row-major order.",
+        "type": "object",
+        "properties": {
+          "surfaces": {
+            "description": "The surface names the runs index; each must be declared under `physics.surfaces`.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "runs": {
+            "description": "Run-length `[count, index into surfaces]` pairs, row-major over the cells.",
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        "required": [
+          "surfaces",
+          "runs"
         ]
       }
     }

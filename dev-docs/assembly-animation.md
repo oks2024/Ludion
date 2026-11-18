@@ -17,8 +17,10 @@ unchanged is `crate::voxel_mesh` (`ludion devdocs scene-kind-documents` for its 
 - `crates/ludion-scene/src/part.rs` — `kind: part` (`L1139`/`L1140`): a voxel grid with no palette.
 - `crates/ludion-scene/src/animation.rs` — `kind: animation` (`L1141`/`L1142`, event data `L1198`): tracks name a *target* (part or joint), a `scale` channel, `events`, `generated_from`.
 - `crates/ludion-scene/src/rig_mask.rs` — `RigMask` and its parser/emitter/`resolve_mask`, shared by `kind: character` (joints) and `kind: assembly` (parts, `masks:`); resolution walks ancestors because assembly part order is not topological.
+- `crates/ludion-scene/src/rig_blend.rs` — `BlendSpace` and its parser/validator/point check/emitter, shared by `kind: character` and `kind: assembly` (`blends:`); the codes and the clips' effective events come in as parameters. `check_assembly_blends` runs after the clips are read.
 - `crates/ludion-scene/src/clip_eval.rs` — the pure sampler: `clip_phase`, `part_pose` (quaternion rotation via `sample_rotation`), `sample_channel` (both find the segment by binary search), `ClipSampler` (a clip resolved against a skin's joints once, rotations as quaternions; the character palette samples through it). Knows nothing of assemblies, matrices, or the engine.
 - `crates/ludion-engine/src/assembly_mesh.rs` — `load`/`load_documents`/`load_with_sources`/`mesh_assembly` → `AssemblyData`. **Read its module doc first**: it carries the two-frames offset/pivot formulas.
+- `crates/ludion-engine/src/blend_space.rs` — `BlendSpaceData` and `resolve_blends`, rig-neutral over each bound clip's `(name, duration, speed, events)`; `AssemblyData::blends` and `CharacterData::blends` both hold it.
 - `crates/ludion-engine/src/extract.rs` — `resolve_assembly`, `animation_pose`, `elapsed_seconds`, `part_placements`, `compose_chain`, and the layer block after `blended_part_pose` (`assembly_layer_poses`, `layered_part_pose`).
 - `crates/ludion-engine/src/asset_cache.rs` — the `assemblies` map and the `dependents` map, which holds every kind's source-file edges.
 - `crates/ludion-engine/src/model_sheet.rs` — `ModelSheetRequest::{clip, time, strip}`, `ClipOutcome`/`PhaseReport`, and the posed gap rasterization (module doc).
@@ -70,6 +72,7 @@ and takes **one** `extract_at` — so `n` phases come out of one evaluator run a
   either. A scene without `AnimationLayers` is byte-identical, and `blended_part_pose` is a cast
   wrapper over an `f64` core so a layer composes over the exact blend (override and additive rules:
   `Plan/animation-layers.md` decisions 27-29).
+- **`AssemblySide` is a pose side.** `part_placements_sides` is the core; `part_placements`/`_faded`/`_with` wrap `ClipPose`s into sides. A side is up to three weighted clip samples: one weight-1 entry returns that clip's `part_pose` verbatim, so a plain clip's matrices are the same bits through the blend-capable path (`a_single_entry_side_is_the_plain_clip_bit_for_bit`). More entries blend in order: rotation by running slerp, translation and scale by weighted sum, and a channel no entry keys stays `None` (decision 32). Layers sample `layer.side`, and the f64 blend core takes two sampled `PartPose`s so a crossfade side may itself be a blend. `blend_clocks`/`animation_events` read `BlendClock` through `get_unrecorded`, never `has`.
 - **Translation is applied in the part's rest frame** (`T · R`, folded into the same `T` as the
   offset). Reversing the order bends a translation key by that part's own rotation; an exact-matrix
   test pins it.

@@ -45,6 +45,7 @@ fn tag(name: &str) -> SurfaceTag {
     SurfaceTag {
         surface: name.to_string(),
         parts: vec![],
+        cells: None,
     }
 }
 

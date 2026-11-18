@@ -310,3 +310,113 @@ kind: [
         oracle.first().map(|d| d.code)
     );
 }
+
+/// A tagged floor: triangle 0 (`x + z < 0`) is `concrete`, triangle 1 is `metal_grate`.
+fn tagged_scene_and_floor(name: &str) -> (Engine, PathBuf) {
+    let dir = fresh_dir(name);
+    let doc = MeshDocument {
+        positions: vec![
+            -5.0, 0.0, -5.0, //
+            5.0, 0.0, -5.0, //
+            -5.0, 0.0, 5.0, //
+            5.0, 0.0, 5.0,
+        ],
+        indices: vec![0, 2, 1, 1, 2, 3],
+        ..MeshDocument::default()
+    };
+    let tags = ludion_scene::MeshSurfaces {
+        names: vec!["concrete".into(), "metal_grate".into()],
+        runs: vec![[1, 0], [1, 1]],
+    };
+    std::fs::write(
+        dir.join(MESH),
+        ludion_scene::emit_mesh_with_surfaces(&doc, Some(&tags)),
+    )
+    .unwrap();
+    let scene = format!(
+        "format: 1\nseed: 3\nphysics:\n  space: free\n  surfaces:\n    - concrete\n    - metal_grate\nentities:\n  \
+         - name: floor\n    components:\n      Transform: {{}}\n      Collider:\n        shape:\n          mesh:\n            path: {MESH}\n        body: static\n"
+    );
+    let mut engine = Engine::builder()
+        .project_root(dir.clone())
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(&scene).unwrap();
+    (engine, dir)
+}
+
+fn surface_names_at(engine: &Engine) -> [Option<String>; 2] {
+    let physics = engine
+        .world()
+        .resource::<PhysicsWorld>()
+        .expect("the scene has physics");
+    [[-2.0, -2.0], [2.0, 2.0]].map(|[x, z]| {
+        let hit = physics
+            .ray_cast([x, 10.0, z], [0.0, -1.0, 0.0], 20.0, &QueryFilter::new())
+            .expect("a finite ray")
+            .remove(0);
+        hit.surface
+            .and_then(|id| physics.surface_name(id))
+            .map(str::to_string)
+    })
+}
+
+#[test]
+fn a_restored_engine_answers_mesh_tags_before_its_first_step() {
+    let (mut engine, _) = tagged_scene_and_floor("tags-restore");
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+    let want = [
+        Some("concrete".to_string()),
+        Some("metal_grate".to_string()),
+    ];
+    assert_eq!(surface_names_at(&engine), want);
+
+    let snapshot: Value = match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    match engine
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap()
+        .body
+    {
+        ResponseBody::Restored { .. } => {}
+        other => panic!("expected a restore, got {other:?}"),
+    }
+    assert_eq!(
+        surface_names_at(&engine),
+        want,
+        "no step has run since the restore"
+    );
+}
+
+#[test]
+fn a_collider_mesh_naming_an_undeclared_surface_is_an_l1697_warning() {
+    let (engine, dir) = tagged_scene_and_floor("tags-undeclared");
+    drop(engine);
+    let source = std::fs::read_to_string(dir.join(MESH))
+        .unwrap()
+        .replace("metal_grate", "metal_gratte");
+    std::fs::write(dir.join(MESH), source).unwrap();
+    let scene = ludion_scene::check(
+        &format!(
+            "format: 1\nseed: 3\nphysics:\n  space: free\n  surfaces:\n    - concrete\n    - metal_grate\nentities:\n  \
+             - name: floor\n    components:\n      Collider:\n        shape:\n          mesh:\n            path: {MESH}\n        body: static\n"
+        ),
+        &ludion_engine::builtin_registry(),
+    )
+    .unwrap();
+    let found = ludion_engine::scene_mesh_asset_diagnostics(&dir, &scene);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].code.as_str(), "L1697");
+    assert_eq!(
+        found[0].path.as_deref(),
+        Some("/entities/0/components/Collider/shape/mesh/path")
+    );
+    assert_eq!(
+        found[0].help.as_deref(),
+        Some("nearest match is `metal_grate`")
+    );
+}

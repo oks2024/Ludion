@@ -7,8 +7,14 @@ use ludion_core::audio::{AudioMessage, Bus, MixLayer};
 use ludion_core::time::FrameIndex;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
-    AntiAliasing, Engine, EngineBuilder, QualityPreset, Settings, SettingsView, WindowMode,
+    AntiAliasing, Engine, EngineBuilder, PlaybackOutcome, QualityPreset, QualitySetting,
+    ReplayPlayback, ReplayPlaybackConfig, RunRecording, RunRecordingConfig, Settings, SettingsView,
+    WindowMode, replay_hashes_with,
 };
+use ludion_protocol::replay::ReplayReader;
+use ludion_protocol::{Command, ResponseBody};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 fn scratch(name: &str) -> PathBuf {
     let dir =
@@ -222,4 +228,442 @@ fn a_rebuild_keeps_the_view_and_the_engine_values() {
     assert_eq!(view.quality(), Some(QualityPreset::Medium));
     assert_eq!(engine.anti_aliasing(), AntiAliasing::Smaa);
     assert_eq!(engine.quality().label, "medium");
+}
+
+// --- W2: the header carries the settings; a replay installs the view and never touches disk -------
+
+const SCENE: &str = "format: 1\nseed: 1\nentities:\n  - name: ear\n    components:\n      Heard:\n        music: 0.0\n";
+
+/// The music volume a system read from the settings view, so it is visible to the `WorldHash`.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Default)]
+struct Heard {
+    music: f32,
+}
+
+fn hear(world: &mut World, _ctx: &SystemCtx) {
+    let music = world
+        .resource::<SettingsView>()
+        .map_or(0.0, |view| view.volume(Bus::Music));
+    for (heard,) in world.query::<(&mut Heard,)>() {
+        heard.music = music;
+    }
+}
+
+/// Asks for a save every tick, so a replay that honored it would write the file.
+fn save_every_tick(world: &mut World, _ctx: &SystemCtx) {
+    if let Some(settings) = world.resource_mut::<Settings>() {
+        settings.save();
+    }
+}
+
+fn root(name: &str) -> PathBuf {
+    let dir = scratch(name);
+    std::fs::create_dir_all(dir.join("content")).unwrap();
+    dir
+}
+
+fn music_file(music: f32) -> String {
+    format!("format: 1\nkind: settings\naudio:\n  master: 1.0\n  buses:\n    music: {music}\n")
+}
+
+fn write_settings(root: &Path, text: &str) {
+    std::fs::create_dir_all(file(root).parent().unwrap()).unwrap();
+    std::fs::write(file(root), text).unwrap();
+}
+
+fn heard_builder(root: &Path, saver: bool) -> EngineBuilder {
+    let mut builder = Engine::builder()
+        .components(|reg| reg.register::<Heard>("Heard"))
+        .system("hear", hear)
+        .project_root(root.join("content"))
+        .save_root(root)
+        .persist_settings();
+    if saver {
+        builder = builder.system("save_every_tick", save_every_tick);
+    }
+    builder
+}
+
+fn backups(root: &Path) -> usize {
+    std::fs::read_dir(file(root).parent().unwrap())
+        .map(|dir| {
+            dir.flatten()
+                .filter(|entry| entry.file_name().to_string_lossy().contains(".bak."))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn record_session(engine: &mut Engine, path: &Path) {
+    engine
+        .set_recording(std::fs::File::create(path).unwrap())
+        .unwrap();
+    for _ in 0..6 {
+        engine.advance_live();
+    }
+    engine.stop_recording().unwrap();
+}
+
+fn recorded_on(root: &Path, text: &str) -> Vec<u8> {
+    write_settings(root, text);
+    let mut engine = heard_builder(root, false).build().unwrap();
+    engine.load_inline_scene(SCENE).unwrap();
+    let path = root.join("session.lrp");
+    record_session(&mut engine, &path);
+    std::fs::read(path).unwrap()
+}
+
+fn heard_of(engine: &mut Engine) -> f32 {
+    engine
+        .world_mut()
+        .query::<(&Heard,)>()
+        .map(|(heard,)| heard.music)
+        .next()
+        .unwrap()
+}
+
+#[test]
+fn the_header_wins_over_the_replaying_machines_file() {
+    let a = root("header-a");
+    let b = root("header-b");
+    let bytes = recorded_on(&a, &music_file(0.5));
+    let header = ReplayReader::new(&bytes).unwrap().header().clone();
+    let carried = header.save_docs.get("settings").expect("carried");
+    assert!(carried.contains("music: 0.5"), "{carried}");
+
+    let b_text = "format: 1\nkind: settings\n  audio: [\n";
+    write_settings(&b, b_text);
+    let mut replayed = ludion_engine::replay_with(
+        heard_builder(&b, true),
+        &bytes,
+        b.join("content"),
+        |_, _| Ok(std::ops::ControlFlow::Continue(())),
+    )
+    .unwrap();
+    assert_eq!(heard_of(&mut replayed), 0.5, "the header's value, not B's");
+    let view = replayed.world().resource::<SettingsView>().unwrap();
+    assert_eq!(view.volume(Bus::Music), 0.5);
+    assert!(
+        replayed.boot_warnings().is_empty(),
+        "the file was never read: {:?}",
+        replayed.boot_warnings()
+    );
+    assert_eq!(std::fs::read_to_string(file(&b)).unwrap(), b_text);
+    assert_eq!(backups(&b), 0, "a replay never backs the file up");
+
+    let live = replay_hashes_with(heard_builder(&a, false), &bytes, a.join("content")).unwrap();
+    let elsewhere =
+        replay_hashes_with(heard_builder(&b, false), &bytes, b.join("content")).unwrap();
+    assert_eq!(live, elsewhere, "the hash trace is identical");
+    let c = root("header-c");
+    let bare = replay_hashes_with(heard_builder(&c, false), &bytes, c.join("content")).unwrap();
+    assert_eq!(live, bare, "no file at all reproduces too");
+    assert!(!file(&c).exists(), "and none is created");
+}
+
+#[test]
+fn a_replay_never_touches_the_disk() {
+    let a = root("disk-a");
+    let bytes = recorded_on(&a, &music_file(0.5));
+
+    // A `save()` every tick on a root with no file writes nothing.
+    let empty = root("disk-empty");
+    let mut replayed = ludion_engine::replay_with(
+        heard_builder(&empty, true),
+        &bytes,
+        empty.join("content"),
+        |_, _| Ok(std::ops::ControlFlow::Continue(())),
+    )
+    .unwrap();
+    assert_eq!(heard_of(&mut replayed), 0.5);
+    assert!(!file(&empty).exists(), "the replayed save() wrote nothing");
+
+    // And a malformed file is never read: no warning, no backup, bytes unchanged.
+    let bad = root("disk-bad");
+    let bad_text = "format: 1\nkind: settings\n  audio: [\n";
+    write_settings(&bad, bad_text);
+    let replayed = ludion_engine::replay_with(
+        heard_builder(&bad, true),
+        &bytes,
+        bad.join("content"),
+        |_, _| Ok(std::ops::ControlFlow::Continue(())),
+    )
+    .unwrap();
+    assert!(replayed.boot_warnings().is_empty());
+    assert_eq!(std::fs::read_to_string(file(&bad)).unwrap(), bad_text);
+    assert_eq!(backups(&bad), 0);
+}
+
+#[test]
+fn default_settings_leave_the_header_without_a_settings_key() {
+    let root = root("default-header");
+    let mut engine = heard_builder(&root, false).build().unwrap();
+    engine.load_inline_scene(SCENE).unwrap();
+    let path = root.join("session.lrp");
+    record_session(&mut engine, &path);
+    let bytes = std::fs::read(&path).unwrap();
+    let header = ReplayReader::new(&bytes).unwrap().header().clone();
+    assert!(header.save_docs.is_empty());
+    let json = serde_json::to_string(&header).unwrap();
+    assert!(!json.contains("settings"), "{json}");
+    let mut reference = header.clone();
+    reference.save_docs = std::collections::BTreeMap::new();
+    assert_eq!(json, serde_json::to_string(&reference).unwrap());
+    assert!(!json.contains("save_docs"), "no key at all: {json}");
+}
+
+fn request_music(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame == FrameIndex(0)
+        && let Some(settings) = world.resource_mut::<Settings>()
+    {
+        settings.request_bus_volume(Bus::Music, 0.7);
+    }
+}
+
+#[test]
+fn a_recording_armed_after_a_request_carries_the_requested_value() {
+    let root = root("armed-after");
+    let mut engine = Engine::builder()
+        .components(|reg| reg.register::<Heard>("Heard"))
+        .system("request_music", request_music)
+        .project_root(root.join("content"))
+        .save_root(&root)
+        .build()
+        .unwrap();
+    engine.load_inline_scene(SCENE).unwrap();
+    engine.advance_live();
+    // A reload puts the frame back at zero, where a recording can arm; the settings stay.
+    engine.load_inline_scene(SCENE).unwrap();
+    let path = root.join("session.lrp");
+    record_session(&mut engine, &path);
+    let bytes = std::fs::read(&path).unwrap();
+    let header = ReplayReader::new(&bytes).unwrap().header().clone();
+    let carried = header.save_docs.get("settings").expect("carried");
+    assert!(carried.contains("music: 0.7"), "{carried}");
+}
+
+#[test]
+fn describe_reports_the_settings_section() {
+    let root = root("describe");
+    write_settings(&root, &music_file(0.5));
+    let describe = |engine: &mut Engine| match engine.execute(Command::EngineDescribe).unwrap().body
+    {
+        ResponseBody::EngineDescription { description } => description["settings"].clone(),
+        other => panic!("expected a description, got {other:?}"),
+    };
+    let mut engine = heard_builder(&root, false).build().unwrap();
+    let section = describe(&mut engine);
+    assert_eq!(section["persisted"], true);
+    assert_eq!(section["quality_pinned"], false);
+    assert_eq!(section["values"]["audio"]["buses"]["music"], 0.5);
+    engine.pin_quality();
+    assert_eq!(describe(&mut engine)["quality_pinned"], true);
+}
+
+/// Asks for `full` at tick 2, a value the recording's header (`medium`) does not already hold.
+fn late_full(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame == FrameIndex(2)
+        && let Some(settings) = world.resource_mut::<Settings>()
+    {
+        settings.request_quality(QualityPreset::Full);
+    }
+}
+
+fn playback_game(dir: &Path) -> EngineBuilder {
+    Engine::builder()
+        .project_root(dir)
+        .save_root(dir)
+        .persist_profile()
+        .run_recordings(RunRecordingConfig::default())
+        .replay_playback(ReplayPlaybackConfig::default())
+        .system("menu", menu)
+        .system("late_full", late_full)
+}
+
+#[test]
+fn in_place_playback_returns_the_pre_play_settings_and_render_state() {
+    let dir = scratch("playback");
+    let hub = "format: 1\nname: hub\nseed: 5\nentities: []\n";
+    std::fs::write(dir.join("hub.yaml"), hub).unwrap();
+    let mut engine = playback_game(&dir).build().unwrap();
+    engine.load_inline_scene(hub).unwrap();
+    engine.advance_live();
+    engine
+        .world_mut()
+        .resource_mut::<RunRecording>()
+        .unwrap()
+        .start("p");
+    for _ in 0..20 {
+        engine.advance_live();
+    }
+    engine
+        .world_mut()
+        .resource_mut::<RunRecording>()
+        .unwrap()
+        .stop();
+    engine.advance_live();
+
+    // The live player then picks different values than the recorded game's menu does.
+    let settings = engine.world_mut().resource_mut::<Settings>().unwrap();
+    settings.request_bus_volume(Bus::Music, 0.2);
+    settings.request_quality(QualityPreset::High);
+    settings.request_anti_aliasing(AntiAliasing::Off);
+    engine.advance_live();
+    assert_eq!(engine.quality().label, "high");
+
+    engine
+        .world_mut()
+        .resource_mut::<ReplayPlayback>()
+        .unwrap()
+        .play("p", "hub.yaml");
+    for _ in 0..6 {
+        engine.advance_live();
+    }
+    let outcome = engine
+        .world()
+        .resource::<ReplayPlayback>()
+        .unwrap()
+        .last_outcome()
+        .cloned();
+    assert_eq!(engine.playing(), Some("p"), "{outcome:?}");
+    assert_eq!(
+        engine.quality().label,
+        "full",
+        "the replayed game's request changed render state"
+    );
+    engine.stop_playback();
+    assert!(matches!(
+        engine
+            .world()
+            .resource::<ReplayPlayback>()
+            .unwrap()
+            .last_outcome(),
+        Some(PlaybackOutcome::Stopped { .. })
+    ));
+    let view = engine.world().resource::<SettingsView>().unwrap();
+    assert_eq!(view.volume(Bus::Music), 0.2, "the pre-play view is back");
+    assert_eq!(view.quality(), Some(QualityPreset::High));
+    assert_eq!(engine.quality().label, "high");
+    assert_eq!(engine.anti_aliasing(), AntiAliasing::Off);
+}
+
+/// Asks for borderless fullscreen at tick 2, inside the recorded span.
+fn late_borderless(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame == FrameIndex(2)
+        && let Some(settings) = world.resource_mut::<Settings>()
+    {
+        settings.request_window_mode(WindowMode::BorderlessFullscreen);
+    }
+}
+
+#[test]
+fn a_replay_never_moves_the_players_window() {
+    let dir = scratch("playback-window");
+    let hub = "format: 1\nname: hub\nseed: 5\nentities: []\n";
+    std::fs::write(dir.join("hub.yaml"), hub).unwrap();
+    let mut engine = Engine::builder()
+        .project_root(&dir)
+        .save_root(&dir)
+        .persist_profile()
+        .run_recordings(RunRecordingConfig::default())
+        .replay_playback(ReplayPlaybackConfig::default())
+        .system("late_borderless", late_borderless)
+        .build()
+        .unwrap();
+    engine.load_inline_scene(hub).unwrap();
+    engine.advance_live();
+    engine
+        .world_mut()
+        .resource_mut::<RunRecording>()
+        .unwrap()
+        .start("p");
+    for _ in 0..20 {
+        engine.advance_live();
+    }
+    engine
+        .world_mut()
+        .resource_mut::<RunRecording>()
+        .unwrap()
+        .stop();
+    engine.advance_live();
+
+    // Live, the player picks windowed; the armed channel then sees only playback traffic.
+    engine
+        .world_mut()
+        .resource_mut::<Settings>()
+        .unwrap()
+        .request_window_mode(WindowMode::Windowed);
+    engine.advance_live();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    engine.set_window_mode_sender(tx);
+    assert!(rx.try_recv().is_err());
+
+    engine
+        .world_mut()
+        .resource_mut::<ReplayPlayback>()
+        .unwrap()
+        .play("p", "hub.yaml");
+    for _ in 0..6 {
+        engine.advance_live();
+    }
+    assert_eq!(engine.playing(), Some("p"));
+    assert!(
+        rx.try_recv().is_err(),
+        "a replayed window request reached the live window"
+    );
+    engine.stop_playback();
+    assert!(rx.try_recv().is_err());
+    assert_eq!(engine.settings_window_mode(), Some(WindowMode::Windowed));
+
+    // Live again, the same request still reaches the sender (the gate is not over-broad).
+    engine
+        .world_mut()
+        .resource_mut::<Settings>()
+        .unwrap()
+        .request_window_mode(WindowMode::BorderlessFullscreen);
+    engine.advance_live();
+    assert_eq!(
+        rx.try_iter().collect::<Vec<_>>(),
+        [WindowMode::BorderlessFullscreen]
+    );
+}
+
+/// Every combination of named/unnamed × file preset/no file × packaged/full.
+#[test]
+fn startup_quality_precedence_holds_for_every_combination() {
+    for named in [false, true] {
+        for file_preset in [None, Some("low")] {
+            for resolved in ["full", "high"] {
+                let root = scratch("startup");
+                if let Some(preset) = file_preset {
+                    write_settings(
+                        &root,
+                        &format!("format: 1\nkind: settings\ngraphics:\n  quality: {preset}\n"),
+                    );
+                }
+                let mut engine = Engine::builder()
+                    .save_root(&root)
+                    .persist_settings()
+                    .build()
+                    .unwrap();
+                engine.apply_startup_quality(QualitySetting::preset(resolved).unwrap(), named);
+                let expected = match (named, file_preset) {
+                    (true, _) => resolved,
+                    (false, Some(preset)) => preset,
+                    (false, None) => resolved,
+                };
+                assert_eq!(
+                    engine.quality().label,
+                    expected,
+                    "named={named} file={file_preset:?} resolved={resolved}"
+                );
+                // Pinned exactly when named: a later request applies only when unpinned.
+                let settings = engine.world_mut().resource_mut::<Settings>().unwrap();
+                settings.request_quality(QualityPreset::Medium);
+                engine.advance_live();
+                let after = if named { expected } else { "medium" };
+                assert_eq!(engine.quality().label, after, "pin after named={named}");
+            }
+        }
+    }
 }

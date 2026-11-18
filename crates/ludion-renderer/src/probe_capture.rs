@@ -15,7 +15,7 @@ use crate::probe::{MAX_PROBES, probe_rank};
 use crate::probe_store;
 use crate::quality::{Quality, QualityParams};
 use crate::render::Renderer;
-use crate::scene::{ProbeWorld, RenderCamera, RenderScene};
+use crate::scene::{ProbeWorld, RenderCamera, RenderScene, Silhouettes};
 use ludion_core::ids::EntityId;
 
 const CAPTURE_NEAR: f32 = 0.05;
@@ -61,6 +61,8 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
     out.texts.clear();
     out.ground_markers.clear();
     out.ground_marker_profiles.clear();
+    // `retain` above shifts the mesh indices, and a face has no composite to draw it.
+    out.silhouettes = Silhouettes::default();
     out.drop_shadows.clear();
     out.decals.clear();
     // Probes are lit by local lights unshadowed, like the GI bake. A face has no composite, so

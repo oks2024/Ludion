@@ -38,7 +38,7 @@ use crate::meshes::TriangleMesh;
 use crate::motor::{LaneReport, MoveReport};
 use crate::queries::QueryFilter;
 use crate::sensors::SensorEvent;
-use crate::surface_tag::{SurfaceId, SurfaceTable};
+use crate::surface_tag::{CellSurfaces, SurfaceId, SurfaceTable};
 use crate::systems::{CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, PhysicsSettings};
 
 /// Gravity applied to every rigid body when nothing else is asked for: one standard gravity down
@@ -501,6 +501,14 @@ pub struct PhysicsWorld {
     /// `(Reverse(priority), entity)`: the first overlay containing a point wins.
     surface_overlays: Vec<(EntityId, String, i32)>,
     overlay_ids: Vec<(EntityId, SurfaceId, i32)>,
+    /// Mesh colliders whose document tags triangles (entity-sorted), and per mesh the local names
+    /// resolved to ids (same order). Refilled by the write and by `sync_mesh_surfaces`; never hashed.
+    mesh_surfaces: Vec<(EntityId, Arc<TriangleMesh>)>,
+    mesh_ids: Vec<(EntityId, Vec<Option<SurfaceId>>)>,
+    /// Each heightfield's authored `SurfaceTag.cells` (entity-sorted), and per entity the local
+    /// names resolved to ids with the runs expanded to one local index per cell.
+    surface_cells: Vec<(EntityId, CellSurfaces)>,
+    cell_ids: Vec<(EntityId, Vec<Option<SurfaceId>>, Vec<u16>)>,
     pub(crate) plane: Option<Plane>,
     tick_rate: TickRate,
     sleep_after_ticks: u32,
@@ -645,6 +653,10 @@ impl PhysicsWorld {
             surfaces_reported: true,
             surface_overlays: Vec::new(),
             overlay_ids: Vec::new(),
+            mesh_surfaces: Vec::new(),
+            mesh_ids: Vec::new(),
+            surface_cells: Vec::new(),
+            cell_ids: Vec::new(),
             plane: None,
             tick_rate,
             sleep_after_ticks: DEFAULT_SLEEP_AFTER_TICKS,
@@ -1524,6 +1536,10 @@ impl PhysicsWorld {
             surfaces_reported: true,
             surface_overlays: Vec::new(),
             overlay_ids: Vec::new(),
+            mesh_surfaces: Vec::new(),
+            mesh_ids: Vec::new(),
+            surface_cells: Vec::new(),
+            cell_ids: Vec::new(),
             plane: snapshot.plane.map(Plane::from),
             tick_rate,
             sleep_after_ticks: DEFAULT_SLEEP_AFTER_TICKS,
@@ -2783,18 +2799,30 @@ impl PhysicsWorld {
         tags: &[(EntityId, String)],
         parts: &[(EntityId, Vec<(u32, String)>)],
         overlays: &[(EntityId, String, i32)],
+        cells: &[(EntityId, CellSurfaces)],
+        meshes: &[(EntityId, Arc<TriangleMesh>)],
     ) {
         if self.surfaces_reported
             && self.surface_tags == tags
             && self.surface_parts == parts
             && self.surface_overlays == overlays
+            && self.surface_cells == cells
+            && same_meshes(&self.mesh_surfaces, meshes)
         {
             return;
         }
         self.surface_tags = tags.to_vec();
         self.surface_parts = parts.to_vec();
         self.surface_overlays = overlays.to_vec();
+        self.surface_cells = cells.to_vec();
+        self.mesh_surfaces = meshes.to_vec();
         self.resolve_surface_ids(true);
+    }
+
+    /// Replaces the tagged-mesh side table after a restore, so a hit answers before the first write.
+    pub(crate) fn set_mesh_surfaces(&mut self, meshes: &[(EntityId, Arc<TriangleMesh>)]) {
+        self.mesh_surfaces = meshes.to_vec();
+        self.resolve_surface_ids(false);
     }
 
     /// Refreshes the surface tags from `world`; call it after a restore, before
@@ -2837,6 +2865,15 @@ impl PhysicsWorld {
             })
             .collect();
         overlays.sort_unstable_by_key(|(entity, _, _)| *entity);
+        let mut cells: Vec<(EntityId, CellSurfaces)> = self
+            .entities()
+            .filter_map(|entity| match world.get::<crate::SurfaceTag>(entity) {
+                Ok(Some(tag)) => tag.cells.clone().map(|cells| (entity, cells)),
+                _ => None,
+            })
+            .collect();
+        cells.sort_unstable_by_key(|(entity, _)| *entity);
+        self.surface_cells = cells;
         self.surface_tags = tags;
         self.surface_parts = parts;
         self.surface_overlays = overlays;
@@ -2845,6 +2882,17 @@ impl PhysicsWorld {
 
     /// The `L1690` rejection for `entity`'s `component` naming the undeclared surface `name`.
     fn undeclared_surface(&self, entity: EntityId, component: &str, name: &str) -> ShapeRejection {
+        self.undeclared(code::SURFACE_UNKNOWN, entity, component, name)
+    }
+
+    /// A rejection under `code` for `entity`'s `component` naming the undeclared surface `name`.
+    fn undeclared(
+        &self,
+        code: DiagnosticCode,
+        entity: EntityId,
+        component: &str,
+        name: &str,
+    ) -> ShapeRejection {
         let declared: &[String] = self.surfaces.as_ref().map_or(&[], SurfaceTable::names);
         let hint = match nearest(name, declared.iter().map(String::as_str)) {
             Some(near) => format!("nearest match is `{near}`"),
@@ -2852,7 +2900,7 @@ impl PhysicsWorld {
         };
         ShapeRejection {
             entity,
-            code: code::SURFACE_UNKNOWN,
+            code,
             reason: format!(
                 "`{component}` surface `{name}` names no surface the scene's \
                  `physics.surfaces` declares; {hint}"
@@ -2896,6 +2944,37 @@ impl PhysicsWorld {
             }
         }
         self.part_ids = part_ids;
+        let mut mesh_ids = Vec::with_capacity(self.mesh_surfaces.len());
+        for (entity, mesh) in &self.mesh_surfaces {
+            let mut resolved = Vec::with_capacity(mesh.surfaces.len());
+            for name in &mesh.surfaces {
+                let id = self.surfaces.as_ref().and_then(|table| table.id(name));
+                if id.is_none() {
+                    rejections.push(self.undeclared(
+                        code::MESH_SURFACE_UNDECLARED,
+                        *entity,
+                        "mesh document",
+                        name,
+                    ));
+                }
+                resolved.push(id);
+            }
+            mesh_ids.push((*entity, resolved));
+        }
+        self.mesh_ids = mesh_ids;
+        let mut cell_ids = Vec::with_capacity(self.surface_cells.len());
+        for (entity, cells) in &self.surface_cells {
+            let mut resolved = Vec::with_capacity(cells.surfaces.len());
+            for name in &cells.surfaces {
+                let id = self.surfaces.as_ref().and_then(|table| table.id(name));
+                if id.is_none() {
+                    rejections.push(self.undeclared_surface(*entity, "SurfaceTag cells", name));
+                }
+                resolved.push(id);
+            }
+            cell_ids.push((*entity, resolved, cells.per_cell()));
+        }
+        self.cell_ids = cell_ids;
         overlay_ids
             .sort_unstable_by_key(|&(entity, _, priority)| (std::cmp::Reverse(priority), entity));
         self.overlay_ids = overlay_ids;
@@ -2986,9 +3065,60 @@ impl PhysicsWorld {
         parts.iter().find(|(k, _)| *k == nearest).map(|&(_, id)| id)
     }
 
+    /// The surface of the mesh triangle or heightfield cell of `entity`'s collider nearest `point`
+    /// (in the collider's local frame; candidates within 1e-4 m of the best distance tie, and the
+    /// lowest triangle index wins), when the mesh document or `SurfaceTag.cells` tags it.
+    fn face_at(&self, entity: EntityId, point: [f32; 3]) -> Option<SurfaceId> {
+        use rapier3d::parry::query::PointQuery;
+        const TIE: f32 = 1e-4;
+        let mesh_at = self
+            .mesh_surfaces
+            .binary_search_by_key(&entity, |&(e, _)| e)
+            .ok();
+        let cell_at = self
+            .cell_ids
+            .binary_search_by_key(&entity, |&(e, _, _)| e)
+            .ok();
+        if mesh_at.is_none() && cell_at.is_none() {
+            return None;
+        }
+        let &row = self.rows.get(&entity)?;
+        let collider = &self.rapier.colliders[self.table[row].collider];
+        let local = collider
+            .position()
+            .inverse_transform_point(to_vector(point));
+        if let (Some(at), Some(trimesh)) = (mesh_at, collider.shape().as_trimesh()) {
+            let mesh = &self.mesh_surfaces[at].1;
+            let nearest = trimesh.project_local_point(local, false);
+            let best = (nearest.point - local).length();
+            let mut lowest: Option<u32> = None;
+            for leaf in trimesh
+                .bvh()
+                .leaves(|node| node.aabb().distance_to_local_point(local, true) <= best + TIE)
+            {
+                let d = trimesh.triangle(leaf).distance_to_local_point(local, true);
+                if d <= best + TIE && lowest.is_none_or(|l| leaf < l) {
+                    lowest = Some(leaf);
+                }
+            }
+            let local_index = *mesh.triangle_surfaces.get(lowest? as usize)?;
+            return self.mesh_ids[at]
+                .1
+                .get(usize::from(local_index))
+                .copied()
+                .flatten();
+        }
+        let (at, field) = (cell_at?, collider.shape().as_heightfield()?);
+        let (i, j) = field.closest_cell_at_point(local);
+        let (_, names, per_cell) = &self.cell_ids[at];
+        let local_index = *per_cell.get(i * field.ncols() + j)?;
+        names.get(usize::from(local_index)).copied().flatten()
+    }
+
     /// The surface a hit on `entity`'s collider at `point` reports: an overlay containing `point`,
-    /// else the entity's `SurfaceTag` part nearest `point` (a `compound` collider only), else the
-    /// entity's `SurfaceTag`, else the scene's `default_surface`, else `None`.
+    /// else the mesh triangle or heightfield cell nearest `point`, else the entity's `SurfaceTag`
+    /// part nearest `point` (a `compound` collider only), else the entity's `SurfaceTag`, else the
+    /// scene's `default_surface`, else `None`.
     ///
     /// # Example
     /// ```
@@ -3002,6 +3132,7 @@ impl PhysicsWorld {
     /// ```
     pub fn surface_at(&self, entity: EntityId, point: [f32; 3]) -> Option<SurfaceId> {
         self.overlay_at(point)
+            .or_else(|| self.face_at(entity, point))
             .or_else(|| self.part_at(entity, point))
             .or_else(|| self.surface_of(entity))
     }
@@ -3338,6 +3469,14 @@ fn part_shape(shape: &Shape) -> Result<SharedShape, (DiagnosticCode, String)> {
         Shape::Compound { .. } => Err(not_a_part("compound")),
         Shape::Mesh { .. } => Err(not_a_part("mesh")),
     }
+}
+
+/// Whether two tagged-mesh tables name the same entities with the same documents.
+fn same_meshes(a: &[(EntityId, Arc<TriangleMesh>)], b: &[(EntityId, Arc<TriangleMesh>)]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|((ea, ma), (eb, mb))| ea == eb && ma.hash == mb.hash)
 }
 
 fn not_a_part(kind: &str) -> (DiagnosticCode, String) {

@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1, W2a, W2b (sim) and A1 mechanized (2026-11-18); A2, A3, W2c–W6 not started.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a, W2b (sim), A1 and A2 mechanized (2026-11-18); A3, W2c–W6 not started.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -65,6 +65,22 @@ No `WorldHash`, replay, trace, wire-schema or golden moved. A scene without a la
 | `crates/ludion-engine/tests/assembly_layers.rs` | neutrality, mask, unkeyed channel, descendants over a non-topological order, additive and `reference`, crossfading base, restore, hash neutrality, 1/2/8 threads, events |
 
 No component, `WorldHash`, replay, trace, wire-schema or golden moved; the component schema did not move.
+
+### A2 — blend spaces on voxel assemblies (base and layer)
+
+| file | role |
+|---|---|
+| `crates/ludion-scene/src/rig_blend.rs` | `BlendSpace` (was `CharacterBlend`), `BlendPoint`, `BlendAt`; the shared parser, validation, point check (bound, looping, sync over the caller's effective events) and emitter, taking the family's structure and consistency codes |
+| `crates/ludion-scene/src/character.rs` | re-wired to the shared blend code; messages and `L1199`/`L1200` byte-identical |
+| `crates/ludion-scene/src/assembly.rs` | `blends:` after `masks:`: `AssemblyDocument.blends`, parse (`L1137`), validate (`L1138`), emit, `check_assembly_blends` |
+| `crates/ludion-engine/src/blend_space.rs` | `BlendSpaceData` (was `CharacterBlendData`) and `resolve_blends`, rig-neutral over each bound clip's name, duration, speed and events |
+| `crates/ludion-engine/src/assembly_mesh.rs` | `AssemblyData.blends` and `AssemblyData::blend`; the blend check runs where the clips are read |
+| `crates/ludion-engine/src/animation_events.rs`, `blend_clock.rs` | `AnimationLibrary.blends` keyed by model; the base and layer blend branches and `blend_clocks` accept assemblies |
+| `crates/ludion-engine/src/extract.rs` | `AssemblySide`, `part_placements_sides` (the wrappers keep their signatures), `animation_pose` and `assembly_layer_poses` resolve blends, `layered_part_pose` samples `layer.side` |
+| `crates/ludion-engine/tests/assembly_blends.rs` | cadence, point-equals-clip, 2D, hash neutrality, 1/2/8 threads, restore, crossfade, layer blend on a mask, no clock on a plain assembly, ragdoll switch, `L1138` refusals |
+
+No component, `WorldHash`, replay, trace, wire-schema or golden moved; the component schema did not move.
+`check-scene` does not list assembly blends yet.
 
 ## Trigger
 
@@ -177,6 +193,17 @@ share one driver shape.
     events work on assemblies exactly as decision 22.
 30. **`excluded: local | model`** (legs staying planted under a torso lean) is deferred, an owner question.
     Trigger: the owner confirms it, or a layered torso visibly swings the legs.
+31. **Assembly `blends:` use decisions 13–19** through the shared parser (`L1137`/`L1138`). Point clips are
+    bound in `clips:` and loop. `sync` is among the clip's own events (an assembly has no overlay). A
+    point's binding speed is 1. A blend name may not equal a clip binding.
+32. **The assembly N-way part blend.** Walk the entries in order: rotation is a running slerp `w / accumulated`,
+    a missing rotation read as identity; translation and scale are weighted sums, missing read as 0 and 1; a
+    channel **no** entry keys stays `None`, so an untouched part keeps its exact rest. One weight-1 entry is that
+    clip's `part_pose` verbatim.
+33. **The ragdoll switch samples the base blend** at the switch instant, from the `BlendClock` phase advanced by
+    the tick fraction, else the stateless fallback. Layers stay excluded (decision 29).
+34. **Layer blends on assemblies follow decision 20** (`BlendClock.layers`, `AnimationLayer.params`). An
+    additive blend layer measures from rest unless `reference:` is set (decision 28).
 
 ## Waves
 
@@ -187,7 +214,8 @@ share one driver shape.
   (decisions 20–24).
 - **A1 (shipped).** Assembly `masks:`, override and additive layers in the assembly path, layer events
   (decisions 25–30).
-- **A2.** Assembly `blends:` and layer blends, sharing the blend parser through `ludion-scene`.
+- **A2 (shipped).** Assembly `blends:` and layer blends, sharing the blend parser through `ludion-scene`
+  (decisions 31–34).
 - **A3.** Prefab-part layers and blends, in `prefab_part_poses`.
 - **W2c.** `render --model … --blend/--layer` strips (`model_sheet.rs` + CLI), gallery
   `assembly-layers.yaml` and its goldens, after A2 so they show an assembly (pinned goldens owed).

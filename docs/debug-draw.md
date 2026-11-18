@@ -46,6 +46,10 @@ cull (a level under 50k triangles is far below it). Non-`rigid` `circle`/`aabb` 
 
 Host-side, from the `Nav` resource and the `NavRoute`/`NavAgent` components at extraction: read-only, it never builds a flow field and never touches the sim. `nav` draws all three parts; `nav:grid`, `nav:routes` and `nav:flow` pick one (`--debug-draw nav:routes`). **Routes** (never culled): each routed agent's polyline from its position along the remaining waypoints, cyan `[0, 0.85, 0.85]` (orange `[1, 0.55, 0.1]` when the route is `partial`), the waypoints already passed dimmed to 40%, and a cross at the goal (red `[1, 0.15, 0.15]` when `unreachable`). **Flow**: an arrow per reached node of every cached field a walking agent without a `NavGoal` reads, yellow `[1, 0.85, 0.1]`. **Grid**: a cross per node (light grey) and each link once, grey when level and dark grey for a stepped link. Flow and grid draw only within 30 m of the game camera (everything when there is none; an editor stage camera does not move the centre); at most 200,000 segments, routes and flow first so only the grid is truncated. It needs the game's `.nav(..)`: the built-in `ludion render` host installs none, so `nav` draws nothing there and the summary names it. `ludion docs nav` has the grid.
 
+### `perception`
+
+Host-side, from `PerceptionResults`, the perception components and the stimulus records at extraction: read-only, never hashed. `perception` draws all four parts; `perception:zones`, `perception:rays`, `perception:noises` and `perception:memory` pick one. It needs a game that ticks `perception_update`, so the built-in `ludion render` host draws nothing for it. `ludion docs perception` lists what each part draws and its colours.
+
 ## What a frame shows
 
 - **The last completed tick.** The engine rolls the drawing over at each frame boundary, so a paused

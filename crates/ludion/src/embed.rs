@@ -306,6 +306,8 @@ pub struct Embedded {
     render_fault: Receiver<Diagnostic>,
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     cursor_lock: Receiver<bool>,
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    window_mode: Receiver<ludion_engine::WindowMode>,
     /// The engine's rumble commands for the pad thread, and the sender the host stops them with.
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     rumble: Receiver<ludion_core::rumble::RumbleCommand>,
@@ -339,6 +341,8 @@ struct Boot {
     render_fault: Sender<Diagnostic>,
     /// The engine's channel for pointer-lock changes, armed in `run_boot`.
     cursor_lock: Sender<bool>,
+    /// The engine's channel for the player's window-mode requests, armed in `run_boot`.
+    window_mode: Sender<ludion_engine::WindowMode>,
     /// The engine's channel for rumble commands, armed in `run_boot`.
     rumble: Sender<ludion_core::rumble::RumbleCommand>,
 }
@@ -349,6 +353,8 @@ enum Prep {
     Game {
         builder: EngineBuilder,
         quality: QualitySetting,
+        /// Whether a flag or the environment named `quality`, which then pins it over the player's file.
+        quality_named: bool,
         render_size: Option<(u32, u32)>,
         /// For an argv mode: the roots its paths resolve against.
         #[cfg(feature = "wire")]
@@ -414,6 +420,8 @@ impl Embedded {
                     options.quality.as_deref(),
                     options.packaged_quality.as_deref(),
                 )?;
+                let quality_named =
+                    ludion_engine::startup_quality_named(options.quality.as_deref());
                 let explicit_size =
                     ludion_engine::resolve_startup_render_size(options.render_size.as_deref())?;
                 // A named extent (option, environment or the builder's own call) wins; otherwise a
@@ -456,6 +464,7 @@ impl Embedded {
                 let prep = Prep::Game {
                     builder,
                     quality,
+                    quality_named,
                     render_size,
                     #[cfg(feature = "wire")]
                     roots: argv_roots,
@@ -489,6 +498,8 @@ impl Embedded {
 
         let (fault_tx, render_fault) = crossbeam_channel::bounded::<Diagnostic>(1);
         let (lock_tx, cursor_lock) = crossbeam_channel::unbounded::<bool>();
+        let (window_mode_tx, window_mode) =
+            crossbeam_channel::unbounded::<ludion_engine::WindowMode>();
         let (rumble_tx, rumble) = crossbeam_channel::unbounded();
         let rumble_stop = rumble_tx.clone();
 
@@ -505,6 +516,7 @@ impl Embedded {
             running: running.clone(),
             render_fault: fault_tx,
             cursor_lock: lock_tx,
+            window_mode: window_mode_tx,
             rumble: rumble_tx,
         };
         // The scene load used to run on `main`'s stack; keep its headroom on the boot thread.
@@ -533,6 +545,7 @@ impl Embedded {
             ended,
             render_fault,
             cursor_lock,
+            window_mode,
             rumble,
             rumble_stop,
             running,
@@ -572,6 +585,12 @@ impl Embedded {
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn cursor_lock_requests(&self) -> Receiver<bool> {
         self.cursor_lock.clone()
+    }
+
+    /// Where the engine sends the player's window-mode requests, for the window host.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    pub(crate) fn window_mode_requests(&self) -> Receiver<ludion_engine::WindowMode> {
+        self.window_mode.clone()
     }
 
     /// Where the engine sends its rumble commands, for the window host's pad thread.
@@ -891,6 +910,7 @@ fn run_boot(boot: Boot) -> bool {
         running,
         render_fault,
         cursor_lock,
+        window_mode,
         rumble,
     } = boot;
 
@@ -898,6 +918,7 @@ fn run_boot(boot: Boot) -> bool {
         Prep::Game {
             builder,
             quality,
+            quality_named,
             render_size,
             #[cfg(feature = "wire")]
             roots,
@@ -918,6 +939,7 @@ fn run_boot(boot: Boot) -> bool {
                 options.restore.as_deref(),
                 options.dev_session.as_deref(),
                 quality,
+                quality_named,
                 options.live_textures(),
                 options.live_probes(),
                 render_size,
@@ -968,6 +990,7 @@ fn run_boot(boot: Boot) -> bool {
 
     engine.arm_render_fault_notify(render_fault);
     engine.set_cursor_lock_sender(cursor_lock);
+    engine.set_window_mode_sender(window_mode);
     engine.set_rumble_sender(rumble);
 
     // Before any renderer exists, and before a listener moves the engine onto its own sim thread.
@@ -1264,6 +1287,7 @@ mod tests {
             None,
             None,
             QualitySetting::full(),
+            false,
             StartOptions::default().live_textures(),
             StartOptions::default().live_probes(),
             None,
@@ -1291,12 +1315,79 @@ mod tests {
             None,
             None,
             QualitySetting::full(),
+            false,
             StartOptions::default().live_textures(),
             StartOptions::default().live_probes(),
             None,
         )
         .unwrap_or_else(|_| panic!("the engine boots"));
         assert_eq!(engine.probes(), ProbeSource::Store);
+    }
+
+    /// The player's settings file picks the quality and the sink's volumes at boot; a quality a flag
+    /// or the environment named beats the file and pins, so a later menu request does not apply.
+    #[test]
+    fn a_hosted_engine_boots_on_the_players_settings_under_a_named_quality() {
+        use ludion_core::audio::{AudioMessage, Bus, MixLayer};
+        use ludion_engine::{QualityPreset, Settings};
+
+        let content = content_root("settings-boot");
+        let save = content.join("save-root");
+        std::fs::create_dir_all(save.join("save")).unwrap();
+        std::fs::write(
+            save.join("save/settings.yaml"),
+            "format: 1\nkind: settings\naudio:\n  master: 1.0\n  buses:\n    music: 0.5\ngraphics:\n  quality: low\n",
+        )
+        .unwrap();
+        let boot = |named: bool, preset: &str| {
+            crate::prepare_game_engine(
+                builder().save_root(&save),
+                &content.join("scenes/main.yaml"),
+                None,
+                None,
+                QualitySetting::preset(preset).unwrap(),
+                named,
+                StartOptions::default().live_textures(),
+                StartOptions::default().live_probes(),
+                None,
+            )
+            .unwrap_or_else(|_| panic!("the engine boots"))
+        };
+        let request_medium = |engine: &mut Engine| {
+            engine
+                .world_mut()
+                .resource_mut::<Settings>()
+                .unwrap()
+                .request_quality(QualityPreset::Medium);
+            engine.advance_live();
+        };
+
+        let mut unnamed = boot(false, "full");
+        assert_eq!(unnamed.quality().label, "low", "the file's preset");
+        request_medium(&mut unnamed);
+        assert_eq!(unnamed.quality().label, "medium", "unpinned, so it applies");
+
+        let mut named = boot(true, "high");
+        assert_eq!(named.quality().label, "high", "the flag beats the file");
+        request_medium(&mut named);
+        assert_eq!(
+            named.quality().label,
+            "high",
+            "pinned: the request persists only"
+        );
+
+        // `wire_audio` seeds the sink through `set_audio_sender`, after this boot.
+        let (tx, rx) = crossbeam_channel::unbounded();
+        unnamed.set_audio_sender(tx);
+        assert_eq!(
+            rx.try_iter().collect::<Vec<_>>(),
+            [AudioMessage::BusGain {
+                bus: Bus::Music,
+                layer: MixLayer::User,
+                gain: 0.5,
+                fade_frames: 0
+            }]
+        );
     }
 
     /// The host's `--aa` beats the builder default, and an unset one leaves it standing.
@@ -1312,6 +1403,7 @@ mod tests {
                 None,
                 None,
                 QualitySetting::full(),
+                false,
                 options.live_textures(),
                 options.live_probes(),
                 None,
@@ -1845,6 +1937,7 @@ mod tests {
                 restore,
                 session,
                 QualitySetting::full(),
+                false,
                 StartOptions::default().live_textures(),
                 StartOptions::default().live_probes(),
                 None,

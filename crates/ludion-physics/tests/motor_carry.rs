@@ -439,6 +439,7 @@ fn belt_with_end_stop(world: &mut World) -> Cast {
             ],
             triangles: vec![[0, 1, 2], [2, 1, 3], [4, 6, 5], [5, 6, 7]],
             hash: 1,
+            ..Default::default()
         })
     })));
     let belt = world.spawn();

@@ -5,7 +5,7 @@
 //! Game code decides *when* to call this — a death blow, a stagger, a rope grab — and hands it the
 //! meshed [`AssemblyData`] its own asset cache already holds (`ludion_engine::load_assembly`). The
 //! switch is otherwise pure ECS surgery: it reads the entity's current pose (rest, or mid-clip at the
-//! caller's `game_time`, through the very same `part_placements_with` extraction draws with), spawns
+//! caller's `game_time`, through the very same `part_placements_sides` extraction draws with), spawns
 //! one entity per part at that pose's world transform, wires a [`Joint`] onto each non-root part
 //! (fixed to its parent by default, or whatever `assembly`'s `joints:` binds it to), and strips the
 //! root's drawing/physics components so it stops being drawn or simulated as the whole model — the
@@ -13,7 +13,7 @@
 //! its id keeps a live handle.
 //!
 //! A ragdoll snapshots rotation and translation only — rigid bodies don't scale, so a clip's `scale`
-//! channel is ignored here (`part_placements_with`'s `scale` flag off).
+//! channel is ignored here (`part_placements_sides`'s `scale` flag off).
 //!
 //! A root `SurfaceTag` is inherited: each spawned part gets a tag with its `parts` entry's surface
 //! (matched by part name), else the root's `surface`; a name key matching no part is one `L1695`
@@ -42,7 +42,7 @@ use ludion_spatial::{Body, Collider, Joint, JointKind, RigidBody, Shape, Velocit
 
 use crate::assembly_mesh::AssemblyData;
 use crate::components::{Animation, Mesh, MeshSource, Name, Transform};
-use crate::extract::{animation_pose, part_placements_with, rotation_quat};
+use crate::extract::{animation_pose, part_placements_sides, rotation_quat};
 
 /// Switches `entity` from a posed `kind: assembly` model into one `rigid` [`Collider`] entity per
 /// part, joined by [`Joint`]s, and returns the spawned part entities in `assembly`'s authored order.
@@ -152,7 +152,7 @@ pub fn switch_to_ragdoll(
     // --- Validated: every step below mutates the world. ---
 
     let (pose, fade) = animation_pose(world, entity, assembly, game_time.into());
-    let placements = part_placements_with(assembly, pose, fade.as_ref(), false, &[]);
+    let placements = part_placements_sides(assembly, pose, fade, false, &[]);
     let q_root = rotation_quat(root_transform.rotation);
     let root_model = Mat4::from_scale_rotation_translation(
         Vec3::from(scale),
@@ -281,6 +281,7 @@ pub fn switch_to_ragdoll(
                     SurfaceTag {
                         surface,
                         parts: vec![],
+                        cells: None,
                     },
                 )
                 .expect("just spawned");
@@ -296,14 +297,12 @@ pub fn switch_to_ragdoll(
         };
         let parent = &assembly.parts[parent_index];
         // The posed placement folds a sampled translation key into the same rest-frame `T` the
-        // offset sits in, ahead of the pivot rotation (`extract.rs`'s `part_placements_with`
+        // offset sits in, ahead of the pivot rotation (`extract.rs`'s `part_placements_sides`
         // doc: `T(offset_i - offset_parent + translation_i) · R_i(pivot_i)`); the anchor must
         // fold it in too, or a mid-clip switch pivots about a point off by `translation_i · s`
-        let sampled_translation = pose
-            .and_then(|(clip, time)| ludion_scene::part_pose(clip, &part.name, time).translation)
-            .map_or(Vec3::ZERO, |v| {
-                Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32)
-            });
+        let sampled_translation = pose.sample(&part.name).translation.map_or(Vec3::ZERO, |v| {
+            Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32)
+        });
         let anchor = [
             (part.offset[0] + part.pivot[0] - parent.offset[0] + sampled_translation.x) * s,
             (part.offset[1] + part.pivot[1] - parent.offset[1] + sampled_translation.y) * s,

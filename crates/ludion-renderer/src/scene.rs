@@ -1511,6 +1511,43 @@ impl StaticRange {
     }
 }
 
+/// The most distinct silhouette styles one frame draws; the composite uniform carries them.
+pub const MAX_SILHOUETTE_STYLES: usize = 8;
+
+/// One occluded-silhouette style: what the composite does with a mesh's hidden pixels.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct SilhouetteStyle {
+    /// Display-referred `[r, g, b, a]`, blended after the tonemap.
+    pub color: [f32; 4],
+    /// Outline radius in 1080p pixels; 0 means no outline.
+    pub outline_px: f32,
+    /// Outline opacity.
+    pub outline_alpha: f32,
+    /// How far behind the occluder a pixel must lie to count as hidden, in view-space units.
+    pub bias: f32,
+    /// Tint every pixel of the mesh, not only the hidden ones.
+    pub always: bool,
+}
+
+/// One mesh drawn into the silhouette mask.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SilhouetteMesh {
+    /// Index into [`RenderScene::meshes`].
+    pub mesh: u32,
+    /// 1-based index into [`Silhouettes::styles`].
+    pub style: u8,
+}
+
+/// The occluded-silhouette side table: the distinct styles and the meshes that use them. A side table
+/// keeps `MeshInstance` untouched. Empty means the frame has no silhouette pass.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct Silhouettes {
+    /// At most [`MAX_SILHOUETTE_STYLES`] distinct styles, in first-encounter order.
+    pub styles: Vec<SilhouetteStyle>,
+    /// The silhouetted meshes, in ascending `mesh` order.
+    pub meshes: Vec<SilhouetteMesh>,
+}
+
 /// Everything the renderer needs to draw one frame — plain data, no ECS, no paths.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RenderScene {
@@ -1551,6 +1588,9 @@ pub struct RenderScene {
     /// `[arc_start, arc_span, partial_alpha, bins]`, then `bins` radii, then `bins` partial radii;
     /// [`GroundMarkerInstance::clip`] is the header's offset. Empty when no marker is clipped.
     pub ground_marker_profiles: Vec<f32>,
+    /// The meshes drawn into the occluded-silhouette mask. Empty for a scene that authors none, which
+    /// adds no pass and leaves the frame byte-identical.
+    pub silhouettes: Silhouettes,
     /// Projected drop shadows, in ascending-`EntityId` extract order. Empty for a scene that
     /// authors none, which draws no shadow pass and leaves the frame byte-identical.
     pub drop_shadows: Vec<DropShadowInstance>,
@@ -1644,6 +1684,7 @@ impl RenderScene {
             sprites: Vec::new(),
             ground_markers: Vec::new(),
             ground_marker_profiles: Vec::new(),
+            silhouettes: Silhouettes::default(),
             drop_shadows: Vec::new(),
             decals: Vec::new(),
             debug_lines: Vec::new(),

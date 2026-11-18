@@ -12,7 +12,7 @@ use std::sync::Arc;
 use ludion_core::diagnostics::Diagnostic;
 
 /// One mesh document's triangles, as the physics engine builds a trimesh from them.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TriangleMesh {
     /// Vertex positions in the collider's local space.
     pub vertices: Vec<[f32; 3]>,
@@ -20,6 +20,11 @@ pub struct TriangleMesh {
     pub triangles: Vec<[u32; 3]>,
     /// A hash of the source document's content: two loads with equal hashes are the same geometry.
     pub hash: u64,
+    /// The local surface names the document's `surfaces` key lists; empty when untagged.
+    pub surfaces: Vec<String>,
+    /// One index into [`surfaces`](Self::surfaces) per triangle, the document's runs expanded;
+    /// empty when untagged.
+    pub triangle_surfaces: Vec<u16>,
 }
 
 /// Reads the mesh at a content-root-relative path, or says why it cannot.
@@ -37,6 +42,7 @@ pub type MeshLoader = Box<dyn Fn(&str) -> Result<TriangleMesh, Diagnostic> + Sen
 ///         vertices: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
 ///         triangles: vec![[0, 2, 1]],
 ///         hash: 7,
+///         ..Default::default()
 ///     }),
 ///     other => Err(Diagnostic::new(
 ///         code::COLLIDER_MESH_UNAVAILABLE,

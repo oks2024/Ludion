@@ -35,7 +35,7 @@ fn main() -> std::process::ExitCode {
 | Extent | With no named extent, the render extent follows the window: height is the window's physical height, aspect is the window's but never narrower than 16:9, capped at the render-size maximum; the blit letterboxes the rest. A 200 ms debounce settles drag-resizes; a minimized window keeps its extent. |
 | Named extent | `--render-size`, `LUDION_RENDER_SIZE` or an explicit `EngineBuilder::render_size` always wins. |
 | Fullscreen | Borderless. Alt+Enter or F11 on Windows, Ctrl+Cmd+F on macOS, plus the green button. The chord is consumed and never reaches `InputState`. |
-| Fullscreen at start | `--fullscreen` (needs `--window`) beats `LUDION_FULLSCREEN=1\|0`, which beats the builder's `.fullscreen(true)`. A malformed value is `L0037`. Nothing persists across launches. |
+| Fullscreen at start | `--fullscreen` (needs `--window`) beats `LUDION_FULLSCREEN=1\|0`, which beats the builder's `.fullscreen(true)`. A malformed value is `L0037`. The player's `display.window` (`ludion docs settings`) sits below the flag and the environment and above the builder; the Alt+Enter chord does not write it. A `Settings::request_window_mode` always applies. |
 | Cursor | Hides after 2 s idle and returns on motion; `.cursor(CursorMode::Visible)` opts out; `CursorMode::Locked` grabs and hides it for mouse look (`ludion docs input` § Mouse look). |
 
 ## Rules

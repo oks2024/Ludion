@@ -212,14 +212,15 @@ pub use pose::PhysicsPose;
 pub use queries::{PointHit, QueryFilter, QueryHit};
 pub use sensors::{ExitCause, SensorEvent, SensorPhase};
 pub use surface_tag::{
-    MAX_SURFACES, PartSurface, SurfaceId, SurfaceOverlay, SurfacePart, SurfaceTable, SurfaceTag,
+    CellSurfaces, MAX_SURFACES, PartSurface, SurfaceId, SurfaceOverlay, SurfacePart, SurfaceTable,
+    SurfaceTag,
 };
 pub use sweep::{Sweep, SweepFilter, SweepHit};
 pub use systems::{
     CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, DEFAULT_SOLVER_ITERATIONS,
     DEFAULT_STABILIZATION_ITERATIONS, KinematicTeleports, MAX_COLLISION_LAYERS, MIRROR,
     PhysicsSettings, PhysicsSpace, PrimedPhysics, STEP, WRITE, claims, install, prime,
-    teleport_kinematic,
+    sync_mesh_surfaces, teleport_kinematic,
 };
 pub use time_scale::MIN_TIME_SCALE;
 pub use wireframe::{WireBody, feature_edges};

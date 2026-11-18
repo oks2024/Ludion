@@ -248,6 +248,7 @@ fn flat_grid() -> TriangleMesh {
         vertices,
         triangles,
         hash: 7,
+        ..Default::default()
     }
 }
 

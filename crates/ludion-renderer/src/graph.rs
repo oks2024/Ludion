@@ -278,6 +278,11 @@ pub mod pass {
     /// It owns its depth rather than sharing `scene_depth`, so the scene pass keeps its own `Less`
     /// test and clear.
     pub const PREPASS: &str = "prepass";
+    /// The occluded-silhouette mask: only the meshes that resolve an `OccludedSilhouette`, drawn into
+    /// an `R8Unorm` style-index target and their own sampled depth, which `composite` reads to tint
+    /// the hidden pixels. Present only when
+    /// [`PostChain::silhouette`](super::PostChain::silhouette) is set.
+    pub const SILHOUETTE_MASK: &str = "silhouette_mask";
     /// The GPU frustum cull: a **compute** pass testing every world mesh instance against the
     /// camera the frame draws with and compacting the survivors into the buffers `prepass` and
     /// `scene` draw indirectly from. Present only when
@@ -853,6 +858,11 @@ pub struct PostChain {
     /// it [`Off`](AntiAliasing::Off), [`masked`](PostChain::masked) never changes it, and a debug view
     /// suppresses it ([`smaa_scheduled`](PostChain::smaa_scheduled)).
     pub aa: AntiAliasing,
+    /// A mesh resolves an `OccludedSilhouette`: the [`pass::SILHOUETTE_MASK`] pass is added before
+    /// `composite`, which gains its two optional inputs (the mask, then the mask's depth) as its last
+    /// reads. `false` leaves the graph with neither the pass nor the resources, which is what makes a
+    /// silhouette-free frame byte-identical by construction. It is content, so `masked` keeps it.
+    pub silhouette: bool,
     /// The scene has probes: the [`pass::PROBE_RELIGHT`] compute pass is added before `reflections`,
     /// writing the `probe_live` transient (`MAX_PROBES`×6, `Rgba32Float`: one row per cube axis) that `reflections` reads
     /// as its last input. `false` leaves the graph with neither the pass nor the resource, which is
@@ -1040,6 +1050,7 @@ impl PostChain {
                         .iter()
                         .any(|p| !p.viewmodel && p.medium < 1.0)),
             aa: AntiAliasing::Off,
+            silhouette: !scene.silhouettes.meshes.is_empty(),
         }
     }
 
@@ -1369,6 +1380,20 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     let scene_medium = chain
         .mesh_medium_scheduled()
         .then(|| graph.transient("scene_medium", TextureDesc::mask_color(render_w, render_h)));
+    // The silhouette mask and its depth (only when a mesh resolves one, so every other frame's resource
+    // list is exactly the silhouette-free graph's).
+    let silhouette = chain.silhouette.then(|| {
+        (
+            graph.transient(
+                pass::SILHOUETTE_MASK,
+                TextureDesc::mask_color(render_w, render_h),
+            ),
+            graph.transient(
+                "silhouette_depth",
+                TextureDesc::sampled_depth(render_w, render_h),
+            ),
+        )
+    });
     // The ambient-occlusion chain (only when the scene enables it, so an AO-free scene's resource list
     // is exactly the pre-SSAO graph's — the same inversion the shadow map rests on).
     let ao = chain.ssao.then(|| AoTargets {
@@ -1858,6 +1883,17 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         targets.blurred
     });
 
+    // Draws directly: it reads no cull buffer, because the mask holds only the silhouetted meshes.
+    if let Some((mask, depth)) = silhouette {
+        graph.add_external_pass_with_depth(
+            pass::SILHOUETTE_MASK,
+            pass::SILHOUETTE_MASK,
+            vec![],
+            vec![mask],
+            depth,
+        );
+    }
+
     // The tail is a chain of at most three passes (six with SMAA), each writing the output directly
     // when it is the last one. Every edge below is derived by the scheduler from the next pass's
     // read.
@@ -1882,6 +1918,11 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     composite_reads.extend(transparent_layer);
     composite_reads.extend(medium_scatter_term);
     composite_reads.extend(scene_medium);
+    composite_reads.extend(
+        silhouette
+            .into_iter()
+            .flat_map(|(mask, depth)| [mask, depth]),
+    );
     // A debug view stands in for the whole composite: the tail after it is unchanged. Bloom, shafts
     // and dof still schedule with unread outputs — acceptable for a debug frame.
     match (chain.ssr_view, &ssr) {
@@ -2649,6 +2690,8 @@ mod tests {
                 fog: bits & 1 != 0,
                 mesh_medium: false,
                 transparent_medium: false,
+                // Content like the decals: no quality switch removes a silhouette.
+                silhouette: bits & 1 != 0,
                 // A client setting: no quality preset masks it, so it varies with `ui` and survives.
                 aa: if bits & 1 != 0 {
                     AntiAliasing::Smaa
@@ -6144,6 +6187,44 @@ mod tests {
                 "no depth-of-field input is declared",
             );
         }
+    }
+
+    /// A frame with no silhouette declares neither the mask pass nor its two transients, and
+    /// `composite` reads exactly what it did before; one with a silhouette adds the pass and ends
+    /// `composite`'s reads with the mask then its depth.
+    #[test]
+    fn silhouette_graph_is_conditional_and_ends_composite_reads_with_the_mask() {
+        let composite_reads = |graph: &RenderGraph| {
+            graph
+                .passes()
+                .iter()
+                .find(|p| p.name == pass::COMPOSITE)
+                .unwrap()
+                .reads()
+                .len()
+        };
+        let (off, _) = build_frame_graph(FrameSize::native(1920, 1080), PostChain::default());
+        assert!(!pass_names(&off).contains(&pass::SILHOUETTE_MASK));
+        assert!(!resource_names(&off).contains(&pass::SILHOUETTE_MASK));
+        assert!(!resource_names(&off).contains(&"silhouette_depth"));
+
+        let chain = PostChain {
+            silhouette: true,
+            ..PostChain::default()
+        };
+        let (on, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        assert!(pass_names(&on).contains(&pass::SILHOUETTE_MASK));
+        let resources = resource_names(&on);
+        let mask = resources
+            .iter()
+            .position(|n| *n == pass::SILHOUETTE_MASK)
+            .expect("the mask transient is declared");
+        assert_eq!(resources[mask + 1], "silhouette_depth");
+        assert_eq!(resources.len(), resource_names(&off).len() + 2);
+        assert_eq!(pass_names(&on).len(), pass_names(&off).len() + 1);
+        assert_eq!(composite_reads(&on), composite_reads(&off) + 2);
+        let at = |name: &str| pass_names(&on).iter().position(|n| *n == name).unwrap();
+        assert!(at(pass::SILHOUETTE_MASK) < at(pass::COMPOSITE));
     }
 
     /// The depth-of-field chain's exact shape: two transients after the shaft targets and still before

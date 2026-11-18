@@ -245,6 +245,15 @@ index on a tie), for every query and the motor alike. A string `part` names a `k
 order: overlay at the point, part, tag, `default_surface`. An empty or repeated key, an index past the compound or on a non-compound collider, or a name on
 a non-assembly entity is `L1694` (`check-scene`); a part named `"1"` must be quoted.
 
+**Triangles and cells.** A `mesh` collider's document can tag its triangles (`surfaces: [concrete, metal_grate]` plus run-length
+`triangle_surfaces`, `ludion devdocs scene-kind-documents`): the names are local and matched to `physics.surfaces` at load. A heightfield tags
+cells on its `SurfaceTag`: `cells: { surfaces: [dirt, concrete], runs: [[40, 0], [8, 1], [16, 0]] }`, row-major, `(rows-1)*(cols-1)` of them.
+One rule for every query and the motor: the triangle (or cell) **nearest the hit point** in the collider's local frame wins; triangles within
+`1e-4` m of the best tie to the lowest index, and a point on a cell edge takes the higher-index cell. Resolution order: overlay, triangle or cell,
+part, tag, `default_surface`. A malformed table is `L1696` and a cell run count off the grid is `L1696` in `check-scene`; a mesh name the scene does
+not declare is an `L1697` warning, and those triangles fall through to the tag. A tag-only edit of the mesh document rebuilds the body; a `cells`
+edit applies from the next write.
+
 ```rust
 if let Some(ground) = report.ground
     && let Some(id) = ground.surface

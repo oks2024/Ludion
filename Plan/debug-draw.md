@@ -24,8 +24,7 @@ hearing circles and a nav overlay while it tunes AI, and drew them from `line` l
    `nav:grid`, `nav:routes`, `nav:flow` (`nav` is all three; `DebugCategories::parse` already passes the
    colon through). Flow arrows and grid nodes draw within a fixed 30 m of the game camera, routes are
    never culled, and a 200,000-segment cap truncates the grid last.
-3. **`perception` belongs to `Plan/perception.md` W5**, which will use these primitives. Nothing here
-   names it.
+3. **`perception` shipped in `Plan/perception.md` W5** (decisions 40-44), through these primitives.
 4. **Proposed — owner ruling owed:** amend `Plan/character-controller.md` decision 17 to list these
    primitives and categories (a one-line pointer to this plan is in it now).
 5. **Proposed:** `nav_view_radius` as a host tunable. Trigger: a level where 30 m is wrong.
@@ -38,7 +37,7 @@ hearing circles and a nav overlay while it tunes AI, and drew them from `line` l
   tests, the `debug_draw` example, `docs/debug-draw.md`, `docs/nav.md`. **Mechanized.**
 - **W2 — nav classes, off-mesh links, blockers.** Overlays for them (an unsnapped link in red). Each
   lands with its Neon Shroud 0004 wave; those features do not exist yet.
-- **W3 — `perception`.** Rides `Plan/perception.md` W5.
+- **W3 — `perception`.** Shipped in `Plan/perception.md` W5. **Mechanized.**
 - **Goldens of the primitives on the pinned GPUs.** Owed: needs a game-free host that runs a system (the
   built-in render host runs none).
 
@@ -47,9 +46,10 @@ hearing circles and a nav overlay while it tunes AI, and drew them from `line` l
 - **W1 (2026-11-18).** Shapes in `ludion-engine`'s `debug_draw.rs`; the nav line builder in `nav.rs`
   (`NAV_VIEW_RADIUS` 30 m, `NAV_MAX_SEGMENTS` 200,000). Pinned: `sphere_and_capsule_output_is_pinned`.
   No golden, schema, replay or hash moved.
+- **W3 (2026-11-18).** The host-side `perception` category (`perception_debug.rs`) and the crate-private `pen_lines`
+  in `debug_draw.rs`. No golden, schema, replay or hash moved.
 
 ## Out of scope
 
 - Text labels and dashed lines (none; a dimmer colour stands in). Trigger: a game that cannot read an overlay without them.
 - A scene-level nav config and a `nav_view_radius` tunable (decisions 5, 6).
-- The `perception` category (decision 3).

@@ -137,9 +137,13 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
     };
     event_loop.set_control_flow(ControlFlow::Wait);
     let (title_hint, fullscreen_default, cursor) = match &source {
-        Source::Game { builder, .. } => (
+        Source::Game { builder, roots } => (
             builder.title_hint().map(str::to_owned),
-            builder.fullscreen_hint(),
+            // The player's file sits under the flag and the environment, over the builder.
+            startup_fullscreen_default(
+                ludion_engine::settings_window_mode_at(&roots.save),
+                builder.fullscreen_hint(),
+            ),
             builder.cursor_hint(),
         ),
         #[cfg(feature = "wire")]
@@ -265,6 +269,16 @@ enum HostEvent {
     Ended,
     /// The game asked to lock (`true`) or release (`false`) the pointer.
     CursorLock(bool),
+    /// The game asked for a window mode (the player's options menu).
+    WindowMode(ludion_engine::WindowMode),
+}
+
+/// The fullscreen default the flag and the environment are resolved over: the player's settings
+/// file when it names a window mode, else the builder's own.
+fn startup_fullscreen_default(file: Option<ludion_engine::WindowMode>, builder: bool) -> bool {
+    file.map_or(builder, |mode| {
+        mode == ludion_engine::WindowMode::BorderlessFullscreen
+    })
 }
 
 /// The winit application: the window and everything the host owns behind it. `embedded` and every
@@ -402,6 +416,7 @@ impl App {
             embedded.ended(),
             embedded.render_fault(),
             embedded.cursor_lock_requests(),
+            embedded.window_mode_requests(),
             internal_stop,
             self.proxy.clone(),
         ));
@@ -566,6 +581,17 @@ impl ApplicationHandler<HostEvent> for App {
                 let action = self.grab.request(lock);
                 self.apply_grab(action);
             }
+            // A request always applies: a start flag decides only the start.
+            HostEvent::WindowMode(mode) => {
+                if let Some(window) = &self.window {
+                    window.set_fullscreen(match mode {
+                        ludion_engine::WindowMode::BorderlessFullscreen => {
+                            Some(Fullscreen::Borderless(None))
+                        }
+                        ludion_engine::WindowMode::Windowed => None,
+                    });
+                }
+            }
         }
     }
 
@@ -711,12 +737,14 @@ fn spawn_waiter_thread(
     ended: Receiver<()>,
     render_fault: Receiver<Diagnostic>,
     cursor_lock: Receiver<bool>,
+    window_mode: Receiver<ludion_engine::WindowMode>,
     internal_stop: Receiver<()>,
     proxy: EventLoopProxy<HostEvent>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut render_fault = render_fault;
         let mut cursor_lock = cursor_lock;
+        let mut window_mode = window_mode;
         loop {
             crossbeam_channel::select! {
                 recv(ctrl_c) -> _ => { let _ = proxy.send_event(HostEvent::Stop); }
@@ -730,6 +758,10 @@ fn spawn_waiter_thread(
                     Ok(lock) => { let _ = proxy.send_event(HostEvent::CursorLock(lock)); }
                     // The engine dropped its sender; swap in a receiver that never fires.
                     Err(_) => cursor_lock = crossbeam_channel::never(),
+                },
+                recv(window_mode) -> mode => match mode {
+                    Ok(mode) => { let _ = proxy.send_event(HostEvent::WindowMode(mode)); }
+                    Err(_) => window_mode = crossbeam_channel::never(),
                 },
                 recv(ended) -> _ => {
                     let _ = proxy.send_event(HostEvent::Ended);
@@ -753,6 +785,22 @@ fn unavailable(detail: String) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_settings_file_beats_the_builders_fullscreen_and_no_file_falls_back() {
+        use ludion_engine::WindowMode;
+        for builder in [false, true] {
+            assert!(startup_fullscreen_default(
+                Some(WindowMode::BorderlessFullscreen),
+                builder
+            ));
+            assert!(!startup_fullscreen_default(
+                Some(WindowMode::Windowed),
+                builder
+            ));
+            assert_eq!(startup_fullscreen_default(None, builder), builder);
+        }
+    }
 
     #[test]
     fn the_player_window_is_titled_with_the_game_alone() {

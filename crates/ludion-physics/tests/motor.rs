@@ -864,6 +864,7 @@ fn strip(y: f32, x0: f32, x1: f32, quads: u32) -> TriangleMesh {
         vertices,
         triangles,
         hash: 1,
+        ..Default::default()
     }
 }
 
@@ -911,6 +912,7 @@ fn mesh_stairs(world: &mut World, top: f32) {
             vertices,
             triangles,
             hash: 2,
+            ..Default::default()
         })
     })));
     let entity = world.spawn();
@@ -959,6 +961,7 @@ fn mesh_corner(world: &mut World) -> EntityId {
             vertices,
             triangles,
             hash: 3,
+            ..Default::default()
         })
     })));
     let entity = world.spawn();
@@ -1102,6 +1105,7 @@ fn mesh_step_then_ramp(world: &mut World) {
             vertices,
             triangles,
             hash: 3,
+            ..Default::default()
         })
     })));
     let entity = world.spawn();

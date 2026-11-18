@@ -3701,6 +3701,8 @@ impl Engine {
             profile_off_disk: self.profile_off_disk,
             profile_text: self.emit_profile_text(),
             input_bindings: self.input_bindings_at_start.clone(),
+            settings: self.settings.clone(),
+            anti_aliasing_settings: self.anti_aliasing_settings,
             speed: self.driver.speed(),
             render_size: self.render_size,
             return_to: return_to.to_string(),
@@ -3822,6 +3824,8 @@ impl Engine {
             profile_off_disk,
             profile_text,
             input_bindings,
+            settings,
+            anti_aliasing_settings,
             speed,
             render_size,
             return_to,
@@ -3833,6 +3837,18 @@ impl Engine {
         self.doc_texts = doc_texts;
         self.profile_off_disk = profile_off_disk;
         self.input_bindings_at_start = input_bindings;
+        // The scene reload below reinstalls the settings view from `self.settings`. A quality the
+        // replayed game requested is undone here, unless a host flag pinned it.
+        let quality_left = self.settings.graphics.quality;
+        self.settings = settings;
+        self.anti_aliasing_settings = anti_aliasing_settings;
+        if quality_left != self.settings.graphics.quality
+            && !self.quality_pinned
+            && let Some(preset) = self.settings.graphics.quality
+            && let Some(setting) = QualitySetting::preset(preset.name())
+        {
+            self.set_quality(setting);
+        }
         self.playback = None;
         self.playback_name = None;
         self.replay_scene_text = None;
@@ -4591,11 +4607,25 @@ impl Engine {
         world.insert_resource(view);
     }
 
+    /// Installs a replay header's settings (`None` for the defaults) **without touching disk**: the
+    /// recorded values replace the boot file-load's, and the world's [`SettingsView`](crate::SettingsView)
+    /// is reinstalled from them, so a recording reproduces on a machine whose file differs. Render
+    /// state (quality, anti-aliasing) and the window are left as they are.
+    pub(crate) fn install_settings_from_text(&mut self, text: Option<&str>) {
+        let (doc, warnings) = match text {
+            Some(text) => crate::settings::parse_text(text),
+            None => Default::default(),
+        };
+        self.boot_warnings.extend(warnings);
+        self.settings = doc;
+        self.install_settings();
+    }
+
     /// Reads the settings file at build when persistence is on: warnings go to `boot_warnings`, the
     /// file's quality and anti-aliasing apply before any renderer exists, and the world's view is
     /// refreshed. A no-op without [`persist_settings`](crate::EngineBuilder::persist_settings).
     pub(crate) fn load_settings(&mut self) {
-        if !self.settings_persistence {
+        if !self.settings_persistence || self.profile_off_disk {
             return;
         }
         let path = self.save_root().join(crate::settings::SETTINGS_PATH);
@@ -4615,7 +4645,8 @@ impl Engine {
     /// Applies the game's pending [`Settings`](crate::Settings) requests at the frame boundary:
     /// volumes to the `User` mix layer (logged, only on change), anti-aliasing and quality to the
     /// engine's render state, the window mode to the armed host channel (only on change), then the
-    /// one write a `save()` asks for. Host state: nothing here is hashed or snapshotted.
+    /// one write a `save()` asks for. A replay (`profile_off_disk`) updates its view but never
+    /// reaches the window or the disk. Host state: nothing here is hashed or snapshotted.
     fn drain_settings(&mut self, frame: FrameIndex) {
         let requests = match self.driver.world_mut().resource_mut::<crate::Settings>() {
             Some(settings) if settings.is_pending() => settings.take(),
@@ -4655,7 +4686,9 @@ impl Engine {
             && self.settings.display.window != Some(mode)
         {
             self.settings.display.window = Some(mode);
-            if let Some(sender) = &self.window_mode_sender {
+            if !self.profile_off_disk
+                && let Some(sender) = &self.window_mode_sender
+            {
                 let _ = sender.send(mode);
             }
         }
@@ -4667,7 +4700,7 @@ impl Engine {
         {
             *resource = view;
         }
-        if requests.save && self.settings_persistence {
+        if requests.save && self.settings_persistence && !self.profile_off_disk {
             self.write_settings();
         }
     }
@@ -5584,6 +5617,7 @@ impl Engine {
     /// ([`Settings::request_window_mode`](crate::Settings::request_window_mode)) is sent here, once
     /// per change. A headless/test engine leaves it unset and the request is a silent no-op. The mode
     /// the settings file chose at boot is [`settings_window_mode`](Engine::settings_window_mode).
+    /// A replay never reaches the window: its requests update the view only.
     pub fn set_window_mode_sender(&mut self, sender: crossbeam_channel::Sender<crate::WindowMode>) {
         self.window_mode_sender = Some(sender);
     }
@@ -5598,6 +5632,18 @@ impl Engine {
     /// [`Settings`](crate::Settings) quality request still persists but no longer applies.
     pub fn pin_quality(&mut self) {
         self.quality_pinned = true;
+    }
+
+    /// The host's startup quality, under the player's file: a quality a flag or the environment
+    /// named applies and pins; otherwise the file's preset (already applied at build) stays, and
+    /// only without one does the resolved (packaged or full) setting apply.
+    pub fn apply_startup_quality(&mut self, setting: QualitySetting, named: bool) {
+        if named {
+            self.pin_quality();
+        }
+        if named || self.settings.graphics.quality.is_none() {
+            self.set_quality(setting);
+        }
     }
 
     /// Wires the one-directional channel to the window host: each change of the game's
@@ -7271,6 +7317,13 @@ impl Engine {
             },
             // The anti-aliasing mode this host draws with, read-only like `quality`.
             "anti_aliasing": self.anti_aliasing().name(),
+            // The player settings in force: whether they persist, whether a host flag pinned the
+            // quality, and every value (the settings file's shape).
+            "settings": {
+                "persisted": self.settings_persistence,
+                "quality_pinned": self.quality_pinned,
+                "values": serde_json::to_value(&self.settings).unwrap_or(Value::Null),
+            },
             // The `render.view` override in force, or `null` when the stream is on the scene's own
             // camera — host render state a client can read without a round trip of its own.
             "view": match &self.view_override {
@@ -7753,13 +7806,24 @@ impl Engine {
             }),
             replay_content_hash: Some(crate::replay_compat::replay_content_hash()),
             game: None,
-            save_docs: self
-                .input_bindings_text()
-                .map(|text| {
-                    BTreeMap::from([(crate::input_bindings::INPUT_BINDINGS_KIND.to_string(), text)])
-                })
-                .unwrap_or_default(),
+            save_docs: self.save_docs_text(),
         }
+    }
+
+    /// The per-machine save documents in force, keyed by kind, for a recording's header: the input
+    /// overrides and, when not the defaults, the settings (so a default header stays byte-identical).
+    fn save_docs_text(&self) -> BTreeMap<String, String> {
+        let mut docs = BTreeMap::new();
+        if let Some(text) = self.input_bindings_text() {
+            docs.insert(crate::input_bindings::INPUT_BINDINGS_KIND.to_string(), text);
+        }
+        if self.settings != crate::settings::SettingsDoc::default() {
+            docs.insert(
+                crate::settings::SETTINGS_KIND.to_string(),
+                self.settings.emit(),
+            );
+        }
+        docs
     }
 
     /// Records what a command applied (if it is recordable and a session is active) at its
@@ -8752,6 +8816,7 @@ impl Engine {
             }
         }
         self.install_collider_meshes();
+        ludion_physics::sync_mesh_surfaces(self.driver.world_mut());
         // Session, after the audio queue: its blanket loop stop is logged there, and a load or restore
         // clears the logs. A load starts a clean stream a replay regenerates from frame 0; a restore
         // adopts the snapshot's reload log and residue so a later switch or replay-seek reproduces

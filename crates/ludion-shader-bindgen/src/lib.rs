@@ -93,6 +93,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "shadow.wgsl",
     "shadow_cutout.wgsl",
     "shafts.wgsl",
+    "silhouette_mask.wgsl",
     "sky.wgsl",
     "smaa_blend.wgsl",
     "smaa_edges.wgsl",
@@ -367,6 +368,10 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
     ),
     ("shadow.wgsl", &["skin.wgsl"]),
     ("shadow_cutout.wgsl", &["skin.wgsl", "mesh_material.wgsl"]),
+    (
+        "silhouette_mask.wgsl",
+        &["camera.wgsl", "skin.wgsl", "mesh_material.wgsl"],
+    ),
     ("sky.wgsl", &["view_ray.wgsl", "sky_gradient.wgsl"]),
     (
         "smaa_blend.wgsl",

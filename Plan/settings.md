@@ -36,6 +36,23 @@
 9. **Emit** writes every present value in schema order and omits unset optional fields.
 10. **`RenderSettings` stays as it is** (a non-persisting runtime request); the file's AA slot sits
     below it and `--aa`.
+11. **The header carries the settings in force at arm, only when non-default** (`save_docs["settings"]`,
+    outside `replay_content_hash`, so a default recording's header is byte-identical). A replay installs
+    the view only (`install_settings_from_text`): never render state, never the window, never disk.
+    Replay and in-place playback build with `profile_off_disk`, which also gates the file read and the
+    write, and the window request is not sent on the host channel (the view still updates, so it
+    matches the recording). A playback return restores the settings, the AA slot and, unless pinned, the quality.
+12. **Quality pin rule:** `Engine::apply_startup_quality(setting, named)`. A quality a flag or
+    `LUDION_QUALITY` named (`startup_quality_named`) applies and pins; otherwise the file's preset,
+    already applied at build, stays; only without one does the resolved (packaged or full) setting apply.
+13. **The window is peeked before the engine** (`settings_window_mode_at`: no backup, no warning; the
+    build reports once). Start: flag, then env, then file, then builder. A runtime request always
+    applies, through `HostEvent::WindowMode`. The chord stays non-persisting, so after a chord the view
+    can disagree with the window.
+14. **`engine.describe` gains a `settings` section:** `persisted`, `quality_pinned`, `values`.
+    The existing `quality` and `anti_aliasing` keys already report the effective values.
+
+`ludion new` already ignores the save directory (`/scenes/save/` in the gitignore template).
 
 ## Waves
 
@@ -43,9 +60,10 @@
   `L4340`–`L4343`, `Settings`/`SettingsView`/`WindowMode`/`QualityPreset`, `persist_settings()`,
   `pin_quality`, the window sender and getter, the audio seed, tests, the `settings_menu` example,
   `docs settings`.
-- **W2:** facade boot reads the file before window, renderer and sink; `pin_quality` callers; the window
-  host consumer; settings-at-start in the generic `ReplayHeader.save_docs` slot (key `settings`, from 0021 W2b) and replay install; `describe` shows file against
-  effective; `ludion new` ignores `save/`; desktop-window and quality docs.
+- **W2 (shipped):** facade boot reads the file before window, renderer and sink; `apply_startup_quality`;
+  the window host consumer; settings-at-start in the generic `ReplayHeader.save_docs` slot (key
+  `settings`, from 0021 W2b) and replay install; `describe` settings section; desktop-window and
+  quality docs.
 - **W3:** text settings with 0024, rumble with 0021 W4 (binds `set_rumble_intensity`), brightness with 0019.
 
 ## Status
@@ -55,6 +73,17 @@ unknown key, unknown bus kept, clamp, NaN, bad names), emit/load round trip, AA 
 combination, apply and persist, off without opt-in, pinned quality, the audio seed, the window sender,
 a `WorldHash` trace equal with and without requests and a rebuild keeping the view. No `WorldHash`,
 trace, replay, golden or schema snapshot moved.
+
+**W2:** `ludion::run` and `ludion::launch` call `persist_settings()` and read the file at build:
+quality and AA are in force before the first renderer, the window opens in the file's mode (peeked
+before the engine exists) and the sink seeds from `set_audio_sender`. Tests: parse_text and peek
+units (no backup), `startup_quality_named`, `apply_startup_quality` over every named/file/resolved
+combination, the header-wins `WorldHash` trace on three roots, a replay that never reads or writes the
+file (a malformed one stays untouched, no `L4340`), a default header byte-identical, a recording armed
+after a request, the describe section, in-place playback returning the pre-play view and render state,
+and the facade boot test. Live smoke is owed to a human: boot borderless from the file on Windows and
+macOS, and a menu request toggles the window. No `replay_content_hash`, `WorldHash`, replay, golden or
+protocol schema moved.
 
 ## Proposed — owner ruling owed
 
@@ -69,4 +98,4 @@ trace, replay, golden or schema snapshot moved.
 
 ## Explicitly out of scope (triggers recorded)
 
-- Facade boot and the window host — W2. Text, rumble, brightness — W3.
+- Text, rumble, brightness — W3.

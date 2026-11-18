@@ -17,8 +17,23 @@ description: Player settings — volumes, quality, AA, window mode; the request/
 3. It reads `world.resource::<SettingsView>()` (`volume`, `quality`, `anti_aliasing`, `window_mode`).
 4. `cargo run -p ludion --example settings_menu` shows two boots on one scratch directory.
 
-Persistence is opt-in and `ludion::run` does not read the file yet: a game that wants it calls
-`persist_settings()` itself.
+`ludion::run` and `ludion::launch` turn persistence on; a game built straight from `Engine::builder()`
+calls `persist_settings()` itself.
+
+## How a host reads it
+
+- **Boot order.** The file is read at build, before the first renderer: quality and AA are in force,
+  and the sink starts at the file's volumes (`set_audio_sender`).
+- **Quality pin.** A `--quality` flag or `LUDION_QUALITY` applies and pins; the file's preset is
+  otherwise kept over a packaged default, and a menu request applies only unpinned.
+- **Window.** The window opens before the engine, so the file is peeked first: `--fullscreen`, then
+  `LUDION_FULLSCREEN`, then `display.window`, then the builder. A `request_window_mode` always applies,
+  even after a start flag. The Alt+Enter chord does not write the file, so the view can disagree after it.
+- **Replay.** A recording carries the settings in force when it was armed in
+  `ReplayHeader.save_docs["settings"]`, only if they are not the defaults. A replay installs them into
+  `SettingsView` and nothing else: no render state, no window, and it never reads or writes the file.
+  A window request made by a replayed game updates the replay's view and never reaches the live window.
+- **Describe.** `engine.describe` has `settings: {persisted, quality_pinned, values}`.
 
 ## Format
 

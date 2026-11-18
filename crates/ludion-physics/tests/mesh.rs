@@ -37,6 +37,7 @@ fn grid(y: f32) -> TriangleMesh {
         vertices,
         triangles,
         hash: u64::from(y.to_bits()),
+        ..Default::default()
     }
 }
 

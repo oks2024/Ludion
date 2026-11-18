@@ -404,3 +404,16 @@ fn a_rigid_child_is_l1221() {
     );
     assert!(stderr.contains("`platform`"), "stderr was: {stderr}");
 }
+
+/// A `SurfaceTag.cells` table whose runs miss the heightfield's `(rows-1)*(cols-1)` cells is `L1696`.
+#[test]
+fn a_cell_run_that_misses_the_grid_is_l1696() {
+    let output = run_check_scene_args("surface-cells-wrong-count.yaml", &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1696"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("/entities/0/components/SurfaceTag/cells"),
+        "stderr was: {stderr}"
+    );
+}

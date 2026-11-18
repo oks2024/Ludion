@@ -1697,15 +1697,15 @@ struct PointDraft {
 }
 
 /// One entity's world pose.
-struct Pose {
-    origin: [f32; 3],
+pub(crate) struct Pose {
+    pub(crate) origin: [f32; 3],
     rotation: [f32; 4],
     scale: [f32; 3],
 }
 
 impl Pose {
     /// The same pose with `origin` moved to the local `eye` offset.
-    fn with_eye(self, eye: [f32; 3]) -> Pose {
+    pub(crate) fn with_eye(self, eye: [f32; 3]) -> Pose {
         Pose {
             origin: add(
                 self.origin,
@@ -1717,12 +1717,12 @@ impl Pose {
 }
 
 /// A target's world origin and sample points.
-struct TargetPoints {
+pub(crate) struct TargetPoints {
     origin: [f32; 3],
-    points: Vec<[f32; 3]>,
+    pub(crate) points: Vec<[f32; 3]>,
 }
 
-fn pose(world: &World, entity: EntityId) -> Option<Pose> {
+pub(crate) fn pose(world: &World, entity: EntityId) -> Option<Pose> {
     let trs = world_transform(world, entity)?.trs;
     Some(Pose {
         origin: trs.translation,
@@ -1731,7 +1731,11 @@ fn pose(world: &World, entity: EntityId) -> Option<Pose> {
     })
 }
 
-fn target_points(world: &World, entity: EntityId, target: &SightTarget) -> Option<TargetPoints> {
+pub(crate) fn target_points(
+    world: &World,
+    entity: EntityId,
+    target: &SightTarget,
+) -> Option<TargetPoints> {
     let pose = pose(world, entity)?;
     Some(TargetPoints {
         origin: pose.origin,

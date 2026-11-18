@@ -28,6 +28,7 @@ description: The render pipeline: passes, GPU resources, and deterministic PNG o
 - `crates/ludion-renderer/src/gpu_cull.rs` — the GPU cull's buffers, bind groups and per-frame dispatch (`ludion docs culling`).
 - `crates/ludion-renderer/src/cull_stats.rs` — the non-blocking readback ring behind the profile `culling` section.
 - `crates/ludion-renderer/src/render/mesh_batch.rs` — world-mesh batching: instance and bucket layout the cull and indirect draws consume.
+- `crates/ludion-renderer/src/render/silhouette.rs` — the occluded-silhouette mask's direct draws and the composite's silhouette uniform lanes.
 - `crates/ludion-renderer/src/render/static_batch.rs` — the persistent static instance and cull-item buffers (quiet / patch / rebuild / remap), GPU-copied each frame into the leading slots of every bucket (`Plan/gpu-driven-culling.md` decision 49).
 - `crates/ludion-renderer/src/shaders/cull.wgsl` — the reduce-then-scan cull compute shader.
 - `crates/ludion-renderer/src/ibl.rs` — the sky prefilter and its cache (`ludion devdocs renderer-ibl`).

@@ -24,6 +24,7 @@ use ludion_render_graph::{
 mod medium_pass;
 mod mesh_batch;
 mod mesh_pipeline;
+mod silhouette;
 mod static_batch;
 use crate::cache_eviction::CacheEviction;
 use crate::compressed::{self, CompressedUploadError};
@@ -2040,6 +2041,14 @@ impl Renderer {
             instances: mesh_instances,
             static_buckets: _,
         } = batch;
+        // The silhouette mask's own draws and the composite lanes that read it; empty and zeroed on a
+        // frame with none, which is the frozen path.
+        let (silhouette_draws, silhouette_asset_draws) = if chain.silhouette {
+            silhouette::build_silhouette_draws(scene, device, &mesh_assets)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let silhouette_lanes = silhouette::composite_lanes(scene, size.render.1, chain.silhouette);
         // The reflections pass's probes: the ranked list and its cell masks, with the sky's
         // intensity when an `Environment` exists.
         let probe_cubes = self.probes.cubes();
@@ -2319,6 +2328,10 @@ impl Renderer {
             proj_y: scene.camera.projection.y_axis.y,
             mesh_draws,
             mesh_asset_draws,
+            silhouette_draws,
+            silhouette_asset_draws,
+            has_silhouette: chain.silhouette,
+            silhouette_lanes,
             cull,
             cull_bounds_buf,
             drop_shadows,
@@ -3926,6 +3939,13 @@ struct FrameRecorder<'a> {
     proj_y: f32,
     mesh_draws: Vec<MeshDraw>,
     mesh_asset_draws: Vec<MeshAssetDraw>,
+    /// The silhouette mask's direct draws; empty unless `has_silhouette`.
+    silhouette_draws: Vec<MeshDraw>,
+    silhouette_asset_draws: Vec<MeshAssetDraw>,
+    /// Whether this frame runs `silhouette_mask`; mirrors [`PostChain::silhouette`].
+    has_silhouette: bool,
+    /// The composite's silhouette uniform lanes; zeroed unless `has_silhouette`.
+    silhouette_lanes: silhouette::CompositeLanes,
     /// This frame's cull inputs; `None` when the graph schedules no `cull`, or when no world draw packed an instance.
     cull: Option<CullFrame>,
     /// The scene's drop shadows and their occlusion atlas layout; empty and `None` when the graph
@@ -3975,6 +3995,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::SHADOW => self.record_shadow(pass),
             pass::LOCAL_SHADOW => self.record_local_shadow(pass),
             pass::PREPASS => self.record_prepass(pass),
+            pass::SILHOUETTE_MASK => self.record_silhouette_mask(pass),
             pass::SSAO => self.record_ssao(pass),
             pass::SHAFTS => self.record_shafts(pass),
             pass::MEDIUM_SCATTER => self.record_medium_scatter(pass),
@@ -4080,6 +4101,9 @@ impl PassRecorder for FrameRecorder<'_> {
                         u32::from(self.has_transparent_medium),
                         0,
                     ],
+                    silhouette: self.silhouette_lanes.header,
+                    silhouette_forward: self.silhouette_lanes.forward,
+                    silhouette_styles: self.silhouette_lanes.styles,
                 };
                 // The composite's three optional inputs, each at the binding the WGSL itself declares,
                 // so neither can move the other and turning one off cannot shift the one behind it.
@@ -4108,6 +4132,16 @@ impl PassRecorder for FrameRecorder<'_> {
                         binding: shader_gen::SCENE_MEDIUM_TEX_BINDING,
                         present: self.has_mesh_medium,
                         fallback: &self.r.fallback_hdr.view,
+                    },
+                    OptionalInput {
+                        binding: shader_gen::SILHOUETTE_MASK_TEX_BINDING,
+                        present: self.has_silhouette,
+                        fallback: &self.r.fallback_hdr.view,
+                    },
+                    OptionalInput {
+                        binding: shader_gen::SILHOUETTE_DEPTH_TEX_BINDING,
+                        present: self.has_silhouette,
+                        fallback: &self.r.fallback_shadow.view,
                     },
                 ];
                 self.fullscreen_effect(
@@ -4318,6 +4352,75 @@ impl FrameRecorder<'_> {
                     None => rp.draw_indexed(0..mesh.index_count, 0, 0..draw.count),
                 }
             }
+        }
+    }
+
+    /// The occluded-silhouette mask: the silhouetted meshes only, into the graph's `silhouette_mask`
+    /// colour target and its own depth attachment. The prepass's recording with no cull, no viewmodel
+    /// and level 0 only: the mask draws every instance directly.
+    fn record_silhouette_mask(&self, pass: &mut RecordedPass<'_>) {
+        let depth_view = pass
+            .depth
+            .expect("the silhouette mask declares a depth attachment");
+        let target = pass.colors()[0].view;
+        let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("silhouette_mask"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: pass.timestamp_writes(),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        rp.set_pipeline(self.r.pipeline(ShaderId::SilhouetteMask));
+        rp.set_bind_group(CAMERA_GROUP, &self.camera_skin_bg, &[]);
+        let mut variant = MeshVariant::PLAIN;
+        for draw in &self.silhouette_draws {
+            rp.set_bind_group(MATERIAL_GROUP, &self.r.default_material_bg, &[]);
+            if draw.variant() != variant {
+                variant = draw.variant();
+                rp.set_pipeline(self.mesh_pipeline(ShaderId::SilhouetteMask, variant));
+            }
+            let mb = self.r.mesh_of(draw.shape);
+            rp.set_vertex_buffer(0, mb.buffer.slice(..));
+            let DrawSource {
+                instances, bytes, ..
+            } = draw.source(None, 0);
+            rp.set_vertex_buffer(1, instances.slice(bytes));
+            rp.draw(0..mb.vertex_count, 0..draw.count);
+        }
+        for draw in &self.silhouette_asset_draws {
+            if draw.variant() != variant {
+                variant = draw.variant();
+                rp.set_pipeline(self.mesh_pipeline(ShaderId::SilhouetteMask, variant));
+            }
+            let mesh = draw.level(0);
+            if mesh.index_count == 0 {
+                continue;
+            }
+            rp.set_bind_group(MATERIAL_GROUP, &mesh.material_bg, &[]);
+            rp.set_vertex_buffer(0, mesh.vertices.slice(..));
+            let DrawSource {
+                instances, bytes, ..
+            } = draw.source(None, 0, 0);
+            rp.set_vertex_buffer(1, instances.slice(bytes));
+            rp.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            rp.draw_indexed(0..mesh.index_count, 0, 0..draw.count);
         }
     }
 
@@ -7199,6 +7302,7 @@ pub(crate) enum ShaderId {
     SmaaEdges,
     SmaaWeights,
     SmaaBlend,
+    SilhouetteMask,
 }
 
 /// Everything about one shader that is a constant: its file name, its compiled-in body, the shared
@@ -7224,7 +7328,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 42;
+const SHADER_COUNT: usize = 43;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -7699,6 +7803,20 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         ],
         layouts: &[Some(LayoutId::SmaaBlend)],
     },
+    ShaderDesc {
+        id: ShaderId::SilhouetteMask,
+        file_name: "silhouette_mask.wgsl",
+        body: include_str!("shaders/silhouette_mask.wgsl"),
+        // The prepass's inputs minus the dither tile: the mask draws no fade discard.
+        snippets: &[Snippet::Camera, Snippet::Skin, Snippet::MeshMaterial],
+        layouts: &[
+            Some(LayoutId::CameraSkin),
+            None,
+            None,
+            None,
+            Some(LayoutId::MeshMaterial),
+        ],
+    },
 ];
 
 impl ShaderId {
@@ -8108,7 +8226,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::Composite,
         create:
-            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_samp_composite_bgl,
+            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_samp_composite_bgl,
     },
     LayoutDesc {
         id: LayoutId::Resolve,
@@ -8370,6 +8488,9 @@ fn build_pipeline(
         }
         ShaderId::Prepass => {
             return twinned(build_prepass_pipeline, &module(device, label, src));
+        }
+        ShaderId::SilhouetteMask => {
+            return twinned(build_silhouette_mask_pipeline, &module(device, label, src));
         }
         ShaderId::DecalReceiver => {
             return twinned(build_decal_receiver_pipeline, &module(device, label, src));
@@ -8846,6 +8967,52 @@ fn build_prepass_pipeline(
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: HDR_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: mesh_primitive(variant),
+        depth_stencil: Some(depth_state(true, wgpu::CompareFunction::Less)),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The silhouette mask pipeline: the prepass's, writing the `R8Unorm` style index.
+fn build_silhouette_mask_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    variant: MeshVariant,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MeshVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &MESH_VERTEX_ATTRS,
+                }),
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MeshInstanceRaw>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &MESH_INSTANCE_ATTRS,
+                }),
+            ],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::R8Unorm,
                 blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -9704,6 +9871,7 @@ mod tests {
     mod mesh_medium;
     mod rim;
     mod shaft_layer;
+    mod silhouette;
     mod skin_bounds;
     mod static_batch;
     mod transparent_dof;
@@ -9798,10 +9966,10 @@ mod tests {
             ],
             [0, 1, 2],
         );
-        // Eight input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
+        // Ten input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
         // the blurred shaft term, blends the depth-of-field gather, loads the transparent layer, adds the
-        // local-light term and loads the mesh medium mask —
-        // the first three in the graph pass's declared read order, and the last five the arc's
+        // local-light term, loads the mesh medium mask and the silhouette mask with its depth —
+        // the first three in the graph pass's declared read order, and the last seven the arc's
         // *optional* slots, whose bindings are fixed whether or not the scene enables them (see
         // `optional_inputs_hold_their_binding`).
         assert_eq!(
@@ -9814,10 +9982,12 @@ mod tests {
                 shader_gen::TRANSPARENT_DEPTH_TEX_BINDING,
                 shader_gen::MEDIUM_SCATTER_TEX_BINDING,
                 shader_gen::SCENE_MEDIUM_TEX_BINDING,
+                shader_gen::SILHOUETTE_MASK_TEX_BINDING,
+                shader_gen::SILHOUETTE_DEPTH_TEX_BINDING,
                 shader_gen::SAMP_BINDING,
                 shader_gen::COMPOSITE_BINDING,
             ],
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
         );
         // Three input textures: the depth-of-field prefilter samples the scene, loads its depth, in
         // the graph pass's declared read order, and loads the transparent layer in the *optional* slot

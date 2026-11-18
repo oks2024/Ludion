@@ -85,7 +85,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::blend_clock::blend_crossings;
-use crate::character::CharacterBlendData;
+use crate::blend_space::BlendSpaceData;
 use crate::components::{
     Animation, AnimationLayers, BlendClock, Mesh, MeshSource, Sprite, layer_weight_at,
 };
@@ -120,14 +120,14 @@ pub(crate) struct AnimationLibrary {
     /// Keyed by model kind and path; `Err` holds the loader's diagnostics for a model that failed
     /// to load.
     models: BTreeMap<Model, Result<BTreeMap<String, ClipTiming>, Vec<Diagnostic>>>,
-    /// The blend spaces of each loaded character, by character path (`blend_clock`).
-    blends: BTreeMap<String, Vec<CharacterBlendData>>,
+    /// The blend spaces of each loaded character or assembly (`blend_clock`).
+    blends: BTreeMap<Model, Vec<BlendSpaceData>>,
 }
 
 /// A model that binds clips, with its path: the `Mesh.shape` of an assembly or character, or an
 /// instanced prefab.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum Model {
+pub(crate) enum Model {
     Assembly(String),
     Character(String),
     Prefab(String),
@@ -173,6 +173,7 @@ impl AnimationLibrary {
             let loaded = match model {
                 Model::Assembly(_) => {
                     crate::assembly_mesh::load(AssetRoot::content(&self.root), rel).map(|data| {
+                        self.blends.insert(model.clone(), data.blends.clone());
                         data.clips
                             .iter()
                             .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
@@ -181,7 +182,7 @@ impl AnimationLibrary {
                 }
                 Model::Character(_) => crate::character::load(AssetRoot::content(&self.root), rel)
                     .map(|data| {
-                        self.blends.insert(rel.to_string(), data.blends.clone());
+                        self.blends.insert(model.clone(), data.blends.clone());
                         data.clips
                             .iter()
                             .map(|b| timing(&b.name, &b.clip, b.speed, &b.events))
@@ -208,11 +209,11 @@ impl AnimationLibrary {
 }
 
 impl AnimationLibrary {
-    /// The blend spaces of the character at `rel`, loading it on first use; empty for a character
-    /// that failed to load or defines none.
-    pub(crate) fn blends(&mut self, rel: &str) -> &[CharacterBlendData] {
-        let _ = self.timings(&Model::Character(rel.to_string()));
-        self.blends.get(rel).map_or(&[], Vec::as_slice)
+    /// The blend spaces of `model`, loading it on first use; empty for a model that failed to load
+    /// or defines none.
+    pub(crate) fn blends(&mut self, model: &Model) -> &[BlendSpaceData] {
+        let _ = self.timings(model);
+        self.blends.get(model).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -397,10 +398,11 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
                 }
             };
             let Some(timing) = timing else {
-                if let Model::Character(rel) = &model
-                    && let Some(clock) = world.get_unrecorded::<BlendClock>(id).ok().flatten()
-                    && let Some(blend) =
-                        library.blends(rel).iter().find(|blend| blend.name == *clip)
+                if let Some(clock) = world.get_unrecorded::<BlendClock>(id).ok().flatten()
+                    && let Some(blend) = library
+                        .blends(&model)
+                        .iter()
+                        .find(|blend| blend.name == *clip)
                     && clock.blend == *clip
                 {
                     let mut names = Vec::new();
@@ -506,11 +508,9 @@ fn walk_layers(
     model: &Model,
     fired: &mut Vec<ClipEvent>,
 ) {
-    let rel = match model {
-        Model::Character(rel) => Some(rel),
-        Model::Assembly(_) => None,
-        Model::Prefab(_) => return,
-    };
+    if matches!(model, Model::Prefab(_)) {
+        return;
+    }
     // Unrecorded, as in the baseless scan.
     let Some(stack) = world.get_unrecorded::<AnimationLayers>(id).ok().flatten() else {
         return;
@@ -540,8 +540,7 @@ fn walk_layers(
             let mut crossed = Vec::new();
             crossings(timing, prev, at(now), &mut crossed);
             names.extend(crossed.into_iter().map(str::to_string));
-        } else if let Some(rel) = rel
-            && let Some(blend) = library.blends(rel).iter().find(|b| b.name == layer.clip)
+        } else if let Some(blend) = library.blends(model).iter().find(|b| b.name == layer.clip)
             && let Some(entry) = world
                 .get_unrecorded::<BlendClock>(id)
                 .ok()

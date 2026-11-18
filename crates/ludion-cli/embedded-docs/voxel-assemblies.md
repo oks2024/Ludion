@@ -69,6 +69,7 @@ Both documents are strict-subset YAML: **block style only**, one entry per line.
 | `clips` | no | short name → clip document path (`ludion docs voxel-animation`) |
 | `joints` | no | child part name → joint spec, for `switch_to_ragdoll` — see Ragdoll joints below |
 | `masks` | no | mask name → `joints` (part names), `descendants`, `weights`: which parts an `AnimationLayers` layer touches (`ludion docs animation-layers`); an unknown part is `L1138` |
+| `blends` | no | blend name → `points` (`clip` + `at`) and optional `sync`: clips mixed by `Animation.params` (`ludion docs voxel-animation`); structure `L1137`, an unbound, non-looping or unsynced point clip `L1138` |
 
 One `parts` entry:
 

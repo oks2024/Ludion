@@ -308,6 +308,7 @@ pub use ludion_engine::{DUCK_FLOOR_DB, DuckRule};
 pub use ludion_engine::{
     GroundMarkerClip, ProfileQuery, VisibilityProfile, ground_marker_profile, visibility_profile,
 };
+pub use ludion_engine::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
 pub use ludion_engine::{
     PatrolFollower, PatrolMotion, PatrolPhase, PatrolResume, PatrolState, patrol_motion,
     patrol_update,
@@ -330,13 +331,13 @@ mod single;
 pub use single::SingleExt;
 
 pub use ludion_physics::{
-    Blast, BlastHit, CharacterMotor, CharacterMotorState, ContactEvent, ContactPhase, ExitCause,
-    Falloff, GroundHit, GroundProbe, JointBroken, LaneEnd, LaneFrame, LaneReport, LayerSet,
-    MotorError, MoveConstraint, MoveReport, PartSurface, PhysicsError, PhysicsWorld, PlatformCarry,
-    PlatformPose, PointHit, Posture, PostureReport, PostureShape, QueryFilter, QueryHit,
-    ResizeReport, ResumeReport, SensorEvent, SensorPhase, SurfaceHit, SurfaceId, SurfaceOverlay,
-    SurfacePart, SurfaceTable, SurfaceTag, SurfaceVelocity, TurnReport, height_in_force,
-    motor_capsule_segment, motor_in_force, teleport_kinematic,
+    Blast, BlastHit, CellSurfaces, CharacterMotor, CharacterMotorState, ContactEvent, ContactPhase,
+    ExitCause, Falloff, GroundHit, GroundProbe, JointBroken, LaneEnd, LaneFrame, LaneReport,
+    LayerSet, MotorError, MoveConstraint, MoveReport, PartSurface, PhysicsError, PhysicsWorld,
+    PlatformCarry, PlatformPose, PointHit, Posture, PostureReport, PostureShape, QueryFilter,
+    QueryHit, ResizeReport, ResumeReport, SensorEvent, SensorPhase, SurfaceHit, SurfaceId,
+    SurfaceOverlay, SurfacePart, SurfaceTable, SurfaceTag, SurfaceVelocity, TurnReport,
+    height_in_force, motor_capsule_segment, motor_in_force, teleport_kinematic,
 };
 pub use ludion_projectiles as projectiles;
 pub use ludion_spatial::{

@@ -226,6 +226,21 @@ The `perception` trace channel (`ludion docs verify-loop`) prints what changed, 
 - An empty `sound_occluder_layers` means no occlusion, not "everything occludes".
 - Surface multipliers are surface *names* in the perception config, not a physics property.
 
+## Debug draw
+
+`--debug-draw perception` (`ludion docs debug-draw`) draws what the last completed tick decided, host-side at extraction: read-only, never hashed. It needs a game's build that ticks `perception_update` (the built-in `ludion render` host runs no system, so it draws nothing). `perception:zones`, `perception:rays`, `perception:noises` and `perception:memory` pick one part.
+
+- **Zones:** each enabled perceiver's zone wedge at its range: green when any target is `visible`, amber when one is `in_zone` only, grey otherwise. Both half-angles at most 90 degrees draw a frustum, a wider zone a flat wedge at eye height.
+- **Rays:** eye to every sample point of each in-zone target, green where the point is in `points_visible`, red otherwise, plus a red cross at the blocker's origin. Results hold no hit point, so a ray is drawn to the point, not to the wall.
+- **Noises:** a ring of `effective_radius` per noise and a line from the noise to each ear that heard it.
+- **Memory:** a cross at each record's `last_position`: sight cyan, hearing yellow, custom magenta, dimmed when not `sensed_now`.
+
+Geometry is the current transforms, verdicts are the last results: a staggered perceiver's rays show its carried verdict against the points as they are now.
+
+## Checks
+
+`L1572` is also found without a tick, once per occurrence with a JSON Pointer and the nearest declared name. `ludion check-scene` links no game, so it checks layers only: a `see_through` or `blocked_by` name missing from `physics.layers`. A game's `--check-scene` and the wire's `scene.check` on a game host also check classes (`detects`, `SightTarget.class`) and noise kinds (`hears`, `NoiseZone.kinds`) against its `PerceptionConfig`. A scene with no collider has no physics world at run time, so the layer check is stricter than a tick there.
+
 ## Next
 
-Not built yet: the debug-draw category and `check-scene` class and layer name checks. `ludion docs collision-layers`, `ludion docs patrol`, `ludion docs systems`.
+No later wave. `ludion docs collision-layers`, `ludion docs patrol`, `ludion docs systems`.

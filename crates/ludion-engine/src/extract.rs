@@ -1359,7 +1359,7 @@ fn extract_inner(
                 let (pose, crossfade) = animation_pose(world, mesh.id, &data, held_now);
                 let layers = assembly_layer_poses(world, mesh.id, &data, held_now);
                 for (part, (local, local_normal)) in
-                    part_placements_layered(&data, pose, crossfade.as_ref(), &layers)
+                    part_placements_layered(&data, pose, crossfade, &layers)
                         .into_iter()
                         .enumerate()
                 {
@@ -1458,6 +1458,8 @@ fn extract_inner(
             viewmodel_emitters,
         )
     });
+    let silhouettes =
+        crate::silhouette::extract_silhouettes(world, &meshes, &mesh_owners, degraded);
     assets.extract_end(ExtractPhase::Meshes);
 
     assets.extract_begin(ExtractPhase::Skin);
@@ -1594,6 +1596,7 @@ fn extract_inner(
         sprites,
         ground_markers,
         ground_marker_profiles,
+        silhouettes,
         drop_shadows,
         decals,
         debug_lines: Vec::new(),
@@ -5851,18 +5854,45 @@ pub(crate) fn animation_pose<'a>(
     id: EntityId,
     data: &'a AssemblyData,
     now: GameTime,
-) -> (ClipPose<'a>, Option<CrossfadePose<'a>>) {
+) -> (AssemblySide<'a>, Option<(AssemblySide<'a>, f64)>) {
     let Some(animation) = get::<Animation>(world, id) else {
-        return (None, None);
+        return (AssemblySide::EMPTY, None);
     };
-    let side = |name: &str, elapsed: f64| {
-        let clip = data.clip(name)?;
-        Some((clip, ludion_scene::clip_phase(clip, elapsed)))
+    // A blend's phase reads the entity's `BlendClock` (advanced by the fraction of a tick `now` is
+    // past the clock's tick), else the stateless `elapsed * rate`. Unrecorded: the ragdoll switch
+    // calls this from a sim command.
+    let clock = world.get_unrecorded::<BlendClock>(id).ok().flatten();
+    let fraction =
+        now.ticks_since(FrameIndex::new(now.ticks_floor())) * now.rate().seconds_per_tick();
+    let side = |name: &str, elapsed: f64, phase: Option<(f64, f32)>| {
+        if let Some(clip) = data.clip(name) {
+            return AssemblySide::single(Some((clip, ludion_scene::clip_phase(clip, elapsed))));
+        }
+        let Some(blend) = data.blend(name) else {
+            return AssemblySide::EMPTY;
+        };
+        let rate = crate::blend_clock::blend_rate(blend, animation.params);
+        let phase = phase.map_or(elapsed * rate, |(phase, speed)| {
+            phase + rate * f64::from(speed) * fraction
+        });
+        AssemblySide::blend(data, blend, animation.params, phase)
     };
-    let pose = side(&animation.clip, clip_elapsed(animation, now));
-    let fade = fade_weight(animation, now).map(|weight| CrossfadePose {
-        from: side(&animation.from, from_clip_elapsed(animation, now)),
-        weight,
+    let live = clock.filter(|c| c.blend == animation.clip && c.started == animation.started);
+    let pose = side(
+        &animation.clip,
+        clip_elapsed(animation, now),
+        live.map(|c| (c.phase, animation.speed)),
+    );
+    let outgoing = clock.filter(|c| !c.from_blend.is_empty() && c.from_blend == animation.from);
+    let fade = fade_weight(animation, now).map(|weight| {
+        (
+            side(
+                &animation.from,
+                from_clip_elapsed(animation, now),
+                outgoing.map(|c| (c.from_phase, animation.from_speed)),
+            ),
+            weight,
+        )
     });
     (pose, fade)
 }
@@ -6402,11 +6432,11 @@ pub(crate) fn part_placements_faded(
 /// (`Plan/animation-layers.md` decisions 27-29). No layers is exactly [`part_placements_faded`].
 pub(crate) fn part_placements_layered(
     assembly: &AssemblyData,
-    pose: ClipPose<'_>,
-    fade: Option<&CrossfadePose<'_>>,
+    pose: AssemblySide<'_>,
+    fade: Option<(AssemblySide<'_>, f64)>,
     layers: &[AssemblyLayerPose<'_>],
 ) -> Vec<(Mat4, Mat3)> {
-    part_placements_with(assembly, pose, fade, true, layers)
+    part_placements_sides(assembly, pose, fade, true, layers)
 }
 
 /// [`part_placements`], with `scale` saying whether a clip's scale channel applies: the render path
@@ -6427,7 +6457,20 @@ pub(crate) fn part_placements_with(
     scale: bool,
     layers: &[AssemblyLayerPose<'_>],
 ) -> Vec<(Mat4, Mat3)> {
-    if pose.is_none() && fade.is_none() && layers.is_empty() {
+    let fade = fade.map(|fade| (AssemblySide::single(fade.from), fade.weight));
+    part_placements_sides(assembly, AssemblySide::single(pose), fade, scale, layers)
+}
+
+/// [`part_placements_with`] over [`AssemblySide`]s, each of which may be a blend: the one
+/// implementation every wrapper reaches. A side of one weight-1 clip poses exactly as a plain clip.
+pub(crate) fn part_placements_sides(
+    assembly: &AssemblyData,
+    pose: AssemblySide<'_>,
+    fade: Option<(AssemblySide<'_>, f64)>,
+    scale: bool,
+    layers: &[AssemblyLayerPose<'_>],
+) -> Vec<(Mat4, Mat3)> {
+    if pose.is_empty() && fade.is_none() && layers.is_empty() {
         return assembly
             .parts
             .iter()
@@ -6457,11 +6500,11 @@ pub(crate) fn part_placements_with(
                     layered.translation,
                 ),
                 (None, None) => {
-                    let Some((clip, time)) = pose else {
+                    if pose.is_empty() {
                         // Layers exist but none reaches this part, and nothing is playing.
                         return Mat4::from_translation(Vec3::from(part.offset) - parent_offset);
-                    };
-                    let sampled = ludion_scene::part_pose(clip, &part.name, time);
+                    }
+                    let sampled = pose.sample(&part.name);
                     let rotation = sampled.rotation.map_or(Quat::IDENTITY, quat_from_f64);
                     (rotation, sampled.scale, sampled.translation)
                 }
@@ -6504,11 +6547,11 @@ fn quat_from_f64(q: [f64; 4]) -> Quat {
 /// contributes the part's rest value (identity rotation, zero translation, unit scale); a channel
 /// neither side animates stays `None`, so an untouched part keeps its exact rest matrices.
 fn blended_part_pose(
-    pose: ClipPose<'_>,
-    fade: &CrossfadePose<'_>,
+    pose: AssemblySide<'_>,
+    fade: (AssemblySide<'_>, f64),
     part: &str,
 ) -> (Quat, Option<[f64; 3]>, Option<[f64; 3]>) {
-    let blended = blended_part_pose_f64(pose, fade, part);
+    let blended = blended_part_pose_f64(fade.0.sample(part), pose.sample(part), fade.1);
     (
         blended.rotation.map_or(Quat::IDENTITY, quat_from_f64),
         blended.scale,
@@ -6519,17 +6562,10 @@ fn blended_part_pose(
 /// [`blended_part_pose`] before the rotation is cast to `f32`, so a layer composes over the exact
 /// `f64` blend.
 fn blended_part_pose_f64(
-    pose: ClipPose<'_>,
-    fade: &CrossfadePose<'_>,
-    part: &str,
+    from: ludion_scene::PartPose,
+    to: ludion_scene::PartPose,
+    w: f64,
 ) -> ludion_scene::PartPose {
-    let sample = |side: ClipPose<'_>| {
-        side.map_or_else(ludion_scene::PartPose::default, |(clip, time)| {
-            ludion_scene::part_pose(clip, part, time)
-        })
-    };
-    let (from, to) = (sample(fade.from), sample(pose));
-    let w = fade.weight;
     let lerp3 = |a: Option<[f64; 3]>, b: Option<[f64; 3]>, rest: f64| match (a, b) {
         (None, None) => None,
         (a, b) => {
@@ -6555,12 +6591,11 @@ fn blended_part_pose_f64(
     }
 }
 
-/// One `AnimationLayers` layer ready to pose an assembly: its clip at the layer's own clock, the
+/// One `AnimationLayers` layer ready to pose an assembly: its clip or blend at the layer's own clock, the
 /// reference an additive layer measures from (clip and time), the mask's per-part weights (`None` is
 /// every part), how it combines, and its weight now, in `(0, 1]`.
 pub(crate) struct AssemblyLayerPose<'a> {
-    pub clip: &'a ludion_scene::AnimationDocument,
-    pub t: f64,
+    pub side: AssemblySide<'a>,
     pub reference: Option<(&'a ludion_scene::AnimationDocument, f64)>,
     pub mask: Option<&'a [f32]>,
     pub mode: LayerMode,
@@ -6568,10 +6603,10 @@ pub(crate) struct AssemblyLayerPose<'a> {
 }
 
 /// The layers of `id`'s `AnimationLayers` that act on an assembly at `now` (the held time the base
-/// pose reads), in list order. A layer with no weight, an unbound clip, an unknown mask or an unknown
-/// `reference` is skipped silently, as a base `Animation` naming an unbound clip is, and a layer
-/// naming a blend does not act on an assembly. Empty — without allocating — when the entity has no
-/// `AnimationLayers`.
+/// pose reads), in list order. A layer with no weight, an unbound clip or blend, an unknown mask or an
+/// unknown `reference` is skipped silently, as a base `Animation` naming an unbound clip is. A blend
+/// layer's phase reads its `BlendClock.layers` entry, else the stateless fallback. Empty — without
+/// allocating — when the entity has no `AnimationLayers`.
 pub(crate) fn assembly_layer_poses<'a>(
     world: &World,
     id: EntityId,
@@ -6581,6 +6616,9 @@ pub(crate) fn assembly_layer_poses<'a>(
     let Some(stack) = get::<AnimationLayers>(world, id) else {
         return Vec::new();
     };
+    let clock = world.get_unrecorded::<BlendClock>(id).ok().flatten();
+    let fraction =
+        now.ticks_since(FrameIndex::new(now.ticks_floor())) * now.rate().seconds_per_tick();
     stack
         .layers
         .iter()
@@ -6590,11 +6628,28 @@ pub(crate) fn assembly_layer_poses<'a>(
             if weight <= 0.0 || weight.is_nan() {
                 return None;
             }
-            let clip = data.clip(&layer.clip)?;
-            let t = ludion_scene::clip_phase(
-                clip,
-                clock_elapsed(now, layer.started, layer.speed, None),
-            );
+            let side = if let Some(clip) = data.clip(&layer.clip) {
+                let t = ludion_scene::clip_phase(
+                    clip,
+                    clock_elapsed(now, layer.started, layer.speed, None),
+                );
+                AssemblySide::single(Some((clip, t)))
+            } else {
+                let blend = data.blend(&layer.clip)?;
+                let rate = crate::blend_clock::blend_rate(blend, layer.params);
+                let live = clock.and_then(|c| {
+                    c.layers.iter().find(|entry| {
+                        entry.name == layer.name
+                            && entry.blend == layer.clip
+                            && entry.started == layer.started
+                    })
+                });
+                let phase = live.map_or_else(
+                    || crate::blend_clock::layer_fallback_phase(blend, layer, now),
+                    |entry| entry.phase + rate * f64::from(layer.speed) * fraction,
+                );
+                AssemblySide::blend(data, blend, layer.params, phase)
+            };
             let mask = match layer.mask.as_str() {
                 "" => None,
                 name => Some(data.mask(name)?),
@@ -6606,8 +6661,7 @@ pub(crate) fn assembly_layer_poses<'a>(
                 _ => None,
             };
             Some(AssemblyLayerPose {
-                clip,
-                t,
+                side,
                 reference,
                 mask,
                 mode: layer.mode,
@@ -6628,13 +6682,13 @@ pub(crate) fn assembly_layer_poses<'a>(
 fn layered_part_pose(
     index: usize,
     name: &str,
-    pose: ClipPose<'_>,
-    fade: Option<&CrossfadePose<'_>>,
+    pose: AssemblySide<'_>,
+    fade: Option<(AssemblySide<'_>, f64)>,
     layers: &[AssemblyLayerPose<'_>],
 ) -> Option<ludion_scene::PartPose> {
     let mut current: Option<ludion_scene::PartPose> = None;
     for layer in layers {
-        let sample = ludion_scene::part_pose(layer.clip, name, layer.t);
+        let sample = layer.side.sample(name);
         if sample.rotation.is_none() && sample.translation.is_none() && sample.scale.is_none() {
             continue;
         }
@@ -6646,10 +6700,10 @@ fn layered_part_pose(
             continue;
         }
         let base = current.get_or_insert_with(|| match fade {
-            Some(fade) => blended_part_pose_f64(pose, fade, name),
-            None => pose.map_or_else(ludion_scene::PartPose::default, |(clip, time)| {
-                ludion_scene::part_pose(clip, name, time)
-            }),
+            Some((from, weight)) => {
+                blended_part_pose_f64(from.sample(name), pose.sample(name), weight)
+            }
+            None => pose.sample(name),
         });
         let identity = [0.0, 0.0, 0.0, 1.0];
         match layer.mode {
@@ -6708,6 +6762,102 @@ fn layered_part_pose(
         }
     }
     current
+}
+
+/// One side of an assembly pose: up to three weighted clip samples (a plain clip is one entry of
+/// weight 1; a blend space's active points are up to three), each `(clip, clip time, weight)`.
+#[derive(Clone, Copy)]
+pub(crate) struct AssemblySide<'a> {
+    entries: [Option<(&'a ludion_scene::AnimationDocument, f64, f64)>; 3],
+}
+
+impl<'a> AssemblySide<'a> {
+    /// No clip: the rest pose.
+    pub(crate) const EMPTY: AssemblySide<'static> = AssemblySide { entries: [None; 3] };
+
+    /// A plain clip side, weight 1.
+    pub(crate) fn single(side: ClipPose<'a>) -> Self {
+        AssemblySide {
+            entries: [side.map(|(clip, t)| (clip, t, 1.0)), None, None],
+        }
+    }
+
+    /// A weighted side from up to three entries.
+    pub(crate) fn weighted(
+        entries: [Option<(&'a ludion_scene::AnimationDocument, f64, f64)>; 3],
+    ) -> Self {
+        AssemblySide { entries }
+    }
+
+    /// The side of `blend` at `params` on shared `phase`: one entry per active point, each clip at
+    /// the time the point plays on that phase.
+    fn blend(
+        data: &'a AssemblyData,
+        blend: &crate::blend_space::BlendSpaceData,
+        params: [f32; 2],
+        phase: f64,
+    ) -> Self {
+        let mut entries = [None; 3];
+        for (slot, (index, weight)) in entries.iter_mut().zip(blend.weights(params).iter()) {
+            let point = &blend.points[usize::from(index)];
+            *slot = Some((
+                &data.clips[point.clip].clip,
+                blend.point_time(index, phase),
+                weight,
+            ));
+        }
+        AssemblySide::weighted(entries)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.iter().all(Option::is_none)
+    }
+
+    /// The part's sampled channels. One weight-1 entry is that clip's `part_pose` verbatim; more
+    /// blend in entry order, rotation by running slerp (`w / accumulated`, a missing rotation read
+    /// as identity), translation and scale by weighted sum (missing read as 0 and 1). A channel no
+    /// entry keys stays `None`, so an untouched part keeps its exact rest.
+    pub(crate) fn sample(&self, part: &str) -> ludion_scene::PartPose {
+        let Some(first) = self.entries.iter().flatten().next() else {
+            return ludion_scene::PartPose::default();
+        };
+        if self.entries.iter().flatten().count() == 1 && first.2 == 1.0 {
+            return ludion_scene::part_pose(first.0, part, first.1);
+        }
+        let identity = [0.0, 0.0, 0.0, 1.0];
+        let mut keyed = [false; 3];
+        let mut accumulated = 0.0;
+        let mut rotation = identity;
+        let mut translation = [0.0; 3];
+        let mut scale = [0.0; 3];
+        for &(clip, t, weight) in self.entries.iter().flatten() {
+            let sample = ludion_scene::part_pose(clip, part, t);
+            keyed[0] |= sample.rotation.is_some();
+            keyed[1] |= sample.translation.is_some();
+            keyed[2] |= sample.scale.is_some();
+            let q = sample.rotation.unwrap_or(identity);
+            let before = accumulated;
+            accumulated += weight;
+            rotation = if before == 0.0 {
+                q
+            } else {
+                ludion_scene::slerp(rotation, q, weight / accumulated)
+            };
+            let (v, k) = (
+                sample.translation.unwrap_or([0.0; 3]),
+                sample.scale.unwrap_or([1.0; 3]),
+            );
+            for axis in 0..3 {
+                translation[axis] += weight * v[axis];
+                scale[axis] += weight * k[axis];
+            }
+        }
+        ludion_scene::PartPose {
+            rotation: keyed[0].then_some(rotation),
+            translation: keyed[1].then_some(translation),
+            scale: keyed[2].then_some(scale),
+        }
+    }
 }
 
 /// Composes each part's parent-relative transform down its chain to the root, memoized.
@@ -8908,6 +9058,7 @@ mod tests {
                 clips,
                 joints: Vec::new(),
                 masks: Vec::new(),
+                blends: Vec::new(),
             }
         }
 
@@ -9148,13 +9299,60 @@ mod tests {
             )]);
             let pose = Some((data.clip("walk").unwrap(), 0.4));
             assert_eq!(
-                part_placements_layered(&data, pose, None, &[]),
+                part_placements_layered(&data, AssemblySide::single(pose), None, &[]),
                 part_placements(&data, pose)
             );
             assert_eq!(
-                part_placements_layered(&data, None, None, &[]),
+                part_placements_layered(&data, AssemblySide::EMPTY, None, &[]),
                 part_placements(&data, None)
             );
+        }
+
+        /// A side of one weight-1 entry is that clip's `part_pose` verbatim, so a plain clip poses
+        /// through the blend-capable path with the exact same bits.
+        #[test]
+        fn a_single_entry_side_is_the_plain_clip_bit_for_bit() {
+            let data = assembly(vec![clip(
+                "walk",
+                "arm",
+                [0.0; 3],
+                [90.0, 0.0, 0.0],
+                [1.0, 2.0, 3.0],
+            )]);
+            let walk = data.clip("walk").unwrap();
+            for t in [0.0, 0.1, 0.4, 0.77, 1.0] {
+                let side = AssemblySide::weighted([Some((walk, t, 1.0)), None, None]);
+                for part in ["arm", "body", "missing"] {
+                    assert_eq!(
+                        side.sample(part),
+                        ludion_scene::part_pose(walk, part, t),
+                        "{part} at {t}"
+                    );
+                }
+                assert_eq!(
+                    part_placements_sides(&data, side, None, true, &[]),
+                    part_placements(&data, Some((walk, t)))
+                );
+            }
+        }
+
+        /// Two weighted entries blend in entry order; a channel no entry keys stays unset, so an
+        /// untouched part keeps its exact rest.
+        #[test]
+        fn a_two_entry_side_blends_keyed_channels_only() {
+            let data = assembly(vec![
+                clip("a", "arm", [90.0, 0.0, 0.0], [0.0; 3], [0.0; 3]),
+                clip("b", "arm", [0.0; 3], [2.0, 0.0, 0.0], [0.0; 3]),
+            ]);
+            let (a, b) = (data.clip("a").unwrap(), data.clip("b").unwrap());
+            let side = AssemblySide::weighted([Some((a, 1.0, 0.5)), Some((b, 1.0, 0.5)), None]);
+            let arm = side.sample("arm");
+            assert!(arm.rotation.is_some() && arm.translation.is_some());
+            assert!(arm.scale.is_none());
+            assert_eq!(arm.translation, Some([1.0, 0.0, 0.0]));
+            let body = side.sample("body");
+            assert!(body.rotation.is_none() && body.scale.is_none());
+            assert_eq!(side.sample("missing"), ludion_scene::PartPose::default());
         }
 
         /// A child authored **before** its parent composes just as well: the chain is resolved by
@@ -9170,6 +9368,7 @@ mod tests {
                 clips: vec![clip("walk", "arm", [0.0; 3], [0.0; 3], [0.0, 0.0, 3.0])],
                 joints: Vec::new(),
                 masks: Vec::new(),
+                blends: Vec::new(),
             };
             let posed = part_placements(&data, Some((data.clip("walk").unwrap(), 1.0)));
             assert_eq!(posed[1].0, Mat4::from_translation(Vec3::new(0.0, 0.0, 3.0)));

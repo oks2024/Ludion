@@ -1,0 +1,339 @@
+# Feature: OccludedSilhouette - a flat tint and outline drawn only where cover hides an entity; the visible body is untouched.
+# Left to right, each figure standing behind cover that hides part of it: (1) `voxels/figure.assembly.yaml` mid-`wave` clip, half
+# behind a wall, white fill with a 2 px outline; (2) a voxel figure behind a low box "truck"; (3) a figure behind a wall at
+# `Fade` 0.35, where the dithered wall still writes depth, so the tint shows through the kept texels; (4) a figure behind
+# `meshes/cutout-grating.mesh.yaml`, whose holes write no depth, so the body shows through the bars and is tinted behind them;
+# (5) a green `when: always` ally with no cover, tinted over its visible pixels; (6) a control behind the same kind of wall
+# with no component, which shows nothing. Colour [1, 1, 1, 0.55] is the default fill; `px` 2 is in 1080p pixels.
+# ludion docs occluded-silhouette.
+format: 1
+name: occluded-silhouette - OccludedSilhouette tints and outlines a figure only where cover hides it
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.7
+          - 14.5
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 40.0
+      PostProcess:
+        exposure: 0.9
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - 10.0
+      DirectionalLight:
+        direction:
+          - -0.3
+          - -0.6
+          - -0.8
+        color:
+          - 1.0
+          - 0.95
+          - 0.9
+        intensity: 1.6
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 18.0
+          - 1.0
+          - 9.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.16
+          - 0.17
+          - 0.2
+          - 1.0
+        roughness: 0.9
+  - name: back-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - -4.0
+        scale:
+          - 18.0
+          - 6.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.1
+          - 0.11
+          - 0.14
+          - 1.0
+        roughness: 0.9
+  - name: hidden-half
+    components:
+      Transform:
+        translation:
+          - -7.0
+          - 0.0
+          - -0.5
+        scale:
+          - 0.25
+          - 0.25
+          - 0.25
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.45
+          - 0.5
+          - 0.6
+          - 1.0
+      Animation:
+        clip: wave
+      OccludedSilhouette:
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.55
+        outline:
+          px: 2.0
+          alpha: 1.0
+  - name: wall-half
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 1.5
+          - 1.2
+        scale:
+          - 1.3
+          - 3.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9
+  - name: under-truck
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 0.0
+          - -0.5
+        scale:
+          - 0.1
+          - 0.1
+          - 0.1
+      Mesh:
+        shape:
+          voxel: voxels/rim-figure.voxel.yaml
+        color:
+          - 0.5
+          - 0.5
+          - 0.55
+          - 1.0
+      OccludedSilhouette:
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.55
+        outline:
+          px: 2.0
+          alpha: 1.0
+  - name: truck
+    components:
+      Transform:
+        translation:
+          - -3.4
+          - 0.55
+          - 1.4
+        scale:
+          - 2.4
+          - 1.1
+          - 1.6
+      Mesh:
+        shape: cube
+        color:
+          - 0.25
+          - 0.3
+          - 0.35
+          - 1.0
+        roughness: 0.9
+  - name: behind-fade
+    components:
+      Transform:
+        translation:
+          - -1.4
+          - 0.0
+          - -0.5
+        scale:
+          - 0.25
+          - 0.25
+          - 0.25
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.45
+          - 0.5
+          - 0.6
+          - 1.0
+      OccludedSilhouette:
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.55
+        outline:
+          px: 2.0
+          alpha: 1.0
+  - name: fade-wall
+    components:
+      Transform:
+        translation:
+          - -0.4
+          - 1.5
+          - 1.2
+        scale:
+          - 2.2
+          - 3.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9
+      Fade:
+        fade: 0.35
+  - name: behind-grating
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 0.0
+          - -0.5
+        scale:
+          - 0.25
+          - 0.25
+          - 0.25
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.45
+          - 0.5
+          - 0.6
+          - 1.0
+      OccludedSilhouette:
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.55
+        outline:
+          px: 2.0
+          alpha: 1.0
+  - name: grating
+    components:
+      Transform:
+        translation:
+          - 2.5
+          - 1.4
+          - 1.2
+        scale:
+          - 3.0
+          - 3.0
+          - 1.0
+      Mesh:
+        shape:
+          asset: meshes/cutout-grating.mesh.yaml
+        color:
+          - 0.8
+          - 0.8
+          - 0.85
+          - 1.0
+        roughness: 0.5
+  - name: ally
+    components:
+      Transform:
+        translation:
+          - 5.0
+          - 0.0
+          - -0.5
+        scale:
+          - 0.25
+          - 0.25
+          - 0.25
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.45
+          - 0.5
+          - 0.6
+          - 1.0
+      OccludedSilhouette:
+        color:
+          - 0.2
+          - 1.0
+          - 0.3
+          - 0.6
+        outline:
+          px: 2.0
+          alpha: 1.0
+        when: always
+  - name: control
+    components:
+      Transform:
+        translation:
+          - 7.4
+          - 0.0
+          - -0.5
+        scale:
+          - 0.25
+          - 0.25
+          - 0.25
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.45
+          - 0.5
+          - 0.6
+          - 1.0
+  - name: control-wall
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 1.5
+          - 1.2
+        scale:
+          - 1.3
+          - 3.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9

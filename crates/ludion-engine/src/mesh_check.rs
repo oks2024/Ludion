@@ -43,6 +43,8 @@ struct Read {
     maps: Vec<String>,
     /// A character's mesh document.
     character_mesh: Option<String>,
+    /// The local surface names a mesh document's `surfaces` key lists.
+    surfaces: Vec<String>,
 }
 
 /// Every `L1101`/`L1102` (or document code) a checked scene's mesh-like files report: `Mesh`
@@ -127,10 +129,52 @@ pub fn scene_mesh_asset_diagnostics(project_root: &Path, scene: &Scene) -> Vec<D
             found.push(mesh_error(&rel, label, &site.pointer, fault));
         }
     }
+    found.extend(undeclared_mesh_surfaces(scene, &sites, &reads));
     for (pointer, rel) in &decal_maps {
         if let Some(fault) = png_faults.get(rel.as_str()) {
             let fault = helped(project_root, fault.clone(), &mut manifest);
             found.push(fault.with_path(pointer.clone()));
+        }
+    }
+    found
+}
+
+/// The `L1697` warning for each local surface name a collider mesh's document lists that the
+/// scene's `physics.surfaces` does not declare; those triangles fall through to the entity's tag.
+fn undeclared_mesh_surfaces(
+    scene: &Scene,
+    sites: &[Site],
+    reads: &BTreeMap<(Doc, &str), Read>,
+) -> Vec<Diagnostic> {
+    let Some(physics) = &scene.physics else {
+        return Vec::new();
+    };
+    let declared = physics.surfaces.iter().map(String::as_str);
+    let mut found = Vec::new();
+    for site in sites.iter().filter(|site| site.label == "collider mesh") {
+        let Some(read) = reads.get(&(Doc::Mesh, site.rel.as_str())) else {
+            continue;
+        };
+        for name in &read.surfaces {
+            if declared.clone().any(|d| d == name) {
+                continue;
+            }
+            let help = match ludion_core::suggest::nearest(name, declared.clone()) {
+                Some(near) => format!("nearest match is `{near}`"),
+                None => "declare it under `physics.surfaces`".to_string(),
+            };
+            found.push(
+                Diagnostic::new(
+                    code::MESH_SURFACE_UNDECLARED,
+                    format!(
+                        "mesh `{}` tags triangles `{name}`, which `physics.surfaces` does not \
+                         declare; they fall through to the entity's surface",
+                        site.rel
+                    ),
+                )
+                .with_path(site.pointer.clone())
+                .with_help(help),
+            );
         }
     }
     found
@@ -372,21 +416,24 @@ fn read_docs<'a>(
 fn read_one(root: AssetRoot<'_>, doc: Doc, rel: &str) -> Read {
     let mut read = Read::default();
     let outcome = match doc {
-        Doc::Mesh => crate::mesh_asset::read_document(root, rel).and_then(|(document, _)| {
-            let levels = crate::mesh_asset::read_levels(root, rel, &document)?;
-            read.maps = crate::mesh_asset::map_paths(rel, &document)
-                .into_iter()
-                .chain(
-                    levels
-                        .iter()
-                        .flat_map(|level| crate::mesh_asset::map_paths(&level.rel, &level.doc)),
-                )
-                .map(|(path, _, _)| path)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            Ok(())
-        }),
+        Doc::Mesh => {
+            crate::mesh_asset::with_mesh_source(root, rel, ludion_scene::check_mesh_surfaces)
+                .and_then(|((document, tags), _)| {
+                    read.surfaces = tags.map(|tags| tags.names).unwrap_or_default();
+                    let levels = crate::mesh_asset::read_levels(root, rel, &document)?;
+                    read.maps =
+                        crate::mesh_asset::map_paths(rel, &document)
+                            .into_iter()
+                            .chain(levels.iter().flat_map(|level| {
+                                crate::mesh_asset::map_paths(&level.rel, &level.doc)
+                            }))
+                            .map(|(path, _, _)| path)
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect();
+                    Ok(())
+                })
+        }
         Doc::Voxel => crate::voxel_mesh::read_document(root, rel).map(|_| ()),
         Doc::Sculpt => crate::sculpt_mesh::read_document(root, rel).map(|_| ()),
         Doc::Assembly => crate::assembly_mesh::load_documents(root, rel).map(|_| ()),
