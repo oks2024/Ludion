@@ -46,7 +46,7 @@
 - **W2:** facade boot reads the file before window, renderer and sink; `pin_quality` callers; the window
   host consumer; settings-at-start in the generic `ReplayHeader.save_docs` slot (key `settings`, from 0021 W2b) and replay install; `describe` shows file against
   effective; `ludion new` ignores `save/`; desktop-window and quality docs.
-- **W3:** text settings with 0024, rumble with 0021 W4, brightness with 0019.
+- **W3:** text settings with 0024, rumble with 0021 W4 (binds `set_rumble_intensity`), brightness with 0019.
 
 ## Status
 

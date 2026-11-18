@@ -16,9 +16,13 @@
 //! Point-to-point routing sits beside the shared flow fields: [`nav_path`] and its siblings answer a
 //! [`PathRequest`] (A* plus string pulling), and an agent that also carries a `NavGoal` walks a planned
 //! `NavRoute` instead of reading a field. The route is hashed sim state; the grid stays derived.
+//!
+//! A `NavLink` entity adds a directed edge between two nodes (a ladder, a vault). `nav_update` rebuilds
+//! the derived link table every call; routes plan across it, and a walker that reaches a link start stops
+//! with `NavRoute.status = at_link` until the game calls [`nav_link_done`]. The engine never moves the body.
 
 use ludion_components::nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
-use ludion_components::{NavAgent, NavSteering};
+use ludion_components::{NavAgent, NavLink, NavSteering};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
@@ -26,17 +30,17 @@ use ludion_core::math::sqrt;
 use ludion_core::par;
 use ludion_ecs::{SystemCtx, World};
 use ludion_nav::{
-    ColumnSource, FloorSample, FlowCache, GridParams, NavGrid, NodeId, PathOptions, PathStatus,
-    find_path, nearest_node, string_pull, walkable_line,
+    ColumnSource, FloorSample, FlowCache, GridParams, NavGrid, NavLinks, NodeId, OffMeshLink,
+    PathOptions, PathStatus, find_path_linked, nearest_node, string_pull_linked, walkable_line,
 };
-use ludion_physics::{PhysicsError, PhysicsWorld, QueryFilter, StaticBody};
+use ludion_physics::{LayerSet, PhysicsError, PhysicsWorld, QueryFilter, StaticBody};
 use ludion_renderer::DebugSegment;
 use ludion_spatial::Shape;
 use ludion_spatial::spatial3d::{Filter, Handle, Index3d, Neighbor};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::diagnostics::report_full;
+use crate::diagnostics::{offender_key, report_full};
 use crate::hierarchy::world_transform;
 
 /// Agents per parallel steering chunk.
@@ -240,6 +244,35 @@ pub struct Nav {
     full_rebuild: bool,
     rebuilds: u64,
     cells: Vec<[u32; 2]>,
+    table: LinkTable,
+}
+
+/// One enabled `NavLink` as the table holds it; its index in [`LinkTable::entries`] is the edge's tag.
+struct LinkEntry {
+    entity: EntityId,
+    from: NodeId,
+    to: NodeId,
+    bidirectional: bool,
+}
+
+/// The derived off-mesh link table: the search edges and the link entity behind each. Rebuilt by every
+/// [`nav_update`]; never hashed or snapshotted.
+#[derive(Default)]
+struct LinkTable {
+    links: NavLinks,
+    entries: Vec<LinkEntry>,
+}
+
+impl LinkTable {
+    /// The lowest link entity whose snapped ends are the nodes under `start` and `end`, in either order
+    /// for a bidirectional link.
+    fn resolve(&self, grid: &NavGrid, start: [f32; 3], end: [f32; 3]) -> Option<EntityId> {
+        let (a, b) = (grid.node_at(start)?, grid.node_at(end)?);
+        self.entries
+            .iter()
+            .find(|e| (e.from, e.to) == (a, b) || (e.bidirectional && (e.to, e.from) == (a, b)))
+            .map(|e| e.entity)
+    }
 }
 
 impl Nav {
@@ -257,6 +290,7 @@ impl Nav {
             full_rebuild: true,
             rebuilds: 0,
             cells: Vec::new(),
+            table: LinkTable::default(),
         })
     }
 
@@ -268,6 +302,11 @@ impl Nav {
     /// The grid, `None` until the first [`nav_update`] with a physics world.
     pub fn grid(&self) -> Option<&NavGrid> {
         self.grid.as_ref()
+    }
+
+    /// The off-mesh edges the last [`nav_update`] built from the enabled `NavLink`s; empty until then.
+    pub fn links(&self) -> &NavLinks {
+        &self.table.links
     }
 
     /// The flow-field cache, read-only: [`FlowCache::get`] answers only for a field already built.
@@ -284,6 +323,10 @@ impl Nav {
     /// The grid and the cache together, so a field can be asked for from the cache against the grid.
     pub fn parts(&mut self) -> (Option<&NavGrid>, &mut FlowCache) {
         (self.grid.as_ref(), &mut self.cache)
+    }
+
+    fn split(&mut self) -> (Option<&NavGrid>, &mut FlowCache, &LinkTable) {
+        (self.grid.as_ref(), &mut self.cache, &self.table)
     }
 
     /// Replaces the config and schedules a full rebuild at the next [`nav_update`].
@@ -524,7 +567,34 @@ pub fn nav_update(world: &mut World, _ctx: &SystemCtx) {
         Some(physics) => update(&mut nav, physics),
         None => Ok(()),
     };
+    let unsnapped = match nav.grid.as_ref() {
+        Some(grid) => {
+            let (table, unsnapped) = build_links(world, grid);
+            nav.table = table;
+            unsnapped
+        }
+        None => Vec::new(),
+    };
     world.insert_resource(nav);
+    for (entity, end, nearest) in unsnapped {
+        let help = match nearest {
+            Some(d) => format!(
+                "the nearest walkable node is {d:.2} m away: move the `{end}` end onto walkable ground or raise `snap_radius`"
+            ),
+            None => format!("no walkable node is near: move the `{end}` end onto walkable ground"),
+        };
+        let key = offender_key(world, entity);
+        report_full(
+            world,
+            key,
+            Diagnostic::new(
+                code::NAV_LINK_UNSNAPPED,
+                format!("the `{end}` end of a `NavLink` snaps to no walkable node, so the link is left out"),
+            )
+            .with_path(format!("/components/NavLink/{end}"))
+            .with_help(help),
+        );
+    }
     if let Err(error) = outcome {
         report_full(
             world,
@@ -539,16 +609,77 @@ pub fn nav_update(world: &mut World, _ctx: &SystemCtx) {
     }
 }
 
+/// A link end that snapped to nothing: its entity, `"from"` or `"to"`, and the nearest node's distance.
+type Unsnapped = (EntityId, &'static str, Option<f32>);
+
+/// The link table from the enabled `NavLink`s, ascending by entity, each end snapped to the grid; plus
+/// the ends that snapped to nothing as `(entity, "from" | "to", nearest node distance)`.
+fn build_links(world: &mut World, grid: &NavGrid) -> (LinkTable, Vec<Unsnapped>) {
+    let mut found: Vec<(EntityId, NavLink)> = world
+        .query_ids::<(&NavLink,)>()
+        .map(|(id, (link,))| (id, link.clone()))
+        .collect();
+    found.sort_by_key(|(id, _)| *id);
+    let mut table = LinkTable::default();
+    let mut unsnapped = Vec::new();
+    let mut edges = Vec::new();
+    for (entity, link) in found.into_iter().filter(|(_, l)| l.enabled) {
+        let affine = crate::hierarchy::world_affine(world, entity);
+        let posed = |p: [f32; 3]| affine.as_ref().map_or(p, |a| a.transform_point(p));
+        let snap = |p: [f32; 3]| {
+            if p.iter().all(|c| c.is_finite()) {
+                nearest_node(grid, p, link.snap_radius)
+            } else {
+                None
+            }
+        };
+        let (from, to) = (snap(posed(link.from)), snap(posed(link.to)));
+        for (end, node, point) in [("from", from, link.from), ("to", to, link.to)] {
+            if node.is_none() {
+                let p = posed(point);
+                let wide = if p.iter().all(|c| c.is_finite()) {
+                    nearest_node(grid, p, 1.0e6)
+                } else {
+                    None
+                };
+                let distance = wide.map(|n| {
+                    let q = grid.node_pos(n);
+                    let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+                    sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
+                });
+                unsnapped.push((entity, end, distance));
+            }
+        }
+        let (Some(from), Some(to)) = (from, to) else {
+            continue;
+        };
+        let (a, b) = (grid.node_pos(from), grid.node_pos(to));
+        let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        edges.push(OffMeshLink {
+            from,
+            to,
+            cost: sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) + link.cost,
+            bidirectional: link.bidirectional,
+            tag: table.entries.len() as u32,
+        });
+        table.entries.push(LinkEntry {
+            entity,
+            from,
+            to,
+            bidirectional: link.bidirectional,
+        });
+    }
+    table.links = NavLinks::new(edges);
+    (table, unsnapped)
+}
+
 fn update(nav: &mut Nav, physics: &PhysicsWorld) -> Result<(), PhysicsError> {
     let mut statics: Vec<StaticBody> = physics.static_bodies().collect();
     statics.sort_by_key(|s| s.entity);
     let config = nav.config.clone();
-    let filter = config
-        .ignore_layers
-        .iter()
-        .fold(QueryFilter::new().only_fixed(), |q, name| {
-            q.ignore_layer(name.clone())
-        });
+    let filter = QueryFilter::new()
+        .only_fixed()
+        .ignore_set(&LayerSet::from(config.ignore_layers.clone()));
     let full = nav.full_rebuild || nav.grid.is_none();
     let (min, max) = if full {
         ([0, 0], [config.nx - 1, config.nz - 1])
@@ -634,6 +765,8 @@ pub struct NavPath {
     pub waypoints: Vec<[f32; 3]>,
     /// Nodes the search expanded.
     pub expanded: u32,
+    /// Waypoint indices where a `NavLink` traversal starts: waypoint `i` is the link start, `i + 1` its end.
+    pub links: Vec<u32>,
 }
 
 impl NavPath {
@@ -643,6 +776,7 @@ impl NavPath {
             cost: f32::INFINITY,
             waypoints: Vec::new(),
             expanded,
+            links: Vec::new(),
         }
     }
 }
@@ -725,15 +859,16 @@ fn project(grid: &NavGrid, p: [f32; 3], node: NodeId) -> [f32; 3] {
 }
 
 /// Plans `req` over `grid`: the one planner `nav_path` and routed steering share.
-fn plan(grid: &NavGrid, req: &PathRequest, project_start: bool) -> NavPath {
+fn plan(grid: &NavGrid, table: &LinkTable, req: &PathRequest, project_start: bool) -> NavPath {
     let (Some(start), Some(goal)) = (
         nearest_node(grid, req.from, req.snap_radius),
         nearest_node(grid, req.to, req.snap_radius),
     ) else {
         return NavPath::unreachable(0);
     };
-    let found = find_path(
+    let found = find_path_linked(
         grid,
+        &table.links,
         start,
         goal,
         &PathOptions {
@@ -745,7 +880,7 @@ fn plan(grid: &NavGrid, req: &PathRequest, project_start: bool) -> NavPath {
     if found.status == PathStatus::Unreachable {
         return NavPath::unreachable(found.expanded);
     }
-    let mut waypoints = string_pull(grid, &found.nodes);
+    let (mut waypoints, marks) = string_pull_linked(grid, &found);
     if let Some(first) = waypoints.first_mut() {
         *first = if project_start {
             project(grid, req.from, start)
@@ -763,6 +898,7 @@ fn plan(grid: &NavGrid, req: &PathRequest, project_start: bool) -> NavPath {
         cost: found.cost,
         waypoints,
         expanded: found.expanded,
+        links: marks.into_iter().map(|(i, _)| i).collect(),
     }
 }
 
@@ -770,7 +906,8 @@ fn plan(grid: &NavGrid, req: &PathRequest, project_start: bool) -> NavPath {
 /// waypoints are the few corners a straight-line walker needs. Both ends snap to the nearest node within
 /// `snap_radius`; an end with none is [`PathStatus::Unreachable`]. A goal that cannot be reached is
 /// [`PathStatus::Partial`] (a path to the reachable node nearest it) unless `partial` is off. Pure
-/// and deterministic; it reads the grid and changes nothing.
+/// and deterministic; it reads the grid and changes nothing. Enabled `NavLink`s are edges of the search:
+/// `links` on the answer lists the waypoints where a traversal starts.
 ///
 /// # Errors
 /// `L4140` before the grid exists (no `.nav(..)` opt-in, or `nav_update` has not run); `L4141` for a
@@ -789,7 +926,13 @@ fn plan(grid: &NavGrid, req: &PathRequest, project_start: bool) -> NavPath {
 pub fn nav_path(world: &World, req: &PathRequest) -> Result<NavPath, Diagnostic> {
     let grid = nav_grid(world)?;
     check_request(req)?;
-    Ok(plan(grid, req, true))
+    let table = world.resource::<Nav>().map(|nav| &nav.table);
+    Ok(plan(
+        grid,
+        table.unwrap_or(&LinkTable::default()),
+        req,
+        true,
+    ))
 }
 
 /// The walking distance in metres from `from` to `to` along the grid, or `None` when the goal cannot be
@@ -886,6 +1029,10 @@ enum RouteWrite {
 /// plan time, so only a grid change can break it; the agent's own drift off the line never does.
 fn leg_walkable(grid: &NavGrid, route: &NavRoute) -> bool {
     let index = route.index as usize;
+    // A leg that starts at a link start is the traversal, not a line to walk.
+    if index > 0 && route.links.contains(&(index as u32 - 1)) {
+        return true;
+    }
     // The route was pulled between node centres; the goal end sits off-centre, so test the centre.
     let centre = |p: [f32; 3]| grid.node_at(p).map_or(p, |n| grid.node_pos(n));
     match (index.checked_sub(1), route.waypoints.get(index)) {
@@ -894,15 +1041,37 @@ fn leg_walkable(grid: &NavGrid, route: &NavRoute) -> bool {
     }
 }
 
+/// Whether the first link traversal still ahead on `route` no longer resolves to an enabled link.
+fn pending_link_missing(grid: &NavGrid, table: &LinkTable, route: &NavRoute) -> bool {
+    let Some(&i) = route.links.iter().find(|&&i| i >= route.index) else {
+        return false;
+    };
+    let i = i as usize;
+    match (route.waypoints.get(i), route.waypoints.get(i + 1)) {
+        (Some(&start), Some(&end)) => table.resolve(grid, start, end).is_none(),
+        _ => true,
+    }
+}
+
 /// The serial plan phase for one routed walker: decides from hashed state and the current grid whether
 /// the route needs planning, and plans it while the per-tick `budget` lasts.
-fn plan_route(grid: &NavGrid, steer: &mut Steer, goal: NavGoal, budget: &mut u32) {
+fn plan_route(
+    grid: &NavGrid,
+    table: &LinkTable,
+    steer: &mut Steer,
+    goal: NavGoal,
+    budget: &mut u32,
+) {
     let cell = |p| grid.cell_of(p);
     let needs_plan = match &steer.route {
         None => true,
+        // A walker stopped at a link waits for `nav_link_done`; nothing replans it.
+        Some(route) if route.status == NavRouteStatus::AtLink => false,
         Some(route) => {
             route.status == NavRouteStatus::Planning
                 || cell(goal.at) != cell(route.goal)
+                || (route.status == NavRouteStatus::Following
+                    && pending_link_missing(grid, table, route))
                 || (goal.replan == NavReplan::OnChange
                     && route.status == NavRouteStatus::Following
                     && !route.partial
@@ -911,6 +1080,7 @@ fn plan_route(grid: &NavGrid, steer: &mut Steer, goal: NavGoal, budget: &mut u32
     };
     if !needs_plan {
         if let Some(route) = steer.route.as_mut()
+            && route.status != NavRouteStatus::AtLink
             && route.goal != goal.at
         {
             // The goal moved inside its cell: follow it without planning again.
@@ -935,9 +1105,15 @@ fn plan_route(grid: &NavGrid, steer: &mut Steer, goal: NavGoal, budget: &mut u32
     };
     if *budget > 0 {
         *budget -= 1;
-        let path = plan(grid, &PathRequest::new(steer.pos, goal.at), false);
+        let path = plan(grid, table, &PathRequest::new(steer.pos, goal.at), false);
         if path.status != PathStatus::Unreachable {
-            route.index = 1.min(path.waypoints.len().saturating_sub(1)) as u32;
+            // A route that opens on a link start must stop there, not walk past it.
+            route.index = if path.links.first() == Some(&0) {
+                0
+            } else {
+                1.min(path.waypoints.len().saturating_sub(1)) as u32
+            };
+            route.links = path.links;
             route.status = NavRouteStatus::Following;
             route.partial = path.status == PathStatus::Partial;
             route.cost = path.cost;
@@ -1019,11 +1195,11 @@ pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
     let mut nav = world.remove_resource::<Nav>();
     if let Some(nav) = nav.as_mut() {
         let mut budget = nav.config.max_path_requests_per_tick;
-        let (grid, cache) = nav.parts();
+        let (grid, cache, table) = nav.split();
         if let Some(grid) = grid {
             for steer in steers.iter_mut().filter(|s| !s.agent.flying) {
                 if let Some(goal) = steer.goal {
-                    plan_route(grid, steer, goal, &mut budget);
+                    plan_route(grid, table, steer, goal, &mut budget);
                     continue;
                 }
                 steer.node = grid.node_at(steer.agent.target);
@@ -1046,12 +1222,13 @@ pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
     };
     let grid = nav.as_ref().and_then(Nav::grid);
     let cache = nav.as_ref().map(|n| &n.cache);
+    let table = nav.as_ref().map(|n| &n.table);
     let chunks = par::par_map_chunks(&steers, STEER_CHUNK, |_, chunk| {
         let mut scratch: Vec<Neighbor> = Vec::new();
         chunk
             .iter()
-            .map(|steer| steer_one(steer, grid, cache, index, &mut scratch))
-            .collect::<Vec<([f32; 3], Option<(u32, NavRouteStatus)>)>>()
+            .map(|steer| steer_one(steer, grid, table, cache, index, &mut scratch))
+            .collect::<Vec<([f32; 3], Option<Advance>)>>()
     });
 
     for (steer, (velocity, advance)) in steers.iter_mut().zip(chunks.into_iter().flatten()) {
@@ -1069,8 +1246,49 @@ pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
     }
 }
 
+/// Tells a routed agent its game-played link traversal is finished: the route continues from the link's
+/// end (`index` moves to the waypoint after the link start, `status` back to `following`, `link` clears).
+/// The game moves the body to the link's end first; the engine never does.
+///
+/// # Errors
+/// `L4146` when the entity has no `NavRoute`, or its route is not `at_link`.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Engine, nav_link_done};
+///
+/// let mut engine = Engine::builder().build().unwrap();
+/// let agent = engine.world_mut().spawn();
+/// // No route, so nothing is waiting at a link.
+/// let err = nav_link_done(engine.world_mut(), agent).unwrap_err();
+/// assert_eq!(err.code.as_str(), "L4146");
+/// ```
+pub fn nav_link_done(world: &mut World, agent: EntityId) -> Result<(), Diagnostic> {
+    let not_at_link = || {
+        Diagnostic::new(
+            code::NAV_NOT_AT_LINK,
+            format!("entity {agent:?} is not stopped at a nav link"),
+        )
+        .with_help("call `nav_link_done` only while its `NavRoute.status` is `at_link`; `ludion explain L4146`")
+    };
+    let Ok(Some(route)) = world.get_mut::<NavRoute>(agent) else {
+        return Err(not_at_link());
+    };
+    if route.status != NavRouteStatus::AtLink {
+        return Err(not_at_link());
+    }
+    let last = route.waypoints.len().saturating_sub(1) as u32;
+    route.index = (route.index + 1).min(last);
+    route.status = NavRouteStatus::Following;
+    route.link = None;
+    Ok(())
+}
+
+/// A route's `(index, status, link)` after this tick's steering.
+type Advance = (u32, NavRouteStatus, Option<EntityId>);
+
 /// Applies the plan phase's change and the steering advance to the stored [`NavRoute`].
-fn write_route(world: &mut World, steer: &mut Steer, advance: Option<(u32, NavRouteStatus)>) {
+fn write_route(world: &mut World, steer: &mut Steer, advance: Option<Advance>) {
     if steer.route_write == RouteWrite::Remove {
         let _ = world.remove::<NavRoute>(steer.entity);
         return;
@@ -1079,10 +1297,10 @@ fn write_route(world: &mut World, steer: &mut Steer, advance: Option<(u32, NavRo
         return;
     };
     let mut store = steer.route_write == RouteWrite::Store;
-    if let Some((index, status)) = advance
-        && (route.index, route.status) != (index, status)
+    if let Some((index, status, link)) = advance
+        && (route.index, route.status, route.link) != (index, status, link)
     {
-        (route.index, route.status) = (index, status);
+        (route.index, route.status, route.link) = (index, status, link);
         store = true;
     }
     if !store {
@@ -1099,10 +1317,11 @@ fn write_route(world: &mut World, steer: &mut Steer, advance: Option<(u32, NavRo
 fn steer_one(
     steer: &Steer,
     grid: Option<&NavGrid>,
+    table: Option<&LinkTable>,
     cache: Option<&FlowCache>,
     index: &Index3d,
     scratch: &mut Vec<Neighbor>,
-) -> ([f32; 3], Option<(u32, NavRouteStatus)>) {
+) -> ([f32; 3], Option<Advance>) {
     let Steer {
         entity, agent, pos, ..
     } = steer;
@@ -1111,13 +1330,19 @@ fn steer_one(
         let target = steer.goal.map_or(agent.target, |g| g.at);
         seek_flying(&NavAgent { target, ..*agent }, *pos)
     } else if steer.goal.is_some() {
-        let (velocity, adv) = seek_routed(steer, grid);
+        let (velocity, adv) = seek_routed(steer, grid, table);
         advance = adv;
         velocity
     } else {
         seek_walking(steer, grid, cache)
     };
-    if agent.neighbor_layers != 0 && agent.separation_neighbors > 0 {
+    // An agent traversing a link stands exactly still.
+    let at_link = steer
+        .route
+        .as_ref()
+        .is_some_and(|r| r.status == NavRouteStatus::AtLink)
+        || advance.is_some_and(|(_, status, _)| status == NavRouteStatus::AtLink);
+    if agent.neighbor_layers != 0 && agent.separation_neighbors > 0 && !at_link {
         let filter = Filter::new(agent.neighbor_layers).excluding(Handle::entity(*entity));
         index.k_nearest(
             *pos,
@@ -1144,7 +1369,11 @@ fn steer_one(
 
 /// A routed walker seeks the waypoint it is on, advancing past the ones it reaches; only a `following`
 /// route moves. Returns the velocity and the route's `(index, status)` after this tick.
-fn seek_routed(steer: &Steer, grid: Option<&NavGrid>) -> ([f32; 3], Option<(u32, NavRouteStatus)>) {
+fn seek_routed(
+    steer: &Steer,
+    grid: Option<&NavGrid>,
+    table: Option<&LinkTable>,
+) -> ([f32; 3], Option<Advance>) {
     let (Some(grid), Some(route)) = (grid, &steer.route) else {
         return ([0.0; 3], None);
     };
@@ -1161,14 +1390,23 @@ fn seek_routed(steer: &Steer, grid: Option<&NavGrid>) -> ([f32; 3], Option<(u32,
     };
     let mut at = (route.index as usize).min(last);
     if at == last && dist(last) <= agent.arrive_radius {
-        return ([0.0; 3], Some((at as u32, NavRouteStatus::Arrived)));
+        return ([0.0; 3], Some((at as u32, NavRouteStatus::Arrived, None)));
     }
     let pass = agent.arrive_radius.max(0.5 * grid.params().cell_size);
     while at < last && dist(at) <= pass {
+        if route.links.contains(&(at as u32))
+            && let Some(link) =
+                table.and_then(|t| t.resolve(grid, waypoints[at], waypoints[at + 1]))
+        {
+            return (
+                [0.0; 3],
+                Some((at as u32, NavRouteStatus::AtLink, Some(link))),
+            );
+        }
         at += 1;
     }
     let d = dist(at);
-    let advance = Some((at as u32, NavRouteStatus::Following));
+    let advance = Some((at as u32, NavRouteStatus::Following, None));
     if d <= 0.0 {
         return ([0.0; 3], advance);
     }
@@ -1232,6 +1470,7 @@ const FLOW_COLOR: [f32; 4] = [1.0, 0.85, 0.1, 1.0];
 const NODE_COLOR: [f32; 4] = [0.7, 0.7, 0.7, 1.0];
 const LINK_FLAT_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
 const LINK_STEP_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 1.0];
+const LINK_OFFMESH_COLOR: [f32; 4] = [1.0, 0.2, 0.9, 1.0];
 
 fn lifted(p: [f32; 3]) -> [f32; 3] {
     [p[0], p[1] + NAV_LIFT, p[2]]
@@ -1354,6 +1593,12 @@ pub(crate) fn debug_lines(
         }
     }
     if parts.grid {
+        for entry in &nav.table.entries {
+            let (a, b) = (grid.node_pos(entry.from), grid.node_pos(entry.to));
+            if (within(eye, a) || within(eye, b)) && lines.len() < NAV_MAX_SEGMENTS {
+                lines.push(seg(lifted(a), lifted(b), LINK_OFFMESH_COLOR));
+            }
+        }
         let half = 0.2 * cell;
         'nodes: for n in 0..grid.node_count() {
             #[allow(clippy::cast_possible_truncation)]

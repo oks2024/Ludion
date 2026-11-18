@@ -1847,6 +1847,9 @@ pub mod code {
     pub const PATROL_FOLLOWER_INVALID: DiagnosticCode = DiagnosticCode::new("L1524");
     /// `L1525` — a `PatrolState` has a non-finite or negative timer, or a non-finite `look_deg`.
     pub const PATROL_STATE_INVALID: DiagnosticCode = DiagnosticCode::new("L1525");
+    /// `L1526` — a `NavLink` has a non-finite `from` or `to`, a negative or non-finite `cost`, or a
+    /// non-positive or non-finite `snap_radius`.
+    pub const NAV_LINK_INVALID: DiagnosticCode = DiagnosticCode::new("L1526");
     /// `L1570` — a `Perceiver` field is invalid: no or too many sight zones, a bad range or angle, a
     /// duplicate zone name, a bad sweep or a bad visibility clamp.
     pub const PERCEIVER_INVALID: DiagnosticCode = DiagnosticCode::new("L1570");
@@ -1874,6 +1877,9 @@ pub mod code {
     /// `L4220` — the `Engine::builder().perception` config is invalid: no more than 32 classes, each
     /// non-empty and unique.
     pub const PERCEPTION_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L4220");
+    /// `L4221` — a due `Perceiver` has gone unserved for more than four of its own periods because
+    /// the `max_sight_rays_per_tick` budget is too small for the load. A warning, once per run.
+    pub const PERCEPTION_DEFERRED: DiagnosticCode = DiagnosticCode::new("L4221");
     /// `L1630` — a binding has zero or several sources.
     pub const INPUT_BINDING_SOURCES: DiagnosticCode = DiagnosticCode::new("L1630");
     /// `L1631` — a binding source does not fit its action kind.
@@ -1908,6 +1914,8 @@ pub mod code {
     pub const INPUT_BINDINGS_RESET: DiagnosticCode = DiagnosticCode::new("L4277");
     /// `L4278` — the input bindings file could not be written to disk.
     pub const INPUT_BINDINGS_SAVE_FAILED: DiagnosticCode = DiagnosticCode::new("L4278");
+    /// `L4279` — a rumble request had a non-finite value; it played as 0.
+    pub const RUMBLE_EFFECT_INVALID: DiagnosticCode = DiagnosticCode::new("L4279");
 
     /// `L1610` — a `UiTween` track has the wrong `from`/`to` arity, a non-finite value or a negative
     /// `duration`.
@@ -1922,6 +1930,16 @@ pub mod code {
     pub const UI_RECT_SAMPLING_IGNORED: DiagnosticCode = DiagnosticCode::new("L1613");
     /// `L2301` — a `UiRect` nine-slice border does not fit its region or rect; drawn clamped.
     pub const UI_SLICE_CLAMPED: DiagnosticCode = DiagnosticCode::new("L2301");
+    /// `L1614` — a `UiGroup` `scale` or `opacity` is out of range.
+    pub const UI_GROUP_INVALID: DiagnosticCode = DiagnosticCode::new("L1614");
+    /// `L1615` — `group` references form a cycle.
+    pub const UI_GROUP_CYCLE: DiagnosticCode = DiagnosticCode::new("L1615");
+    /// `L1616` — a `group` chain is deeper than the limit.
+    pub const UI_GROUP_TOO_DEEP: DiagnosticCode = DiagnosticCode::new("L1616");
+    /// `L1617` — a `group`, `fill_group` or `fill` combination that has no effect.
+    pub const UI_GROUP_IGNORED: DiagnosticCode = DiagnosticCode::new("L1617");
+    /// `L2302` — a UI element's `group` could not be resolved; drawn ungrouped.
+    pub const UI_GROUP_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L2302");
 
     /// `L1341` — a `Static` entity holds something the static path cannot; it takes the dynamic path.
     pub const STATIC_INELIGIBLE: DiagnosticCode = DiagnosticCode::new("L1341");
@@ -2107,6 +2125,15 @@ pub mod code {
     /// or a `DropShadow` authors `type: wedge`. Raised by `ludion-engine`'s `GroundMarker` and
     /// `DropShadow` semantic validators, at scene-check / `component.set` time.
     pub const GROUND_MARKER_WEDGE_INVALID: DiagnosticCode = DiagnosticCode::new("L2113");
+
+    /// `L2340` — a `GroundMarker` ring is not drawable as authored: `thickness` above `radius`, or
+    /// `fill` outside `[0, 1]`; or a `DropShadow` authors `type: ring`. Raised by `ludion-components`'
+    /// `GroundMarker` and `DropShadow` semantic validators.
+    pub const GROUND_MARKER_RING_INVALID: DiagnosticCode = DiagnosticCode::new("L2340");
+
+    /// `L2341` — a `GroundMarker.style` field is out of range: `outline_px`/`grid_px` not positive
+    /// and finite, or an alpha or `flicker` outside `[0, 1]`. Pointer `/style/<field>`.
+    pub const GROUND_MARKER_STYLE_INVALID: DiagnosticCode = DiagnosticCode::new("L2341");
 
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
@@ -2663,6 +2690,12 @@ pub mod code {
     /// `L4144` — an entity carries a `PatrolFollower` but no `NavAgent`. A **warning**, reported once
     /// per entity by `patrol_update`; the patrol does not run.
     pub const PATROL_WITHOUT_AGENT: DiagnosticCode = DiagnosticCode::new("L4144");
+    /// `L4145` — an end of an enabled `NavLink` snaps to no walkable node within its `snap_radius`, so the
+    /// link is left out of the table. A **warning**, reported once per link per grid build.
+    pub const NAV_LINK_UNSNAPPED: DiagnosticCode = DiagnosticCode::new("L4145");
+    /// `L4146` — `nav_link_done` was called for an entity whose `NavRoute` is not `at_link`. An **error**
+    /// returned to the caller.
+    pub const NAV_NOT_AT_LINK: DiagnosticCode = DiagnosticCode::new("L4146");
 
     /// `L4033` — a `ProjectileLook::Mesh` asset or `ProjectileLook::Voxel` model cannot be drawn: at `build` the file does not
     /// exist (an **error**, refused with a nearest-name suggestion); at extract it failed to load
@@ -9346,6 +9379,16 @@ written by `patrol_update`; a scene that carries one is a snapshot.
 Fix: delete the component and let `patrol_update` start the patrol again.",
     },
     CodeEntry {
+        code: code::NAV_LINK_INVALID,
+        severity: Severity::Error,
+        title: "a nav link is invalid",
+        explanation: "A `NavLink` has a non-finite component in `from` or `to`, a negative or non-finite `cost`, or a
+non-positive or non-finite `snap_radius` (pointers `/entities/{i}/components/NavLink/from/{k}`, `/to/{k}`,
+`/cost`, `/snap_radius`). A scene with one is refused.
+
+Fix: write finite endpoints, a `cost` of 0 or more metres and a `snap_radius` above 0.",
+    },
+    CodeEntry {
         code: code::PERCEIVER_INVALID,
         severity: Severity::Error,
         title: "a perceiver is invalid",
@@ -9354,8 +9397,9 @@ A `Perceiver` field is out of range (pointer `/entities/{i}/components/Perceiver
 sight zones or more than 8; a zone's `range` is not finite and above 0, its `half_angle_deg` is outside
 (0, 180] or its `vertical_half_angle_deg` outside (0, 90]; two zones share a `name`; a
 `visibility_clamp` has `lo > hi`; `see_through_max_range` is negative; or the `sweep` has a
-`period_s` that does not exceed `2 * dwell_s`, a sine with a `dwell_s`, or a non-finite value. A scene
-with one is refused.
+`period_s` that does not exceed `2 * dwell_s`, a sine with a `dwell_s`, or a non-finite value; or
+`period_ticks` is 0. A scene with one is refused. A `SightSampleRecord` with a non-finite `distance`,
+`angle_deg` or `effective_range` is refused the same way.
 
 Fix: correct the named field. A zone with the default `vertical_half_angle_deg` (45) is a wedge, not a cone.",
     },
@@ -9419,9 +9463,27 @@ Fix: give the perceiver `memory:` (see `ludion docs perception`), and pass finit
 32 names, an empty name or a repeated name (pointer `/classes/{j}`, `/noise_kinds/{j}`). Each name is
 one bit of a mask, so a list is capped at 32. It is also refused for a `surface_noise` entry with an
 empty or repeated `surface` or a negative or non-finite `multiplier` (`/surface_noise/{j}/...`), an
-`occlusion_factor` outside [0, 1] or a `max_occluders` outside 1 to 8. `build` refuses the config.
+`occlusion_factor` outside [0, 1] or a `max_occluders` outside 1 to 8, or a
+`max_sight_rays_per_tick` of 0 (`/max_sight_rays_per_tick`; leave it unset for no budget). `build`
+refuses the config.
 
 Fix: list each name once, at most 32, and keep the numbers in range.",
+    },
+    CodeEntry {
+        code: code::PERCEPTION_DEFERRED,
+        severity: Severity::Warning,
+        title: "a perceiver's sight is starved by the ray budget",
+        explanation: "\
+`perception_update` has not evaluated a perceiver's sight for more than four of its `period_ticks`
+(so at least five ticks for the default period of 1) because `PerceptionConfig.max_sight_rays_per_tick`
+served other perceivers first. Its carried samples go stale: `evaluated_tick` stops advancing and its
+guard acts on old sight. Reported once per run; `engine.describe` `perception.deferred` lists the
+perceivers waiting.
+
+This is a **warning**.
+
+Fix: raise `max_sight_rays_per_tick` (2048 is the recommended value), raise the `period_ticks` of
+far or idle perceivers, or give them fewer zones and sample points.",
     },
     CodeEntry {
         code: code::NOISE_ZONE_INVALID,
@@ -9487,6 +9549,25 @@ An entity carries a `PatrolFollower` but no `NavAgent`, so `patrol_update` has n
 it. Reported once per entity.
 
 Fix: add a `NavAgent` to the entity.",
+    },
+    CodeEntry {
+        code: code::NAV_LINK_UNSNAPPED,
+        severity: Severity::Warning,
+        title: "a nav link end is off the walkable grid",
+        explanation: "An enabled `NavLink` has an end with no walkable node within `snap_radius`, so the link is left out of the
+navigation table and no route crosses it. Reported once per link per grid build; the help names the
+nearest node's distance when one exists.
+
+Fix: move the end onto walkable ground, or raise `snap_radius`.",
+    },
+    CodeEntry {
+        code: code::NAV_NOT_AT_LINK,
+        severity: Severity::Error,
+        title: "the agent is not stopped at a nav link",
+        explanation: "`nav_link_done` was called for an entity whose `NavRoute` is missing or not `at_link`. Only a routed
+agent that reached a link start waits for it.
+
+Fix: call `nav_link_done` only while the agent's `NavRoute.status` is `at_link`.",
     },
     CodeEntry {
         code: code::INPUT_BINDING_SOURCES,
@@ -9656,6 +9737,18 @@ bindings still apply to this session.
 Fix: make `save/` writable and call `save()` again.",
     },
     CodeEntry {
+        code: code::RUMBLE_EFFECT_INVALID,
+        severity: Severity::Warning,
+        title: "a rumble request had a non-finite value",
+        explanation: "\nA game system called `Rumble::play()` with a `low`, `high` or `duration` that is NaN or infinite.
+The value played as 0, so a request with no other motor or duration left is dropped. Finite values
+out of range are clamped silently (motors to 0..=1, `duration` to 0..=2 seconds). It is one warning
+per frame boundary, and rumble is host feel: it never touches the simulation or the `WorldHash`.
+
+Fix: compute the motor strengths and the duration from finite values, for example guard a division
+that can reach zero before it feeds `RumbleEffect`.",
+    },
+    CodeEntry {
         code: code::UI_TWEEN_INVALID,
         severity: Severity::Error,
         title: "a UI tween track is invalid",
@@ -9723,6 +9816,59 @@ x the canvas pixel scale) larger than the rect. The borders shrink proportionall
 Reported once per entity, as a degraded warning at render time.
 
 Fix: shrink the `border` or `scale`, or enlarge the rect.",
+    },
+    CodeEntry {
+        code: code::UI_GROUP_INVALID,
+        severity: Severity::Error,
+        title: "a UI group has an out-of-range number",
+        explanation: "\
+A `UiGroup` `scale` (pointer `/entities/{i}/components/UiGroup/scale`) is non-finite or not above zero,
+or its `opacity` is non-finite or outside 0..1. A scene with one is refused.
+
+Fix: write a positive finite `scale` and an `opacity` between 0 and 1.",
+    },
+    CodeEntry {
+        code: code::UI_GROUP_CYCLE,
+        severity: Severity::Error,
+        title: "UI group references form a cycle",
+        explanation: "\
+A chain of `group` references on `UiRect`, `UiText`, `UiList` or `UiGroup` comes back to an entity it
+already passed through (pointer `/entities/{i}/components/{Component}/group`). A scene with one is
+refused.
+
+Fix: break the loop; a group's `group` must point at an outer group.",
+    },
+    CodeEntry {
+        code: code::UI_GROUP_TOO_DEEP,
+        severity: Severity::Error,
+        title: "a UI group chain is too deep",
+        explanation: "\
+An element sits inside more than 8 nested `UiGroup`s (pointer
+`/entities/{i}/components/{Component}/group`). A scene with one is refused.
+
+Fix: flatten the nesting to 8 groups or fewer.",
+    },
+    CodeEntry {
+        code: code::UI_GROUP_IGNORED,
+        severity: Severity::Warning,
+        title: "a UI group field is ignored",
+        explanation: "\
+A `UiRect` has `fill_group: true` without a `group` (pointer
+`/entities/{i}/components/UiRect/fill_group`), or has `fill: true` beside `group` or `fill_group`
+(`fill` wins and the group fields are ignored).
+
+Fix: set `group`, or drop `fill_group`; keep either `fill` or the group fields.",
+    },
+    CodeEntry {
+        code: code::UI_GROUP_UNRESOLVED,
+        severity: Severity::Warning,
+        title: "a UI element's group could not be resolved",
+        explanation: "\
+A UI element's `group` names a dead entity or one without `UiGroup`, or its chain runs past 8 groups
+(a wire spawn can build either). The element draws ungrouped. Reported once per entity, as a degraded
+warning at render time; `check-scene` reports a static reference to an entity without `UiGroup`.
+
+Fix: point `group` at a live entity that carries `UiGroup`, within 8 levels.",
     },
     CodeEntry {
         code: code::STATIC_INELIGIBLE,
@@ -10458,6 +10604,36 @@ in `[0, 1]`; use a `disc` or `segment` shape on a `DropShadow`.
 
     GroundMarker:
       shape: { type: wedge, half_angle_deg: 30.0, outer_radius: 7.0, inner_radius: 3.0, fill: 0.5 }",
+    },
+    CodeEntry {
+        code: code::GROUND_MARKER_RING_INVALID,
+        severity: Severity::Error,
+        title: "GroundMarker ring is not drawable",
+        explanation: "A `GroundMarker` authors a `type: ring` shape that cannot be drawn: `thickness` is greater
+than `radius` (the band would pass through the centre), or `fill` is outside `[0, 1]`. A `DropShadow`
+raises the same code when it authors `type: ring`, because a drop shadow is a disc or a segment. A
+wedge's optional `inner_half_angle_deg` outside `(0, half_angle_deg]` is `L2113`, not this code.
+The message names the field and the value; the JSON Pointer points at it.
+
+Fix: give the ring a `thickness` in `(0, radius]` and a `fill` in `[0, 1]`; use a `disc` or `segment`
+shape on a `DropShadow`.
+
+    GroundMarker:
+      shape: { type: ring, radius: 3.0, thickness: 0.2, dashes: 12 }",
+    },
+    CodeEntry {
+        code: code::GROUND_MARKER_STYLE_INVALID,
+        severity: Severity::Error,
+        title: "GroundMarker style is not valid",
+        explanation: "A `GroundMarker.style` field is out of range: `outline_px` or `grid_px` is not positive and
+finite, or one of `grid_alpha`, `interior_alpha`, `inner_alpha`, `fill_alpha` or `flicker` is
+outside `[0, 1]`. The message names the field and the value; the JSON Pointer is `/style/<field>`.
+
+Fix: give the pixel widths a value above 0 and every alpha and `flicker` a value in `[0, 1]`; omit the
+field to take its default.
+
+    GroundMarker:
+      style: { outline_px: 2.0, flicker: 0.5 }",
     },
     CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
@@ -13389,6 +13565,7 @@ mod tests {
         code::PATROL_DATA_CONSISTENCY,
         code::PATROL_FOLLOWER_INVALID,
         code::PATROL_STATE_INVALID,
+        code::NAV_LINK_INVALID,
         code::PERCEIVER_INVALID,
         code::SIGHT_TARGET_INVALID,
         code::PERCEPTION_NAME_UNKNOWN,
@@ -13413,12 +13590,18 @@ mod tests {
         code::INPUT_BINDINGS_ENVELOPE,
         code::INPUT_BINDINGS_RESET,
         code::INPUT_BINDINGS_SAVE_FAILED,
+        code::RUMBLE_EFFECT_INVALID,
         code::UI_TWEEN_INVALID,
         code::UI_WORLD_ANCHOR_INVALID,
         code::UI_MOTION_UNSUPPORTED,
         code::UI_RECT_SAMPLING_INVALID,
         code::UI_RECT_SAMPLING_IGNORED,
         code::UI_SLICE_CLAMPED,
+        code::UI_GROUP_INVALID,
+        code::UI_GROUP_CYCLE,
+        code::UI_GROUP_TOO_DEEP,
+        code::UI_GROUP_IGNORED,
+        code::UI_GROUP_UNRESOLVED,
         code::STATIC_INELIGIBLE,
         code::STATIC_PARENT_NOT_STATIC,
         code::STATIC_REWRITTEN,
@@ -13456,6 +13639,8 @@ mod tests {
         code::GI_VOLUME_EMPTY,
         code::DECAL_INVALID_ANGLE_FADE,
         code::GROUND_MARKER_WEDGE_INVALID,
+        code::GROUND_MARKER_RING_INVALID,
+        code::GROUND_MARKER_STYLE_INVALID,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,
@@ -13568,7 +13753,10 @@ mod tests {
         code::PATROL_ROUTE_UNLOADED,
         code::PATROL_POINT_UNREACHABLE,
         code::PATROL_WITHOUT_AGENT,
+        code::NAV_LINK_UNSNAPPED,
+        code::NAV_NOT_AT_LINK,
         code::PERCEPTION_CONFIG_INVALID,
+        code::PERCEPTION_DEFERRED,
         code::PROJECTILE_LOOK_ASSET,
         code::PHYSICS_SCALE_UNGATED,
         code::POSE_BLEND_POSE_MISSING,
@@ -13777,19 +13965,24 @@ mod tests {
             code::VIEWMODEL_LENS_NOT_ON_CAMERA,
             code::PERCEPTION_NAME_UNKNOWN,
             code::STIMULUS_REPORT_INVALID,
+            code::PERCEPTION_DEFERRED,
             code::NOISE_INVALID,
             code::PATROL_ROUTE_UNLOADED,
             code::PATROL_POINT_UNREACHABLE,
             code::PATROL_WITHOUT_AGENT,
+            code::NAV_LINK_UNSNAPPED,
             code::INPUT_ACTION_UNKNOWN,
             code::INPUT_OVERRIDE_UNKNOWN,
             code::INPUT_OVERRIDE_INVALID,
             code::INPUT_BINDINGS_ENVELOPE,
             code::INPUT_BINDINGS_RESET,
             code::INPUT_BINDINGS_SAVE_FAILED,
+            code::RUMBLE_EFFECT_INVALID,
             code::UI_MOTION_UNSUPPORTED,
             code::UI_RECT_SAMPLING_IGNORED,
             code::UI_SLICE_CLAMPED,
+            code::UI_GROUP_IGNORED,
+            code::UI_GROUP_UNRESOLVED,
             code::STATIC_INELIGIBLE,
             code::STATIC_PARENT_NOT_STATIC,
             code::STATIC_REWRITTEN,

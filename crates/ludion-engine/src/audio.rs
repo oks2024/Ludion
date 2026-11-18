@@ -23,8 +23,9 @@
 //! and a world rebuild sends [`AudioMessage::StopAllLoops`] rather than diffing against one.
 
 pub use ludion_core::audio::{
-    AudioCategory, AudioEvent, AudioMessage, Bus, CategoryGains, LoopId, MixLayer,
+    AudioCategory, AudioEvent, AudioMessage, Bus, CategoryGains, LoopId, MixLayer, VoiceId,
 };
+use ludion_core::ids::EntityId;
 use ludion_core::time::FrameIndex;
 use ludion_ecs::World;
 
@@ -39,10 +40,12 @@ pub struct AudioQueue {
     pending: Vec<Queued>,
     /// Sounds queued with a NaN or infinite gain since the last drain, played at gain 0 (`L5005`).
     non_finite: Vec<String>,
+    /// The next [`VoiceId`] [`play_on`](AudioQueue::play_on) hands out.
+    next_voice: u64,
 }
 
-/// One pending queue entry: a message ready to send, or a positional one-shot the engine resolves
-/// against the listener at the frame boundary.
+/// One pending queue entry: a message ready to send, a positional one-shot the engine resolves
+/// against the listener at the frame boundary, or an attached voice it follows.
 #[derive(Debug)]
 pub(crate) enum Queued {
     Message(AudioMessage),
@@ -50,6 +53,16 @@ pub(crate) enum Queued {
         event: AudioEvent,
         position: [f32; 3],
         range: f32,
+    },
+    On {
+        id: VoiceId,
+        entity: EntityId,
+        event: AudioEvent,
+        range: f32,
+    },
+    StopVoice {
+        id: VoiceId,
+        fade_frames: u32,
     },
 }
 
@@ -105,6 +118,55 @@ impl AudioQueue {
     /// ```
     pub fn play_at(&mut self, sound: impl Into<String>, gain: f32, position: [f32; 3], range: f32) {
         self.push_at(AudioEvent::new(sound, gain), position, range);
+    }
+
+    /// Plays `sound` once from `entity` and **follows it**: each tick the engine re-resolves the
+    /// voice's gain and pan against the listener (the [`play_at`](Self::play_at) falloff, `range` a
+    /// hard cutoff), so a speaker walking away fades out and one walking in is heard. The voice
+    /// starts even when `entity` is out of earshot, and ends when the clip does (the engine reads the
+    /// WAV's length) or when `entity` despawns (a ~10 ms fade). Returns the id [`voice_stop`] takes;
+    /// ids count up from `0` and restart when the world rebuilds.
+    ///
+    /// ```
+    /// # use ludion_ecs::World;
+    /// # use ludion_engine::audio::{AudioCategory, AudioQueue, VoiceId};
+    /// # let guard = World::new().spawn();
+    /// let mut queue = AudioQueue::default();
+    /// let first = queue.play_on(guard, "voice/chatter.wav", 0.8, 18.0, AudioCategory::Voice);
+    /// let second = queue.play_on(guard, "voice/alert.wav", 1.0, 18.0, AudioCategory::Voice);
+    /// assert_eq!((first, second), (VoiceId(0), VoiceId(1)));
+    /// queue.voice_stop(first, 6);
+    /// ```
+    ///
+    /// [`voice_stop`]: Self::voice_stop
+    pub fn play_on(
+        &mut self,
+        entity: EntityId,
+        sound: impl Into<String>,
+        gain: f32,
+        range: f32,
+        category: AudioCategory,
+    ) -> VoiceId {
+        let id = VoiceId(self.next_voice);
+        self.next_voice += 1;
+        let sound = sound.into();
+        let gain = self.finite_gain(&sound, gain);
+        self.pending.push(Queued::On {
+            id,
+            entity,
+            event: AudioEvent {
+                category,
+                ..AudioEvent::new(sound, gain)
+            },
+            range,
+        });
+        id
+    }
+
+    /// Fades the attached voice `id` out over `fade_frames` sim ticks (at least about 10 ms). A voice
+    /// that has already ended, was stopped or never existed is ignored.
+    pub fn voice_stop(&mut self, id: VoiceId, fade_frames: u32) {
+        self.pending.push(Queued::StopVoice { id, fade_frames });
     }
 
     /// Starts `sound` looping at `gain` until stopped — a global bed identified by its own path, so
@@ -414,9 +476,26 @@ impl SentLoop {
     ) -> bool {
         self.sound == sound
             && self.category == category
-            && (gain - self.gain).abs() <= self.gain * RESYNC_GAIN_RATIO
-            && (pan - self.pan).abs() <= RESYNC_PAN_STEP
+            && resync_is_current(self.gain, self.pan, gain, pan)
     }
+}
+
+/// Whether `gain` and `pan` are within [`RESYNC_GAIN_RATIO`] and [`RESYNC_PAN_STEP`] of the `sent_gain`
+/// and `sent_pan` the sink already has: the filter an emitter and an attached voice share.
+pub(crate) fn resync_is_current(sent_gain: f32, sent_pan: f32, gain: f32, pan: f32) -> bool {
+    (gain - sent_gain).abs() <= sent_gain * RESYNC_GAIN_RATIO
+        && (pan - sent_pan).abs() <= RESYNC_PAN_STEP
+}
+
+/// An attached voice (`AudioQueue::play_on`) the engine keeps following: the entity it rides, what
+/// it was authored at, the last gain and pan sent, and the frame it ends.
+pub(crate) struct AttachedVoice {
+    pub(crate) entity: EntityId,
+    pub(crate) gain: f32,
+    pub(crate) range: f32,
+    pub(crate) sent_gain: f32,
+    pub(crate) sent_pan: f32,
+    pub(crate) ends: FrameIndex,
 }
 
 /// The gain an [`AudioEmitter`](crate::AudioEmitter) sounds at from `listener`: its authored `gain`
@@ -545,11 +624,14 @@ impl AudioLogEntry {
             AudioMessage::MusicPlay { track, .. } => Some(track),
             AudioMessage::MusicSet { id, .. } => Some(id),
             AudioMessage::MusicStemGain { stem, .. } => Some(stem),
+            AudioMessage::VoiceStart { sound, .. } => Some(sound),
             AudioMessage::LoopStop { .. }
             | AudioMessage::StopAllLoops
             | AudioMessage::MusicStop { .. }
             | AudioMessage::BusGain { .. }
-            | AudioMessage::BusPause { .. } => None,
+            | AudioMessage::BusPause { .. }
+            | AudioMessage::VoiceSync { .. }
+            | AudioMessage::VoiceStop { .. } => None,
         }
     }
 
@@ -560,9 +642,12 @@ impl AudioLogEntry {
             AudioMessage::LoopSync { gain, .. }
             | AudioMessage::MusicPlay { gain, .. }
             | AudioMessage::MusicStemGain { gain, .. }
-            | AudioMessage::BusGain { gain, .. } => Some(*gain),
+            | AudioMessage::BusGain { gain, .. }
+            | AudioMessage::VoiceStart { gain, .. }
+            | AudioMessage::VoiceSync { gain, .. } => Some(*gain),
             AudioMessage::LoopStop { .. }
             | AudioMessage::StopAllLoops
+            | AudioMessage::VoiceStop { .. }
             | AudioMessage::BusPause { .. }
             | AudioMessage::MusicSet { .. }
             | AudioMessage::MusicStop { .. } => None,

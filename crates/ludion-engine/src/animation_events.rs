@@ -35,6 +35,18 @@
 //! fading-out run's footsteps would double the incoming clip's and a stale `end` would release a
 //! choice the game has already made.
 //!
+//! **Layers.** A skinned character's `AnimationLayers` layer with `events: true` fires its clip's
+//! events too, only while its weight at the gameplay instant is above 0, with `ClipEvent.layer` set to
+//! the layer's name (base events carry an empty `layer`) and `clip` to the layer's clip or blend. A
+//! layer keeps no walk record: a plain clip is walked statelessly over `(T(i − step), T(i)]`, `T`
+//! being the layer's clock times the binding speed, `i` the exact gameplay instant and `step` this
+//! tick's gameplay step, so the windows tile exactly under a scaled clock. The window is `[0, T(i)]`
+//! when the layer's `started` lies after `floor(i − step)`; a layer a system registered after
+//! `animation_events` starts therefore loses only an event at exactly `t = 0`, so register
+//! `play_layer` callers before it. A raw `speed` write mid-clip may skip or repeat one crossing that
+//! tick. A layer naming a blend fires its dominant point's events over its `BlendClock.layers` window.
+//! An entity's base events come first, then its layers' in list order.
+//!
 //! **Held frames.** A frame the game held crosses nothing: the resource is cleared and the walk
 //! skipped, so an event is never delivered twice for one gameplay frame.
 //!
@@ -73,9 +85,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::blend_clock::blend_crossings;
 use crate::character::CharacterBlendData;
-use crate::components::{Animation, BlendClock, Mesh, MeshSource, Sprite};
+use crate::components::{
+    Animation, AnimationLayers, BlendClock, Mesh, MeshSource, Sprite, layer_weight_at,
+};
 use crate::extract::clock_elapsed;
 use crate::prefab::PrefabInstance;
+use ludion_components::animation_layers::MAX_ANIMATION_LAYERS;
 
 /// The reserved name of the implicit event a one-shot clip fires when it finishes.
 const END: &str = "end";
@@ -229,6 +244,9 @@ pub struct ClipEvent {
     pub clip: String,
     /// The event's authored name, or `end` for a one-shot's implicit end.
     pub name: String,
+    /// The `AnimationLayers` layer that fired it; empty for the base clip. `clip` then names the
+    /// layer's clip or blend.
+    pub layer: String,
 }
 
 /// Every [`ClipEvent`] the last [`animation_events`] run fired, in deterministic order (see the
@@ -338,6 +356,8 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
             );
         }
     }
+    // A character with no base clip still walks its event-firing layers.
+    let mut baseless = Vec::new();
     for (id, (animation, mesh)) in world.query_ids::<(&Animation, &Mesh)>() {
         let model = match &mesh.shape {
             MeshSource::Assembly(rel) => Model::Assembly(rel.clone()),
@@ -346,80 +366,107 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
         };
         if !animation.clip.is_empty() {
             playing.insert(id, (animation.clone(), model));
+        } else if matches!(model, Model::Character(_)) {
+            baseless.push((id, animation.clone(), model));
+        }
+    }
+    for (id, animation, model) in baseless {
+        let layered = world
+            .component::<AnimationLayers>(id)
+            .is_some_and(|stack| stack.layers.iter().any(|layer| layer.events));
+        if layered {
+            playing.insert(id, (animation, model));
         }
     }
     for (id, (animation, model)) in playing {
         let animation = &animation;
         let clip = &animation.clip;
-        let timing = match library.timings(&model) {
-            Ok(timings) => timings.get(clip),
-            Err(error) => {
-                failures.push((id, clip.clone(), model.path().to_string(), error.to_vec()));
-                None
+        'base: {
+            if clip.is_empty() {
+                break 'base;
             }
-        };
-        let Some(timing) = timing else {
-            if let Model::Character(rel) = &model
-                && let Some(clock) = world.component::<BlendClock>(id)
-                && let Some(blend) = library.blends(rel).iter().find(|blend| blend.name == *clip)
-                && clock.blend == *clip
-            {
-                let mut names = Vec::new();
-                blend_crossings(blend, animation.params, clock, &mut names);
-                fired.extend(names.into_iter().map(|name| ClipEvent {
-                    entity: id,
-                    clip: clip.clone(),
-                    name,
-                }));
+            let timing = match library.timings(&model) {
+                Ok(timings) => timings.get(clip),
+                Err(error) => {
+                    failures.push((id, clip.clone(), model.path().to_string(), error.to_vec()));
+                    None
+                }
+            };
+            let Some(timing) = timing else {
+                if let Model::Character(rel) = &model
+                    && let Some(clock) = world.component::<BlendClock>(id)
+                    && let Some(blend) =
+                        library.blends(rel).iter().find(|blend| blend.name == *clip)
+                    && clock.blend == *clip
+                {
+                    let mut names = Vec::new();
+                    blend_crossings(
+                        blend,
+                        animation.params,
+                        (clock.prev, clock.phase),
+                        &mut names,
+                    );
+                    fired.extend(names.into_iter().map(|name| ClipEvent {
+                        entity: id,
+                        clip: clip.clone(),
+                        name,
+                        layer: String::new(),
+                    }));
+                }
+                break 'base;
+            };
+            let started = animation.started.as_u64();
+            if ticks < started {
+                break 'base;
             }
-            continue;
-        };
-        let started = animation.started.as_u64();
-        if ticks < started {
-            continue;
+            let frame = FrameIndex::new(started);
+            let (speed, anchor) = (animation.speed, animation.anchor);
+            let at =
+                |time: GameTime| clock_elapsed(time, frame, speed, anchor.as_ref()) * timing.speed;
+            let t_now = at(now);
+            let old = record.as_mut().and_then(|record| {
+                let index = record.clips.binary_search_by_key(&id, |c| c.entity).ok()?;
+                Some((record.tick, &mut record.clips[index]))
+            });
+            let resumed = old
+                .as_ref()
+                // A scaled clock repeats a gameplay tick across sim ticks, so the same tick resumes too.
+                .filter(|(tick, last)| {
+                    (*tick == ticks || tick + 1 == ticks)
+                        && last.clip == *clip
+                        && last.started == frame
+                })
+                .map(|(_, last)| last.t);
+            let prev = match resumed {
+                Some(t) => Some(t),
+                // Started this tick, or stamped after last tick's walk: nothing has been walked yet.
+                None if started + 1 >= ticks => None,
+                // Already running when first seen (a load, a switch, a restore from an older snapshot).
+                None => Some(at(GameTime::from_ticks(ticks - 1, now.rate()))),
+            };
+            // A raw `speed` write that lowers the speed pulls clip time back below the point already
+            // walked; keeping the furthest point fires nothing until the clock passes it again.
+            let reached = resumed.map_or(t_now, |p| t_now.max(p));
+            let walked_clip = match old {
+                Some((_, last)) if last.clip == *clip => std::mem::take(&mut last.clip),
+                _ => clip.clone(),
+            };
+            walked.push(WalkedClip {
+                entity: id,
+                clip: walked_clip,
+                started: frame,
+                t: reached,
+            });
+            let mut names = Vec::new();
+            crossings(timing, prev, t_now, &mut names);
+            fired.extend(names.into_iter().map(|name| ClipEvent {
+                entity: id,
+                clip: clip.clone(),
+                name: name.to_string(),
+                layer: String::new(),
+            }));
         }
-        let frame = FrameIndex::new(started);
-        let (speed, anchor) = (animation.speed, animation.anchor);
-        let at = |time: GameTime| clock_elapsed(time, frame, speed, anchor.as_ref()) * timing.speed;
-        let t_now = at(now);
-        let old = record.as_mut().and_then(|record| {
-            let index = record.clips.binary_search_by_key(&id, |c| c.entity).ok()?;
-            Some((record.tick, &mut record.clips[index]))
-        });
-        let resumed = old
-            .as_ref()
-            // A scaled clock repeats a gameplay tick across sim ticks, so the same tick resumes too.
-            .filter(|(tick, last)| {
-                (*tick == ticks || tick + 1 == ticks) && last.clip == *clip && last.started == frame
-            })
-            .map(|(_, last)| last.t);
-        let prev = match resumed {
-            Some(t) => Some(t),
-            // Started this tick, or stamped after last tick's walk: nothing has been walked yet.
-            None if started + 1 >= ticks => None,
-            // Already running when first seen (a load, a switch, a restore from an older snapshot).
-            None => Some(at(GameTime::from_ticks(ticks - 1, now.rate()))),
-        };
-        // A raw `speed` write that lowers the speed pulls clip time back below the point already
-        // walked; keeping the furthest point fires nothing until the clock passes it again.
-        let reached = resumed.map_or(t_now, |p| t_now.max(p));
-        let walked_clip = match old {
-            Some((_, last)) if last.clip == *clip => std::mem::take(&mut last.clip),
-            _ => clip.clone(),
-        };
-        walked.push(WalkedClip {
-            entity: id,
-            clip: walked_clip,
-            started: frame,
-            t: reached,
-        });
-        let mut names = Vec::new();
-        crossings(timing, prev, t_now, &mut names);
-        fired.extend(names.into_iter().map(|name| ClipEvent {
-            entity: id,
-            clip: clip.clone(),
-            name: name.to_string(),
-        }));
+        walk_layers(world, &mut library, ctx, id, &model, fired);
     }
     world.insert_resource(library);
     world.insert_resource(AnimationWalk {
@@ -442,6 +489,67 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
             crate::diagnostics::offender_key(world, id)
         );
         crate::diagnostics::report_full(world, key, diagnostic);
+    }
+}
+
+/// Appends the events of `id`'s event-firing `AnimationLayers` layers, in list order (the module
+/// docs' "Layers" paragraph). Only a skinned character has layers.
+fn walk_layers(
+    world: &World,
+    library: &mut AnimationLibrary,
+    ctx: &SystemCtx,
+    id: EntityId,
+    model: &Model,
+    fired: &mut Vec<ClipEvent>,
+) {
+    let Model::Character(rel) = model else {
+        return;
+    };
+    let Some(stack) = world.component::<AnimationLayers>(id) else {
+        return;
+    };
+    let now = ctx.game_instant;
+    let ticks = now.ticks_floor();
+    let step_q16 = (ctx.game_scale() * 65536.0) as u64;
+    let prev_instant = GameTime::from_q16(now.as_q16().saturating_sub(step_q16), now.rate());
+    for layer in stack.layers.iter().take(MAX_ANIMATION_LAYERS) {
+        if !layer.events || layer_weight_at(layer, now) <= 0.0 {
+            continue;
+        }
+        let mut names: Vec<String> = Vec::new();
+        let timing = library
+            .timings(model)
+            .ok()
+            .and_then(|timings| timings.get(&layer.clip));
+        if let Some(timing) = timing {
+            if ticks < layer.started.as_u64() {
+                continue;
+            }
+            let at = |time: GameTime| {
+                clock_elapsed(time, layer.started, layer.speed, None) * timing.speed
+            };
+            let prev =
+                (layer.started.as_u64() <= prev_instant.ticks_floor()).then(|| at(prev_instant));
+            let mut crossed = Vec::new();
+            crossings(timing, prev, at(now), &mut crossed);
+            names.extend(crossed.into_iter().map(str::to_string));
+        } else if let Some(blend) = library.blends(rel).iter().find(|b| b.name == layer.clip)
+            && let Some(entry) = world.component::<BlendClock>(id).and_then(|clock| {
+                clock.layers.iter().find(|entry| {
+                    entry.name == layer.name
+                        && entry.blend == layer.clip
+                        && entry.started == layer.started
+                })
+            })
+        {
+            blend_crossings(blend, layer.params, (entry.prev, entry.phase), &mut names);
+        }
+        fired.extend(names.into_iter().map(|name| ClipEvent {
+            entity: id,
+            clip: layer.clip.clone(),
+            name,
+            layer: layer.name.clone(),
+        }));
     }
 }
 

@@ -44,8 +44,29 @@ Runnable: the `AudioListener` doctest and `crates/ludion-engine/tests/audio.rs`.
   listener alone is enough for emitters to sync.
 - **Nothing here reaches `WorldHash`, snapshots or replays**; the component is read by the audio path only.
 
+## Attached voices
+
+`AudioQueue::play_on` plays a one-shot that follows an entity while it plays.
+
+```rust,ignore
+let id = queue.play_on(guard, "voice/chatter.wav", 0.8, 18.0, AudioCategory::Voice); // entity, sound, gain, range, bus
+queue.voice_stop(id, 6); // optional: fade it out over 6 ticks
+```
+
+- **It follows the entity.** Each tick the engine re-resolves the voice's gain and pan against the listener (the
+  `play_at` falloff) and sends a `VoiceSync` only when they move past the emitter's 1% / 0.02 steps.
+- **It starts even when inaudible**, at gain `0.0`: a line begun out of earshot is heard when its speaker walks in.
+  A voice on an already-dead entity sends nothing.
+- **It ends with the clip.** The engine reads the WAV's length at the frame boundary and stops following after
+  `ceil(frames x tick_hz / sample_rate)` ticks; `audio_messages` carries `VoiceStart`, `VoiceSync`, `VoiceStop`.
+- **A despawned entity stops it** with the sink's ~10 ms fade; `voice_stop` on an ended or unknown id is ignored.
+- **Ids count up from `0` per queue** and restart when the world rebuilds (`scene.load`, restore).
+- A device reopen drops attached voices, as it drops one-shots; only loops come back.
+
 ## Gotchas
 
+- A WAV that is not 16-bit PCM never decodes: its voice still starts (the sink reports it) but is never followed
+  or ended by length.
 - To pan by where the player's body faces rather than where the camera looks, use `orientation: self`.
 - There is no blend between player and camera: parent the listener where the ear should be.
 - The listener moves with its entity every tick; an emitter re-syncs only when its gain or pan moves past

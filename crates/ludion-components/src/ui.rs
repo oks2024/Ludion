@@ -453,6 +453,118 @@ pub struct UiSlice {
     pub center: UiSliceCenter,
 }
 
+/// A screen-space box that other UI elements anchor inside, scale, fade and hide as one unit. It
+/// draws nothing: it resolves like a [`UiRect`](crate::UiRect) (`anchor`, `offset`, `size`), and a
+/// `UiRect`, `UiText`, `UiList` or another `UiGroup` with `group: <this entity>` anchors against that
+/// box instead of the canvas. `scale` (about the box centre), `opacity` and `visible: false` compose
+/// onto every descendant through nesting of up to 8 groups. `order` stays global; a group never
+/// reorders its children. `UiTween` (offset, size, scale, opacity) and `UiWorldAnchor` work on a
+/// group.
+///
+/// ```yaml
+/// components:
+///   UiGroup: { anchor: top_right, offset: [-24, 24], size: [360, 360], opacity: 0.9 }
+/// ```
+///
+/// ```
+/// use ludion_components::UiGroup;
+///
+/// let group: UiGroup = serde_json::from_value(serde_json::json!({})).unwrap();
+/// assert_eq!(group, UiGroup::default());
+/// assert_eq!(group.size, [100.0, 100.0]);
+/// assert!(group.visible);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct UiGroup {
+    /// Which canvas point (or outer group box point) the group is placed at (default `top_left`).
+    #[serde(default)]
+    pub anchor: crate::Anchor,
+    /// Offset from the anchor point, in canvas units, **+Y down** (default `[0, 0]`).
+    #[serde(default)]
+    pub offset: [f32; 2],
+    /// Size `[width, height]` in canvas units (default `[100, 100]`).
+    #[serde(default = "crate::hundred2")]
+    pub size: [f32; 2],
+    /// Uniform scale about the box centre, composed onto every descendant, `> 0` (default `1`).
+    #[serde(default = "one_f32", skip_serializing_if = "is_one_f32")]
+    pub scale: f32,
+    /// Opacity multiplied into every descendant's alpha, `0..=1` (default `1`).
+    #[serde(default = "one_f32", skip_serializing_if = "is_one_f32")]
+    pub opacity: f32,
+    /// Whether the group's descendants draw at all (default `true`).
+    #[serde(default = "crate::yes", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    /// The outer group this one nests in (default none: it sits on the canvas).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub group: Option<EntityId>,
+}
+
+impl Default for UiGroup {
+    fn default() -> Self {
+        UiGroup {
+            anchor: crate::Anchor::TopLeft,
+            offset: [0.0, 0.0],
+            size: [100.0, 100.0],
+            scale: 1.0,
+            opacity: 1.0,
+            visible: true,
+            group: None,
+        }
+    }
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+impl SemanticValidate for UiGroup {
+    /// Rejects a `size` axis that is not strictly positive and finite (`L1118`, `/size/{i}`), a
+    /// `scale` that is non-finite or not above 0, and an `opacity` that is non-finite or outside
+    /// `0..=1` (`L1614`, `/scale`, `/opacity`).
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        if let Some(size) = value.get("size").and_then(Value::as_array) {
+            for (index, element) in size.iter().enumerate().take(2) {
+                if let Some(extent) = element.as_f64().map(engine_number) {
+                    crate::require_positive_finite_ui_size(
+                        extent,
+                        &format!("/size/{index}"),
+                        &mut out,
+                    );
+                }
+            }
+        }
+        let mut reject = |pointer: &str, what: &str| {
+            out.push(
+                Diagnostic::new(code::UI_GROUP_INVALID, what.to_string())
+                    .with_path(pointer)
+                    .with_help("fix the field; `ludion explain L1614`"),
+            );
+        };
+        if let Some(scale) = value
+            .get("scale")
+            .and_then(Value::as_f64)
+            .map(engine_number)
+            && !(scale.is_finite() && scale > 0.0)
+        {
+            reject("/scale", "the `UiGroup` scale must be finite and above 0");
+        }
+        if let Some(opacity) = value
+            .get("opacity")
+            .and_then(Value::as_f64)
+            .map(engine_number)
+            && !(opacity.is_finite() && (0.0..=1.0).contains(&opacity))
+        {
+            reject(
+                "/opacity",
+                "the `UiGroup` opacity must be finite and within 0..1",
+            );
+        }
+        out
+    }
+}
+
 fn is_default_center(value: &UiSliceCenter) -> bool {
     *value == UiSliceCenter::default()
 }
@@ -698,10 +810,104 @@ pub(crate) fn ui_rect_sampling_diagnostics(
     }
 }
 
+/// `L1617` for a `UiRect`'s `fill_group` and `fill` beside `group`, pushed onto `out`. Pointers are
+/// relative to the component (`/fill_group`, `/fill`).
+pub(crate) fn ui_rect_group_diagnostics(
+    object: &serde_json::Map<String, Value>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let present = |field: &str| object.get(field).is_some_and(|v| !v.is_null());
+    let flag = |field: &str| object.get(field).and_then(Value::as_bool) == Some(true);
+    let mut ignored = |pointer: &str, what: &str, help: &str| {
+        out.push(
+            Diagnostic::new(code::UI_GROUP_IGNORED, what.to_string())
+                .with_path(pointer)
+                .with_help(help.to_string()),
+        );
+    };
+    if flag("fill_group") && !present("group") {
+        ignored(
+            "/fill_group",
+            "this `UiRect` has `fill_group: true` but no `group`, so it is ignored",
+            "set `group`, or drop `fill_group`",
+        );
+    }
+    if flag("fill") && (present("group") || flag("fill_group")) {
+        ignored(
+            "/fill",
+            "this `UiRect` has `fill: true`, so its `group` and `fill_group` are ignored",
+            "keep either `fill` or the group fields",
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn group_diag(value: Value) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        ui_rect_group_diagnostics(value.as_object().unwrap(), &mut out);
+        out
+    }
+
+    #[test]
+    fn group_round_trips_and_skips_defaults() {
+        let empty: UiGroup = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(empty, UiGroup::default());
+        assert_eq!(
+            serde_json::to_value(&empty).unwrap(),
+            json!({ "anchor": "top_left", "offset": [0.0, 0.0], "size": [100.0, 100.0] })
+        );
+        let full = json!({
+            "anchor": "top_right", "offset": [-24.0, 24.0], "size": [360.0, 360.0],
+            "scale": 0.5, "opacity": 0.25, "visible": false,
+            "group": { "index": 2, "generation": 0 }
+        });
+        let parsed: UiGroup = serde_json::from_value(full.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), full);
+    }
+
+    #[test]
+    fn rect_without_group_fields_serializes_as_before() {
+        let rect = serde_json::to_value(crate::UiRect::default()).unwrap();
+        assert!(rect.get("group").is_none() && rect.get("fill_group").is_none());
+        let text = serde_json::to_value(crate::UiText::default()).unwrap();
+        assert!(text.get("group").is_none());
+        let list = serde_json::to_value(crate::UiList::default()).unwrap();
+        assert!(list.get("group").is_none());
+    }
+
+    #[test]
+    fn group_scale_and_opacity_are_l1614() {
+        for (value, pointer) in [
+            (json!({ "scale": 0.0 }), "/scale"),
+            (json!({ "scale": -1.0 }), "/scale"),
+            (json!({ "opacity": 1.5 }), "/opacity"),
+            (json!({ "opacity": -0.1 }), "/opacity"),
+        ] {
+            let out = UiGroup::validate_semantics(&value);
+            assert_eq!(pointers(&out, "L1614"), [pointer], "{value}");
+        }
+        let out = UiGroup::validate_semantics(&json!({ "size": [0.0, 10.0] }));
+        assert_eq!(pointers(&out, "L1118"), ["/size/0"]);
+        assert!(UiGroup::validate_semantics(&json!({ "scale": 2.0, "opacity": 0.0 })).is_empty());
+        assert!(UiGroup::validate_semantics(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn fill_group_without_group_and_fill_beside_group_are_l1617() {
+        let d = group_diag(json!({ "fill_group": true }));
+        assert_eq!(pointers(&d, "L1617"), ["/fill_group"]);
+        let d = group_diag(json!({ "fill": true, "group": { "index": 1, "generation": 0 } }));
+        assert_eq!(pointers(&d, "L1617"), ["/fill"]);
+        let d = group_diag(json!({
+            "fill_group": true, "group": { "index": 1, "generation": 0 }
+        }));
+        assert!(d.is_empty());
+        assert!(group_diag(json!({})).is_empty());
+    }
 
     fn sampling(value: Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();

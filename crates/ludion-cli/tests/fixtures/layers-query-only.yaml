@@ -1,0 +1,43 @@
+format: 1
+seed: 1
+physics:
+  space: free
+  layers:
+    - name: dummy
+      ignores:
+        - dummy
+    - name: sensor
+      ignores:
+        - default
+entities:
+  - name: a
+    components:
+      Collider:
+        shape:
+          sphere:
+            radius: 0.5
+        body: static
+      QueryLayers:
+        layers:
+          - dummy
+  - name: b
+    components:
+      Collider:
+        shape:
+          sphere:
+            radius: 0.5
+        body: static
+      QueryLayers:
+        layers:
+          - dummy
+          - sensor
+  - name: c
+    components:
+      Collider:
+        shape:
+          sphere:
+            radius: 0.5
+        body: static
+      QueryLayers:
+        layers:
+          - dummy

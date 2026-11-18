@@ -68,12 +68,29 @@ Layers evaluate in list order over the base pose; at most four (`L1670`).
 | `weight` | `0` | target weight in `[0, 1]` (`L1671` outside it) |
 | `from_weight`, `changed`, `fade` | `0`, frame `0`, `0` s | the ramp: from `from_weight` at `changed` over `fade` seconds |
 | `started`, `speed` | frame `0`, `1.0` | the layer clip's own clock; it does not restart with the base |
+| `params` | `[0, 0]` | the two values a blend named by `clip` is evaluated at (`L1671` when not finite) |
+| `reference` | `""` | an additive layer's reference clip; empty measures from the layer's own first frame |
+| `events` | `false` | the layer fires its clip's events, tagged `ClipEvent.layer` |
 
 - **Override** blends each joint toward the layer clip by `weight × mask`; a joint the layer clip has
   no track for is untouched, and at exactly 1 the layer's channels are taken verbatim.
 - **Additive** adds the layer clip's change from its own first frame (`t = 0`) on top of the pose
   beneath: a lean clip whose first frame is upright adds only the lean.
+- With `reference: idle` an additive layer measures its change from the `idle` clip's first frame
+  instead; an unknown reference skips the layer.
 - The weight ramp and the layer clock follow the base `Animation.hold` grid.
+- **Layer blends.** A layer `clip` that is not a clip may name a blend of the character, driven by the
+  layer's own `params` (never `Animation.params`) and `set_layer_params(&mut layers, "lean", [x, 0.0])`,
+  which writes only on change. Its phase lives in `BlendClock.layers`, one entry per such layer,
+  integrated at the layer's `speed` and restarted when its `started` changes (`play_layer` to a new
+  clip). Register `blend_clocks` as under Blend spaces; layers need no extra query line. An additive
+  blend layer without `reference` measures from each point's first frame under the current weights.
+- **Layer events.** `events: true` makes a layer fire its clip's events while its weight is above 0.
+  Each `ClipEvent` carries the layer's name in `layer` (`""` for the base clip) and the layer's clip
+  or blend in `clip`; an entity's base events come first, then its layers' in list order. A plain clip
+  is walked statelessly over the tick's gameplay window, so a scaled game clock fires each event once.
+  Register whatever calls `play_layer` before `animation_events`: a layer started after it loses only
+  an event at exactly `t = 0`.
 
 Steer a layer from game code, writing only when the choice changes:
 
@@ -130,7 +147,7 @@ blends:
   It keeps a hashed `BlendClock` only on an entity whose clip names a blend. Without it, extract falls
   back to `elapsed * rate(params now)`: exact while the params hold still, and no events fire.
 - **Limits.** `hold` does not step a blend's phase. A blend may not share a clip binding's name.
-  Blends on assemblies and prefabs, and a layer naming a blend, are not supported.
+  Blends on assemblies and prefabs are not supported; a layer blend's phase is not stepped by `hold`.
 
 Errors: `L1199` for a malformed `blends:` entry, `L1200` for a duplicate position, a name clash,
 collinear 2D points, an unbound or non-looping point clip, or a `sync` event a point clip lacks.
@@ -142,7 +159,7 @@ collinear 2D points, an unbound or non-looping point clip, or a `sync` event a p
 - An unknown clip or mask name, or a layer at weight 0, is a silent degrade — the layer does nothing.
 - A skin named by `SkinBone` parts refuses `AnimationLayers` (`L1672`); assemblies and prefab parts
   ignore it.
-- Layer clips raise no `AnimationEvents` yet, and a layer's `clip` cannot name a blend.
+- A layer raises no `AnimationEvents` unless it sets `events: true`.
 - `ParentJoint` sockets and `posed_joint_world` read the layered pose.
 
 ## Next

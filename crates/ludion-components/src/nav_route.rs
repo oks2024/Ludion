@@ -3,6 +3,7 @@
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
+use ludion_core::ids::EntityId;
 use ludion_core::number::engine_number;
 use ludion_ecs::SemanticValidate;
 use schemars::JsonSchema;
@@ -62,13 +63,17 @@ pub enum NavRouteStatus {
     Arrived,
     /// No route to the goal; the agent stands still until the goal changes cell.
     Unreachable,
+    /// Stopped at a link start, waiting for `nav_link_done`; `NavRoute.link` names the link.
+    AtLink,
 }
 
 /// The route `nav_steer` plans for a [`NavAgent`](crate::NavAgent) that carries a [`NavGoal`].
 /// **Written by `nav_steer`**: a game reads it and never inserts one. It is hashed sim state, so a restored
 /// world resumes the route it was on instead of planning again from elsewhere. `waypoints[0]` is the
 /// node the route started from; `index` is the waypoint being walked to. A partial route (`partial`)
-/// ends at the reachable point nearest the goal; `cost` is the path length along the grid links.
+/// ends at the reachable point nearest the goal; `cost` is the path length along the grid links. `links`
+/// lists the waypoint indices where a [`NavLink`](crate::NavLink) traversal starts (waypoint `i` is the
+/// link start, `i + 1` its end); at one the agent stops `at_link` until `nav_link_done`.
 ///
 /// ```yaml
 /// components:
@@ -107,6 +112,13 @@ pub struct NavRoute {
     /// Path cost in metres along the grid links (default `0`).
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub cost: f32,
+    /// Waypoint indices where a link traversal starts (default none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<u32>,
+    /// The link being waited at; set only while `status` is `at_link` (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub link: Option<EntityId>,
 }
 
 fn is_zero_vec3(value: &[f32; 3]) -> bool {
@@ -205,6 +217,20 @@ impl SemanticValidate for NavRoute {
                 format!("the `NavRoute` index {index} is past its {len} waypoints"),
             );
         }
+        for (n, entry) in value
+            .get("links")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if entry.as_u64().is_some_and(|i| i >= len) {
+                reject(
+                    format!("/links/{n}"),
+                    format!("the `NavRoute` link start {entry} is past its {len} waypoints"),
+                );
+            }
+        }
         out
     }
 }
@@ -228,6 +254,8 @@ mod tests {
             status: NavRouteStatus::Following,
             partial: true,
             cost: 3.5,
+            links: vec![0],
+            link: None,
         };
         let back: NavRoute = serde_json::from_value(serde_json::to_value(&route).unwrap()).unwrap();
         assert_eq!(back, route);
@@ -257,5 +285,11 @@ mod tests {
             NavRoute::validate_semantics(&json!({ "waypoints": [[0.0, 0.0, 0.0]], "index": 1 }))
                 .is_empty()
         );
+        let found = NavRoute::validate_semantics(&json!({
+            "waypoints": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            "links": [0, 2],
+        }));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path.as_deref(), Some("/links/1"));
     }
 }

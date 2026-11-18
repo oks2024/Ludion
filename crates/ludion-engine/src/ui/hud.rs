@@ -9,7 +9,9 @@
 
 use std::borrow::Cow;
 
-use ludion_components::ui::{UiAnchorBehind, UiAnchorShow, UiTween, UiTweenField, UiWorldAnchor};
+use ludion_components::ui::{
+    UiAnchorBehind, UiAnchorShow, UiGroup, UiTween, UiTweenField, UiWorldAnchor,
+};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
@@ -18,8 +20,10 @@ use ludion_core::time::TickRate;
 use ludion_ecs::World;
 use ludion_renderer::UiInstance;
 
+use super::group::{GroupXf, UiGroups};
 use super::{
-    canvas_anchor_px, nine_slice, pixel_scale, place_world_anchor, sub_uv, ui_tween_sample,
+    canvas_anchor_px, group_delta, nine_slice, pixel_scale, place_world_anchor, sub_uv,
+    ui_tween_sample,
 };
 use crate::components::{Anchor, UiList, UiRect, UiText};
 use crate::hierarchy::WorldAffines;
@@ -48,14 +52,16 @@ pub(crate) enum HudElement {
     Rect { fill: bool },
     Text,
     List,
+    Group,
 }
 
 impl HudElement {
     fn supports(self, field: UiTweenField) -> bool {
         match field {
             UiTweenField::Opacity | UiTweenField::Offset => true,
-            UiTweenField::Scale | UiTweenField::Color => !matches!(self, HudElement::List),
-            UiTweenField::Size => matches!(self, HudElement::Rect { .. }),
+            UiTweenField::Scale => !matches!(self, HudElement::List),
+            UiTweenField::Color => matches!(self, HudElement::Rect { .. } | HudElement::Text),
+            UiTweenField::Size => matches!(self, HudElement::Rect { .. } | HudElement::Group),
         }
     }
 }
@@ -85,6 +91,7 @@ fn element_name(element: HudElement) -> &'static str {
         HudElement::Rect { .. } => "UiRect",
         HudElement::Text => "UiText",
         HudElement::List => "UiList",
+        HudElement::Group => "UiGroup",
     }
 }
 
@@ -129,7 +136,7 @@ fn sample(
                     element_name(element),
                 ),
             )
-            .with_help("`scale` and `color` need a `UiRect` or `UiText`, `size` a `UiRect`; `ludion explain L2300`"),
+            .with_help("`color` needs a `UiRect` or `UiText`, `scale` a `UiRect`, `UiText` or `UiGroup`, `size` a `UiRect` or `UiGroup`; `ludion explain L2300`"),
         ));
     }
     let at = |field: UiTweenField| {
@@ -230,6 +237,32 @@ pub(crate) fn pre_list<'a>(
     Cow::Owned(out)
 }
 
+/// A group's own numbers at this frame, its tracks applied: the offset and size to resolve, and the
+/// scale and opacity it composes onto its descendants.
+pub(crate) struct GroupMotion {
+    pub offset: [f32; 2],
+    pub size: [f32; 2],
+    pub scale: f32,
+    pub opacity: f32,
+}
+
+/// The group's numbers with its tracks at this frame applied.
+pub(crate) fn pre_group(
+    frame: &HudFrame<'_>,
+    id: EntityId,
+    group: &UiGroup,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) -> GroupMotion {
+    let s = sample(frame, id, HudElement::Group, degraded);
+    let [x, y] = s.offset.unwrap_or([0.0, 0.0]);
+    GroupMotion {
+        offset: [group.offset[0] + x, group.offset[1] + y],
+        size: s.size.unwrap_or(group.size),
+        scale: group.scale * s.scale.unwrap_or(1.0),
+        opacity: group.opacity * s.opacity.unwrap_or(1.0),
+    }
+}
+
 /// The bounding box `[l, t, r, b]` of every rect and glyph quad in `instances`, or `None` when empty.
 fn bounds(instances: &[UiEntry]) -> Option<[f32; 4]> {
     let mut out: Option<[f32; 4]> = None;
@@ -290,6 +323,11 @@ fn multiply_alpha(instances: &mut [UiEntry], opacity: f32) {
 /// The scale pivots on the centre of the instances' bounding box, the anchor then moves the box by
 /// `projected − canvas_anchor_point` so the element's `anchor` is its pivot on the projected point.
 /// A target that is dead or has no `Transform` draws nothing.
+///
+/// An element inside a [`UiGroup`] first moves by [`group_delta`] into the group's box, takes the
+/// same tween scale, then the group's affine and opacity; its own world anchor is skipped (`L2300`)
+/// and an invisible group removes it. An element with no `group` takes exactly the path above.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn post(
     frame: &HudFrame<'_>,
     poses: &mut WorldAffines,
@@ -298,11 +336,23 @@ pub(crate) fn post(
     anchor: Anchor,
     entries: &mut Vec<UiEntry>,
     start: usize,
+    grouping: Grouping<'_>,
 ) {
     if start >= entries.len() {
         return;
     }
     let world = frame.world;
+    let group_xf = resolve_grouping(frame, poses, id, element, grouping);
+    if let Some((xf, in_box)) = &group_xf {
+        if !xf.visible {
+            return entries.truncate(start);
+        }
+        if !in_box {
+            let delta = group_delta(anchor, xf.box_px, frame.viewport);
+            transform_instances(&mut entries[start..], [0.0, 0.0], 1.0, delta);
+        }
+    }
+    let group_xf = group_xf.map(|(xf, _)| xf);
     let scale = match world.get::<UiTween>(id).ok().flatten() {
         Some(tween) if element.supports(UiTweenField::Scale) => ui_tween_sample(
             tween,
@@ -316,10 +366,11 @@ pub(crate) fn post(
     };
     let world_anchor = match element {
         HudElement::Rect { fill: true } => None,
+        _ if group_xf.is_some() => None,
         _ => world.get::<UiWorldAnchor>(id).ok().flatten(),
     };
     if scale.is_none() && world_anchor.is_none() {
-        return;
+        return apply_group(entries, start, group_xf);
     }
     let Some(b) = bounds(&entries[start..]) else {
         return;
@@ -328,18 +379,10 @@ pub(crate) fn post(
     let mut delta = [0.0, 0.0];
     let mut opacity = 1.0;
     if let Some(a) = world_anchor {
-        match placement(frame, poses, a) {
+        match world_anchor_delta(frame, poses, a, anchor) {
             None => return entries.truncate(start),
-            Some((p, alpha)) => {
-                let hidden = (p.behind && a.behind == UiAnchorBehind::Hide)
-                    || (a.show == UiAnchorShow::OnScreen && !p.on_screen)
-                    || (a.show == UiAnchorShow::OffScreen && p.on_screen)
-                    || alpha <= 0.0;
-                if hidden {
-                    return entries.truncate(start);
-                }
-                let pivot = canvas_anchor_px(anchor, frame.viewport);
-                delta = [p.pixel[0] - pivot[0], p.pixel[1] - pivot[1]];
+            Some((d, alpha)) => {
+                delta = d;
                 opacity = alpha;
             }
         }
@@ -348,6 +391,92 @@ pub(crate) fn post(
     if opacity < 1.0 {
         multiply_alpha(&mut entries[start..], opacity);
     }
+    apply_group(entries, start, group_xf);
+}
+
+/// What a grouped element needs from [`post`]: its group, whether it covers the group's box
+/// (`fill_group`, so no delta), the shared memo and the degraded list.
+pub(crate) struct Grouping<'a> {
+    pub group: Option<EntityId>,
+    pub fill_group: bool,
+    pub groups: &'a mut UiGroups,
+    pub degraded: &'a mut Vec<(String, Diagnostic)>,
+}
+
+/// The element's resolved group and whether the element already sits in the group's box. `None` for
+/// an ungrouped element, a `fill: true` rect (which ignores `group`), or a group that cannot be
+/// resolved (`L2302`, drawn ungrouped).
+fn resolve_grouping(
+    frame: &HudFrame<'_>,
+    poses: &mut WorldAffines,
+    id: EntityId,
+    element: HudElement,
+    grouping: Grouping<'_>,
+) -> Option<(GroupXf, bool)> {
+    let group = grouping.group?;
+    if matches!(element, HudElement::Rect { fill: true }) {
+        return None;
+    }
+    let key = crate::diagnostics::offender_key(frame.world, id);
+    let Some(xf) = grouping
+        .groups
+        .resolve(frame, poses, group, grouping.degraded)
+    else {
+        grouping.degraded.push((
+            format!("{key}/ui-group"),
+            Diagnostic::new(
+                code::UI_GROUP_UNRESOLVED,
+                format!("{id} names {group} as its `group`, which is not a live `UiGroup` within 8 levels with no cycle; the element is drawn ungrouped"),
+            )
+            .with_help("point `group` at a live entity with a `UiGroup`; `ludion explain L2302`"),
+        ));
+        return None;
+    };
+    if frame.world.has::<UiWorldAnchor>(id) {
+        grouping.degraded.push((
+            format!("{key}/ui-anchor-group"),
+            Diagnostic::new(
+                code::UI_MOTION_UNSUPPORTED,
+                format!("{id} carries a `UiWorldAnchor` inside a group, so its anchor is skipped"),
+            )
+            .with_help("put the `UiWorldAnchor` on the outermost group; `ludion explain L2300`"),
+        ));
+    }
+    Some((xf, grouping.fill_group))
+}
+
+/// Applies the group's scale, translation and opacity to the instances `entries[start..]`.
+fn apply_group(entries: &mut [UiEntry], start: usize, group: Option<GroupXf>) {
+    let Some(xf) = group else {
+        return;
+    };
+    if xf.scale.to_bits() != 1.0f32.to_bits() || xf.offset != [0.0, 0.0] {
+        transform_instances(&mut entries[start..], [0.0, 0.0], xf.scale, xf.offset);
+    }
+    if xf.opacity < 1.0 {
+        multiply_alpha(&mut entries[start..], xf.opacity);
+    }
+}
+
+/// The translation a world anchor gives an element whose canvas anchor is `anchor`, and the fade
+/// alpha it multiplies in; `None` when the anchor hides the element (a dead target, behind the
+/// camera, outside its `show` window, or faded out).
+pub(crate) fn world_anchor_delta(
+    frame: &HudFrame<'_>,
+    poses: &mut WorldAffines,
+    a: &UiWorldAnchor,
+    anchor: Anchor,
+) -> Option<([f32; 2], f32)> {
+    let (p, alpha) = placement(frame, poses, a)?;
+    let hidden = (p.behind && a.behind == UiAnchorBehind::Hide)
+        || (a.show == UiAnchorShow::OnScreen && !p.on_screen)
+        || (a.show == UiAnchorShow::OffScreen && p.on_screen)
+        || alpha <= 0.0;
+    if hidden {
+        return None;
+    }
+    let pivot = canvas_anchor_px(anchor, frame.viewport);
+    Some(([p.pixel[0] - pivot[0], p.pixel[1] - pivot[1]], alpha))
 }
 
 /// The anchor's placement and its fade alpha, or `None` when the target cannot be drawn against.

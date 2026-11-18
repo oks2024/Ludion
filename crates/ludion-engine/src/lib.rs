@@ -113,6 +113,7 @@ mod replay;
 mod replay_compat;
 mod replay_playback;
 mod residue_store;
+mod rumble;
 mod run_recording;
 mod run_save;
 mod scene_check;
@@ -144,7 +145,7 @@ pub use assembly_mesh::{
 };
 pub use audio::{
     AudioCategory, AudioDistance, AudioEvent, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
-    Bus, CategoryGains, LoopId, MixLayer, play_sound,
+    Bus, CategoryGains, LoopId, MixLayer, VoiceId, play_sound,
 };
 pub use bisect::{
     BisectReport, ComponentDiff, DriveDone, EntityDiff, KeyframeDivergence, KeyframeDriftReport,
@@ -163,22 +164,23 @@ pub use commands::sim::step_in_batches;
 pub use components::{
     Anchor, Animation, AudioEmitter, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, EmitShape, Environment, Fade, GiDynamic,
-    GiVolume, GroundMarker, GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, Name, NavAgent,
-    NavGoal, NavReplan, NavRoute, NavRouteStatus, NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER,
-    ParentJoint, ParticleBlend, ParticleEmitter, Perceiver, PointLight, PostProcess, ProbeShape,
-    Projection, ReflectionProbe, Require, Residue, SightPoint, SightTarget, SightZone, SkinBone,
-    SpotLight, Sprite, SpriteBlend, Static, Text, TileAppearance, Tilemap, Transform,
-    UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiList, UiListItem, UiRect, UiText, UiTween,
-    UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility,
-    builtin_registry, crossfade,
+    GiVolume, GroundMarker, GroundMarkerGrid, GroundMarkerShape, GroundMarkerStyle, MapWrap, Mesh,
+    MeshGrid, MeshSource, Name, NavAgent, NavGoal, NavLink, NavReplan, NavRoute, NavRouteStatus,
+    NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter,
+    Perceiver, PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Require, Residue,
+    SightPoint, SightTarget, SightZone, SkinBone, SpotLight, Sprite, SpriteBlend, Static, Text,
+    TileAppearance, Tilemap, Transform, UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiGroup,
+    UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack,
+    UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
 };
 pub use components::{
-    AnimationLayer, AnimationLayers, BlendClock, LayerMode, fade_layer, layer_weight, play_layer,
+    AnimationLayer, AnimationLayers, BlendClock, LayerMode, LayerPhase, fade_layer, layer_weight,
+    play_layer, set_layer_params,
 };
 pub use components::{AudioListener, ListenerOrientation};
 pub use components::{
-    Hearing, Look, NoiseZone, NoiseZoneShape, PendingNoise, PerceiverMemory, PerceptionState,
-    Sense, StimulusRecord, SweepShape, ZoneSweep,
+    Hearing, Look, NoiseZone, NoiseZoneShape, PendingNoise, PerceiverMemory, PerceiverStatus,
+    PerceptionState, Sense, SightSampleRecord, StimulusRecord, SweepShape, ZoneSweep,
 };
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
@@ -238,8 +240,8 @@ pub use motor::{
     set_character_posture, suspend_character, teleport_character, turn_character,
 };
 pub use nav::{
-    Nav, NavConfig, NavPath, PathRequest, nav_distance, nav_path, nav_project, nav_reachable,
-    nav_steer, nav_update,
+    Nav, NavConfig, NavPath, PathRequest, nav_distance, nav_link_done, nav_path, nav_project,
+    nav_reachable, nav_steer, nav_update,
 };
 pub use parent_joint::{posed_joint_world, scene_parent_joint_diagnostics};
 pub use path_follow::{
@@ -310,6 +312,7 @@ pub use replay_playback::{
     ReplayPlaybackConfig,
 };
 pub use residue_store::ResidueStore;
+pub use rumble::{Rumble, RumbleEffect};
 pub use run_recording::{RunRecording, RunRecordingConfig, RunRecordingEntry, RunRecordingRequest};
 pub use run_save::{BuildStamp, ResumeOutcome, RunSave, RunSaveEntry, RunSaveRequest, SuspendInfo};
 pub use scene_check::{

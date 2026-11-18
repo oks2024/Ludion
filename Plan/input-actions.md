@@ -114,6 +114,19 @@
     for per-machine save documents, which the settings wave reuses for settings-at-start. A replay installs the
     header's entry (or the defaults when absent) and never reads, writes or backs up the file, so a
     committed recording reproduces on any machine.
+27. **Rumble is an outbox (W4).** `Rumble` is a plain resource the engine drains at the frame boundary to
+    the window host's pad thread, the audio contract: never hashed, snapshotted, recorded or on the wire; a
+    replay re-issues the requests by re-running the systems; headless and in the out-of-process viewer it is
+    a silent no-op. The shared `RumbleCommand` lives in `ludion-core`, as `AudioMessage` does.
+28. **Validation and mixing.** Motors clamp to 0..=1 and `duration` to 0..=2 s; a non-finite value is 0 and
+    reports `L4279`; a zero duration or two zero motors is dropped. On the pad, overlapping effects take the
+    maximum per motor and nothing plays longer than 2 s. `stop_all()` discards the tick's earlier plays.
+29. **Intensity.** `Engine::set_rumble_intensity(0..=1)` scales every request and 0 drops every `Play`; a
+    non-finite value is 1. Settings W3 binds the player setting to it.
+30. **Backend.** gilrs force feedback on Windows (WGI), strong motor for `low`, weak for `high`. gilrs's
+    macOS force feedback is a no-op stub, so rumble is silent on macOS.
+31. **Stops.** Rumble stops when the window loses focus (the host sends `StopAll` itself, without the sim)
+    and when the primary pad disconnects; with no primary pad commands are discarded.
 
 ## Waves
 
@@ -133,11 +146,11 @@
 - **W3 — devices, glyphs and the full key set:** the whole keyboard appended after `Alt` plus `Back`/`Forward` (one corpus re-record), the window keymap and mouse mapping for them, recorded `gamepad_connected{family}` / `gamepad_disconnected`,
   `last_device` / `device_changed`, `Actions::source`, a glyph table (`glyph_name`), a focus event
   (Proposed).
-- **W4 — rumble:** an outbox and host backends (gilrs on Windows; macOS GameController is decided there).
+- **W4 — rumble (shipped):** the outbox, the validator, the pad-thread mixer and the gilrs backend on Windows (decisions 27–31); macOS is silent.
 
 ## Status
 
-**W1a** (this wave): the sim-side action layer, bindings limited to today's keys. The existing key
+**W1a**: the sim-side action layer, bindings limited to today's keys. The existing key
 and button names and order are pinned, and a serialized script of every one is checked against a literal
 written before any change, so `replay_content_hash` stays put. `Actions` is tested at every gesture
 boundary, trigger hysteresis, axes, every compile error with its pointer, a two-run `SimDriver`
@@ -165,7 +178,20 @@ file differs or is absent, no `save_docs` key without overrides, a restore rever
 overrides, and the `replay_content_hash` and protocol schema hash staying put. The `rebind_menu` example
 plays a rebind across two boots. No `WorldHash`, trace, replay, golden or schema moved.
 
+**W4**: rumble. `Rumble`/`RumbleEffect` (`ludion-engine`), `RumbleCommand` (`ludion-core`), the drain to the
+facade's pad thread, a pure per-motor mixer in `ludion-window` and the gilrs backend, `L4279`, the
+`rumble` example and `docs input` §Rumble. Tests cover delivery, clamping and `L4279`, `stop_all`,
+intensity, no sender, restore and rebuild leaving an empty outbox, and an identical `WorldHash` trace with
+and without the playing system; the mixer is unit-tested. The pad thread polls every 8 ms while a primary
+pad is connected and every 100 ms otherwise. No `WorldHash`, trace, replay, golden or schema moved.
+**Owed:** rumble felt on a real pad on the Windows box, and the silence confirmed on the M4.
+
 ## Proposed — owner ruling owed
+
+- **A macOS rumble backend** (GameController / CHHaptics). It is platform-shaped code in `crates/`, which
+  needs the owner's ruling (a cargo feature). Trigger: the game needs rumble on Mac.
+- **The 8 ms pad poll.** A rumble command waits at most one poll, so the thread wakes every 8 ms while a
+  primary pad is connected and every 100 ms without one. A pad event channel would remove the polling.
 
 - **`UiNav.back` (breaking).** `UiNav` is built by struct literal in games and docs, so a new field breaks
   every one. W2a ships `from_actions` with no `back` field; games read `ui_back` through `actions.pressed`.

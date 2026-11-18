@@ -19,11 +19,12 @@
 //! hearing and custom senses, and it is forgotten after `forget_*_s` of gameplay time. Records are
 //! ordinary entities, so they are hashed and snapshotted.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ludion_components::{
-    NoiseZone, NoiseZoneShape, PendingNoise, Perceiver, PerceiverMemory, PerceptionState, Require,
-    Sense, SightTarget, StimulusRecord, SweepShape, ZoneSweep,
+    NoiseZone, NoiseZoneShape, PendingNoise, Perceiver, PerceiverMemory, PerceiverStatus,
+    PerceptionState, Require, Sense, SightSampleRecord, SightTarget, StimulusRecord, SweepShape,
+    ZoneSweep,
 };
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -34,6 +35,7 @@ use ludion_ecs::{SystemCtx, World};
 use ludion_physics::{LayerSet, PhysicsWorld, QueryFilter, SurfaceId, Sweep};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::diagnostics::report_full;
 use crate::hierarchy::world_transform;
@@ -79,6 +81,10 @@ pub struct PerceptionConfig {
     /// Most occluders that count against one noise, 1 to 8 (default `2`).
     #[serde(default = "default_max_occluders")]
     pub max_occluders: u32,
+    /// Most line-of-sight rays cast per tick; the perceivers that do not fit wait their turn. `None`
+    /// is no cap; `Some(0)` is refused. 2048 is the recommended value (default `None`).
+    #[serde(default)]
+    pub max_sight_rays_per_tick: Option<u32>,
 }
 
 fn default_occlusion_factor() -> f32 {
@@ -98,6 +104,7 @@ impl Default for PerceptionConfig {
             sound_occluder_layers: LayerSet::default(),
             occlusion_factor: default_occlusion_factor(),
             max_occluders: default_max_occluders(),
+            max_sight_rays_per_tick: None,
         }
     }
 }
@@ -125,7 +132,8 @@ impl PerceptionConfig {
     /// # Errors
     /// `L4220`, pointer `/classes` or `/noise_kinds` for a list over 32 names, `/classes/{j}` or
     /// `/noise_kinds/{j}` for an empty or repeated name, `/surface_noise/{j}/surface` or
-    /// `/surface_noise/{j}/multiplier`, `/occlusion_factor`, or `/max_occluders`.
+    /// `/surface_noise/{j}/multiplier`, `/occlusion_factor`, `/max_occluders`, or
+    /// `/max_sight_rays_per_tick` for a budget of 0.
     pub fn validate(&self) -> Result<(), Diagnostic> {
         let invalid = |path: String, what: String| {
             Diagnostic::new(code::PERCEPTION_CONFIG_INVALID, what)
@@ -202,6 +210,12 @@ impl PerceptionConfig {
                 ),
             ));
         }
+        if self.max_sight_rays_per_tick == Some(0) {
+            return Err(invalid(
+                "/max_sight_rays_per_tick".into(),
+                "perception `max_sight_rays_per_tick` 0 would starve every perceiver; leave it unset for no cap (2048 is recommended)".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -253,6 +267,8 @@ pub struct PerceptionResults {
     facings: Vec<(EntityId, u8, [f32; 3])>,
     heard: Vec<HeardNoise>,
     noises: Vec<NoiseRecord>,
+    rays_cast: u32,
+    deferred: Vec<EntityId>,
 }
 
 /// The id [`emit_noise`] gave a noise; ids rise by one per accepted noise.
@@ -385,6 +401,17 @@ impl PerceptionResults {
     pub fn noises(&self) -> &[NoiseRecord] {
         &self.noises
     }
+
+    /// The line-of-sight rays cast this tick, re-casts after a self-hit included.
+    pub fn rays_cast(&self) -> u32 {
+        self.rays_cast
+    }
+
+    /// The perceivers whose sight was due this tick but did not fit `max_sight_rays_per_tick`,
+    /// sorted. Their samples are carried from the last evaluation.
+    pub fn deferred(&self) -> &[EntityId] {
+        &self.deferred
+    }
 }
 
 /// Rebuilds [`PerceptionResults`] from every enabled [`Perceiver`] and [`SightTarget`], delivers every
@@ -438,8 +465,26 @@ pub fn perception_update(world: &mut World, ctx: &SystemCtx) {
         tick: ctx.game_frame.as_u64(),
         ..PerceptionResults::default()
     };
+    let now = results.tick;
+    let budget = config.max_sight_rays_per_tick;
+    let carry = Carry::read(world, &perceivers, budget);
+    let due: Vec<bool> = perceivers
+        .iter()
+        .enumerate()
+        .map(|(index, (id, p))| {
+            eyes[index].is_some()
+                && (!carry.persisting.contains(id)
+                    || is_due(
+                        id.index(),
+                        p.period_ticks,
+                        now,
+                        carry.status.get(id).copied(),
+                    ))
+        })
+        .collect();
     let mut reports: Vec<(String, Diagnostic)> = Vec::new();
     let seconds = ctx.game_time.seconds();
+    let rotation: Rotation;
     {
         let physics = world.resource::<PhysicsWorld>();
         let mut frame = Frame {
@@ -449,7 +494,7 @@ pub fn perception_update(world: &mut World, ctx: &SystemCtx) {
             layers: BTreeMap::new(),
             reports: &mut reports,
         };
-        let mut drafts: Vec<Draft> = Vec::new();
+        let mut plans: Vec<(EntityId, Vec<Draft>)> = Vec::new();
         for (index, (id, perceiver)) in perceivers.iter().enumerate() {
             let Some(eye) = &eyes[index] else { continue };
             let sweep_yaw = perceiver
@@ -458,9 +503,15 @@ pub fn perception_update(world: &mut World, ctx: &SystemCtx) {
                 .map_or(0.0, |s| sweep_offset_deg(s, seconds));
             let (yaw, pitch) = (perceiver.look.yaw_deg + sweep_yaw, perceiver.look.pitch_deg);
             let facing = math::quat_rotate(eye.rotation, local_forward(yaw, pitch));
+            for zone_index in 0..perceiver.sight.len() {
+                results.facings.push((*id, zone_index as u8, facing));
+            }
+            if !due[index] {
+                continue;
+            }
+            let mut drafts: Vec<Draft> = Vec::new();
             for (zone_index, zone) in perceiver.sight.iter().enumerate() {
                 let zone_id = zone_index as u8;
-                results.facings.push((*id, zone_id, facing));
                 let detects = frame.detect_mask(&zone.detects);
                 let see_through = frame.known_layers(&zone.see_through);
                 for (t_index, (target_id, target)) in targets.iter().enumerate() {
@@ -524,24 +575,337 @@ pub fn perception_update(world: &mut World, ctx: &SystemCtx) {
                     });
                 }
             }
+            plans.push((*id, drafts));
         }
-        results.samples = frame.finish(drafts);
+        let wanted: Vec<(EntityId, u32)> = plans
+            .iter()
+            .map(|(id, drafts)| (*id, planned_rays(drafts)))
+            .collect();
+        rotation = plan_rotation(&wanted, carry.cursor, budget);
+        let drafts: Vec<Draft> = plans
+            .into_iter()
+            .filter(|(id, _)| rotation.served.binary_search(id).is_ok())
+            .flat_map(|(_, drafts)| drafts)
+            .collect();
+        let (fresh, rays) = frame.finish(drafts);
+        results.samples = fresh;
+        results.rays_cast = rays;
     }
     results.facings.sort_by_key(|(e, z, _)| (*e, *z));
+    results.deferred.clone_from(&rotation.deferred);
+    let fresh = std::mem::take(&mut results.samples);
+    let merged = persist_sight(world, now, &perceivers, &carry, &rotation, &fresh);
+    note_starved(&perceivers, &carry, &rotation, now, &mut reports);
     let heard = hear(world, &config, &mut reports);
     results.heard = heard.heard;
     results.noises = heard.noises;
     update_memory(
         world,
-        ctx.game_frame.as_u64(),
+        now,
         ctx.game_time.rate().hz(),
-        &results.samples,
+        &fresh,
         heard.refreshes,
     );
+    results.samples = merged.unwrap_or(fresh);
     world.insert_resource(results);
     for (key, diagnostic) in reports {
         report_full(world, key, diagnostic);
     }
+}
+
+/// What a pass reads of earlier ticks: which perceivers persist their sight, when each was last
+/// evaluated, the carried sample records and the rotation cursor.
+struct Carry {
+    /// Enabled perceivers whose sight is staggered (`period_ticks > 1`) or budgeted.
+    persisting: BTreeSet<EntityId>,
+    status: BTreeMap<EntityId, u64>,
+    records: Vec<(EntityId, SightSampleRecord)>,
+    cursor: Option<EntityId>,
+}
+
+impl Carry {
+    fn read(world: &mut World, perceivers: &[(EntityId, Perceiver)], budget: Option<u32>) -> Carry {
+        let persisting = perceivers
+            .iter()
+            .filter(|(_, p)| p.period_ticks > 1 || budget.is_some())
+            .map(|(id, _)| *id)
+            .collect();
+        let status = world
+            .query_ids::<(&PerceiverStatus,)>()
+            .map(|(id, (s,))| (id, s.evaluated_tick))
+            .collect();
+        let mut records: Vec<(EntityId, SightSampleRecord)> = world
+            .query_ids::<(&SightSampleRecord,)>()
+            .map(|(id, (r,))| (id, r.clone()))
+            .collect();
+        records.sort_by_key(|(id, _)| *id);
+        let cursor = world
+            .query_ids::<(&PerceptionState,)>()
+            .min_by_key(|(id, _)| *id)
+            .and_then(|(_, (s,))| s.sight_cursor);
+        Carry {
+            persisting,
+            status,
+            records,
+            cursor,
+        }
+    }
+}
+
+/// Whether a perceiver of period `period` and entity `index` is due at `now`: one never evaluated
+/// waits for its phase (`now % period == index % period`), one evaluated is due `period` ticks after
+/// its last evaluation, so a deferred perceiver stays due until served.
+fn is_due(index: u32, period: u32, now: u64, evaluated: Option<u64>) -> bool {
+    let period = u64::from(period.max(1));
+    match evaluated {
+        None => now % period == u64::from(index) % period,
+        Some(last) => now.saturating_sub(last) >= period,
+    }
+}
+
+/// The rays a perceiver's drafts will cast: points in a wedge that a non-empty blocker set can hide.
+fn planned_rays(drafts: &[Draft]) -> u32 {
+    drafts
+        .iter()
+        .flat_map(|d| &d.points)
+        .filter(|p| p.inside && p.blockers.as_ref().is_some_and(|set| !set.is_empty()))
+        .count() as u32
+}
+
+/// Who the budget serves this tick.
+#[derive(Default)]
+struct Rotation {
+    served: Vec<EntityId>,
+    deferred: Vec<EntityId>,
+    cursor: Option<EntityId>,
+}
+
+/// Serves `due` (sorted by id, each with the rays it plans) from the first id above `cursor`,
+/// wrapping. The first perceiver is always served, even over `budget`; the first that does not fit
+/// stops the pass and every later one is deferred, which keeps the rotation fair. The cursor becomes
+/// the last one served. With no budget everyone is served and the cursor is left alone.
+fn plan_rotation(
+    due: &[(EntityId, u32)],
+    cursor: Option<EntityId>,
+    budget: Option<u32>,
+) -> Rotation {
+    let Some(budget) = budget else {
+        return Rotation {
+            served: due.iter().map(|(id, _)| *id).collect(),
+            deferred: Vec::new(),
+            cursor,
+        };
+    };
+    let start = cursor.map_or(0, |c| due.partition_point(|(id, _)| *id <= c));
+    let mut rotation = Rotation {
+        cursor,
+        ..Rotation::default()
+    };
+    let mut used = 0u32;
+    let mut stopped = false;
+    for (id, rays) in due[start..].iter().chain(&due[..start]) {
+        if !stopped && (rotation.served.is_empty() || used.saturating_add(*rays) <= budget) {
+            used = used.saturating_add(*rays);
+            rotation.served.push(*id);
+            rotation.cursor = Some(*id);
+        } else {
+            stopped = true;
+            rotation.deferred.push(*id);
+        }
+    }
+    rotation.served.sort();
+    rotation.deferred.sort();
+    rotation
+}
+
+fn record_of(sample: &SightSample) -> SightSampleRecord {
+    SightSampleRecord {
+        perceiver: sample.perceiver,
+        target: sample.target,
+        blocker: sample.blocker,
+        zone: sample.zone,
+        in_zone: sample.in_zone,
+        visible: sample.visible,
+        points_visible: sample.points_visible,
+        distance: sample.distance,
+        angle_deg: sample.angle_deg,
+        effective_range: sample.effective_range,
+        evaluated_tick: sample.evaluated_tick,
+    }
+}
+
+fn sample_of(record: &SightSampleRecord) -> SightSample {
+    SightSample {
+        perceiver: record.perceiver,
+        zone: record.zone,
+        target: record.target,
+        in_zone: record.in_zone,
+        visible: record.visible,
+        points_visible: record.points_visible,
+        blocker: record.blocker,
+        distance: record.distance,
+        angle_deg: record.angle_deg,
+        effective_range: record.effective_range,
+        evaluated_tick: record.evaluated_tick,
+    }
+}
+
+/// The persistence pass: upserts the [`SightSampleRecord`]s and [`PerceiverStatus`] of every served
+/// persisting perceiver, despawns those of a perceiver that is gone, disabled or no longer
+/// persisting, advances the rotation cursor, and returns `fresh` merged with the carried samples of
+/// the perceivers not served. A deferred perceiver that was never evaluated gets a status one period
+/// back, so it stays due every tick until served and `L4221` can measure its wait. `None` when nothing
+/// persists and nothing is stored, so a plain world is not touched.
+fn persist_sight(
+    world: &mut World,
+    now: u64,
+    perceivers: &[(EntityId, Perceiver)],
+    carry: &Carry,
+    rotation: &Rotation,
+    fresh: &[SightSample],
+) -> Option<Vec<SightSample>> {
+    if carry.persisting.is_empty() && carry.status.is_empty() && carry.records.is_empty() {
+        return None;
+    }
+    let served = |id: &EntityId| rotation.served.binary_search(id).is_ok();
+    let mut wanted: BTreeMap<(EntityId, u8, EntityId), SightSampleRecord> = BTreeMap::new();
+    for sample in fresh
+        .iter()
+        .filter(|s| carry.persisting.contains(&s.perceiver))
+    {
+        wanted.insert(
+            (sample.perceiver, sample.zone, sample.target),
+            record_of(sample),
+        );
+    }
+    let mut doomed: Vec<EntityId> = Vec::new();
+    let mut existing: BTreeMap<(EntityId, u8, EntityId), (EntityId, &SightSampleRecord)> =
+        BTreeMap::new();
+    for (entity, record) in &carry.records {
+        let key = (record.perceiver, record.zone, record.target);
+        if !carry.persisting.contains(&record.perceiver) || existing.contains_key(&key) {
+            doomed.push(*entity);
+            continue;
+        }
+        existing.insert(key, (*entity, record));
+    }
+    let mut merged: Vec<SightSample> = fresh.to_vec();
+    for (key, (entity, record)) in &existing {
+        if served(&key.0) {
+            if !wanted.contains_key(key) {
+                doomed.push(*entity);
+            }
+        } else if world.is_alive(record.target) {
+            merged.push(sample_of(record));
+        }
+    }
+    merged.sort_by_key(|s| (s.perceiver, s.zone, s.target));
+
+    doomed.sort();
+    let _ = world.despawn_many(&doomed);
+    for (key, record) in wanted {
+        match existing.get(&key) {
+            Some((entity, old)) => {
+                if **old != record
+                    && let Ok(Some(stored)) = world.get_mut::<SightSampleRecord>(*entity)
+                {
+                    *stored = record;
+                }
+            }
+            None => {
+                let entity = world.spawn();
+                let _ = world.insert(entity, record);
+            }
+        }
+    }
+    for id in rotation
+        .served
+        .iter()
+        .filter(|id| carry.persisting.contains(id))
+    {
+        match world.get_mut::<PerceiverStatus>(*id) {
+            Ok(Some(status)) => status.evaluated_tick = now,
+            _ => {
+                let _ = world.insert(
+                    *id,
+                    PerceiverStatus {
+                        evaluated_tick: now,
+                    },
+                );
+            }
+        }
+    }
+    for id in &rotation.deferred {
+        if carry.persisting.contains(id)
+            && !carry.status.contains_key(id)
+            && let Ok(at) = perceivers.binary_search_by_key(id, |(p, _)| *p)
+        {
+            let period = u64::from(perceivers[at].1.period_ticks.max(1));
+            let _ = world.insert(
+                *id,
+                PerceiverStatus {
+                    evaluated_tick: now.saturating_sub(period),
+                },
+            );
+        }
+    }
+    for entity in carry.status.keys() {
+        if !carry.persisting.contains(entity) && world.is_alive(*entity) {
+            let _ = world.remove::<PerceiverStatus>(*entity);
+        }
+    }
+    if rotation.cursor != carry.cursor {
+        let state = state_entity(world);
+        if let Ok(Some(state)) = world.get_mut::<PerceptionState>(state) {
+            state.sight_cursor = rotation.cursor;
+        }
+    }
+    Some(merged)
+}
+
+/// Queues `L4221` when a deferred perceiver has waited more than four of its periods.
+fn note_starved(
+    perceivers: &[(EntityId, Perceiver)],
+    carry: &Carry,
+    rotation: &Rotation,
+    now: u64,
+    reports: &mut Vec<(String, Diagnostic)>,
+) {
+    for id in &rotation.deferred {
+        let Some(last) = carry.status.get(id) else {
+            continue;
+        };
+        let period = perceivers
+            .binary_search_by_key(id, |(p, _)| *p)
+            .map_or(1, |at| perceivers[at].1.period_ticks.max(1));
+        let waited = now.saturating_sub(*last);
+        if waited > 4 * u64::from(period) {
+            reports.push((
+                "perception/deferred".to_string(),
+                Diagnostic::new(
+                    code::PERCEPTION_DEFERRED,
+                    format!(
+                        "perceiver {id:?} has not been evaluated for {waited} ticks (period {period}): `max_sight_rays_per_tick` is too small for the load"
+                    ),
+                )
+                .with_help(
+                    "raise `PerceptionConfig.max_sight_rays_per_tick` (2048 is recommended) or the `period_ticks` of idle perceivers; see `ludion docs perception`",
+                ),
+            ));
+            return;
+        }
+    }
+}
+
+/// The `perception` key of `engine.describe`: the rays the last tick cast and the perceivers it
+/// deferred. `None` until `perception_update` has run, so a world without perception describes
+/// byte-identically to one before this key existed.
+pub(crate) fn describe_section(world: &World) -> Option<Value> {
+    let results = world.resource::<PerceptionResults>()?;
+    Some(json!({
+        "rays_cast": results.rays_cast,
+        "deferred": results.deferred,
+    }))
 }
 
 /// A stimulus a game reports to a perceiver's memory: hearing, or a custom sense.
@@ -826,7 +1190,7 @@ fn update_memory(
 /// };
 /// let perceiver = Perceiver {
 ///     enabled: true, eye: [0.0; 3], look: Default::default(), sight: vec![zone], sweep: None,
-///     memory: Some(PerceiverMemory::default()), hearing: None,
+///     memory: Some(PerceiverMemory::default()), hearing: None, period_ticks: 1,
 /// };
 /// world.insert(guard, perceiver).unwrap();
 ///
@@ -1067,15 +1431,7 @@ pub fn emit_noise(world: &mut World, _ctx: &SystemCtx, noise: Noise) -> Option<N
         report_full(world, format!("noise/kind:{}", noise.kind), diagnostic);
         return None;
     }
-    let existing = world
-        .query_ids::<(&PerceptionState,)>()
-        .map(|(id, _)| id)
-        .min();
-    let state = existing.unwrap_or_else(|| {
-        let entity = world.spawn();
-        let _ = world.insert(entity, PerceptionState::default());
-        entity
-    });
+    let state = state_entity(world);
     let id = world
         .get_mut::<PerceptionState>(state)
         .ok()
@@ -1100,6 +1456,19 @@ pub fn emit_noise(world: &mut World, _ctx: &SystemCtx, noise: Noise) -> Option<N
         },
     );
     Some(NoiseId(id))
+}
+
+/// The [`PerceptionState`] singleton's entity: the lowest one, spawned on first use.
+fn state_entity(world: &mut World) -> EntityId {
+    let existing = world
+        .query_ids::<(&PerceptionState,)>()
+        .map(|(id, _)| id)
+        .min();
+    existing.unwrap_or_else(|| {
+        let entity = world.spawn();
+        let _ = world.insert(entity, PerceptionState::default());
+        entity
+    })
 }
 
 /// What the hearing pass produced.
@@ -1475,7 +1844,8 @@ impl Frame<'_> {
     }
 
     /// Casts every ray, grouped by blocker set, and folds the drafts into samples in draft order.
-    fn finish(&self, mut drafts: Vec<Draft>) -> Vec<SightSample> {
+    /// Also returns the rays cast, a re-cast after a self-hit included.
+    fn finish(&self, mut drafts: Vec<Draft>) -> (Vec<SightSample>, u32) {
         struct Ray {
             sweep: Sweep,
             perceiver: EntityId,
@@ -1501,6 +1871,7 @@ impl Frame<'_> {
             }
         }
         let mut outcomes = vec![Cast::Clear; rays.len()];
+        let mut cast_count = 0u32;
         if let Some(physics) = self.physics {
             for (set, members) in &groups {
                 let layers = LayerSet::from(set.clone());
@@ -1514,22 +1885,26 @@ impl Frame<'_> {
                 let sweeps: Vec<Sweep> = members.iter().map(|&at| rays[at].sweep).collect();
                 let mut hits = vec![None; sweeps.len()];
                 physics.first_hits(&sweeps, &filter, &mut hits);
+                cast_count += sweeps.len() as u32;
                 for (&at, hit) in members.iter().zip(hits) {
                     let ray = &rays[at];
                     // The eye inside the perceiver's own blocking collider is not a blocker.
                     let hit = match hit {
-                        Some(h) if h.entity == ray.perceiver => physics.first_hit_skipping(
-                            &ray.sweep,
-                            &filter,
-                            &[ray.perceiver, ray.target],
-                        ),
+                        Some(h) if h.entity == ray.perceiver => {
+                            cast_count += 1;
+                            physics.first_hit_skipping(
+                                &ray.sweep,
+                                &filter,
+                                &[ray.perceiver, ray.target],
+                            )
+                        }
                         other => other,
                     };
                     outcomes[at] = hit.map_or(Cast::Clear, |h| Cast::Blocked(Some(h.entity)));
                 }
             }
         }
-        drafts
+        let samples = drafts
             .into_iter()
             .map(|draft| {
                 let cast = |point: &PointDraft| point.ray.map_or(Cast::Clear, |at| outcomes[at]);
@@ -1568,7 +1943,8 @@ impl Frame<'_> {
                     evaluated_tick: self.tick,
                 }
             })
-            .collect()
+            .collect();
+        (samples, cast_count)
     }
 }
 
@@ -1851,6 +2227,54 @@ mod tests {
         );
     }
 
+    fn id(index: u32) -> EntityId {
+        EntityId::new(index, 0)
+    }
+
+    #[test]
+    fn a_never_evaluated_perceiver_waits_for_its_phase_and_an_evaluated_one_for_its_period() {
+        assert!(is_due(4, 1, 7, None));
+        assert!(is_due(4, 3, 7, None) && !is_due(4, 3, 8, None));
+        assert!(!is_due(4, 3, 8, Some(7)) && is_due(4, 3, 10, Some(7)));
+        assert!(is_due(0, 3, 9, Some(1)));
+        assert!(
+            !is_due(0, 3, 0, Some(5)),
+            "a restored-earlier clock is not due"
+        );
+        assert!(is_due(0, 0, 3, None), "a zero period is read as 1");
+    }
+
+    #[test]
+    fn the_rotation_starts_after_the_cursor_and_stops_at_the_first_misfit() {
+        let due = [(id(1), 4), (id(2), 4), (id(3), 4), (id(4), 4)];
+        let none = plan_rotation(&due, None, None);
+        assert_eq!((none.served.len(), none.deferred.len()), (4, 0));
+        assert_eq!(none.cursor, None);
+
+        let first = plan_rotation(&due, None, Some(8));
+        assert_eq!(first.served, [id(1), id(2)]);
+        assert_eq!(first.deferred, [id(3), id(4)]);
+        assert_eq!(first.cursor, Some(id(2)));
+
+        let wrapped = plan_rotation(&due, Some(id(3)), Some(8));
+        assert_eq!(wrapped.served, [id(1), id(4)]);
+        assert_eq!(wrapped.deferred, [id(2), id(3)]);
+        assert_eq!(wrapped.cursor, Some(id(1)));
+    }
+
+    #[test]
+    fn the_first_perceiver_is_served_over_budget_and_a_misfit_blocks_later_small_ones() {
+        let due = [(id(1), 50), (id(2), 1)];
+        let big = plan_rotation(&due, None, Some(10));
+        assert_eq!(big.served, [id(1)]);
+        assert_eq!(big.deferred, [id(2)]);
+        let unfair = [(id(1), 1), (id(2), 9), (id(3), 1)];
+        let stopped = plan_rotation(&unfair, None, Some(5));
+        assert_eq!(stopped.served, [id(1)]);
+        assert_eq!(stopped.deferred, [id(2), id(3)]);
+        assert_eq!(plan_rotation(&[], Some(id(1)), Some(5)).cursor, Some(id(1)));
+    }
+
     #[test]
     fn a_config_refuses_bad_noise_settings() {
         let path = |edit: &dyn Fn(&mut PerceptionConfig)| {
@@ -1884,6 +2308,15 @@ mod tests {
         assert_eq!(path(&|c| c.occlusion_factor = 1.5), "/occlusion_factor");
         assert_eq!(path(&|c| c.max_occluders = 9), "/max_occluders");
         assert_eq!(path(&|c| c.max_occluders = 0), "/max_occluders");
+        assert_eq!(
+            path(&|c| c.max_sight_rays_per_tick = Some(0)),
+            "/max_sight_rays_per_tick"
+        );
+        let capped = PerceptionConfig {
+            max_sight_rays_per_tick: Some(1),
+            ..Default::default()
+        };
+        assert!(capped.validate().is_ok());
     }
 
     fn zone_at(shape: NoiseZoneShape, origin: [f32; 3], priority: i32, mult: f32) -> ZoneAt {

@@ -41,6 +41,7 @@ pub mod audio;
 pub mod blend_clock;
 pub mod lane;
 pub mod light_exposure;
+pub mod nav_link;
 pub mod nav_route;
 pub mod path_follow;
 pub mod patrol;
@@ -52,24 +53,25 @@ pub mod validators;
 
 pub use animation_layers::{
     AnimationLayer, AnimationLayers, LayerMode, fade_layer, layer_weight, layer_weight_at,
-    play_layer,
+    play_layer, set_layer_params,
 };
 pub use audio::{AudioListener, ListenerOrientation};
-pub use blend_clock::BlendClock;
+pub use blend_clock::{BlendClock, LayerPhase};
 pub use lane::{LaneConstraint, LaneEnds};
 pub use light_exposure::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
+pub use nav_link::NavLink;
 pub use nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
 pub use path_follow::{PathFollower, PathMode, PathOrient};
 pub use patrol::{PatrolFollower, PatrolPhase, PatrolResume, PatrolState};
 pub use patterns::{PatternPlayer, VOLLEY_MAX_BULLETS, Volley, VolleyShape};
 pub use perception::{
     Hearing, Look, NoiseZone, NoiseZoneShape, PERCEIVER_MEMORY_MAX_RECORDS, PERCEPTION_MAX_PARTS,
-    PendingNoise, Perceiver, PerceiverMemory, PerceptionState, Require, Sense, SightPoint,
-    SightTarget, SightZone, StimulusRecord, SweepShape, ZoneSweep,
+    PendingNoise, Perceiver, PerceiverMemory, PerceiverStatus, PerceptionState, Require, Sense,
+    SightPoint, SightSampleRecord, SightTarget, SightZone, StimulusRecord, SweepShape, ZoneSweep,
 };
 pub use prefab::PrefabInstance;
 pub use ui::{
-    UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiNav, UiSlice, UiSliceCenter, UiTween,
+    UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiGroup, UiNav, UiSlice, UiSliceCenter, UiTween,
     UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
 };
 
@@ -2691,11 +2693,36 @@ pub enum GroundMarkerShape {
         /// are about square at the rim.
         #[serde(default = "wedge_grid_spacing")]
         grid_spacing: f32,
+        /// Half the opening angle of a narrower inner zone, in `(0, half_angle_deg]` degrees; it
+        /// needs a positive `inner_radius`, which becomes the zone's range. Absent (the default)
+        /// draws the single-zone wedge. The zone takes `GroundMarker.inner_color`. Not scaled.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        inner_half_angle_deg: Option<f32>,
+    },
+    /// An annulus centred on the entity — a noise-ring or footprint telegraph. Drawn as a band of
+    /// `thickness` ending at `radius`, optionally broken into dashes, with an optional interior
+    /// `fill` from the centre. Not valid on a `DropShadow` (`L2340`).
+    Ring {
+        /// The band's outer radius in world units.
+        radius: f32,
+        /// The band's width in world units, in `(0, radius]` (`L2340` above `radius`).
+        thickness: f32,
+        /// Fraction of `radius`, in `[0, 1]`, filled from the centre at `style.fill_alpha` (default
+        /// `0`, none). Not scaled.
+        #[serde(default, skip_serializing_if = "is_zero_f32")]
+        fill: f32,
+        /// Number of dashes around the band; `0` (the default) draws it solid.
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        dashes: u32,
     },
 }
 
 fn wedge_grid_spacing() -> f32 {
     1.0
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 impl Default for GroundMarkerShape {
@@ -2717,7 +2744,8 @@ impl Default for GroundMarkerShape {
 /// fixed world-space Y offset (`ludion_renderer::GROUND_MARKER_LIFT`) so a marker lying on a floor
 /// never z-fights the geometry it marks; no scene picks that offset.
 ///
-/// Plain, static data: the component carries a shape and a color and nothing else. Animation — a
+/// Plain, static data: the component carries a shape, a color and an optional look
+/// ([`GroundMarkerStyle`], plus a wedge's `inner_color`) and nothing else. Animation — a
 /// warmup filling in, an urgency ramp — is a game system writing the shape field (a disc's `radius`,
 /// a segment's `length`) and `color` each frame, the same shape as the hit-flash pattern that writes
 /// `Mesh.color`; `cargo run -p ludion --example ground_marker` is the copyable form.
@@ -2731,6 +2759,13 @@ pub struct GroundMarker {
     /// marker's analytic coverage, so it is the marker's overall opacity.
     #[serde(default = "white4")]
     pub color: [f32; 4],
+    /// Linear RGBA of a [`GroundMarkerShape::Wedge`]'s inner zone (default: `color`). Ignored by
+    /// every other shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inner_color: Option<[f32; 4]>,
+    /// The marker's look, per field defaulted (absent: today's look). See [`GroundMarkerStyle`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<GroundMarkerStyle>,
 }
 
 impl Default for GroundMarker {
@@ -2738,6 +2773,98 @@ impl Default for GroundMarker {
         GroundMarker {
             shape: GroundMarkerShape::default(),
             color: [1.0; 4],
+            inner_color: None,
+            style: None,
+        }
+    }
+}
+
+/// Whether a wedge draws its polar grid.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GroundMarkerGrid {
+    /// Concentric arcs and radial spokes (the default).
+    #[default]
+    Polar,
+    /// No grid.
+    None,
+}
+
+/// The look of a [`GroundMarker`]; every field defaults, so a partial `style: { flicker: 0.5 }`
+/// is valid. Render-only.
+///
+/// Applicability by shape: a wedge reads every field (`grid: none` skips the grid); a ring reads
+/// `fill_alpha` (its interior `fill`) and `flicker`; a disc and a segment read only `flicker`.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct GroundMarkerStyle {
+    /// Outline and inner-arc width in pixels (default `1.5`); positive and finite.
+    #[serde(default = "style_outline_px")]
+    pub outline_px: f32,
+    /// Whether the wedge grid is drawn (default `polar`).
+    #[serde(default)]
+    pub grid: GroundMarkerGrid,
+    /// Grid line width in pixels (default `1.0`); positive and finite.
+    #[serde(default = "style_grid_px")]
+    pub grid_px: f32,
+    /// Grid line opacity in `[0, 1]` (default `0.45`).
+    #[serde(default = "style_grid_alpha")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub grid_alpha: f32,
+    /// Wedge interior opacity in `[0, 1]` (default `0.06`).
+    #[serde(default = "style_interior_alpha")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub interior_alpha: f32,
+    /// Wedge inner-zone interior opacity in `[0, 1]` (default `0.12`).
+    #[serde(default = "style_inner_alpha")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub inner_alpha: f32,
+    /// Opacity of the `fill` part (a wedge's growing fill, a ring's interior) in `[0, 1]`
+    /// (default `0.30`).
+    #[serde(default = "style_fill_alpha")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub fill_alpha: f32,
+    /// Fraction of coverage dropped per pixel per sim tick, in `[0, 1]` (default `0`, steady).
+    /// Seeded from the entity and the sim tick, so it is deterministic and never hashed.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub flicker: f32,
+}
+
+fn style_outline_px() -> f32 {
+    1.5
+}
+fn style_grid_px() -> f32 {
+    1.0
+}
+fn style_grid_alpha() -> f32 {
+    0.45
+}
+fn style_interior_alpha() -> f32 {
+    0.06
+}
+fn style_inner_alpha() -> f32 {
+    0.12
+}
+fn style_fill_alpha() -> f32 {
+    0.30
+}
+
+impl Default for GroundMarkerStyle {
+    fn default() -> Self {
+        GroundMarkerStyle {
+            outline_px: style_outline_px(),
+            grid: GroundMarkerGrid::Polar,
+            grid_px: style_grid_px(),
+            grid_alpha: style_grid_alpha(),
+            interior_alpha: style_interior_alpha(),
+            inner_alpha: style_inner_alpha(),
+            fill_alpha: style_fill_alpha(),
+            flicker: 0.0,
         }
     }
 }
@@ -2762,8 +2889,105 @@ impl SemanticValidate for GroundMarker {
             "GroundMarker",
         ));
         out.extend(wedge_diagnostics(value));
+        out.extend(ring_diagnostics(value));
+        out.extend(value_color_diagnostics(
+            "GroundMarker",
+            value,
+            "inner_color",
+        ));
+        out.extend(style_diagnostics(value));
         out
     }
+}
+
+/// `L2340` for a ring `shape` that cannot be drawn: `thickness` above `radius`, `fill` outside
+/// `[0, 1]`. By field name; each check needs the numeric fields it compares.
+fn ring_diagnostics(value: &Value) -> Vec<Diagnostic> {
+    let Some(shape) = value.get("shape") else {
+        return Vec::new();
+    };
+    let invalid = |field: &str, v: f64, why: &str, help: &str| {
+        Diagnostic::new(
+            code::GROUND_MARKER_RING_INVALID,
+            format!("ground marker ring `{field}` {v} is not valid; {why}"),
+        )
+        .with_path(format!("/shape/{field}"))
+        .with_help(help.to_string())
+    };
+    let mut out = Vec::new();
+    if let (Some(thickness), Some(radius)) = (
+        shape.get("thickness").and_then(as_stored_f32),
+        shape.get("radius").and_then(as_stored_f32),
+    ) && thickness > radius
+    {
+        out.push(invalid(
+            "thickness",
+            thickness,
+            "it must not exceed `radius`",
+            "give `thickness` a value in (0, radius]",
+        ));
+    }
+    if let Some(fill) = shape.get("fill").and_then(as_stored_f32)
+        && shape.get("type").and_then(Value::as_str) == Some("ring")
+        && !(0.0..=1.0).contains(&fill)
+    {
+        out.push(invalid(
+            "fill",
+            fill,
+            "it is a fraction of `radius` and must be within [0, 1]",
+            "give `fill` a value in [0, 1]",
+        ));
+    }
+    out
+}
+
+/// `L2341` for a `style` field out of range, pointer `/style/<field>`.
+fn style_diagnostics(value: &Value) -> Vec<Diagnostic> {
+    let Some(style) = value.get("style") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut flag = |field: &str, v: f64, why: &str, help: &str| {
+        out.push(
+            Diagnostic::new(
+                code::GROUND_MARKER_STYLE_INVALID,
+                format!("ground marker style `{field}` {v} is not valid; {why}"),
+            )
+            .with_path(format!("/style/{field}"))
+            .with_help(help.to_string()),
+        );
+    };
+    for field in ["outline_px", "grid_px"] {
+        if let Some(v) = style.get(field).and_then(as_stored_f32)
+            && !(v.is_finite() && v > 0.0)
+        {
+            flag(
+                field,
+                v,
+                "it is a pixel width and must be positive and finite",
+                "give the width a value greater than 0",
+            );
+        }
+    }
+    for field in [
+        "grid_alpha",
+        "interior_alpha",
+        "inner_alpha",
+        "fill_alpha",
+        "flicker",
+    ] {
+        if let Some(v) = style.get(field).and_then(as_stored_f32)
+            && !(0.0..=1.0).contains(&v)
+        {
+            flag(
+                field,
+                v,
+                "it must be within [0, 1]",
+                "give the field a value in [0, 1]",
+            );
+        }
+    }
+    out
 }
 
 /// `L2113` for a wedge `shape` that cannot be drawn: `half_angle_deg` outside `(0, 180]`,
@@ -2807,13 +3031,32 @@ fn wedge_diagnostics(value: &Value) -> Vec<Diagnostic> {
         ));
     }
     let fill = shape.get("fill").and_then(as_stored_f32).unwrap_or(0.0);
-    if !(0.0..=1.0).contains(&fill) {
+    if !(0.0..=1.0).contains(&fill) && shape.get("type").and_then(Value::as_str) != Some("ring") {
         out.push(invalid(
             "fill",
             fill,
             "it is a fraction of `outer_radius` and must be within [0, 1]",
             "give `fill` a value in [0, 1]",
         ));
+    }
+    if let Some(inner_half) = shape.get("inner_half_angle_deg").and_then(as_stored_f32) {
+        let outer_half = shape.get("half_angle_deg").and_then(as_stored_f32);
+        if !(inner_half > 0.0 && outer_half.is_none_or(|half| inner_half <= half)) {
+            out.push(invalid(
+                "inner_half_angle_deg",
+                inner_half,
+                "it must be greater than 0 and at most `half_angle_deg`",
+                "give `inner_half_angle_deg` a value in (0, half_angle_deg], or omit it",
+            ));
+        }
+        if inner == 0.0 {
+            out.push(invalid(
+                "inner_radius",
+                inner,
+                "an inner zone (`inner_half_angle_deg`) needs a positive `inner_radius` as its range",
+                "give `inner_radius` a value in (0, outer_radius), or remove `inner_half_angle_deg`",
+            ));
+        }
     }
     out
 }
@@ -2823,7 +3066,15 @@ fn shape_dimension_diagnostics(value: &Value, noun: &str, component: &str) -> Ve
     let Some(shape) = value.get("shape") else {
         return Vec::new();
     };
-    ["radius", "length", "width", "outer_radius", "grid_spacing"]
+    const FIELDS: [&str; 6] = [
+        "radius",
+        "length",
+        "width",
+        "outer_radius",
+        "grid_spacing",
+        "thickness",
+    ];
+    FIELDS
         .into_iter()
         .filter_map(|field| {
             let dimension = shape.get(field).and_then(as_stored_f32)?;
@@ -2935,6 +3186,21 @@ impl SemanticValidate for DropShadow {
                 Diagnostic::new(
                     code::GROUND_MARKER_WEDGE_INVALID,
                     "a drop shadow cannot use a `wedge` shape".to_string(),
+                )
+                .with_path("/shape/type")
+                .with_help("a drop shadow is a disc or a segment"),
+            );
+        }
+        if value
+            .get("shape")
+            .and_then(|shape| shape.get("type"))
+            .and_then(Value::as_str)
+            == Some("ring")
+        {
+            out.push(
+                Diagnostic::new(
+                    code::GROUND_MARKER_RING_INVALID,
+                    "a drop shadow cannot use a `ring` shape".to_string(),
                 )
                 .with_path("/shape/type")
                 .with_help("a drop shadow is a disc or a segment"),
@@ -4730,6 +4996,15 @@ pub struct UiRect {
     /// stretch. Wins over [`uv_rect`](UiRect::uv_rect) and needs a `texture` or `atlas`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slice: Option<ui::UiSlice>,
+    /// The [`UiGroup`] this rect anchors inside, instead of the canvas (default none). The group's
+    /// `scale`, `opacity` and `visible` compose onto the rect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub group: Option<EntityId>,
+    /// Cover the [`group`](UiRect::group)'s box, as `fill` covers the canvas (default `false`).
+    /// Needs a `group` (`L1617`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fill_group: bool,
 }
 
 impl Default for UiRect {
@@ -4747,6 +5022,8 @@ impl Default for UiRect {
             fill: false,
             uv_rect: None,
             slice: None,
+            group: None,
+            fill_group: false,
         }
     }
 }
@@ -4775,6 +5052,7 @@ impl SemanticValidate for UiRect {
                 out.extend(ui_rect_fill_ignored(object));
             }
             ui::ui_rect_sampling_diagnostics(object, &mut out);
+            ui::ui_rect_group_diagnostics(object, &mut out);
         }
         out
     }
@@ -4859,6 +5137,10 @@ pub struct UiText {
     /// `default` entry, else the built-in 8×8 face.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// The [`UiGroup`] this text anchors inside, instead of the canvas (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub group: Option<EntityId>,
 }
 
 impl Default for UiText {
@@ -4873,6 +5155,7 @@ impl Default for UiText {
             wrap_width: 0.0,
             visible: true,
             font: None,
+            group: None,
         }
     }
 }
@@ -5003,6 +5286,10 @@ pub struct UiList {
     /// `default` entry, else the built-in 8×8 face.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// The [`UiGroup`] this list anchors inside, instead of the canvas (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub group: Option<EntityId>,
 }
 
 impl Default for UiList {
@@ -5024,6 +5311,7 @@ impl Default for UiList {
             max_visible: 0,
             visible: true,
             font: None,
+            group: None,
         }
     }
 }
@@ -5047,7 +5335,11 @@ impl SemanticValidate for UiList {
 /// Pushes an `L1118` when `value` is not a strictly positive, finite number (zero, negative, or
 /// non-finite) — shared by `UiRect.size` (checked per axis), `UiText.size`, `UiList.size` and
 /// `Text.size`.
-fn require_positive_finite_ui_size(value: f64, pointer: &str, out: &mut Vec<Diagnostic>) {
+pub(crate) fn require_positive_finite_ui_size(
+    value: f64,
+    pointer: &str,
+    out: &mut Vec<Diagnostic>,
+) {
     if !ludion_core::number::positive_f32(value) {
         out.push(ui_element_non_positive_size(value, pointer));
     }
@@ -6318,6 +6610,23 @@ pub fn builtin_registry() -> Registry {
     registry
         .register::<BlendClock>("BlendClock")
         .expect("unique");
+    // The carried sight state, appended after `BlendClock`: a perceiver's last evaluation tick and its
+    // carried samples, written by `perception_update` when sight is staggered or budgeted.
+    registry
+        .register::<PerceiverStatus>("PerceiverStatus")
+        .expect("unique");
+    registry
+        .register_validated::<SightSampleRecord>("SightSampleRecord")
+        .expect("unique");
+    // The UI group, appended after `SightSampleRecord`: a screen-space box other UI elements anchor
+    // inside, resolved by `extract`.
+    registry
+        .register_validated::<UiGroup>("UiGroup")
+        .expect("unique");
+    // The off-mesh nav link, appended after `UiGroup`: an edge `nav_update` adds to the nav table.
+    registry
+        .register_validated::<NavLink>("NavLink")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -6326,7 +6635,7 @@ pub fn builtin_registry() -> Registry {
 }
 
 /// The built-ins whose engine-owned consumer is a sim-phase system.
-const SIM_ONLY_COMPONENTS: [&str; 30] = [
+const SIM_ONLY_COMPONENTS: [&str; 33] = [
     "Collider",
     "Velocity",
     "Joint",
@@ -6357,6 +6666,9 @@ const SIM_ONLY_COMPONENTS: [&str; 30] = [
     "PendingNoise",
     "PerceptionState",
     "BlendClock",
+    "PerceiverStatus",
+    "SightSampleRecord",
+    "NavLink",
 ];
 
 #[cfg(test)]
@@ -6405,6 +6717,9 @@ mod tests {
             "PendingNoise",
             "PerceptionState",
             "BlendClock",
+            "PerceiverStatus",
+            "SightSampleRecord",
+            "NavLink",
         ];
         expected.sort_unstable();
         assert_eq!(marked, expected);
@@ -6834,12 +7149,16 @@ mod tests {
                 "PendingNoise",
                 "PerceptionState",
                 "BlendClock",
+                "PerceiverStatus",
+                "SightSampleRecord",
+                "UiGroup",
+                "NavLink",
             ]
         );
         assert_eq!(
             registry.len(),
-            73,
-            "appending `BlendClock` grows the registry to 73"
+            77,
+            "appending `NavLink` grows the registry to 77"
         );
     }
 
@@ -8631,6 +8950,8 @@ mod tests {
                 scale: 2.0,
                 center: ui::UiSliceCenter::Hidden,
             }),
+            group: Some(EntityId::new(7, 0)),
+            fill_group: true,
         };
         let json = serde_json::to_value(&rect).unwrap();
         assert_eq!(json["uv_rect"], serde_json::json!([0.0, 0.25, 0.5, 1.0]));
@@ -8662,6 +8983,8 @@ mod tests {
             fill: false,
             uv_rect: None,
             slice: None,
+            group: None,
+            fill_group: false,
         };
         let json = serde_json::to_value(&rect).unwrap();
         assert_eq!(json["atlas"], serde_json::json!("sprites/hud.atlas.yaml"));
@@ -8736,6 +9059,7 @@ mod tests {
             wrap_width: 320.0,
             visible: false,
             font: Some("title".to_string()),
+            group: Some(EntityId::new(3, 0)),
         };
         let json = serde_json::to_value(&text).unwrap();
         assert_eq!(json["anchor"], serde_json::json!("center"));
@@ -9865,6 +10189,8 @@ entities:
         let disc = GroundMarker {
             shape: GroundMarkerShape::Disc { radius: 3.0 },
             color: [1.6, 0.2, 0.1, 0.55],
+            inner_color: None,
+            style: None,
         };
         let json = serde_json::to_value(disc).unwrap();
         assert_eq!(
@@ -10004,8 +10330,11 @@ entities:
                 inner_radius: 3.0,
                 fill: 0.5,
                 grid_spacing: 2.0,
+                inner_half_angle_deg: None,
             },
             color: [0.25, 1.6, 0.6, 0.9],
+            inner_color: None,
+            style: None,
         };
         let json = serde_json::to_value(wedge).unwrap();
         assert_eq!(
@@ -10029,8 +10358,192 @@ entities:
                 inner_radius: 0.0,
                 fill: 0.0,
                 grid_spacing: 1.0,
+                inner_half_angle_deg: None,
             }
         );
+    }
+
+    /// The two-zone wedge, the ring and the style round-trip; absent new fields add no key.
+    #[test]
+    fn ground_marker_zones_ring_and_style_round_trip() {
+        let two_zone = GroundMarker {
+            shape: GroundMarkerShape::Wedge {
+                half_angle_deg: 40.0,
+                outer_radius: 7.0,
+                inner_radius: 3.0,
+                fill: 0.0,
+                grid_spacing: 1.0,
+                inner_half_angle_deg: Some(15.0),
+            },
+            color: [1.0; 4],
+            inner_color: Some([1.0, 0.1, 0.1, 1.0]),
+            style: Some(GroundMarkerStyle {
+                grid: GroundMarkerGrid::None,
+                flicker: 0.5,
+                ..GroundMarkerStyle::default()
+            }),
+        };
+        let json = serde_json::to_value(two_zone).unwrap();
+        assert_eq!(json["shape"]["inner_half_angle_deg"], 15.0);
+        assert_eq!(json["style"]["grid"], "none");
+        assert_eq!(
+            serde_json::from_value::<GroundMarker>(json).unwrap(),
+            two_zone
+        );
+
+        let ring = GroundMarker {
+            shape: GroundMarkerShape::Ring {
+                radius: 3.0,
+                thickness: 0.25,
+                fill: 0.5,
+                dashes: 12,
+            },
+            ..GroundMarker::default()
+        };
+        let json = serde_json::to_value(ring).unwrap();
+        assert_eq!(
+            json["shape"],
+            serde_json::json!({
+                "type": "ring", "radius": 3.0, "thickness": 0.25, "fill": 0.5, "dashes": 12
+            })
+        );
+        assert_eq!(serde_json::from_value::<GroundMarker>(json).unwrap(), ring);
+
+        let solid = serde_json::to_value(GroundMarker {
+            shape: GroundMarkerShape::Ring {
+                radius: 3.0,
+                thickness: 0.25,
+                fill: 0.0,
+                dashes: 0,
+            },
+            ..GroundMarker::default()
+        })
+        .unwrap();
+        assert_eq!(
+            solid["shape"],
+            serde_json::json!({ "type": "ring", "radius": 3.0, "thickness": 0.25 })
+        );
+    }
+
+    /// A marker with none of the new fields serializes exactly as it did before them.
+    #[test]
+    fn absent_ground_marker_extensions_serialize_byte_identically() {
+        let wedge = serde_json::to_value(GroundMarker {
+            shape: GroundMarkerShape::Wedge {
+                half_angle_deg: 30.0,
+                outer_radius: 7.0,
+                inner_radius: 3.0,
+                fill: 0.5,
+                grid_spacing: 1.0,
+                inner_half_angle_deg: None,
+            },
+            ..GroundMarker::default()
+        })
+        .unwrap();
+        assert_eq!(
+            wedge,
+            serde_json::json!({
+                "shape": {
+                    "type": "wedge", "half_angle_deg": 30.0, "outer_radius": 7.0,
+                    "inner_radius": 3.0, "fill": 0.5, "grid_spacing": 1.0
+                },
+                "color": [1.0, 1.0, 1.0, 1.0]
+            })
+        );
+    }
+
+    /// A partial `style:` fills the other fields with today's look.
+    #[test]
+    fn a_partial_ground_marker_style_takes_the_defaults() {
+        let marker: GroundMarker =
+            serde_json::from_value(serde_json::json!({ "style": { "flicker": 0.5 } })).unwrap();
+        assert_eq!(
+            marker.style,
+            Some(GroundMarkerStyle {
+                flicker: 0.5,
+                ..GroundMarkerStyle::default()
+            })
+        );
+        let d = GroundMarkerStyle::default();
+        assert_eq!(
+            (d.outline_px, d.grid_px, d.grid_alpha, d.interior_alpha),
+            (1.5, 1.0, 0.45, 0.06)
+        );
+        assert_eq!((d.inner_alpha, d.fill_alpha, d.flicker), (0.12, 0.30, 0.0));
+    }
+
+    /// Each ring, inner-zone and style diagnostic names its code and pointer.
+    #[test]
+    fn ground_marker_ring_zone_and_style_diagnostics() {
+        let pointer_of = |value: serde_json::Value| {
+            GroundMarker::validate_semantics(&value)
+                .into_iter()
+                .map(|d| (d.code.to_string(), d.path.unwrap_or_default()))
+                .collect::<Vec<_>>()
+        };
+        let ok = |value: serde_json::Value| GroundMarker::validate_semantics(&value).is_empty();
+        assert!(ok(serde_json::json!({
+            "shape": { "type": "ring", "radius": 3.0, "thickness": 3.0, "fill": 1.0 },
+            "style": { "outline_px": 2.0, "flicker": 1.0 },
+            "inner_color": [1.0, 0.0, 0.0, 1.0],
+        })));
+        assert_eq!(
+            pointer_of(serde_json::json!({
+                "shape": { "type": "ring", "radius": 3.0, "thickness": 4.0 } })),
+            [("L2340".to_string(), "/shape/thickness".to_string())]
+        );
+        assert_eq!(
+            pointer_of(serde_json::json!({
+                "shape": { "type": "ring", "radius": 3.0, "thickness": 1.0, "fill": 1.5 } })),
+            [("L2340".to_string(), "/shape/fill".to_string())]
+        );
+        assert_eq!(
+            pointer_of(serde_json::json!({
+                "shape": { "type": "ring", "radius": 3.0, "thickness": 0.0 } })),
+            [("L2106".to_string(), "/shape/thickness".to_string())]
+        );
+        let wedge = |extra: serde_json::Value| {
+            let mut shape = serde_json::json!({
+                "type": "wedge", "half_angle_deg": 30.0, "outer_radius": 7.0, "inner_radius": 3.0 });
+            shape
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::json!({ "shape": shape })
+        };
+        assert!(ok(wedge(
+            serde_json::json!({ "inner_half_angle_deg": 30.0 })
+        )));
+        for bad in [0.0, 31.0] {
+            assert_eq!(
+                pointer_of(wedge(serde_json::json!({ "inner_half_angle_deg": bad }))),
+                [(
+                    "L2113".to_string(),
+                    "/shape/inner_half_angle_deg".to_string()
+                )]
+            );
+        }
+        assert_eq!(
+            pointer_of(serde_json::json!({
+                "shape": { "type": "wedge", "half_angle_deg": 30.0, "outer_radius": 7.0,
+                           "inner_half_angle_deg": 10.0 } })),
+            [("L2113".to_string(), "/shape/inner_radius".to_string())]
+        );
+        assert_eq!(
+            pointer_of(serde_json::json!({ "style": { "grid_px": 0.0, "flicker": 2.0 } })),
+            [
+                ("L2341".to_string(), "/style/grid_px".to_string()),
+                ("L2341".to_string(), "/style/flicker".to_string())
+            ]
+        );
+        assert_eq!(
+            pointer_of(serde_json::json!({ "inner_color": [1.0, 1.0, 1.0, 2.0] }))[0].1,
+            "/inner_color/3"
+        );
+        let shadow = DropShadow::validate_semantics(&serde_json::json!({
+            "shape": { "type": "ring", "radius": 1.0, "thickness": 0.1 } }));
+        assert_eq!(shadow.len(), 1);
+        assert_eq!(shadow[0].code.to_string(), "L2340");
     }
 
     /// A well-formed wedge validates clean and survives the canonical writer idempotently.
@@ -10492,6 +11005,7 @@ entities:
             max_visible: 4,
             visible: false,
             font: Some("body".to_string()),
+            group: Some(EntityId::new(5, 0)),
         };
         let json = serde_json::to_value(&list).unwrap();
         assert_eq!(serde_json::from_value::<UiList>(json).unwrap(), list);
@@ -10626,6 +11140,7 @@ entities:
             ("PatternPlayer", vec![("/target", false, true, true)]),
             ("Volley", vec![("/source", true, true, true)]),
             ("UiWorldAnchor", vec![("/target", false, false, false)]),
+            ("UiGroup", vec![("/group", false, true, true)]),
         ] {
             let info = registry.get(component).expect("registered");
             let fields: Vec<(&str, bool, bool, bool)> = info

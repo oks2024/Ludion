@@ -449,7 +449,7 @@ fn a_bad_config_names_its_field() {
         (
             "/ignore_layers/1",
             NavConfig {
-                ignore_layers: vec!["a".into(), String::new()],
+                ignore_layers: vec!["a".to_string(), String::new()],
                 ..config()
             },
         ),

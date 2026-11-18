@@ -10,6 +10,12 @@
 //   segment(length, width) -> half_extent ((L - w)/2, 0),   corner radius w/2
 //   wedge(outer, ...)      -> half_extent (0, 0),           corner radius outer (the bounding disc),
 //                             shape.w = 1; `wedge` = (half_angle, inner_radius, fill, grid_spacing)
+//   ring(radius, ...)      -> half_extent (0, 0),           corner radius radius (the bounding disc),
+//                             shape.w = 2; `extra` = (thickness, fill, dashes, 0)
+//
+// The look is per instance: `style_a` = (outline_px, grid_px or 0 for no grid, grid_alpha,
+// interior_alpha), `style_b` = (inner_alpha, fill_alpha, flicker, seed), `inner_color` tints a
+// wedge's inner zone, and a wedge's `extra.x` is its inner half-angle (negative: single zone).
 //
 // The `Camera` uniform (@group 0) is a shared snippet composed ahead of this file
 // (`shaders/snippets/camera.wgsl`), then `sd_rounded_box` (`shaders/snippets/rounded_box.wgsl`).
@@ -29,6 +35,12 @@ struct VsIn {
     @location(5) shape: vec4<f32>,
     // A wedge's (half_angle in radians, inner_radius, fill fraction, grid_spacing); zero otherwise.
     @location(6) wedge: vec4<f32>,
+    @location(7) inner_color: vec4<f32>,
+    @location(8) style_a: vec4<f32>,
+    // The seed is a float-encoded integer below 2^24, read back with `u32()`.
+    @location(9) style_b: vec4<f32>,
+    // A wedge's inner half-angle (-1 for none); a ring's (thickness, fill, dashes, 0).
+    @location(10) extra: vec4<f32>,
 };
 
 struct VsOut {
@@ -38,6 +50,10 @@ struct VsOut {
     @location(1) color: vec4<f32>,
     @location(2) @interpolate(flat) shape: vec4<f32>,
     @location(3) @interpolate(flat) wedge: vec4<f32>,
+    @location(4) @interpolate(flat) inner_color: vec4<f32>,
+    @location(5) @interpolate(flat) style_a: vec4<f32>,
+    @location(6) @interpolate(flat) style_b: vec4<f32>,
+    @location(7) @interpolate(flat) extra: vec4<f32>,
 };
 
 @vertex
@@ -54,20 +70,17 @@ fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
     out.color = in.color;
     out.shape = in.shape;
     out.wedge = in.wedge;
+    out.inner_color = in.inner_color;
+    out.style_a = in.style_a;
+    out.style_b = in.style_b;
+    out.extra = in.extra;
     return out;
 }
 
-// Wedge look constants. The authored colour is the look, so none of these is a field; add one if the
-// slice needs to tune it.
-// Outline, inner arc and fill front: crisp enough to read as a vector line at gameplay distance.
-const EDGE_PX: f32 = 1.5;
-// Grid lines are thinner and fainter than the outline so the cone reads as a wireframe, not a mesh.
-const GRID_PX: f32 = 1.0;
-const GRID_ALPHA: f32 = 0.45;
-// Mostly transparent interior, so the ground and anything standing in the cone stay readable.
-const INTERIOR_ALPHA: f32 = 0.06;
-// The filled part reads clearly stronger than the interior without hiding the ground.
-const FILL_ALPHA: f32 = 0.30;
+// The wedge look is `GroundMarkerStyle`, per instance: outline/inner-arc/fill-front width
+// (`style_a.x`), grid line width (`.y`, 0 = no grid) and opacity (`.z`), interior opacity (`.w`), the
+// inner zone's interior opacity (`style_b.x`) and the filled part's opacity (`.y`). Defaults are the
+// original constants: 1.5, 1.0, 0.45, 0.06, 0.12, 0.30.
 
 // Coverage of a line `px` pixels wide at world distance `dist`, given `wpp` world units per pixel.
 fn wedge_line(dist: f32, px: f32, wpp: f32) -> f32 {
@@ -75,6 +88,8 @@ fn wedge_line(dist: f32, px: f32, wpp: f32) -> f32 {
 }
 
 // A wireframe circular sector: apex at the origin, facing local +X, in the marker's local XZ plane.
+// With `extra.x >= 0` the wedge has a second, narrower inner zone (half-angle `extra.x`, range
+// `inner`) outlined and tinted `inner_color`; with `extra.x < 0` this is the original single-zone path.
 fn wedge_color(in: VsOut, wpp: f32) -> vec4<f32> {
     let p = in.local;
     let ha = in.wedge.x;
@@ -82,6 +97,13 @@ fn wedge_color(in: VsOut, wpp: f32) -> vec4<f32> {
     let fill = in.wedge.z;
     let s = in.wedge.w;
     let outer = in.shape.z;
+    let edge_px = in.style_a.x;
+    let grid_px = in.style_a.y;
+    let grid_alpha = in.style_a.z;
+    let interior_alpha = in.style_a.w;
+    let inner_alpha = in.style_b.x;
+    let fill_alpha = in.style_b.y;
+    let two_zone = in.extra.x >= 0.0;
 
     let r = length(p);
     let ang = atan2(p.y, p.x); // 0 on the facing axis
@@ -94,45 +116,111 @@ fn wedge_color(in: VsOut, wpp: f32) -> vec4<f32> {
     let inside = 1.0 - smoothstep(-wpp, wpp, d);
 
     // Outline: the two radial edges and the outer arc, at full alpha.
-    let outline = wedge_line(abs(d), EDGE_PX, wpp);
+    let outline = wedge_line(abs(d), edge_px, wpp);
     var lines = 0.0;
-    if (inner > 0.0) {
-        lines = max(lines, wedge_line(abs(r - inner), EDGE_PX, wpp));
+    // A single zone draws the inner range as a full-width arc; two zones outline the inner sector.
+    if (inner > 0.0 && !two_zone) {
+        lines = max(lines, wedge_line(abs(r - inner), edge_px, wpp));
     }
     if (fill > 0.0 && fill < 1.0) {
-        lines = max(lines, wedge_line(abs(r - fill * outer), EDGE_PX, wpp));
+        lines = max(lines, wedge_line(abs(r - fill * outer), edge_px, wpp));
     }
     // Concentric grid arcs every `s` metres.
     let arc = abs(fract(r / s + 0.5) - 0.5) * s;
-    var grid = wedge_line(arc, GRID_PX, wpp);
+    var grid = wedge_line(arc, grid_px, wpp);
     // Radial spokes, spaced so cells are about square at the rim; skipped near the apex, where they
     // converge into moire.
     let n = max(1.0, round(2.0 * ha * outer / s));
     let spoke_step = 2.0 * ha / n;
     let spoke = abs(fract((ang + ha) / spoke_step + 0.5) - 0.5) * spoke_step * r;
     if (r > s) {
-        grid = max(grid, wedge_line(spoke, GRID_PX, wpp));
+        grid = max(grid, wedge_line(spoke, grid_px, wpp));
     }
     // Interior, stronger where the fill has reached.
     let filled = 1.0 - smoothstep(-wpp, wpp, r - fill * outer);
-    let interior = mix(INTERIOR_ALPHA, FILL_ALPHA, filled * select(0.0, 1.0, fill > 0.0));
+    let fill_gate = filled * select(0.0, 1.0, fill > 0.0);
+    let interior = mix(interior_alpha, fill_alpha, fill_gate);
 
-    let body = max(max(lines, grid * GRID_ALPHA), interior);
+    let grid_cov = select(0.0, grid * grid_alpha, grid_px > 0.0);
+    let body = max(max(lines, grid_cov), interior);
     let coverage = max(outline, inside * body);
+    if (!two_zone) {
+        return vec4<f32>(in.color.rgb, in.color.a * coverage);
+    }
+
+    // The inner sector, through the same sdPie.
+    let ihs = in.extra.x;
+    let ci = vec2<f32>(sin(ihs), cos(ihs));
+    let li = r - inner;
+    let mi = length(q - ci * clamp(dot(q, ci), 0.0, inner));
+    let d_in = max(li, mi * sign(ci.y * q.x - ci.x * q.y));
+    let inside_in = 1.0 - smoothstep(-wpp, wpp, d_in);
+    let inner_outline = wedge_line(abs(d_in), edge_px, wpp) * inside;
+    let inner_body = max(inner_alpha, filled * select(0.0, fill_alpha, fill > 0.0));
+    let inner_cov = max(inner_outline, inside_in * inner_body);
+    let w = max(inside_in, inner_outline);
+    let base = vec4<f32>(in.color.rgb, in.color.a * coverage);
+    let tint = vec4<f32>(in.inner_color.rgb, in.inner_color.a * max(coverage, inner_cov));
+    return mix(base, tint, w);
+}
+
+// An annulus of `thickness` ending at `radius`, optionally broken into `dashes`, with an optional
+// interior fill from the centre.
+fn ring_color(in: VsOut, wpp: f32) -> vec4<f32> {
+    let p = in.local;
+    let radius = in.shape.z;
+    let thickness = in.extra.x;
+    let fill = in.extra.y;
+    let dashes = in.extra.z;
+    let r = length(p);
+    let half_band = thickness * 0.5;
+    let d = abs(r - (radius - half_band)) - half_band;
+    var band = 1.0 - smoothstep(-wpp, wpp, d);
+    if (dashes > 0.0) {
+        // Keep the first half of every dash period; the distance to a dash edge is in arc length.
+        let t = fract(dashes * (atan2(p.y, p.x) + 3.14159265) / 6.2831853);
+        let from_centre = abs(fract(t - 0.25 + 0.5) - 0.5);
+        let edge = (from_centre - 0.25) * (6.2831853 / dashes) * r;
+        band = band * (1.0 - smoothstep(-wpp, wpp, edge));
+    }
+    var coverage = band;
+    if (fill > 0.0) {
+        let filled = 1.0 - smoothstep(-wpp, wpp, r - fill * radius);
+        coverage = max(coverage, filled * in.style_b.y);
+    }
     return vec4<f32>(in.color.rgb, in.color.a * coverage);
+}
+
+// One round of PCG: a cheap integer hash with good avalanche, so adjacent pixels decorrelate.
+fn pcg(v: u32) -> u32 {
+    let s = v * 747796405u + 2891336453u;
+    let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (w >> 22u) ^ w;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Derivatives sit outside the branch so they stay in uniform control flow.
     let wpp = max(length(fwidth(in.local)), 1e-6); // world units per pixel
-    if (in.shape.w > 0.5) {
-        return wedge_color(in, wpp);
+    var color: vec4<f32>;
+    if (in.shape.w > 1.5) {
+        color = ring_color(in, wpp);
+    } else if (in.shape.w > 0.5) {
+        color = wedge_color(in, wpp);
+    } else {
+        let d = sd_rounded_box(in.local, in.shape.xy, in.shape.z);
+        // Analytic anti-aliasing: one screen-space texel of the distance field, centred on the outline,
+        // so the edge is one pixel wide at any distance and any marker size.
+        let aa = max(fwidth(d), 1e-6);
+        let coverage = 1.0 - smoothstep(-aa, aa, d);
+        color = vec4<f32>(in.color.rgb, in.color.a * coverage);
     }
-    let d = sd_rounded_box(in.local, in.shape.xy, in.shape.z);
-    // Analytic anti-aliasing: one screen-space texel of the distance field, centred on the outline,
-    // so the edge is one pixel wide at any distance and any marker size.
-    let aa = max(fwidth(d), 1e-6);
-    let coverage = 1.0 - smoothstep(-aa, aa, d);
-    return vec4<f32>(in.color.rgb, in.color.a * coverage);
+    // Flicker: drop a `flicker` fraction of pixels, re-rolled every sim tick through the seed.
+    if (in.style_b.z > 0.0) {
+        let h = pcg(u32(in.clip.x) ^ pcg(u32(in.clip.y) ^ pcg(u32(in.style_b.w))));
+        if (f32(h >> 8u) / 16777216.0 < in.style_b.z) {
+            color.a = 0.0;
+        }
+    }
+    return color;
 }

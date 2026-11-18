@@ -89,7 +89,8 @@ the next deliberate corpus re-record.
   `slow_motion` example. `game_dt` integrators follow; nothing else does.
 - **W2 (shipped)** the closed forms in `ludion-engine` read `game_instant`: `extract.rs` particles, clip phase and
   volleys; `animation_events`; `parent_joint`; `ragdoll`; `patterns` (the timeline walks
-  `game_frames_crossed`, volley age is fractional); the `ludion-projectiles` bullet evaluators.
+  `game_frames_crossed`, volley age is fractional); the volley bullet evaluators (`patterns.rs`
+  `bullet_age`/`bullet_position`/`bullet_is_alive`/`volley_hits`).
 - **W3 (shipped)** physics: the `step` system calls `scale_time(s)` for `0 < s < 1` (no opt-in; a hold
   still does not reach physics); `PhysicsWorld::gameplay_dt` scaled; the kinematic and projectile
   paths pinned by tests.
@@ -148,10 +149,11 @@ reopens when a game needs it.
 
 ## Status
 
-- **W1:** in the working tree, rev to be filled by the tech lead.
-- **W2:** in the working tree, rev to be filled by the tech lead. `ludion-projectiles` bullet evaluators
-  were not part of it and still read whole ticks.
-- **W3:** in the working tree, rev to be filled by the tech lead.
-- **W4:** in the working tree, rev to be filled by the tech lead.
-- **Owner rulings owed:** (a)–(e) in "Proposed" above. (b) is applied conservatively: `Plan/physics.md`
+- **W1:** shipped, Lore rev 2373.
+- **W2:** shipped, Lore rev 2374 (integrated green at 2376). The volley bullet evaluators read the
+  fractional instant. The `ludion-projectiles` pool has no closed form: it integrates `ctx.game_dt`, so it
+  follows the scale; W3's tests pin it.
+- **W3:** shipped, Lore rev 2378.
+- **W4:** shipped, Lore rev 2378.
+- **Owner rulings owed:** (a)–(f) in "Proposed" above. (b) is applied conservatively: `Plan/physics.md`
   §Time scale carries the amendment line.

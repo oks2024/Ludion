@@ -251,7 +251,59 @@ pub enum GroundMarkerShape {
         fill: f32,
         /// World units between concentric grid arcs (`> 0`).
         grid_spacing: f32,
+        /// Half the opening angle of the narrower inner zone in **radians**, at most `half_angle`;
+        /// `None` is the single-zone wedge. The zone's range is `inner_radius`.
+        inner_half_angle: Option<f32>,
     },
+    /// An annulus centred on the origin: a band of `thickness` ending at `radius`, optionally
+    /// dashed, with an optional interior fill from the centre.
+    Ring {
+        /// Outer radius in world units (`> 0`).
+        radius: f32,
+        /// Band width in world units, at most `radius`.
+        thickness: f32,
+        /// Fraction of `radius` filled from the centre, clamped to `[0, 1]`.
+        fill: f32,
+        /// Dashes around the band; `0` draws it solid.
+        dashes: u32,
+    },
+}
+
+/// The look of a ground marker, in pixels and opacities. `Default` is the wedge's original look,
+/// so a marker with no authored style draws exactly as before.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct GroundMarkerStyle {
+    /// Outline and inner-arc width in pixels.
+    pub outline_px: f32,
+    /// Whether a wedge draws its polar grid.
+    pub grid: bool,
+    /// Grid line width in pixels.
+    pub grid_px: f32,
+    /// Grid line opacity.
+    pub grid_alpha: f32,
+    /// Wedge interior opacity.
+    pub interior_alpha: f32,
+    /// Wedge inner-zone interior opacity.
+    pub inner_alpha: f32,
+    /// Opacity of a wedge's growing fill and a ring's interior.
+    pub fill_alpha: f32,
+    /// Fraction of coverage dropped per pixel, in `[0, 1]`; `0` is steady.
+    pub flicker: f32,
+}
+
+impl Default for GroundMarkerStyle {
+    fn default() -> Self {
+        GroundMarkerStyle {
+            outline_px: 1.5,
+            grid: true,
+            grid_px: 1.0,
+            grid_alpha: 0.45,
+            interior_alpha: 0.06,
+            inner_alpha: 0.12,
+            fill_alpha: 0.30,
+            flicker: 0.0,
+        }
+    }
 }
 
 impl GroundMarkerShape {
@@ -259,7 +311,7 @@ impl GroundMarkerShape {
     /// local XZ plane and its corner radius. One packing for disc and segment — this is what lets
     /// the shader carry a single branch-free distance function. A wedge returns its **bounding
     /// disc** (`([0, 0], outer_radius)`): that sizes the quad the wedge is drawn in, and is what a
-    /// wedge wrongly inserted on a `DropShadow` draws as.
+    /// wedge wrongly inserted on a `DropShadow` draws as. A ring does the same with its `radius`.
     ///
     /// # Example
     /// ```
@@ -279,9 +331,15 @@ impl GroundMarkerShape {
     /// assert_eq!(
     ///     GroundMarkerShape::Wedge {
     ///         half_angle: 0.5, inner_radius: 3.0, outer_radius: 7.0, fill: 0.0, grid_spacing: 1.0,
+    ///         inner_half_angle: None,
     ///     }
     ///     .rounded_box(),
     ///     ([0.0, 0.0], 7.0),
+    /// );
+    /// // So is a ring.
+    /// assert_eq!(
+    ///     GroundMarkerShape::Ring { radius: 4.0, thickness: 0.5, fill: 0.0, dashes: 0 }.rounded_box(),
+    ///     ([0.0, 0.0], 4.0),
     /// );
     /// ```
     pub fn rounded_box(self) -> ([f32; 2], f32) {
@@ -292,6 +350,7 @@ impl GroundMarkerShape {
                 ([(length * 0.5 - radius).max(0.0), 0.0], radius)
             }
             GroundMarkerShape::Wedge { outer_radius, .. } => ([0.0, 0.0], outer_radius),
+            GroundMarkerShape::Ring { radius, .. } => ([0.0, 0.0], radius),
         }
     }
 }
@@ -321,6 +380,12 @@ pub struct GroundMarkerInstance {
     /// Linear RGBA, HDR-capable. Alpha multiplies the analytic coverage, so `a` is the marker's
     /// overall opacity.
     pub color: [f32; 4],
+    /// Linear RGBA of a wedge's inner zone; equal to `color` when none is authored.
+    pub inner_color: [f32; 4],
+    /// The marker's look; `Default` is the original wedge look.
+    pub style: GroundMarkerStyle,
+    /// Seed for the flicker dropout, masked to 24 bits so it packs as an exact float integer.
+    pub flicker_seed: u32,
 }
 
 /// How far above a drop shadow's anchor the renderer starts looking for a receiving surface, in

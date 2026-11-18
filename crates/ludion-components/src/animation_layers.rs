@@ -64,6 +64,18 @@ pub struct AnimationLayer {
     /// The clip's playback rate multiplier (default `1.0`; `L1671` when negative or not finite).
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub speed: f32,
+    /// Whether the layer fires animation events, tagged with its name in `ClipEvent.layer` (default
+    /// `false`; events fire only while the layer's weight is above `0`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub events: bool,
+    /// The two parameters a blend named by `clip` is evaluated at, in the blend's axis order (default
+    /// `[0, 0]`; `L1671` when not finite). Unused by a plain clip.
+    #[serde(default, skip_serializing_if = "is_zero_params")]
+    pub params: [f32; 2],
+    /// An additive layer's reference clip: its change is measured from that clip's first frame (default
+    /// `""` — the layer's own first frame). An unknown name skips the layer silently.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reference: String,
 }
 
 impl Default for AnimationLayer {
@@ -79,6 +91,9 @@ impl Default for AnimationLayer {
             fade: 0.0,
             started: FrameIndex::ZERO,
             speed: 1.0,
+            events: false,
+            params: [0.0; 2],
+            reference: String::new(),
         }
     }
 }
@@ -94,7 +109,8 @@ impl Default for AnimationLayer {
 /// **Presentation only.** Extract composes the layers into the skin palette; no system reads the
 /// component, and a scene without it poses exactly as before. It is ordinary hashed sim state, so
 /// write it only when a choice changes. A `SkinBone`-driven skin refuses it (`L1672`); an assembly or
-/// prefab part ignores it. Layer clips raise no events.
+/// prefab part ignores it. A layer raises no events unless it sets `events: true`. A layer's `clip` may
+/// name a blend of the character, evaluated at the layer's `params`.
 ///
 /// ```yaml
 /// components:
@@ -208,9 +224,33 @@ pub fn play_layer(layers: &mut AnimationLayers, name: &str, clip: &str, now: Sim
     true
 }
 
+/// Sets the layer `name`'s blend parameters, writing only on a change. Returns `false` when there is
+/// no such layer.
+///
+/// ```
+/// use ludion_components::{AnimationLayers, AnimationLayer, set_layer_params};
+///
+/// let mut layers = AnimationLayers {
+///     layers: vec![AnimationLayer { name: "lean".into(), clip: "tilt".into(), ..Default::default() }],
+/// };
+/// assert!(set_layer_params(&mut layers, "lean", [0.5, 0.0]));
+/// assert_eq!(layers.layers[0].params, [0.5, 0.0]);
+/// assert!(!set_layer_params(&mut layers, "missing", [1.0, 0.0]));
+/// ```
+pub fn set_layer_params(layers: &mut AnimationLayers, name: &str, params: [f32; 2]) -> bool {
+    let Some(layer) = layers.layers.iter_mut().find(|layer| layer.name == name) else {
+        return false;
+    };
+    if layer.params != params {
+        layer.params = params;
+    }
+    true
+}
+
 impl SemanticValidate for AnimationLayers {
     /// More than four layers (`L1670`, `/layers`); a duplicate or empty name, a weight outside
-    /// `[0, 1]`, a negative or non-finite `fade` or `speed` (`L1671`, `/layers/<i>/<field>`).
+    /// `[0, 1]`, a negative or non-finite `fade` or `speed`, a non-finite `params` entry (`L1671`,
+    /// `/layers/<i>/<field>`).
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         let Some(layers) = value.get("layers").and_then(Value::as_array) else {
@@ -264,6 +304,17 @@ impl SemanticValidate for AnimationLayers {
                     ));
                 }
             }
+            if let Some(params) = layer.get("params").and_then(Value::as_array) {
+                for (axis, v) in params.iter().enumerate() {
+                    if !v.as_f64().is_some_and(f64::is_finite) {
+                        out.push(invalid(
+                            index,
+                            &format!("params/{axis}"),
+                            &format!("`params` entry {axis} ({v}) must be a finite number"),
+                        ));
+                    }
+                }
+            }
         }
         out
     }
@@ -288,6 +339,15 @@ fn is_override(mode: &LayerMode) -> bool {
 #[allow(clippy::float_cmp)]
 fn is_zero(value: &f32) -> bool {
     *value == 0.0
+}
+
+#[allow(clippy::float_cmp)]
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn is_zero_params(value: &[f32; 2]) -> bool {
+    is_zero(&value[0]) && is_zero(&value[1])
 }
 
 #[allow(clippy::float_cmp)]
@@ -399,6 +459,51 @@ mod tests {
             "jump",
             SimTime::from_ticks(9, rate)
         ));
+    }
+
+    #[test]
+    fn new_fields_stay_out_of_the_text_at_their_defaults() {
+        let mut full = layer("a");
+        full.events = true;
+        full.params = [0.5, 0.0];
+        full.reference = "idle".into();
+        let value = serde_json::to_value(&full).unwrap();
+        assert_eq!(
+            value,
+            json!({ "name": "a", "clip": "aim", "events": true, "params": [0.5, 0.0], "reference": "idle" })
+        );
+        let back: AnimationLayer = serde_json::from_value(value).unwrap();
+        assert_eq!(back, full);
+    }
+
+    #[test]
+    fn set_layer_params_writes_once() {
+        let mut layers = AnimationLayers {
+            layers: vec![layer("a")],
+        };
+        assert!(set_layer_params(&mut layers, "a", [1.0, 2.0]));
+        let before = layers.clone();
+        assert!(set_layer_params(&mut layers, "a", [1.0, 2.0]));
+        assert_eq!(layers, before);
+        assert_eq!(layers.layers[0].params, [1.0, 2.0]);
+        assert!(!set_layer_params(&mut layers, "b", [0.0; 2]));
+    }
+
+    #[test]
+    fn a_non_finite_param_is_l1671() {
+        // JSON has no NaN: a non-finite `f32` serializes to null, and a string is not a number.
+        let found = codes(json!({ "layers": [
+            { "name": "a", "params": [0.5, null] },
+            { "name": "b", "params": ["x", 1.0] },
+            { "name": "c", "params": [0.5, 1.0] },
+        ] }));
+        assert_eq!(
+            found,
+            [
+                ("L1671".to_string(), "/layers/0/params/1".to_string()),
+                ("L1671".to_string(), "/layers/1/params/0".to_string()),
+            ]
+        );
     }
 
     fn codes(value: Value) -> Vec<(String, String)> {

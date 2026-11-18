@@ -47,6 +47,7 @@ pub mod par;
 pub mod paths;
 pub mod require_gpu;
 pub mod rng;
+pub mod rumble;
 pub mod suggest;
 pub mod text;
 pub mod time;

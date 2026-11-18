@@ -105,6 +105,7 @@ Blasts take the same filter.
 - A filtered pair is never detected: no contact, no `ContactEvent`. A pair you forgot to ignore
   collides and a pair you ignored by mistake is silent. `ludion check-scene <scene> --bounds` prints
   the resolved matrix (`--json` adds it as the summary's `layers` field) — read which pairs never meet without launching.
+  A layer that entities list in `QueryLayers` gains ` (N query-only)` in text; `--json` gives every layer a `query_only` count.
 - The layer filter wins over a joint's `collide: true`.
 - A live edit of the `layers:` block or of a `layer:` takes effect on the next tick.
 - Reordering `layers:` changes no result.

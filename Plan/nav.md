@@ -56,6 +56,23 @@
       splines; `follow: spline` waits for a rail-like patrol request.
     - `paused` hands the guard to behaviour code; unpausing rejoins by `resume` (`nearest`, `next`, `last`).
       A finished `once` patrol stays `done`.
+14. **`NavLink` is a component that adds a directed edge between two grid nodes** (Neon Shroud request 0004 §4).
+    Fields `from`, `to` (the entity's frame: posed by `world_affine` when it has a `Transform`, world
+    coordinates otherwise), `bidirectional` (default `true`), `kind` (free text for the game), `cost` (metres
+    *added* to the 3D distance between the two snapped nodes), `enabled`, `snap_radius` (default `0.75`); every
+    field defaulted, so `{}` deserializes. **Differences from the request:** no `classes` field (wave 2 adds
+    it); `kind` is free text, not an enum; the current link is reported on `NavRoute.link`, not
+    `NavSteering.link` (decision 7 keeps `NavSteering` a velocity; decision 10 puts route state on `NavRoute`).
+15. **The link table is derived** (decision 6 holds). `nav_update` rebuilds it every call after the grid, from the
+    enabled `NavLink`s in ascending `EntityId`, snapping each end with `nearest_node(.., snap_radius)`. An end that
+    snaps to nothing warns `L4145` once per link per grid build. Flow fields ignore links.
+16. **Routes cross links without entity-ref lists.** `NavRoute` gains `links: Vec<u32>` (waypoint indices where a
+    traversal starts; waypoint `i` is the link start, `i + 1` its end), `link: Option<EntityId>` (one ref, set only
+    while `at_link`) and the status `at_link`. The link entity resolves from the table by its (start node, end
+    node) pair, lowest entity first. A walker that reaches a link start stops with zero velocity and waits for
+    `nav_link_done`; the engine never moves the body. A pending link that no longer resolves (disabled, removed,
+    moved) replans under both `replan` modes; a route `at_link` is never replanned. Request amendment 2's link
+    half, flow fields ignoring links and a zero velocity while `at_link` are **Proposed — owner ruling owed**.
 
 **Known second way (temporary):** vigil keeps its game-side 2D nav (`games/vigil/src/nav.rs`).
 Moving it to the layered grid moves its `WorldHash`; the exit is the owed migration, gated by
@@ -91,6 +108,14 @@ arrives, the goal moving a cell or a wall across the leg replans (and `replan: n
 defers two of ten agents one tick, 1- and 8-thread traces match, and a mid-route restore rejoins. Only the
 component schema snapshot moved.
 
+Wave 1b (request 0004 §3), by commit subject: patrols — `kind: patrol` documents, `PatrolFollower` and
+`PatrolState`, `patrol_update` and `patrol_motion`; `L1522`–`L1525`, `L4142`–`L4144`.
+
+Wave 3 (request 0004 §4), by commit subject: `ludion-nav` gains `NavLinks`, `find_path_linked` and
+`string_pull_linked`; the engine gains `NavLink`, `NavRouteStatus::AtLink` with `NavRoute.links`/`link`, and
+`nav_link_done`; `L1526`, `L4145`, `L4146`. A scene with no `NavLink` routes and hashes as before. Only the
+component schema snapshot moved.
+
 ## Waves (Neon Shroud request 0004)
 
 The request asks for paths, patrols, off-mesh links, dynamic blockers and avoidance. Each wave is
@@ -105,8 +130,8 @@ independently shippable; later ones add fields and components, never reshape ear
 - **2 — agent classes:** a per-class grid (radius, height, step, slope) and `PathRequest.class`. Amends
   decision 8 (one class per `Nav`); the trigger is met (walkers and forklifts) — **Proposed — owner ruling
   owed**. Also `nav_random_point`, `nav_raycast` and the `nav` trace channel.
-- **3 — off-mesh links:** `NavLink`, an `AtLink` marker on a route, `nav_link_done`; waypoint annotations
-  become fields parallel to `NavRoute.waypoints`, so entity references wait for this wave.
+- **3 — off-mesh links (shipped):** `NavLink`, `NavRouteStatus::AtLink`, `nav_link_done`; `L1526`, `L4145`, `L4146`
+  (decisions 14–16).
 - **4 — dynamic blockers:** a `NavBlocker` overlay and `AtBlocker`, without re-sampling statics. Amends
   decision 1 (statics only) — **Proposed — owner ruling owed**.
 - **5 — avoidance:** `NavAgent.avoidance` and `NavObstacle`; brings "Avoidance beyond separation" into
@@ -121,4 +146,5 @@ keeps plain points. `nav_random_point`, `nav_raycast` and the `nav` trace channe
 - **Several agent classes per world** — trigger: a game with two agent sizes (met: wave 2).
 - **A 3D flying field** — trigger: flyers stuck behind geometry in play.
 - **Avoidance beyond separation** — wave 5.
+- **Links in flow fields** — trigger: a chasing crowd that must climb.
 - **Voxel-derived walkability** — trigger: a voxel room the collider sampler misreads.

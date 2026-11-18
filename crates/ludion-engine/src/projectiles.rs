@@ -16,7 +16,7 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::TickRate;
 use ludion_ecs::{SystemCtx, World};
-use ludion_physics::{PhysicsWorld, QueryFilter};
+use ludion_physics::{LayerSet, PhysicsWorld, QueryFilter};
 use ludion_projectiles::{
     MAX_DECODE_CAPACITY, ProjectileDesc, ProjectileId, ProjectilePool, SpawnError, StepConfig,
     StepEvents, step,
@@ -141,10 +141,8 @@ impl Projectiles {
         pool: ProjectilePool,
         events: StepEvents,
     ) -> Self {
-        let mut query = config
-            .ignore_layers
-            .iter()
-            .fold(QueryFilter::new(), |q, name| q.ignore_layer(name.clone()));
+        let mut query =
+            QueryFilter::new().ignore_set(&LayerSet::from(config.ignore_layers.clone()));
         if config.include_sensors {
             query = query.include_sensors();
         }

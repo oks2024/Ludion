@@ -1,0 +1,236 @@
+# Feature: GroundMarker two-zone wedge, ring, style and flicker. Row 1: two-zone cones (a narrow inner
+# zone inside the wide one) at fill 0, 0.5 and 1, the last with a distinct inner_color. Row 2: rings, thin,
+# thick, dashed (dashes: 12) and one at Transform.scale 0.5 with fill 1. Row 3: a wedge with style grid: none
+# and one with style flicker 0.5 (a deterministic per-tick dropout). Seen from a ~55 degree top-down camera.
+format: 1
+name: "ground-marker-zones - GroundMarker two-zone wedge, ring, style grid none and flicker"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 3.5
+          - 29.5
+          - 17.5
+        rotation:
+          - -55.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 10.0
+          - 4.0
+      PointLight:
+        color:
+          - 0.8
+          - 0.85
+          - 1.0
+        intensity: 2.0
+        range: 40.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 50.0
+          - 1.0
+          - 50.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.05
+          - 0.06
+          - 0.08
+          - 1.0
+  - name: zones-fill-0
+    components:
+      Transform:
+        translation:
+          - -12.0
+          - 0.0
+          - -6.0
+      GroundMarker:
+        shape:
+          type: wedge
+          half_angle_deg: 40.0
+          outer_radius: 7.0
+          inner_radius: 3.0
+          fill: 0.0
+          grid_spacing: 1.0
+          inner_half_angle_deg: 15.0
+        color:
+          - 0.25
+          - 1.6
+          - 0.6
+          - 0.9
+  - name: zones-fill-50
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 0.0
+          - -6.0
+      GroundMarker:
+        shape:
+          type: wedge
+          half_angle_deg: 40.0
+          outer_radius: 7.0
+          inner_radius: 3.0
+          fill: 0.5
+          grid_spacing: 1.0
+          inner_half_angle_deg: 15.0
+        color:
+          - 0.25
+          - 1.6
+          - 0.6
+          - 0.9
+  - name: zones-fill-100
+    components:
+      Transform:
+        translation:
+          - 4.0
+          - 0.0
+          - -6.0
+      GroundMarker:
+        shape:
+          type: wedge
+          half_angle_deg: 40.0
+          outer_radius: 7.0
+          inner_radius: 3.0
+          fill: 1.0
+          grid_spacing: 1.0
+          inner_half_angle_deg: 15.0
+        color:
+          - 0.25
+          - 1.6
+          - 0.6
+          - 0.9
+        inner_color:
+          - 2.0
+          - 0.15
+          - 0.1
+          - 0.9
+  - name: ring-thin
+    components:
+      Transform:
+        translation:
+          - -12.0
+          - 0.0
+          - 3.0
+      GroundMarker:
+        shape:
+          type: ring
+          radius: 3.0
+          thickness: 0.1
+        color:
+          - 0.25
+          - 1.6
+          - 0.6
+          - 0.9
+  - name: ring-thick
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 0.0
+          - 3.0
+      GroundMarker:
+        shape:
+          type: ring
+          radius: 3.0
+          thickness: 0.8
+        color:
+          - 0.25
+          - 1.6
+          - 0.6
+          - 0.9
+  - name: ring-dashed
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 3.0
+      GroundMarker:
+        shape:
+          type: ring
+          radius: 3.0
+          thickness: 0.4
+          dashes: 12
+        color:
+          - 0.25
+          - 1.6
+          - 0.6
+          - 0.9
+  - name: ring-scaled
+    components:
+      Transform:
+        scale:
+          - 0.5
+          - 0.5
+          - 0.5
+        translation:
+          - 6.0
+          - 0.0
+          - 3.0
+      GroundMarker:
+        shape:
+          type: ring
+          radius: 6.0
+          thickness: 0.5
+          fill: 1.0
+        color:
+          - 2.0
+          - 0.15
+          - 0.1
+          - 0.9
+  - name: wedge-no-grid
+    components:
+      Transform:
+        translation:
+          - -14.0
+          - 0.0
+          - 7.0
+      GroundMarker:
+        shape:
+          type: wedge
+          half_angle_deg: 30.0
+          outer_radius: 7.0
+          inner_radius: 3.0
+          fill: 0.0
+          grid_spacing: 1.0
+        color:
+          - 0.25
+          - 1.6
+          - 0.6
+          - 0.9
+        style:
+          grid: none
+  - name: wedge-flicker
+    components:
+      Transform:
+        translation:
+          - 4.0
+          - 0.0
+          - 7.0
+      GroundMarker:
+        shape:
+          type: wedge
+          half_angle_deg: 30.0
+          outer_radius: 7.0
+          inner_radius: 3.0
+          fill: 0.0
+          grid_spacing: 1.0
+        color:
+          - 2.0
+          - 0.15
+          - 0.1
+          - 0.9
+        style:
+          flicker: 0.5

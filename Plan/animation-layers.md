@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1 and W2a mechanized (2026-11-18); W2b–W6 not started.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a and W2b (sim) mechanized (2026-11-18); W2c–W6 not started.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -38,6 +38,20 @@ Blend errors reuse `L1199`/`L1200`. A scene without a blend poses and hashes as 
 and `component_schemas.json` are the only wire-visible moves. The d2 amendment ships in its opt-in form
 (only a blend-using entity hashes a `BlendClock`), still "Proposed — owner ruling owed".
 
+### W2b (sim) — layer blends, layer `params`, `reference:`, layer events
+
+| file | role |
+|---|---|
+| `crates/ludion-components/src/animation_layers.rs` | `AnimationLayer.events`/`params`/`reference`, `set_layer_params`, `L1671` on a non-finite `params` entry |
+| `crates/ludion-components/src/blend_clock.rs` | `BlendClock.layers`, `LayerPhase` |
+| `crates/ludion-engine/src/blend_clock.rs` | `blend_clocks` keeps the clock while a layer names a blend; `layer_fallback_phase`; `blend_crossings` takes `(prev, phase)` |
+| `crates/ludion-engine/src/extract.rs` | `LayerPose.pose`/`reference` as `PoseSide`, `layer_poses` resolves a layer blend, `PoseSide::at_zero` |
+| `crates/ludion-engine/src/animation_events.rs` | `ClipEvent.layer`, `walk_layers`, the "Layers" crossing rule |
+| `crates/ludion-engine/tests/layer_events.rs` | events, weight 0, blend sweep and restart, scaled clock, restore, point pose, reference, neutrality |
+
+No `WorldHash`, replay, trace, wire-schema or golden moved. A scene without a layer blend never carries a
+`BlendClock`; only `component_schemas.json` re-blessed.
+
 ## Trigger
 
 The game's characters do locomotion plus something else on one skin: carry a body, aim, peek around a
@@ -71,14 +85,13 @@ all four: three skinned kinds (player, militia guard, android worker) share one 
    rest); below 1 slerps rotation and lerps translation and scale from the pose beneath.
 4. **Additive reference is the layer clip's first frame (`t = 0`).** With layer sample `c` and reference `r`:
    rotation `base ⊗ slerp(I, r⁻¹ ⊗ c, k)`, translation `base + k (c − r)`, scale `base × (1 + k (c / r − 1))`.
-   Quaternion product and conjugate are plain arithmetic. A named `reference: <clip>` is W2.
+   Quaternion product and conjugate are plain arithmetic. A named `reference: <clip>` is decision 21.
 5. **The weight ramps from `from_weight` at `changed` over `fade` seconds**, derived from tick counts like
    `crossfade`, on the base `Animation.hold` grid. `fade_layer` writes only on change, so a per-tick caller
    does not churn the hash; `play_layer` restamps only on a new clip. Games pass `ctx.game_time`.
 6. **W1 layers ignore `SkinBone`-driven skins (`L1672`) and assemblies and prefab parts.** One pose source
    per skin stays true. Masks name skin joints, so assembly parts would need part-name masks (see Proposed).
-7. **Layer events are not emitted in W1.** W2 adds an opt-in `events: true` per layer (default off, so a carry
-   loop does not double footsteps); events report the layer name.
+7. **Layer events are not emitted in W1.** Replaced by decision 22 (W2b): an opt-in `events: true`.
 8. **Blend spaces** (W2): `blends:` in the character document, 1D by a scalar and 2D by a vector, driven by
    `Animation.params`, with phase sync through a hashed `BlendClock`. A blend emits the events of its
    highest-weight clip (ties go to the lower index) so footstep noise stays on the feet.
@@ -109,14 +122,38 @@ all four: three skinned kinds (player, militia guard, android worker) share one 
 18. **With no `BlendClock`** (system not registered) extract falls back to `φ = elapsed · rate(params now)`:
     stateless, exact while the params hold still, used by tools; no events fire.
 19. **A blend name may not equal a clip name** (`Animation.clip` resolves both).
+20. **A layer `clip` resolves as a clip, else as a blend of the character** (decision 19 keeps the names
+    disjoint). A layer blend is driven by `AnimationLayer.params`, never `Animation.params`. Its phase is a
+    `BlendClock.layers` entry `{ name, blend, started, phase, prev }`, integrated by `blend_clocks` exactly as
+    decision 15 does, at `layer.speed`, and restarted on a new `(clip, started)`. This happens only while the
+    entity's base `Animation` sits on a character `Mesh`. Without a clock, extract falls back to
+    `clock_elapsed(started, speed) · rate(params)` (decision 18).
+21. **`reference: <clip>`** (additive only) takes the reference pose from that clip's first frame. Without it,
+    the reference is the layer's own first frame: for a blend, each point at `t = 0` under the current
+    weights. An unknown reference skips the layer silently, as an unknown mask does.
+22. **Layer events are opt-in with `events: true`.** They fire only while the layer's weight at `now` is above
+    0. A plain clip layer is walked **statelessly** over `(T(i − step), T(i)]` on the exact gameplay instant
+    `i`, where `T` is the layer's clock times the binding speed and `step` is this tick's gameplay step. The
+    window is `[0, T(i)]` when `started` lies after `floor(i − step)`. Windows tile exactly, so nothing
+    repeats. A layer started by a system registered *after* `animation_events` loses only an event at exactly
+    `t = 0`; register `play_layer` callers before it, as for `Animation`. A raw `speed` write mid-clip may
+    skip or repeat one crossing that tick. A blend layer fires its dominant point's events over its
+    `BlendClock.layers` window (decision 16). Events carry `ClipEvent.clip` = the layer's clip or blend name
+    and `ClipEvent.layer` = the layer name. Base events have `layer: ""`. Order: an entity's base events,
+    then its layers' in list order.
+23. **`set_layer_params(&mut layers, name, params) -> bool`** writes only on change. The request's `param: N`
+    indices into `Animation.params` are not built (decision 13): a layer owns its two params.
+24. **`hold` does not step layer blend phases** (decision 17, same trigger).
 
 ## Waves
 
 - **W1 (shipped).** Masks, `AnimationLayers`, composition in extract's `Skin` phase, `L1670`–`L1672`, docs.
 - **W2a (shipped).** 1D/2D blend spaces, `Animation.params`, `BlendClock`, `blend_clocks`, blend events
   (decisions 13–19).
-- **W2b.** A layer's `clip` naming a blend, layer `events`, `reference:`, `render --blend/--layer` strips,
-  gallery `character-layers.yaml` (pinned goldens owed).
+- **W2b (sim, shipped).** A layer's `clip` naming a blend, layer `params`, `reference:`, layer `events`
+  (decisions 20–24).
+- **W2c.** `render --model … --blend/--layer` strips (`model_sheet.rs` + CLI), gallery
+  `character-layers.yaml` and its goldens (pinned goldens owed).
 - **W3.** `AnimGraph` and `AnimGraphState` (decision 9).
 - **W4.** Look-at and two-bone IK (decision 10).
 - **W5.** Ground feet, the bench, profile counters (decision 11).

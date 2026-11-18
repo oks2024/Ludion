@@ -247,7 +247,9 @@ fn step(
                             failures.push(Failure::Unreachable(id, state.point));
                             advance(&mut state, doc.mode, len);
                         }
-                        NavRouteStatus::Planning | NavRouteStatus::Following => {}
+                        NavRouteStatus::Planning
+                        | NavRouteStatus::Following
+                        | NavRouteStatus::AtLink => {}
                     }
                 }
             }

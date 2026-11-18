@@ -2566,6 +2566,9 @@ mod tests {
                 shape: crate::scene::GroundMarkerShape::Disc { radius: 3.0 },
                 model: ludion_core::math::glam::Mat4::IDENTITY,
                 color: [4.0, 0.4, 0.2, 0.6],
+                inner_color: [4.0, 0.4, 0.2, 0.6],
+                style: crate::scene::GroundMarkerStyle::default(),
+                flicker_seed: 0,
             });
         let marked = PostChain::for_scene(&scene);
         assert_eq!(

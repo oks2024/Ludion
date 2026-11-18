@@ -159,11 +159,20 @@ struct SpriteInstanceRaw {
 struct GroundMarkerInstanceRaw {
     model: [[f32; 4]; 4],
     color: [f32; 4],
-    /// `(half_extent.x, half_extent.z, corner_radius, is_wedge)` in the marker's local XZ plane; a
-    /// wedge packs `(0, 0, outer_radius, 1)`.
+    /// `(half_extent.x, half_extent.z, corner_radius, kind)` in the marker's local XZ plane; a
+    /// wedge packs `(0, 0, outer_radius, 1)` and a ring `(0, 0, radius, 2)`.
     shape: [f32; 4],
-    /// A wedge's `(half_angle, inner_radius, fill, grid_spacing)`; zero for disc and segment.
+    /// A wedge's `(half_angle, inner_radius, fill, grid_spacing)`; zero for disc, segment and ring.
     wedge: [f32; 4],
+    /// A wedge's inner-zone colour (the marker colour when none is authored).
+    inner_color: [f32; 4],
+    /// `(outline_px, grid_px or 0 for no grid, grid_alpha, interior_alpha)`.
+    style_a: [f32; 4],
+    /// `(inner_alpha, fill_alpha, flicker, seed)`; the seed is below 2^24, an exact float integer.
+    style_b: [f32; 4],
+    /// A wedge's `(inner_half_angle or -1, 0, 0, 0)`; a ring's `(thickness, fill, dashes, 0)`;
+    /// `(-1, 0, 0, 0)` for disc and segment.
+    extra: [f32; 4],
 }
 
 /// One particle instance: the disc's centre, the camera basis it faces along, its linear HDR colour,
@@ -3546,24 +3555,51 @@ fn ground_marker_raws(markers: &[GroundMarkerInstance]) -> Vec<GroundMarkerInsta
         .iter()
         .map(|marker| {
             let (half_extent, radius) = marker.shape.rounded_box();
-            let (is_wedge, wedge) = match marker.shape {
+            let (kind, wedge, extra) = match marker.shape {
                 crate::scene::GroundMarkerShape::Wedge {
                     half_angle,
                     inner_radius,
                     fill,
                     grid_spacing,
+                    inner_half_angle,
                     ..
                 } => (
                     1.0,
                     [half_angle, inner_radius, fill.clamp(0.0, 1.0), grid_spacing],
+                    [inner_half_angle.unwrap_or(-1.0), 0.0, 0.0, 0.0],
                 ),
-                _ => (0.0, [0.0; 4]),
+                crate::scene::GroundMarkerShape::Ring {
+                    thickness,
+                    fill,
+                    dashes,
+                    ..
+                } => (
+                    2.0,
+                    [0.0; 4],
+                    [thickness, fill.clamp(0.0, 1.0), dashes as f32, 0.0],
+                ),
+                _ => (0.0, [0.0; 4], [-1.0, 0.0, 0.0, 0.0]),
             };
+            let style = marker.style;
             GroundMarkerInstanceRaw {
                 model: marker.model.to_cols_array_2d(),
                 color: marker.color,
-                shape: [half_extent[0], half_extent[1], radius, is_wedge],
+                shape: [half_extent[0], half_extent[1], radius, kind],
                 wedge,
+                inner_color: marker.inner_color,
+                style_a: [
+                    style.outline_px,
+                    if style.grid { style.grid_px } else { 0.0 },
+                    style.grid_alpha,
+                    style.interior_alpha,
+                ],
+                style_b: [
+                    style.inner_alpha,
+                    style.fill_alpha,
+                    style.flicker,
+                    (marker.flicker_seed & 0xFF_FFFF) as f32,
+                ],
+                extra,
             }
         })
         .collect()
@@ -8523,8 +8559,9 @@ const MESH_VERTEX_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0
 /// normal-matrix rows 12-15, occlusion-fade lane 16, hit-flash lane 17, rim lane 20, medium lane 21 (`.x`).
 const MESH_INSTANCE_ATTRS: [wgpu::VertexAttribute; 14] = wgpu::vertex_attr_array![6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x4, 13 => Float32x4, 14 => Float32x4, 15 => Float32x4, 16 => Float32x4, 17 => Float32x4, 20 => Float32x4, 21 => Float32];
 /// Ground-marker per-instance attributes (`GroundMarkerInstanceRaw`): model columns 0-3, color 4,
-/// the rounded-box SDF's `(half_extent, radius, is_wedge)` lane 5, the wedge lane 6.
-const GROUND_MARKER_INSTANCE_ATTRS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4];
+/// the rounded-box SDF's `(half_extent, radius, kind)` lane 5, the wedge lane 6, the inner colour 7,
+/// the style lanes 8-9 and the wedge/ring extra lane 10.
+const GROUND_MARKER_INSTANCE_ATTRS: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4];
 /// Sprite per-instance attributes (`SpriteInstanceRaw`: center/right/up/color, then the UV rect, the
 /// flags lane, the hit-flash lane, the tiling/scroll lane, and the medium scale), locations 0-8.
 const SPRITE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4, 5 => Uint32, 6 => Float32x4, 7 => Float32x4, 8 => Float32];
@@ -12374,6 +12411,9 @@ mod tests {
                 shape: crate::scene::GroundMarkerShape::Disc { radius: 3.0 },
                 model: Mat4::from_translation(Vec3::new(0.0, crate::GROUND_MARKER_LIFT, 0.0)),
                 color: [0.9, 0.15, 0.1, 1.0],
+                inner_color: [0.9, 0.15, 0.1, 1.0],
+                style: crate::scene::GroundMarkerStyle::default(),
+                flicker_seed: 0,
             });
         let marked = renderer.render(&scene, size).expect("marked render");
 
@@ -12428,6 +12468,9 @@ mod tests {
                 },
                 model: Mat4::from_translation(Vec3::new(0.0, crate::GROUND_MARKER_LIFT, 0.0)),
                 color: [0.2, 0.6, 0.9, 0.8],
+                inner_color: [0.2, 0.6, 0.9, 0.8],
+                style: crate::scene::GroundMarkerStyle::default(),
+                flicker_seed: 0,
             });
         let once = renderer.render(&scene, size).expect("segment render");
         let twice = renderer.render(&scene, size).expect("segment render again");
@@ -23141,7 +23184,7 @@ mod tests {
     /// telegraph reaches the bloom chain unclamped).
     #[test]
     fn ground_markers_pack_both_shapes_onto_one_sdf() {
-        use crate::scene::{GroundMarkerInstance, GroundMarkerShape};
+        use crate::scene::{GroundMarkerInstance, GroundMarkerShape, GroundMarkerStyle};
 
         let placement = Mat4::from_translation(Vec3::new(2.0, crate::GROUND_MARKER_LIFT, -5.0));
         let markers = [
@@ -23149,6 +23192,9 @@ mod tests {
                 shape: GroundMarkerShape::Disc { radius: 3.0 },
                 model: placement,
                 color: [6.0, 0.5, 0.25, 0.75],
+                inner_color: [6.0, 0.5, 0.25, 0.75],
+                style: GroundMarkerStyle::default(),
+                flicker_seed: 0,
             },
             GroundMarkerInstance {
                 shape: GroundMarkerShape::Segment {
@@ -23157,6 +23203,9 @@ mod tests {
                 },
                 model: Mat4::IDENTITY,
                 color: [0.1, 0.2, 0.3, 1.0],
+                inner_color: [0.1, 0.2, 0.3, 1.0],
+                style: GroundMarkerStyle::default(),
+                flicker_seed: 0,
             },
         ];
         let raws = ground_marker_raws(&markers);
@@ -23171,13 +23220,72 @@ mod tests {
         // exactly the authored length and width.
         assert_eq!(raws[1].shape, [3.0, 0.0, 1.0, 0.0]);
         assert_eq!(raws[1].model, Mat4::IDENTITY.to_cols_array_2d());
+        // A default style packs today's constants, and a disc's extra lane is the "no inner zone" one.
+        assert_eq!(raws[0].style_a, [1.5, 1.0, 0.45, 0.06]);
+        assert_eq!(raws[0].style_b, [0.12, 0.30, 0.0, 0.0]);
+        assert_eq!(raws[0].extra, [-1.0, 0.0, 0.0, 0.0]);
+    }
+
+    /// A ring packs kind 2 with `(thickness, fill, dashes)` in the extra lane and no wedge lane.
+    #[test]
+    fn a_ground_marker_ring_packs_its_lane() {
+        use crate::scene::{GroundMarkerInstance, GroundMarkerShape, GroundMarkerStyle};
+
+        let raws = ground_marker_raws(&[GroundMarkerInstance {
+            shape: GroundMarkerShape::Ring {
+                radius: 4.0,
+                thickness: 0.5,
+                fill: 2.0,
+                dashes: 12,
+            },
+            model: Mat4::IDENTITY,
+            color: [1.0; 4],
+            inner_color: [1.0; 4],
+            style: GroundMarkerStyle::default(),
+            flicker_seed: 0,
+        }]);
+        assert_eq!(raws[0].shape, [0.0, 0.0, 4.0, 2.0]);
+        assert_eq!(raws[0].wedge, [0.0; 4]);
+        assert_eq!(raws[0].extra, [0.5, 1.0, 12.0, 0.0]);
+    }
+
+    /// The two-zone half-angle rides `extra.x`, `grid: none` packs a zero grid width, and the seed
+    /// is masked to 24 bits so it is an exact float integer.
+    #[test]
+    fn a_ground_marker_packs_zones_grid_and_flicker() {
+        use crate::scene::{GroundMarkerInstance, GroundMarkerShape, GroundMarkerStyle};
+
+        let raws = ground_marker_raws(&[GroundMarkerInstance {
+            shape: GroundMarkerShape::Wedge {
+                half_angle: 0.7,
+                inner_radius: 3.0,
+                outer_radius: 7.0,
+                fill: 0.0,
+                grid_spacing: 1.0,
+                inner_half_angle: Some(0.3),
+            },
+            model: Mat4::IDENTITY,
+            color: [1.0; 4],
+            inner_color: [1.0, 0.0, 0.0, 1.0],
+            style: GroundMarkerStyle {
+                grid: false,
+                flicker: 0.5,
+                ..GroundMarkerStyle::default()
+            },
+            flicker_seed: 0xABCD_EF12,
+        }]);
+        assert_eq!(raws[0].extra, [0.3, 0.0, 0.0, 0.0]);
+        assert_eq!(raws[0].inner_color, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(raws[0].style_a[1], 0.0);
+        assert_eq!(raws[0].style_b[2], 0.5);
+        assert_eq!(raws[0].style_b[3], (0xCD_EF12_u32) as f32);
     }
 
     /// A wedge packs its bounding disc with the wedge flag in `shape.w`, and its angle, inner
     /// radius, (clamped) fill and grid spacing in the wedge lane.
     #[test]
     fn a_ground_marker_wedge_packs_its_lane() {
-        use crate::scene::{GroundMarkerInstance, GroundMarkerShape};
+        use crate::scene::{GroundMarkerInstance, GroundMarkerShape, GroundMarkerStyle};
 
         let raws = ground_marker_raws(&[GroundMarkerInstance {
             shape: GroundMarkerShape::Wedge {
@@ -23186,12 +23294,17 @@ mod tests {
                 outer_radius: 7.0,
                 fill: 0.25,
                 grid_spacing: 1.0,
+                inner_half_angle: None,
             },
             model: Mat4::IDENTITY,
             color: [0.25, 1.6, 0.6, 0.9],
+            inner_color: [0.25, 1.6, 0.6, 0.9],
+            style: GroundMarkerStyle::default(),
+            flicker_seed: 0,
         }]);
         assert_eq!(raws[0].shape, [0.0, 0.0, 7.0, 1.0]);
         assert_eq!(raws[0].wedge, [0.5, 3.0, 0.25, 1.0]);
+        assert_eq!(raws[0].extra, [-1.0, 0.0, 0.0, 0.0]);
     }
 
     /// A segment at least as wide as it is long degenerates to a disc of radius `length / 2` rather

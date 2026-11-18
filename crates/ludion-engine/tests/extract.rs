@@ -1256,6 +1256,8 @@ fn ui_rect_resolves_through_extract_exactly_like_the_pure_function() {
         fill: false,
         uv_rect: None,
         slice: None,
+        group: None,
+        fill_group: false,
     };
     world.insert(e, rect.clone()).unwrap();
 
@@ -1477,6 +1479,7 @@ fn ui_text_resolves_through_extract_exactly_like_the_measured_block() {
         wrap_width: 0.0,
         visible: true,
         font: None,
+        group: None,
     };
     world.insert(e, text.clone()).unwrap();
 
@@ -2178,6 +2181,7 @@ fn ground_marker_dimensions_are_scaled_into_world_units() {
             GroundMarker {
                 shape: GroundMarkerShape::Disc { radius: 4.0 },
                 color: [1.0; 4],
+                ..GroundMarker::default()
             },
         )
         .unwrap();
@@ -2201,6 +2205,7 @@ fn ground_marker_dimensions_are_scaled_into_world_units() {
                     width: 1.5,
                 },
                 color: [1.0; 4],
+                ..GroundMarker::default()
             },
         )
         .unwrap();
@@ -2249,8 +2254,10 @@ fn ground_marker_wedge_lengths_are_scaled_and_angle_and_fill_are_not() {
                     inner_radius: 3.0,
                     fill: 1.5,
                     grid_spacing: 0.5,
+                    inner_half_angle_deg: None,
                 },
                 color: [1.0; 4],
+                ..GroundMarker::default()
             },
         )
         .unwrap();
@@ -2268,8 +2275,124 @@ fn ground_marker_wedge_lengths_are_scaled_and_angle_and_fill_are_not() {
             outer_radius: 14.0,
             fill: 1.0,
             grid_spacing: 1.0,
+            inner_half_angle: None,
         },
     );
+    assert_eq!(scene.ground_markers[0].inner_color, [1.0; 4]);
+    assert_eq!(
+        scene.ground_markers[0].style,
+        ludion_renderer::GroundMarkerStyle::default(),
+        "no authored style extracts as the original look",
+    );
+}
+
+/// A ring's radius and thickness scale into world units; its fill clamps and its dash count passes.
+#[test]
+fn ground_marker_ring_lengths_scale_and_fill_does_not() {
+    let mut world = World::new();
+    let id = world.spawn();
+    world
+        .insert(
+            id,
+            Transform {
+                scale: [0.5, 0.5, 0.5],
+                ..Transform::default()
+            },
+        )
+        .unwrap();
+    world
+        .insert(
+            id,
+            GroundMarker {
+                shape: GroundMarkerShape::Ring {
+                    radius: 6.0,
+                    thickness: 0.4,
+                    fill: 1.5,
+                    dashes: 12,
+                },
+                ..GroundMarker::default()
+            },
+        )
+        .unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
+    assert_eq!(
+        scene.ground_markers[0].shape,
+        RendererMarkerShape::Ring {
+            radius: 3.0,
+            thickness: 0.2,
+            fill: 1.0,
+            dashes: 12,
+        },
+    );
+}
+
+/// The inner half-angle converts to radians and clamps to the outer one; `inner_color` and a
+/// partial style pass through, and the flicker seed follows the sim tick but is stable per
+/// `(entity, tick)`.
+#[test]
+fn ground_marker_zone_style_and_flicker_seed_extract() {
+    let mut world = World::new();
+    let id = world.spawn();
+    world.insert(id, Transform::default()).unwrap();
+    world
+        .insert(
+            id,
+            GroundMarker {
+                shape: GroundMarkerShape::Wedge {
+                    half_angle_deg: 40.0,
+                    outer_radius: 7.0,
+                    inner_radius: 3.0,
+                    fill: 0.0,
+                    grid_spacing: 1.0,
+                    inner_half_angle_deg: Some(90.0),
+                },
+                color: [1.0; 4],
+                inner_color: Some([1.0, 0.0, 0.0, 1.0]),
+                style: Some(ludion_engine::components::GroundMarkerStyle {
+                    grid: ludion_engine::components::GroundMarkerGrid::None,
+                    flicker: 0.5,
+                    ..Default::default()
+                }),
+            },
+        )
+        .unwrap();
+    let at = |tick: u64| {
+        extract_at(
+            &world,
+            (320, 180),
+            ludion_assets::AssetRoot::content(Path::new(".")),
+            SimTime::from_ticks(tick, TickRate::DEFAULT),
+            QualityParams::FULL.particle_density,
+        )
+        .unwrap()
+        .ground_markers[0]
+    };
+    let marker = at(10);
+    let RendererMarkerShape::Wedge {
+        half_angle,
+        inner_half_angle,
+        ..
+    } = marker.shape
+    else {
+        panic!("a wedge");
+    };
+    assert_eq!(
+        inner_half_angle,
+        Some(half_angle),
+        "clamped to the outer half-angle"
+    );
+    assert_eq!(marker.inner_color, [1.0, 0.0, 0.0, 1.0]);
+    assert!(!marker.style.grid);
+    assert_eq!(marker.style.flicker, 0.5);
+    assert_eq!(marker.style.outline_px, 1.5, "the rest takes the default");
+    assert_eq!(marker.flicker_seed, at(10).flicker_seed);
+    assert_ne!(marker.flicker_seed, at(11).flicker_seed);
+    assert!(marker.flicker_seed <= 0xFF_FFFF);
 }
 
 /// The instance's model matrix is **rigid** — rotation and translation only, with
@@ -2331,6 +2454,7 @@ fn ground_markers_extract_in_ascending_entity_order_with_their_color() {
             GroundMarker {
                 shape: GroundMarkerShape::Disc { radius: 1.0 },
                 color: [2.5, 0.2, 0.1, 0.55],
+                ..GroundMarker::default()
             },
         )
         .unwrap();
@@ -2346,6 +2470,7 @@ fn ground_markers_extract_in_ascending_entity_order_with_their_color() {
             GroundMarker {
                 shape: GroundMarkerShape::Disc { radius: 1.0 },
                 color: [0.1, 0.9, 0.3, 1.0],
+                ..GroundMarker::default()
             },
         )
         .unwrap();
@@ -2808,6 +2933,7 @@ fn an_unwrapped_ui_text_lowers_exactly_as_before() {
         wrap_width: 0.0,
         visible: true,
         font: None,
+        group: None,
     };
     let viewport = (1920, 1080);
     let mut world = World::new();

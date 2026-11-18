@@ -5,7 +5,10 @@ use core::cmp::{Ordering, Reverse};
 use core::f32::consts::SQRT_2;
 use std::collections::BinaryHeap;
 
+use ludion_core::math::sqrt;
+
 use crate::grid::{NEIGHBORS, NO_LINK, NavGrid, NodeId};
+use crate::links::NavLinks;
 
 /// How a [`find_path`] search ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +53,9 @@ pub struct PathResult {
     pub nodes: Vec<NodeId>,
     /// Nodes expanded by the search.
     pub expanded: u32,
+    /// `(i, tag)` for each off-mesh link the path crosses: `nodes[i]` to `nodes[i + 1]` is link `tag`;
+    /// ascending `i`. Empty for [`find_path`].
+    pub links: Vec<(u32, u32)>,
 }
 
 /// An open-set entry ordered by `(f, node, g)` so pop order is fully pinned.
@@ -83,6 +89,15 @@ fn octile(grid: &NavGrid, a: u32, b: u32) -> f32 {
     (hi + (SQRT_2 - 1.0) * lo) * grid.params().cell_size
 }
 
+/// Horizontal distance between two nodes' column centres; admissible when off-mesh links cost at least the
+/// distance between their ends.
+fn column_dist(grid: &NavGrid, a: u32, b: u32) -> f32 {
+    let ((ai, aj), (bi, bj)) = (grid.node_column(a), grid.node_column(b));
+    let dx = ai.abs_diff(bi) as f32;
+    let dz = aj.abs_diff(bj) as f32;
+    sqrt(dx * dx + dz * dz) * grid.params().cell_size
+}
+
 /// A* from `from` to `to` over the links an agent walks. Out-of-range ids are [`PathStatus::Unreachable`].
 ///
 /// ```
@@ -111,12 +126,66 @@ fn octile(grid: &NavGrid, a: u32, b: u32) -> f32 {
 /// assert_eq!(path.cost, 3.0);
 /// ```
 pub fn find_path(grid: &NavGrid, from: NodeId, to: NodeId, opts: &PathOptions) -> PathResult {
+    find_path_linked(grid, &NavLinks::default(), from, to, opts)
+}
+
+/// [`find_path`] that also crosses the off-mesh edges of `links` (grid steps are relaxed first, then the
+/// node's link edges in table order). With an empty table the result equals [`find_path`]'s.
+///
+/// ```
+/// use ludion_nav::{
+///     ColumnSource, FloorSample, GridParams, NavGrid, NavLinks, OffMeshLink, PathOptions, PathStatus,
+///     find_path_linked,
+/// };
+///
+/// struct Flat;
+/// impl ColumnSource for Flat {
+///     fn column(&self, i: u32, _j: u32, _c: [f32; 2], out: &mut Vec<FloorSample>) {
+///         // A wall of no floor at column 2 splits the strip.
+///         if i != 2 {
+///             out.push(FloorSample { y: 0.0, normal: [0.0, 1.0, 0.0], headroom: f32::INFINITY });
+///         }
+///     }
+/// }
+/// let params = GridParams {
+///     origin: [0.0, 0.0],
+///     cell_size: 1.0,
+///     nx: 5,
+///     nz: 1,
+///     agent_height: 1.8,
+///     max_step: 0.3,
+///     max_slope_deg: 45.0,
+/// };
+/// let grid = NavGrid::build(params, &Flat);
+/// let a = grid.node_at([1.5, 0.0, 0.5]).unwrap();
+/// let b = grid.node_at([3.5, 0.0, 0.5]).unwrap();
+/// let opts = PathOptions { partial: false, ..PathOptions::default() };
+/// assert_eq!(find_path_linked(&grid, &NavLinks::default(), a, b, &opts).status, PathStatus::Unreachable);
+/// let links = NavLinks::new(vec![OffMeshLink { from: a, to: b, cost: 4.0, bidirectional: false, tag: 0 }]);
+/// let path = find_path_linked(&grid, &links, a, b, &opts);
+/// assert_eq!((path.status, path.cost, path.links), (PathStatus::Complete, 4.0, vec![(0, 0)]));
+/// ```
+pub fn find_path_linked(
+    grid: &NavGrid,
+    links: &NavLinks,
+    from: NodeId,
+    to: NodeId,
+    opts: &PathOptions,
+) -> PathResult {
+    let h_of = |a: u32, b: u32| {
+        if links.is_empty() {
+            octile(grid, a, b)
+        } else {
+            column_dist(grid, a, b)
+        }
+    };
     let n = grid.node_count();
     let unreachable = |expanded| PathResult {
         status: PathStatus::Unreachable,
         cost: f32::INFINITY,
         nodes: Vec::new(),
         expanded,
+        links: Vec::new(),
     };
     if from.0 as usize >= n || to.0 as usize >= n {
         return unreachable(0);
@@ -127,15 +196,17 @@ pub fn find_path(grid: &NavGrid, from: NodeId, to: NodeId, opts: &PathOptions) -
             cost: 0.0,
             nodes: vec![from],
             expanded: 0,
+            links: Vec::new(),
         };
     }
 
     let mut g = vec![f32::INFINITY; n];
     let mut parent = vec![NO_LINK; n];
+    let mut via = vec![NO_LINK; n];
     let mut heap = BinaryHeap::new();
     g[from.0 as usize] = 0.0;
     heap.push(Reverse(Open {
-        f: octile(grid, from.0, to.0),
+        f: h_of(from.0, to.0),
         g: 0.0,
         node: from.0,
     }));
@@ -155,16 +226,16 @@ pub fn find_path(grid: &NavGrid, from: NodeId, to: NodeId, opts: &PathOptions) -
             break;
         }
         expanded += 1;
-        let h = octile(grid, open.node, to.0);
+        let h = h_of(open.node, to.0);
         if (h, open.g, open.node)
             .partial_cmp(&best)
             .is_some_and(|o| o == Ordering::Less)
         {
             best = (h, open.g, open.node);
         }
-        let (links, costs) = (grid.raw_links(open.node), grid.raw_costs(open.node));
+        let (steps, costs) = (grid.raw_links(open.node), grid.raw_costs(open.node));
         for dir in 0..NEIGHBORS.len() {
-            let l = links[dir];
+            let l = steps[dir];
             if l == NO_LINK {
                 continue;
             }
@@ -174,8 +245,27 @@ pub fn find_path(grid: &NavGrid, from: NodeId, to: NodeId, opts: &PathOptions) -
             }
             g[l as usize] = ng;
             parent[l as usize] = open.node;
+            via[l as usize] = NO_LINK;
             heap.push(Reverse(Open {
-                f: ng + octile(grid, l, to.0),
+                f: ng + h_of(l, to.0),
+                g: ng,
+                node: l,
+            }));
+        }
+        for edge in links.out_edges(NodeId(open.node)) {
+            let l = edge.to.0;
+            if l as usize >= n {
+                continue;
+            }
+            let ng = open.g + edge.cost;
+            if ng > opts.max_cost || ng >= g[l as usize] {
+                continue;
+            }
+            g[l as usize] = ng;
+            parent[l as usize] = open.node;
+            via[l as usize] = edge.tag;
+            heap.push(Reverse(Open {
+                f: ng + h_of(l, to.0),
                 g: ng,
                 node: l,
             }));
@@ -190,12 +280,23 @@ pub fn find_path(grid: &NavGrid, from: NodeId, to: NodeId, opts: &PathOptions) -
         return unreachable(expanded);
     };
     let mut nodes = vec![NodeId(end)];
+    let mut tags = vec![via[end as usize]];
     let mut at = end;
     while parent[at as usize] != NO_LINK {
         at = parent[at as usize];
         nodes.push(NodeId(at));
+        tags.push(via[at as usize]);
     }
     nodes.reverse();
+    tags.reverse();
+    // `tags[k]` is how `nodes[k]` was reached; step `k - 1 -> k` is a link when it is not a grid step.
+    let crossed: Vec<(u32, u32)> = tags
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(_, t)| **t != NO_LINK)
+        .map(|(k, t)| (k as u32 - 1, *t))
+        .collect();
     PathResult {
         status: if reached {
             PathStatus::Complete
@@ -205,6 +306,7 @@ pub fn find_path(grid: &NavGrid, from: NodeId, to: NodeId, opts: &PathOptions) -
         cost: g[end as usize],
         nodes,
         expanded,
+        links: crossed,
     }
 }
 
@@ -298,6 +400,23 @@ pub fn string_pull(grid: &NavGrid, nodes: &[NodeId]) -> Vec<[f32; 3]> {
         out.push(grid.node_pos(nodes[last]));
     }
     out
+}
+
+/// [`string_pull`] across off-mesh links: the node path is split at each link step, every grid run is pulled
+/// on its own and the runs are concatenated. Returns the waypoints and, per link, `(waypoint index of the
+/// link start, tag)`; the link end is the next waypoint. With no links it equals `string_pull(grid, &path.nodes)`.
+pub fn string_pull_linked(grid: &NavGrid, path: &PathResult) -> (Vec<[f32; 3]>, Vec<(u32, u32)>) {
+    let mut points = Vec::new();
+    let mut starts = Vec::new();
+    let mut from = 0usize;
+    for &(i, tag) in &path.links {
+        let i = i as usize;
+        points.extend(string_pull(grid, &path.nodes[from..=i]));
+        starts.push((points.len() as u32 - 1, tag));
+        from = i + 1;
+    }
+    points.extend(string_pull(grid, &path.nodes[from..]));
+    (points, starts)
 }
 
 /// The node nearest `p` within `max_dist` (3D distance to the node position): the node under `p` when

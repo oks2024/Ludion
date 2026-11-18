@@ -13,13 +13,16 @@
 //! `BlendClock`, so a world with no blends hashes exactly as before.
 
 use ludion_core::ids::EntityId;
-use ludion_core::time::GameTime;
+use ludion_core::time::{FrameIndex, GameTime};
 use ludion_ecs::{SystemCtx, World};
 
 use crate::animation_events::AnimationLibrary;
 use crate::character::CharacterBlendData;
-use crate::components::{Animation, BlendClock, Mesh, MeshSource};
-use crate::extract::{clip_elapsed, fade_weight};
+use crate::components::{
+    Animation, AnimationLayer, AnimationLayers, BlendClock, LayerPhase, Mesh, MeshSource,
+};
+use crate::extract::{clip_elapsed, clock_elapsed, fade_weight};
+use ludion_components::animation_layers::MAX_ANIMATION_LAYERS;
 
 /// The most cycles one tick's crossings visit, the latest: a tick that spans more (an absurd rate)
 /// neither stalls nor overflows.
@@ -40,16 +43,30 @@ pub(crate) fn fallback_phase(
     clip_elapsed(animation, now) * blend_rate(blend, animation.params)
 }
 
+/// The stateless phase of a layer's blend at `now`: `elapsed * rate(layer params now)`. What extract
+/// reads when no [`BlendClock`] layer entry matches, and where a fresh entry starts.
+pub(crate) fn layer_fallback_phase(
+    blend: &CharacterBlendData,
+    layer: &AnimationLayer,
+    now: GameTime,
+) -> f64 {
+    clock_elapsed(now, layer.started, layer.speed, None) * blend_rate(blend, layer.params)
+}
+
 /// Integrates the [`BlendClock`] of every character whose `Animation.clip` (or, while a crossfade is
-/// live, `from`) names a blend of its character document, and removes the clock from one that no
-/// longer does.
+/// live, `from`) or whose `AnimationLayers` layer `clip` names a blend of its character document, and
+/// removes the clock from one that no longer does.
 ///
 /// Entities run in ascending id order. A held gameplay frame only parks `prev` on `phase`. A changed
 /// `(clip, started)` restarts the phase at the stateless value for the new clock and, when the
 /// outgoing clip was the blend the clock held, carries that phase for the crossfade's outgoing side.
+/// Each layer naming a blend keeps a `BlendClock.layers` entry integrated the same way at the layer's
+/// `params` and `speed`, restarted when its `(blend, started)` changes; a clock with no base blend
+/// keeps `blend` empty and its base fields zero.
 ///
-/// A game registers it after whatever writes `Animation` and before `animation_events`, and declares
-/// its accesses:
+/// A game registers it after whatever writes `Animation` or `AnimationLayers` and before
+/// `animation_events`, and declares its accesses (the layers are read by component lookup, so they
+/// need no query line):
 ///
 /// ```
 /// use ludion_engine::{Animation, BlendClock, Engine, Mesh, animation_events, blend_clocks};
@@ -92,8 +109,20 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
             && !animation.from.is_empty()
             && fade_weight(&animation, ctx.game_instant).is_some();
         let outgoing = fading.then(|| blend_named(&animation.from)).flatten();
+        let layer_blends: Vec<(&AnimationLayer, &CharacterBlendData)> = world
+            .component::<AnimationLayers>(id)
+            .map(|stack| {
+                stack
+                    .layers
+                    .iter()
+                    .take(MAX_ANIMATION_LAYERS)
+                    .filter_map(|layer| Some((layer, blend_named(&layer.clip)?)))
+                    .collect()
+            })
+            .unwrap_or_default();
         let had = world.component::<BlendClock>(id).is_some();
-        if incoming.is_none() && outgoing.is_none() {
+        let base_blends = incoming.is_some() || outgoing.is_some();
+        if !base_blends && layer_blends.is_empty() {
             if had {
                 let _ = world.remove::<BlendClock>(id);
             }
@@ -110,6 +139,48 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
                 continue;
             }
             clock.prev = clock.phase;
+            for entry in &mut clock.layers {
+                entry.prev = entry.phase;
+            }
+            let _ = world.insert(id, clock);
+            continue;
+        }
+        let old_layers = std::mem::take(&mut clock.layers);
+        clock.layers = layer_blends
+            .iter()
+            .map(|&(layer, blend)| {
+                let old = old_layers.iter().find(|entry| {
+                    entry.name == layer.name
+                        && entry.blend == blend.name
+                        && entry.started == layer.started
+                });
+                match old {
+                    None => LayerPhase {
+                        name: layer.name.clone(),
+                        blend: blend.name.clone(),
+                        started: layer.started,
+                        phase: layer_fallback_phase(blend, layer, ctx.game_instant),
+                        prev: -1.0,
+                    },
+                    Some(entry) => LayerPhase {
+                        prev: entry.phase,
+                        phase: if ticks < layer.started.as_u64() {
+                            0.0
+                        } else {
+                            entry.phase
+                                + blend_rate(blend, layer.params) * f64::from(layer.speed) * seconds
+                        },
+                        ..entry.clone()
+                    },
+                }
+            })
+            .collect();
+        if !base_blends {
+            clock.blend = String::new();
+            clock.started = FrameIndex::ZERO;
+            clock.reset = FrameIndex::ZERO;
+            (clock.phase, clock.prev) = (0.0, 0.0);
+            (clock.from_blend, clock.from_phase) = (String::new(), 0.0);
             let _ = world.insert(id, clock);
             continue;
         }
@@ -153,17 +224,16 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
     world.insert_resource(library);
 }
 
-/// The names of the events the dominant point of `blend` fires as the shared phase moves over
-/// `clock`'s `(prev, phase]` window; a restart parks `prev` at `-1`, which opens the window at phase
+/// The names of the events the dominant point of `blend` fires as the shared phase moves over the
+/// `(prev, phase]` window of a [`BlendClock`] (or one of its layer entries); a restart parks `prev` at `-1`, which opens the window at phase
 /// 0 inclusive (`[0, phase]`). Each event sits at phase position `frac(t / duration - sync)`, so a synced event
 /// lands at phase 0 and fires once per cycle at any rate. At most [`MAX_CYCLES_PER_TICK`] cycles.
 pub(crate) fn blend_crossings(
     blend: &CharacterBlendData,
     params: [f32; 2],
-    clock: &BlendClock,
+    (prev, now): (f64, f64),
     out: &mut Vec<String>,
 ) {
-    let (prev, now) = (clock.prev, clock.phase);
     if !(prev.is_finite() && now.is_finite()) {
         return;
     }
@@ -236,7 +306,7 @@ mod tests {
 
     fn fired(blend: &CharacterBlendData, clock: &BlendClock) -> Vec<String> {
         let mut out = Vec::new();
-        blend_crossings(blend, [0.0; 2], clock, &mut out);
+        blend_crossings(blend, [0.0; 2], (clock.prev, clock.phase), &mut out);
         out
     }
 

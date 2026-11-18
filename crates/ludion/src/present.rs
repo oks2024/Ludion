@@ -390,6 +390,7 @@ impl App {
             move |value| {
                 let _ = gamepad_tx.send((value, HostStamp::default()));
             },
+            embedded.rumble_commands(),
             self.running.clone(),
         ));
         let internal_stop = self
@@ -660,6 +661,9 @@ impl ApplicationHandler<HostEvent> for App {
                 self.route_input(&event);
             }
             WindowEvent::Focused(focused) => {
+                if !focused && let Some(embedded) = &self.embedded {
+                    embedded.stop_rumble();
+                }
                 self.route_input(&event);
                 let action = self.grab.focus(focused);
                 self.apply_grab(action);

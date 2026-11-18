@@ -33,6 +33,7 @@
 //!
 //! then `top_left * scale` and `element_size * scale` give the pixel-space rect.
 
+pub(crate) mod group;
 pub mod hud;
 
 use std::borrow::Cow;
@@ -610,6 +611,35 @@ pub fn canvas_anchor_px(anchor: Anchor, viewport: (u32, u32)) -> [f32; 2] {
     [
         fraction[0] * canvas_width(viewport) * scale,
         fraction[1] * CANVAS_HEIGHT * scale,
+    ]
+}
+
+/// The translation, in pixels, that turns an element resolved against the canvas into the same element
+/// resolved against the box `group_px = [x, y, w, h]` (a [`UiGroup`](crate::components::UiGroup)'s
+/// resolved rect): `[x + f.x * (w - canvas_w), y + f.y * (h - canvas_h)]` with `f` the anchor's
+/// fraction. Pure arithmetic, so a grouped element is its canvas resolve plus this.
+///
+/// # Example
+///
+/// ```
+/// use ludion_engine::components::Anchor;
+/// use ludion_engine::ui::{group_delta, resolve_ui_rect};
+///
+/// let viewport = (1920, 1080);
+/// let group = resolve_ui_rect(Anchor::TopRight, [-24.0, 24.0], [360.0, 360.0], viewport);
+/// let on_canvas = resolve_ui_rect(Anchor::Center, [0.0, 0.0], [40.0, 40.0], viewport);
+/// let delta = group_delta(Anchor::Center, group, viewport);
+/// // Centred in the group box: 1536 + 180 = 1716, 24 + 180 = 204.
+/// assert_eq!(on_canvas[0] + delta[0] + 20.0, group[0] + 180.0);
+/// assert_eq!(on_canvas[1] + delta[1] + 20.0, group[1] + 180.0);
+/// ```
+pub fn group_delta(anchor: Anchor, group_px: [f32; 4], viewport: (u32, u32)) -> [f32; 2] {
+    let fraction = anchor_fraction(anchor);
+    let scale = pixel_scale(viewport);
+    let canvas = [canvas_width(viewport) * scale, CANVAS_HEIGHT * scale];
+    [
+        group_px[0] + fraction[0] * (group_px[2] - canvas[0]),
+        group_px[1] + fraction[1] * (group_px[3] - canvas[1]),
     ]
 }
 

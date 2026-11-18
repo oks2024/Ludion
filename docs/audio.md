@@ -162,6 +162,7 @@ queue.play_at("sounds/impact.wav", 1.0, impact_position, 12.0); // sound, gain, 
 - **Out of range, below audibility, or with no listener (no camera, no `AudioListener`), nothing is sent.** A dropped one-shot is not
   retried on a later frame.
 - **`push_at(event, position, range)`** places an ambient one-shot, as `push` does for a global one.
+- A one-shot that must follow a moving entity is `play_on` (`ludion docs audio-space`).
 
 ## Music
 

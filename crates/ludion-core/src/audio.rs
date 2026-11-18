@@ -397,7 +397,66 @@ pub enum AudioMessage {
         /// The fade length in sim ticks.
         fade_frames: u32,
     },
+    /// Start a one-shot the engine keeps addressable under `id`: it plays once like
+    /// [`OneShot`](AudioMessage::OneShot), but [`VoiceSync`](AudioMessage::VoiceSync) moves its level
+    /// and [`VoiceStop`](AudioMessage::VoiceStop) fades it out while it plays.
+    ///
+    /// ```
+    /// use ludion_core::audio::{AudioCategory, AudioMessage, VoiceId};
+    ///
+    /// // "A guard's chatter, started at 80% a little left of centre."
+    /// let message = AudioMessage::VoiceStart {
+    ///     id: VoiceId(0),
+    ///     sound: "voice/chatter.wav".to_string(),
+    ///     gain: 0.8,
+    ///     pan: -0.2,
+    ///     category: AudioCategory::Voice,
+    /// };
+    /// assert_ne!(message, AudioMessage::StopAllLoops);
+    /// ```
+    VoiceStart {
+        /// Which voice this starts.
+        id: VoiceId,
+        /// The sound, as a content-root-relative WAV path.
+        sound: String,
+        /// A linear gain multiplier applied to the voice's samples.
+        gain: f32,
+        /// Stereo position: `-1.0` hard left, `0.0` centre, `1.0` hard right.
+        pan: f32,
+        /// Which mixdown bus the voice belongs to.
+        category: AudioCategory,
+    },
+    /// Slew the voice `id` to a new `gain` and `pan`, keeping its cursor. A voice that has ended
+    /// is ignored.
+    VoiceSync {
+        /// The voice addressed.
+        id: VoiceId,
+        /// The target linear gain.
+        gain: f32,
+        /// The target stereo position.
+        pan: f32,
+    },
+    /// Fade the voice `id` out over `fade_frames` sim ticks (at least about 10 ms), then retire it.
+    VoiceStop {
+        /// The voice addressed.
+        id: VoiceId,
+        /// The fade length in sim ticks.
+        fade_frames: u32,
+    },
 }
+
+/// The identity of one attached voice (`AudioQueue::play_on`): a per-queue counter, reset when the
+/// world rebuilds. A tag the sink keys its voice table by, never simulation state.
+///
+/// # Example
+///
+/// ```
+/// use ludion_core::audio::VoiceId;
+///
+/// assert!(VoiceId(0) < VoiceId(1));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VoiceId(pub u64);
 
 /// The most stems a [`AudioMessage::MusicSet`] plays; stems past it are dropped with `L5006`.
 pub const MUSIC_STEMS_MAX: usize = 8;

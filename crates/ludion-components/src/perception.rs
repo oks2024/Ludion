@@ -186,6 +186,13 @@ pub struct Perceiver {
     /// Hears noises emitted with `emit_noise`; unset hears nothing (default none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hearing: Option<Hearing>,
+    /// Evaluates sight every this many ticks, phased by the entity index; `1` is every tick (default
+    /// `1`; 0 is refused).
+    #[serde(
+        default = "default_period_ticks",
+        skip_serializing_if = "is_default_period"
+    )]
+    pub period_ticks: u32,
 }
 
 /// How a [`Perceiver`] hears: an ear offset, a sensitivity and the noise kinds it listens for.
@@ -318,7 +325,7 @@ pub struct PendingNoise {
 }
 
 /// The singleton `perception_update` and `emit_noise` keep their counters in, spawned on the first
-/// noise. Hashed and snapshotted.
+/// noise or the first persisted sight sample. Hashed and snapshotted.
 ///
 /// ```
 /// use ludion_components::PerceptionState;
@@ -330,6 +337,80 @@ pub struct PerceptionState {
     /// The id the next emitted noise gets (default `0`).
     #[serde(default, skip_serializing_if = "is_zero_tick")]
     pub next_noise_id: u64,
+    /// The last perceiver the sight ray budget served; the next pass starts after it (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub sight_cursor: Option<EntityId>,
+}
+
+/// When a [`Perceiver`]'s sight was last evaluated. Written by `perception_update` onto a perceiver
+/// whose sight is staggered or budgeted, so a snapshot restores the stagger exactly. Hashed and
+/// snapshotted.
+///
+/// ```
+/// use ludion_components::PerceiverStatus;
+///
+/// assert_eq!(PerceiverStatus::default().evaluated_tick, 0);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct PerceiverStatus {
+    /// The gameplay tick the perceiver's sight was last evaluated on; before the first evaluation, one
+    /// period before the tick it first fell due (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_tick")]
+    pub evaluated_tick: u64,
+}
+
+/// One carried sight sample of a [`Perceiver`] that is staggered or budgeted: what `perception_update`
+/// last computed for `(perceiver, zone, target)`, kept while the perceiver is not evaluated. A runtime
+/// entity, hashed and snapshotted, that despawns with its perceiver or when its key stops sampling.
+///
+/// ```
+/// use ludion_components::SightSampleRecord;
+///
+/// let record: SightSampleRecord = serde_json::from_value(serde_json::json!({
+///     "perceiver": { "index": 0, "generation": 0 }, "target": { "index": 1, "generation": 0 },
+///     "visible": true, "points_visible": 1, "distance": 4.0, "angle_deg": 10.0,
+///     "effective_range": 6.0, "evaluated_tick": 12,
+/// }))
+/// .unwrap();
+/// assert!(record.visible && record.blocker.is_none() && record.in_zone);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct SightSampleRecord {
+    /// The perceiver that looked.
+    #[schemars(with = "ludion_ecs::EntityRefSchema")]
+    pub perceiver: EntityId,
+    /// The entity looked at.
+    #[schemars(with = "ludion_ecs::EntityRefSchema")]
+    pub target: EntityId,
+    /// The nearest blocker of the lowest-index blocked point (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub blocker: Option<EntityId>,
+    /// Index into the perceiver's `sight` list (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_zone")]
+    pub zone: u8,
+    /// Whether any sample point was inside the zone's wedge (default `true`).
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub in_zone: bool,
+    /// Whether the target's `require` rule was met (default `false`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub visible: bool,
+    /// A bitmask over the target's points that were seen (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_zone")]
+    pub points_visible: u8,
+    /// Metres from the eye to the target's origin (default `0.0`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub distance: f32,
+    /// Degrees between the zone's facing and the direction to the target (default `0.0`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub angle_deg: f32,
+    /// The zone's range after visibility scaling (default `0.0`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub effective_range: f32,
+    /// The gameplay tick the sample was computed on (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_tick")]
+    pub evaluated_tick: u64,
 }
 
 /// How long a [`Perceiver`] remembers what it sensed, and how much. Times are gameplay seconds, so a
@@ -563,6 +644,12 @@ fn is_zero_zone(value: &u8) -> bool {
 fn is_zero_priority(value: &i32) -> bool {
     *value == 0
 }
+fn default_period_ticks() -> u32 {
+    1
+}
+fn is_default_period(value: &u32) -> bool {
+    *value == 1
+}
 fn default_forget_sight_s() -> f32 {
     12.0
 }
@@ -702,7 +789,7 @@ impl SemanticValidate for Perceiver {
     /// `vertical_half_angle_deg` outside (0, 90], a repeated zone `name`, a negative or non-finite
     /// `see_through_max_range`, a `visibility_clamp` with `lo > hi`, a non-finite `eye` or `look`,
     /// and a sweep whose `period_s` does not exceed `2 * dwell_s`, whose sine carries a dwell, or
-    /// whose numbers are not finite. A wrong *shape* is the schema's job.
+    /// whose numbers are not finite, and a `period_ticks` of 0. A wrong *shape* is the schema's job.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut found = Found::new(code::PERCEIVER_INVALID, "Perceiver");
         let help = "see `ludion docs perception`; `ludion explain L1570`";
@@ -724,6 +811,13 @@ impl SemanticValidate for Perceiver {
                     help,
                 );
             }
+        }
+        if value.get("period_ticks").and_then(Value::as_u64) == Some(0) {
+            found.reject(
+                "/period_ticks".into(),
+                "`period_ticks` 0 must be at least 1".into(),
+                help,
+            );
         }
         if let Some(zones) = value.get("sight").and_then(Value::as_array) {
             if zones.is_empty() || zones.len() > PERCEPTION_MAX_PARTS {
@@ -952,6 +1046,19 @@ impl SemanticValidate for StimulusRecord {
             "is not finite",
             help,
         );
+        found.out
+    }
+}
+
+impl SemanticValidate for SightSampleRecord {
+    /// Rejects a non-finite `distance`, `angle_deg` or `effective_range` (`L1570`); a record is
+    /// engine-written, so only a hand-edited scene or snapshot can carry one.
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut found = Found::new(code::PERCEIVER_INVALID, "SightSampleRecord");
+        let help = "see `ludion docs perception`; `ludion explain L1570`";
+        for field in ["distance", "angle_deg", "effective_range"] {
+            found.number_where(value, "", field, |n| !n.is_finite(), "is not finite", help);
+        }
         found.out
     }
 }
@@ -1269,6 +1376,33 @@ mod tests {
             paths(NoiseZone::validate_semantics(&sphere)),
             ["/shape/sphere/radius", "/kinds/0"]
         );
+    }
+
+    #[test]
+    fn a_period_of_zero_is_refused_and_one_is_the_omitted_default() {
+        let zero = Perceiver::validate_semantics(&perceiver(json!({ "period_ticks": 0 })));
+        assert_eq!(zero[0].code, code::PERCEIVER_INVALID);
+        assert_eq!(paths(zero), ["/period_ticks"]);
+        let three = perceiver(json!({ "period_ticks": 3 }));
+        assert!(Perceiver::validate_semantics(&three).is_empty());
+        let parsed: Perceiver = serde_json::from_value(three.clone()).unwrap();
+        assert_eq!(parsed.period_ticks, 3);
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), three);
+        let one: Perceiver = serde_json::from_value(perceiver(json!({}))).unwrap();
+        assert_eq!(one.period_ticks, 1);
+    }
+
+    #[test]
+    fn a_sample_record_round_trips_and_refuses_non_finite_numbers() {
+        let value = json!({
+            "perceiver": { "index": 1, "generation": 0 }, "target": { "index": 2, "generation": 0 },
+            "zone": 1, "visible": true, "points_visible": 3, "distance": 2.5,
+            "evaluated_tick": 9,
+        });
+        let parsed: SightSampleRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+        let bad = SightSampleRecord::validate_semantics(&json!({ "distance": 1e39 }));
+        assert_eq!(paths(bad), ["/distance"]);
     }
 
     #[test]

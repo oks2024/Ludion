@@ -1367,4 +1367,13 @@ mod surface_schema_tests {
         assert!(!schema.contains("\"surfaces\""), "{schema}");
         assert!(!schema.contains("default_surface"), "{schema}");
     }
+
+    /// Guards a future `LayerSet` config field: a `$ref` to it would move `replay_content_hash`
+    /// and fail every committed replay, so the schema must stay a plain list of names.
+    #[test]
+    fn the_snapshot_schema_spells_projectile_ignore_layers_inline() {
+        let schema = super::snapshot_schema().to_string();
+        assert!(schema.contains("ignore_layers"), "{schema}");
+        assert!(!schema.contains("LayerSet"), "{schema}");
+    }
 }

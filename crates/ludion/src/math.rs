@@ -100,9 +100,10 @@
 
 pub use ludion_core::math::*;
 pub use ludion_engine::ui::{
-    FontFace, NineSlice, WorldAnchorPlacement, canvas_anchor_px, list_hit, measure_ui_list,
-    measure_ui_text, nine_slice, place_world_anchor, resolve_ui_list, resolve_ui_rect,
-    resolve_ui_rect_of, resolve_ui_text, sub_uv, ui_list_window, ui_tween_sample, wrap_ui_text,
+    FontFace, NineSlice, WorldAnchorPlacement, canvas_anchor_px, group_delta, list_hit,
+    measure_ui_list, measure_ui_text, nine_slice, place_world_anchor, resolve_ui_list,
+    resolve_ui_rect, resolve_ui_rect_of, resolve_ui_text, sub_uv, ui_list_window, ui_tween_sample,
+    wrap_ui_text,
 };
 pub use ludion_engine::{ModelCamera, ModelView, fit_distance_for_aspect, model_camera};
 

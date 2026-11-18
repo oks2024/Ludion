@@ -5,7 +5,7 @@
 //! rule. A [`FlowField`] is a radius-capped Dijkstra from one target node plus a unit flow direction per
 //! node; a [`FlowCache`] keeps one field per target node, so every agent chasing the same cell shares it.
 //! [`find_path`] is point-to-point A* over the same links, with [`string_pull`] and [`walkable_line`] cutting a
-//! node path to waypoints.
+//! node path to waypoints; [`find_path_linked`] also crosses [`NavLinks`], the off-mesh edges (ladders, vaults).
 //!
 //! # Boundary
 //!
@@ -49,11 +49,14 @@
 mod cache;
 mod field;
 mod grid;
+mod links;
 mod path;
 
 pub use cache::FlowCache;
 pub use field::FlowField;
 pub use grid::{ColumnSource, FloorSample, GridParams, NEIGHBORS, NO_LINK, NavGrid, NodeId};
+pub use links::{LinkEdge, NavLinks, OffMeshLink};
 pub use path::{
-    PathOptions, PathResult, PathStatus, find_path, nearest_node, string_pull, walkable_line,
+    PathOptions, PathResult, PathStatus, find_path, find_path_linked, nearest_node, string_pull,
+    string_pull_linked, walkable_line,
 };

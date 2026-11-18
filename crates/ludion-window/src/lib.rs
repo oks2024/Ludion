@@ -80,6 +80,7 @@ pub mod host_input;
 pub mod keymap;
 pub mod mouse;
 mod reconnect;
+mod rumble;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -181,6 +182,7 @@ pub fn run(options: WindowOptions, stop: Receiver<()>) -> Result<(), Diagnostic>
         move |value| {
             let _ = gamepad_tx.send(value);
         },
+        crossbeam_channel::never(),
         running.clone(),
     );
     let waiter = spawn_waiter_thread(stop, internal_stop_rx, proxy.clone());
@@ -530,8 +532,14 @@ fn connect_input(url: &str) -> Option<Client> {
 /// pad's events are forwarded (multi-pad is out of scope, `Plan/phase-13-input.md`). A `Disconnected`
 /// from that pad first sends the releases for everything it held (axes to zero, buttons up), then
 /// promotes the next still-connected pad, if any.
+///
+/// `rumble` carries the engine's force-feedback commands (the out-of-process viewer passes a channel
+/// that never yields). They are mixed per motor and played on the primary pad; a disconnect clears
+/// them, and with no primary pad they are discarded. The poll timeout is 8 ms while a primary pad is
+/// connected, so a command waits at most that long, and 100 ms (about 10 wakeups a second) otherwise.
 pub fn spawn_gamepad_thread(
     send: impl Fn(serde_json::Value) + Send + 'static,
+    rumble: Receiver<ludion_core::rumble::RumbleCommand>,
     running: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
@@ -541,8 +549,28 @@ pub fn spawn_gamepad_thread(
         };
         let mut primary: Option<GamepadId> = gilrs.gamepads().next().map(|(id, _)| id);
         let mut held = gamepad::PadHeld::default();
+        let start = std::time::Instant::now();
+        let mut mix = rumble::RumbleMix::default();
+        let mut applied = (0.0_f32, 0.0_f32);
+        let mut _effect: Option<gilrs::ff::Effect> = None;
         while running.load(Ordering::Relaxed) {
-            let Some(event) = gilrs.next_event_blocking(Some(Duration::from_millis(100))) else {
+            let now = start.elapsed();
+            for command in rumble.try_iter() {
+                mix.apply(now, command);
+            }
+            if primary.is_none() {
+                mix.clear();
+            }
+            let motors = mix.motors(now);
+            if motors != applied {
+                applied = motors;
+                _effect = None; // dropping an effect stops it
+                if let (Some(id), true) = (primary, motors != (0.0, 0.0)) {
+                    _effect = play_rumble(&mut gilrs, id, motors);
+                }
+            }
+            let timeout = Duration::from_millis(if primary.is_some() { 8 } else { 100 });
+            let Some(event) = gilrs.next_event_blocking(Some(timeout)) else {
                 continue; // timed out with no event: loop back and re-check `running`
             };
             match event.event {
@@ -553,6 +581,11 @@ pub fn spawn_gamepad_thread(
                     continue;
                 }
                 gilrs::EventType::Disconnected => {
+                    if primary == Some(event.id) {
+                        mix.clear();
+                        applied = (0.0, 0.0);
+                        _effect = None;
+                    }
                     let connected = gilrs.gamepads().map(|(id, _)| id);
                     for value in
                         gamepad::on_disconnect(&mut primary, event.id, &mut held, connected)
@@ -571,6 +604,47 @@ pub fn spawn_gamepad_thread(
             }
         }
     })
+}
+
+/// Starts a force-feedback effect on `pad` with the mixed motor strengths (`low` drives the strong
+/// motor, `high` the weak one). The mix owns every stop (it drops the effect on a change, a clear or a
+/// disconnect), so the effect is built to play far longer than any mix lifetime: a constant mix that
+/// outlasts one request must not die with the backend. A pad without force feedback or a backend error
+/// is silent: this is host feel, not sim.
+fn play_rumble(
+    gilrs: &mut Gilrs,
+    pad: GamepadId,
+    (low, high): (f32, f32),
+) -> Option<gilrs::ff::Effect> {
+    use gilrs::ff::{BaseEffect, BaseEffectType, EffectBuilder, Replay, Ticks};
+    if !gilrs.gamepad(pad).is_ff_supported() {
+        return None;
+    }
+    let magnitude = |v: f32| (v * f32::from(u16::MAX)) as u16;
+    let replay = Replay {
+        play_for: Ticks::from_ms(u32::MAX),
+        ..Default::default()
+    };
+    let effect = EffectBuilder::new()
+        .add_effect(BaseEffect {
+            kind: BaseEffectType::Strong {
+                magnitude: magnitude(low),
+            },
+            scheduling: replay,
+            ..Default::default()
+        })
+        .add_effect(BaseEffect {
+            kind: BaseEffectType::Weak {
+                magnitude: magnitude(high),
+            },
+            scheduling: replay,
+            ..Default::default()
+        })
+        .gamepads(&[pad])
+        .finish(gilrs)
+        .ok()?;
+    effect.play().ok()?;
+    Some(effect)
 }
 
 /// The waiter thread: forward the caller's `stop` to the loop as a clean shutdown, or exit quietly

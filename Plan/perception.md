@@ -1,6 +1,6 @@
 # Plan: Perception — sight zones, sample points, batched line of sight
 
-> **Waves 1–2 mechanized — sight and stimulus memory ship; later waves are laid out below.**
+> **Waves 1–3 and W4a mechanized — sight, stimulus memory, hearing, and the sight stagger and ray budget ship; later waves are laid out below.**
 > Driven by Neon Shroud request 0001 (stealth AI senses). Game-facing doc: `ludion docs perception`.
 
 ## Design decisions
@@ -90,6 +90,37 @@
 28. **Invalid noise (W3):** a non-finite or negative `at`/`radius`/`loudness` drops the noise in `emit_noise` with
     `L1577` (warning, once); an undeclared `kind` drops it with `L1572` (once per name). `L1575` bad `NoiseZone`,
     `L1576` bad `hearing`.
+29. **`period_ticks: u32` on `Perceiver` (W4a)**, default 1 and skipped when 1; 0 is `L1570` at `/period_ticks`. A
+    perceiver is **due** when it has never been evaluated and `tick % N == entity.index() % N` (the request's phase), or
+    when `now - evaluated_tick >= N`. A deferred perceiver therefore stays due until served: one deferred before its
+    first evaluation gets a status with `evaluated_tick = now - N`, so it is due every tick (its phase may slide) and
+    `L4221` can measure its wait.
+30. **Budget `max_sight_rays_per_tick: Option<u32>`, default `None` (unlimited).** `Some(0)` is `L4220` at
+    `/max_sight_rays_per_tick`. The request's 2048 is the documented recommendation and stays Proposed as a default:
+    any budget makes sight persisted hashed state (decision 31), which would reverse decision 11 in every perception
+    world and move their hashes.
+31. **Carried samples are hashed entities** whenever they can be needed: for a perceiver with `period_ticks > 1`, or
+    for every perceiver when a budget is set ("persisting"). A derived resource cannot carry them (a `SnapshotDoc` field
+    moves `replay_content_hash`; a ref list on a component breaks `L1392`). `PerceiverStatus { evaluated_tick }` goes on
+    the perceiver's entity and carries no ref. One `SightSampleRecord` entity per persisted sample mirrors
+    `SightSample` (`perceiver` and `target` marked refs, `blocker` a marked `Option`). A served perceiver's records are
+    upserted by `(zone, target)`: vanished keys despawn, new keys spawn in ascending `(perceiver, zone, target)` after
+    the despawns. Records and status of a perceiver that is dead, disabled or no longer persisting are removed.
+32. **Rotation.** Due perceivers, sorted by id, start at the first id above `PerceptionState.sight_cursor` (marked
+    `Option` ref, default none) and wrap. A perceiver's planned rays are its points in a wedge with a non-empty blocker
+    set; a re-cast after a self-hit is not counted. It is served when it is the first this tick, or when
+    `used + rays <= budget`. **The first one that does not fit stops the pass**: every later due perceiver is deferred,
+    which keeps the rotation fair. The cursor becomes the last id served. `PerceptionState` is spawned lazily, through
+    the `emit_noise` helper, only when a budget moves the cursor. A world with no budget and no stagger touches no
+    record, status or state.
+33. **Results.** A served perceiver gets fresh samples; a perceiver not served reads its records. Samples stay sorted by
+    `(perceiver, zone, target)`. `zone_facing` is current for every perceiver every tick (no rays). **Only fresh samples
+    refresh memory**, so `sensed_now` blinks off on a tick a guard is not evaluated (a docs gotcha).
+34. **`L4221 PERCEPTION_DEFERRED`** (warning; `LINTS`, the `L1577` precedent): a due perceiver deferred while
+    `now - evaluated_tick > 4 * period_ticks`; once per run (`report_full`, key `perception/deferred`).
+35. **Counts.** `PerceptionResults::rays_cast()` (rays actually cast, re-casts included) and `deferred()` (due, not
+    served, sorted). `engine.describe` gains `perception: { rays_cast, deferred }`, present once `PerceptionResults`
+    exists (the `ai::describe_section` precedent).
 
 ## Waves
 
@@ -98,9 +129,10 @@
   despawn with the perceiver, snapshot rejoin).
 - **W3 (shipped, Neon Shroud request 0001):** hearing (`emit_noise`, `PendingNoise` on an engine entity, `NoiseZone`,
   occlusion via `sound_occluder_layers`, the surface multiplier by name in `PerceptionConfig`; decisions 21-28).
-- **W4:** `period_ticks` stagger, ray budget and rotation cursor on a hashed `PerceptionState`, `L4221`, the
-  `perception` trace channel, `engine.describe` counts, gallery `examples/gallery/perception.yaml`, the committed
-  `WorldHash` trace, the bench (30 x 2 x 12 x 3).
+- **W4a (shipped):** `period_ticks` stagger, ray budget and rotation cursor on a hashed `PerceptionState`, carried
+  samples, `L4221`, `engine.describe` counts (decisions 29-35).
+- **W4b:** the `perception` trace channel, gallery `examples/gallery/perception.yaml`, the committed `WorldHash`
+  trace, the bench (30 x 2 x 12 x 3, 1 and 8 threads).
 - **W5:** debug draw category (rides request 0005), check-scene class and layer name checks.
 
 ## Out of scope (triggers recorded)
@@ -114,7 +146,7 @@
 instead of passing `MoveReport.ground.surface`; not built, the game passes the id today.
 
 The gap-map pointer; the pitch sign (decision 3); the vertical default of 45 degrees; wedge versus cone; the default
-ray budget 2048 and the bench target 0.5 ms (W4); no entity-ref collection (decision 2).
+ray budget 2048 (decision 30) and the bench target 0.5 ms (W4b); no entity-ref collection (decision 2).
 
 ## Status
 
@@ -132,3 +164,9 @@ ray budget 2048 and the bench target 0.5 ms (W4); no entity-ref collection (deci
   `perception_update` and the generalized memory refresh; `L1575`/`L1576`/`L1577`; tests in
   `crates/ludion-engine/tests/perception_hearing.rs`; `component_schemas.json` re-blessed. No wire schema, trace, replay
   or golden moved.
+- **W4a mechanized (2026-11-18):** `Perceiver.period_ticks`, `PerceptionConfig.max_sight_rays_per_tick`,
+  `PerceiverStatus`, `SightSampleRecord` (two components appended, both sim-only; 75 in the registry),
+  `PerceptionState.sight_cursor`; the rotation and persistence passes inside `perception_update`;
+  `PerceptionResults::rays_cast`/`deferred`; the `perception` key of `engine.describe`; `L4221`; tests in
+  `crates/ludion-engine/tests/perception_budget.rs` (incl. the byte-identity proof against a world that never ran the
+  update); `component_schemas.json` re-blessed. No wire schema, `SnapshotDoc` schema, trace, replay or golden moved.

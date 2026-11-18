@@ -134,7 +134,7 @@
   "AnimationLayers": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "AnimationLayers",
-    "description": "Override and additive clip layers over a skinned `kind: character`'s base `Animation`.\n\nLayers are evaluated in list order over the base pose (at most four, `L1670`). An override layer\nblends toward its clip by `weight` × the bone mask's weight for each joint; a joint the clip has no\ntrack for stays as it was. An additive layer adds its clip's change from its first frame. Each\nlayer has its own clock (`started`, `speed`) and its weight ramps from `from_weight` over `fade`\nseconds from `changed`; both use the base `Animation.hold` grid.\n\n**Presentation only.** Extract composes the layers into the skin palette; no system reads the\ncomponent, and a scene without it poses exactly as before. It is ordinary hashed sim state, so\nwrite it only when a choice changes. A `SkinBone`-driven skin refuses it (`L1672`); an assembly or\nprefab part ignores it. Layer clips raise no events.\n\n```yaml\ncomponents:\n  Animation:\n    clip: run\n  AnimationLayers:\n    layers:\n      - name: upper\n        clip: aim\n        mask: upper_body\n        weight: 1.0\n```\n\n```\nuse ludion_components::{AnimationLayers, AnimationLayer, fade_layer, layer_weight};\nuse ludion_core::time::{SimTime, TickRate};\n\nlet mut layers = AnimationLayers {\n    layers: vec![AnimationLayer { name: \"upper\".into(), clip: \"aim\".into(), ..Default::default() }],\n};\nlet now = SimTime::from_ticks(60, TickRate::DEFAULT);\nassert!(fade_layer(&mut layers, \"upper\", 1.0, 0.5, now));\n// Half the fade later the layer is half on.\nlet later = SimTime::from_ticks(75, TickRate::DEFAULT);\nassert_eq!(layer_weight(&layers.layers[0], later), 0.5);\n```",
+    "description": "Override and additive clip layers over a skinned `kind: character`'s base `Animation`.\n\nLayers are evaluated in list order over the base pose (at most four, `L1670`). An override layer\nblends toward its clip by `weight` × the bone mask's weight for each joint; a joint the clip has no\ntrack for stays as it was. An additive layer adds its clip's change from its first frame. Each\nlayer has its own clock (`started`, `speed`) and its weight ramps from `from_weight` over `fade`\nseconds from `changed`; both use the base `Animation.hold` grid.\n\n**Presentation only.** Extract composes the layers into the skin palette; no system reads the\ncomponent, and a scene without it poses exactly as before. It is ordinary hashed sim state, so\nwrite it only when a choice changes. A `SkinBone`-driven skin refuses it (`L1672`); an assembly or\nprefab part ignores it. A layer raises no events unless it sets `events: true`. A layer's `clip` may\nname a blend of the character, evaluated at the layer's `params`.\n\n```yaml\ncomponents:\n  Animation:\n    clip: run\n  AnimationLayers:\n    layers:\n      - name: upper\n        clip: aim\n        mask: upper_body\n        weight: 1.0\n```\n\n```\nuse ludion_components::{AnimationLayers, AnimationLayer, fade_layer, layer_weight};\nuse ludion_core::time::{SimTime, TickRate};\n\nlet mut layers = AnimationLayers {\n    layers: vec![AnimationLayer { name: \"upper\".into(), clip: \"aim\".into(), ..Default::default() }],\n};\nlet now = SimTime::from_ticks(60, TickRate::DEFAULT);\nassert!(fade_layer(&mut layers, \"upper\", 1.0, 0.5, now));\n// Half the fade later the layer is half on.\nlet later = SimTime::from_ticks(75, TickRate::DEFAULT);\nassert_eq!(layer_weight(&layers.layers[0], later), 0.5);\n```",
     "type": "object",
     "properties": {
       "layers": {
@@ -199,6 +199,24 @@
             "description": "The clip's playback rate multiplier (default `1.0`; `L1671` when negative or not finite).",
             "type": "number",
             "format": "float"
+          },
+          "events": {
+            "description": "Whether the layer fires animation events, tagged with its name in `ClipEvent.layer` (default\n`false`; events fire only while the layer's weight is above `0`).",
+            "type": "boolean"
+          },
+          "params": {
+            "description": "The two parameters a blend named by `clip` is evaluated at, in the blend's axis order (default\n`[0, 0]`; `L1671` when not finite). Unused by a plain clip.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "reference": {
+            "description": "An additive layer's reference clip: its change is measured from that clip's first frame (default\n`\"\"` — the layer's own first frame). An unknown name skips the layer silently.",
+            "type": "string"
           }
         },
         "required": [
@@ -350,6 +368,52 @@
         "description": "The outgoing blend's phase (default `0.0`).",
         "type": "number",
         "format": "double"
+      },
+      "layers": {
+        "description": "The phases of the layers whose `clip` names a blend, in layer order (default none).",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/LayerPhase"
+        }
+      }
+    },
+    "$defs": {
+      "LayerPhase": {
+        "description": "One `AnimationLayers` layer's blend phase inside a [`BlendClock`], kept like the base phase.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The layer's name.",
+            "type": "string"
+          },
+          "blend": {
+            "description": "The blend the layer's `clip` named when the phase was stamped.",
+            "type": "string"
+          },
+          "started": {
+            "description": "The layer's `started` the phase was stamped for (default frame `0`).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "default": 0
+          },
+          "phase": {
+            "description": "Unwrapped phase cycles (default `0.0`).",
+            "type": "number",
+            "format": "double",
+            "default": 0.0
+          },
+          "prev": {
+            "description": "The phase at the end of the previous gameplay tick; `-1` on a restart tick (default `0.0`).",
+            "type": "number",
+            "format": "double",
+            "default": 0.0
+          }
+        },
+        "required": [
+          "name",
+          "blend"
+        ]
       }
     }
   },
@@ -3463,6 +3527,14 @@
                 "format": "float",
                 "default": 1.0
               },
+              "inner_half_angle_deg": {
+                "description": "Half the opening angle of a narrower inner zone, in `(0, half_angle_deg]` degrees; it\nneeds a positive `inner_radius`, which becomes the zone's range. Absent (the default)\ndraws the single-zone wedge. The zone takes `GroundMarker.inner_color`. Not scaled.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "float"
+              },
               "type": {
                 "type": "string",
                 "const": "wedge"
@@ -3472,6 +3544,42 @@
               "type",
               "half_angle_deg",
               "outer_radius"
+            ]
+          },
+          {
+            "description": "An annulus centred on the entity — a noise-ring or footprint telegraph. Drawn as a band of\n`thickness` ending at `radius`, optionally broken into dashes, with an optional interior\n`fill` from the centre. Not valid on a `DropShadow` (`L2340`).",
+            "type": "object",
+            "properties": {
+              "radius": {
+                "description": "The band's outer radius in world units.",
+                "type": "number",
+                "format": "float"
+              },
+              "thickness": {
+                "description": "The band's width in world units, in `(0, radius]` (`L2340` above `radius`).",
+                "type": "number",
+                "format": "float"
+              },
+              "fill": {
+                "description": "Fraction of `radius`, in `[0, 1]`, filled from the centre at `style.fill_alpha` (default\n`0`, none). Not scaled.",
+                "type": "number",
+                "format": "float"
+              },
+              "dashes": {
+                "description": "Number of dashes around the band; `0` (the default) draws it solid.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "const": "ring"
+              }
+            },
+            "required": [
+              "type",
+              "radius",
+              "thickness"
             ]
           }
         ]
@@ -3663,7 +3771,7 @@
   "GroundMarker": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "GroundMarker",
-    "description": "A flat, ground-anchored telegraph marker: an analytic disc, capsule or wedge lying in the entity's local\nXZ plane, alpha-blended over the scene after the opaque meshes and before the sprites.\n\nThe marker's placement is the entity's [`Transform`]: translation positions it, rotation orients\nit (local +X is a [`GroundMarkerShape::Segment`]'s length axis), and the **uniform**\n`Transform.scale.x` multiplies its authored dimensions. `Transform.scale.x` scales the footprint\nuniformly; the other two axes are ignored — animate a shape field (`radius`, `length`, `width`),\nnever the scale, to change one dimension without distorting the other. Extract lifts it by a\nfixed world-space Y offset (`ludion_renderer::GROUND_MARKER_LIFT`) so a marker lying on a floor\nnever z-fights the geometry it marks; no scene picks that offset.\n\nPlain, static data: the component carries a shape and a color and nothing else. Animation — a\nwarmup filling in, an urgency ramp — is a game system writing the shape field (a disc's `radius`,\na segment's `length`) and `color` each frame, the same shape as the hit-flash pattern that writes\n`Mesh.color`; `cargo run -p ludion --example ground_marker` is the copyable form.",
+    "description": "A flat, ground-anchored telegraph marker: an analytic disc, capsule or wedge lying in the entity's local\nXZ plane, alpha-blended over the scene after the opaque meshes and before the sprites.\n\nThe marker's placement is the entity's [`Transform`]: translation positions it, rotation orients\nit (local +X is a [`GroundMarkerShape::Segment`]'s length axis), and the **uniform**\n`Transform.scale.x` multiplies its authored dimensions. `Transform.scale.x` scales the footprint\nuniformly; the other two axes are ignored — animate a shape field (`radius`, `length`, `width`),\nnever the scale, to change one dimension without distorting the other. Extract lifts it by a\nfixed world-space Y offset (`ludion_renderer::GROUND_MARKER_LIFT`) so a marker lying on a floor\nnever z-fights the geometry it marks; no scene picks that offset.\n\nPlain, static data: the component carries a shape, a color and an optional look\n([`GroundMarkerStyle`], plus a wedge's `inner_color`) and nothing else. Animation — a\nwarmup filling in, an urgency ramp — is a game system writing the shape field (a disc's `radius`,\na segment's `length`) and `color` each frame, the same shape as the hit-flash pattern that writes\n`Mesh.color`; `cargo run -p ludion --example ground_marker` is the copyable form.",
     "type": "object",
     "properties": {
       "shape": {
@@ -3688,6 +3796,30 @@
           1.0,
           1.0,
           1.0
+        ]
+      },
+      "inner_color": {
+        "description": "Linear RGBA of a [`GroundMarkerShape::Wedge`]'s inner zone (default: `color`). Ignored by\nevery other shape.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4
+      },
+      "style": {
+        "description": "The marker's look, per field defaulted (absent: today's look). See [`GroundMarkerStyle`].",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GroundMarkerStyle"
+          },
+          {
+            "type": "null"
+          }
         ]
       }
     },
@@ -3771,6 +3903,14 @@
                 "format": "float",
                 "default": 1.0
               },
+              "inner_half_angle_deg": {
+                "description": "Half the opening angle of a narrower inner zone, in `(0, half_angle_deg]` degrees; it\nneeds a positive `inner_radius`, which becomes the zone's range. Absent (the default)\ndraws the single-zone wedge. The zone takes `GroundMarker.inner_color`. Not scaled.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "float"
+              },
               "type": {
                 "type": "string",
                 "const": "wedge"
@@ -3781,6 +3921,140 @@
               "half_angle_deg",
               "outer_radius"
             ]
+          },
+          {
+            "description": "An annulus centred on the entity — a noise-ring or footprint telegraph. Drawn as a band of\n`thickness` ending at `radius`, optionally broken into dashes, with an optional interior\n`fill` from the centre. Not valid on a `DropShadow` (`L2340`).",
+            "type": "object",
+            "properties": {
+              "radius": {
+                "description": "The band's outer radius in world units.",
+                "type": "number",
+                "format": "float"
+              },
+              "thickness": {
+                "description": "The band's width in world units, in `(0, radius]` (`L2340` above `radius`).",
+                "type": "number",
+                "format": "float"
+              },
+              "fill": {
+                "description": "Fraction of `radius`, in `[0, 1]`, filled from the centre at `style.fill_alpha` (default\n`0`, none). Not scaled.",
+                "type": "number",
+                "format": "float"
+              },
+              "dashes": {
+                "description": "Number of dashes around the band; `0` (the default) draws it solid.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "const": "ring"
+              }
+            },
+            "required": [
+              "type",
+              "radius",
+              "thickness"
+            ]
+          }
+        ]
+      },
+      "GroundMarkerStyle": {
+        "description": "The look of a [`GroundMarker`]; every field defaults, so a partial `style: { flicker: 0.5 }`\nis valid. Render-only.\n\nApplicability by shape: a wedge reads every field (`grid: none` skips the grid); a ring reads\n`fill_alpha` (its interior `fill`) and `flicker`; a disc and a segment read only `flicker`.",
+        "type": "object",
+        "properties": {
+          "outline_px": {
+            "description": "Outline and inner-arc width in pixels (default `1.5`); positive and finite.",
+            "type": "number",
+            "format": "float",
+            "default": 1.5
+          },
+          "grid": {
+            "description": "Whether the wedge grid is drawn (default `polar`).",
+            "$ref": "#/$defs/GroundMarkerGrid",
+            "default": "polar"
+          },
+          "grid_px": {
+            "description": "Grid line width in pixels (default `1.0`); positive and finite.",
+            "type": "number",
+            "format": "float",
+            "default": 1.0
+          },
+          "grid_alpha": {
+            "description": "Grid line opacity in `[0, 1]` (default `0.45`).",
+            "type": "number",
+            "format": "float",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "default": 0.44999998807907104,
+            "x-ui-range": [
+              0.0,
+              1.0
+            ]
+          },
+          "interior_alpha": {
+            "description": "Wedge interior opacity in `[0, 1]` (default `0.06`).",
+            "type": "number",
+            "format": "float",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "default": 0.05999999865889549,
+            "x-ui-range": [
+              0.0,
+              1.0
+            ]
+          },
+          "inner_alpha": {
+            "description": "Wedge inner-zone interior opacity in `[0, 1]` (default `0.12`).",
+            "type": "number",
+            "format": "float",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "default": 0.11999999731779099,
+            "x-ui-range": [
+              0.0,
+              1.0
+            ]
+          },
+          "fill_alpha": {
+            "description": "Opacity of the `fill` part (a wedge's growing fill, a ring's interior) in `[0, 1]`\n(default `0.30`).",
+            "type": "number",
+            "format": "float",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "default": 0.30000001192092896,
+            "x-ui-range": [
+              0.0,
+              1.0
+            ]
+          },
+          "flicker": {
+            "description": "Fraction of coverage dropped per pixel per sim tick, in `[0, 1]` (default `0`, steady).\nSeeded from the entity and the sim tick, so it is deterministic and never hashed.",
+            "type": "number",
+            "format": "float",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "default": 0.0,
+            "x-ui-range": [
+              0.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "GroundMarkerGrid": {
+        "description": "Whether a wedge draws its polar grid.",
+        "oneOf": [
+          {
+            "description": "Concentric arcs and radial spokes (the default).",
+            "type": "string",
+            "const": "polar"
+          },
+          {
+            "description": "No grid.",
+            "type": "string",
+            "const": "none"
           }
         ]
       }
@@ -5004,10 +5278,60 @@
       }
     }
   },
+  "NavLink": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "NavLink",
+    "description": "An off-mesh link: `nav_path` and routed agents (`NavGoal` → `NavRoute`) plan across it as an edge from\n`from` to `to` (both ways when `bidirectional`). A walker that reaches the start stops with\n`NavRoute.status = at_link`; the game plays the traversal, moves the body, and calls `nav_link_done`.\nThe engine never moves the body. `nav_update` rebuilds the link table every call: a disabled or\nremoved link drops out and the routes using it plan again.\n\n`from` and `to` are in the entity's frame: posed by its `Transform` when it has one, world coordinates\notherwise. Each snaps to the nearest walkable node within `snap_radius` (an end that finds none warns\n`L4145` and the link is left out). `cost` is metres **added** to the 3D distance between the two\nsnapped nodes, so a slow climb can be made to lose to a short walk. `kind` is free text for the game\n(`\"ladder\"`, `\"vault\"`) and is not read by the engine.\n\nNon-finite endpoints, a negative or non-finite `cost` and a non-positive or non-finite `snap_radius`\nare rejected (`L1526`).\n\n```yaml\ncomponents:\n  NavLink:\n    from: [4.5, 0.0, 2.5]\n    to: [4.5, 3.0, 2.5]\n    kind: ladder\n    cost: 2.0\n```\n\n```\nuse ludion_components::NavLink;\n\nlet link: NavLink = serde_json::from_value(serde_json::json!({ \"kind\": \"ladder\" })).unwrap();\nassert!(link.bidirectional && link.enabled);\nassert_eq!(link.snap_radius, 0.75);\n```",
+    "type": "object",
+    "properties": {
+      "from": {
+        "description": "The link's start, in the entity's frame (default the origin).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "to": {
+        "description": "The link's end, in the entity's frame (default the origin).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "bidirectional": {
+        "description": "Whether the link can also be crossed from `to` to `from` (default `true`).",
+        "type": "boolean"
+      },
+      "kind": {
+        "description": "What the traversal is, for the game: free text, never read by the engine (default empty).",
+        "type": "string"
+      },
+      "cost": {
+        "description": "Metres added to the distance between the two snapped nodes (default `0`).",
+        "type": "number",
+        "format": "float"
+      },
+      "enabled": {
+        "description": "Whether routes may use the link (default `true`).",
+        "type": "boolean"
+      },
+      "snap_radius": {
+        "description": "Metres an end may be from a walkable node and still snap to it (default `0.75`).",
+        "type": "number",
+        "format": "float"
+      }
+    }
+  },
   "NavRoute": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "NavRoute",
-    "description": "The route `nav_steer` plans for a [`NavAgent`](crate::NavAgent) that carries a [`NavGoal`].\n**Written by `nav_steer`**: a game reads it and never inserts one. It is hashed sim state, so a restored\nworld resumes the route it was on instead of planning again from elsewhere. `waypoints[0]` is the\nnode the route started from; `index` is the waypoint being walked to. A partial route (`partial`)\nends at the reachable point nearest the goal; `cost` is the path length along the grid links.\n\n```yaml\ncomponents:\n  NavRoute:\n    goal: [12.0, 0.0, -4.5]\n    waypoints: [[0.5, 0.0, 0.5], [6.5, 0.0, 3.5], [12.5, 0.0, -4.5]]\n    index: 1\n    status: following\n    cost: 14.2\n```\n\n```\nuse ludion_components::{NavRoute, NavRouteStatus};\n\nlet route: NavRoute = serde_json::from_value(serde_json::json!({})).unwrap();\nassert_eq!(route.status, NavRouteStatus::Planning);\nassert!(route.waypoints.is_empty());\n```",
+    "description": "The route `nav_steer` plans for a [`NavAgent`](crate::NavAgent) that carries a [`NavGoal`].\n**Written by `nav_steer`**: a game reads it and never inserts one. It is hashed sim state, so a restored\nworld resumes the route it was on instead of planning again from elsewhere. `waypoints[0]` is the\nnode the route started from; `index` is the waypoint being walked to. A partial route (`partial`)\nends at the reachable point nearest the goal; `cost` is the path length along the grid links. `links`\nlists the waypoint indices where a [`NavLink`](crate::NavLink) traversal starts (waypoint `i` is the\nlink start, `i + 1` its end); at one the agent stops `at_link` until `nav_link_done`.\n\n```yaml\ncomponents:\n  NavRoute:\n    goal: [12.0, 0.0, -4.5]\n    waypoints: [[0.5, 0.0, 0.5], [6.5, 0.0, 3.5], [12.5, 0.0, -4.5]]\n    index: 1\n    status: following\n    cost: 14.2\n```\n\n```\nuse ludion_components::{NavRoute, NavRouteStatus};\n\nlet route: NavRoute = serde_json::from_value(serde_json::json!({})).unwrap();\nassert_eq!(route.status, NavRouteStatus::Planning);\nassert!(route.waypoints.is_empty());\n```",
     "type": "object",
     "properties": {
       "goal": {
@@ -5051,6 +5375,39 @@
         "description": "Path cost in metres along the grid links (default `0`).",
         "type": "number",
         "format": "float"
+      },
+      "links": {
+        "description": "Waypoint indices where a link traversal starts (default none).",
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "link": {
+        "description": "The link being waited at; set only while `status` is `at_link` (default none).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
       }
     },
     "$defs": {
@@ -5076,6 +5433,11 @@
             "description": "No route to the goal; the agent stands still until the goal changes cell.",
             "type": "string",
             "const": "unreachable"
+          },
+          {
+            "description": "Stopped at a link start, waiting for `nav_link_done`; `NavRoute.link` names the link.",
+            "type": "string",
+            "const": "at_link"
           }
         ]
       }
@@ -5903,6 +6265,12 @@
             "type": "null"
           }
         ]
+      },
+      "period_ticks": {
+        "description": "Evaluates sight every this many ticks, phased by the entity index; `1` is every tick (default\n`1`; 0 is refused).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
       }
     },
     "$defs": {
@@ -6093,10 +6461,24 @@
       }
     }
   },
+  "PerceiverStatus": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PerceiverStatus",
+    "description": "When a [`Perceiver`]'s sight was last evaluated. Written by `perception_update` onto a perceiver\nwhose sight is staggered or budgeted, so a snapshot restores the stagger exactly. Hashed and\nsnapshotted.\n\n```\nuse ludion_components::PerceiverStatus;\n\nassert_eq!(PerceiverStatus::default().evaluated_tick, 0);\n```",
+    "type": "object",
+    "properties": {
+      "evaluated_tick": {
+        "description": "The gameplay tick the perceiver's sight was last evaluated on; before the first evaluation, one\nperiod before the tick it first fell due (default `0`).",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      }
+    }
+  },
   "PerceptionState": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "PerceptionState",
-    "description": "The singleton `perception_update` and `emit_noise` keep their counters in, spawned on the first\nnoise. Hashed and snapshotted.\n\n```\nuse ludion_components::PerceptionState;\n\nassert_eq!(PerceptionState::default().next_noise_id, 0);\n```",
+    "description": "The singleton `perception_update` and `emit_noise` keep their counters in, spawned on the first\nnoise or the first persisted sight sample. Hashed and snapshotted.\n\n```\nuse ludion_components::PerceptionState;\n\nassert_eq!(PerceptionState::default().next_noise_id, 0);\n```",
     "type": "object",
     "properties": {
       "next_noise_id": {
@@ -6104,6 +6486,30 @@
         "type": "integer",
         "format": "uint64",
         "minimum": 0
+      },
+      "sight_cursor": {
+        "description": "The last perceiver the sight ray budget served; the next pass starts after it (default none).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
       }
     }
   },
@@ -6829,6 +7235,127 @@
     "description": "Marks an entity whose state **stays behind** when the run leaves this scene: the engine captures\nits full component bag on the way out of a district and re-applies it on the way back in, within\none session (see `crate::transition`).\n\nA field-less opt-in marker, authored `Residue: {}` (or inserted from code on an entity a system\nspawns). Absent is today's behaviour exactly: a scene that marks nothing captures nothing, and a\nswitch out of it and back rebuilds it from its authored text alone.\n\n**Identity is the entity's `Name`.** A marked entity that carries one is matched back onto the\nfreshly instantiated entity of the same name — its authored state is replaced in place, so its\n`EntityId` is the one the target scene minted and no other entity's id moves. A marked entity with\nno `Name` is *anonymous*: it is never matched, and comes back as a fresh entity spawned before the\ncarried set (the dropped-pickup case).\n\n**The state must stay alive to be remembered.** Capture reads the departing world, so an entity\ndespawned before the switch leaves nothing behind and the target scene's authored version returns.\nA thing that has been \"used up\" therefore keeps its entity and flips a component to say so — the\ndestroyed spawner is a husk, not a hole.",
     "type": "object",
     "properties": {}
+  },
+  "SightSampleRecord": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "SightSampleRecord",
+    "description": "One carried sight sample of a [`Perceiver`] that is staggered or budgeted: what `perception_update`\nlast computed for `(perceiver, zone, target)`, kept while the perceiver is not evaluated. A runtime\nentity, hashed and snapshotted, that despawns with its perceiver or when its key stops sampling.\n\n```\nuse ludion_components::SightSampleRecord;\n\nlet record: SightSampleRecord = serde_json::from_value(serde_json::json!({\n    \"perceiver\": { \"index\": 0, \"generation\": 0 }, \"target\": { \"index\": 1, \"generation\": 0 },\n    \"visible\": true, \"points_visible\": 1, \"distance\": 4.0, \"angle_deg\": 10.0,\n    \"effective_range\": 6.0, \"evaluated_tick\": 12,\n}))\n.unwrap();\nassert!(record.visible && record.blocker.is_none() && record.in_zone);\n```",
+    "type": "object",
+    "properties": {
+      "perceiver": {
+        "description": "The perceiver that looked.",
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "target": {
+        "description": "The entity looked at.",
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "blocker": {
+        "description": "The nearest blocker of the lowest-index blocked point (default none).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "zone": {
+        "description": "Index into the perceiver's `sight` list (default `0`).",
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0,
+        "maximum": 255
+      },
+      "in_zone": {
+        "description": "Whether any sample point was inside the zone's wedge (default `true`).",
+        "type": "boolean"
+      },
+      "visible": {
+        "description": "Whether the target's `require` rule was met (default `false`).",
+        "type": "boolean"
+      },
+      "points_visible": {
+        "description": "A bitmask over the target's points that were seen (default `0`).",
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0,
+        "maximum": 255
+      },
+      "distance": {
+        "description": "Metres from the eye to the target's origin (default `0.0`).",
+        "type": "number",
+        "format": "float"
+      },
+      "angle_deg": {
+        "description": "Degrees between the zone's facing and the direction to the target (default `0.0`).",
+        "type": "number",
+        "format": "float"
+      },
+      "effective_range": {
+        "description": "The zone's range after visibility scaling (default `0.0`).",
+        "type": "number",
+        "format": "float"
+      },
+      "evaluated_tick": {
+        "description": "The gameplay tick the sample was computed on (default `0`).",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      }
+    },
+    "required": [
+      "perceiver",
+      "target"
+    ]
   },
   "SightTarget": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -7749,6 +8276,137 @@
       }
     }
   },
+  "UiGroup": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "UiGroup",
+    "description": "A screen-space box that other UI elements anchor inside, scale, fade and hide as one unit. It\ndraws nothing: it resolves like a [`UiRect`](crate::UiRect) (`anchor`, `offset`, `size`), and a\n`UiRect`, `UiText`, `UiList` or another `UiGroup` with `group: <this entity>` anchors against that\nbox instead of the canvas. `scale` (about the box centre), `opacity` and `visible: false` compose\nonto every descendant through nesting of up to 8 groups. `order` stays global; a group never\nreorders its children. `UiTween` (offset, size, scale, opacity) and `UiWorldAnchor` work on a\ngroup.\n\n```yaml\ncomponents:\n  UiGroup: { anchor: top_right, offset: [-24, 24], size: [360, 360], opacity: 0.9 }\n```\n\n```\nuse ludion_components::UiGroup;\n\nlet group: UiGroup = serde_json::from_value(serde_json::json!({})).unwrap();\nassert_eq!(group, UiGroup::default());\nassert_eq!(group.size, [100.0, 100.0]);\nassert!(group.visible);\n```",
+    "type": "object",
+    "properties": {
+      "anchor": {
+        "description": "Which canvas point (or outer group box point) the group is placed at (default `top_left`).",
+        "$ref": "#/$defs/Anchor",
+        "default": "top_left"
+      },
+      "offset": {
+        "description": "Offset from the anchor point, in canvas units, **+Y down** (default `[0, 0]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "default": [
+          0.0,
+          0.0
+        ]
+      },
+      "size": {
+        "description": "Size `[width, height]` in canvas units (default `[100, 100]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "default": [
+          100.0,
+          100.0
+        ]
+      },
+      "scale": {
+        "description": "Uniform scale about the box centre, composed onto every descendant, `> 0` (default `1`).",
+        "type": "number",
+        "format": "float"
+      },
+      "opacity": {
+        "description": "Opacity multiplied into every descendant's alpha, `0..=1` (default `1`).",
+        "type": "number",
+        "format": "float"
+      },
+      "visible": {
+        "description": "Whether the group's descendants draw at all (default `true`).",
+        "type": "boolean"
+      },
+      "group": {
+        "description": "The outer group this one nests in (default none: it sits on the canvas).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      }
+    },
+    "$defs": {
+      "Anchor": {
+        "description": "Which of the nine canvas points a screen-space UI element ([`UiRect`], [`UiText`]) pins to — and,\nequally, which point of the element's own extent sits on it (its own pivot). For example,\n[`Anchor::BottomRight`] pins the element's bottom-right corner to the canvas's bottom-right\ncorner (a corner HUD needs no size arithmetic); [`Anchor::Center`] centers the element on the\ncanvas center with zero offset. There is no separate `pivot` field — one anchor names both ends.\n\n**Every variant carries a doc comment.** This is load-bearing, not style: `schemars` only emits\nthe `oneOf`-of-`const` schema shape (which the editor inspector needs to render a dropdown) when\nevery variant of a unit-only enum is doc-commented — an undocumented variant collapses the whole\nschema to a bare `{\"enum\": [...]}`, which falls to the raw-JSON textarea instead.",
+        "oneOf": [
+          {
+            "description": "The canvas's top-left corner; the element's own top-left corner sits there.",
+            "type": "string",
+            "const": "top_left"
+          },
+          {
+            "description": "The canvas's top edge, horizontally centered; the element's own top-center point sits there.",
+            "type": "string",
+            "const": "top_center"
+          },
+          {
+            "description": "The canvas's top-right corner; the element's own top-right corner sits there.",
+            "type": "string",
+            "const": "top_right"
+          },
+          {
+            "description": "The canvas's left edge, vertically centered; the element's own center-left point sits there.",
+            "type": "string",
+            "const": "center_left"
+          },
+          {
+            "description": "The canvas's center; the element's own center sits there.",
+            "type": "string",
+            "const": "center"
+          },
+          {
+            "description": "The canvas's right edge, vertically centered; the element's own center-right point sits there.",
+            "type": "string",
+            "const": "center_right"
+          },
+          {
+            "description": "The canvas's bottom-left corner; the element's own bottom-left corner sits there.",
+            "type": "string",
+            "const": "bottom_left"
+          },
+          {
+            "description": "The canvas's bottom edge, horizontally centered; the element's own bottom-center point sits\nthere.",
+            "type": "string",
+            "const": "bottom_center"
+          },
+          {
+            "description": "The canvas's bottom-right corner; the element's own bottom-right corner sits there.",
+            "type": "string",
+            "const": "bottom_right"
+          }
+        ]
+      }
+    }
+  },
   "UiList": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "UiList",
@@ -7902,6 +8560,30 @@
           "string",
           "null"
         ]
+      },
+      "group": {
+        "description": "The [`UiGroup`] this list anchors inside, instead of the canvas (default none).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
       }
     },
     "$defs": {
@@ -8092,6 +8774,34 @@
             "type": "null"
           }
         ]
+      },
+      "group": {
+        "description": "The [`UiGroup`] this rect anchors inside, instead of the canvas (default none). The group's\n`scale`, `opacity` and `visible` compose onto the rect.",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "fill_group": {
+        "description": "Cover the [`group`](UiRect::group)'s box, as `fill` covers the canvas (default `false`).\nNeeds a `group` (`L1617`).",
+        "type": "boolean"
       }
     },
     "$defs": {
@@ -8266,6 +8976,30 @@
           "string",
           "null"
         ]
+      },
+      "group": {
+        "description": "The [`UiGroup`] this text anchors inside, instead of the canvas (default none).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
       }
     },
     "$defs": {

@@ -1386,6 +1386,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_local_light_diagnostics(scene));
     diagnostics.extend(scene_light_exposure_diagnostics(scene));
     diagnostics.extend(scene_lens_and_sun_disc_diagnostics(scene));
+    diagnostics.extend(crate::ui::group::scene_ui_group_diagnostics(scene));
     diagnostics.extend(scene_preload_diagnostics(project_root, scene));
     // The mesh-asset pass reports a missing skinned mesh at its entity; the skin-bone and
     // parent-joint passes read the same files and push the reader's bare diagnostic, dropped here.

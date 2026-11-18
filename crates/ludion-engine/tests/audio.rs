@@ -1270,3 +1270,281 @@ fn two_listeners_hear_from_the_lowest_id_and_report_l1650_once() {
         1
     );
 }
+
+// --- Attached voices: play_on ---
+
+const VOICE_SCENE: &str = "\
+format: 1
+entities:
+  - name: camera
+    components:
+      Transform: {}
+      Camera: {}
+  - name: guard
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 0.0
+          - 0.0
+";
+
+const GUARD: EntityId = EntityId::new(1, 0);
+
+/// A mono PCM16 WAV of `frames` frames at 44100 Hz.
+fn wav(frames: usize) -> Vec<u8> {
+    let data: Vec<u8> = (0..frames).flat_map(|_| 1000i16.to_le_bytes()).collect();
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&44100u32.to_le_bytes());
+    wav.extend_from_slice(&88200u32.to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(&data);
+    wav
+}
+
+/// A scratch project root unique to this process and `name`, holding `long.wav` (4 s, 240 ticks at
+/// 60 Hz) and `short.wav` (0.5 s, 30 ticks).
+fn voice_root(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("ludion-voices-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("long.wav"), wav(176_400)).unwrap();
+    std::fs::write(dir.join("short.wav"), wav(22_050)).unwrap();
+    dir
+}
+
+fn voice_engine(name: &str, pan: AudioPan) -> Engine {
+    let mut engine = Engine::builder()
+        .project_root(voice_root(name))
+        .audio_pan(pan)
+        .build()
+        .expect("engine builds");
+    engine.load_inline_scene(VOICE_SCENE).expect("scene loads");
+    engine
+}
+
+fn play_voice(engine: &mut Engine, entity: EntityId, sound: &str) -> ludion_engine::VoiceId {
+    queue(engine).play_on(entity, sound, 1.0, 10.0, AudioCategory::Voice)
+}
+
+fn move_guard_to(engine: &mut Engine, x: f32) {
+    engine
+        .world_mut()
+        .get_mut::<ludion_engine::Transform>(GUARD)
+        .expect("the guard is alive")
+        .expect("the guard has a Transform")
+        .translation = [x, 0.0, 0.0];
+}
+
+/// Every voice message in the log with its frame, in emission order.
+fn voice_messages(engine: &Engine) -> Vec<(u64, AudioMessage)> {
+    engine
+        .audio_log()
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.message,
+                AudioMessage::VoiceStart { .. }
+                    | AudioMessage::VoiceSync { .. }
+                    | AudioMessage::VoiceStop { .. }
+            )
+        })
+        .map(|entry| (entry.frame.as_u64(), entry.message.clone()))
+        .collect()
+}
+
+/// A voice on a walking entity re-syncs its gain as it walks away, and pans under `Stereo`.
+#[test]
+fn a_voice_follows_its_entity_in_gain_and_pan() {
+    let mut engine = voice_engine("follow", AudioPan::Stereo);
+    let id = play_voice(&mut engine, GUARD, "long.wav");
+    engine.advance_live();
+    move_guard_to(&mut engine, 6.0);
+    engine.advance_live();
+
+    let messages = voice_messages(&engine);
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    let AudioMessage::VoiceStart {
+        id: started,
+        gain,
+        pan,
+        category,
+        ..
+    } = &messages[0].1
+    else {
+        panic!("a start: {messages:?}");
+    };
+    assert_eq!((*started, *category), (id, AudioCategory::Voice));
+    assert!((gain - 0.8).abs() < 1e-5, "{gain}");
+    assert!(pan.abs() > 0.5, "stereo places it to a side: {pan}");
+    let AudioMessage::VoiceSync {
+        id: synced, gain, ..
+    } = &messages[1].1
+    else {
+        panic!("a sync: {messages:?}");
+    };
+    assert_eq!(*synced, id);
+    assert!((gain - 0.4).abs() < 1e-5, "{gain}");
+}
+
+/// A static entity sends exactly one start and no syncs.
+#[test]
+fn a_static_voice_sends_one_start_and_no_syncs() {
+    let mut engine = voice_engine("static", AudioPan::Stereo);
+    play_voice(&mut engine, GUARD, "long.wav");
+    for _ in 0..10 {
+        engine.advance_live();
+    }
+    let messages = voice_messages(&engine);
+    assert!(
+        matches!(messages.as_slice(), [(0, AudioMessage::VoiceStart { .. })]),
+        "{messages:?}"
+    );
+}
+
+/// A 0.5 s clip is 30 ticks at 60 Hz: nothing is sent for it from tick 30 on, even while it moves.
+#[test]
+fn a_voice_is_not_followed_past_the_clip_end() {
+    let mut engine = voice_engine("ends", AudioPan::Centred);
+    play_voice(&mut engine, GUARD, "short.wav");
+    for tick in 0..45 {
+        move_guard_to(&mut engine, 2.0 + tick as f32 * 0.1);
+        engine.advance_live();
+    }
+    let messages = voice_messages(&engine);
+    assert!(
+        messages
+            .iter()
+            .any(|(_, message)| matches!(message, AudioMessage::VoiceSync { .. }))
+    );
+    let last = messages.last().expect("messages").0;
+    assert!(
+        last < 30,
+        "last voice message at frame {last}: {messages:?}"
+    );
+}
+
+/// `voice_stop` emits one `VoiceStop`; a second stop, and a stop after the clip ended, emit nothing.
+#[test]
+fn voice_stop_emits_once_and_never_after_the_end() {
+    let mut engine = voice_engine("stop", AudioPan::Centred);
+    let id = play_voice(&mut engine, GUARD, "long.wav");
+    engine.advance_live();
+    queue(&mut engine).voice_stop(id, 6);
+    engine.advance_live();
+    queue(&mut engine).voice_stop(id, 6);
+    engine.advance_live();
+    let stops: Vec<_> = voice_messages(&engine)
+        .into_iter()
+        .filter(|(_, message)| matches!(message, AudioMessage::VoiceStop { .. }))
+        .collect();
+    assert_eq!(
+        stops,
+        vec![(1, AudioMessage::VoiceStop { id, fade_frames: 6 })]
+    );
+
+    let mut engine = voice_engine("stop-late", AudioPan::Centred);
+    let id = play_voice(&mut engine, GUARD, "short.wav");
+    for _ in 0..40 {
+        engine.advance_live();
+    }
+    queue(&mut engine).voice_stop(id, 6);
+    engine.advance_live();
+    assert_eq!(voice_messages(&engine).len(), 1, "only the start");
+}
+
+/// Despawning the entity stops its voice with a zero-length request the next tick, once.
+#[test]
+fn despawning_the_entity_stops_its_voice() {
+    let mut engine = voice_engine("despawn", AudioPan::Centred);
+    let id = play_voice(&mut engine, GUARD, "long.wav");
+    engine.advance_live();
+    engine
+        .world_mut()
+        .despawn(GUARD)
+        .expect("the guard is alive");
+    engine.advance_live();
+    engine.advance_live();
+    let messages = voice_messages(&engine);
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_eq!(
+        messages[1],
+        (1, AudioMessage::VoiceStop { id, fade_frames: 0 })
+    );
+}
+
+/// Ids count up in queue order and restart at 0 after a scene load.
+#[test]
+fn voice_ids_count_up_and_restart_after_a_rebuild() {
+    let mut engine = voice_engine("ids", AudioPan::Centred);
+    let first = play_voice(&mut engine, GUARD, "long.wav");
+    let second = play_voice(&mut engine, GUARD, "short.wav");
+    assert_eq!((first.0, second.0), (0, 1));
+    engine.advance_live();
+    let started: Vec<_> = voice_messages(&engine)
+        .into_iter()
+        .filter_map(|(_, message)| match message {
+            AudioMessage::VoiceStart { id, .. } => Some(id.0),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started, vec![0, 1]);
+
+    engine.load_inline_scene(VOICE_SCENE).expect("scene loads");
+    assert_eq!(play_voice(&mut engine, GUARD, "long.wav").0, 0);
+}
+
+/// A voice on an entity that is already dead sends nothing.
+#[test]
+fn a_voice_on_a_dead_entity_sends_nothing() {
+    let mut engine = voice_engine("dead", AudioPan::Centred);
+    engine
+        .world_mut()
+        .despawn(GUARD)
+        .expect("the guard is alive");
+    play_voice(&mut engine, GUARD, "long.wav");
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+    assert!(voice_messages(&engine).is_empty());
+}
+
+/// An unreadable sound still starts (the sink reports it) but is never tracked or synced.
+#[test]
+fn an_unreadable_sound_starts_and_is_never_synced() {
+    let mut engine = voice_engine("unreadable", AudioPan::Centred);
+    play_voice(&mut engine, GUARD, "missing.wav");
+    engine.advance_live();
+    move_guard_to(&mut engine, 8.0);
+    engine.advance_live();
+    engine.advance_live();
+    let messages = voice_messages(&engine);
+    assert!(
+        matches!(messages.as_slice(), [(0, AudioMessage::VoiceStart { .. })]),
+        "{messages:?}"
+    );
+}
+
+/// Two identical runs produce identical logs.
+#[test]
+fn voice_logs_are_reproducible() {
+    fn run(name: &str) -> Vec<(u64, AudioMessage)> {
+        let mut engine = voice_engine(name, AudioPan::Stereo);
+        play_voice(&mut engine, GUARD, "short.wav");
+        for tick in 0..40 {
+            move_guard_to(&mut engine, 2.0 + tick as f32 * 0.2);
+            engine.advance_live();
+        }
+        voice_messages(&engine)
+    }
+    assert_eq!(run("repro-a"), run("repro-b"));
+}

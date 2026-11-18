@@ -211,10 +211,20 @@ Decisions:
 The masks live in a side table on `PhysicsWorld` (entity-sorted, never hashed, never in the blob), fed each tick
 like spawn ranks and refilled after a restore. Blasts filter through the same `SweepFilter::drops`.
 
-### W5 — counts and migration (not started)
+### W5 — counts and migration (shipped)
 
-`check-scene --bounds` prints per-layer query-only member counts; `NavConfig` / `Projectile` `ignore_layers`
-become `LayerSet`. Trigger: the first component consumer (Neon Shroud request 0001).
+`check-scene --bounds` prints per-layer query-only member counts (` (N query-only)` in text, only when above
+zero; `query_only` on every `--json` entry). `NavConfig` / `ProjectileConfig` keep `ignore_layers: Vec<String>` and
+resolve to a `LayerSet` internally at their filter sites (`QueryFilter::ignore_set`). `ProjectileConfig` sits in the
+snapshot document, and a bare `LayerSet` field would emit a `$ref` that moves `replay_content_hash`; a guard test in
+`snapshot.rs` pins the schema as a plain list.
+
+- **Proposed — owner ruling owed:** change the two `ignore_layers` field types to `LayerSet` (breaking public API; would
+  need `#[schemars(with = "Vec<String>")]` on `ProjectileConfig`). The external caller that would adapt is Serious Isaac
+  `src/lib.rs:267` (`ignore_layers: vec![ENEMY_PHYSICS_LAYER.into()]` becomes
+  `LayerSet::from(vec![ENEMY_PHYSICS_LAYER.to_string()])`). Serialized bytes would be unchanged.
+- **Out of scope:** the camera rig's `RigCollisionConfig::{include_layers, ignore_layers}` stay `Vec<String>`.
+  Trigger: `LayerSet` moves below `ludion-physics`, or `ludion-camera` gains a physics dependency for another reason.
 
 ## Gates
 
@@ -278,4 +288,6 @@ out the kinematic seat; nothing built, the joint-zero re-capture stays a known l
 
 **W4 shipped** (Neon Shroud request 0002): `QueryLayers`, `LayerSet`, `QueryFilter::include_layer` /
 `include_set` / `ignore_set`, codes `L1500` / `L1501`; blasts and sweeps share one `SweepFilter::drops`. No
-hash, trace, golden or replay moved. W5 not started.
+hash, trace, golden or replay moved.
+**W5 shipped** (Neon Shroud request 0002): query-only counts in `check-scene --bounds`; `ignore_layers`
+resolved through `LayerSet` internally, the public type change is proposed. No hash, schema, trace, golden or replay moved.

@@ -47,9 +47,10 @@ use crate::character::CharacterData;
 use crate::components::{
     Animation, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
-    GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, ParentJoint, ParticleEmitter,
-    PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Rim, SkinBone, SpotLight,
-    Sprite, SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList, UiRect, UiText,
+    GroundMarkerGrid, GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, ParentJoint,
+    ParticleEmitter, PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Rim,
+    SkinBone, SpotLight, Sprite, SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList,
+    UiRect, UiText,
 };
 use crate::components::{AnimationLayers, BlendClock, LayerMode, layer_weight_at};
 use crate::docs::DocStore;
@@ -984,6 +985,7 @@ fn extract_inner(
         game_frame: now.ticks_floor(),
         rate: sim_now.rate(),
     };
+    let mut groups = ui::group::UiGroups::default();
     for (index, &id) in ids.iter().enumerate() {
         if let Some(rect) = get::<UiRect>(world, id)
             && rect.visible
@@ -992,6 +994,14 @@ fn extract_inner(
             let rect_motion = ui::hud::pre_rect(&hud, id, rect, degraded);
             let rect = &*rect_motion;
             let rect_px = ui::resolve_ui_rect_of(rect, viewport);
+            // `fill_group` covers the group's box; a group that cannot resolve leaves the canvas
+            // rect and `post` reports it.
+            let rect_px = match rect.group {
+                Some(group) if rect.fill_group && !rect.fill => groups
+                    .resolve(&hud, &mut poses, group, degraded)
+                    .map_or(rect_px, |g| g.box_px),
+                _ => rect_px,
+            };
             // The UV sub-rect the rect samples. A loose `texture:` or an untextured fill samples the
             // whole image (byte-identical to the pre-atlas path); an `atlas` + `frame` reference
             // narrows it to that region, resolved through the same `resolve_atlas_frame` and the
@@ -1053,6 +1063,12 @@ fn extract_inner(
                 rect.anchor,
                 &mut ui_entries,
                 hud_start,
+                ui::hud::Grouping {
+                    group: rect.group,
+                    fill_group: rect.fill_group,
+                    groups: &mut groups,
+                    degraded: &mut *degraded,
+                },
             );
         }
         if let Some(text) = get::<UiText>(world, id)
@@ -1091,6 +1107,12 @@ fn extract_inner(
                 text.anchor,
                 &mut ui_entries,
                 hud_start,
+                ui::hud::Grouping {
+                    group: text.group,
+                    fill_group: false,
+                    groups: &mut groups,
+                    degraded: &mut *degraded,
+                },
             );
         }
         if let Some(list) = get::<UiList>(world, id)
@@ -1165,6 +1187,12 @@ fn extract_inner(
                 list.anchor,
                 &mut ui_entries,
                 hud_start,
+                ui::hud::Grouping {
+                    group: list.group,
+                    fill_group: false,
+                    groups: &mut groups,
+                    degraded: &mut *degraded,
+                },
             );
         }
     }
@@ -1507,7 +1535,7 @@ fn extract_inner(
 
     assets.extract_begin(ExtractPhase::Lights);
     let (ground_markers, ground_marker_ids) =
-        extract_ground_markers(world, &ids, &visibility, &mut poses);
+        extract_ground_markers(world, &ids, &visibility, &mut poses, sim_now);
     let (drop_shadows, drop_shadow_ids) =
         extract_drop_shadows(world, &ids, &visibility, &mut poses, &mesh_owners);
     let (light_ids, spot_light_ids): (Vec<EntityId>, Vec<EntityId>) = if collect {
@@ -2012,6 +2040,7 @@ fn extract_ground_markers(
     ids: &[EntityId],
     visibility: &FrameVisibility,
     poses: &mut WorldAffines,
+    now: SimTime,
 ) -> (Vec<GroundMarkerInstance>, Vec<EntityId>) {
     ids.iter()
         .filter(|&&id| !visibility.hidden(id))
@@ -2020,16 +2049,46 @@ fn extract_ground_markers(
             let pose = render_pose(world, poses, id);
             let shape = scaled_shape(marker.shape, pose.scale()[0]);
             let translation = Vec3::from(pose.translation()) + Vec3::Y * GROUND_MARKER_LIFT;
+            let style = marker.style.map_or_else(Default::default, |s| {
+                ludion_renderer::GroundMarkerStyle {
+                    outline_px: s.outline_px,
+                    grid: s.grid == GroundMarkerGrid::Polar,
+                    grid_px: s.grid_px,
+                    grid_alpha: s.grid_alpha,
+                    interior_alpha: s.interior_alpha,
+                    inner_alpha: s.inner_alpha,
+                    fill_alpha: s.fill_alpha,
+                    flicker: s.flicker,
+                }
+            });
             Some((
                 GroundMarkerInstance {
                     shape,
                     model: Mat4::from_rotation_translation(pose.quat(), translation),
                     color: marker.color,
+                    inner_color: marker.inner_color.unwrap_or(marker.color),
+                    style,
+                    flicker_seed: flicker_seed(id, now),
                 },
                 id,
             ))
         })
         .unzip()
+}
+
+/// The flicker dropout's per-(entity, sim tick) seed: a fixed integer mix of the entity slot,
+/// generation and tick, masked to 24 bits so it rides a float lane exactly. Wrapping ops only, so
+/// it is the same on every platform; render-only, never hashed.
+fn flicker_seed(id: EntityId, now: SimTime) -> u32 {
+    let ticks = now.ticks();
+    let mut h = (ticks as u32) ^ ((ticks >> 32) as u32).rotate_left(16);
+    h = h.wrapping_mul(0x9E37_79B1)
+        ^ id.index().wrapping_mul(0x85EB_CA6B)
+        ^ id.generation().wrapping_mul(0xC2B2_AE35);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2C1B_3C6D);
+    h ^= h >> 12;
+    h & 0xFF_FFFF
 }
 
 /// A component shape in final world units: every length times `scale` (a wedge's angle and fill are
@@ -2053,12 +2112,28 @@ fn scaled_shape(shape: GroundMarkerShape, scale: f32) -> ludion_renderer::Ground
             inner_radius,
             fill,
             grid_spacing,
-        } => ludion_renderer::GroundMarkerShape::Wedge {
-            half_angle: half_angle_deg.to_radians(),
-            inner_radius: inner_radius * scale,
-            outer_radius: outer_radius * scale,
+            inner_half_angle_deg,
+        } => {
+            let half_angle = half_angle_deg.to_radians();
+            ludion_renderer::GroundMarkerShape::Wedge {
+                half_angle,
+                inner_radius: inner_radius * scale,
+                outer_radius: outer_radius * scale,
+                fill: fill.clamp(0.0, 1.0),
+                grid_spacing: grid_spacing * scale,
+                inner_half_angle: inner_half_angle_deg.map(|a| a.to_radians().min(half_angle)),
+            }
+        }
+        GroundMarkerShape::Ring {
+            radius,
+            thickness,
+            fill,
+            dashes,
+        } => ludion_renderer::GroundMarkerShape::Ring {
+            radius: radius * scale,
+            thickness: thickness * scale,
             fill: fill.clamp(0.0, 1.0),
-            grid_spacing: grid_spacing * scale,
+            dashes,
         },
     }
 }
@@ -3957,7 +4032,9 @@ pub(crate) fn skin_palette(
     let (pose, crossfade) = character.map_or((PoseSide::EMPTY, None), |data| {
         character_pose(world, skin, data, held_now)
     });
-    let layers = character.map_or_else(Vec::new, |data| layer_poses(world, skin, data, held_now));
+    let layers = character.map_or_else(Vec::new, |data| {
+        layer_poses(world, skin, data, joints.len(), held_now)
+    });
     match followed {
         Some(followed) if !followed.is_empty() => {
             posed_palette(joints, skin_model, followed, scratch, out);
@@ -4555,7 +4632,7 @@ pub(crate) fn sampled_palette_sides(
         let sampled = if layers.is_empty() {
             sampled
         } else {
-            layered_joint_pose(joint, index, joints.len(), sampled, layers).or(sampled)
+            layered_joint_pose(joint, index, sampled, layers).or(sampled)
         };
         let local = match sampled {
             None => joint.rest_local,
@@ -4605,6 +4682,13 @@ impl<'a> PoseSide<'a> {
     /// A weighted side from up to three entries.
     pub(crate) fn weighted(entries: [Option<(&'a ClipSampler, f64, f64)>; 3]) -> Self {
         PoseSide { entries }
+    }
+
+    /// The same entries all sampled at clip time `0`: a layer's own first frame.
+    fn at_zero(self) -> Self {
+        PoseSide {
+            entries: self.entries.map(|entry| entry.map(|(s, _, w)| (s, 0.0, w))),
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -4710,10 +4794,12 @@ fn blended_joint_pose(
     })
 }
 
-/// One `AnimationLayers` layer ready to sample: its clip at the layer's own clock, the mask's
-/// per-joint weights (`None` is the whole skin), how it combines, and its weight now, in `(0, 1]`.
+/// One `AnimationLayers` layer ready to sample: its clip (or blend) at the layer's own clock, the
+/// reference an additive layer measures from, the mask's per-joint weights (`None` is the whole skin),
+/// how it combines, and its weight now, in `(0, 1]`.
 pub(crate) struct LayerPose<'a> {
-    pub pose: ClipPose<'a, ClipSampler>,
+    pub pose: PoseSide<'a>,
+    pub reference: PoseSide<'a>,
     pub mask: Option<&'a [f32]>,
     pub mode: LayerMode,
     pub weight: f64,
@@ -4727,11 +4813,17 @@ pub(crate) fn layer_poses<'a>(
     world: &World,
     id: EntityId,
     data: &'a CharacterData,
+    joint_count: usize,
     now: GameTime,
 ) -> Vec<LayerPose<'a>> {
     let Some(stack) = get::<AnimationLayers>(world, id) else {
         return Vec::new();
     };
+    // A layer blend's phase reads its `BlendClock.layers` entry, advanced by the fraction of a tick
+    // `now` is past the clock's tick, else the stateless `elapsed * rate`.
+    let clock = get::<BlendClock>(world, id);
+    let fraction =
+        now.ticks_since(FrameIndex::new(now.ticks_floor())) * now.rate().seconds_per_tick();
     stack
         .layers
         .iter()
@@ -4741,17 +4833,54 @@ pub(crate) fn layer_poses<'a>(
             if weight <= 0.0 || weight.is_nan() {
                 return None;
             }
-            let binding = data.clip(&layer.clip)?;
+            let pose = if let Some(binding) = data.clip(&layer.clip) {
+                let elapsed = clock_elapsed(now, layer.started, layer.speed, None) * binding.speed;
+                PoseSide::single(Some((
+                    &binding.sampler,
+                    ludion_scene::clip_phase(&binding.clip, elapsed),
+                )))
+            } else {
+                let blend = data.blend(&layer.clip)?;
+                let rate = crate::blend_clock::blend_rate(blend, layer.params);
+                let live = clock.and_then(|c| {
+                    c.layers.iter().find(|entry| {
+                        entry.name == layer.name
+                            && entry.blend == layer.clip
+                            && entry.started == layer.started
+                    })
+                });
+                let phase = live.map_or_else(
+                    || crate::blend_clock::layer_fallback_phase(blend, layer, now),
+                    |entry| entry.phase + rate * f64::from(layer.speed) * fraction,
+                );
+                let mut entries = [None; 3];
+                for (slot, (index, weight)) in
+                    entries.iter_mut().zip(blend.weights(layer.params).iter())
+                {
+                    let point = &blend.points[usize::from(index)];
+                    *slot = Some((
+                        &data.clips[point.clip].sampler,
+                        blend.point_time(index, phase),
+                        weight,
+                    ));
+                }
+                PoseSide::weighted(entries)
+            }
+            .bound(joint_count);
             let mask = match layer.mask.as_str() {
                 "" => None,
                 name => Some(data.mask(name)?),
             };
-            let elapsed = clock_elapsed(now, layer.started, layer.speed, None) * binding.speed;
+            let reference = match layer.mode {
+                LayerMode::Additive if !layer.reference.is_empty() => {
+                    PoseSide::single(Some((&data.clip(&layer.reference)?.sampler, 0.0)))
+                        .bound(joint_count)
+                }
+                _ => pose.at_zero(),
+            };
             Some(LayerPose {
-                pose: Some((
-                    &binding.sampler,
-                    ludion_scene::clip_phase(&binding.clip, elapsed),
-                )),
+                pose,
+                reference,
                 mask,
                 mode: layer.mode,
                 weight,
@@ -4771,7 +4900,6 @@ pub(crate) fn layer_poses<'a>(
 fn layered_joint_pose(
     joint: &SkinJoint,
     index: usize,
-    joint_count: usize,
     base: Option<ludion_scene::PartPose>,
     layers: &[LayerPose<'_>],
 ) -> Option<ludion_scene::PartPose> {
@@ -4794,13 +4922,7 @@ fn layered_joint_pose(
     };
     let mut current: Option<([f64; 4], [f64; 3], [f64; 3])> = None;
     for layer in layers {
-        let Some((sampler, t)) = layer.pose else {
-            continue;
-        };
-        if sampler.targets() != joint_count {
-            continue;
-        }
-        let Some(sample) = sampler.pose(index, t) else {
+        let Some(sample) = layer.pose.sample(index, joint) else {
             continue;
         };
         let mask = layer
@@ -4824,7 +4946,7 @@ fn layered_joint_pose(
                 }
             }
             LayerMode::Additive => {
-                let (r_rot, r_trans, r_scale) = channels(sampler.pose(index, 0.0));
+                let (r_rot, r_trans, r_scale) = channels(layer.reference.sample(index, joint));
                 let delta = quat_mul(quat_conjugate(r_rot), c_rot);
                 *rotation = quat_mul(
                     *rotation,
@@ -6939,7 +7061,8 @@ mod tests {
         mask: Option<&'a [f32]>,
     ) -> LayerPose<'a> {
         LayerPose {
-            pose: Some((sampler, t)),
+            pose: PoseSide::single(Some((sampler, t))),
+            reference: PoseSide::single(Some((sampler, 0.0))),
             mask,
             mode,
             weight,

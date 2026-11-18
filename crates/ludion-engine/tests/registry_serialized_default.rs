@@ -31,11 +31,13 @@ fn fixtures(name: &str) -> Vec<Value> {
         })],
         "SkinBone" => vec![json!({ "skin": entity_ref(), "bone": "b" })],
         "UiWorldAnchor" => vec![json!({ "target": entity_ref() })],
+        "UiGroup" => vec![json!({ "group": entity_ref() })],
         "SightTarget" => vec![json!({ "class": "c" })],
         "StimulusRecord" => vec![
             json!({ "perceiver": entity_ref(), "sense": "sight", "last_position": [0.0, 0.0, 0.0] }),
             json!({ "perceiver": entity_ref(), "sense": { "custom": 3 }, "last_position": [0.0, 0.0, 0.0] }),
         ],
+        "SightSampleRecord" => vec![json!({ "perceiver": entity_ref(), "target": entity_ref() })],
         "NoiseZone" => vec![
             json!({ "shape": { "sphere": { "radius": 1.0 } } }),
             json!({ "shape": { "box": { "half_extents": [1.0, 1.0, 1.0] } } }),

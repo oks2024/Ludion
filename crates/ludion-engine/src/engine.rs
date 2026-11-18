@@ -63,8 +63,9 @@ use serde_json::Value;
 
 use crate::asset_cache::AssetCache;
 use crate::audio::{
-    AudioDistance, AudioLogEntry, AudioMessage, AudioPan, AudioQueue, Bus, CategoryGains,
-    ListenerPose, LoopId, MixLayer, Queued, SentLoop, audible_voice,
+    AttachedVoice, AudioDistance, AudioLogEntry, AudioMessage, AudioPan, AudioQueue, Bus,
+    CategoryGains, ListenerPose, LoopId, MixLayer, Queued, SentLoop, VoiceId, audible_voice,
+    resync_is_current,
 };
 use crate::builtin_registry;
 use crate::components::{
@@ -384,6 +385,11 @@ pub struct Engine {
     /// The window host's channel for [`cursor_lock_game`](Engine::cursor_lock_request) changes
     /// ([`set_cursor_lock_sender`](Engine::set_cursor_lock_sender)); unset headless.
     cursor_lock_sender: Option<crossbeam_channel::Sender<bool>>,
+    /// The window host's pad-thread channel for [`Rumble`](crate::Rumble) commands
+    /// ([`set_rumble_sender`](Engine::set_rumble_sender)); unset headless.
+    rumble_sender: Option<crossbeam_channel::Sender<ludion_core::rumble::RumbleCommand>>,
+    /// The player's rumble intensity, `0..=1`, scaling every request (0 drops them).
+    rumble_intensity: f32,
     /// The player settings in force: the file read at build (when
     /// [`persist_settings`](crate::EngineBuilder::persist_settings) is on) plus every
     /// [`Settings`](crate::Settings) request since — the source of the [`SettingsView`](crate::SettingsView)
@@ -541,6 +547,14 @@ pub struct Engine {
     /// recorded. Cleared by [`install_audio_queue`](Engine::install_audio_queue), whose blanket stop
     /// already silences everything a rebuilt world used to sound.
     audible_emitters: StableMap<EntityId, SentLoop>,
+    /// The attached voices ([`AudioQueue::play_on`]) still sounding that the engine follows: each
+    /// re-resolved against the listener per tick until its clip ends, it is stopped, or its entity
+    /// despawns. Host-side bookkeeping like `audible_emitters`: never hashed, snapshotted or
+    /// recorded, and cleared by [`install_audio_queue`](Engine::install_audio_queue).
+    attached_voices: StableMap<VoiceId, AttachedVoice>,
+    /// Each sound a voice started on: its length in sim ticks (`None` when the file would not
+    /// decode), read once per path. Content-derived, so it is no sim state.
+    voice_ticks: StableMap<String, Option<u64>>,
     /// Whether a host has enabled writing the profile to disk at the frame boundary
     /// ([`persist_profile`](crate::EngineBuilder::persist_profile)). Default `false`, so a
     /// replay/CI/test run fills the log but never clobbers or renames the machine's real
@@ -937,6 +951,8 @@ impl Engine {
             anti_aliasing_game: None,
             cursor_lock_game: None,
             cursor_lock_sender: None,
+            rumble_sender: None,
+            rumble_intensity: 1.0,
             settings: crate::settings::SettingsDoc::default(),
             settings_persistence: false,
             input_bindings_persistence: false,
@@ -983,6 +999,8 @@ impl Engine {
             queued_render_fault: None,
             audio_sender: None,
             audible_emitters: StableMap::new(),
+            attached_voices: StableMap::new(),
+            voice_ticks: StableMap::new(),
             profile_persistence: false,
             profile_off_disk: false,
             run_save: None,
@@ -1017,6 +1035,7 @@ impl Engine {
         engine.install_shutdown();
         engine.install_render_settings();
         engine.install_cursor_lock();
+        engine.install_rumble();
         engine.install_settings();
         engine.install_debug_draw();
         engine.install_game_clock(GameClock::default());
@@ -2072,8 +2091,10 @@ impl Engine {
         crate::input_actions::drain_unknown(self.driver.world_mut());
         self.drain_diagnostics();
         self.drain_audio(frame);
+        self.drain_rumble();
         self.drain_settings(frame);
         self.sync_audio_emitters(frame);
+        self.sync_attached_voices(frame);
         self.drain_profile(frame);
         self.drain_input_bindings();
         self.drain_checkpoints(frame);
@@ -2346,7 +2367,7 @@ impl Engine {
         }
         let listener = queued
             .iter()
-            .any(|item| matches!(item, Queued::At { .. }))
+            .any(|item| matches!(item, Queued::At { .. } | Queued::On { .. }))
             .then(|| audio_listener(self.driver.world_mut()))
             .flatten();
         for item in queued {
@@ -2373,7 +2394,133 @@ impl Engine {
                     event.pan = pan;
                     self.emit_audio(frame, AudioMessage::OneShot(event));
                 }
+                Queued::On {
+                    id,
+                    entity,
+                    event,
+                    range,
+                } => {
+                    if !self.driver.world().is_alive(entity) {
+                        continue;
+                    }
+                    let (gain, pan) = listener
+                        .as_ref()
+                        .and_then(|l| self.voice_gain_pan(l, entity, event.gain, range))
+                        .unwrap_or((0.0, 0.0));
+                    let ticks = self.clip_ticks(&event.sound);
+                    if let Some(ticks) = ticks.filter(|&ticks| ticks > 0) {
+                        self.attached_voices.insert(
+                            id,
+                            AttachedVoice {
+                                entity,
+                                gain: event.gain,
+                                range,
+                                sent_gain: gain,
+                                sent_pan: pan,
+                                ends: FrameIndex(frame.0 + ticks),
+                            },
+                        );
+                    }
+                    self.emit_audio(
+                        frame,
+                        AudioMessage::VoiceStart {
+                            id,
+                            sound: event.sound,
+                            gain,
+                            pan,
+                            category: event.category,
+                        },
+                    );
+                }
+                Queued::StopVoice { id, fade_frames } => {
+                    if self.attached_voices.remove(&id).is_some() {
+                        self.emit_audio(frame, AudioMessage::VoiceStop { id, fade_frames });
+                    }
+                }
             }
+        }
+    }
+
+    /// The gain and pan an attached voice authored at `gain` reaches `listener` with from `entity`'s
+    /// world position (the origin when it has no transform); `None` when inaudible there.
+    fn voice_gain_pan(
+        &self,
+        listener: &ListenerPose,
+        entity: EntityId,
+        gain: f32,
+        range: f32,
+    ) -> Option<(f32, f32)> {
+        let at = crate::hierarchy::world_transform(self.driver.world(), entity)
+            .map_or([0.0; 3], |at| at.trs.translation);
+        audible_voice(
+            gain,
+            range,
+            listener,
+            at,
+            self.audio_distance,
+            self.audio_pan,
+        )
+    }
+
+    /// The length of the WAV `sound` in sim ticks, `ceil(frames x tick_hz / sample_rate)` in integer
+    /// math, or `None` when it will not read or decode. Cached per path until the next rebuild.
+    fn clip_ticks(&mut self, sound: &str) -> Option<u64> {
+        if let Some(ticks) = self.voice_ticks.get(&sound.to_string()) {
+            return *ticks;
+        }
+        let hz = u64::from(self.tick_rate().hz());
+        let ticks = ludion_assets::load_wav(AssetRoot::content(&self.project_root), sound)
+            .ok()
+            .map(|pcm| {
+                let frames = (pcm.samples.len() / usize::from(pcm.channels.max(1))) as u64;
+                (frames * hz).div_ceil(u64::from(pcm.sample_rate.max(1)))
+            });
+        self.voice_ticks.insert(sound.to_string(), ticks);
+        ticks
+    }
+
+    /// Re-resolves every attached voice ([`AudioQueue::play_on`]) against the listener, beside
+    /// [`sync_audio_emitters`](Engine::sync_audio_emitters). Voices are visited in ascending
+    /// [`VoiceId`]: one past its end is dropped silently (the sink retires it itself); one whose
+    /// entity despawned is dropped with a `VoiceStop` the sink fades over its ~10 ms floor; the rest
+    /// send a `VoiceSync` only when gain or pan moved past the emitter's resend filter. With no
+    /// listener, or no voices, the step does nothing.
+    fn sync_attached_voices(&mut self, frame: FrameIndex) {
+        if self.attached_voices.is_empty() {
+            return;
+        }
+        let listener = audio_listener(self.driver.world_mut());
+        let ids: Vec<VoiceId> = self.attached_voices.keys().copied().collect();
+        for id in ids {
+            let Some(voice) = self.attached_voices.get(&id) else {
+                continue;
+            };
+            let (entity, authored, range, ends) =
+                (voice.entity, voice.gain, voice.range, voice.ends);
+            if frame >= ends {
+                self.attached_voices.remove(&id);
+                continue;
+            }
+            if !self.driver.world().is_alive(entity) {
+                self.attached_voices.remove(&id);
+                self.emit_audio(frame, AudioMessage::VoiceStop { id, fade_frames: 0 });
+                continue;
+            }
+            let Some(listener) = &listener else {
+                continue;
+            };
+            let (gain, pan) = self
+                .voice_gain_pan(listener, entity, authored, range)
+                .unwrap_or((0.0, 0.0));
+            let Some(voice) = self.attached_voices.get_mut(&id) else {
+                continue;
+            };
+            if resync_is_current(voice.sent_gain, voice.sent_pan, gain, pan) {
+                continue;
+            }
+            voice.sent_gain = gain;
+            voice.sent_pan = pan;
+            self.emit_audio(frame, AudioMessage::VoiceSync { id, gain, pan });
         }
     }
 
@@ -3707,6 +3854,41 @@ impl Engine {
         }
     }
 
+    /// Validates, scales and sends the world's [`Rumble`](crate::Rumble) outbox to the armed pad
+    /// channel, dropping it when none is wired. A non-finite value reports one `L4279`. Host state:
+    /// nothing about it is recorded, hashed or snapshotted.
+    fn drain_rumble(&mut self) {
+        let (commands, non_finite) = match self.driver.world_mut().resource_mut::<crate::Rumble>() {
+            Some(rumble) if rumble.is_pending() => rumble.take(),
+            _ => return,
+        };
+        if non_finite
+            && let Some(sink) = self.driver.world_mut().resource_mut::<crate::Diagnostics>()
+        {
+            sink.report(
+                code::RUMBLE_EFFECT_INVALID,
+                "rumble",
+                "a rumble request had a non-finite value; it played as 0".to_string(),
+            );
+        }
+        let Some(sender) = &self.rumble_sender else {
+            return;
+        };
+        for command in commands {
+            let command = match command {
+                ludion_core::rumble::RumbleCommand::Play { low, high, seconds } => {
+                    let (low, high) = (low * self.rumble_intensity, high * self.rumble_intensity);
+                    if low <= 0.0 && high <= 0.0 {
+                        continue;
+                    }
+                    ludion_core::rumble::RumbleCommand::Play { low, high, seconds }
+                }
+                stop => stop,
+            };
+            let _ = sender.send(command);
+        }
+    }
+
     /// Drains a quit a game system asked for through the [`Shutdown`](crate::Shutdown) resource,
     /// returning whether one was pending.
     ///
@@ -3938,6 +4120,8 @@ impl Engine {
             .world_mut()
             .insert_resource(AudioQueue::default());
         self.audible_emitters.clear();
+        self.attached_voices.clear();
+        self.voice_ticks.clear();
         let frame = self.frame();
         self.emit_audio(frame, AudioMessage::StopAllLoops);
     }
@@ -4224,6 +4408,14 @@ impl Engine {
         self.driver
             .world_mut()
             .insert_resource(crate::CursorLock::default());
+    }
+
+    /// Installs a fresh (empty) [`Rumble`](crate::Rumble) outbox into the current world, the
+    /// [`install_cursor_lock`](Engine::install_cursor_lock) mold.
+    fn install_rumble(&mut self) {
+        self.driver
+            .world_mut()
+            .insert_resource(crate::Rumble::default());
     }
 
     /// Installs a fresh (empty) [`Settings`](crate::Settings) request resource and a
@@ -5251,6 +5443,31 @@ impl Engine {
     /// engine leaves it unset and the request stays a silent no-op.
     pub fn set_cursor_lock_sender(&mut self, sender: crossbeam_channel::Sender<bool>) {
         self.cursor_lock_sender = Some(sender);
+    }
+
+    /// Wires the channel to the window host's pad thread: each drained [`Rumble`](crate::Rumble)
+    /// command goes here, validated and scaled by [`rumble_intensity`](Engine::rumble_intensity). A
+    /// headless/test engine leaves it unset and rumble stays a silent no-op.
+    pub fn set_rumble_sender(
+        &mut self,
+        sender: crossbeam_channel::Sender<ludion_core::rumble::RumbleCommand>,
+    ) {
+        self.rumble_sender = Some(sender);
+    }
+
+    /// Sets the player's rumble intensity: `0..=1` scales every request, 0 drops them all. A
+    /// non-finite value becomes 1.
+    pub fn set_rumble_intensity(&mut self, intensity: f32) {
+        self.rumble_intensity = if intensity.is_finite() {
+            intensity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+    }
+
+    /// The rumble intensity in force, `0..=1` (default 1).
+    pub fn rumble_intensity(&self) -> f32 {
+        self.rumble_intensity
     }
 
     /// The pointer lock the game last requested through [`CursorLock`](crate::CursorLock), `None`
@@ -6902,6 +7119,9 @@ impl Engine {
         if let Some(ai) = crate::ai::describe_section(self.driver.world()) {
             doc["ai"] = ai;
         }
+        if let Some(perception) = crate::perception::describe_section(self.driver.world()) {
+            doc["perception"] = perception;
+        }
         doc
     }
 
@@ -8330,6 +8550,7 @@ impl Engine {
         self.install_shutdown();
         self.install_render_settings();
         self.install_cursor_lock();
+        self.install_rumble();
         self.install_settings();
         self.install_debug_draw();
         // A restore resumes the gameplay time it captured, not a clock level with the frame counter.

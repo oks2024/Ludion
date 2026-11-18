@@ -58,6 +58,28 @@ pub struct BlendClock {
     /// The outgoing blend's phase (default `0.0`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub from_phase: f64,
+    /// The phases of the layers whose `clip` names a blend, in layer order (default none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<LayerPhase>,
+}
+
+/// One `AnimationLayers` layer's blend phase inside a [`BlendClock`], kept like the base phase.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct LayerPhase {
+    /// The layer's name.
+    pub name: String,
+    /// The blend the layer's `clip` named when the phase was stamped.
+    pub blend: String,
+    /// The layer's `started` the phase was stamped for (default frame `0`).
+    #[serde(default = "crate::frame_zero")]
+    #[schemars(with = "u64")]
+    pub started: FrameIndex,
+    /// Unwrapped phase cycles (default `0.0`).
+    #[serde(default)]
+    pub phase: f64,
+    /// The phase at the end of the previous gameplay tick; `-1` on a restart tick (default `0.0`).
+    #[serde(default)]
+    pub prev: f64,
 }
 
 impl Default for BlendClock {
@@ -70,6 +92,7 @@ impl Default for BlendClock {
             prev: 0.0,
             from_blend: String::new(),
             from_phase: 0.0,
+            layers: Vec::new(),
         }
     }
 }

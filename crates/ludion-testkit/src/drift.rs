@@ -41,7 +41,7 @@
 //! `SightTarget` is seeded likewise: its `class` names what the zones detect, with no honest default.
 //! `StimulusRecord` is seeded too: its `perceiver`, `sense` and `last_position` are what every record
 //! is written with, with no honest default. `NoiseZone`'s `shape` and `PendingNoise`'s noise fields
-//! have no honest default either.
+//! have no honest default either. `SightSampleRecord` needs its `perceiver` and `target`.
 //! `PrefabInstance` is seeded the same way: its `source`, `part` and `root` are provenance
 //! `spawn_prefab` always writes, with no honest default.
 
@@ -75,6 +75,10 @@ fn probe_seed(name: &str) -> Value {
             "perceiver": { "index": 0, "generation": 0 },
             "sense": "sight",
             "last_position": [0.0, 0.0, 0.0],
+        }),
+        "SightSampleRecord" => json!({
+            "perceiver": { "index": 0, "generation": 0 },
+            "target": { "index": 0, "generation": 0 },
         }),
         "NoiseZone" => json!({ "shape": { "sphere": { "radius": 1.0 } } }),
         "PendingNoise" => json!({

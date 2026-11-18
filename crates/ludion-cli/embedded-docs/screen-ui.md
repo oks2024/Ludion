@@ -203,13 +203,14 @@ of life icons and a jewel drawn from regions of the sprites gallery's committed 
 
 ## Moving elements
 
-`UiTween` animates opacity, offset, scale, size and colour closed-form (`ludion docs ui-tweens`); `UiWorldAnchor` pins an element to a 3D target and clamps it to the screen edge (`ludion docs ui-world-anchor`). Both resolve in `extract`: nothing is written per tick. A textured rect can sample a sub-rect (`uv_rect`) or draw as a nine-slice frame (`slice`): `ludion docs ui-nine-slice`.
+`UiTween` animates opacity, offset, scale, size and colour closed-form (`ludion docs ui-tweens`); `UiWorldAnchor` pins an element to a 3D target and clamps it to the screen edge (`ludion docs ui-world-anchor`). Both resolve in `extract`: nothing is written per tick. A textured rect can sample a sub-rect (`uv_rect`) or draw as a nine-slice frame (`slice`): `ludion docs ui-nine-slice`. A `UiGroup` is a box other elements anchor, scale, fade and hide inside (`group: <ref>`): `ludion docs ui-groups`.
 
 ## Next
 
 - `ludion docs ui-nine-slice` — `uv_rect` and resizable frames.
 - `ludion docs ui-tweens` — closed-form HUD motion.
 - `ludion docs ui-world-anchor` — HUD elements that follow 3D targets.
+- `ludion docs ui-groups` — a box that scales, fades and hides the UI inside it.
 - `ludion docs sprites` — the sprite layer's hub; a `UiRect` spends the same committed atlas.
 - `ludion docs ui-list` — the selectable-menu widget: format, cursor/activation, windowing.
 - `ludion docs fonts` — TrueType faces for `UiText`/`UiList`/`Text`.

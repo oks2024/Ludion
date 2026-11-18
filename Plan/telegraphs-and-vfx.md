@@ -116,14 +116,14 @@ occludes nothing) — no new frame-graph machinery, one more pipeline in the exi
 - **Second-consumer story**: any top-down/third-person action game with ranged or AoE combat needs
   ground indicators — melee ARPGs, tower-defense/RTS range rings, any twin-stick beyond the reference game.
 
-**2. First-wave shape set: Disc and Segment only — Ring and Sector/cone deferred.** Of the reference
+**2. First-wave shape set: Disc and Segment only — Sector/cone and Ring later (Sector shipped; Ring: see decision 9).** Of the reference
 game's prototype archetypes, only the charger (charge → **Segment**,
 a capsule/rectangle along the charge path) and the ranged enemy (landing point + persistent zone → **Disc**)
 attack at range. Ring (an annular boundary, e.g. a future time-bubble edge) and Sector/cone (a true
 angular wedge, vs. the design's landing-*point* circle) have no prototype consumer.
 `GroundMarkerShape` is an enum, so a later variant touches only the shader's SDF branch, not the pass
 wiring or extract integration. **Trigger:** a concrete game enemy variant that needs
-one.
+one. (Ring's trigger fired: decision 9.)
 
 **3. `GroundMarker` carries static shape parameters only; animation is game-side via
 `Transform.scale`.** Mirrors `Sprite`'s convention (`docs/components.md:35`: drawn size × entity
@@ -171,6 +171,39 @@ burst, and a game system stands one plume beside every spawner.
   emissive prop for the vertical tear. Explicitly launch-scale,
   well past the prototype.
 
+### Neon Shroud request 0014
+
+**8. The two-zone wedge.** `Wedge.inner_half_angle_deg: Option<f32>` adds a narrower inner sector reaching
+`inner_radius`, tinted by `GroundMarker.inner_color`. Absent, the wedge draws byte-identically (the
+single-zone shader path is arithmetically unchanged; goldens do not move).
+
+**9. Ring.** `GroundMarkerShape::Ring { radius, thickness, fill, dashes }`. Decision 2's trigger fired on
+the game's noise rings (gdd §4.4) and the ghost footprint (§5.3). `fill` is a fraction of `radius` drawn
+at `style.fill_alpha`; `dashes: 0` is solid. A ring on a `DropShadow` is `L2340`.
+
+**10. `GroundMarkerStyle`.** Optional, per-field defaulted: `outline_px 1.5, grid polar|none, grid_px 1.0,
+grid_alpha 0.45, interior_alpha 0.06, inner_alpha 0.12, fill_alpha 0.30, flicker 0` — today's wedge
+constants, now per instance. Applicability: the wedge reads every field; the ring reads `fill_alpha` and
+`flicker`; disc and segment read only `flicker`. Out-of-range values are `L2341`.
+
+**11. Flicker.** Render-only coverage dropout in `[0, 1]`, a per-(pixel, seed) integer hash in the shader;
+the seed is an integer mix of `(EntityId, sim tick)` made at extract, masked to 24 bits. It is never
+hashed and a replay shows the same pattern (the request asked for a renderer frame index; a sim tick keeps
+it deterministic).
+
+**12. The line-of-sight clip (W2, design of record).** A shared `visibility_profile` function (one
+filter, also called by 0001 sight) casts `bins` rays (8..=512) from the marker apex through physics and
+yields a range per bin. `GroundMarker.clip` opts in; the engine writes a derived `GroundMarkerClip`
+component; a game-scheduled `ground_marker::clip` system runs after physics. The renderer reads the
+profiles from one storage buffer with a per-instance offset, interpolating between bins; the fill is
+clipped radially only. An epsilon pose-skip cache avoids recasting a still marker; the cost is the
+`ground_marker_clip` profile key. The game's answers: flat ground for the slice, a `partial_layers`
+form for see-through blockers, binned rays with interpolation. Codes L2342 (clip `bins`/`height`/layer
+error) and L2343 (clip authored but the system is not scheduled, warning).
+
+**13. Codes.** L2340–L2349 are taken for 0014: L2340 ring invalid, L2341 style invalid; L2342–L2343
+reserved for W2.
+
 ## Waves
 
 ### Wave 1 — `GroundMarker` component, conditional pass, Disc + Segment
@@ -199,16 +232,28 @@ impact, despawns after) + `WorldHash` determinism preserved. Scoped by
 the game's private plan, not scheduled here. **Charge line delivered 2026-08-20**
 (see the Status header); the landing disc is still owed.
 
-### Wave — Sector shape (shipped; Ring still deferred)
+### Wave — Sector shape (shipped; Ring: Neon Shroud 0014 W1)
 Triggered per decision 2. Adds one `GroundMarkerShape` variant and one SDF branch; no
 pass/graph/extract-plumbing change.
 
 *Status (2026-11-18): Sector shipped as `GroundMarkerShape::Wedge`* — a wireframe vision cone (apex
 at the origin facing +X, half-angle, outer and inner range arcs, polar grid, a `fill` fraction growing
 from the apex), validated by `L2113`, drawn by its own branch in `ground_marker.wgsl`. Its trigger
-fired on an external stealth game's vision cones. Not clipped by walls (follow-up). Ring stays
-deferred. The Windows golden `ground-marker-wedge.png` is blessed; **the macOS golden is owed** on
+fired on an external stealth game's vision cones. Not clipped by walls (W2, decision 12). Ring shipped in 0014 W1 (decision 9). The Windows golden `ground-marker-wedge.png` is blessed; **the macOS golden is owed** on
 the pinned M4.
+
+### Wave — Neon Shroud 0014 W1 (shipped 2026-11-18, mechanized)
+Everything render-only: the two-zone wedge, `Ring`, `GroundMarker.inner_color` and `style`, flicker, codes
+L2340/L2341, `docs/ground-telegraphs.md` sections, the gallery scene `ground-marker-zones` (Windows golden
+blessed on the RTX 3090; **the macOS golden is owed** on the M4). `ground-markers` and
+`ground-marker-wedge` goldens, `WorldHash`, replays and the protocol schema do not move. Request
+differences: `dash: {count}` is `dashes: u32`; the ring's `fill_alpha` field is the `fill` fraction drawn at
+`style.fill_alpha`; ring/style get L2340/L2341 rather than extending L2113; the flicker seed is
+`(entity, sim tick)`.
+
+### W2 — line-of-sight clip (not started)
+Design of record: decision 12. Out of W1: physics casts, `GroundMarkerClip`, `visibility_profile`,
+perception sharing, the profile storage buffer and key, L2342/L2343.
 
 ## Engine/game boundary
 
@@ -223,7 +268,7 @@ the pinned M4.
 
 ## Deferred / non-goals
 
-- **Ring shape** — trigger: a concrete enemy variant that needs one (decision 2). Sector shipped (see above).
+- **Ring shape** — shipped (decision 9). Sector shipped (see above).
 - **A particle/GPU-emitter system** — trigger unchanged from the two recorded conditions
   (`Plan/phase-7-designer-flow.md:96`, plus a private plan), sharpened in decision 7: a human gate's verdict, or a measured entity/`WorldHash` budget breach from a high-count effect. Neither
   fired.
@@ -251,6 +296,15 @@ the pinned M4.
     - (vi) Bind-pose projection is deferred until a look test shows swim.
     - (vii) The default ("skinned never") is unchanged.
     - (viii) Acceptance: a 200-hierarchy-decal bench row, and a gallery golden with a scorch on a skinned joint that paints only its character while the clean skinned character stays clean.
+
+## Proposed — owner ruling owed
+
+- (a) Ring's trigger firing (amends decision 2).
+- (b) Decision 3's "shape and colour and nothing else" now admits `inner_color` and `style` (W1) and a
+  derived `GroundMarkerClip` (W2).
+- (c) The engine owning the clip system and the renderer reading a profile buffer (the engine/game
+  boundary section).
+- (d) The Sector wave's "not clipped (follow-up)" becomes W2.
 
 ## Risks / open questions
 

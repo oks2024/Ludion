@@ -1,11 +1,11 @@
 ---
-description: Navigation — walkability grid, flow fields, point-to-point paths, NavAgent/NavGoal steering
+description: Navigation — walkability grid, flow fields, paths, off-mesh NavLink, NavAgent/NavGoal steering
 ---
 
 # Navigation: a grid from the colliders, one flow field per target, agents that steer
 
 **Scope:** `NavConfig`, `Engine::nav`, `nav_update`, `NavAgent`, `NavSteering`, `nav_steer`, `NavGoal`, `NavRoute`,
-`nav_path` and its queries. The
+`NavLink`, `nav_link_done`, `nav_path` and its queries. The
 engine writes a desired velocity; moving the body is yours — `ludion docs motor` for a capsule,
 `ludion docs components` for the rows. Static colliders come from `ludion docs physics` and
 `ludion docs collision-layers`; the neighbour index is `ludion docs spatial-3d`.
@@ -106,7 +106,7 @@ let on_floor = nav_project(world, p, 2.0)?;     // Option<[f32; 3]>: nearest wal
 Give a walker a `NavGoal { at }` (`replan: on_change` default, or `never`) beside its `NavAgent`.
 `nav_steer` plans a route, stores it as a `NavRoute` (`waypoints`, `index`, `status`, `partial`, `cost`)
 and steers along it; a game reads `NavRoute.status`: `planning` (waiting for the per-tick cap),
-`following`, `arrived` (within `arrive_radius` of the last waypoint) or `unreachable`.
+`following`, `arrived` (within `arrive_radius` of the last waypoint), `unreachable` or `at_link`.
 
 - **Replanning is pure**: when the goal moves to another cell, or, under `on_change`, when the leg being
   walked (the stored waypoint pair, not where the agent stands) is no longer walkable (a static wall
@@ -118,6 +118,25 @@ and steers along it; a game reads `NavRoute.status`: `planning` (waiting for the
   instead of planning again. An agent with no `NavGoal` has none, so such scenes hash as before.
 - A flyer with a `NavGoal` seeks `at` in 3D and gets no route. Routed agents skip the flow field, and
   separation is added as for any agent.
+
+## Links
+
+A `NavLink { from, to, bidirectional, kind, cost, enabled, snap_radius }` entity adds an edge a walker
+cannot walk: a ladder, a vault, a door. `from` and `to` are in the entity's frame (its `Transform` poses
+them), each snapped to the nearest node within `snap_radius` (`0.75`); an end that finds none leaves the
+link out and warns `L4145`. The edge costs the 3D distance between the nodes plus `cost` metres; `kind` is
+free text for your game.
+
+`nav_path` and routed agents plan across links (`NavPath.links` lists the waypoints where a traversal
+starts). A walker that reaches a link start stops: `NavRoute.status = at_link`, `NavRoute.link = Some(link
+entity)`, velocity exactly zero. **You play the traversal and move the body to the link's end, then call
+`nav_link_done(world, agent)`**; the route continues from there (`L4146` if the agent is not `at_link`).
+The engine never moves the body.
+
+- Disabling or removing a link, or moving its ends off the nodes, replans the routes ahead of it (in both
+  `replan` modes). An `at_link` route is never replanned until `nav_link_done`.
+- The link table is derived and rebuilt every `nav_update`. Flow fields (agents with only a `target`) ignore
+  links. A scene with no `NavLink` plans and hashes as before.
 
 ## Feeding the motor
 
@@ -158,3 +177,4 @@ Put the motors on a layer that ignores itself, so they don't block each other. N
 - `ludion docs patrol` — guards that walk `kind: patrol` routes as nav legs.
 - `ludion docs components` — the `NavAgent`, `NavSteering`, `NavGoal` and `NavRoute` rows.
 - `cargo run -p ludion --example nav_path` — a wall between an agent and its goal.
+- `cargo run -p ludion --example nav_link` — a ladder between two floors.

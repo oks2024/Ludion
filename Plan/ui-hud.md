@@ -1,9 +1,11 @@
 # Plan: HUD motion and shapes — tweens, world anchors, rotation, clipping (Neon Shroud request 0020)
 
-> Status: **Waves 1–2 mechanized (2026-11-18)** — `UiTween` and `UiWorldAnchor`, resolved in `extract`
+> Status: **Waves 1, 2, 4a mechanized (2026-11-18)** — `UiGroup` (`group`, `fill_group`; scale, opacity,
+> visibility composed through up to 8 levels; CPU only, only the component schema snapshot moved);
+> `UiTween` and `UiWorldAnchor`, resolved in `extract`
 > (`ui/hud.rs`; the component and schema snapshots moved once, no golden, replay or protocol hash);
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
-> component schema snapshot moved). Waves 3–7 are recorded below and not started. Owed: the
+> component schema snapshot moved). Waves 3, 4b and 5–7 are recorded below and not started. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
 > marker (jitter under `present_interpolation`, decision 8).
 
@@ -86,6 +88,34 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 17. **Pure twins:** `ludion_engine::ui::nine_slice(rect_px, uv, region_texels, &UiSlice, pixel_scale) ->
     NineSlice` and `ludion_engine::ui::sub_uv(region, uv_rect)`, re-exported from `ludion::math`.
 
+18. **`UiGroup` fields:** `anchor`, `offset`, `size` (defaults as `UiRect`: top_left, `[0,0]`, `[100,100]`),
+    `scale: f32` (default 1, skipped at 1), `opacity: f32` (default 1, skipped at 1), `visible: bool` (default
+    true, skipped when true), `group: Option<EntityId>` (nesting). It draws nothing. `rotation` arrives with W3,
+    `clip` with W4b (both recorded as request differences).
+19. **`group` field** on `UiRect`, `UiText`, `UiList` and `UiGroup`: an optional entity ref, skipped when none.
+    The scene range check, `scene.save` remap and the presentation rule (`L1036`) come free from the marker.
+    `UiRect.fill_group: bool` (skipped when false) covers the group's box, as `fill` covers the canvas.
+20. **Resolution = canvas resolve + a translation.** Resolving against a box `B = [bx, by, bw, bh]` px instead of
+    the canvas differs only by `group_delta(anchor, B, viewport) = [bx + f.x*(bw - cw), by + f.y*(bh - ch)]`
+    with `f` the anchor fraction and `cw`, `ch` the canvas in px. No resolve function changes: the element
+    resolves and emits as today, then its instances move by `group_delta` (`ludion::math::group_delta`).
+21. **Group transform.** Each group resolves to a box in one shared layout space (`resolve_ui_rect` with the
+    tween's offset and size, plus `group_delta` against the parent's box; a top-level group's `UiWorldAnchor`
+    adds its translation) and an affine `p' = p*scale + offset`:
+    `affine(G) = affine(parent) o scale_about(centre(box), G.scale * tween scale)`. `opacity(G)` is the
+    product down the chain, `visible(G)` the conjunction. A child moves by `group_delta` into the box, takes its
+    own tween scale, then `affine(G)` and `opacity(G)`; an invisible group removes its instances.
+22. **Order and composition.** `order` stays global; a group never reorders children. A `UiWorldAnchor` on a
+    grouped element or a nested group is skipped with `L2300` (anchor the outermost group). `fill: true`
+    ignores `group` and `fill_group` (`L1617`). A `color` tween track on a group is `L2300`.
+23. **Depth and cycles.** A chain is at most 8 groups. A cycle is `L1615` and a deeper chain `L1616` (errors,
+    from `check-scene`). At runtime the element draws ungrouped with the degraded warning `L2302` (a dead
+    entity, one without `UiGroup`, a cycle or a chain past 8). `check-scene` also reports a static `group`
+    ref to an entity without `UiGroup` as `L2302`.
+24. **Validation codes:** `L1614` (error) `UiGroup.scale` non-finite or <= 0, `opacity` non-finite or outside
+    `[0,1]`; `size` reuses `L1118`. `L1617` (warning) `fill_group` without `group`, or `fill` beside
+    `group`/`fill_group`.
+
 ## Waves
 
 - **W1 — `UiTween`, `UiWorldAnchor`, resolved in extract.** CPU-only; the pass lives in
@@ -97,8 +127,12 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
   without the fields extracts byte-identically.
 - **W3 — rotation and `UiShape`.** Needs the renderer: a new instance and `ui_shape.wgsl`; waits for
   the renderer lock of the extract wedge.
-- **W4 — `UiGroup`:** origin, scale, opacity and visibility; then the fragment clip and `math::ui_hit`,
-  which walks groups, tweens and anchors.
+- **W4a — `UiGroup`:** origin, scale, opacity and visibility, CPU only (decisions 18-24;
+  `ui/group.rs`, `hud.rs::post`). Docs `ui-groups`; example `ui_groups`. An element without `group`
+  extracts byte-identically.
+- **W4b — the fragment clip and `math::ui_hit`:** a `UiInstance` field on both variants,
+  `ui_rect.wgsl`/`ui_text.wgsl`, the `ui-groups` gallery golden; `ui_hit` walks groups, tweens, anchors
+  and the clip.
 - **W5 — text outline and shadow** (SDF, and the dilation fallback for the bitmap face).
 - **W6 — `UiRadial` and `UiRadialNav`,** with the 1/2/8-thread replay and the snapshot test.
 - **W7 — anchor blend keys under interpolation, `rotate_toward`, `distance.scale`, `camera`.**
@@ -107,11 +141,12 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 
 Request amendments 1–7; the 12-o'clock clockwise angle convention (W3); the centre pivot for scale;
 the `real` default clock; the separate `UiEase`; the interpolation gap (decision 8); W2: `uv_rect` beside `slice` warns and `slice` wins, stretch-only
-edges, the proportional texel clamp rather than an error.
+edges, the proportional texel clamp rather than an error; W4a: the 8-level cap, `order` global (no block sort),
+a world anchor only on the outermost group, `fill` ignoring `group`.
 
 ## Out of scope (triggers recorded)
 
-`UiShape`, rotation, `UiGroup`/clip, nine-slice edge tiling (trigger: frame art that visibly breaks
+`UiShape`, rotation, the group `clip` (W4b), nine-slice edge tiling (trigger: frame art that visibly breaks
 when stretched), slicing `UiList`/`UiText`, text outline/shadow, `UiRadial`,
 `math::ui_hit`, anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see

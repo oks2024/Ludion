@@ -139,9 +139,45 @@ fn bounds_json_prints_one_object() {
     assert_eq!(
         value["layers"],
         serde_json::json!([
-            { "name": "default", "ignores": ["sensor"] },
-            { "name": "dummy", "ignores": ["dummy"] },
-            { "name": "sensor", "ignores": ["default"] },
+            { "name": "default", "ignores": ["sensor"], "query_only": 0 },
+            { "name": "dummy", "ignores": ["dummy"], "query_only": 0 },
+            { "name": "sensor", "ignores": ["default"], "query_only": 0 },
+        ])
+    );
+}
+
+/// `--bounds` appends `(N query-only)` to a layer's line only when entities list it in `QueryLayers`.
+#[test]
+fn bounds_text_shows_query_only_counts() {
+    let output = run_check_scene_args("layers-query-only.yaml", &["--bounds"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines[..4],
+        [
+            "layers:",
+            "  default: ignores sensor",
+            "  dummy: ignores dummy (3 query-only)",
+            "  sensor: ignores default (1 query-only)",
+        ],
+        "stdout was: {stdout}"
+    );
+}
+
+/// Under `--json` every layer carries `query_only`, zero included.
+#[test]
+fn bounds_json_shows_query_only_counts() {
+    let output = run_check_scene_args("layers-query-only.yaml", &["--bounds", "--json"]);
+    assert!(output.status.success());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout is one JSON object");
+    assert_eq!(
+        value["layers"],
+        serde_json::json!([
+            { "name": "default", "ignores": ["sensor"], "query_only": 0 },
+            { "name": "dummy", "ignores": ["dummy"], "query_only": 3 },
+            { "name": "sensor", "ignores": ["default"], "query_only": 1 },
         ])
     );
 }

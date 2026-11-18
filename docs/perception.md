@@ -15,7 +15,7 @@ guard's route is `ludion docs patrol`.
 3. Read `world.resource::<PerceptionResults>()`: `sight(perceiver)` (a slice), `samples()`, `zone_facing(perceiver, zone)`.
 4. `ludion check-scene` validates both components; `ludion explain L1570` for a refusal.
 
-Results are rebuilt every tick, sorted `(perceiver, zone, target)`, identical at any thread count, and never hashed or snapshotted. With no config the system does nothing, and a world without the components hashes byte-identically.
+Results are rebuilt every tick, sorted `(perceiver, zone, target)`, identical at any thread count, and never hashed or snapshotted (carried samples, below, are). With no config the system does nothing, and a world without the components hashes byte-identically.
 
 **Freshness:** transforms are current; line of sight reads the last completed physics step. A sweep reads gameplay time, so a held `GameClock` freezes it.
 
@@ -168,6 +168,22 @@ Declare the kinds on the config: `PerceptionConfig { noise_kinds, surface_noise:
 - **Codes.** `L1575` bad `NoiseZone`; `L1576` bad `hearing`; `L1577` (warning, once) `emit_noise` dropped a non-finite or negative `at`, `radius` or `loudness`; an undeclared `kind` is `L1572`.
 - A world that never emits and has no `NoiseZone` hashes as before.
 
+## Budget and stagger
+
+```yaml
+Perceiver:
+  period_ticks: 3        # evaluate sight every 3rd tick (default 1; 0 is L1570)
+```
+
+`PerceptionConfig { max_sight_rays_per_tick: Some(2048), .. }` caps the line-of-sight rays per tick (`None`, the default, is no cap; 2048 is the recommended value; `Some(0)` is `L4220`).
+
+- **Stagger.** A perceiver never evaluated waits for its phase (`tick % period == entity index % period`); after that it is due `period` ticks after its last evaluation. One deferred before its first evaluation gets `PerceiverStatus.evaluated_tick` one period back, so it stays due every tick until served.
+- **Budget.** Due perceivers are served in id order from the one after `PerceptionState.sight_cursor`, wrapping. A perceiver's rays are its points in a wedge with a non-empty `blocked_by`. The first one served is always served, even over the cap; the first that does not fit stops the pass and every later one is deferred. A deferred perceiver stays due, so every one is served in turn.
+- **Carried samples.** A perceiver not evaluated this tick keeps its last samples, with their old `evaluated_tick`, in `results.sight(..)`. `zone_facing` is current every tick (it costs no rays).
+- **Counts.** `results.rays_cast()` (re-casts included) and `results.deferred()` (due, not served, sorted); `engine.describe` shows them under `perception`.
+- **`L4221`** (warning, once): a perceiver has waited over four periods for a turn. Raise the budget or the `period_ticks` of idle guards.
+- **Hashed state.** Carried samples are `SightSampleRecord` entities, one per `(perceiver, zone, target)`, and `PerceiverStatus { evaluated_tick }` rides the perceiver. They exist only for a perceiver with `period_ticks > 1`, or for every perceiver when a budget is set, and despawn with it. A world with neither hashes as before.
+
 ## Cover recipe
 
 Declare layers `wall`, `cover_low`, `cover_high`, `cover_overhead` under `physics.layers` and put props on them. One target per posture, each with a point at its height:
@@ -185,8 +201,10 @@ Low cover hides crouch and prone from a ray that passes through it; high cover h
 - **An empty `blocked_by` means nothing can block the point:** no ray is cast and it is seen through walls. (An include-less physics filter would hit everything; the engine never builds one.)
 - A world with no `PhysicsWorld` (no colliders) casts no rays: every in-wedge point is seen.
 - A facing never `look`s: the zone follows the entity's rotation, so a body that never turns sees only along its start direction.
-- Results are not hashed or snapshotted; a restored world fills them on the next tick. Records are, because they are entities.
+- Results are not hashed or snapshotted; a restored world fills them on the next tick. Records are, because they are entities (so are `SightSampleRecord`s).
 - Records are runtime entities: `scene.save` of a *running* world writes them like any spawned entity. A dead source keeps its record until it ages out.
+- **A staggered or deferred guard's `sensed_now` blinks:** only fresh samples refresh memory, so `sensed_now` is false on ticks the guard is not evaluated. Read `visible` and `evaluated_tick` from the results, or `last_sensed_tick` from the record.
+- **A ray budget makes sight hashed state** (`SightSampleRecord`, `PerceiverStatus`, the cursor): turning it on moves the world hash and a replay's.
 - A perceiver never sees itself: a target equal to the perceiver is skipped.
 - An empty `sound_occluder_layers` means no occlusion, not "everything occludes".
 - Surface multipliers are surface *names* in the perception config, not a physics property.

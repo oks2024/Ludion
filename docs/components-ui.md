@@ -16,6 +16,7 @@ are `ludion docs screen-ui` and `ludion docs ui-list`.
 | `UiList` | `anchor`/`offset`/`title`/`items: [{text, enabled}]` (empty — draws nothing)/`selected: u32`/`max_visible: u32` (`0` = unlimited — windows the drawn items around `selected`)/`size: f32` (`24.0`, `L1118`)/`line_spacing`/`padding: f32` (`0.0`/`16.0`, `>=0`)/`color`/`selected_color`/`disabled_color`/`background: [f32;4]`/`font: Option<String>` (as `UiText`)/`order: i32`/`visible: bool` (`true`) — the selectable-menu list; screen-space only. See `ludion docs ui-list` |
 | `UiTween` | `tracks: [{field, from, to, start (0), duration (1 s), ease (linear), repeat (once), clock (real)}]` — closed-form opacity/offset/scale/size/colour animation of a `UiRect`/`UiText`/`UiList` on the same entity; arity, non-finite or negative `duration` is `L1610`, an unsupported field `L2300`. See `ludion docs ui-tweens` |
 | `UiWorldAnchor` | `target: EntityId` (required), `world_offset: [f32;3]`, `show` (`always`/`on_screen`/`off_screen`), `behind` (`clamp`/`hide`), `margin` (`48`), `fade: Option<[near, far]>` — pins the element to a 3D target and clamps it to the screen edge; a bad number is `L1611`. See `ludion docs ui-world-anchor` |
+| `UiGroup` | `anchor`/`offset`/`size` (as `UiRect`), `scale` (`1`, `>0`), `opacity` (`1`, `0..=1`), `visible` (`true`), `group: Option<EntityId>` — draws nothing; `UiRect`/`UiText`/`UiList`/`UiGroup` with `group: <ref>` anchor in its box and take its scale, opacity and visibility; `UiRect.fill_group` covers the box. A bad `scale`/`opacity` is `L1614`, a cycle `L1615`, a chain past 8 `L1616`, an ignored field `L1617`, an unresolved group `L2302`. See `ludion docs ui-groups` |
 | `Text` | `text: String` (`""`), `size: f32` (`1.0`), `color: [f32;4]` (white; RGB `>=0`, alpha `0..=1`: `L1263`), `font: Option<String>` (as `UiText`) |
 
 **World `Text` draws on top of the scene with no depth test, in scene order** — a wall in front of a label does not hide it, and two overlapping labels stack by entity order, not by distance. Fog, beams and DoF use the label's own distance, so a label seen through a wall is fogged as far as it actually is.
@@ -27,4 +28,5 @@ are `ludion docs screen-ui` and `ludion docs ui-list`.
 - `ludion docs screen-ui` — the reference canvas, anchors, and draw order for `UiRect`/`UiText`.
 - `ludion docs ui-list` — `UiList`: cursor, activation, and windowing.
 - `ludion docs ui-tweens`, `ludion docs ui-world-anchor` — HUD motion components.
+- `ludion docs ui-groups` — `UiGroup` and the `group` field.
 - `ludion docs fonts` — baked faces and the `font` field.

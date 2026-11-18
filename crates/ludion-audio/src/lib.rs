@@ -431,6 +431,9 @@ impl Voice {
 enum LoopKey {
     Entity(EntityId),
     Sound(u32),
+    /// An attached voice (`AudioMessage::VoiceStart`): a one-shot kept in the table so it can be
+    /// synced and stopped by id.
+    Voice(u64),
 }
 
 /// What the sink thread hands the real-time callback. Decoding and resampling have already happened
@@ -442,6 +445,12 @@ enum VoiceCommand {
     LoopSync { id: LoopKey, voice: Voice },
     /// Fade out and drop the loop under this id, if any.
     LoopStop(LoopKey),
+    /// Start a one-shot under a keyed id so it can be synced and stopped while it plays.
+    VoiceStart { id: LoopKey, voice: Voice },
+    /// Slew the keyed voice to a new gain and pan, if it is still playing.
+    VoiceSync { id: LoopKey, gain: f32, pan: f32 },
+    /// Fade the keyed voice out over `frames` device frames, then drop it.
+    VoiceStop { id: LoopKey, frames: usize },
     /// Fade out every loop and the music.
     StopAllLoops,
     /// Begin a music play: chunks of this generation are the ones to mix.
@@ -1164,6 +1173,43 @@ impl Router {
                 }
                 VoiceCommand::LoopSync { id: key, voice }
             }
+            AudioMessage::VoiceStart {
+                id,
+                sound,
+                gain,
+                pan,
+                category,
+            } => {
+                let samples = resolve(
+                    &mut self.cache,
+                    &mut self.superseded,
+                    &self.content_root,
+                    &sound,
+                    self.out_rate,
+                    self.out_channels,
+                    self.recheck,
+                )?;
+                VoiceCommand::VoiceStart {
+                    id: LoopKey::Voice(id.0),
+                    voice: Voice {
+                        samples,
+                        pos: 0,
+                        envelope: Envelope::at(gain),
+                        pan: Panner::at(sane_pan(pan)),
+                        category,
+                        looping: false,
+                    },
+                }
+            }
+            AudioMessage::VoiceSync { id, gain, pan } => VoiceCommand::VoiceSync {
+                id: LoopKey::Voice(id.0),
+                gain,
+                pan: sane_pan(pan),
+            },
+            AudioMessage::VoiceStop { id, fade_frames } => VoiceCommand::VoiceStop {
+                id: LoopKey::Voice(id.0),
+                frames: self.mix_frames(fade_frames),
+            },
             AudioMessage::LoopStop { id } => {
                 let key = self.key(id);
                 if self.declared.remove(&key).is_some_and(|d| d.playing) {
@@ -1479,7 +1525,9 @@ fn skipped(diagnostic: Diagnostic, sound: &str) -> Diagnostic {
 /// The decode diagnostic of the named file.
 pub fn check_message(content_root: &Path, message: &AudioMessage) -> Result<(), Diagnostic> {
     match message {
-        AudioMessage::OneShot(AudioEvent { sound, .. }) | AudioMessage::LoopSync { sound, .. } => {
+        AudioMessage::OneShot(AudioEvent { sound, .. })
+        | AudioMessage::LoopSync { sound, .. }
+        | AudioMessage::VoiceStart { sound, .. } => {
             load_wav(ludion_assets::AssetRoot::content(content_root), sound).map(drop)
         }
         AudioMessage::MusicPlay { track, .. } => music::check_track(content_root, track),
@@ -1620,6 +1668,29 @@ impl Mixer {
             VoiceCommand::LoopStop(id) => {
                 if let Some(voice) = self.loops.remove(&id) {
                     self.retire(voice);
+                }
+            }
+            VoiceCommand::VoiceStart { id, voice } => {
+                if !self.loops.contains_key(&id)
+                    && self.live() >= self.limits.total
+                    && !self.steal(None)
+                {
+                    return;
+                }
+                if let Some(displaced) = self.loops.insert(id, voice) {
+                    self.retire(displaced);
+                }
+            }
+            VoiceCommand::VoiceSync { id, gain, pan } => {
+                if let Some(voice) = self.loops.get_mut(&id) {
+                    voice.envelope.slew_to(gain, self.ramp_frames);
+                    voice.pan.envelope.slew_to(pan, self.ramp_frames);
+                }
+            }
+            VoiceCommand::VoiceStop { id, frames } => {
+                if let Some(voice) = self.loops.remove(&id) {
+                    let room = 2 * self.limits.total;
+                    retire(&mut self.voices, room, frames.max(self.ramp_frames), voice);
                 }
             }
             VoiceCommand::StopAllLoops => {
@@ -1945,8 +2016,9 @@ fn collapse_simultaneous(arriving: &mut Vec<Voice>, voice: Voice, limit: usize) 
 /// Sums every active voice into `scratch` (resized to `samples` and zeroed first) through its bus's
 /// per-frame level in `levels` (bus `b` owns `b * MIX_BLOCK_FRAMES ..`), advancing each voice's
 /// cursor and envelope, and drops the voices that ran out of samples or finished fading out. A voice
-/// on a `held` bus is skipped, cursor and envelope kept. A loop in the table is never dropped here —
-/// only a stop removes one.
+/// on a `held` bus is skipped, cursor and envelope kept. A looping voice in the table is never
+/// dropped here — only a stop removes one; a keyed attached voice (not looping) leaves the table
+/// when it ends.
 ///
 /// The loop table's iteration order varies per process, so with three or more loops the sum can
 /// differ in its last bits between runs; audio is outside every gate. The table is a `HashMap`
@@ -1970,11 +2042,10 @@ fn mix_into(
         }
         voice.advance_into(scratch, channels, bus_levels(levels, voice, frames))
     });
-    for voice in loops.values_mut() {
-        if !is_held(held, voice) {
-            voice.advance_into(scratch, channels, bus_levels(levels, voice, frames));
-        }
-    }
+    loops.retain(|_, voice| {
+        is_held(held, voice)
+            || voice.advance_into(scratch, channels, bus_levels(levels, voice, frames))
+    });
 }
 
 /// Whether `voice`'s bus is held.
@@ -2732,6 +2803,92 @@ mod tests {
         mixer.apply(VoiceCommand::LoopStop(bed()));
         assert_eq!(render(&mut mixer, 6), [0.375, 0.25, 0.125, 0.0, 0.0, 0.0]);
         assert!(mixer.loops.is_empty() && mixer.voices.is_empty());
+    }
+
+    /// A voice start command under keyed voice `n`, as the router would send it.
+    fn voice_start(n: u64, samples: &Arc<Vec<f32>>, gain: f32) -> VoiceCommand {
+        VoiceCommand::VoiceStart {
+            id: LoopKey::Voice(n),
+            voice: one_shot(samples, gain, AudioCategory::Voice),
+        }
+    }
+
+    #[test]
+    fn a_keyed_voice_plays_once_and_leaves_the_table_when_it_ends() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(voice_start(0, &constant(0.5, 3), 1.0));
+        assert_eq!(render(&mut mixer, 2), [0.5, 0.5]);
+        assert_eq!(mixer.loops.len(), 1);
+        assert_eq!(render(&mut mixer, 2), [0.5, 0.0]);
+        assert!(mixer.loops.is_empty() && mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn a_voice_sync_moves_the_level_without_restarting_the_cursor() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(voice_start(0, &constant(0.5, 64), 1.0));
+        render(&mut mixer, 2);
+        mixer.apply(VoiceCommand::VoiceSync {
+            id: LoopKey::Voice(0),
+            gain: 0.5,
+            pan: 0.0,
+        });
+        let out = render(&mut mixer, 8);
+        assert!(out[0] < 0.5, "the level starts to slew: {out:?}");
+        assert!((out[7] - 0.25).abs() < 1e-6, "and settles: {out:?}");
+        assert_eq!(mixer.loops[&LoopKey::Voice(0)].pos, 10);
+    }
+
+    #[test]
+    fn a_voice_sync_for_an_ended_voice_is_ignored() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(VoiceCommand::VoiceSync {
+            id: LoopKey::Voice(7),
+            gain: 0.5,
+            pan: 0.0,
+        });
+        assert!(mixer.loops.is_empty());
+    }
+
+    #[test]
+    fn a_voice_stop_fades_out_over_the_given_frames() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(voice_start(0, &constant(0.5, 64), 1.0));
+        render(&mut mixer, 2);
+        mixer.apply(VoiceCommand::VoiceStop {
+            id: LoopKey::Voice(0),
+            frames: 8,
+        });
+        assert!(mixer.loops.is_empty(), "the voice leaves the table at once");
+        let out = render(&mut mixer, 12);
+        assert!(out[0] < 0.5 && out[0] > 0.0, "{out:?}");
+        assert!(out.windows(2).all(|pair| pair[1] <= pair[0]), "{out:?}");
+        assert!(out[4] > 0.0, "slower than the 4-frame ramp: {out:?}");
+        assert_eq!(out[11], 0.0);
+        assert!(mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn stop_all_loops_retires_a_keyed_voice() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(voice_start(0, &constant(0.5, 64), 1.0));
+        assert_eq!(render(&mut mixer, 2), [0.5, 0.5]);
+        mixer.apply(VoiceCommand::StopAllLoops);
+        assert_eq!(render(&mut mixer, 6), [0.375, 0.25, 0.125, 0.0, 0.0, 0.0]);
+        assert!(mixer.loops.is_empty() && mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn a_voice_whose_sound_will_not_load_routes_to_nothing() {
+        let mut rig = rig(scratch_root("voice-missing"));
+        let message = AudioMessage::VoiceStart {
+            id: ludion_core::audio::VoiceId(0),
+            sound: "missing.wav".to_string(),
+            gain: 1.0,
+            pan: 0.0,
+            category: AudioCategory::Voice,
+        };
+        assert!(rig.router.route(message).is_none());
     }
 
     #[test]

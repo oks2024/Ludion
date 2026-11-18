@@ -667,6 +667,9 @@ mod tests {
             shape: GroundMarkerShape::Disc { radius: 2.0 },
             model,
             color: [1.0; 4],
+            inner_color: [1.0; 4],
+            style: crate::scene::GroundMarkerStyle::default(),
+            flicker_seed: 0,
         }
     }
 

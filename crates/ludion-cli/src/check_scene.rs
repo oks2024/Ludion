@@ -451,29 +451,69 @@ fn resolved_layers(scene: &Scene) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
+/// How many entities list each layer in `QueryLayers`, by layer name (an entity counts once per
+/// layer).
+fn query_only_counts(scene: &Scene) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for entity in &scene.entities {
+        let Some((_, value)) = entity
+            .components
+            .iter()
+            .find(|(name, _)| name == "QueryLayers")
+        else {
+            continue;
+        };
+        let Some(layers) = value.get("layers").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let mut names: Vec<&str> = layers
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        for name in names {
+            *counts.entry(name.to_string()).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
 /// The `--bounds` layer report for a scene: a `layers:` header and one line per layer, or one line
 /// saying none are declared.
 fn render_layer_matrix(scene: &Scene) -> String {
     if scene.physics.as_ref().is_none_or(|p| p.layers.is_empty()) {
         return "layers: none declared — every collider collides with every other\n".to_string();
     }
+    let counts = query_only_counts(scene);
     let mut out = String::from("layers:\n");
     for (name, ignored) in resolved_layers(scene) {
+        let suffix = match counts.get(&name) {
+            Some(n) if *n > 0 => format!(" ({n} query-only)"),
+            _ => String::new(),
+        };
         if ignored.is_empty() {
-            out.push_str(&format!("  {name}: collides with every layer\n"));
+            out.push_str(&format!("  {name}: collides with every layer{suffix}\n"));
         } else {
-            out.push_str(&format!("  {name}: ignores {}\n", ignored.join(", ")));
+            out.push_str(&format!(
+                "  {name}: ignores {}{suffix}\n",
+                ignored.join(", ")
+            ));
         }
     }
     out
 }
 
-/// The `layers` field under `--bounds --json`: `[{"name":…,"ignores":[…]}]`, resolved and
-/// symmetric, in matrix order.
+/// The `layers` field under `--bounds --json`:
+/// `[{"name":…,"ignores":[…],"query_only":N}]`, resolved and symmetric, in matrix order.
 fn layers_json(scene: &Scene) -> serde_json::Value {
+    let counts = query_only_counts(scene);
     resolved_layers(scene)
         .into_iter()
-        .map(|(name, ignores)| serde_json::json!({ "name": name, "ignores": ignores }))
+        .map(|(name, ignores)| {
+            let query_only = counts.get(&name).copied().unwrap_or(0);
+            serde_json::json!({ "name": name, "ignores": ignores, "query_only": query_only })
+        })
         .collect()
 }
 

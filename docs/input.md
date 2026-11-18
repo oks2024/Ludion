@@ -267,6 +267,28 @@ buttons release with their axes) and releases held buttons. These releases are o
 `input.inject` events, so a replay reproduces them. A game cannot yet *see* focus or pad connection
 (no pause-on-focus-loss signal); a game that needs one would get it as new recorded events.
 
+## Rumble — `Rumble`
+
+```rust
+world.resource_mut::<Rumble>().unwrap().play(RumbleEffect { low: 0.8, high: 0.3, duration: 0.18 });
+world.resource_mut::<Rumble>().unwrap().stop_all();
+```
+
+`low` drives the strong motor, `high` the weak one, `duration` is seconds. Values clamp (motors to
+0..=1, `duration` to 0..=2); a request with a zero duration or both motors at 0 is dropped; a non-finite
+value counts as 0 and reports `L4279`. `stop_all()` discards the earlier plays of that tick.
+
+**The audio contract.** The outbox drains at the frame boundary to the window host's pad thread. It is
+never hashed, snapshotted, recorded or on the wire, and a replay re-issues the requests by re-running
+the systems. Headless and in the out-of-process viewer nothing listens, so a game never branches on a pad.
+
+**On the pad.** Overlapping effects take the maximum per motor. A request plays at most 2 s. Rumble stops
+when the window loses focus and when the primary pad disconnects. `Engine::set_rumble_intensity(0..=1)`
+scales every request (0 drops them); the settings menu binds the player's choice to it.
+
+**Backends.** Windows plays through gilrs force feedback. macOS is silent: gilrs's macOS force feedback is
+a stub. The example `cargo run -p ludion --example rumble` presses a key headless and prints the command.
+
 ## Aim recipe — cursor/stick to the ground plane
 
 To point something at where the cursor (or a

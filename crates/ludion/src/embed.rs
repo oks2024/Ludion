@@ -306,6 +306,11 @@ pub struct Embedded {
     render_fault: Receiver<Diagnostic>,
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     cursor_lock: Receiver<bool>,
+    /// The engine's rumble commands for the pad thread, and the sender the host stops them with.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    rumble: Receiver<ludion_core::rumble::RumbleCommand>,
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    rumble_stop: Sender<ludion_core::rumble::RumbleCommand>,
     /// Set by the boot thread once it serves its intake; until then a transition is queued, not awaited.
     running: Arc<AtomicBool>,
     scene: PathBuf,
@@ -334,6 +339,8 @@ struct Boot {
     render_fault: Sender<Diagnostic>,
     /// The engine's channel for pointer-lock changes, armed in `run_boot`.
     cursor_lock: Sender<bool>,
+    /// The engine's channel for rumble commands, armed in `run_boot`.
+    rumble: Sender<ludion_core::rumble::RumbleCommand>,
 }
 
 /// How the boot thread gets its engine.
@@ -482,6 +489,8 @@ impl Embedded {
 
         let (fault_tx, render_fault) = crossbeam_channel::bounded::<Diagnostic>(1);
         let (lock_tx, cursor_lock) = crossbeam_channel::unbounded::<bool>();
+        let (rumble_tx, rumble) = crossbeam_channel::unbounded();
+        let rumble_stop = rumble_tx.clone();
 
         let running = Arc::new(AtomicBool::new(false));
         let boot = Boot {
@@ -496,6 +505,7 @@ impl Embedded {
             running: running.clone(),
             render_fault: fault_tx,
             cursor_lock: lock_tx,
+            rumble: rumble_tx,
         };
         // The scene load used to run on `main`'s stack; keep its headroom on the boot thread.
         let handle = std::thread::Builder::new()
@@ -523,6 +533,8 @@ impl Embedded {
             ended,
             render_fault,
             cursor_lock,
+            rumble,
+            rumble_stop,
             running,
             scene,
             boot: handle,
@@ -560,6 +572,20 @@ impl Embedded {
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn cursor_lock_requests(&self) -> Receiver<bool> {
         self.cursor_lock.clone()
+    }
+
+    /// Where the engine sends its rumble commands, for the window host's pad thread.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    pub(crate) fn rumble_commands(&self) -> Receiver<ludion_core::rumble::RumbleCommand> {
+        self.rumble.clone()
+    }
+
+    /// Stops every playing rumble effect without going through the sim (focus loss).
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    pub(crate) fn stop_rumble(&self) {
+        let _ = self
+            .rumble_stop
+            .send(ludion_core::rumble::RumbleCommand::StopAll);
     }
 
     /// The surface's present handle, once the boot has attached it: the frame size the last present
@@ -865,6 +891,7 @@ fn run_boot(boot: Boot) -> bool {
         running,
         render_fault,
         cursor_lock,
+        rumble,
     } = boot;
 
     let mut engine = match prep {
@@ -941,6 +968,7 @@ fn run_boot(boot: Boot) -> bool {
 
     engine.arm_render_fault_notify(render_fault);
     engine.set_cursor_lock_sender(cursor_lock);
+    engine.set_rumble_sender(rumble);
 
     // Before any renderer exists, and before a listener moves the engine onto its own sim thread.
     let attached = surface.is_some();

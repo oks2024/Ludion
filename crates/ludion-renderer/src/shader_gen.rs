@@ -4680,6 +4680,10 @@ pub const GROUND_MARKER_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (4, wgpu::VertexFormat::Float32x4),
     (5, wgpu::VertexFormat::Float32x4),
     (6, wgpu::VertexFormat::Float32x4),
+    (7, wgpu::VertexFormat::Float32x4),
+    (8, wgpu::VertexFormat::Float32x4),
+    (9, wgpu::VertexFormat::Float32x4),
+    (10, wgpu::VertexFormat::Float32x4),
 ];
 
 /// `mesh.wgsl`'s `vs_main` `@location` inputs, in location order.
