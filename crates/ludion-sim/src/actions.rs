@@ -869,6 +869,9 @@ pub struct InputGesture {
     /// Ticks until a deferred tap fires.
     #[serde(skip_serializing_if = "Option::is_none")]
     pending: Option<u32>,
+    /// Held when the layer first resolved, with no down edge that tick: ignored until released.
+    #[serde(skip_serializing_if = "is_false")]
+    latched: bool,
 }
 
 /// The gesture state of every tracked input: what a snapshot carries so a hold or a pending tap
@@ -956,6 +959,9 @@ pub struct Actions {
     outs: Vec<GestureOut>,
     reads: Vec<ActionOut>,
     unknown: Mutex<Unknown>,
+    /// Whether the layer has resolved a tick (or been given a state); a fresh layer latches inputs
+    /// already held on its first tick.
+    primed: bool,
 }
 
 impl Actions {
@@ -969,6 +975,7 @@ impl Actions {
             outs: vec![GestureOut::default(); inputs],
             reads: vec![ActionOut::default(); actions],
             unknown: Mutex::new(Unknown::default()),
+            primed: false,
         }
     }
 
@@ -1009,17 +1016,31 @@ impl Actions {
             kept.insert(input, gesture);
         }
         self.state = ActionState(kept);
+        self.primed = true;
         Ok(())
     }
 
     /// Advances every gesture one tick against `input` and recomputes every action's reads.
     /// Call exactly once per tick, after the tick's events are applied.
+    ///
+    /// On a layer's first tick, an input already at level with no down edge that tick (a key held
+    /// across a load or restore) is **latched**: it fires nothing and reads inactive until released.
+    /// Wheel steps are never latched.
     pub fn resolve(&mut self, input: &InputState) {
         let ticks = self.map.ticks;
+        let first = !self.primed;
+        self.primed = true;
         for (at, physical) in self.map.inputs.iter().enumerate() {
             let flags = self.map.flags[at];
             let gesture = self.state.0.entry(*physical).or_default();
-            let now = read_level(*physical, gesture.down, input);
+            let level = read_level(*physical, gesture.down, input);
+            if first && level && !has_down_edge(*physical, input) {
+                gesture.latched = true;
+            }
+            if !level {
+                gesture.latched = false;
+            }
+            let now = level && !gesture.latched;
             // A wheel step is a one-tick press: a notch on consecutive ticks is a release then a
             // press, so a continuous scroll fires `pressed` every tick.
             if now
@@ -1147,6 +1168,17 @@ fn read_level(physical: PhysicalInput, was_down: bool, input: &InputState) -> bo
         }
         PhysicalInput::WheelUp => input.mouse().wheel()[1] > 0.0,
         PhysicalInput::WheelDown => input.mouse().wheel()[1] < 0.0,
+    }
+}
+
+/// Whether the input went down this tick. Triggers have no edge; wheel steps count as one.
+fn has_down_edge(physical: PhysicalInput, input: &InputState) -> bool {
+    match physical {
+        PhysicalInput::Key(k) => input.was_pressed(k),
+        PhysicalInput::Mouse(b) => input.mouse().was_pressed(b),
+        PhysicalInput::Pad(b) => input.gamepad().was_pressed(b),
+        PhysicalInput::Trigger { .. } => false,
+        PhysicalInput::WheelUp | PhysicalInput::WheelDown => true,
     }
 }
 

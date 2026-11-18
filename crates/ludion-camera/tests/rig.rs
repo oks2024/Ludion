@@ -1,10 +1,11 @@
 //! The rig pipeline, tick by tick, on hand-built paths.
 
 use ludion_camera::{
-    Blend, BlendCurve, BlendIn, CameraRig, ChaseRig, FirstPersonRig, FollowRig, KickConfig,
-    LookAhead, RigConfig, RigInput, RigMode, RigOutput, Springs, TrackRig, add_fov_kick, add_kick,
-    add_look, add_look_counts, add_trauma, camera_relative, camera_relative_yaw, look_from_counts,
-    orbit_eye, resolved_camera, set_look, snap_rig, step_rig,
+    Blend, BlendCurve, BlendIn, CameraRig, ChaseRig, FirstPersonRig, FollowRig, Framing,
+    KickConfig, LookAhead, Recenter, RigCollision, RigCollisionConfig, RigConfig, RigInput,
+    RigMode, RigOutput, Springs, TrackRig, add_fov_kick, add_kick, add_look, add_look_counts,
+    add_trauma, camera_relative, camera_relative_yaw, look_from_counts, orbit_eye, resolved_camera,
+    set_look, snap_rig, step_rig,
 };
 use ludion_core::math::{euler_xyz_degrees_to_quat, quat_rotate};
 use ludion_core::time::FrameIndex;
@@ -64,6 +65,7 @@ fn tick(rig: &mut CameraRig, path: &PathSampler, target: [f32; 3], frame: u64) -
         dt: DT,
         game_frame: FrameIndex::new(frame),
         camera_fov_y_deg: None,
+        collision: None,
     };
     step_rig(rig, &input).expect("target and path present")
 }
@@ -555,6 +557,7 @@ fn run(held: u64) -> CameraRig {
             dt: DT,
             game_frame: FrameIndex::new(12),
             camera_fov_y_deg: None,
+            collision: None,
         };
         step_rig(&mut rig, &input).unwrap();
         assert_eq!(
@@ -660,6 +663,7 @@ fn no_target_or_no_path_returns_none_and_touches_nothing() {
         dt: DT,
         game_frame: FrameIndex::new(1),
         camera_fov_y_deg: None,
+        collision: None,
     };
     assert_eq!(step_rig(&mut rig, &input), None);
     input.target = Some([0.0; 3]);
@@ -751,6 +755,7 @@ fn fp_tick_dt(rig: &mut CameraRig, target: [f32; 3], frame: u64, game_dt: f32) -
         dt: DT,
         game_frame: FrameIndex::new(frame),
         camera_fov_y_deg: None,
+        collision: None,
     };
     step_rig(rig, &input).expect("target present")
 }
@@ -1521,4 +1526,370 @@ fn the_boom_modes_serialize_and_default_compactly() {
     let value = serde_json::to_value(fp_rig()).unwrap();
     assert!(value["state"].get("pivot").is_none());
     assert!(value["state"].get("pivot_velocity").is_none());
+}
+
+// ── collision, framing and recenter ──────────────────────────────────────────────────────────────
+
+/// An infinite slab of solid between `z0` and `z1`: analytic sphere casts along any direction.
+#[derive(Debug)]
+struct Slab {
+    z0: f32,
+    z1: f32,
+}
+
+impl RigCollision for Slab {
+    fn cast(&self, from: [f32; 3], dir: [f32; 3], max: f32, radius: f32) -> Option<f32> {
+        let (lo, hi) = (self.z0 - radius, self.z1 + radius);
+        if from[2] > lo && from[2] < hi {
+            return Some(0.0);
+        }
+        let entry = if dir[2] > 0.0 && from[2] <= lo {
+            lo
+        } else if dir[2] < 0.0 && from[2] >= hi {
+            hi
+        } else {
+            return None;
+        };
+        let d = (entry - from[2]) / dir[2];
+        (d <= max).then_some(d)
+    }
+}
+
+fn collide_cfg(collision: RigCollisionConfig) -> RigConfig {
+    RigConfig {
+        collision,
+        ..boom_cfg(RigMode::Chase(ChaseRig::default()), 0.0)
+    }
+}
+
+fn on() -> RigCollisionConfig {
+    RigCollisionConfig {
+        enabled: true,
+        ..RigCollisionConfig::default()
+    }
+}
+
+fn tick_with(
+    rig: &mut CameraRig,
+    target: [f32; 3],
+    frame: u64,
+    game_dt: f32,
+    collision: Option<&dyn RigCollision>,
+) -> RigOutput {
+    let input = RigInput {
+        target: Some(target),
+        path: None,
+        game_dt,
+        dt: DT,
+        game_frame: FrameIndex::new(frame),
+        camera_fov_y_deg: None,
+        collision,
+    };
+    step_rig(rig, &input).expect("target present")
+}
+
+fn full_boom() -> f32 {
+    6.0
+}
+
+#[test]
+fn a_hit_pulls_the_boom_in_on_the_same_tick() {
+    let wall = Slab { z0: 3.0, z1: 50.0 };
+    let mut rig = rig_with(collide_cfg(on()));
+    let out = tick_with(&mut rig, [0.0; 3], 0, DT, Some(&wall));
+    let boom = rig.state.boom.expect("pulled in");
+    assert!(boom < full_boom() - 2.0, "{boom}");
+    assert!((dist(out.translation, [0.0; 3]) - boom).abs() < 1e-4);
+    // The eye sphere stays clear of the wall.
+    assert!(out.translation[2] + 0.3 <= 3.0 + 1e-4);
+    assert_eq!(rig.state.boom_hold, 0.15);
+    assert!(!out.stuck);
+    // Aim reports the collided eye; the uncollided one stays in the state.
+    assert_eq!(rig.aim().unwrap().eye, out.translation);
+    assert!(rig.state.eye[2] > 3.0);
+}
+
+#[test]
+fn the_boom_holds_then_eases_back_and_a_held_clock_freezes_the_hold() {
+    let wall = Slab { z0: 3.0, z1: 50.0 };
+    let far = Slab { z0: 90.0, z1: 91.0 };
+    let mut rig = rig_with(collide_cfg(on()));
+    tick_with(&mut rig, [0.0; 3], 0, DT, Some(&wall));
+    let pulled = rig.state.boom.unwrap();
+    // A held clock neither spends the hold nor eases.
+    for _ in 0..30 {
+        tick_with(&mut rig, [0.0; 3], 0, 0.0, Some(&far));
+    }
+    assert_eq!((rig.state.boom, rig.state.boom_hold), (Some(pulled), 0.15));
+    // The hold spends on gameplay time with the boom unchanged...
+    for k in 1..=8 {
+        tick_with(&mut rig, [0.0; 3], k, DT, Some(&far));
+        assert_eq!(rig.state.boom, Some(pulled), "tick {k}");
+    }
+    // ...then it eases back out to the full boom and the state returns to default.
+    let mut last = pulled;
+    let mut grew = false;
+    for k in 9..600 {
+        tick_with(&mut rig, [0.0; 3], k, DT, Some(&far));
+        match rig.state.boom {
+            Some(boom) => {
+                assert!(boom >= last, "monotone recovery");
+                grew |= boom > pulled;
+                last = boom;
+            }
+            None => break,
+        }
+    }
+    assert!(grew);
+    assert_eq!((rig.state.boom, rig.state.boom_hold), (None, 0.0));
+}
+
+#[test]
+fn a_deeper_hit_during_recovery_pulls_in_at_once_and_restarts_the_hold() {
+    let near_wall = Slab { z0: 4.0, z1: 50.0 };
+    let nearer = Slab { z0: 2.0, z1: 50.0 };
+    let mut rig = rig_with(collide_cfg(on()));
+    tick_with(&mut rig, [0.0; 3], 0, DT, Some(&near_wall));
+    let first = rig.state.boom.unwrap();
+    for k in 1..4 {
+        tick_with(&mut rig, [0.0; 3], k, DT, Some(&near_wall));
+    }
+    assert!(rig.state.boom_hold < 0.15);
+    tick_with(&mut rig, [0.0; 3], 4, DT, Some(&nearer));
+    assert!(rig.state.boom.unwrap() < first);
+    assert_eq!(rig.state.boom_hold, 0.15);
+}
+
+#[test]
+fn starting_inside_retries_from_the_target_then_falls_back_and_reports_stuck() {
+    // The pivot sits inside the slab but the target does not: the retry from the target finds the
+    // wall between it and the eye.
+    let slab = Slab { z0: 2.5, z1: 3.5 };
+    let mut rig = rig_with(RigConfig {
+        focus_offset: [0.0, 0.0, 3.0],
+        ..collide_cfg(on())
+    });
+    let out = tick_with(&mut rig, [0.0; 3], 0, DT, Some(&slab));
+    assert!(!out.stuck);
+    let boom = rig.state.boom.expect("pulled in");
+    assert!(boom >= 0.6 && boom < full_boom());
+    // Both inside: the boom holds at `min_distance` and the tick reports stuck.
+    let all = Slab {
+        z0: -100.0,
+        z1: 100.0,
+    };
+    let mut rig = rig_with(collide_cfg(on()));
+    let out = tick_with(&mut rig, [0.0; 3], 0, DT, Some(&all));
+    assert!(out.stuck);
+    assert_eq!(rig.state.boom, Some(0.6));
+    assert!((dist(out.translation, [0.0; 3]) - 0.6).abs() < 1e-4);
+}
+
+#[test]
+fn disabled_collision_is_bit_identical_to_no_collision() {
+    let wall = Slab { z0: 3.0, z1: 50.0 };
+    let mut plain = rig_with(collide_cfg(RigCollisionConfig::default()));
+    let mut disabled = plain.clone();
+    let mut absent = rig_with(collide_cfg(on()));
+    for k in 0..60 {
+        for rig in [&mut plain, &mut disabled, &mut absent] {
+            add_look(rig, 1.5, 0.2);
+        }
+        let target = [k as f32 * 0.05, 0.0, -1.0];
+        let a = tick_with(&mut plain, target, k, DT, None);
+        let b = tick_with(&mut disabled, target, k, DT, Some(&wall));
+        let c = tick_with(&mut absent, target, k, DT, None);
+        assert_eq!((a, a), (b, c));
+    }
+    // `last_applied` carries the authored config, which differs by the enabled flag alone.
+    let json = |rig: &CameraRig| {
+        let mut state = serde_json::to_value(&rig.state).unwrap();
+        state.as_object_mut().unwrap().remove("last_applied");
+        state
+    };
+    assert_eq!(json(&plain), json(&disabled));
+    assert_eq!(json(&plain), json(&absent));
+    assert!(json(&plain).get("boom").is_none());
+}
+
+#[test]
+fn track_collision_casts_from_the_focus() {
+    let path = straight();
+    let wall = Slab {
+        z0: -17.0,
+        z1: -10.0,
+    };
+    let mut rig = rig_with(RigConfig {
+        collision: on(),
+        ..rigid([0.0, 0.0, 4.5])
+    });
+    // Target at z = -20: the focus is on it and the eye 4.5 m behind at z = -15.5, inside the wall.
+    let out = tick(&mut rig, &path, [0.0, 1.0, -20.0], 0);
+    let _ = out;
+    let input = RigInput {
+        target: Some([0.0, 1.0, -20.0]),
+        path: Some(&path),
+        game_dt: DT,
+        dt: DT,
+        game_frame: FrameIndex::new(1),
+        camera_fov_y_deg: None,
+        collision: Some(&wall),
+    };
+    let out = step_rig(&mut rig, &input).unwrap();
+    let boom = rig.state.boom.expect("pulled in");
+    assert!(boom < 4.5);
+    assert!(out.translation[2] + 0.3 <= -17.0 + 1e-3 || out.translation[2] - 0.3 >= -10.0);
+}
+
+fn framed(weight: f32) -> Framing {
+    Framing {
+        weight,
+        pivot_offset: [1.0, 0.5, 0.0],
+        yaw_offset_deg: 20.0,
+        pitch_offset_deg: 5.0,
+        distance: Some(4.0),
+        half_life: 0.12,
+    }
+}
+
+#[test]
+fn framing_at_weight_zero_is_bit_identical_to_no_framing() {
+    let mut plain = chase_rig(ChaseRig::default());
+    let mut zero = chase_rig(ChaseRig::default());
+    zero.framing = framed(0.0);
+    for k in 0..40 {
+        add_look(&mut plain, 2.0, 0.5);
+        add_look(&mut zero, 2.0, 0.5);
+        let target = [k as f32 * 0.1, 0.0, -2.0];
+        assert_eq!(
+            fp_tick(&mut plain, target, k),
+            fp_tick(&mut zero, target, k)
+        );
+    }
+    assert_eq!(plain.state, zero.state);
+}
+
+#[test]
+fn framing_reaches_full_weight_and_returns_to_exact_rest() {
+    let mut rig = chase_rig(ChaseRig::default());
+    fp_tick(&mut rig, [0.0; 3], 0);
+    rig.framing = framed(1.0);
+    for k in 1..400 {
+        fp_tick(&mut rig, [0.0; 3], k);
+    }
+    assert_eq!(rig.state.framing_weight, 1.0);
+    let aim = rig.aim().unwrap();
+    assert!((aim.yaw_deg - 20.0).abs() < 1e-4);
+    assert!((aim.pitch_deg - 25.0).abs() < 1e-4);
+    assert_eq!(rig.state.yaw_deg, 0.0, "the unframed orbit yaw stays");
+    assert!(near(
+        aim.eye,
+        orbit_eye([1.0, 0.5, 0.0], 20.0, 25.0, 4.0),
+        1e-3
+    ));
+    // A framed pivot offset rotates with the orbit yaw.
+    set_look(&mut rig, 90.0, 20.0);
+    fp_tick(&mut rig, [0.0; 3], 401);
+    let aim = rig.aim().unwrap();
+    assert!(near(
+        aim.eye,
+        orbit_eye([0.0, 0.5, -1.0], 110.0, 25.0, 4.0),
+        1e-3
+    ));
+    rig.framing.weight = 0.0;
+    for k in 402..800 {
+        fp_tick(&mut rig, [0.0; 3], k);
+    }
+    assert_eq!(rig.state.framing_weight, 0.0);
+    assert!(
+        serde_json::to_value(&rig.state)
+            .unwrap()
+            .get("framing_weight")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_snap_takes_the_framing_weight_at_once() {
+    let mut rig = chase_rig(ChaseRig::default());
+    rig.framing = framed(1.0);
+    fp_tick(&mut rig, [0.0; 3], 0);
+    assert_eq!(rig.state.framing_weight, 1.0);
+}
+
+#[test]
+fn the_latch_with_framing_equals_look_then_a_held_tick() {
+    let mut rig = chase_rig(ChaseRig::default());
+    fp_tick(&mut rig, [0.0; 3], 0);
+    rig.framing = framed(1.0);
+    for k in 1..30 {
+        fp_tick(&mut rig, [k as f32 * 0.1, 0.0, -2.0], k);
+    }
+    assert!(rig.state.framing_weight > 0.0 && rig.state.framing_weight < 1.0);
+    let target = [2.9, 0.0, -2.0];
+    let latched = resolved_camera(&rig, target, [25.0, -7.0]).unwrap();
+    let mut held = rig.clone();
+    add_look(&mut held, 25.0, -7.0);
+    let out = fp_tick_dt(&mut held, target, 30, 0.0);
+    assert_eq!(latched.view, out);
+    assert_eq!(latched.aim, held.aim().unwrap());
+}
+
+fn recenter_rig(min_speed: f32) -> CameraRig {
+    chase_rig(ChaseRig {
+        recenter: Recenter {
+            enabled: true,
+            delay: 0.5,
+            half_life: 0.2,
+            min_speed,
+        },
+        ..ChaseRig::default()
+    })
+}
+
+#[test]
+fn recenter_turns_behind_the_motion_only_after_the_delay_without_look() {
+    let mut rig = recenter_rig(1.0);
+    let mut x = 0.0;
+    fp_tick(&mut rig, [x, 0.0, 0.0], 0);
+    for k in 1..=25 {
+        x += 3.0 * DT;
+        fp_tick(&mut rig, [x, 0.0, 0.0], k);
+        assert_eq!(rig.state.yaw_deg, 0.0, "tick {k}: still inside the delay");
+    }
+    for k in 26..=120 {
+        x += 3.0 * DT;
+        fp_tick(&mut rig, [x, 0.0, 0.0], k);
+    }
+    assert!(
+        (rig.state.yaw_deg + 90.0).abs() < 0.5,
+        "{}",
+        rig.state.yaw_deg
+    );
+    // A nonzero look restarts the wait.
+    add_look(&mut rig, 30.0, 0.0);
+    x += 3.0 * DT;
+    fp_tick(&mut rig, [x, 0.0, 0.0], 121);
+    assert!(rig.state.look_idle < 2.0 * DT);
+    let yaw = rig.state.yaw_deg;
+    for k in 122..=140 {
+        x += 3.0 * DT;
+        fp_tick(&mut rig, [x, 0.0, 0.0], k);
+    }
+    assert_eq!(rig.state.yaw_deg, yaw);
+}
+
+#[test]
+fn recenter_never_turns_below_min_speed_and_stays_off_by_default() {
+    let mut slow = recenter_rig(1.0);
+    let mut off = chase_rig(ChaseRig::default());
+    let mut x = 0.0;
+    for k in 0..200 {
+        x += 0.5 * DT;
+        fp_tick(&mut slow, [x, 0.0, 0.0], k);
+        fp_tick(&mut off, [x * 6.0, 0.0, 0.0], k);
+    }
+    assert_eq!(slow.state.yaw_deg, 0.0);
+    assert_eq!(off.state.yaw_deg, 0.0);
+    assert_eq!(off.state.look_idle, 0.0);
 }

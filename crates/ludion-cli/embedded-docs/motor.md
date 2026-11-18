@@ -34,7 +34,7 @@ The worked example is `games/character-course`: its `src/lib.rs` controller is t
 
 The defaults are human scale; a 1 m platformer character overrides the first five as in the preset column. An out-of-range field is L1294 at its JSON Pointer (`/step_height`); the cross-field rules (`step_height < height`, `height ≥ 2 * radius`) are not reachable by the JSON Schema.
 
-`CharacterMotorState` is engine-written (grounded, ground entity, the ground's last pose, a height override, the last carry tick). It rides the world hash and the snapshot; a game never edits it except through the motor functions.
+`CharacterMotorState` is engine-written (grounded, ground entity, the ground's last pose, a height override, the posture in force, the last carry tick). It rides the world hash and the snapshot; a game never edits it except through the motor functions.
 
 `SurfaceVelocity { velocity: [x, y, z] }` — a conveyor's velocity in m/s in the **collider's local frame** (it turns with the entity). It acts only on a `static` or `kinematic` collider (L1299 otherwise).
 
@@ -69,7 +69,7 @@ A motor that ended its last call grounded on a `static` or `kinematic` support (
 | `ceiling`, `walls` | head bump (zero vertical speed); one wall per entity and plane, sorted by travel distance then entity |
 | `stepped` | the climb of this tick (above) |
 | `platform` (entity, translation, yaw, surface) | what carried it; default (no entity) when no carry ran or the move was stuck |
-| `moved`, `height` | the feet's total movement incl. depenetration and carry; the capsule height used |
+| `moved`, `height`, `posture` | the feet's total movement incl. depenetration and carry; the capsule height used; the posture in force (`None` = the motor's own shape) |
 | `stuck` | crushed: no clear pose |
 
 `platform` holds the *intended* carry even when a wall blocked it. Takeoff momentum is `(platform.translation + platform.surface) / dt`; the motor never adds momentum itself. Static floors report their entity with zeros. Two calls in one tick carry only on the first; with several motors, **call order is game order**.
@@ -80,13 +80,39 @@ A motor that ended its last call grounded on a `static` or `kinematic` support (
 - `fits_character(world, hero, height)` → `Result<bool, MotorError>` is that test without changing anything. A non-finite overlap query counts as "fits".
 - The test reads the last completed step: a ceiling despawned in tick N still blocks in N and is gone in N + 1.
 - `probe_character_ground(world, hero, feet)` → `Result<Option<GroundProbe>, MotorError>` runs the motor's own ground probe, cast from `step_height` above `feet` over `step_height + snap_distance + skin_width`. The result is `ground` plus `rest_y` (the feet height the motor would settle at); `None` means no ground a walk could reach, including an obstacle above the step. It uses the crouched height and the motor's layer filter, does no headroom test, and moves nothing. It draws `MOTOR_PROBE`.
-- `teleport_character(world, hero, feet, yaw)` places the feet and yaw **without driving the capsule**: no prop on the way is pushed, and none near the old or new spot is launched. It clears grounded, ground, platform and the carry tick (no carry next tick) and restores the authored height when it fits at the new spot, and nulls a `LaneConstraint`'s `s` so the lane re-acquires globally (`blend` kept). A sleeping prop beside either spot is woken and shows one gravity step of speed before it settles — a wake, not a launch. A plain `Transform` write is a **move**: it drives the capsule and pushes props, and keeps the grounded record: when the old support moved or turned that tick, the next call carries the new feet with it, about the old support's pivot, once. Reposition a rider with `teleport_character` (`ludion docs physics` §Teleports for rigid bodies).
+- `teleport_character(world, hero, feet, yaw)` places the feet and yaw **without driving the capsule**: no prop on the way is pushed, and none near the old or new spot is launched. It clears grounded, ground, platform and the carry tick (no carry next tick) and restores the authored shape (no posture, the authored height) when a posture or crouch was in force and the authored shape fits at the new spot, and nulls a `LaneConstraint`'s `s` so the lane re-acquires globally (`blend` kept). A sleeping prop beside either spot is woken and shows one gravity step of speed before it settles — a wake, not a launch. A plain `Transform` write is a **move**: it drives the capsule and pushes props, and keeps the grounded record: when the old support moved or turned that tick, the next call carries the new feet with it, about the old support's pivot, once. Reposition a rider with `teleport_character` (`ludion docs physics` §Teleports for rigid bodies).
+
+## Postures
+
+```yaml
+CharacterMotor:
+  radius: 0.3
+  height: 1.75
+  postures:                       # optional; empty is omitted from saved text
+    crouch:
+      shape: { upright: { height: 1.1 } }   # radius optional, defaults to the motor's
+      step_height: 0.2                      # optional overrides: step_height, slope_limit_deg, snap_distance
+```
+
+- A posture is a named upright capsule plus optional tunable overrides. `CharacterMotorState.posture` names the one in force; `None` is the motor's own shape. `motor_in_force(motor, state)` returns the motor the solver, the write pass and the fit tests all use: the posture applied, then the `resize_character` height override on top.
+- Names are non-empty with no `/` or `~`. A bad posture is L1294 at its own pointer (`/postures/crouch/shape/upright/height`, `/postures/crouch/step_height`); a field it inherits from the motor is reported at `/postures/crouch` and says so.
+- `set_character_posture(world, hero, Some("crouch"))` → `PostureReport { posture, blocked_by }`. Checks in order: `NoMotor`, `NoPose`, `Suspended` (resume takes a posture), `UnknownPosture`, `InvalidMotor`. A posture taller or wider than the shape in force is fit-tested at the feet first: a blocker leaves everything unchanged and `blocked_by` names the lowest-id collider (last completed step, as for resize). Otherwise the posture is set and any height override cleared. `None` stands back up. Same posture again is a success.
+- `resize_character` works on top of a posture; the next posture change clears its override.
+- `MoveReport.posture` says which posture the move used. A `CharacterMotorState.posture` naming an undeclared posture is L1540 in check-scene and L4170 at runtime (once per entity); the motor runs its base shape.
+
+```rust
+// stand/crouch from input; a refused stand keeps the crouch
+let want = if crouch_held { Some("crouch") } else { None };
+if let Ok(report) = set_character_posture(world, hero, want) {
+    if report.blocked_by.is_some() { /* still crouched under the ceiling */ }
+}
+```
 
 ## Suspend and resume
 
 - `suspend_character(world, hero)` parks the motor: `CharacterMotorState.suspended` becomes `true`, the grounded record, ground, platform and carry tick clear, the height in force stays, and the capsule **body is gone at the next physics write**. Every move (`move_character`, `move_character_with`, `move_characters`) and `teleport_character` is `MotorError::Suspended`. It is idempotent. `resize_character`, `fits_character` and `probe_character_ground` still work on a parked motor. `suspended` is omitted from the state while `false`.
-- `character_fit(world, hero, None, feet, yaw)` → `Result<Option<EntityId>, MotorError>` is the resume test without changing anything: the lowest-id collider inside the upright capsule at the height in force, `None` when it fits. `yaw` does not change the fit of an upright capsule. `Some(posture)` is `MotorError::UnknownPosture` (no motor declares postures).
-- `resume_character(world, hero, feet, yaw, None)` → `ResumeReport { resumed, blocked_by }`. A blocker gives `resumed: false` with the motor still parked and the pose unchanged; a fit writes the pose, clears the state like a teleport (no props pushed, a `LaneConstraint`'s `s` nulled) and the capsule is rebuilt by the next write. A motor under a `Parent` is `MotorError::Parented` (reparent it to the root first); one not parked is `MotorError::NotSuspended`.
+- `character_fit(world, hero, None, feet, yaw)` → `Result<Option<EntityId>, MotorError>` is the resume test without changing anything: the lowest-id collider inside the upright capsule at the height in force, `None` when it fits. `yaw` does not change the fit of an upright capsule. `Some(posture)` tests that declared posture's capsule instead (no height override); an undeclared name is `MotorError::UnknownPosture`. `None` is the motor's own shape, wearing the height override only while no posture is in force.
+- `resume_character(world, hero, feet, yaw, None)` → `ResumeReport { resumed, blocked_by }`. A blocker gives `resumed: false` with the motor still parked and the pose unchanged; `posture` `Some(name)` tests that posture and sets it (the height override is cleared); `None` tests the motor's own shape and clears any posture. A fit writes the pose, clears the state like a teleport (no props pushed, a `LaneConstraint`'s `s` nulled) and the capsule is rebuilt by the next write. A motor under a `Parent` is `MotorError::Parented` (reparent it to the root first); one not parked is `MotorError::NotSuspended`.
 - `switch_to_ragdoll` and `switch_skin_to_ragdoll` suspend the motor on the switched entity or its nearest ancestor with one.
 - **A carried or ragdolled guard:** suspend it when something else takes the entity (a ragdoll switch does so itself; a carry, a `Parent`). To revive, put the entity back at the root, walk a candidate list and take the first that fits:
 
@@ -133,6 +159,8 @@ Category `motor` (`DebugCategories::parse("motor")`), drawn only by `ludion_engi
 | L1297 | a `CharacterMotor` entity has a `Parent`; it writes world-space feet (check-scene, once at runtime); a suspended motor is exempt |
 | L1298 | a `SurfaceVelocity` component is non-finite (the component validator) |
 | L1299 | a `SurfaceVelocity` entity has no `Collider`, or a rigid one (check-scene) |
+| L1540 | a `CharacterMotorState.posture` names a posture the `CharacterMotor` does not declare (check-scene) |
+| L4170 | the same at run time (once per entity); the motor runs its base shape |
 | L1186 | the motor's `layer` is not declared in `physics.layers` |
 
 `MotorError` (`NoMotor`, `NoPose`, `NoPhysicsWorld`, `NonFiniteDisplacement`, `InvalidMotor`, `InvalidHeight`, `NonFiniteTeleport`, `NonFiniteFeet`, `Suspended`, `NotSuspended`, `Parented`, `UnknownPosture`) are `Err` returns with a message, not codes. `ludion explain L1294` prints the fix.

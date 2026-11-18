@@ -1,6 +1,6 @@
 # Plan: Input actions — a data-driven action map, gestures, rebinding, glyphs, rumble
 
-> **Wave 1a mechanized (sim side); Waves 1b–4 not started.**
+> **Waves 1a (sim side) and 1b (engine opt-in) mechanized; Waves 2–4 not started.**
 > Driven by Neon Shroud request 0021: a game that is played on keyboard and pad needs to name what
 > the player means (`crouch`, `move`), bind it to several physical inputs, tell a tap from a hold from
 > a double-tap, let the player rebind, show the right glyph and shake the pad. Game-facing doc:
@@ -53,14 +53,29 @@
     `restore_state` carry it for a snapshot (Wave 1b), so a hold continues across a restore on the same
     tick.
 
+11. **The map is an engine-owned singleton doc kind** (W1b). `Engine::builder().input_actions()` pushes
+    `DocKind::new::<InputActionsDoc>("input-actions", singleton)` without setting `game_doc_kinds`
+    (the `patterns()` shape), adds `validate_input_actions` and `carry_resource::<Actions>()`. A
+    missing or doubled file is the existing `L1315`; compile errors are re-pathed to
+    `input-actions/<doc key><pointer>`.
+12. **Install and carry semantics.** `Actions` is installed beside `install_nav` after every world
+    build, unless one is present. A scene load and an `engine.restore` get a fresh `Actions`; a scene
+    switch and a checkpoint carry the departing one (carriers run before the install).
+13. **The latch rule.** A fresh `Actions` latches, on its first `resolve`, every input at level with no
+    down edge that tick (a trigger counts at `press`; wheel steps never latch). A latched input fires no
+    edge, has no level or tap and no `held_ticks`; its release is silent and clears the latch. So a key
+    held across a load or restore needs a fresh press and never fires a spurious gesture.
+14. **Unknown names report `L4270` once each**, drained at the frame boundary into `Diagnostics`
+    (key `input-actions/<name>`), with the nearest action names, or all of them when fewer than eight.
+
 ## Waves
 
 - **W1a — sim side (shipped):** `InputActionsDoc`, `ActionMap::compile`, `Actions`;
   gestures, trigger hysteresis, axes; the driver hook; `L1630`–`L1635`, `L4270`, `L4271`.
-- **W1b — engine opt-in:** `Engine::builder().input_actions()`, an engine-owned doc-singleton kind
-  registered like `patterns()`, install beside `install_nav`, `carry_resource::<Actions>()`, a snapshot
-  field for `ActionState`, unknown names drained into `Diagnostics` as `L4270`, facade prelude, a
-  runnable example.
+- **W1b — engine opt-in (shipped):** `Engine::builder().input_actions()`, an engine-owned
+  doc-singleton kind registered like `patterns()`, install beside `install_nav`,
+  `carry_resource::<Actions>()`, the latch rule, unknown names drained into `Diagnostics` as `L4270`,
+  facade prelude, a runnable example. The snapshot field for `ActionState` moved to Proposed (below).
 - **W2 — rebinding:** capture, `kind: input-bindings` overrides, the effective table in the `.lrp` header
   and keyframes, `UiNav::from_actions`, a rebind-menu example. Enforces `locked: true`.
 - **W3 — devices, glyphs and the full key set:** the whole keyboard appended after `Alt` plus `Back`/`Forward` (one corpus re-record), the window keymap and mouse mapping for them, recorded `gamepad_connected{family}` / `gamepad_disconnected`,
@@ -76,8 +91,20 @@ written before any change, so `replay_content_hash` stays put. `Actions` is test
 boundary, trigger hysteresis, axes, every compile error with its pointer, a two-run `SimDriver`
 comparison and a mid-hold state round trip. No pinned artifact moved.
 
+**W1b**: the engine loads the map. `input_actions()` registers the singleton kind, its validator and the
+carrier; `Actions` is installed after every build, carried across a switch and a checkpoint, fresh on a
+load and a restore, with the latch rule making a held input need a fresh press there. Tests cover a pad
+tap and hold, the keyboard route, a bad document's `L1632` at its re-pathed pointer, `L1315`, one
+`L4270`, the restore latch, a hold carried across a switch, and a 1/2/8-thread hash trace. No snapshot,
+schema, replay or golden moved.
+
 ## Proposed — owner ruling owed
 
+- **A snapshot field for `ActionState`** (exact mid-gesture continuation across `engine.restore`, a
+  replay seek and a bisect keyframe). A new `SnapshotDoc` field changes `snapshot_schema()`, which
+  `replay_content_hash` covers, so it rides W3's one corpus re-record. Until then a restore installs a
+  fresh `Actions` and the latch rule applies; a plain linear replay never restores, so it is exact.
+  `Actions::state()` / `restore_state()` stay for it.
 - **One corpus re-record in W3** for the full key set: new `Key`/`MouseButton` variants move `replay_content_hash`, so every committed replay is re-recorded once, last, after the schema snapshot.
 - **Promote remapping and rumble out of `Plan/phase-13-input.md`'s out-of-scope list** (request
   amendments 1–2). Wave 1a builds none of rebinding or rumble; it is the sim side they stand on.
@@ -96,7 +123,8 @@ comparison and a mid-hold state round trip. No pinned artifact moved.
 - **`stick_dir` button bindings** (a stick direction as a button) — trigger: a game that wants menu or
   dodge input from a stick flick.
 - **Per-binding gesture thresholds** — trigger: a game needing a different hold time for one action.
-- **Live `asset.reload` of the map** — trigger: tuning an action map in the editor.
+- **Live `asset.reload` of the map** — `Actions` compiles at world build and is not rebuilt by a
+  reload; trigger: tuning an action map in the editor.
 - **Keys beyond today's set in bindings** — trigger: W3 (needs the re-record above).
 - **Keyboard-layout labels** (what the key at a physical position says on this layout) — trigger: glyphs
   for non-QWERTY players; arrives with W3's glyph table.

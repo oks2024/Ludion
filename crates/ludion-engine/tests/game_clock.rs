@@ -416,3 +416,75 @@ fn a_snapshot_carries_the_clock_and_omits_an_unheld_one() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A system scaling by NaN is reported once as `L4260` and leaves the clock untouched.
+#[test]
+fn an_invalid_scale_reports_once_and_changes_nothing() {
+    fn bad_scale(world: &mut World, _ctx: &SystemCtx) {
+        world.resource_mut::<GameClock>().unwrap().scale(f32::NAN);
+    }
+    let dir = root("invalid_scale");
+    let mut engine = Engine::builder()
+        .system("bad_scale", bad_scale)
+        .project_root(&dir)
+        .build()
+        .expect("the documents validate");
+    engine.load_inline_scene(SCENE).expect("the scene loads");
+    advance(&mut engine, 10);
+
+    let code = ludion_core::codes::code::GAME_SCALE_INVALID;
+    let reported = engine
+        .world()
+        .resource::<ludion_engine::diagnostics::Diagnostics>()
+        .unwrap()
+        .reported(code)
+        .count();
+    assert_eq!(reported, 1, "ten bad frames report once per session");
+    assert!(
+        engine.world().resource::<GameClock>().unwrap().is_zero(),
+        "an ignored request leaves nothing behind"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A snapshot taken mid-scale restores the same clock, and an unscaled run still omits the field.
+#[test]
+fn a_scaled_snapshot_round_trips() {
+    fn slow(world: &mut World, _ctx: &SystemCtx) {
+        world.resource_mut::<GameClock>().unwrap().scale(0.25);
+    }
+    let dir = root("scaled_snapshot");
+    let build = || {
+        let mut engine = Engine::builder()
+            .system("slow", slow)
+            .project_root(&dir)
+            .build()
+            .expect("the documents validate");
+        engine.load_inline_scene(SCENE).expect("the scene loads");
+        engine
+    };
+    let mut scaled = build();
+    advance(&mut scaled, 21);
+    let captured = *scaled.world().resource::<GameClock>().unwrap();
+    assert!(captured.slowed_q16() > 0 && captured.is_scaling());
+
+    let document = snapshot_of(&mut scaled);
+    assert!(
+        document["game_clock"].get("slowed_q16").is_some(),
+        "the schema-skipped field still travels in the snapshot"
+    );
+    let mut restored = build();
+    restored
+        .execute(Command::EngineRestore(EngineRestoreParams {
+            snapshot: document,
+        }))
+        .expect("the snapshot restores");
+    assert_eq!(*restored.world().resource::<GameClock>().unwrap(), captured);
+    assert_eq!(game_now(&restored), game_now(&scaled));
+
+    let mut unscaled = playing(&dir, false);
+    advance(&mut unscaled, 30);
+    assert!(snapshot_of(&mut unscaled).get("game_clock").is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

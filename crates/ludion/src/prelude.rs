@@ -74,12 +74,13 @@
 //! - **Sim/input/time** — [`InputState`], [`Key`], [`InputEvent`]; the mouse/gamepad devices
 //!   [`MouseState`]/[`GamepadState`] (reached via `input.mouse()`/`input.gamepad()`) and their
 //!   name enums [`MouseButton`], [`GamepadButton`], [`GamepadAxis`]; the const-constructible key-or-button
-//!   binding [`Action`] and the standard radial stick deadzone [`STICK_DEADZONE`] and the trigger press level [`TRIGGER_THRESHOLD`]; [`SimTime`], [`FrameIndex`],
+//!   binding [`Action`], the data-driven action map [`Actions`] read by [`ActionName`]
+//!   (`Engine::builder().input_actions()`, `ludion docs input`) and the standard radial stick deadzone [`STICK_DEADZONE`] and the trigger press level [`TRIGGER_THRESHOLD`]; [`SimTime`], [`FrameIndex`],
 //!   [`TickRate`]; [`DeterministicRng`] and [`WorldSeed`] are the seeded randomness a system draws from. [`GameClock`] is the gameplay half of that time: the resource a game calls
 //!   `hold()` on every frame it is frozen (`world.resource_mut::<GameClock>().unwrap().hold()`), so
 //!   that `ctx.game_time` / `ctx.game_frame` — what every closed-form evaluator reads, from a
 //!   pattern timeline to a particle emitter — stand still while the sim keeps ticking. Held nothing
-//!   by default, so a game that never freezes never names it.
+//!   by default, so a game that never freezes never names it; `scale(s)` slows it the same way, and [`GameTime`] is the exact fractional gameplay time (`ctx.game_instant`).
 //! - **Render extent** — [`RenderExtent`], the resource carrying the pixel extent the session
 //!   renders and streams at (`world.resource::<RenderExtent>()`). It is the `viewport` every
 //!   pointer mapping takes — [`math::list_hit`], [`math::camera_ray`] — so a game never names an
@@ -109,6 +110,10 @@
 //!   with [`spawn_projectile`] (a [`projectiles::ProjectileDesc`]), and the tick's
 //!   [`projectiles::HitEvent`]s read from the [`Projectiles`] resource. Re-exported as a module so
 //!   its `Response` and `HitEvent` do not clash.
+//! - **Light exposure** — [`light_exposure`] answers how lit 1–16 points are from sim state, with the
+//!   renderer's falloff, cone and sky formulas and physics-ray shadows for casting lights
+//!   ([`ExposureQuery`], [`Exposure`]); `ludion docs light-exposure`.
+//! - **Perception** — sight for guards: `Engine::builder().perception(`[`PerceptionConfig`]`)` and [`perception_update`] scheduled after whatever moves them; a [`Perceiver`] with [`SightZone`]s sees every [`SightTarget`] (sample [`SightPoint`]s, a [`Require`] rule) and the tick's [`SightSample`]s are read from [`PerceptionResults`] (`ludion docs perception`).
 //! - **Navigation** — the opt-in walkability grid built from the static physics colliders:
 //!   `Engine::builder().nav(`[`NavConfig`]`)` and [`nav_update`] scheduled before whatever reads the
 //!   [`Nav`] resource. A [`NavAgent`] entity gets its desired velocity in [`NavSteering`] from [`nav_steer`]
@@ -232,42 +237,48 @@ pub use ludion_engine::{
     CheckpointInfo, Checkpoints, ClipAnchor, ClipEvent, CursorLock, CursorMode, DebugCategories,
     DebugPen, Decal, DecalBlend, DecalMap, DecalReceiverSet, Diagnostics, DirectionalLight,
     DocStore, DropShadow, EmitShape, Engine, EngineBuilder, Environment, Fade, FirstPersonRig,
-    FollowRig, FollowerMotion, FontLibrary, GameIdentity, GiDynamic, GroundMarker,
+    FollowRig, FollowerMotion, FontLibrary, Framing, GameIdentity, GiDynamic, GroundMarker,
     GroundMarkerShape, Keep, KickConfig, LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL,
-    LANE_OFF, LANE_ON, LANE_PATH, LaneConstraint, LaneEnds, LaneInput, LookAhead, MOTOR_AIRBORNE,
-    MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE, MOTOR_STUCK,
-    MOTOR_WALL, MapSpawn, MapWrap, Mesh, MeshGrid, MeshSource, Mirror, MixLayer, MotionSegment,
-    Name, Nav, NavAgent, NavConfig, NavGoal, NavPath, NavReplan, NavRoute, NavRouteStatus,
-    NavSteering, NoInterpolate, PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend,
-    ParticleEmitter, PathDocument, PathFollower, PathFrame, PathInterpolation, PathMetric,
-    PathMode, PathOrient, PathRequest, PathSampler, PathStatus, PatternDoc, PatternPlayer,
-    PlaybackControls, PlaybackInput, PlaybackOutcome, PlaybackSpeed, PointLight, PostProcess,
-    PrefabApplied, PrefabInstance, PrefabPrewarm, PrefabReverted, ProbeCoverage,
-    ProbeCoverageEntry, ProbeRefreeze, ProbeShape, Profile, ProjectileConfig, ProjectileLook,
-    ProjectileVisual, ProjectileVisuals, Projectiles, Projection, RampSpec, ReflectionProbe,
-    RenderExtent, RenderSettings, ReplayEntry, ReplayPlayback, ReplayPlaybackConfig, Residue,
-    ResidueStore, RestoreOutcome, ResumeOutcome, RigConfig, RigMode, RigState, RunRecording,
-    RunRecordingConfig, RunSave, SceneSwitch, ShakeConfig, Shutdown, SkinBone, SpotLight, Springs,
-    Sprite, SpriteBlend, Static, SuspendInfo, SwitchTo, Text, TileAppearance, Tilemap,
-    TimelineEntry, TrackRig, Transform, TransformHierarchy, TurnSpec, UiAnchorBehind, UiAnchorShow,
-    UiClock, UiEase, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat,
-    UiTweenTrack, UiWorldAnchor, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel,
-    ViewmodelLens, Visibility, Volley, VolleyCenter, VolleyShape, WorldPose, add_fov_kick,
-    add_kick, add_look, add_look_counts, add_trauma, advance_volleys, animation_events,
-    builtin_registry, bullet_age, bullet_is_alive, bullet_position, camera_relative,
-    camera_relative_yaw, character_fit, check_path, crossfade, debug_draw, despawn_instance,
-    first_person_eye, fits_character, lane_error_colour, lane_frame, lane_relative, load_assembly,
-    move_character, move_character_with, move_characters, nav_distance, nav_path, nav_project,
-    nav_reachable, nav_steer, nav_update, orbit_eye, path_follow, path_follower_motion,
+    LANE_OFF, LANE_ON, LANE_PATH, LaneConstraint, LaneEnds, LaneInput, Look, LookAhead,
+    MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE,
+    MOTOR_STUCK, MOTOR_WALL, MapSpawn, MapWrap, Mesh, MeshGrid, MeshSource, Mirror, MixLayer,
+    MotionSegment, Name, Nav, NavAgent, NavConfig, NavGoal, NavPath, NavReplan, NavRoute,
+    NavRouteStatus, NavSteering, NoInterpolate, PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint,
+    ParticleBlend, ParticleEmitter, PathDocument, PathFollower, PathFrame, PathInterpolation,
+    PathMetric, PathMode, PathOrient, PathRequest, PathSampler, PathStatus, PatternDoc,
+    PatternPlayer, Perceiver, PerceptionConfig, PerceptionResults, PlaybackControls, PlaybackInput,
+    PlaybackOutcome, PlaybackSpeed, PointLight, PostProcess, PrefabApplied, PrefabInstance,
+    PrefabPrewarm, PrefabReverted, ProbeCoverage, ProbeCoverageEntry, ProbeRefreeze, ProbeShape,
+    Profile, ProjectileConfig, ProjectileLook, ProjectileVisual, ProjectileVisuals, Projectiles,
+    Projection, RampSpec, Recenter, ReflectionProbe, RenderExtent, RenderSettings, ReplayEntry,
+    ReplayPlayback, ReplayPlaybackConfig, Require, Residue, ResidueStore, RestoreOutcome,
+    ResumeOutcome, RigCollision, RigCollisionConfig, RigConfig, RigMode, RigState, RunRecording,
+    RunRecordingConfig, RunSave, SceneSwitch, ShakeConfig, Shutdown, SightPoint, SightSample,
+    SightTarget, SightZone, SkinBone, SpotLight, Springs, Sprite, SpriteBlend, Static, SuspendInfo,
+    SweepShape, SwitchTo, Text, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
+    TransformHierarchy, TurnSpec, UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiList,
+    UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
+    VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel, ViewmodelLens, Visibility, Volley,
+    VolleyCenter, VolleyShape, WorldPose, ZoneSweep, add_fov_kick, add_kick, add_look,
+    add_look_counts, add_trauma, advance_volleys, animation_events, builtin_registry, bullet_age,
+    bullet_is_alive, bullet_position, camera_relative, camera_relative_yaw, character_fit,
+    check_path, crossfade, debug_draw, despawn_instance, first_person_eye, fits_character,
+    lane_error_colour, lane_frame, lane_relative, load_assembly, move_character,
+    move_character_with, move_characters, nav_distance, nav_path, nav_project, nav_reachable,
+    nav_steer, nav_update, orbit_eye, path_follow, path_follower_motion, perception_update,
     play_patterns, play_sound, posed_joint_world, prepare_map, prepare_prefab, prewarm_prefab,
     probe_character_ground, projectiles_step, reparent, report_diagnostic, report_full_diagnostic,
-    resize_character, resume_character, revert_prefab, set_clip_speed, set_look, snap_rig,
-    spawn_map, spawn_prefab, spawn_projectile, suspend_character, switch_skin_to_ragdoll,
-    switch_to_ragdoll, teleport_character, unpack_prefab, validate_pattern_docs, volley_hits,
-    world_transform,
+    resize_character, resume_character, revert_prefab, set_character_posture, set_clip_speed,
+    set_look, snap_rig, spawn_map, spawn_prefab, spawn_projectile, suspend_character,
+    switch_skin_to_ragdoll, switch_to_ragdoll, teleport_character, unpack_prefab,
+    validate_pattern_docs, volley_hits, world_transform,
 };
 
 pub use ludion_engine::ui::UiNav;
+pub use ludion_engine::{
+    Combine, Exposure, ExposureError, ExposureQuery, Facing, LightContribution, LightKind,
+    MAX_EXPOSURE_POINTS, light_exposure,
+};
 pub use ludion_engine::{
     PatrolFollower, PatrolMotion, PatrolPhase, PatrolResume, PatrolState, patrol_motion,
     patrol_update,
@@ -279,8 +290,8 @@ pub use ludion_ecs::{
 };
 
 pub use ludion_sim::{
-    Action, GamepadAxis, GamepadButton, GamepadState, InputEvent, InputState, Key, MouseButton,
-    MouseState, STICK_DEADZONE, TRIGGER_THRESHOLD,
+    Action, ActionName, Actions, GamepadAxis, GamepadButton, GamepadState, InputEvent, InputState,
+    Key, MouseButton, MouseState, STICK_DEADZONE, TRIGGER_THRESHOLD,
 };
 
 pub use crate::math;
@@ -292,8 +303,9 @@ pub use ludion_physics::{
     Blast, BlastHit, CharacterMotor, CharacterMotorState, ContactEvent, ContactPhase, ExitCause,
     Falloff, GroundHit, GroundProbe, JointBroken, LaneEnd, LaneFrame, LaneReport, MotorError,
     MoveConstraint, MoveReport, PhysicsError, PhysicsWorld, PlatformCarry, PlatformPose, PointHit,
-    QueryFilter, QueryHit, ResizeReport, ResumeReport, SensorEvent, SensorPhase, SurfaceHit,
-    SurfaceVelocity, height_in_force, teleport_kinematic,
+    Posture, PostureReport, PostureShape, QueryFilter, QueryHit, ResizeReport, ResumeReport,
+    SensorEvent, SensorPhase, SurfaceHit, SurfaceVelocity, height_in_force, motor_in_force,
+    teleport_kinematic,
 };
 pub use ludion_projectiles as projectiles;
 pub use ludion_spatial::{
@@ -307,7 +319,7 @@ pub use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
 pub use ludion_core::ids::EntityId;
 pub use ludion_core::par;
 pub use ludion_core::rng::{DeterministicRng, WorldSeed};
-pub use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
+pub use ludion_core::time::{FrameIndex, GameClock, GameTime, SimTime, TickRate};
 pub use ludion_sim::WorldHash;
 
 pub use ludion_protocol::{Command, command};

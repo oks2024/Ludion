@@ -30,6 +30,10 @@ fn zero(v: &f32) -> bool {
     *v == 0.0
 }
 
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
 fn is_default_sensitivity(v: &f32) -> bool {
     *v == CameraRig::DEFAULT_LOOK_DEG_PER_COUNT
 }
@@ -95,6 +99,10 @@ pub struct CameraRig {
     /// changes it. Inert when the rig sets no `fov_y_deg`.
     #[serde(skip_serializing_if = "zero")]
     pub fov_offset_deg: f32,
+    /// The game-written framing channel (corner peek, wall-hug, shoulder framing) for `chase` and
+    /// `follow`: it moves the eye before collision, eased by `framing.half_life`.
+    #[serde(skip_serializing_if = "is_default")]
+    pub framing: Framing,
     /// Engine-written state: springs, projection, blend and shake clock.
     pub state: RigState,
 }
@@ -114,6 +122,7 @@ impl Default for CameraRig {
             fov_kick_deg: 0.0,
             roll_deg: 0.0,
             fov_offset_deg: 0.0,
+            framing: Framing::default(),
             state: RigState::default(),
         }
     }
@@ -281,6 +290,107 @@ pub struct RigConfig {
     pub fov_y_deg: Option<f32>,
     /// The blend used when this configuration becomes the active one.
     pub blend_in: BlendIn,
+    /// The sphere-cast collision stage that keeps the eye out of geometry; off by default.
+    #[serde(skip_serializing_if = "is_default")]
+    pub collision: RigCollisionConfig,
+}
+
+/// The collision stage of a rig: a sphere cast from the pivot (or focus, on `track`) to the eye
+/// pulls the boom in at once and eases it back out after a hold. Ignored in `first_person`. It
+/// lives on the config so a zone can swap it.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct RigCollisionConfig {
+    /// Whether the stage runs.
+    pub enabled: bool,
+    /// Radius of the cast sphere in metres; above 0.
+    pub radius: f32,
+    /// Physics layer names the cast hits; empty hits every layer.
+    pub include_layers: Vec<String>,
+    /// Physics layer names the cast passes through.
+    pub ignore_layers: Vec<String>,
+    /// The shortest boom a hit can pull in to, in metres.
+    pub min_distance: f32,
+    /// Metres kept between the hit and the eye.
+    pub skin: f32,
+    /// Gameplay seconds the pulled-in boom holds before easing back out.
+    pub recover_delay: f32,
+    /// Seconds for the remaining boom error to halve while recovering.
+    pub recover_half_life: f32,
+}
+
+impl Default for RigCollisionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            radius: 0.3,
+            include_layers: Vec::new(),
+            ignore_layers: Vec::new(),
+            min_distance: 0.6,
+            skin: 0.05,
+            recover_delay: 0.15,
+            recover_half_life: 0.35,
+        }
+    }
+}
+
+/// The game-written framing channel: at `weight` 1 the boom is built from the offset pivot, yaw,
+/// pitch and distance below. It eases by `half_life`, applies before collision, and the framed
+/// yaw and pitch show in [`CameraRig::aim`]; `state.yaw_deg` stays the unframed orbit yaw.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct Framing {
+    /// The goal weight, clamped to `[0, 1]` at use; `0` is no framing.
+    pub weight: f32,
+    /// Pivot offset in metres in the yaw frame: `+x` right, `+y` up, `+z` back.
+    pub pivot_offset: [f32; 3],
+    /// Yaw added at full weight, in degrees.
+    pub yaw_offset_deg: f32,
+    /// Pitch added at full weight, in degrees (positive looks down).
+    pub pitch_offset_deg: f32,
+    /// The boom length at full weight; `None` keeps the mode's.
+    pub distance: Option<f32>,
+    /// Seconds for the applied weight to halve toward `weight`.
+    pub half_life: f32,
+}
+
+impl Default for Framing {
+    fn default() -> Self {
+        Self {
+            weight: 0.0,
+            pivot_offset: [0.0; 3],
+            yaw_offset_deg: 0.0,
+            pitch_offset_deg: 0.0,
+            distance: None,
+            half_life: 0.12,
+        }
+    }
+}
+
+/// The chase recenter: after `delay` gameplay seconds with no look, the yaw turns back behind the
+/// target's horizontal motion.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct Recenter {
+    /// Whether the recenter runs.
+    pub enabled: bool,
+    /// Gameplay seconds without look input before it starts.
+    pub delay: f32,
+    /// Seconds for the yaw error to halve.
+    pub half_life: f32,
+    /// Horizontal target speed in metres per second below which it does not turn.
+    pub min_speed: f32,
+}
+
+impl Default for Recenter {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            delay: 1.5,
+            half_life: 0.6,
+            min_speed: 1.0,
+        }
+    }
 }
 
 /// The placement mode of a rig. Externally tagged: `mode: { track: { .. } }`.
@@ -372,6 +482,9 @@ pub struct ChaseRig {
     pub yaw_deg: Option<f32>,
     /// Whether `look_deg[1]` moves the pitch; `false` consumes and drops it.
     pub look_pitch: bool,
+    /// Turns the yaw back behind the target's motion once look has been idle.
+    #[serde(skip_serializing_if = "is_default")]
+    pub recenter: Recenter,
 }
 
 impl Default for ChaseRig {
@@ -383,6 +496,7 @@ impl Default for ChaseRig {
             pitch_max_deg: 70.0,
             yaw_deg: None,
             look_pitch: true,
+            recenter: Recenter::default(),
         }
     }
 }
@@ -619,6 +733,18 @@ pub struct RigState {
     pub yaw_velocity: f32,
     /// The pitch spring's velocity in degrees per second.
     pub pitch_velocity: f32,
+    /// The collided boom length in metres; `None` when the eye is free.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boom: Option<f32>,
+    /// Gameplay seconds left before a pulled-in boom eases back out.
+    #[serde(skip_serializing_if = "zero")]
+    pub boom_hold: f32,
+    /// The applied framing weight in `[0, 1]`.
+    #[serde(skip_serializing_if = "zero")]
+    pub framing_weight: f32,
+    /// Gameplay seconds since the last nonzero chase look.
+    #[serde(skip_serializing_if = "zero")]
+    pub look_idle: f32,
     /// The vertical anchor's height.
     pub anchor_y: f32,
     /// The smoothed look-ahead shift on x and z.

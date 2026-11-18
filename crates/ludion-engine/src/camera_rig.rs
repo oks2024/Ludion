@@ -22,16 +22,30 @@
 //! the desired and actual eye, the focus, the anchor, the look-ahead and a running blend; for
 //! `first_person`, the target, its line to the eye, the eye, a 2 m aim ray and a running blend; for
 //! `chase` and `follow`, the focus, the sprung pivot, the boom from the pivot to the eye, the eye and
-//! a running blend. A held rig draws nothing.
+//! a running blend. While a collision pull-in holds the boom short, the collided eye and its line to
+//! the uncollided eye draw too. A held rig draws nothing.
+//!
+//! With `collision.enabled` the stage casts a sphere through [`PhysicsWorld::shape_cast`], excluding
+//! the target entity (its child colliders are not excluded: put them on an ignored layer); sensors
+//! are skipped. A rejected cast, such as an undeclared layer name, reports `L1550` once and skips
+//! the stage; a world with no `PhysicsWorld` reports `L1551` once; a pivot and target both inside
+//! geometry report `L1552` once.
 
 use std::sync::Arc;
 
-use ludion_camera::{CameraRig, RigInput, RigMode, invalid_field, rig_focus, step_rig, track_eye};
+use std::cell::Cell;
+
+use ludion_camera::{
+    CameraRig, RigCollision, RigCollisionConfig, RigInput, RigMode, invalid_field, rig_focus,
+    step_rig, track_eye,
+};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, Schedule, SystemCtx, World};
+use ludion_physics::{PhysicsWorld, QueryFilter};
 use ludion_scene::PathSampler;
+use ludion_spatial::Shape;
 use serde_json::Value;
 
 use crate::components::{Camera, Projection, Transform};
@@ -56,6 +70,8 @@ const FOCUS: [f32; 4] = [1.0, 0.3, 0.6, 1.0];
 const ANCHOR: [f32; 4] = [0.7, 0.4, 1.0, 1.0];
 /// The look-ahead ray.
 const LOOK_AHEAD: [f32; 4] = [0.6, 1.0, 0.2, 1.0];
+/// A collision pull-in: the collided eye and its line to the uncollided eye.
+const PULLED: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
 /// A running blend's source eye and its line to the actual eye.
 const BLEND: [f32; 4] = [1.0, 0.5, 0.1, 1.0];
 const CROSS: f32 = 0.2;
@@ -193,6 +209,11 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
     };
     let mut rig = rig;
     let cut = rig.state.snap || rig.state.last_applied.is_none();
+    let physics = world.resource::<PhysicsWorld>();
+    let no_physics = rig.rig.collision.enabled && physics.is_none();
+    let cast = physics
+        .filter(|_| rig.rig.collision.enabled)
+        .map(|physics| PhysicsRigCollision::new(physics, &rig.rig.collision, target));
     let output = step_rig(
         &mut rig,
         &RigInput {
@@ -202,8 +223,19 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
             dt: ctx.dt,
             game_frame: ctx.game_frame,
             camera_fov_y_deg,
+            collision: cast.as_ref().map(|cast| cast as &dyn RigCollision),
         },
     );
+    let rejected = cast.and_then(|cast| cast.failed.take());
+    if no_physics || rejected.is_some() || output.as_ref().is_some_and(|out| out.stuck) {
+        report_collision(
+            world,
+            entity,
+            no_physics,
+            rejected,
+            output.is_some_and(|o| o.stuck),
+        );
+    }
     if let Some(output) = &output {
         match &sampler {
             Some(sampler) => draw(world, &rig, sampler, target_position, output.translation),
@@ -233,6 +265,111 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         })) = world.get_mut::<Camera>(entity)
     {
         *fov_y_deg = fov;
+    }
+}
+
+/// The collision stage's physics: a sphere cast of the rig's radius that skips the target, sensors
+/// and the ignored layers.
+struct PhysicsRigCollision<'a> {
+    physics: &'a PhysicsWorld,
+    filter: QueryFilter,
+    /// The first physics error of the tick; the cast reports clear after it.
+    failed: Cell<Option<String>>,
+}
+
+impl std::fmt::Debug for PhysicsRigCollision<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PhysicsRigCollision")
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> PhysicsRigCollision<'a> {
+    fn new(physics: &'a PhysicsWorld, cfg: &RigCollisionConfig, target: EntityId) -> Self {
+        let mut filter = QueryFilter::new().exclude(target);
+        for name in &cfg.include_layers {
+            filter = filter.include_layer(name.as_str());
+        }
+        for name in &cfg.ignore_layers {
+            filter = filter.ignore_layer(name.as_str());
+        }
+        Self {
+            physics,
+            filter,
+            failed: Cell::new(None),
+        }
+    }
+}
+
+impl RigCollision for PhysicsRigCollision<'_> {
+    fn cast(&self, from: [f32; 3], dir: [f32; 3], max: f32, radius: f32) -> Option<f32> {
+        let shape = Shape::Sphere { radius };
+        match self
+            .physics
+            .shape_cast(&shape, from, [0.0, 0.0, 0.0, 1.0], dir, max, &self.filter)
+        {
+            Ok(hits) => hits.first().map(|hit| hit.distance),
+            Err(error) => {
+                if let Some(first) = self.failed.take() {
+                    self.failed.set(Some(first));
+                } else {
+                    self.failed.set(Some(error.to_string()));
+                }
+                None
+            }
+        }
+    }
+}
+
+/// Reports the collision stage's faults, each once per rig.
+fn report_collision(
+    world: &mut World,
+    entity: EntityId,
+    no_physics: bool,
+    rejected: Option<String>,
+    stuck: bool,
+) {
+    let key = crate::diagnostics::offender_key(world, entity);
+    if no_physics {
+        crate::diagnostics::report(
+            world,
+            code::CAMERA_RIG_COLLISION_NO_PHYSICS,
+            key.clone(),
+            format!(
+                "the `CameraRig` on {entity} has `collision.enabled` but the world has no \
+                 `PhysicsWorld`; the camera runs without collision"
+            ),
+        );
+    }
+    if let Some(error) = rejected {
+        crate::diagnostics::report_full(
+            world,
+            key.clone(),
+            Diagnostic::new(
+                code::CAMERA_RIG_COLLISION_QUERY,
+                format!(
+                    "the `CameraRig` on {entity} could not cast its collision sphere: {error}; \
+                     the camera runs without collision"
+                ),
+            )
+            .with_path("/rig/collision")
+            .with_help(
+                "declare the layer names in `include_layers` and `ignore_layers` under \
+                 `physics.layers`",
+            ),
+        );
+    }
+    if stuck {
+        crate::diagnostics::report(
+            world,
+            code::CAMERA_RIG_COLLISION_STUCK,
+            key,
+            format!(
+                "the `CameraRig` on {entity} has its pivot and target inside geometry; the boom \
+                 is held at `collision.min_distance`: move the pivot out of the wall, or put the \
+                 target's own colliders on an `ignore_layers` layer"
+            ),
+        );
     }
 }
 
@@ -310,6 +447,9 @@ fn draw(
             [state.look_ahead[0], 0.0, state.look_ahead[1]],
             LOOK_AHEAD,
         );
+    if state.boom.is_some() {
+        pen.cross(eye, CROSS, PULLED).line(eye, state.eye, PULLED);
+    }
     if let Some(blend) = &state.blend {
         pen.cross(blend.from.eye, CROSS, BLEND)
             .line(blend.from.eye, eye, BLEND);
@@ -348,6 +488,9 @@ fn draw_orbit(world: &mut World, rig: &CameraRig, target: [f32; 3], eye: [f32; 3
         .cross(pivot, CROSS, PROJECTED)
         .line(pivot, eye, DESIRED)
         .cross(eye, CROSS, EYE);
+    if state.boom.is_some() {
+        pen.cross(eye, CROSS, PULLED).line(eye, state.eye, PULLED);
+    }
     if let Some(blend) = &state.blend {
         pen.cross(blend.from.eye, CROSS, BLEND)
             .line(blend.from.eye, eye, BLEND);

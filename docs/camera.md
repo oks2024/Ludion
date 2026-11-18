@@ -118,6 +118,11 @@ CameraRig:
         pitch_max_deg: 70.0
         yaw_deg: null             # start yaw; null carries the current yaw
         look_pitch: true          # false: look_deg[1] is consumed and dropped
+        recenter:                 # off by default: turn back behind the target's motion
+          enabled: false
+          delay: 1.5              # gameplay seconds without look before it starts
+          half_life: 0.6          # seconds for the yaw error to halve
+          min_speed: 1.0          # horizontal m/s below which it never turns
       # follow:                   # fixed world yaw, pitch and distance
       #   yaw_deg: 0.0
       #   pitch_deg: 45.0         # in (-90, 90)
@@ -127,9 +132,51 @@ CameraRig:
 - `chase` takes `look_deg` as `first_person` does (`add_look`, `add_look_counts`): applied on every tick with a target, held clock included, yaw wrapped, pitch clamped to the range. The pivot freezes on a held tick; look still turns the boom.
 - `follow` holds its authored angles and **consumes and discards** `look_deg` every tick, so stick input does not pile up in a follow zone and pop on the return to `chase`.
 - A snap or switch into `chase` starts the yaw at `yaw_deg`, or carries the current one (from `track`, `first_person`, or 0 on a fresh load), starts the pitch at `pitch_deg`, and rests the pivot on the focus. A spawn facing is `set_look` (its yaw carries). Into `follow`: the authored angles.
+- **Recenter:** with `recenter.enabled`, once `delay` gameplay seconds pass with no nonzero look and the target moves at `min_speed` or faster, the yaw damps along the shortest arc toward the heading behind the motion. Any nonzero look restarts the wait; a stopped target never turns the camera. Disabled, it costs nothing and adds nothing to the state.
 - Scale a stick by the real `dt` before `add_look` (a stick is a rate, a mouse count is a delta). A late-latching presenter covers `chase` (`ludion docs presentation`).
 
 Runnable: `crates/ludion/examples/chase_camera.rs`.
+
+## Collision
+
+`rig.collision` keeps the eye out of geometry in `chase`, `follow` and `track` (never `first_person`). It casts a sphere from the pivot (the focus, on `track`) to the eye of the blended pose, so a blend out of first person never cuts through the wall the player peered past.
+
+```yaml
+rig:
+  collision:
+    enabled: true
+    radius: 0.3              # cast sphere, metres, > 0
+    include_layers: []       # physics.layers names the cast hits; empty = every layer
+    ignore_layers: []        # names the cast passes through
+    min_distance: 0.6        # the shortest boom a hit can pull in to
+    skin: 0.05               # metres kept between the hit and the eye sphere
+    recover_delay: 0.15      # gameplay seconds the pulled-in boom holds
+    recover_half_life: 0.35  # then eases back out
+```
+
+- A hit pulls the boom in **on the same tick**, even on a held clock. The hold counts down on gameplay time; then the boom eases back to its full length and the state returns to default. A deeper hit during recovery pulls in at once and restarts the hold.
+- The target entity is excluded and sensors are skipped. The target's **child** colliders are not excluded: put them on a layer in `ignore_layers`.
+- A cast that starts overlapping retries once from the target. If that overlaps too, the boom holds at `min_distance` and `L1552` is reported.
+- The pose written to the `Transform` and `aim()` is the collided one; `rig.state.eye` stays the uncollided eye, and `rig.state.boom` is the collided length (`None` when free).
+- Layer names are checked at runtime: an undeclared one is `L1550` and the stage is skipped. A world with no physics is `L1551`. `ludion-camera` itself is physics-free (`RigInput.collision` takes a `RigCollision`); the engine supplies one over `PhysicsWorld::shape_cast`.
+
+## Framing
+
+`CameraRig.framing` is game-written, like `roll_deg`: corner peek, wall-hug, a shoulder offset. It moves the `chase` or `follow` eye **before** collision (track and first person ignore it).
+
+```yaml
+framing:
+  weight: 1.0                # goal in [0, 1]; the applied weight eases by half_life
+  pivot_offset: [0.8, 0.3, 0.0]  # metres in the yaw frame: x right, y up, z back
+  yaw_offset_deg: 10.0
+  pitch_offset_deg: 0.0
+  distance: 4.0              # boom length at full weight; omit to keep the mode's
+  half_life: 0.12
+```
+
+- At weight 0 the boom is the plain orbit, bit for bit; a returned peek rests at exactly 0 and leaves the state.
+- The framed yaw and pitch are the pose's: `aim()` and `yaw_deg()` see the framed view. `rig.state.yaw_deg` is the unframed orbit yaw.
+- `camera_relative` reads the framed yaw. To keep stick directions fixed during a peek, call `camera_relative_yaw(stick, rig.state.yaw_deg)`.
 
 ## Kick and roll
 
@@ -190,7 +237,7 @@ The system is installed on every schedule and returns at once in a world without
 
 ## Debug draw
 
-Category `camera` (`--debug-draw camera`), hash-neutral: the rail polyline, the search window around the projection, the projected point, the desired and actual eye (and the line between), the focus and eye-to-focus line, the anchored height, the look-ahead ray and, while a blend runs, its source eye. `first_person` draws the target, its line to the eye, the eye, a 2 m aim ray and a running blend's source eye; `chase` and `follow` draw the focus, the pivot, the boom to the eye, the eye and a running blend's source eye. A held rig draws nothing.
+Category `camera` (`--debug-draw camera`), hash-neutral: the rail polyline, the search window around the projection, the projected point, the desired and actual eye (and the line between), the focus and eye-to-focus line, the anchored height, the look-ahead ray and, while a blend runs, its source eye. `first_person` draws the target, its line to the eye, the eye, a 2 m aim ray and a running blend's source eye; `chase` and `follow` draw the focus, the pivot, the boom to the eye, the eye and a running blend's source eye. While a collision pull-in is active, a red cross at the collided eye and a line to the uncollided eye. A held rig draws nothing.
 
 ## Diagnostics
 
@@ -198,10 +245,13 @@ On `L1304`–`L1307` and `L1309` the rig **holds its pose**; on `L1308` the lowe
 
 | code | raised when |
 | --- | --- |
-| L1304 | a field is out of range (pointer under `/rig/…`, `/shake/…`, `/trauma`, `/look_deg`, `/look_deg_per_count`, `/kick`, `/kick_deg`, `/roll_deg`; `pitch_limit_deg` outside (0, 90), a non-finite `eye_offset`, `look_deg` or kick channel) |
+| L1304 | a field is out of range (pointer under `/rig/…` including `/rig/collision/…`, `/framing/…`, `/shake/…`, `/trauma`, `/look_deg`, `/look_deg_per_count`, `/kick`, `/kick_deg`, `/roll_deg`; `pitch_limit_deg` outside (0, 90), a non-finite `eye_offset`, `look_deg` or kick channel) |
 | L1305 | `target` names a despawned entity (warning, once) |
 | L1306 | the track `path` fails to load (once) |
 | L1307 | the entity has no `Camera` |
+| L1550 | the collision cast was rejected, e.g. an undeclared layer name (pointer `/rig/collision`; the stage is skipped) |
+| L1551 | `collision.enabled` in a world with no physics (warning, once) |
+| L1552 | pivot and target both inside geometry; the boom holds at `min_distance` (warning, once) |
 | L1308 | more than one `CameraRig`; only the lowest entity id runs |
 | L1309 | the camera entity has a `Parent` (the rig writes a world-space pose) |
 | L1332 | a `CameraOffset` field is non-finite |
@@ -237,6 +287,7 @@ Runnable: `crates/ludion/examples/camera_offset.rs`.
 - One rig per world, on a root camera.
 - A game defining its own `CameraRig` type must name it explicitly (`use crate::…::CameraRig`): the prelude glob exports the engine's one, and vigil does exactly this.
 - Rig state saved in scene text resumes on load; a blend stamped later than the game clock (a mid-blend save reloaded at frame 0) is stale, so the rig snaps rather than freezing.
+- The late latch rebuilds the framed boom at the tick's collided length without casting again: the presenter has no physics.
 - A snap tick does not advance trauma decay or the shake clock (one tick).
 - Gate a rig's pose by `WorldHash` and the camera `Transform`, never by a shaken image on an unpinned GPU.
 

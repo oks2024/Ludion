@@ -118,30 +118,52 @@ and per-device prompt labels are not in the engine.
 
 ## Action maps — named actions, data-driven
 
-A `kind: input-actions` document names what the player means and which physical inputs mean it. It is
-sim-side data: `InputActionsDoc` compiles with `ActionMap::compile(&doc, rate)` into the `Actions`
-resource, and the `SimDriver` resolves it once per tick when the world holds one. The engine does not
-load the file; build the document and insert `Actions` yourself.
+A `kind: input-actions` document names what the player means and which physical inputs mean it.
+`Engine::builder().input_actions()` opts in: exactly one `*.yaml` under the content root with
+`kind: input-actions` (`L1315` otherwise), validated at build, `scene.load` and every rebuild under the
+compile codes below, re-pathed `input-actions/<file>/<pointer>`. The engine compiles it into the
+`Actions` resource and the `SimDriver` resolves it once per tick. Without the opt-in,
+`ActionMap::compile(&doc, rate)` and inserting `Actions` yourself work the same.
+`cargo run -p ludion --example input_actions` is the copyable game.
 
 ```yaml
-gestures: { tap_max: 0.22, hold: 0.35, double_tap_window: 0.25 }   # seconds; all optional
+gestures:                      # seconds; all optional
+  tap_max: 0.22
+  hold: 0.35
+  double_tap_window: 0.25
 actions:
   crouch:                      # a-z 0-9 _
     kind: button
     bindings:
-      - { key: C, gesture: tap }
-      - { key: C, gesture: hold }
+      - key: C
+        gesture: tap
+      - key: C
+        gesture: hold
   fire:
     kind: button
-    bindings: [ { mouse: left }, { trigger: right, press: 0.5, release: 0.35 } ]
+    bindings:
+      - mouse: left
+      - trigger: right
+        press: 0.5
+        release: 0.35
   move:
     kind: axis2
     bindings:
-      - { keys: { up: W, down: S, left: A, right: D } }
-      - { stick: left, deadzone: 0.2 }
+      - keys:
+          up: W
+          down: S
+          left: A
+          right: D
+      - stick: left
+        deadzone: 0.2
   look:
     kind: axis2
-    bindings: [ { mouse_delta: true, scale: 0.05, invert_y: true }, { stick: right, scale: 3.0 } ]
+    bindings:
+      - mouse_delta: true
+        scale: 0.05
+        invert_y: true
+      - stick: right
+        scale: 3.0
 ```
 
 ```rust
@@ -154,7 +176,11 @@ let [x, y] = actions.axis2(ActionName::new("move"));
 Reads: `pressed` / `held` / `released` (buttons; `released` waits for the last held binding),
 `held_ticks` and `hold_progress` (a `hold` binding's ticks down and its fraction of the threshold),
 `axis` (`axis1`), `axis2`. An unknown name reads inactive or zero and is reported once through
-`take_unknown()` (`L4270`). A binding names one source; the source must fit the action's kind:
+`take_unknown()`; with the builder opt-in the engine reports each unknown name once as `L4270`.
+`Actions` is fresh after `scene.load` and `engine.restore`, and carried by a scene switch and a
+checkpoint. A fresh layer **latches** an input already held on its first tick (a trigger already at or
+above `press` too): it fires nothing, reads inactive and contributes no `held_ticks` until released, so
+after a load or restore a held input needs a fresh press. A binding names one source; the source must fit the action's kind:
 
 | kind | sources |
 |---|---|
@@ -180,8 +206,8 @@ within `double_tap_window` after a tap and is level while held. When an input ha
 binding its tap is deferred: it fires `double_tap_window` ticks after the release, unless the second
 press cancels it — that latency is the cost of telling the two apart. Thresholds are sim ticks
 (seconds rounded half up at the tick rate, minimum 1), never `game_dt`: a `GameClock` hold or slow
-motion never stretches one. `Actions::state()` and `restore_state()` carry a mid-gesture state across a
-snapshot.
+motion never stretches one. `Actions::state()` and `restore_state()` carry a mid-gesture state; the
+engine's snapshot does not yet, so a restore starts the layer fresh (the latch above).
 
 ## Headless is quiescent, not broken
 

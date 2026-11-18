@@ -1,5 +1,5 @@
 ---
-description: Freezing gameplay time while the sim keeps ticking — GameClock, SystemCtx's game_* fields
+description: Freeze or slow gameplay time while the sim ticks — GameClock hold/scale, SystemCtx game_* fields
 ---
 
 # The gameplay clock
@@ -41,9 +41,37 @@ unheld run of the same scene over the same span of frames.
 |---|---|---|
 | `frame` / `time` / `dt` | the sim's own — advance every tick regardless | unaffected: the host and a pause overlay still need these |
 | `game_frame` / `game_time` / `game_dt` | the same three, read through `GameClock` | stand still: `game_dt` is `0.0`; `game_frame`/`game_time` repeat the frame gameplay time stopped on |
+| `game_instant` | exact fractional gameplay time (`GameTime`); `game_time` is its floor | stands still |
 
 `ctx.game_advanced()` is `ctx.game_dt > 0.0` — the guard a system that must fire once per gameplay
-frame (not once per sim tick) returns on.
+frame (not once per sim tick) returns on. Under a scale `game_dt` is `dt × s` and `game_time` is the floor of `game_instant`; see Scale.
+
+## Scale
+
+`scale(s)` slows gameplay time to a fraction `s` of a tick, `s` in `(0, 1]`. Call it every frame the game is slowed, exactly as `hold()`: it applies to the next tick (the same latency as a hold) and a frame that calls nothing runs at full speed.
+
+```rust
+use ludion::prelude::*;
+
+fn slow_while_aiming(world: &mut World, _ctx: &SystemCtx) {
+    world.resource_mut::<GameClock>().unwrap().scale(0.25);
+}
+```
+
+- Several calls in one frame compose by `min`. **A hold wins**: a frame that holds and scales is held.
+- The value is quantized to 1/65536 and clamped up to `GameClock::MIN_SCALE` (1/1024). A non-finite value, `s <= 0` or `s > 1` is ignored and reported once as `L4260`; use `hold()` for a freeze. There is no scale above 1.
+- `ctx.game_scale()` is the scale of this tick (`0.0` held). `ctx.game_advanced()` means time moved (`game_dt > 0`); `ctx.game_frames_crossed() > 0` means a whole gameplay frame passed (0 or 1; always 1 on an unscaled advanced tick). A system that must act once per gameplay frame guards on `game_frames_crossed() > 0`.
+
+| Guard | True on |
+|---|---|
+| `game_advanced()` | every tick time moved, scaled or not |
+| `game_frames_crossed() > 0` | one tick in `1/s` at scale `s` |
+| `!game_advanced()` | held ticks only |
+
+- **Stamps stay whole frames.** `ctx.game_frame` is the floor of `ctx.game_instant`: a `started` stamp is a floor frame, so an effect started mid-slow begins up to one gameplay frame early. Read `game_instant` (`ticks_since(started)`) for fractional age.
+- **Follows the scale now:** everything that integrates `ctx.game_dt` — `PathFollower`, camera rig springs, projectile pools, `ludion-ai` timers and cooldowns.
+- **Does not follow yet:** the closed-form evaluators (`bullet_position`, particle emitters, animation clips and events, parent joints, ragdolls, pattern timelines) step in whole gameplay frames, so they advance only on ticks that cross a frame. Physics keeps its full step, and the motor's `PhysicsWorld::gameplay_dt` returns a whole tick on a scaled frame. A game must not scale while it relies on any of these.
+- The scale stays out of `WorldHash`, like `hold`; the clock rides `engine.snapshot` and is omitted while it excludes nothing.
 
 ## Rules
 

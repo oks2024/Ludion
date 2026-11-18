@@ -499,6 +499,36 @@ pub fn scene_motor_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
             name == "CharacterMotorState"
                 && value.get("suspended").and_then(|v| v.as_bool()) == Some(true)
         });
+        let named_posture = entity
+            .components
+            .iter()
+            .find(|(name, _)| name == "CharacterMotorState")
+            .and_then(|(_, state)| state.get("posture")?.as_str());
+        if let Some(posture) = named_posture {
+            let declared: Vec<&str> = entity
+                .components
+                .iter()
+                .find(|(name, _)| name == "CharacterMotor")
+                .and_then(|(_, motor)| motor.get("postures")?.as_object())
+                .map(|postures| postures.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            if !declared.contains(&posture) {
+                let help = match suggest::nearest(posture, declared.iter().copied()) {
+                    Some(candidate) => format!("nearest match is `{candidate}`"),
+                    None => "declare it under `CharacterMotor.postures`".to_string(),
+                };
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::CHARACTER_MOTOR_POSTURE_UNKNOWN,
+                        format!(
+                            "posture `{posture}` is not declared by this entity's `CharacterMotor`"
+                        ),
+                    )
+                    .with_path(format!("{at}/CharacterMotorState/posture"))
+                    .with_help(help),
+                );
+            }
+        }
         if has("Parent") && !suspended {
             diagnostics.push(
                 Diagnostic::new(
@@ -1472,6 +1502,33 @@ entities:
             found[0].path.as_deref(),
             Some("/entities/0/components/CharacterMotor")
         );
+    }
+
+    #[test]
+    fn an_undeclared_posture_is_l1540() {
+        let scene = motor_scene(
+            LAYERS,
+            "      CharacterMotor:\n        postures:\n          crouch:\n            shape:\n              upright:\n                height: 1.0\n      CharacterMotorState:\n        posture: crouhc\n",
+        );
+        let found = scene_motor_diagnostics(&scene);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code, code::CHARACTER_MOTOR_POSTURE_UNKNOWN);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/CharacterMotorState/posture")
+        );
+        assert!(
+            found[0]
+                .help
+                .as_deref()
+                .unwrap_or_default()
+                .contains("crouch")
+        );
+        let declared = motor_scene(
+            LAYERS,
+            "      CharacterMotor:\n        postures:\n          crouch:\n            shape:\n              upright:\n                height: 1.0\n      CharacterMotorState:\n        posture: crouch\n",
+        );
+        assert!(scene_motor_diagnostics(&declared).is_empty());
     }
 
     #[test]

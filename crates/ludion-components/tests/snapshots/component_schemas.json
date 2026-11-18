@@ -457,6 +457,10 @@
         "type": "number",
         "format": "float"
       },
+      "framing": {
+        "description": "The game-written framing channel (corner peek, wall-hug, shoulder framing) for `chase` and\n`follow`: it moves the eye before collision, eased by `framing.half_life`.",
+        "$ref": "#/$defs/Framing"
+      },
       "state": {
         "description": "Engine-written state: springs, projection, blend and shake clock.",
         "$ref": "#/$defs/RigState",
@@ -562,6 +566,10 @@
               "seconds": 1.0,
               "curve": "ease_in_out"
             }
+          },
+          "collision": {
+            "description": "The sphere-cast collision stage that keeps the eye out of geometry; off by default.",
+            "$ref": "#/$defs/RigCollisionConfig"
           }
         }
       },
@@ -731,6 +739,39 @@
             "description": "Whether `look_deg[1]` moves the pitch; `false` consumes and drops it.",
             "type": "boolean",
             "default": true
+          },
+          "recenter": {
+            "description": "Turns the yaw back behind the target's motion once look has been idle.",
+            "$ref": "#/$defs/Recenter"
+          }
+        }
+      },
+      "Recenter": {
+        "description": "The chase recenter: after `delay` gameplay seconds with no look, the yaw turns back behind the\ntarget's horizontal motion.",
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "description": "Whether the recenter runs.",
+            "type": "boolean",
+            "default": false
+          },
+          "delay": {
+            "description": "Gameplay seconds without look input before it starts.",
+            "type": "number",
+            "format": "float",
+            "default": 1.5
+          },
+          "half_life": {
+            "description": "Seconds for the yaw error to halve.",
+            "type": "number",
+            "format": "float",
+            "default": 0.6000000238418579
+          },
+          "min_speed": {
+            "description": "Horizontal target speed in metres per second below which it does not turn.",
+            "type": "number",
+            "format": "float",
+            "default": 1.0
           }
         }
       },
@@ -856,6 +897,63 @@
           }
         ]
       },
+      "RigCollisionConfig": {
+        "description": "The collision stage of a rig: a sphere cast from the pivot (or focus, on `track`) to the eye\npulls the boom in at once and eases it back out after a hold. Ignored in `first_person`. It\nlives on the config so a zone can swap it.",
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "description": "Whether the stage runs.",
+            "type": "boolean",
+            "default": false
+          },
+          "radius": {
+            "description": "Radius of the cast sphere in metres; above 0.",
+            "type": "number",
+            "format": "float",
+            "default": 0.30000001192092896
+          },
+          "include_layers": {
+            "description": "Physics layer names the cast hits; empty hits every layer.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "ignore_layers": {
+            "description": "Physics layer names the cast passes through.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "min_distance": {
+            "description": "The shortest boom a hit can pull in to, in metres.",
+            "type": "number",
+            "format": "float",
+            "default": 0.6000000238418579
+          },
+          "skin": {
+            "description": "Metres kept between the hit and the eye.",
+            "type": "number",
+            "format": "float",
+            "default": 0.05000000074505806
+          },
+          "recover_delay": {
+            "description": "Gameplay seconds the pulled-in boom holds before easing back out.",
+            "type": "number",
+            "format": "float",
+            "default": 0.15000000596046448
+          },
+          "recover_half_life": {
+            "description": "Seconds for the remaining boom error to halve while recovering.",
+            "type": "number",
+            "format": "float",
+            "default": 0.3499999940395355
+          }
+        }
+      },
       "ShakeConfig": {
         "description": "The trauma shake, applied to the output pose only.",
         "type": "object",
@@ -932,6 +1030,60 @@
             "type": "number",
             "format": "float",
             "default": 0.15000000596046448
+          }
+        }
+      },
+      "Framing": {
+        "description": "The game-written framing channel: at `weight` 1 the boom is built from the offset pivot, yaw,\npitch and distance below. It eases by `half_life`, applies before collision, and the framed\nyaw and pitch show in [`CameraRig::aim`]; `state.yaw_deg` stays the unframed orbit yaw.",
+        "type": "object",
+        "properties": {
+          "weight": {
+            "description": "The goal weight, clamped to `[0, 1]` at use; `0` is no framing.",
+            "type": "number",
+            "format": "float",
+            "default": 0.0
+          },
+          "pivot_offset": {
+            "description": "Pivot offset in metres in the yaw frame: `+x` right, `+y` up, `+z` back.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "yaw_offset_deg": {
+            "description": "Yaw added at full weight, in degrees.",
+            "type": "number",
+            "format": "float",
+            "default": 0.0
+          },
+          "pitch_offset_deg": {
+            "description": "Pitch added at full weight, in degrees (positive looks down).",
+            "type": "number",
+            "format": "float",
+            "default": 0.0
+          },
+          "distance": {
+            "description": "The boom length at full weight; `None` keeps the mode's.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "default": null
+          },
+          "half_life": {
+            "description": "Seconds for the applied weight to halve toward `weight`.",
+            "type": "number",
+            "format": "float",
+            "default": 0.11999999731779099
           }
         }
       },
@@ -1039,6 +1191,29 @@
             "type": "number",
             "format": "float",
             "default": 0.0
+          },
+          "boom": {
+            "description": "The collided boom length in metres; `None` when the eye is free.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "boom_hold": {
+            "description": "Gameplay seconds left before a pulled-in boom eases back out.",
+            "type": "number",
+            "format": "float"
+          },
+          "framing_weight": {
+            "description": "The applied framing weight in `[0, 1]`.",
+            "type": "number",
+            "format": "float"
+          },
+          "look_idle": {
+            "description": "Gameplay seconds since the last nonzero chase look.",
+            "type": "number",
+            "format": "float"
           },
           "anchor_y": {
             "description": "The vertical anchor's height.",
@@ -1241,6 +1416,88 @@
         "format": "uint32",
         "minimum": 0,
         "default": 4
+      },
+      "postures": {
+        "description": "Named postures (`crouch`, `low`): each an upright shape and optional tunable overrides the\nmotor takes on while `CharacterMotorState.posture` names it. Empty is the plain motor and\nis omitted from the saved text. Names are identifiers: non-empty, no `/` or `~`.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/Posture"
+        }
+      }
+    },
+    "$defs": {
+      "Posture": {
+        "description": "One named posture of a [`CharacterMotor`]: a shape, and tunables that replace the motor's while\nit is in force.\n\n```yaml\npostures:\n  crouch:\n    shape: { upright: { height: 1.1 } }\n    step_height: 0.2\n```",
+        "type": "object",
+        "properties": {
+          "shape": {
+            "description": "The capsule this posture gives the motor.",
+            "$ref": "#/$defs/PostureShape"
+          },
+          "step_height": {
+            "description": "Replaces the motor's `step_height` while in force; `None` inherits it.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "slope_limit_deg": {
+            "description": "Replaces the motor's `slope_limit_deg` while in force; `None` inherits it.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "snap_distance": {
+            "description": "Replaces the motor's `snap_distance` while in force; `None` inherits it.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          }
+        },
+        "required": [
+          "shape"
+        ]
+      },
+      "PostureShape": {
+        "description": "A posture's capsule. Externally tagged (`upright: { .. }`) like `Collider.shape`, so further\nshapes can join without a breaking change.",
+        "oneOf": [
+          {
+            "description": "A capsule standing on the feet, like the motor's own.",
+            "type": "object",
+            "properties": {
+              "upright": {
+                "type": "object",
+                "properties": {
+                  "height": {
+                    "description": "The capsule's full height, feet to crown, in metres.",
+                    "type": "number",
+                    "format": "float"
+                  },
+                  "radius": {
+                    "description": "The capsule radius, in metres; `None` is the motor's.",
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "format": "float"
+                  }
+                },
+                "required": [
+                  "height"
+                ]
+              }
+            },
+            "required": [
+              "upright"
+            ],
+            "additionalProperties": false
+          }
+        ]
       }
     }
   },
@@ -1296,6 +1553,13 @@
           "null"
         ],
         "format": "float"
+      },
+      "posture": {
+        "description": "The posture in force, a key of the motor's `postures`; `None` is the motor's own shape.\nSet by `set_character_posture` and `resume_character`.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "carry_tick": {
         "description": "The tick platform carry last ran on, so it applies once per tick.",
@@ -4447,6 +4711,187 @@
       }
     }
   },
+  "Perceiver": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Perceiver",
+    "description": "An entity that sees: up to eight [`SightZone`]s from an eye point, a facing, and an optional\nclosed-form [`ZoneSweep`]. The entity's world rotation, then `look`, then the sweep's yaw orient\nevery zone. `perception_update` fills the `PerceptionResults` resource from it.\n\n```yaml\ncomponents:\n  Perceiver:\n    eye:\n      - 0.0\n      - 1.6\n      - 0.0\n    look:\n      pitch_deg: 5.0\n    sight:\n      - name: inner\n        range: 6.0\n        half_angle_deg: 60.0\n        detects:\n          - player\n      - name: outer\n        range: 14.0\n        half_angle_deg: 30.0\n        range_by_visibility: true\n```\n\n```\nuse ludion_components::Perceiver;\n\nlet guard: Perceiver = serde_json::from_value(serde_json::json!({\n    \"eye\": [0.0, 1.6, 0.0],\n    \"sight\": [{ \"name\": \"inner\", \"range\": 6.0, \"half_angle_deg\": 60.0 }],\n}))\n.unwrap();\nassert!(guard.enabled);\nassert_eq!(guard.sight.len(), 1);\n```",
+    "type": "object",
+    "properties": {
+      "enabled": {
+        "description": "Whether the perceiver sees; a disabled one produces no samples (default `true`).",
+        "type": "boolean"
+      },
+      "eye": {
+        "description": "The eye in the entity's local frame, metres (default `[0, 0, 0]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "look": {
+        "description": "The facing the zones share, from the entity's rotation (default none).",
+        "$ref": "#/$defs/Look"
+      },
+      "sight": {
+        "description": "The sight zones, one to eight.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/SightZone"
+        },
+        "default": []
+      },
+      "sweep": {
+        "description": "A yaw sweep over gameplay time, applied to every zone (default none).",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ZoneSweep"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "$defs": {
+      "Look": {
+        "description": "A facing offset from the entity's own rotation, in degrees. Yaw 0 looks along the entity's −Z,\n**positive yaw turns left** and **positive pitch looks down**: the camera rig's convention.\n\n```\nuse ludion_components::Look;\n\nlet look: Look = serde_json::from_value(serde_json::json!({ \"pitch_deg\": 10.0 })).unwrap();\nassert_eq!(look, Look { yaw_deg: 0.0, pitch_deg: 10.0 });\n```",
+        "type": "object",
+        "properties": {
+          "yaw_deg": {
+            "description": "Turn about +Y in degrees; positive turns left (default `0.0`).",
+            "type": "number",
+            "format": "float"
+          },
+          "pitch_deg": {
+            "description": "Tilt in degrees; positive looks down (default `0.0`).",
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
+      "SightZone": {
+        "description": "One wedge of sight: a range, horizontal and vertical half-angles, and the classes it detects. A\npoint is in the zone when its horizontal and vertical angles are inside the half-angles and its\ndistance from the eye is within the effective range (a wedge, not a cone).\n\n```\nuse ludion_components::SightZone;\n\nlet zone: SightZone = serde_json::from_value(serde_json::json!({\n    \"name\": \"inner\", \"range\": 6.0, \"half_angle_deg\": 60.0,\n    \"detects\": [\"player\"], \"see_through\": [\"cover_overhead\"], \"see_through_max_range\": 3.0,\n}))\n.unwrap();\nassert_eq!(zone.vertical_half_angle_deg, 45.0);\nassert!(!zone.range_by_visibility);\n```",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "The zone's name; unique within the perceiver (default `\"\"`).",
+            "type": "string"
+          },
+          "range": {
+            "description": "Metres from the eye (finite and above 0).",
+            "type": "number",
+            "format": "float"
+          },
+          "half_angle_deg": {
+            "description": "Horizontal half-angle in degrees, in (0, 180].",
+            "type": "number",
+            "format": "float"
+          },
+          "vertical_half_angle_deg": {
+            "description": "Vertical half-angle in degrees, in (0, 90] (default `45.0`).",
+            "type": "number",
+            "format": "float"
+          },
+          "detects": {
+            "description": "The `PerceptionConfig` classes the zone detects; empty means every class (default `[]`).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "see_through": {
+            "description": "Layers a sample point's `blocked_by` loses while it is within `see_through_max_range` of the\neye (default `[]`).",
+            "$ref": "#/$defs/LayerSet"
+          },
+          "see_through_max_range": {
+            "description": "Metres from the eye within which `see_through` applies (default `0.0`).",
+            "type": "number",
+            "format": "float"
+          },
+          "range_by_visibility": {
+            "description": "Scales `range` by the target's visibility (default `false`).",
+            "type": "boolean"
+          },
+          "visibility_clamp": {
+            "description": "Clamps the visibility that scales the range, `[lo, hi]` with `lo <= hi`; unset clamps only\nbelow 0 (default unset).",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "required": [
+          "range",
+          "half_angle_deg"
+        ]
+      },
+      "LayerSet": {
+        "description": "An ordered list of layer names, in the author's order (never sorted, so a scene's text does not\nchurn). Serializes as a plain list of strings.\n\n```\nuse ludion_physics::LayerSet;\n\nlet set = LayerSet::from(vec![\"light_occluder\".to_string()]);\nassert_eq!(set.as_slice(), [\"light_occluder\"]);\nassert!(!set.is_empty());\nassert_eq!(serde_json::to_string(&set).unwrap(), r#\"[\"light_occluder\"]\"#);\n```",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "ZoneSweep": {
+        "description": "A closed-form yaw sweep of a [`Perceiver`]'s zones: a camera or searchlight panning to and fro.\nIt is a pure function of gameplay time (a held `GameClock` holds it).\n\n```\nuse ludion_components::{SweepShape, ZoneSweep};\n\nlet sweep: ZoneSweep = serde_json::from_value(serde_json::json!({\n    \"amplitude_deg\": 40.0, \"period_s\": 8.0, \"dwell_s\": 1.0,\n}))\n.unwrap();\nassert_eq!(sweep.shape, SweepShape::PingPongLinear);\nassert_eq!(sweep.phase_s, 0.0);\n```",
+        "type": "object",
+        "properties": {
+          "amplitude_deg": {
+            "description": "Degrees either side of the look yaw (finite).",
+            "type": "number",
+            "format": "float"
+          },
+          "period_s": {
+            "description": "Seconds for one full cycle, above `2 * dwell_s`.",
+            "type": "number",
+            "format": "float"
+          },
+          "dwell_s": {
+            "description": "Seconds held at each end of a `ping_pong_linear` sweep (default `0.0`).",
+            "type": "number",
+            "format": "float"
+          },
+          "phase_s": {
+            "description": "Seconds added to gameplay time before the cycle position is taken (default `0.0`).",
+            "type": "number",
+            "format": "float"
+          },
+          "shape": {
+            "description": "The motion (default `ping_pong_linear`).",
+            "$ref": "#/$defs/SweepShape"
+          }
+        },
+        "required": [
+          "amplitude_deg",
+          "period_s"
+        ]
+      },
+      "SweepShape": {
+        "description": "How a [`ZoneSweep`] moves the facing's yaw over gameplay time.",
+        "oneOf": [
+          {
+            "description": "Constant-speed travel from `-amplitude_deg` to `+amplitude_deg`, a dwell, the way back, a dwell.",
+            "type": "string",
+            "const": "ping_pong_linear"
+          },
+          {
+            "description": "`amplitude_deg * sin(2π t / period_s)`; `dwell_s` must be 0.",
+            "type": "string",
+            "const": "sine"
+          }
+        ]
+      }
+    }
+  },
   "PointLight": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "PointLight",
@@ -5169,6 +5614,99 @@
     "description": "Marks an entity whose state **stays behind** when the run leaves this scene: the engine captures\nits full component bag on the way out of a district and re-applies it on the way back in, within\none session (see `crate::transition`).\n\nA field-less opt-in marker, authored `Residue: {}` (or inserted from code on an entity a system\nspawns). Absent is today's behaviour exactly: a scene that marks nothing captures nothing, and a\nswitch out of it and back rebuilds it from its authored text alone.\n\n**Identity is the entity's `Name`.** A marked entity that carries one is matched back onto the\nfreshly instantiated entity of the same name — its authored state is replaced in place, so its\n`EntityId` is the one the target scene minted and no other entity's id moves. A marked entity with\nno `Name` is *anonymous*: it is never matched, and comes back as a fresh entity spawned before the\ncarried set (the dropped-pickup case).\n\n**The state must stay alive to be remembered.** Capture reads the departing world, so an entity\ndespawned before the switch leaves nothing behind and the target scene's authored version returns.\nA thing that has been \"used up\" therefore keeps its entity and flips a component to say so — the\ndestroyed spawner is a husk, not a hole.",
     "type": "object",
     "properties": {}
+  },
+  "SightTarget": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "SightTarget",
+    "description": "An entity a [`Perceiver`] can see: a `class` the zones detect, a `visibility` that scales\nvisibility-ranged zones, and one to eight sample [`SightPoint`]s with the rule that turns their\nresults into one answer.\n\n```yaml\ncomponents:\n  SightTarget:\n    class: player\n    visibility: 0.5\n    points:\n      - offset:\n          - 0.0\n          - 1.6\n          - 0.0\n        blocked_by:\n          - wall\n          - cover_high\n      - offset:\n          - 0.0\n          - 0.4\n          - 0.0\n        blocked_by:\n          - wall\n          - cover_low\n          - cover_high\n    require: any\n```\n\n```\nuse ludion_components::{Require, SightTarget};\n\nlet target: SightTarget = serde_json::from_value(serde_json::json!({\n    \"class\": \"player\",\n    \"points\": [{ \"offset\": [0.0, 1.0, 0.0] }],\n}))\n.unwrap();\nassert_eq!(target.visibility, 1.0);\nassert_eq!(target.require, Require::Any);\n```",
+    "type": "object",
+    "properties": {
+      "class": {
+        "description": "A `PerceptionConfig` class name.",
+        "type": "string"
+      },
+      "visibility": {
+        "description": "Scales the range of `range_by_visibility` zones (default `1.0`; finite, not negative).",
+        "type": "number",
+        "format": "float"
+      },
+      "points": {
+        "description": "The sample points, one to eight.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/SightPoint"
+        },
+        "default": []
+      },
+      "require": {
+        "description": "How many points must be seen (default `any`).",
+        "$ref": "#/$defs/Require"
+      }
+    },
+    "required": [
+      "class"
+    ],
+    "$defs": {
+      "SightPoint": {
+        "description": "One place on a target a ray is cast to, and the layers that hide it.\n\n```\nuse ludion_components::SightPoint;\n\nlet head: SightPoint = serde_json::from_value(serde_json::json!({\n    \"offset\": [0.0, 1.6, 0.0], \"blocked_by\": [\"wall\", \"cover_high\"],\n}))\n.unwrap();\nassert_eq!(head.blocked_by.as_slice(), [\"wall\", \"cover_high\"]);\n```",
+        "type": "object",
+        "properties": {
+          "offset": {
+            "description": "The point in the target's local frame, metres.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "blocked_by": {
+            "description": "The layers that block the line of sight to this point; empty means nothing blocks it (a\nray is not even cast; default `[]`).",
+            "$ref": "#/$defs/LayerSet"
+          }
+        },
+        "required": [
+          "offset"
+        ]
+      },
+      "LayerSet": {
+        "description": "An ordered list of layer names, in the author's order (never sorted, so a scene's text does not\nchurn). Serializes as a plain list of strings.\n\n```\nuse ludion_physics::LayerSet;\n\nlet set = LayerSet::from(vec![\"light_occluder\".to_string()]);\nassert_eq!(set.as_slice(), [\"light_occluder\"]);\nassert!(!set.is_empty());\nassert_eq!(serde_json::to_string(&set).unwrap(), r#\"[\"light_occluder\"]\"#);\n```",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "Require": {
+        "description": "How many of a [`SightTarget`]'s sample points must be seen for the target to count as seen.\n\n```\nuse ludion_components::Require;\n\nlet rule: Require = serde_json::from_value(serde_json::json!({ \"fraction\": 0.5 })).unwrap();\nassert_eq!(rule, Require::Fraction(0.5));\nlet all: Require = serde_json::from_value(serde_json::json!(\"all\")).unwrap();\nassert_eq!(all, Require::All);\n```",
+        "oneOf": [
+          {
+            "description": "One visible point is enough.",
+            "type": "string",
+            "const": "any"
+          },
+          {
+            "description": "Every point must be visible.",
+            "type": "string",
+            "const": "all"
+          },
+          {
+            "description": "At least `ceil(fraction * points)` points, with `fraction` in (0, 1].",
+            "type": "object",
+            "properties": {
+              "fraction": {
+                "type": "number",
+                "format": "float"
+              }
+            },
+            "required": [
+              "fraction"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
   },
   "SkinBone": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -870,3 +870,40 @@ fn walkers_get_field_directions_toward_a_motor_target() {
         );
     }
 }
+
+/// A routed walker and a flow-field walker under a camera, with `nav` debug draw `categories`.
+fn drawn_nav_hashes(categories: ludion_engine::DebugCategories) -> Vec<u64> {
+    let mut engine = steering_builder()
+        .nav(config())
+        .system("mover", mover)
+        .build()
+        .expect("boots");
+    engine.set_debug_draw(categories);
+    let mut yaml = scene(&[ground()]);
+    yaml += "  - name: cam\n    components:\n      Camera: {}\n      Transform:\n        translation:\n";
+    yaml += &seq([12.0, 10.0, 12.0], 10);
+    yaml += &agent(0, [2.0, 0.0, 2.0], "        neighbor_layers: 0\n");
+    yaml += &format!(
+        "      NavGoal:\n        at:\n{}",
+        seq([20.5, 0.0, 20.5], 10)
+    );
+    yaml += &agent(
+        1,
+        [3.0, 0.0, 3.0],
+        &format!(
+            "        neighbor_layers: 0\n{}",
+            target_yaml([18.5, 0.0, 5.5])
+        ),
+    );
+    engine.load_inline_scene(&yaml).unwrap();
+    trace(&mut engine, 30)
+}
+
+#[test]
+fn drawing_the_nav_view_never_perturbs_the_world_hash() {
+    use ludion_engine::DebugCategories;
+    let all = drawn_nav_hashes(DebugCategories::All);
+    assert_eq!(all, drawn_nav_hashes(DebugCategories::parse("nav")));
+    assert_eq!(all, drawn_nav_hashes(DebugCategories::None));
+    assert!(all.windows(2).any(|w| w[0] != w[1]), "the walkers move");
+}

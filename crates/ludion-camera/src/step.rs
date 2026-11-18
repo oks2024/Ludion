@@ -1,17 +1,23 @@
 //! The per-tick rig pipeline.
 
 use ludion_core::math::{
-    Orbit, euler_xyz_degrees_to_quat, powf, quat_mul, quat_rotate, quat_to_euler_xyz_degrees, sqrt,
+    Orbit, atan2, euler_xyz_degrees_to_quat, powf, quat_mul, quat_rotate,
+    quat_to_euler_xyz_degrees, sin_cos, sqrt,
 };
 use ludion_core::time::FrameIndex;
 use ludion_scene::PathSampler;
 
+use crate::collision::{RigCollision, collide, held_eye, release};
 use crate::first_person::{apply_look, first_person_eye, looked};
 use crate::orbit::{chase_look, chased, clamp_pitch, orbit_eye};
-use crate::rig::{Aim, Blend, CameraRig, Pose, RigMode};
+use crate::rig::{Aim, Blend, CameraRig, Framing, Pose, Recenter, RigMode, RigState};
 use crate::shake::shake_noise;
 use crate::spring::{damp, decay, ease, lerp_pose, spring_step, wrap180};
 use crate::track::{Desired, desired, rig_focus};
+
+const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
+const RAD_TO_DEG: f32 = 180.0 / core::f32::consts::PI;
+const FRAMING_REST: f32 = 1e-4;
 
 /// What the engine resolved for one rig tick.
 #[derive(Clone, Copy, Debug)]
@@ -29,6 +35,9 @@ pub struct RigInput<'a> {
     pub game_frame: FrameIndex,
     /// The camera's current vertical field of view in degrees, when it is perspective.
     pub camera_fov_y_deg: Option<f32>,
+    /// The sphere cast the collision stage uses, or `None` to skip the stage (the crate has no
+    /// physics of its own).
+    pub collision: Option<&'a dyn RigCollision>,
 }
 
 /// The camera pose a tick produced, shake included.
@@ -40,6 +49,9 @@ pub struct RigOutput {
     pub rotation_deg: [f32; 3],
     /// The field of view to write, when the rig sets one.
     pub fov_y_deg: Option<f32>,
+    /// The collision stage found both the cast origin and the target inside geometry and holds the
+    /// boom at `min_distance`.
+    pub stuck: bool,
 }
 
 /// Advances `rig` one tick and returns the camera pose, or `None` (touching nothing, so the engine
@@ -74,6 +86,7 @@ pub struct RigOutput {
 ///     dt: 1.0 / 60.0,
 ///     game_frame: FrameIndex::ZERO,
 ///     camera_fov_y_deg: None,
+///     collision: None,
 /// };
 /// let out = step_rig(&mut rig, &input).unwrap();
 /// assert!((out.translation[1] - 2.2).abs() < 1e-5 && (out.translation[2] + 5.5).abs() < 1e-5);
@@ -91,6 +104,9 @@ pub fn step_rig(rig: &mut CameraRig, input: &RigInput) -> Option<RigOutput> {
         }
         RigMode::Chase(chase) => {
             let look = std::mem::take(&mut rig.look_deg);
+            if look != [0.0; 2] {
+                rig.state.look_idle = 0.0;
+            }
             chase_look(&mut rig.state, chase, look);
         }
         RigMode::Follow(follow) => {
@@ -118,13 +134,48 @@ pub fn step_rig(rig: &mut CameraRig, input: &RigInput) -> Option<RigOutput> {
     if let RigMode::FirstPerson(fp) = &rig.rig.mode {
         rig.state.eye = first_person_eye(fp, target, rig.state.yaw_deg);
     }
-    if let Some(eye) = boom_eye(rig) {
-        rig.state.eye = eye;
+    let mut live = Pose {
+        eye: rig.state.eye,
+        yaw_deg: rig.state.yaw_deg,
+        pitch_deg: rig.state.pitch_deg,
+        fov_y_deg: rig.rig.fov_y_deg,
+    };
+    let mut origin = None;
+    if let Some(boom) = boom(rig, rig.state.yaw_deg, rig.state.pitch_deg) {
+        rig.state.eye = boom.eye;
+        (live.eye, live.yaw_deg, live.pitch_deg) = (boom.eye, boom.yaw_deg, boom.pitch_deg);
+        origin = Some(boom.origin);
+    } else if let RigMode::Track(_) = &rig.rig.mode {
+        let state = &rig.state;
+        origin = Some(rig_focus(
+            &rig.rig,
+            target,
+            state.anchor_y,
+            state.look_ahead,
+        ));
     }
 
-    let pose = blended_pose(rig, input);
+    let mut pose = blended_pose(rig, input, live);
+    let mut stuck = false;
+    match (origin, input.collision) {
+        (Some(origin), Some(collision)) if rig.rig.collision.enabled => {
+            (pose.eye, stuck) = collide(
+                &mut rig.state,
+                &rig.rig.collision,
+                collision,
+                origin,
+                pose.eye,
+                target,
+                input.game_dt,
+            );
+        }
+        _ => release(&mut rig.state),
+    }
     rig.state.pose = Some(pose);
-    resolved_camera(rig, target, [0.0; 2]).map(|resolved| resolved.view)
+    resolved_camera(rig, target, [0.0; 2]).map(|resolved| RigOutput {
+        stuck,
+        ..resolved.view
+    })
 }
 
 /// The frame's resolved camera: the pre-effect aim and the final view.
@@ -144,8 +195,9 @@ pub struct ResolvedCamera {
 /// bit for bit. The extra look `[yaw, pitch]` (degrees, as [`add_look`](crate::add_look)) applies
 /// only to a `first_person` or `chase` rig with no blend running; pitch clamps to the mode's
 /// range (`chase` moves it only with `look_pitch`), the eye follows the new angles (about the
-/// pivot, for `chase`), and kick, roll, the FOV channels and shake apply on top. In any other case
-/// it is ignored.
+/// pivot, for `chase`, framed like the tick's boom), and kick, roll, the FOV channels and shake
+/// apply on top. The latched eye keeps the tick's collided boom length without casting again: the
+/// presenter has no physics. In any other case it is ignored.
 ///
 /// # Example
 ///
@@ -163,6 +215,7 @@ pub struct ResolvedCamera {
 ///     dt: 1.0 / 60.0,
 ///     game_frame: FrameIndex::ZERO,
 ///     camera_fov_y_deg: None,
+///     collision: None,
 /// };
 /// let out = step_rig(&mut rig, &input).unwrap();
 /// assert_eq!(resolved_camera(&rig, target, [0.0; 2]).unwrap().view, out);
@@ -183,10 +236,17 @@ pub fn resolved_camera(
                 pose.eye = first_person_eye(fp, target, pose.yaw_deg);
             }
             RigMode::Chase(chase) => {
-                (pose.yaw_deg, pose.pitch_deg) =
-                    chased(chase, pose.yaw_deg, pose.pitch_deg, extra_look_deg);
-                if let Some(pivot) = rig.state.pivot {
-                    pose.eye = orbit_eye(pivot, pose.yaw_deg, pose.pitch_deg, chase.distance);
+                let (yaw, pitch) = if rig.state.framing_weight == 0.0 {
+                    (pose.yaw_deg, pose.pitch_deg)
+                } else {
+                    (rig.state.yaw_deg, rig.state.pitch_deg)
+                };
+                let (yaw, pitch) = chased(chase, yaw, pitch, extra_look_deg);
+                if let Some(boom) = boom(rig, yaw, pitch) {
+                    pose.eye = held_eye(&rig.state, boom.origin, boom.eye);
+                    (pose.yaw_deg, pose.pitch_deg) = (boom.yaw_deg, boom.pitch_deg);
+                } else {
+                    (pose.yaw_deg, pose.pitch_deg) = (yaw, pitch);
                 }
             }
             RigMode::Track(_) | RigMode::Follow(_) => {}
@@ -250,8 +310,8 @@ fn rest_on_desired(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathS
             state.pitch_deg = pitch_deg;
             state.yaw_velocity = 0.0;
             state.pitch_velocity = 0.0;
-            if let Some(eye) = boom_eye(rig) {
-                rig.state.eye = eye;
+            if let Some(boom) = boom(rig, rig.state.yaw_deg, rig.state.pitch_deg) {
+                rig.state.eye = boom.eye;
             }
             return;
         }
@@ -285,20 +345,92 @@ fn rest_on_desired(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathS
     state.pivot_velocity = [0.0; 3];
 }
 
-/// The eye of a `chase` or `follow` rig on its boom from the sprung pivot; `None` in other modes.
-fn boom_eye(rig: &CameraRig) -> Option<[f32; 3]> {
+/// A `chase` or `follow` boom: where it starts, the eye and the framed angles.
+struct Boom {
+    origin: [f32; 3],
+    eye: [f32; 3],
+    yaw_deg: f32,
+    pitch_deg: f32,
+}
+
+/// The boom of a `chase` or `follow` rig from the sprung pivot at the unframed `yaw_deg` and
+/// `pitch_deg`, with the applied framing weight folded in; `None` in other modes. At weight `0` it
+/// is the plain orbit.
+fn boom(rig: &CameraRig, yaw_deg: f32, pitch_deg: f32) -> Option<Boom> {
     let state = &rig.state;
-    let distance = match &rig.rig.mode {
-        RigMode::Chase(chase) => chase.distance,
-        RigMode::Follow(follow) => follow.distance,
+    let (distance, chase) = match &rig.rig.mode {
+        RigMode::Chase(chase) => (chase.distance, Some(chase)),
+        RigMode::Follow(follow) => (follow.distance, None),
         RigMode::Track(_) | RigMode::FirstPerson(_) => return None,
     };
-    Some(orbit_eye(
-        state.pivot?,
-        state.yaw_deg,
-        state.pitch_deg,
-        distance,
-    ))
+    let pivot = state.pivot?;
+    let w = state.framing_weight;
+    if w == 0.0 {
+        return Some(Boom {
+            origin: pivot,
+            eye: orbit_eye(pivot, yaw_deg, pitch_deg, distance),
+            yaw_deg,
+            pitch_deg,
+        });
+    }
+    let framing = &rig.framing;
+    let (s, c) = sin_cos(yaw_deg * DEG_TO_RAD);
+    let [ox, oy, oz] = framing.pivot_offset;
+    let origin = [
+        pivot[0] + (ox * c + oz * s) * w,
+        pivot[1] + oy * w,
+        pivot[2] + (-ox * s + oz * c) * w,
+    ];
+    let yaw = wrap180(yaw_deg + framing.yaw_offset_deg * w);
+    let pitch = pitch_deg + framing.pitch_offset_deg * w;
+    let pitch = chase.map_or_else(
+        || pitch.clamp(-89.0, 89.0),
+        |chase| clamp_pitch(chase, pitch),
+    );
+    let distance = distance + (framing.distance.unwrap_or(distance) - distance) * w;
+    Some(Boom {
+        origin,
+        eye: orbit_eye(origin, yaw, pitch, distance),
+        yaw_deg: yaw,
+        pitch_deg: pitch,
+    })
+}
+
+/// The framing weight the game asks for, in `[0, 1]`; a non-finite weight is none.
+fn framing_goal(framing: &Framing) -> f32 {
+    let weight = framing.weight;
+    if weight.is_finite() {
+        weight.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+/// One step of the applied framing weight toward `goal`, snapped to exactly the goal once within
+/// `1e-4` so a returned peek rests at `0.0` and skips serialization.
+fn ease_framing(weight: f32, goal: f32, half_life: f32, dt: f32) -> f32 {
+    let next = damp(weight, goal, half_life, dt);
+    if (next - goal).abs() < FRAMING_REST {
+        goal
+    } else {
+        next
+    }
+}
+
+/// Turns the chase yaw toward the heading of the target's horizontal motion once look has been
+/// idle for `delay`. Counts idle time only while enabled, so a disabled recenter leaves the state
+/// untouched.
+fn recenter(state: &mut RigState, cfg: &Recenter, velocity: [f32; 2], speed: f32, dt: f32) {
+    if !cfg.enabled {
+        state.look_idle = 0.0;
+        return;
+    }
+    state.look_idle += dt;
+    if state.look_idle >= cfg.delay && speed >= cfg.min_speed {
+        let goal = atan2(-velocity[0], -velocity[1]) * RAD_TO_DEG;
+        let yaw_goal = state.yaw_deg + wrap180(goal - state.yaw_deg);
+        state.yaw_deg = wrap180(damp(state.yaw_deg, yaw_goal, cfg.half_life, dt));
+    }
 }
 
 fn snap(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>) {
@@ -307,6 +439,8 @@ fn snap(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>) {
     rig.state.last_target = Some(target);
     rest_on_desired(rig, target, sampler);
     rig.state.blend = None;
+    release(&mut rig.state);
+    rig.state.framing_weight = framing_goal(&rig.framing);
     rig.state.last_applied = Some(rig.rig.clone());
     rig.state.snap = false;
 }
@@ -404,6 +538,11 @@ fn advance(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>,
             );
         }
         state.pivot = Some(next);
+        let goal = framing_goal(&rig.framing);
+        state.framing_weight = ease_framing(state.framing_weight, goal, rig.framing.half_life, dt);
+        if let RigMode::Chase(chase) = &cfg.mode {
+            recenter(state, &chase.recenter, velocity, speed, dt);
+        }
         return;
     }
     let Some(sampler) = sampler else {
@@ -446,14 +585,8 @@ fn advance(rig: &mut CameraRig, target: [f32; 3], sampler: Option<&PathSampler>,
 }
 
 /// The rig's own pose, or the running blend toward it (dropped once it completes).
-fn blended_pose(rig: &mut CameraRig, input: &RigInput) -> Pose {
+fn blended_pose(rig: &mut CameraRig, input: &RigInput, live: Pose) -> Pose {
     let state = &mut rig.state;
-    let live = Pose {
-        eye: state.eye,
-        yaw_deg: state.yaw_deg,
-        pitch_deg: state.pitch_deg,
-        fov_y_deg: rig.rig.fov_y_deg,
-    };
     let Some(blend) = &state.blend else {
         return live;
     };
@@ -518,5 +651,6 @@ fn post_aim(rig: &CameraRig, pose: &Pose) -> RigOutput {
         translation,
         rotation_deg,
         fov_y_deg,
+        stuck: false,
     }
 }

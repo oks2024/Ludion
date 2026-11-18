@@ -153,6 +153,7 @@ Put the motors on a layer that ignores itself, so they don't block each other. N
 ## Next
 
 - `ludion docs motor` — the capsule that applies a steering velocity.
+- `--debug-draw nav` (`nav:grid`, `nav:routes`, `nav:flow`) draws the grid, routes and flow arrows: `ludion docs debug-draw`.
 - `ludion docs spatial-3d` — the index separation reads.
 - `ludion docs patrol` — guards that walk `kind: patrol` routes as nav legs.
 - `ludion docs components` — the `NavAgent`, `NavSteering`, `NavGoal` and `NavRoute` rows.

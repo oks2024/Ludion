@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 /// assert_eq!(TickRate::DEFAULT.hz(), 60);
 /// assert!((TickRate::DEFAULT.seconds_per_tick() - 1.0 / 60.0).abs() < 1e-12);
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[serde(try_from = "u32")]
 pub struct TickRate(u32);
 
@@ -159,6 +159,134 @@ impl SimTime {
     }
 }
 
+/// Q16 fixed-point ticks: how many fractional units make one tick (1/65536 of a tick each).
+pub const Q16_PER_TICK: u64 = 65536;
+
+/// A point in gameplay time with a fractional tick, stored as an exact Q16 count (1/65536 tick).
+///
+/// [`SimTime`] counts whole ticks; once the gameplay clock runs slower than the sim
+/// ([`GameClock::scale`]) gameplay time sits between ticks, and this is its exact form. Seconds are
+/// derived on demand, never accumulated. A system reads it as `SystemCtx::game_instant`.
+///
+/// # Example
+///
+/// ```
+/// use ludion_core::time::{GameTime, TickRate};
+/// let t = GameTime::from_ticks(90, TickRate::DEFAULT);
+/// assert_eq!(t.ticks_floor(), 90);
+/// assert!((t.seconds() - 1.5).abs() < 1e-12);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GameTime {
+    q16: u64,
+    rate: TickRate,
+}
+
+impl GameTime {
+    /// A whole-tick instant: `ticks` ticks at `rate`.
+    ///
+    /// ```
+    /// use ludion_core::time::{GameTime, TickRate};
+    /// assert_eq!(GameTime::from_ticks(2, TickRate::DEFAULT).as_q16(), 2 * 65536);
+    /// ```
+    pub const fn from_ticks(ticks: u64, rate: TickRate) -> Self {
+        GameTime {
+            q16: ticks.saturating_mul(Q16_PER_TICK),
+            rate,
+        }
+    }
+
+    /// An instant from a raw Q16 count (1/65536 tick) at `rate`.
+    ///
+    /// ```
+    /// use ludion_core::time::{GameTime, TickRate};
+    /// let half = GameTime::from_q16(32768, TickRate::DEFAULT);
+    /// assert_eq!(half.ticks_floor(), 0);
+    /// ```
+    pub const fn from_q16(q16: u64, rate: TickRate) -> Self {
+        GameTime { q16, rate }
+    }
+
+    /// The raw Q16 count (1/65536 tick) — the deterministic source of truth.
+    ///
+    /// ```
+    /// use ludion_core::time::{GameTime, TickRate};
+    /// assert_eq!(GameTime::from_q16(98304, TickRate::DEFAULT).as_q16(), 98304);
+    /// ```
+    pub const fn as_q16(self) -> u64 {
+        self.q16
+    }
+
+    /// Whole ticks elapsed, the fraction dropped.
+    ///
+    /// ```
+    /// use ludion_core::time::{GameTime, TickRate};
+    /// assert_eq!(GameTime::from_q16(3 * 65536 + 65535, TickRate::DEFAULT).ticks_floor(), 3);
+    /// ```
+    pub const fn ticks_floor(self) -> u64 {
+        self.q16 / Q16_PER_TICK
+    }
+
+    /// How many whole ticks this instant crossed when it advanced by `step_q16`: `0` or `1` for a
+    /// step of at most a tick.
+    ///
+    /// ```
+    /// use ludion_core::time::{GameTime, TickRate};
+    /// let t = GameTime::from_q16(65536 + 16384, TickRate::DEFAULT);
+    /// assert_eq!(t.ticks_crossed(16384), 0);
+    /// assert_eq!(t.ticks_crossed(32768), 1);
+    /// ```
+    pub const fn ticks_crossed(self, step_q16: u32) -> u64 {
+        let before = self.q16.saturating_sub(step_q16 as u64);
+        self.q16 / Q16_PER_TICK - before / Q16_PER_TICK
+    }
+
+    /// The whole-tick [`SimTime`] at or before this instant.
+    ///
+    /// ```
+    /// use ludion_core::time::{GameTime, SimTime, TickRate};
+    /// let t = GameTime::from_q16(2 * 65536 + 1, TickRate::DEFAULT);
+    /// assert_eq!(t.floor(), SimTime::from_ticks(2, TickRate::DEFAULT));
+    /// ```
+    pub const fn floor(self) -> SimTime {
+        SimTime::from_ticks(self.ticks_floor(), self.rate)
+    }
+
+    /// The rate these ticks are measured against.
+    ///
+    /// ```
+    /// use ludion_core::time::{GameTime, TickRate};
+    /// assert_eq!(GameTime::from_ticks(1, TickRate::hz_of(30)).rate().hz(), 30);
+    /// ```
+    pub const fn rate(self) -> TickRate {
+        self.rate
+    }
+
+    /// Elapsed gameplay seconds, derived from the Q16 count and never fed back into state.
+    ///
+    /// ```
+    /// use ludion_core::time::{GameTime, TickRate};
+    /// let t = GameTime::from_q16(65536 / 2, TickRate::hz_of(60));
+    /// assert!((t.seconds() - 0.5 / 60.0).abs() < 1e-12);
+    /// ```
+    pub fn seconds(self) -> f64 {
+        self.q16 as f64 / 65536.0 * self.rate.seconds_per_tick()
+    }
+
+    /// Fractional ticks since the frame `started`: negative when `started` is ahead.
+    ///
+    /// ```
+    /// use ludion_core::time::{FrameIndex, GameTime, TickRate};
+    /// let t = GameTime::from_q16(10 * 65536 + 32768, TickRate::DEFAULT);
+    /// assert_eq!(t.ticks_since(FrameIndex::new(4)), 6.5);
+    /// assert_eq!(t.ticks_since(FrameIndex::new(12)), -1.5);
+    /// ```
+    pub fn ticks_since(self, started: FrameIndex) -> f64 {
+        let delta = i128::from(self.q16) - i128::from(started.as_u64()) * i128::from(Q16_PER_TICK);
+        delta as f64 / 65536.0
+    }
+}
+
 /// The gameplay clock: how much of the tick count the game has excluded from its own time.
 ///
 /// The sim keeps ticking while a game is frozen — a pause overlay's input has to run, and so does
@@ -190,7 +318,7 @@ impl SimTime {
 /// assert!(!clock.advance());
 /// assert_eq!(clock.game_frame(FrameIndex::new(11)), FrameIndex::new(10));
 /// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct GameClock {
     /// Frames already folded out of gameplay time.
     #[serde(default)]
@@ -198,15 +326,95 @@ pub struct GameClock {
     /// Whether the frame now running was marked frozen.
     #[serde(default)]
     holding: bool,
+    /// Q16 ticks already folded out by scaled frames. Never normalized into `held`: a scaled frame
+    /// is not a held one.
+    // Outside the typed snapshot schema (so `replay_content_hash` is unchanged); the snapshot still carries it.
+    #[schemars(skip)]
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    slowed_q16: u64,
+    /// The scale requested by the frame now running, in Q16.
+    // Outside the typed snapshot schema (so `replay_content_hash` is unchanged); the snapshot still carries it.
+    #[schemars(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_q16: Option<u32>,
+    /// The scale step folded into the tick now running, in Q16 (a full tick is `Q16_PER_TICK`).
+    // Outside the typed snapshot schema (so `replay_content_hash` is unchanged); the snapshot still carries it.
+    #[schemars(skip)]
+    #[serde(default = "full_step", skip_serializing_if = "is_full_step")]
+    step_q16: u32,
+    /// The f32 bits of the frame's first invalid scale request, for the engine to report.
+    #[serde(skip)]
+    #[schemars(skip)]
+    rejected: Option<u32>,
+}
+
+const FULL_STEP: u32 = Q16_PER_TICK as u32;
+
+fn full_step() -> u32 {
+    FULL_STEP
+}
+
+fn is_full_step(step: &u32) -> bool {
+    *step == FULL_STEP
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+impl Default for GameClock {
+    fn default() -> Self {
+        GameClock {
+            held: 0,
+            holding: false,
+            slowed_q16: 0,
+            pending_q16: None,
+            step_q16: FULL_STEP,
+            rejected: None,
+        }
+    }
 }
 
 impl GameClock {
+    /// The smallest accepted scale, 1/1024: a positive request below it clamps up to it.
+    pub const MIN_SCALE: f32 = 1.0 / 1024.0;
+
     /// Marks the frame now running as frozen: gameplay time does not enter the next tick.
     ///
     /// Idempotent within a frame — a game may call it from several systems — so the cost of an
-    /// extra call is nothing.
+    /// extra call is nothing. A hold wins over [`scale`](GameClock::scale).
     pub fn hold(&mut self) {
         self.holding = true;
+    }
+
+    /// Requests that gameplay time enter the next tick at fraction `s` of a full tick, `s` in
+    /// `(0, 1]`: call it every frame the game is slowed, as with [`hold`](GameClock::hold).
+    ///
+    /// Several calls in one frame compose by `min`. The request is quantized to Q16 and clamped up
+    /// to [`MIN_SCALE`](GameClock::MIN_SCALE). A non-finite value, `s <= 0` or `s > 1` is ignored
+    /// and latched for the engine to report as `L4260`.
+    ///
+    /// ```
+    /// use ludion_core::time::{FrameIndex, GameClock};
+    /// let mut clock = GameClock::default();
+    /// clock.scale(0.5);
+    /// assert!(clock.advance());
+    /// assert_eq!(clock.applied_scale(), 0.5);
+    /// // Half a tick is excluded: gameplay time lags the sim by half a tick.
+    /// assert_eq!(clock.game_frame(FrameIndex::new(1)), FrameIndex::new(0));
+    /// ```
+    pub fn scale(&mut self, s: f32) {
+        if !(s.is_finite() && s > 0.0 && s <= 1.0) {
+            if self.rejected.is_none() {
+                self.rejected = Some(s.to_bits());
+            }
+            return;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // clamped into u32 range
+        let q = ((f64::from(s) * 65536.0).round() as u32).clamp(64, FULL_STEP);
+        if q < FULL_STEP {
+            self.pending_q16 = Some(self.pending_q16.map_or(q, |p| p.min(q)));
+        }
     }
 
     /// How many frames are already excluded from gameplay time.
@@ -219,32 +427,94 @@ impl GameClock {
         self.holding
     }
 
+    /// Whether the tick now running was folded at a scale below 1.
+    pub const fn is_scaling(self) -> bool {
+        self.step_q16 < FULL_STEP
+    }
+
+    /// The Q16 step the tick now running was folded at; `Q16_PER_TICK` unless scaled. A held tick
+    /// is reported by [`advance`](GameClock::advance) returning `false`, not here.
+    pub const fn step_q16(self) -> u32 {
+        self.step_q16
+    }
+
+    /// [`step_q16`](GameClock::step_q16) as a fraction of a tick, exact in f32.
+    pub fn applied_scale(self) -> f32 {
+        self.step_q16 as f32 / 65536.0
+    }
+
+    /// Q16 ticks already excluded by scaled frames.
+    pub const fn slowed_q16(self) -> u64 {
+        self.slowed_q16
+    }
+
+    /// Takes the first invalid [`scale`](GameClock::scale) value of this frame, if any.
+    pub fn take_rejected_scale(&mut self) -> Option<f32> {
+        self.rejected.take().map(f32::from_bits)
+    }
+
     /// Whether this clock has excluded nothing at all — the default, and what lets a snapshot omit
     /// the field entirely.
     pub const fn is_zero(&self) -> bool {
-        self.held == 0 && !self.holding
+        self.held == 0
+            && !self.holding
+            && self.slowed_q16 == 0
+            && self.pending_q16.is_none()
+            && self.step_q16 == FULL_STEP
+            && self.rejected.is_none()
     }
 
-    /// `frame` in gameplay frames: the raw count less everything held, saturating at zero.
+    /// The Q16 amount the frame now running has already been marked to exclude.
+    const fn pending_deficit(&self) -> u64 {
+        if self.holding {
+            Q16_PER_TICK
+        } else if let Some(p) = self.pending_q16 {
+            Q16_PER_TICK - p as u64
+        } else {
+            0
+        }
+    }
+
+    /// Gameplay position at `ticks` sim ticks, in Q16, saturating at zero.
+    const fn game_q16(&self, ticks: u64) -> u64 {
+        let now = ticks as u128 * Q16_PER_TICK as u128;
+        let excluded = self.held as u128 * Q16_PER_TICK as u128
+            + self.slowed_q16 as u128
+            + self.pending_deficit() as u128;
+        let q = now.saturating_sub(excluded);
+        if q > u64::MAX as u128 {
+            u64::MAX
+        } else {
+            q as u64
+        }
+    }
+
+    /// `frame` in gameplay frames: the raw count less everything excluded, floored.
     pub const fn game_frame(self, frame: FrameIndex) -> FrameIndex {
-        FrameIndex(
-            frame
-                .as_u64()
-                .saturating_sub(self.held)
-                .saturating_sub(self.holding as u64),
-        )
+        FrameIndex(self.game_q16(frame.as_u64()) / Q16_PER_TICK)
     }
 
-    /// `now` in gameplay time: the same subtraction as [`game_frame`](GameClock::game_frame), at
-    /// the same rate (a hold slows nothing down — it removes whole ticks).
+    /// `now` in gameplay time, floored to a whole tick, at the same rate (a hold slows nothing
+    /// down — it removes whole ticks).
     pub const fn game_time(self, now: SimTime) -> SimTime {
         SimTime {
-            ticks: now
-                .ticks
-                .saturating_sub(self.held)
-                .saturating_sub(self.holding as u64),
+            ticks: self.game_q16(now.ticks) / Q16_PER_TICK,
             rate: now.rate,
         }
+    }
+
+    /// `now` in fractional gameplay time: [`game_time`](GameClock::game_time) before the floor.
+    ///
+    /// ```
+    /// use ludion_core::time::{GameClock, SimTime, TickRate};
+    /// let mut clock = GameClock::default();
+    /// clock.scale(0.25);
+    /// clock.advance();
+    /// let now = SimTime::from_ticks(4, TickRate::DEFAULT);
+    /// assert_eq!(clock.game_instant(now).as_q16(), 4 * 65536 - 3 * 65536 / 4);
+    /// ```
+    pub const fn game_instant(self, now: SimTime) -> GameTime {
+        GameTime::from_q16(self.game_q16(now.ticks), now.rate)
     }
 
     /// This clock with `frames` more frames excluded (saturating): the rewind a checkpoint restore
@@ -260,23 +530,32 @@ impl GameClock {
     pub const fn rebased(self, frames: u64) -> GameClock {
         GameClock {
             held: self.held.saturating_add(frames),
-            holding: self.holding,
+            ..self
         }
     }
 
     /// The driver's per-tick fold, run once at the start of every tick: a frame marked frozen
-    /// becomes one more held frame and the mark clears.
+    /// becomes one more held frame, a scaled one excludes the rest of its tick, and the marks clear.
     ///
     /// Returns whether gameplay time advanced into this tick — `false` exactly when the previous
     /// frame was held, which is what `SystemCtx::game_advanced` reports to systems.
     pub fn advance(&mut self) -> bool {
-        if self.holding {
+        let advanced = if self.holding {
             self.held += 1;
-            self.holding = false;
+            self.step_q16 = FULL_STEP;
             false
-        } else {
+        } else if let Some(p) = self.pending_q16 {
+            self.slowed_q16 = self.slowed_q16.saturating_add(Q16_PER_TICK - u64::from(p));
+            self.step_q16 = p;
             true
-        }
+        } else {
+            self.step_q16 = FULL_STEP;
+            true
+        };
+        self.holding = false;
+        self.pending_q16 = None;
+        self.rejected = None;
+        advanced
     }
 }
 
@@ -391,7 +670,7 @@ mod tests {
     fn gameplay_time_runs_at_the_same_rate_behind_the_sim() {
         let clock = GameClock {
             held: 30,
-            holding: false,
+            ..GameClock::default()
         };
         let now = SimTime::from_ticks(150, TickRate::DEFAULT);
         let game = clock.game_time(now);
@@ -405,6 +684,7 @@ mod tests {
         let clock = GameClock {
             held: 9,
             holding: true,
+            ..GameClock::default()
         };
         assert_eq!(clock.game_frame(FrameIndex::new(3)), FrameIndex::ZERO);
         assert_eq!(
@@ -418,6 +698,7 @@ mod tests {
         let clock = GameClock {
             held: 7,
             holding: true,
+            ..GameClock::default()
         };
         let json = serde_json::to_string(&clock).unwrap();
         assert_eq!(serde_json::from_str::<GameClock>(&json).unwrap(), clock);
@@ -426,5 +707,157 @@ mod tests {
             serde_json::from_str::<GameClock>("{}").unwrap(),
             GameClock::default()
         );
+    }
+
+    const Q: u64 = Q16_PER_TICK;
+
+    #[test]
+    fn a_long_slow_run_excludes_exactly_the_quantized_step() {
+        let mut clock = GameClock::default();
+        for _ in 0..100_000 {
+            clock.scale(0.15);
+            assert!(clock.advance());
+        }
+        assert_eq!(clock.step_q16(), 9830);
+        assert_eq!(clock.slowed_q16(), 100_000 * (Q - 9830));
+        assert_eq!(clock.held(), 0, "a scaled frame is not a held one");
+    }
+
+    #[test]
+    fn scales_compose_by_min_within_a_frame() {
+        let mut clock = GameClock::default();
+        clock.scale(0.5);
+        clock.scale(0.25);
+        clock.scale(0.75);
+        assert!(clock.advance());
+        assert_eq!(clock.step_q16(), 16384);
+        assert!(clock.advance(), "the request does not outlive its frame");
+        assert_eq!(clock.step_q16(), Q as u32);
+    }
+
+    #[test]
+    fn a_hold_wins_over_a_scale() {
+        let mut clock = GameClock::default();
+        clock.scale(0.5);
+        clock.hold();
+        assert!(!clock.advance());
+        assert_eq!(clock.held(), 1);
+        assert_eq!(clock.slowed_q16(), 0);
+        assert!(!clock.is_scaling());
+    }
+
+    #[test]
+    fn an_unscaled_clock_matches_the_held_maths() {
+        let mut clock = GameClock::default();
+        for frame in 0..40u64 {
+            clock.advance();
+            let held = clock.held();
+            let expect = frame.saturating_sub(held);
+            assert_eq!(clock.game_frame(FrameIndex::new(frame)).as_u64(), expect);
+            let now = SimTime::from_ticks(frame, TickRate::DEFAULT);
+            assert_eq!(clock.game_time(now).ticks(), expect);
+            assert_eq!(clock.game_instant(now).as_q16(), expect * Q);
+            if (10..14).contains(&frame) {
+                clock.hold();
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_scales_latch_and_change_nothing() {
+        for bad in [f32::NAN, f32::INFINITY, 0.0, -1.0, 1.5] {
+            let mut clock = GameClock::default();
+            clock.scale(bad);
+            assert_eq!(
+                clock.take_rejected_scale().map(f32::to_bits),
+                Some(bad.to_bits())
+            );
+            assert!(clock.is_zero(), "{bad} left a mark");
+        }
+        let mut clock = GameClock::default();
+        clock.scale(-1.0);
+        clock.scale(f32::NAN);
+        assert_eq!(
+            clock.take_rejected_scale(),
+            Some(-1.0),
+            "the first one is kept"
+        );
+        assert_eq!(clock.take_rejected_scale(), None);
+    }
+
+    #[test]
+    fn a_tiny_scale_clamps_to_the_minimum() {
+        let mut clock = GameClock::default();
+        clock.scale(1.0e-9);
+        clock.advance();
+        assert_eq!(clock.applied_scale(), GameClock::MIN_SCALE);
+    }
+
+    #[test]
+    fn a_full_scale_is_the_identity() {
+        let mut clock = GameClock::default();
+        clock.scale(1.0);
+        assert!(clock.is_zero());
+        assert!(clock.advance());
+        assert!(clock.is_zero());
+    }
+
+    #[test]
+    fn unscaled_clocks_serialize_as_before_and_a_scaled_one_round_trips() {
+        assert_eq!(
+            serde_json::to_string(&GameClock::default()).unwrap(),
+            r#"{"held":0,"holding":false}"#
+        );
+        let mut held = GameClock::default();
+        held.scale(0.5);
+        held.advance();
+        held.hold();
+        held.advance();
+        assert_eq!(
+            serde_json::to_string(&held).unwrap(),
+            r#"{"held":1,"holding":false,"slowed_q16":32768}"#
+        );
+        let mut scaled = GameClock::default();
+        scaled.scale(0.25);
+        scaled.advance();
+        scaled.scale(0.5);
+        let json = serde_json::to_string(&scaled).unwrap();
+        assert!(
+            json.contains("step_q16") && json.contains("pending_q16"),
+            "{json}"
+        );
+        assert_eq!(serde_json::from_str::<GameClock>(&json).unwrap(), scaled);
+    }
+
+    #[test]
+    fn rebase_preserves_the_slowed_total() {
+        let mut clock = GameClock::default();
+        clock.scale(0.5);
+        clock.advance();
+        let live = clock.rebased(5);
+        assert_eq!(live.slowed_q16(), clock.slowed_q16());
+        assert_eq!(live.held(), 5);
+        assert_eq!(live.step_q16(), clock.step_q16());
+    }
+
+    #[test]
+    fn game_time_measures_fractional_ticks_since_a_stamp() {
+        let t = GameTime::from_q16(5 * Q + Q / 4, TickRate::DEFAULT);
+        assert_eq!(t.ticks_since(FrameIndex::new(2)), 3.25);
+        assert_eq!(t.ticks_since(FrameIndex::new(6)), -0.75);
+        assert_eq!(t.floor().ticks(), 5);
+    }
+
+    #[test]
+    fn the_clock_schema_lists_only_held_and_holding() {
+        let schema = serde_json::to_value(schemars::schema_for!(GameClock)).unwrap();
+        let mut keys: Vec<&str> = schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["held", "holding"]);
     }
 }

@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use ludion_core::codes::code;
 use ludion_core::panic_capture;
-use ludion_core::time::{FrameIndex, GameClock, SimTime, TickRate};
+use ludion_core::time::{FrameIndex, GameClock, GameTime, Q16_PER_TICK, SimTime, TickRate};
 
 use crate::{Phase, World};
 
@@ -53,6 +53,11 @@ use crate::{Phase, World};
 /// unheld run the two agree exactly; while a game holds, the gameplay three stand still
 /// (`game_dt` is `0.0`, so a system integrating `pos += v * ctx.game_dt` freezes for free) and
 /// [`game_advanced`](SystemCtx::game_advanced) is `false`.
+///
+/// A game may also slow gameplay time ([`GameClock::scale`]): `game_dt` shrinks to `dt × s`,
+/// [`game_instant`](SystemCtx::game_instant) is the exact fractional gameplay time, `game_frame` /
+/// `game_time` are its floor, and [`game_frames_crossed`](SystemCtx::game_frames_crossed) says
+/// whether a whole gameplay frame passed this tick. `game_advanced` stays `true` while time moves.
 ///
 /// Build one with [`new`](SystemCtx::new) (unheld) and, if a clock applies,
 /// [`with_clock`](SystemCtx::with_clock) — never field by field, so a new clock field cannot be
@@ -72,6 +77,10 @@ pub struct SystemCtx {
     /// The gameplay timestep: [`dt`](SystemCtx::dt) on a frame gameplay time advanced into, `0.0`
     /// on a held one.
     pub game_dt: f32,
+    /// [`time`](SystemCtx::time) in exact fractional gameplay time; its floor is
+    /// [`game_time`](SystemCtx::game_time).
+    pub game_instant: GameTime,
+    game_step_q16: u32,
 }
 
 impl SystemCtx {
@@ -88,18 +97,35 @@ impl SystemCtx {
             game_frame: frame,
             game_time: SimTime::from_ticks(frame.as_u64(), rate),
             game_dt: dt,
+            game_instant: GameTime::from_ticks(frame.as_u64(), rate),
+            game_step_q16: Q16_PER_TICK as u32,
         }
     }
 
     /// The same context read through `clock`, `advanced` being what the tick's
     /// [`GameClock::advance`] fold returned.
     pub fn with_clock(self, clock: &GameClock, advanced: bool) -> Self {
+        let step = if advanced { clock.step_q16() } else { 0 };
+        let game_instant = clock.game_instant(self.time);
         SystemCtx {
-            game_frame: clock.game_frame(self.frame),
-            game_time: clock.game_time(self.time),
-            game_dt: if advanced { self.dt } else { 0.0 },
+            game_frame: FrameIndex::new(game_instant.ticks_floor()),
+            game_time: game_instant.floor(),
+            game_dt: self.dt * (step as f32 / 65536.0),
+            game_instant,
+            game_step_q16: step,
             ..self
         }
+    }
+
+    /// The fraction of a full tick gameplay time advanced by this tick: `1.0` unscaled, `0.0` held.
+    pub fn game_scale(&self) -> f32 {
+        self.game_step_q16 as f32 / 65536.0
+    }
+
+    /// How many whole gameplay frames this tick crossed: `0` or `1`, and `1` on every unscaled
+    /// advanced tick. The guard for "once per gameplay frame" when time is scaled.
+    pub fn game_frames_crossed(&self) -> u64 {
+        self.game_instant.ticks_crossed(self.game_step_q16)
     }
 
     /// Whether gameplay time advanced into this tick. `false` on a frame the game held — the guard
@@ -465,6 +491,47 @@ impl Schedule {
 mod tests {
     use super::*;
     use ludion_core::time::TickRate;
+
+    #[test]
+    fn a_new_ctx_is_the_identity_clock() {
+        let ctx = SystemCtx::new(FrameIndex::new(5), TickRate::DEFAULT);
+        assert_eq!(ctx.game_scale(), 1.0);
+        assert_eq!(ctx.game_frames_crossed(), 1);
+        assert_eq!(ctx.game_instant, GameTime::from_ticks(5, TickRate::DEFAULT));
+        let via = ctx.with_clock(&GameClock::default(), true);
+        assert_eq!(via.game_dt, ctx.dt);
+        assert_eq!(via.game_frames_crossed(), 1);
+    }
+
+    #[test]
+    fn a_quarter_scale_crosses_a_frame_every_fourth_tick() {
+        let mut clock = GameClock::default();
+        let mut crossed = Vec::new();
+        for frame in 1..=8u64 {
+            clock.scale(0.25);
+            let advanced = clock.advance();
+            let ctx = SystemCtx::new(FrameIndex::new(frame), TickRate::DEFAULT)
+                .with_clock(&clock, advanced);
+            assert_eq!(ctx.game_scale(), 0.25);
+            assert_eq!(ctx.game_dt, ctx.dt * 0.25);
+            assert!(ctx.game_advanced());
+            crossed.push(ctx.game_frames_crossed());
+        }
+        assert_eq!(crossed, vec![0, 0, 0, 1, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn a_held_ctx_crosses_nothing() {
+        let mut clock = GameClock::default();
+        clock.hold();
+        let advanced = clock.advance();
+        let ctx =
+            SystemCtx::new(FrameIndex::new(3), TickRate::DEFAULT).with_clock(&clock, advanced);
+        assert_eq!(ctx.game_frames_crossed(), 0);
+        assert_eq!(ctx.game_scale(), 0.0);
+        assert_eq!(ctx.game_dt, 0.0);
+        assert!(!ctx.game_advanced());
+    }
 
     fn ctx() -> SystemCtx {
         SystemCtx::new(FrameIndex::ZERO, TickRate::DEFAULT)

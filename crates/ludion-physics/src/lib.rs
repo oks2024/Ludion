@@ -200,10 +200,11 @@ pub use ludion_spatial::{NoParent, ParentPose};
 pub use meshes::{ColliderMeshes, MeshLoader, TriangleMesh};
 pub use motor::{
     CharacterMotor, CharacterMotorState, GroundHit, GroundProbe, LaneEnd, LaneFrame, LaneReport,
-    MotorError, MoveConstraint, MoveReport, PlatformCarry, PlatformPose, ResizeReport,
-    ResumeReport, SurfaceHit, SurfaceVelocity, character_fit, fits_character, ground_probe_reach,
-    height_in_force, move_character, move_character_with, move_characters, probe_character_ground,
-    resize_character, resume_character, suspend_character, teleport_character,
+    MotorError, MoveConstraint, MoveReport, PlatformCarry, PlatformPose, Posture, PostureReport,
+    PostureShape, ResizeReport, ResumeReport, SurfaceHit, SurfaceVelocity, character_fit,
+    fits_character, ground_probe_reach, height_in_force, motor_in_force, move_character,
+    move_character_with, move_characters, probe_character_ground, resize_character,
+    resume_character, set_character_posture, suspend_character, teleport_character,
 };
 pub use pose::PhysicsPose;
 pub use queries::{PointHit, QueryFilter, QueryHit};

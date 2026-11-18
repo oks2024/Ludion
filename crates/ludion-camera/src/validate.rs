@@ -141,6 +141,32 @@ fn config_violations(config: &RigConfig) -> Vec<(&'static str, &'static str)> {
     {
         found.push(("/fov_y_deg", "must be between 0 and 180 degrees, exclusive"));
     }
+    let collision = &config.collision;
+    if !(collision.radius.is_finite() && collision.radius > 0.0) {
+        found.push(("/collision/radius", POSITIVE));
+    }
+    for (pointer, value) in [
+        ("/collision/min_distance", collision.min_distance),
+        ("/collision/skin", collision.skin),
+        ("/collision/recover_delay", collision.recover_delay),
+        ("/collision/recover_half_life", collision.recover_half_life),
+    ] {
+        if !value.is_finite() || value < 0.0 {
+            found.push((pointer, NOT_NEGATIVE));
+        }
+    }
+    if let RigMode::Chase(chase) = &config.mode {
+        let recenter = &chase.recenter;
+        for (pointer, value) in [
+            ("/mode/chase/recenter/delay", recenter.delay),
+            ("/mode/chase/recenter/half_life", recenter.half_life),
+            ("/mode/chase/recenter/min_speed", recenter.min_speed),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                found.push((pointer, NOT_NEGATIVE));
+            }
+        }
+    }
     found
 }
 
@@ -201,6 +227,30 @@ fn violations(rig: &CameraRig) -> Vec<(String, &'static str)> {
             found.push((pointer.to_string(), FINITE));
         }
     }
+    let framing = &rig.framing;
+    for (pointer, value) in [
+        ("/framing/weight", framing.weight),
+        ("/framing/yaw_offset_deg", framing.yaw_offset_deg),
+        ("/framing/pitch_offset_deg", framing.pitch_offset_deg),
+    ] {
+        if !value.is_finite() {
+            found.push((pointer.to_string(), FINITE));
+        }
+    }
+    for (axis, value) in framing.pivot_offset.into_iter().enumerate() {
+        if !value.is_finite() {
+            found.push((format!("/framing/pivot_offset/{axis}"), FINITE));
+        }
+    }
+    if framing
+        .distance
+        .is_some_and(|v| !(v.is_finite() && v > 0.0))
+    {
+        found.push(("/framing/distance".to_string(), POSITIVE));
+    }
+    if !framing.half_life.is_finite() || framing.half_life < 0.0 {
+        found.push(("/framing/half_life".to_string(), NOT_NEGATIVE));
+    }
     if !(0.0..=1.0).contains(&rig.trauma) {
         found.push(("/trauma".to_string(), "must be between 0 and 1"));
     }
@@ -231,7 +281,9 @@ fn diagnostic(what: &str, pointer: &str, rule: &str) -> Diagnostic {
          `trauma` in [0, 1], `pitch_limit_deg` inside (0, 90), a `chase` or `follow` `distance` \
          above 0, their pitches inside (-90, 90) with `pitch_min_deg` <= `pitch_max_deg`, and \
          `eye_offset`, `enter_pitch_deg`, chase and follow `yaw_deg` and `pitch_deg`, `look_deg`, \
-         `look_deg_per_count`, `kick_deg`, `fov_kick_deg`, `roll_deg` and `fov_offset_deg` finite",
+         `look_deg_per_count`, `kick_deg`, `fov_kick_deg`, `roll_deg` and `fov_offset_deg` finite, \
+         `collision.radius` and `framing.distance` above 0, the other `collision`, `recenter` and \
+         `framing.half_life` fields non-negative, and `framing.weight` and its offsets finite",
     )
 }
 
@@ -258,7 +310,9 @@ impl SemanticValidate for CameraRig {
     /// `roll_deg` and `fov_offset_deg` not finite; `pitch_limit_deg` outside `(0, 90)`; a `chase`
     /// or `follow` `distance` not positive, their pitches outside `(-90, 90)`, `pitch_max_deg`
     /// below `pitch_min_deg`; `enter_pitch_deg` and their yaws not finite; `fov_y_deg`
-    /// outside `(0, 180)`; `trauma` outside `[0, 1]`. A value that does not deserialize is left to
+    /// outside `(0, 180)`; `trauma` outside `[0, 1]`; `collision.radius` or `framing.distance` not
+    /// positive; the other `collision` fields, the `recenter` fields and `framing.half_life`
+    /// negative or not finite; `framing.weight` and its offsets not finite. A value that does not deserialize is left to
     /// the schema.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let Ok(rig) = serde_json::from_value::<CameraRig>(value.clone()) else {
@@ -470,6 +524,96 @@ mod tests {
                 "/fov_offset_deg",
             ),
         ] {
+            assert_eq!(
+                invalid_field(&rig).map(|(pointer, _)| pointer).as_deref(),
+                Some(pointer)
+            );
+        }
+    }
+
+    #[test]
+    fn collision_framing_and_recenter_fields_name_their_pointers() {
+        for (value, pointer) in [
+            (
+                json!({"rig": {"collision": {"radius": 0.0}}}),
+                "/rig/collision/radius",
+            ),
+            (
+                json!({"rig": {"collision": {"min_distance": -1.0}}}),
+                "/rig/collision/min_distance",
+            ),
+            (
+                json!({"rig": {"collision": {"skin": -1.0}}}),
+                "/rig/collision/skin",
+            ),
+            (
+                json!({"rig": {"collision": {"recover_delay": -1.0}}}),
+                "/rig/collision/recover_delay",
+            ),
+            (
+                json!({"rig": {"collision": {"recover_half_life": -1.0}}}),
+                "/rig/collision/recover_half_life",
+            ),
+            (
+                json!({"rig": {"mode": {"chase": {"recenter": {"delay": -1.0}}}}}),
+                "/rig/mode/chase/recenter/delay",
+            ),
+            (
+                json!({"rig": {"mode": {"chase": {"recenter": {"half_life": -1.0}}}}}),
+                "/rig/mode/chase/recenter/half_life",
+            ),
+            (
+                json!({"rig": {"mode": {"chase": {"recenter": {"min_speed": -1.0}}}}}),
+                "/rig/mode/chase/recenter/min_speed",
+            ),
+            (json!({"framing": {"distance": 0.0}}), "/framing/distance"),
+            (
+                json!({"framing": {"half_life": -1.0}}),
+                "/framing/half_life",
+            ),
+        ] {
+            assert_eq!(
+                pointers(value.clone())
+                    .first()
+                    .and_then(|(_, p)| p.as_deref()),
+                Some(pointer),
+                "{value}"
+            );
+        }
+        for (framing, pointer) in [
+            (
+                crate::Framing {
+                    weight: f32::NAN,
+                    ..Default::default()
+                },
+                "/framing/weight",
+            ),
+            (
+                crate::Framing {
+                    pivot_offset: [0.0, f32::INFINITY, 0.0],
+                    ..Default::default()
+                },
+                "/framing/pivot_offset/1",
+            ),
+            (
+                crate::Framing {
+                    yaw_offset_deg: f32::NAN,
+                    ..Default::default()
+                },
+                "/framing/yaw_offset_deg",
+            ),
+            (
+                crate::Framing {
+                    pitch_offset_deg: f32::NAN,
+                    ..Default::default()
+                },
+                "/framing/pitch_offset_deg",
+            ),
+        ] {
+            let rig = CameraRig {
+                framing,
+                ..CameraRig::default()
+            };
             assert_eq!(
                 invalid_field(&rig).map(|(pointer, _)| pointer).as_deref(),
                 Some(pointer)

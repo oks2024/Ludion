@@ -14,7 +14,10 @@ use ludion_spatial::{Body, Collider, Joint, JointMotor, Plane, Shape, Velocity};
 use crate::PhysicsPose;
 use crate::layer_set::{LayerSet, QueryLayers};
 use crate::meshes::ColliderMeshes;
-use crate::motor::{CharacterMotor, CharacterMotorState, check, height_in_force, motor_invalid};
+use crate::motor::{
+    CharacterMotor, CharacterMotorState, check, check_postures, motor_in_force, motor_invalid,
+    posture_unknown,
+};
 use crate::world::{DEFAULT_GRAVITY, MeshInput, PhysicsWorld, ShapeRejection, mesh_hash_of};
 use ludion_spatial::ParentPose;
 
@@ -475,6 +478,13 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         if row.suspended {
             continue;
         }
+        if let Some(posture) = &row.posture_fallback {
+            motor_rejections.push((
+                row.entity,
+                code::CHARACTER_MOTOR_POSTURE_FALLBACK,
+                format!("its CharacterMotorState names posture `{posture}`, which the CharacterMotor does not declare"),
+            ));
+        }
         match row.collider {
             Err(reason) => {
                 motor_rejections.push((row.entity, code::CHARACTER_MOTOR_INVALID, reason))
@@ -729,6 +739,8 @@ struct MotorRow {
     collider: Result<Collider, String>,
     /// Parked by `suspend_character`: the row gets no body.
     suspended: bool,
+    /// The state names a posture the motor does not declare: the row is the base shape.
+    posture_fallback: Option<String>,
 }
 
 /// Every `CharacterMotor` with a pose, ascending by entity. The pose is the **feet**; the body
@@ -742,17 +754,24 @@ fn motor_rows<P: PhysicsPose>(world: &mut World) -> Vec<MotorRow> {
         .into_iter()
         .map(|(entity, motor, feet)| {
             let state = world.get::<CharacterMotorState>(entity).ok().flatten();
-            let height = height_in_force(&motor, state);
-            let overridden = CharacterMotor { height, ..motor };
-            let collider = match check(&overridden) {
+            let overridden = motor_in_force(&motor, state);
+            let height = overridden.height;
+            let collider = match check(&overridden)
+                .map_err(|(pointer, reason)| (pointer.to_string(), reason))
+                .and_then(|()| check_postures(&motor))
+            {
                 Ok(()) => Ok(overridden.solver_collider(height)),
-                Err((pointer, reason)) => Err(motor_invalid(&reason, pointer).message),
+                Err((pointer, reason)) => Err(motor_invalid(&reason, &pointer).message),
             };
+            let posture_fallback = posture_unknown(&motor, state)
+                .then(|| state.and_then(|state| state.posture.clone()))
+                .flatten();
             MotorRow {
                 entity,
                 centre: [feet[0], feet[1] + height / 2.0, feet[2]],
                 collider,
                 suspended: state.is_some_and(|state| state.suspended),
+                posture_fallback,
             }
         })
         .collect()

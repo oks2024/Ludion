@@ -2567,14 +2567,13 @@ fn bullet_texture(
 /// intensity clamp to non-negative (`f32::max` drops a NaN), so a Rust-built value that skipped
 /// validation never subtracts light. A casting light carries its shadow tunables ([`local_shadow`]).
 fn point_light_data(light: &PointLight, position: Vec3, dynamic: bool) -> Option<PointLightData> {
-    if !(light.range.is_finite() && light.range > 0.0) {
-        return None;
-    }
+    let clamped =
+        ludion_renderer::light_model::local_light(light.color, light.intensity, light.range)?;
     Some(PointLightData {
         position,
-        color: Vec3::from(light.color).max(Vec3::ZERO),
-        intensity: light.intensity.max(0.0),
-        range: light.range,
+        color: clamped.color,
+        intensity: clamped.intensity,
+        range: clamped.range,
         dynamic,
         shadow: local_shadow(
             light.cast_shadows,
@@ -2593,7 +2592,7 @@ fn point_light_data(light: &PointLight, position: Vec3, dynamic: bool) -> Option
 /// falls back to the default capped at half the range, so a Rust-built value that skipped
 /// validation (`L1312`) still gets a usable view. A `distance` that is not finite and positive
 /// becomes `None`; the fade clamps into `[0, distance]`, and is `0` without a distance (`L1322`).
-fn local_shadow(
+pub(crate) fn local_shadow(
     cast: bool,
     bias: f32,
     near: f32,
@@ -2627,20 +2626,19 @@ fn local_shadow(
 /// positive and ordered for a Rust-built value that skipped validation (`L1272`). A casting light
 /// carries its shadow tunables ([`local_shadow`]).
 fn spot_light_data(light: &SpotLight, position: Vec3) -> Option<SpotLightData> {
-    if !(light.range.is_finite() && light.range > 0.0) {
-        return None;
-    }
+    let clamped =
+        ludion_renderer::light_model::local_light(light.color, light.intensity, light.range)?;
     let direction = Vec3::from(light.direction).try_normalize()?;
-    let outer = light.outer_angle.clamp(0.0, 89.9);
-    let inner = light.inner_angle.clamp(0.0, 89.9).min(outer);
+    let (cos_inner, cos_outer) =
+        ludion_renderer::light_model::spot_cosines(light.inner_angle, light.outer_angle);
     Some(SpotLightData {
         position,
         direction,
-        color: Vec3::from(light.color).max(Vec3::ZERO),
-        intensity: light.intensity.max(0.0),
-        range: light.range,
-        cos_inner: ludion_core::math::cos(inner.to_radians()),
-        cos_outer: ludion_core::math::cos(outer.to_radians()),
+        color: clamped.color,
+        intensity: clamped.intensity,
+        range: clamped.range,
+        cos_inner,
+        cos_outer,
         shadow: local_shadow(
             light.cast_shadows,
             light.shadow_bias,

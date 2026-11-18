@@ -4,7 +4,7 @@
 use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, World};
 
-use super::component::{CharacterMotorState, check, height_in_force};
+use super::component::{CharacterMotor, CharacterMotorState, check, motor_in_force, posture_motor};
 use super::report::{MotorError, ResumeReport};
 use super::resize::{headroom, motor_of, place};
 use crate::pose::PhysicsPose;
@@ -55,23 +55,42 @@ pub fn suspend_character(world: &mut World, entity: EntityId) -> Result<(), Moto
     Ok(())
 }
 
+/// The motor a fit or resume tests: the named posture's, which must be declared; `None` is the
+/// base shape, wearing the height override only while no posture is in force.
+fn target<P: PhysicsPose>(
+    world: &World,
+    entity: EntityId,
+    posture: Option<&str>,
+) -> Result<CharacterMotor, MotorError> {
+    let (motor, _) = motor_of::<P>(world, entity)?;
+    match posture {
+        Some(name) => posture_motor(&motor, name).ok_or_else(|| MotorError::UnknownPosture {
+            entity,
+            posture: name.to_owned(),
+        }),
+        None => {
+            let state = world.get::<CharacterMotorState>(entity).ok().flatten();
+            let base = CharacterMotorState {
+                posture: None,
+                height: state
+                    .filter(|state| state.posture.is_none())
+                    .and_then(|state| state.height),
+                ..CharacterMotorState::default()
+            };
+            Ok(motor_in_force(&motor, Some(&base)))
+        }
+    }
+}
+
 /// The shared checks of [`character_fit`] and [`resume_character`] after the pose and posture
-/// ones: the motor valid at the height in force, the physics world present, then the overlap test.
-fn blocker<P: PhysicsPose>(
+/// ones: the target motor valid, the physics world present, then the overlap test.
+fn blocker(
     world: &World,
     entity: EntityId,
     feet: [f32; 3],
+    resting: &CharacterMotor,
 ) -> Result<Option<EntityId>, MotorError> {
-    let (motor, _) = motor_of::<P>(world, entity)?;
-    let height = height_in_force(
-        &motor,
-        world.get::<CharacterMotorState>(entity).ok().flatten(),
-    );
-    let resting = super::CharacterMotor {
-        height,
-        ..motor.clone()
-    };
-    if let Err((pointer, reason)) = check(&resting) {
+    if let Err((pointer, reason)) = check(resting) {
         return Err(MotorError::InvalidMotor {
             entity,
             reason: format!("{pointer}: {reason}"),
@@ -80,25 +99,16 @@ fn blocker<P: PhysicsPose>(
     let physics = world
         .resource::<PhysicsWorld>()
         .ok_or(MotorError::NoPhysicsWorld)?;
-    Ok(headroom(physics, entity, &motor, feet, height))
-}
-
-fn no_posture(entity: EntityId, posture: Option<&str>) -> Result<(), MotorError> {
-    match posture {
-        Some(posture) => Err(MotorError::UnknownPosture {
-            entity,
-            posture: posture.to_owned(),
-        }),
-        None => Ok(()),
-    }
+    Ok(headroom(physics, entity, resting, feet, resting.height))
 }
 
 /// Whether `entity`'s capsule fits standing on `feet`: the lowest-id collider in the way, `None`
 /// when it fits. It is the test [`resume_character`] runs, so a game can try several candidate
 /// spots without changing anything.
 ///
-/// `posture` is `None` for the upright capsule at the height in force; a motor declares no
-/// postures yet, so `Some(_)` is [`MotorError::UnknownPosture`]. Works on a live or suspended motor.
+/// `posture` is `None` for the motor's own shape (at the height override, while no posture is in
+/// force) or the name of one of its `postures`, tested without a height override; a name the motor
+/// does not declare is [`MotorError::UnknownPosture`]. Works on a live or suspended motor.
 ///
 /// ```no_run
 /// # use ludion_ecs::{SystemCtx, World};
@@ -122,8 +132,8 @@ pub fn character_fit<P: PhysicsPose>(
         return Err(MotorError::NonFiniteFeet(feet));
     }
     let _ = yaw;
-    no_posture(entity, posture)?;
-    blocker::<P>(world, entity, feet)
+    let resting = target::<P>(world, entity, posture)?;
+    blocker(world, entity, feet, &resting)
 }
 
 /// Brings a suspended motor back with its feet at `feet`, facing `yaw` (radians about +Y), when the
@@ -131,10 +141,11 @@ pub fn character_fit<P: PhysicsPose>(
 ///
 /// A blocker makes this `Ok(ResumeReport { resumed: false, blocked_by })` with the motor still
 /// suspended and the pose unchanged; try another spot. A fit writes the pose, clears the grounded
-/// state like [`teleport_character`](crate::teleport_character) (the height in force is kept),
-/// and places the capsule without pushing props. A motor under a `Parent` is
+/// state like [`teleport_character`](crate::teleport_character), and places the capsule without pushing props. A motor under a `Parent` is
 /// [`MotorError::Parented`]: reparent it to the root first; one that is not suspended is
-/// [`MotorError::NotSuspended`]. `yaw` has no effect on the fit of an upright capsule.
+/// [`MotorError::NotSuspended`]. `posture` is the shape to wake in: `Some(name)` tests that
+/// declared posture and sets it (the height override is cleared); `None` tests the motor's own
+/// shape and keeps a height override only if no posture was in force. `yaw` has no effect on the fit of an upright capsule.
 ///
 /// Call it from a system registered **before** [`install`](crate::install)'s.
 ///
@@ -159,7 +170,7 @@ pub fn resume_character<P: PhysicsPose>(
     if !feet.iter().all(|c| c.is_finite()) || !yaw.is_finite() {
         return Err(MotorError::NonFiniteTeleport { feet, yaw });
     }
-    no_posture(entity, posture)?;
+    let resting = target::<P>(world, entity, posture)?;
     if world.has::<Parent>(entity) {
         return Err(MotorError::Parented(entity));
     }
@@ -171,7 +182,7 @@ pub fn resume_character<P: PhysicsPose>(
     if !suspended {
         return Err(MotorError::NotSuspended(entity));
     }
-    if let Some(blocker) = blocker::<P>(world, entity, feet)? {
+    if let Some(blocker) = blocker(world, entity, feet, &resting)? {
         return Ok(ResumeReport {
             resumed: false,
             blocked_by: Some(blocker),
@@ -180,6 +191,17 @@ pub fn resume_character<P: PhysicsPose>(
     place::<P>(world, entity, feet, yaw, false);
     if let Ok(Some(state)) = world.get_mut::<CharacterMotorState>(entity) {
         state.suspended = false;
+        match posture {
+            Some(name) => {
+                state.posture = Some(name.to_owned());
+                state.height = None;
+            }
+            None => {
+                if state.posture.take().is_some() {
+                    state.height = None;
+                }
+            }
+        }
     }
     Ok(ResumeReport {
         resumed: true,

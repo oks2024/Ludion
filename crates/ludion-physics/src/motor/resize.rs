@@ -6,14 +6,15 @@ use ludion_core::math::sin_cos;
 use ludion_ecs::World;
 use ludion_spatial::Shape;
 
-use super::component::{CharacterMotor, CharacterMotorState, check, height_in_force};
+use super::component::{CharacterMotor, CharacterMotorState, check, motor_in_force};
 use super::mover::motor_filter;
 use super::report::{MotorError, ResizeReport};
 use crate::pose::PhysicsPose;
 use crate::systems::teleport_kinematic;
 use crate::world::PhysicsWorld;
 
-/// A motor, its feet and the height in force, after the checks every function here shares.
+/// A motor with its posture applied (`motor`, no height override), its feet and the height in
+/// force, after the checks every function here shares.
 struct Checked {
     motor: CharacterMotor,
     feet: [f32; 3],
@@ -66,13 +67,16 @@ fn checked<P: PhysicsPose>(
     if world.resource::<PhysicsWorld>().is_none() {
         return Err(MotorError::NoPhysicsWorld);
     }
-    validate(entity, &motor, height)?;
-    let current = height_in_force(
-        &motor,
-        world.get::<CharacterMotorState>(entity).ok().flatten(),
-    );
+    let state = world.get::<CharacterMotorState>(entity).ok().flatten();
+    let shape = CharacterMotorState {
+        height: None,
+        ..state.cloned().unwrap_or_default()
+    };
+    let posture = motor_in_force(&motor, Some(&shape));
+    validate(entity, &posture, height)?;
+    let current = motor_in_force(&motor, state).height;
     Ok(Checked {
-        motor,
+        motor: posture,
         feet,
         current,
     })
@@ -207,9 +211,10 @@ pub fn fits_character<P: PhysicsPose>(
 /// A plain `Transform` write is a move, not a teleport: it drives the capsule and pushes props on
 /// the way, and it keeps the grounded record, so a rider whose support moved that tick is carried
 /// about the old pivot once; reposition a rider with this. This clears the grounded state, the
-/// ground and the platform (no carry next tick), and restores the authored height when the motor
-/// was crouched and the authored height fits at the new spot; otherwise the crouch stays and the
-/// next move's `report.height` says so. The pose alone is written when the world has no physics
+/// ground and the platform (no carry next tick), and restores the authored shape (no posture, the
+/// authored height) when the motor was in a posture or crouched and the authored shape fits at the
+/// new spot; otherwise the posture and crouch stay and the next move's `report.posture` and
+/// `report.height` say so. The pose alone is written when the world has no physics
 /// yet.
 ///
 /// A suspended motor is [`MotorError::Suspended`]: [`resume_character`](crate::resume_character) is the
@@ -240,18 +245,23 @@ pub fn teleport_character<P: PhysicsPose>(
     if state.is_some_and(|state| state.suspended) {
         return Err(MotorError::Suspended(entity));
     }
-    let crouched = height_in_force(&motor, state) < motor.height;
-    let restores = crouched
+    let base = CharacterMotor {
+        postures: Default::default(),
+        ..motor.clone()
+    };
+    let reduced = state.is_some_and(|state| state.posture.is_some())
+        || motor_in_force(&motor, state).height < motor.height;
+    let restores = reduced
         && check(&motor).is_ok()
         && world
             .resource::<PhysicsWorld>()
-            .is_some_and(|physics| headroom(physics, entity, &motor, feet, motor.height).is_none());
+            .is_some_and(|physics| headroom(physics, entity, &base, feet, motor.height).is_none());
     place::<P>(world, entity, feet, yaw, restores);
     Ok(())
 }
 
 /// Writes the pose and resets the motor's state like a teleport (`restore_height` drops a crouch
-/// override), then tells the physics write to place the capsule without pushing props.
+/// override and the posture), then tells the physics write to place the capsule without pushing props.
 pub(super) fn place<P: PhysicsPose>(
     world: &mut World,
     entity: EntityId,
@@ -271,6 +281,7 @@ pub(super) fn place<P: PhysicsPose>(
         state.carry_tick = None;
         if restore_height {
             state.height = None;
+            state.posture = None;
         }
     };
     if let Ok(Some(state)) = world.get_mut::<CharacterMotorState>(entity) {

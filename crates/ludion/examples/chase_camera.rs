@@ -2,7 +2,8 @@
 //! mouse motion into rig look, and the `chase` rig hangs the eye on a boom from a sprung pivot that
 //! follows the hero. Yaw and pitch are not sprung, so the view turns 1:1 with the input; the pitch
 //! stays inside `pitch_min_deg..pitch_max_deg`. A `follow` rig takes the same shape with a fixed
-//! yaw and pitch and ignores look.
+//! yaw and pitch and ignores look. `collision` keeps the eye out of walls (it needs the scene's
+//! `physics:` block), and the game-written `framing` channel peeks the boom over a shoulder.
 //!
 //! A stick is not a mouse: mouse counts are already a delta, but a stick's deflection is a rate, so
 //! scale it by the real frame time (`ctx.dt`) before [`add_look`], or the turn speed follows the
@@ -29,14 +30,30 @@ fn look(world: &mut World, _ctx: &SystemCtx) {
     add_look_counts(rig, delta[0], delta[1]);
 }
 
-/// The game: the look system on a default engine.
-pub fn game() -> EngineBuilder {
-    Engine::builder().system("look", look)
+/// A shoulder peek between ticks 10 and 20: the framing weight eases in and back out on its own.
+fn peek(world: &mut World, ctx: &SystemCtx) {
+    let Some(cam) = world.entities().find(|&id| world.has::<CameraRig>(id)) else {
+        return;
+    };
+    let rig = world.get_mut::<CameraRig>(cam).unwrap().unwrap();
+    let peeking = (10..20).contains(&ctx.frame.as_u64());
+    rig.framing = Framing {
+        weight: if peeking { 1.0 } else { 0.0 },
+        pivot_offset: [0.8, 0.2, 0.0],
+        ..Framing::default()
+    };
 }
 
-/// A chase camera on a hero entity; the pitch is held between 10 and 40 degrees.
+/// The game: the look and peek systems on a default engine.
+pub fn game() -> EngineBuilder {
+    Engine::builder().system("look", look).system("peek", peek)
+}
+
+/// A chase camera on a hero entity over a floor; the pitch is held between 10 and 40 degrees.
 const SCENE: &str = r#"format: 1
 seed: 1
+physics:
+  space: free
 entities:
   - name: camera
     components:
@@ -53,6 +70,8 @@ entities:
               pitch_deg: 20.0
               pitch_min_deg: 10.0
               pitch_max_deg: 40.0
+          collision:
+            enabled: true
   - name: hero
     components:
       Transform:
@@ -60,6 +79,21 @@ entities:
           - 0.0
           - 0.0
           - 0.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -1.0
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 20.0
+              - 0.5
+              - 20.0
+        body: static
 "#;
 
 // --- Headless demo `main` ------------------------------------------------------------------------

@@ -107,7 +107,42 @@ No new camera API (request 0010 and the mixer, 0023, own theirs).
 full (never evicts) · `L4202` invalid name (empty, over 64 chars, outside `[A-Za-z0-9_.-]`) · `L4203`
 capture failed (old slot kept) · `L4204` restore failed (world untouched) · `L4205` switch dropped by a
 restore · `L4206` keyframe skipped while slots are held · `L4207` recording arm refused while slots are
-held.
+held. W2 adds `L4208` disk write failed (error; the previous file stays, the next request retries) ·
+`L4209` disk load refused (the `L1401` sibling).
+
+## Wave 2 decisions — the disk slot
+
+**W2-1. No config field.** The path is fixed at `save/checkpoint.json` (the `RUN_SAVE_PATH` precedent). The
+request's `persist: Option<path>` is dropped; a game that never calls `persist` never writes.
+
+**W2-2. API on `Checkpoints`**, applied at the boundary: `persist(name)` writes held slot `name` after this
+frame's captures (last call wins; unknown name `L4200`, nothing written); `discard_disk()` runs before any
+`persist`; `load_disk()` is a restore request sharing W1's field, now a private `RestoreRequest { Slot, Disk }`
+(last `restore`/`load_disk` wins); `disk()` is the file read at boot or last written, `None` in a replay or
+playback; `disk_error()` is the last `L4208`/`L4209`. No new public types; `RestoreOutcome` reports a load under
+the envelope's slot name.
+
+**W2-3. Envelope** (`format: 1`, private serde struct): `{format, build: BuildStamp, name, frame, game_frame,
+scene?, scene_path?, authored_names (sorted), slot: <capture doc>}`. The slot doc is the W1 capture unchanged;
+its profile and input fields are ignored on load.
+
+**W2-4. Load order.** A host that keeps no saves: `Refused`, no backup. A recording open: `L4209`, file kept, no
+backup. Strict read: a missing file is `Refused` with no backup; garbled, newer format, stamp mismatch or an
+invalid name is `L4209` with a `.bak.<hash>` backup and `disk() = None`. A new name with the store full:
+`L4201`, file kept. Otherwise the slot enters the store (replacing a same-named one) and W1's slot restore
+runs; a restore error (drift) is `L4209` with backup and the store is put back as it was.
+
+**W2-5. The frame never moves back.** A Continue runs at a frame below the slot's, so the checkpoint driver
+frame is `max(engine.frame(), slot.frame)`; `game_frame` then equals the slot's. When the frames differ the
+`Rebuild::Checkpoint` input row clones the held `InputState` and drops pending injected input (addressed to
+skipped frames); equal frames still `carry_input_from`. In-memory slots are never ahead, so W1 is unchanged.
+
+**W2-6. Persist under recording is allowed:** it is output, and a replay regenerates it on a host that only
+updates info.
+
+**W2-7. Determinism.** `disk()` is disk input like `RunSave::pending()`: read it on the title screen, before a
+recording starts. A continued run cannot be recorded from the loaded state (`RunRecording::start` reloads
+scene text, and held slots refuse arming, `L4207`).
 
 ## Waves
 
@@ -115,9 +150,10 @@ held.
   `Checkpoints` resource (`capture`/`restore`/`discard`, `slots`, `slot`, `last_restore`),
   `CheckpointConfig { max_slots }`, `Rebuild::Checkpoint`, the clock rebase, the keyframe skip and arm
   refusal, tests, `docs/checkpoints.md`, the `checkpoints` example.
-- **W2 — disk slot.** `persist`/`load_disk`/`discard_disk`/`disk()`; a `save/checkpoint.json` envelope with
-  a `BuildStamp`, kept on load; strict refusal with a `.bak.<hash>` backup; `load_disk` refused while a
-  recording is open.
+- **W2 — disk slot** (decisions W2-1..7). `persist`/`load_disk`/`discard_disk`/`disk()`/`disk_error()`; a
+  `save/checkpoint.json` envelope with a `BuildStamp`, kept on load; strict refusal with a `.bak.<hash>`
+  backup (`L4209`); `load_disk` refused while a recording is open; the frame jumps forward to a slot ahead of
+  it; `L4208` write failures.
 - **W3 — the store rides the snapshot.** A `checkpoints` snapshot field lifts the keyframe skip and the arm
   refusal (re-records the replay corpus); the slot digest joins `WorldHash`;
   `SceneChangeKind::CheckpointRestore`.
@@ -141,6 +177,8 @@ held.
 - `restore(name, keep: &[EntityId])` — trigger: a game that cannot carry meta state in the profile or a
   carried resource.
 - Multiple named disk slots — trigger: a game with a save-slot screen.
+- Recording a continued run — trigger: a game needing a replay that starts from a loaded checkpoint
+  (`RunRecording::start` reloads scene text).
 - Time scale (request 0011), camera zones (0010) and mixer state (0023): the rebase stays correct under
   them; nothing is built for them here.
 

@@ -38,6 +38,7 @@
 //! default, so it is seeded rather than exempted, and anything added later must default.
 //! `ParentJoint` is seeded for the same reason: its `joint` names a specific joint, and an empty
 //! default name would load without error.
+//! `SightTarget` is seeded likewise: its `class` names what the zones detect, with no honest default.
 //! `PrefabInstance` is seeded the same way: its `source`, `part` and `root` are provenance
 //! `spawn_prefab` always writes, with no honest default.
 
@@ -66,6 +67,7 @@ fn probe_seed(name: &str) -> Value {
         "SkinBone" => json!({ "skin": { "index": 0, "generation": 0 }, "bone": "b" }),
         "ParentJoint" => json!({ "joint": "j" }),
         "UiWorldAnchor" => json!({ "target": { "index": 0, "generation": 0 } }),
+        "SightTarget" => json!({ "class": "c" }),
         "PrefabInstance" => json!({
             "source": "p.prefab.yaml",
             "part": "a",

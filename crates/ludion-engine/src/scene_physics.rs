@@ -242,6 +242,11 @@ pub(crate) fn report_rejections(world: &mut World) {
                  Collider is removed",
                 rejection.reason
             )
+        } else if rejection.code == code::CHARACTER_MOTOR_POSTURE_FALLBACK {
+            format!(
+                "{named}: {}; it runs as its base shape until its state or CharacterMotor changes",
+                rejection.reason
+            )
         } else if rejection.code == code::CHARACTER_MOTOR_INVALID {
             format!(
                 "{named}: {}; it gets no body until its CharacterMotor changes",

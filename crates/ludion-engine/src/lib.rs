@@ -62,10 +62,13 @@ pub mod extract_observer;
 mod field_diff;
 mod font_sheet;
 pub mod fonts;
+mod game_clock;
 pub mod hierarchy;
+mod input_actions;
 mod instantiate;
 pub mod interpolation;
 mod lane;
+mod light_exposure;
 pub mod live;
 mod load_observer;
 pub mod manifest;
@@ -79,6 +82,7 @@ pub mod particles;
 mod path_follow;
 mod patrol;
 pub mod patterns;
+mod perception;
 pub mod perf_live;
 mod player_profile;
 mod pose_blend;
@@ -154,12 +158,14 @@ pub use components::{
     DecalReceiverSet, DirectionalLight, DropShadow, EmitShape, Environment, Fade, GiDynamic,
     GiVolume, GroundMarker, GroundMarkerShape, MapWrap, Mesh, MeshGrid, MeshSource, Name, NavAgent,
     NavGoal, NavReplan, NavRoute, NavRouteStatus, NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER,
-    ParentJoint, ParticleBlend, ParticleEmitter, PointLight, PostProcess, ProbeShape, Projection,
-    ReflectionProbe, Residue, SkinBone, SpotLight, Sprite, SpriteBlend, Static, Text,
-    TileAppearance, Tilemap, Transform, UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiList,
-    UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
-    Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
+    ParentJoint, ParticleBlend, ParticleEmitter, Perceiver, PointLight, PostProcess, ProbeShape,
+    Projection, ReflectionProbe, Require, Residue, SightPoint, SightTarget, SightZone, SkinBone,
+    SpotLight, Sprite, SpriteBlend, Static, Text, TileAppearance, Tilemap, Transform,
+    UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiList, UiListItem, UiRect, UiText, UiTween,
+    UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility,
+    builtin_registry, crossfade,
 };
+pub use components::{Look, SweepShape, ZoneSweep};
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
@@ -178,17 +184,23 @@ pub use hierarchy::{
     HierarchyFault, Keep, MAX_HIERARCHY_DEPTH, TransformHierarchy, WorldPose, reparent,
     world_affine, world_pose_transform, world_transform,
 };
+pub use input_actions::{INPUT_ACTIONS_KIND, validate_input_actions};
 pub use instantiate::EngineHooks;
 pub use interpolation::NoInterpolate;
 pub use lane::{
     LANE_ANCHOR, LANE_ERROR_FULL, LANE_FORWARD, LANE_LATERAL, LANE_OFF, LANE_ON, LANE_PATH,
     LaneConstraint, LaneEnds, LaneInput, lane_error_colour, lane_frame, lane_relative,
 };
+pub use light_exposure::{
+    Combine, Exposure, ExposureError, ExposureQuery, Facing, LightContribution, LightKind,
+    MAX_EXPOSURE_POINTS, light_exposure,
+};
 pub use ludion_camera::{
-    Aim, BlendCurve, BlendIn, CameraRig, ChaseRig, FirstPersonRig, FollowRig, KickConfig,
-    LookAhead, RigConfig, RigMode, RigState, ShakeConfig, Springs, TrackRig, VerticalAnchor,
-    add_fov_kick, add_kick, add_look, add_look_counts, add_trauma, camera_relative,
-    camera_relative_yaw, first_person_eye, look_from_counts, orbit_eye, set_look, snap_rig,
+    Aim, BlendCurve, BlendIn, CameraRig, ChaseRig, FirstPersonRig, FollowRig, Framing, KickConfig,
+    LookAhead, Recenter, RigCollision, RigCollisionConfig, RigConfig, RigMode, RigState,
+    ShakeConfig, Springs, TrackRig, VerticalAnchor, add_fov_kick, add_kick, add_look,
+    add_look_counts, add_trauma, camera_relative, camera_relative_yaw, first_person_eye,
+    look_from_counts, orbit_eye, set_look, snap_rig,
 };
 pub use ludion_nav::PathStatus;
 pub use ludion_protocol::replay::GameIdentity;
@@ -207,8 +219,8 @@ pub use model_sheet::{
 pub use motor::{
     MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE,
     MOTOR_STUCK, MOTOR_WALL, character_fit, fits_character, move_character, move_character_with,
-    move_characters, probe_character_ground, resize_character, resume_character, suspend_character,
-    teleport_character,
+    move_characters, probe_character_ground, resize_character, resume_character,
+    set_character_posture, suspend_character, teleport_character,
 };
 pub use nav::{
     Nav, NavConfig, NavPath, PathRequest, nav_distance, nav_path, nav_project, nav_reachable,
@@ -228,6 +240,7 @@ pub use patterns::{
     bullet_age, bullet_is_alive, bullet_position, play_patterns, validate_pattern_docs,
     volley_hits,
 };
+pub use perception::{PerceptionConfig, PerceptionResults, SightSample, perception_update};
 pub use perf_live::{
     FrameSample, LIVE_SEQUENTIAL_NAMES, LiveGpuProfile, LivePerf, PROFILE_WINDOW_FRAMES,
     ProfileSamples, ProfileWindowData,

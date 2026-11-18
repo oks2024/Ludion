@@ -30,6 +30,7 @@ use ludion_nav::{
     find_path, nearest_node, string_pull, walkable_line,
 };
 use ludion_physics::{PhysicsError, PhysicsWorld, QueryFilter, StaticBody};
+use ludion_renderer::DebugSegment;
 use ludion_spatial::Shape;
 use ludion_spatial::spatial3d::{Filter, Handle, Index3d, Neighbor};
 use schemars::JsonSchema;
@@ -267,6 +268,11 @@ impl Nav {
     /// The grid, `None` until the first [`nav_update`] with a physics world.
     pub fn grid(&self) -> Option<&NavGrid> {
         self.grid.as_ref()
+    }
+
+    /// The flow-field cache, read-only: [`FlowCache::get`] answers only for a field already built.
+    pub fn cache(&self) -> &FlowCache {
+        &self.cache
     }
 
     /// The flow-field cache. Borrow the [`grid`](Nav::grid) separately; they are distinct fields
@@ -1202,4 +1208,229 @@ fn seek_walking(steer: &Steer, grid: Option<&NavGrid>, cache: Option<&FlowCache>
         .and_then(|field| field.flow_at(grid, pos))
         .unwrap_or([to[0] / d, to[1] / d]);
     [dir[0] * agent.speed, 0.0, dir[1] * agent.speed]
+}
+
+/// Metres around the camera inside which the `nav` view draws grid nodes and flow arrows.
+const NAV_VIEW_RADIUS: f32 = 30.0;
+/// Most segments the `nav` view draws; the grid is drawn last, so it is what gets truncated.
+const NAV_MAX_SEGMENTS: usize = 200_000;
+/// Metres the `nav` lines sit above the floor.
+const NAV_LIFT: f32 = 0.05;
+
+/// Which `nav` parts [`debug_lines`] draws.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NavDebugParts {
+    pub(crate) grid: bool,
+    pub(crate) routes: bool,
+    pub(crate) flow: bool,
+}
+
+const ROUTE_AHEAD: [f32; 4] = [0.0, 0.85, 0.85, 1.0];
+const ROUTE_PARTIAL: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
+const ROUTE_UNREACHABLE: [f32; 4] = [1.0, 0.15, 0.15, 1.0];
+const FLOW_COLOR: [f32; 4] = [1.0, 0.85, 0.1, 1.0];
+const NODE_COLOR: [f32; 4] = [0.7, 0.7, 0.7, 1.0];
+const LINK_FLAT_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
+const LINK_STEP_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 1.0];
+
+fn lifted(p: [f32; 3]) -> [f32; 3] {
+    [p[0], p[1] + NAV_LIFT, p[2]]
+}
+
+fn within(eye: Option<[f32; 3]>, p: [f32; 3]) -> bool {
+    eye.is_none_or(|e| {
+        let d = [p[0] - e[0], p[1] - e[1], p[2] - e[2]];
+        d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= NAV_VIEW_RADIUS * NAV_VIEW_RADIUS
+    })
+}
+
+/// The entities with a `NavRoute`, ascending.
+fn route_entities(world: &World) -> Vec<EntityId> {
+    let mut ids: Vec<EntityId> = world
+        .entities()
+        .filter(|id| world.has::<NavRoute>(*id))
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+/// The distinct nodes walking agents without a `NavGoal` head for, ascending: the flow fields they read.
+fn flow_targets(world: &World, grid: &NavGrid) -> Vec<NodeId> {
+    let mut targets: Vec<NodeId> = world
+        .entities()
+        .filter(|id| !world.has::<NavGoal>(*id))
+        .filter_map(|id| {
+            let agent = world.get::<NavAgent>(id).ok().flatten()?;
+            (!agent.flying)
+                .then(|| grid.node_at(agent.target))
+                .flatten()
+        })
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+    targets
+}
+
+/// The `nav` debug category, drawn at extraction from the [`Nav`] resource and the `NavRoute` and
+/// `NavAgent` components; read-only, it never builds a field. Routes come first and are never culled,
+/// then flow arrows, then the grid, so [`NAV_MAX_SEGMENTS`] only ever truncates the grid. Flow arrows and
+/// grid nodes within [`NAV_VIEW_RADIUS`] of `eye` are drawn (all of them when `eye` is `None`).
+pub(crate) fn debug_lines(
+    world: &World,
+    parts: NavDebugParts,
+    eye: Option<[f32; 3]>,
+) -> Vec<DebugSegment> {
+    let mut lines = Vec::new();
+    let seg = |a, b, color| DebugSegment { a, b, color };
+    if parts.routes {
+        for id in route_entities(world) {
+            let Ok(Some(route)) = world.get::<NavRoute>(id) else {
+                continue;
+            };
+            let index = (route.index as usize).min(route.waypoints.len());
+            let ahead = if route.partial {
+                ROUTE_PARTIAL
+            } else {
+                ROUTE_AHEAD
+            };
+            let behind = [ahead[0] * 0.4, ahead[1] * 0.4, ahead[2] * 0.4, 1.0];
+            let done = &route.waypoints[..route.waypoints.len().min(index + 1)];
+            for pair in done.windows(2) {
+                lines.push(seg(lifted(pair[0]), lifted(pair[1]), behind));
+            }
+            if let Some(pose) = world_transform(world, id) {
+                let mut at = lifted(pose.trs.translation);
+                for waypoint in route.waypoints.iter().skip(index) {
+                    lines.push(seg(at, lifted(*waypoint), ahead));
+                    at = lifted(*waypoint);
+                }
+            }
+            let color = if route.status == NavRouteStatus::Unreachable {
+                ROUTE_UNREACHABLE
+            } else {
+                ahead
+            };
+            let g = lifted(route.goal);
+            for axis in [[0.15, 0.0, 0.0], [0.0, 0.0, 0.15]] {
+                let a = [g[0] - axis[0], g[1], g[2] - axis[2]];
+                let b = [g[0] + axis[0], g[1], g[2] + axis[2]];
+                lines.push(seg(a, b, color));
+            }
+        }
+    }
+    let Some(nav) = world.resource::<Nav>() else {
+        return lines;
+    };
+    let Some(grid) = nav.grid() else {
+        return lines;
+    };
+    let cell = grid.params().cell_size;
+    if parts.flow {
+        let (cos, sin) = (0.866_025_4_f32, 0.5_f32);
+        for target in flow_targets(world, grid) {
+            let Some(field) = nav.cache().get(target) else {
+                continue;
+            };
+            for &node in field.reached() {
+                let p = lifted(grid.node_pos(NodeId(node)));
+                let flow = field.flow(NodeId(node));
+                if flow == [0.0; 2] || !within(eye, p) {
+                    continue;
+                }
+                let len = 0.4 * cell;
+                let tip = [p[0] + flow[0] * len, p[1], p[2] + flow[1] * len];
+                lines.push(seg(p, tip, FLOW_COLOR));
+                for sign in [1.0_f32, -1.0] {
+                    let (bx, bz) = (-flow[0], -flow[1]);
+                    let (s, c) = (sin * sign, cos);
+                    let head = [
+                        tip[0] + 0.3 * len * (bx * c - bz * s),
+                        p[1],
+                        tip[2] + 0.3 * len * (bx * s + bz * c),
+                    ];
+                    lines.push(seg(tip, head, FLOW_COLOR));
+                }
+            }
+        }
+    }
+    if parts.grid {
+        let half = 0.2 * cell;
+        'nodes: for n in 0..grid.node_count() {
+            #[allow(clippy::cast_possible_truncation)]
+            let id = NodeId(n as u32);
+            let p = grid.node_pos(id);
+            if !within(eye, p) {
+                continue;
+            }
+            let q = lifted(p);
+            let cross = [
+                seg(
+                    [q[0] - half, q[1], q[2]],
+                    [q[0] + half, q[1], q[2]],
+                    NODE_COLOR,
+                ),
+                seg(
+                    [q[0], q[1], q[2] - half],
+                    [q[0], q[1], q[2] + half],
+                    NODE_COLOR,
+                ),
+            ];
+            for line in cross {
+                if lines.len() >= NAV_MAX_SEGMENTS {
+                    break 'nodes;
+                }
+                lines.push(line);
+            }
+            for dir in 0..8 {
+                let Some(other) = grid.link(id, dir).filter(|other| *other > id) else {
+                    continue;
+                };
+                if lines.len() >= NAV_MAX_SEGMENTS {
+                    break 'nodes;
+                }
+                let o = grid.node_pos(other);
+                let color = if (o[1] - p[1]).abs() <= 0.01 {
+                    LINK_FLAT_COLOR
+                } else {
+                    LINK_STEP_COLOR
+                };
+                lines.push(seg(q, lifted(o), color));
+            }
+        }
+    }
+    lines.truncate(NAV_MAX_SEGMENTS);
+    lines
+}
+
+/// The `nav` parts with something to draw, for `drawn`: `nav:grid` when the grid has a node,
+/// `nav:routes` when a `NavRoute` has a waypoint, `nav:flow` when a flowing walker's field is cached;
+/// `nav` itself when any of them is.
+pub(crate) fn debug_present(world: &World) -> Vec<&'static str> {
+    use crate::debug_draw::{NAV, NAV_FLOW, NAV_GRID, NAV_ROUTES};
+    let mut present = Vec::new();
+    let nav = world.resource::<Nav>();
+    let grid = nav.and_then(Nav::grid);
+    if grid.is_some_and(|g| g.node_count() > 0) {
+        present.push(NAV_GRID);
+    }
+    if route_entities(world).into_iter().any(|id| {
+        world
+            .get::<NavRoute>(id)
+            .ok()
+            .flatten()
+            .is_some_and(|route| !route.waypoints.is_empty())
+    }) {
+        present.push(NAV_ROUTES);
+    }
+    if let (Some(nav), Some(grid)) = (nav, grid)
+        && flow_targets(world, grid)
+            .into_iter()
+            .any(|target| nav.cache().get(target).is_some())
+    {
+        present.push(NAV_FLOW);
+    }
+    if !present.is_empty() {
+        present.push(NAV);
+    }
+    present
 }

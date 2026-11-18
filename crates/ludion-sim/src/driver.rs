@@ -15,7 +15,8 @@
 //!    (gestures advance one tick; a world without one is untouched).
 //! 2. **Gameplay clock** — fold the [`GameClock`] resource, if the world carries one: a frame the
 //!    game marked frozen becomes one more held frame, and the fold reports whether gameplay time
-//!    advanced into this tick. A world with no clock behaves as an unheld one.
+//!    advanced into this tick; a frame the game marked scaled excludes the rest of its tick (the
+//!    context's `game_dt` shrinks by the scale). A world with no clock behaves as an unheld one.
 //! 3. **Systems** — run the [`Schedule`] once, in registration order, with the context of frame
 //!    *N* read through the folded clock (`SystemCtx::new(N, rate).with_clock(…)`).
 //! 4. **Advance** — the frame counter becomes *N + 1*.
@@ -604,6 +605,72 @@ mod tests {
         let mut schedule = Schedule::new();
         schedule.add_system("hold_window", hold_window);
         SimDriver::new(world, schedule, SimConfig::default())
+    }
+
+    /// One row per tick: `(ctx.frame, ctx.game_frame, ctx.game_dt)`.
+    #[derive(Default)]
+    struct ScaleTrace(Vec<(u64, u64, f32)>);
+
+    /// A game slowed to half speed during frames `10..=17`.
+    fn slow_window(world: &mut World, ctx: &SystemCtx) {
+        world.resource_mut::<ScaleTrace>().unwrap().0.push((
+            ctx.frame.as_u64(),
+            ctx.game_frame.as_u64(),
+            ctx.game_dt,
+        ));
+        if (10..=17).contains(&ctx.frame.as_u64())
+            && let Some(clock) = world.resource_mut::<GameClock>()
+        {
+            clock.scale(0.5);
+        }
+    }
+
+    fn driver_slowing(with_clock: bool) -> SimDriver {
+        let mut world = World::new();
+        world.insert_resource(ScaleTrace::default());
+        if with_clock {
+            world.insert_resource(GameClock::default());
+        }
+        let mut schedule = Schedule::new();
+        schedule.add_system("slow_window", slow_window);
+        SimDriver::new(world, schedule, SimConfig::default())
+    }
+
+    #[test]
+    fn a_scaled_window_halves_the_gameplay_step_and_the_frame_rate() {
+        let mut driver = driver_slowing(true);
+        driver.run_ticks(22);
+        let dt = SystemCtx::new(
+            ludion_core::time::FrameIndex::ZERO,
+            SimConfig::default().tick_rate,
+        )
+        .dt;
+        let rows = &driver.world().resource::<ScaleTrace>().unwrap().0;
+        for &(frame, _, game_dt) in rows {
+            let expect = if (11..=18).contains(&frame) {
+                dt / 2.0
+            } else {
+                dt
+            };
+            assert_eq!(game_dt, expect, "frame {frame}");
+        }
+        let frames: Vec<u64> = rows[8..=19].iter().map(|r| r.1).collect();
+        assert_eq!(frames, vec![8, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 15]);
+        assert_eq!(driver.world().resource::<GameClock>().unwrap().held(), 0);
+    }
+
+    #[test]
+    fn scaling_a_world_without_a_clock_changes_nothing() {
+        let mut driver = driver_slowing(false);
+        driver.run_ticks(22);
+        let dt = SystemCtx::new(
+            ludion_core::time::FrameIndex::ZERO,
+            SimConfig::default().tick_rate,
+        )
+        .dt;
+        for &(frame, game_frame, game_dt) in &driver.world().resource::<ScaleTrace>().unwrap().0 {
+            assert_eq!((game_frame, game_dt), (frame, dt));
+        }
     }
 
     fn trace(driver: &SimDriver, frames: std::ops::RangeInclusive<usize>) -> Vec<(u64, u64, bool)> {

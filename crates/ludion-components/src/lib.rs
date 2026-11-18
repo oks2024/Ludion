@@ -41,6 +41,7 @@ pub mod nav_route;
 pub mod path_follow;
 pub mod patrol;
 pub mod patterns;
+pub mod perception;
 pub mod prefab;
 pub mod ui;
 pub mod validators;
@@ -50,6 +51,10 @@ pub use nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
 pub use path_follow::{PathFollower, PathMode, PathOrient};
 pub use patrol::{PatrolFollower, PatrolPhase, PatrolResume, PatrolState};
 pub use patterns::{PatternPlayer, VOLLEY_MAX_BULLETS, Volley, VolleyShape};
+pub use perception::{
+    Look, PERCEPTION_MAX_PARTS, Perceiver, Require, SightPoint, SightTarget, SightZone, SweepShape,
+    ZoneSweep,
+};
 pub use prefab::PrefabInstance;
 pub use ui::{
     UiAnchorBehind, UiAnchorShow, UiClock, UiEase, UiNav, UiTween, UiTweenField, UiTweenRepeat,
@@ -6125,6 +6130,13 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<PatrolState>("PatrolState")
         .expect("unique");
+    // The sight pair, appended after `PatrolState`: who looks and what can be seen, read by `perception_update`.
+    registry
+        .register_validated::<Perceiver>("Perceiver")
+        .expect("unique");
+    registry
+        .register_validated::<SightTarget>("SightTarget")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -6133,7 +6145,7 @@ pub fn builtin_registry() -> Registry {
 }
 
 /// The built-ins whose engine-owned consumer is a sim-phase system.
-const SIM_ONLY_COMPONENTS: [&str; 20] = [
+const SIM_ONLY_COMPONENTS: [&str; 22] = [
     "Collider",
     "Velocity",
     "Joint",
@@ -6154,6 +6166,8 @@ const SIM_ONLY_COMPONENTS: [&str; 20] = [
     "QueryLayers",
     "PatrolFollower",
     "PatrolState",
+    "Perceiver",
+    "SightTarget",
 ];
 
 #[cfg(test)]
@@ -6192,6 +6206,8 @@ mod tests {
             "QueryLayers",
             "PatrolFollower",
             "PatrolState",
+            "Perceiver",
+            "SightTarget",
         ];
         expected.sort_unstable();
         assert_eq!(marked, expected);
@@ -6592,12 +6608,14 @@ mod tests {
                 "UiWorldAnchor",
                 "PatrolFollower",
                 "PatrolState",
+                "Perceiver",
+                "SightTarget",
             ]
         );
         assert_eq!(
             registry.len(),
-            60,
-            "appending PatrolState grows the registry to 60"
+            62,
+            "appending SightTarget grows the registry to 62"
         );
     }
 

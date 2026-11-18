@@ -28,10 +28,30 @@ fn draw_motor(world: &mut World, _ctx: &SystemCtx) {
         .ray([0.0, 1.0, 0.0], [2.0, 0.0, 0.0], [1.0, 0.8, 0.1, 1.0]);
 }
 
-/// The game: one system. A real game's `main` is `ludion::run(game())`; pass `--render-out frame.png
+/// What a guard senses, drawn under `ai`: a sight wedge and a hearing circle on the floor, a ring
+/// sector for a close-range arc and a cone for a spotlight. Angles are degrees, `[0, 1, 0]` is the
+/// plane's normal, and a shape that cannot be drawn (zero radius, a NaN) draws nothing.
+fn draw_senses(world: &mut World, _ctx: &SystemCtx) {
+    let (floor, up, facing) = ([0.0, 0.02, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+    debug_draw(world, "ai")
+        .wedge(floor, up, facing, 40.0, 6.0, [1.0, 0.8, 0.1, 1.0])
+        .ring_sector(floor, up, facing, 70.0, 1.0, 2.5, [1.0, 0.4, 0.1, 1.0])
+        .circle(floor, up, 3.0, [0.3, 0.6, 1.0, 1.0])
+        .cone(
+            [0.0, 3.0, 0.0],
+            [0.0, -1.0, 0.0],
+            25.0,
+            3.0,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+}
+
+/// The game: two systems. A real game's `main` is `ludion::run(game())`; pass `--render-out frame.png
 /// --debug-draw motor` to it to see the lines.
 pub fn game() -> EngineBuilder {
-    Engine::builder().system("draw_motor", draw_motor)
+    Engine::builder()
+        .system("draw_motor", draw_motor)
+        .system("draw_senses", draw_senses)
 }
 
 /// A camera looking at the origin. The scene draws nothing itself: every line comes from the system.
@@ -75,6 +95,7 @@ fn main() -> ExitCode {
 
     // The pen recorded whether or not anything is shown.
     println!("drawn under: {:?}", engine.debug_draw_drawn());
+    assert_eq!(engine.debug_draw_drawn(), ["ai", "motor"]);
 
     let plain = match engine.render_png(320, 180) {
         Ok(png) => png,

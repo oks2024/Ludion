@@ -149,6 +149,9 @@ enum Act {
     Capture(&'static str),
     Restore(&'static str),
     Discard(&'static str),
+    Persist(&'static str),
+    LoadDisk,
+    DiscardDisk,
     Switch,
     Hold,
     Earn,
@@ -192,6 +195,9 @@ fn director(script: Script) -> impl Fn(&mut World, &SystemCtx) + Send + Sync + '
                 Act::Capture(name) => world.resource_mut::<Checkpoints>().unwrap().capture(*name),
                 Act::Restore(name) => world.resource_mut::<Checkpoints>().unwrap().restore(*name),
                 Act::Discard(name) => world.resource_mut::<Checkpoints>().unwrap().discard(*name),
+                Act::Persist(name) => world.resource_mut::<Checkpoints>().unwrap().persist(*name),
+                Act::LoadDisk => world.resource_mut::<Checkpoints>().unwrap().load_disk(),
+                Act::DiscardDisk => world.resource_mut::<Checkpoints>().unwrap().discard_disk(),
                 Act::Switch => world.resource_mut::<SceneSwitch>().unwrap().request(
                     "next.yaml".to_string(),
                     "gate".to_string(),
@@ -699,4 +705,211 @@ fn checkpoint_traces_are_thread_count_invariant() {
     });
     assert_eq!(one, two, "1 vs 2 threads");
     assert_eq!(one, eight, "1 vs 8 threads");
+}
+
+// --- Wave 2: the disk slot ----------------------------------------------------------------------
+
+fn persisting(dir: &Path, acts: Script) -> EngineBuilder {
+    game(dir, 4, acts).persist_profile()
+}
+
+fn checkpoint_file(dir: &Path) -> PathBuf {
+    dir.join("save/checkpoint.json")
+}
+
+/// Boots a persisting engine that captures `a` at frame 10 and persists it at 12, then quits.
+/// Returns the world hash the capture was taken at.
+fn persist_a(dir: &Path) -> WorldHash {
+    let acts = script(&[(10, Act::Capture("a")), (12, Act::Persist("a"))]);
+    let mut engine = boot(persisting(dir, acts));
+    trace(&mut engine, 14)[10]
+}
+
+fn backups(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir.join("save"))
+        .unwrap()
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.starts_with("checkpoint.json.bak."))
+        .collect()
+}
+
+fn refused_reason(engine: &Engine) -> String {
+    match checkpoints(engine).last_restore() {
+        Some(RestoreOutcome::Refused { reason, .. }) => reason.clone(),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_persisted_slot_continues_after_a_relaunch_and_the_file_stays() {
+    let dir = fresh_dir("disk-continue");
+    let captured = persist_a(&dir);
+    assert!(checkpoint_file(&dir).exists());
+
+    let acts = script(&[(3, Act::LoadDisk), (40, Act::Restore("a"))]);
+    let mut engine = boot(persisting(&dir, acts));
+    let info = checkpoints(&engine).disk().cloned().expect("read at boot");
+    assert_eq!((info.name.as_str(), info.frame.as_u64()), ("a", 11));
+    assert!(
+        checkpoints(&engine).slots().is_empty(),
+        "nothing is loaded before the request"
+    );
+
+    let loaded = trace(&mut engine, 4);
+    assert_eq!(loaded[3], captured, "the world is the slot's");
+    assert_eq!(
+        engine.frame().as_u64(),
+        11,
+        "the frame jumped forward, never back"
+    );
+    let clock = *engine.world().resource::<GameClock>().unwrap();
+    assert_eq!(clock.game_frame(engine.frame()), info.game_frame);
+    assert_eq!(
+        checkpoints(&engine).last_restore(),
+        Some(&RestoreOutcome::Restored {
+            name: "a".to_string(),
+            frame: FrameIndex::new(11),
+        })
+    );
+    assert!(checkpoint_file(&dir).exists(), "a Continue keeps the file");
+    assert_eq!(checkpoints(&engine).disk(), Some(&info));
+    assert!(
+        checkpoints(&engine).slot("a").is_some(),
+        "the slot is in the store"
+    );
+
+    // Dying after a Continue restores it.
+    let after = trace(&mut engine, 30);
+    assert_eq!(
+        after[29], captured,
+        "the in-memory restore of the loaded slot works"
+    );
+}
+
+#[test]
+fn loading_the_disk_slot_twice_gives_identical_worlds() {
+    let dir = fresh_dir("disk-twice");
+    persist_a(&dir);
+    let acts = script(&[(3, Act::LoadDisk), (20, Act::LoadDisk)]);
+    let mut engine = boot(persisting(&dir, acts));
+    let first = trace(&mut engine, 4)[3];
+    let second = trace(&mut engine, 10)[9];
+    assert_eq!(first, second);
+}
+
+#[test]
+fn discard_disk_removes_the_file() {
+    let dir = fresh_dir("disk-discard");
+    persist_a(&dir);
+    let mut engine = boot(persisting(&dir, script(&[(2, Act::DiscardDisk)])));
+    assert!(checkpoints(&engine).disk().is_some());
+    trace(&mut engine, 4);
+    assert!(!checkpoint_file(&dir).exists());
+    assert!(checkpoints(&engine).disk().is_none());
+}
+
+fn refused_load_leaves_the_world_alone(label: &str, spoil: impl Fn(&Path)) {
+    let dir = fresh_dir(label);
+    persist_a(&dir);
+    spoil(&checkpoint_file(&dir));
+
+    let mut engine = boot(persisting(&dir, script(&[(3, Act::LoadDisk)])));
+    let control_dir = fresh_dir(&format!("{label}-control"));
+    let mut control = boot(game(&control_dir, 4, script(&[])));
+    assert_eq!(
+        trace(&mut engine, 6),
+        trace(&mut control, 6),
+        "{label}: the world is untouched"
+    );
+
+    let reason = refused_reason(&engine);
+    assert!(!reason.is_empty());
+    assert_eq!(
+        checkpoints(&engine).disk_error().map(|d| d.code),
+        Some(code::CHECKPOINT_DISK_LOAD_REFUSED),
+        "{label}"
+    );
+    assert!(checkpoints(&engine).disk().is_none(), "{label}");
+    assert!(checkpoints(&engine).slots().is_empty(), "{label}");
+    assert!(!checkpoint_file(&dir).exists(), "{label}: renamed away");
+    assert_eq!(backups(&dir).len(), 1, "{label}");
+}
+
+#[test]
+fn a_foreign_build_is_refused_and_backed_up() {
+    refused_load_leaves_the_world_alone("disk-build", |path| {
+        let mut file: Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        file["build"]["engine_version"] = json!("0.0.0-old");
+        std::fs::write(path, serde_json::to_string(&file).unwrap()).unwrap();
+    });
+}
+
+#[test]
+fn a_garbled_file_is_refused_and_backed_up() {
+    refused_load_leaves_the_world_alone("disk-garbled", |path| {
+        std::fs::write(path, "{ not json").unwrap();
+    });
+}
+
+#[test]
+fn a_load_while_recording_is_refused_and_the_file_is_kept() {
+    let dir = fresh_dir("disk-recording");
+    persist_a(&dir);
+    let mut engine = boot(persisting(&dir, script(&[(3, Act::LoadDisk)])));
+    engine.set_recording(SharedSink::default()).unwrap();
+    trace(&mut engine, 6);
+    assert!(refused_reason(&engine).contains("recording"));
+    assert_eq!(
+        checkpoints(&engine).disk_error().map(|d| d.code),
+        Some(code::CHECKPOINT_DISK_LOAD_REFUSED)
+    );
+    assert!(checkpoint_file(&dir).exists(), "the file is kept");
+    assert!(backups(&dir).is_empty(), "and not backed up");
+    assert!(checkpoints(&engine).disk().is_some());
+    assert!(checkpoints(&engine).slots().is_empty());
+}
+
+#[test]
+fn a_host_that_keeps_no_saves_updates_disk_and_writes_nothing() {
+    let dir = fresh_dir("disk-ephemeral");
+    let acts = script(&[
+        (2, Act::Capture("a")),
+        (3, Act::Persist("a")),
+        (6, Act::LoadDisk),
+    ]);
+    let mut engine = boot(game(&dir, 4, acts));
+    trace(&mut engine, 5);
+    assert_eq!(
+        checkpoints(&engine).disk().map(|d| d.name.as_str()),
+        Some("a")
+    );
+    assert!(!checkpoint_file(&dir).exists());
+    trace(&mut engine, 3);
+    assert!(refused_reason(&engine).contains("keeps no saves"));
+}
+
+#[test]
+fn persisting_an_unknown_name_reports_l4200_and_writes_nothing() {
+    let dir = fresh_dir("disk-unknown");
+    let mut engine = boot(persisting(&dir, script(&[(2, Act::Persist("nope"))])));
+    trace(&mut engine, 4);
+    assert_eq!(reported(&engine, code::CHECKPOINT_NO_SLOT), 1);
+    assert!(!checkpoint_file(&dir).exists());
+    assert!(checkpoints(&engine).disk().is_none());
+}
+
+#[test]
+fn a_disk_load_keeps_the_live_profile() {
+    let dir = fresh_dir("disk-profile");
+    persist_a(&dir);
+    let acts = script(&[(2, Act::Earn), (3, Act::LoadDisk)]);
+    let mut engine = boot(persisting(&dir, acts));
+    trace(&mut engine, 5);
+    let profile = engine.world().resource::<Profile<Save>>().unwrap();
+    assert_eq!(
+        profile.get().deaths,
+        1,
+        "the live profile survives a Continue"
+    );
 }

@@ -229,6 +229,10 @@ pub struct Engine {
     /// The game's nav config ([`EngineBuilder::nav`](crate::EngineBuilder::nav)), already validated at
     /// build; `None` installs no grid.
     pub(crate) nav_config: Option<crate::NavConfig>,
+    /// The game's perception config ([`EngineBuilder::perception`](crate::EngineBuilder::perception)),
+    /// already validated at build; `None` installs no results.
+    pub(crate) perception_config: Option<crate::PerceptionConfig>,
+    pub(crate) input_actions: bool,
     /// How the pool is drawn ([`EngineBuilder::projectile_visuals`](crate::EngineBuilder::projectile_visuals)).
     pub(crate) projectile_draw: crate::projectile_draw::ProjectileDraw,
     /// What the last install-time validation pass reported at `Warning` severity — the errors
@@ -858,6 +862,8 @@ impl Engine {
             resource_carriers: Vec::new(),
             projectile_config: None,
             nav_config: None,
+            perception_config: None,
+            input_actions: false,
             projectile_draw: crate::projectile_draw::ProjectileDraw::default(),
             doc_validation_warnings: Vec::new(),
             doc_skip_warnings: Vec::new(),
@@ -2020,6 +2026,7 @@ impl Engine {
         if self.drain_system_panic() {
             return true;
         }
+        crate::input_actions::drain_unknown(self.driver.world_mut());
         self.drain_diagnostics();
         self.drain_audio(frame);
         self.sync_audio_emitters(frame);
@@ -2053,6 +2060,7 @@ impl Engine {
         scene_physics::report_parented_bodies(self.driver.world_mut());
         scene_physics::report_scaled_colliders(self.driver.world_mut());
         crate::lane::report_without_motor(self.driver.world_mut());
+        crate::game_clock::report_rejected_scale(self.driver.world_mut());
         let (physics_installed, game_systems) =
             self.driver
                 .system_names()
@@ -2764,17 +2772,32 @@ impl Engine {
         self.session.run_save_error = Some(diagnostic);
     }
 
-    /// Computes the build stamp, reads the suspended run (persisting hosts only) and sweeps foreign
-    /// temps beside it; called once at build when [`run_save`](crate::EngineBuilder::run_save) is on.
-    pub(crate) fn init_run_save(&mut self) {
-        let stamp = crate::run_save::BuildStamp {
+    /// What built this engine: the stamp a saved run or checkpoint is only offered back to.
+    pub(crate) fn build_stamp(&self) -> crate::run_save::BuildStamp {
+        crate::run_save::BuildStamp {
             engine_version: ENGINE_VERSION.to_string(),
             game_schema: crate::run_save::game_schema_hash(&self.registry, &self.doc_kinds),
             projectiles: self
                 .projectile_config
                 .as_ref()
                 .map(crate::run_save::projectile_config_hash),
-        };
+        }
+    }
+
+    /// Whether this host writes save files (a live host, not a test or replay).
+    pub(crate) fn persisting(&self) -> bool {
+        self.profile_persistence && !self.profile_off_disk
+    }
+
+    /// Whether an in-place playback is running, so disk input is hidden from the world.
+    pub(crate) fn is_playback(&self) -> bool {
+        self.playback_name.is_some()
+    }
+
+    /// Computes the build stamp, reads the suspended run (persisting hosts only) and sweeps foreign
+    /// temps beside it; called once at build when [`run_save`](crate::EngineBuilder::run_save) is on.
+    pub(crate) fn init_run_save(&mut self) {
+        let stamp = self.build_stamp();
         let mut pending = None;
         if self.profile_persistence && !self.profile_off_disk {
             let path = self.save_root().join(crate::run_save::RUN_SAVE_PATH);
@@ -3971,6 +3994,31 @@ impl Engine {
         if let Ok(nav) = crate::Nav::new(config.clone()) {
             self.driver.world_mut().insert_resource(nav);
         }
+    }
+
+    /// Installs [`Actions`](ludion_sim::Actions) compiled from the loaded `kind: input-actions`
+    /// document unless the world already holds one (a `carry_resource` moved it across a switch).
+    /// Called after every world (re)build, once the doc stores are in; a no-op for a game that did
+    /// not opt in.
+    pub(crate) fn install_input_actions(&mut self) {
+        if !self.input_actions {
+            return;
+        }
+        let rate = self.tick_rate();
+        crate::input_actions::install(self.driver.world_mut(), rate);
+    }
+
+    /// Installs the configured [`PerceptionConfig`](crate::PerceptionConfig) and an empty
+    /// [`PerceptionResults`](crate::PerceptionResults) into the current world. Called after every
+    /// world (re)build; the results are derived, so a restored world starts empty and the next
+    /// `perception_update` fills them. A no-op for a game that configured none.
+    pub(crate) fn install_perception(&mut self) {
+        let Some(config) = &self.perception_config else {
+            return;
+        };
+        let world = self.driver.world_mut();
+        world.insert_resource(config.clone());
+        world.insert_resource(crate::PerceptionResults::default());
     }
 
     /// Installs a fresh (empty) [`Shutdown`](crate::Shutdown) resource into the current world so game
@@ -7865,8 +7913,15 @@ impl Engine {
                 driver.world_mut().insert_resource(*std::mem::take(input));
                 driver.set_pending_input(std::mem::take(pending_input));
             }
-            Rebuild::Switch { .. } | Rebuild::Checkpoint { .. } => {
-                driver.carry_input_from(&mut self.driver)
+            Rebuild::Switch { .. } => driver.carry_input_from(&mut self.driver),
+            // A disk slot ahead of the live frame cannot carry the injected script: it is addressed
+            // to frames the load skips.
+            Rebuild::Checkpoint { .. } => {
+                if driver.frame() == self.driver.frame() {
+                    driver.carry_input_from(&mut self.driver);
+                } else if let Some(input) = self.driver.world().resource::<InputState>() {
+                    driver.world_mut().insert_resource(input.clone());
+                }
             }
         }
         self.driver = driver;
@@ -7902,6 +7957,8 @@ impl Engine {
         self.install_prefab_prewarm();
         self.install_projectiles();
         self.install_nav();
+        self.install_perception();
+        self.install_input_actions();
         if matches!(
             kind,
             Rebuild::Switch { restart: true, .. }

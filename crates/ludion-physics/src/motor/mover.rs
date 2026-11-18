@@ -12,7 +12,7 @@ use ludion_spatial::ParentPose;
 use rapier3d::prelude::{BoundingVolume, SharedShape};
 
 use super::carry::{rigid_carry, rotate, rotate_yaw};
-use super::component::{CharacterMotor, CharacterMotorState, PlatformPose, check, height_in_force};
+use super::component::{CharacterMotor, CharacterMotorState, PlatformPose, check, motor_in_force};
 use super::gather::Gather;
 use super::report::{GroundHit, GroundProbe, MotorError, MoveReport, PlatformCarry, SurfaceHit};
 use super::surface::SurfaceVelocity;
@@ -218,12 +218,8 @@ pub(super) fn prepare<P: PhysicsPose, R: ParentPose>(
         return Err(MotorError::NonFiniteDisplacement(displacement));
     }
     let state = world.get::<CharacterMotorState>(entity).ok().flatten();
-    let height = height_in_force(&motor, state);
     let was_grounded = state.is_some_and(|state| state.grounded);
-    let checked = CharacterMotor {
-        height,
-        ..motor.clone()
-    };
+    let checked = motor_in_force(&motor, state);
     if let Err((pointer, reason)) = check(&checked) {
         return Err(MotorError::InvalidMotor {
             entity,
@@ -270,10 +266,15 @@ pub(super) fn apply<P: PhysicsPose>(
     world: &mut World,
     entity: EntityId,
     tick: u64,
-    outcome: Outcome,
+    mut outcome: Outcome,
     platform_now: Option<PlatformPose>,
 ) -> MoveReport {
     let frame = FrameIndex::new(tick);
+    outcome.report.posture = world
+        .get::<CharacterMotorState>(entity)
+        .ok()
+        .flatten()
+        .and_then(|state| state.posture.clone());
 
     if let Ok(Some(pose)) = world.get_mut::<P>(entity) {
         pose.set_translation(outcome.feet);
@@ -363,10 +364,7 @@ pub fn probe_character_ground<P: PhysicsPose>(
         return Err(MotorError::NonFiniteFeet(feet));
     }
     let state = world.get::<CharacterMotorState>(entity).ok().flatten();
-    let checked = CharacterMotor {
-        height: height_in_force(&motor, state),
-        ..motor.clone()
-    };
+    let checked = motor_in_force(&motor, state);
     if let Err((pointer, reason)) = check(&checked) {
         return Err(MotorError::InvalidMotor {
             entity,
@@ -853,6 +851,7 @@ impl<'a> Solver<'a> {
             moved: sub(feet, start),
             stuck,
             height: self.height,
+            posture: None,
             lane: None,
         };
         Outcome {

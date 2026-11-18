@@ -37,8 +37,10 @@ entity order, `None` when absent.
 varies); `ctx.frame: FrameIndex` is the tick count; `ctx.time: SimTime` gives exact
 `ctx.time.seconds()`. Never read a wall clock — it would break determinism (and `Instant::now` is a
 clippy build error here). `ctx.game_frame`/`ctx.game_time`/`ctx.game_dt` are the same three read
-through a `GameClock` a game may hold while frozen; they equal the sim ones exactly until a game
-calls `hold()` (`ludion docs game-clock`).
+through a `GameClock` a game may hold while frozen or `scale` down; they equal the sim ones exactly
+until a game calls `hold()` or `scale()` (`ludion docs game-clock`). `ctx.game_instant: GameTime` is
+the exact fractional gameplay time, `ctx.game_scale()` the tick's scale and
+`ctx.game_frames_crossed()` the whole gameplay frames it crossed (0 or 1).
 
 **Input — only through `InputState`.** Every device read is `ludion docs input`.
 

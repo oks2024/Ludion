@@ -215,3 +215,4 @@ rest stay lit and unshadowed; `shadow_distance` (with a `shadow_fade` band) drop
 - `ludion docs local-shadows` — opt-in shadows for point and spot lights.
 - `ludion docs sun-cascades` — camera-fitted cascades for the sun's shadow.
 - `ludion docs drop-shadow` — the projected contact shadow under a character, no sun needed.
+- `ludion docs light-exposure` — how lit a point is, read from sim state for gameplay.

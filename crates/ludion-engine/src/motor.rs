@@ -6,7 +6,7 @@ use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, World};
 use ludion_physics::{
     CharacterMotor, CharacterMotorState, GroundProbe, MotorError, MoveConstraint, MoveReport,
-    ResizeReport, ResumeReport, ground_probe_reach,
+    PostureReport, ResizeReport, ResumeReport, ground_probe_reach, motor_in_force,
 };
 
 use crate::components::Transform;
@@ -174,6 +174,24 @@ pub fn resize_character(
     height: f32,
 ) -> Result<ResizeReport, MotorError> {
     ludion_physics::resize_character::<Transform>(world, entity, height)
+}
+
+/// Puts the motor in a named posture; see [`ludion_physics::set_character_posture`].
+///
+/// ```no_run
+/// # use ludion_core::ids::EntityId;
+/// # use ludion_engine::set_character_posture;
+/// # use ludion_ecs::{SystemCtx, World};
+/// fn stand(world: &mut World, _ctx: &SystemCtx, hero: EntityId) {
+///     let _ = set_character_posture(world, hero, None);
+/// }
+/// ```
+pub fn set_character_posture(
+    world: &mut World,
+    entity: EntityId,
+    posture: Option<&str>,
+) -> Result<PostureReport, MotorError> {
+    ludion_physics::set_character_posture::<Transform>(world, entity, posture)
 }
 
 /// Whether a capsule of `height` fits at the feet; see [`ludion_physics::fits_character`].
@@ -344,6 +362,13 @@ fn draw(
     let Some(motor) = world.get::<CharacterMotor>(entity).ok().flatten().cloned() else {
         return;
     };
+    let motor = motor_in_force(
+        &motor,
+        world
+            .get::<ludion_physics::CharacterMotorState>(entity)
+            .ok()
+            .flatten(),
+    );
     let radius = motor.radius;
     let colour = if report.stuck {
         MOTOR_STUCK

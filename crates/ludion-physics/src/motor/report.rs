@@ -132,6 +132,8 @@ pub struct MoveReport {
     pub stuck: bool,
     /// The capsule height the move used.
     pub height: f32,
+    /// The posture in force for the move, `None` for the motor's own shape.
+    pub posture: Option<String>,
     /// Present when the entity has a `LaneConstraint` that is engaged or still easing; filled by
     /// the engine's `move_character`.
     pub lane: Option<LaneReport>,
@@ -144,6 +146,16 @@ pub struct ResizeReport {
     /// The capsule height in force after the call.
     pub height: f32,
     /// The lowest-id collider that kept a growth from fitting; the height is unchanged then.
+    pub blocked_by: Option<EntityId>,
+}
+
+/// What one `set_character_posture` call did.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PostureReport {
+    /// The posture in force after the call (`None` is the motor's own shape).
+    pub posture: Option<String>,
+    /// The lowest-id collider that kept a growth from fitting; the posture is unchanged then.
     pub blocked_by: Option<EntityId>,
 }
 
@@ -279,8 +291,8 @@ impl fmt::Display for MotorError {
             ),
             MotorError::UnknownPosture { entity, posture } => write!(
                 f,
-                "the CharacterMotor on {entity:?} has no posture {posture:?}; this motor declares \
-                 no postures, so pass None"
+                "the CharacterMotor on {entity:?} has no posture {posture:?}; declare it under \
+                 `postures` on the motor, or pass None for the motor's own shape"
             ),
         }
     }

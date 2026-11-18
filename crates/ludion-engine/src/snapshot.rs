@@ -1168,7 +1168,12 @@ fn restore_with(
     let schedule = engine.build_schedule(scene_physics.as_ref());
     let (driver_frame, driver_run_state, driver_speed) = match &mode {
         RestoreMode::Session(_) => (FrameIndex::new(doc.frame), doc.run_state, speed),
-        RestoreMode::Checkpoint(_) => (engine.frame(), engine.run_state(), engine.speed()),
+        // A disk slot can be ahead of a fresh boot; the frame never moves back.
+        RestoreMode::Checkpoint(slot) => (
+            engine.frame().max(slot.info.frame),
+            engine.run_state(),
+            engine.speed(),
+        ),
     };
     let driver = ludion_sim::SimDriver::restore(
         world,

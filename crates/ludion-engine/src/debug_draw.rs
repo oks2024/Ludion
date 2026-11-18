@@ -42,6 +42,12 @@ pub(crate) const CULL: &str = "cull";
 /// The category [`segments`] draws from the live `PhysicsWorld`'s colliders.
 pub(crate) const COLLIDERS: &str = "colliders";
 
+/// The host-side `nav` category and its sub-filters; `nav` alone enables all three parts.
+pub(crate) const NAV: &str = "nav";
+pub(crate) const NAV_GRID: &str = "nav:grid";
+pub(crate) const NAV_ROUTES: &str = "nav:routes";
+pub(crate) const NAV_FLOW: &str = "nav:flow";
+
 /// The category name that stands for every category in [`DebugCategories`]; no system may draw under it.
 const ALL: &str = "all";
 
@@ -183,7 +189,7 @@ impl DebugPen<'_> {
     /// Three great circles of `radius` around `center`.
     pub fn sphere(&mut self, center: [f32; 3], radius: f32, color: [f32; 4]) -> &mut Self {
         let c = Vec3::from(center);
-        self.arc(
+        self.arc_chords(
             c,
             Vec3::X,
             Vec3::Y,
@@ -193,7 +199,7 @@ impl DebugPen<'_> {
             TAU,
             color,
         );
-        self.arc(
+        self.arc_chords(
             c,
             Vec3::Y,
             Vec3::Z,
@@ -203,7 +209,7 @@ impl DebugPen<'_> {
             TAU,
             color,
         );
-        self.arc(
+        self.arc_chords(
             c,
             Vec3::Z,
             Vec3::X,
@@ -227,21 +233,21 @@ impl DebugPen<'_> {
         let u = axis.cross(helper).normalize();
         let v = axis.cross(u);
         for end in [a, b] {
-            self.arc(end, u, v, radius, CIRCLE_SEGMENTS, 0.0, TAU, color);
+            self.arc_chords(end, u, v, radius, CIRCLE_SEGMENTS, 0.0, TAU, color);
         }
         for side in [u, v, -u, -v] {
             self.push(a + side * radius, b + side * radius, color);
         }
         for (end, cap) in [(a, -axis), (b, axis)] {
-            self.arc(end, u, cap, radius, ARC_SEGMENTS, 0.0, PI, color);
-            self.arc(end, v, cap, radius, ARC_SEGMENTS, 0.0, PI, color);
+            self.arc_chords(end, u, cap, radius, ARC_SEGMENTS, 0.0, PI, color);
+            self.arc_chords(end, v, cap, radius, ARC_SEGMENTS, 0.0, PI, color);
         }
         self
     }
 
     /// `segments` chords along `center + radius * (cos t * e1 + sin t * e2)` for `t` in `start..start + sweep`.
     #[allow(clippy::too_many_arguments)]
-    fn arc(
+    fn arc_chords(
         &mut self,
         center: Vec3,
         e1: Vec3,
@@ -252,20 +258,268 @@ impl DebugPen<'_> {
         sweep: f32,
         color: [f32; 4],
     ) {
-        let point = |i: usize| {
-            #[allow(clippy::cast_precision_loss)]
-            let t = start + sweep * (i as f32) / (segments as f32);
-            let (s, c) = sin_cos(t);
-            center + radius * (c * e1 + s * e2)
-        };
+        let point = |i: usize| arc_point(center, e1, e2, radius, arc_t(start, sweep, i, segments));
         for i in 0..segments {
             self.push(point(i), point(i + 1), color);
+        }
+    }
+
+    /// A full ring of `radius` around `center` in the plane ⊥ `normal`, with a chord count that
+    /// grows with the radius. Degenerate input (non-finite, `radius <= 0`, zero `normal`) draws nothing.
+    pub fn circle(
+        &mut self,
+        center: [f32; 3],
+        normal: [f32; 3],
+        radius: f32,
+        color: [f32; 4],
+    ) -> &mut Self {
+        if !valid(&[center, normal], &[radius], color) || radius <= 0.0 {
+            return self;
+        }
+        let normal = Vec3::from(normal);
+        let Some(n) = normal.try_normalize() else {
+            return self;
+        };
+        let helper = if n.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+        let Some((e1, e2)) = plane_basis(normal, helper) else {
+            return self;
+        };
+        let segments = segments_for(radius, TAU);
+        self.arc_chords(center.into(), e1, e2, radius, segments, 0.0, TAU, color);
+        self
+    }
+
+    /// An open arc of `radius` around `center` in the plane ⊥ `normal`. It starts at the
+    /// direction `from_dir` (projected into the plane) and sweeps `sweep_deg` degrees, positive
+    /// counter-clockwise looking down `-normal`. `sweep_deg` is in `[-360, 360]`; `0` draws nothing.
+    pub fn arc(
+        &mut self,
+        center: [f32; 3],
+        normal: [f32; 3],
+        from_dir: [f32; 3],
+        radius: f32,
+        sweep_deg: f32,
+        color: [f32; 4],
+    ) -> &mut Self {
+        if !valid(&[center, normal, from_dir], &[radius, sweep_deg], color)
+            || radius <= 0.0
+            || sweep_deg == 0.0
+            || sweep_deg.abs() > 360.0
+        {
+            return self;
+        }
+        let Some((e1, e2)) = plane_basis(normal.into(), from_dir.into()) else {
+            return self;
+        };
+        let sweep = sweep_deg.to_radians();
+        let segments = segments_for(radius, sweep);
+        self.arc_chords(center.into(), e1, e2, radius, segments, 0.0, sweep, color);
+        self
+    }
+
+    /// A fan outline: two edges from `apex` and the outer arc between them, `half_angle_deg` either
+    /// side of `forward` in the plane ⊥ `normal`. `half_angle_deg` is in `(0, 180]`; `180` is a full disc.
+    pub fn wedge(
+        &mut self,
+        apex: [f32; 3],
+        normal: [f32; 3],
+        forward: [f32; 3],
+        half_angle_deg: f32,
+        range: f32,
+        color: [f32; 4],
+    ) -> &mut Self {
+        self.ring_sector(apex, normal, forward, half_angle_deg, 0.0, range, color)
+    }
+
+    /// A wedge with its inner corner cut away: two radial edges, the outer arc and, when
+    /// `r_inner > 0`, the inner arc. Needs `0 <= r_inner < r_outer`; angles as [`wedge`](Self::wedge).
+    #[allow(clippy::too_many_arguments)]
+    pub fn ring_sector(
+        &mut self,
+        apex: [f32; 3],
+        normal: [f32; 3],
+        forward: [f32; 3],
+        half_angle_deg: f32,
+        r_inner: f32,
+        r_outer: f32,
+        color: [f32; 4],
+    ) -> &mut Self {
+        if !valid(
+            &[apex, normal, forward],
+            &[half_angle_deg, r_inner, r_outer],
+            color,
+        ) || half_angle_deg <= 0.0
+            || half_angle_deg > 180.0
+            || r_inner < 0.0
+            || r_outer <= r_inner
+        {
+            return self;
+        }
+        let Some((e1, e2)) = plane_basis(normal.into(), forward.into()) else {
+            return self;
+        };
+        self.sector(
+            apex.into(),
+            e1,
+            e2,
+            half_angle_deg.to_radians(),
+            r_inner,
+            r_outer,
+            color,
+        );
+        self
+    }
+
+    /// A cone from `apex` along `axis`: a base circle `length` along the axis and four generators
+    /// to it. `half_angle_deg` is in `(0, 90)`.
+    pub fn cone(
+        &mut self,
+        apex: [f32; 3],
+        axis: [f32; 3],
+        half_angle_deg: f32,
+        length: f32,
+        color: [f32; 4],
+    ) -> &mut Self {
+        if !valid(&[apex, axis], &[half_angle_deg, length], color)
+            || half_angle_deg <= 0.0
+            || half_angle_deg >= 90.0
+            || length <= 0.0
+        {
+            return self;
+        }
+        let Some(a) = Vec3::from(axis).try_normalize() else {
+            return self;
+        };
+        let helper = if a.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+        let Some((e1, e2)) = plane_basis(a, helper) else {
+            return self;
+        };
+        let (s, c) = sin_cos(half_angle_deg.to_radians());
+        let radius = length * s / c;
+        let apex = Vec3::from(apex);
+        let base = apex + a * length;
+        let segments = segments_for(radius, TAU);
+        self.arc_chords(base, e1, e2, radius, segments, 0.0, TAU, color);
+        for quarter in 0..4u8 {
+            let t = f32::from(quarter) * (PI / 2.0);
+            self.push(apex, arc_point(base, e1, e2, radius, t), color);
+        }
+        self
+    }
+
+    /// A sensor frustum from `apex`: a horizontal fan (about `up`) and a vertical fan (in the
+    /// forward/up plane) at `range`, joined by four edges to the apex. Both half angles are in `(0, 90]`;
+    /// `forward` must not be parallel to `up`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn frustum_wedge(
+        &mut self,
+        apex: [f32; 3],
+        forward: [f32; 3],
+        up: [f32; 3],
+        half_h_deg: f32,
+        half_v_deg: f32,
+        range: f32,
+        color: [f32; 4],
+    ) -> &mut Self {
+        if !valid(
+            &[apex, forward, up],
+            &[half_h_deg, half_v_deg, range],
+            color,
+        ) || half_h_deg <= 0.0
+            || half_h_deg > 90.0
+            || half_v_deg <= 0.0
+            || half_v_deg > 90.0
+            || range <= 0.0
+        {
+            return self;
+        }
+        let (forward, up) = (Vec3::from(forward), Vec3::from(up));
+        let (Some((h1, h2)), Some((v1, v2))) = (
+            plane_basis(up, forward),
+            plane_basis(forward.cross(up), forward),
+        ) else {
+            return self;
+        };
+        let apex = Vec3::from(apex);
+        self.sector(apex, h1, h2, half_h_deg.to_radians(), 0.0, range, color);
+        self.sector(apex, v1, v2, half_v_deg.to_radians(), 0.0, range, color);
+        self
+    }
+
+    /// The outline of the sector `-half..half` between `r_inner` and `r_outer` in the basis `e1`, `e2`:
+    /// edge at `-half`, outer arc, edge at `+half`, then the inner arc back when `r_inner > 0`. Edge
+    /// ends reuse the arcs' own angles, so they meet the arcs bit-exactly.
+    #[allow(clippy::too_many_arguments)]
+    fn sector(
+        &mut self,
+        apex: Vec3,
+        e1: Vec3,
+        e2: Vec3,
+        half: f32,
+        r_inner: f32,
+        r_outer: f32,
+        color: [f32; 4],
+    ) {
+        let sweep = 2.0 * half;
+        let n_outer = segments_for(r_outer, sweep);
+        let n_inner = segments_for(r_inner, sweep);
+        let at = |radius: f32, t: f32| arc_point(apex, e1, e2, radius, t);
+        let outer_lo = arc_t(-half, sweep, 0, n_outer);
+        let outer_hi = arc_t(-half, sweep, n_outer, n_outer);
+        let inner_hi = arc_t(half, -sweep, 0, n_inner);
+        let inner_lo = arc_t(half, -sweep, n_inner, n_inner);
+        self.push(at(r_inner, inner_lo), at(r_outer, outer_lo), color);
+        self.arc_chords(apex, e1, e2, r_outer, n_outer, -half, sweep, color);
+        self.push(at(r_outer, outer_hi), at(r_inner, inner_hi), color);
+        if r_inner > 0.0 {
+            self.arc_chords(apex, e1, e2, r_inner, n_inner, half, -sweep, color);
         }
     }
 }
 
 const PI: f32 = std::f32::consts::PI;
 const TAU: f32 = std::f32::consts::TAU;
+
+/// Chord sagitta the adaptive circle count aims for, metres.
+const SAGITTA: f32 = 0.02;
+
+/// Chords in an arc of `radius` sweeping `sweep` radians: the full-circle count that keeps a chord's
+/// sagitta near [`SAGITTA`] (clamped to 8..=64) scaled by the swept fraction, at least one.
+fn segments_for(radius: f32, sweep: f32) -> usize {
+    let full = (TAU * ludion_core::math::sqrt(radius / (8.0 * SAGITTA)))
+        .ceil()
+        .clamp(8.0, 64.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let n = (full * sweep.abs() / TAU).ceil().max(1.0) as usize;
+    n
+}
+
+/// An orthonormal pair `(e1, e2)` spanning the plane ⊥ `normal`, `e1` along `forward` projected into
+/// it; `e2 = normal x e1`, so a positive sweep from `e1` toward `e2` is right-handed about `normal`.
+fn plane_basis(normal: Vec3, forward: Vec3) -> Option<(Vec3, Vec3)> {
+    let n = normal.try_normalize()?;
+    let e1 = (forward - n * forward.dot(n)).try_normalize()?;
+    Some((e1, n.cross(e1)))
+}
+
+/// The angle of chord point `i` of `segments` along `start..start + sweep`.
+#[allow(clippy::cast_precision_loss)]
+fn arc_t(start: f32, sweep: f32, i: usize, segments: usize) -> f32 {
+    start + sweep * (i as f32) / (segments as f32)
+}
+
+/// `center + radius * (cos t * e1 + sin t * e2)`.
+fn arc_point(center: Vec3, e1: Vec3, e2: Vec3, radius: f32, t: f32) -> Vec3 {
+    let (s, c) = sin_cos(t);
+    center + radius * (c * e1 + s * e2)
+}
+
+/// Whether every float a primitive was given is finite.
+fn valid(points: &[[f32; 3]], scalars: &[f32], color: [f32; 4]) -> bool {
+    points.iter().flatten().all(|v| v.is_finite())
+        && scalars.iter().all(|v| v.is_finite())
+        && color.iter().all(|v| v.is_finite())
+}
 
 /// Which debug categories the host wants drawn. Host render state on the
 /// [`Engine`](crate::Engine), never in a world.
@@ -357,7 +611,10 @@ impl DebugCategories {
 ///
 /// The `hierarchy` category is drawn here from the live world rather than by a system, so it is
 /// always current, even paused, and costs nothing unless enabled. It sorts among the categories;
-/// `probes` and `colliders` (every physics body's wireframe) are drawn the same way. `local_shadows`
+/// `probes`, `colliders` (every physics body's wireframe) and `nav` are drawn the same way. `nav`
+/// shows the grid, the `NavRoute` polylines and the cached flow arrows; `nav:grid`, `nav:routes` and
+/// `nav:flow` pick one part. Grid nodes and arrows within 30 m of the game camera are drawn (all when
+/// there is no camera); routes are never culled. `local_shadows`
 /// is the exception: the engine appends it after extract, because it needs the camera's grants.
 pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegment> {
     if *filter == DebugCategories::None {
@@ -390,12 +647,27 @@ pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegm
             .or_default()
             .extend(crate::scene_physics::collider_debug_lines(world));
     }
+    let parts = crate::nav::NavDebugParts {
+        grid: filter.enables(NAV) || filter.enables(NAV_GRID),
+        routes: filter.enables(NAV) || filter.enables(NAV_ROUTES),
+        flow: filter.enables(NAV) || filter.enables(NAV_FLOW),
+    };
+    if parts.grid || parts.routes || parts.flow {
+        let eye = crate::extract::stream_camera(world, (1, 1), None)
+            .ok()
+            .map(|camera| camera.position.to_array());
+        categories
+            .entry(NAV)
+            .or_default()
+            .extend(crate::nav::debug_lines(world, parts, eye));
+    }
     categories.into_values().flatten().collect()
 }
 
 /// The categories the world has drawn: what [`DebugDraw::drawn`] lists plus `hierarchy` when any
 /// entity has a `Parent`, `probes` when any has a `ReflectionProbe` and `colliders` when the
-/// physics world holds a body, `local_shadows` when any point or spot light casts and `cull` when
+/// physics world holds a body, `nav`, `nav:grid`, `nav:routes` and `nav:flow` when there is something
+/// to draw for them, `local_shadows` when any point or spot light casts and `cull` when
 /// any entity has a `Mesh`, sorted.
 pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = world
@@ -410,6 +682,7 @@ pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
     if crate::scene_physics::any_body(world) {
         names.push(COLLIDERS);
     }
+    names.extend(crate::nav::debug_present(world));
     if crate::extract::any_local_shadow_caster(world) {
         names.push(LOCAL_SHADOWS);
     }
@@ -495,6 +768,182 @@ mod tests {
             }),
             3 * CIRCLE_SEGMENTS
         );
+    }
+
+    /// FNV-1a over every segment endpoint's bits: `sphere` and `capsule` geometry is frozen.
+    #[test]
+    fn sphere_and_capsule_output_is_pinned() {
+        let mut world = world();
+        debug_draw(&mut world, "t")
+            .sphere([0.3, 1.0, -2.0], 0.7, RED)
+            .capsule([0.0, 0.5, 0.0], [0.2, 1.5, 0.1], 0.4, RED)
+            .capsule([1.0, 2.0, 3.0], [1.0, 2.0, 3.0], 0.4, RED);
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for s in &world.resource::<DebugDraw>().unwrap().pending["t"] {
+            for v in s.a.into_iter().chain(s.b) {
+                for byte in v.to_bits().to_le_bytes() {
+                    hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+                }
+            }
+        }
+        assert_eq!(hash, 12_741_808_649_133_389_326);
+    }
+
+    #[test]
+    fn the_new_primitives_draw_their_segment_counts() {
+        let up = [0.0, 1.0, 0.0];
+        let fwd = [0.0, 0.0, 1.0];
+        let n = |draw: &dyn Fn(&mut DebugPen<'_>)| count(&mut world(), |p| draw(p));
+        assert_eq!(
+            n(&|p| {
+                p.circle([0.0; 3], up, 1.0, RED);
+            }),
+            16
+        );
+        assert_eq!(
+            n(&|p| {
+                p.arc([0.0; 3], up, fwd, 1.0, 90.0, RED);
+            }),
+            4
+        );
+        assert_eq!(
+            n(&|p| {
+                p.arc([0.0; 3], up, fwd, 1.0, -360.0, RED);
+            }),
+            16
+        );
+        assert_eq!(
+            n(&|p| {
+                p.wedge([0.0; 3], up, fwd, 45.0, 1.0, RED);
+            }),
+            2 + 4
+        );
+        assert_eq!(
+            n(&|p| {
+                p.ring_sector([0.0; 3], up, fwd, 45.0, 0.5, 1.0, RED);
+            }),
+            2 + 4 + 3
+        );
+        assert_eq!(
+            n(&|p| {
+                p.cone([0.0; 3], fwd, 45.0, 1.0, RED);
+            }),
+            16 + 4
+        );
+        assert_eq!(
+            n(&|p| {
+                p.frustum_wedge([0.0; 3], fwd, up, 45.0, 30.0, 1.0, RED);
+            }),
+            (2 + 4) + (2 + 3)
+        );
+    }
+
+    #[test]
+    fn the_segment_rule_scales_with_radius_and_sweep() {
+        assert_eq!(segments_for(1.0, TAU), 16);
+        assert_eq!(segments_for(0.3, TAU), 9);
+        assert_eq!(segments_for(40.0, TAU), 64);
+        assert_eq!(segments_for(0.001, TAU), 8);
+        assert_eq!(segments_for(1.0, PI), 8);
+        assert_eq!(segments_for(1.0, 0.001), 1);
+        assert_eq!(segments_for(1.0, -TAU), 16);
+    }
+
+    #[test]
+    fn a_90_degree_wedge_closes_on_its_edges() {
+        let mut world = world();
+        debug_draw(&mut world, "t").wedge(
+            [1.0, 2.0, 3.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            45.0,
+            2.0,
+            RED,
+        );
+        let s = &world.resource::<DebugDraw>().unwrap().pending["t"];
+        let (first, arc, last) = (s[0], &s[1..s.len() - 1], s[s.len() - 1]);
+        assert_eq!(first.a, [1.0, 2.0, 3.0]);
+        assert_eq!(
+            arc[0].a, first.b,
+            "the arc starts where the first edge ends"
+        );
+        assert_eq!(
+            arc[arc.len() - 1].b,
+            last.a,
+            "the arc ends where the last edge starts"
+        );
+        assert_eq!(last.b, [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn a_ring_sector_with_no_inner_radius_is_a_wedge() {
+        let draw = |ring: bool| {
+            let mut world = world();
+            let (a, n, f) = ([0.5, 0.0, 0.5], [0.0, 1.0, 0.0], [1.0, 0.0, 1.0]);
+            let mut pen = debug_draw(&mut world, "t");
+            if ring {
+                pen.ring_sector(a, n, f, 60.0, 0.0, 3.0, RED);
+            } else {
+                pen.wedge(a, n, f, 60.0, 3.0, RED);
+            }
+            world.resource::<DebugDraw>().unwrap().pending["t"].clone()
+        };
+        let (ring, wedge) = (draw(true), draw(false));
+        assert!(!wedge.is_empty());
+        assert_eq!(ring.len(), wedge.len());
+        for (r, w) in ring.iter().zip(&wedge) {
+            assert_eq!((r.a, r.b), (w.a, w.b));
+        }
+    }
+
+    #[test]
+    fn degenerate_shapes_draw_nothing() {
+        let (o, up, fwd) = ([0.0; 3], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+        let nan = [f32::NAN, 0.0, 0.0];
+        let mut world = world();
+        debug_draw(&mut world, "t")
+            .circle(nan, up, 1.0, RED)
+            .circle(o, [0.0; 3], 1.0, RED)
+            .circle(o, up, 0.0, RED)
+            .circle(o, up, f32::INFINITY, RED)
+            .arc(o, up, up, 1.0, 90.0, RED)
+            .arc(o, up, fwd, 1.0, 0.0, RED)
+            .arc(o, up, fwd, 1.0, 361.0, RED)
+            .wedge(o, up, up, 45.0, 1.0, RED)
+            .wedge(o, up, fwd, 0.0, 1.0, RED)
+            .wedge(o, up, fwd, 181.0, 1.0, RED)
+            .wedge(o, up, fwd, 45.0, 0.0, RED)
+            .ring_sector(o, up, fwd, 45.0, 1.0, 1.0, RED)
+            .ring_sector(o, up, fwd, 45.0, -1.0, 1.0, RED)
+            .cone(o, fwd, 90.0, 1.0, RED)
+            .cone(o, fwd, 0.0, 1.0, RED)
+            .cone(o, [0.0; 3], 45.0, 1.0, RED)
+            .frustum_wedge(o, up, up, 45.0, 30.0, 1.0, RED)
+            .frustum_wedge(o, fwd, up, 91.0, 30.0, 1.0, RED)
+            .circle(o, up, 1.0, [f32::NAN, 0.0, 0.0, 1.0]);
+        assert!(world.resource::<DebugDraw>().unwrap().pending.is_empty());
+    }
+
+    #[test]
+    fn circle_and_arc_points_lie_on_the_circle_in_its_plane() {
+        let (c, n) = ([1.0, 2.0, 3.0], Vec3::new(1.0, 2.0, -0.5).normalize());
+        let mut world = world();
+        debug_draw(&mut world, "t")
+            .circle(c, n.to_array(), 2.5, RED)
+            .arc(c, n.to_array(), [0.3, 0.1, 0.9], 2.5, -200.0, RED);
+        let pending = &world.resource::<DebugDraw>().unwrap().pending["t"];
+        assert!(pending.len() > 16);
+        for s in pending {
+            for p in [s.a, s.b] {
+                let d = Vec3::from(p) - Vec3::from(c);
+                assert!(
+                    (d.length() - 2.5).abs() < 1e-5,
+                    "{p:?} is {} away",
+                    d.length()
+                );
+                assert!(d.dot(n).abs() < 1e-5, "{p:?} leaves the plane");
+            }
+        }
     }
 
     #[test]
@@ -1029,5 +1478,103 @@ mod tests {
 
         engine.set_debug_draw(DebugCategories::parse("path"));
         assert!(lines(&mut engine).is_empty());
+    }
+
+    /// A block-style YAML 3-sequence at `indent` spaces.
+    fn seq3(v: [f32; 3], indent: usize) -> String {
+        v.iter()
+            .map(|c| format!("{:indent$}- {c:?}\n", ""))
+            .collect()
+    }
+
+    /// A 24 m floor, a camera over it, a goal-routed walker and a flow-field walker, on a 16 x 16 grid.
+    fn nav_engine() -> crate::Engine {
+        let root =
+            std::env::temp_dir().join(format!("ludion-debug-draw-nav-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut engine = crate::Engine::builder()
+            .project_root(&root)
+            .nav(crate::NavConfig {
+                nx: 16,
+                nz: 16,
+                y_min: -2.0,
+                y_max: 8.0,
+                ..crate::NavConfig::default()
+            })
+            .system("nav_update", crate::nav_update)
+            .system("nav_steer", crate::nav_steer)
+            .build()
+            .unwrap();
+        let mut yaml = String::from(
+            "format: 1\nphysics:\n  space: free\nentities:\n  - name: floor\n    components:\n      Transform:\n        translation:\n",
+        );
+        yaml += &seq3([8.0, -0.5, 8.0], 10);
+        yaml += "      Collider:\n        shape:\n          box:\n            half_extents:\n";
+        yaml += &seq3([8.0, 0.5, 8.0], 14);
+        yaml += "        body: static\n  - name: cam\n    components:\n      Camera: {}\n      Transform:\n        translation:\n";
+        yaml += &seq3([8.0, 10.0, 8.0], 10);
+        for (name, at, goal, kind) in [
+            (
+                "routed",
+                [2.0, 0.0, 2.0],
+                [12.0, 0.0, 12.0],
+                "NavGoal:\n        at:\n",
+            ),
+            (
+                "flowing",
+                [3.0, 0.0, 3.0],
+                [12.0, 0.0, 4.0],
+                "NavAgent:\n        target:\n",
+            ),
+        ] {
+            yaml += &format!(
+                "  - name: {name}\n    components:\n      Transform:\n        translation:\n"
+            );
+            yaml += &seq3(at, 10);
+            if kind.starts_with("NavGoal") {
+                yaml += "      NavAgent:\n        neighbor_layers: 0\n      ";
+            } else {
+                yaml += "      ";
+            }
+            yaml += kind;
+            yaml += &seq3(goal, 10);
+            if kind.starts_with("NavAgent") {
+                yaml += "        neighbor_layers: 0\n";
+            }
+        }
+        engine.load_inline_scene(&yaml).unwrap();
+        for _ in 0..4 {
+            engine.advance_live();
+        }
+        engine
+    }
+
+    #[test]
+    fn the_nav_category_draws_the_grid_routes_and_flow_with_sub_filters() {
+        let mut engine = nav_engine();
+        assert!(
+            lines(&mut engine).is_empty(),
+            "nothing is enabled by default"
+        );
+        let drawn = engine.debug_draw_drawn();
+        for name in [NAV, NAV_GRID, NAV_ROUTES, NAV_FLOW] {
+            assert!(drawn.contains(&name), "{name} missing from {drawn:?}");
+        }
+        let mut count = |filter: &str| {
+            engine.set_debug_draw(DebugCategories::parse(filter));
+            lines(&mut engine).len()
+        };
+        let (all, grid, routes, flow) = (
+            count("nav"),
+            count("nav:grid"),
+            count("nav:routes"),
+            count("nav:flow"),
+        );
+        assert!(grid > 0 && routes > 0 && flow > 0);
+        assert!(routes < all && flow < all && grid < all);
+        assert_eq!(all, grid + routes + flow, "`nav` is the three parts");
+        assert_eq!(count("nav:routes,nav:flow"), routes + flow);
+        assert_eq!(count("motor"), 0);
+        assert_eq!(count(""), 0);
     }
 }

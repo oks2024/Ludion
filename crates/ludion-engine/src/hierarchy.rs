@@ -144,7 +144,6 @@ pub(crate) fn inherited_mesh_field<T: Copy>(
 /// `entity`'s effective [`Visibility`]: the AND of its own and every `Parent` ancestor's (a hidden
 /// ancestor hides the whole tree; a part's own `visible: true` never shows it). A world with no
 /// `Visibility` anywhere answers the default after one O(1) count and never walks a chain.
-#[cfg(test)]
 pub(crate) fn inherited_visibility(world: &World, entity: EntityId) -> Visibility {
     if world.component_count::<Visibility>() == 0 {
         return Visibility::default();

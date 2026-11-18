@@ -139,6 +139,8 @@ pub struct EngineBuilder {
     resource_carriers: Vec<ResourceCarrier>,
     projectile_config: Option<crate::ProjectileConfig>,
     nav_config: Option<crate::NavConfig>,
+    perception_config: Option<crate::PerceptionConfig>,
+    input_actions: bool,
     projectile_visuals: Option<crate::ProjectileVisuals>,
     profile_kind: Option<ProfileKind>,
     profile_path: Option<PathBuf>,
@@ -184,6 +186,8 @@ impl EngineBuilder {
             resource_carriers: Vec::new(),
             projectile_config: None,
             nav_config: None,
+            perception_config: None,
+            input_actions: false,
             projectile_visuals: None,
             profile_kind: None,
             profile_path: None,
@@ -920,6 +924,40 @@ impl EngineBuilder {
             .validate_docs(crate::validate_pattern_docs)
     }
 
+    /// Opts the game into the data-driven action map (`ludion docs input`): registers the
+    /// engine-owned `kind: input-actions` document as a singleton, its validator
+    /// ([`validate_input_actions`](crate::validate_input_actions)) and a
+    /// [`carry_resource`](EngineBuilder::carry_resource) for [`Actions`](ludion_sim::Actions) in one
+    /// call.
+    ///
+    /// One method rather than three, for the [`patterns`](EngineBuilder::patterns) reason: the
+    /// parts are not independently useful. Without the validator a bad binding surfaces as a
+    /// silently dead action; without the carrier a scene switch drops a hold in progress.
+    ///
+    /// The engine compiles the one document into an `Actions` resource at every world build. A
+    /// scene switch or checkpoint carries it; a load or a restore installs a fresh one, and an
+    /// input held across that needs a fresh press. Exactly one `kind: input-actions` file must
+    /// exist under the content root (`L1315` otherwise).
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::Engine;
+    ///
+    /// let builder = Engine::builder().input_actions();
+    /// # let _ = builder;
+    /// ```
+    #[must_use]
+    pub fn input_actions(mut self) -> Self {
+        self.input_actions = true;
+        self.doc_kinds
+            .push(DocKind::new::<ludion_sim::InputActionsDoc>(
+                crate::INPUT_ACTIONS_KIND,
+                true,
+            ));
+        self.validate_docs(crate::validate_input_actions)
+            .carry_resource::<ludion_sim::Actions>()
+    }
+
     /// Moves the resource of type `T` from the departing world to the arriving one across a **scene
     /// switch** (`ludion docs scene-transitions`), if the departing world holds one.
     ///
@@ -1008,6 +1046,31 @@ impl EngineBuilder {
     #[must_use]
     pub fn nav(mut self, config: crate::NavConfig) -> Self {
         self.nav_config = Some(config);
+        self
+    }
+
+    /// Opts into sight: installs `config` and an empty [`PerceptionResults`](crate::PerceptionResults)
+    /// at every world build. Schedule [`perception_update`](crate::perception_update) after the
+    /// systems that move perceivers and targets. The last call wins; [`build`](EngineBuilder::build)
+    /// refuses an invalid config with `L4220`.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{Engine, PerceptionConfig, perception_update};
+    ///
+    /// let engine = Engine::builder()
+    ///     .perception(PerceptionConfig { classes: vec!["player".into()] })
+    ///     .system("perception_update", perception_update)
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = engine;
+    ///
+    /// let too_many = PerceptionConfig { classes: (0..33).map(|n| n.to_string()).collect() };
+    /// assert!(Engine::builder().perception(too_many).build().is_err());
+    /// ```
+    #[must_use]
+    pub fn perception(mut self, config: crate::PerceptionConfig) -> Self {
+        self.perception_config = Some(config);
         self
     }
 
@@ -1172,6 +1235,9 @@ impl EngineBuilder {
         if let Some(config) = &self.nav_config {
             config.validate()?;
         }
+        if let Some(config) = &self.perception_config {
+            config.validate()?;
+        }
         if let Some(visuals) = &self.projectile_visuals {
             visuals.validate()?;
             visuals.check_assets(&project_root)?;
@@ -1226,16 +1292,21 @@ impl EngineBuilder {
         engine.resource_carriers = self.resource_carriers;
         engine.projectile_config = self.projectile_config;
         engine.nav_config = self.nav_config;
+        engine.perception_config = self.perception_config;
+        engine.input_actions = self.input_actions;
         if let Some(visuals) = self.projectile_visuals {
             engine.projectile_draw.visuals = visuals;
         }
         engine.install_projectiles();
         engine.install_nav();
+        engine.install_perception();
         // Populate the data-doc stores into the initial (pre-scene-load) world so a game driven
         // before any `scene.load` still sees its docs; a malformed doc — or a broken cross-reference
         // a registered validation pass reports as an error — fails the build here (the collapsed
         // diagnostic carries every one as `related`).
         engine.install_docs().map_err(crate::commands::collapse)?;
+        // After `install_docs`: it compiles the action map from the doc store that call fills.
+        engine.install_input_actions();
         engine.sweep_profile_debris();
         // Load the registered profile into the same initial world (or default it). Never fails the
         // build — an unloadable save is backed up and defaulted, reported via `profile_migration`.

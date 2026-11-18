@@ -58,6 +58,7 @@ mod gi_inject;
 mod gpu_cull;
 pub mod graph;
 mod ibl;
+pub mod light_model;
 mod lobe;
 mod local_shadow;
 mod look_motion;

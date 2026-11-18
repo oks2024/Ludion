@@ -238,6 +238,7 @@ fn trigger(value: f32) -> InputEvent {
 #[test]
 fn a_trigger_binding_has_hysteresis_and_the_legacy_button_does_not() {
     let mut rig = trigger_rig();
+    rig.idle(1); // a trigger already past `press` on the first tick would be latched
     rig.tick(&[trigger(0.6)]);
     assert!(rig.actions.pressed(name("aim")) && rig.actions.pressed(name("legacy")));
     rig.tick(&[trigger(0.49)]);
@@ -253,6 +254,49 @@ fn a_trigger_binding_has_hysteresis_and_the_legacy_button_does_not() {
         "re-press needs the press level"
     );
     rig.tick(&[trigger(0.5)]);
+    assert!(rig.actions.pressed(name("aim")));
+}
+
+#[test]
+fn a_key_held_before_the_first_resolve_is_latched_until_released() {
+    let mut rig = Rig::new(json!({
+        "go": button(json!([{ "key": "C" }])),
+        "hop": button(json!([{ "key": "C", "gesture": "hold" }])),
+    }));
+    // Held across a load: the down edge came on an earlier tick, before this layer existed.
+    rig.input.begin_tick();
+    rig.input.apply(InputEvent::KeyDown { key: Key::C });
+    rig.input.begin_tick();
+    rig.actions.resolve(&rig.input);
+    for _ in 0..H + 2 {
+        assert!(!rig.actions.pressed(name("go")) && !rig.actions.held(name("go")));
+        assert!(!rig.actions.pressed(name("hop")) && rig.actions.held_ticks(name("hop")) == 0);
+        rig.tick(&[]);
+    }
+    rig.up(Key::C);
+    assert!(
+        !rig.actions.released(name("go")),
+        "a latched release yields nothing"
+    );
+    rig.down(Key::C);
+    assert!(rig.actions.pressed(name("go")), "a fresh press fires");
+}
+
+#[test]
+fn a_key_pressed_on_the_first_tick_fires_normally() {
+    let mut rig = Rig::new(json!({ "go": button(json!([{ "key": "C" }])) }));
+    rig.down(Key::C);
+    assert!(rig.actions.pressed(name("go")) && rig.actions.held(name("go")));
+}
+
+#[test]
+fn a_trigger_past_press_at_creation_is_latched() {
+    let mut rig = trigger_rig();
+    rig.tick(&[trigger(0.9)]);
+    assert!(!rig.actions.pressed(name("aim")) && !rig.actions.held(name("aim")));
+    rig.tick(&[trigger(0.1)]);
+    assert!(!rig.actions.released(name("aim")));
+    rig.tick(&[trigger(0.6)]);
     assert!(rig.actions.pressed(name("aim")));
 }
 

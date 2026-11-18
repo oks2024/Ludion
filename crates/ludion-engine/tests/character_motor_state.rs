@@ -214,3 +214,32 @@ fn a_snapshot_taken_while_suspended_restores_the_parking() {
     resumed.advance_live();
     assert_eq!(bodies(&resumed), 2, "the capsule is back");
 }
+
+#[test]
+fn an_undeclared_posture_falls_back_to_the_base_shape_and_reports_once() {
+    let mut engine = booted("posture-fallback");
+    let hero = named(&mut engine, "hero");
+    engine
+        .world_mut()
+        .insert(
+            hero,
+            CharacterMotorState {
+                posture: Some("ghost".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    for _ in 0..6 {
+        engine.advance_live();
+    }
+    let reported: Vec<String> = engine
+        .world()
+        .resource::<ludion_engine::diagnostics::Diagnostics>()
+        .map(|d| {
+            d.reported(ludion_core::codes::code::CHARACTER_MOTOR_POSTURE_FALLBACK)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(reported.len(), 1, "{reported:?}");
+}

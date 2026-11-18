@@ -393,6 +393,14 @@ pub mod code {
     pub const CHECKPOINT_KEYFRAME_SKIP: DiagnosticCode = DiagnosticCode::new("L4206");
     /// `L4207` — a run recording was not armed because checkpoint slots are held. A warning.
     pub const CHECKPOINT_RECORDING_ARM_REFUSED: DiagnosticCode = DiagnosticCode::new("L4207");
+    /// `L4208` — the checkpoint disk slot could not be written or removed. The previous whole file
+    /// stays and the next request retries. An error.
+    pub const CHECKPOINT_DISK_WRITE_FAILED: DiagnosticCode = DiagnosticCode::new("L4208");
+    /// `L4209` — a disk checkpoint was not loaded; the file was backed up (or kept, while a recording
+    /// is open) and the world is untouched. A warning.
+    pub const CHECKPOINT_DISK_LOAD_REFUSED: DiagnosticCode = DiagnosticCode::new("L4209");
+    /// `L4260` — a `GameClock::scale` value was non-finite, `<= 0` or `> 1` and was ignored. A warning.
+    pub const GAME_SCALE_INVALID: DiagnosticCode = DiagnosticCode::new("L4260");
     /// `L1403` — the `run_recordings` builder config is invalid (zero keyframe interval, bad dir).
     pub const RUN_RECORDING_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1403");
     /// `L1404` — a replay was recorded by a different game build (schema or version) and was refused.
@@ -1564,6 +1572,15 @@ pub mod code {
     /// must be a root entity. Raised by `check-scene` and once at runtime by `ludion-engine`.
     pub const CHARACTER_MOTOR_PARENTED: DiagnosticCode = DiagnosticCode::new("L1297");
 
+    /// `L1540` — an authored `CharacterMotorState.posture` names a posture the entity's
+    /// `CharacterMotor` does not declare. Raised by `check-scene`.
+    pub const CHARACTER_MOTOR_POSTURE_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1540");
+
+    /// `L4170` — a motor's state names a posture its `CharacterMotor` does not declare (a component
+    /// edited live, or the posture removed). The motor runs as its base shape. Raised once per
+    /// entity at runtime.
+    pub const CHARACTER_MOTOR_POSTURE_FALLBACK: DiagnosticCode = DiagnosticCode::new("L4170");
+
     /// `L1298` — a `SurfaceVelocity` has a non-finite component. Raised by the component's validator.
     pub const SURFACE_VELOCITY_INVALID: DiagnosticCode = DiagnosticCode::new("L1298");
 
@@ -1594,8 +1611,9 @@ pub mod code {
     /// positive, their pitches are outside (-90, 90) or `pitch_max_deg` is below `pitch_min_deg`,
     /// `enter_pitch_deg` or a `chase` or `follow` `yaw_deg` or `pitch_deg` is not finite, `look_deg`,
     /// `look_deg_per_count`, `kick_deg`, `fov_kick_deg`, `roll_deg` or `fov_offset_deg` is not
-    /// finite, a `kick` half-life is negative, `fov_y_deg` is outside (0, 180) or `trauma` is
-    /// outside [0, 1]. Raised by the component's validator and, for a
+    /// finite, a `kick` half-life is negative, `fov_y_deg` is outside (0, 180), `trauma` is
+    /// outside [0, 1], `collision.radius` or `framing.distance` is not positive, another
+    /// `collision`, `recenter` or `framing` field is negative or not finite. Raised by the component's validator and, for a
     /// rig built in Rust, once per entity at runtime.
     pub const CAMERA_RIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1304");
 
@@ -1618,6 +1636,19 @@ pub mod code {
     /// `L1309` — a `CameraRig` entity has a `Parent`. A rig writes a world-space pose, so the camera
     /// must be a root entity. Raised by `check-scene` and once per entity at runtime.
     pub const CAMERA_RIG_PARENTED: DiagnosticCode = DiagnosticCode::new("L1309");
+
+    /// `L1550` — the physics world rejected a `CameraRig` collision cast, for example an undeclared
+    /// layer name in `include_layers` or `ignore_layers`. Raised once per rig; the collision stage is
+    /// skipped.
+    pub const CAMERA_RIG_COLLISION_QUERY: DiagnosticCode = DiagnosticCode::new("L1550");
+
+    /// `L1551` — a `CameraRig` has `collision.enabled` but the world has no `PhysicsWorld`. A
+    /// warning raised once per rig; the stage is skipped.
+    pub const CAMERA_RIG_COLLISION_NO_PHYSICS: DiagnosticCode = DiagnosticCode::new("L1551");
+
+    /// `L1552` — a `CameraRig`'s pivot and target both start inside geometry, so the boom is held at
+    /// `min_distance`. A warning raised once per rig.
+    pub const CAMERA_RIG_COLLISION_STUCK: DiagnosticCode = DiagnosticCode::new("L1552");
 
     /// `L1311` — an asset path inside a `kind: prefab` document, or a nested `prefab:` entry, is not
     /// a relative path (absolute, drive or scheme prefix, NUL, or a malformed `..` segment). Raised
@@ -1736,6 +1767,18 @@ pub mod code {
     pub const PATROL_FOLLOWER_INVALID: DiagnosticCode = DiagnosticCode::new("L1524");
     /// `L1525` — a `PatrolState` has a non-finite or negative timer, or a non-finite `look_deg`.
     pub const PATROL_STATE_INVALID: DiagnosticCode = DiagnosticCode::new("L1525");
+    /// `L1570` — a `Perceiver` field is invalid: no or too many sight zones, a bad range or angle, a
+    /// duplicate zone name, a bad sweep or a bad visibility clamp.
+    pub const PERCEIVER_INVALID: DiagnosticCode = DiagnosticCode::new("L1570");
+    /// `L1571` — a `SightTarget` field is invalid: an empty class, no or too many sample points, a
+    /// non-finite offset or visibility, or a `fraction` outside (0, 1].
+    pub const SIGHT_TARGET_INVALID: DiagnosticCode = DiagnosticCode::new("L1571");
+    /// `L1572` — perception named a class or a layer the world does not declare, so the zone or the
+    /// sample point detects or sees nothing. A warning, once per name.
+    pub const PERCEPTION_NAME_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1572");
+    /// `L4220` — the `Engine::builder().perception` config is invalid: no more than 32 classes, each
+    /// non-empty and unique.
+    pub const PERCEPTION_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L4220");
     /// `L1630` — a binding has zero or several sources.
     pub const INPUT_BINDING_SOURCES: DiagnosticCode = DiagnosticCode::new("L1630");
     /// `L1631` — a binding source does not fit its action kind.
@@ -2511,6 +2554,11 @@ pub mod code {
     /// **warning**: the parts stay limp. Raised at runtime by `ludion-engine`'s `pose_blend` system,
     /// once per (group, pose).
     pub const POSE_BLEND_POSE_MISSING: DiagnosticCode = DiagnosticCode::new("L4035");
+
+    /// `L4250` — a `light_exposure` query is malformed: no points, more than 16, a non-finite point
+    /// (`/points/<i>`), or a `Normal` facing that is zero or non-finite (`/facing`). An error
+    /// returned to the caller, never a panic.
+    pub const LIGHT_EXPOSURE_INVALID: DiagnosticCode = DiagnosticCode::new("L4250");
 
     // --- L5xxx: audio (raised by `ludion-audio`) ---
 
@@ -5799,6 +5847,49 @@ This is a **warning**.
 Fix: start the recording before the first capture, or `discard` every slot first.",
     },
     CodeEntry {
+        code: code::CHECKPOINT_DISK_WRITE_FAILED,
+        severity: Severity::Error,
+        title: "checkpoint disk slot could not be written or removed",
+        explanation: "\
+`Checkpoints::persist` or `Checkpoints::discard_disk` could not write or delete
+`save/checkpoint.json`. The previous whole file stays in place (writes are atomic), the in-memory
+slots are unaffected, and the next request retries.
+
+This is an **error**; the sim keeps running.
+
+Fix: check the save root is writable and has free space.",
+    },
+    CodeEntry {
+        code: code::CHECKPOINT_DISK_LOAD_REFUSED,
+        severity: Severity::Warning,
+        title: "disk checkpoint not loaded",
+        explanation: "\
+`Checkpoints::load_disk` refused `save/checkpoint.json`: the file is garbled, was written by a newer
+format or a different build (engine version, component or data schemas, projectile pool), holds an
+invalid name, or no longer restores cleanly. The file is renamed to `checkpoint.json.bak.<hash>` and
+`disk()` reads `None`, so a menu stops offering it; the world is untouched.
+
+While a `RunRecording` is open the load is refused too, with the file kept and no backup: stop the
+recording first (a replay never reads disk).
+
+This is a **warning**.
+
+Fix: start a new game, or load the backup with the build that wrote it.",
+    },
+    CodeEntry {
+        code: code::GAME_SCALE_INVALID,
+        severity: Severity::Warning,
+        title: "game clock scale value ignored",
+        explanation: "\
+A system called `GameClock::scale` with a value that was not finite, was `<= 0`, or was `> 1`. The
+call was ignored, so gameplay time ran at the other requested scale, or at full speed. The message
+names the first bad value of the frame and is reported once per session.
+
+This is a **warning**.
+
+Fix: clamp to `(0, 1]`; use `hold()` for a freeze.",
+    },
+    CodeEntry {
         code: code::RUN_RECORDING_CONFIG_INVALID,
         severity: Severity::Error,
         title: "run recording config is invalid",
@@ -8362,6 +8453,24 @@ Fix: add `physics: { space: free }` to the scene.",
 Fix: remove the `Parent`, or move the motor to a root entity and follow the mover from game code.",
     },
     CodeEntry {
+        code: code::CHARACTER_MOTOR_POSTURE_UNKNOWN,
+        severity: Severity::Error,
+        title: "a character motor state names an undeclared posture",
+        explanation: "A `CharacterMotorState` has a `posture` that the entity's `CharacterMotor` does not declare under
+`postures`, so the motor would run as its base shape.
+
+Fix: declare the posture under `CharacterMotor.postures`, or correct the name (the help names the nearest match).",
+    },
+    CodeEntry {
+        code: code::CHARACTER_MOTOR_POSTURE_FALLBACK,
+        severity: Severity::Warning,
+        title: "a character motor fell back to its base shape",
+        explanation: "At run time a motor's `CharacterMotorState.posture` names a posture its `CharacterMotor` does not declare
+(the component was edited live, or the posture was removed). The motor runs as its base shape, reported once per entity.
+
+Fix: declare the posture under `CharacterMotor.postures`, or call `set_character_posture` with a declared name or `None`.",
+    },
+    CodeEntry {
         code: code::SURFACE_VELOCITY_INVALID,
         severity: Severity::Error,
         title: "a surface velocity is not a finite vector",
@@ -8440,7 +8549,10 @@ run along the ground, not for ladders or shafts.",
 `search_window`, `full_speed`, `frequency` or `exponent` is not a positive finite number; `offset` or
 `focus_offset` or the first-person `eye_offset` is not finite; `pitch_limit_deg` is outside (0, 90);
 `look_deg`, `look_deg_per_count`, `kick_deg`, `fov_kick_deg`, `roll_deg` or `fov_offset_deg` is not finite; a `kick`
-half-life is negative or not finite; `fov_y_deg` is outside (0, 180); `trauma` is outside [0, 1]. The pointer
+half-life is negative or not finite; `fov_y_deg` is outside (0, 180); `trauma` is outside [0, 1];
+`collision.radius` or `framing.distance` is not positive; `collision.min_distance`, `skin`,
+`recover_delay` or `recover_half_life`, a chase `recenter` field or `framing.half_life` is negative or
+not finite; `framing.weight` or a framing offset is not finite. The pointer
 names the field. A rig built in Rust with such a value is reported once per entity at runtime and
 holds, so the camera stays where it was.
 
@@ -8497,6 +8609,38 @@ camera's `Transform`, which would be read as local to the parent. At runtime the
 and holds.
 
 Fix: make the camera a root entity.",
+    },
+    CodeEntry {
+        code: code::CAMERA_RIG_COLLISION_QUERY,
+        severity: Severity::Error,
+        title: "a camera rig collision cast was rejected",
+        explanation: "The sphere cast of a `CameraRig`'s collision stage was refused by the physics world, most often
+because a name in `collision.include_layers` or `collision.ignore_layers` is not a declared
+`physics.layers` entry. The diagnostic carries the physics error and points at `/rig/collision`. It is
+reported once per rig and the collision stage is skipped, so the eye is not pulled in.
+
+Fix: declare the layer in the project's `physics.layers`, or correct the name.",
+    },
+    CodeEntry {
+        code: code::CAMERA_RIG_COLLISION_NO_PHYSICS,
+        severity: Severity::Warning,
+        title: "a camera rig collides in a world with no physics",
+        explanation: "A `CameraRig` has `collision.enabled` set, but the world has no `PhysicsWorld`, so there is nothing
+to cast against. The rig reports this once and runs without the collision stage.
+
+Fix: add physics to the game, or set `collision.enabled` to false.",
+    },
+    CodeEntry {
+        code: code::CAMERA_RIG_COLLISION_STUCK,
+        severity: Severity::Warning,
+        title: "a camera rig pivot and target are inside geometry",
+        explanation: "The collision stage found both the boom's origin (the pivot) and the target overlapping a collider,
+so no cast can tell which way is out. The boom is held at `collision.min_distance`. It is reported once
+per rig. The usual cause is a camera pivot or `focus_offset` placed inside a wall, or a collider on
+the target's own children, which the cast does not exclude.
+
+Fix: move the pivot out of the geometry, or put the target's child colliders on a layer listed in
+`collision.ignore_layers`.",
     },
     CodeEntry {
         code: code::PREFAB_ASSET_PATH,
@@ -8848,6 +8992,57 @@ A `PatrolState` field is out of range (pointer `/entities/{i}/components/PatrolS
 written by `patrol_update`; a scene that carries one is a snapshot.
 
 Fix: delete the component and let `patrol_update` start the patrol again.",
+    },
+    CodeEntry {
+        code: code::PERCEIVER_INVALID,
+        severity: Severity::Error,
+        title: "a perceiver is invalid",
+        explanation: "\
+A `Perceiver` field is out of range (pointer `/entities/{i}/components/Perceiver/{field}`): there are no
+sight zones or more than 8; a zone's `range` is not finite and above 0, its `half_angle_deg` is outside
+(0, 180] or its `vertical_half_angle_deg` outside (0, 90]; two zones share a `name`; a
+`visibility_clamp` has `lo > hi`; `see_through_max_range` is negative; or the `sweep` has a
+`period_s` that does not exceed `2 * dwell_s`, a sine with a `dwell_s`, or a non-finite value. A scene
+with one is refused.
+
+Fix: correct the named field. A zone with the default `vertical_half_angle_deg` (45) is a wedge, not a cone.",
+    },
+    CodeEntry {
+        code: code::SIGHT_TARGET_INVALID,
+        severity: Severity::Error,
+        title: "a sight target is invalid",
+        explanation: "\
+A `SightTarget` field is out of range (pointer `/entities/{i}/components/SightTarget/{field}`): `class`
+is empty, there are no sample `points` or more than 8, an `offset` or `visibility` is not finite, a
+`visibility` is negative, or `require: { fraction: f }` has an `f` outside (0, 1]. A scene with one is
+refused.
+
+Fix: correct the named field; give the target at least one point (`offset: [0, 1.6, 0]` is a head).",
+    },
+    CodeEntry {
+        code: code::PERCEPTION_NAME_UNKNOWN,
+        severity: Severity::Warning,
+        title: "perception names an unknown class or layer",
+        explanation: "\
+`perception_update` met a `detects` class the `PerceptionConfig` does not declare, or a `blocked_by` /
+`see_through` layer the physics layer table does not declare. The message names the nearest declared
+name. Conservatively, the zone detects nothing of that class, and a sample point with an unknown
+`blocked_by` layer is not seen; an unknown `see_through` layer is dropped. Reported once per name.
+
+This is a **warning**.
+
+Fix: declare the class in `PerceptionConfig.classes`, or the layer under `physics.layers`.",
+    },
+    CodeEntry {
+        code: code::PERCEPTION_CONFIG_INVALID,
+        severity: Severity::Error,
+        title: "perception config is invalid",
+        explanation: "\
+`Engine::builder().perception(config)` was given a `classes` list that holds more than 32 names, an
+empty name or a repeated name (pointer `/classes/{j}`). Each class is one bit of a mask, so the list is
+capped at 32. `build` refuses the config.
+
+Fix: list each class once, at most 32.",
     },
     CodeEntry {
         code: code::PATROL_ROUTE_UNLOADED,
@@ -11786,6 +11981,20 @@ Fix: add the pose to the parts' `JointPoses.poses`, correct the `PoseBlend.pose`
 that the parts reach the root through `group:` or `SkinBone.skin`.",
     },
     CodeEntry {
+        code: code::LIGHT_EXPOSURE_INVALID,
+        severity: Severity::Error,
+        title: "light exposure query is malformed",
+        explanation: "\
+`light_exposure` refuses a query it cannot answer. Three cases, each with a JSON Pointer:
+
+  - `/points`: the list is empty or holds more than 16 points (`MAX_EXPOSURE_POINTS`);
+  - `/points/<i>`: point `i` has a NaN or infinite coordinate;
+  - `/facing`: a `Facing::Normal` that is zero-length or non-finite.
+
+Fix: pass between 1 and 16 finite points, and a non-zero finite normal (or `Facing::Omni`).
+See `ludion docs light-exposure`.",
+    },
+    CodeEntry {
         code: code::AUDIO_DEVICE_UNAVAILABLE,
         severity: Severity::Warning,
         title: "no audio output device available",
@@ -12227,6 +12436,9 @@ mod tests {
         code::CHECKPOINT_SWITCH_DROPPED,
         code::CHECKPOINT_KEYFRAME_SKIP,
         code::CHECKPOINT_RECORDING_ARM_REFUSED,
+        code::CHECKPOINT_DISK_WRITE_FAILED,
+        code::CHECKPOINT_DISK_LOAD_REFUSED,
+        code::GAME_SCALE_INVALID,
         code::RUN_RECORDING_CONFIG_INVALID,
         code::REPLAY_GAME_MISMATCH,
         code::REPLAY_PLAYBACK_FAILED,
@@ -12364,6 +12576,8 @@ mod tests {
         code::CHARACTER_MOTOR_WITH_COLLIDER,
         code::CHARACTER_MOTOR_NO_PHYSICS_SCENE,
         code::CHARACTER_MOTOR_PARENTED,
+        code::CHARACTER_MOTOR_POSTURE_UNKNOWN,
+        code::CHARACTER_MOTOR_POSTURE_FALLBACK,
         code::SURFACE_VELOCITY_INVALID,
         code::SURFACE_VELOCITY_NO_SURFACE,
         code::LANE_CONSTRAINT_INVALID,
@@ -12376,6 +12590,9 @@ mod tests {
         code::CAMERA_RIG_WITHOUT_CAMERA,
         code::CAMERA_RIG_DUPLICATE,
         code::CAMERA_RIG_PARENTED,
+        code::CAMERA_RIG_COLLISION_QUERY,
+        code::CAMERA_RIG_COLLISION_NO_PHYSICS,
+        code::CAMERA_RIG_COLLISION_STUCK,
         code::PREFAB_ASSET_PATH,
         code::LOCAL_LIGHT_INVALID_SHADOW,
         code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
@@ -12406,6 +12623,9 @@ mod tests {
         code::PATROL_DATA_CONSISTENCY,
         code::PATROL_FOLLOWER_INVALID,
         code::PATROL_STATE_INVALID,
+        code::PERCEIVER_INVALID,
+        code::SIGHT_TARGET_INVALID,
+        code::PERCEPTION_NAME_UNKNOWN,
         code::INPUT_BINDING_SOURCES,
         code::INPUT_BINDING_SOURCE_KIND,
         code::INPUT_BINDING_MODIFIER,
@@ -12565,9 +12785,11 @@ mod tests {
         code::PATROL_ROUTE_UNLOADED,
         code::PATROL_POINT_UNREACHABLE,
         code::PATROL_WITHOUT_AGENT,
+        code::PERCEPTION_CONFIG_INVALID,
         code::PROJECTILE_LOOK_ASSET,
         code::PHYSICS_SCALE_UNGATED,
         code::POSE_BLEND_POSE_MISSING,
+        code::LIGHT_EXPOSURE_INVALID,
         // --- L5xxx: audio ---
         code::AUDIO_DEVICE_UNAVAILABLE,
         code::AUDIO_STREAM_FAILED,
@@ -12701,6 +12923,8 @@ mod tests {
             code::CHECKPOINT_SWITCH_DROPPED,
             code::CHECKPOINT_KEYFRAME_SKIP,
             code::CHECKPOINT_RECORDING_ARM_REFUSED,
+            code::CHECKPOINT_DISK_LOAD_REFUSED,
+            code::GAME_SCALE_INVALID,
             code::REPLAY_PLAYBACK_FAILED,
             code::PROFILE_SAVE_FAILED,
             code::SCHEDULE_MODULE_CONCENTRATION,
@@ -12729,8 +12953,11 @@ mod tests {
             code::REFLECTION_PROBE_NOT_STORED,
             code::TEXTURE_CHECK_WARNING,
             code::COLLIDER_SCALE_IGNORED,
+            code::CHARACTER_MOTOR_POSTURE_FALLBACK,
             code::LANE_PATH_VERTICAL,
             code::CAMERA_RIG_TARGET_MISSING,
+            code::CAMERA_RIG_COLLISION_NO_PHYSICS,
+            code::CAMERA_RIG_COLLISION_STUCK,
             code::DIRECTIONAL_LIGHT_EXTENT_UNUSED,
             code::UI_RECT_FILL_IGNORES_PLACEMENT,
             code::LOCAL_LIGHT_SHADOW_FADE_UNUSED,
@@ -12739,6 +12966,7 @@ mod tests {
             code::CAMERA_OFFSET_FOV_CLAMPED,
             code::VIEWMODEL_NO_CAMERA,
             code::VIEWMODEL_LENS_NOT_ON_CAMERA,
+            code::PERCEPTION_NAME_UNKNOWN,
             code::PATROL_ROUTE_UNLOADED,
             code::PATROL_POINT_UNREACHABLE,
             code::PATROL_WITHOUT_AGENT,

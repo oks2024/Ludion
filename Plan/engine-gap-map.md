@@ -90,7 +90,7 @@ settled plan, nothing built; **rejected** — closed by design.
 
 ### AI
 
-- Navmesh, pathfinding library, behaviour trees, steering, perception — absent in the engine.
+- Navmesh, pathfinding library, behaviour trees, steering, perception — absent in the engine. (perception: `Plan/perception.md`.)
   vigil runs game-side flow fields; `ludion-nav` deferred until a second consumer
   (a private plan). Trigger fired (the external FPS request 0007) → `Plan/nav.md`.
 - Agent behaviour (HFSM, timers, squads): `Plan/ai-behaviour.md`.

@@ -15,7 +15,7 @@ use ludion_ecs::{SystemCtx, World};
 use ludion_engine::live::{StampedCommand, run_live, shutdown_channel};
 use ludion_engine::{
     Camera, CameraOffset, CameraRig, DebugCategories, Egress, EgressChannels, Engine, Name,
-    RigMode, Transform, add_kick, add_look, add_trauma, snap_rig,
+    RigMode, Transform, add_kick, add_look, add_trauma, set_look, snap_rig,
 };
 use ludion_protocol::command::{
     EngineRestoreParams, SimStepParams, StreamSubscribeParams, SubscribeMode,
@@ -1425,4 +1425,295 @@ fn the_camera_category_draws_a_chase_rig_without_perturbing_the_hash() {
         "the camera category drew nothing"
     );
     assert_eq!(hashes, plain);
+}
+
+// ---- collision and framing ----
+
+const RADIUS: f32 = 0.3;
+
+/// A chase rig 6 m from a hero at the origin (entity 1), with `collision` fields (12-space
+/// indented lines under `collision:`) and `walls` as extra entities. `physics` is the scene's
+/// physics block, empty for none.
+fn collide_scene(physics: &str, pitch: f32, distance: f32, collision: &str, walls: &str) -> String {
+    format!(
+        "format: 1\nseed: 3\n{physics}entities:\n  - name: cam\n    components:\n      Transform: {{}}\n      Camera: {{}}\n      CameraRig:\n        target:\n          index: 1\n          generation: 0\n        rig:\n          mode:\n            chase:\n              distance: {distance:?}\n              pitch_deg: {pitch:?}\n          collision:\n            enabled: true\n{collision}  - name: hero\n    components:\n      Transform: {{}}\n{walls}"
+    )
+}
+
+const PHYSICS: &str = "physics:\n  space: free\n  layers:\n    - name: wall\n    - name: ghost\n";
+
+/// A block-style three-number sequence, each item at `indent` spaces.
+fn block3(indent: usize, v: [f32; 3]) -> String {
+    v.iter()
+        .map(|n| format!("{}- {n:?}\n", " ".repeat(indent)))
+        .collect()
+}
+
+/// A static box collider entity.
+fn wall(name: &str, centre: [f32; 3], half: [f32; 3], layer: &str) -> String {
+    let layer = if layer.is_empty() {
+        String::new()
+    } else {
+        format!("        layer: {layer}\n")
+    };
+    format!(
+        "  - name: {name}\n    components:\n      Transform:\n        translation:\n{}      Collider:\n        shape:\n          box:\n            half_extents:\n{}        body: static\n{layer}",
+        block3(10, centre),
+        block3(14, half),
+    )
+}
+
+/// The wall on the hero's +X side, its near face at x = 4.
+fn side_wall(layer: &str) -> String {
+    wall("wall", [4.5, 1.0, 0.0], [0.5, 5.0, 10.0], layer)
+}
+
+/// The metres from `point` to the box centred `centre` with half extents `half`.
+fn gap_to_box(point: [f32; 3], centre: [f32; 3], half: [f32; 3]) -> f32 {
+    let d = |i: usize| ((point[i] - centre[i]).abs() - half[i]).max(0.0);
+    (d(0) * d(0) + d(1) * d(1) + d(2) * d(2)).sqrt()
+}
+
+fn spin(world: &mut World, _: &SystemCtx) {
+    let cam = named(world, "cam");
+    add_look(world.get_mut::<CameraRig>(cam).unwrap().unwrap(), 4.0, 0.0);
+}
+
+/// Yaw 90 (the eye on the +X side, into the wall) until frame 60, then yaw 0.
+fn park_then_leave(world: &mut World, ctx: &SystemCtx) {
+    let frame = ctx.frame.as_u64();
+    if frame == 0 || frame == 60 {
+        let cam = named(world, "cam");
+        let yaw = if frame == 0 { 90.0 } else { 0.0 };
+        set_look(world.get_mut::<CameraRig>(cam).unwrap().unwrap(), yaw, 20.0);
+    }
+}
+
+fn collide_engine(tag: &str, scene: &str, systems: Systems) -> Engine {
+    engine_for(tag, &[], scene, systems)
+}
+
+#[test]
+fn an_orbit_past_a_wall_never_puts_the_eye_sphere_inside_it() {
+    let scene = collide_scene(PHYSICS, 20.0, 6.0, "", &side_wall(""));
+    let mut engine = collide_engine("collide-orbit", &scene, &[("spin", spin)]);
+    let mut pulled = 0;
+    for tick in 0..200 {
+        engine.advance_live();
+        let gap = gap_to_box(eye_of(&engine), [4.5, 1.0, 0.0], [0.5, 5.0, 10.0]);
+        assert!(
+            gap >= RADIUS - 1e-3,
+            "tick {tick}: the eye is {gap} m from the wall"
+        );
+        pulled += usize::from(rig_of(&engine).state.boom.is_some());
+    }
+    assert!(
+        pulled > 20,
+        "the orbit crossed the wall ({pulled} ticks pulled in)"
+    );
+}
+
+#[test]
+fn the_boom_recovers_to_its_distance_after_leaving_the_wall() {
+    let scene = collide_scene(PHYSICS, 20.0, 6.0, "", &side_wall(""));
+    let mut engine = collide_engine("collide-recover", &scene, &[("leave", park_then_leave)]);
+    advance(&mut engine, 50);
+    let boom = rig_of(&engine).state.boom.expect("pulled in at the wall");
+    assert!(boom < 4.0, "{boom}");
+    advance(&mut engine, 500);
+    let rig = rig_of(&engine);
+    assert_eq!((rig.state.boom, rig.state.boom_hold), (None, 0.0));
+    assert!((distance(eye_of(&engine), [0.0; 3]) - 6.0).abs() < 1e-3);
+}
+
+#[test]
+fn a_four_metre_ceiling_holds_a_twelve_metre_boom_at_fifty_five_degrees() {
+    let ceiling = wall("ceiling", [0.0, 4.5, 0.0], [30.0, 0.5, 30.0], "");
+    let scene = collide_scene(PHYSICS, 55.0, 12.0, "", &ceiling);
+    let mut engine = collide_engine("collide-ceiling", &scene, &[("spin", spin)]);
+    for tick in 0..120 {
+        engine.advance_live();
+        let eye = eye_of(&engine);
+        assert!(eye[1] + RADIUS <= 4.0 + 1e-3, "tick {tick}: eye {eye:?}");
+        assert!(rig_of(&engine).state.boom.is_some(), "tick {tick}");
+    }
+}
+
+#[test]
+fn a_pivot_and_target_inside_geometry_report_l1552_once_and_hold_min_distance() {
+    let room = wall("room", [0.0, 0.0, 0.0], [3.0, 3.0, 3.0], "");
+    let scene = collide_scene(PHYSICS, 20.0, 6.0, "", &room);
+    let mut engine = collide_engine("collide-stuck", &scene, &[]);
+    advance(&mut engine, 5);
+    assert_eq!(rig_of(&engine).state.boom, Some(0.6));
+    let lines = log_lines(collide_engine("collide-stuck-log", &scene, &[]), 30);
+    assert_eq!(reported(&lines, "L1552").len(), 1, "{lines:?}");
+}
+
+#[test]
+fn an_undeclared_layer_reports_l1550_once_and_a_world_without_physics_l1551() {
+    let scene = collide_scene(
+        PHYSICS,
+        20.0,
+        6.0,
+        "            ignore_layers:\n              - nowhere\n",
+        &side_wall(""),
+    );
+    let lines = log_lines(
+        collide_engine("collide-l1550", &scene, &[("spin", spin)]),
+        30,
+    );
+    let found = reported(&lines, "L1550");
+    assert_eq!(found.len(), 1, "{lines:?}");
+    let diagnostic = found[0].diagnostic.as_ref().unwrap();
+    assert_eq!(diagnostic.path.as_deref(), Some("/rig/collision"));
+    assert!(found[0].message.contains("nowhere"), "{}", found[0].message);
+
+    let scene = collide_scene("", 20.0, 6.0, "", "");
+    let lines = log_lines(collide_engine("collide-l1551", &scene, &[]), 30);
+    assert_eq!(reported(&lines, "L1551").len(), 1, "{lines:?}");
+    let mut engine = collide_engine("collide-l1551-pose", &scene, &[]);
+    advance(&mut engine, 3);
+    assert!(
+        (distance(eye_of(&engine), [0.0; 3]) - 6.0).abs() < 1e-3,
+        "runs uncollided"
+    );
+}
+
+#[test]
+fn an_ignored_layer_lets_the_camera_through() {
+    let walls = side_wall("ghost");
+    let blocked = collide_scene(PHYSICS, 20.0, 6.0, "", &walls);
+    let mut engine = collide_engine("collide-blocked", &blocked, &[("leave", park_then_leave)]);
+    advance(&mut engine, 30);
+    assert!(rig_of(&engine).state.boom.is_some());
+
+    let through = collide_scene(
+        PHYSICS,
+        20.0,
+        6.0,
+        "            ignore_layers:\n              - ghost\n",
+        &walls,
+    );
+    let mut engine = collide_engine("collide-through", &through, &[("leave", park_then_leave)]);
+    advance(&mut engine, 30);
+    assert_eq!(rig_of(&engine).state.boom, None);
+    assert!((distance(eye_of(&engine), [0.0; 3]) - 6.0).abs() < 1e-3);
+}
+
+/// Spins the camera, and from frame 40 asks for a framed shoulder peek.
+fn spin_and_frame(world: &mut World, ctx: &SystemCtx) {
+    spin(world, ctx);
+    if ctx.frame.as_u64() == 40 {
+        let cam = named(world, "cam");
+        let rig = world.get_mut::<CameraRig>(cam).unwrap().unwrap();
+        rig.framing.weight = 1.0;
+        rig.framing.pivot_offset = [0.8, 0.3, 0.0];
+        rig.framing.yaw_offset_deg = 10.0;
+    }
+}
+
+fn collide_hero_scene() -> String {
+    collide_scene(PHYSICS, 20.0, 6.0, "", &side_wall(""))
+}
+
+fn collide_hashes(tag: &str) -> Vec<u64> {
+    let mut engine = collide_engine(tag, &collide_hero_scene(), &[("spin", spin_and_frame)]);
+    (0..160)
+        .map(|_| {
+            engine.advance_live();
+            engine.world_hash().unwrap().as_u64()
+        })
+        .collect()
+}
+
+#[test]
+fn a_collided_framed_run_hashes_the_same_twice_and_at_one_and_eight_threads() {
+    let first = collide_hashes("collide-hash-a");
+    assert_eq!(first, collide_hashes("collide-hash-b"));
+    let distinct: std::collections::BTreeSet<u64> = first.iter().copied().collect();
+    assert!(distinct.len() > 100, "a flat trace proves nothing");
+    #[allow(clippy::disallowed_methods)]
+    let [one, eight] = std::thread::scope(|scope| {
+        [(1, "collide-hash-t1"), (8, "collide-hash-t8")]
+            .map(|(n, tag)| scope.spawn(move || par::with_threads(n, || collide_hashes(tag))))
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+            })
+    });
+    assert_eq!(one, eight);
+    assert_eq!(one, first);
+}
+
+/// Yaw 90 into the wall from frame 0, and a framed peek from frame 40.
+fn park_and_frame(world: &mut World, ctx: &SystemCtx) {
+    park_then_leave_start(world, ctx);
+    if ctx.frame.as_u64() == 40 {
+        let cam = named(world, "cam");
+        let rig = world.get_mut::<CameraRig>(cam).unwrap().unwrap();
+        rig.framing.weight = 1.0;
+        rig.framing.pivot_offset = [0.8, 0.3, 0.0];
+        rig.framing.yaw_offset_deg = 10.0;
+    }
+}
+
+fn park_then_leave_start(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame.as_u64() == 0 {
+        let cam = named(world, "cam");
+        set_look(
+            world.get_mut::<CameraRig>(cam).unwrap().unwrap(),
+            90.0,
+            20.0,
+        );
+    }
+}
+
+#[test]
+fn a_snapshot_restore_mid_pull_in_and_mid_framing_resumes_the_same_hashes() {
+    const AT: usize = 43;
+    const TICKS: usize = 120;
+    let scene = collide_hero_scene();
+    let make = |tag: &str| collide_engine(tag, &scene, &[("drive", park_and_frame)]);
+    let mut engine = make("collide-restore-ref");
+    let reference: Vec<u64> = (0..TICKS)
+        .map(|_| {
+            engine.advance_live();
+            engine.world_hash().unwrap().as_u64()
+        })
+        .collect();
+
+    let mut before = make("collide-restore-a");
+    advance(&mut before, AT);
+    let rig = rig_of(&before);
+    assert!(rig.state.boom.is_some(), "mid pull-in");
+    assert!(
+        rig.state.framing_weight > 0.0 && rig.state.framing_weight < 1.0,
+        "mid framing: {}",
+        rig.state.framing_weight
+    );
+    let snapshot = match before.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let mut resumed = make("collide-restore-b");
+    match resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap()
+        .body
+    {
+        ResponseBody::Restored { .. } => {}
+        other => panic!("expected a restore, got {other:?}"),
+    }
+    assert_eq!(resumed.world_hash().unwrap().as_u64(), reference[AT - 1]);
+    for (i, expected) in reference[AT..].iter().enumerate() {
+        resumed.advance_live();
+        assert_eq!(
+            resumed.world_hash().unwrap().as_u64(),
+            *expected,
+            "tick {} after the restore",
+            i + 1
+        );
+    }
 }
