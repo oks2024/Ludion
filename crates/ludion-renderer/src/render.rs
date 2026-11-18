@@ -152,15 +152,18 @@ struct SpriteInstanceRaw {
 /// already collapsed to the rounded-box SDF's two parameters. Matches `ground_marker.wgsl`'s `VsIn`.
 ///
 /// Collapsing [`GroundMarkerShape`](crate::GroundMarkerShape) here rather than uploading a variant
-/// tag is what keeps the shader branch-free: a disc and a capsule differ only in
-/// `(half_extent, corner radius)`.
+/// tag keeps disc and capsule branch-free: they differ only in `(half_extent, corner radius)`. A
+/// wedge is the one exception: `shape.w` is `1.0` and the `wedge` lane carries its parameters.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GroundMarkerInstanceRaw {
     model: [[f32; 4]; 4],
     color: [f32; 4],
-    /// `(half_extent.x, half_extent.z, corner_radius, pad)` in the marker's local XZ plane.
+    /// `(half_extent.x, half_extent.z, corner_radius, is_wedge)` in the marker's local XZ plane; a
+    /// wedge packs `(0, 0, outer_radius, 1)`.
     shape: [f32; 4],
+    /// A wedge's `(half_angle, inner_radius, fill, grid_spacing)`; zero for disc and segment.
+    wedge: [f32; 4],
 }
 
 /// One particle instance: the disc's centre, the camera basis it faces along, its linear HDR colour,
@@ -3543,10 +3546,24 @@ fn ground_marker_raws(markers: &[GroundMarkerInstance]) -> Vec<GroundMarkerInsta
         .iter()
         .map(|marker| {
             let (half_extent, radius) = marker.shape.rounded_box();
+            let (is_wedge, wedge) = match marker.shape {
+                crate::scene::GroundMarkerShape::Wedge {
+                    half_angle,
+                    inner_radius,
+                    fill,
+                    grid_spacing,
+                    ..
+                } => (
+                    1.0,
+                    [half_angle, inner_radius, fill.clamp(0.0, 1.0), grid_spacing],
+                ),
+                _ => (0.0, [0.0; 4]),
+            };
             GroundMarkerInstanceRaw {
                 model: marker.model.to_cols_array_2d(),
                 color: marker.color,
-                shape: [half_extent[0], half_extent[1], radius, 0.0],
+                shape: [half_extent[0], half_extent[1], radius, is_wedge],
+                wedge,
             }
         })
         .collect()
@@ -8506,8 +8523,8 @@ const MESH_VERTEX_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0
 /// normal-matrix rows 12-15, occlusion-fade lane 16, hit-flash lane 17, rim lane 20, medium lane 21 (`.x`).
 const MESH_INSTANCE_ATTRS: [wgpu::VertexAttribute; 14] = wgpu::vertex_attr_array![6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x4, 13 => Float32x4, 14 => Float32x4, 15 => Float32x4, 16 => Float32x4, 17 => Float32x4, 20 => Float32x4, 21 => Float32];
 /// Ground-marker per-instance attributes (`GroundMarkerInstanceRaw`): model columns 0-3, color 4,
-/// the rounded-box SDF's `(half_extent, radius, pad)` lane 5.
-const GROUND_MARKER_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
+/// the rounded-box SDF's `(half_extent, radius, is_wedge)` lane 5, the wedge lane 6.
+const GROUND_MARKER_INSTANCE_ATTRS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4];
 /// Sprite per-instance attributes (`SpriteInstanceRaw`: center/right/up/color, then the UV rect, the
 /// flags lane, the hit-flash lane, the tiling/scroll lane, and the medium scale), locations 0-8.
 const SPRITE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4, 5 => Uint32, 6 => Float32x4, 7 => Float32x4, 8 => Float32];
@@ -23147,12 +23164,34 @@ mod tests {
         assert_eq!(raws.len(), 2, "one instance per marker, in scene order");
         // A disc is a zero-extent box whose corner radius is the whole shape.
         assert_eq!(raws[0].shape, [0.0, 0.0, 3.0, 0.0]);
+        assert_eq!(raws[0].wedge, [0.0; 4]);
         assert_eq!(raws[0].model, placement.to_cols_array_2d());
         assert_eq!(raws[0].color, [6.0, 0.5, 0.25, 0.75]);
         // An 8 x 2 segment is a 6-long straight section with 1-radius caps: the drawn footprint is
         // exactly the authored length and width.
         assert_eq!(raws[1].shape, [3.0, 0.0, 1.0, 0.0]);
         assert_eq!(raws[1].model, Mat4::IDENTITY.to_cols_array_2d());
+    }
+
+    /// A wedge packs its bounding disc with the wedge flag in `shape.w`, and its angle, inner
+    /// radius, (clamped) fill and grid spacing in the wedge lane.
+    #[test]
+    fn a_ground_marker_wedge_packs_its_lane() {
+        use crate::scene::{GroundMarkerInstance, GroundMarkerShape};
+
+        let raws = ground_marker_raws(&[GroundMarkerInstance {
+            shape: GroundMarkerShape::Wedge {
+                half_angle: 0.5,
+                inner_radius: 3.0,
+                outer_radius: 7.0,
+                fill: 0.25,
+                grid_spacing: 1.0,
+            },
+            model: Mat4::IDENTITY,
+            color: [0.25, 1.6, 0.6, 0.9],
+        }]);
+        assert_eq!(raws[0].shape, [0.0, 0.0, 7.0, 1.0]);
+        assert_eq!(raws[0].wedge, [0.5, 3.0, 0.25, 1.0]);
     }
 
     /// A segment at least as wide as it is long degenerates to a disc of radius `length / 2` rather

@@ -217,9 +217,9 @@ pub const GROUND_MARKER_LIFT: f32 = 0.01;
 /// The footprint a [`GroundMarkerInstance`] draws, in **final world units** — the authored maximum
 /// already multiplied by the entity's uniform scale, so the renderer does no sizing arithmetic.
 ///
-/// Both variants are evaluated by one analytic signed-distance function in `ground_marker.wgsl`
-/// (a rounded box), so a variant is a different `(half-extent, corner radius)` pair rather than a
-/// different shader branch.
+/// Disc and segment are evaluated by one analytic signed-distance function in `ground_marker.wgsl`
+/// (a rounded box), so each is a different `(half-extent, corner radius)` pair rather than a
+/// different shader branch. A wedge takes its own branch (a sector SDF plus a wireframe).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum GroundMarkerShape {
     /// A filled circle of `radius` world units, centred on the instance's origin — an area-of-effect
@@ -238,12 +238,28 @@ pub enum GroundMarkerShape {
         /// Total width across local +Z, in world units (`> 0`).
         width: f32,
     },
+    /// A circular sector facing the instance's local **+X**, apex at the origin, drawn as a
+    /// wireframe with a fill growing from the apex — a vision-cone telegraph.
+    Wedge {
+        /// Half the opening angle in **radians**, in `(0, pi]`.
+        half_angle: f32,
+        /// Range of the inner arc in world units; `0` draws none.
+        inner_radius: f32,
+        /// Distance from the apex to the outer arc in world units (`> 0`).
+        outer_radius: f32,
+        /// Fraction of `outer_radius` filled from the apex, clamped to `[0, 1]`.
+        fill: f32,
+        /// World units between concentric grid arcs (`> 0`).
+        grid_spacing: f32,
+    },
 }
 
 impl GroundMarkerShape {
     /// The shape as the rounded-box SDF's two parameters: the box's half-extent in the marker's
-    /// local XZ plane and its corner radius. One packing for both variants — this is what lets the
-    /// shader carry a single branch-free distance function.
+    /// local XZ plane and its corner radius. One packing for disc and segment — this is what lets
+    /// the shader carry a single branch-free distance function. A wedge returns its **bounding
+    /// disc** (`([0, 0], outer_radius)`): that sizes the quad the wedge is drawn in, and is what a
+    /// wedge wrongly inserted on a `DropShadow` draws as.
     ///
     /// # Example
     /// ```
@@ -259,6 +275,14 @@ impl GroundMarkerShape {
     ///     GroundMarkerShape::Segment { length: 8.0, width: 2.0 }.rounded_box(),
     ///     ([3.0, 0.0], 1.0),
     /// );
+    /// // A wedge is its bounding disc.
+    /// assert_eq!(
+    ///     GroundMarkerShape::Wedge {
+    ///         half_angle: 0.5, inner_radius: 3.0, outer_radius: 7.0, fill: 0.0, grid_spacing: 1.0,
+    ///     }
+    ///     .rounded_box(),
+    ///     ([0.0, 0.0], 7.0),
+    /// );
     /// ```
     pub fn rounded_box(self) -> ([f32; 2], f32) {
         match self {
@@ -267,6 +291,7 @@ impl GroundMarkerShape {
                 let radius = (width * 0.5).min(length * 0.5);
                 ([(length * 0.5 - radius).max(0.0), 0.0], radius)
             }
+            GroundMarkerShape::Wedge { outer_radius, .. } => ([0.0, 0.0], outer_radius),
         }
     }
 }

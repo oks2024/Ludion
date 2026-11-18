@@ -2632,12 +2632,19 @@ pub struct Residue {}
 ///   type: segment
 ///   length: 8.0
 ///   width: 2.0
+/// shape:
+///   type: wedge
+///   half_angle_deg: 30.0
+///   outer_radius: 7.0
+///   inner_radius: 3.0
+///   fill: 0.5
 /// ```
 ///
 /// Every dimension is the marker's **maximum** extent in world units, further multiplied by the
 /// entity's uniform `Transform.scale.x` — so a telegraph filling in as its warmup counts down is a
 /// per-frame scale write, never a re-authored shape. All of them must be strictly positive and
-/// finite (`L2106`).
+/// finite (`L2106`). A wedge's `half_angle_deg` and `fill` are not lengths and are never scaled; a
+/// wedge that cannot be drawn as authored is `L2113`.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GroundMarkerShape {
@@ -2659,6 +2666,31 @@ pub enum GroundMarkerShape {
         /// Total width across local +Z, in world units.
         width: f32,
     },
+    /// A circular sector — a vision-cone telegraph — drawn as a wireframe: outline, optional inner
+    /// range arc, a polar grid, and a fill that grows from the apex. The apex is at the entity
+    /// origin and the wedge faces local **+X**. Not valid on a `DropShadow` (`L2113`).
+    Wedge {
+        /// Half the opening angle in degrees, in `(0, 180]`; the wedge spans `±half_angle_deg`
+        /// about +X. Not scaled by `Transform.scale.x`.
+        half_angle_deg: f32,
+        /// Distance from the apex to the outer arc, in world units.
+        outer_radius: f32,
+        /// Range of an inner arc, in world units; `0` (the default) draws none. Must be below
+        /// `outer_radius`.
+        #[serde(default)]
+        inner_radius: f32,
+        /// Fraction of `outer_radius`, in `[0, 1]`, filled from the apex (default `0`). Not scaled.
+        #[serde(default)]
+        fill: f32,
+        /// Metres between concentric grid arcs (default `1.0`); radial spokes are spaced so cells
+        /// are about square at the rim.
+        #[serde(default = "wedge_grid_spacing")]
+        grid_spacing: f32,
+    },
+}
+
+fn wedge_grid_spacing() -> f32 {
+    1.0
 }
 
 impl Default for GroundMarkerShape {
@@ -2669,7 +2701,7 @@ impl Default for GroundMarkerShape {
     }
 }
 
-/// A flat, ground-anchored telegraph marker: an analytic disc or capsule lying in the entity's local
+/// A flat, ground-anchored telegraph marker: an analytic disc, capsule or wedge lying in the entity's local
 /// XZ plane, alpha-blended over the scene after the opaque meshes and before the sprites.
 ///
 /// The marker's placement is the entity's [`Transform`]: translation positions it, rotation orients
@@ -2708,7 +2740,9 @@ impl Default for GroundMarker {
 impl SemanticValidate for GroundMarker {
     /// Rejects a shape dimension that is not a strictly positive, finite number (`L2106`), with a
     /// JSON Pointer relative to the component root (`/shape/radius`, `/shape/length`,
-    /// `/shape/width`). A degenerate footprint has no signed distance to evaluate, so it is a
+    /// `/shape/width`, `/shape/outer_radius`, `/shape/grid_spacing`), and a wedge that cannot be
+    /// drawn as authored (`L2113`, pointers `/shape/half_angle_deg`, `/shape/inner_radius`,
+    /// `/shape/fill`). A degenerate footprint has no signed distance to evaluate, so it is a
     /// mis-authored marker rather than an invisible one. `color` is checked as an HDR colour
     /// (`L1263`).
     ///
@@ -2722,8 +2756,61 @@ impl SemanticValidate for GroundMarker {
             "ground marker",
             "GroundMarker",
         ));
+        out.extend(wedge_diagnostics(value));
         out
     }
+}
+
+/// `L2113` for a wedge `shape` that cannot be drawn: `half_angle_deg` outside `(0, 180]`,
+/// `inner_radius` negative or not below `outer_radius`, `fill` outside `[0, 1]`. By field name,
+/// like [`shape_dimension_diagnostics`]; an absent `inner_radius` / `fill` reads as its default `0`,
+/// and the `inner_radius < outer_radius` check needs a numeric `outer_radius` to compare against.
+fn wedge_diagnostics(value: &Value) -> Vec<Diagnostic> {
+    let Some(shape) = value.get("shape") else {
+        return Vec::new();
+    };
+    let invalid = |field: &str, v: f64, why: &str, help: &str| {
+        Diagnostic::new(
+            code::GROUND_MARKER_WEDGE_INVALID,
+            format!("ground marker wedge `{field}` {v} is not valid; {why}"),
+        )
+        .with_path(format!("/shape/{field}"))
+        .with_help(help.to_string())
+    };
+    let mut out = Vec::new();
+    if let Some(half) = shape.get("half_angle_deg").and_then(as_stored_f32)
+        && !(half > 0.0 && half <= 180.0)
+    {
+        out.push(invalid(
+            "half_angle_deg",
+            half,
+            "it must be greater than 0 and at most 180 degrees",
+            "give `half_angle_deg` a value in (0, 180]",
+        ));
+    }
+    let inner = shape
+        .get("inner_radius")
+        .and_then(as_stored_f32)
+        .unwrap_or(0.0);
+    let outer = shape.get("outer_radius").and_then(as_stored_f32);
+    if !(inner >= 0.0 && outer.is_none_or(|outer| inner < outer)) {
+        out.push(invalid(
+            "inner_radius",
+            inner,
+            "it must be zero or positive and below `outer_radius`",
+            "give `inner_radius` a value in [0, outer_radius), or 0 for no inner arc",
+        ));
+    }
+    let fill = shape.get("fill").and_then(as_stored_f32).unwrap_or(0.0);
+    if !(0.0..=1.0).contains(&fill) {
+        out.push(invalid(
+            "fill",
+            fill,
+            "it is a fraction of `outer_radius` and must be within [0, 1]",
+            "give `fill` a value in [0, 1]",
+        ));
+    }
+    out
 }
 
 /// `L2106` for every non-positive or non-finite dimension in a component's `shape`, by field name.
@@ -2731,7 +2818,7 @@ fn shape_dimension_diagnostics(value: &Value, noun: &str, component: &str) -> Ve
     let Some(shape) = value.get("shape") else {
         return Vec::new();
     };
-    ["radius", "length", "width"]
+    ["radius", "length", "width", "outer_radius", "grid_spacing"]
         .into_iter()
         .filter_map(|field| {
             let dimension = shape.get(field).and_then(as_stored_f32)?;
@@ -2833,6 +2920,21 @@ impl SemanticValidate for DropShadow {
     /// field the author wrote.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = shape_dimension_diagnostics(value, "drop shadow", "DropShadow");
+        if value
+            .get("shape")
+            .and_then(|shape| shape.get("type"))
+            .and_then(Value::as_str)
+            == Some("wedge")
+        {
+            out.push(
+                Diagnostic::new(
+                    code::GROUND_MARKER_WEDGE_INVALID,
+                    "a drop shadow cannot use a `wedge` shape".to_string(),
+                )
+                .with_path("/shape/type")
+                .with_help("a drop shadow is a disc or a segment"),
+            );
+        }
         let distance = |field: &str, default: f32| {
             value
                 .get(field)
@@ -9790,6 +9892,145 @@ entities:
                 "shape": { "type": "disc", "radius": 3.0 },
             }))
             .is_empty()
+        );
+    }
+
+    /// A wedge serializes internally tagged and round-trips; a minimal wedge takes the defaults.
+    #[test]
+    fn ground_marker_wedge_round_trips_and_defaults() {
+        let wedge = GroundMarker {
+            shape: GroundMarkerShape::Wedge {
+                half_angle_deg: 30.0,
+                outer_radius: 7.0,
+                inner_radius: 3.0,
+                fill: 0.5,
+                grid_spacing: 2.0,
+            },
+            color: [0.25, 1.6, 0.6, 0.9],
+        };
+        let json = serde_json::to_value(wedge).unwrap();
+        assert_eq!(
+            json["shape"],
+            serde_json::json!({
+                "type": "wedge", "half_angle_deg": 30.0, "outer_radius": 7.0,
+                "inner_radius": 3.0, "fill": 0.5, "grid_spacing": 2.0
+            })
+        );
+        assert_eq!(serde_json::from_value::<GroundMarker>(json).unwrap(), wedge);
+
+        let minimal: GroundMarker = serde_json::from_value(serde_json::json!({
+            "shape": { "type": "wedge", "half_angle_deg": 30.0, "outer_radius": 7.0 },
+        }))
+        .unwrap();
+        assert_eq!(
+            minimal.shape,
+            GroundMarkerShape::Wedge {
+                half_angle_deg: 30.0,
+                outer_radius: 7.0,
+                inner_radius: 0.0,
+                fill: 0.0,
+                grid_spacing: 1.0,
+            }
+        );
+    }
+
+    /// A well-formed wedge validates clean and survives the canonical writer idempotently.
+    #[test]
+    fn a_well_formed_wedge_validates_and_round_trips_through_the_canonical_writer() {
+        assert!(
+            GroundMarker::validate_semantics(&serde_json::json!({
+                "shape": { "type": "wedge", "half_angle_deg": 180.0, "outer_radius": 7.0,
+                           "inner_radius": 3.0, "fill": 1.0 },
+            }))
+            .is_empty()
+        );
+        let registry = builtin_registry();
+        let source = concat!(
+            "format: 1\n",
+            "entities:\n",
+            "  - components:\n",
+            "      GroundMarker:\n",
+            "        shape:\n",
+            "          type: wedge\n",
+            "          half_angle_deg: 30.0\n",
+            "          outer_radius: 7.0\n",
+            "          inner_radius: 3.0\n",
+            "          fill: 0.35\n",
+        );
+        let scene = ludion_scene::check(source, &registry).expect("a valid wedge scene");
+        let once = ludion_scene::emit(&scene, &registry);
+        let reparsed = ludion_scene::check(&once, &registry).expect("emitted scene re-parses");
+        assert_eq!(once, ludion_scene::emit(&reparsed, &registry));
+        assert!(once.contains("type: wedge"), "{once}");
+    }
+
+    /// Each unusable wedge is `L2113` at its own field pointer.
+    #[test]
+    fn an_undrawable_wedge_is_l2113() {
+        for (shape, field) in [
+            (
+                serde_json::json!({ "half_angle_deg": 0.0, "outer_radius": 7.0 }),
+                "half_angle_deg",
+            ),
+            (
+                serde_json::json!({ "half_angle_deg": 181.0, "outer_radius": 7.0 }),
+                "half_angle_deg",
+            ),
+            (
+                serde_json::json!({ "half_angle_deg": 30.0, "outer_radius": 7.0, "inner_radius": -1.0 }),
+                "inner_radius",
+            ),
+            (
+                serde_json::json!({ "half_angle_deg": 30.0, "outer_radius": 7.0, "inner_radius": 7.0 }),
+                "inner_radius",
+            ),
+            (
+                serde_json::json!({ "half_angle_deg": 30.0, "outer_radius": 7.0, "fill": 1.5 }),
+                "fill",
+            ),
+            (
+                serde_json::json!({ "half_angle_deg": 30.0, "outer_radius": 7.0, "fill": -0.1 }),
+                "fill",
+            ),
+        ] {
+            let mut shape = shape;
+            shape["type"] = "wedge".into();
+            let out = GroundMarker::validate_semantics(&serde_json::json!({ "shape": shape }));
+            let pointer = format!("/shape/{field}");
+            assert!(
+                out.iter()
+                    .any(|d| d.code.as_str() == "L2113"
+                        && d.path.as_deref() == Some(pointer.as_str())),
+                "expected an L2113 at {pointer}: {out:?}"
+            );
+        }
+    }
+
+    /// A zero `outer_radius` and a negative `grid_spacing` are `L2106`.
+    #[test]
+    fn a_non_positive_wedge_dimension_is_l2106() {
+        let out = GroundMarker::validate_semantics(&serde_json::json!({
+            "shape": { "type": "wedge", "half_angle_deg": 30.0, "outer_radius": 0.0,
+                       "grid_spacing": -1.0 },
+        }));
+        let l2106: Vec<&str> = out
+            .iter()
+            .filter(|d| d.code.as_str() == "L2106")
+            .filter_map(|d| d.path.as_deref())
+            .collect();
+        assert_eq!(l2106, ["/shape/outer_radius", "/shape/grid_spacing"]);
+    }
+
+    /// A `DropShadow` authoring a wedge is `L2113` at `/shape/type`.
+    #[test]
+    fn a_drop_shadow_wedge_is_l2113() {
+        let out = DropShadow::validate_semantics(&serde_json::json!({
+            "shape": { "type": "wedge", "half_angle_deg": 30.0, "outer_radius": 7.0 },
+        }));
+        assert!(
+            out.iter()
+                .any(|d| d.code.as_str() == "L2113" && d.path.as_deref() == Some("/shape/type")),
+            "{out:?}"
         );
     }
 

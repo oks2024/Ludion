@@ -2024,7 +2024,8 @@ fn extract_ground_markers(
         .unzip()
 }
 
-/// A component shape in final world units: every dimension times `scale`. A negative scale has no
+/// A component shape in final world units: every length times `scale` (a wedge's angle and fill are
+/// not lengths and stay unscaled; its `fill` is clamped to `[0, 1]`). A negative scale has no
 /// meaningful footprint, so it clamps to `0.0` (an invisible shape) rather than mirroring geometry.
 fn scaled_shape(shape: GroundMarkerShape, scale: f32) -> ludion_renderer::GroundMarkerShape {
     let scale = scale.max(0.0);
@@ -2038,6 +2039,19 @@ fn scaled_shape(shape: GroundMarkerShape, scale: f32) -> ludion_renderer::Ground
                 width: width * scale,
             }
         }
+        GroundMarkerShape::Wedge {
+            half_angle_deg,
+            outer_radius,
+            inner_radius,
+            fill,
+            grid_spacing,
+        } => ludion_renderer::GroundMarkerShape::Wedge {
+            half_angle: half_angle_deg.to_radians(),
+            inner_radius: inner_radius * scale,
+            outer_radius: outer_radius * scale,
+            fill: fill.clamp(0.0, 1.0),
+            grid_spacing: grid_spacing * scale,
+        },
     }
 }
 

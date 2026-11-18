@@ -25,7 +25,7 @@ DropShadow:            # every field optional; `DropShadow: {}` is the default b
 
 | Field | Default | Range | Code |
 |---|---|---|---|
-| `shape` | disc, `radius: 0.5` | every dimension `> 0` and finite | `L2106` |
+| `shape` | disc, `radius: 0.5` (disc or segment; `type: wedge` is refused) | every dimension `> 0` and finite | `L2106`, `L2113` (wedge) |
 | `opacity` | `0.6` | `0..=1` | `L1014` |
 | `softness` | `0.5` | `0..=1` | `L1014` |
 | `max_distance` | `20.0` | positive, finite | `L2110` |

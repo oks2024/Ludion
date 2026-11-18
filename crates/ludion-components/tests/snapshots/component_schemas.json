@@ -3297,7 +3297,7 @@
     },
     "$defs": {
       "GroundMarkerShape": {
-        "description": "The footprint a [`GroundMarker`] draws, in the marker's own local XZ plane.\n\n# Serialized form (serde internal tagging)\n\nA `type` key names the variant and its dimensions sit beside it — the [`Projection`] spelling,\nwhich is the one every struct-variant enum in a component uses (external tagging is what\n[`MeshSource`] needs for its bare-string and one-key-path variants, not a second choice here):\n\n```yaml\nshape:\n  type: disc\n  radius: 3.0\nshape:\n  type: segment\n  length: 8.0\n  width: 2.0\n```\n\nEvery dimension is the marker's **maximum** extent in world units, further multiplied by the\nentity's uniform `Transform.scale.x` — so a telegraph filling in as its warmup counts down is a\nper-frame scale write, never a re-authored shape. All of them must be strictly positive and\nfinite (`L2106`).",
+        "description": "The footprint a [`GroundMarker`] draws, in the marker's own local XZ plane.\n\n# Serialized form (serde internal tagging)\n\nA `type` key names the variant and its dimensions sit beside it — the [`Projection`] spelling,\nwhich is the one every struct-variant enum in a component uses (external tagging is what\n[`MeshSource`] needs for its bare-string and one-key-path variants, not a second choice here):\n\n```yaml\nshape:\n  type: disc\n  radius: 3.0\nshape:\n  type: segment\n  length: 8.0\n  width: 2.0\nshape:\n  type: wedge\n  half_angle_deg: 30.0\n  outer_radius: 7.0\n  inner_radius: 3.0\n  fill: 0.5\n```\n\nEvery dimension is the marker's **maximum** extent in world units, further multiplied by the\nentity's uniform `Transform.scale.x` — so a telegraph filling in as its warmup counts down is a\nper-frame scale write, never a re-authored shape. All of them must be strictly positive and\nfinite (`L2106`). A wedge's `half_angle_deg` and `fill` are not lengths and are never scaled; a\nwedge that cannot be drawn as authored is `L2113`.",
         "oneOf": [
           {
             "description": "A filled circle centred on the entity — an area-of-effect or landing-point telegraph.",
@@ -3341,6 +3341,49 @@
               "type",
               "length",
               "width"
+            ]
+          },
+          {
+            "description": "A circular sector — a vision-cone telegraph — drawn as a wireframe: outline, optional inner\nrange arc, a polar grid, and a fill that grows from the apex. The apex is at the entity\norigin and the wedge faces local **+X**. Not valid on a `DropShadow` (`L2113`).",
+            "type": "object",
+            "properties": {
+              "half_angle_deg": {
+                "description": "Half the opening angle in degrees, in `(0, 180]`; the wedge spans `±half_angle_deg`\nabout +X. Not scaled by `Transform.scale.x`.",
+                "type": "number",
+                "format": "float"
+              },
+              "outer_radius": {
+                "description": "Distance from the apex to the outer arc, in world units.",
+                "type": "number",
+                "format": "float"
+              },
+              "inner_radius": {
+                "description": "Range of an inner arc, in world units; `0` (the default) draws none. Must be below\n`outer_radius`.",
+                "type": "number",
+                "format": "float",
+                "default": 0.0
+              },
+              "fill": {
+                "description": "Fraction of `outer_radius`, in `[0, 1]`, filled from the apex (default `0`). Not scaled.",
+                "type": "number",
+                "format": "float",
+                "default": 0.0
+              },
+              "grid_spacing": {
+                "description": "Metres between concentric grid arcs (default `1.0`); radial spokes are spaced so cells\nare about square at the rim.",
+                "type": "number",
+                "format": "float",
+                "default": 1.0
+              },
+              "type": {
+                "type": "string",
+                "const": "wedge"
+              }
+            },
+            "required": [
+              "type",
+              "half_angle_deg",
+              "outer_radius"
             ]
           }
         ]
@@ -3532,7 +3575,7 @@
   "GroundMarker": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "GroundMarker",
-    "description": "A flat, ground-anchored telegraph marker: an analytic disc or capsule lying in the entity's local\nXZ plane, alpha-blended over the scene after the opaque meshes and before the sprites.\n\nThe marker's placement is the entity's [`Transform`]: translation positions it, rotation orients\nit (local +X is a [`GroundMarkerShape::Segment`]'s length axis), and the **uniform**\n`Transform.scale.x` multiplies its authored dimensions. `Transform.scale.x` scales the footprint\nuniformly; the other two axes are ignored — animate a shape field (`radius`, `length`, `width`),\nnever the scale, to change one dimension without distorting the other. Extract lifts it by a\nfixed world-space Y offset (`ludion_renderer::GROUND_MARKER_LIFT`) so a marker lying on a floor\nnever z-fights the geometry it marks; no scene picks that offset.\n\nPlain, static data: the component carries a shape and a color and nothing else. Animation — a\nwarmup filling in, an urgency ramp — is a game system writing the shape field (a disc's `radius`,\na segment's `length`) and `color` each frame, the same shape as the hit-flash pattern that writes\n`Mesh.color`; `cargo run -p ludion --example ground_marker` is the copyable form.",
+    "description": "A flat, ground-anchored telegraph marker: an analytic disc, capsule or wedge lying in the entity's local\nXZ plane, alpha-blended over the scene after the opaque meshes and before the sprites.\n\nThe marker's placement is the entity's [`Transform`]: translation positions it, rotation orients\nit (local +X is a [`GroundMarkerShape::Segment`]'s length axis), and the **uniform**\n`Transform.scale.x` multiplies its authored dimensions. `Transform.scale.x` scales the footprint\nuniformly; the other two axes are ignored — animate a shape field (`radius`, `length`, `width`),\nnever the scale, to change one dimension without distorting the other. Extract lifts it by a\nfixed world-space Y offset (`ludion_renderer::GROUND_MARKER_LIFT`) so a marker lying on a floor\nnever z-fights the geometry it marks; no scene picks that offset.\n\nPlain, static data: the component carries a shape and a color and nothing else. Animation — a\nwarmup filling in, an urgency ramp — is a game system writing the shape field (a disc's `radius`,\na segment's `length`) and `color` each frame, the same shape as the hit-flash pattern that writes\n`Mesh.color`; `cargo run -p ludion --example ground_marker` is the copyable form.",
     "type": "object",
     "properties": {
       "shape": {
@@ -3562,7 +3605,7 @@
     },
     "$defs": {
       "GroundMarkerShape": {
-        "description": "The footprint a [`GroundMarker`] draws, in the marker's own local XZ plane.\n\n# Serialized form (serde internal tagging)\n\nA `type` key names the variant and its dimensions sit beside it — the [`Projection`] spelling,\nwhich is the one every struct-variant enum in a component uses (external tagging is what\n[`MeshSource`] needs for its bare-string and one-key-path variants, not a second choice here):\n\n```yaml\nshape:\n  type: disc\n  radius: 3.0\nshape:\n  type: segment\n  length: 8.0\n  width: 2.0\n```\n\nEvery dimension is the marker's **maximum** extent in world units, further multiplied by the\nentity's uniform `Transform.scale.x` — so a telegraph filling in as its warmup counts down is a\nper-frame scale write, never a re-authored shape. All of them must be strictly positive and\nfinite (`L2106`).",
+        "description": "The footprint a [`GroundMarker`] draws, in the marker's own local XZ plane.\n\n# Serialized form (serde internal tagging)\n\nA `type` key names the variant and its dimensions sit beside it — the [`Projection`] spelling,\nwhich is the one every struct-variant enum in a component uses (external tagging is what\n[`MeshSource`] needs for its bare-string and one-key-path variants, not a second choice here):\n\n```yaml\nshape:\n  type: disc\n  radius: 3.0\nshape:\n  type: segment\n  length: 8.0\n  width: 2.0\nshape:\n  type: wedge\n  half_angle_deg: 30.0\n  outer_radius: 7.0\n  inner_radius: 3.0\n  fill: 0.5\n```\n\nEvery dimension is the marker's **maximum** extent in world units, further multiplied by the\nentity's uniform `Transform.scale.x` — so a telegraph filling in as its warmup counts down is a\nper-frame scale write, never a re-authored shape. All of them must be strictly positive and\nfinite (`L2106`). A wedge's `half_angle_deg` and `fill` are not lengths and are never scaled; a\nwedge that cannot be drawn as authored is `L2113`.",
         "oneOf": [
           {
             "description": "A filled circle centred on the entity — an area-of-effect or landing-point telegraph.",
@@ -3606,6 +3649,49 @@
               "type",
               "length",
               "width"
+            ]
+          },
+          {
+            "description": "A circular sector — a vision-cone telegraph — drawn as a wireframe: outline, optional inner\nrange arc, a polar grid, and a fill that grows from the apex. The apex is at the entity\norigin and the wedge faces local **+X**. Not valid on a `DropShadow` (`L2113`).",
+            "type": "object",
+            "properties": {
+              "half_angle_deg": {
+                "description": "Half the opening angle in degrees, in `(0, 180]`; the wedge spans `±half_angle_deg`\nabout +X. Not scaled by `Transform.scale.x`.",
+                "type": "number",
+                "format": "float"
+              },
+              "outer_radius": {
+                "description": "Distance from the apex to the outer arc, in world units.",
+                "type": "number",
+                "format": "float"
+              },
+              "inner_radius": {
+                "description": "Range of an inner arc, in world units; `0` (the default) draws none. Must be below\n`outer_radius`.",
+                "type": "number",
+                "format": "float",
+                "default": 0.0
+              },
+              "fill": {
+                "description": "Fraction of `outer_radius`, in `[0, 1]`, filled from the apex (default `0`). Not scaled.",
+                "type": "number",
+                "format": "float",
+                "default": 0.0
+              },
+              "grid_spacing": {
+                "description": "Metres between concentric grid arcs (default `1.0`); radial spokes are spaced so cells\nare about square at the rim.",
+                "type": "number",
+                "format": "float",
+                "default": 1.0
+              },
+              "type": {
+                "type": "string",
+                "const": "wedge"
+              }
+            },
+            "required": [
+              "type",
+              "half_angle_deg",
+              "outer_radius"
             ]
           }
         ]

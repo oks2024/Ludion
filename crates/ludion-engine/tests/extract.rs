@@ -2222,6 +2222,54 @@ fn ground_marker_dimensions_are_scaled_into_world_units() {
     );
 }
 
+/// A wedge's radii and grid spacing scale into world units; its angle (converted to radians) and
+/// `fill` do not, and `fill` clamps to `[0, 1]`.
+#[test]
+fn ground_marker_wedge_lengths_are_scaled_and_angle_and_fill_are_not() {
+    let mut world = World::new();
+    let id = world.spawn();
+    world
+        .insert(
+            id,
+            Transform {
+                scale: [2.0, 2.0, 2.0],
+                ..Transform::default()
+            },
+        )
+        .unwrap();
+    world
+        .insert(
+            id,
+            GroundMarker {
+                shape: GroundMarkerShape::Wedge {
+                    half_angle_deg: 90.0,
+                    outer_radius: 7.0,
+                    inner_radius: 3.0,
+                    fill: 1.5,
+                    grid_spacing: 0.5,
+                },
+                color: [1.0; 4],
+            },
+        )
+        .unwrap();
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
+    assert_eq!(
+        scene.ground_markers[0].shape,
+        RendererMarkerShape::Wedge {
+            half_angle: std::f32::consts::FRAC_PI_2,
+            inner_radius: 6.0,
+            outer_radius: 14.0,
+            fill: 1.0,
+            grid_spacing: 1.0,
+        },
+    );
+}
+
 /// The instance's model matrix is **rigid** — rotation and translation only, with
 /// `GROUND_MARKER_LIFT` added to Y — so a scaled marker's matrix is a pure rotation about the lifted
 /// position. The lift is the engine's one answer to a coplanar quad; no scene authors it.

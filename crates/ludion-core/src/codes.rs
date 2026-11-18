@@ -2051,6 +2051,12 @@ pub mod code {
     /// `component.set` time; the pointer is `/angle_fade` or `/angle_fade/<n>`.
     pub const DECAL_INVALID_ANGLE_FADE: DiagnosticCode = DiagnosticCode::new("L2112");
 
+    /// `L2113` — a `GroundMarker` wedge is not drawable as authored: `half_angle_deg` outside
+    /// `(0, 180]`, `inner_radius` negative or not below `outer_radius`, or `fill` outside `[0, 1]`;
+    /// or a `DropShadow` authors `type: wedge`. Raised by `ludion-engine`'s `GroundMarker` and
+    /// `DropShadow` semantic validators, at scene-check / `component.set` time.
+    pub const GROUND_MARKER_WEDGE_INVALID: DiagnosticCode = DiagnosticCode::new("L2113");
+
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
     pub const RENDER_GOLDEN_MISSING: DiagnosticCode = DiagnosticCode::new("L2201");
@@ -10231,6 +10237,21 @@ Fix: give `angle_fade` two finite angles with `0 <= start <= end <= 90`.
       angle_fade: [60.0, 80.0]",
     },
     CodeEntry {
+        code: code::GROUND_MARKER_WEDGE_INVALID,
+        severity: Severity::Error,
+        title: "GroundMarker wedge is not drawable",
+        explanation: "A `GroundMarker` authors a `type: wedge` shape that cannot be drawn: `half_angle_deg` is outside
+`(0, 180]`, `inner_radius` is negative or not below `outer_radius`, or `fill` is outside `[0, 1]`.
+A `DropShadow` raises the same code when it authors `type: wedge`, because a drop shadow is a disc
+or a segment. The message names the field and the value; the JSON Pointer points at it.
+
+Fix: give the wedge a half-angle in `(0, 180]`, an `inner_radius` in `[0, outer_radius)` and a `fill`
+in `[0, 1]`; use a `disc` or `segment` shape on a `DropShadow`.
+
+    GroundMarker:
+      shape: { type: wedge, half_angle_deg: 30.0, outer_radius: 7.0, inner_radius: 3.0, fill: 0.5 }",
+    },
+    CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
         severity: Severity::Error,
         title: "golden image is missing",
@@ -13045,6 +13066,7 @@ mod tests {
         code::DROP_SHADOW_INVALID_DISTANCE,
         code::GI_VOLUME_EMPTY,
         code::DECAL_INVALID_ANGLE_FADE,
+        code::GROUND_MARKER_WEDGE_INVALID,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,

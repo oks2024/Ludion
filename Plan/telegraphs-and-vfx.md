@@ -199,9 +199,16 @@ impact, despawns after) + `WorldHash` determinism preserved. Scoped by
 the game's private plan, not scheduled here. **Charge line delivered 2026-08-20**
 (see the Status header); the landing disc is still owed.
 
-### Deferred wave — Ring / Sector shapes
+### Wave — Sector shape (shipped; Ring still deferred)
 Triggered per decision 2. Adds one `GroundMarkerShape` variant and one SDF branch; no
 pass/graph/extract-plumbing change.
+
+*Status (2026-11-18): Sector shipped as `GroundMarkerShape::Wedge`* — a wireframe vision cone (apex
+at the origin facing +X, half-angle, outer and inner range arcs, polar grid, a `fill` fraction growing
+from the apex), validated by `L2113`, drawn by its own branch in `ground_marker.wgsl`. Its trigger
+fired on an external stealth game's vision cones. Not clipped by walls (follow-up). Ring stays
+deferred. The Windows golden `ground-marker-wedge.png` is blessed; **the macOS golden is owed** on
+the pinned M4.
 
 ## Engine/game boundary
 
@@ -216,7 +223,7 @@ pass/graph/extract-plumbing change.
 
 ## Deferred / non-goals
 
-- **Ring and Sector/cone shapes** — trigger: a concrete enemy variant that needs one (decision 2).
+- **Ring shape** — trigger: a concrete enemy variant that needs one (decision 2). Sector shipped (see above).
 - **A particle/GPU-emitter system** — trigger unchanged from the two recorded conditions
   (`Plan/phase-7-designer-flow.md:96`, plus a private plan), sharpened in decision 7: a human gate's verdict, or a measured entity/`WorldHash` budget breach from a high-count effect. Neither
   fired.
@@ -238,7 +245,7 @@ pass/graph/extract-plumbing change.
   - *Proposed (Serious Isaac 0021, owner approval owed): skinned hierarchy receivers.* Ready to build once approved.
     - (i) `Decal.skinned: bool`, default `false`, omitted from canonical text at its default, so scenes and goldens are unchanged. The wire schema hash moves once.
     - (ii) With `receivers: hierarchy`, it admits the hierarchy's skinned meshes. The `extract.rs` `Hierarchy` arm stops filtering `!skinned` when the flag is set.
-    - (iii) `skinned: true` with `receivers: all` is error `L2113` (confirm free at build), next to `L2106`/`L2112`, raised by `check-scene`. A world decal across a moving crowd would only swim.
+    - (iii) `skinned: true` with `receivers: all` is an error under the next free code after `L2113` (taken by the `GroundMarker` wedge; confirm free at build), next to `L2106`/`L2112`, raised by `check-scene`. A world decal across a moving crowd would only swim.
     - (iv) The box follows the posed joint through `ParentJoint`. The projector reconstructs the posed depth. Swim near a bending joint is accepted for small marks.
     - (v) The receivers survive `switch_skin_to_ragdoll`, because the skin keeps its id and `Mesh` (`skin_ragdoll.rs`).
     - (vi) Bind-pose projection is deferred until a look test shows swim.
