@@ -1,7 +1,7 @@
 # In-memory checkpoints — capture and restore the world from a system
 
-> **Status:** Wave 1 PLANNED (2026-11-18). Nothing shipped yet; this section records what shipped as
-> each wave closes.
+> **Status:** Waves 1 and 2 mechanized (2026-11-18); Waves 3 and 4 not started. The Status section at the end
+> records what shipped as each wave closes.
 >
 > Neon Shroud request 0012 (`engine-requests/0012-in-memory-checkpoints.md`, filed 2026-11-17, audited
 > at engine r2369). The request's §2 table is the semantics of record (below); its §1–§4 and §7 are what
@@ -146,11 +146,11 @@ scene text, and held slots refuse arming, `L4207`).
 
 ## Waves
 
-- **W1 — in-memory slots**:
+- **W1 — in-memory slots** (shipped, r2372):
   `Checkpoints` resource (`capture`/`restore`/`discard`, `slots`, `slot`, `last_restore`),
   `CheckpointConfig { max_slots }`, `Rebuild::Checkpoint`, the clock rebase, the keyframe skip and arm
   refusal, tests, `docs/checkpoints.md`, the `checkpoints` example.
-- **W2 — disk slot** (decisions W2-1..7). `persist`/`load_disk`/`discard_disk`/`disk()`/`disk_error()`; a
+- **W2 — disk slot** (shipped, r2373; decisions W2-1..7). `persist`/`load_disk`/`discard_disk`/`disk()`/`disk_error()`; a
   `save/checkpoint.json` envelope with a `BuildStamp`, kept on load; strict refusal with a `.bak.<hash>`
   backup (`L4209`); `load_disk` refused while a recording is open; the frame jumps forward to a slot ahead of
   it; `L4208` write failures.
@@ -184,4 +184,11 @@ scene text, and held slots refuse arming, `L4207`).
 
 ## Status
 
-Wave 1: not started.
+- **W1 mechanized (r2372, 2026-11-18):** in-memory slots: the `Checkpoints` resource (`capture`, `restore`,
+  `discard`, `slots`, `slot`, `last_restore`), `CheckpointConfig`, `Rebuild::Checkpoint`, the clock rebase, the
+  keyframe skip and arm refusal, tests, `docs/checkpoints.md` and the `checkpoints` example.
+- **W2 mechanized (r2373, 2026-11-18):** the disk slot: `persist`, `load_disk`, `discard_disk`, `disk` and
+  `disk_error` in `crates/ludion-engine/src/checkpoints.rs`, the `save/checkpoint.json` envelope with a
+  `BuildStamp`, strict refusal with a `.bak.<hash>` backup (`L4209`), `L4208` write failures; documented in
+  `docs/checkpoints.md`.
+- **W3, W4:** not started.

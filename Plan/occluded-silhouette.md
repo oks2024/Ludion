@@ -1,6 +1,6 @@
 # Plan: Occluded silhouette
 
-> Status: **IN PROGRESS** (Neon Shroud request 0015, W1). Usage is `ludion docs occluded-silhouette`; the gallery
+> Status: **W1 mechanized** (Neon Shroud request 0015, r2384). Usage is `ludion docs occluded-silhouette`; the gallery
 > scene is `examples/gallery/occluded-silhouette.yaml`.
 
 ## Why
@@ -57,4 +57,7 @@ decision and is not settled by this.
 
 ## Status — request 0015
 
-- **W1:** in progress.
+- **W1 mechanized (r2384, 2026-11-18):** the `OccludedSilhouette` component, the `silhouette_mask` pass and the
+  composite; scenes without the component keep the same frame graph and pixels. The `occluded-silhouette`
+  gallery golden is blessed on the RTX 3090. No replay content hash, `WorldHash`, existing golden or protocol
+  schema moved.

@@ -154,4 +154,7 @@ tried on Metal, in the orthographic shaft tests, or on the reference game, and w
 - macOS goldens blessed for `fog-sprites`, `fog-sprites-ortho`, `dof-sprites`, `shafts-sprites`.
 - Windows: the same four first-blessed on the RTX 3090, and `night-street` re-blessed for the three
   pixels above. Mechanized; the human look and the Windows cost are in the owed ledger.
-- Mesh path (0016): W1 in progress.
+- Mesh path (0016) W1 mechanized (r2386, 2026-11-18): `Mesh.blend` (`alpha` or `additive`) draws in the
+  `transparents` pass and joins `transparent_depth`; the `glass-and-holograms` gallery golden is blessed on the
+  RTX 3090. Opaque scenes keep the same pixels, and no replay content hash, `WorldHash`, existing golden or
+  protocol schema moved. W2 and W3 are not started.
