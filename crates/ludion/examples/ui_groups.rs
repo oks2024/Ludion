@@ -4,7 +4,7 @@
 //! The group is a 360 x 360 box in the top-right corner. Its children anchor inside the box rather
 //! than the canvas (`group: <the group>`), so the frame fills the box (`fill_group`) and the blips
 //! sit at fractions of it. A `UiTween` on the group scales and fades all three at once, and
-//! `clip: circle` cuts the frame to a round radar. The headless `main` prints each drawn instance
+//! `clip: circle` cuts the frame to a round radar, and `rotation: 15.0` turns the whole panel about the box centre. The headless `main` prints each drawn instance
 //! (pixel rect and colour) at two frames of the pop-in, then `ui_hit` at the box centre and corner.
 //!
 //! ```text
@@ -54,6 +54,7 @@ fn spawn_radar(world: &mut World) -> EntityId {
                 anchor: Anchor::TopRight,
                 offset: [-24.0, 24.0],
                 size: [360.0, 360.0],
+                rotation: 15.0,
                 clip: UiClipShape::Circle,
                 ..UiGroup::default()
             },
@@ -143,6 +144,19 @@ fn main() -> ExitCode {
         "ui_hit centre {} corner {}",
         math::ui_hit(engine.world(), frame, viewport, centre, now),
         math::ui_hit(engine.world(), frame, viewport, corner, now),
+    );
+    // A rotated rect is hit-tested with `ui_point_in`: 200 x 20 centred on the canvas, turned 90°.
+    let bar = UiRect {
+        anchor: Anchor::Center,
+        size: [200.0, 20.0],
+        rotation: 90.0,
+        ..UiRect::default()
+    };
+    let middle = [viewport.0 as f32 * 0.5, viewport.1 as f32 * 0.5];
+    println!(
+        "ui_point_in above {} beside {}",
+        math::ui_point_in(&bar, viewport, [middle[0], middle[1] - 50.0 * scale]),
+        math::ui_point_in(&bar, viewport, [middle[0] + 50.0 * scale, middle[1]]),
     );
     ExitCode::SUCCESS
 }

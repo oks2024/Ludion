@@ -1,5 +1,5 @@
 ---
-description: Rain — a world-anchored field of velocity-stretched streaks around the camera
+description: Rain: world-anchored streaks around the camera, and the wet surfaces under it
 ---
 
 # Weather: `Rain`
@@ -30,6 +30,7 @@ entities:
         lit: true            # shade each streak from the scene's lights (unshadowed)
         medium: 1.0          # how much fog reaches the streaks, [0, 1]
         occlusion: true      # hide streaks under roofs; false keeps the pass but draws no casters
+        wetness: 1.0         # how wet exposed surfaces look, [0, 1]; 0 leaves every surface dry
         seed: 0              # varies the lattice
 ```
 Every field is optional. `Rain` is a singleton: the lowest entity id wins and each further one is `L2381`.
@@ -58,11 +59,25 @@ the camera (`radius` either side, texel-snapped so a camera move under a texel l
 above the band). Each streak fragment compares its height with the nearest caster over its column and fades out over
 5 cm below it: no rain under an awning, a roof or a doorway lintel, with a crisp edge. What occludes is what casts a
 shadow: a `Mesh` with `cast_shadows: false` lets rain through (`RainOccluder`, a component that occludes without
-drawing, comes with the wetness wave). The map is straight down, so wind-slanted rain still reaches the first metre
+drawing, is in `Plan/rain-and-wet.md`). The map is straight down, so wind-slanted rain still reaches the first metre
 inside a wall's edge, and a roof more than 64 m over the band does not occlude. The pass runs only with a `Rain`
 present: a rain-free scene keeps the identical frame graph and pixels. `occlusion: false` keeps the pass and draws no
 casters, so nothing occludes. The pass costs 0.003 ms on `rain-awning` at 1080p on the RTX 3090 (a handful of
 casters); it grows with the casters in the volume, like the sun's shadow pass.
+
+## Wetness
+`wetness` (default 1) darkens and glosses every opaque mesh surface the rain reaches. Per fragment the scene pass
+computes `w = wetness x exposure x facing` and applies it: the albedo is multiplied by `mix(1, 0.6, w x porosity)` and
+the roughness goes to `mix(r, 0.08, w x (1 - metallic))`, so metal stays dry-looking and the screen-space and probe
+reflections then show the wet ground with no extra wiring. Porosity is 0.5 for every surface, so a voxel palette
+(world models, assemblies), a sculpt, a primitive and an asset mesh all get wet with nothing authored.
+
+**Exposure** is read from the `rain_occlusion` map (`## Roofs`): a surface at its column's top is wet, and one more
+than 20 cm below the nearest caster is dry, so the ground under an awning, the inside of a doorway and a figure
+standing under a roof read dry. Past the map's edge (the outer 10 % of `radius` blends toward it) exposure is the
+`GiVolume` sky visibility when the scene has one, else 1. **Facing** is `0.5 + 0.5 * n.y` on the geometric normal:
+1 facing up, 0.5 on a wall, 0 facing down. Drying is a game-written `wetness`: write it from a presentation system
+over time, the way a game writes `focus_distance`; `wetness: 0` renders the frame as a dry one.
 
 ## Gotchas
 | Situation | What happens |
@@ -72,7 +87,10 @@ casters); it grows with the casters in the volume, like the sun's shadow pass.
 | Fog | Streaks fog through the transparent layer; `medium: 0` keeps them out of the fog |
 | Streaks overlapping | Blended premultiplied, unsorted within the draw |
 | Probe captures | Drop the rain; secondary views keep it |
-| Gameplay rain zones, wetness | Separate sim data, not the picture's rain |
+| Gameplay rain zones | Separate sim data, not the picture's rain |
+| A character under a roof | Wet per pixel from the map, so it dries the instant it steps under cover |
+| A `coat` decal | The authored puddle: wetness leaves decals and blended meshes (glass, holograms) untouched |
+| Viewmodel | Never wetted |
 | Time past 4096 s | Wraps; every drop jumps once |
 
 ## Diagnostics
@@ -80,4 +98,5 @@ casters); it grows with the casters in the volume, like the sun's shadow pass.
 - `L2381` (warning): more than one `Rain`; the lowest id is used.
 - `L2382` (warning): the streak budget clamped the per-tile count.
 
-`ludion explain L2380` gives the fix. The gallery scene is `examples/gallery/rain-open.yaml`.
+`ludion explain L2380` gives the fix. The gallery scenes are `examples/gallery/rain-open.yaml`, `rain-awning.yaml` and
+`rain-wet.yaml` (wet voxel ground and figures, a dry awning).

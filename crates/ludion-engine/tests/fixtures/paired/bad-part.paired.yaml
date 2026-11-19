@@ -1,0 +1,30 @@
+format: 1
+kind: paired
+name: bad-part
+roles:
+  a:
+    assembly: ../../../../../examples/gallery/voxels/humanoid.assembly.yaml
+    align_only: true
+    scale: 1.0
+  b:
+    assembly: ../../../../../examples/gallery/voxels/humanoid.assembly.yaml
+    align_only: true
+    scale: 1.0
+align:
+  reference: a
+  moves: a
+  ticks: 4
+  offsets:
+    b:
+      translation:
+        - 5.0
+        - 0.0
+        - 0.0
+events:
+  - name: e
+    t: 0.0
+contacts:
+  - a: a/head
+    b: b/hed
+    at: e
+    max_gap: 10.0

@@ -51,6 +51,10 @@
 //! it (group delta, tweens, world anchor, group affine, visibility and the clip). It reads the world
 //! and is not part of the sim's hashed state.
 //!
+//! A rotated `UiRect` (`rotation` in degrees, clockwise on screen, about its centre) is hit-tested
+//! with [`ui_point_in`], and [`ui_rect_corners`] gives its four drawn corners; both use
+//! `ludion_core::math` trig only when the rotation is non-zero.
+//!
 //! These four are pure arithmetic (no trig, no transcendentals) exactly like [`camera_ray`]/
 //! [`ray_ground_plane`] above, so their output is as safe to fold into hashed sim state as any other
 //! deterministic helper here.
@@ -114,7 +118,8 @@ pub use ludion_engine::ui::{
     FontFace, NineSlice, RadialItemLayout, RadialLayout, WorldAnchorPlacement, canvas_anchor_px,
     group_delta, list_hit, measure_ui_list, measure_ui_text, nine_slice, place_world_anchor,
     radial_hit, radial_layout, resolve_ui_list, resolve_ui_rect, resolve_ui_rect_of,
-    resolve_ui_text, sub_uv, ui_hit, ui_list_window, ui_tween_sample, wrap_ui_text,
+    resolve_ui_text, sub_uv, ui_hit, ui_list_window, ui_point_in, ui_rect_corners, ui_tween_sample,
+    wrap_ui_text,
 };
 pub use ludion_engine::{ModelCamera, ModelView, fit_distance_for_aspect, model_camera};
 

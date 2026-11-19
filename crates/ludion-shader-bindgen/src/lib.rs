@@ -215,6 +215,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "gi_probe.wgsl",
             "view_ray.wgsl",
             "math.wgsl",
+            "rain_occlusion.wgsl",
             "mesh_shading.wgsl",
             "mesh_material.wgsl",
         ],
@@ -331,6 +332,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "lights.wgsl",
             "billboard_light.wgsl",
             "quad.wgsl",
+            "rain_occlusion.wgsl",
         ],
     ),
     (

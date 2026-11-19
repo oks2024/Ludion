@@ -1,6 +1,6 @@
 # Plan: Paired animations and a posed ragdoll — rest-relative zeros, part velocity, the way back, `kind: paired`
 
-> Status: **W1–W3 mechanized (2026-11-18); W4–W6 not started.** Driver: Neon Shroud request 0008
+> Status: **W1–W4 mechanized (2026-11-18); W5–W6 not started.** Driver: Neon Shroud request 0008
 > (`engine-requests/0008-paired-animations-and-posed-ragdoll.md`). A takedown aligns two voxel assemblies,
 > plays one clip on both, and ends with the target ragdolled at the pose it died in; the way back
 > (get-up) re-poses an assembly from a ragdoll. The design below was written from the tree on 2026-11-18,
@@ -58,6 +58,20 @@ A scene, replay or game that never calls the new function poses and hashes as be
 extra removal is a no-op without a `PoseSnapshot`, the hoisted translations are the same values, and extract
 reads the snapshot only for a bound fade. No `WorldHash`, replay, trace, wire-schema or golden moved. Only
 `component_schemas.json` re-blessed.
+
+### W4 — the `kind: paired` document, `check-scene` contacts and warp report, L1752–L1755
+
+| file | role |
+|---|---|
+| `crates/ludion-scene/src/paired.rs`, `lib.rs`, `kinds.rs` | `PairedDocument` and friends, parse (`L1752`), validate (`L1753`), canonical emit; `parse_paired`/`validate_paired`/`check_paired`/`emit_paired`; the `paired` `KINDS` row |
+| `crates/ludion-core/src/codes.rs` | `PAIRED_DOCUMENT_STRUCTURE`, `PAIRED_DATA_CONSISTENCY`, `PAIRED_ROLE_MISMATCH`, `PAIRED_CONTACT_GAP` (`L1752`–`L1755`), explain entries and list rows |
+| `crates/ludion-engine/src/paired_doc.rs`, `lib.rs` | `check_paired_files`, `PairedReport`: role assemblies loaded, clips, event times and contact parts checked (`L1754`), gaps measured on posed parts (`L1755`) |
+| `crates/ludion-cli/src/paired_report.rs`, `check_scene.rs`, `main.rs` | the `check-scene` text and `--json` report |
+| `examples/gallery/voxels/choke.paired.yaml`, `crates/ludion-engine/tests/paired_doc.rs` + fixtures, `crates/ludion-cli/tests/check_scene_paired.rs` + fixtures | the gallery document and the proofs |
+| `docs/paired-actions.md`, `docs/voxel-animation.md` (+ embedded mirrors) | the topic and its pointer |
+
+Nothing plays a paired action yet. No component, `WorldHash`, replay, trace, wire-schema, schema snapshot or
+golden moved; nothing was blessed.
 
 ## Trigger
 
@@ -130,6 +144,33 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
     physics step, so `resume_character` (or a `Collider` insert) is called from the next tick on; on the
     same tick their bodies still block the capsule. The rustdoc and `docs/voxel-assemblies.md` say so.
 
+15. **Document shape.** Top level `format: 1`, `kind: paired`, `name` (required: W5's events fire as
+    `paired:<name>`), `roles`, `align`, `events`, `contacts`. `roles` is a mapping (at least 2 entries,
+    sorted on emit) of `{ assembly, clip, align_only, posture, scale }`. `align` is `{ reference, moves,
+    ticks, offsets }`, all four required, where `offsets` maps every non-reference role to `{ translation:
+    [x, y, z] m, yaw_deg }` in the reference entity's frame (−Z forward). `moves` is a role name or `split`.
+    Differences from the request: `align.offsets.<role>` replaces `align.target` (N roles, and the request's
+    example role is itself named `target`); `moves` names a role instead of the fixed `instigator | target`;
+    `scale` is new (decision 19); events are `{ name, t }` entries and contacts `{ a, b, at, max_gap }`.
+16. **Clip roles only.** `clip` names a key of the assembly's `clips:`; a 0007 blend needs parameters the
+    document has no place for. Trigger: a paired action that needs a parametric clip.
+17. **No prefab roles yet;** `align_only: true` (no `clip`) covers the search spot. Trigger: the locker
+    stash (a prefab door with node clips).
+18. **Two passes.** `ludion-scene` checks the file alone (`L1752` shape, `L1753` data); `ludion-engine`'s
+    `check_paired_files` loads each role's assembly and checks against it (`L1754`) and measures the
+    contacts (`L1755` warning). The `KINDS` row is `doc_store: false`: nothing loads a paired document at
+    boot yet; W5 decides how `start_paired` resolves one.
+19. **`scale`** (optional, above 0, default 1) is the role entity's uniform `Transform` scale: assembly
+    cells are 1 unit, offsets are metres, so a contact gap is meaningless without it.
+20. **Event time** is gameplay seconds since the shared `started` at speed 1; events strictly ascend with
+    unique names, and `t` is at most the `duration` of every clip role's clip.
+21. **Gap and warp metrics.** A role entity sits at `T(offset) · R_y(yaw) · S(scale)` (the reference at
+    identity); each part cell's centre goes through its part's `posed · rest⁻¹` at the event's `t` (rest for
+    an `align_only` role). `gap = max(0, min centre distance − (s_a + s_b)/2)`, reported in metres and in
+    role `a`'s cells (`/ s_a`); 0 means touching or overlapping; it is cell-quantized like the model sheet's
+    posed gaps. The warp report is each role's aligned offset, yaw, planar distance from the reference, the
+    mover and `ticks`; its start pose is runtime, so the path from it is W5's `paired_fit`.
+
 ## Waves
 
 - **W1 (shipped).** `JointZero`, `LimitsFrom`, `RagdollSwitch`, `switch_to_ragdoll_with`, layers in the
@@ -138,10 +179,11 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
   closed form (decision 9).
 - **W3 (shipped).** Ragdoll → assembly: `switch_ragdoll_to_assembly`, `ragdoll_landing`, `PoseSnapshot`,
   the placement and face-up rule (decisions 10–14).
-- **W4.** The `kind: paired` document: the `KINDS` row, parse and validate, L-codes (0008's range
-  L4370–89 / L1750–59), `check-scene` contacts and warp report.
+- **W4 (shipped).** The `kind: paired` document: the `KINDS` row, parse and validate, `L1752`–`L1755`,
+  `check-scene` contacts and warp report (decisions 15–21). 0008's runtime range L4370–89 stays for W5.
 - **W5.** Paired runtime: `paired_fit`, `start_paired`, `paired_motion`, `abort_paired`, hashed
-  `PairedAction`, `paired:<action>` events, the lockstep guard, N roles, per-role `posture:`.
+  `PairedAction`, `paired:<action>` events, the lockstep guard, N roles, per-role `posture:`; refuse a cast
+  whose entity scale differs from the role's `scale`; blend and prefab roles.
 - **W6.** `render --paired`, the `paired-takedown` gallery scene and goldens.
 
 ## Open questions, with the game's answers

@@ -82,6 +82,15 @@ fn extract_fills_rain_from_the_component() {
     assert!(extract(&mut engine_for(&document(""))).rain.is_none());
 }
 
+/// `wetness` defaults to 1 and the authored value reaches the frame's rain.
+#[test]
+fn extract_carries_wetness() {
+    let default = engine_for(&document(&rain_entity("weather", true, &[])));
+    assert_eq!(extract(&mut { default }).rain.expect("rain").wetness, 1.0);
+    let dry = engine_for(&document(&rain_entity("weather", true, &["wetness: 0.25"])));
+    assert_eq!(extract(&mut { dry }).rain.expect("rain").wetness, 0.25);
+}
+
 #[test]
 fn intensity_zero_extracts_no_rain() {
     let mut engine = engine_for(&document(&rain_entity(

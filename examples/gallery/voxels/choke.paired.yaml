@@ -1,0 +1,35 @@
+format: 1
+kind: paired
+name: choke
+roles:
+  instigator:
+    assembly: humanoid.assembly.yaml
+    clip: carry
+    scale: 0.125
+  target:
+    assembly: humanoid.assembly.yaml
+    clip: idle
+    scale: 0.125
+align:
+  reference: instigator
+  moves: instigator
+  ticks: 12
+  offsets:
+    target:
+      translation:
+        - 0.0
+        - 0.0
+        - -0.5
+      yaw_deg: 180.0
+events:
+  - name: grab
+    t: 0.25
+  - name: hold
+    t: 0.5
+  - name: release
+    t: 0.9
+contacts:
+  - a: instigator/lower-arm-r
+    b: target/head
+    at: hold
+    max_gap: 8.0

@@ -1,0 +1,163 @@
+# Feature: `rotation` on `UiRect`, `UiText` and `UiGroup` (Plan/ui-hud.md W3a): degrees, clockwise on
+# screen, about the centre of what the element draws (a group: its box). Over a dark backdrop:
+# - Left: an untextured rect at 30 degrees and a checker-textured rect at -45 degrees.
+# - Bottom-left: outlined text at -15 degrees, turned about its glyph bounds.
+# - Right: a `rect`-clipped group turned 20 degrees; its child rect (10 degrees) and its text overhang
+#   the box and are cut at the turned edge, the text mid-glyph. Inside it, a nested `circle` group
+#   (turned with it) cuts a cyan rect to the inscribed circle.
+format: 1
+name: "ui-rotation - UiRect, UiText and UiGroup rotation, and a rotated clip"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 5.0
+      Camera: {}
+  - name: backdrop
+    components:
+      UiRect:
+        fill: true
+        color:
+          - 0.06
+          - 0.07
+          - 0.1
+          - 1.0
+        order: 0
+  - name: rect-30
+    components:
+      UiRect:
+        offset:
+          - 120.0
+          - 100.0
+        size:
+          - 320.0
+          - 120.0
+        rotation: 30.0
+        color:
+          - 1.0
+          - 0.55
+          - 0.15
+          - 1.0
+        order: 1
+  - name: checker-minus-45
+    components:
+      UiRect:
+        offset:
+          - 140.0
+          - 420.0
+        size:
+          - 240.0
+          - 240.0
+        texture: assets/checker.png
+        rotation: -45.0
+        order: 1
+  - name: text-minus-15
+    components:
+      UiText:
+        anchor: bottom_left
+        offset:
+          - 100.0
+          - -160.0
+        text: ROTATED TEXT
+        size: 80.0
+        rotation: -15.0
+        outline:
+          width: 3.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 1.0
+        order: 2
+  - name: clip-group
+    components:
+      UiGroup:
+        anchor: top_right
+        offset:
+          - -80.0
+          - 120.0
+        size:
+          - 700.0
+          - 700.0
+        rotation: 20.0
+        clip: rect
+  - name: clip-group-frame
+    components:
+      UiRect:
+        fill_group: true
+        group:
+          index: 5
+          generation: 0
+        color:
+          - 0.15
+          - 0.2
+          - 0.3
+          - 1.0
+        order: 1
+  - name: clip-group-rect
+    components:
+      UiRect:
+        anchor: top_center
+        offset:
+          - 0.0
+          - 60.0
+        size:
+          - 900.0
+          - 120.0
+        rotation: 10.0
+        group:
+          index: 5
+          generation: 0
+        color:
+          - 0.25
+          - 0.75
+          - 0.35
+          - 1.0
+        order: 2
+  - name: clip-group-text
+    components:
+      UiText:
+        text: CUT BY THE TURNED EDGE
+        size: 90.0
+        offset:
+          - -120.0
+          - 300.0
+        group:
+          index: 5
+          generation: 0
+        order: 3
+  - name: clip-circle
+    components:
+      UiGroup:
+        anchor: bottom_center
+        offset:
+          - 0.0
+          - -60.0
+        size:
+          - 300.0
+          - 300.0
+        clip: circle
+        group:
+          index: 5
+          generation: 0
+  - name: clip-circle-fill
+    components:
+      UiRect:
+        group:
+          index: 9
+          generation: 0
+        offset:
+          - -80.0
+          - -80.0
+        size:
+          - 460.0
+          - 460.0
+        color:
+          - 0.2
+          - 0.85
+          - 0.95
+          - 1.0
+        order: 4

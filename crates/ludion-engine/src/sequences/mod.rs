@@ -5,7 +5,8 @@
 //! [`sequence_update`] **before** `dialogue_update` and before any system that reads
 //! [`SequenceEvents`], and drives a beat through the free functions here. **The API only marks
 //! state** — [`play`] spawns a pending [`SequencePlayer`], [`skip`] and [`cancel`] set a flag — and
-//! the system applies every key and emits every event.
+//! the system applies every key and emits every event. [`release`] clears a `wait: release` key,
+//! [`holding`] reports a `holds_gameplay` beat holding the gameplay clock.
 //!
 //! State is entities, so it rides hashing, snapshots and checkpoints: one [`SequencePlayer`] per
 //! playing beat (its handle *is* the entity) and one [`SequenceBinding`] per bound role. A game that
@@ -25,8 +26,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub use docs::{
-    AnimationKey, AudioKey, CameraKey, DialogueKey, EventKey, OnSkip, SequenceClock, SequenceDoc,
-    SequenceTracks, UiKey,
+    AnimationKey, AudioKey, CameraKey, DialogueKey, DialogueWait, EventKey, EventWait, OnSkip,
+    SequenceClock, SequenceDoc, SequenceTracks, UiKey,
 };
 pub use events::{SequenceEnd, SequenceEvent, SequenceEvents, SequenceTrack};
 pub use update::sequence_update;
@@ -83,6 +84,37 @@ pub struct SequencePlayer {
     /// The `seq` of every dialogue line it said, so a skip or cancel can interrupt them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub said: Vec<u64>,
+    /// Clock frames the playhead spent parked on waits; the playhead is `now - started - waited`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub waited: u64,
+    /// The wait the playhead is parked on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait: Option<PendingWait>,
+    /// A [`release`] latch: clears the current `wait: release`, or the next one reached.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub released: bool,
+}
+
+/// A wait the playhead is parked on.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+pub struct PendingWait {
+    /// The `at` of the key that set it; the playhead stays here.
+    pub at: u32,
+    /// What clears it.
+    pub kind: WaitKind,
+}
+
+/// What a [`PendingWait`] is waiting for.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitKind {
+    /// The dialogue line with this `seq` ends.
+    LineEnd {
+        /// The line's `DialogueLine.seq`.
+        seq: u64,
+    },
+    /// The game calls [`release`].
+    Release,
 }
 
 /// One role bound to one entity: its own entity because a list of entity refs is refused (`L1392`).
@@ -118,6 +150,10 @@ fn frame_zero() -> FrameIndex {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// A playing sequence's handle: the entity that carries it, valid until it ends.
@@ -202,13 +238,16 @@ pub fn play(
         player,
         SequencePlayer {
             sequence: key.to_owned(),
-            clock: doc.clock,
+            clock: doc.effective_clock(),
             state: PlayerState::Pending,
             started: FrameIndex::ZERO,
             applied_through: None,
             skip: false,
             cancel: false,
             said: Vec::new(),
+            waited: 0,
+            wait: None,
+            released: false,
         },
     );
     for (role, entity) in bindings {
@@ -271,6 +310,45 @@ pub fn cancel(world: &mut World, handle: SequenceHandle) -> bool {
     };
     player.cancel = true;
     true
+}
+
+/// Releases a `wait: release` key: the playhead resumes on the next clock frame. A single latch, not a
+/// counter: a release before the wait is reached clears the next one, so an early release cannot
+/// stall the beat. `false` when the handle is not live.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Engine, sequences};
+///
+/// let mut engine = Engine::builder().sequences().build().unwrap();
+/// let gone = sequences::SequenceHandle(ludion_core::ids::EntityId::new(9, 0));
+/// assert!(!sequences::release(engine.world_mut(), gone));
+/// ```
+pub fn release(world: &mut World, handle: SequenceHandle) -> bool {
+    let Ok(Some(player)) = world.get_mut::<SequencePlayer>(handle.0) else {
+        return false;
+    };
+    player.released = true;
+    true
+}
+
+/// Whether a live `holds_gameplay` sequence is holding the gameplay clock.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Engine, sequences};
+///
+/// let mut engine = Engine::builder().sequences().build().unwrap();
+/// assert!(!sequences::holding(engine.world_mut()));
+/// ```
+pub fn holding(world: &mut World) -> bool {
+    let playing: Vec<String> = world
+        .query_ids::<(&SequencePlayer,)>()
+        .map(|(_, (player,))| player.sequence.clone())
+        .collect();
+    playing
+        .iter()
+        .any(|key| find_doc(world, key).is_some_and(|doc| doc.holds_gameplay))
 }
 
 /// Whether the handle names a sequence that has not ended.

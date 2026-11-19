@@ -134,6 +134,12 @@ struct EnvParams {
     // dynamic-injection flag (1 = the `gi_inject` pass ran this frame and `gi_dyn_tex` holds its
     // output; 0 = the 1×1×1 fallback is bound). zw are reserved and written zero.
     gi_bounce: vec4<f32>,
+    // The rain-occlusion map's world-to-clip view (straight down, orthographic); read by `mesh.wgsl` only.
+    wet_view: mat4x4<f32>,
+    // x = `Rain.wetness` (0 = no rain: the map is never read), y = the map flag (1 = `wet_map` holds
+    // this frame's `rain_occlusion`), z = the map's half extent in metres (the edge fade), w reserved
+    // and written zero.
+    wet: vec4<f32>,
 };
 @group(3) @binding(0) var irradiance_tex: texture_cube<f32>;
 // Binding 1 (the specular cube) is the `reflections` pass's; binding 2, the split-sum BRDF LUT, is read by

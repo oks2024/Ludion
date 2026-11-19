@@ -12,7 +12,7 @@ use ludion_core::time::{SimTime, TickRate};
 use ludion_engine::components::{Anchor, UiList, UiListItem, UiRect, UiText};
 use ludion_engine::ui::{resolve_ui_rect, ui_hit};
 use ludion_engine::{Diagnostics, Engine, extract_at};
-use ludion_renderer::{QualityParams, RenderScene, UiClip, UiInstance};
+use ludion_renderer::{QualityParams, RenderScene, UiClip, UiInstance, UiRotation};
 
 const SCENE: &str = "\
 format: 1
@@ -809,4 +809,174 @@ fn three_clipping_levels_report_l2303_statically_and_at_runtime() {
     let found = clips(&extract(&mut engine));
     assert!(found[0].boxes.iter().all(Option::is_some));
     assert_eq!(reported(&engine, code::UI_CLIP_NESTING), 1);
+}
+
+// --- rotation (`Plan/ui-hud.md` decisions 45-52) ---
+
+fn rotations(scene: &RenderScene) -> Vec<UiRotation> {
+    scene
+        .ui
+        .iter()
+        .map(|instance| match instance {
+            UiInstance::Rect { rotation, .. } | UiInstance::Text { rotation, .. } => *rotation,
+        })
+        .collect()
+}
+
+fn extract_when(engine: &Engine, tick: u64) -> RenderScene {
+    extract_at(
+        engine.world(),
+        engine.render_size(),
+        ludion_assets::AssetRoot::content(engine.project_root()),
+        now(tick),
+        QualityParams::FULL.particle_density,
+    )
+    .expect("extracts")
+}
+
+#[test]
+fn rotated_elements_carry_their_rotation_and_unrotated_ones_carry_none() {
+    let mut engine = engine();
+    spawn(
+        &mut engine,
+        UiRect {
+            offset: [100.0, 100.0],
+            size: [40.0, 20.0],
+            rotation: 30.0,
+            ..UiRect::default()
+        },
+    );
+    spawn(
+        &mut engine,
+        UiText {
+            text: "HI".into(),
+            rotation: -15.0,
+            order: 1,
+            ..UiText::default()
+        },
+    );
+    spawn(
+        &mut engine,
+        UiRect {
+            order: 2,
+            ..UiRect::default()
+        },
+    );
+    let scene = extract(&mut engine);
+    let turned = rotations(&scene);
+    let s = scale(&engine);
+    assert_eq!(turned[0].radians, 30.0f32.to_radians());
+    assert!((turned[0].pivot_px[0] - 120.0 * s).abs() < 1e-2);
+    assert!((turned[0].pivot_px[1] - 110.0 * s).abs() < 1e-2);
+    assert_eq!(turned[1].radians, (-15.0f32).to_radians());
+    assert_eq!(turned[2], UiRotation::NONE);
+}
+
+#[test]
+fn a_rotation_tween_adds_to_the_authored_rotation() {
+    let mut engine = engine();
+    let id = spawn(
+        &mut engine,
+        UiRect {
+            rotation: 10.0,
+            ..UiRect::default()
+        },
+    );
+    add(
+        &mut engine,
+        id,
+        UiTween {
+            tracks: vec![UiTweenTrack {
+                field: UiTweenField::Rotation,
+                from: vec![0.0],
+                to: vec![40.0],
+                start: 0,
+                duration: 1.0,
+                ease: UiEase::Linear,
+                repeat: UiTweenRepeat::Once,
+                clock: UiClock::Real,
+            }],
+        },
+    );
+    let at = rotations(&extract_when(&engine, 30))[0].radians;
+    assert!(
+        (at - 30.0f32.to_radians()).abs() < 1e-3,
+        "10 authored + 20 at mid-tween, got {at}"
+    );
+}
+
+#[test]
+fn a_rotated_fill_group_child_under_a_rotated_group_sums_the_radians() {
+    let mut engine = engine();
+    let g = group(
+        &mut engine,
+        UiGroup {
+            rotation: 20.0,
+            ..top_right_group()
+        },
+    );
+    spawn(
+        &mut engine,
+        UiRect {
+            fill_group: true,
+            group: Some(g),
+            rotation: 10.0,
+            ..UiRect::default()
+        },
+    );
+    let turned = rotations(&extract(&mut engine));
+    assert!((turned[0].radians - 30.0f32.to_radians()).abs() < 1e-5);
+}
+
+#[test]
+fn ui_hit_follows_a_rotated_rect() {
+    let mut engine = engine();
+    let id = spawn(
+        &mut engine,
+        UiRect {
+            anchor: Anchor::Center,
+            size: [200.0, 20.0],
+            rotation: 90.0,
+            ..UiRect::default()
+        },
+    );
+    let s = scale(&engine);
+    let (w, h) = engine.render_size();
+    let (cx, cy) = (w as f32 * 0.5, h as f32 * 0.5);
+    assert!(
+        hit(&engine, id, [cx, cy - 50.0 * s]),
+        "on the turned long axis"
+    );
+    assert!(
+        !hit(&engine, id, [cx + 50.0 * s, cy]),
+        "where the unrotated rect would be"
+    );
+    assert!(!hit(&engine, id, [cx + 90.0 * s, cy]));
+}
+
+#[test]
+fn ui_hit_misses_a_child_cut_by_a_rotated_clip() {
+    let mut engine = engine();
+    let g = group(
+        &mut engine,
+        UiGroup {
+            anchor: Anchor::Center,
+            size: [200.0, 200.0],
+            clip: UiClipShape::Rect,
+            rotation: 45.0,
+            ..UiGroup::default()
+        },
+    );
+    let id = spawn(&mut engine, child(Anchor::Center, [400.0, 400.0], g));
+    let s = scale(&engine);
+    let (w, h) = engine.render_size();
+    let (cx, cy) = (w as f32 * 0.5, h as f32 * 0.5);
+    assert!(
+        hit(&engine, id, [cx - 60.0 * s, cy - 60.0 * s]),
+        "inside the diamond"
+    );
+    assert!(
+        !hit(&engine, id, [cx - 95.0 * s, cy - 95.0 * s]),
+        "inside the unturned box, outside the turned one"
+    );
 }

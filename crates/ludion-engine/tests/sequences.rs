@@ -655,7 +655,33 @@ tracks:
             "L1120",
             format!(
                 "{head}length_ticks: 9
+tracks:
+  transform: []
+"
+            ),
+        ),
+        (
+            "L1734",
+            format!(
+                "{head}length_ticks: 9
 holds_gameplay: true
+clock: game
+"
+            ),
+        ),
+        (
+            "L1735",
+            format!(
+                "{head}length_ticks: 9
+tracks:
+  dialogue:
+    - at: 4
+      line: hello
+      wait: line_end
+  event:
+    - at: 4
+      name: a
+      wait: release
 "
             ),
         ),
@@ -672,6 +698,339 @@ holds_gameplay: true
         .unwrap();
     assert!(ok.doc_validation_warnings().is_empty());
     let _ = &mut ok;
+}
+
+const STRINGS_WAIT: &str = "format: 1
+kind: strings
+locale: en
+strings:
+  speaker.operator: Operator
+  t.hello: Copy that.
+  t.short: Short.
+  t.long: A longer line.
+";
+
+const DIALOGUE_WAIT: &str = "format: 1
+kind: dialogue
+speakers:
+  operator:
+    name: speaker.operator
+    channel: radio
+lines:
+  hello:
+    speaker: operator
+    text: t.hello
+    duration_ticks: 100
+  short:
+    speaker: operator
+    text: t.short
+    duration_ticks: 20
+  long:
+    speaker: operator
+    text: t.long
+    duration_ticks: 35
+";
+
+fn wait_line(line: &str) -> String {
+    format!(
+        "format: 1
+kind: sequence
+length_ticks: 60
+tracks:
+  dialogue:
+    - at: 10
+      line: {line}
+      wait: line_end
+  event:
+    - at: 10
+      name: with_line
+    - at: 20
+      name: after_line
+"
+    )
+}
+
+const WAIT_RELEASE: &str = "format: 1
+kind: sequence
+length_ticks: 30
+tracks:
+  event:
+    - at: 5
+      name: door
+      wait: release
+    - at: 10
+      name: after
+";
+
+const HOLD: &str = "format: 1
+kind: sequence
+length_ticks: 10
+holds_gameplay: true
+tracks:
+  event:
+    - at: 3
+      name: held_event
+";
+
+const HOLD_WAIT: &str = "format: 1
+kind: sequence
+length_ticks: 60
+holds_gameplay: true
+tracks:
+  dialogue:
+    - at: 5
+      line: long
+      wait: line_end
+  event:
+    - at: 50
+      name: late
+";
+
+const WAIT_LONG: &str = "sequences/wait_long.yaml";
+const WAIT_SHORT: &str = "sequences/wait_short.yaml";
+const WAIT_REL: &str = "sequences/wait_release.yaml";
+const HOLD_KEY: &str = "sequences/hold.yaml";
+const HOLD_WAIT_KEY: &str = "sequences/hold_wait.yaml";
+
+/// The W1 game plus the hold and wait documents (a dialogue doc with a 20- and a 35-tick line).
+fn game_waits(name: &str) -> EngineBuilder {
+    Engine::builder()
+        .project_root(fresh_dir(name))
+        .dialogue(DialogueConfig::default())
+        .sequences()
+        .doc_text("strings/en.yaml", STRINGS_WAIT)
+        .doc_text("dialogue/main.yaml", DIALOGUE_WAIT)
+        .system("sequence_update", sequence_update)
+        .system("dialogue_update", dialogue_update)
+        .system("probe", probe)
+        .doc_text(BEAT, &beat("game"))
+        .doc_text(WAIT_SHORT, &wait_line("short"))
+        .doc_text(WAIT_LONG, &wait_line("long"))
+        .doc_text(WAIT_REL, WAIT_RELEASE)
+        .doc_text(HOLD_KEY, HOLD)
+        .doc_text(HOLD_WAIT_KEY, HOLD_WAIT)
+}
+
+fn boot_waits(name: &str) -> Beat {
+    scene(game_waits(name).build().expect("the docs are valid"))
+}
+
+fn play_bare(beat: &mut Beat, key: &str) -> SequenceHandle {
+    sequences::play(beat.engine.world_mut(), key, &[]).unwrap()
+}
+
+fn game_frames(beat: &Beat) -> Vec<u64> {
+    beat.engine
+        .world()
+        .resource::<GameFrames>()
+        .map(|frames| frames.0.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn wait_line_end_shifts_later_keys_by_the_line_length() {
+    let run = |key: &str, name: &str| {
+        let mut beat = boot_waits(name);
+        let handle = play_bare(&mut beat, key);
+        let run = ticks(&mut beat.engine, 120);
+        (
+            fired_tick(&run, handle, "with_line"),
+            fired_tick(&run, handle, "after_line").unwrap(),
+            ended_at(&run).unwrap(),
+        )
+    };
+    let (short_at, short_after, short_end) = run(WAIT_SHORT, "wait-short");
+    let (long_at, long_after, long_end) = run(WAIT_LONG, "wait-long");
+    assert_eq!(short_at, Some(10));
+    assert_eq!(
+        long_at,
+        Some(10),
+        "the key at the wait's own tick is not shifted"
+    );
+    assert_eq!(long_after - short_after, 15);
+    assert_eq!(short_end.1, SequenceEnd::Completed);
+    assert_eq!(long_end.1, SequenceEnd::Completed);
+    assert_eq!(long_end.0 - short_end.0, 15);
+    assert!(short_after > 20, "the wait delays the later key");
+}
+
+#[test]
+fn wait_release_holds_until_release_and_an_early_release_latches() {
+    let mut beat = boot_waits("wait-release");
+    let handle = play_bare(&mut beat, WAIT_REL);
+    let mut run = ticks(&mut beat.engine, 20);
+    assert_eq!(fired_tick(&run, handle, "door"), Some(5));
+    assert_eq!(
+        fired_tick(&run, handle, "after"),
+        None,
+        "parked on the wait"
+    );
+    assert!(sequences::is_playing(beat.engine.world(), handle));
+    assert!(sequences::release(beat.engine.world_mut(), handle));
+    run.extend(ticks(&mut beat.engine, 40));
+    assert_eq!(
+        fired_tick(&run, handle, "after"),
+        Some(25),
+        "resumes on the next clock frame, then runs the 5 ticks to the next key"
+    );
+    assert_eq!(ended_at(&run), Some((45, SequenceEnd::Completed)));
+    assert!(!sequences::release(beat.engine.world_mut(), handle));
+
+    // A release before the key is a latch: the wait never parks.
+    let mut early = boot_waits("wait-early");
+    let handle = play_bare(&mut early, WAIT_REL);
+    assert!(sequences::release(early.engine.world_mut(), handle));
+    let run = ticks(&mut early.engine, 40);
+    assert_eq!(fired_tick(&run, handle, "door"), Some(5));
+    assert_eq!(fired_tick(&run, handle, "after"), Some(10));
+    assert_eq!(ended_at(&run), Some((30, SequenceEnd::Completed)));
+}
+
+#[test]
+fn holds_gameplay_freezes_game_time_for_the_span() {
+    let mut beat = boot_waits("holds");
+    let hold = play_bare(&mut beat, HOLD_KEY);
+    let watched = play(&mut beat, BEAT);
+    let mut run = Vec::new();
+    let mut holding = Vec::new();
+    for _ in 0..30 {
+        run.extend(ticks(&mut beat.engine, 1));
+        holding.push(sequences::holding(beat.engine.world_mut()));
+    }
+    let end = ended_at(&run).expect("the holding beat ends").0;
+    assert_eq!(end, 10, "the sim clock counts its length");
+    assert_eq!(fired_tick(&run, hold, "held_event"), Some(3));
+    let frames = game_frames(&beat);
+    assert!(
+        frames[1..=end].iter().all(|f| *f == frames[1]),
+        "game frames stay constant through the span: {frames:?}"
+    );
+    let resumed = (end..frames.len())
+        .find(|&i| frames[i] > frames[i - 1])
+        .expect("gameplay resumes");
+    assert_eq!(
+        resumed,
+        end + 1,
+        "the last hold is issued on tick end-1; gameplay advances again on end+1: {frames:?}"
+    );
+    assert_eq!(frames[resumed], frames[1] + 1);
+    assert!(
+        run[..end]
+            .iter()
+            .flatten()
+            .all(|e| !matches!(e, SequenceEvent::KeyApplied { handle, at, .. } if *handle == watched && *at > 0)),
+        "a game-clock beat applies nothing during the span"
+    );
+    assert!(holding[..end - 1].iter().all(|h| *h), "holding while live");
+    assert!(holding[end..].iter().all(|h| !h), "not holding after");
+}
+
+#[test]
+fn skip_mid_wait_ends_skipped_and_releases_the_hold() {
+    let mut beat = boot_waits("skip-wait");
+    let handle = play_bare(&mut beat, HOLD_WAIT_KEY);
+    let mut run = ticks(&mut beat.engine, 12);
+    assert_eq!(fired_tick(&run, handle, "late"), None);
+    assert!(sequences::is_playing(beat.engine.world(), handle));
+    assert!(sequences::skip(beat.engine.world_mut(), handle));
+    run.extend(ticks(&mut beat.engine, 12));
+    assert_eq!(ended_at(&run), Some((12, SequenceEnd::Skipped)));
+    assert_eq!(
+        fired_tick(&run, handle, "late"),
+        Some(12),
+        "on_skip fires it"
+    );
+    let frames = game_frames(&beat);
+    assert!(
+        frames[1..=12].iter().all(|f| *f == frames[1]),
+        "held through the wait: {frames:?}"
+    );
+    assert_eq!(
+        frames[13],
+        frames[12] + 1,
+        "resumes one tick after the ending tick (the two-frame rule): {frames:?}"
+    );
+}
+
+#[test]
+fn skip_mid_wait_interrupts_the_waited_line() {
+    let mut beat = boot_waits("skip-line");
+    let handle = play_bare(&mut beat, HOLD_WAIT_KEY);
+    ticks(&mut beat.engine, 12);
+    sequences::skip(beat.engine.world_mut(), handle);
+    tick(&mut beat.engine);
+    assert!(dialogue_events(&beat.engine).iter().any(|e| matches!(
+        e,
+        DialogueEvent::Ended {
+            reason: ludion_engine::dialogue::EndReason::Interrupted,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn a_restore_mid_release_wait_and_mid_hold_resumes_identically() {
+    let record = |engine: &mut Engine, n: usize| -> (Vec<Vec<SequenceEvent>>, Vec<u64>) {
+        let mut stream = Vec::new();
+        let mut hashes = Vec::new();
+        for _ in 0..n {
+            stream.push(tick(engine));
+            hashes.push(engine.world_hash().unwrap().as_u64());
+        }
+        (stream, hashes)
+    };
+
+    // (a) parked on `wait: release`.
+    let mut beat = boot_waits("restore-wait");
+    let handle = play_bare(&mut beat, WAIT_REL);
+    ticks(&mut beat.engine, 8);
+    let snapshot = snapshot_of(&mut beat.engine);
+    assert!(sequences::release(beat.engine.world_mut(), handle));
+    let reference = record(&mut beat.engine, 40);
+    assert!(fired_tick(&reference.0, handle, "after").is_some());
+    restore(&mut beat.engine, snapshot);
+    assert!(sequences::release(beat.engine.world_mut(), handle));
+    assert_eq!(record(&mut beat.engine, 40), reference);
+
+    // (b) mid-span of a holding beat.
+    let mut beat = boot_waits("restore-hold");
+    play_bare(&mut beat, HOLD_KEY);
+    ticks(&mut beat.engine, 5);
+    let snapshot = snapshot_of(&mut beat.engine);
+    let before = game_frames(&beat).len();
+    let reference = record(&mut beat.engine, 20);
+    let reference_frames = game_frames(&beat)[before..].to_vec();
+    restore(&mut beat.engine, snapshot);
+    let before = game_frames(&beat).len();
+    assert_eq!(record(&mut beat.engine, 20), reference);
+    assert_eq!(game_frames(&beat)[before..], reference_frames[..]);
+}
+
+#[test]
+fn unused_hold_and_wait_documents_hash_like_no_opt_in() {
+    let quiet = |opted_in: bool| {
+        let builder = if opted_in {
+            game_waits("quiet-waits-in")
+        } else {
+            Engine::builder().project_root(fresh_dir("quiet-waits-out"))
+        };
+        let mut engine = builder.build().unwrap();
+        engine
+            .load_inline_scene("format: 1\nseed: 1\nentities: []\n")
+            .unwrap();
+        (0..10)
+            .map(|_| {
+                engine
+                    .execute(Command::SimStep(SimStepParams {
+                        ticks: 1,
+                        hash: false,
+                    }))
+                    .unwrap();
+                engine.world_hash().unwrap().as_u64()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(quiet(true), quiet(false));
 }
 
 #[test]

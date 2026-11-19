@@ -215,9 +215,15 @@ hit tests ignore it, and a group's opacity fades it with the text. A negative or
 
 `examples/gallery/ui-text-outline.yaml` shows each case over bright bands; `cargo run -p ludion --example font_text` builds one.
 
+## Rotation
+
+`rotation: <degrees>` on `UiRect`, `UiText` and `UiGroup` turns the element **clockwise on screen** (`0`, the default, draws as before; a non-finite value is `L1620`). The pivot is the centre of what the element draws: a rect's box (a nine-slice's nine pieces share one), a text run's glyph bounds, a group's box. A `UiTween` `rotation` track adds to the authored value. `UiList` and `UiRadial` have no field; rotate them through a group.
+
+Hit-test a rotated rect with `ludion::math::ui_point_in(&rect, viewport, cursor)`; `ui_rect_corners(&rect, viewport)` gives its drawn corners (top-left, top-right, bottom-right, bottom-left). Both are ungrouped and untweened; `ui_hit` answers for a grouped or animated element. `examples/gallery/ui-rotation.yaml` is the golden.
+
 ## Moving elements
 
-`UiTween` animates opacity, offset, scale, size and colour closed-form (`ludion docs ui-tweens`); `UiWorldAnchor` pins an element to a 3D target and clamps it to the screen edge (`ludion docs ui-world-anchor`). Both resolve in `extract`: nothing is written per tick. A textured rect can sample a sub-rect (`uv_rect`) or draw as a nine-slice frame (`slice`): `ludion docs ui-nine-slice`. A `UiGroup` is a box other elements anchor, scale, fade and hide inside (`group: <ref>`): `ludion docs ui-groups`.
+`UiTween` animates opacity, offset, scale, rotation, size and colour closed-form (`ludion docs ui-tweens`); `UiWorldAnchor` pins an element to a 3D target and clamps it to the screen edge (`ludion docs ui-world-anchor`). Both resolve in `extract`: nothing is written per tick. A textured rect can sample a sub-rect (`uv_rect`) or draw as a nine-slice frame (`slice`): `ludion docs ui-nine-slice`. A `UiGroup` is a box other elements anchor, scale, fade and hide inside (`group: <ref>`): `ludion docs ui-groups`.
 
 ## Next
 

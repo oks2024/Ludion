@@ -1,6 +1,6 @@
 # Plan: Sequencer — `kind: sequence`, keyed tracks, skip
 
-> **Wave 1 mechanized — the document, `sequences::play`, six tracks and skip ship; holds, transform spans and preview are laid out below.**
+> **Waves 1–2a mechanized — the document, `sequences::play`, six tracks, skip, `holds_gameplay` and `wait: line_end`/`release` ship; the per-entity clock domain (W2b), transform spans and preview are laid out below.**
 > Driven by Neon Shroud request 0025 (sequencer / timeline). Game-facing doc: `ludion docs sequences`.
 
 ## Design decisions
@@ -42,18 +42,42 @@
 10. **Events.** `SequenceEvents`, rewritten every run: `KeyApplied { handle, track, at }` (the W1 trace; a skip emits
     it for each end form), `Fired { handle, name }`, `Ended { handle, end }`, with `fired(handle, name)` and
     `ended(handle)`.
-11. **Later waves own their fields.** Waits, `holds_gameplay` with the per-entity clock domain, the transform track,
-    voices, music and duck keys, preview and wire are unknown fields today (`L1120`), never silently ignored.
+11. **Later waves own their fields.** The transform track, voices, music and duck keys, preview and wire are unknown
+    fields today (`L1120`), never silently ignored. Holds and waits shipped in W2a (decisions 13–18).
 12. **UI `start`.** A ui key's track `start` is a frame offset after the key applies, on the track's own clock
     (`real` → `ctx.frame`, `game` → `ctx.game_frame`).
+13. **`holds_gameplay: bool`** (default false) on `SequenceDoc`. While the player is live (Pending or Playing, waiting
+    included) `sequence_update` calls `GameClock::hold()` once at its end, except on the tick the player ends. It
+    implies `clock: sim`, since a held game clock would never advance the playhead; an explicit `clock: game` with it
+    is `L1734`. `SequenceDoc.clock` is an `Option`; `effective_clock()` resolves it.
+14. **Waits.** `DialogueKey.wait: line_end` and `EventKey.wait: release` (one-variant enums, so a wrong wait on a track
+    is a serde error). Two wait keys at the same `at`, across both tracks, are `L1735`: one pending wait per player.
+15. **Playhead with waits.** `playhead = now − started − waited`. A pending wait clears when its dialogue line no
+    longer exists (`DialogueLine.seq`) or when `released` is set (consumed); while it holds, nothing applies and the
+    player cannot complete, even at `at == length_ticks`. On clear, `waited = elapsed − wait.at` and later keys apply
+    from the next clock frame. The playhead is clamped to the earliest due wait key before any track applies. Keys at
+    the wait's own `at` in every track apply that tick. A refused `say` (`L4353`) sets no wait.
+16. **`sequences::release(world, handle) -> bool`**: `false` when not live; otherwise sets one latch (not a counter)
+    that clears the current `wait: release` or the next one reached, so an early release cannot stall the beat.
+17. **Skip and cancel ignore waits.** Skip still applies every end form and fires every `on_skip: fire` event; the hold
+    ends with the player.
+18. **`sequences::holding(world) -> bool`** mirrors `dialogue::holding`: a live `holds_gameplay` sequence is holding
+    the clock.
 
 ## Waves
 
 - **W1 (shipped):** the document and validator (`L1730`–`L1733`), `play`/`skip`/`cancel`/`is_playing`, `SequenceEvents`,
   camera, animation, ui, audio, dialogue and event tracks, clocks `game` and `sim`, `L4350`–`L4354`, the example and
   `ludion docs sequences`.
-- **W2 holds:** `holds_gameplay` and the engine-owned per-entity clock domain (`SequenceBound`), `wait: line_end` and
-  `wait: release`.
+- **W2a holds (shipped):** `holds_gameplay`, `wait: line_end`, `wait: release`, `sequences::release`/`holding`,
+  `L1734`/`L1735`.
+- **W2b per-entity clock domain:** `SequenceBound { player, bound_sim, bound_game }`, added and removed by the engine on
+  the bound roles and their hierarchy children. It gives a per-entity instant `bound_game + (sim_now − bound_sim)`
+  while bound. Every gameplay-time reader takes it: `extract.rs` closed forms, `parent_joint.rs`,
+  `animation_events.rs`, `blend_clock.rs`, `camera_rig.rs`, `path_follow.rs` and the sequence's own animation stamp.
+  At release the stamps each actor took during the hold (`Animation.started`, crossfades and layers, the rig blend
+  start) shift back by the lead, so nothing jumps. `docs/game-clock.md`'s "no per-component opt-out" line is amended
+  there (request amendment 2, still Proposed).
 - **W3:** the transform track (anchor pose and ease, `kind: path` spans), audio voices stopped on skip,
   `music_crossfade`, duck keys, the camera-zone override flag (with request 0010).
 - **W4:** built-in schedule placement, `ludion render --sequence --bind --at`, wire `sequence.play/seek/skip` (a
@@ -65,10 +89,15 @@
 
 ## Proposed — owner ruling owed
 
-- Request amendments 2 (a per-entity clock domain, W2) and 3 (waits are not a state machine).
+- Request amendments 2 (a per-entity clock domain, W2b) and 3 (waits are not a state machine).
+- `SequenceDoc.clock` becomes an `Option` (a public field type; no game uses sequences, grep of both game roots
+  2026-11-19), and `sequences::release` is a single latch taking a handle, not the request's `release(entity)`.
 - `skippable` defaults to `true`.
 - The API differs from the request (decision 4): free functions over `&mut World`, one entity per binding.
 
 ## Status
 
 - W1 mechanized: `crates/ludion-engine/src/sequences/`, `tests/sequences.rs`, `crates/ludion/examples/sequence.rs`.
+- W2a mechanized: `sequences/{docs,mod,update}.rs`, `tests/sequences.rs`, `L1734`/`L1735` in `codes.rs`,
+  `docs/sequences.md`, `docs/game-clock.md`, the example. Limit until W2b: a `holds_gameplay` beat freezes its bound
+  actors' animation and camera; only real-clock ui tracks, audio, dialogue and events advance.

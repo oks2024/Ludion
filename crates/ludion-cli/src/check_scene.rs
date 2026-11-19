@@ -252,6 +252,7 @@ pub fn run(
         Some(kind) if kind == "font" => run_font(reporter, &source),
         Some(kind) if kind == "character" => run_character(reporter, &source),
         Some(kind) if kind == "prefab" => run_prefab(reporter, &source),
+        Some(kind) if kind == "paired" => crate::paired_report::run(reporter),
         Some(other) => match ludion_scene::kind_entry(&other) {
             Some(entry) => match entry.check {
                 ludion_scene::KindCheck::Here(check) => {
@@ -1320,6 +1321,7 @@ enum IkRow<'a> {
         axis: [f64; 3],
         bend: f64,
         limits: Option<[f64; 2]>,
+        ground: bool,
     },
     LookAt {
         name: &'a str,
@@ -1336,7 +1338,10 @@ fn ik_row<'a>(
     match (&entry.kind, &resolved.kind) {
         (
             ludion_scene::IkKind::Chain {
-                parts, effector, ..
+                parts,
+                effector,
+                ground,
+                ..
             },
             ludion_engine::AssemblyIkKind::Chain {
                 axis, bend, limits, ..
@@ -1348,6 +1353,7 @@ fn ik_row<'a>(
             axis: *axis,
             bend: *bend,
             limits: *limits,
+            ground: *ground,
         }),
         (
             ludion_scene::IkKind::LookAt { aim, .. },
@@ -1376,14 +1382,21 @@ impl IkRow<'_> {
                 axis,
                 bend,
                 limits,
-            } => serde_json::json!({
-                "name": name,
-                "kind": "chain",
-                "parts": parts,
-                "effector": effector,
-                "hinge": { "axis": axis, "bend": bend },
-                "limits": limits,
-            }),
+                ground,
+            } => {
+                let mut row = serde_json::json!({
+                    "name": name,
+                    "kind": "chain",
+                    "parts": parts,
+                    "effector": effector,
+                    "hinge": { "axis": axis, "bend": bend },
+                    "limits": limits,
+                });
+                if *ground {
+                    row["ground"] = serde_json::Value::Bool(true);
+                }
+                row
+            }
             IkRow::LookAt {
                 name,
                 aim,
@@ -1409,11 +1422,13 @@ impl IkRow<'_> {
                 axis,
                 bend,
                 limits,
+                ground,
             } => {
                 let limits =
                     limits.map_or(String::new(), |[lo, hi]| format!(", limits [{lo}, {hi}]"));
+                let ground = if *ground { ", ground" } else { "" };
                 format!(
-                    "  ik {name}: chain {} -> {}, effector {}, hinge {} bend {}{limits}",
+                    "  ik {name}: chain {} -> {}, effector {}, hinge {} bend {}{limits}{ground}",
                     parts[0],
                     parts[1],
                     list(effector),
@@ -1568,6 +1583,10 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
     if !ik_rows.is_empty() {
         fields["ik"] = ik_rows.iter().map(IkRow::json).collect();
     }
+    if let Some(ground) = &assembly.ground {
+        fields["ground"] =
+            serde_json::json!({ "max_adjust": ground.max_adjust, "root_drop": ground.root_drop });
+    }
 
     if reporter.json {
         for warning in connectivity.into_iter().chain(overlap) {
@@ -1652,6 +1671,10 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
     }
     for row in &ik_rows {
         println!("{}", row.text());
+    }
+    if let Some(ground) = &assembly.ground {
+        let drop = if ground.root_drop { ", root_drop" } else { "" };
+        println!("  ground: max_adjust {}{drop}", ground.max_adjust);
     }
     if let Some(warning) = connectivity {
         diagnostic::print(&warning);

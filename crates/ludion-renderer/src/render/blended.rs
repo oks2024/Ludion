@@ -1,6 +1,7 @@
 //! The blended meshes' draw order and draws (`Plan/transparent-depth.md` decisions 5–7).
 
 use super::mesh_batch::{MeshInstanceRaw, instance_raw, is_mirrored};
+use super::rain::WetInput;
 use super::{
     CAMERA_GROUP, ENV_GROUP, FrameRecorder, LIGHTS_GROUP, MATERIAL_GROUP, MeshAssetGpu,
     MeshVariant, SUN_GROUP, ShaderId, init_buffer,
@@ -91,7 +92,7 @@ impl FrameRecorder<'_> {
             .as_ref()
             .expect("the mesh shader has lazy twins")
             .blend;
-        let (sun_bg, env_bg) = self.shading_groups(device, inputs, false);
+        let (sun_bg, env_bg) = self.shading_groups(device, inputs, false, WetInput::Mesh(None));
         rp.set_bind_group(CAMERA_GROUP, &self.camera_skin_bg, &[]);
         rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
         rp.set_bind_group(SUN_GROUP, &sun_bg, &[]);

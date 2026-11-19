@@ -7,8 +7,9 @@ use super::{
     premultiplied_blend, shader_gen, skin_bind_group,
 };
 use crate::graph::FrameSize;
-use crate::rain::{occlusion_view, rain_layout};
+use crate::rain::{RainData, occlusion_view, rain_layout};
 use crate::scene::RenderScene;
+use ludion_core::math::glam::Vec3;
 
 /// Group of the rain's own uniform.
 const RAIN_GROUP: u32 = shader_gen::RAIN_GROUP;
@@ -22,8 +23,48 @@ pub(super) struct RainDraw {
     instances: u32,
 }
 
+/// What the scene pass needs to wet its surfaces: the occlusion view, the authored wetness and the
+/// map's half extent. Present on every frame whose graph schedules the `rain_occlusion` map (the
+/// scene pass reads it last), even at `wetness: 0`.
+#[derive(Clone, Copy)]
+pub(super) struct WetFrame {
+    pub(super) view: [[f32; 4]; 4],
+    pub(super) wetness: f32,
+    pub(super) half_extent: f32,
+}
+
+/// The group-3 flavour a shading bind group is built for.
+#[derive(Clone, Copy)]
+pub(super) enum WetInput<'a> {
+    /// The lit decal pass's layout, which has no map slot.
+    Decal,
+    /// A mesh pipeline's layout: the `rain_occlusion` map and its frame, or none on a frame that is
+    /// dry (the fallback depth is bound and the shader's wet branch is never taken).
+    Mesh(Option<(&'a wgpu::TextureView, &'a WetFrame)>),
+}
+
+impl<'a> WetInput<'a> {
+    pub(super) fn frame(self) -> Option<(&'a wgpu::TextureView, &'a WetFrame)> {
+        match self {
+            WetInput::Mesh(frame) => frame,
+            WetInput::Decal => None,
+        }
+    }
+}
+
+impl WetFrame {
+    pub(super) fn new(rain: &RainData, camera: Vec3) -> Self {
+        Self {
+            view: occlusion_view(rain, camera).to_cols_array_2d(),
+            wetness: rain.wetness,
+            half_extent: rain.radius,
+        }
+    }
+}
+
 impl Renderer {
-    /// Uploads the scene's rain, or `None` when it has none or nothing to draw.
+    /// Uploads the scene's rain, or `None` when it has none or nothing to draw. A wet rain with no
+    /// streaks is still built: its occlusion pass must fill the map the surfaces read.
     pub(super) fn build_rain_draw(
         &self,
         scene: &RenderScene,
@@ -32,7 +73,7 @@ impl Renderer {
     ) -> Option<RainDraw> {
         let rain = scene.rain.as_ref()?;
         let layout = rain_layout(rain, scene.camera.position);
-        if layout.instances == 0 {
+        if layout.instances == 0 && rain.wetness <= 0.0 {
             return None;
         }
         let occlusion_view = occlusion_view(rain, scene.camera.position).to_cols_array_2d();

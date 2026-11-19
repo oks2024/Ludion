@@ -26,6 +26,17 @@ pub(crate) const MAX_GROUP_DEPTH: usize = 8;
 /// The most clipping groups that apply to one element (the innermost are kept).
 pub(crate) const MAX_CLIPS: usize = 2;
 
+/// `(cos, sin)` of a UI rotation in radians. Exactly 0 is `(1, 0)` with no trig, so an unrotated
+/// chain never reaches the libm.
+pub(crate) fn cos_sin(radians: f32) -> (f32, f32) {
+    if radians == 0.0 {
+        (1.0, 0.0)
+    } else {
+        let (sin, cos) = ludion_core::math::sin_cos(radians);
+        (cos, sin)
+    }
+}
+
 /// A resolved group: its box in layout pixels and the composition it gives every descendant.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GroupXf {
@@ -33,7 +44,10 @@ pub(crate) struct GroupXf {
     pub box_px: [f32; 4],
     /// The composed uniform scale of this group and every ancestor.
     pub scale: f32,
-    /// The composed translation: layout pixel `p` lands at `p * scale + offset`.
+    /// The composed clockwise rotation, radians, of this group and every ancestor.
+    pub rotation: f32,
+    /// The composed translation: layout pixel `p` lands at `S · R(rotation) · p + offset`, which is
+    /// `p * scale + offset` when `rotation` is 0.
     pub offset: [f32; 2],
     /// The product of this group's and every ancestor's opacity.
     pub opacity: f32,
@@ -160,6 +174,7 @@ fn compose(
     let outer = parent.unwrap_or(GroupXf {
         box_px,
         scale: 1.0,
+        rotation: 0.0,
         offset: [0.0, 0.0],
         opacity: 1.0,
         visible: true,
@@ -168,10 +183,32 @@ fn compose(
     });
     let scale = motion.scale;
     let composed_scale = outer.scale * scale;
-    let composed_offset = [
-        outer.scale * centre[0] * (1.0 - scale) + outer.offset[0],
-        outer.scale * centre[1] * (1.0 - scale) + outer.offset[1],
-    ];
+    let own_rotation = motion.rotation.to_radians();
+    let (composed_rotation, composed_offset) = if outer.rotation == 0.0 && own_rotation == 0.0 {
+        (
+            0.0,
+            [
+                outer.scale * centre[0] * (1.0 - scale) + outer.offset[0],
+                outer.scale * centre[1] * (1.0 - scale) + outer.offset[1],
+            ],
+        )
+    } else {
+        // `O = A_outer(centre) − S · R(Θ) · centre`, so the group turns about its own centre.
+        let (oc, os) = cos_sin(outer.rotation);
+        let outer_at = [
+            outer.scale * (oc * centre[0] - os * centre[1]) + outer.offset[0],
+            outer.scale * (os * centre[0] + oc * centre[1]) + outer.offset[1],
+        ];
+        let rotation = outer.rotation + own_rotation;
+        let (c, s) = cos_sin(rotation);
+        (
+            rotation,
+            [
+                outer_at[0] - composed_scale * (c * centre[0] - s * centre[1]),
+                outer_at[1] - composed_scale * (s * centre[0] + c * centre[1]),
+            ],
+        )
+    };
     let clip = compose_clip(
         frame,
         id,
@@ -179,12 +216,14 @@ fn compose(
         outer.clip,
         box_px,
         composed_scale,
+        composed_rotation,
         composed_offset,
         degraded,
     );
     GroupXf {
         box_px,
         scale: composed_scale,
+        rotation: composed_rotation,
         offset: composed_offset,
         opacity: outer.opacity * opacity,
         visible: outer.visible && visible,
@@ -203,25 +242,45 @@ fn compose_clip(
     inherited: UiClip,
     box_px: [f32; 4],
     scale: f32,
+    rotation: f32,
     offset: [f32; 2],
     degraded: &mut Vec<(String, Diagnostic)>,
 ) -> UiClip {
-    let rect = [
-        box_px[0] * scale + offset[0],
-        box_px[1] * scale + offset[1],
-        box_px[2] * scale,
-        box_px[3] * scale,
-    ];
+    let size = [box_px[2] * scale, box_px[3] * scale];
+    let rect = if rotation == 0.0 {
+        [
+            box_px[0] * scale + offset[0],
+            box_px[1] * scale + offset[1],
+            size[0],
+            size[1],
+        ]
+    } else {
+        // Decision 51: the box is centred on where the group maps its own centre, then turned.
+        let (c, s) = cos_sin(rotation);
+        let centre = [box_px[0] + box_px[2] * 0.5, box_px[1] + box_px[3] * 0.5];
+        let at = [
+            scale * (c * centre[0] - s * centre[1]) + offset[0],
+            scale * (s * centre[0] + c * centre[1]) + offset[1],
+        ];
+        [
+            at[0] - size[0] * 0.5,
+            at[1] - size[1] * 0.5,
+            size[0],
+            size[1],
+        ]
+    };
     let shorter = rect[2].min(rect[3]);
     let own = match group.clip {
         UiClipShape::None => return inherited,
         UiClipShape::Rect => UiClipBox {
             rect_px: rect,
             radius_px: 0.0,
+            radians: rotation,
         },
         UiClipShape::RoundedRect { corner_radius } => UiClipBox {
             rect_px: rect,
             radius_px: (corner_radius * pixel_scale(frame.viewport) * scale).min(shorter * 0.5),
+            radians: rotation,
         },
         UiClipShape::Circle => UiClipBox {
             rect_px: [
@@ -231,6 +290,7 @@ fn compose_clip(
                 shorter,
             ],
             radius_px: shorter * 0.5,
+            radians: rotation,
         },
     };
     if inherited.boxes[MAX_CLIPS - 1].is_some() {
@@ -260,10 +320,21 @@ pub(crate) fn clip_contains(clip: &UiClip, p: [f32; 2]) -> bool {
         .all(|b| rounded_box_sdf(p, b) < 0.0)
 }
 
-/// The signed distance from `p` to the rounded box, negative inside.
+/// The signed distance from `p` to the rounded box, negative inside. A rotated box evaluates `p` in
+/// its own frame (`R(−θ)` about its centre), as `ui_rect.wgsl`'s `box_point` does.
 pub(crate) fn rounded_box_sdf(p: [f32; 2], b: &UiClipBox) -> f32 {
     let [x, y, w, h] = b.rect_px;
     let half = [w * 0.5, h * 0.5];
+    let p = if b.radians == 0.0 {
+        p
+    } else {
+        let (c, s) = cos_sin(b.radians);
+        let d = [p[0] - (x + half[0]), p[1] - (y + half[1])];
+        [
+            x + half[0] + c * d[0] + s * d[1],
+            y + half[1] - s * d[0] + c * d[1],
+        ]
+    };
     let q = [
         (p[0] - (x + half[0])).abs() - half[0] + b.radius_px,
         (p[1] - (y + half[1])).abs() - half[1] + b.radius_px,
@@ -546,6 +617,119 @@ mod tests {
         assert!(resolve(&world, &mut groups, c).is_none());
     }
 
+    fn near(a: [f32; 2], b: [f32; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3
+    }
+
+    #[test]
+    fn nested_quarter_turns_compose_to_a_half_turn() {
+        let mut world = World::new();
+        let outer = spawn(
+            &mut world,
+            UiGroup {
+                size: [200.0, 100.0],
+                rotation: 90.0,
+                ..UiGroup::default()
+            },
+        );
+        let inner = spawn(
+            &mut world,
+            UiGroup {
+                anchor: Anchor::Center,
+                size: [100.0, 100.0],
+                rotation: 90.0,
+                group: Some(outer),
+                ..UiGroup::default()
+            },
+        );
+        let mut groups = UiGroups::default();
+        let o = resolve(&world, &mut groups, outer).unwrap();
+        // Turned about its centre (100, 50): O = c − R(90°)c = (100, 50) − (−50, 100).
+        assert!((o.rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert!(near(o.offset, [150.0, -50.0]));
+        let i = resolve(&world, &mut groups, inner).unwrap();
+        // The inner box is centred at (100, 50), which the outer turn maps to itself; R(180°)c = −c.
+        assert_eq!(i.box_px, [50.0, 0.0, 100.0, 100.0]);
+        assert!((i.rotation - std::f32::consts::PI).abs() < 1e-6);
+        assert!(near(i.offset, [200.0, 100.0]));
+    }
+
+    #[test]
+    fn an_unrotated_chain_composes_with_the_scale_only_formula_bit_for_bit() {
+        let mut world = World::new();
+        let outer = spawn(
+            &mut world,
+            UiGroup {
+                size: [400.0, 200.0],
+                scale: 0.7,
+                ..UiGroup::default()
+            },
+        );
+        let inner = spawn(
+            &mut world,
+            UiGroup {
+                anchor: Anchor::Center,
+                size: [100.0, 100.0],
+                scale: 1.3,
+                group: Some(outer),
+                ..UiGroup::default()
+            },
+        );
+        let mut groups = UiGroups::default();
+        let o = resolve(&world, &mut groups, outer).unwrap();
+        let i = resolve(&world, &mut groups, inner).unwrap();
+        assert_eq!((o.rotation.to_bits(), i.rotation.to_bits()), (0, 0));
+        let centre = [
+            i.box_px[0] + i.box_px[2] * 0.5,
+            i.box_px[1] + i.box_px[3] * 0.5,
+        ];
+        let want = [
+            o.scale * centre[0] * (1.0 - 1.3) + o.offset[0],
+            o.scale * centre[1] * (1.0 - 1.3) + o.offset[1],
+        ];
+        assert_eq!(i.scale.to_bits(), (o.scale * 1.3).to_bits());
+        assert_eq!(
+            i.offset.map(f32::to_bits),
+            want.map(f32::to_bits),
+            "the unrotated formula runs unchanged"
+        );
+    }
+
+    #[test]
+    fn a_rotated_groups_clip_is_centred_on_its_mapped_centre() {
+        let mut world = World::new();
+        let id = spawn(
+            &mut world,
+            UiGroup {
+                scale: 0.5,
+                rotation: 90.0,
+                ..clipping(UiClipShape::Rect, None)
+            },
+        );
+        let mut groups = UiGroups::default();
+        let xf = resolve(&world, &mut groups, id).unwrap();
+        let b = xf.clip.boxes[0].unwrap();
+        // A lone group turns about its own centre (100, 50), so the 200x100 box becomes 100x50 there.
+        assert!(near([b.rect_px[0], b.rect_px[1]], [50.0, 25.0]));
+        assert_eq!([b.rect_px[2], b.rect_px[3]], [100.0, 50.0]);
+        assert_eq!(b.radians, xf.rotation);
+        assert!((b.radians - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_rotated_box_is_evaluated_in_its_own_frame() {
+        let b = UiClipBox {
+            rect_px: [-50.0, -5.0, 100.0, 10.0],
+            radius_px: 0.0,
+            radians: std::f32::consts::FRAC_PI_4,
+        };
+        // (30, 30) is far above the flat box but on its long axis once the box is turned 45°.
+        assert!(rounded_box_sdf([30.0, 30.0], &b) < 0.0);
+        assert!(rounded_box_sdf([30.0, -30.0], &b) > 0.0);
+        let flat = UiClipBox { radians: 0.0, ..b };
+        assert!(rounded_box_sdf([30.0, 30.0], &flat) > 0.0);
+    }
+
     fn clipping(clip: UiClipShape, group: Option<EntityId>) -> UiGroup {
         UiGroup {
             size: [200.0, 100.0],
@@ -643,6 +827,7 @@ mod tests {
                 Some(UiClipBox {
                     rect_px: [10.0, 10.0, 20.0, 20.0],
                     radius_px: 0.0,
+                    radians: 0.0,
                 }),
                 None,
             ],
@@ -660,6 +845,7 @@ mod tests {
                 Some(UiClipBox {
                     rect_px: [0.0, 0.0, 100.0, 100.0],
                     radius_px: 50.0,
+                    radians: 0.0,
                 }),
                 None,
             ],

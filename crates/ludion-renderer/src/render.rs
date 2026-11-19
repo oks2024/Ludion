@@ -26,6 +26,7 @@ mod medium_pass;
 mod mesh_batch;
 mod mesh_pipeline;
 mod rain;
+use rain::WetInput;
 mod silhouette;
 mod static_batch;
 mod ui_text;
@@ -63,6 +64,7 @@ use crate::scene::{
     DebugSegment, DecalMaps, DropShadowInstance, FontDraw, GroundMarkerInstance, MapImage,
     MeshData, MeshShape, MeshTexture, MeshTextures, ParticleInstance, PostData, RenderScene,
     SpriteInstance, TextureImage, TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance,
+    UiRotation,
 };
 use crate::shader_reload::{
     ReloadTarget, build_ibl, build_mipgen, classify, pipeline_incompatible, validate_wgsl,
@@ -227,7 +229,8 @@ struct TextVertexRaw {
 /// One screen-space UI rect instance: a pixel-space rect `[x, y, w, h]` (top-left origin, +Y down),
 /// a linear RGBA tint, and the sampled UV sub-rect `[u0, v0, u1, v1]` (`[0, 0, 1, 1]` for a whole
 /// texture or an untextured fill, a packed region otherwise), then the packed clip (see
-/// [`ui_clip_raw`]). Matches `ui_rect.wgsl`'s `VsIn`.
+/// [`ui_clip_raw`]), the clip boxes' rotation (`clip_t`) and the instance's rotation
+/// (`[cos, sin, pivot_x, pivot_y]`, `[1, 0, 0, 0]` unrotated). Matches `ui_rect.wgsl`'s `VsIn`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct UiRectInstanceRaw {
@@ -237,16 +240,46 @@ struct UiRectInstanceRaw {
     clip_a: [f32; 4],
     clip_b: [f32; 4],
     clip_r: [f32; 4],
+    clip_t: [f32; 4],
+    rot: [f32; 4],
 }
 
-/// Packs a [`UiClip`] as `[clip_a, clip_b, clip_r]`: each box's `[x, y, w, h]`, then
-/// `[radius_a, radius_b, on_a, on_b]` with the flags exactly `0.0` or `1.0`.
-fn ui_clip_raw(clip: &UiClip) -> [[f32; 4]; 3] {
+/// `(cos, sin)` of a UI rotation. Exactly 0 radians is `(1, 0)` without trig, so an unrotated
+/// element packs the identity the shaders test for.
+fn ui_cos_sin(radians: f32) -> (f32, f32) {
+    if radians == 0.0 {
+        (1.0, 0.0)
+    } else {
+        let (sin, cos) = ludion_core::math::sin_cos(radians);
+        (cos, sin)
+    }
+}
+
+/// Packs a [`UiRotation`] as `[cos, sin, pivot_x, pivot_y]`; `[1, 0, 0, 0]` when unrotated.
+fn ui_rotation_raw(rotation: &UiRotation) -> [f32; 4] {
+    if rotation.radians == 0.0 {
+        return [1.0, 0.0, 0.0, 0.0];
+    }
+    let (cos, sin) = ui_cos_sin(rotation.radians);
+    [cos, sin, rotation.pivot_px[0], rotation.pivot_px[1]]
+}
+
+/// Packs a [`UiClip`] as `[clip_a, clip_b, clip_r, clip_t]`: each box's `[x, y, w, h]`, then
+/// `[radius_a, radius_b, on_a, on_b]` with the flags exactly `0.0` or `1.0`, then
+/// `[cos_a, sin_a, cos_b, sin_b]` of the boxes' rotation (`[1, 0, 1, 0]` unrotated).
+fn ui_clip_raw(clip: &UiClip) -> [[f32; 4]; 4] {
     let [a, b] = clip.boxes;
     let rect = |slot: Option<UiClipBox>| slot.map_or([0.0; 4], |b| b.rect_px);
     let radius = |slot: Option<UiClipBox>| slot.map_or(0.0, |b| b.radius_px);
     let on = |slot: Option<UiClipBox>| f32::from(slot.is_some());
-    [rect(a), rect(b), [radius(a), radius(b), on(a), on(b)]]
+    let cs = |slot: Option<UiClipBox>| ui_cos_sin(slot.map_or(0.0, |b| b.radians));
+    let ((ca, sa), (cb, sb)) = (cs(a), cs(b));
+    [
+        rect(a),
+        rect(b),
+        [radius(a), radius(b), on(a), on(b)],
+        [ca, sa, cb, sb],
+    ]
 }
 
 /// One physical GPU texture plus its default view.
@@ -2285,6 +2318,11 @@ impl Renderer {
         let sprite_draws = self.build_sprite_draws(scene, device, &textures);
         let particle_draw = self.build_particle_draw(scene, device);
         let rain_draw = self.build_rain_draw(scene, size, device);
+        let wet = chain
+            .rain
+            .then_some(scene.rain.as_ref())
+            .flatten()
+            .map(|rain| rain::WetFrame::new(rain, scene.camera.position));
         let text_draws = self.build_text_draws(scene, device, &textures);
         let ui_batches = self.build_ui_batches(scene, device, &textures, &view_targets);
 
@@ -2362,6 +2400,7 @@ impl Renderer {
             sprite_draws,
             particle_draw,
             rain_draw,
+            wet,
             text_draws,
             ui_batches,
         })
@@ -3023,12 +3062,13 @@ impl Renderer {
                         uv,
                         clip,
                         view,
+                        rotation,
                     }) = scene.ui.get(i)
                     {
                         if (*texture, *view) != source {
                             break;
                         }
-                        let [clip_a, clip_b, clip_r] = ui_clip_raw(clip);
+                        let [clip_a, clip_b, clip_r, clip_t] = ui_clip_raw(clip);
                         raws.push(UiRectInstanceRaw {
                             rect: *rect_px,
                             color: *color,
@@ -3036,6 +3076,8 @@ impl Renderer {
                             clip_a,
                             clip_b,
                             clip_r,
+                            clip_t,
+                            rot: ui_rotation_raw(rotation),
                         });
                         i += 1;
                     }
@@ -3084,6 +3126,7 @@ impl Renderer {
                         font,
                         clip,
                         outline,
+                        rotation,
                         ..
                     }) = scene.ui.get(i)
                     {
@@ -3096,6 +3139,7 @@ impl Renderer {
                             *color,
                             sdf,
                             clip,
+                            rotation,
                             outline.as_ref().map(|o| (o, spread_px, atlas_dims)),
                         );
                         i += 1;
@@ -3206,6 +3250,10 @@ impl Renderer {
     /// the three bounce volumes bound beside `gi.probes` (the 1×1×1 fallbacks on a frame that baked
     /// no bounce).
     ///
+    /// `wet` picks the layout: the mesh pipelines' carries the `rain_occlusion` map (the frame's wetness
+    /// on a rain frame's scene pass, else the 1×1 fallback depth and `wet = 0`, so the shader never reads
+    /// it); the lit decal pass's has no map slot.
+    ///
     /// `gi_dyn` is the graph's injected volume on a frame that ran the `gi_inject` pass and `None`
     /// otherwise — one `Option` rather than a view and a flag that could disagree. It resolves here
     /// to the renderer's 1×1×1 fallback plus a zero `gi_bounce.y`, a lane that was reserved and
@@ -3225,6 +3273,7 @@ impl Renderer {
         gi: &ResolvedGi,
         gi_dyn: Option<&wgpu::TextureView>,
         gi_strengths: GiStrengths,
+        wet: WetInput<'_>,
     ) -> wgpu::BindGroup {
         let mut params = env.params;
         params[3] = gi_strengths.sky_visibility;
@@ -3240,57 +3289,73 @@ impl Renderer {
                 0.0,
                 0.0,
             ],
+            wet_view: wet.frame().map_or([[0.0; 4]; 4], |(_, w)| w.view),
+            wet: wet
+                .frame()
+                .map_or([0.0; 4], |(_, w)| [w.wetness, 1.0, w.half_extent, 0.0]),
         };
         let params_buf = init_buffer(
             device,
             wgpu::BufferUsages::UNIFORM,
             bytemuck::bytes_of(&params),
         );
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: IRRADIANCE_TEX_BINDING,
+                resource: wgpu::BindingResource::TextureView(&env.irradiance),
+            },
+            wgpu::BindGroupEntry {
+                binding: shader_gen::ENV_BRDF_LUT_BINDING,
+                resource: wgpu::BindingResource::TextureView(&env.brdf),
+            },
+            wgpu::BindGroupEntry {
+                binding: ENV_SAMP_BINDING,
+                resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: ENV_BINDING,
+                resource: params_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: shader_gen::AO_TEX_BINDING,
+                resource: wgpu::BindingResource::TextureView(ao_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: shader_gen::GI_TEX_BINDING,
+                resource: wgpu::BindingResource::TextureView(&gi.probes),
+            },
+            wgpu::BindGroupEntry {
+                binding: shader_gen::GI_BOUNCE_R_BINDING,
+                resource: wgpu::BindingResource::TextureView(&gi.bounce[0]),
+            },
+            wgpu::BindGroupEntry {
+                binding: shader_gen::GI_BOUNCE_G_BINDING,
+                resource: wgpu::BindingResource::TextureView(&gi.bounce[1]),
+            },
+            wgpu::BindGroupEntry {
+                binding: shader_gen::GI_BOUNCE_B_BINDING,
+                resource: wgpu::BindingResource::TextureView(&gi.bounce[2]),
+            },
+            wgpu::BindGroupEntry {
+                binding: shader_gen::GI_DYN_TEX_BINDING,
+                resource: wgpu::BindingResource::TextureView(gi_dyn_view),
+            },
+        ];
+        if let WetInput::Mesh(frame) = wet {
+            entries.push(wgpu::BindGroupEntry {
+                binding: shader_gen::WET_MAP_BINDING,
+                resource: wgpu::BindingResource::TextureView(
+                    frame.map_or(&self.fallback_shadow.view, |(view, _)| view),
+                ),
+            });
+        }
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("env bind group"),
-            layout: self.layouts.get(LayoutId::Env),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: IRRADIANCE_TEX_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&env.irradiance),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::ENV_BRDF_LUT_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&env.brdf),
-                },
-                wgpu::BindGroupEntry {
-                    binding: ENV_SAMP_BINDING,
-                    resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: ENV_BINDING,
-                    resource: params_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::AO_TEX_BINDING,
-                    resource: wgpu::BindingResource::TextureView(ao_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::GI_TEX_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&gi.probes),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::GI_BOUNCE_R_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&gi.bounce[0]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::GI_BOUNCE_G_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&gi.bounce[1]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::GI_BOUNCE_B_BINDING,
-                    resource: wgpu::BindingResource::TextureView(&gi.bounce[2]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shader_gen::GI_DYN_TEX_BINDING,
-                    resource: wgpu::BindingResource::TextureView(gi_dyn_view),
-                },
-            ],
+            layout: self.layouts.get(match wet {
+                WetInput::Decal => LayoutId::Env,
+                WetInput::Mesh(_) => LayoutId::EnvWet,
+            }),
+            entries: &entries,
         })
     }
 
@@ -3995,6 +4060,9 @@ struct FrameRecorder<'a> {
     /// which case the scene pass binds no particle pipeline and issues no particle draw.
     particle_draw: Option<ParticleDraw>,
     rain_draw: Option<rain::RainDraw>,
+    /// The scene pass's wetness inputs, present when the graph schedules the `rain_occlusion` map
+    /// (its last read of the scene pass).
+    wet: Option<rain::WetFrame>,
     text_draws: Vec<TextDraw>,
     ui_batches: Vec<UiBatch>,
 }
@@ -4602,6 +4670,7 @@ impl FrameRecorder<'_> {
         device: &wgpu::Device,
         inputs: &[&wgpu::TextureView],
         ao: bool,
+        wet: WetInput<'_>,
     ) -> (wgpu::BindGroup, wgpu::BindGroup) {
         // The mesh group-2 sun bind group: the sun uniform + the shadow map + the comparison sampler.
         // On a frame that drew one the scene pass reads the graph's `shadow_map`;
@@ -4664,6 +4733,7 @@ impl FrameRecorder<'_> {
             &self.resolved_gi,
             gi_dyn,
             self.gi_strengths,
+            wet,
         );
         (sun_bg, env_bg)
     }
@@ -4742,7 +4812,18 @@ impl FrameRecorder<'_> {
             multiview_mask: None,
         });
 
-        let (sun_bg, env_bg) = self.shading_groups(pass.device, pass.inputs, self.has_ao);
+        // A rain frame's scene pass reads the occlusion map last, after the shading tail.
+        let (tail, wet) = match &self.wet {
+            Some(wet) => {
+                let (map, tail) = pass.inputs.split_last().expect(
+                    "a rain frame schedules the occlusion map as the scene pass's last read",
+                );
+                (tail, Some((*map, wet)))
+            }
+            None => (pass.inputs, None),
+        };
+        let wet = WetInput::Mesh(wet);
+        let (sun_bg, env_bg) = self.shading_groups(pass.device, tail, self.has_ao, wet);
 
         // Meshes.
         // A probe capture draws no viewmodel (`face_scene` drops the gun).
@@ -5540,7 +5621,12 @@ impl FrameRecorder<'_> {
         } else {
             &self.r.fallback_receivers.view
         };
-        let (sun_bg, env_bg) = self.shading_groups(pass.device, &pass.inputs[head..], self.has_ao);
+        let (sun_bg, env_bg) = self.shading_groups(
+            pass.device,
+            &pass.inputs[head..],
+            self.has_ao,
+            WetInput::Decal,
+        );
         let decal_buf = init_buffer(
             pass.device,
             wgpu::BufferUsages::STORAGE,
@@ -7379,6 +7465,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::GiProbe,
             Snippet::ViewRay,
             Snippet::Math,
+            Snippet::RainOcclusion,
             Snippet::MeshShading,
             Snippet::MeshMaterial,
         ],
@@ -7386,7 +7473,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Some(LayoutId::CameraSkin),
             Some(LayoutId::Lights),
             Some(LayoutId::Sun),
-            Some(LayoutId::Env),
+            Some(LayoutId::EnvWet),
             Some(LayoutId::MeshMaterial),
         ],
     },
@@ -7853,6 +7940,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Lights,
             Snippet::BillboardLight,
             Snippet::Quad,
+            Snippet::RainOcclusion,
         ],
         layouts: &[
             Some(LayoutId::Camera),
@@ -7993,11 +8081,14 @@ pub(crate) enum Snippet {
     /// `world_from_depth`, a pixel's world position from its stored device depth and the pass's
     /// `inv_view_proj`, binding-free (ssao, projector, dof_coc).
     WorldFromDepth,
+    /// `occluder_top`, the height of the nearest shadow caster over a world point in the overhead
+    /// rain-occlusion map, binding-free (rain, mesh).
+    RainOcclusion,
 }
 
 impl Snippet {
     /// Every snippet.
-    pub(crate) const ALL: [Snippet; 31] = [
+    pub(crate) const ALL: [Snippet; 32] = [
         Snippet::Camera,
         Snippet::ClusterGrid,
         Snippet::Probes,
@@ -8029,6 +8120,7 @@ impl Snippet {
         Snippet::Math,
         Snippet::SoftFalloff,
         Snippet::WorldFromDepth,
+        Snippet::RainOcclusion,
     ];
 
     /// The snippet's file name under `shaders/snippets/`; its reload key is `snippets/<file name>`.
@@ -8065,6 +8157,7 @@ impl Snippet {
             Snippet::Math => "math.wgsl",
             Snippet::SoftFalloff => "soft_falloff.wgsl",
             Snippet::WorldFromDepth => "world_from_depth.wgsl",
+            Snippet::RainOcclusion => "rain_occlusion.wgsl",
         }
     }
 
@@ -8104,6 +8197,7 @@ impl Snippet {
             Snippet::Math => include_str!("shaders/snippets/math.wgsl"),
             Snippet::SoftFalloff => include_str!("shaders/snippets/soft_falloff.wgsl"),
             Snippet::WorldFromDepth => include_str!("shaders/snippets/world_from_depth.wgsl"),
+            Snippet::RainOcclusion => include_str!("shaders/snippets/rain_occlusion.wgsl"),
         }
     }
 }
@@ -8192,10 +8286,13 @@ enum LayoutId {
     GroundMarkerProfiles,
     /// The rain pass's group 2: the lattice parameters.
     Rain,
+    /// The mesh pipelines' group 3: [`Env`](LayoutId::Env) plus the rain-occlusion map the wetness reads.
+    /// The lit decal pass keeps `Env`: it already fills the fragment stage's sampled-texture limit.
+    EnvWet,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 47;
+const LAYOUT_COUNT: usize = 48;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -8396,6 +8493,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::Rain,
         create: shader_gen::create_rain_rain_occlusion_bgl,
+    },
+    LayoutDesc {
+        id: LayoutId::EnvWet,
+        create: shader_gen::create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map_bgl,
     },
 ];
 
@@ -8814,9 +8915,9 @@ const PARTICLE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_ar
 /// Text per-vertex attributes (`TextVertexRaw`: position/uv/color/sdf), locations 0-3.
 const TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 4] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x4, 3 => Float32];
-/// UI-rect per-instance attributes (`UiRectInstanceRaw`: rect/color/uv-sub-rect/clip a, b, r),
-/// locations 0-5.
-const UI_RECT_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
+/// UI-rect per-instance attributes (`UiRectInstanceRaw`: rect/color/uv-sub-rect/clip a, b, r, t/rot),
+/// locations 0-7.
+const UI_RECT_INSTANCE_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4];
 /// Debug-line per-vertex attributes (`DebugLineVertexRaw`: position/color), locations 0-1.
 const DEBUG_LINE_VERTEX_ATTRS: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];

@@ -31,6 +31,10 @@ struct VsIn {
     @location(3) clip_a: vec4<f32>,
     @location(4) clip_b: vec4<f32>,
     @location(5) clip_r: vec4<f32>,
+    // The clip boxes' rotation: (cos_a, sin_a, cos_b, sin_b), (1, 0, 1, 0) when unrotated.
+    @location(6) clip_t: vec4<f32>,
+    // The instance's rotation: (cos, sin, pivot_x, pivot_y), (1, 0, 0, 0) when unrotated.
+    @location(7) rot: vec4<f32>,
 };
 
 struct VsOut {
@@ -40,20 +44,29 @@ struct VsOut {
     @location(2) @interpolate(flat) cl_a: vec4<f32>,
     @location(3) @interpolate(flat) cl_b: vec4<f32>,
     @location(4) @interpolate(flat) cl_r: vec4<f32>,
+    @location(5) @interpolate(flat) cl_t: vec4<f32>,
 };
 
 // Analytic UI clip: `a`/`b` are the two clip boxes `[x, y, w, h]` in pixels, `r` is
-// `(radius_a, radius_b, on_a, on_b)`. An absent box is a flag, never a sentinel box, and gives exactly
-// 1.0, so an unclipped fragment multiplies its alpha by 1.0 untouched.
+// `(radius_a, radius_b, on_a, on_b)`, `t` is `(cos_a, sin_a, cos_b, sin_b)`. An absent box is a flag,
+// never a sentinel box, and gives exactly 1.0, so an unclipped fragment multiplies its alpha by 1.0
+// untouched. A rotated box is evaluated in its own frame; an unrotated one skips the mapping.
 fn rounded_box_sdf(p: vec2<f32>, rect: vec4<f32>, radius: f32) -> f32 {
     let half = rect.zw * 0.5;
     let q = abs(p - (rect.xy + half)) - half + vec2<f32>(radius);
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
 
-fn clip_cov(p: vec2<f32>, a: vec4<f32>, b: vec4<f32>, r: vec4<f32>) -> f32 {
-    let cov_a = clamp(0.5 - rounded_box_sdf(p, a, r.x), 0.0, 1.0);
-    let cov_b = clamp(0.5 - rounded_box_sdf(p, b, r.y), 0.0, 1.0);
+fn box_point(p: vec2<f32>, rect: vec4<f32>, cs: vec2<f32>) -> vec2<f32> {
+    let c = rect.xy + rect.zw * 0.5;
+    let d = p - c;
+    let q = c + vec2<f32>(cs.x * d.x + cs.y * d.y, -cs.y * d.x + cs.x * d.y);
+    return select(p, q, cs.x != 1.0 || cs.y != 0.0);
+}
+
+fn clip_cov(p: vec2<f32>, a: vec4<f32>, b: vec4<f32>, r: vec4<f32>, t: vec4<f32>) -> f32 {
+    let cov_a = clamp(0.5 - rounded_box_sdf(box_point(p, a, t.xy), a, r.x), 0.0, 1.0);
+    let cov_b = clamp(0.5 - rounded_box_sdf(box_point(p, b, t.zw), b, r.y), 0.0, 1.0);
     return min(select(1.0, cov_a, r.z > 0.5), select(1.0, cov_b, r.w > 0.5));
 }
 
@@ -66,7 +79,11 @@ const CORNERS = array<vec2<f32>, 6>(
 @vertex
 fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
     let corner = CORNERS[vi];
-    let px = in.rect.xy + corner * in.rect.zw;
+    var px = in.rect.xy + corner * in.rect.zw;
+    // Rotate about the pivot only when the instance is rotated, so an unrotated vertex is untouched.
+    let d = px - in.rot.zw;
+    let rotated = in.rot.zw + vec2<f32>(in.rot.x * d.x - in.rot.y * d.y, in.rot.y * d.x + in.rot.x * d.y);
+    px = select(px, rotated, in.rot.x != 1.0 || in.rot.y != 0.0);
     let ndc = vec2<f32>(
         px.x / ui.viewport.x * 2.0 - 1.0,
         1.0 - px.y / ui.viewport.y * 2.0,
@@ -80,6 +97,7 @@ fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
     out.cl_a = in.clip_a;
     out.cl_b = in.clip_b;
     out.cl_r = in.clip_r;
+    out.cl_t = in.clip_t;
     return out;
 }
 
@@ -87,7 +105,7 @@ fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let texel = textureSample(rect_tex, rect_sampler, in.uv);
     // The clip coverage multiplies the tint's alpha; an unclipped instance multiplies by exactly 1.0.
-    let a = in.color.a * clip_cov(in.clip.xy, in.cl_a, in.cl_b, in.cl_r);
+    let a = in.color.a * clip_cov(in.clip.xy, in.cl_a, in.cl_b, in.cl_r, in.cl_t);
     // The texel is premultiplied, so the tint's own alpha scales its colour as well as its coverage.
     return vec4<f32>(texel.rgb * in.color.rgb * a, texel.a * a);
 }

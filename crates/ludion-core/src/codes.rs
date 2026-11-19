@@ -646,6 +646,11 @@ pub mod code {
     /// `L1733` — a sequence `dialogue` key names a line no loaded `kind: dialogue` doc defines, or
     /// the game did not opt in with `.dialogue()`.
     pub const SEQUENCE_UNKNOWN_LINE: DiagnosticCode = DiagnosticCode::new("L1733");
+    /// `L1734` — a sequence sets `holds_gameplay: true` with `clock: game`; a held game clock would
+    /// never advance it.
+    pub const SEQUENCE_HOLD_CLOCK: DiagnosticCode = DiagnosticCode::new("L1734");
+    /// `L1735` — two sequence `wait` keys share one `at`.
+    pub const SEQUENCE_WAIT_CONFLICT: DiagnosticCode = DiagnosticCode::new("L1735");
     /// `L4340` — the settings file could not be loaded, so the engine backed it up and started from
     /// defaults.
     pub const SETTINGS_RESET: DiagnosticCode = DiagnosticCode::new("L4340");
@@ -1275,6 +1280,21 @@ pub mod code {
     /// holds a non-finite element, or a `rotation` has a squared length under 1e-12. The JSON
     /// Pointer names the part's field.
     pub const POSE_SNAPSHOT_INVALID: DiagnosticCode = DiagnosticCode::new("L1751");
+
+    /// `L1752` — a `kind: paired` document is structurally invalid: a missing or wrong-typed key,
+    /// an unknown key, or a role, offset, event or contact of the wrong shape.
+    pub const PAIRED_DOCUMENT_STRUCTURE: DiagnosticCode = DiagnosticCode::new("L1752");
+
+    /// `L1753` — a well-shaped `kind: paired` document breaks a data rule inside the file: an
+    /// unknown role reference, a missing offset, events out of order, a bad contact.
+    pub const PAIRED_DATA_CONSISTENCY: DiagnosticCode = DiagnosticCode::new("L1753");
+
+    /// `L1754` — a `kind: paired` document disagrees with its role assemblies: one does not load, a
+    /// clip or contact part is unknown, or an event lies past a clip's duration.
+    pub const PAIRED_ROLE_MISMATCH: DiagnosticCode = DiagnosticCode::new("L1754");
+
+    /// `L1755` — warning: a paired contact's measured gap exceeds its `max_gap`.
+    pub const PAIRED_CONTACT_GAP: DiagnosticCode = DiagnosticCode::new("L1755");
 
     /// `L1189` — a `Collider` whose shape is a `compound` is structurally invalid: `parts` is
     /// missing or empty, a part's `shape` is a `compound`, `heightfield`, `circle` or `aabb`, or a
@@ -2000,6 +2020,8 @@ pub mod code {
     pub const UI_TEXT_OUTLINE_INVALID: DiagnosticCode = DiagnosticCode::new("L1618");
     /// `L1619` — a `UiRadial` has a non-finite number, a bad radius, gap, deadzone, hysteresis or size, or more than 16 items.
     pub const UI_RADIAL_INVALID: DiagnosticCode = DiagnosticCode::new("L1619");
+    /// `L1620` — a `UiRect`, `UiText` or `UiGroup` `rotation` is not finite.
+    pub const UI_ROTATION_INVALID: DiagnosticCode = DiagnosticCode::new("L1620");
     /// `L2302` — a UI element's `group` could not be resolved; drawn ungrouped.
     pub const UI_GROUP_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L2302");
     /// `L2303` — more than two clipping groups in a UI element's chain; the outer ones are dropped.
@@ -7487,6 +7509,59 @@ translation numbers:
         translation: [0.0, 0.0, 0.0]",
     },
     CodeEntry {
+        code: code::PAIRED_DOCUMENT_STRUCTURE,
+        severity: Severity::Error,
+        title: "a paired document is malformed",
+        explanation: "\
+A `kind: paired` document is structurally invalid: an empty or non-mapping root, a missing `format`, `kind`,
+`name`, `roles` or `align`, an unknown key (the message names the nearest valid one), or a role, offset,
+event, contact or number of the wrong shape. The pointer names the spot, such as `/roles/target/clip`.
+Data rules (an unknown reference role, an event out of order) are the separate `L1753`.
+
+Fix: a paired document is `format: 1`, `kind: paired`, a `name`, two or more `roles` and an `align` block;
+see `ludion docs paired-actions`.",
+    },
+    CodeEntry {
+        code: code::PAIRED_DATA_CONSISTENCY,
+        severity: Severity::Error,
+        title: "a paired document is inconsistent",
+        explanation: "\
+A well-shaped `kind: paired` document breaks a data rule inside the file: fewer than 2 roles, an
+`align.reference` or `align.moves` that names no role (the message names the nearest), an offset for an
+unknown role, for the reference, or missing for a non-reference role, `ticks: 0`, a number that is not
+finite or is beyond the f32 range, a `scale` of 0 or less, a role with both or neither of `clip` and
+`align_only`, an empty name, an event with a negative `t`, out of order or repeated, or a contact that is
+not `role/part`, names an unknown role, has both sides on one role, names an unknown event in `at`, or has
+a negative `max_gap`. The pointer names the field.
+
+Fix: correct the named field; see `ludion docs paired-actions`.",
+    },
+    CodeEntry {
+        code: code::PAIRED_ROLE_MISMATCH,
+        severity: Severity::Error,
+        title: "a paired document does not match its role assemblies",
+        explanation: "\
+A `kind: paired` document is consistent on its own but disagrees with the assemblies its roles name: a
+role's `assembly` does not load, a `clip` is not one of that assembly's clips (the message names the
+nearest), an event `t` is past a role clip's duration, or a contact names a part the role's assembly lacks.
+The pointer names the field, such as `/roles/target/clip` or `/contacts/0/b`.
+
+Fix: use a clip and part name the assembly has, or shorten the events to fit the clip; see
+`ludion docs paired-actions`.",
+    },
+    CodeEntry {
+        code: code::PAIRED_CONTACT_GAP,
+        severity: Severity::Warning,
+        title: "a paired contact is farther apart than allowed",
+        explanation: "\
+`ludion check-scene` posed both roles at a contact's event time and measured a gap between the two named
+parts that exceeds the contact's `max_gap`. The pointer is `/contacts/<index>`. The gap is in the first
+role's cells; a role's `scale` converts the metre offsets to cells, so a wrong `scale` shows up here.
+
+Fix: move the target's `align.offsets` entry closer, change the event time, or raise `max_gap`; see
+`ludion docs paired-actions`.",
+    },
+    CodeEntry {
         code: code::COLLIDER_COMPOUND_INVALID,
         severity: Severity::Error,
         title: "compound collider is structurally invalid",
@@ -10128,6 +10203,16 @@ above it; a `gap_deg` or `hysteresis_deg` outside `[0, 360 / items)`; a `deadzon
 
 Fix: give the radii `0 <= radius_inner < radius_outer`, keep `gap_deg` and `hysteresis_deg` under one
 sector's span, `deadzone` below 1, and at most 16 items (the game builds items from what it owns).",
+    },
+    CodeEntry {
+        code: code::UI_ROTATION_INVALID,
+        severity: Severity::Error,
+        title: "a UI rotation is invalid",
+        explanation: "\
+A `UiRect`, `UiText` or `UiGroup` has a `rotation` that is not finite (pointer
+`/entities/{i}/components/{Component}/rotation`). A scene with one is refused.
+
+Fix: give `rotation` a finite value in degrees (positive is clockwise on screen; 0 draws unrotated).",
     },
     CodeEntry {
         code: code::UI_GROUP_UNRESOLVED,
@@ -13553,6 +13638,26 @@ Fix: check the id against the `lines:` of your dialogue docs, and add `.dialogue
 engine builder.",
     },
     CodeEntry {
+        code: code::SEQUENCE_HOLD_CLOCK,
+        severity: Severity::Error,
+        title: "a holding sequence uses the game clock",
+        explanation: "\
+A sequence sets `holds_gameplay: true` with `clock: game`. A held game clock never advances, so the
+sequence's playhead would stall for as long as it holds.
+
+Fix: drop `clock:` (a holding sequence runs on the sim clock) or write `clock: sim`.",
+    },
+    CodeEntry {
+        code: code::SEQUENCE_WAIT_CONFLICT,
+        severity: Severity::Error,
+        title: "two sequence wait keys share one tick",
+        explanation: "\
+Two `wait` keys, on the dialogue and event tracks together, sit at the same `at`. A player holds at
+most one wait at a time.
+
+Fix: move one wait key to a different `at`, or drop one of the two.",
+    },
+    CodeEntry {
         code: code::SEQUENCE_UNKNOWN,
         severity: Severity::Error,
         title: "no such sequence is loaded",
@@ -13988,6 +14093,10 @@ mod tests {
         code::JOINT_MOTOR_INVALID,
         code::JOINT_ZERO_INVALID,
         code::POSE_SNAPSHOT_INVALID,
+        code::PAIRED_DOCUMENT_STRUCTURE,
+        code::PAIRED_DATA_CONSISTENCY,
+        code::PAIRED_ROLE_MISMATCH,
+        code::PAIRED_CONTACT_GAP,
         code::COLLIDER_COMPOUND_INVALID,
         code::MESH_SKIN_STRUCTURE,
         code::MESH_SKIN_DATA,
@@ -14175,6 +14284,7 @@ mod tests {
         code::UI_GROUP_IGNORED,
         code::UI_TEXT_OUTLINE_INVALID,
         code::UI_RADIAL_INVALID,
+        code::UI_ROTATION_INVALID,
         code::UI_GROUP_UNRESOLVED,
         code::UI_CLIP_NESTING,
         code::UI_TEXT_OUTLINE_CLAMPED,
@@ -14381,6 +14491,8 @@ mod tests {
         code::SEQUENCE_UNKNOWN_ROLE,
         code::SEQUENCE_EVENT_NAME,
         code::SEQUENCE_UNKNOWN_LINE,
+        code::SEQUENCE_HOLD_CLOCK,
+        code::SEQUENCE_WAIT_CONFLICT,
         code::SEQUENCE_UNKNOWN,
         code::SEQUENCE_BIND_INVALID,
         code::SEQUENCE_ROLE_MISSING,
@@ -14531,6 +14643,7 @@ mod tests {
             code::AI_GROUP_MISSING,
             code::AI_SEND_NO_MIND,
             code::AI_STATE_NOT_LISTED,
+            code::PAIRED_CONTACT_GAP,
             code::IMPORT_SKIN_UNWEIGHTED,
             code::IMPORT_EXTENSION_IGNORED,
             code::PLACEMENT_FLOATING,

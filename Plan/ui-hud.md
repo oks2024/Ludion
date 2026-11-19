@@ -1,6 +1,8 @@
 # Plan: HUD motion and shapes — tweens, world anchors, rotation, clipping (Neon Shroud request 0020)
 
-> Status: **Waves 1, 2, 4a, 4b, 5a, 6a mechanized (2026-11-18)** — W6a: `UiRadial` (decisions 37–44, `L1619`,
+> Status: **Waves 1, 2, 3a, 4a, 4b, 5a, 6a mechanized (2026-11-19)** — W3a: `rotation` on `UiRect`/`UiText`/`UiGroup`
+> (decisions 45–52, `L1620`, `UiTweenField::Rotation`, `ui_rect_corners`/`ui_point_in`, rotated clip and hit; the `ui-rotation`
+> golden is blessed on the RTX 3090, the macOS golden is owed on the M4); W6a: `UiRadial` (decisions 37–44, `L1619`,
 > `radial_layout`/`radial_hit`, `docs/ui-radial.md`; labels and icons only, wedges are W6b); W5a: `outline` on `UiText`/`UiList` (decisions 31–36,
 > `L1618`, `L2304`, `ui_text.wgsl`; the `ui-text-outline` golden is blessed on the RTX 3090, the macOS golden is owed on the M4);
 > `UiGroup` (`group`, `fill_group`; scale, opacity,
@@ -11,7 +13,7 @@
 > `UiTween` and `UiWorldAnchor`, resolved in `extract`
 > (`ui/hud.rs`; the component and schema snapshots moved once, no golden, replay or protocol hash);
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
-> component schema snapshot moved). Waves 3, 5b and 6–7 are recorded below and not started. Owed: the
+> component schema snapshot moved). Waves 3b, 3c, 5b and 6b–7 are recorded below and not started. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
 > marker (jitter under `present_interpolation`, decision 8).
 
@@ -206,6 +208,32 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 44. **Hash:** `navigate` writes only `selected` and `pointer`, only on change; an idle wheel is bit-identical, and a
     world without `UiRadial` extracts and hashes as before.
 
+45. **Field.** `rotation: f32` on `UiRect`, `UiText`, `UiGroup`: degrees, skipped when zero. Positive is clockwise on the
+    +Y-down canvas: `R(θ) = [[c, −s], [s, c]]` applied to `(x, y)`, `θ = deg.to_radians()`. A non-finite value is
+    `L1620` at `/rotation`. `UiList` and `UiRadial` take no `rotation`; they rotate only through a group.
+46. **Pivot.** An element rotates about the centre of the bounds of its emitted instances (`hud::bounds`, the pivot
+    `scale` uses), after its tween scale and world-anchor translation. A nine-slice's nine pieces share it. Text pivots
+    on the glyph quads' bounds. A group rotates about the centre of its `box_px`.
+47. **Tween.** `UiTweenField::Rotation` (arity 1, degrees) is added to the authored rotation, like `offset`. Supported on
+    `UiRect`, `UiText`, `UiGroup`; on a list or radial it is `L2300`.
+48. **Renderer data.** `ludion_renderer::UiRotation { radians, pivot_px }` (`NONE` = zero) on both `UiInstance` variants.
+    Geometry stays axis-aligned; the drawn point is `pivot + R(radians)(p − pivot)`. Rects rotate in the `ui_rect.wgsl`
+    vertex stage, text on the CPU in `push_ui_text_verts`, both only when `radians != 0`, so an unrotated vertex is
+    bit-identical. `UiClipBox` gains `radians` (about its own centre); the fragment SDF evaluates in the box frame
+    behind the same flag.
+49. **Group composition.** `GroupXf` is a similarity `p' = S·R(Θ)·p + O`. Composing group `g` (scale `s`, rotation `θ`,
+    centre `c`) under parent `A_p`: `S = S_p·s`, `Θ = Θ_p + θ`, `O = A_p(c) − S·R(Θ)·c`. When `Θ_p` and `θ` are both
+    exactly 0 the pre-rotation formula runs unchanged (the general one is not bit-equal; `ui-groups` depends on it).
+50. **Applying a rotated group to an instance.** With `P` the instance's pivot if rotated, else its bounds centre:
+    `P' = A(P)`, every point maps `x' = P' + S·(x − P)`, `radians += Θ`, `pivot = P'`. When `Θ == 0` the existing
+    path runs unchanged.
+51. **Clip box under rotation.** When `Θ != 0` the clip box is centred on `A(centre(box_px))`, sized `[w·S, h·S]`, with
+    `radians = Θ`; radius and circle rules (decision 26) are unchanged. When `Θ == 0` the existing formula runs.
+52. **Hit tests.** `ui_hit` inverse-rotates the cursor about the instance's pivot before the half-open bounds test; the
+    clip test uses the rotated SDF twin. `ui_rect_corners(&UiRect, viewport)` (TL, TR, BR, BL) and
+    `ui_point_in(&UiRect, viewport, cursor)` are ungrouped and untweened. All trig goes through
+    `ludion_core::math::sin_cos`, and a rotation of exactly 0 takes no trig.
+
 ## Waves
 
 - **W1 — `UiTween`, `UiWorldAnchor`, resolved in extract.** CPU-only; the pass lives in
@@ -215,8 +243,11 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 - **W2 — `uv_rect` and nine-slice.** CPU-only: extract emits nine ordinary `UiInstance::Rect`s in place of
   one (`ui/hud.rs::emit_rect`); no renderer change. Docs `ui-nine-slice`; example `ui_nine_slice`. A rect
   without the fields extracts byte-identically.
-- **W3 — rotation and `UiShape`.** Needs the renderer: a new instance and `ui_shape.wgsl`; waits for
-  the renderer lock of the extract wedge.
+- **W3a — rotation** (decisions 45–52): `rotation` on `UiRect`/`UiText`/`UiGroup`, the rotated clip, hit agreement,
+  `ui_rect_corners`/`ui_point_in`; the `ui-rotation` golden. Unrotated UI renders byte-identically.
+- **W3b — `UiShape` analytic kinds** `line circle ring arc wedge rounded_rect`, fill and stroke, `UiInstance::Shape`,
+  `ui_shape.wgsl`, `ui_shape_hit`, the `ui-shapes` golden.
+- **W3c — polygon** by ear clipping with a feathered fringe and a degenerate warning, polyline joins, dashes.
 - **W4a — `UiGroup`:** origin, scale, opacity and visibility, CPU only (decisions 18-24;
   `ui/group.rs`, `hud.rs::post`). Docs `ui-groups`; example `ui_groups`. An element without `group`
   extracts byte-identically.
@@ -225,12 +256,12 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
   and the clip.
 - **W5a — text outline** (decisions 31–36): SDF from the field, bitmap by in-shader dilation; `ui-text-outline` golden.
 - **W5b — text shadow.**
-- Order, proposed: W6a → W3 → W6b.
+- Order, proposed: W6a → W3a → W3b → W6b.
 - **W6a — `UiRadial`, `UiRadialNav`, `radial_layout`/`radial_hit`** (decisions 37–44): CPU only, no renderer change;
   item text, detail and icons through the existing UI instances; the 1/2/8-thread replay and the snapshot test
   (`tests/ui_radial.rs`); `L1619`; docs `ui-radial`; example `ui_radial`. Only the component schema snapshot moved.
-- **W6b — wedge fills and strokes** on W3's shape pipeline, after W3: `fill`, `selected_fill`, `stroke` fields and the
-  `ui-radial` gallery golden. A rotated wheel is a rotated `UiGroup` (W3).
+- **W6b — wedge fills and strokes** on W3b's shape pipeline, after W3b: `fill`, `selected_fill`, `stroke` fields and the
+  `ui-radial` gallery golden. A rotated wheel is a rotated `UiGroup` (W3a).
 - **W7 — anchor blend keys under interpolation, `rotate_toward`, `distance.scale`, `camera`.**
 
 ## Proposed — owner ruling owed
@@ -244,12 +275,16 @@ W6a: the clock-angle convention, the clockwise boundary rule, the gap ignored by
 the pointer reset on close, the 16-item cap and allowing one item, the first step from none landing on the first enabled item,
 a delta aim read +y down, the icon placement and the `icon_size` and `detail` sizes (fields the request does not name), icons tinted
 by the item colour, the W6a → W3 → W6b order.
-Request differences: no rotation or polygon in `ui-groups` (W3); `ui_hit` does not return list items; W6a draws no wedge or stroke (W6b)
+W3a: the clockwise-degrees convention (shared with decision 38), the centre pivot (request open question 2), the text pivot at
+the glyph-bounds centre rather than the measured block, the additive rotation tween, no `rotation` field on `UiList`/`UiRadial`,
+the W3a/W3b/W3c split. W3a request differences: `UiShape` and its rotation are W3b, the tween adds to the authored rotation,
+there is no rotation field on lists.
+Request differences: no polygon in `ui-groups` (W3c); `ui_hit` does not return list items; W6a draws no wedge or stroke (W6b)
 and adds `icon_size`, `selected_color`, `visible` and `outline`.
 
 ## Out of scope (triggers recorded)
 
-`UiShape`, rotation, nine-slice edge tiling (trigger: frame art that visibly breaks
+`UiShape` (W3b/W3c), rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
 when stretched), slicing `UiList`/`UiText`, text shadow (W5b), `UiRadial` wedge and stroke drawing (W6b), sub-wheels, item-level `ui_hit`,
 anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see

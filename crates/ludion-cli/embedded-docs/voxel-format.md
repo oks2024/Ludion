@@ -213,6 +213,8 @@ are **not** connected.
   Material is different: `Mesh.roughness`/`metallic`/`emissive` are inert on a voxel model the moment
   any one palette entry authors any material field — color always tints, material never blends across
   the two surfaces.
+- **Rain wets every palette.** Under a `Rain` (`ludion docs weather`) a voxel model's exposed faces darken
+  and gloss with a porosity of 0.5, whatever the palette authors; there is no porosity field yet.
 
 ## Gotchas
 

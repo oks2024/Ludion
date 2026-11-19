@@ -774,17 +774,44 @@ fn test_quads(text: &str, cell: f32) -> Vec<ludion_font::GlyphQuad> {
 /// An absent clip packs both on-flags as exactly 0.0, a present box sets only its own flag.
 #[test]
 fn ui_clip_raw_flags_follow_the_boxes() {
-    let [_, _, r] = ui_clip_raw(&UiClip::NONE);
+    let [_, _, r, t] = ui_clip_raw(&UiClip::NONE);
     assert_eq!((r[2], r[3]), (0.0, 0.0));
+    assert_eq!(t, [1.0, 0.0, 1.0, 0.0]);
     let one = UiClipBox {
         rect_px: [1.0, 2.0, 3.0, 4.0],
         radius_px: 1.5,
+        radians: 0.0,
     };
-    let [a, b, r] = ui_clip_raw(&UiClip {
+    let [a, b, r, _] = ui_clip_raw(&UiClip {
         boxes: [Some(one), None],
     });
     assert_eq!((a, b), ([1.0, 2.0, 3.0, 4.0], [0.0; 4]));
     assert_eq!(r, [1.5, 0.0, 1.0, 0.0]);
+}
+
+/// A rotated clip box packs its cosine and sine in its own slot, an unrotated one packs the
+/// identity; an instance rotation packs `[cos, sin, pivot]`, and none packs `[1, 0, 0, 0]`.
+#[test]
+fn ui_rotation_packs_cos_sin_and_pivot() {
+    let boxed = |radians| {
+        Some(UiClipBox {
+            rect_px: [0.0, 0.0, 10.0, 10.0],
+            radius_px: 0.0,
+            radians,
+        })
+    };
+    let [_, _, _, t] = ui_clip_raw(&UiClip {
+        boxes: [boxed(std::f32::consts::FRAC_PI_2), boxed(0.0)],
+    });
+    assert!((t[0]).abs() < 1e-6 && (t[1] - 1.0).abs() < 1e-6);
+    assert_eq!((t[2], t[3]), (1.0, 0.0));
+    assert_eq!(ui_rotation_raw(&UiRotation::NONE), [1.0, 0.0, 0.0, 0.0]);
+    let raw = ui_rotation_raw(&UiRotation {
+        radians: std::f32::consts::PI,
+        pivot_px: [3.0, 4.0],
+    });
+    assert!((raw[0] + 1.0).abs() < 1e-6 && raw[1].abs() < 1e-6);
+    assert_eq!((raw[2], raw[3]), (3.0, 4.0));
 }
 
 /// One PNG read as a loose texture (premultiplied by the engine) and as an atlas colour map
@@ -852,6 +879,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
         uv: [0.0, 0.0, 1.0, 1.0],
         clip: UiClip::NONE,
         view: None,
+        rotation: crate::UiRotation::NONE,
     };
     let text = UiInstance::Text {
         color: [1.0; 4],
@@ -860,6 +888,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
         font: None,
         clip: UiClip::NONE,
         outline: None,
+        rotation: crate::UiRotation::NONE,
     };
 
     // Two consecutive untextured rects → one batch of two instances.
@@ -893,6 +922,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
         font,
         clip: UiClip::NONE,
         outline: None,
+        rotation: crate::UiRotation::NONE,
     };
     scene.ui = vec![
         text_with(None),
@@ -973,6 +1003,7 @@ fn needs_gpu_a_translucent_solid_ui_rect_composites_to_the_straight_alpha_result
         uv: [0.0, 0.0, 1.0, 1.0],
         clip: UiClip::NONE,
         view: None,
+        rotation: crate::UiRotation::NONE,
     }];
 
     let bare_img = renderer
@@ -1027,6 +1058,7 @@ fn needs_gpu_overlay_draws_ui_over_the_scene() {
         uv: [0.0, 0.0, 1.0, 1.0],
         clip: UiClip::NONE,
         view: None,
+        rotation: crate::UiRotation::NONE,
     }];
 
     let bare_img = renderer
@@ -3457,6 +3489,7 @@ fn needs_gpu_ui_is_rasterized_at_the_output_extent_below_native() {
             uv: [0.0, 0.0, 1.0, 1.0],
             clip: UiClip::NONE,
             view: None,
+            rotation: crate::UiRotation::NONE,
         },
         UiInstance::Text {
             color: [1.0; 4],
@@ -3466,6 +3499,7 @@ fn needs_gpu_ui_is_rasterized_at_the_output_extent_below_native() {
             font: None,
             clip: UiClip::NONE,
             outline: None,
+            rotation: crate::UiRotation::NONE,
         },
     ];
 
@@ -3922,6 +3956,7 @@ fn needs_gpu_smaa_renders_under_a_ui_overlay() {
         uv: [0.0, 0.0, 1.0, 1.0],
         clip: UiClip::NONE,
         view: None,
+        rotation: crate::UiRotation::NONE,
     }];
     let size = FrameSize::native(w, h);
     let off = renderer.render(&scene, size).expect("off render");

@@ -9,6 +9,7 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::suggest;
+use serde_json::Value;
 
 use crate::assembly::{AssemblyDocument, AssemblyJointKind};
 use crate::envelope;
@@ -16,7 +17,16 @@ use crate::fields::parse_number;
 use crate::scalar::{format_float, scalar_string};
 use crate::yaml::{self, MapEntry, NodeValue, pointer_token};
 
-const IK_ENTRY_KEYS: [&str; 6] = ["parts", "effector", "hinge", "aim", "forward", "limits_deg"];
+const IK_ENTRY_KEYS: [&str; 7] = [
+    "parts",
+    "effector",
+    "hinge",
+    "ground",
+    "aim",
+    "forward",
+    "limits_deg",
+];
+const GROUND_KEYS: [&str; 2] = ["max_adjust", "root_drop"];
 const HINGE_KEYS: [&str; 2] = ["axis", "bend"];
 const LIMIT_KEYS: [&str; 2] = ["yaw", "pitch"];
 
@@ -47,6 +57,9 @@ pub enum IkKind {
         /// The authored hinge; absent resolves from the lower part's `joints:` entry or the
         /// humanoid naming convention.
         hinge: Option<IkHinge>,
+        /// Whether the effector is placed on the static ground under it (needs the document's
+        /// top-level `ground:` block).
+        ground: bool,
     },
     /// A look-at: the `aim` mask's parts turn together so `forward` faces the target.
     LookAt {
@@ -57,6 +70,16 @@ pub enum IkKind {
         /// The yaw and pitch limits in degrees, each in `(0, 180]`.
         limits_deg: [f64; 2],
     },
+}
+
+/// The top-level `ground:` block: how far a grounded chain may move its effector and whether the
+/// whole assembly may drop so the lower sole reaches.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IkGround {
+    /// The largest move of a foot up or down, in the assembly's voxels; finite and positive.
+    pub max_adjust: f64,
+    /// Whether the assembly root lowers to the lowest foot's ground.
+    pub root_drop: bool,
 }
 
 /// One named `ik:` entry.
@@ -101,6 +124,91 @@ pub(crate) fn parse_ik(entry: &MapEntry, diagnostics: &mut Vec<Diagnostic>) -> V
     out
 }
 
+/// Parses the top-level `ground:` block.
+pub(crate) fn parse_ground(
+    entry: &MapEntry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<IkGround> {
+    let NodeValue::Mapping(fields) = &entry.node.value else {
+        diagnostics.push(structure(
+            format!(
+                "`ground` must be a mapping with `max_adjust`, found {} (line {})",
+                entry.node.value.type_phrase(),
+                entry.node.line
+            ),
+            "/ground",
+            "write:\n  ground:\n    max_adjust: 3.0",
+        ));
+        return None;
+    };
+    let before = diagnostics.len();
+    let mut max_adjust = None;
+    let mut root_drop = false;
+    for field in fields {
+        let pointer = format!("/ground/{}", field.key);
+        match field.key.as_str() {
+            "max_adjust" => {
+                max_adjust = parse_number(
+                    &field.node,
+                    &pointer,
+                    "max_adjust",
+                    code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                    diagnostics,
+                )
+                .and_then(|value| {
+                    if value.is_finite() && value > 0.0 {
+                        Some(value)
+                    } else {
+                        diagnostics.push(structure(
+                            format!(
+                                "`max_adjust` must be finite and greater than 0, found {value}"
+                            ),
+                            &pointer,
+                            "give the largest foot move in voxels, e.g. `3.0`",
+                        ));
+                        None
+                    }
+                });
+            }
+            "root_drop" => match &field.node.value {
+                NodeValue::Scalar(Value::Bool(value)) => root_drop = *value,
+                other => diagnostics.push(structure(
+                    format!(
+                        "`root_drop` must be a boolean, found {} (line {})",
+                        other.type_phrase(),
+                        field.node.line
+                    ),
+                    &pointer,
+                    "write `root_drop: true` or remove the key",
+                )),
+            },
+            unknown => diagnostics.push(envelope::unknown_key(
+                unknown,
+                field,
+                "/ground",
+                "`ground`",
+                GROUND_KEYS,
+                code::ASSEMBLY_DOCUMENT_STRUCTURE,
+            )),
+        }
+    }
+    if diagnostics.len() != before {
+        return None;
+    }
+    let Some(max_adjust) = max_adjust else {
+        diagnostics.push(structure(
+            "`ground` is missing its required `max_adjust`".to_string(),
+            "/ground",
+            "add `max_adjust: 3.0`, the largest foot move in voxels",
+        ));
+        return None;
+    };
+    Some(IkGround {
+        max_adjust,
+        root_drop,
+    })
+}
+
 fn structure(message: String, pointer: &str, help: impl Into<String>) -> Diagnostic {
     Diagnostic::new(code::ASSEMBLY_DOCUMENT_STRUCTURE, message)
         .with_path(pointer.to_string())
@@ -124,6 +232,7 @@ fn parse_entry(sub: &MapEntry, pointer: &str, diagnostics: &mut Vec<Diagnostic>)
     let mut parts = None;
     let mut effector = None;
     let mut hinge = None;
+    let mut ground = None;
     let mut aim = None;
     let mut forward = None;
     let mut limits = None;
@@ -148,14 +257,18 @@ fn parse_entry(sub: &MapEntry, pointer: &str, diagnostics: &mut Vec<Diagnostic>)
                 forward = parse_vec3(&field.node, &field_pointer, "forward", true, diagnostics);
             }
             "limits_deg" => limits = parse_limits(&field.node, &field_pointer, diagnostics),
-            "ground" => diagnostics.push(structure(
-                format!(
-                    "an `ik` entry does not support `ground` (line {})",
-                    field.key_line
-                ),
-                &field_pointer,
-                "ground placement is not supported",
-            )),
+            "ground" => match &field.node.value {
+                NodeValue::Scalar(Value::Bool(value)) => ground = Some(*value),
+                other => diagnostics.push(structure(
+                    format!(
+                        "`ground` must be a boolean, found {} (line {})",
+                        other.type_phrase(),
+                        field.node.line
+                    ),
+                    &field_pointer,
+                    "write `ground: true` on a chain, or remove the key",
+                )),
+            },
             unknown => diagnostics.push(envelope::unknown_key(
                 unknown,
                 field,
@@ -200,10 +313,15 @@ fn parse_entry(sub: &MapEntry, pointer: &str, diagnostics: &mut Vec<Diagnostic>)
                 parts: parts?,
                 effector,
                 hinge,
+                ground: ground.unwrap_or(false),
             })
         }
         (false, true) => {
-            for (key, present) in [("effector", effector.is_some()), ("hinge", hinge.is_some())] {
+            for (key, present) in [
+                ("effector", effector.is_some()),
+                ("hinge", hinge.is_some()),
+                ("ground", ground.is_some()),
+            ] {
                 if present {
                     diagnostics.push(structure(
                         format!("a look-at entry cannot have `{key}`, which belongs to a chain"),
@@ -497,7 +615,21 @@ pub(crate) fn validate_ik(doc: &AssemblyDocument, diagnostics: &mut Vec<Diagnost
                 parts,
                 effector: _,
                 hinge,
+                ground,
             } => {
+                if *ground && doc.ground.is_none() {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            code::ASSEMBLY_DATA_CONSISTENCY,
+                            format!(
+                                "the chain `{}` is `ground: true` but the assembly has no `ground:` block",
+                                entry.name
+                            ),
+                        )
+                        .with_path(format!("{pointer}/ground"))
+                        .with_help("add a top-level block:\nground:\n  max_adjust: 3.0"),
+                    );
+                }
                 let mut known = true;
                 for (index, part) in parts.iter().enumerate() {
                     if !part_names.contains(&part.as_str()) {
@@ -548,6 +680,20 @@ pub(crate) fn validate_ik(doc: &AssemblyDocument, diagnostics: &mut Vec<Diagnost
                 }
             }
         }
+    }
+    let grounded = doc
+        .ik
+        .iter()
+        .any(|e| matches!(e.kind, IkKind::Chain { ground: true, .. }));
+    if doc.ground.is_some() && !grounded {
+        diagnostics.push(
+            Diagnostic::new(
+                code::ASSEMBLY_DATA_CONSISTENCY,
+                "the assembly has a `ground:` block but no `ik:` chain is `ground: true`",
+            )
+            .with_path("/ground")
+            .with_help("add `ground: true` to a foot chain, or remove the `ground:` block"),
+        );
     }
 }
 
@@ -614,6 +760,7 @@ pub(crate) fn emit_ik(out: &mut String, entries: &[IkEntry]) {
                 parts,
                 effector,
                 hinge,
+                ground,
             } => {
                 out.push_str("    parts:\n");
                 for part in parts {
@@ -626,6 +773,9 @@ pub(crate) fn emit_ik(out: &mut String, entries: &[IkEntry]) {
                     out.push_str("    hinge:\n");
                     emit_vec3(out, "      axis:\n", "        - ", &hinge.axis);
                     out.push_str(&format!("      bend: {}\n", hinge.bend));
+                }
+                if *ground {
+                    out.push_str("    ground: true\n");
                 }
             }
             IkKind::LookAt {
@@ -656,6 +806,19 @@ pub(crate) fn emit_ik(out: &mut String, entries: &[IkEntry]) {
                 }
             }
         }
+    }
+}
+
+/// Appends the canonical top-level `ground:` block; writes nothing when absent.
+pub(crate) fn emit_ground(out: &mut String, ground: Option<&IkGround>) {
+    let Some(ground) = ground else {
+        return;
+    };
+    out.push_str("ground:\n  max_adjust: ");
+    out.push_str(&format_float(ground.max_adjust));
+    out.push('\n');
+    if ground.root_drop {
+        out.push_str("  root_drop: true\n");
     }
 }
 
@@ -747,9 +910,10 @@ mod tests {
             "/ik/x/parts",
         );
         structure_error(
-            "ik:\n  x:\n    parts:\n      - a\n      - b\n    ground: true\n    effector:\n      - 0.0\n      - 0.0\n      - 0.0\n",
+            "ik:\n  x:\n    parts:\n      - a\n      - b\n    ground: 3\n    effector:\n      - 0.0\n      - 0.0\n      - 0.0\n",
             "/ik/x/ground",
         );
+        structure_error("ik:\n  x:\n    aim: m\n    ground: true\n", "/ik/x/ground");
         structure_error(
             "ik:\n  x:\n    aim: m\n    limits_deg:\n      yaw: 0.0\n",
             "/ik/x/limits_deg/yaw",
@@ -770,6 +934,40 @@ mod tests {
             "ik:\n  x:\n    parts:\n      - a\n      - b\n    effector:\n      - 0.0\n      - 0.0\n      - 0.0\n    hinge:\n      axis:\n        - 1.0\n        - 0.0\n        - 0.0\n      bend: 2\n",
             "/ik/x/hinge/bend",
         );
+    }
+
+    const GROUND_CHAIN: &str = "ik:\n  foot_r:\n    parts:\n      - upper-arm-r\n      - lower-arm-r\n    effector:\n      - 1.0\n      - 0.0\n      - 1.0\n    ground: true\n";
+
+    #[test]
+    fn a_ground_chain_and_block_round_trip() {
+        let source = doc(&format!(
+            "{GROUND_CHAIN}ground:\n  max_adjust: 3.0\n  root_drop: true\n"
+        ));
+        let parsed = parse(&source).expect("parses");
+        assert_eq!(parsed.ground.as_ref().map(|g| g.root_drop), Some(true));
+        assert_eq!(emit(&parsed), source);
+        assert!(errors(&source).is_empty());
+        let no_drop = doc(&format!("{GROUND_CHAIN}ground:\n  max_adjust: 2.5\n"));
+        assert_eq!(emit(&parse(&no_drop).expect("parses")), no_drop);
+    }
+
+    #[test]
+    fn ground_block_shape_errors_are_l1137() {
+        structure_error("ground: 3\n", "/ground");
+        structure_error("ground:\n  root_drop: true\n", "/ground");
+        structure_error("ground:\n  max_adjust: 0.0\n", "/ground/max_adjust");
+        structure_error("ground:\n  max_adjust: -1.0\n", "/ground/max_adjust");
+        structure_error(
+            "ground:\n  max_adjust: 3.0\n  root_drop: 1\n",
+            "/ground/root_drop",
+        );
+        structure_error("ground:\n  max_adjust: 3.0\n  speed: 1\n", "/ground/speed");
+    }
+
+    #[test]
+    fn ground_cross_checks_are_l1138() {
+        consistency_error(GROUND_CHAIN, "/ik/foot_r/ground");
+        consistency_error("ground:\n  max_adjust: 3.0\n", "/ground");
     }
 
     fn consistency_error(ik: &str, pointer: &str) {

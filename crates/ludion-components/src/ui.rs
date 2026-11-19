@@ -254,13 +254,15 @@ pub enum UiTweenField {
     Size,
     /// Replaces the element's linear RGBA colour (4). `UiRect` and `UiText`.
     Color,
+    /// Added to the element's `rotation`, degrees (1). `UiRect`, `UiText` and `UiGroup`.
+    Rotation,
 }
 
 impl UiTweenField {
     /// How many numbers `from` and `to` hold for this field.
     pub fn arity(self) -> usize {
         match self {
-            UiTweenField::Opacity | UiTweenField::Scale => 1,
+            UiTweenField::Opacity | UiTweenField::Scale | UiTweenField::Rotation => 1,
             UiTweenField::Offset | UiTweenField::Size => 2,
             UiTweenField::Color => 4,
         }
@@ -488,6 +490,10 @@ pub struct UiGroup {
     /// Uniform scale about the box centre, composed onto every descendant, `> 0` (default `1`).
     #[serde(default = "one_f32", skip_serializing_if = "is_one_f32")]
     pub scale: f32,
+    /// Rotation about the box centre in degrees, clockwise on screen, composed onto every descendant and
+    /// its clip (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rotation: f32,
     /// Opacity multiplied into every descendant's alpha, `0..=1` (default `1`).
     #[serde(default = "one_f32", skip_serializing_if = "is_one_f32")]
     pub opacity: f32,
@@ -545,6 +551,7 @@ impl Default for UiGroup {
             offset: [0.0, 0.0],
             size: [100.0, 100.0],
             scale: 1.0,
+            rotation: 0.0,
             opacity: 1.0,
             visible: true,
             group: None,
@@ -614,6 +621,7 @@ impl SemanticValidate for UiGroup {
                 "the `UiGroup` clip corner_radius must be finite and at least 0",
             );
         }
+        validate_rotation(value, &mut out);
         out
     }
 }
@@ -673,6 +681,30 @@ pub(crate) fn validate_text_outline(value: &Value, out: &mut Vec<Diagnostic>) {
             "the text outline color must have finite channels",
         );
     }
+}
+
+/// Rejects a `rotation` that is not finite (`L1620`, `/rotation`). Shared by `UiRect`, `UiText` and
+/// `UiGroup`.
+pub(crate) fn validate_rotation(value: &Value, out: &mut Vec<Diagnostic>) {
+    if let Some(rotation) = value
+        .get("rotation")
+        .and_then(Value::as_f64)
+        .map(engine_number)
+        && !rotation.is_finite()
+    {
+        out.push(
+            Diagnostic::new(
+                code::UI_ROTATION_INVALID,
+                "the UI rotation must be finite".to_string(),
+            )
+            .with_path("/rotation")
+            .with_help("give `rotation` a finite number of degrees; `ludion explain L1620`"),
+        );
+    }
+}
+
+fn is_zero_f32(value: &f32) -> bool {
+    value.to_bits() == 0.0f32.to_bits()
 }
 
 fn is_default_center(value: &UiSliceCenter) -> bool {

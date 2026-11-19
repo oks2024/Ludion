@@ -7602,6 +7602,12 @@
         "type": "boolean",
         "default": true
       },
+      "wetness": {
+        "description": "How wet exposed surfaces look, in `[0, 1]`: 0 leaves every surface dry, 1 darkens and glosses what the\nrain reaches (default 1). Games write it to dry a street.",
+        "type": "number",
+        "format": "float",
+        "default": 1.0
+      },
       "seed": {
         "description": "Varies the lattice hash (default 0).",
         "type": "integer",
@@ -8924,6 +8930,11 @@
         "type": "number",
         "format": "float"
       },
+      "rotation": {
+        "description": "Rotation about the box centre in degrees, clockwise on screen, composed onto every descendant and\nits clip (default `0`).",
+        "type": "number",
+        "format": "float"
+      },
       "opacity": {
         "description": "Opacity multiplied into every descendant's alpha, `0..=1` (default `1`).",
         "type": "number",
@@ -9816,6 +9827,11 @@
           "string",
           "null"
         ]
+      },
+      "rotation": {
+        "description": "Rotation about the centre of what the rect draws, degrees, clockwise on screen (default `0`).",
+        "type": "number",
+        "format": "float"
       }
     },
     "$defs": {
@@ -10025,6 +10041,11 @@
             "type": "null"
           }
         ]
+      },
+      "rotation": {
+        "description": "Rotation about the centre of the glyph bounds, degrees, clockwise on screen (default `0`).",
+        "type": "number",
+        "format": "float"
       }
     },
     "$defs": {
@@ -10203,6 +10224,11 @@
             "description": "Replaces the element's linear RGBA colour (4). `UiRect` and `UiText`.",
             "type": "string",
             "const": "color"
+          },
+          {
+            "description": "Added to the element's `rotation`, degrees (1). `UiRect`, `UiText` and `UiGroup`.",
+            "type": "string",
+            "const": "rotation"
           }
         ]
       },

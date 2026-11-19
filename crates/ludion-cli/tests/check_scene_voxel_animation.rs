@@ -280,6 +280,45 @@ fn assembly_lists_its_ik_entries() {
     assert!(value.get("ik").is_none(), "{value}");
 }
 
+/// A grounded chain's row ends `, ground` and the `ground:` block gets its own line; the JSON carries
+/// `"ground": true` on the chain only when grounded and a top-level `ground` object.
+#[test]
+fn assembly_lists_its_ground_feet() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/gallery/voxels/humanoid-grounded.assembly.yaml");
+    let output = run_check_scene(&path);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in [
+        "  ik foot_l: chain upper-leg-l -> lower-leg-l, effector [1, 0, 1], hinge [1, 0, 0] bend -1, ground\n",
+        "  ground: max_adjust 3, root_drop\n",
+    ] {
+        assert!(stdout.contains(line), "missing {line:?} in: {stdout}");
+    }
+    assert!(
+        stdout.contains("  ik hand_r: chain upper-arm-r -> lower-arm-r, effector [1, 0, 1], hinge [1, 0, 0] bend +1\n"),
+        "an ungrounded chain has no ground suffix: {stdout}"
+    );
+
+    let json = run_check_scene_args(&path, &["--json"]);
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).expect("one JSON object");
+    assert_eq!(
+        value["ground"],
+        serde_json::json!({ "max_adjust": 3.0, "root_drop": true })
+    );
+    let chains = value["ik"].as_array().expect("the ik rows");
+    for chain in chains {
+        let grounded = chain["name"]
+            .as_str()
+            .is_some_and(|n| n.starts_with("foot_"));
+        assert_eq!(chain.get("ground").is_some(), grounded, "{chain}");
+    }
+}
+
 /// An assembly whose part draws a glyph the palette does not define is `L1138`, naming the glyph,
 /// the part, and its file — the cross-file check only `ludion_engine::load_assembly` can run.
 #[test]

@@ -30,7 +30,6 @@ use ludion_core::time::{FrameIndex, GameClock, GameTime, Q16_PER_TICK, SimTime, 
 use ludion_ecs::{ReadColumn, World};
 use ludion_protocol::command::ViewPose;
 use ludion_renderer::LodSettings;
-use ludion_renderer::UiClip;
 use ludion_renderer::{
     BlendData, BlendMode, BlendedMesh, CameraBlend, DebugSegment, DecalBlend, DecalInstance,
     DecalMaps, DecalReceivers, DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT,
@@ -40,6 +39,7 @@ use ludion_renderer::{
     SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap,
     UiInstance, WorldVoxelGrid, aspect_ratio,
 };
+use ludion_renderer::{UiClip, UiRotation};
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
 use crate::assembly_mesh::AssemblyData;
@@ -1078,6 +1078,7 @@ fn extract_inner(
                 ui::hud::Grouping {
                     group: rect.group,
                     fill_group: rect.fill_group,
+                    rotation_deg: rect.rotation,
                     groups: &mut groups,
                     degraded: &mut *degraded,
                 },
@@ -1120,6 +1121,7 @@ fn extract_inner(
                     font,
                     clip: UiClip::NONE,
                     outline,
+                    rotation: UiRotation::NONE,
                 },
             ));
             let element = ui::hud::HudElement::Text;
@@ -1134,6 +1136,7 @@ fn extract_inner(
                 ui::hud::Grouping {
                     group: text.group,
                     fill_group: false,
+                    rotation_deg: text.rotation,
                     groups: &mut groups,
                     degraded: &mut *degraded,
                 },
@@ -1182,6 +1185,7 @@ fn extract_inner(
                             uv: SpriteInstance::FULL_UV,
                             clip: UiClip::NONE,
                             view: None,
+                            rotation: UiRotation::NONE,
                         },
                     ));
                 }
@@ -1212,6 +1216,7 @@ fn extract_inner(
                             font,
                             clip: UiClip::NONE,
                             outline,
+                            rotation: UiRotation::NONE,
                         },
                     ));
                 }
@@ -1228,6 +1233,7 @@ fn extract_inner(
                 ui::hud::Grouping {
                     group: list.group,
                     fill_group: false,
+                    rotation_deg: 0.0,
                     groups: &mut groups,
                     degraded: &mut *degraded,
                 },
@@ -1294,6 +1300,7 @@ fn extract_inner(
                 ui::hud::Grouping {
                     group: radial.group,
                     fill_group: false,
+                    rotation_deg: 0.0,
                     groups: &mut groups,
                     degraded: &mut *degraded,
                 },
@@ -6669,6 +6676,9 @@ pub(crate) fn assembly_part_models(
     if !ik_goals.is_empty() {
         crate::assembly_ik::apply_assembly_ik(data, &ik_goals, &mut placed);
     }
+    if data.ground.is_some() {
+        crate::assembly_ik::apply_assembly_ground(world, id, data, model, &ik_goals, &mut placed);
+    }
     placed
 }
 
@@ -9366,6 +9376,7 @@ mod tests {
                 masks: Vec::new(),
                 blends: Vec::new(),
                 ik: Vec::new(),
+                ground: None,
             }
         }
 
@@ -9677,6 +9688,7 @@ mod tests {
                 masks: Vec::new(),
                 blends: Vec::new(),
                 ik: Vec::new(),
+                ground: None,
             };
             let posed = part_placements(&data, Some((data.clip("walk").unwrap(), 1.0)));
             assert_eq!(posed[1].0, Mat4::from_translation(Vec3::new(0.0, 0.0, 3.0)));

@@ -937,6 +937,27 @@ pub struct UiClipBox {
     /// Corner radius in pixels, at most half the shorter side (a circle is a square box with half
     /// its side).
     pub radius_px: f32,
+    /// Clockwise rotation of the box about its own centre, radians; `0` is an axis-aligned box.
+    pub radians: f32,
+}
+
+/// The rotation of one UI instance: its axis-aligned geometry is drawn at
+/// `pivot_px + R(radians)(p − pivot_px)`, `R` turning clockwise on the +Y-down screen. `radians == 0`
+/// draws the geometry as is.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct UiRotation {
+    /// Clockwise rotation in radians.
+    pub radians: f32,
+    /// The pivot in screen pixels.
+    pub pivot_px: [f32; 2],
+}
+
+impl UiRotation {
+    /// No rotation.
+    pub const NONE: UiRotation = UiRotation {
+        radians: 0.0,
+        pivot_px: [0.0, 0.0],
+    };
 }
 
 /// The analytic fragment clip of one UI instance: at most two [`UiClipBox`]es, innermost first,
@@ -982,6 +1003,8 @@ pub enum UiInstance {
         /// Index into [`RenderScene::views`]: the rect shows that view's texture. `texture` is `None`
         /// whenever this is `Some`.
         view: Option<u32>,
+        /// The element's rotation; `rect_px` stays axis-aligned.
+        rotation: UiRotation,
     },
     /// A run of screen-space text, laid out in pixel space by extract (the same layout as
     /// [`TextRun`]).
@@ -998,6 +1021,8 @@ pub enum UiInstance {
         clip: UiClip,
         /// An outline drawn under the glyphs, or `None`.
         outline: Option<GlyphOutline>,
+        /// The element's rotation; `quads` stay axis-aligned.
+        rotation: UiRotation,
     },
 }
 

@@ -14,9 +14,10 @@
 use ludion_components::{IkTargets, ik_target_weight_at};
 use ludion_core::ids::EntityId;
 use ludion_core::math::f64::{acos, asin, atan2, cos, sin, sqrt};
-use ludion_core::math::glam::{Mat3, Mat4, Vec4};
+use ludion_core::math::glam::{Mat3, Mat4, Vec3, Vec4};
 use ludion_core::time::GameTime;
 use ludion_ecs::World;
+use ludion_physics::QueryFilter;
 
 use crate::assembly_mesh::{AssemblyData, AssemblyIkKind};
 
@@ -130,6 +131,7 @@ pub(crate) fn apply_assembly_ik(
                 axis,
                 bend,
                 limits,
+                ..
             } => {
                 if let IkAim::Point(target) = goal.aim {
                     chain(
@@ -147,6 +149,138 @@ pub(crate) fn apply_assembly_ik(
             }
         }
     }
+}
+
+/// Puts the effector of every `ground: true` chain without an active goal on the static ground
+/// under it (`Plan/animation-layers.md` decisions 45–48), on the placements after targeted IK.
+/// Returns the number of ray casts. Without physics, or a foot over no ground within reach, the
+/// placements are untouched; a move under a thousandth of a voxel is no move, so flat ground at the
+/// assembly's origin poses bit for bit as without `ground`.
+pub(crate) fn apply_assembly_ground(
+    world: &World,
+    id: EntityId,
+    data: &AssemblyData,
+    model: Mat4,
+    goals: &[IkGoal],
+    placed: &mut [(Mat4, Mat3)],
+) -> usize {
+    let Some(ground) = data.ground else {
+        return 0;
+    };
+    let Some(physics) = crate::ground_marker_clip::physics_of(world) else {
+        return 0;
+    };
+    let cols = model.to_cols_array().map(f64::from);
+    let voxel = length([cols[4], cols[5], cols[6]]);
+    let band = 1e-3 * voxel;
+    let reach = ground.max_adjust * voxel;
+    let floor = cols[13];
+    let filter = QueryFilter::new().only_fixed().exclude(id);
+
+    struct Foot {
+        parts: [usize; 2],
+        effector: V3,
+        axis: V3,
+        bend: f64,
+        limits: Option<[f64; 2]>,
+        target: V3,
+        delta: f64,
+    }
+    let mut casts = 0;
+    let mut feet: Vec<Foot> = Vec::new();
+    for (entry, ik) in data.ik.iter().enumerate() {
+        let AssemblyIkKind::Chain {
+            parts,
+            effector,
+            axis,
+            bend,
+            limits,
+            ground: true,
+        } = &ik.kind
+        else {
+            continue;
+        };
+        if goals.iter().any(|goal| goal.entry == entry) {
+            continue;
+        }
+        let local = point_of(&placed[parts[1]].0, effector.map(|c| c as f32));
+        let e = transform_point(&cols, local);
+        let origin = [e[0] as f32, (floor + reach) as f32, e[2] as f32];
+        casts += 1;
+        let Ok(hits) = physics.ray_cast(origin, [0.0, -1.0, 0.0], (2.0 * reach) as f32, &filter)
+        else {
+            continue;
+        };
+        let Some(hit) = hits.first() else {
+            continue;
+        };
+        if hit.distance <= 0.0 {
+            continue;
+        }
+        let delta = (reach - f64::from(hit.distance)).clamp(-reach, reach);
+        feet.push(Foot {
+            parts: *parts,
+            effector: *effector,
+            axis: *axis,
+            bend: *bend,
+            limits: *limits,
+            target: [e[0], e[1] + delta, e[2]],
+            delta,
+        });
+    }
+    let inverse = ludion_core::math::mat4_inverse(model);
+    let drop = if ground.root_drop {
+        feet.iter().map(|foot| foot.delta).fold(0.0, f64::min)
+    } else {
+        0.0
+    };
+    let dropped = drop < -band;
+    if dropped {
+        let down = inverse * Vec4::new(0.0, drop as f32, 0.0, 0.0);
+        let shift = Mat4::from_translation(Vec3::new(down.x, down.y, down.z));
+        for pair in placed.iter_mut() {
+            pair.0 = shift * pair.0;
+        }
+    }
+    for foot in feet {
+        let residual = if dropped {
+            foot.delta - drop
+        } else {
+            foot.delta
+        };
+        if residual.abs() < band {
+            continue;
+        }
+        let t = inverse
+            * Vec4::new(
+                foot.target[0] as f32,
+                foot.target[1] as f32,
+                foot.target[2] as f32,
+                1.0,
+            );
+        let target = [f64::from(t.x), f64::from(t.y), f64::from(t.z)];
+        chain(
+            data,
+            placed,
+            foot.parts,
+            foot.effector,
+            foot.axis,
+            foot.bend,
+            foot.limits,
+            target,
+            1.0,
+        );
+    }
+    casts
+}
+
+/// `m · (p, 1)` in `f64` from a column-major matrix.
+fn transform_point(c: &[f64; 16], p: V3) -> V3 {
+    [
+        c[0] * p[0] + c[4] * p[1] + c[8] * p[2] + c[12],
+        c[1] * p[0] + c[5] * p[1] + c[9] * p[2] + c[13],
+        c[2] * p[0] + c[6] * p[1] + c[10] * p[2] + c[14],
+    ]
 }
 
 /// Turns the aim parts together so `forward` faces the goal, root-first, each by its share of the
@@ -509,8 +643,10 @@ mod tests {
                     axis: [1.0, 0.0, 0.0],
                     bend,
                     limits,
+                    ground: false,
                 },
             }],
+            ground: None,
         }
     }
 
@@ -646,6 +782,7 @@ mod tests {
                     limits_deg,
                 },
             }],
+            ground: None,
         }
     }
 

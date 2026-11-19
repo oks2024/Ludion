@@ -34,6 +34,7 @@ fn with_rect(mut scene: RenderScene, view: Option<u32>) -> RenderScene {
         uv: [0.0, 0.0, 1.0, 1.0],
         clip: UiClip::NONE,
         view,
+        rotation: crate::UiRotation::NONE,
     }];
     scene
 }

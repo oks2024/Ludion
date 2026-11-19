@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); part sockets mechanized (2026-11-19); A3 deferred; W3, W5, W6 not started; the macOS twins of the W2d goldens and of `humanoid-look-yaw-limit-strip.png` are owed to the M4.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); part sockets and W5a (ground feet) mechanized (2026-11-19); A3 deferred; W3, W5b, W6 not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -154,6 +154,21 @@ No `WorldHash`, replay, wire-schema or existing golden moved; the component sche
 `ParentJoint` doc comment. A `ParentJoint` inserted at runtime under an assembly used to compose as a plain
 `Parent` and now gains the rest level (committed content could not carry one: `L1318`).
 
+### W5a — ground feet
+
+| file | role |
+|---|---|
+| `crates/ludion-scene/src/rig_ik.rs`, `assembly.rs`, `lib.rs` | `IkGround`, `IkKind::Chain.ground`, the top-level `ground:` key (parse `L1137`, cross checks `L1138`, canonical emit after `ik`) |
+| `crates/ludion-engine/src/assembly_mesh.rs`, `lib.rs` | `AssemblyIkKind::Chain.ground`, `AssemblyData.ground` / `AssemblyGroundData` (outside the mesh content hash) |
+| `crates/ludion-engine/src/assembly_ik.rs`, `extract.rs` | `apply_assembly_ground` (the cast, dead band, `root_drop`), called from `assembly_part_models` after the IK block |
+| `crates/ludion-engine/tests/assembly_ground.rs` | flat and no-collider bit-identity, a step, a step too tall, `root_drop`, a goal winning, a socket on a grounded part, repeat, thread and hash proofs, the gallery files |
+| `examples/gallery/voxels/humanoid-grounded.assembly.yaml`, `assembly-ground.yaml`, `goldens/` | a grounded humanoid; one figure with a foot on a step, one on a 15° ramp; golden `assembly-ground.png` blessed on the RTX 3090 |
+| `crates/ludion-cli/src/check_scene.rs`, `tests/check_scene_voxel_animation.rs` | `, ground` on a chain row, a `ground:` line, JSON `"ground"` |
+| `docs/voxel-animation.md`, `docs/voxel-assemblies.md`, embedded mirror | §Ground feet and the key table row |
+
+No `WorldHash`, replay, wire-schema, component-schema or existing golden moved; new golden
+`assembly-ground.png` blessed on the RTX 3090, macOS twin owed.
+
 ## Trigger
 
 The game's characters do locomotion plus something else on one skin: carry a body, aim, peek around a
@@ -299,7 +314,8 @@ share one driver shape.
     convention), with the layer weight ramp (`weight`, `from_weight`, `changed`, `fade`); `L1673`.
     Entry-name keys also mean a dead target is a missing key, never a stale id.
 39. **Deferrals.** `rate_deg`: a look target's jump visibly snaps (needs presentation state; the request's open
-    question). Socket-part targets: request item 0, part sockets. A third chain part and `ground`: W5.
+    question). Socket-part targets: request item 0, part sockets. `ground` is W5a (decisions 45–49); a third
+    chain part stays deferred.
     IK in the ragdoll switch: a ragdoll that must start from an IK'd pose. **Entity targets**: a target that
     must follow an entity without per-tick writes — it needs registry support for entity references inside a
     map (`L1392`); until then game code writes `point` from the entity's world position each tick it moves.
@@ -333,6 +349,27 @@ share one driver shape.
     part, its help naming the nearest part; `assembly_part`, `voxel` and primitive parents stay `L1318`.
     Non-goals: IK targets naming a socket part (decision 39 stays deferred), and sockets on `assembly_part`
     entities and prefab parts (trigger: a consumer asks).
+45. **Ground feet: authoring.** `ground: true` on a chain; a top-level `ground:` with `max_adjust` (voxels,
+    finite, > 0, required) and `root_drop` (bool, default false, omitted when false). `L1137`: wrong types,
+    an unknown key in `ground:`, `ground` on a look-at. `L1138`: a `ground: true` chain without a `ground:`
+    block (help: add `ground:\n  max_adjust: 3.0`), or a `ground:` block with no grounded chain.
+46. **The cast.** Per grounded chain without an active goal, in name order, on the placements after targeted
+    IK: `e` = the effector in world (`model · placed[lower] · effector`), `floor` = world y of the assembly
+    frame's origin (`model · (0,0,0,1)`), `reach = max_adjust · |model.y_axis|`. One `ray_cast([e.x,
+    floor + reach, e.z], [0,-1,0], 2·reach, QueryFilter::new().only_fixed().exclude(id))`; take `hits[0]`; no
+    hit or `distance == 0` (the origin is inside something taller than `reach`) leaves that foot alone; else
+    `delta = (floor + reach − distance) − floor`, clamped to `±reach`. Measuring from the floor (not the foot)
+    keeps an animated foot lift: the target is `e + (0, delta, 0)`.
+47. **Dead band.** `|delta| < 1e-3 · voxel` (voxel = `|model.y_axis|`) is no move, so flat ground at the floor
+    poses **bit for bit** as without ground; so does a scene with no physics.
+48. **`root_drop`.** `drop = min(0, min delta)` over feet that hit; if below the dead band, pre-multiply
+    `T(inverse(model) · (0, drop, 0, 0))` onto every part, then solve each grounded foot whose residual
+    `delta − drop` is outside the dead band toward its (pre-drop) world target with `chain(…, k = 1)`. Without
+    `root_drop`, the drop is 0. A foot is never raised by lowering, and the root is never raised.
+49. **Scope.** Visual only, extract only (`assembly_part_models`), static (`only_fixed`) ground as of the last
+    completed physics step. No foot pitch to the normal (a third part; trigger: an assembly with a separate
+    foot part), no moving-platform ground (trigger: a character must stand on a kinematic body), not in the
+    model sheet, the ragdoll switch or skinned characters.
 
 ## Waves
 
@@ -359,7 +396,9 @@ share one driver shape.
   on that part's final drawn pose (after layers and IK), and `posed_joint_world` for assemblies (decisions
   41–44; the macOS twin of the `assembly-socket` golden is owed to the M4). Lifts decision 39's socket-part
   deferral for assembly parts.
-- **W5.** Ground feet, the bench, profile counters (decision 11).
+- **W5a (shipped 2026-11-19).** Ground feet on voxel assemblies (decisions 45–49; the macOS twin of the
+  `assembly-ground` golden is owed to the M4).
+- **W5b.** The bench and the profile counters (decision 11).
 - **W6.** Root motion import and `root_motion_delta` (decision 12).
 
 ## Proposed — owner ruling owed
@@ -375,6 +414,10 @@ share one driver shape.
 - A socketed prop's collider and every sim read follow the **rest** socket, not the animated part; posed-sim
   sockets would need the pose in the sim (amending `animation-clips` decision 2).
 - The W5 budget (≤0.5 ms for 32 characters).
+- Ground `max_adjust` in the assembly's voxel units (the request's proposal) — Proposed, owner ruling owed.
+- Foot placement ships visual-only, amending `Plan/voxel-animation.md` decision 2 (trigger fired: ramps and
+  stairs) — Proposed, owner ruling owed.
+- An active `IkTargets` goal on a grounded chain wins over ground — Proposed, owner ruling owed.
 - `animation-clips` decision 10's merge trigger fired (a character feature assemblies also want); merging
   `kind: character` and `kind: assembly` is not done here — Proposed, owner ruling owed.
 

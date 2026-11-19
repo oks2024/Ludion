@@ -1259,6 +1259,7 @@ fn ui_rect_resolves_through_extract_exactly_like_the_pure_function() {
         group: None,
         fill_group: false,
         view: None,
+        rotation: 0.0,
     };
     world.insert(e, rect.clone()).unwrap();
 
@@ -1483,6 +1484,7 @@ fn ui_text_resolves_through_extract_exactly_like_the_measured_block() {
         font: None,
         group: None,
         outline: None,
+        rotation: 0.0,
     };
     world.insert(e, text.clone()).unwrap();
 
@@ -2939,6 +2941,7 @@ fn an_unwrapped_ui_text_lowers_exactly_as_before() {
         font: None,
         group: None,
         outline: None,
+        rotation: 0.0,
     };
     let viewport = (1920, 1080);
     let mut world = World::new();

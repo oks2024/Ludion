@@ -159,6 +159,68 @@ pub fn resolve_ui_rect_of(rect: &UiRect, viewport: (u32, u32)) -> [f32; 4] {
     resolve_ui_rect(rect.anchor, rect.offset, rect.size, viewport)
 }
 
+/// The four corners of `rect` as drawn, in render-target pixels: top-left, top-right, bottom-right,
+/// bottom-left of [`resolve_ui_rect_of`], turned by `rect.rotation` (degrees, clockwise on screen)
+/// about the rect's centre. Ungrouped and untweened, like [`resolve_ui_rect_of`]; an unrotated rect
+/// takes no trig.
+///
+/// # Example
+///
+/// ```
+/// use ludion_engine::components::UiRect;
+/// use ludion_engine::ui::ui_rect_corners;
+///
+/// let rect = UiRect { size: [200.0, 20.0], ..UiRect::default() };
+/// let corners = ui_rect_corners(&rect, (1920, 1080));
+/// assert_eq!(corners[0], [0.0, 0.0]);
+/// assert_eq!(corners[2], [200.0, 20.0]);
+/// ```
+pub fn ui_rect_corners(rect: &UiRect, viewport: (u32, u32)) -> [[f32; 2]; 4] {
+    let [x, y, w, h] = resolve_ui_rect_of(rect, viewport);
+    let corners = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+    if rect.rotation == 0.0 {
+        return corners;
+    }
+    let (c, s) = group::cos_sin(rect.rotation.to_radians());
+    let centre = [x + w * 0.5, y + h * 0.5];
+    corners.map(|p| {
+        let (dx, dy) = (p[0] - centre[0], p[1] - centre[1]);
+        [centre[0] + c * dx - s * dy, centre[1] + s * dx + c * dy]
+    })
+}
+
+/// Whether `cursor` (render-target pixels) is inside `rect` as drawn rotated: the cursor turns back
+/// about the rect's centre and takes the half-open bounds test of [`resolve_ui_rect_of`]. Ungrouped
+/// and untweened; [`ui_hit`] answers for a grouped or animated element.
+///
+/// # Example
+///
+/// ```
+/// use ludion_engine::components::{Anchor, UiRect};
+/// use ludion_engine::ui::ui_point_in;
+///
+/// // 200 x 20, centred on (960, 540), turned 90°: now 20 wide and 200 tall.
+/// let rect = UiRect {
+///     anchor: Anchor::Center,
+///     size: [200.0, 20.0],
+///     rotation: 90.0,
+///     ..UiRect::default()
+/// };
+/// assert!(ui_point_in(&rect, (1920, 1080), [960.0, 490.0]));
+/// assert!(!ui_point_in(&rect, (1920, 1080), [1010.0, 540.0]));
+/// ```
+pub fn ui_point_in(rect: &UiRect, viewport: (u32, u32), cursor: [f32; 2]) -> bool {
+    let [x, y, w, h] = resolve_ui_rect_of(rect, viewport);
+    let mut p = cursor;
+    if rect.rotation != 0.0 {
+        let (c, s) = group::cos_sin(rect.rotation.to_radians());
+        let centre = [x + w * 0.5, y + h * 0.5];
+        let (dx, dy) = (p[0] - centre[0], p[1] - centre[1]);
+        p = [centre[0] + c * dx + s * dy, centre[1] - s * dx + c * dy];
+    }
+    p[0] >= x && p[0] < x + w && p[1] >= y && p[1] < y + h
+}
+
 /// Measures a [`UiText`] block's extent in **canvas units** from the
 /// face's advance widths (`ludion_font::layout`, the one layout every text path shares): `size` is
 /// the line height, width is the widest line's advance sum scaled to it, height is the line count ×

@@ -92,6 +92,18 @@ tracks:
       name: radar_online
 ";
 
+/// Holds gameplay while it plays and parks after `door_open` until the game releases it.
+const DOOR: &str = "format: 1
+kind: sequence
+length_ticks: 30
+holds_gameplay: true
+tracks:
+  event:
+    - at: 5
+      name: door_open
+      wait: release
+";
+
 // --- Headless demo `main` ------------------------------------------------------------------------
 
 fn write(root: &std::path::Path, name: &str, text: &str) -> std::io::Result<()> {
@@ -156,20 +168,57 @@ fn run(
     Some((focus, clip, online))
 }
 
+/// A beat that holds gameplay and parks on `wait: release` until the game calls `sequences::release`
+/// (here, a door finishing). Returns whether it held, parked, and ended after the release.
+fn door(root: &std::path::Path) -> Option<bool> {
+    let mut engine = game(root.to_path_buf()).build().ok()?;
+    engine
+        .load_inline_scene("format: 1\nseed: 1\nentities: []\n")
+        .ok()?;
+    let handle = sequences::play(engine.world_mut(), "sequences/door.yaml", &[]).ok()?;
+    let step = |engine: &mut Engine| {
+        engine
+            .execute(Command::SimStep(command::SimStepParams {
+                ticks: 1,
+                hash: false,
+            }))
+            .ok()
+    };
+    for _ in 0..20 {
+        step(&mut engine)?;
+    }
+    let parked =
+        sequences::is_playing(engine.world(), handle) && sequences::holding(engine.world_mut());
+    println!("door: parked on the wait after 20 ticks: {parked}");
+    sequences::release(engine.world_mut(), handle);
+    for _ in 0..30 {
+        step(&mut engine)?;
+    }
+    let ended = !sequences::is_playing(engine.world(), handle);
+    println!("door: ended after the release: {ended}");
+    Some(parked && ended)
+}
+
 fn main() -> ExitCode {
     let root = std::env::temp_dir().join(format!("ludion-sequence-example-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let written = write(&root, "strings/en.yaml", STRINGS)
         .and_then(|()| write(&root, "dialogue/main.yaml", BANK))
-        .and_then(|()| write(&root, "sequences/radar.yaml", BEAT));
+        .and_then(|()| write(&root, "sequences/radar.yaml", BEAT))
+        .and_then(|()| write(&root, "sequences/door.yaml", DOOR));
     if let Err(error) = written {
         eprintln!("could not write the demo docs: {error}");
         return ExitCode::FAILURE;
     }
     let watched = run(&root, "watched", None);
     let skipped = run(&root, "skipped", Some(5));
+    let door = door(&root);
     let _ = std::fs::remove_dir_all(&root);
     match (watched, skipped) {
+        _ if door != Some(true) => {
+            eprintln!("the door beat did not park and release: {door:?}");
+            ExitCode::FAILURE
+        }
         (Some(watched), Some(skipped)) if watched == skipped && watched.2 => {
             println!("both runs end in {watched:?}");
             ExitCode::SUCCESS

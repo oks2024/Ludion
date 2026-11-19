@@ -4,10 +4,14 @@
 //!
 //! 1. a vanished document or a cancel ends it `Cancelled`;
 //! 2. a pending player stamps its start from its clock;
-//! 3. a skip applies the end forms and ends it `Skipped`;
-//! 4. every key with `applied_through < at <= playhead` applies, by track (camera, animation, ui,
-//!    audio, dialogue, event), then `at`, then document order;
-//! 5. the tick the playhead reaches `length_ticks` it ends `Completed`.
+//! 3. a skip applies the end forms and ends it `Skipped` (waits do not stop it);
+//! 4. a pending wait either clears (the line ended, or `release` was called) and the playhead
+//!    resumes from the wait's `at`, or the player stores itself and applies nothing;
+//! 5. otherwise the playhead is `now - started - waited`, stopped at the earliest due wait key, and
+//!    every key with `applied_through < at <= playhead` applies, by track (camera, animation, ui,
+//!    audio, dialogue, event), then `at`, then document order; a wait key parks the playhead;
+//! 6. the tick the playhead reaches `length_ticks` with no wait pending it ends `Completed`;
+//! 7. a player that stays live with `holds_gameplay` makes the system call `GameClock::hold` once.
 
 use std::collections::BTreeMap;
 
@@ -16,11 +20,14 @@ use ludion_components::ui::{UiClock, UiTween, UiTweenRepeat};
 use ludion_components::{Animation, crossfade};
 use ludion_core::codes::code;
 use ludion_core::ids::EntityId;
+use ludion_core::time::GameClock;
 use ludion_ecs::{SystemCtx, World};
 
-use super::docs::{CameraKey, OnSkip, SequenceClock, SequenceDoc};
+use super::docs::{CameraKey, DialogueWait, EventWait, OnSkip, SequenceClock, SequenceDoc};
 use super::events::{SequenceEnd, SequenceEvent, SequenceEvents, SequenceTrack};
-use super::{PlayerState, SequenceBinding, SequenceHandle, SequencePlayer, find_doc};
+use super::{
+    PendingWait, PlayerState, SequenceBinding, SequenceHandle, SequencePlayer, WaitKind, find_doc,
+};
 use crate::diagnostics::report;
 use crate::dialogue::{DialogueLine, LineHandle};
 
@@ -77,9 +84,10 @@ pub fn sequence_update(world: &mut World, ctx: &SystemCtx) {
         }
     }
     let mut events = Vec::new();
+    let mut hold = false;
     for (id, player) in players {
         let roles = bindings.remove(&id).unwrap_or_default();
-        Beat {
+        hold |= Beat {
             world: &mut *world,
             ctx,
             pid: id,
@@ -91,6 +99,9 @@ pub fn sequence_update(world: &mut World, ctx: &SystemCtx) {
     }
     if let Some(out) = world.resource_mut::<SequenceEvents>() {
         out.events = events;
+    }
+    if hold && let Some(clock) = world.resource_mut::<GameClock>() {
+        clock.hold();
     }
 }
 
@@ -108,7 +119,9 @@ impl Beat<'_> {
         SequenceHandle(self.pid)
     }
 
-    fn step(mut self) {
+    /// Plays the player one tick. `true` when it stays live with `holds_gameplay`, so the caller
+    /// holds the game clock.
+    fn step(mut self) -> bool {
         let Some(doc) = find_doc(self.world, &self.player.sequence) else {
             self.degrade(
                 "document",
@@ -118,11 +131,11 @@ impl Beat<'_> {
                 ),
             );
             self.finish(SequenceEnd::Cancelled);
-            return;
+            return false;
         };
         if self.player.cancel {
             self.finish(SequenceEnd::Cancelled);
-            return;
+            return false;
         }
         let now = match self.player.clock {
             SequenceClock::Game => self.ctx.game_frame,
@@ -135,10 +148,42 @@ impl Beat<'_> {
         if self.player.skip {
             self.skip_to_end(&doc);
             self.finish(SequenceEnd::Skipped);
-            return;
+            return false;
         }
         let elapsed = now.as_u64().saturating_sub(self.player.started.as_u64());
-        let playhead = u32::try_from(elapsed).unwrap_or(u32::MAX);
+        let playhead = if let Some(wait) = self.player.wait.clone() {
+            let cleared = match wait.kind {
+                WaitKind::LineEnd { seq } => !line_alive(self.world, seq),
+                WaitKind::Release => std::mem::take(&mut self.player.released),
+            };
+            if !cleared {
+                self.store();
+                return doc.holds_gameplay;
+            }
+            self.player.waited = elapsed.saturating_sub(u64::from(wait.at));
+            self.player.wait = None;
+            wait.at
+        } else {
+            let natural =
+                u32::try_from(elapsed.saturating_sub(self.player.waited)).unwrap_or(u32::MAX);
+            // A playhead stops at the earliest wait key it would pass.
+            let earliest = doc
+                .tracks
+                .dialogue
+                .iter()
+                .filter(|k| k.wait.is_some())
+                .map(|k| k.at)
+                .chain(
+                    doc.tracks
+                        .event
+                        .iter()
+                        .filter(|k| k.wait.is_some())
+                        .map(|k| k.at),
+                )
+                .filter(|&at| at <= natural && self.player.applied_through.is_none_or(|t| at > t))
+                .min();
+            earliest.unwrap_or(natural)
+        };
         let applied = self.player.applied_through;
         let due = |at: u32| at <= playhead && applied.is_none_or(|through| at > through);
         for key in doc.tracks.camera.iter().filter(|k| due(k.at)) {
@@ -158,18 +203,39 @@ impl Beat<'_> {
             self.applied(SequenceTrack::Audio, key.at);
         }
         for key in doc.tracks.dialogue.iter().filter(|k| due(k.at)) {
-            self.dialogue(&key.line, key.speaker.as_deref());
+            let seq = self.dialogue(&key.line, key.speaker.as_deref());
+            if let (Some(DialogueWait::LineEnd), Some(seq)) = (key.wait, seq) {
+                self.park(key.at, WaitKind::LineEnd { seq });
+            }
             self.applied(SequenceTrack::Dialogue, key.at);
         }
         for key in doc.tracks.event.iter().filter(|k| due(k.at)) {
             self.applied(SequenceTrack::Event, key.at);
             self.fire(&key.name);
+            if key.wait == Some(EventWait::Release) && !std::mem::take(&mut self.player.released) {
+                self.park(key.at, WaitKind::Release);
+            }
         }
         self.player.applied_through = Some(playhead);
-        if playhead >= doc.length_ticks {
+        if self.player.wait.is_none() && playhead >= doc.length_ticks {
             self.finish(SequenceEnd::Completed);
-        } else if let Ok(Some(stored)) = self.world.get_mut::<SequencePlayer>(self.pid) {
+            return false;
+        }
+        self.store();
+        doc.holds_gameplay
+    }
+
+    /// Writes the player's state back to its entity.
+    fn store(self) {
+        if let Ok(Some(stored)) = self.world.get_mut::<SequencePlayer>(self.pid) {
             *stored = self.player;
+        }
+    }
+
+    /// Parks the playhead at `at` until `kind` clears; one wait at a time.
+    fn park(&mut self, at: u32, kind: WaitKind) {
+        if self.player.wait.is_none() {
+            self.player.wait = Some(PendingWait { at, kind });
         }
     }
 
@@ -337,7 +403,8 @@ impl Beat<'_> {
         }
     }
 
-    fn dialogue(&mut self, line: &str, speaker: Option<&str>) {
+    /// Says the line; the `seq` of the spoken line, or `None` when it was refused.
+    fn dialogue(&mut self, line: &str, speaker: Option<&str>) -> Option<u64> {
         let entity = match speaker {
             None => None,
             Some(role) => self.resolve(role).map(|index| self.roles[index].entity),
@@ -353,11 +420,15 @@ impl Beat<'_> {
                 if let Some(seq) = seq {
                     self.player.said.push(seq);
                 }
+                seq
             }
-            Err(refused) => self.degrade(
-                &format!("dialogue:{line}"),
-                format!("dialogue line `{line}` was refused: {}", refused.message),
-            ),
+            Err(refused) => {
+                self.degrade(
+                    &format!("dialogue:{line}"),
+                    format!("dialogue line `{line}` was refused: {}", refused.message),
+                );
+                None
+            }
         }
     }
 
@@ -427,6 +498,13 @@ impl Beat<'_> {
             }
         }
     }
+}
+
+/// Whether a dialogue line with `seq` still exists (lines despawn when they end).
+fn line_alive(world: &mut World, seq: u64) -> bool {
+    world
+        .query_ids::<(&DialogueLine,)>()
+        .any(|(_, (line,))| line.seq == seq)
 }
 
 /// Interrupts the dialogue lines a sequence said, found by `seq`.

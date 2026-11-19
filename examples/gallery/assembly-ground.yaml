@@ -1,0 +1,152 @@
+# Feature: ground feet on a voxel assembly (`ludion docs voxel-animation`, "Ground feet"). The humanoid
+# declares `ground: true` chains on both legs with `root_drop`, so each sole is placed on the static
+# ground under it. The left figure stands at rest with its left foot over a two-voxel step: that
+# knee bends and the sole sits on the step. The right figure plays `idle` across a 15 degree ramp:
+# both soles meet the slope. A foot over flat ground at the floor poses as without `ground`.
+format: 1
+name: assembly-ground - feet on a step and on a ramp
+seed: 1
+physics:
+  space: free
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 1.2
+          - 6.2
+        rotation:
+          - -5.0
+          - 19.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 40.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 1.5
+          - 3.5
+          - 4.5
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 5.0
+        range: 24.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 6.0
+          - 1.0
+          - 4.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.32
+          - 0.6
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 3.0
+              - 0.5
+              - 2.0
+        body: static
+  - name: step
+    components:
+      Transform:
+        translation:
+          - -1.325
+          - 0.125
+          - 0.0
+        scale:
+          - 0.3
+          - 0.25
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.55
+          - 0.4
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.15
+              - 0.125
+              - 0.25
+        body: static
+  - name: ramp
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 0.032
+          - 0.0
+        rotation:
+          - 0.0
+          - 0.0
+          - 15.0
+        scale:
+          - 1.2
+          - 0.1
+          - 0.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.6
+          - 0.5
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.6
+              - 0.05
+              - 0.4
+        body: static
+  - name: stepper
+    components:
+      Transform:
+        translation:
+          - -1.2
+          - 0.0
+          - 0.0
+        scale:
+          - 0.125
+          - 0.125
+          - 0.125
+      Mesh:
+        shape:
+          assembly: voxels/humanoid-grounded.assembly.yaml
+  - name: climber
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.125
+          - 0.125
+          - 0.125
+      Mesh:
+        shape:
+          assembly: voxels/humanoid-grounded.assembly.yaml
+      Animation:
+        clip: idle

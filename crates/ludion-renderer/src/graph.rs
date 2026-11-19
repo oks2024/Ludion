@@ -25,8 +25,9 @@
 //!   then the generic projector pass that paints each decal and multiplies each shadow's footprint
 //!   into `scene`, after `reflections` and before `transparents`.
 //! - **rain_occlusion** — present only with rain ([`PostChain::rain`]): a depth-only straight-down map of
-//!   the shadow casters over the rain volume, read by `transparents` and `transparent_depth` as their
-//!   last input, so the streaks stop under a roof.
+//!   the shadow casters over the rain volume, scheduled ahead of `scene`, which reads it last to wet the
+//!   surfaces the rain reaches, and read by `transparents` and `transparent_depth` as their last input,
+//!   so the streaks stop under a roof.
 //! - **decal_receivers** — present only when a decal lists receiver meshes ([`PostChain::decal_receivers`]):
 //!   the listed meshes redrawn into an id target, depth-matched against `scene_depth`, read by both decal
 //!   passes. It sits right after `scene`.
@@ -1708,6 +1709,19 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     };
     // The lit decals shade like the scene pass, so they read what it reads, after their own inputs.
     let decals_lit_tail = chain.lit_decals.then(|| scene_reads.clone());
+    // The rain's overhead depth map runs ahead of the scene pass, which reads it last to wet the
+    // surfaces the rain reaches; `transparents` and `transparent_depth` read it last as well. The
+    // lit decals bind none, so it joins the scene's reads after their tail was copied.
+    if let Some(map) = rain_occlusion {
+        graph.add_external_pass_with_depth(
+            pass::RAIN_OCCLUSION,
+            pass::RAIN_OCCLUSION,
+            vec![],
+            vec![],
+            map,
+        );
+        scene_reads.push(map);
+    }
     let scene_pass = graph.add_external_pass_with_depth(
         pass::SCENE,
         pass::SCENE,
@@ -1821,17 +1835,10 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             vec![scene],
         );
     }
-    // The rain's overhead depth map, ahead of the two passes that draw the rain and read it as their
-    // last input, so `record_blended`'s fixed input indices do not move.
+    // The two passes that draw the rain read the map last, so `record_blended`'s fixed input indices
+    // do not move.
     let mut blended_reads = blended_reads;
     if let Some(map) = rain_occlusion {
-        graph.add_external_pass_with_depth(
-            pass::RAIN_OCCLUSION,
-            pass::RAIN_OCCLUSION,
-            vec![],
-            vec![],
-            map,
-        );
         blended_reads.push(map);
     }
     graph.add_external_pass_with_depth(
@@ -6308,8 +6315,9 @@ mod tests {
         }
     }
 
-    /// A rain-free frame declares neither the occlusion pass nor its map; a rain frame adds both, and
-    /// the map is the last read of `transparents` and of `transparent_depth`.
+    /// A rain-free frame declares neither the occlusion pass nor its map; a rain frame adds both, runs
+    /// the pass ahead of `scene`, and the map is the last read of `scene`, `transparents` and
+    /// `transparent_depth`.
     #[test]
     fn rain_graph_is_conditional_and_ends_both_transparent_reads_with_the_map() {
         let reads = |graph: &RenderGraph, name: &str| {
@@ -6338,11 +6346,12 @@ mod tests {
         );
         let names = pass_names(&on);
         let at = |name: &str| names.iter().position(|n| *n == name).unwrap();
+        assert!(at(pass::RAIN_OCCLUSION) < at(pass::SCENE));
         assert!(at(pass::RAIN_OCCLUSION) < at(pass::TRANSPARENTS));
         assert!(at(pass::RAIN_OCCLUSION) < at(pass::TRANSPARENT_DEPTH));
         assert_eq!(resource_names(&on).len(), resource_names(&off).len() + 1);
         assert_eq!(names.len(), pass_names(&off).len() + 1);
-        for name in [pass::TRANSPARENTS, pass::TRANSPARENT_DEPTH] {
+        for name in [pass::SCENE, pass::TRANSPARENTS, pass::TRANSPARENT_DEPTH] {
             assert_eq!(
                 reads(&on, name).last().map(String::as_str),
                 Some(pass::RAIN_OCCLUSION),

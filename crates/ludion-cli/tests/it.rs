@@ -14,6 +14,7 @@ mod check_scene_character;
 mod check_scene_fonts;
 mod check_scene_json;
 mod check_scene_mesh;
+mod check_scene_paired;
 mod check_scene_placement;
 mod check_scene_prefab;
 mod check_scene_sprite;

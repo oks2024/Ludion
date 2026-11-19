@@ -317,9 +317,10 @@ ik:
 ```
 
 - A chain has `parts` and `effector`, a look-at has `aim`; both or neither is `L1137`, as are a third
-  part and `ground` (not supported). `L1138`: an unknown part or mask, a second part that is not a child
-  of the first, or no `hinge:` where the second part has a non-hinge `joints:` entry or is not named
-  `lower-leg-*`/`lower-arm-*`.
+  part, `ground` on a look-at or a `ground:` with a wrong type or unknown key. `L1138`: an unknown part or
+  mask, a second part that is not a child of the first, or no `hinge:` where the second part has a non-hinge
+  `joints:` entry or is not named `lower-leg-*`/`lower-arm-*`; a `ground: true` chain without a `ground:`
+  block, or the block with no grounded chain.
 - The hinge is `hinge:`, else the second part's `joints:` hinge (its limits clamp the flex), else axis +X
   with bend −1 for `lower-leg-*` and +1 for `lower-arm-*` (the humanoid convention).
 - `IkTargets.targets` maps an entry name to one of `point` (world) or `direction` (`Look`: +yaw turns
@@ -342,6 +343,37 @@ ik:
   voxels**, the frame `place:` is written in. Both need `--clip`, `--crossfade` or `--blend` (not a `--blend`
   range with a `--look` range), assemblies only. Each phase prints `look [yaw, pitch]` and keeps the gap
   analysis, so "the elbow tears out of its plug" is text. Misuse is `L1117`.
+
+#### Ground feet
+
+```yaml
+ik:
+  foot_l:                       # a chain with `ground: true` puts its effector on the ground
+    parts:
+      - upper-leg-l
+      - lower-leg-l
+    effector:
+      - 1.0
+      - 0.0
+      - 1.0
+    ground: true
+ground:
+  max_adjust: 3.0               # voxels, > 0, required
+  root_drop: true               # default false
+```
+
+- Extract casts one ray down per grounded chain (static colliders as of the last physics step), on the
+  pose after clip, layers, look-ats and targeted chains, and solves the chain so its effector lands there.
+  The cast is measured from the assembly's origin height, so an animated foot lift survives.
+- The move clamps to `max_adjust` voxels. No ground within reach, or an origin inside something taller, leaves
+  the foot alone; a move under 1/1000 voxel is no move: flat ground at the floor, and a scene with no
+  collider, pose byte for byte as without `ground`.
+- `root_drop` lowers every part by the deepest dip a foot found, then solves each foot back up to its own
+  ground; it never raises the root.
+- An active `IkTargets` goal on a grounded chain wins over the ground.
+- Presentation only: no foot pitch to the slope, no moving platforms, not in the model sheet, the ragdoll
+  switch or `kind: character` skins. Sockets on a grounded part follow it; the sim keeps the rest socket.
+- `check-scene` ends a grounded chain's row with `, ground` and prints `ground: max_adjust 3, root_drop`.
 
 ### Live editing
 
@@ -371,6 +403,7 @@ outside the mesh content hash, so nothing is re-uploaded to the GPU.
 - `ludion docs voxel-assemblies` — the model the clips address: parts, pivots, the humanoid names.
 - `ludion docs character-animation` — skinned characters: the `kind: character` document, clips, `crossfade`, `AnimationEvents`.
 - `ludion docs sprite-animation` — the same `Animation` component over a `Sprite`'s atlas flipbook.
+- `ludion docs paired-actions` — the `kind: paired` document: two assemblies aligned, with events and contact gaps checked.
 - `ludion docs prefab-animation` — imported rigid node clips on a prefab instance.
 - `ludion docs components` — `Animation`'s row, and every other built-in component.
 - `ludion docs voxel-sheets` — the sheet flags `--clip` composes with.

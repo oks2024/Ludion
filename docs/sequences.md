@@ -5,13 +5,13 @@ description: Sequences: kind sequence timelines of camera, animation, ui, audio,
 # Sequences (a keyed timeline, skip, cancel)
 
 **Scope:** `kind: sequence` documents, `sequences::play` with roles bound to entities, the six W1 tracks,
-`SequenceEvents`, skip and cancel. Clocks are `ludion docs game-clock`; lines are `ludion docs dialogue`; the camera
+`SequenceEvents`, skip and cancel, `holds_gameplay`, waits. Clocks are `ludion docs game-clock`; lines are `ludion docs dialogue`; the camera
 rig is `ludion docs camera`; UI tweens are `ludion docs ui-tweens`.
 
 ## The loop
 
 1. `Engine::builder().sequences()` opts in (add `.dialogue(..)` if a key says a line).
-2. Write `sequences/<name>.yaml` under the content root; `build` and `check-scene` validate it (`L1730`–`L1733`).
+2. Write `sequences/<name>.yaml` under the content root; `build` and `check-scene` validate it (`L1730`–`L1735`).
 3. Schedule `.system("sequence_update", sequence_update)` **before** `dialogue_update` (a dialogue key then starts the
    same tick) and before systems that read `SequenceEvents`.
 4. `sequences::play(world, "sequences/radar.yaml", &[("camera", cam), ("radar", panel)])` returns a `SequenceHandle`.
@@ -27,7 +27,8 @@ roles:
   - camera
   - radar
 length_ticks: 120
-clock: game          # game (default) | sim
+clock: game          # game (default; sim when holds_gameplay) | sim
+holds_gameplay: false  # true holds the gameplay clock while it plays
 skippable: true      # default true
 tracks:
   camera:
@@ -78,8 +79,8 @@ tracks:
 | `animation` | `role`, `clip`, `fade` (0 s) | `crossfade`; `fade: 0` is a hard cut. |
 | `ui` | `role`, `tracks` | Writes `UiTween`; each track's `start` is a frame offset after the key. |
 | `audio` | `play`, `gain` (1), `role?`, `range` (10) | A one-shot; with `role`, positional at that entity. |
-| `dialogue` | `line`, `speaker?` | `dialogue::say`; refused lines warn `L4353`. |
-| `event` | `name`, `on_skip` (`fire`) | `Fired` in `SequenceEvents`. `name` is not empty or `end`. |
+| `dialogue` | `line`, `speaker?`, `wait?` (`line_end`) | `dialogue::say`; refused lines warn `L4353` (and set no wait). |
+| `event` | `name`, `on_skip` (`fire`), `wait?` (`release`) | `Fired` in `SequenceEvents`. `name` is not empty or `end`. |
 
 Every list is in ascending `at`, each `at` in `0..=length_ticks`; an unknown field is `L1120`. Block-style YAML only: a non-empty `[..]` or `{..}` is `L1005`.
 
@@ -90,6 +91,21 @@ shift by the held length; `scale(0.5)` doubles the ticks. `clock: sim` runs thro
 the gameplay frame. A sequence started on frame F ends `Completed` on F+`length_ticks`, keys at `at == length_ticks`
 applying that tick. Order inside a tick: track (camera, animation, ui, audio, dialogue, event), `at`, document order;
 players in ascending entity id.
+
+## Holds and waits
+
+`holds_gameplay: true` holds the `GameClock` (the path dialogue's holding lines use) for as long as the beat is
+live, except on its final tick, so gameplay resumes two sim frames after the beat ends. It implies `clock: sim`;
+an explicit `clock: game` with it is `L1734`. `sequences::holding(world)` reports it.
+
+A key can park the playhead: a dialogue key with `wait: line_end` (until the line it said has ended, however it
+ended) or an event key with `wait: release` (the event fires, then the playhead waits for
+`sequences::release(world, handle)`). The playhead is `now − started − waited`: while parked nothing applies and the
+beat cannot complete, even at `at == length_ticks`; when the wait clears, later keys apply from the next clock frame,
+so a longer voice line shifts everything after it. Keys at the wait's own `at`, on any track, apply that tick. One
+wait at a time: two at one `at` is `L1735`. `release` is one latch, not a counter: called before the wait is
+reached, it clears the next one, so an early release cannot stall the beat; it returns `false` for a dead handle.
+`skip` and `cancel` ignore waits, and the hold ends with the beat.
 
 ## Skip and cancel
 
@@ -112,6 +128,8 @@ events fire in order, then `Ended { Skipped }`. A skipped and a watched beat lea
 | `L1731` | Unknown, duplicate or missing role |
 | `L1732` | Empty or reserved event name |
 | `L1733` | Dialogue line unknown, or no `.dialogue()` |
+| `L1734` | `holds_gameplay: true` with an explicit `clock: game` |
+| `L1735` | Two `wait` keys at one `at` (dialogue and event tracks together) |
 | `L4350` / `L4351` | `play`: unknown document / role undeclared or bound twice |
 | `L4352` | Role unbound or its entity dead (warning, once) |
 | `L4353` | Key degraded: missing `CameraRig`/`Animation`, `say` refused, doc gone (warning, once) |
@@ -123,6 +141,8 @@ events fire in order, then `Ended { Skipped }`. A skipped and a watched beat lea
   Entity refs in a list are refused (`L1392`), hence one binding entity per role.
 - Scheduled after `dialogue_update`, a dialogue key starts a tick late.
 - An opted-in game that never plays hashes as if it had not opted in.
+- A `holds_gameplay` beat freezes its bound actors too: their animation and camera read the held
+  gameplay clock. Only real-clock ui tracks, audio, dialogue and events advance.
 
 ## Next
 

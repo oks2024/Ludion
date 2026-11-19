@@ -84,6 +84,7 @@ mod mesh_check;
 pub mod model_sheet;
 mod motor;
 mod nav;
+mod paired_doc;
 mod parent_joint;
 pub mod particles;
 mod path_follow;
@@ -150,8 +151,9 @@ mod voxelizer;
 
 pub use animation_events::{AnimationEvents, ClipEvent, animation_events};
 pub use assembly_mesh::{
-    AssemblyData, AssemblyIkData, AssemblyIkKind, AssemblyPartData, MeshedAssemblyDocuments,
-    load as load_assembly, load_meshed_documents as load_assembly_meshed_documents, mesh_assembly,
+    AssemblyData, AssemblyGroundData, AssemblyIkData, AssemblyIkKind, AssemblyPartData,
+    MeshedAssemblyDocuments, load as load_assembly,
+    load_meshed_documents as load_assembly_meshed_documents, mesh_assembly,
 };
 pub use audio::{
     AudioCategory, AudioDistance, AudioEvent, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
@@ -267,6 +269,7 @@ pub use nav::{
     Nav, NavConfig, NavPath, PathRequest, nav_distance, nav_link_done, nav_path, nav_project,
     nav_reachable, nav_steer, nav_update,
 };
+pub use paired_doc::{PairedContactReport, PairedReport, PairedRoleReport, check_paired_files};
 pub use parent_joint::{posed_joint_world, scene_parent_joint_diagnostics};
 pub use path_follow::{
     FollowerMotion, PathFollower, PathMode, PathOrient, path_follow, path_follower_motion,

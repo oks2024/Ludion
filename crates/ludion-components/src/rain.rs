@@ -71,6 +71,10 @@ pub struct Rain {
     /// Hide streaks under roofs; read by the occlusion pass (default true).
     #[serde(default = "default_true")]
     pub occlusion: bool,
+    /// How wet exposed surfaces look, in `[0, 1]`: 0 leaves every surface dry, 1 darkens and glosses what the
+    /// rain reaches (default 1). Games write it to dry a street.
+    #[serde(default = "default_wetness")]
+    pub wetness: f32,
     /// Varies the lattice hash (default 0).
     #[serde(default)]
     pub seed: u32,
@@ -93,6 +97,7 @@ impl Default for Rain {
             lit: true,
             medium: default_medium(),
             occlusion: true,
+            wetness: default_wetness(),
             seed: 0,
         }
     }
@@ -127,6 +132,9 @@ fn default_streak() -> f32 {
 }
 fn default_color() -> [f32; 4] {
     [0.55, 0.6, 0.65, 0.25]
+}
+fn default_wetness() -> f32 {
+    1.0
 }
 fn default_true() -> bool {
     true
@@ -228,6 +236,11 @@ pub fn rain_problems(rain: &Rain) -> Vec<(String, String)> {
         "/medium".into(),
         format!("`medium` is {}; it takes a value in [0, 1]", rain.medium),
     );
+    check(
+        unit(rain.wetness),
+        "/wetness".into(),
+        format!("`wetness` is {}; it takes a value in [0, 1]", rain.wetness),
+    );
     out
 }
 
@@ -319,6 +332,9 @@ mod tests {
             ["/color/1"]
         );
         assert_eq!(paths(json!({ "medium": 2.0 })), ["/medium"]);
+        assert_eq!(paths(json!({ "wetness": 1.5 })), ["/wetness"]);
+        assert_eq!(paths(json!({ "wetness": -0.1 })), ["/wetness"]);
+        assert!(paths(json!({ "wetness": 0.0 })).is_empty());
         assert!(paths(json!({ "height": [-6.0, 58.0], "cell": 8.0 })).is_empty());
     }
 }

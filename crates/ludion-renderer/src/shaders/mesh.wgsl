@@ -301,6 +301,47 @@ fn wrap_band(
     return sum * diffuse * direct_ao;
 }
 
+// The overhead rain-occlusion map, read with `textureLoad` by `surface_wetness`. It is declared here, not
+// in `mesh_shading.wgsl`, because the lit decal pass shares that snippet and already fills the fragment
+// stage's sampled-texture limit: only the mesh pipelines bind it. A frame without rain (and the blended
+// draws) binds a 1×1 fallback and carries `wet = 0`, so it is never read.
+@group(3) @binding(11) var wet_map: texture_depth_2d;
+
+// How wet the rain has left a surface point, in [0, 1]: `wetness × exposure × facing`. Exposure is the
+// overhead occlusion map's — a point at its column's top is 1, one under a roof 0 — and blends over the
+// map's outer 10 % to the sky visibility (the open sky without a `GiVolume`). Facing is 1 looking up,
+// 0.5 on a wall, 0 looking down. 0 without rain; `n` is the geometric normal.
+fn surface_wetness(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
+    if (env.wet.x <= 0.0) {
+        return 0.0;
+    }
+    var beyond = 1.0;
+    if (env.gi_origin.w > 0.5) {
+        beyond = mix(1.0, gi_sky_visibility(world_pos, n), env.params.w);
+    }
+    var exposure = beyond;
+    if (env.wet.y > 0.5) {
+        let column = occluder_top(env.wet_view, wet_map, world_pos);
+        if (column.y > 0.5) {
+            var under = 1.0;
+            if (column.x > NO_OCCLUDER) {
+                under = smoothstep(column.x - 0.2, column.x, world_pos.y);
+            }
+            let clip = env.wet_view * vec4<f32>(world_pos, 1.0);
+            let edge = max(abs(clip.x), abs(clip.y)) * env.wet.z;
+            exposure = mix(beyond, under, 1.0 - smoothstep(0.9 * env.wet.z, env.wet.z, edge));
+        }
+    }
+    let facing = clamp(0.5 + 0.5 * n.y, 0.0, 1.0);
+    return env.wet.x * exposure * facing;
+}
+
+// The wet look (`Plan/rain-and-wet.md` decision 14): the albedo multiplier at full wetness and porosity,
+// the roughness of a water film, and the porosity every surface takes until a document authors one.
+const WET_ALBEDO_DARKEN: f32 = 0.6;
+const WET_ROUGHNESS: f32 = 0.08;
+const WET_POROSITY_DEFAULT: f32 = 0.5;
+
 fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
     // Screen-door occlusion fade (opaque pipeline — no blend, no depth-write change; discard is the
     // whole mechanism). `height_min` (fade.y) gates by world height: only fragments strictly ABOVE it
@@ -374,6 +415,18 @@ fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
     var occlusion_map = 1.0;
     if ((material.flags & MATERIAL_OCCLUSION) != 0u) {
         occlusion_map = mix(1.0, textureSample(occlusion_tex, material_samp, in.uv).r, material.occlusion_strength);
+    }
+
+    // Rain wets what it reaches: the albedo darkens by the porosity and the roughness drops toward a
+    // film of water, except on metal. The viewmodel and the blended draws stay dry.
+    if (!VIEWMODEL && !BLENDED) {
+        var geometric = normalize(in.world_normal);
+        if (material_back_face(front_facing)) {
+            geometric = -geometric;
+        }
+        let wet = surface_wetness(in.world_pos, geometric);
+        albedo = albedo * mix(1.0, WET_ALBEDO_DARKEN, wet * WET_POROSITY_DEFAULT);
+        surface.x = mix(surface.x, WET_ROUGHNESS, wet * (1.0 - surface.y));
     }
 
     let shaded = shade(in.world_pos, normal, albedo, surface, ao, in.clip.xy, occlusion_map);

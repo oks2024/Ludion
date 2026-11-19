@@ -151,6 +151,7 @@ fn assembly_doc() -> impl Strategy<Value = AssemblyDocument> {
                 masks: Vec::new(),
                 blends: Vec::new(),
                 ik: Vec::new(),
+                ground: None,
             }
         })
 }
@@ -345,6 +346,7 @@ fn empty_collections_use_flow_empties() {
         masks: Vec::new(),
         blends: Vec::new(),
         ik: Vec::new(),
+        ground: None,
     };
     let text = emit_assembly(&doc);
     assert_eq!(

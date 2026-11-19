@@ -5033,6 +5033,9 @@ pub struct UiRect {
     /// image: `texture`, `atlas`, `frame`, `slice` and `uv_rect` beside it are `L2373`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view: Option<String>,
+    /// Rotation about the centre of what the rect draws, degrees, clockwise on screen (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rotation: f32,
 }
 
 impl Default for UiRect {
@@ -5053,6 +5056,7 @@ impl Default for UiRect {
             group: None,
             fill_group: false,
             view: None,
+            rotation: 0.0,
         }
     }
 }
@@ -5084,6 +5088,7 @@ impl SemanticValidate for UiRect {
             ui::ui_rect_group_diagnostics(object, &mut out);
             render_view::ui_rect_view_diagnostics(object, &mut out);
         }
+        ui::validate_rotation(value, &mut out);
         out
     }
 }
@@ -5174,6 +5179,9 @@ pub struct UiText {
     /// An outline drawn under the glyphs (default none). Ink only: layout and hit tests ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline: Option<TextOutline>,
+    /// Rotation about the centre of the glyph bounds, degrees, clockwise on screen (default `0`).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rotation: f32,
 }
 
 impl Default for UiText {
@@ -5190,6 +5198,7 @@ impl Default for UiText {
             font: None,
             group: None,
             outline: None,
+            rotation: 0.0,
         }
     }
 }
@@ -5204,6 +5213,7 @@ impl SemanticValidate for UiText {
             require_positive_finite_ui_size(size, "/size", &mut out);
         }
         ui::validate_text_outline(value, &mut out);
+        ui::validate_rotation(value, &mut out);
         out
     }
 }
@@ -9035,6 +9045,7 @@ mod tests {
             group: Some(EntityId::new(7, 0)),
             fill_group: true,
             view: None,
+            rotation: 0.0,
         };
         let json = serde_json::to_value(&rect).unwrap();
         assert_eq!(json["uv_rect"], serde_json::json!([0.0, 0.25, 0.5, 1.0]));
@@ -9069,6 +9080,7 @@ mod tests {
             group: None,
             fill_group: false,
             view: None,
+            rotation: 0.0,
         };
         let json = serde_json::to_value(&rect).unwrap();
         assert_eq!(json["atlas"], serde_json::json!("sprites/hud.atlas.yaml"));
@@ -9148,10 +9160,58 @@ mod tests {
                 width: 2.0,
                 color: [0.0, 0.0, 0.0, 1.0],
             }),
+            rotation: -15.0,
         };
         let json = serde_json::to_value(&text).unwrap();
         assert_eq!(json["anchor"], serde_json::json!("center"));
         assert_eq!(serde_json::from_value::<UiText>(json).unwrap(), text);
+    }
+
+    /// An absent `rotation` serializes as before, `rotation: 30` round-trips, and a non-finite one is
+    /// `L1620` at `/rotation` on each of the three components.
+    #[test]
+    fn ui_rotation_serializes_validates_and_tweens() {
+        for json in [
+            serde_json::to_value(UiRect::default()).unwrap(),
+            serde_json::to_value(UiText::default()).unwrap(),
+            serde_json::to_value(UiGroup::default()).unwrap(),
+        ] {
+            assert!(json.get("rotation").is_none());
+        }
+        let rect = UiRect {
+            rotation: 30.0,
+            ..UiRect::default()
+        };
+        let json = serde_json::to_value(&rect).unwrap();
+        assert_eq!(json["rotation"], serde_json::json!(30.0));
+        assert_eq!(serde_json::from_value::<UiRect>(json).unwrap(), rect);
+        let group = UiGroup {
+            rotation: 30.0,
+            ..UiGroup::default()
+        };
+        let json = serde_json::to_value(&group).unwrap();
+        assert_eq!(serde_json::from_value::<UiGroup>(json).unwrap(), group);
+        assert_eq!(ui::UiTweenField::Rotation.arity(), 1);
+
+        let nan = |d: Vec<Diagnostic>| {
+            let d: Vec<_> = d
+                .into_iter()
+                .filter(|d| d.code == code::UI_ROTATION_INVALID)
+                .collect();
+            d.iter()
+                .map(|d| d.path.clone().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let bad = serde_json::json!({"rotation": 1e300});
+        let good = serde_json::json!({"rotation": 30.0});
+        for validate in [
+            UiRect::validate_semantics,
+            UiText::validate_semantics,
+            UiGroup::validate_semantics,
+        ] {
+            assert_eq!(nan(validate(&bad)), ["/rotation"]);
+            assert!(nan(validate(&good)).is_empty());
+        }
     }
 
     /// An empty `UiText: {}` deserializes to the documented default — anchor `TopLeft`, empty text,

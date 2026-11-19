@@ -1,8 +1,8 @@
 //! The screen-space UI text vertex stream: the packed vertex, its attribute table, and the glyph-quad
 //! packing (including the outline's quad growth) that `ui_text.wgsl` reads.
 
-use super::ui_clip_raw;
-use crate::scene::{GlyphOutline, UiClip};
+use super::{ui_clip_raw, ui_cos_sin};
+use crate::scene::{GlyphOutline, UiClip, UiRotation};
 use bytemuck::{Pod, Zeroable};
 use ludion_font::GlyphQuad;
 
@@ -23,10 +23,11 @@ pub(super) struct UiTextVertexRaw {
     ol_color: [f32; 4],
     ol_rect: [f32; 4],
     ol_param: [f32; 4],
+    clip_t: [f32; 4],
 }
 
-/// UI-text per-vertex attributes (`UiTextVertexRaw`: position/uv/color/sdf/clip a, b, r/outline colour, rect, param), locations 0-9.
-pub(super) const UI_TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4];
+/// UI-text per-vertex attributes (`UiTextVertexRaw`: position/uv/color/sdf/clip a, b, r/outline colour, rect, param/clip t), locations 0-10.
+pub(super) const UI_TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4];
 
 /// Appends one screen-space text run's glyph quads (6 vertices each) to `verts`, in pixel space with
 /// a top-left origin and **+Y down**. The quads come from `ludion_font::layout` via extract — the
@@ -36,15 +37,28 @@ pub(super) const UI_TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 10] = wgpu::verte
 /// An `outline` (with the face's SDF spread and the atlas size in texels) rides every vertex. An SDF
 /// quad already carries the spread as padding and is not grown; a bitmap quad grows by the whole-texel
 /// radius per side, and every vertex carries the original uv rect so the shader masks out neighbours.
+///
+/// A `rotation` with `radians != 0` turns every corner about its pivot here, on the CPU; an unrotated
+/// run's positions are untouched.
 pub(super) fn push_ui_text_verts(
     verts: &mut Vec<UiTextVertexRaw>,
     quads: &[GlyphQuad],
     color: [f32; 4],
     sdf: bool,
     clip: &UiClip,
+    rotation: &UiRotation,
     outline: Option<(&GlyphOutline, u32, [u32; 2])>,
 ) {
-    let [clip_a, clip_b, clip_r] = ui_clip_raw(clip);
+    let [clip_a, clip_b, clip_r, clip_t] = ui_clip_raw(clip);
+    let turn = (rotation.radians != 0.0).then(|| ui_cos_sin(rotation.radians));
+    let place = |x: f32, y: f32| match turn {
+        None => [x, y],
+        Some((cos, sin)) => {
+            let [px, py] = rotation.pivot_px;
+            let (dx, dy) = (x - px, y - py);
+            [px + cos * dx - sin * dy, py + sin * dx + cos * dy]
+        }
+    };
     let (ol_color, ol_param) = match outline {
         None => ([0.0; 4], [0.0; 4]),
         Some((o, spread_px, _)) => {
@@ -82,7 +96,7 @@ pub(super) fn push_ui_text_verts(
             }
         }
         let vert = |x: f32, y: f32, u: f32, v: f32| UiTextVertexRaw {
-            position: [x, y],
+            position: place(x, y),
             uv: [u, v],
             color,
             sdf: f32::from(sdf),
@@ -92,6 +106,7 @@ pub(super) fn push_ui_text_verts(
             ol_color,
             ol_rect,
             ol_param,
+            clip_t,
         };
         let tl = vert(l, t, u0, v0);
         let tr = vert(r, t, u1, v0);
@@ -122,7 +137,15 @@ mod tests {
         for (text, glyphs, lines) in [("HI", 2, 1), ("HELLO", 5, 1), ("HI\nTHERE\nYOU", 5, 3)] {
             let mut verts = Vec::new();
             let quads = test_quads(text, cell);
-            push_ui_text_verts(&mut verts, &quads, [1.0; 4], false, &UiClip::NONE, None);
+            push_ui_text_verts(
+                &mut verts,
+                &quads,
+                [1.0; 4],
+                false,
+                &UiClip::NONE,
+                &UiRotation::NONE,
+                None,
+            );
             let (mut max_x, mut max_y) = (0.0_f32, 0.0_f32);
             for v in &verts {
                 max_x = max_x.max(v.position[0]);
@@ -148,6 +171,7 @@ mod tests {
             [1.0; 4],
             false,
             &UiClip::NONE,
+            &UiRotation::NONE,
             None,
         );
         assert!(verts.is_empty(), "empty string emits nothing");
@@ -158,6 +182,7 @@ mod tests {
             [1.0; 4],
             false,
             &UiClip::NONE,
+            &UiRotation::NONE,
             None,
         );
         assert!(verts.is_empty(), "unmapped code points emit no quads");
@@ -170,7 +195,15 @@ mod tests {
     fn ui_text_verts_pack_the_outline() {
         let quads = test_quads("H", 8.0);
         let mut plain = Vec::new();
-        push_ui_text_verts(&mut plain, &quads, [1.0; 4], false, &UiClip::NONE, None);
+        push_ui_text_verts(
+            &mut plain,
+            &quads,
+            [1.0; 4],
+            false,
+            &UiClip::NONE,
+            &UiRotation::NONE,
+            None,
+        );
         assert!(
             plain
                 .iter()
@@ -189,6 +222,7 @@ mod tests {
             [1.0; 4],
             false,
             &UiClip::NONE,
+            &UiRotation::NONE,
             Some((&outline, 0, dims)),
         );
         let q = &quads[0];
@@ -213,10 +247,52 @@ mod tests {
             [1.0; 4],
             true,
             &UiClip::NONE,
+            &UiRotation::NONE,
             Some((&outline, 8, dims)),
         );
         assert_eq!(sdf[0].uv, q.uv[..2]);
         assert_eq!(sdf[0].position, [q.pos[0], q.pos[1]]);
         assert_eq!(sdf[0].ol_param, [1.0, 0.5 - 2.0 / 16.0, 0.0, 0.0]);
+    }
+
+    /// An unrotated run keeps the axis-aligned corners and `clip_t = [1, 0, 1, 0]`; a 90° rotation
+    /// about a pivot (clockwise on the +Y-down screen) moves the corners to the hand-computed points.
+    #[test]
+    fn ui_text_verts_rotate_about_the_pivot() {
+        let quads = test_quads("H", 8.0);
+        let q = &quads[0];
+        let mut plain = Vec::new();
+        let push = |verts: &mut Vec<UiTextVertexRaw>, rotation: &UiRotation| {
+            push_ui_text_verts(
+                verts,
+                &quads,
+                [1.0; 4],
+                false,
+                &UiClip::NONE,
+                rotation,
+                None,
+            );
+        };
+        push(&mut plain, &UiRotation::NONE);
+        assert_eq!(plain[0].position, [q.pos[0], q.pos[1]]);
+        assert_eq!(plain[1].position, [q.pos[2], q.pos[1]]);
+        assert_eq!(plain[0].clip_t, [1.0, 0.0, 1.0, 0.0]);
+
+        let pivot = [10.0, 10.0];
+        let mut turned = Vec::new();
+        push(
+            &mut turned,
+            &UiRotation {
+                radians: std::f32::consts::FRAC_PI_2,
+                pivot_px: pivot,
+            },
+        );
+        // R(90°)(x, y) = (-y, x): the top-left corner offset (dx, dy) lands at (-dy, dx).
+        let want = |x: f32, y: f32| [pivot[0] - (y - pivot[1]), pivot[1] + (x - pivot[0])];
+        let near =
+            |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4;
+        assert!(near(turned[0].position, want(q.pos[0], q.pos[1])));
+        assert!(near(turned[1].position, want(q.pos[2], q.pos[1])));
+        assert!(near(turned[2].position, want(q.pos[2], q.pos[3])));
     }
 }

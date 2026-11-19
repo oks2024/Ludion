@@ -10,9 +10,9 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::time::{GameClock, GameTime, SimTime};
 use ludion_ecs::World;
-use ludion_renderer::{SpriteInstance, UiClip, UiInstance};
+use ludion_renderer::{SpriteInstance, UiClip, UiInstance, UiRotation};
 
-use super::group::{UiGroups, clip_contains};
+use super::group::{UiGroups, clip_contains, cos_sin};
 use super::hud::{self, Grouping, HudElement, HudFrame, UiEntry};
 use super::{FontFace, radial_hit, radial_layout, ui_list_draw, ui_text_draw};
 use crate::components::{Anchor, UiList, UiRadial, UiRect, UiText};
@@ -112,9 +112,17 @@ pub fn ui_hit(
             uv: SpriteInstance::FULL_UV,
             clip: UiClip::NONE,
             view: None,
+            rotation: UiRotation::NONE,
         };
         let element = HudElement::Rect { fill: rect.fill };
-        if probe.hit(element, rect.anchor, rect.group, rect.fill_group, row) {
+        if probe.hit(
+            element,
+            rect.anchor,
+            rect.group,
+            rect.fill_group,
+            rect.rotation,
+            row,
+        ) {
             return true;
         }
     }
@@ -129,8 +137,16 @@ pub fn ui_hit(
             font: None,
             clip: UiClip::NONE,
             outline: None,
+            rotation: UiRotation::NONE,
         };
-        if probe.hit(HudElement::Text, text.anchor, text.group, false, row) {
+        if probe.hit(
+            HudElement::Text,
+            text.anchor,
+            text.group,
+            false,
+            text.rotation,
+            row,
+        ) {
             return true;
         }
     }
@@ -147,8 +163,9 @@ pub fn ui_hit(
             uv: SpriteInstance::FULL_UV,
             clip: UiClip::NONE,
             view: None,
+            rotation: UiRotation::NONE,
         };
-        if probe.hit(HudElement::List, list.anchor, list.group, false, row) {
+        if probe.hit(HudElement::List, list.anchor, list.group, false, 0.0, row) {
             return true;
         }
     }
@@ -171,8 +188,16 @@ pub fn ui_hit(
             uv: SpriteInstance::FULL_UV,
             clip: UiClip::NONE,
             view: None,
+            rotation: UiRotation::NONE,
         };
-        if probe.hit(HudElement::Radial, radial.anchor, radial.group, false, row) {
+        if probe.hit(
+            HudElement::Radial,
+            radial.anchor,
+            radial.group,
+            false,
+            0.0,
+            row,
+        ) {
             return true;
         }
     }
@@ -184,6 +209,17 @@ fn face_of<'a>(fonts: Option<&'a FontLibrary>, name: Option<&str>) -> &'a FontFa
         Some(library) => library.face(name),
         None => FontFace::embedded(),
     }
+}
+
+/// `pivot + R(−radians)(p − pivot)`; `p` itself for an unrotated instance.
+fn unrotate(p: [f32; 2], rotation: &UiRotation) -> [f32; 2] {
+    if rotation.radians == 0.0 {
+        return p;
+    }
+    let (c, s) = cos_sin(rotation.radians);
+    let [px, py] = rotation.pivot_px;
+    let (dx, dy) = (p[0] - px, p[1] - py);
+    [px + c * dx + s * dy, py - s * dx + c * dy]
 }
 
 /// The state one [`ui_hit`] walk shares across the entity's UI components.
@@ -205,6 +241,7 @@ impl Probe<'_> {
         anchor: Anchor,
         group: Option<EntityId>,
         fill_group: bool,
+        rotation_deg: f32,
         row: UiInstance,
     ) -> bool {
         let mut entries: Vec<UiEntry> = vec![(0, self.entity, row)];
@@ -219,6 +256,7 @@ impl Probe<'_> {
             Grouping {
                 group,
                 fill_group,
+                rotation_deg,
                 groups: &mut self.groups,
                 degraded: &mut self.degraded,
             },
@@ -226,8 +264,11 @@ impl Probe<'_> {
         let Some(b) = hud::bounds(&entries) else {
             return false;
         };
-        let (UiInstance::Rect { clip, .. } | UiInstance::Text { clip, .. }) = &entries[0].2;
-        let [x, y] = self.cursor;
+        let (UiInstance::Rect { clip, rotation, .. } | UiInstance::Text { clip, rotation, .. }) =
+            &entries[0].2;
+        // The geometry is axis-aligned and the draw turns it about the pivot, so the cursor turns
+        // back the other way before the bounds test (decision 52).
+        let [x, y] = unrotate(self.cursor, rotation);
         x >= b[0] && x < b[2] && y >= b[1] && y < b[3] && clip_contains(clip, self.cursor)
     }
 }

@@ -39,6 +39,8 @@ pub struct RainData {
     pub medium: f32,
     /// Hide streaks under roofs.
     pub occlusion: bool,
+    /// How wet exposed surfaces look, in `[0, 1]`; 0 draws no wetness.
+    pub wetness: f32,
     /// Varies the lattice hash.
     pub seed: u32,
     /// Game seconds, wrapped at [`RAIN_TIME_WRAP_S`].
@@ -215,6 +217,7 @@ mod tests {
             lit: true,
             medium: 1.0,
             occlusion: true,
+            wetness: 0.0,
             seed: 0,
             time_s: 3.25,
             per_tile: 96,

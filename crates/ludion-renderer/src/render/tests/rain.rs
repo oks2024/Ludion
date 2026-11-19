@@ -23,6 +23,7 @@ fn rain(time_s: f32) -> RainData {
         lit: true,
         medium: 1.0,
         occlusion: true,
+        wetness: 0.0,
         seed: 0,
         time_s,
         per_tile: 96,
@@ -354,4 +355,199 @@ fn pass_gpu_time_ms(json: &str, pass: &str) -> Option<f64> {
     let rest = rest.trim_start_matches([':', ' ', '\n']);
     let end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == 'e' || c == '-'))?;
     rest[..end].parse().ok()
+}
+
+// --- Wetness -------------------------------------------------------------------------------------
+
+/// A rain with no streaks: only the wetness can change a frame.
+fn wet_rain(wetness: f32) -> RainData {
+    RainData {
+        per_tile: 0,
+        wetness,
+        ..rain(0.0)
+    }
+}
+
+/// An sRGB-encoded 8-bit channel back to linear light.
+fn linear(v: u8) -> f32 {
+    let c = f32::from(v) / 255.0;
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// One matte, ambient-lit face filling the frame, `distance` ahead of a camera at `eye` looking along
+/// `dir`: its normal faces the camera. The rain has no streaks and no occlusion, so exposure is 1 and
+/// the facing term alone decides how wet it looks.
+fn facing_scene(eye: Vec3, dir: Vec3, up: Vec3, wetness: f32) -> RenderScene {
+    let mut scene = RenderScene::empty((PX, PX));
+    scene.camera = crate::scene::RenderCamera {
+        view: Mat4::look_to_rh(eye, dir, up),
+        position: eye,
+        ..origin_camera(PX, PX)
+    };
+    scene.ambient = [0.5; 3];
+    scene.post = Some(exact_post());
+    // A 30 m cube whose near face is 4 m from the eye.
+    let mut face = slab(eye + dir * 19.0, 30.0, [0.5; 3]);
+    face.material = [0.8, 0.0, 0.0];
+    scene.meshes.push(face);
+    scene.rain = Some(RainData {
+        occlusion: false,
+        ..wet_rain(wetness)
+    });
+    scene
+}
+
+fn centre(frame: &RenderedImage) -> u8 {
+    px(frame, PX / 2, PX / 2)[0]
+}
+
+/// At full wetness the albedo of a matte surface darkens by `mix(1, 0.6, 0.5)` facing up, by half that
+/// pull on a wall, and not at all facing down. Skips with no GPU.
+#[test]
+fn needs_gpu_wetness_darkens_by_facing() {
+    let Some(renderer) = skip_or_renderer("wetness_darkens_by_facing") else {
+        return;
+    };
+    let ratio = |eye: Vec3, dir: Vec3, up: Vec3| {
+        let dry = renderer
+            .render(&facing_scene(eye, dir, up, 0.0), size())
+            .expect("dry");
+        let wet = renderer
+            .render(&facing_scene(eye, dir, up, 1.0), size())
+            .expect("wet");
+        (linear(centre(&wet)) / linear(centre(&dry)), dry, wet)
+    };
+    let (up, ..) = ratio(Vec3::new(0.0, 4.0, 0.0), -Vec3::Y, -Vec3::Z);
+    let (wall, ..) = ratio(Vec3::ZERO, -Vec3::Z, Vec3::Y);
+    let (down, dry, wet) = ratio(Vec3::ZERO, Vec3::Y, -Vec3::Z);
+    assert!(
+        (up - 0.8).abs() < 0.03,
+        "facing up darkens to 0.8, got {up}"
+    );
+    assert!(
+        (wall - 0.9).abs() < 0.03,
+        "a wall darkens to 0.9, got {wall}"
+    );
+    assert_eq!(dry.rgba, wet.rgba, "a down-facing surface stays dry");
+    assert_eq!(down, 1.0);
+}
+
+/// Wetness drops the roughness: a rough plane under a sun that mirrors toward the camera gets a
+/// brighter highlight peak when wet. Skips with no GPU.
+#[test]
+fn needs_gpu_wetness_glosses_a_rough_surface() {
+    let Some(renderer) = skip_or_renderer("wetness_glosses_a_rough_surface") else {
+        return;
+    };
+    let (w, h) = (64u32, 64u32);
+    let frame = FrameSize::native(w, h);
+    let peak = |wetness: f32, metallic: f32| {
+        let mut scene = RenderScene::empty((w, h));
+        scene.post = Some(exact_post());
+        scene.ambient = [0.0; 3];
+        let eye = Vec3::new(0.0, 3.0, -5.196);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y),
+            projection: Mat4::perspective_rh(40.0_f32.to_radians(), 1.0, 0.1, 100.0),
+            position: eye,
+        };
+        let mut floor = ground(20.0);
+        floor.color = [1.0; 4];
+        floor.material = [0.7, metallic, 0.0];
+        scene.meshes = vec![floor];
+        scene.sun = Some(test_sun(
+            Vec3::new(0.0, -0.5, -0.866),
+            Vec3::splat(0.4),
+            0.002,
+        ));
+        scene.rain = Some(RainData {
+            occlusion: false,
+            ..wet_rain(wetness)
+        });
+        let img = renderer.render(&scene, frame).expect("render");
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| luma(&img, x, y))
+            .max()
+            .unwrap_or(0)
+    };
+    assert!(
+        peak(1.0, 0.0) > peak(0.0, 0.0),
+        "the wet highlight peaks higher"
+    );
+}
+
+/// A matte floor under a head-height camera with an ambient light, rained on (no streaks) at
+/// `wetness`, with an optional roof.
+fn matte_under_roof(wetness: f32, roof: Option<MeshInstance>) -> RenderScene {
+    let mut scene = under_roof(Some(wet_rain(wetness)), roof);
+    scene.ambient = [0.6; 3];
+    scene.meshes[0].material = [0.8, 0.0, 0.0];
+    scene
+}
+
+/// The frame's near floor rows: far floor and the horizon lie past the occlusion map's edge fade.
+fn near_floor(a: &RenderedImage, b: &RenderedImage, x: std::ops::Range<u32>) -> bool {
+    (PX * 3 / 4..PX).any(|y| x.clone().any(|x| px(a, x, y) != px(b, x, y)))
+}
+
+/// Floor under a roof is dry, byte for byte, inside the roof's footprint away from the edge fade; the
+/// open half of the same frame changes. Skips with no GPU.
+#[test]
+fn needs_gpu_wetness_leaves_the_roofed_floor_dry() {
+    let Some(renderer) = skip_or_renderer("wetness_leaves_the_roofed_floor_dry") else {
+        return;
+    };
+    let half = || {
+        Some(roof(
+            Vec3::new(-30.0, 3.0, 0.0),
+            Vec3::new(60.0, 0.2, 60.0),
+            true,
+        ))
+    };
+    let dry = renderer
+        .render(&matte_under_roof(0.0, half()), size())
+        .expect("dry");
+    let wet = renderer
+        .render(&matte_under_roof(1.0, half()), size())
+        .expect("wet");
+    let mid = PX / 2;
+    assert!(
+        !near_floor(&dry, &wet, 0..mid - 4),
+        "the roofed floor stays dry"
+    );
+    assert!(
+        near_floor(&dry, &wet, mid + 4..PX),
+        "the open floor gets wet"
+    );
+}
+
+/// The `scene` pass time of a wet matte floor at wetness 0 and 1: a measurement, not a gate. Run with
+/// `cargo test -p ludion-renderer --release -- --ignored --nocapture needs_gpu_bench_wetness_gpu_ms`.
+#[test]
+#[ignore = "a timing measurement, not a gate — run with --release --ignored --nocapture"]
+fn needs_gpu_bench_wetness_gpu_ms() {
+    let Some(renderer) = skip_or_renderer("bench_wetness_gpu_ms") else {
+        return;
+    };
+    let size = FrameSize::native(1920, 1080);
+    let mut best = [f64::MAX; 2];
+    for (slot, wetness) in [0.0, 1.0].into_iter().enumerate() {
+        let mut scene = matte_under_roof(wetness, None);
+        scene.camera = head_camera(1920, 1080);
+        for _ in 0..12 {
+            let json = renderer.dump_timings_json(&scene, size).expect("timings");
+            if let Some(ms) = pass_gpu_time_ms(&json, "scene") {
+                best[slot] = best[slot].min(ms);
+            }
+        }
+    }
+    eprintln!(
+        "scene: {:.3} ms at wetness 0, {:.3} ms at wetness 1 (best of 12, 1080p)",
+        best[0], best[1]
+    );
 }

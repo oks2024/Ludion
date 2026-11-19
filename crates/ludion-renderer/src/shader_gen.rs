@@ -582,13 +582,17 @@ pub struct EnvParams {
     pub gi_origin: [f32; 4],
     pub gi_scale: [f32; 4],
     pub gi_bounce: [f32; 4],
+    pub wet_view: [[f32; 4]; 4],
+    pub wet: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<EnvParams>() == 80);
+const _: () = assert!(core::mem::size_of::<EnvParams>() == 160);
 const _: () = assert!(core::mem::offset_of!(EnvParams, params) == 0);
 const _: () = assert!(core::mem::offset_of!(EnvParams, ao) == 16);
 const _: () = assert!(core::mem::offset_of!(EnvParams, gi_origin) == 32);
 const _: () = assert!(core::mem::offset_of!(EnvParams, gi_scale) == 48);
 const _: () = assert!(core::mem::offset_of!(EnvParams, gi_bounce) == 64);
+const _: () = assert!(core::mem::offset_of!(EnvParams, wet_view) == 80);
+const _: () = assert!(core::mem::offset_of!(EnvParams, wet) == 144);
 
 /// WGSL `struct GiBakeParams`.
 ///
@@ -2261,6 +2265,10 @@ pub const GI_BOUNCE_B_BINDING: u32 = 9;
 pub const GI_DYN_TEX_GROUP: u32 = 3;
 pub const GI_DYN_TEX_BINDING: u32 = 10;
 
+/// `wet_map` — `@group(3) @binding(11)`, in `mesh.wgsl`.
+pub const WET_MAP_GROUP: u32 = 3;
+pub const WET_MAP_BINDING: u32 = 11;
+
 /// `base_color_tex` — `@group(4) @binding(0)`, in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`, `silhouette_mask.wgsl`.
 pub const BASE_COLOR_TEX_GROUP: u32 = 4;
 pub const BASE_COLOR_TEX_BINDING: u32 = 0;
@@ -3035,7 +3043,7 @@ pub fn create_hiz_src_hiz_samp_hiz_params_bgl(device: &wgpu::Device) -> wgpu::Bi
     })
 }
 
-/// Bind group layout `irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex` (@group 3), from `decal_lit.wgsl`, `mesh.wgsl`.
+/// Bind group layout `irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex` (@group 3), from `decal_lit.wgsl`.
 pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
@@ -3074,7 +3082,7 @@ pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(80),
+                    min_binding_size: wgpu::BufferSize::new(160),
                 },
                 count: None,
             },
@@ -3134,6 +3142,123 @@ pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+/// Bind group layout `irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map` (@group 3), from `mesh.wgsl`.
+pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map_bgl(
+    device: &wgpu::Device,
+) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: IRRADIANCE_TEX_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::Cube,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: ENV_BRDF_LUT_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: ENV_SAMP_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: ENV_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(160),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: AO_TEX_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: GI_TEX_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: GI_BOUNCE_R_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: GI_BOUNCE_G_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: GI_BOUNCE_B_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: GI_DYN_TEX_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: WET_MAP_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
                 count: None,
@@ -4977,6 +5102,8 @@ pub const UI_RECT_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (3, wgpu::VertexFormat::Float32x4),
     (4, wgpu::VertexFormat::Float32x4),
     (5, wgpu::VertexFormat::Float32x4),
+    (6, wgpu::VertexFormat::Float32x4),
+    (7, wgpu::VertexFormat::Float32x4),
 ];
 
 /// `ui_text.wgsl`'s `vs_main` `@location` inputs, in location order.
@@ -4991,6 +5118,7 @@ pub const UI_TEXT_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (7, wgpu::VertexFormat::Float32x4),
     (8, wgpu::VertexFormat::Float32x4),
     (9, wgpu::VertexFormat::Float32x4),
+    (10, wgpu::VertexFormat::Float32x4),
 ];
 
 // --- Compute workgroup sizes (@workgroup_size per compute entry point) ---------------------------

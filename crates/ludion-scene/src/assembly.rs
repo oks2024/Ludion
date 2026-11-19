@@ -74,7 +74,7 @@ use crate::part::PartDocument;
 use crate::rig_blend::{
     BlendSpace, check_blend_points, emit_blends, parse_blends, validate_blends,
 };
-use crate::rig_ik::{IkEntry, emit_ik, parse_ik, validate_ik};
+use crate::rig_ik::{IkEntry, IkGround, emit_ground, emit_ik, parse_ground, parse_ik, validate_ik};
 use crate::rig_mask::{RigMask, emit_masks, parse_masks, validate_mask_names};
 use crate::scalar::{format_float, scalar_string};
 use crate::voxel::{PaletteEntry, VoxelDocument, single_glyph};
@@ -87,9 +87,9 @@ pub const ASSEMBLY_FORMAT_VERSION: u64 = 1;
 /// assembly's palette reads identically to a voxel model's.
 const EMPTY_GLYPH: char = '.';
 
-const ASSEMBLY_KEYS: [&str; 11] = [
+const ASSEMBLY_KEYS: [&str; 12] = [
     "format", "kind", "name", "size", "palette", "parts", "clips", "joints", "masks", "blends",
-    "ik",
+    "ik", "ground",
 ];
 const PART_ENTRY_KEYS: [&str; 6] = ["name", "file", "parent", "place", "pivot", "mirror"];
 const ASSEMBLY_JOINT_KEYS: [&str; 4] = ["kind", "axis", "limits", "break_impulse"];
@@ -254,6 +254,8 @@ pub struct AssemblyDocument {
     /// Two-part IK chains and look-ats, sorted by name (the canonical order `emit` writes). An
     /// absent `ik` is the empty list.
     pub ik: Vec<IkEntry>,
+    /// The bounds for `ground: true` chains; absent when no chain is grounded.
+    pub ground: Option<IkGround>,
 }
 
 // --- Parsing (`L1137`) --------------------------------------------------------------------------
@@ -376,6 +378,9 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
             }
             "ik" => {
                 doc.ik = parse_ik(entry, &mut diagnostics);
+            }
+            "ground" => {
+                doc.ground = parse_ground(entry, &mut diagnostics);
             }
             unknown => diagnostics.push(envelope::unknown_key(
                 unknown,
@@ -2439,6 +2444,7 @@ pub(crate) fn emit(doc: &AssemblyDocument) -> String {
     emit_masks(&mut out, &doc.masks);
     emit_blends(&mut out, &doc.blends);
     emit_ik(&mut out, &doc.ik);
+    emit_ground(&mut out, doc.ground.as_ref());
 
     out
 }

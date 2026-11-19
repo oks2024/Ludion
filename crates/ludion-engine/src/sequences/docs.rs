@@ -1,4 +1,4 @@
-//! The `kind: sequence` document and its validation pass (`L1730`–`L1733`).
+//! The `kind: sequence` document and its validation pass (`L1730`–`L1735`).
 
 use std::collections::BTreeSet;
 
@@ -56,15 +56,30 @@ pub struct SequenceDoc {
     pub roles: Vec<String>,
     /// The beat's length in ticks, at least 1; it ends on the tick the playhead reaches it.
     pub length_ticks: u32,
-    /// The clock `at` counts on (default `game`).
+    /// The clock `at` counts on (default `game`, or `sim` with `holds_gameplay`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock: Option<SequenceClock>,
+    /// Holds the gameplay clock while the beat plays (default `false`); implies `clock: sim`.
     #[serde(default)]
-    pub clock: SequenceClock,
+    pub holds_gameplay: bool,
     /// Whether [`skip`](super::skip) may cut the beat to its end state (default `true`).
     #[serde(default = "yes")]
     pub skippable: bool,
     /// The keys, one list per track.
     #[serde(default)]
     pub tracks: SequenceTracks,
+}
+
+impl SequenceDoc {
+    /// The clock the playhead counts on: the explicit `clock`, else `sim` for a holding beat and
+    /// `game` otherwise.
+    pub fn effective_clock(&self) -> SequenceClock {
+        self.clock.unwrap_or(if self.holds_gameplay {
+            SequenceClock::Sim
+        } else {
+            SequenceClock::Game
+        })
+    }
 }
 
 fn yes() -> bool {
@@ -182,6 +197,25 @@ pub struct DialogueKey {
     /// The role whose entity speaks it (default none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    /// Holds the playhead here until the line ends (default: no wait).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait: Option<DialogueWait>,
+}
+
+/// What a dialogue key waits for.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DialogueWait {
+    /// The line it says has ended, however it ended.
+    LineEnd,
+}
+
+/// What an event key waits for.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EventWait {
+    /// The game calls [`release`](super::release).
+    Release,
 }
 
 /// What a skip does with an unfired event.
@@ -206,6 +240,9 @@ pub struct EventKey {
     /// What a skip does with it (default `fire`).
     #[serde(default)]
     pub on_skip: OnSkip,
+    /// Holds the playhead here, after the event fires, until released (default: no wait).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait: Option<EventWait>,
 }
 
 fn diagnostic(code: DiagnosticCode, message: String, path: String) -> Diagnostic {
@@ -260,8 +297,39 @@ fn validate_doc(
             ));
         }
     }
+    if doc.holds_gameplay && doc.clock == Some(SequenceClock::Game) {
+        out.push(diagnostic(
+            code::SEQUENCE_HOLD_CLOCK,
+            format!(
+                "`{doc_path}` holds gameplay with `clock: game`; a held game clock never advances it"
+            ),
+            at("/clock"),
+        ));
+    }
     let tracks = &doc.tracks;
     let length = doc.length_ticks;
+
+    // One pending wait per player: no two wait keys at one `at`, across both tracks.
+    let mut waits: Vec<(u32, String)> = Vec::new();
+    for (n, key) in tracks.dialogue.iter().enumerate() {
+        if key.wait.is_some() {
+            waits.push((key.at, format!("/tracks/dialogue/{n}/wait")));
+        }
+    }
+    for (n, key) in tracks.event.iter().enumerate() {
+        if key.wait.is_some() {
+            waits.push((key.at, format!("/tracks/event/{n}/wait")));
+        }
+    }
+    for (n, (wait_at, pointer)) in waits.iter().enumerate() {
+        if let Some((_, first)) = waits[..n].iter().find(|(a, _)| a == wait_at) {
+            out.push(diagnostic(
+                code::SEQUENCE_WAIT_CONFLICT,
+                format!("two wait keys share tick {wait_at}: `{first}` and `{pointer}`"),
+                at(pointer),
+            ));
+        }
+    }
 
     // `(track, index, at)` per key, checked for range and order in one place.
     let ats = |track: &str, keys: Vec<u32>, out: &mut Vec<Diagnostic>| {
@@ -517,6 +585,87 @@ mod tests {
         assert_eq!(codes(&run(doc(-1.0, "ok"), true)), ["L1730"]);
         assert_eq!(codes(&run(doc(0.5, "end"), true)), ["L1732"]);
         assert_eq!(codes(&run(doc(0.5, ""), true)), ["L1732"]);
+    }
+
+    #[test]
+    fn holding_with_an_explicit_game_clock_is_refused() {
+        let doc = |clock: Option<&str>, holds: bool| {
+            let mut v = json!({ "length_ticks": 9, "holds_gameplay": holds });
+            if let Some(c) = clock {
+                v["clock"] = json!(c);
+            }
+            v
+        };
+        assert!(run(doc(None, true), true).is_empty());
+        assert!(run(doc(Some("sim"), true), true).is_empty());
+        assert!(run(doc(Some("game"), false), true).is_empty());
+        let out = run(doc(Some("game"), true), true);
+        assert_eq!(codes(&out), ["L1734"]);
+        assert_eq!(
+            out[0].path.as_deref(),
+            Some("sequence/sequences/t.yaml/clock")
+        );
+    }
+
+    #[test]
+    fn the_effective_clock_resolves_all_four_combinations() {
+        let doc = |clock: Option<&str>, holds: bool| {
+            let mut v = json!({ "length_ticks": 9, "holds_gameplay": holds });
+            if let Some(c) = clock {
+                v["clock"] = json!(c);
+            }
+            serde_json::from_value::<SequenceDoc>(v)
+                .unwrap()
+                .effective_clock()
+        };
+        assert_eq!(doc(None, false), SequenceClock::Game);
+        assert_eq!(doc(None, true), SequenceClock::Sim);
+        assert_eq!(doc(Some("sim"), false), SequenceClock::Sim);
+        assert_eq!(doc(Some("game"), false), SequenceClock::Game);
+    }
+
+    #[test]
+    fn two_waits_at_one_tick_conflict_within_and_across_tracks() {
+        let doc = |tracks: serde_json::Value| json!({ "length_ticks": 9, "tracks": tracks });
+        let line = |at: u32| json!({ "at": at, "line": "hello", "wait": "line_end" });
+        let event = |at: u32| json!({ "at": at, "name": "e", "wait": "release" });
+        assert!(
+            run(
+                doc(json!({ "dialogue": [line(2)], "event": [event(3)] })),
+                true
+            )
+            .is_empty()
+        );
+        let within = run(doc(json!({ "event": [event(2), event(2)] })), true);
+        assert_eq!(codes(&within), ["L1735"]);
+        assert_eq!(
+            within[0].path.as_deref(),
+            Some("sequence/sequences/t.yaml/tracks/event/1/wait")
+        );
+        let across = run(
+            doc(json!({ "dialogue": [line(2)], "event": [event(2)] })),
+            true,
+        );
+        assert_eq!(codes(&across), ["L1735"]);
+        assert!(across[0].message.contains("/tracks/dialogue/0/wait"));
+        assert!(across[0].message.contains("/tracks/event/0/wait"));
+    }
+
+    #[test]
+    fn a_wait_on_the_wrong_track_fails_to_deserialize() {
+        let wrong = |track: &str, key: serde_json::Value| {
+            serde_json::from_value::<SequenceDoc>(
+                json!({ "length_ticks": 9, "tracks": { track: [key] } }),
+            )
+        };
+        assert!(wrong("event", json!({ "at": 0, "name": "e", "wait": "line_end" })).is_err());
+        assert!(
+            wrong(
+                "dialogue",
+                json!({ "at": 0, "line": "l", "wait": "release" })
+            )
+            .is_err()
+        );
     }
 
     #[test]

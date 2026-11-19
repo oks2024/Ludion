@@ -250,6 +250,13 @@ pub const KINDS: &[KindEntry] = &[
         doc_store: true,
         model_sheet: false,
     },
+    KindEntry {
+        name: "paired",
+        noun: "a paired action",
+        check: KindCheck::Here(|s| crate::check_paired(s).map(drop)),
+        doc_store: false,
+        model_sheet: false,
+    },
 ];
 
 /// The [`KINDS`] row for a `kind:` string, or `None` when it names no engine kind.

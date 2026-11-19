@@ -127,6 +127,7 @@ mod map;
 mod mesh;
 mod mesh_edit;
 mod overrides;
+mod paired;
 mod palette;
 mod parse;
 mod part;
@@ -201,6 +202,10 @@ pub use mesh_edit::{
     MeshEditRegion, MeshEditRegionShape,
 };
 pub use overrides::{AppliedOverride, SceneOverride, apply_overrides, parse_sweep};
+pub use paired::{
+    PAIRED_FORMAT_VERSION, PairedAlign, PairedContact, PairedDocument, PairedEvent, PairedMoves,
+    PairedOffset, PairedRole,
+};
 pub use palette::{PALETTE_FORMAT_VERSION, PaletteDocument};
 pub use part::{PART_FORMAT_VERSION, PartDocument};
 pub use path::{
@@ -213,7 +218,9 @@ pub use physics_surfaces::MAX_SURFACES;
 pub use prefab::{PREFAB_FORMAT_VERSION, PrefabDocument};
 pub use profile::ProfileEnvelope;
 pub use rig_blend::{BlendAt, BlendPoint, BlendSpace};
-pub use rig_ik::{DEFAULT_LOOK_FORWARD, DEFAULT_LOOK_LIMITS_DEG, IkEntry, IkHinge, IkKind};
+pub use rig_ik::{
+    DEFAULT_LOOK_FORWARD, DEFAULT_LOOK_LIMITS_DEG, IkEntry, IkGround, IkHinge, IkKind,
+};
 pub use rig_mask::RigMask;
 pub use rim::DocRim;
 pub use sculpt::{
@@ -2583,6 +2590,80 @@ pub fn check_patrol(source: &str) -> Result<PatrolDocument, Vec<Diagnostic>> {
 /// ```
 pub fn emit_patrol(doc: &PatrolDocument) -> String {
     patrol::emit(doc)
+}
+
+// --- Paired documents (`*.paired.yaml`) ---------------------------------------------------------
+//
+// A paired action aligns two or more voxel-assembly roles and plays a clip on each
+// (`Plan/paired-animations.md` decisions 15–21); the engine's `check_paired_files` checks one
+// against its role assemblies.
+
+/// Parses strict-subset YAML into a [`PairedDocument`], checking structure/shape only.
+///
+/// # Errors
+/// `L1752` for a missing/wrong-typed key, an unrecognized `kind`, an unknown key, or a role, offset,
+/// event or contact of the wrong shape.
+pub fn parse_paired(source: &str) -> Result<PairedDocument, Vec<Diagnostic>> {
+    paired::parse(source)
+}
+
+/// Validates the data rules of `doc` that need no other file: role references, offsets, `ticks`,
+/// `scale`, event order and contact sides (`L1753`).
+pub fn validate_paired(doc: &PairedDocument) -> Vec<Diagnostic> {
+    paired::validate(doc)
+}
+
+/// Parses and validates a paired document in one step.
+///
+/// # Errors
+/// Everything [`parse_paired`] and [`validate_paired`] can report.
+pub fn check_paired(source: &str) -> Result<PairedDocument, Vec<Diagnostic>> {
+    let doc = parse_paired(source)?;
+    let diagnostics = validate_paired(&doc);
+    if diagnostics.is_empty() {
+        Ok(doc)
+    } else {
+        Err(diagnostics)
+    }
+}
+
+/// Writes `doc` in canonical form (stable field order, roles and offsets sorted by name, LF endings,
+/// ryu shortest-round-trip floats). Byte-idempotent.
+///
+/// # Example
+/// ```
+/// let source = "\
+/// format: 1
+/// kind: paired
+/// name: choke
+/// roles:
+///   instigator:
+///     assembly: humanoid.assembly.yaml
+///     clip: carry
+///   target:
+///     assembly: humanoid.assembly.yaml
+///     clip: idle
+/// align:
+///   reference: instigator
+///   moves: instigator
+///   ticks: 12
+///   offsets:
+///     target:
+///       translation:
+///         - 0.0
+///         - 0.0
+///         - -0.6
+///       yaw_deg: 180.0
+/// events:
+///   - name: grab
+///     t: 0.25
+/// ";
+/// let paired = ludion_scene::check_paired(source).expect("the document is valid");
+/// assert_eq!(paired.roles.len(), 2);
+/// assert_eq!(ludion_scene::emit_paired(&paired), source); // canonical emit is a fixed point
+/// ```
+pub fn emit_paired(doc: &PairedDocument) -> String {
+    paired::emit(doc)
 }
 
 // --- Prefab documents (`*.prefab.yaml`) ---------------------------------------------------------

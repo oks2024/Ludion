@@ -15,8 +15,8 @@
 // A fragment under a roof is hidden: it reads the `rain_occlusion` depth map (every shadow caster seen
 // straight down) and fades out below the caster's top at its column (`rain_open_sky`).
 //
-// The `Camera` uniform (@group 0) and the clustered light set (@group 1) are shared snippets composed
-// ahead of this file.
+// The `Camera` uniform (@group 0), the clustered light set (@group 1) and the map's `occluder_top` are
+// shared snippets composed ahead of this file.
 
 struct RainParams {
     // xyz = the base tile of the drawn block, w unused.
@@ -154,19 +154,11 @@ fn rain_coverage(local: vec2<f32>) -> f32 {
 // 1 above the nearest shadow caster over `world`'s column, fading to 0 over 5 cm below its top, so
 // the streaks stop under a roof with a crisp edge. A column outside the map, or with no caster, is open.
 fn rain_open_sky(world: vec3<f32>) -> f32 {
-    let clip = rain.occ_view * vec4<f32>(world, 1.0);
-    let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
-    if (any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0))) {
+    let column = occluder_top(rain.occ_view, rain_occlusion, world);
+    if (column.y < 0.5 || column.x <= NO_OCCLUDER) {
         return 1.0;
     }
-    let size = vec2<i32>(textureDimensions(rain_occlusion));
-    let texel = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2<i32>(0), size - vec2<i32>(1));
-    let depth = textureLoad(rain_occlusion, texel, 0);
-    if (depth >= 1.0) {
-        return 1.0;
-    }
-    let top = (depth - rain.occ_view[3].z) / rain.occ_view[1].z;
-    return smoothstep(top - 0.05, top, world.y);
+    return smoothstep(column.x - 0.05, column.x, world.y);
 }
 
 struct VsOut {

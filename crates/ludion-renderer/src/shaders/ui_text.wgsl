@@ -27,6 +27,8 @@ struct VsIn {
     @location(7) ol_color: vec4<f32>,
     @location(8) ol_rect: vec4<f32>,
     @location(9) ol_param: vec4<f32>,
+    // The clip boxes' rotation: (cos_a, sin_a, cos_b, sin_b), (1, 0, 1, 0) when unrotated.
+    @location(10) clip_t: vec4<f32>,
 };
 
 struct VsOut {
@@ -40,20 +42,29 @@ struct VsOut {
     @location(6) @interpolate(flat) ol_color: vec4<f32>,
     @location(7) @interpolate(flat) ol_rect: vec4<f32>,
     @location(8) @interpolate(flat) ol_param: vec4<f32>,
+    @location(9) @interpolate(flat) cl_t: vec4<f32>,
 };
 
 // Analytic UI clip: `a`/`b` are the two clip boxes `[x, y, w, h]` in pixels, `r` is
-// `(radius_a, radius_b, on_a, on_b)`. An absent box is a flag, never a sentinel box, and gives exactly
-// 1.0, so an unclipped fragment multiplies its alpha by 1.0 untouched.
+// `(radius_a, radius_b, on_a, on_b)`, `t` is `(cos_a, sin_a, cos_b, sin_b)`. An absent box is a flag,
+// never a sentinel box, and gives exactly 1.0, so an unclipped fragment multiplies its alpha by 1.0
+// untouched. A rotated box is evaluated in its own frame; an unrotated one skips the mapping.
 fn rounded_box_sdf(p: vec2<f32>, rect: vec4<f32>, radius: f32) -> f32 {
     let half = rect.zw * 0.5;
     let q = abs(p - (rect.xy + half)) - half + vec2<f32>(radius);
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
 
-fn clip_cov(p: vec2<f32>, a: vec4<f32>, b: vec4<f32>, r: vec4<f32>) -> f32 {
-    let cov_a = clamp(0.5 - rounded_box_sdf(p, a, r.x), 0.0, 1.0);
-    let cov_b = clamp(0.5 - rounded_box_sdf(p, b, r.y), 0.0, 1.0);
+fn box_point(p: vec2<f32>, rect: vec4<f32>, cs: vec2<f32>) -> vec2<f32> {
+    let c = rect.xy + rect.zw * 0.5;
+    let d = p - c;
+    let q = c + vec2<f32>(cs.x * d.x + cs.y * d.y, -cs.y * d.x + cs.x * d.y);
+    return select(p, q, cs.x != 1.0 || cs.y != 0.0);
+}
+
+fn clip_cov(p: vec2<f32>, a: vec4<f32>, b: vec4<f32>, r: vec4<f32>, t: vec4<f32>) -> f32 {
+    let cov_a = clamp(0.5 - rounded_box_sdf(box_point(p, a, t.xy), a, r.x), 0.0, 1.0);
+    let cov_b = clamp(0.5 - rounded_box_sdf(box_point(p, b, t.zw), b, r.y), 0.0, 1.0);
     return min(select(1.0, cov_a, r.z > 0.5), select(1.0, cov_b, r.w > 0.5));
 }
 
@@ -74,6 +85,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.ol_color = in.ol_color;
     out.ol_rect = in.ol_rect;
     out.ol_param = in.ol_param;
+    out.cl_t = in.clip_t;
     return out;
 }
 
@@ -87,7 +99,7 @@ fn masked_alpha(uv: vec2<f32>, rect: vec4<f32>) -> f32 {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let coverage = glyph_coverage(in.uv, in.sdf);
-    let clip = clip_cov(in.clip.xy, in.cl_a, in.cl_b, in.cl_r);
+    let clip = clip_cov(in.clip.xy, in.cl_a, in.cl_b, in.cl_r, in.cl_t);
     // Uniform-flow samples for the SDF path, before the outline branch.
     let raw = textureSample(atlas_tex, atlas_sampler, in.uv).a;
     let w = max(fwidth(raw), 1e-4) * 0.7;

@@ -18,9 +18,9 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::time::TickRate;
 use ludion_ecs::World;
-use ludion_renderer::{UiClip, UiInstance};
+use ludion_renderer::{UiClip, UiInstance, UiRotation};
 
-use super::group::{GroupXf, UiGroups};
+use super::group::{GroupXf, UiGroups, cos_sin};
 use super::{
     canvas_anchor_px, group_delta, nine_slice, pixel_scale, place_world_anchor, sub_uv,
     ui_tween_sample,
@@ -64,6 +64,10 @@ impl HudElement {
         match field {
             UiTweenField::Opacity | UiTweenField::Offset => true,
             UiTweenField::Scale => !matches!(self, HudElement::List),
+            UiTweenField::Rotation => matches!(
+                self,
+                HudElement::Rect { .. } | HudElement::Text | HudElement::Group
+            ),
             UiTweenField::Color => matches!(self, HudElement::Rect { .. } | HudElement::Text),
             UiTweenField::Size => matches!(self, HudElement::Rect { .. } | HudElement::Group),
         }
@@ -78,10 +82,12 @@ struct Samples {
     size: Option<[f32; 2]>,
     color: Option<[f32; 4]>,
     scale: Option<f32>,
+    rotation: Option<f32>,
 }
 
 fn field_name(field: UiTweenField) -> &'static str {
     match field {
+        UiTweenField::Rotation => "rotation",
         UiTweenField::Opacity => "opacity",
         UiTweenField::Offset => "offset",
         UiTweenField::Scale => "scale",
@@ -154,7 +160,7 @@ fn sample(
                     element_name(element),
                 ),
             )
-            .with_help("`color` needs a `UiRect` or `UiText`, `scale` a `UiRect`, `UiText` or `UiGroup`, `size` a `UiRect` or `UiGroup`, and a `UiRadial` takes none (tween its group); `ludion explain L2300`"),
+            .with_help("`color` needs a `UiRect` or `UiText`, `scale` and `rotation` a `UiRect`, `UiText` or `UiGroup`, `size` a `UiRect` or `UiGroup`, and a `UiRadial` takes none (tween its group); `ludion explain L2300`"),
         ));
     }
     let at = |field: UiTweenField| {
@@ -168,6 +174,7 @@ fn sample(
     out.size = at(UiTweenField::Size).map(|v| [v[0], v[1]]);
     out.color = at(UiTweenField::Color);
     out.scale = at(UiTweenField::Scale).map(|v| v[0]);
+    out.rotation = at(UiTweenField::Rotation).map(|v| v[0]);
     out
 }
 
@@ -271,6 +278,8 @@ pub(crate) struct GroupMotion {
     pub offset: [f32; 2],
     pub size: [f32; 2],
     pub scale: f32,
+    /// Degrees: the authored rotation plus the tween.
+    pub rotation: f32,
     pub opacity: f32,
 }
 
@@ -287,6 +296,7 @@ pub(crate) fn pre_group(
         offset: [group.offset[0] + x, group.offset[1] + y],
         size: s.size.unwrap_or(group.size),
         scale: group.scale * s.scale.unwrap_or(1.0),
+        rotation: group.rotation + s.rotation.unwrap_or(0.0),
         opacity: group.opacity * s.opacity.unwrap_or(1.0),
     }
 }
@@ -314,7 +324,8 @@ pub(crate) fn bounds(instances: &[UiEntry]) -> Option<[f32; 4]> {
     out
 }
 
-/// Scales every instance about `centre` by `scale`, then translates it by `delta`, in pixels.
+/// Scales every instance about `centre` by `scale`, then translates it by `delta`, in pixels. A
+/// rotated instance's pivot moves like any other point.
 pub(crate) fn transform_instances(
     instances: &mut [UiEntry],
     centre: [f32; 2],
@@ -323,15 +334,28 @@ pub(crate) fn transform_instances(
 ) {
     let x = |v: f32| (v - centre[0]) * scale + centre[0] + delta[0];
     let y = |v: f32| (v - centre[1]) * scale + centre[1] + delta[1];
+    let turn = |rotation: &mut UiRotation| {
+        if rotation.radians != 0.0 {
+            rotation.pivot_px = [x(rotation.pivot_px[0]), y(rotation.pivot_px[1])];
+        }
+    };
     for (_, _, instance) in instances {
         match instance {
-            UiInstance::Rect { rect_px: r, .. } => {
+            UiInstance::Rect {
+                rect_px: r,
+                rotation,
+                ..
+            } => {
                 *r = [x(r[0]), y(r[1]), r[2] * scale, r[3] * scale];
+                turn(rotation);
             }
-            UiInstance::Text { quads, .. } => {
+            UiInstance::Text {
+                quads, rotation, ..
+            } => {
                 for q in quads {
                     q.pos = [x(q.pos[0]), y(q.pos[1]), x(q.pos[2]), y(q.pos[3])];
                 }
+                turn(rotation);
             }
         }
     }
@@ -352,10 +376,12 @@ fn multiply_alpha(instances: &mut [UiEntry], opacity: f32) {
 }
 
 /// Transforms the instances `entries[start..]` that one element just emitted: its tween's `scale`,
-/// then its world anchor. An element the anchor hides has its instances removed.
+/// then its world anchor, then its rotation. An element the anchor hides has its instances removed.
 ///
 /// The scale pivots on the centre of the instances' bounding box, the anchor then moves the box by
-/// `projected − canvas_anchor_point` so the element's `anchor` is its pivot on the projected point.
+/// `projected − canvas_anchor_point` so the element's `anchor` is its pivot on the projected point,
+/// and the rotation (the authored `grouping.rotation_deg` plus the tween's) turns about the centre
+/// of that moved box (`Plan/ui-hud.md` decision 46).
 /// A target that is dead or has no `Transform` draws nothing.
 ///
 /// An element inside a [`UiGroup`] first moves by [`group_delta`] into the group's box, takes the
@@ -376,6 +402,7 @@ pub(crate) fn post(
         return;
     }
     let world = frame.world;
+    let authored_rotation = grouping.rotation_deg;
     let group_xf = resolve_grouping(frame, poses, id, element, grouping);
     if let Some((xf, in_box)) = &group_xf {
         if !xf.visible {
@@ -387,23 +414,21 @@ pub(crate) fn post(
         }
     }
     let group_xf = group_xf.map(|(xf, _)| xf);
-    let scale = match world.get::<UiTween>(id).ok().flatten() {
-        Some(tween) if element.supports(UiTweenField::Scale) => ui_tween_sample(
-            tween,
-            UiTweenField::Scale,
-            frame.real_frame,
-            frame.game_frame,
-            frame.rate,
-        )
-        .map(|v| v[0]),
+    let tween_at = |field: UiTweenField| match world.get::<UiTween>(id).ok().flatten() {
+        Some(tween) if element.supports(field) => {
+            ui_tween_sample(tween, field, frame.real_frame, frame.game_frame, frame.rate)
+                .map(|v| v[0])
+        }
         _ => None,
     };
+    let scale = tween_at(UiTweenField::Scale);
+    let rotation_deg = authored_rotation + tween_at(UiTweenField::Rotation).unwrap_or(0.0);
     let world_anchor = match element {
         HudElement::Rect { fill: true } | HudElement::Radial => None,
         _ if group_xf.is_some() => None,
         _ => world.get::<UiWorldAnchor>(id).ok().flatten(),
     };
-    if scale.is_none() && world_anchor.is_none() {
+    if scale.is_none() && world_anchor.is_none() && rotation_deg == 0.0 {
         return apply_group(entries, start, group_xf);
     }
     let Some(b) = bounds(&entries[start..]) else {
@@ -421,9 +446,24 @@ pub(crate) fn post(
             }
         }
     }
-    transform_instances(&mut entries[start..], centre, scale.unwrap_or(1.0), delta);
+    if scale.is_some() || world_anchor.is_some() {
+        transform_instances(&mut entries[start..], centre, scale.unwrap_or(1.0), delta);
+    }
     if opacity < 1.0 {
         multiply_alpha(&mut entries[start..], opacity);
+    }
+    if rotation_deg != 0.0 {
+        let rotation = UiRotation {
+            radians: rotation_deg.to_radians(),
+            pivot_px: [centre[0] + delta[0], centre[1] + delta[1]],
+        };
+        for (_, _, instance) in &mut entries[start..] {
+            match instance {
+                UiInstance::Rect { rotation: r, .. } | UiInstance::Text { rotation: r, .. } => {
+                    *r = rotation;
+                }
+            }
+        }
     }
     apply_group(entries, start, group_xf);
 }
@@ -433,6 +473,8 @@ pub(crate) fn post(
 pub(crate) struct Grouping<'a> {
     pub group: Option<EntityId>,
     pub fill_group: bool,
+    /// The element's authored `rotation` in degrees (0 for a list or radial); `post` adds the tween.
+    pub rotation_deg: f32,
     pub groups: &'a mut UiGroups,
     pub degraded: &'a mut Vec<(String, Diagnostic)>,
 }
@@ -479,7 +521,11 @@ fn resolve_grouping(
     Some((xf, grouping.fill_group))
 }
 
-/// Applies the group's scale, translation and opacity to the instances `entries[start..]`.
+/// Applies the group's scale, rotation, translation and opacity to the instances `entries[start..]`.
+///
+/// A rotated group (decision 50) maps each instance about its pivot `P` (its rotation pivot, else its
+/// bounds centre) to `P' = A(P)`: the axis-aligned geometry scales about `P` onto `P'`, and the
+/// rotation adds `Θ` about `P'`. An unrotated group takes the plain scale-and-translate path.
 fn apply_group(entries: &mut [UiEntry], start: usize, group: Option<GroupXf>) {
     let Some(xf) = group else {
         return;
@@ -489,11 +535,61 @@ fn apply_group(entries: &mut [UiEntry], start: usize, group: Option<GroupXf>) {
             UiInstance::Rect { clip, .. } | UiInstance::Text { clip, .. } => *clip = xf.clip,
         }
     }
-    if xf.scale.to_bits() != 1.0f32.to_bits() || xf.offset != [0.0, 0.0] {
+    if xf.rotation != 0.0 {
+        rotate_into_group(&mut entries[start..], &xf);
+    } else if xf.scale.to_bits() != 1.0f32.to_bits() || xf.offset != [0.0, 0.0] {
         transform_instances(&mut entries[start..], [0.0, 0.0], xf.scale, xf.offset);
     }
     if xf.opacity < 1.0 {
         multiply_alpha(&mut entries[start..], xf.opacity);
+    }
+}
+
+/// Applies a rotated group's similarity to every instance, one pivot each (decision 50).
+fn rotate_into_group(instances: &mut [UiEntry], xf: &GroupXf) {
+    let (c, s) = cos_sin(xf.rotation);
+    let map = |p: [f32; 2]| {
+        [
+            xf.scale * (c * p[0] - s * p[1]) + xf.offset[0],
+            xf.scale * (s * p[0] + c * p[1]) + xf.offset[1],
+        ]
+    };
+    for entry in instances {
+        let centre = bounds(std::slice::from_ref(entry))
+            .map_or([0.0, 0.0], |b| [(b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5]);
+        let (_, _, instance) = entry;
+        let (rotation, pivot) = match instance {
+            UiInstance::Rect { rotation, .. } | UiInstance::Text { rotation, .. } => {
+                let pivot = if rotation.radians != 0.0 {
+                    rotation.pivot_px
+                } else {
+                    centre
+                };
+                (rotation, pivot)
+            }
+        };
+        let moved = map(pivot);
+        rotation.radians += xf.rotation;
+        rotation.pivot_px = moved;
+        let place = |p: [f32; 2]| {
+            [
+                moved[0] + xf.scale * (p[0] - pivot[0]),
+                moved[1] + xf.scale * (p[1] - pivot[1]),
+            ]
+        };
+        match instance {
+            UiInstance::Rect { rect_px: r, .. } => {
+                let [x, y] = place([r[0], r[1]]);
+                *r = [x, y, r[2] * xf.scale, r[3] * xf.scale];
+            }
+            UiInstance::Text { quads, .. } => {
+                for q in quads {
+                    let [x0, y0] = place([q.pos[0], q.pos[1]]);
+                    let [x1, y1] = place([q.pos[2], q.pos[3]]);
+                    q.pos = [x0, y0, x1, y1];
+                }
+            }
+        }
     }
 }
 
@@ -590,6 +686,7 @@ pub(crate) fn emit_rect(
                 uv,
                 clip: UiClip::NONE,
                 view,
+                rotation: UiRotation::NONE,
             },
         )
     };
@@ -633,6 +730,7 @@ mod tests {
                 uv: [0.0, 0.0, 1.0, 1.0],
                 clip: UiClip::NONE,
                 view: None,
+                rotation: UiRotation::NONE,
             },
         )
     }
@@ -652,6 +750,7 @@ mod tests {
                 font: None,
                 clip: UiClip::NONE,
                 outline: None,
+                rotation: UiRotation::NONE,
             },
         )
     }
@@ -697,6 +796,136 @@ mod tests {
         }
     }
 
+    fn identity_xf() -> GroupXf {
+        GroupXf {
+            box_px: [0.0, 0.0, 200.0, 100.0],
+            scale: 1.0,
+            rotation: 0.0,
+            offset: [0.0, 0.0],
+            opacity: 1.0,
+            visible: true,
+            depth: 1,
+            clip: UiClip::NONE,
+        }
+    }
+
+    fn rect_of(entry: &UiEntry) -> ([f32; 4], UiRotation) {
+        let UiInstance::Rect {
+            rect_px, rotation, ..
+        } = &entry.2
+        else {
+            unreachable!()
+        };
+        (*rect_px, *rotation)
+    }
+
+    #[test]
+    fn an_unrotated_group_leaves_geometry_and_rotation_untouched() {
+        let mut rows = vec![rect(13.5, 7.25, 41.0, 23.0), text([2.0, 3.0, 9.0, 11.0])];
+        let before: Vec<_> = rows.iter().map(|r| r.2.clone()).collect();
+        apply_group(&mut rows, 0, Some(identity_xf()));
+        assert_eq!(rows.iter().map(|r| r.2.clone()).collect::<Vec<_>>(), before);
+    }
+
+    #[test]
+    fn a_rotated_group_moves_each_pivot_and_adds_its_turn() {
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let xf = GroupXf {
+            rotation: quarter,
+            offset: [150.0, -50.0],
+            ..identity_xf()
+        };
+        let mut rows = vec![rect(90.0, 40.0, 20.0, 20.0), rect(0.0, 0.0, 20.0, 20.0)];
+        apply_group(&mut rows, 0, Some(xf));
+        let near = |a: &[f32], b: &[f32]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3);
+        // The centre-of-group rect maps onto itself and only gains the turn.
+        let (r0, t0) = rect_of(&rows[0]);
+        assert!(near(&r0, &[90.0, 40.0, 20.0, 20.0]) && near(&t0.pivot_px, &[100.0, 50.0]));
+        assert_eq!(t0.radians, quarter);
+        // (10, 10) → R(90°)(10, 10) + (150, −50) = (140, −40): the rect keeps its size around it.
+        let (r1, t1) = rect_of(&rows[1]);
+        assert!(near(&r1, &[130.0, -50.0, 20.0, 20.0]) && near(&t1.pivot_px, &[140.0, -40.0]));
+    }
+
+    #[test]
+    fn a_rotated_group_adds_to_an_elements_own_rotation_about_its_pivot() {
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let mut rows = vec![rect(0.0, 0.0, 20.0, 20.0)];
+        let UiInstance::Rect { rotation, .. } = &mut rows[0].2 else {
+            unreachable!()
+        };
+        *rotation = UiRotation {
+            radians: quarter,
+            pivot_px: [20.0, 0.0],
+        };
+        let xf = GroupXf {
+            rotation: quarter,
+            offset: [150.0, -50.0],
+            ..identity_xf()
+        };
+        apply_group(&mut rows, 0, Some(xf));
+        let (r, t) = rect_of(&rows[0]);
+        // The own pivot (20, 0) → (0, 20) + (150, −50) = (150, −30); geometry shifts by the same.
+        assert!((t.radians - 2.0 * quarter).abs() < 1e-6);
+        assert!((t.pivot_px[0] - 150.0).abs() < 1e-3 && (t.pivot_px[1] + 30.0).abs() < 1e-3);
+        assert!((r[0] - 130.0).abs() < 1e-3 && (r[1] + 30.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn an_element_rotates_about_the_centre_of_its_bounds() {
+        let world = World::new();
+        let frame = HudFrame {
+            world: &world,
+            view: Mat4::IDENTITY,
+            projection: Mat4::IDENTITY,
+            viewport: (1920, 1080),
+            real_frame: 0,
+            game_frame: 0,
+            rate: TickRate::DEFAULT,
+        };
+        let mut rows = vec![rect(100.0, 100.0, 40.0, 20.0)];
+        let (mut groups, mut degraded) = (UiGroups::default(), Vec::new());
+        post(
+            &frame,
+            &mut WorldAffines::new(),
+            EntityId::new(0, 0),
+            HudElement::Rect { fill: false },
+            Anchor::TopLeft,
+            &mut rows,
+            0,
+            Grouping {
+                group: None,
+                fill_group: false,
+                rotation_deg: 30.0,
+                groups: &mut groups,
+                degraded: &mut degraded,
+            },
+        );
+        let (r, t) = rect_of(&rows[0]);
+        assert_eq!(r, [100.0, 100.0, 40.0, 20.0], "geometry stays axis-aligned");
+        assert_eq!(t.pivot_px, [120.0, 110.0]);
+        assert_eq!(t.radians, 30.0f32.to_radians());
+        // Zero rotation takes no stamp at all.
+        let mut plain = vec![rect(100.0, 100.0, 40.0, 20.0)];
+        post(
+            &frame,
+            &mut WorldAffines::new(),
+            EntityId::new(0, 0),
+            HudElement::Rect { fill: false },
+            Anchor::TopLeft,
+            &mut plain,
+            0,
+            Grouping {
+                group: None,
+                fill_group: false,
+                rotation_deg: 0.0,
+                groups: &mut groups,
+                degraded: &mut degraded,
+            },
+        );
+        assert_eq!(rect_of(&plain[0]).1, UiRotation::NONE);
+    }
+
     #[test]
     fn element_support_matrix() {
         let rect = HudElement::Rect { fill: false };
@@ -705,6 +934,9 @@ mod tests {
         assert!(HudElement::Text.supports(UiTweenField::Scale));
         assert!(!HudElement::List.supports(UiTweenField::Color));
         assert!(HudElement::List.supports(UiTweenField::Opacity));
+        assert!(HudElement::Group.supports(UiTweenField::Rotation));
+        assert!(!HudElement::List.supports(UiTweenField::Rotation));
+        assert!(!HudElement::Radial.supports(UiTweenField::Rotation));
     }
 
     fn emit(

@@ -23,6 +23,7 @@ A child names it by entity ref: `UiRect: { anchor: center, size: [16, 16], group
 |---|---|---|
 | `anchor`, `offset`, `size` | `top_left`, `[0, 0]`, `[100, 100]` | the box, as for `UiRect` (`size` axis `<= 0` is `L1118`) |
 | `scale` | `1` | uniform scale about the box centre, composed onto every descendant, `> 0` (`L1614`) |
+| `rotation` | `0` | degrees, clockwise on screen, about the box centre; turns every descendant and the clip with it (non-finite is `L1620`) |
 | `opacity` | `1` | multiplied into every descendant's alpha, `0..=1` (`L1614`) |
 | `visible` | `true` | `false` removes every descendant |
 | `group` | none | the outer group this one nests in |
@@ -30,7 +31,7 @@ A child names it by entity ref: `UiRect: { anchor: center, size: [16, 16], group
 
 ## Rules
 
-- **Nesting composes:** scales and opacities multiply, boxes nest, `visible` is the conjunction. A chain is at most 8 groups: a deeper one, or a `group` cycle, is refused by `check-scene` (`L1616`, `L1615`).
+- **Nesting composes:** scales and opacities multiply, rotations add (each group turns about its own centre), boxes nest, `visible` is the conjunction. A chain is at most 8 groups: a deeper one, or a `group` cycle, is refused by `check-scene` (`L1616`, `L1615`).
 - **`order` stays global.** A group never reorders its children; they sort by `(order, entity)` with everything else.
 - **`UiTween` and `UiWorldAnchor` work on a group** (offset, size, scale, opacity; no `color`): a tween scale moves every child, a world anchor moves the whole group. Anchor only the outermost group: a `UiWorldAnchor` on a grouped element or a nested group is skipped (`L2300`).
 - **`fill: true` ignores `group`** and `fill_group` (`L1617`); `fill_group` without `group` is also `L1617`.
@@ -43,7 +44,7 @@ A child names it by entity ref: `UiRect: { anchor: center, size: [16, 16], group
 
 - **Nested clips intersect.** An element keeps the two innermost clipping groups in its chain; a third is dropped with the degraded warning `L2303` (and `check-scene` reports the chain statically).
 - A clip hides pixels, not entities: a clipped-away child still exists and still sorts by `order`.
-- There is no rotation or polygon clip.
+- A rotated group turns its clip with it (the box centred where the group maps its own centre, turned by the composed rotation); the edge stays anti-aliased. There is no polygon clip.
 
 ```yaml
 components:
@@ -52,7 +53,7 @@ components:
 
 ## Hit-testing
 
-`ludion::math::ui_hit(world, entity, viewport, cursor, now) -> bool` answers whether the cursor (render-target pixels) is over a `UiRect`, `UiText` or `UiList` as extract draws it: the group delta, tweens, world anchor, group affine, visibility and clip. A `UiRect` is its resolved rect, a `UiText` the box of its glyphs, a `UiList` its panel (use `list_hit` for the item index of an ungrouped list). It is `false` for an invisible element or group, a world anchor that hides it, a dead entity, a non-finite cursor or a camera error; a point exactly on a clip edge is outside. It ignores `pixel_snap`.
+`ludion::math::ui_hit(world, entity, viewport, cursor, now) -> bool` answers whether the cursor (render-target pixels) is over a `UiRect`, `UiText` or `UiList` as extract draws it: the group delta, tweens, world anchor, group affine, visibility and clip. A rotated element is hit in its own frame, and a rotated clip is tested rotated. A `UiRect` is its resolved rect, a `UiText` the box of its glyphs, a `UiList` its panel (use `list_hit` for the item index of an ungrouped list). It is `false` for an invisible element or group, a world anchor that hides it, a dead entity, a non-finite cursor or a camera error; a point exactly on a clip edge is outside. It ignores `pixel_snap`.
 
 ## See also
 

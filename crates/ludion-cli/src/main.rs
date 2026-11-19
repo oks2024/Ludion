@@ -63,6 +63,7 @@ mod map_check;
 mod map_drift;
 mod mesh;
 mod new;
+mod paired_report;
 mod perfetto;
 mod placement;
 mod profile;

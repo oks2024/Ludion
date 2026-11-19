@@ -7,7 +7,7 @@
 
 use ludion_core::math;
 use ludion_font::{GlyphQuad, YAxis, fold_line_breaks, layout};
-use ludion_renderer::{FontDraw, GlyphOutline, UiClip, UiInstance};
+use ludion_renderer::{FontDraw, GlyphOutline, UiClip, UiInstance, UiRotation};
 
 use super::{FontFace, pixel_scale, resolve_ui_rect};
 use crate::components::{UiRadial, UiRadialItem};
@@ -182,6 +182,7 @@ pub(crate) fn radial_draw(
                 uv,
                 clip: UiClip::NONE,
                 view: None,
+                rotation: UiRotation::NONE,
             });
         }
         let mut line = |text: &str, size: f32, centre: [f32; 2]| {
@@ -195,6 +196,7 @@ pub(crate) fn radial_draw(
                 font,
                 clip: UiClip::NONE,
                 outline,
+                rotation: UiRotation::NONE,
             });
         };
         line(&item.text, radial.size, [mx, my]);

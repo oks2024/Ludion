@@ -135,6 +135,18 @@ pub struct AssemblyData {
     /// The assembly's `ik:` chains and look-ats, sorted by name, resolved against the parts, masks
     /// and joints. Pose data like clips: outside the mesh content hash.
     pub ik: Vec<AssemblyIkData>,
+    /// The `ground:` bounds for `ground: true` chains; `None` when no chain is grounded. Pose data:
+    /// outside the mesh content hash.
+    pub ground: Option<AssemblyGroundData>,
+}
+
+/// The resolved `ground:` block (`Plan/animation-layers.md` decisions 45–48).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AssemblyGroundData {
+    /// The largest foot move up or down, in the assembly's voxels.
+    pub max_adjust: f64,
+    /// Whether the whole assembly may lower so the lowest foot reaches.
+    pub root_drop: bool,
 }
 
 /// One `ik:` entry resolved against the assembly (`Plan/animation-layers.md` decision 37).
@@ -163,6 +175,8 @@ pub enum AssemblyIkKind {
         bend: f64,
         /// The flex limits in degrees, `[min, max]`; `None` is unlimited.
         limits: Option<[f64; 2]>,
+        /// Whether the effector is placed on the static ground under it.
+        ground: bool,
     },
     /// A look-at.
     LookAt {
@@ -534,6 +548,10 @@ pub fn mesh_assembly(
             .collect(),
         joints: assembly.joints.clone(),
         ik: resolve_ik(assembly, &masks, parts),
+        ground: assembly.ground.as_ref().map(|g| AssemblyGroundData {
+            max_adjust: g.max_adjust,
+            root_drop: g.root_drop,
+        }),
         masks,
         blends,
     }
@@ -556,6 +574,7 @@ fn resolve_ik(
                     parts: names,
                     effector,
                     hinge,
+                    ground,
                 } => {
                     let upper = index(&names[0])?;
                     let lower = index(&names[1])?;
@@ -572,6 +591,7 @@ fn resolve_ik(
                         axis,
                         bend,
                         limits,
+                        ground: *ground,
                     }
                 }
                 IkKind::LookAt {
@@ -764,6 +784,7 @@ mod tests {
             masks: Vec::new(),
             blends: Vec::new(),
             ik: Vec::new(),
+            ground: None,
         }
     }
 
@@ -1028,6 +1049,7 @@ mod tests {
                 parts: ["upper-arm-r".to_string(), lower.to_string()],
                 effector: [1.5, 0.0, 0.5],
                 hinge,
+                ground: false,
             },
         }];
         doc
