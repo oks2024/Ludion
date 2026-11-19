@@ -2,19 +2,23 @@
 //! uniform. See `shaders/rain.wgsl` and [`crate::rain`].
 
 use super::{
-    CAMERA_GROUP, FrameRecorder, HDR_FORMAT, LIGHTS_GROUP, LayoutId, Renderer, ShaderId,
-    depth_state, init_buffer, module, premultiplied_blend, shader_gen, uniform_bind_group,
+    CAMERA_GROUP, CasterPipeline, FrameRecorder, HDR_FORMAT, LIGHTS_GROUP, LayoutId, RecordedPass,
+    Renderer, SHADOW_VIEW_BINDING, SHADOW_VIEW_GROUP, ShaderId, depth_state, init_buffer, module,
+    premultiplied_blend, shader_gen, skin_bind_group,
 };
 use crate::graph::FrameSize;
-use crate::rain::rain_layout;
+use crate::rain::{occlusion_view, rain_layout};
 use crate::scene::RenderScene;
 
 /// Group of the rain's own uniform.
 const RAIN_GROUP: u32 = shader_gen::RAIN_GROUP;
 
-/// The frame's rain: the uniform's bind group and the instance count.
+/// The frame's rain: the uniform, the occlusion view and the instance count. The bind group is built
+/// at record time, once the graph has handed over the occlusion map.
 pub(super) struct RainDraw {
-    params_bg: wgpu::BindGroup,
+    params: wgpu::Buffer,
+    occlusion_view: [[f32; 4]; 4],
+    occlusion: bool,
     instances: u32,
 }
 
@@ -31,6 +35,7 @@ impl Renderer {
         if layout.instances == 0 {
             return None;
         }
+        let occlusion_view = occlusion_view(rain, scene.camera.position).to_cols_array_2d();
         let proj_y = scene.camera.projection.y_axis.y.abs().max(1e-6);
         let pixel = 2.0 / (proj_y * size.render.1.max(1) as f32);
         let params = shader_gen::RainParams {
@@ -51,6 +56,7 @@ impl Renderer {
             wind: [rain.wind[0], rain.wind[1], rain.wind[2], rain.gust],
             look: [rain.drop_width, rain.streak / 60.0, pixel, rain.medium],
             color: rain.color,
+            occ_view: occlusion_view,
         };
         let buffer = init_buffer(
             device,
@@ -58,30 +64,109 @@ impl Renderer {
             bytemuck::bytes_of(&params),
         );
         Some(RainDraw {
-            params_bg: uniform_bind_group(device, self.layouts.get(LayoutId::Rain), &buffer),
+            params: buffer,
+            occlusion_view,
+            occlusion: rain.occlusion,
             instances: layout.instances,
         })
     }
 }
 
 impl FrameRecorder<'_> {
+    /// The rain's overhead occlusion pass: every shadow caster (statics included) drawn straight down
+    /// into the graph's `rain_occlusion` depth map, cleared to 1.0 and stored for the two rain draws.
+    /// With `occlusion: false` (or nothing to draw) the map is only cleared, so nothing occludes.
+    pub(super) fn record_rain_occlusion(&self, pass: &mut RecordedPass<'_>) {
+        let depth_view = pass
+            .depth
+            .expect("the rain occlusion pass declares a depth attachment");
+        let view_bg = self
+            .rain_draw
+            .as_ref()
+            .filter(|draw| draw.occlusion)
+            .map(|draw| {
+                let buf = init_buffer(
+                    pass.device,
+                    wgpu::BufferUsages::UNIFORM,
+                    bytemuck::bytes_of(&draw.occlusion_view),
+                );
+                skin_bind_group(
+                    pass.device,
+                    self.r.layouts.get(LayoutId::ShadowView),
+                    SHADOW_VIEW_BINDING,
+                    &buf,
+                    &self.bone_palette_buf,
+                )
+            });
+        let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("rain_occlusion"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: pass.timestamp_writes(),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        let Some(view_bg) = view_bg else {
+            return;
+        };
+        let mut bound = CasterPipeline::default();
+        rp.set_pipeline(self.caster_pipeline(bound));
+        rp.set_bind_group(SHADOW_VIEW_GROUP, &view_bg, &[]);
+        self.draw_casters(
+            &mut rp,
+            |sources| {
+                let all = 0..sources.len() as u32;
+                std::iter::once(all).collect()
+            },
+            None,
+            &mut bound,
+        );
+    }
+
     /// Draws the rain inside a recording pass: the colour pass when `layer` is `None`, else the
-    /// transparent layer of `Some(format)`.
+    /// transparent layer of `Some(format)`. `inputs` is the pass's reads, whose last is the
+    /// `rain_occlusion` map.
     pub(super) fn record_rain(
         &self,
         rp: &mut wgpu::RenderPass<'_>,
+        device: &wgpu::Device,
+        inputs: &[&wgpu::TextureView],
         layer: Option<ludion_render_graph::TextureFormat>,
     ) {
         let Some(draw) = &self.rain_draw else {
             return;
         };
+        let occlusion = inputs
+            .last()
+            .expect("a rain frame schedules the occlusion map as its last read");
+        let params_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("rain bind group"),
+            layout: self.r.layouts.get(LayoutId::Rain),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::RAIN_BINDING,
+                    resource: draw.params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::RAIN_OCCLUSION_BINDING,
+                    resource: wgpu::BindingResource::TextureView(occlusion),
+                },
+            ],
+        });
         rp.set_pipeline(match layer {
             None => self.r.pipeline(ShaderId::Rain),
             Some(format) => self.r.transparent_depth_pipeline(ShaderId::Rain, format),
         });
         rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
         rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
-        rp.set_bind_group(RAIN_GROUP, &draw.params_bg, &[]);
+        rp.set_bind_group(RAIN_GROUP, &params_bg, &[]);
         rp.draw(0..6, 0..draw.instances);
     }
 }

@@ -209,6 +209,9 @@ fn drive_animation(world: &mut World, ctx: &SystemCtx) {
 }
 ```
 
+A ragdoll folding back into its assembly crossfades from a captured `PoseSnapshot` instead of a clip
+(`switch_ragdoll_to_assembly`, `ludion docs voxel-assemblies` §Ragdolls); a later `crossfade()` retires it.
+
 ### Layers
 
 An `AnimationLayers` component plays a second clip over the base `Animation` on some parts only
@@ -329,7 +332,16 @@ ik:
   target out of reach leaves the limb straight or folded, aimed at it (no pole vector). `weight` blends from
   the animated pose to the solved one.
 - No `IkTargets`, no matching entry or weight 0 poses byte for byte as without IK. Not in the ragdoll
-  switch, the model sheet or `kind: character` skins.
+  switch or `kind: character` skins; the model sheet solves it only for `--look`/`--ik`.
+- `check-scene <assembly>` lists each entry: `ik hand_r: chain upper-arm-r -> lower-arm-r, effector [..],
+  hinge [..] bend +1` (the hinge the solver uses, a defaulted one included) and `ik look: look-at head_look,
+  forward [..], yaw ±70, pitch ±40`. `--json` adds `"ik"` only when there are entries.
+- `render --model x.assembly.yaml --clip idle --look look=0..100,0 --strip 6` sweeps a look-at's yaw (a number
+  or `lo..hi` per side, `Look`'s convention, `NAME=` optional with one look-at) across the strip's phases,
+  every one at `--time`; `--ik hand_r=6,12,2` (repeatable) reaches a chain to a point **in the assembly's grid
+  voxels**, the frame `place:` is written in. Both need `--clip`, `--crossfade` or `--blend` (not a `--blend`
+  range with a `--look` range), assemblies only. Each phase prints `look [yaw, pitch]` and keeps the gap
+  analysis, so "the elbow tears out of its plug" is text. Misuse is `L1117`.
 
 ### Live editing
 

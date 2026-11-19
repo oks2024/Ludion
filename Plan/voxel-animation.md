@@ -200,8 +200,8 @@ tracks:
   needs an object to follow a limb. **Fired by Clockout 0028 on skins:** `ParentJoint` attaches an
   entity to a joint of a skinned parent, the draw follows the posed joint, `posed_joint_world` is the
   presentation-only pose read, and the `character-socket` gallery golden proves it.
-- **Assembly parts and prefab parts as socket targets** (voxel `clips:` parts, imported prefab
-  parts) — a consumer asks.
+- **Prefab parts as socket targets** (imported prefab parts) — a consumer asks. Assembly parts shipped
+  as sockets (`Plan/animation-layers.md` decisions 41–44; owner ruling owed on lifting this deferral).
 - **Scale channel** (squash-and-stretch) — a sitting asks for it.
 - **Part visibility keyframes** — first content that needs them.
 - **mp4 clip preview** — first clip that looked right as a strip but reads wrong in motion

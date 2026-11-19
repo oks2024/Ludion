@@ -342,6 +342,16 @@ fn render_debug_takes_the_sun_cascades_view() {
     assert_eq!(debug_view(&mut engine, Some(None)), None);
 }
 
+/// The irradiance view is renderer and CLI only: a wire variant would move the replay schema hash, so
+/// `render.debug` reports no view for it.
+#[test]
+fn render_debug_reports_no_view_for_the_irradiance_view() {
+    let root = fixture_root();
+    let mut engine = engine(&root, &DebugCategories::None);
+    engine.set_debug_view(Some(ludion_engine::DebugView::Irradiance));
+    assert_eq!(debug_view(&mut engine, None), None);
+}
+
 const PHYSICS_SCENE: &str = "\
 format: 1
 seed: 7

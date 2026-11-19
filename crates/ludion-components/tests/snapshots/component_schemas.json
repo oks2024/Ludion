@@ -5867,7 +5867,7 @@
   "ParentJoint": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "ParentJoint",
-    "description": "Attaches an entity to one joint of its [`Parent`]'s skeleton: the parent must\nbe a skinned mesh ([`Mesh`] `shape: asset` naming a mesh document with `joints:`, or `shape:\ncharacter`, which resolves to one — the rule [`SkinBone`] uses). The entity's [`Transform`] is\nlocal to the joint's model transform; sim reads compose the joint's rest pose into the chain.\n\n```yaml\ncomponents:\n  Parent: { index: 0, generation: 0 }\n  ParentJoint:\n    joint: hand_r\n```\n\nTwo load-time/check-time/prefab-spawn diagnostics refuse a bad link: the parent not a skinned\nmesh, or no `Parent` at all (`L1318`), and `joint` naming no joint of it (`L1319`, the help names\nthe nearest). A runtime miss (a parent that lost its mesh, an unknown joint) composes as a plain\n`Parent`, silently. Like any component it is hashed, snapshotted and saved on a sim entity.",
+    "description": "Attaches an entity to one joint of its [`Parent`]'s skeleton: the parent must\nbe a skinned mesh ([`Mesh`] `shape: asset` naming a mesh document with `joints:`, or `shape:\ncharacter`, which resolves to one — the rule [`SkinBone`] uses), or a voxel assembly ([`Mesh`]\n`shape: assembly`, `joint` naming a part). The entity's [`Transform`] is local to the joint's\nmodel transform; sim reads compose the joint's rest pose into the chain. An assembly part's\nsocket frame is its pivot, in voxel units; sim reads use the part's rest frame, and the draw\nfollows the part's animated pose (`posed_joint_world` reads that pose from presentation).\n\n```yaml\ncomponents:\n  Parent: { index: 0, generation: 0 }\n  ParentJoint:\n    joint: hand_r\n```\n\nTwo load-time/check-time/prefab-spawn diagnostics refuse a bad link: the parent not a skinned\nmesh or an assembly, or no `Parent` at all (`L1318`), and `joint` naming no joint or part of it\n(`L1319`, the help names the nearest). A runtime miss (a parent that lost its mesh, an unknown joint) composes as a plain\n`Parent`, silently. Like any component it is hashed, snapshotted and saved on a sim entity.",
     "type": "object",
     "properties": {
       "joint": {
@@ -6915,6 +6915,66 @@
       "pose",
       "weight"
     ]
+  },
+  "PoseSnapshot": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PoseSnapshot",
+    "description": "The pose a voxel assembly's crossfade starts from, captured when a ragdoll folds back into it.\n\nIt is the outgoing side of the entity's fade exactly while `Animation.from` is empty,\n`Animation.fade_started` equals `started`, and the fade is active; otherwise it is inert. The next\n`crossfade()` (a non-empty `from`, a new `fade_started`) or a hard clip cut therefore retires it\nwith no system. `switch_ragdoll_to_assembly` writes it and `switch_to_ragdoll_with` removes it; a\nstale, inert snapshot between those two calls is ordinary hashed state.\n\n**Presentation only.** Extract reads it; no system does. A scene without it poses exactly as\nbefore.\n\n```yaml\ncomponents:\n  PoseSnapshot:\n    started: 120\n    parts:\n      - { part: torso, rotation: [0.0, 0.0, 0.0, 1.0], translation: [0.0, 0.0, 0.0] }\n```",
+    "type": "object",
+    "properties": {
+      "started": {
+        "description": "The `fade_started` frame of the crossfade this snapshot feeds (default frame `0`).",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0,
+        "default": 0
+      },
+      "parts": {
+        "description": "The captured parts, by assembly part name (default none: nothing to fade from).",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/SnapshotPart"
+        },
+        "default": []
+      }
+    },
+    "$defs": {
+      "SnapshotPart": {
+        "description": "One part's captured local pose: the sampled rotation and translation channels an assembly clip\nwould have produced for it.",
+        "type": "object",
+        "properties": {
+          "part": {
+            "description": "The assembly part's name.",
+            "type": "string"
+          },
+          "rotation": {
+            "description": "The rotation channel as a quaternion `[x, y, z, w]`.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "translation": {
+            "description": "The translation channel in model units (before the entity's `scale`).",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "part",
+          "rotation",
+          "translation"
+        ]
+      }
+    }
   },
   "PostProcess": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -1310,6 +1310,132 @@ fn filter_keyword(filter: ludion_scene::AtlasFilter) -> &'static str {
     }
 }
 
+/// One `ik:` entry as `check-scene` lists it: names and the unmirrored effector from the document,
+/// the hinge and limits the solver uses from the resolved assembly.
+enum IkRow<'a> {
+    Chain {
+        name: &'a str,
+        parts: &'a [String; 2],
+        effector: [f64; 3],
+        axis: [f64; 3],
+        bend: f64,
+        limits: Option<[f64; 2]>,
+    },
+    LookAt {
+        name: &'a str,
+        aim: &'a str,
+        forward: [f64; 3],
+        limits_deg: [f64; 2],
+    },
+}
+
+fn ik_row<'a>(
+    entry: &'a ludion_scene::IkEntry,
+    resolved: &ludion_engine::AssemblyIkData,
+) -> Option<IkRow<'a>> {
+    match (&entry.kind, &resolved.kind) {
+        (
+            ludion_scene::IkKind::Chain {
+                parts, effector, ..
+            },
+            ludion_engine::AssemblyIkKind::Chain {
+                axis, bend, limits, ..
+            },
+        ) => Some(IkRow::Chain {
+            name: &entry.name,
+            parts,
+            effector: *effector,
+            axis: *axis,
+            bend: *bend,
+            limits: *limits,
+        }),
+        (
+            ludion_scene::IkKind::LookAt { aim, .. },
+            ludion_engine::AssemblyIkKind::LookAt {
+                forward,
+                limits_deg,
+                ..
+            },
+        ) => Some(IkRow::LookAt {
+            name: &entry.name,
+            aim,
+            forward: *forward,
+            limits_deg: *limits_deg,
+        }),
+        _ => None,
+    }
+}
+
+impl IkRow<'_> {
+    fn json(&self) -> serde_json::Value {
+        match self {
+            IkRow::Chain {
+                name,
+                parts,
+                effector,
+                axis,
+                bend,
+                limits,
+            } => serde_json::json!({
+                "name": name,
+                "kind": "chain",
+                "parts": parts,
+                "effector": effector,
+                "hinge": { "axis": axis, "bend": bend },
+                "limits": limits,
+            }),
+            IkRow::LookAt {
+                name,
+                aim,
+                forward,
+                limits_deg,
+            } => serde_json::json!({
+                "name": name,
+                "kind": "look_at",
+                "aim": aim,
+                "forward": forward,
+                "limits_deg": { "yaw": limits_deg[0], "pitch": limits_deg[1] },
+            }),
+        }
+    }
+
+    fn text(&self) -> String {
+        let list = |v: &[f64; 3]| format!("[{}, {}, {}]", v[0], v[1], v[2]);
+        match self {
+            IkRow::Chain {
+                name,
+                parts,
+                effector,
+                axis,
+                bend,
+                limits,
+            } => {
+                let limits =
+                    limits.map_or(String::new(), |[lo, hi]| format!(", limits [{lo}, {hi}]"));
+                format!(
+                    "  ik {name}: chain {} -> {}, effector {}, hinge {} bend {}{limits}",
+                    parts[0],
+                    parts[1],
+                    list(effector),
+                    list(axis),
+                    if *bend < 0.0 { "-1" } else { "+1" },
+                )
+            }
+            IkRow::LookAt {
+                name,
+                aim,
+                forward,
+                limits_deg,
+            } => format!(
+                "  ik {name}: look-at {aim}, forward {}, yaw ±{}, pitch ±{}",
+                list(forward),
+                limits_deg[0],
+                limits_deg[1],
+            ),
+        }
+    }
+}
+
 /// Validates an assembly document (`kind: assembly`, the model of record for a multi-part voxel
 /// model, `Plan/voxel-animation.md` decisions 3, 4 and 9) — the one `check-scene` path that touches
 /// more than the one file it was given.
@@ -1430,6 +1556,18 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
             })
             .collect();
     }
+    // `data.ik` and the document's `ik` are both sorted by name, so they zip; the resolved hinge
+    // and limits come from `data` (what the solver uses), the names and the unmirrored effector from
+    // the document.
+    let ik_rows: Vec<IkRow<'_>> = assembly
+        .ik
+        .iter()
+        .zip(&data.ik)
+        .filter_map(|(entry, resolved)| ik_row(entry, resolved))
+        .collect();
+    if !ik_rows.is_empty() {
+        fields["ik"] = ik_rows.iter().map(IkRow::json).collect();
+    }
 
     if reporter.json {
         for warning in connectivity.into_iter().chain(overlap) {
@@ -1511,6 +1649,9 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
                 .collect();
             println!("    triangles: {}", triangles.join(" "));
         }
+    }
+    for row in &ik_rows {
+        println!("{}", row.text());
     }
     if let Some(warning) = connectivity {
         diagnostic::print(&warning);

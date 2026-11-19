@@ -11842,6 +11842,10 @@ fn needs_gpu_a_debug_view_without_ssr_draws_the_normal_frame() {
     };
     let (plain, _) = ssr_view_frame(&renderer, 0.0, None);
     for view in crate::DebugView::ALL {
+        // The irradiance view needs no subject: it always replaces the frame.
+        if view == crate::DebugView::Irradiance {
+            continue;
+        }
         let (viewed, _) = ssr_view_frame(&renderer, 0.0, Some(view));
         assert_eq!(plain.rgba, viewed.rgba, "{} moved the frame", view.name());
     }

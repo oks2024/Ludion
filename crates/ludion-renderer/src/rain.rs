@@ -4,7 +4,7 @@
 //! rounds, so a drop's position is a function of the tile and the time alone and never of the camera;
 //! `shaders/rain.wgsl` evaluates the same arithmetic and [`drop_position`] is its twin.
 
-use ludion_core::math::glam::{IVec3, Vec3};
+use ludion_core::math::glam::{IVec3, Mat4, Vec3};
 
 /// The most streaks one draw carries. A scene asking for more is clamped per tile.
 pub const MAX_RAIN_STREAKS: u32 = 65_536;
@@ -99,6 +99,46 @@ pub fn rain_layout(rain: &RainData, cam: Vec3) -> RainLayout {
         per_tile: rain.per_tile,
         instances: n_xz * n_xz * n_y * rain.per_tile,
     }
+}
+
+/// The edge of the overhead occlusion map, in texels.
+pub const RAIN_OCCLUSION_SIZE: u32 = 512;
+
+/// How far above the top of the rain band the occlusion camera sits: roofs up to this high over the
+/// band still shadow the streaks below them.
+pub const RAIN_OCCLUDER_REACH: f32 = 64.0;
+
+/// The straight-down orthographic view of the overhead occlusion map: world to clip, `x`/`y` over
+/// `[-radius, radius]` around the camera and `z = 0` at the eye, `z = 1` at the far plane.
+///
+/// The eye follows `cam.xz` snapped to the map's texel grid, so a sub-texel camera move leaves the
+/// map, and every roof edge in it, still.
+pub fn occlusion_view(rain: &RainData, cam: Vec3) -> Mat4 {
+    let texel = 2.0 * rain.radius / RAIN_OCCLUSION_SIZE as f32;
+    let snap = |v: f32| (v / texel).floor() * texel;
+    let eye = Vec3::new(
+        snap(cam.x),
+        cam.y + rain.height[1] + RAIN_OCCLUDER_REACH,
+        snap(cam.z),
+    );
+    let far = RAIN_OCCLUDER_REACH + (rain.height[1] - rain.height[0]);
+    let view = Mat4::look_at_rh(eye, eye - Vec3::Y, -Vec3::Z);
+    let proj = Mat4::orthographic_rh(
+        -rain.radius,
+        rain.radius,
+        -rain.radius,
+        rain.radius,
+        0.0,
+        far,
+    );
+    proj * view
+}
+
+/// The world height of the surface a stored map `depth` means: the CPU twin of the shader's inverse.
+/// A straight-down orthographic depth is affine in height, so the matrix's `y` column and translation
+/// invert it with no unprojection.
+pub fn occluder_height(view: &Mat4, depth: f32) -> f32 {
+    (depth - view.w_axis.z) / view.y_axis.z
 }
 
 /// One round of PCG, the shader's `pcg`.
@@ -244,6 +284,44 @@ mod tests {
         let h = drop_hash(IVec3::new(1, -2, 3), 7, 42);
         assert_eq!(h, drop_hash(IVec3::new(1, -2, 3), 7, 42));
         assert_ne!(h, drop_hash(IVec3::new(1, -2, 4), 7, 42));
+    }
+
+    /// Moving the camera by less than a texel keeps the map still; a whole texel moves it.
+    #[test]
+    fn the_occlusion_snap_is_stable_under_a_sub_texel_move() {
+        let r = rain();
+        let texel = 2.0 * r.radius / RAIN_OCCLUSION_SIZE as f32;
+        let base = Vec3::new(10.0 + 0.25 * texel, 1.6, -7.0 + 0.25 * texel);
+        let a = occlusion_view(&r, base);
+        let b = occlusion_view(&r, base + Vec3::new(0.4 * texel, 0.0, 0.4 * texel));
+        assert_eq!(a, b, "a sub-texel move");
+        let c = occlusion_view(&r, base + Vec3::new(texel, 0.0, 0.0));
+        assert_ne!(a, c, "a texel move");
+    }
+
+    #[test]
+    fn the_occlusion_map_covers_the_band_and_the_reach() {
+        let r = rain();
+        let cam = Vec3::new(3.0, 1.6, 4.0);
+        let m = occlusion_view(&r, cam);
+        // The top of the band's top reaches z = REACH / far; the band's bottom is z = 1.
+        let far = RAIN_OCCLUDER_REACH + (r.height[1] - r.height[0]);
+        let top = m.project_point3(Vec3::new(cam.x, cam.y + r.height[1], cam.z));
+        assert!((top.z - RAIN_OCCLUDER_REACH / far).abs() < 1e-4, "{top:?}");
+        let bottom = m.project_point3(Vec3::new(cam.x, cam.y + r.height[0], cam.z));
+        assert!((bottom.z - 1.0).abs() < 1e-4, "{bottom:?}");
+        let east = m.project_point3(Vec3::new(cam.x + r.radius, cam.y, cam.z));
+        assert!((east.x - 1.0).abs() < 0.01, "{east:?}");
+    }
+
+    #[test]
+    fn an_occluder_height_round_trips_through_the_depth() {
+        let r = rain();
+        let m = occlusion_view(&r, Vec3::new(-2.0, 0.5, 9.0));
+        for y in [-5.0, 0.0, 3.0, 12.5, 40.0] {
+            let depth = m.project_point3(Vec3::new(1.0, y, 2.0)).z;
+            assert!((occluder_height(&m, depth) - y).abs() < 1e-3, "y={y}");
+        }
     }
 
     #[test]

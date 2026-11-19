@@ -632,6 +632,32 @@ fn rest_offset(assembly_size: [u32; 3], place: [u32; 3], part_size: [u32; 3]) ->
     .map(|component| component as f32)
 }
 
+/// Every part's socket rest in the assembly frame, by part name: [`AssemblyPartData::offset`] plus
+/// [`AssemblyPartData::pivot`], built from the same two functions [`mesh_assembly`] uses, without
+/// meshing. `parts` is aligned by index with `assembly.parts`.
+pub(crate) fn part_socket_rests(
+    assembly: &AssemblyDocument,
+    parts: &[PartDocument],
+) -> Vec<(String, [f32; 3])> {
+    assembly
+        .parts
+        .iter()
+        .zip(parts)
+        .map(|(entry, part)| {
+            let offset = rest_offset(assembly.size, entry.place, part.size);
+            let pivot = pivot_in_part_mesh(entry, part.size);
+            (
+                entry.name.clone(),
+                [
+                    offset[0] + pivot[0],
+                    offset[1] + pivot[1],
+                    offset[2] + pivot[2],
+                ],
+            )
+        })
+        .collect()
+}
+
 /// The authored pivot relative to the part mesh origin — the module doc's `pivot` formula, taking
 /// the mirrored frame from [`AssemblyPartEntry::pivot_in_mesh_frame`] rather than branching here.
 fn pivot_in_part_mesh(entry: &AssemblyPartEntry, part_size: [u32; 3]) -> [f32; 3] {
@@ -1112,6 +1138,28 @@ mod tests {
             mesh_assembly(&assembly, &parts, &clips, 0xC0FFEE),
             mesh_assembly(&assembly, &parts, &clips, 0xC0FFEE)
         );
+    }
+
+    /// The sim-side socket rest equals the meshed `offset + pivot` per part, mirrored part included.
+    #[test]
+    fn socket_rests_equal_the_meshed_offset_plus_pivot() {
+        let mut arm = part_entry("arm", [2, 1, 0]);
+        arm.parent = Some("body".to_string());
+        arm.pivot = [0.5, 1.5, 0.5];
+        arm.mirror_x = true;
+        let assembly = assembly_doc([4, 3, 2], vec![part_entry("body", [0, 0, 0]), arm]);
+        let parts = [
+            part_doc([2, 2, 2], &[&["AB", "BA"], &[".A", "B."]]),
+            part_doc([2, 2, 1], &[&["A."], &[".B"]]),
+        ];
+        let data = mesh_assembly(&assembly, &parts, &[], 1);
+        let rests = part_socket_rests(&assembly, &parts);
+        assert_eq!(rests.len(), data.parts.len());
+        for ((name, rest), part) in rests.iter().zip(&data.parts) {
+            assert_eq!(name, &part.name);
+            let expected: [f32; 3] = std::array::from_fn(|i| part.offset[i] + part.pivot[i]);
+            assert_eq!(*rest, expected, "part `{name}`");
+        }
     }
 
     /// Two identical part documents in one assembly still get distinct mesh hashes — the renderer

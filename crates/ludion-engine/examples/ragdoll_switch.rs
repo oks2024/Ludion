@@ -8,6 +8,9 @@
 //! pose rather than the pose the puppet was in at the switch. The arm hinge angle is printed at the
 //! end of the run. With `--part-velocity` the switch also adds the drawn pose's own motion to each
 //! part's `Velocity` (`RagdollSwitch::part_velocity`), and the arm's spawn velocity is printed.
+//! With `--recover` the fallen body is folded back into the puppet at the end of the run
+//! (`ragdoll_landing`, then `switch_ragdoll_to_assembly`, crossfading into `wave` from the fallen
+//! pose) and the landing is printed.
 //!
 //! The switch is ordinary game code: a real game calls `switch_to_ragdoll` from a system, at
 //! `ctx.game_time` (`SystemCtx::game_time`) — a death blow, a stagger, a rope grab. This headless
@@ -23,6 +26,7 @@
 //! cargo run -p ludion-engine --example ragdoll_switch
 //! cargo run -p ludion-engine --example ragdoll_switch -- --limits-from-rest
 //! cargo run -p ludion-engine --example ragdoll_switch -- --part-velocity --limits-from-rest
+//! cargo run -p ludion-engine --example ragdoll_switch -- --recover --limits-from-rest
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -33,8 +37,8 @@ use ludion_core::math::euler_xyz_degrees_to_quat;
 use ludion_core::math::glam::Quat;
 use ludion_core::time::{SimTime, TickRate};
 use ludion_engine::{
-    Engine, LimitsFrom, RagdollSwitch, Transform, load_assembly, switch_to_ragdoll,
-    switch_to_ragdoll_with,
+    Engine, LimitsFrom, RagdollSwitch, Transform, load_assembly, ragdoll_landing,
+    switch_ragdoll_to_assembly, switch_to_ragdoll, switch_to_ragdoll_with,
 };
 use ludion_spatial::Velocity;
 
@@ -228,6 +232,7 @@ fn main() -> ExitCode {
     let now = SimTime::from_ticks(engine.frame().0, TickRate::DEFAULT);
     let from_rest = std::env::args().any(|arg| arg == "--limits-from-rest");
     let part_velocity = std::env::args().any(|arg| arg == "--part-velocity");
+    let recover = std::env::args().any(|arg| arg == "--recover");
     let switched = if from_rest || part_velocity {
         let mut opts = RagdollSwitch::default();
         if from_rest {
@@ -299,6 +304,36 @@ fn main() -> ExitCode {
         };
         let angle = 2.0 * ludion_core::math::atan2(relative.z, relative.w).to_degrees();
         println!("arm hinge angle from rest: {angle:.1} degrees");
+    }
+
+    if recover {
+        // Fold the fallen body back into the puppet: ask where it lies first (a game picks its
+        // get-up clip from `face_up`), then switch, crossfading into `wave` from the fallen pose.
+        let now = SimTime::from_ticks(engine.frame().0, TickRate::DEFAULT);
+        let landing = match ragdoll_landing(engine.world(), puppet, &spawned, &data) {
+            Ok(landing) => landing,
+            Err(diagnostic) => {
+                eprintln!("{diagnostic}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let folded = switch_ragdoll_to_assembly(
+            engine.world_mut(),
+            puppet,
+            &spawned,
+            &data,
+            "wave",
+            0.25,
+            now,
+        );
+        if let Err(diagnostic) = folded {
+            eprintln!("{diagnostic}");
+            return ExitCode::FAILURE;
+        }
+        println!(
+            "folded back: face_up {}, root_yaw {:.3} rad, feet {:?}",
+            landing.face_up, landing.root_yaw, landing.feet
+        );
     }
 
     let _ = std::fs::remove_dir_all(&root);

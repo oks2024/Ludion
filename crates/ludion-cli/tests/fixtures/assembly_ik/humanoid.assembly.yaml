@@ -1,0 +1,95 @@
+format: 1
+kind: assembly
+name: humanoid
+size:
+  - 5
+  - 2
+  - 1
+palette:
+  A:
+    color:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 1.0
+parts:
+  - name: torso
+    file: parts/cell.part.yaml
+    place:
+      - 0
+      - 0
+      - 0
+  - name: head
+    file: parts/cell.part.yaml
+    parent: torso
+    place:
+      - 0
+      - 1
+      - 0
+  - name: upper-arm-l
+    file: parts/cell.part.yaml
+    parent: torso
+    place:
+      - 1
+      - 0
+      - 0
+  - name: lower-arm-l
+    file: parts/cell.part.yaml
+    parent: upper-arm-l
+    place:
+      - 2
+      - 0
+      - 0
+  - name: upper-arm-r
+    file: parts/cell.part.yaml
+    parent: torso
+    place:
+      - 3
+      - 0
+      - 0
+  - name: lower-arm-r
+    file: parts/cell.part.yaml
+    parent: upper-arm-r
+    place:
+      - 4
+      - 0
+      - 0
+clips:
+  idle: anims/idle.anim.yaml
+  walk: anims/walk.anim.yaml
+masks:
+  head_look:
+    joints:
+      - torso
+      - head
+    weights:
+      - 0.5
+      - 1.0
+ik:
+  arm_l:
+    parts:
+      - upper-arm-l
+      - lower-arm-l
+    effector:
+      - 0.5
+      - 0.0
+      - 0.5
+    hinge:
+      axis:
+        - 0.0
+        - 0.0
+        - 1.0
+      bend: -1
+  hand_r:
+    parts:
+      - upper-arm-r
+      - lower-arm-r
+    effector:
+      - 1.0
+      - 0.0
+      - 1.0
+  look:
+    aim: head_look
+    limits_deg:
+      yaw: 70.0
+      pitch: 40.0

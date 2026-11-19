@@ -251,7 +251,7 @@ pub(crate) fn debug(
             .into_iter()
             .map(String::from)
             .collect(),
-        view: engine.debug_view().map(wire_view),
+        view: engine.debug_view().and_then(wire_view),
     })
 }
 
@@ -265,14 +265,16 @@ fn renderer_view(view: RenderDebugView) -> DebugView {
     }
 }
 
-fn wire_view(view: DebugView) -> RenderDebugView {
-    match view {
+fn wire_view(view: DebugView) -> Option<RenderDebugView> {
+    Some(match view {
         DebugView::SsrConfidence => RenderDebugView::SsrConfidence,
         DebugView::SsrFootprint => RenderDebugView::SsrFootprint,
         DebugView::ProbeIndex => RenderDebugView::ProbeIndex,
         DebugView::LocalShadowAtlas => RenderDebugView::LocalShadowAtlas,
         DebugView::SunCascades => RenderDebugView::SunCascades,
-    }
+        // Not on the wire: a wire variant moves the replay schema hash.
+        DebugView::Irradiance => return None,
+    })
 }
 
 /// `render.dump_graph` — the render graph structure as JSON (no GPU needed).

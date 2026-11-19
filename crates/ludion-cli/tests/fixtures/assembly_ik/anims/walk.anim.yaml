@@ -1,0 +1,18 @@
+format: 1
+kind: animation
+name: walk
+duration: 1.0
+loop: true
+tracks:
+  torso:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 10.0
+          - 0.0
+          - 0.0

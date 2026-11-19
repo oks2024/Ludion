@@ -208,7 +208,8 @@ use ludion_sculpt::{SculptMesh, SculptSources};
 use ludion_sim::{SimConfig, SimDriver};
 use serde_json::Value;
 
-use crate::assembly_mesh::AssemblyData;
+use crate::assembly_ik::{IkAim, IkGoal, apply_assembly_ik};
+use crate::assembly_mesh::{AssemblyData, AssemblyIkKind};
 use crate::builtin_registry;
 use crate::character::CharacterData;
 use crate::components::{AnimationLayer, AnimationLayers, LayerMode};
@@ -223,6 +224,7 @@ use crate::{
     Transform, UiText,
 };
 use ludion_components::animation_layers::MAX_ANIMATION_LAYERS;
+use ludion_components::{IkTarget, IkTargets, Look};
 
 /// A turntable view. [`ALL`](ModelView::ALL) is the canonical sheet order;
 /// [`DEFAULT`](ModelView::DEFAULT) is the set an empty request expands to.
@@ -448,6 +450,15 @@ pub struct ModelSheetRequest<'a> {
     /// [`crossfade`](Self::crossfade) or [`blend`](Self::blend): at most
     /// [`MAX_ANIMATION_LAYERS`], one assembly or character at a time (`L1670` past the cap).
     pub layers: &'a [LayerSpec<'a>],
+    /// Aim an assembly's `ik:` look-at over the base pose of [`clip`](Self::clip),
+    /// [`crossfade`](Self::crossfade) or [`blend`](Self::blend). A `lo..hi` side makes the strip's
+    /// phases look phases ([`DEFAULT_CROSSFADE_PHASES`] of them unless [`strip`](Self::strip) says
+    /// otherwise), every one at the same [`time`](Self::time). Assembly documents only, and not with a
+    /// `--blend` range.
+    pub look: Option<LookSpec<'a>>,
+    /// Reach `ik:` chains to points of the assembly grid over the same base pose, solved by the one
+    /// solver the game extracts with. Assembly documents only.
+    pub ik: &'a [IkSpec<'a>],
     /// Show each phase at the pose a game shows with `Animation.hold` = N: the phase tick snaps down
     /// to a multiple of N, the clip or fade taken to begin on a grid tick. `None` and `Some(1)` are
     /// every tick. Needs [`clip`](Self::clip) or [`crossfade`](Self::crossfade); `Some(0)` is `L1317`.
@@ -480,6 +491,8 @@ impl<'a> ModelSheetRequest<'a> {
             crossfade: None,
             blend: None,
             layers: &[],
+            look: None,
+            ik: &[],
             hold: None,
             part: None,
             isolate: false,
@@ -699,6 +712,120 @@ pub fn parse_layer(spec: &str) -> Result<LayerSpec<'_>, Diagnostic> {
     })
 }
 
+/// A parsed `--look [NAME=]YAW,PITCH`: a look-at's direction, each side a number or a `lo..hi`
+/// range swept across the strip's phases.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LookSpec<'a> {
+    /// The `ik:` look-at the direction aims; `None` is the assembly's only look-at.
+    pub name: Option<&'a str>,
+    /// Degrees about +Y; positive turns left (`Look`'s convention).
+    pub yaw: Sweep,
+    /// Degrees of tilt; positive looks down.
+    pub pitch: Sweep,
+}
+
+/// A parsed `--ik NAME=X,Y,Z`: a chain's target point, in the assembly's own grid voxels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IkSpec<'a> {
+    /// The `ik:` chain whose effector reaches the point.
+    pub name: &'a str,
+    /// The point in assembly-grid voxels — the frame `place:` is written in.
+    pub point: [f32; 3],
+}
+
+/// Parses a `[name=]yaw,pitch` look spec, each side a number or a `lo..hi` range.
+///
+/// # Errors
+/// `L1117` if the spec is not two `,`-separated fields, a name before `=` is empty, or a side is not a
+/// finite number or a range of two.
+pub fn parse_look(spec: &str) -> Result<LookSpec<'_>, Diagnostic> {
+    const EXAMPLE: &str = "e.g. `--look 40,0` aims the only look-at 40° to the left, \
+                           `--look look=0..100,0` sweeps the yaw of the one named `look` across the \
+                           strip — yaw then pitch, in degrees";
+    let refuse = |message: String| {
+        Diagnostic::new(code::MODEL_SHEET_INPUT, message).with_help(EXAMPLE.to_string())
+    };
+    let (name, angles) = match spec.split_once('=') {
+        Some(("", _)) => {
+            return Err(refuse(format!(
+                "`--look {spec}` leaves the look-at name empty: write `<name>=<yaw>,<pitch>`, or \
+                 drop the `=`"
+            )));
+        }
+        Some((name, angles)) => (Some(name), angles),
+        None => (None, spec),
+    };
+    let fields: Vec<&str> = angles.split(',').collect();
+    let [yaw, pitch] = fields[..] else {
+        return Err(refuse(format!(
+            "`--look {spec}` has {} `,`-separated field{}, but a look is `<yaw>,<pitch>`",
+            fields.len(),
+            if fields.len() == 1 { "" } else { "s" }
+        )));
+    };
+    let sweep = |text: &str| {
+        sweep_of(text).ok_or_else(|| {
+            refuse(format!(
+                "`--look {spec}` has `{text}` where a finite number or a `lo..hi` range was expected"
+            ))
+        })
+    };
+    Ok(LookSpec {
+        name,
+        yaw: sweep(yaw)?,
+        pitch: sweep(pitch)?,
+    })
+}
+
+/// Parses a `name=x,y,z` chain target, in assembly-grid voxels.
+///
+/// # Errors
+/// `L1117` if there is no `=`, the name is empty, or the point is not three finite numbers.
+pub fn parse_ik(spec: &str) -> Result<IkSpec<'_>, Diagnostic> {
+    const EXAMPLE: &str = "e.g. `--ik hand_r=6,12,2` reaches the chain `hand_r` for the voxel point \
+                           x=6, y=12, z=2 of the assembly grid (`check-scene` lists the chains)";
+    let refuse = |message: String| {
+        Diagnostic::new(code::MODEL_SHEET_INPUT, message).with_help(EXAMPLE.to_string())
+    };
+    let Some((name, point)) = spec.split_once('=') else {
+        return Err(refuse(format!(
+            "`--ik {spec}` has no `=`, but a target is `<name>=<x>,<y>,<z>`"
+        )));
+    };
+    if name.is_empty() {
+        return Err(refuse(format!(
+            "`--ik {spec}` leaves the chain name empty: name the `ik:` chain to reach with"
+        )));
+    }
+    let fields: Vec<&str> = point.split(',').collect();
+    let [x, y, z] = fields[..] else {
+        return Err(refuse(format!(
+            "`--ik {spec}` has {} `,`-separated field{}, but a point is `<x>,<y>,<z>`",
+            fields.len(),
+            if fields.len() == 1 { "" } else { "s" }
+        )));
+    };
+    let number = |text: &str| match text.parse::<f32>() {
+        Ok(value) if value.is_finite() => Ok(value),
+        _ => Err(refuse(format!(
+            "`--ik {spec}` has `{text}` where a finite number was expected"
+        ))),
+    };
+    Ok(IkSpec {
+        name,
+        point: [number(x)?, number(y)?, number(z)?],
+    })
+}
+
+/// A finite number, or a `lo..hi` range of two.
+fn sweep_of(text: &str) -> Option<Sweep> {
+    let number = |part: &str| part.parse::<f32>().ok().filter(|value| value.is_finite());
+    match text.split_once("..") {
+        Some((lo, hi)) => Some(Sweep::Range(number(lo)?, number(hi)?)),
+        None => Some(Sweep::At(number(text)?)),
+    }
+}
+
 /// The most models one lineup may carry. Past eight, each model's slice of the cell is too narrow
 /// for the comparison a lineup exists to make — and its caption no longer fits under it.
 pub const MAX_LINEUP_MODELS: usize = 8;
@@ -754,6 +881,8 @@ pub struct ClipOutcome {
     pub blend: Option<String>,
     /// The request's layers, each echoed as `clip weight mask mode` (`-` for no mask), bottom first.
     pub layers: Vec<String>,
+    /// The request's `--ik` targets, each echoed as `name=[x, y, z]` in assembly-grid voxels.
+    pub ik: Vec<String>,
     /// The tick rate clip time was quantized against ([`TickRate::DEFAULT`]), in hertz.
     pub hz: u32,
     /// The pose cadence the phases were snapped to, in ticks (`1` when the request had none).
@@ -794,6 +923,9 @@ pub struct PhaseReport {
     pub weight: Option<f64>,
     /// The blend parameters this phase evaluated; `None` outside a blend sweep.
     pub params: Option<[f32; 2]>,
+    /// The `[yaw, pitch]` in degrees this phase aimed its look-at at, before the look-at's limits
+    /// clamp it; `None` without `--look`.
+    pub look: Option<[f32; 2]>,
     /// The blend's shared phase in unwrapped cycles (`elapsed × rate(params)`); `None` outside a
     /// blend sweep.
     pub phase: Option<f64>,
@@ -935,7 +1067,10 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
     check_part_flags(request)?;
     // A strip spends its one cell on phases exactly as a lineup spends it on models, so the two
     // share every layout decision from here down.
-    let fanned = request.strip.is_some() || request.crossfade.is_some() || sweeps_blend(request);
+    let fanned = request.strip.is_some()
+        || request.crossfade.is_some()
+        || sweeps_blend(request)
+        || sweeps_look(request);
     let row = lineup || fanned;
     // A row spends its one cell on subjects rather than angles, so it takes one view — and defaults
     // to the gameplay one, the angle the comparison is actually made at.
@@ -952,7 +1087,7 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
     }
     if let Some(sweep) = request.sweep {
         let phases = request.strip.or_else(|| {
-            (request.crossfade.is_some() || sweeps_blend(request))
+            (request.crossfade.is_some() || sweeps_blend(request) || sweeps_look(request))
                 .then_some(DEFAULT_CROSSFADE_PHASES)
         });
         check_sweep_shape(&sweep, &views, phases)?;
@@ -1059,6 +1194,8 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
                     started: phase.started,
                     params: phase.params,
                     layers: request.layers,
+                    ik: Some(&posed.ik).filter(|ik| !ik.is_empty()),
+                    look: phase.look,
                     fade: phase.fade.map(|(from_started, fade_started)| FadeSpec {
                         from: posed.from.as_deref().unwrap_or_default(),
                         from_started,
@@ -1193,6 +1330,7 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
                     )
                 })
                 .collect(),
+            ik: ik_echoes(request),
             name: posed.name,
             duration: posed.duration,
             looped: posed.looped,
@@ -1301,6 +1439,35 @@ fn check_clip_flags(request: &ModelSheetRequest) -> Result<(), Vec<Diagnostic>> 
                 .to_string(),
             "name the base too, e.g. `--clip walk --layer wave:1.0:arm_only`",
         ));
+    }
+    let aim = match (request.look, request.ik) {
+        (Some(_), _) => Some("`--look`"),
+        (None, [_, ..]) => Some("`--ik`"),
+        (None, []) => None,
+    };
+    if let Some(aim) = aim {
+        if request.clip.is_none() && request.crossfade.is_none() && request.blend.is_none() {
+            return Err(refuse_clip(
+                format!(
+                    "{aim} needs a base pose: the solver aims over `--clip`, `--crossfade` or \
+                     `--blend`"
+                ),
+                "name the base too, e.g. `--clip idle --look 40,0`",
+            ));
+        }
+        if sweeps_look(request)
+            && request.blend.is_some_and(|blend| {
+                matches!(blend.p0, Sweep::Range(..)) || matches!(blend.p1, Some(Sweep::Range(..)))
+            })
+        {
+            return Err(refuse_clip(
+                "a `--look` range and a `--blend` range both sweep the strip, and a strip sweeps one \
+                 thing"
+                    .to_string(),
+                "hold the blend at a value (`--blend locomotion:1`) while the look sweeps, or give \
+                 `--look` plain angles while the blend sweeps",
+            ));
+        }
     }
     if request.hold == Some(0) {
         return Err(vec![
@@ -2257,6 +2424,10 @@ struct AnimationSpec<'a> {
     params: [f32; 2],
     /// The `AnimationLayers` the entity carries, all started at `started`.
     layers: &'a [LayerSpec<'a>],
+    /// The `--look`/`--ik` the entity's `IkTargets` aim, when there are any.
+    ik: Option<&'a IkPlan>,
+    /// The `[yaw, pitch]` this phase's look-at aims at.
+    look: Option<[f32; 2]>,
 }
 
 /// Whether the request sweeps a blend, so its phases are a strip.
@@ -2279,14 +2450,18 @@ struct FadeSpec<'a> {
 }
 
 /// One phase entity's frames: `started`, and under a crossfade its `(from_started, fade_started)`.
+#[derive(Debug)]
 struct PhaseStart {
     started: u64,
     fade: Option<(u64, u64)>,
     /// The blend parameters under a blend sweep; `[0, 0]` elsewhere.
     params: [f32; 2],
+    /// The look-at aim of this phase under `--look`.
+    look: Option<[f32; 2]>,
 }
 
 /// A resolved clip request: everything the render and the report need, decided entirely on the CPU.
+#[derive(Debug)]
 struct Posed {
     /// The clip played — a crossfade's incoming one.
     name: String,
@@ -2306,6 +2481,8 @@ struct Posed {
     now: u64,
     /// One report per phase, in the same order.
     reports: Vec<PhaseReport>,
+    /// What `--look`/`--ik` resolved to; empty without them.
+    ik: IkPlan,
 }
 
 /// The largest posed occupancy grid the gap analysis will build (256³ cells). A pose is a rigid
@@ -2447,18 +2624,22 @@ impl<'a> ClipSource<'a> {
     ///
     /// An assembly poses through [`part_placements_sides`], the one implementation extract draws
     /// with: `layers` compose over the base `pose` (and its `fade`) exactly as the entity's
-    /// `AnimationLayers` do.
+    /// `AnimationLayers` do, and `ik` solves over the result as extract's `IkTargets` pass does.
     fn report(
         &self,
         pose: AssemblySide<'_>,
         fade: Option<(AssemblySide<'_>, f64)>,
         layers: &[AssemblyLayerPose<'_>],
+        ik: &[IkGoal],
         time: f64,
         tick: u64,
     ) -> Result<PhaseReport, Vec<Diagnostic>> {
         match self {
             ClipSource::Assembly(posing) => {
-                let posed = part_placements_sides(&posing.data, pose, fade, true, layers);
+                let mut posed = part_placements_sides(&posing.data, pose, fade, true, layers);
+                if !ik.is_empty() {
+                    apply_assembly_ik(&posing.data, ik, &mut posed);
+                }
                 phase_report(
                     &posing.assembly,
                     &posing.grid,
@@ -2475,6 +2656,7 @@ impl<'a> ClipSource<'a> {
                 strays: Vec::new(),
                 weight: None,
                 params: None,
+                look: None,
                 phase: None,
             }),
         }
@@ -2551,6 +2733,217 @@ fn layers_of(specs: &[LayerSpec<'_>], started: u64) -> Vec<AnimationLayer> {
         .collect()
 }
 
+/// What `--look` and `--ik` resolved to against one assembly: the entries they drive and the points
+/// the chains reach, both in the assembly frame the solver works in.
+#[derive(Clone, Debug, Default)]
+struct IkPlan {
+    /// Each `--ik`: its entry index in [`AssemblyData::ik`], its name, and the target in the assembly
+    /// frame (bottom-centre origin, 1 voxel = 1 unit).
+    chains: Vec<(usize, String, [f32; 3])>,
+    /// The look-at `--look` aims: its entry index and name.
+    look: Option<(usize, String)>,
+}
+
+impl IkPlan {
+    fn is_empty(&self) -> bool {
+        self.chains.is_empty() && self.look.is_none()
+    }
+
+    /// The solver goals for one phase aiming the look-at at `look` (`[yaw, pitch]` in degrees).
+    fn goals(&self, look: Option<[f32; 2]>) -> Vec<IkGoal> {
+        let chains = self.chains.iter().map(|(entry, _, point)| IkGoal {
+            entry: *entry,
+            aim: IkAim::Point(point.map(f64::from)),
+            weight: 1.0,
+        });
+        let look = self
+            .look
+            .iter()
+            .zip(look)
+            .map(|((entry, _), [yaw, pitch])| IkGoal {
+                entry: *entry,
+                aim: IkAim::Direction {
+                    yaw_deg: f64::from(yaw),
+                    pitch_deg: f64::from(pitch),
+                },
+                weight: 1.0,
+            });
+        chains.chain(look).collect()
+    }
+
+    /// The `IkTargets` a sheet entity placed by `placement` carries so extract solves the same
+    /// goals: chain points move from the assembly frame to the world through the entity's
+    /// translation and uniform scale, a look is the direction itself.
+    fn targets(&self, look: Option<[f32; 2]>, placement: &Placement) -> IkTargets {
+        let mut targets = IkTargets::default();
+        for (_, name, point) in &self.chains {
+            let world = std::array::from_fn(|axis| {
+                placement.translation[axis] + placement.scale * point[axis]
+            });
+            targets.targets.insert(
+                name.clone(),
+                IkTarget {
+                    point: Some(world),
+                    weight: 1.0,
+                    ..IkTarget::default()
+                },
+            );
+        }
+        if let (Some((_, name)), Some([yaw_deg, pitch_deg])) = (&self.look, look) {
+            targets.targets.insert(
+                name.clone(),
+                IkTarget {
+                    direction: Some(Look { yaw_deg, pitch_deg }),
+                    weight: 1.0,
+                    ..IkTarget::default()
+                },
+            );
+        }
+        targets
+    }
+}
+
+/// Whether a `--look` side is a range, so its phases are a strip of looks.
+fn sweeps_look(request: &ModelSheetRequest) -> bool {
+    request.look.is_some_and(|look| {
+        matches!(look.yaw, Sweep::Range(..)) || matches!(look.pitch, Sweep::Range(..))
+    })
+}
+
+/// The `[yaw, pitch]` phase `index` of `phases` aims at, or `None` without `--look`.
+fn look_at_phase(request: &ModelSheetRequest, index: u32, phases: u32) -> Option<[f32; 2]> {
+    request
+        .look
+        .map(|look| [look.yaw.at(index, phases), look.pitch.at(index, phases)])
+}
+
+/// `--ik` as `name=[x, y, z]` echoes, for the report.
+fn ik_echoes(request: &ModelSheetRequest) -> Vec<String> {
+    request
+        .ik
+        .iter()
+        .map(|spec| format!("{}={:?}", spec.name, spec.point))
+        .collect()
+}
+
+/// Resolves `--look` and `--ik` against the model, or `L1117` for one that cannot take them. An empty
+/// plan when neither flag was given.
+fn resolve_ik(
+    source: &ClipSource<'_>,
+    noun: &str,
+    request: &ModelSheetRequest,
+) -> Result<IkPlan, Vec<Diagnostic>> {
+    if request.look.is_none() && request.ik.is_empty() {
+        return Ok(IkPlan::default());
+    }
+    let what = if request.look.is_some() {
+        "`--look`"
+    } else {
+        "`--ik`"
+    };
+    let ClipSource::Assembly(posing) = source else {
+        return Err(refuse_clip(
+            format!(
+                "{what} cannot aim this {noun}: only an assembly declares `ik:` chains and \
+                 look-ats, and a {noun}'s parts or bones carry none"
+            ),
+            "point `--model` at the `.assembly.yaml` whose `ik:` names the chain or look-at",
+        ));
+    };
+    let entries = &posing.data.ik;
+    let chains: Vec<&str> = entries
+        .iter()
+        .filter(|entry| matches!(entry.kind, AssemblyIkKind::Chain { .. }))
+        .map(|entry| entry.name.as_str())
+        .collect();
+    let looks: Vec<&str> = entries
+        .iter()
+        .filter(|entry| matches!(entry.kind, AssemblyIkKind::LookAt { .. }))
+        .map(|entry| entry.name.as_str())
+        .collect();
+    let all: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+    let find = |flag: &str, name: &str, wants_chain: bool| -> Result<usize, Vec<Diagnostic>> {
+        let (kind, found, mine, instead) = if wants_chain {
+            ("chain", "look-at", &chains, "--look")
+        } else {
+            ("look-at", "chain", &looks, "--ik")
+        };
+        let Some(index) = entries.iter().position(|entry| entry.name == name) else {
+            let help = match ludion_core::suggest::nearest(name, all.iter().copied()) {
+                Some(nearest) => format!(
+                    "nearest match is `{nearest}`; {} (`check-scene <model>.assembly.yaml` lists them)",
+                    declared(&all)
+                ),
+                None => format!(
+                    "name a {kind} of the `ik:` map (`check-scene <model>.assembly.yaml` lists them)"
+                ),
+            };
+            return Err(refuse_clip(
+                format!(
+                    "`{flag} {name}` names no `ik:` entry of this assembly: {}",
+                    declared(&all)
+                ),
+                &help,
+            ));
+        };
+        if !mine.contains(&name) {
+            return Err(refuse_clip(
+                format!("`{flag} {name}` names a {found}, but {flag} drives a {kind}"),
+                &format!("use `{instead}` for that entry, or name {}", declared(mine)),
+            ));
+        }
+        Ok(index)
+    };
+
+    let mut plan = IkPlan::default();
+    let [sx, _, sz] = posing.grid.voxel.size;
+    for spec in request.ik {
+        let entry = find("--ik", spec.name, true)?;
+        // The `place:` frame is the grid's own voxels; the assembly frame sits at the bottom-centre.
+        let [x, y, z] = spec.point;
+        plan.chains.push((
+            entry,
+            spec.name.to_string(),
+            [x - sx as f32 * 0.5, y, z - sz as f32 * 0.5],
+        ));
+    }
+    if let Some(look) = request.look {
+        let entry = match look.name {
+            Some(name) => find("--look", name, false)?,
+            None => match looks[..] {
+                [only] => entries
+                    .iter()
+                    .position(|entry| entry.name == only)
+                    .expect("the name came from the same entries"),
+                _ => {
+                    return Err(refuse_clip(
+                        format!(
+                            "a bare `--look` needs exactly one look-at, and this assembly declares {}",
+                            if looks.is_empty() {
+                                "none".to_string()
+                            } else {
+                                looks.len().to_string()
+                            }
+                        ),
+                        &if looks.is_empty() {
+                            "add an `aim:` entry under `ik:` (`ludion docs voxel-animation`)"
+                                .to_string()
+                        } else {
+                            format!(
+                                "name one, e.g. `--look {}=0,0` — {}",
+                                looks[0],
+                                declared(&looks)
+                            )
+                        },
+                    ));
+                }
+            },
+        };
+        plan.look = Some((entry, entries[entry].name.clone()));
+    }
+    Ok(plan)
+}
+
 /// Resolves `name` against the model: checks it is an assembly, character or prefab that binds the name,
 /// loads what the pose needs, and computes every phase's time, `started` frame, and report.
 ///
@@ -2566,25 +2959,38 @@ fn resolve_clip(
     check_bound(noun, &names, name)?;
     let source = ClipSource::load(model, loaded)?;
     check_layers(&source, noun, request.layers)?;
+    let ik = resolve_ik(&source, noun, request)?;
     let (clip, factor) = source.bound(name);
 
     let rate = TickRate::DEFAULT;
     let hold = request.hold.unwrap_or(1);
-    let ticks: Vec<u64> = phase_times(clip.duration, clip.looped, request.strip, request.time)
+    // A look sweep spends the strip on looks, so every phase sits at the one `--time`.
+    let times = if sweeps_look(request) {
+        let phases = request.strip.unwrap_or(DEFAULT_CROSSFADE_PHASES) as usize;
+        vec![request.time.unwrap_or(0.0); phases]
+    } else {
+        phase_times(clip.duration, clip.looped, request.strip, request.time)
+    };
+    let ticks: Vec<u64> = times
         .into_iter()
         .map(|time| quantize(time / factor, rate))
         .map(|tick| crate::extract::held_ticks(hold, tick))
         .collect();
     let now = ticks.iter().copied().max().unwrap_or(0);
     let mut reports = Vec::with_capacity(ticks.len());
-    for &tick in &ticks {
+    let mut looks = Vec::with_capacity(ticks.len());
+    for (index, &tick) in ticks.iter().enumerate() {
         // The instant the render will reach, derived the way the render derives it: the entity's
         // elapsed seconds are `(now − started) × seconds_per_tick`, and `clip_phase` wraps or
         // clamps them per the clip's own `loop:`.
         let time = tick as f64 * rate.seconds_per_tick() * factor;
         let pose = AssemblySide::single(Some((clip, ludion_scene::clip_phase(clip, time))));
         let layers = source.layer_poses(request.layers, now - tick, game_now(now));
-        reports.push(source.report(pose, None, &layers, time, tick)?);
+        let look = look_at_phase(request, index as u32, ticks.len() as u32);
+        let mut report = source.report(pose, None, &layers, &ik.goals(look), time, tick)?;
+        report.look = look;
+        reports.push(report);
+        looks.push(look);
     }
 
     Ok(Posed {
@@ -2597,14 +3003,17 @@ fn resolve_clip(
         two_d: false,
         started: ticks
             .iter()
-            .map(|tick| PhaseStart {
+            .zip(looks)
+            .map(|(tick, look)| PhaseStart {
                 started: now - tick,
                 fade: None,
                 params: [0.0; 2],
+                look,
             })
             .collect(),
         now,
         reports,
+        ik,
     })
 }
 
@@ -2628,6 +3037,7 @@ fn resolve_crossfade(
     check_bound(noun, &names, spec.to)?;
     let source = ClipSource::load(model, loaded)?;
     check_layers(&source, noun, request.layers)?;
+    let ik = resolve_ik(&source, noun, request)?;
     let (from_clip, from_factor) = source.bound(spec.from);
     let (to_clip, to_factor) = source.bound(spec.to);
 
@@ -2635,7 +3045,13 @@ fn resolve_crossfade(
     let seconds = f64::from(spec.seconds);
     let phases = request.strip.unwrap_or(DEFAULT_CROSSFADE_PHASES);
     let hold = request.hold.unwrap_or(1);
-    let fade_ticks: Vec<u64> = phase_times(seconds, false, Some(phases), None)
+    // A look sweep spends the strip on looks, so every phase sits at the fade's start.
+    let times = if sweeps_look(request) {
+        vec![0.0; phases as usize]
+    } else {
+        phase_times(seconds, false, Some(phases), None)
+    };
+    let fade_ticks: Vec<u64> = times
         .into_iter()
         .map(|time| quantize(time, rate))
         .map(|tick| crate::extract::held_ticks(hold, tick))
@@ -2645,7 +3061,7 @@ fn resolve_crossfade(
 
     let mut started = Vec::with_capacity(fade_ticks.len());
     let mut reports = Vec::with_capacity(fade_ticks.len());
-    for &tick in &fade_ticks {
+    for (index, &tick) in fade_ticks.iter().enumerate() {
         let to_time = tick as f64 * rate.seconds_per_tick() * to_factor;
         let from_time = (tick + lead) as f64 * rate.seconds_per_tick() * from_factor;
         // The extractor's own arithmetic, so the report names the weight the render drew.
@@ -2656,19 +3072,23 @@ fn resolve_crossfade(
             weight: raw,
         });
         let layers = source.layer_poses(request.layers, now - tick, game_now(now));
+        let look = look_at_phase(request, index as u32, phases);
         let mut report = source.report(
             AssemblySide::single(to_pose),
             fade.map(|fade| (AssemblySide::single(fade.from), fade.weight)),
             &layers,
+            &ik.goals(look),
             to_time,
             tick,
         )?;
         report.weight = Some(raw.min(1.0));
+        report.look = look;
         reports.push(report);
         started.push(PhaseStart {
             started: now - tick,
             fade: Some((now - tick - lead, now - tick)),
             params: [0.0; 2],
+            look,
         });
     }
 
@@ -2683,6 +3103,7 @@ fn resolve_crossfade(
         started,
         now,
         reports,
+        ik,
     })
 }
 
@@ -2788,6 +3209,7 @@ fn resolve_blend(
         return Err(refuse_prefab(&what));
     }
     check_layers(&source, noun, request.layers)?;
+    let ik = resolve_ik(&source, noun, request)?;
     let Some(blend) = source.blend(spec.name) else {
         return Err(refuse_clip(
             format!(
@@ -2820,9 +3242,11 @@ fn resolve_blend(
 
     let rate = TickRate::DEFAULT;
     let ranged = matches!(spec.p0, Sweep::Range(..)) || matches!(spec.p1, Some(Sweep::Range(..)));
-    let phases = request
-        .strip
-        .unwrap_or(if ranged { DEFAULT_CROSSFADE_PHASES } else { 1 });
+    let phases = request.strip.unwrap_or(if ranged || sweeps_look(request) {
+        DEFAULT_CROSSFADE_PHASES
+    } else {
+        1
+    });
     let hold = request.hold.unwrap_or(1);
     let tick = crate::extract::held_ticks(hold, quantize(request.time.unwrap_or(0.0), rate));
     let elapsed = tick as f64 * rate.seconds_per_tick();
@@ -2845,14 +3269,17 @@ fn resolve_blend(
             ClipSource::Assembly(posing) => AssemblySide::blend(&posing.data, blend, params, phase),
             _ => AssemblySide::EMPTY,
         };
-        let mut report = source.report(side, None, &layers, elapsed, tick)?;
+        let look = look_at_phase(request, index, phases);
+        let mut report = source.report(side, None, &layers, &ik.goals(look), elapsed, tick)?;
         report.params = Some(params);
         report.phase = Some(phase);
+        report.look = look;
         reports.push(report);
         started.push(PhaseStart {
             started: 0,
             fade: None,
             params,
+            look,
         });
     }
 
@@ -2867,6 +3294,7 @@ fn resolve_blend(
         started,
         now: tick,
         reports,
+        ik,
     })
 }
 
@@ -3002,6 +3430,7 @@ fn phase_report(
             strays: Vec::new(),
             weight: None,
             params: None,
+            look: None,
             phase: None,
         });
     }
@@ -3122,6 +3551,7 @@ fn phase_report(
         strays,
         weight: None,
         params: None,
+        look: None,
         phase: None,
     })
 }
@@ -4241,6 +4671,9 @@ fn synthesize_scene(
                     },
                 ));
             }
+            if let Some(ik) = animation.ik {
+                components.push(typed("IkTargets", &ik.targets(animation.look, placement)));
+            }
         }
         entities.push(entity(components));
     }
@@ -4626,6 +5059,365 @@ mod tests {
         assert_eq!((full.mask, full.mode), (Some("torso"), LayerMode::Additive));
         let skipped = parse_layer("breathe:0.5::additive").expect("an empty mask");
         assert_eq!((skipped.mask, skipped.mode), (None, LayerMode::Additive));
+    }
+
+    #[test]
+    fn a_look_spec_parses_names_numbers_and_ranges() {
+        let bare = parse_look("40,-10").expect("two numbers");
+        assert_eq!(
+            bare,
+            LookSpec {
+                name: None,
+                yaw: Sweep::At(40.0),
+                pitch: Sweep::At(-10.0)
+            }
+        );
+        let swept = parse_look("look=0..100,5").expect("a name and a range");
+        assert_eq!(
+            (swept.name, swept.yaw, swept.pitch),
+            (Some("look"), Sweep::Range(0.0, 100.0), Sweep::At(5.0))
+        );
+        let both = parse_look("-20..20,-5..5").expect("two ranges");
+        assert_eq!(
+            (both.yaw, both.pitch),
+            (Sweep::Range(-20.0, 20.0), Sweep::Range(-5.0, 5.0))
+        );
+    }
+
+    #[test]
+    fn a_malformed_look_spec_is_refused_with_its_input() {
+        for spec in [
+            "", "40", "40,0,1", "=40,0", "left,0", "40,NaN", "0..,0", "..5,0", "0..inf,0",
+            "look=40",
+        ] {
+            let diagnostic = parse_look(spec).expect_err(spec);
+            assert_eq!(diagnostic.code, code::MODEL_SHEET_INPUT, "{spec}");
+            assert!(diagnostic.message.contains(spec), "{spec}");
+            assert!(
+                diagnostic
+                    .help
+                    .as_deref()
+                    .is_some_and(|help| help.contains("--look 40,0")),
+                "{spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ik_spec_parses_a_name_and_a_point() {
+        let spec = parse_ik("hand_r=6,12.5,-2").expect("a point");
+        assert_eq!((spec.name, spec.point), ("hand_r", [6.0, 12.5, -2.0]));
+        assert_eq!(parse_ik("a=0,0,0").expect("the origin").point, [0.0; 3]);
+    }
+
+    #[test]
+    fn a_malformed_ik_spec_is_refused_with_its_input() {
+        for spec in [
+            "hand_r",
+            "=1,2,3",
+            "hand_r=1,2",
+            "hand_r=1,2,3,4",
+            "hand_r=1,two,3",
+            "hand_r=1,2,inf",
+            "hand_r=0..1,2,3",
+        ] {
+            let diagnostic = parse_ik(spec).expect_err(spec);
+            assert_eq!(diagnostic.code, code::MODEL_SHEET_INPUT, "{spec}");
+            assert!(diagnostic.message.contains(spec), "{spec}");
+            assert!(
+                diagnostic
+                    .help
+                    .as_deref()
+                    .is_some_and(|help| help.contains("--ik hand_r=6,12,2")),
+                "{spec}"
+            );
+        }
+    }
+
+    /// The gallery humanoid: a `look` look-at and a `hand_r` chain, both over a clip it binds.
+    fn humanoid_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/gallery/voxels/humanoid.assembly.yaml")
+    }
+
+    /// Resolves `request` against the gallery humanoid's `idle` clip, CPU only.
+    fn humanoid_posed(request: &ModelSheetRequest) -> Result<Posed, Vec<Diagnostic>> {
+        let path = humanoid_path();
+        let loaded = load_model(&path).unwrap_or_else(|d| panic!("{d:#?}"));
+        resolve_clip(request, &path, &loaded, "idle")
+    }
+
+    /// A strip sweeping the look past its limit reports each phase's own aim, and every phase sits at
+    /// the one `--time`.
+    #[test]
+    fn a_look_sweep_is_a_strip_of_looks_at_one_time() {
+        let path = humanoid_path();
+        let models = [path.as_path()];
+        let look = parse_look("look=0..100,0").expect("a sweep");
+        let request = ModelSheetRequest {
+            clip: Some("idle"),
+            time: Some(0.5),
+            strip: Some(6),
+            look: Some(look),
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        assert!(sweeps_look(&request));
+        let posed = humanoid_posed(&request).expect("the sweep resolves");
+        for (report, yaw) in posed
+            .reports
+            .iter()
+            .zip([0.0, 20.0, 40.0, 60.0, 80.0, 100.0])
+        {
+            let [got, pitch] = report.look.expect("every phase aims");
+            assert!((got - yaw).abs() < 1e-4 && pitch == 0.0, "{got} vs {yaw}");
+        }
+        assert!(posed.reports.iter().all(|r| r.tick == 30 && r.time == 0.5));
+        assert!(posed.reports.iter().all(|r| r.components == Some(1)));
+        assert_eq!(posed.started.len(), 6);
+    }
+
+    /// Without a range the strip keeps the clip's own phases and aims every one the same way.
+    #[test]
+    fn a_plain_look_does_not_fan_a_strip_out() {
+        let path = humanoid_path();
+        let models = [path.as_path()];
+        let request = ModelSheetRequest {
+            clip: Some("idle"),
+            look: Some(parse_look("30,10").expect("a look")),
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        assert!(!sweeps_look(&request));
+        let posed = humanoid_posed(&request).expect("a posed sheet");
+        assert_eq!(posed.reports.len(), 1);
+        assert_eq!(posed.reports[0].look, Some([30.0, 10.0]));
+    }
+
+    /// The report's pose is `part_placements_sides` plus the one solver: phases past the yaw limit
+    /// pose identically, and a phase inside it does not.
+    #[test]
+    fn a_look_past_its_limit_poses_like_the_limit() {
+        let path = humanoid_path();
+        let models = [path.as_path()];
+        let request = ModelSheetRequest {
+            clip: Some("idle"),
+            look: Some(parse_look("0,0").expect("a look")),
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        let loaded = load_model(&path).unwrap_or_else(|d| panic!("{d:#?}"));
+        let source = ClipSource::load(&path, &loaded).expect("loads");
+        let ClipSource::Assembly(posing) = &source else {
+            panic!("the humanoid is an assembly");
+        };
+        let plan = resolve_ik(&source, "assembly", &request).expect("a bare look resolves");
+        assert_eq!(
+            plan.look.as_ref().map(|(_, name)| name.as_str()),
+            Some("look")
+        );
+        let rest =
+            || part_placements_sides(&posing.data, AssemblySide::single(None), None, true, &[]);
+        let pose = |yaw: f32| {
+            let mut placed = rest();
+            apply_assembly_ik(&posing.data, &plan.goals(Some([yaw, 0.0])), &mut placed);
+            placed
+        };
+        assert_eq!(pose(80.0), pose(100.0), "both clamp at the 70 degree limit");
+        assert_eq!(pose(70.0), pose(100.0));
+        assert_ne!(pose(40.0), pose(100.0));
+        assert_ne!(pose(0.0), pose(40.0));
+    }
+
+    /// A chain target is written in assembly-grid voxels and the scene carries it in world space:
+    /// `translation + scale * (x - sx/2, y, z - sz/2)`, the same point the report solved.
+    #[test]
+    fn an_ik_target_reaches_the_scene_in_the_frame_the_report_solved() {
+        let path = humanoid_path();
+        let models = [path.as_path()];
+        let ik = [parse_ik("hand_r=6,12,2").expect("a point")];
+        let request = ModelSheetRequest {
+            clip: Some("idle"),
+            ik: &ik,
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        let posed = humanoid_posed(&request).expect("a posed sheet");
+        let [(entry, name, point)] = &posed.ik.chains[..] else {
+            panic!("one chain");
+        };
+        assert_eq!(name, "hand_r");
+        // The humanoid is 8 x 16 x 2: the assembly frame sits at the bottom centre.
+        assert_eq!(*point, [2.0, 12.0, 1.0]);
+        assert_eq!(
+            posed.ik.goals(None),
+            [IkGoal {
+                entry: *entry,
+                aim: IkAim::Point([2.0, 12.0, 1.0]),
+                weight: 1.0
+            }]
+        );
+
+        let placement = Placement {
+            translation: [0.5, 0.0, -1.0],
+            scale: 0.25,
+            base: Vec3::ZERO,
+        };
+        let targets = posed.ik.targets(None, &placement);
+        assert_eq!(
+            targets.targets["hand_r"].point,
+            Some([0.5 + 0.25 * 2.0, 0.25 * 12.0, -1.0 + 0.25 * 1.0])
+        );
+        assert_eq!(targets.targets["hand_r"].weight, 1.0);
+        assert!(!targets.targets.contains_key("look"));
+    }
+
+    /// The synthesized scene carries an `IkTargets` only when the request has IK, and the look is a
+    /// `direction` in `Look`'s convention.
+    #[test]
+    fn the_scene_carries_ik_targets_only_when_asked() {
+        let bounds = ModelBounds {
+            kind: ModelKind::Assembly,
+            ..baseline_bounds()
+        };
+        let subject = Subject::single(&bounds);
+        let names = [bounds.file_name.clone()];
+        let plan = IkPlan {
+            chains: vec![(1, "hand_r".to_string(), [1.0, 2.0, 3.0])],
+            look: Some((0, "look".to_string())),
+        };
+        let scene_of = |ik: Option<&IkPlan>| {
+            let animation = AnimationSpec {
+                clip: "idle",
+                started: 0,
+                fade: None,
+                params: [0.0; 2],
+                layers: &[],
+                ik,
+                look: Some([40.0, -5.0]),
+            };
+            synthesize_scene(
+                &[&bounds],
+                &names,
+                &subject,
+                None,
+                ModelView::Front,
+                "front",
+                &[],
+                &[Some(animation)],
+                200,
+                200,
+                None,
+            )
+        };
+        assert!(!scene_of(None).contains("IkTargets"));
+        let yaml = scene_of(Some(&plan));
+        let scene = ludion_scene::parse(&yaml).expect("the sheet parses");
+        let model = &scene.entities[0];
+        let ik = model
+            .components
+            .iter()
+            .find(|(name, _)| name == "IkTargets")
+            .map(|(_, value)| value)
+            .unwrap_or_else(|| panic!("an IkTargets component in {yaml}"));
+        assert_eq!(ik["targets"]["look"]["direction"]["yaw_deg"], 40.0);
+        assert_eq!(ik["targets"]["look"]["direction"]["pitch_deg"], -5.0);
+        assert_eq!(ik["targets"]["look"]["weight"], 1.0);
+        assert!(ik["targets"]["hand_r"]["point"].is_array());
+    }
+
+    /// Every way `--look` and `--ik` can misname what they drive is an `L1117` that lists the entries.
+    #[test]
+    fn look_and_ik_refusals_name_what_the_assembly_declares() {
+        let path = humanoid_path();
+        let models = [path.as_path()];
+        let refused = |look: Option<&str>, ik: &[&str]| -> Diagnostic {
+            let looks = look.map(|spec| parse_look(spec).expect("a look"));
+            let iks: Vec<IkSpec<'_>> = ik
+                .iter()
+                .map(|spec| parse_ik(spec).expect("an ik"))
+                .collect();
+            let request = ModelSheetRequest {
+                clip: Some("idle"),
+                look: looks,
+                ik: &iks,
+                ..ModelSheetRequest::new(&models, 900, 600)
+            };
+            let mut errors = humanoid_posed(&request).expect_err("a refusal");
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            let error = errors.remove(0);
+            assert_eq!(error.code, code::MODEL_SHEET_INPUT, "{error:?}");
+            error
+        };
+        let unknown = refused(None, &["hand_l=0,0,0"]);
+        assert!(unknown.message.contains("`hand_r`") && unknown.message.contains("`look`"));
+        let help = unknown.help.as_deref().unwrap_or_default();
+        assert!(help.contains("nearest match is `hand_r`"), "{help}");
+        let wrong = refused(None, &["look=0,0,0"]);
+        assert!(
+            wrong.message.contains("names a look-at"),
+            "{}",
+            wrong.message
+        );
+        let wrong = refused(Some("hand_r=0,0"), &[]);
+        assert!(wrong.message.contains("names a chain"), "{}", wrong.message);
+        let unknown = refused(Some("gaze=0,0"), &[]);
+        assert!(unknown.message.contains("names no `ik:` entry"));
+    }
+
+    /// `--look` and `--ik` aim over a base pose, and not alongside a swept blend.
+    #[test]
+    fn look_and_ik_flag_shapes_are_checked_before_anything_loads() {
+        let path = humanoid_path();
+        let models = [path.as_path()];
+        let look = parse_look("look=0..90,0").expect("a sweep");
+        let ik = [parse_ik("hand_r=1,2,3").expect("a point")];
+        let bare = ModelSheetRequest {
+            look: Some(look),
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        let errors = check_clip_flags(&bare).expect_err("no base pose");
+        assert_eq!(errors[0].code, code::MODEL_SHEET_INPUT);
+        assert!(errors[0].message.contains("`--look` needs a base pose"));
+        let bare = ModelSheetRequest {
+            ik: &ik,
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        let errors = check_clip_flags(&bare).expect_err("no base pose");
+        assert!(errors[0].message.contains("`--ik` needs a base pose"));
+
+        let both = ModelSheetRequest {
+            blend: Some(parse_blend("locomotion:0..2").expect("a sweep")),
+            look: Some(look),
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        let errors = check_clip_flags(&both).expect_err("two sweeps");
+        assert!(errors[0].message.contains("both sweep the strip"));
+        let held = ModelSheetRequest {
+            blend: Some(parse_blend("locomotion:1").expect("a value")),
+            look: Some(look),
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        assert!(check_clip_flags(&held).is_ok());
+    }
+
+    /// A character has no `ik:`, so it refuses `--look`, naming why.
+    #[test]
+    fn a_character_refuses_look() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/gallery/characters/mannequin.character.yaml");
+        let loaded = load_model(&path).unwrap_or_else(|d| panic!("{d:#?}"));
+        let models = [path.as_path()];
+        let look = parse_look("0,0").expect("a look");
+        let request = ModelSheetRequest {
+            look: Some(look),
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        let errors = resolve_clip(&request, &path, &loaded, "idle").expect_err("a refusal");
+        assert_eq!(errors[0].code, code::MODEL_SHEET_INPUT);
+        assert!(
+            errors[0]
+                .message
+                .contains("only an assembly declares `ik:`"),
+            "{}",
+            errors[0].message
+        );
     }
 
     #[test]
@@ -5017,6 +5809,8 @@ entities:
             fade: None,
             params: [0.0; 2],
             layers: &[],
+            ik: None,
+            look: None,
         };
         assert_eq!(keys(posed), ["clip", "started"]);
         let fading = AnimationSpec {

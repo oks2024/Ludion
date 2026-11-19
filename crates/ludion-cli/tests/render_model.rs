@@ -2356,3 +2356,149 @@ fn needs_gpu_a_layer_over_a_clip_echoes_the_stack() {
             || components_of(&stdout, 0).ends_with("components")
     );
 }
+
+// --- Assembly `--look` and `--ik` -------------------------------------------------------------------
+
+/// A six-cell assembly with a head look-at, a defaulted `hand_r` chain and an explicit `arm_l` chain,
+/// two looping clips. Read-only; every test renders into its own work directory.
+fn ik_humanoid() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/assembly_ik/humanoid.assembly.yaml")
+}
+
+/// Misusing `--look` and `--ik` is a readable `L1117` that writes no file. No GPU.
+#[test]
+fn look_and_ik_misuse_is_readable() {
+    let model = ik_humanoid();
+    let model = model.to_str().unwrap();
+    let dir = target_tmpdir().join("ik_misuse");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let cases: [(&[&str], &str); 8] = [
+        (&["--look", "40,0"], "`--look` needs a base pose"),
+        (&["--ik", "hand_r=1,2,3"], "`--ik` needs a base pose"),
+        (&["--clip", "walk", "--look", "40"], "`<yaw>,<pitch>`"),
+        (&["--clip", "walk", "--ik", "hand_r=1,2"], "`<x>,<y>,<z>`"),
+        (&["--clip", "walk", "--ik", "hand_l=1,2,3"], "`arm_l`"),
+        (&["--clip", "walk", "--ik", "look=1,2,3"], "names a look-at"),
+        (&["--clip", "walk", "--look", "arm_l=0,0"], "names a chain"),
+        (
+            &["--blend", "locomotion:0..2", "--look", "0..9,0"],
+            "both sweep the strip",
+        ),
+    ];
+    for (extra, expected) in cases {
+        let mut args = vec!["render", "--model", model];
+        args.extend(extra);
+        let output = run_ludion_in(&dir, &args);
+        assert!(!output.status.success(), "{extra:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("error[L1117]"), "{extra:?}: {stderr}");
+        assert!(stderr.contains(expected), "{extra:?}: {stderr}");
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("dir reads").count(),
+            0,
+            "an error must not produce an output file"
+        );
+    }
+}
+
+/// `--look 0..90,0 --strip 4` writes the strip, names it `-ik`, and reports each phase's look.
+#[test]
+fn needs_gpu_a_look_sweep_reports_each_phases_look() {
+    let dir = target_tmpdir().join("look_sweep");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let model = ik_humanoid();
+    let output = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--model",
+            model.to_str().unwrap(),
+            "--clip",
+            "walk",
+            "--look",
+            "0..90,0",
+            "--strip",
+            "4",
+            "--width",
+            "480",
+            "--height",
+            "270",
+        ],
+    );
+    if !output.status.success() {
+        if is_no_adapter(&output) {
+            eprintln!("SKIPPED a_look_sweep_reports_each_phases_look: no GPU adapter");
+            return;
+        }
+        panic!(
+            "render --look failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(dir.join("humanoid-walk-strip-ik.png").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("4 phases"), "{stdout}");
+    for index in 0..4 {
+        let prefix = format!("  phase {index}:");
+        let line = stdout
+            .lines()
+            .find(|line| line.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("no `{prefix}` line in: {stdout}"));
+        assert!(line.contains(", look ["), "{line}");
+        assert!(line.ends_with("1 component"), "{line}");
+    }
+    // The endpoints of the sweep are exact; the middle phases are fractions of it.
+    assert!(stdout.contains("look [0, 0]"), "{stdout}");
+    assert!(stdout.contains("look [90, 0]"), "{stdout}");
+    assert!(!stdout.contains("ik:"), "no --ik, no echo: {stdout}");
+}
+
+/// `--ik` echoes its target once and reports the gap analysis of the solved pose.
+#[test]
+fn needs_gpu_an_ik_target_is_echoed_and_analysed() {
+    let dir = target_tmpdir().join("ik_echo");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let model = ik_humanoid();
+    let output = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--model",
+            model.to_str().unwrap(),
+            "--clip",
+            "idle",
+            "--ik",
+            "hand_r=4.5,2,0.5",
+            "--ik",
+            "arm_l=1.5,1,0.5",
+            "--width",
+            "480",
+            "--height",
+            "270",
+        ],
+    );
+    if !output.status.success() {
+        if is_no_adapter(&output) {
+            eprintln!("SKIPPED an_ik_target_is_echoed_and_analysed: no GPU adapter");
+            return;
+        }
+        panic!(
+            "render --ik failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(dir.join("humanoid-idle-t0-ik.png").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ik: hand_r=[4.5, 2.0, 0.5], arm_l=[1.5, 1.0, 0.5]"),
+        "{stdout}"
+    );
+    assert!(
+        components_of(&stdout, 0).ends_with("component")
+            || components_of(&stdout, 0).ends_with("components")
+    );
+}

@@ -125,8 +125,9 @@ impl SceneTwins {
 }
 
 /// The mesh shader's lazily built twins: the `sun_cascades` debug view's scene pipelines,
-/// `SUN_CASCADE_VIEW` true, for world draws and for the gun's, and the blended meshes' ([`BlendTwins`]).
-/// Built on first use, so a game that never opens the view or blends neither compiles them nor pays
+/// `SUN_CASCADE_VIEW` true, and the `irradiance` view's, `IRRADIANCE_VIEW` true, each for world draws
+/// and for the gun's, and the blended meshes' ([`BlendTwins`]).
+/// Built on first use, so a game that never opens a view or blends neither compiles them nor pays
 /// for them in any fragment. A shader reload builds a fresh, empty set.
 pub(super) struct CascadeViewTwins {
     pub(super) blend: BlendTwins,
@@ -135,6 +136,8 @@ pub(super) struct CascadeViewTwins {
     layout: wgpu::PipelineLayout,
     /// `[world, gun]`.
     built: std::sync::OnceLock<[SceneTwins; 2]>,
+    /// The `irradiance` view's `[world, gun]`.
+    irradiance: std::sync::OnceLock<[SceneTwins; 2]>,
 }
 
 impl CascadeViewTwins {
@@ -149,6 +152,7 @@ impl CascadeViewTwins {
             shader: shader.clone(),
             layout: layout.clone(),
             built: std::sync::OnceLock::new(),
+            irradiance: std::sync::OnceLock::new(),
         }
     }
 
@@ -166,6 +170,25 @@ impl CascadeViewTwins {
             [
                 build(&[("SUN_CASCADE_VIEW", 1.0)]),
                 build(&[("SUN_CASCADE_VIEW", 1.0), ("VIEWMODEL", 1.0)]),
+            ]
+        });
+        built[usize::from(viewmodel)].get(variant, medium)
+    }
+
+    pub(super) fn get_irradiance(
+        &self,
+        device: &wgpu::Device,
+        variant: MeshVariant,
+        viewmodel: bool,
+        medium: bool,
+    ) -> &wgpu::RenderPipeline {
+        let built = self.irradiance.get_or_init(|| {
+            let build = |constants| {
+                SceneTwins::build(device, self.label, &self.shader, &self.layout, constants)
+            };
+            [
+                build(&[("IRRADIANCE_VIEW", 1.0)]),
+                build(&[("IRRADIANCE_VIEW", 1.0), ("VIEWMODEL", 1.0)]),
             ]
         });
         built[usize::from(viewmodel)].get(variant, medium)

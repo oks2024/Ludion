@@ -16,6 +16,12 @@ override BLENDED: bool = false;
 // that shades it. A pipeline constant, so a frame without the view carries no branch for it.
 override SUN_CASCADE_VIEW: bool = false;
 
+// True only in the scene pass's `irradiance` debug-view twins: `shade` sums the diffuse irradiance
+// (albedo 1, no specular) and `fs_main` stores it as `E / IRRADIANCE_VIEW_SCALE`.
+override IRRADIANCE_VIEW: bool = false;
+// Mirrors `debug_view.rs::IRRADIANCE_VIEW_SCALE`.
+const IRRADIANCE_VIEW_SCALE: f32 = 4.0;
+
 // The directional "sun" — a mesh-only @group(2) (Plan/shadow-mapping.md decision 3), so the shared
 // camera/lights layouts and the sprite/text shaders are untouched. `sun.color` is premultiplied and
 // is zero for a sunless frame (a zeroed uniform), which makes the whole sun term vanish with no
@@ -605,7 +611,12 @@ fn shade(
     let metallic = clamp(surface.y, 0.0, 1.0);
     let alpha = roughness * roughness;
     let f0 = mix(vec3<f32>(0.04), albedo, metallic);
-    let diffuse = (1.0 - metallic) * albedo;
+    var diffuse = (1.0 - metallic) * albedo;
+    var ambient_albedo = albedo;
+    if (IRRADIANCE_VIEW) {
+        diffuse = vec3<f32>(1.0);
+        ambient_albedo = vec3<f32>(1.0);
+    }
 
     let n = normalize(n_in);
     // `to_camera` serves twice: normalized it is the view vector, and its own dot product is the
@@ -632,9 +643,11 @@ fn shade(
         // `diffuse`, not `albedo`, for the reason the IBL term uses it.
         acc = acc + lights.ambient.rgb * diffuse;
         // The specular lobe took E_ss of the energy; the diffuse keeps the rest (Filament's 1 - E).
-        acc = acc * (vec3<f32>(1.0) - (f0 * dfg.x + vec3<f32>(dfg.y)));
+        if (!IRRADIANCE_VIEW) {
+            acc = acc * (vec3<f32>(1.0) - (f0 * dfg.x + vec3<f32>(dfg.y)));
+        }
     } else {
-        acc = lights.ambient.rgb * albedo;
+        acc = lights.ambient.rgb * ambient_albedo;
     }
     // Occlusion applies **here and nowhere else** for the diffuse term — both kinds: the screen-space
     // AO factor and the material's baked occlusion map. Indirect specular is added by the
@@ -741,7 +754,10 @@ fn shade(
         let vis = visibility_smith(ndl, ndv, alpha);
         let f = fresnel_schlick(vdh, f0);
         // Specular scaled by PI to stay proportioned with the 1/PI-free diffuse lobe.
-        let specular = PI * d * vis * f * energy;
+        var specular = PI * d * vis * f * energy;
+        if (IRRADIANCE_VIEW) {
+            specular = vec3<f32>(0.0);
+        }
         acc = acc + (diffuse + specular) * radiance;
     }
 
@@ -781,14 +797,20 @@ fn shade(
             // Widening alpha by the disc keeps the lobe energy-correct: scale by (alpha / alpha')^2.
             let alpha_wide = min(alpha + sun.disc_spread, 1.0);
             let norm = (alpha / alpha_wide) * (alpha / alpha_wide);
-            let specular_rep = PI * distribution_ggx(ndh_rep, alpha) * visibility_smith(ndl_rep, ndv, alpha)
+            var specular_rep = PI * distribution_ggx(ndh_rep, alpha) * visibility_smith(ndl_rep, ndv, alpha)
                 * fresnel_schlick(vdh_rep, f0) * norm * energy;
+            if (IRRADIANCE_VIEW) {
+                specular_rep = vec3<f32>(0.0);
+            }
             acc = acc + (diffuse * ndl_sun + specular_rep * ndl_rep) * sun.color.rgb * shadow;
         } else {
             let d_sun = distribution_ggx(ndh_sun, alpha);
             let vis_sun = visibility_smith(ndl_sun, ndv, alpha);
             let f_sun = fresnel_schlick(vdh_sun, f0);
-            let specular_sun = PI * d_sun * vis_sun * f_sun * energy;
+            var specular_sun = PI * d_sun * vis_sun * f_sun * energy;
+            if (IRRADIANCE_VIEW) {
+                specular_sun = vec3<f32>(0.0);
+            }
             acc = acc + (diffuse + specular_sun) * sun.color.rgb * ndl_sun * shadow;
         }
     }

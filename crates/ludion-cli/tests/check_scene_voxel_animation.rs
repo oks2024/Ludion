@@ -224,6 +224,62 @@ fn assembly_lists_its_masks_and_blends() {
     );
 }
 
+/// An assembly's `ik:` entries are listed after its blends: a chain with an explicit hinge, a chain
+/// whose `lower-arm-*` hinge defaulted (printed as the solver uses it), and a look-at — as text and
+/// as JSON; an assembly with none prints no such line and its JSON carries no `ik` key.
+#[test]
+fn assembly_lists_its_ik_entries() {
+    let path = fixture("assembly_ik/humanoid.assembly.yaml");
+    let output = run_check_scene(&path);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in [
+        "  ik arm_l: chain upper-arm-l -> lower-arm-l, effector [0.5, 0, 0.5], hinge [0, 0, 1] bend -1\n",
+        "  ik hand_r: chain upper-arm-r -> lower-arm-r, effector [1, 0, 1], hinge [1, 0, 0] bend +1\n",
+        "  ik look: look-at head_look, forward [0, 0, -1], yaw \u{b1}70, pitch \u{b1}40\n",
+    ] {
+        assert!(stdout.contains(line), "missing {line:?} in: {stdout}");
+    }
+
+    let json = run_check_scene_args(&path, &["--json"]);
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).expect("one JSON object");
+    assert_eq!(
+        value["ik"],
+        serde_json::json!([
+            {
+                "name": "arm_l", "kind": "chain",
+                "parts": ["upper-arm-l", "lower-arm-l"],
+                "effector": [0.5, 0.0, 0.5],
+                "hinge": { "axis": [0.0, 0.0, 1.0], "bend": -1.0 },
+                "limits": null
+            },
+            {
+                "name": "hand_r", "kind": "chain",
+                "parts": ["upper-arm-r", "lower-arm-r"],
+                "effector": [1.0, 0.0, 1.0],
+                "hinge": { "axis": [1.0, 0.0, 0.0], "bend": 1.0 },
+                "limits": null
+            },
+            {
+                "name": "look", "kind": "look_at", "aim": "head_look",
+                "forward": [0.0, 0.0, -1.0],
+                "limits_deg": { "yaw": 70.0, "pitch": 40.0 }
+            }
+        ])
+    );
+
+    let plain = fixture("assembly_blends/humanoid.assembly.yaml");
+    let stdout = String::from_utf8_lossy(&run_check_scene(&plain).stdout).into_owned();
+    assert!(!stdout.contains("  ik "), "{stdout}");
+    let json = run_check_scene_args(&plain, &["--json"]);
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).expect("one JSON object");
+    assert!(value.get("ik").is_none(), "{value}");
+}
+
 /// An assembly whose part draws a glyph the palette does not define is `L1138`, naming the glyph,
 /// the part, and its file — the cross-file check only `ludion_engine::load_assembly` can run.
 #[test]

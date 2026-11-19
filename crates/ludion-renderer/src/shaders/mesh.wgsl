@@ -377,6 +377,16 @@ fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
     }
 
     let shaded = shade(in.world_pos, normal, albedo, surface, ao, in.clip.xy, occlusion_map);
+    if (IRRADIANCE_VIEW) {
+        // The irradiance the light summed, as the view stores it: no wrap, emissive, rim or flash, and
+        // no specular for the reflections pass to add.
+        var view_out: CaptureOut;
+        view_out.color = vec4<f32>(hdr_safe(shaded.lit / IRRADIANCE_VIEW_SCALE), in.color.a);
+        view_out.emissive = vec4<f32>(0.0);
+        view_out.normal_roughness = vec4<f32>(shaded.n, shaded.roughness);
+        view_out.specular = vec4<f32>(0.0);
+        return view_out;
+    }
     var lit = shaded.lit;
     if (in.wrap.a > 0.0) {
         let diffuse = (1.0 - clamp(surface.y, 0.0, 1.0)) * albedo;

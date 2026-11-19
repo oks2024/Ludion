@@ -1,7 +1,8 @@
 # Plan: Rain and wet weather
 
-> Status: **W1a mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field and the
-> `rain-open` golden. Usage is `ludion docs weather`; the gallery scene is `examples/gallery/rain-open.yaml`.
+> Status: **W1a and W1b mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
+> roof occlusion and the `rain-open` and `rain-awning` goldens. Usage is `ludion docs weather`; the gallery scenes are
+> `examples/gallery/rain-open.yaml` and `rain-awning.yaml`.
 
 ## Why
 
@@ -44,7 +45,7 @@ for the whole arc; W1a ships the streak field.
 
 - **W1a** (shipped): the component, `L2380`–`L2382`, the GPU-evaluated field in the transparents pass and the
   transparent layer, `docs/weather.md`, the `rain-open` golden. A rain-free scene keeps the identical graph and bytes.
-- **W1b:** the overhead occlusion pass, per-fragment roof clipping and the `rain-awning` golden.
+- **W1b** (shipped): the overhead occlusion pass, per-fragment roof clipping and the `rain-awning` golden.
 - **W2, wetness:** per-pixel `w = wetness × exposure × facing` in `mesh.wgsl` from the occlusion map.
   Porosity defaults to 0.5 when absent, so every voxel palette (16 and 64 cells/m, assemblies) gets wet without
   authoring; then a `porosity` field on palettes, sculpt, `Mesh` and mesh documents. Characters are wet per pixel.
@@ -74,3 +75,9 @@ for the whole arc; W1a ships the streak field.
 - **W1a mechanized (2026-11-18):** `Rain`, `RainData`, the `rain` shader and the `rain-open` gallery golden, blessed on
   the RTX 3090. Scenes without a `Rain` keep the same frame graph and pixels. No replay content hash, `WorldHash`,
   existing golden or protocol schema moved.
+- **W1b mechanized (2026-11-18):** the conditional `rain_occlusion` pass (`PostChain.rain`; a 512² `Depth32Float` map
+  over `camera.xz ± radius`, texel-snapped, 64 m reach), read as the last input of `transparents` and
+  `transparent_depth`; the streak fragment fades out over 5 cm below the nearest shadow caster at its column;
+  `occlusion: false` keeps the pass and issues no draws. The `rain-awning` golden is blessed on the RTX 3090; the pass
+  costs 0.003 ms there at 1080p. Rain-free frames keep the same graph and pixels, and `rain-open` did not move. No replay
+  content hash, `WorldHash`, existing golden or protocol schema moved.

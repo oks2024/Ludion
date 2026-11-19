@@ -162,6 +162,9 @@
 //!   [`switch_skin_to_ragdoll`] does the same for a skinned mesh: it spawns a parts prefab of
 //!   [`SkinBone`] bodies bound to the live skin (the prefab's last part, `$skin`, stands for it) at the
 //!   rest pose, with the skin's velocity; a game finds a skin's parts by their [`SkinBone`].
+//!   [`switch_ragdoll_to_assembly`] folds a voxel ragdoll's parts back into the root and crossfades
+//!   from their pose ([`PoseSnapshot`]); [`ragdoll_landing`] returns the same [`RagdollToAssembly`]
+//!   placement first, so the game can choose its get-up clip.
 //! - **Projectile patterns** — [`Volley`] is one fired volley, a closed-form bullet field on the
 //!   entity that carries it; [`PatternPlayer`] plays a `kind: pattern` document's timeline, standing
 //!   a [`Volley`] up on each entry's frame. [`play_patterns`] and [`advance_volleys`] are the
@@ -324,6 +327,9 @@ pub use ludion_engine::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
 pub use ludion_engine::{
     PatrolFollower, PatrolMotion, PatrolPhase, PatrolResume, PatrolState, patrol_motion,
     patrol_update,
+};
+pub use ludion_engine::{
+    PoseSnapshot, RagdollToAssembly, SnapshotPart, ragdoll_landing, switch_ragdoll_to_assembly,
 };
 
 pub use ludion_ecs::{

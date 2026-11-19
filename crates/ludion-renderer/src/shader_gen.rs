@@ -921,8 +921,9 @@ pub struct RainParams {
     pub wind: [f32; 4],
     pub look: [f32; 4],
     pub color: [f32; 4],
+    pub occ_view: [[f32; 4]; 4],
 }
-const _: () = assert!(core::mem::size_of::<RainParams>() == 112);
+const _: () = assert!(core::mem::size_of::<RainParams>() == 176);
 const _: () = assert!(core::mem::offset_of!(RainParams, base) == 0);
 const _: () = assert!(core::mem::offset_of!(RainParams, counts) == 16);
 const _: () = assert!(core::mem::offset_of!(RainParams, shape) == 32);
@@ -930,6 +931,7 @@ const _: () = assert!(core::mem::offset_of!(RainParams, band) == 48);
 const _: () = assert!(core::mem::offset_of!(RainParams, wind) == 64);
 const _: () = assert!(core::mem::offset_of!(RainParams, look) == 80);
 const _: () = assert!(core::mem::offset_of!(RainParams, color) == 96);
+const _: () = assert!(core::mem::offset_of!(RainParams, occ_view) == 112);
 
 /// WGSL `struct RecvDraw`.
 ///
@@ -2190,6 +2192,10 @@ pub const SPRITE_TEX_BINDING: u32 = 0;
 /// `sun` — `@group(2) @binding(0)`, in `decal_lit.wgsl`, `mesh.wgsl`.
 pub const SUN_GROUP: u32 = 2;
 pub const SUN_BINDING: u32 = 0;
+
+/// `rain_occlusion` — `@group(2) @binding(1)`, in `rain.wgsl`.
+pub const RAIN_OCCLUSION_GROUP: u32 = 2;
+pub const RAIN_OCCLUSION_BINDING: u32 = 1;
 
 /// `shadow_tex` — `@group(2) @binding(1)`, in `decal_lit.wgsl`, `mesh.wgsl`.
 pub const SHADOW_TEX_GROUP: u32 = 2;
@@ -3539,20 +3545,32 @@ pub fn create_proj_map_proj_map_samp_bgl(device: &wgpu::Device) -> wgpu::BindGro
     })
 }
 
-/// Bind group layout `rain` (@group 2), from `rain.wgsl`.
-pub fn create_rain_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+/// Bind group layout `rain_rain_occlusion` (@group 2), from `rain.wgsl`.
+pub fn create_rain_rain_occlusion_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("rain"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: RAIN_BINDING,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(112),
+        label: Some("rain_rain_occlusion"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: RAIN_BINDING,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(176),
+                },
+                count: None,
             },
-            count: None,
-        }],
+            wgpu::BindGroupLayoutEntry {
+                binding: RAIN_OCCLUSION_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
     })
 }
 

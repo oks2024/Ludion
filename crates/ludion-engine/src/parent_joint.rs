@@ -1,6 +1,7 @@
 //! Validates every `ParentJoint` from a scene *document*: the entity's `Parent` must be a skinned
-//! mesh, and `joint` must name one of its joints. One pure pass shared by `scene.load`/a district
-//! switch, `ludion check-scene` and prefab spawn (the [`crate::skin_bone`] pattern).
+//! mesh or an assembly, and `joint` must name one of its joints or parts. One pure pass shared by
+//! `scene.load`/a district switch, `ludion check-scene` and prefab spawn (the [`crate::skin_bone`]
+//! pattern).
 //!
 //! Two diagnostics (`L1318`, `L1319`); see [`ParentJoint`](crate::components::ParentJoint)'s doc
 //! comment for the rule.
@@ -21,6 +22,7 @@ use ludion_ecs::{Parent, Phase, World};
 use ludion_renderer::SkinJoint;
 use ludion_scene::{MeshJoint, Scene, SceneEntity};
 
+use crate::assembly_mesh::AssemblyData;
 use crate::character::CharacterData;
 use crate::components::{Mesh, MeshSource, ParentJoint, SkinBone};
 use crate::hierarchy::{WorldPose, world_affine};
@@ -33,6 +35,8 @@ pub fn scene_parent_joint_diagnostics(project_root: &Path, scene: &Scene) -> Vec
     let mut diagnostics = Vec::new();
     let mut reported_mesh_errors: BTreeSet<String> = BTreeSet::new();
     let mut mesh_cache: BTreeMap<String, Result<Option<Vec<MeshJoint>>, Vec<Diagnostic>>> =
+        BTreeMap::new();
+    let mut assembly_cache: BTreeMap<String, Result<Vec<String>, Vec<Diagnostic>>> =
         BTreeMap::new();
 
     for (index, entity) in scene.entities.iter().enumerate() {
@@ -69,6 +73,33 @@ pub fn scene_parent_joint_diagnostics(project_root: &Path, scene: &Scene) -> Vec
         }
         let parent_entity = &scene.entities[parent_index];
 
+        if let Some(rel) = assembly_path(parent_entity) {
+            let parts = assembly_cache.entry(rel.clone()).or_insert_with(|| {
+                crate::assembly_mesh::load_documents(AssetRoot::content(project_root), &rel).map(
+                    |(assembly, _, _, _)| {
+                        assembly
+                            .parts
+                            .into_iter()
+                            .map(|p| p.name)
+                            .collect::<Vec<_>>()
+                    },
+                )
+            });
+            match parts {
+                Ok(parts) => {
+                    if !parts.contains(&parent_joint.joint) {
+                        diagnostics.push(unknown_part(index, &parent_joint.joint, parts));
+                    }
+                }
+                Err(errors) => {
+                    if reported_mesh_errors.insert(format!("assembly:{rel}")) {
+                        diagnostics.extend(errors.clone());
+                    }
+                }
+            }
+            continue;
+        }
+
         let mesh_rel = match skinned_mesh_path(
             ludion_assets::AssetRoot::content(project_root),
             parent_entity,
@@ -86,8 +117,8 @@ pub fn scene_parent_joint_diagnostics(project_root: &Path, scene: &Scene) -> Vec
                     index,
                     entity,
                     format!(
-                        "its `Parent` {} carries no `Mesh`, or its `shape` is not `asset` or \
-                         `character`",
+                        "its `Parent` {} carries no `Mesh`, or its `shape` is not `asset`, \
+                         `character` or `assembly`",
                         named(parent_entity, parent_index)
                     ),
                 ));
@@ -127,6 +158,16 @@ pub fn scene_parent_joint_diagnostics(project_root: &Path, scene: &Scene) -> Vec
     diagnostics
 }
 
+/// `entity`'s `Mesh.shape: assembly` path, or `None` for no `Mesh` or any other shape.
+fn assembly_path(entity: &SceneEntity) -> Option<String> {
+    let (_, value) = entity.components.iter().find(|(name, _)| name == "Mesh")?;
+    let mesh: Mesh = serde_json::from_value(value.clone()).ok()?;
+    match mesh.shape {
+        MeshSource::Assembly(path) => Some(path),
+        _ => None,
+    }
+}
+
 /// A skin's joint rest model transforms by joint name.
 type JointRests = BTreeMap<String, Trs>;
 
@@ -146,6 +187,9 @@ pub(crate) struct SkinRests {
     /// The same keys: the decoded joints and the character's clips, for [`posed_joint_world`].
     /// Separate from `meshes`, so a broken clip can never change a sim-side rest read.
     posed: Mutex<BTreeMap<String, Option<Arc<SkinPoseData>>>>,
+    /// Meshed assemblies keyed `assembly:<path>`, for [`posed_joint_world`]; separate from `meshes`
+    /// for the same reason as `posed`.
+    assemblies: Mutex<BTreeMap<String, Option<Arc<AssemblyData>>>>,
 }
 
 /// What the presentation read of a posed joint needs beyond the rest table: the skin's decoded
@@ -161,7 +205,23 @@ impl SkinRests {
             root,
             meshes: Mutex::new(BTreeMap::new()),
             posed: Mutex::new(BTreeMap::new()),
+            assemblies: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    fn assembly_data(&self, rel: &str) -> Option<Arc<AssemblyData>> {
+        let mut assemblies = self
+            .assemblies
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        assemblies
+            .entry(format!("assembly:{rel}"))
+            .or_insert_with(|| {
+                crate::assembly_mesh::load(AssetRoot::content(&self.root), rel)
+                    .ok()
+                    .map(Arc::new)
+            })
+            .clone()
     }
 
     fn pose_data(&self, shape: &MeshSource) -> Option<Arc<SkinPoseData>> {
@@ -201,6 +261,7 @@ impl SkinRests {
         let key = match shape {
             MeshSource::Asset(path) => format!("asset:{path}"),
             MeshSource::Character(path) => format!("character:{path}"),
+            MeshSource::Assembly(path) => format!("assembly:{path}"),
             _ => return None,
         };
         let skin = {
@@ -214,6 +275,9 @@ impl SkinRests {
     }
 
     fn load(&self, shape: &MeshSource) -> Option<Arc<JointRests>> {
+        if let MeshSource::Assembly(rel) = shape {
+            return self.load_assembly(rel);
+        }
         let path = match shape {
             MeshSource::Asset(path) => path.clone(),
             MeshSource::Character(path) => {
@@ -244,6 +308,27 @@ impl SkinRests {
                 scale: [scale.x as f32, scale.y as f32, scale.z as f32],
             });
         }
+        Some(Arc::new(rests))
+    }
+
+    /// An assembly's part sockets at rest: the committed documents only, never meshed or posed, so a
+    /// broken clip file cannot change a sim read.
+    fn load_assembly(&self, rel: &str) -> Option<Arc<JointRests>> {
+        let (assembly, parts, _, _) =
+            crate::assembly_mesh::load_documents(AssetRoot::content(&self.root), rel).ok()?;
+        let rests = crate::assembly_mesh::part_socket_rests(&assembly, &parts)
+            .into_iter()
+            .map(|(name, translation)| {
+                (
+                    name,
+                    Trs {
+                        translation,
+                        rotation: [0.0, 0.0, 0.0, 1.0],
+                        scale: [1.0, 1.0, 1.0],
+                    },
+                )
+            })
+            .collect();
         Some(Arc::new(rests))
     }
 }
@@ -283,10 +368,13 @@ pub(crate) fn joint_rest(world: &World, node: EntityId) -> Option<Trs> {
 /// followers). A skin with no `Animation` and no followers returns the rest pose. Compose the
 /// result with a local transform to place a presentation entity on a hand or a socket.
 ///
-/// `Ok(None)` when `skin` is dead, has no `Transform`, is not a skinned mesh, or names no such
-/// joint. `now` is sim time; the world's `GameClock` maps it as extract does. Only the
-/// presentation and host phases may read it: a sim system is refused with `L0028`, because the
-/// answer comes from render-side arithmetic that is not part of the hashed state.
+/// `skin` may instead be an `assembly` entity and `joint` a part name: the pose is the part's pivot
+/// frame in the part's final drawn placement (clips, blends, crossfade, layers and IK).
+///
+/// `Ok(None)` when `skin` is dead, has no `Transform`, is not a skinned mesh or an assembly, or
+/// names no such joint or part. `now` is sim time; the world's `GameClock` maps it as extract does.
+/// Only the presentation and host phases may read it: a sim system is refused with `L0028`, because
+/// the answer comes from render-side arithmetic that is not part of the hashed state.
 ///
 /// # Errors
 /// `L0028` when called from a sim system.
@@ -326,6 +414,9 @@ pub fn posed_joint_world(
     let Some(rests) = world.resource::<SkinRests>() else {
         return Ok(None);
     };
+    if let MeshSource::Assembly(rel) = &mesh.shape {
+        return Ok(posed_assembly_part(world, rests, skin, rel, joint, now));
+    }
     let Some(data) = rests.pose_data(&mesh.shape) else {
         return Ok(None);
     };
@@ -375,14 +466,49 @@ pub fn posed_joint_world(
             skin_affine.mul_affine(&rest.to_affine())
         }
     };
+    Ok(Some(pose_of(&affine)))
+}
+
+/// The world pose of `part`'s pivot frame on assembly entity `entity`: its world transform times the
+/// part's final drawn placement (clip or blend, crossfade, layers, IK) times its pivot, the level a
+/// socket child draws at. `None` for any miss.
+fn posed_assembly_part(
+    world: &World,
+    rests: &SkinRests,
+    entity: EntityId,
+    rel: &str,
+    part: &str,
+    now: SimTime,
+) -> Option<WorldPose> {
+    let data = rests.assembly_data(rel)?;
+    let index = data.parts.iter().position(|p| p.name == part)?;
+    let entity_affine = world_affine(world, entity)?;
+    let now = world
+        .resource::<GameClock>()
+        .map_or_else(|| GameTime::from(now), |clock| clock.game_instant(now));
+    let placed = crate::extract::assembly_part_models(
+        world,
+        entity,
+        &data,
+        affine_mat4(&entity_affine),
+        now,
+    );
+    let level = placed[index].0 * Mat4::from_translation(Vec3::from(data.parts[index].pivot));
+    let affine = entity_affine.mul_affine(&crate::extract::mat4_affine(level));
+    Some(pose_of(&affine))
+}
+
+/// An affine as a [`WorldPose`], flagging shear.
+#[allow(clippy::disallowed_methods)] // render-side: GPU matrix, never reaches a hash
+fn pose_of(affine: &ludion_core::math::Affine3) -> WorldPose {
     let cols = affine.cols.map(Vec3::from);
     let perpendicular = |u: Vec3, v: Vec3| u.dot(v).abs() <= 1e-5 * u.length() * v.length();
-    Ok(Some(WorldPose {
+    WorldPose {
         trs: affine.to_trs_lossy(),
         sheared: !(perpendicular(cols[0], cols[1])
             && perpendicular(cols[1], cols[2])
             && perpendicular(cols[2], cols[0])),
-    }))
+    }
 }
 
 /// An affine as a matrix: [`crate::extract::mat4_affine`]'s inverse.
@@ -403,9 +529,23 @@ fn not_skinned(pointer: &str, index: usize, entity: &SceneEntity, reason: String
     .with_path(pointer.to_string())
     .with_help(
         "point `Parent` at an entity carrying a skinned `Mesh` (`shape: { asset: \
-         \"meshes/rig.mesh.yaml\" }` exported with its armature, or a `character`), or remove \
-         `ParentJoint`",
+         \"meshes/rig.mesh.yaml\" }` exported with its armature, or a `character`) or an \
+         `assembly`, or remove `ParentJoint`",
     )
+}
+
+/// `L1319` — `joint` names no part of the parent's assembly.
+fn unknown_part(index: usize, part: &str, parts: &[String]) -> Diagnostic {
+    let help = match suggest::nearest(part, parts.iter().map(String::as_str)) {
+        Some(candidate) => format!("nearest match is `{candidate}`"),
+        None => format!("this assembly's parts are: {}", parts.join(", ")),
+    };
+    Diagnostic::new(
+        code::PARENT_JOINT_UNKNOWN_JOINT,
+        format!("`ParentJoint.joint` `{part}` is not a part of its parent's assembly"),
+    )
+    .with_path(format!("/entities/{index}/components/ParentJoint/joint"))
+    .with_help(help)
 }
 
 /// `L1319` — `joint` names no joint of the parent's mesh document.
@@ -528,6 +668,85 @@ pub(crate) mod tests {
         let (_, child) = skin_and_child(&mut plain, "child");
         plain.remove::<ParentJoint>(child).unwrap();
         world_transform(&plain, child).unwrap()
+    }
+
+    /// A temp project holding a two-part assembly: `arm` (1×1×1) placed at `(2, 1, 0)` with its
+    /// pivot at `(0, 1, 0)` under `body` (2×1×1), in a 4×2×1 assembly. Returns the root.
+    fn assembly_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ludion-assembly-socket-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("models/parts")).unwrap();
+        let part = |size: [u32; 3], row: &str| {
+            format!(
+                "format: 1\nkind: part\nsize:\n  - {}\n  - {}\n  - {}\nslices:\n  -\n    - \"{row}\"\n",
+                size[0], size[1], size[2]
+            )
+        };
+        std::fs::write(
+            dir.join("models/parts/body.part.yaml"),
+            part([2, 1, 1], "AA"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("models/parts/arm.part.yaml"), part([1, 1, 1], "A")).unwrap();
+        std::fs::write(
+            dir.join("models/fixture.assembly.yaml"),
+            "format: 1\nkind: assembly\nname: fixture\nsize:\n  - 4\n  - 2\n  - 1\npalette:\n  A:\n    \
+             color:\n      - 1.0\n      - 0.0\n      - 0.0\n      - 1.0\nparts:\n  - name: body\n    \
+             file: parts/body.part.yaml\n    place:\n      - 0\n      - 0\n      - 0\n  - name: arm\n    \
+             file: parts/arm.part.yaml\n    parent: body\n    place:\n      - 2\n      - 1\n      - 0\n    \
+             pivot:\n      - 0.0\n      - 1.0\n      - 0.0\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    fn assembly_and_child(world: &mut World, part: &str) -> EntityId {
+        let assembly = world.spawn();
+        world.insert(assembly, Transform::default()).unwrap();
+        let mesh: Mesh = serde_json::from_value(
+            serde_json::json!({ "shape": { "assembly": "models/fixture.assembly.yaml" } }),
+        )
+        .unwrap();
+        world.insert(assembly, mesh).unwrap();
+        let child = world.spawn();
+        world.insert(child, Transform::default()).unwrap();
+        world.insert(child, Parent(assembly)).unwrap();
+        world
+            .insert(
+                child,
+                ParentJoint {
+                    joint: part.to_string(),
+                },
+            )
+            .unwrap();
+        child
+    }
+
+    #[test]
+    fn an_assembly_part_rests_at_offset_plus_pivot_and_a_miss_composes_as_a_plain_parent() {
+        let dir = assembly_dir("rest");
+        let mut hit = World::new();
+        let child = assembly_and_child(&mut hit, "arm");
+        install(&mut hit, &dir);
+        // offset = place + size/2 - assembly/2 on x and z: (2 + 0.5 - 2, 1, 0 + 0.5 - 0.5);
+        // pivot in the mesh frame = (0 - 0.5, 1, 0 - 0.5).
+        assert_eq!(
+            world_transform(&hit, child).unwrap().trs.translation,
+            [0.0, 2.0, -0.5]
+        );
+
+        let mut miss = World::new();
+        let child_m = assembly_and_child(&mut miss, "ram");
+        install(&mut miss, &dir);
+        assert_eq!(
+            world_transform(&miss, child_m).unwrap().trs.translation,
+            [0.0; 3],
+            "an unknown part composes as a plain Parent"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

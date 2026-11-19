@@ -108,7 +108,8 @@ from a quiet scene.
 
 `view` shows a debug view in place of the composite, the same views as
 `ludion render --debug-view`: `"ssr_confidence"`, `"ssr_footprint"`, `"local_shadow_atlas"` (the local-light shadow atlas, letterboxed: `ludion docs local-shadows`), `"sun_cascades"` (each lit surface tinted by its sun cascade: `ludion docs sun-cascades`) or `"probe_index"` (the winning
-reflection probe per pixel, coloured by rank; the `probes` category draws the volumes). A name sets it, `null` clears it,
+reflection probe per pixel, coloured by rank; the `probes` category draws the volumes). The CLI's `irradiance` view
+(`ludion docs light-exposure`) is not a `view` value: CLI and Rust only, `render.debug` reports `null` for it. A name sets it, `null` clears it,
 absent keeps it; the reply's `view` is the one in force. A view never turns SSR on: on a frame without
 SSR the normal frame is drawn (`render.dump_graph` shows whether `ssr_debug` is scheduled).
 

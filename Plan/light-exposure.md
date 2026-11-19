@@ -1,6 +1,6 @@
 # Plan: light exposure — a sim-side answer to "how lit is this point"
 
-> Status: **W1 and W2 mechanized (2026-11-18); W3 not started.** Neon Shroud request 0013
+> Status: **W1 and W2 mechanized (2026-11-18); W3 mechanized on Windows (2026-11-19); macOS twins owed.** Neon Shroud request 0013
 > (`engine-requests/0013-light-exposure-query.md`, read-only), audited at engine r2369. The game's stealth
 > perception (request 0001) needs the authored light at a body's position from its own system, without
 > a rendered frame. Related: `Plan/spot-light.md`, `Plan/shadow-mapping.md`, `Plan/physics.md`.
@@ -86,6 +86,26 @@ engine answers from sim state, with the renderer's own formulas.
     reuses `L1186`; field validation reuses `L4250`. This replaces decision 9's reading of `L4252` as a
     casting light whose filter matches nothing: the function takes a caller's filter, so only the
     authored layers can be checked.
+17. **The `irradiance` view.** `DebugView::Irradiance` (`ludion render --debug-view irradiance`): every
+    opaque `Mesh` fragment writes the diffuse irradiance the mesh path summed — lighting with albedo 1,
+    ambient/IBL, local lights and the sun each with its shadow — with no specular, emissive, wrap, rim,
+    flash or post, stored as `sRGB(E / 4)` (`IRRADIANCE_VIEW_SCALE`). It saturates at `E = 4`. It is a
+    pipeline-constant twin of the mesh scene pass (`IRRADIANCE_VIEW`, as `sun_cascades` is) and
+    `irradiance_debug` blits the `scene` target in place of `composite`; the normal path is untouched.
+    Blended meshes, sprites, decals, particles and the sky draw as usual.
+18. **Not on the wire.** A `RenderDebugView` variant feeds `replay_schema_hash`, which every committed
+    `.lrp` carries, so adding one re-records the corpus. The view is renderer, Rust and CLI only:
+    `render.debug` reports no view for it. **Proposed, owner ruling owed**, trigger: the next sanctioned
+    corpus re-record.
+19. **The gate's tolerances.** The request's, fixed constants, not a per-OS calibrated floor: both sides
+    run one formula, so a floor would hide drift. A 32×32 grid of floor points of the gallery's
+    `light-exposure` scene, rendered under the view at 512×512 (one sample per 16 px, half a metre),
+    against `light_exposure` with `Facing::Normal([0, 1, 0])`. A sample is **clean** unless one of its
+    eight neighbours at 0.25 m differs on any light's reached/occluded status, it lies in a spot's ramp
+    band (inner − 1° to outer + 1°), or it is within 0.25 m of the wall: clean samples agree within
+    `max(5 %, 0.01)`. The lit/unlit verdict (`total ≥ 0.25`) agrees on ≥ 99 % of all samples and on every
+    sample whose neighbours share its verdict. The gate asserts ≥ 400 clean, ≥ 50 lit and ≥ 50 unlit
+    samples, and no saturated sample. **Authoring condition:** the scene's floor irradiance stays below 3.5.
 
 ## Waves
 
@@ -94,8 +114,9 @@ engine answers from sim state, with the renderer's own formulas.
 - **W2 — the component (shipped).** `LightExposure`, `light_exposure_update`, `LightExposureResults`,
   check-scene warnings (`L4251`, `L4252`), a WorldHash trace test. The hashed `LightExposureReading`
   stays Proposed (decision 11).
-- **W3 — the agreement gate.** `--debug-view irradiance`, a gallery scene, goldens pinned on both OSes
-  and the rendered-vs-CPU agreement test. Owed to the pinned machines.
+- **W3 — the agreement gate (shipped on Windows).** `--debug-view irradiance`, a gallery scene, goldens
+  pinned on both OSes and the rendered-vs-CPU agreement test. The macOS goldens and the test's M4 run are
+  owed to the M4.
 
 ## Out of scope
 
@@ -118,3 +139,8 @@ engine answers from sim state, with the renderer's own formulas.
   the engine (pose mapping, default and authored occluders, a latched fault, byte-identity without the
   component), and a 60-tick trace identical at 1/2/8 threads and across snapshot/restore. No trace,
   replay, golden or wire-schema hash moved.
+- W3 (2026-11-19): `DebugView::Irradiance` (renderer, engine and CLI; not on the wire, decision 18), the
+  `light-exposure` gallery scene with goldens `light-exposure.png` and `light-exposure-irradiance.png`
+  blessed on the RTX 3090, and `light_exposure_agreement.rs`. On this box: clean 696 of 1024, max relative
+  error 0.0167, max absolute error 0.0099, binary agreement 100 % (864 of 864 steady samples). Owed: the
+  M4 twins of both goldens and the agreement test green there; the wire variant (decision 18).

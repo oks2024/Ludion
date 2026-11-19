@@ -52,7 +52,7 @@ use ludion_scene::AssemblyJointKind;
 use ludion_spatial::{Body, Collider, Joint, JointKind, JointZero, RigidBody, Shape, Velocity};
 
 use crate::assembly_mesh::AssemblyData;
-use crate::components::{Animation, Mesh, MeshSource, Name, Transform};
+use crate::components::{Animation, Mesh, MeshSource, Name, PoseSnapshot, Transform};
 use crate::extract::{
     animation_pose, animation_pose_at, assembly_layer_poses, assembly_layer_poses_at,
     part_placements_sides, rotation_quat,
@@ -225,6 +225,17 @@ pub fn switch_to_ragdoll_with(
     let (pose, fade) = animation_pose(world, entity, assembly, now);
     let layers = assembly_layer_poses(world, entity, assembly, now);
     let placements = part_placements_sides(assembly, pose, fade, false, &layers);
+    // Each part's sampled translation, read before the world mutates: the joint anchors below fold
+    // it in, and `pose` borrows the world.
+    let sampled_translations: Vec<Vec3> = assembly
+        .parts
+        .iter()
+        .map(|part| {
+            pose.sample(&part.name).translation.map_or(Vec3::ZERO, |v| {
+                Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32)
+            })
+        })
+        .collect();
     let q_root = rotation_quat(root_transform.rotation);
     let root_model = Mat4::from_scale_rotation_translation(
         Vec3::from(scale),
@@ -414,9 +425,7 @@ pub fn switch_to_ragdoll_with(
         // offset sits in, ahead of the pivot rotation (`extract.rs`'s `part_placements_sides`
         // doc: `T(offset_i - offset_parent + translation_i) · R_i(pivot_i)`); the anchor must
         // fold it in too, or a mid-clip switch pivots about a point off by `translation_i · s`
-        let sampled_translation = pose.sample(&part.name).translation.map_or(Vec3::ZERO, |v| {
-            Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32)
-        });
+        let sampled_translation = sampled_translations[index];
         let anchor = [
             (part.offset[0] + part.pivot[0] - parent.offset[0] + sampled_translation.x) * s,
             (part.offset[1] + part.pivot[1] - parent.offset[1] + sampled_translation.y) * s,
@@ -456,6 +465,9 @@ pub fn switch_to_ragdoll_with(
     world.remove::<Mesh>(entity).expect("checked alive above");
     world
         .remove::<Animation>(entity)
+        .expect("checked alive above");
+    world
+        .remove::<PoseSnapshot>(entity)
         .expect("checked alive above");
     world
         .remove::<Collider>(entity)
@@ -554,7 +566,7 @@ fn rotation_rate(now: Quat, then: Quat, back: f64) -> [f64; 3] {
 
 /// The axis-aligned bounding box of `positions` (flat xyz triples, the part-mesh frame), or `None`
 /// for an empty mesh.
-fn mesh_bounds(positions: &[f32]) -> Option<(Vec3, Vec3)> {
+pub(crate) fn mesh_bounds(positions: &[f32]) -> Option<(Vec3, Vec3)> {
     let mut chunks = positions.chunks_exact(3);
     let first = chunks.next()?;
     let mut min = Vec3::new(first[0], first[1], first[2]);

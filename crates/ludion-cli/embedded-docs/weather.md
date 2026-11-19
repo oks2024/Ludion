@@ -29,7 +29,7 @@ entities:
         color: [0.55, 0.6, 0.65, 0.25]   # display colour and base opacity, each [0, 1]
         lit: true            # shade each streak from the scene's lights (unshadowed)
         medium: 1.0          # how much fog reaches the streaks, [0, 1]
-        occlusion: true      # read by the roof occlusion pass, not yet drawn
+        occlusion: true      # hide streaks under roofs; false keeps the pass but draws no casters
         seed: 0              # varies the lattice
 ```
 Every field is optional. `Rain` is a singleton: the lowest entity id wins and each further one is `L2381`.
@@ -52,10 +52,22 @@ streaks. One draw carries at most **65,536**; past that the per-tile count is cl
 per load. Streaks fade over the last 15 % of the radius and of the height band. The `transparents` pass time with and
 without rain is measured with `cargo test -p ludion-renderer --release -- --ignored --nocapture needs_gpu_bench_rain_gpu_ms`.
 
+## Roofs
+A `rain_occlusion` pass draws every shadow caster over the rain volume straight down into a 512x512 depth map around
+the camera (`radius` either side, texel-snapped so a camera move under a texel leaves the map still, and reaching 64 m
+above the band). Each streak fragment compares its height with the nearest caster over its column and fades out over
+5 cm below it: no rain under an awning, a roof or a doorway lintel, with a crisp edge. What occludes is what casts a
+shadow: a `Mesh` with `cast_shadows: false` lets rain through (`RainOccluder`, a component that occludes without
+drawing, comes with the wetness wave). The map is straight down, so wind-slanted rain still reaches the first metre
+inside a wall's edge, and a roof more than 64 m over the band does not occlude. The pass runs only with a `Rain`
+present: a rain-free scene keeps the identical frame graph and pixels. `occlusion: false` keeps the pass and draws no
+casters, so nothing occludes. The pass costs 0.003 ms on `rain-awning` at 1080p on the RTX 3090 (a handful of
+casters); it grows with the casters in the volume, like the sun's shadow pass.
+
 ## Gotchas
 | Situation | What happens |
 |---|---|
-| A roof over the camera | Streaks fall through it: roof clipping is not drawn yet (`occlusion` is stored for it) |
+| A roof over the camera | No streaks under it, per pixel; `occlusion: false` draws through. A mesh with `cast_shadows: false` does not occlude |
 | Light | A lit streak takes the lit-sprite rule at its centre, so the sun and local lights are unshadowed |
 | Fog | Streaks fog through the transparent layer; `medium: 0` keeps them out of the fog |
 | Streaks overlapping | Blended premultiplied, unsorted within the draw |

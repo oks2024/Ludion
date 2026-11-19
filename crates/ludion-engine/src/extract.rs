@@ -45,6 +45,7 @@ use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 use crate::assembly_mesh::AssemblyData;
 use crate::asset_cache::{AssetCache, AssetRefs, SourceFiles};
 use crate::character::CharacterData;
+use crate::components::PoseSnapshot;
 use crate::components::{
     Animation, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
@@ -1488,16 +1489,7 @@ fn extract_inner(
                 ) else {
                     continue;
                 };
-                let held_now = held_for(world, mesh.id, now);
-                let (pose, crossfade) = animation_pose(world, mesh.id, &data, held_now);
-                let layers = assembly_layer_poses(world, mesh.id, &data, held_now);
-                let mut placed = part_placements_layered(&data, pose, crossfade, &layers);
-                let ik_goals = crate::assembly_ik::assembly_ik_goals(
-                    world, mesh.id, &data, mesh.model, held_now,
-                );
-                if !ik_goals.is_empty() {
-                    crate::assembly_ik::apply_assembly_ik(&data, &ik_goals, &mut placed);
-                }
+                let placed = assembly_part_models(world, mesh.id, &data, mesh.model, now);
                 for (part, (local, local_normal)) in placed.into_iter().enumerate() {
                     let index = base + part;
                     let instance = MeshInstance {
@@ -4433,10 +4425,11 @@ fn skin_followers<'w>(
 }
 
 /// Builds the skin followers and poses every `ParentJoint` child's joint level in `poses` with the
-/// skin's posed joint model, so the child and everything below it draw at
-/// `skin world × posed joint × local`; returns the followers. Outer skins first (by ancestor depth),
-/// so a skin that is itself a socket child reads its parent's override. Silent on every miss: the
-/// mesh loop reports load errors, and a miss keeps the joint's rest level.
+/// skin's posed joint model (or, under an assembly, the part's final drawn pivot frame), so the
+/// child and everything below it draw at `skin world × posed joint × local`; returns the followers.
+/// Outer skins first (by ancestor depth), so a skin that is itself a socket child reads its
+/// parent's override. Silent on every miss: the mesh loop reports load errors, and a miss keeps the
+/// joint's rest level.
 ///
 /// A `SkinBone` part under a socket child memoizes that child before its posed joint exists, and a
 /// follower on a skin feeds that skin's palette, so the two depend on each other. A pass that sets a
@@ -4576,11 +4569,15 @@ fn pose_each(
     *store = SocketPalettes::default();
     let mut stale = false;
     let mut resolved: ResolvedSocketAssets = StableMap::new();
+    let mut assembly_assets: StableMap<&str, Arc<AssemblyData>> = StableMap::new();
     for group in sockets.chunk_by(|a, b| a.0 == b.0) {
         let mut jobs: Vec<SocketJob> = Vec::new();
         let mut job_of: StableMap<EntityId, usize> = StableMap::new();
         // (socket child, job, slot in the job's joints), in socket order.
         let mut applies: Vec<(EntityId, usize, usize)> = Vec::new();
+        // Assembly sockets: (socket child, part level), and each assembly's placements this group.
+        let mut assembly_levels: Vec<(EntityId, Mat4)> = Vec::new();
+        let mut placements: StableMap<EntityId, Vec<(Mat4, Mat3)>> = StableMap::new();
         for &(_, id, skin) in group {
             if !world.is_alive(skin) {
                 continue;
@@ -4591,6 +4588,25 @@ fn pose_each(
             let Some(mesh) = get::<Mesh>(world, skin) else {
                 continue;
             };
+            if let MeshSource::Assembly(rel) = &mesh.shape {
+                let Some(data) = assembly_assets.get(&rel.as_str()).cloned().or_else(|| {
+                    let data = assets.assembly(rel).ok()?;
+                    assembly_assets.insert(rel.as_str(), data.clone());
+                    Some(data)
+                }) else {
+                    continue;
+                };
+                let Some(part) = data.parts.iter().position(|p| p.name == joint.joint) else {
+                    continue;
+                };
+                let placed = placements.entry(skin).or_insert_with(|| {
+                    let model = render_pose(world, poses, skin).model();
+                    assembly_part_models(world, skin, &data, model, now)
+                });
+                let pivot = Vec3::from(data.parts[part].pivot);
+                assembly_levels.push((id, placed[part].0 * Mat4::from_translation(pivot)));
+                continue;
+            }
             // A distinct asset resolves once per call: sockets share a handful of paths. Only
             // successes are cached, so a failing path is retried (and reported) per socket.
             let (is_character, rel) = match &mesh.shape {
@@ -4695,20 +4711,31 @@ fn pose_each(
             let Some(model) = results[job].joints[slot] else {
                 continue;
             };
-            let posed = mat4_affine(model);
-            if poses.is_memoized(id) {
-                let same = poses.posed_joint(id).is_some_and(|old| {
-                    old.cols
-                        .iter()
-                        .flatten()
-                        .zip(posed.cols.iter().flatten())
-                        .all(|(a, b)| a.to_bits() == b.to_bits())
-                });
-                stale |= !same;
-            }
-            poses.set_posed_joint(id, posed);
+            stale |= apply_posed_joint(poses, id, model);
+        }
+        for (id, model) in assembly_levels {
+            stale |= apply_posed_joint(poses, id, model);
         }
     }
+    stale
+}
+
+/// Sets `id`'s posed joint level to `model`; true when it differs (bit for bit, so a NaN cannot
+/// loop) from the value on a child a lookup had already memoized.
+fn apply_posed_joint(poses: &mut WorldAffines, id: EntityId, model: Mat4) -> bool {
+    let posed = mat4_affine(model);
+    let mut stale = false;
+    if poses.is_memoized(id) {
+        let same = poses.posed_joint(id).is_some_and(|old| {
+            old.cols
+                .iter()
+                .flatten()
+                .zip(posed.cols.iter().flatten())
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        });
+        stale = !same;
+    }
+    poses.set_posed_joint(id, posed);
     stale
 }
 
@@ -6032,7 +6059,7 @@ fn resolve_assembly_part(
 /// Crate-visible so [`crate::ragdoll::switch_to_ragdoll`] resolves the same pose extraction draws,
 /// at the caller's gameplay time rather than a frame's render time.
 pub(crate) fn animation_pose<'a>(
-    world: &World,
+    world: &'a World,
     id: EntityId,
     data: &'a AssemblyData,
     now: GameTime,
@@ -6044,7 +6071,7 @@ pub(crate) fn animation_pose<'a>(
 /// weight read `then`, and a live blend phase is wound back by `rate · speed · back` on the same
 /// params. `back == 0.0` (with `then == now`) is exactly [`animation_pose`].
 pub(crate) fn animation_pose_at<'a>(
-    world: &World,
+    world: &'a World,
     id: EntityId,
     data: &'a AssemblyData,
     now: GameTime,
@@ -6084,15 +6111,20 @@ pub(crate) fn animation_pose_at<'a>(
         live.map(|c| (c.phase, animation.speed)),
     );
     let outgoing = clock.filter(|c| !c.from_blend.is_empty() && c.from_blend == animation.from);
+    // A `PoseSnapshot` is the outgoing side only for the fade it was captured for: an empty `from`
+    // and a matching `fade_started` (the fade being active is `fade_weight` returning `Some`).
+    let snapshot = get::<PoseSnapshot>(world, id)
+        .filter(|s| animation.from.is_empty() && animation.fade_started == s.started);
     let fade = fade_weight(animation, then).map(|weight| {
-        (
-            side(
+        let outgoing_side = match snapshot {
+            Some(snapshot) => AssemblySide::snapshot(snapshot),
+            None => side(
                 &animation.from,
                 from_clip_elapsed(animation, then),
                 outgoing.map(|c| (c.from_phase, animation.from_speed)),
             ),
-            weight,
-        )
+        };
+        (outgoing_side, weight)
     });
     (pose, fade)
 }
@@ -6618,6 +6650,28 @@ pub(crate) fn part_placements(
     part_placements_with(assembly, pose, None, true, &[])
 }
 
+/// `id`'s final part placements (assembly frame) as extract draws them at `now`: base clip or blend,
+/// crossfade, `hold`, layers, then IK. One sequence for the mesh loop, the part sockets and
+/// [`posed_joint_world`](crate::posed_joint_world), so a socket cannot disagree with the part it
+/// rides. `model` is the entity's world matrix (the IK goals need it).
+pub(crate) fn assembly_part_models(
+    world: &World,
+    id: EntityId,
+    data: &AssemblyData,
+    model: Mat4,
+    now: GameTime,
+) -> Vec<(Mat4, Mat3)> {
+    let held_now = held_for(world, id, now);
+    let (pose, crossfade) = animation_pose(world, id, data, held_now);
+    let layers = assembly_layer_poses(world, id, data, held_now);
+    let mut placed = part_placements_layered(data, pose, crossfade, &layers);
+    let ik_goals = crate::assembly_ik::assembly_ik_goals(world, id, data, model, held_now);
+    if !ik_goals.is_empty() {
+        crate::assembly_ik::apply_assembly_ik(data, &ik_goals, &mut placed);
+    }
+    placed
+}
+
 /// [`part_placements_faded`] with an entity's `AnimationLayers` composed over the base pose
 /// (`Plan/animation-layers.md` decisions 27-29). No layers is exactly [`part_placements_faded`].
 pub(crate) fn part_placements_layered(
@@ -6990,16 +7044,22 @@ fn layered_part_pose(
 #[derive(Clone, Copy)]
 pub(crate) struct AssemblySide<'a> {
     entries: [Option<(&'a ludion_scene::AnimationDocument, f64, f64)>; 3],
+    /// A captured pose standing in for the clips (a ragdoll folded back into its assembly).
+    snapshot: Option<&'a PoseSnapshot>,
 }
 
 impl<'a> AssemblySide<'a> {
     /// No clip: the rest pose.
-    pub(crate) const EMPTY: AssemblySide<'static> = AssemblySide { entries: [None; 3] };
+    pub(crate) const EMPTY: AssemblySide<'static> = AssemblySide {
+        entries: [None; 3],
+        snapshot: None,
+    };
 
     /// A plain clip side, weight 1.
     pub(crate) fn single(side: ClipPose<'a>) -> Self {
         AssemblySide {
             entries: [side.map(|(clip, t)| (clip, t, 1.0)), None, None],
+            snapshot: None,
         }
     }
 
@@ -7007,7 +7067,18 @@ impl<'a> AssemblySide<'a> {
     pub(crate) fn weighted(
         entries: [Option<(&'a ludion_scene::AnimationDocument, f64, f64)>; 3],
     ) -> Self {
-        AssemblySide { entries }
+        AssemblySide {
+            entries,
+            snapshot: None,
+        }
+    }
+
+    /// The side a [`PoseSnapshot`] holds: each part it names at its captured channels.
+    pub(crate) fn snapshot(snapshot: &'a PoseSnapshot) -> Self {
+        AssemblySide {
+            entries: [None; 3],
+            snapshot: Some(snapshot),
+        }
     }
 
     /// The side of `blend` at `params` on shared `phase`: one entry per active point, each clip at
@@ -7031,14 +7102,28 @@ impl<'a> AssemblySide<'a> {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.iter().all(Option::is_none)
+        self.snapshot.is_none() && self.entries.iter().all(Option::is_none)
     }
 
     /// The part's sampled channels. One weight-1 entry is that clip's `part_pose` verbatim; more
     /// blend in entry order, rotation by running slerp (`w / accumulated`, a missing rotation read
     /// as identity), translation and scale by weighted sum (missing read as 0 and 1). A channel no
-    /// entry keys stays `None`, so an untouched part keeps its exact rest.
+    /// entry keys stays `None`, so an untouched part keeps its exact rest. A snapshot side returns
+    /// its captured rotation and translation for a part it names, and the rest for one it doesn't.
     pub(crate) fn sample(&self, part: &str) -> ludion_scene::PartPose {
+        if let Some(snapshot) = self.snapshot {
+            return snapshot
+                .parts
+                .iter()
+                .find(|captured| captured.part == part)
+                .map_or_else(ludion_scene::PartPose::default, |captured| {
+                    ludion_scene::PartPose {
+                        rotation: Some(captured.rotation.map(f64::from)),
+                        translation: Some(captured.translation.map(f64::from)),
+                        scale: None,
+                    }
+                });
+        }
         let Some(first) = self.entries.iter().flatten().next() else {
             return ludion_scene::PartPose::default();
         };

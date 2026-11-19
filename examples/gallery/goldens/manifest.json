@@ -9,5 +9,6 @@
   "character-socket": { "frames": 60 },
   "crowd-animation": { "frames": 90 },
   "occluded-silhouette": { "frames": 20 },
-  "assembly-layers": { "frames": 60 }
+  "assembly-layers": { "frames": 60 },
+  "assembly-socket": { "frames": 30 }
 }

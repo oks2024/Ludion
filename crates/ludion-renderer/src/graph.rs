@@ -24,6 +24,9 @@
 //!   or a decal ([`PostChain::decals`]): a depth-only atlas of straight-down tiles, one per caster,
 //!   then the generic projector pass that paints each decal and multiplies each shadow's footprint
 //!   into `scene`, after `reflections` and before `transparents`.
+//! - **rain_occlusion** — present only with rain ([`PostChain::rain`]): a depth-only straight-down map of
+//!   the shadow casters over the rain volume, read by `transparents` and `transparent_depth` as their
+//!   last input, so the streaks stop under a roof.
 //! - **decal_receivers** — present only when a decal lists receiver meshes ([`PostChain::decal_receivers`]):
 //!   the listed meshes redrawn into an id target, depth-matched against `scene_depth`, read by both decal
 //!   passes. It sits right after `scene`.
@@ -214,6 +217,9 @@ pub mod pass {
     /// A full-screen view of the local-light shadow atlas (`ludion render --debug-view
     /// local_shadow_atlas`): replaces `composite`, reads the atlas and writes the same target.
     pub const LOCAL_SHADOW_DEBUG: &str = "local_shadow_debug";
+    /// The `irradiance` debug view (`ludion render --debug-view irradiance`): replaces `composite`,
+    /// blitting the `scene` target the mesh pass wrote as `E / IRRADIANCE_VIEW_SCALE`.
+    pub const IRRADIANCE_DEBUG: &str = "irradiance_debug";
     /// A probe capture's last pass: the lit face into the capture target, with sky visibility in
     /// alpha. Reads `scene` and `scene_depth`.
     pub const PROBE_FACE: &str = "probe_face";
@@ -283,6 +289,10 @@ pub mod pass {
     /// the hidden pixels. Present only when
     /// [`PostChain::silhouette`](super::PostChain::silhouette) is set.
     pub const SILHOUETTE_MASK: &str = "silhouette_mask";
+    /// The rain's overhead occlusion: every shadow caster over the rain volume drawn straight down
+    /// into a depth map the rain's fragments read to hide streaks under a roof. Present only when
+    /// [`PostChain::rain`](super::PostChain::rain) is set.
+    pub const RAIN_OCCLUSION: &str = "rain_occlusion";
     /// The GPU frustum cull: a **compute** pass testing every world mesh instance against the
     /// camera the frame draws with and compacting the survivors into the buffers `prepass` and
     /// `scene` draw indirectly from. Present only when
@@ -854,6 +864,10 @@ pub struct PostChain {
     /// `composite`, so it adds no pass. Set only when the scene asked for it **and** the frame fits
     /// cascades ([`sun_cascades`](PostChain::sun_cascades)): a view never conjures its subject.
     pub sun_cascade_view: bool,
+    /// The `irradiance` view: the mesh pass writes the diffuse irradiance ([`crate::DebugView::Irradiance`])
+    /// and [`pass::IRRADIANCE_DEBUG`] replaces `composite`. It needs no subject, so it is always set when
+    /// asked for and no quality mask removes it.
+    pub irradiance_view: bool,
     /// The anti-aliasing the host asked for. A client setting like [`RenderScale`]: `for_scene` leaves
     /// it [`Off`](AntiAliasing::Off), [`masked`](PostChain::masked) never changes it, and a debug view
     /// suppresses it ([`smaa_scheduled`](PostChain::smaa_scheduled)).
@@ -863,6 +877,12 @@ pub struct PostChain {
     /// reads. `false` leaves the graph with neither the pass nor the resources, which is what makes a
     /// silhouette-free frame byte-identical by construction. It is content, so `masked` keeps it.
     pub silhouette: bool,
+    /// The scene has [`Rain`](crate::RainData): the [`pass::RAIN_OCCLUSION`] pass is added before
+    /// `transparents`, writing the `rain_occlusion` transient (a straight-down depth map of the shadow
+    /// casters over the rain volume), which `transparents` and `transparent_depth` read as their last
+    /// input. `false` leaves the graph with neither the pass nor the resource, which is what makes a
+    /// rain-free frame byte-identical by construction. It is content, so `masked` keeps it.
+    pub rain: bool,
     /// The scene has probes: the [`pass::PROBE_RELIGHT`] compute pass is added before `reflections`,
     /// writing the `probe_live` transient (`MAX_PROBES`×6, `Rgba32Float`: one row per cube axis) that `reflections` reads
     /// as its last input. `false` leaves the graph with neither the pass nor the resource, which is
@@ -1030,6 +1050,7 @@ impl PostChain {
                 && local_shadow_atlas.is_some(),
             sun_cascade_view: scene.debug_view == Some(crate::DebugView::SunCascades)
                 && sun_cascades.is_some(),
+            irradiance_view: scene.debug_view == Some(crate::DebugView::Irradiance),
             probe_relight: !scene.probes.is_empty(),
             drop_shadow_atlas: crate::projector::occlusion_atlas(scene.drop_shadows.len())
                 .map(|atlas| atlas.edge),
@@ -1061,6 +1082,7 @@ impl PostChain {
             blended: !scene.blended.is_empty(),
             aa: AntiAliasing::Off,
             silhouette: !scene.silhouettes.meshes.is_empty(),
+            rain: scene.rain.is_some(),
         }
     }
 
@@ -1073,6 +1095,7 @@ impl PostChain {
             && !self.probe_view
             && !self.local_shadow_view
             && !self.sun_cascade_view
+            && !self.irradiance_view
     }
 
     /// Whether this frame runs the `transparent_depth` pass: a transparent is drawn, a reader needs
@@ -1102,6 +1125,7 @@ impl PostChain {
                 self.sun_cascade_view
                     .then_some(crate::DebugView::SunCascades)
             })
+            .or_else(|| self.irradiance_view.then_some(crate::DebugView::Irradiance))
     }
 
     /// The chain the scene requires, minus what this machine's [`Quality`] disables — masking an
@@ -1143,6 +1167,7 @@ impl PostChain {
             sun_cascades,
             // Masked cascades leave nothing to tint by: the normal frame is drawn.
             sun_cascade_view: self.sun_cascade_view && sun_cascades.is_some(),
+            irradiance_view: self.irradiance_view,
             ssao: self.ssao && quality.ssao,
             // The march reads the shadow map, so the pair cannot outlive it. Keeping the map alive
             // for the shafts alone was the alternative and is worse: "shadows off" would then still
@@ -1518,6 +1543,16 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             TextureDesc::sampled_depth(edge, edge),
         )
     });
+    // The rain's overhead occlusion map, on the same terms.
+    let rain_occlusion = chain.rain.then(|| {
+        graph.transient(
+            pass::RAIN_OCCLUSION,
+            TextureDesc::sampled_depth(
+                crate::rain::RAIN_OCCLUSION_SIZE,
+                crate::rain::RAIN_OCCLUSION_SIZE,
+            ),
+        )
+    });
     // The local-light shadow atlas, declared on the same terms. `CopySrc` lets a test read it back.
     let local_shadow_atlas = chain.local_shadow_atlas.map(|edge| {
         graph.transient(
@@ -1786,6 +1821,19 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             vec![scene],
         );
     }
+    // The rain's overhead depth map, ahead of the two passes that draw the rain and read it as their
+    // last input, so `record_blended`'s fixed input indices do not move.
+    let mut blended_reads = blended_reads;
+    if let Some(map) = rain_occlusion {
+        graph.add_external_pass_with_depth(
+            pass::RAIN_OCCLUSION,
+            pass::RAIN_OCCLUSION,
+            vec![],
+            vec![],
+            map,
+        );
+        blended_reads.push(map);
+    }
     graph.add_external_pass_with_depth(
         pass::TRANSPARENTS,
         pass::TRANSPARENTS,
@@ -1948,6 +1996,12 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // A debug view stands in for the whole composite: the tail after it is unchanged. Bloom, shafts
     // and dof still schedule with unread outputs — acceptable for a debug frame.
     match (chain.ssr_view, &ssr) {
+        _ if chain.irradiance_view => graph.add_external_pass(
+            pass::IRRADIANCE_DEBUG,
+            pass::IRRADIANCE_DEBUG,
+            vec![scene],
+            vec![composite_target],
+        ),
         _ if chain.local_shadow_view => graph.add_external_pass(
             pass::LOCAL_SHADOW_DEBUG,
             pass::LOCAL_SHADOW_DEBUG,
@@ -2166,7 +2220,8 @@ pub(crate) fn build_ssr_trace_graph(size: FrameSize) -> (RenderGraph, ResourceId
 
 /// The transparent layer as a minimal graph whose target is an **output** — it survives to readback,
 /// where a transient could be aliased away and has no `COPY_SRC`. The `scene` pass has no reads, as
-/// the recorder's has on a sunless, AO-free frame.
+/// the recorder's has on a sunless, AO-free frame. It is rain-free: a rain frame's two passes read the
+/// `rain_occlusion` map, which this graph does not schedule.
 #[cfg(test)]
 pub(crate) fn build_transparent_depth_graph(size: FrameSize) -> (RenderGraph, ResourceId) {
     let (render_w, render_h) = size.render;
@@ -2227,6 +2282,7 @@ pub(crate) fn build_probe_capture_graph(
             && !chain.decals
             && !chain.lit_decals
             && !chain.decal_receivers
+            && !chain.rain
             && chain.local_shadow_atlas.is_none()
             && chain.sun_cascades.is_none(),
         "a probe face schedules none of the screen-space chains: {chain:?}"
@@ -2698,6 +2754,7 @@ mod tests {
                 probe_view: bits & 1 != 0,
                 local_shadow_view: false,
                 sun_cascade_view: false,
+                irradiance_view: false,
                 probe_relight: bits & 1 != 0,
                 // Content too, like the probes: no quality switch removes a drop shadow.
                 drop_shadow_atlas: (bits & 1 != 0).then_some(128),
@@ -2714,6 +2771,8 @@ mod tests {
                 transparent_medium: false,
                 // Content like the decals: no quality switch removes a silhouette.
                 silhouette: bits & 1 != 0,
+                // Content too: no quality switch removes the rain.
+                rain: bits & 1 != 0,
                 // Content too: no quality switch removes a blended mesh.
                 blended: bits & 1 != 0,
                 // A client setting: no quality preset masks it, so it varies with `ui` and survives.
@@ -3325,6 +3384,42 @@ mod tests {
         let none = PostChain::for_scene(&cascadeless);
         assert!(!none.sun_cascade_view);
         assert_eq!(none.view(), None);
+    }
+
+    /// The irradiance view needs no subject: it replaces `composite`, schedules no SMAA and survives
+    /// every quality tier; a scene without it has neither the flag nor the pass.
+    #[test]
+    fn the_irradiance_view_replaces_composite_and_schedules_no_smaa() {
+        let size = FrameSize::native(1920, 1080);
+        let plain = PostChain::for_scene(&sun_scene());
+        assert!(!plain.irradiance_view);
+        let mut viewed = sun_scene();
+        viewed.debug_view = Some(crate::DebugView::Irradiance);
+        let mut chain = PostChain::for_scene(&viewed);
+        assert!(chain.irradiance_view);
+        assert_eq!(chain.view(), Some(crate::DebugView::Irradiance));
+        assert!(
+            chain
+                .masked(&Quality::LOW, &QualityParams::LOW)
+                .irradiance_view
+        );
+        chain.aa = AntiAliasing::Smaa;
+        assert!(!chain.smaa_scheduled());
+
+        let names = |chain: PostChain| {
+            let (graph, _) = build_frame_graph(size, chain);
+            pass_names(&graph)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        };
+        let viewed_names = names(chain);
+        assert!(viewed_names.contains(&pass::IRRADIANCE_DEBUG.to_string()));
+        assert!(!viewed_names.contains(&pass::COMPOSITE.to_string()));
+        assert!(!viewed_names.contains(&pass::SMAA_EDGES.to_string()));
+        let plain_names = names(plain);
+        assert!(!plain_names.contains(&pass::IRRADIANCE_DEBUG.to_string()));
+        assert!(plain_names.contains(&pass::COMPOSITE.to_string()));
     }
 
     /// The cascade atlas is `sun_atlas_grid` tiles of the chain's edge; an unset sun keeps the
@@ -6209,6 +6304,54 @@ mod tests {
                 composite.reads().len(),
                 expected,
                 "no depth-of-field input is declared",
+            );
+        }
+    }
+
+    /// A rain-free frame declares neither the occlusion pass nor its map; a rain frame adds both, and
+    /// the map is the last read of `transparents` and of `transparent_depth`.
+    #[test]
+    fn rain_graph_is_conditional_and_ends_both_transparent_reads_with_the_map() {
+        let reads = |graph: &RenderGraph, name: &str| {
+            let pass = graph.passes().iter().find(|p| p.name == name).unwrap();
+            pass.reads()
+                .iter()
+                .map(|id| graph.resources()[id.index()].name.to_string())
+                .collect::<Vec<_>>()
+        };
+        let size = FrameSize::native(1920, 1080);
+        let off_chain = PostChain {
+            fog: true,
+            transparent_cover: true,
+            ..PostChain::default()
+        };
+        let (off, _) = build_frame_graph(size, off_chain);
+        assert!(!pass_names(&off).contains(&pass::RAIN_OCCLUSION));
+        assert!(!resource_names(&off).contains(&pass::RAIN_OCCLUSION));
+
+        let (on, _) = build_frame_graph(
+            size,
+            PostChain {
+                rain: true,
+                ..off_chain
+            },
+        );
+        let names = pass_names(&on);
+        let at = |name: &str| names.iter().position(|n| *n == name).unwrap();
+        assert!(at(pass::RAIN_OCCLUSION) < at(pass::TRANSPARENTS));
+        assert!(at(pass::RAIN_OCCLUSION) < at(pass::TRANSPARENT_DEPTH));
+        assert_eq!(resource_names(&on).len(), resource_names(&off).len() + 1);
+        assert_eq!(names.len(), pass_names(&off).len() + 1);
+        for name in [pass::TRANSPARENTS, pass::TRANSPARENT_DEPTH] {
+            assert_eq!(
+                reads(&on, name).last().map(String::as_str),
+                Some(pass::RAIN_OCCLUSION),
+                "{name}"
+            );
+            assert_eq!(
+                reads(&on, name).len(),
+                reads(&off, name).len() + 1,
+                "{name}"
             );
         }
     }

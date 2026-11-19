@@ -51,6 +51,7 @@ pub mod path_follow;
 pub mod patrol;
 pub mod patterns;
 pub mod perception;
+pub mod pose_snapshot;
 pub mod prefab;
 pub mod radial;
 pub mod rain;
@@ -82,6 +83,7 @@ pub use perception::{
     PendingNoise, Perceiver, PerceiverMemory, PerceiverStatus, PerceptionState, Require, Sense,
     SightPoint, SightSampleRecord, SightTarget, SightZone, StimulusRecord, SweepShape, ZoneSweep,
 };
+pub use pose_snapshot::{PoseSnapshot, SnapshotPart};
 pub use prefab::PrefabInstance;
 pub use radial::{AimKind, MAX_RADIAL_ITEMS, RadialEvent, UiRadial, UiRadialItem, UiRadialNav};
 pub use rain::{MAX_RAIN_HEIGHT_SPAN, Rain, rain_problems};
@@ -5623,8 +5625,11 @@ pub struct SkinBone {
 
 /// Attaches an entity to one joint of its [`Parent`]'s skeleton: the parent must
 /// be a skinned mesh ([`Mesh`] `shape: asset` naming a mesh document with `joints:`, or `shape:
-/// character`, which resolves to one — the rule [`SkinBone`] uses). The entity's [`Transform`] is
-/// local to the joint's model transform; sim reads compose the joint's rest pose into the chain.
+/// character`, which resolves to one — the rule [`SkinBone`] uses), or a voxel assembly ([`Mesh`]
+/// `shape: assembly`, `joint` naming a part). The entity's [`Transform`] is local to the joint's
+/// model transform; sim reads compose the joint's rest pose into the chain. An assembly part's
+/// socket frame is its pivot, in voxel units; sim reads use the part's rest frame, and the draw
+/// follows the part's animated pose (`posed_joint_world` reads that pose from presentation).
 ///
 /// ```yaml
 /// components:
@@ -5634,8 +5639,8 @@ pub struct SkinBone {
 /// ```
 ///
 /// Two load-time/check-time/prefab-spawn diagnostics refuse a bad link: the parent not a skinned
-/// mesh, or no `Parent` at all (`L1318`), and `joint` naming no joint of it (`L1319`, the help names
-/// the nearest). A runtime miss (a parent that lost its mesh, an unknown joint) composes as a plain
+/// mesh or an assembly, or no `Parent` at all (`L1318`), and `joint` naming no joint or part of it
+/// (`L1319`, the help names the nearest). A runtime miss (a parent that lost its mesh, an unknown joint) composes as a plain
 /// `Parent`, silently. Like any component it is hashed, snapshotted and saved on a sim entity.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct ParentJoint {
@@ -6690,6 +6695,10 @@ pub fn builtin_registry() -> Registry {
         .expect("unique");
     // The rain field, appended after `IkTargets`: read by `extract` into the transparent layer's streak draw.
     registry.register_validated::<Rain>("Rain").expect("unique");
+    // The ragdoll-to-assembly pose snapshot, appended after `Rain`: read by `extract` as a crossfade's outgoing side.
+    registry
+        .register_validated::<PoseSnapshot>("PoseSnapshot")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -7225,12 +7234,13 @@ mod tests {
                 "RenderView",
                 "IkTargets",
                 "Rain",
+                "PoseSnapshot",
             ]
         );
         assert_eq!(
             registry.len(),
-            84,
-            "appending `Rain` grows the registry to 84"
+            85,
+            "appending `PoseSnapshot` grows the registry to 85"
         );
     }
 

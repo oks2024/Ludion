@@ -65,6 +65,24 @@ the lights that reached a point (`unoccluded > 0`).
 Not applied: penumbra, `GiVolume` sky visibility and bounce, SSAO, specular and the energy split,
 emissive, `Mesh.wrap`, fog. The sim pose differs from the render pose by up to one tick.
 
+## The agreement gate
+
+`ludion render --scene examples/gallery/light-exposure.yaml --debug-view irradiance` draws every opaque
+`Mesh` fragment as the diffuse irradiance the renderer summed there (albedo 1: ambient/IBL, local lights
+and the sun, each with its shadow; no specular, emissive or post), stored as `sRGB(E / 4)`, so it saturates
+at `E = 4`. The view is CLI and Rust only, not a `render.debug` value (`ludion docs wire-render`).
+The engine test `light_exposure_agreement` renders that scene at 512×512 and compares a 32×32 grid of
+floor points with `light_exposure(Facing::Normal([0, 1, 0]))`:
+
+- A sample is clean unless a neighbour 0.25 m away differs on any light's reached/occluded status, it
+  lies in a spot's ramp band (inner − 1° to outer + 1°), or it is within 0.25 m of the wall. Clean samples
+  agree within `max(5 %, 0.01)`.
+- The lit verdict (`total ≥ 0.25`) agrees on ≥ 99 % of all samples and on every sample whose neighbours
+  share its verdict.
+- The tolerances are fixed, not a per-OS floor: both sides run one formula.
+
+**Authoring condition:** keep the floor's irradiance below 3.5, and give each occluding mesh a collider.
+
 ## Errors
 
 `L4250` (`ludion explain L4250`): no points, over 16, a non-finite point (`/points/<i>`), a zero or

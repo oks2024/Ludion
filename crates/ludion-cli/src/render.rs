@@ -181,6 +181,10 @@ pub struct Request<'a> {
     pub blend: Option<&'a str>,
     /// `--layer` (model mode), repeatable: each `<clip>:<weight>[:<mask>[:<mode>]]`, parsed in `run_model`.
     pub layers: &'a [String],
+    /// `--look` (model mode): the `[<name>=]<yaw>,<pitch>` spec, parsed in `run_model`.
+    pub look: Option<&'a str>,
+    /// `--ik` (model mode), repeatable: each `<name>=<x>,<y>,<z>`, parsed in `run_model`.
+    pub ik: &'a [String],
     /// `--hold` (model mode, with `--clip` or `--crossfade`): snap each phase to a multiple of N ticks.
     pub hold: Option<u32>,
     /// `--part` (model mode, a sculpt): frame the sheet on this named part.
@@ -837,6 +841,19 @@ fn run_model(request: &Request, model: &Path) -> ExitCode {
         Ok(layers) => layers,
         Err(diagnostic) => return report(model, &[diagnostic]),
     };
+    let look = match request.look.map(ludion_engine::parse_look).transpose() {
+        Ok(look) => look,
+        Err(diagnostic) => return report(model, &[diagnostic]),
+    };
+    let ik: Result<Vec<_>, _> = request
+        .ik
+        .iter()
+        .map(|spec| ludion_engine::parse_ik(spec))
+        .collect();
+    let ik = match ik {
+        Ok(ik) => ik,
+        Err(diagnostic) => return report(model, &[diagnostic]),
+    };
     let out = request
         .out
         .map(Path::to_path_buf)
@@ -868,6 +885,8 @@ fn run_model(request: &Request, model: &Path) -> ExitCode {
         crossfade,
         blend,
         layers: &layers,
+        look,
+        ik: &ik,
         hold: request.hold,
         part: request.part,
         isolate: request.isolate,
@@ -956,6 +975,9 @@ fn print_clip_report(clip: &ludion_engine::ClipOutcome) {
     if !clip.layers.is_empty() {
         println!("layers: {}", clip.layers.join(", "));
     }
+    if !clip.ik.is_empty() {
+        println!("ik: {}", clip.ik.join(", "));
+    }
     for (index, phase) in clip.phases.iter().enumerate() {
         print!("  phase {index}: t {} (tick {})", phase.time, phase.tick);
         if let Some([x, y]) = phase.params {
@@ -966,6 +988,9 @@ fn print_clip_report(clip: &ludion_engine::ClipOutcome) {
         }
         if let Some(weight) = phase.weight {
             print!(", weight {weight:.3}");
+        }
+        if let Some([yaw, pitch]) = phase.look {
+            print!(", look [{yaw}, {pitch}]");
         }
         if let Some(components) = phase.components {
             print!(
@@ -1053,11 +1078,16 @@ fn default_sheet_out(model: &Path, request: &Request) -> PathBuf {
         _ => String::new(),
     };
     let hold = format!(
-        "{hold}{}",
+        "{hold}{}{}",
         if request.layers.is_empty() {
             ""
         } else {
             "-layered"
+        },
+        if request.look.is_none() && request.ik.is_empty() {
+            ""
+        } else {
+            "-ik"
         }
     );
     // A malformed spec never reaches here: `run_model` refuses it first.

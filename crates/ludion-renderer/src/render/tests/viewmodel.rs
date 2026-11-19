@@ -242,8 +242,8 @@ fn point(position: Vec3, intensity: f32, range: f32) -> crate::scene::PointLight
 }
 
 /// The viewmodel, the `sun_cascades` view and the blended twins are pipeline constants, not uniform
-/// data: the composed mesh shader declares `VIEWMODEL`, `BLENDED`, `SUN_CASCADE_VIEW` and
-/// `BLEND_ADDITIVE` overrides, each defaulting to false, so a pipeline built without constants shades
+/// data: the composed mesh shader declares `VIEWMODEL`, `BLENDED`, `SUN_CASCADE_VIEW`,
+/// `IRRADIANCE_VIEW` and `BLEND_ADDITIVE` overrides, each defaulting to false, so a pipeline built without constants shades
 /// the world opaque with no debug tint, and neither the `Camera` nor the `Sun` uniform carries a field
 /// for them.
 #[test]
@@ -261,6 +261,7 @@ fn the_mesh_overrides_default_to_the_world() {
             Some("VIEWMODEL"),
             Some("BLENDED"),
             Some("SUN_CASCADE_VIEW"),
+            Some("IRRADIANCE_VIEW"),
             Some("BLEND_ADDITIVE")
         ]
     );

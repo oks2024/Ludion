@@ -108,6 +108,7 @@ mod projectiles;
 mod quality;
 mod query_drift;
 pub mod ragdoll;
+mod ragdoll_recover;
 mod rain;
 mod recording;
 mod render;
@@ -149,8 +150,8 @@ mod voxelizer;
 
 pub use animation_events::{AnimationEvents, ClipEvent, animation_events};
 pub use assembly_mesh::{
-    AssemblyData, AssemblyPartData, MeshedAssemblyDocuments, load as load_assembly,
-    load_meshed_documents as load_assembly_meshed_documents, mesh_assembly,
+    AssemblyData, AssemblyIkData, AssemblyIkKind, AssemblyPartData, MeshedAssemblyDocuments,
+    load as load_assembly, load_meshed_documents as load_assembly_meshed_documents, mesh_assembly,
 };
 pub use audio::{
     AudioCategory, AudioDistance, AudioEvent, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
@@ -195,6 +196,7 @@ pub use components::{
     PerceptionState, Sense, SightSampleRecord, StimulusRecord, SweepShape, ZoneSweep,
 };
 pub use components::{IkTarget, IkTargets, fade_ik_target, ik_target_weight, ik_target_weight_at};
+pub use components::{PoseSnapshot, SnapshotPart};
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
@@ -248,11 +250,12 @@ pub use ludion_scene::{
 pub use ludion_sim::WorldHash;
 pub use mesh_check::scene_mesh_asset_diagnostics;
 pub use model_sheet::{
-    BlendSweepSpec, ClipCrossfade, ClipOutcome, CrossfadeSpec, DEFAULT_CROSSFADE_PHASES, LayerSpec,
-    MAX_LINEUP_MODELS, MAX_STRIP_PHASES, MIN_STRIP_PHASES, ModelCamera, ModelChannel,
-    ModelSheetRequest, ModelSweep, ModelSweepOutcome, ModelView, PhaseGap, PhaseReport, PhaseStray,
-    SheetOutcome, Sweep, TrueSizeFraming, fit_distance_for_aspect, model_camera, parse_blend,
-    parse_crossfade, parse_layer, render_model_sheet,
+    BlendSweepSpec, ClipCrossfade, ClipOutcome, CrossfadeSpec, DEFAULT_CROSSFADE_PHASES, IkSpec,
+    LayerSpec, LookSpec, MAX_LINEUP_MODELS, MAX_STRIP_PHASES, MIN_STRIP_PHASES, ModelCamera,
+    ModelChannel, ModelSheetRequest, ModelSweep, ModelSweepOutcome, ModelView, PhaseGap,
+    PhaseReport, PhaseStray, SheetOutcome, Sweep, TrueSizeFraming, fit_distance_for_aspect,
+    model_camera, parse_blend, parse_crossfade, parse_ik, parse_layer, parse_look,
+    render_model_sheet,
 };
 pub use motor::{
     MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE,
@@ -317,6 +320,7 @@ pub use quality::{
 };
 pub use query_drift::{QueryDriftReport, check_query_drift_replay, check_query_drift_with};
 pub use ragdoll::{LimitsFrom, RagdollSwitch, switch_to_ragdoll, switch_to_ragdoll_with};
+pub use ragdoll_recover::{RagdollToAssembly, ragdoll_landing, switch_ragdoll_to_assembly};
 pub use rain::scene_rain_diagnostics;
 pub use render::{
     BuilderRenderOutcome, RenderOutcome, dump_scene_graph_json, engine_at_frame, gpu_uploads,

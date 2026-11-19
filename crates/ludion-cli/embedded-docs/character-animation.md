@@ -146,6 +146,8 @@ masked override or additive clips over its base `Animation`; `ludion docs animat
   The sim reads the rest pose from the skin's committed mesh document under the project root; without it
   (an engine with no root, or a missing mesh) the child composes as a plain `Parent`, so its sim results
   and hashes differ.
+- A voxel assembly is a socket parent too, `joint` naming a part (frame = its pivot; sim reads use its rest
+  frame, the draw its animated pose): `ludion docs voxel-assemblies` §Sockets on parts.
 - Under present interpolation the socket child and its subtree take the skin's blend key, so the prop
   never swims against the body.
 - `posed_joint_world(world, skin, joint, now) -> Result<Option<WorldPose>, Diagnostic>` is presentation

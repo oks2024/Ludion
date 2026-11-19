@@ -715,6 +715,25 @@ enum Command {
         /// `check-scene <model>.assembly.yaml` lists the masks. A prefab has no layers.
         #[arg(long, value_name = "CLIP:WEIGHT[:MASK[:MODE]]", conflicts_with_all = ["scene", "atlas", "sprite"])]
         layer: Vec<String>,
+        /// Under `--model`, aim an assembly's `ik:` look-at over the pose of `--clip`, `--crossfade`
+        /// or `--blend`: `--look 40,0` turns the head 40° left (`YAW,PITCH` in degrees, +yaw left,
+        /// +pitch down, as `Look`); `--look look=0..100,0` names the look-at `look` and sweeps its yaw
+        /// across five phases (`--strip N` for 2 to 8), every phase at `--time`, so "the head past its
+        /// 70° limit" is a strip. A bare value needs exactly one look-at. The report prints each
+        /// phase's `look [yaw, pitch]` and the gap analysis through the solver the game draws with;
+        /// `check-scene <model>.assembly.yaml` lists the entries. Assemblies only; not with a `--blend`
+        /// range.
+        #[arg(long, value_name = "[NAME=]YAW,PITCH", conflicts_with_all = ["scene", "atlas", "sprite"])]
+        look: Option<String>,
+        /// Under `--model`, reach an assembly's `ik:` chain over the pose of `--clip`, `--crossfade`
+        /// or `--blend`: `--ik hand_r=6,12,2` drives the chain `hand_r`'s effector to the point x=6,
+        /// y=12, z=2 **in the assembly's grid voxels** (the frame `place:` is written in, the same
+        /// numbers `check-scene --bounds` and `--layers` print). A target out of reach leaves the limb
+        /// straight, aimed at it. Repeat the flag for more chains. The report echoes the targets and
+        /// the gap analysis shows whether the limb tore out of its plug; `check-scene
+        /// <model>.assembly.yaml` lists the chains. Assemblies only.
+        #[arg(long, value_name = "NAME=X,Y,Z", conflicts_with_all = ["scene", "atlas", "sprite"])]
+        ik: Vec<String>,
         /// Under `--model`, show each `--clip`/`--crossfade` phase at the pose a game shows with
         /// `Animation.hold: N`: the phase snaps down to the last multiple of N ticks, so
         /// neighbouring phases can repeat a pose. 1 (the default) is every tick; 0 is `L1317`.
@@ -1844,6 +1863,8 @@ enum CliDebugView {
     LocalShadowAtlas,
     #[value(name = "sun_cascades")]
     SunCascades,
+    #[value(name = "irradiance")]
+    Irradiance,
 }
 
 impl From<CliDebugView> for ludion_engine::DebugView {
@@ -1854,6 +1875,7 @@ impl From<CliDebugView> for ludion_engine::DebugView {
             CliDebugView::ProbeIndex => ludion_engine::DebugView::ProbeIndex,
             CliDebugView::LocalShadowAtlas => ludion_engine::DebugView::LocalShadowAtlas,
             CliDebugView::SunCascades => ludion_engine::DebugView::SunCascades,
+            CliDebugView::Irradiance => ludion_engine::DebugView::Irradiance,
         }
     }
 }
@@ -2214,6 +2236,8 @@ fn main() -> std::process::ExitCode {
             crossfade,
             blend,
             layer,
+            look,
+            ik,
             hold,
             part,
             isolate,
@@ -2336,6 +2360,8 @@ fn main() -> std::process::ExitCode {
                 crossfade: crossfade.as_deref(),
                 blend: blend.as_deref(),
                 layers: &layer,
+                look: look.as_deref(),
+                ik: &ik,
                 hold,
                 part: part.as_deref(),
                 isolate,

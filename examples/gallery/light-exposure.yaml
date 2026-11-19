@@ -1,0 +1,193 @@
+# Feature: the irradiance debug view and the light_exposure agreement gate - a white 16 m floor seen from straight above
+# (orthographic, so pixel and floor position are linear) under a dim moonlit sun, a hard-edged spot, a spot whose pool the
+# wall half-shadows, a plain spot, two point lights and one hidden point light. The floor has no collider; the wall has
+# one, so it is the only occluder `light_exposure` sees. `ludion render --debug-view irradiance` shows the diffuse
+# irradiance each fragment received (stored as E / 4), which `light_exposure` reproduces from sim state.
+# ludion docs light-exposure.
+format: 1
+seed: 1
+name: "light-exposure - the irradiance view and light_exposure agree: pools, a wall shadow, a hidden light"
+physics:
+  space: free
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 20.0
+          - 0.0
+        rotation:
+          - -90.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 16.0
+  - name: environment
+    components:
+      Environment:
+        ibl_intensity: 0.5
+      PostProcess:
+        ssao: 0.0
+  - name: moon
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 10.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - -0.5
+          - -0.8
+          - -0.3
+        color:
+          - 0.7
+          - 0.8
+          - 1.0
+        intensity: 0.12
+  - name: floor
+    components:
+      Transform:
+        scale:
+          - 16.0
+          - 1.0
+          - 16.0
+      Mesh:
+        shape: plane
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        roughness: 1.0
+  - name: wall
+    components:
+      Transform:
+        translation:
+          - 3.2
+          - 1.5
+          - 3.0
+        scale:
+          - 0.3
+          - 3.0
+          - 3.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.5
+          - 0.5
+          - 1.0
+        roughness: 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.15
+              - 1.5
+              - 1.5
+        body: static
+  - name: spot-hard
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 4.0
+          - -4.0
+      SpotLight:
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+        intensity: 6.0
+        range: 10.0
+        direction:
+          - 0.0
+          - -1.0
+          - 0.0
+        inner_angle: 20.0
+        outer_angle: 20.0
+  - name: spot-shadowed
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 4.0
+          - 3.0
+      SpotLight:
+        color:
+          - 1.0
+          - 0.9
+          - 0.7
+        intensity: 5.0
+        range: 10.0
+        direction:
+          - 0.0
+          - -1.0
+          - 0.0
+        inner_angle: 25.0
+        outer_angle: 40.0
+        cast_shadows: true
+  - name: spot-plain
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 4.0
+          - 4.0
+      SpotLight:
+        color:
+          - 0.8
+          - 0.9
+          - 1.0
+        intensity: 4.0
+        range: 10.0
+        direction:
+          - 0.0
+          - -1.0
+          - 0.0
+        inner_angle: 10.0
+        outer_angle: 30.0
+  - name: point-a
+    components:
+      Transform:
+        translation:
+          - -1.0
+          - 2.0
+          - -5.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.7
+          - 0.5
+        intensity: 2.0
+        range: 6.0
+  - name: point-b
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 2.0
+          - -5.0
+      PointLight:
+        color:
+          - 0.6
+          - 1.0
+          - 0.7
+        intensity: 1.5
+        range: 5.0
+  - name: point-hidden
+    components:
+      Transform:
+        translation:
+          - -6.5
+          - 2.0
+          - 0.5
+      PointLight:
+        intensity: 3.0
+        range: 6.0
+      Visibility:
+        visible: false

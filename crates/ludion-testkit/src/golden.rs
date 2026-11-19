@@ -95,6 +95,12 @@ pub struct GoldenTest {
     /// Layers stacked over the base pose of the clip, crossfade or blend, one
     /// `ludion render --layer CLIP:WEIGHT[:MASK[:MODE]]` spec each (at most four).
     pub layers: Vec<String>,
+    /// For an assembly source: aim its `ik:` look-at over the base pose, exactly
+    /// `ludion render --look [NAME=]YAW,PITCH` (a `lo..hi` side sweeps the strip's phases).
+    pub look: Option<String>,
+    /// Chain targets over the base pose, one `ludion render --ik NAME=X,Y,Z` spec each (assembly-grid
+    /// voxels).
+    pub ik: Vec<String>,
     /// Hold each pose for this many sim ticks (stepped cadence), exactly `ludion render --hold N`.
     /// `None` is every tick.
     pub hold: Option<u32>,
@@ -152,6 +158,8 @@ impl std::fmt::Debug for GoldenTest {
             .field("crossfade", &self.crossfade)
             .field("blend", &self.blend)
             .field("layers", &self.layers)
+            .field("look", &self.look)
+            .field("ik", &self.ik)
             .field("hold", &self.hold)
             .field("frames", &self.frames)
             .field("debug_draw", &self.debug_draw)
@@ -218,6 +226,8 @@ impl GoldenTest {
             crossfade: None,
             blend: None,
             layers: Vec::new(),
+            look: None,
+            ik: Vec::new(),
             hold: None,
             frames: 0,
             debug_draw: ludion_engine::DebugCategories::None,
@@ -476,6 +486,18 @@ impl GoldenTest {
                     .map(|spec| ludion_engine::parse_layer(spec))
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|d| vec![d])?;
+                let look = self
+                    .look
+                    .as_deref()
+                    .map(ludion_engine::parse_look)
+                    .transpose()
+                    .map_err(|d| vec![d])?;
+                let ik = self
+                    .ik
+                    .iter()
+                    .map(|spec| ludion_engine::parse_ik(spec))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|d| vec![d])?;
                 let outcome =
                     ludion_engine::render_model_sheet(&ludion_engine::ModelSheetRequest {
                         clip: self.clip.as_deref(),
@@ -484,6 +506,8 @@ impl GoldenTest {
                         crossfade,
                         blend,
                         layers: &layers,
+                        look,
+                        ik: &ik,
                         hold: self.hold,
                         ..ludion_engine::ModelSheetRequest::new(
                             &[self.scene.as_path()],
@@ -1234,6 +1258,14 @@ mod tests {
         let errors = test
             .render()
             .expect_err("a layer with no weight is refused");
+        assert_eq!(errors[0].code.as_str(), "L1117", "{errors:?}");
+        test.layers = Vec::new();
+        test.look = Some("0".to_string());
+        let errors = test.render().expect_err("a look with no pitch is refused");
+        assert_eq!(errors[0].code.as_str(), "L1117", "{errors:?}");
+        test.look = None;
+        test.ik = vec!["hand_r".to_string()];
+        let errors = test.render().expect_err("an ik with no point is refused");
         assert_eq!(errors[0].code.as_str(), "L1117", "{errors:?}");
     }
 

@@ -12,6 +12,9 @@
 // output pixel wide with its alpha scaled by the width it was widened from. Blending is premultiplied.
 // A lit rain shades each streak centre once through the lit-sprite rule (`shade_two_sided`), unshadowed.
 //
+// A fragment under a roof is hidden: it reads the `rain_occlusion` depth map (every shadow caster seen
+// straight down) and fades out below the caster's top at its column (`rain_open_sky`).
+//
 // The `Camera` uniform (@group 0) and the clustered light set (@group 1) are shared snippets composed
 // ahead of this file.
 
@@ -31,9 +34,14 @@ struct RainParams {
     look: vec4<f32>,
     // The authored colour (rgb) and base opacity (a).
     color: vec4<f32>,
+    // The overhead occlusion map's world-to-clip view: straight down and orthographic, so its depth is
+    // affine in height (column 1's z and the translation's z invert it).
+    occ_view: mat4x4<f32>,
 };
 
 @group(2) @binding(0) var<uniform> rain: RainParams;
+// The `rain_occlusion` map: the nearest shadow caster's depth over each texel, 1.0 where there is none.
+@group(2) @binding(1) var rain_occlusion: texture_depth_2d;
 
 // One round of PCG: a cheap integer hash with good avalanche.
 fn pcg(v: u32) -> u32 {
@@ -143,10 +151,29 @@ fn rain_coverage(local: vec2<f32>) -> f32 {
     return clamp(across * along, 0.0, 1.0);
 }
 
+// 1 above the nearest shadow caster over `world`'s column, fading to 0 over 5 cm below its top, so
+// the streaks stop under a roof with a crisp edge. A column outside the map, or with no caster, is open.
+fn rain_open_sky(world: vec3<f32>) -> f32 {
+    let clip = rain.occ_view * vec4<f32>(world, 1.0);
+    let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
+    if (any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0))) {
+        return 1.0;
+    }
+    let size = vec2<i32>(textureDimensions(rain_occlusion));
+    let texel = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2<i32>(0), size - vec2<i32>(1));
+    let depth = textureLoad(rain_occlusion, texel, 0);
+    if (depth >= 1.0) {
+        return 1.0;
+    }
+    let top = (depth - rain.occ_view[3].z) / rain.occ_view[1].z;
+    return smoothstep(top - 0.05, top, world.y);
+}
+
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
+    @location(2) world: vec3<f32>,
 };
 
 @vertex
@@ -156,12 +183,13 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     out.clip = v.clip;
     out.local = v.local;
     out.color = v.color;
+    out.world = v.world;
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let weight = clamp(in.color.a, 0.0, 1.0) * rain_coverage(in.local);
+    let weight = clamp(in.color.a, 0.0, 1.0) * rain_coverage(in.local) * rain_open_sky(in.world);
     return vec4<f32>(in.color.rgb * weight, weight);
 }
 
@@ -187,6 +215,6 @@ fn vs_depth(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) ->
 
 @fragment
 fn fs_depth(in: DepthOut) -> @location(0) vec4<f32> {
-    let weight = clamp(in.color.a, 0.0, 1.0) * rain_coverage(in.local);
+    let weight = clamp(in.color.a, 0.0, 1.0) * rain_coverage(in.local) * rain_open_sky(in.world);
     return transparent_layer(in.world, weight, rain.look.w);
 }

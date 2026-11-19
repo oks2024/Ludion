@@ -21,6 +21,7 @@ use ludion_render_graph::{
 };
 
 mod blended;
+mod irradiance_view;
 mod medium_pass;
 mod mesh_batch;
 mod mesh_pipeline;
@@ -984,6 +985,20 @@ impl Renderer {
             .as_ref()
             .expect("the mesh shader has cascade-view twins")
             .get(self.gpu.device(), variant, viewmodel, medium)
+    }
+
+    /// The mesh shader's `irradiance` debug-view twin for `variant`, built on the view's first frame.
+    fn irradiance_view_pipeline(
+        &self,
+        variant: MeshVariant,
+        viewmodel: bool,
+        medium: bool,
+    ) -> &wgpu::RenderPipeline {
+        self.pipelines[ShaderId::Mesh as usize]
+            .cascade_view
+            .as_ref()
+            .expect("the mesh shader has cascade-view twins")
+            .get_irradiance(self.gpu.device(), variant, viewmodel, medium)
     }
 
     /// The mesh shader's probe-capture pipeline (four targets) for `variant`.
@@ -2337,6 +2352,7 @@ impl Renderer {
             local_shadow,
             sun_cascades,
             sun_cascade_view,
+            irradiance_view: scene.debug_view == Some(crate::DebugView::Irradiance),
             sun_lanes,
             local_cull_base,
             sun_tile: chain.shadow_map.unwrap_or_default(),
@@ -3953,6 +3969,8 @@ struct FrameRecorder<'a> {
     sun_cascades: Option<SunCascades>,
     /// Whether the scene pass draws the `sun_cascades` debug view ([`sun_cascade_view`]).
     sun_cascade_view: bool,
+    /// Whether the scene pass draws the `irradiance` debug view.
+    irradiance_view: bool,
     /// The fit packed for the mesh `Sun` uniform and the shafts march; count 0 without a fit.
     sun_lanes: SunCascadeLanes,
     /// The cull view of the first granted local shadow view: view 0 is the camera and the sun's maps
@@ -4004,6 +4022,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::REFLECTIONS => self.record_reflections(pass),
             pass::SSR_BLEND => self.record_ssr_blend(pass),
             pass::DROP_SHADOW_OCCLUSION => self.record_drop_shadow_occlusion(pass),
+            pass::RAIN_OCCLUSION => self.record_rain_occlusion(pass),
             pass::DECAL_RECEIVERS => self.record_decal_receivers(pass),
             pass::DECALS_LIT => self.record_decals_lit(pass),
             pass::PROJECTOR => self.record_projector(pass),
@@ -4013,6 +4032,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::SSR_DEBUG => self.record_ssr_debug(pass),
             pass::PROBE_DEBUG => self.record_probe_debug(pass),
             pass::LOCAL_SHADOW_DEBUG => self.record_local_shadow_debug(pass),
+            pass::IRRADIANCE_DEBUG => self.record_irradiance_debug(pass),
             pass::PROBE_FACE => self.record_probe_face(pass),
             pass::TRANSPARENTS => self.record_transparents(pass),
             pass::TRANSPARENT_DEPTH => self.record_transparent_depth(pass),
@@ -4184,7 +4204,9 @@ impl FrameRecorder<'_> {
         medium: bool,
     ) -> &wgpu::RenderPipeline {
         let viewmodel = viewmodel && self.viewmodel_camera_skin_bg.is_some();
-        if self.sun_cascade_view {
+        if self.irradiance_view {
+            self.r.irradiance_view_pipeline(variant, viewmodel, medium)
+        } else if self.sun_cascade_view {
             self.r.cascade_view_pipeline(variant, viewmodel, medium)
         } else if viewmodel {
             self.r.viewmodel_pipeline(variant, medium)
@@ -5782,7 +5804,7 @@ impl FrameRecorder<'_> {
 
         self.record_blended(&mut rp, pass.device, pass.inputs, None);
         // Rain reaches farthest of the transparents, so it draws under the sprites and particles.
-        self.record_rain(&mut rp, None);
+        self.record_rain(&mut rp, pass.device, pass.inputs, None);
 
         // Sprites/billboards.
         rp.set_pipeline(self.r.pipeline(ShaderId::Sprite));
@@ -5862,7 +5884,7 @@ impl FrameRecorder<'_> {
         });
 
         self.record_blended(&mut rp, pass.device, pass.inputs, Some(format));
-        self.record_rain(&mut rp, Some(format));
+        self.record_rain(&mut rp, pass.device, pass.inputs, Some(format));
 
         rp.set_pipeline(self.r.transparent_depth_pipeline(ShaderId::Sprite, format));
         rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
@@ -8373,7 +8395,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::Rain,
-        create: shader_gen::create_rain_bgl,
+        create: shader_gen::create_rain_rain_occlusion_bgl,
     },
 ];
 

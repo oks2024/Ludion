@@ -5,7 +5,7 @@
 //! enters a scene file or a `WorldHash`, and it never turns its effect on — with SSR off for the frame
 //! there is no trace to show, a scene without probes has no index to draw, and a frame with no granted
 //! local-light shadow has no atlas, and a sun without fitted cascades has none to tint by; the normal
-//! frame is drawn in each case.
+//! frame is drawn in each case. The irradiance view needs no subject: it always draws.
 
 /// One of the full-screen debug views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,16 +25,21 @@ pub enum DebugView {
     /// ([`SUN_CASCADE_VIEW_PALETTE`]); the seam band blends two tints, and past the last cascade the
     /// fragment is untinted, which is where the sun's shadows end.
     SunCascades,
+    /// The diffuse irradiance every opaque `Mesh` fragment received (lighting with albedo 1: ambient,
+    /// local lights and the sun, each with its shadow), no specular, emissive or post, stored as
+    /// `sRGB(E / IRRADIANCE_VIEW_SCALE)`. The picture `light_exposure` is checked against.
+    Irradiance,
 }
 
 impl DebugView {
     /// Every view, in the order the CLI lists them.
-    pub const ALL: [DebugView; 5] = [
+    pub const ALL: [DebugView; 6] = [
         DebugView::SsrConfidence,
         DebugView::SsrFootprint,
         DebugView::ProbeIndex,
         DebugView::LocalShadowAtlas,
         DebugView::SunCascades,
+        DebugView::Irradiance,
     ];
 
     /// The spelling used by the CLI and in summaries.
@@ -45,6 +50,7 @@ impl DebugView {
             DebugView::ProbeIndex => "probe_index",
             DebugView::LocalShadowAtlas => "local_shadow_atlas",
             DebugView::SunCascades => "sun_cascades",
+            DebugView::Irradiance => "irradiance",
         }
     }
 
@@ -67,6 +73,9 @@ pub const PROBE_VIEW_PALETTE: [[f32; 3]; 8] = [
     [1.0, 0.5, 0.0],
     [0.5, 0.0, 1.0],
 ];
+
+/// The `irradiance` view stores `sRGB(E / IRRADIANCE_VIEW_SCALE)`; `mesh_shading.wgsl` mirrors it.
+pub const IRRADIANCE_VIEW_SCALE: f32 = 4.0;
 
 /// The tint of sun cascade `k`, nearest first: soft multiplicative colours, so the lit picture stays
 /// readable under them. The `sun_cascades` view's source; `mesh.wgsl`'s `SUN_CASCADE_TINT` mirrors it.

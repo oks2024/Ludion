@@ -93,7 +93,9 @@ pub use cluster::{ClusterStats, cluster_stats};
 pub use compressed::{CompressedUploadError, check_compressed};
 pub use cull::{LodRadii, cull_marks, lod_level, lod_radii, lod_size};
 pub use cull_stats::CullViewCount;
-pub use debug_view::{DebugView, PROBE_VIEW_PALETTE, SUN_CASCADE_VIEW_PALETTE};
+pub use debug_view::{
+    DebugView, IRRADIANCE_VIEW_SCALE, PROBE_VIEW_PALETTE, SUN_CASCADE_VIEW_PALETTE,
+};
 pub use frame_observer::{FrameObserver, FramePhase};
 pub use gi_bake::{GiReadback, max_gi_probes};
 pub use graph::{

@@ -1271,6 +1271,11 @@ pub mod code {
     /// has a length under 1e-6, so it is not a quaternion. The JSON Pointer is `/rotation`.
     pub const JOINT_ZERO_INVALID: DiagnosticCode = DiagnosticCode::new("L1750");
 
+    /// `L1751` — a `PoseSnapshot` is structurally invalid: a part's `rotation` or `translation`
+    /// holds a non-finite element, or a `rotation` has a squared length under 1e-12. The JSON
+    /// Pointer names the part's field.
+    pub const POSE_SNAPSHOT_INVALID: DiagnosticCode = DiagnosticCode::new("L1751");
+
     /// `L1189` — a `Collider` whose shape is a `compound` is structurally invalid: `parts` is
     /// missing or empty, a part's `shape` is a `compound`, `heightfield`, `circle` or `aabb`, or a
     /// part `translation`/`rotation` element is beyond `f32` range. The JSON Pointer names the
@@ -1817,12 +1822,13 @@ pub mod code {
     /// `Animation`'s semantic validator, in files and on the wire; pointer `/hold`.
     pub const ANIMATION_HOLD_ZERO: DiagnosticCode = DiagnosticCode::new("L1317");
 
-    /// `L1318` — a `ParentJoint` component's `Parent` is not a skinned mesh, or the entity has no
-    /// `Parent`. Raised at load, `check-scene` and prefab spawn; pointer
+    /// `L1318` — a `ParentJoint` component's `Parent` is not a skinned mesh or an assembly, or the
+    /// entity has no `Parent`. Raised at load, `check-scene` and prefab spawn; pointer
     /// `/entities/{i}/components/ParentJoint`.
     pub const PARENT_JOINT_NOT_SKINNED: DiagnosticCode = DiagnosticCode::new("L1318");
 
-    /// `L1319` — a `ParentJoint`'s `joint` names no joint of its parent's mesh document. Pointer
+    /// `L1319` — a `ParentJoint`'s `joint` names no joint of its parent's mesh document, or no part
+    /// of its parent's assembly. Pointer
     /// `/entities/{i}/components/ParentJoint/joint`.
     pub const PARENT_JOINT_UNKNOWN_JOINT: DiagnosticCode = DiagnosticCode::new("L1319");
 
@@ -7457,6 +7463,30 @@ Fix: give `rotation` four finite numbers of a non-zero quaternion:
     rotation: [0.0, 0.0, 0.0, 1.0]",
     },
     CodeEntry {
+        code: code::POSE_SNAPSHOT_INVALID,
+        severity: Severity::Error,
+        title: "pose snapshot is structurally invalid",
+        explanation: "\
+A `PoseSnapshot` component holds a part pose a crossfade cannot start from.
+
+Two cases raise it, each at `/parts/<index>/<field>`:
+
+  - a `rotation` or `translation` element is not finite;
+  - a `rotation`'s four elements have a squared length under 1e-12, so it is not a quaternion.
+
+`switch_ragdoll_to_assembly` writes a valid snapshot of a folded ragdoll's parts; this code means
+the component was authored or edited by hand.
+
+Fix: give each part four finite rotation numbers (`[x, y, z, w]`, not all zero) and three finite
+translation numbers:
+
+  PoseSnapshot:
+    parts:
+      - part: torso
+        rotation: [0.0, 0.0, 0.0, 1.0]
+        translation: [0.0, 0.0, 0.0]",
+    },
+    CodeEntry {
         code: code::COLLIDER_COMPOUND_INVALID,
         severity: Severity::Error,
         title: "compound collider is structurally invalid",
@@ -9332,31 +9362,34 @@ play every tick.",
     CodeEntry {
         code: code::PARENT_JOINT_NOT_SKINNED,
         severity: Severity::Error,
-        title: "ParentJoint's parent is not a skinned mesh",
+        title: "ParentJoint's parent is not a skinned mesh or an assembly",
         explanation: "\
-A `ParentJoint` component is on an entity whose `Parent` is not a skinned mesh, or that has no
-`Parent` at all.
+A `ParentJoint` component is on an entity whose `Parent` is not a skinned mesh or an assembly, or
+that has no `Parent` at all.
 
-`ParentJoint` attaches an entity to one joint of its parent's skeleton, so the parent must carry a
-`Mesh` whose `shape` is `asset` naming a mesh document with `joints:`, or `character`, which resolves
-to one (the rule `SkinBone` uses). The message names the reason.
+`ParentJoint` attaches an entity to one joint of its parent's skeleton, or one part of its parent's
+voxel assembly, so the parent must carry a `Mesh` whose `shape` is `asset` naming a mesh document with
+`joints:`, `character`, which resolves to one (the rule `SkinBone` uses), or `assembly`. An
+`assembly_part`, a `voxel` model or a primitive has nothing to attach to. The message names the
+reason.
 
 The JSON Pointer names the component: `/entities/{i}/components/ParentJoint`. Fix: point `Parent` at
-the skinned entity, or remove `ParentJoint`.",
+the skinned or assembly entity, or remove `ParentJoint`.",
     },
     CodeEntry {
         code: code::PARENT_JOINT_UNKNOWN_JOINT,
         severity: Severity::Error,
-        title: "ParentJoint's joint is not a joint of its parent's skeleton",
+        title: "ParentJoint's joint is not a joint of its parent's skeleton or a part of its assembly",
         explanation: "\
-A `ParentJoint` component's `joint` does not name any joint of its parent's mesh document.
+A `ParentJoint` component's `joint` does not name any joint of its parent's mesh document, or any
+part of its parent's assembly.
 
-The help names the nearest joint name when one is close enough to suggest a typo, or lists every
-joint name the mesh document declares.
+The help names the nearest joint or part name when one is close enough to suggest a typo, or lists
+every name the document declares.
 
 The JSON Pointer names the field: `/entities/{i}/components/ParentJoint/joint`. Fix: spell `joint`
 exactly as one of the parent mesh's `joints[].name` entries — `ludion check-scene <mesh> --bounds`
-prints the joint tree.",
+prints the joint tree — or as a part name of the parent assembly (`parts[].name`).",
     },
     CodeEntry {
         code: code::PRESENTATION_INSTANCE_SIM_COMPONENT,
@@ -13954,6 +13987,7 @@ mod tests {
         code::AI_MACHINE_VARIANTS,
         code::JOINT_MOTOR_INVALID,
         code::JOINT_ZERO_INVALID,
+        code::POSE_SNAPSHOT_INVALID,
         code::COLLIDER_COMPOUND_INVALID,
         code::MESH_SKIN_STRUCTURE,
         code::MESH_SKIN_DATA,

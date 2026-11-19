@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d and W4a mechanized (2026-11-18); A3 deferred; W3, W4b–W6 and part sockets not started, W4b next; the macOS twins of the W2d goldens are owed to the M4.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); part sockets mechanized (2026-11-19); A3 deferred; W3, W5, W6 not started; the macOS twins of the W2d goldens and of `humanoid-look-yaw-limit-strip.png` are owed to the M4.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -120,6 +120,39 @@ engine behaviour, component, `WorldHash`, replay, wire-schema or existing golden
 
 No `WorldHash`, replay, wire-schema or golden moved; the component schema snapshot gained `IkTargets`.
 Tooling (`check-scene`, `render --look/--ik`, a golden) is W4b.
+
+### W4b — `check-scene` lists `ik:`, `render --look/--ik`, the yaw-limit golden
+
+| file | role |
+|---|---|
+| `crates/ludion-cli/src/check_scene.rs` | the `ik:` listing, text and JSON (`"ik"` only when non-empty), from the document's names and effector and the resolved hinge |
+| `crates/ludion-engine/src/model_sheet.rs`, `lib.rs` | `parse_look`/`parse_ik`, `ModelSheetRequest.look`/`ik`, `PhaseReport.look`, `ClipOutcome.ik`, the `IkPlan` the report poses through `apply_assembly_ik` and the scene's `IkTargets` |
+| `crates/ludion-cli/src/main.rs`, `render.rs` | `--look [NAME=]YAW,PITCH` and a repeatable `--ik NAME=X,Y,Z`; `-ik` in the output name; `look [y, p]` per phase and one `ik:` echo |
+| `crates/ludion-testkit/src/golden.rs`, `tests/gallery.rs` | `GoldenTest.look`/`ik`; `humanoid_look_yaw_limit_strip_test`, golden `humanoid-look-yaw-limit-strip.png` |
+| `examples/gallery/voxels/humanoid.assembly.yaml` | a `head_look` mask, a `look` look-at (yaw 70, pitch 40) and a `hand_r` chain |
+| `crates/ludion-cli/tests/fixtures/assembly_ik/` | the CLI fixture: an explicit-hinge chain, a defaulted `lower-arm-*` chain and a look-at |
+
+The strip sweeps the yaw 0 to 100 over six phases, so the last two cells clamp at 70°; every phase reports
+1 component. The golden is blessed on the RTX 3090; `goldens/macos/humanoid-look-yaw-limit-strip.png` is
+owed to the M4. Masks and `ik:` are pose data outside the mesh content hash, so `assembly-layers.png` and
+`humanoid-locomotion-blend-strip.png` passed unblessed. No component, schema, `WorldHash`, replay or existing
+golden moved.
+
+### Part sockets — `ParentJoint` naming an assembly part (request 0007 item 0)
+
+| file | role |
+|---|---|
+| `crates/ludion-engine/src/assembly_mesh.rs` | `part_socket_rests`: each part's `offset + pivot` from the documents, no meshing |
+| `crates/ludion-engine/src/parent_joint.rs` | `SkinRests` learns `MeshSource::Assembly` (the sim rest, a `Trs` per part name); `posed_joint_world` answers for an assembly; `L1318`/`L1319` cover assemblies |
+| `crates/ludion-engine/src/extract.rs` | `assembly_part_models`, the one placement sequence (clip or blend, crossfade, `hold`, layers, IK) for the mesh loop, the sockets and `posed_joint_world`; `pose_each` poses assembly sockets |
+| `crates/ludion-core/src/codes.rs`, `crates/ludion-components/src/lib.rs` | `L1318`/`L1319` text and the `ParentJoint` doc comment |
+| `crates/ludion-engine/tests/assembly_socket.rs` | the sim rest across clip, layers and IK, the draw riding the part, drawn == sim at rest, hash neutrality with a collider, thread invariance, diagnostics |
+| `examples/gallery/assembly-socket.yaml`, `goldens/` | a flashlight on a walking arm and a cube on a resting head; golden blessed on the RTX 3090 (macOS twin owed to the M4) |
+| `docs/voxel-assemblies.md`, `character-animation.md`, `components.md` | §Sockets on parts and the pointers |
+
+No `WorldHash`, replay, wire-schema or existing golden moved; the component schema snapshot changed only in the
+`ParentJoint` doc comment. A `ParentJoint` inserted at runtime under an assembly used to compose as a plain
+`Parent` and now gains the rest level (committed content could not carry one: `L1318`).
 
 ## Trigger
 
@@ -271,6 +304,36 @@ share one driver shape.
     must follow an entity without per-tick writes — it needs registry support for entity references inside a
     map (`L1392`); until then game code writes `point` from the entity's world position each tick it moves.
 
+40. **`render --model --look/--ik` pose through the one solver** (`apply_assembly_ik` on the sheet's
+    placements, then the gap analysis). `--look [NAME=]YAW,PITCH` takes a number or `lo..hi` per side (`Look`'s
+    convention); a range makes the strip's phases look phases (`--strip`, default 5), every one at the same
+    `--time`, and a bare `--look` needs exactly one look-at. `--ik NAME=X,Y,Z` is repeatable, names a chain, and
+    its point is in **assembly-grid voxels** (the `place:` frame), converted to the solver's bottom-centre frame;
+    the scene's `IkTargets` carry the same point in world space (`translation + scale · p`). Both need `--clip`,
+    `--crossfade` or `--blend`, assemblies only, and a look range refuses a blend range; every refusal is
+    `L1117`, a bad name listing the entries. Without them every report and image is unchanged. `check-scene`
+    lists each `ik:` entry (a chain's resolved hinge, a look-at's forward and limits; JSON `"ik"` only when
+    non-empty).
+41. **A socket's frame is the part's pivot, in voxel units.** The part's placement is in its mesh frame
+    (origin at `offset`, rotation about `pivot`), so the socket level is `placement × T(pivot)`; at rest that is
+    `T(offset + pivot)` bit for bit. The child's `Transform` is local to it and scaled by the assembly
+    entity's `Transform` like any child (the skin-socket contract).
+42. **Sim reads the rest socket, from documents only.** `SkinRests` composes `offset + pivot` from the
+    committed assembly and part documents (`load_documents`: parse and validate, no mesher, no clip), never a
+    clip, mask, layer, `IkTargets` or blend, so a socket child's `world_transform`, a collider on it and every
+    `WorldHash` are independent of animation state. The cache is separate from the posed-data one, so a broken
+    clip file cannot change a sim read. Posed-sim sockets would need the pose in the sim (amending
+    `animation-clips` decision 2).
+43. **The draw is the part's final pose through one helper.** `extract::assembly_part_models` is the
+    sequence the mesh loop draws parts with (`held_for`, `animation_pose`, `assembly_layer_poses`,
+    `part_placements_layered`, then IK); `pose_each` and `posed_joint_world` call it, so a socket cannot
+    disagree with the part it rides. `posed_joint_world` accepts an assembly and a part name (an unknown part
+    is `Ok(None)`) and meshes the parts once per path on the first host read.
+44. **Diagnostics widen, no new codes.** `L1318` is "not a skinned mesh or an assembly" and `L1319` an unknown
+    part, its help naming the nearest part; `assembly_part`, `voxel` and primitive parents stay `L1318`.
+    Non-goals: IK targets naming a socket part (decision 39 stays deferred), and sockets on `assembly_part`
+    entities and prefab parts (trigger: a consumer asks).
+
 ## Waves
 
 - **W1 (shipped).** Masks, `AnimationLayers`, composition in extract's `Skin` phase, `L1670`–`L1672`, docs.
@@ -290,10 +353,12 @@ share one driver shape.
 - **W2d (shipped).** The gallery humanoid, `assembly-layers.yaml` and two goldens (macOS twins owed).
 - **W3.** `AnimGraph` and `AnimGraphState` (decision 9).
 - **W4a (shipped).** The `ik:` key, `IkTargets`, look-at and two-part IK in extract (decisions 36–39).
-- **W4b.** `check-scene` lists `ik:`, `render --model --look/--ik`, `GoldenTest`, and the look-at-at-its-yaw-limit golden.
-- **Part sockets** (request 0007 item 0, after W4b). `ParentJoint` naming an assembly part, a child composing
-  on that part's final drawn pose (after layers and IK), and `posed_joint_world` for assemblies. Lifts
-  decision 39's socket-part deferral.
+- **W4b (shipped).** `check-scene` lists `ik:`, `render --model --look/--ik`, `GoldenTest.look`/`ik`, and the
+  look-at-at-its-yaw-limit golden (decision 40; macOS twin owed).
+- **Part sockets (shipped 2026-11-19).** `ParentJoint` naming an assembly part, a child composing
+  on that part's final drawn pose (after layers and IK), and `posed_joint_world` for assemblies (decisions
+  41–44; the macOS twin of the `assembly-socket` golden is owed to the M4). Lifts decision 39's socket-part
+  deferral for assembly parts.
 - **W5.** Ground feet, the bench, profile counters (decision 11).
 - **W6.** Root motion import and `root_motion_delta` (decision 12).
 
@@ -305,6 +370,10 @@ share one driver shape.
   are sim reads of clip data (the trade decision 15 made for events).
 - The `AnimGraph` helper against `animation-clips` decision 4 and `voxel-animation` decision 6 (no state
   machine asset): it is Rust, not data.
+- Lifting `voxel-animation`'s deferral "Assembly parts and prefab parts as socket targets" for assembly parts
+  (prefab parts stay deferred).
+- A socketed prop's collider and every sim read follow the **rest** socket, not the animated part; posed-sim
+  sockets would need the pose in the sim (amending `animation-clips` decision 2).
 - The W5 budget (≤0.5 ms for 32 characters).
 - `animation-clips` decision 10's merge trigger fired (a character feature assemblies also want); merging
   `kind: character` and `kind: assembly` is not done here — Proposed, owner ruling owed.

@@ -214,6 +214,23 @@ fn humanoid_locomotion_blend_strip_test() -> GoldenTest {
     test
 }
 
+/// The gallery humanoid's `look` look-at swept from yaw 0 to 100 over six phases (0, 20, 40, 60, 80,
+/// 100): the last two cells clamp at the 70° limit, so the head stops while the aim keeps going.
+fn humanoid_look_yaw_limit_strip_test() -> GoldenTest {
+    let mut test = GoldenTest::new(
+        gallery_dir().join("voxels").join("humanoid.assembly.yaml"),
+        os_goldens().join("humanoid-look-yaw-limit-strip.png"),
+    );
+    test.width = 900;
+    test.height = 600;
+    test.clip = Some("idle".to_string());
+    test.time = Some(0.0);
+    test.look = Some("look=0..100,0".to_string());
+    test.strip = Some(6);
+    test.ssim_threshold = 1.0;
+    test
+}
+
 /// The mannequin character crossfading `run` into `idle` over eight phases at `hold: 5`: the fade
 /// steps on the pose grid, so the first two cells repeat.
 fn mannequin_crossfade_hold_test() -> GoldenTest {
@@ -294,6 +311,15 @@ fn needs_gpu_humanoid_locomotion_blend_strip_matches_committed_golden_at_exactly
     check_strip(
         humanoid_locomotion_blend_strip_test(),
         "humanoid_locomotion_blend_strip",
+    );
+}
+
+/// The humanoid's look-at sweep: the head turns to its yaw limit and stays there.
+#[test]
+fn needs_gpu_humanoid_look_yaw_limit_strip_matches_committed_golden_at_exactly_one() {
+    check_strip(
+        humanoid_look_yaw_limit_strip_test(),
+        "humanoid_look_yaw_limit_strip",
     );
 }
 
@@ -415,6 +441,66 @@ fn needs_gpu_sun_cascades_view_matches_committed_golden_at_exactly_one() {
             );
         }
         Err(diagnostics) => panic!("the sun-cascades view render failed: {diagnostics:?}"),
+    }
+}
+
+/// The gallery's `light-exposure.yaml` scene under the `irradiance` view at 960×540: the diffuse
+/// irradiance `light_exposure` is checked against. The discovery pairing covers the normal render.
+fn light_exposure_irradiance_test() -> GoldenTest {
+    let gallery = gallery_dir();
+    let mut test = GoldenTest::new(
+        gallery.join("light-exposure.yaml"),
+        os_goldens().join("light-exposure-irradiance.png"),
+    )
+    .with_debug_view(Some(DebugView::Irradiance));
+    test.ssim_threshold = 1.0;
+    test
+}
+
+/// `light-exposure` under the `irradiance` debug view compares clean against its committed golden at
+/// exactly SSIM 1.0. Under `LUDION_BLESS`, (re)writes the committed golden instead. Skips gracefully
+/// with no GPU adapter.
+#[test]
+fn needs_gpu_light_exposure_irradiance_view_matches_committed_golden_at_exactly_one() {
+    let test = light_exposure_irradiance_test();
+
+    if bless_requested() {
+        match test.bless() {
+            Ok(GoldenOutcome::Blessed { .. }) => {}
+            Ok(_) => unreachable!("bless() only ever returns Blessed"),
+            Err(diagnostics) if is_skip(&diagnostics) => {
+                eprintln!(
+                    "SKIPPED light_exposure_irradiance_view_matches_committed_golden_at_exactly_one (bless): {}",
+                    skip_note(&diagnostics)
+                );
+            }
+            Err(diagnostics) => {
+                panic!("blessing the light-exposure irradiance golden failed: {diagnostics:?}")
+            }
+        }
+        return;
+    }
+
+    let out_dir = scratch_dir("light_exposure_irradiance_out");
+    match test.run(&out_dir) {
+        Ok(GoldenOutcome::Passed { report }) => {
+            assert_eq!(
+                report.ssim,
+                Some(1.0),
+                "the irradiance view render must be byte-identical to its freshly-blessed golden"
+            );
+        }
+        Ok(GoldenOutcome::Failed { report, .. }) => {
+            panic!("the irradiance view golden failed: {}", report.summary)
+        }
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diagnostics) if is_skip(&diagnostics) => {
+            eprintln!(
+                "SKIPPED light_exposure_irradiance_view_matches_committed_golden_at_exactly_one: {}",
+                skip_note(&diagnostics)
+            );
+        }
+        Err(diagnostics) => panic!("the irradiance view render failed: {diagnostics:?}"),
     }
 }
 

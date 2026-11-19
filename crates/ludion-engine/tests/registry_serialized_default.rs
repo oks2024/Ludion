@@ -109,6 +109,12 @@ fn fixtures(name: &str) -> Vec<Value> {
                 "look": { "direction": { "yaw_deg": 30.0 }, "fade": 0.25 },
             } }),
         ],
+        "PoseSnapshot" => vec![
+            json!({}),
+            json!({ "started": 120, "parts": [
+                { "part": "torso", "rotation": [0.0, 0.0, 0.0, 1.0], "translation": [0.0, 1.0, 0.0] },
+            ] }),
+        ],
         "ReflectionProbe" => vec![
             json!({ "shape": { "box": { "extent": [1.0, 1.0, 1.0] } } }),
             json!({ "shape": { "sphere": { "radius": 2.0 } } }),

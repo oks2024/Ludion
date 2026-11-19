@@ -211,6 +211,39 @@ earlier, per gameplay second, so clips, blends, crossfades and layers all count 
 keeps its stumble; a choked one goes limp). It defaults to `false`, which is `switch_to_ragdoll`
 exactly. A clip cut at the switch tick contributes only its own motion, and a rest figure adds none.
 
+**Back to the assembly.** `switch_ragdoll_to_assembly(world, entity, parts, assembly, clip, fade,
+game_time)` folds the parts `switch_to_ragdoll` returned (retired ones too) back into the root: it
+despawns them, re-inserts the root `Mesh`, places the root, and starts `clip` crossfading over `fade`
+seconds **from the fallen pose**, so the first drawn frame is the last ragdoll frame (`fade: 0` cuts).
+`ragdoll_landing(world, entity, parts, assembly)` returns the same `RagdollToAssembly` and changes
+nothing: call it first and pick `get_up_back` or `get_up_front` from `face_up`. The rule: `face_up` is
+the root part's chest pointing up, `root_yaw` (radians, for `resume_character`) turns the entity's
+`-Z` along the head's ground direction, and `feet` is the root part's pivot over the lowest part
+corner (no raycast). The pose lives in a hashed `PoseSnapshot` on the root, outgoing side of the fade
+only while `Animation.from` is empty and `fade_started` matches its `started`; the next `crossfade()`
+or clip cut retires it, and `switch_to_ragdoll` removes it. The game still resumes the motor
+(`resume_character(world, e, feet, root_yaw, None)` leaves the root where it is) or re-inserts a
+`Collider`, from the **next tick** on: the despawned parts leave the physics world on the next step
+and, on the same tick, still block the capsule. `L3036` refuses a bad entity, part list or clip, mutating nothing.
+
+## Sockets on parts
+
+`ParentJoint { joint: <part name> }` under an entity whose `Mesh.shape` is `assembly` attaches a prop to
+that part (a flashlight on `lower-arm-r`, a pistol in a hand). The socket frame is the part's **pivot**, in
+voxel units; the child's `Transform` is local to it and scaled by the assembly entity's `Transform` like
+any child.
+
+- **A socketed prop's collider, `world_transform` and every other sim read follow the part's *rest* socket,
+  not the animated part**, so no `WorldHash` depends on a clip, layer or IK target. The draw follows the
+  part's final pose (clip or blend, crossfade, `hold`, layers, IK), and the prop's descendants ride on it.
+  For the drawn pose from presentation (a projectile's spawn point) use
+  `posed_joint_world(world, assembly, "lower-arm-r", now)`.
+- `L1318`: no `Parent`, or the parent is not a skinned mesh or an assembly (`assembly_part`, `voxel` and
+  primitives are not). `L1319`: `joint` is not a part of the assembly; the help names the nearest part.
+- A `ParentJoint` inserted at runtime under an assembly gains the rest level (it composed as a plain
+  `Parent` before). IK targets cannot name a socket part.
+- Example: `ludion render --scene examples/gallery/assembly-socket.yaml --frames 30 --out assembly-socket.png`.
+
 ## Gotchas
 
 - **`--set`/`--sweep` reach an assembly's `palette:`** exactly as they do a voxel model's; the staged
