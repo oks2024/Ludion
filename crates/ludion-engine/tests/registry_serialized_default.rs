@@ -98,6 +98,17 @@ fn fixtures(name: &str) -> Vec<Value> {
             json!({ "name": "v" }),
             json!({ "name": "v", "size": [64, 32], "enabled": false, "order": -1 }),
         ],
+        "Rain" => vec![
+            json!({}),
+            json!({ "intensity": 0.5, "wind": [1.0, 0.0, 2.0], "seed": 3 }),
+        ],
+        "IkTargets" => vec![
+            json!({}),
+            json!({ "targets": {
+                "hand": { "point": [1.0, 2.0, 3.0], "weight": 0.5 },
+                "look": { "direction": { "yaw_deg": 30.0 }, "fade": 0.25 },
+            } }),
+        ],
         "ReflectionProbe" => vec![
             json!({ "shape": { "box": { "extent": [1.0, 1.0, 1.0] } } }),
             json!({ "shape": { "sphere": { "radius": 2.0 } } }),

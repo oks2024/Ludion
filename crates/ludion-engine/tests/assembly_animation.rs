@@ -58,6 +58,21 @@ parts:
 clips:
   walk: anims/walk.anim.yaml
   raise: anims/raise.anim.yaml
+ik:
+  reach:
+    parts:
+      - body
+      - arm
+    effector:
+      - 0.5
+      - 1.0
+      - 0.5
+    hinge:
+      axis:
+        - 1.0
+        - 0.0
+        - 0.0
+      bend: 1
 ";
 
 /// The `walk` clip: `arm` sweeps 0° → 90° about +X across one looping second. Block-style
@@ -163,6 +178,27 @@ entities:
           assembly: models/fixture.assembly.yaml
 ";
 
+/// One entity walking with an `IkTargets` point on the `reach` chain.
+const IK_SCENE: &str = "format: 1
+seed: 1
+entities:
+  - name: reacher
+    components:
+      Mesh:
+        shape:
+          assembly: models/fixture.assembly.yaml
+      Animation:
+        clip: walk
+      IkTargets:
+        targets:
+          reach:
+            point:
+              - 1.0
+              - 2.0
+              - 1.0
+            weight: 1.0
+";
+
 /// How many parts one fixture assembly contributes to `RenderScene.meshes`.
 const PARTS: usize = 2;
 
@@ -242,7 +278,17 @@ fn extracting_a_crossfading_run_changes_neither_its_hashes_nor_its_recording() {
     assert_extraction_is_hash_neutral("hash-neutral-fade", FADE_SCENE);
 }
 
+/// The same neutrality with an `IkTargets` solving a chain on every extract.
+#[test]
+fn extracting_an_ik_run_changes_neither_its_hashes_nor_its_recording() {
+    assert_extraction_is_hash_neutral_of("hash-neutral-ik", IK_SCENE, PARTS);
+}
+
 fn assert_extraction_is_hash_neutral(name: &str, scene: &str) {
+    assert_extraction_is_hash_neutral_of(name, scene, 3 * PARTS);
+}
+
+fn assert_extraction_is_hash_neutral_of(name: &str, scene: &str, expected_meshes: usize) {
     let root = fixture_project(name);
 
     let run = |tag: &str, extract_each_tick: bool| {
@@ -263,7 +309,7 @@ fn assert_extraction_is_hash_neutral(name: &str, scene: &str) {
             );
             if extract_each_tick {
                 let posed = posed_at(&engine, engine.frame().as_u64());
-                assert_eq!(posed.len(), 3 * PARTS);
+                assert_eq!(posed.len(), expected_meshes);
             }
         }
         engine.stop_recording().expect("recording stops");

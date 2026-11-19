@@ -147,6 +147,8 @@ pub(crate) fn world_key(
         viewmodel: _,
         // `face_scene` clears the secondary views: a capture draws one world, never a nested view
         views: _,
+        // `face_scene` drops the rain: a probe capture draws the world without weather.
+        rain: _,
     } = face_scene;
 
     let mut w = KeyWriter(Vec::new());

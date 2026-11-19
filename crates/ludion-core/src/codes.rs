@@ -634,6 +634,18 @@ pub mod code {
     pub const DIALOGUE_LINE_INVALID: DiagnosticCode = DiagnosticCode::new("L1717");
     /// `L1718` — a `kind: strings` doc has an empty `locale`.
     pub const STRINGS_LOCALE_INVALID: DiagnosticCode = DiagnosticCode::new("L1718");
+    /// `L1730` — a `kind: sequence` doc is structurally invalid: `length_ticks` 0, a key past the
+    /// length or out of order, a camera key with neither or both of `rig`/`restore`, or a
+    /// non-finite number.
+    pub const SEQUENCE_INVALID: DiagnosticCode = DiagnosticCode::new("L1730");
+    /// `L1731` — a sequence key names a role the doc does not declare, a role is declared twice, or a
+    /// camera, animation or ui key has no role.
+    pub const SEQUENCE_UNKNOWN_ROLE: DiagnosticCode = DiagnosticCode::new("L1731");
+    /// `L1732` — a sequence `event` key has an empty name or the reserved name `end`.
+    pub const SEQUENCE_EVENT_NAME: DiagnosticCode = DiagnosticCode::new("L1732");
+    /// `L1733` — a sequence `dialogue` key names a line no loaded `kind: dialogue` doc defines, or
+    /// the game did not opt in with `.dialogue()`.
+    pub const SEQUENCE_UNKNOWN_LINE: DiagnosticCode = DiagnosticCode::new("L1733");
     /// `L4340` — the settings file could not be loaded, so the engine backed it up and started from
     /// defaults.
     pub const SETTINGS_RESET: DiagnosticCode = DiagnosticCode::new("L4340");
@@ -645,6 +657,19 @@ pub mod code {
     pub const SETTINGS_VALUE_CLAMPED: DiagnosticCode = DiagnosticCode::new("L4342");
     /// `L4343` — the settings file could not be written at a frame boundary.
     pub const SETTINGS_SAVE_FAILED: DiagnosticCode = DiagnosticCode::new("L4343");
+    /// `L4350` — `sequences::play` named a document no loaded `kind: sequence` defines.
+    pub const SEQUENCE_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L4350");
+    /// `L4351` — `sequences::play` bound a role the document does not declare, or bound one twice.
+    pub const SEQUENCE_BIND_INVALID: DiagnosticCode = DiagnosticCode::new("L4351");
+    /// `L4352` — a declared role was left unbound or its entity is dead, so its keys are inert. A
+    /// warning, once per player and role.
+    pub const SEQUENCE_ROLE_MISSING: DiagnosticCode = DiagnosticCode::new("L4352");
+    /// `L4353` — a sequence key degraded at run time: the role entity lacks the component the key
+    /// writes, a dialogue line was refused, or the document vanished mid-play. A warning, once per
+    /// player and reason.
+    pub const SEQUENCE_KEY_DEGRADED: DiagnosticCode = DiagnosticCode::new("L4353");
+    /// `L4354` — a `sequences::` call reached an engine that did not opt in with `.sequences()`.
+    pub const SEQUENCES_NOT_ENABLED: DiagnosticCode = DiagnosticCode::new("L4354");
 
     /// `L1122` — a saved player profile could not be written to disk at a frame boundary. The engine
     /// stages the canonical text to a hidden `.tmp` sibling, syncs it to disk and renames it over
@@ -1322,6 +1347,11 @@ pub mod code {
     /// `L1672` — a `SkinBone`-driven skin carries an `AnimationLayers`: its pose comes from the
     /// parts, so layers have nothing to compose over. Raised once per skin.
     pub const ANIMATION_LAYERS_ON_SKIN_BONE_SKIN: DiagnosticCode = DiagnosticCode::new("L1672");
+
+    /// `L1673` — an `IkTargets` target is invalid: not exactly one of `point` or
+    /// `direction`, a `weight` or `from_weight` outside `[0, 1]`, a negative or non-finite `fade`, or
+    /// a non-finite number. Pointed at `/targets/<name>/<field>`.
+    pub const IK_TARGET_INVALID: DiagnosticCode = DiagnosticCode::new("L1673");
 
     /// `L1201` — a glTF input could not be read or parsed: the file is unreadable, or its bytes are
     /// not a valid `.gltf`/`.glb` document (bad JSON, a failed structural validation, or a buffer/
@@ -2203,6 +2233,15 @@ pub mod code {
 
     /// `L2374` — more than 4 `RenderView`s are enabled; the extras are not rendered. Raised by extract.
     pub const RENDER_VIEW_BUDGET: DiagnosticCode = DiagnosticCode::new("L2374");
+
+    /// `L2380` — a `Rain` field is non-finite or out of range.
+    pub const RAIN_INVALID: DiagnosticCode = DiagnosticCode::new("L2380");
+
+    /// `L2381` — more than one `Rain` is in the scene; the lowest entity id is used.
+    pub const RAIN_DUPLICATE: DiagnosticCode = DiagnosticCode::new("L2381");
+
+    /// `L2382` — a `Rain` asks for more streaks than the budget; the per-tile count is clamped.
+    pub const RAIN_STREAK_BUDGET: DiagnosticCode = DiagnosticCode::new("L2382");
 
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
@@ -7708,6 +7747,23 @@ Raised once per skin, pointed at that skin entity's `AnimationLayers` component.
 Fix: remove `AnimationLayers` from the skin, or remove every `SkinBone` part that names it.",
     },
     CodeEntry {
+        code: code::IK_TARGET_INVALID,
+        severity: Severity::Error,
+        title: "an IkTargets target is invalid",
+        explanation: "\
+One target of an `IkTargets` component holds a value the IK pass cannot use. One of:
+
+  - it sets none, or both, of `point` and `direction`;
+  - `weight` or `from_weight` is outside `[0, 1]` or not finite;
+  - `fade` is negative or not finite;
+  - a `point` or `direction` number is not finite.
+
+Pointed at `/targets/<name>/<field>`.
+
+Fix: set exactly one of `point` or `direction`, keep weights in `[0, 1]`, and keep `fade`
+finite and non-negative.",
+    },
+    CodeEntry {
         code: code::IMPORT_INVALID_GLTF,
         severity: Severity::Error,
         title: "glTF input is unreadable or invalid",
@@ -10966,6 +11022,36 @@ each further one is skipped and a `UiRect` that shows it draws nothing. Raised o
 Fix: disable views that are not on screen (`enabled: false`) or merge them.",
     },
     CodeEntry {
+        code: code::RAIN_INVALID,
+        severity: Severity::Error,
+        title: "Rain field out of range",
+        explanation: "A `Rain` field is non-finite or outside its range (the JSON Pointer names the field). `intensity`,
+`gust`, `medium` and each `color` channel take [0, 1]; `density` (0, 16]; `radius` [2, 64]; `cell` [1, 8];
+`height` is `[low, high]` with low < high and a span of at most 64; `fall_speed` is `[min, max]` with
+0 < min <= max <= 40; `wind.y` must be 0 and |x|, |z| at most 20; `drop_width` (0, 0.05]; `streak` [0, 8].
+
+Fix: bring the field into range; `ludion docs weather` lists every field.",
+    },
+    CodeEntry {
+        code: code::RAIN_DUPLICATE,
+        severity: Severity::Warning,
+        title: "more than one Rain",
+        explanation: "More than one entity carries a `Rain`. Rain is a singleton: the lowest entity id is used and each
+further one is ignored. Raised by extract and by check-scene.
+
+Fix: keep one `Rain` entity.",
+    },
+    CodeEntry {
+        code: code::RAIN_STREAK_BUDGET,
+        severity: Severity::Warning,
+        title: "Rain exceeds the streak budget",
+        explanation: "`density * intensity * cell^3` streaks per tile, over the tiles around the camera, exceeds the
+65,536-streak ceiling. The per-tile count is clamped so the total fits; the rain is thinner than authored. Raised once
+per load by extract and by check-scene.
+
+Fix: lower `density`, `radius` or the `height` span.",
+    },
+    CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
         severity: Severity::Error,
         title: "golden image is missing",
@@ -13389,6 +13475,103 @@ there is no config, no bank and no queue.
 Fix: add `.dialogue(DialogueConfig::default())` to `Engine::builder()`.",
     },
     CodeEntry {
+        code: code::SEQUENCE_INVALID,
+        severity: Severity::Error,
+        title: "a sequence document is invalid",
+        explanation: "\
+A `kind: sequence` document breaks a structural rule (pointer `/tracks/{track}/{n}/...`): `length_ticks`
+is 0, a key's `at` is past `length_ticks`, the keys of one track are not in `at` order, a camera key
+has neither or both of `rig` and `restore`, or a `fade`, `gain` or `range` is not finite. The build
+refuses it.
+
+Fix: put the keys of each track in ascending `at` order inside `0..=length_ticks`, give each camera
+key exactly one of `rig:` or `restore: true`, and use finite numbers.",
+    },
+    CodeEntry {
+        code: code::SEQUENCE_UNKNOWN_ROLE,
+        severity: Severity::Error,
+        title: "a sequence key names an unknown role",
+        explanation: "\
+A sequence key's `role` is not in the document's `roles:` list, a role is declared twice, or a
+camera, animation or ui key carries no `role` at all. Roles are how the game binds entities to a
+beat, so a key with no declared role could never play.
+
+Fix: declare the role under `roles:` and spell it the same in the key, and give every camera,
+animation and ui key a `role`.",
+    },
+    CodeEntry {
+        code: code::SEQUENCE_EVENT_NAME,
+        severity: Severity::Error,
+        title: "a sequence event has an invalid name",
+        explanation: "\
+An `event` key has an empty `name`, or the reserved name `end` (the engine's own `Ended` event).
+
+Fix: give the event a non-empty name other than `end`, such as `radar_online`.",
+    },
+    CodeEntry {
+        code: code::SEQUENCE_UNKNOWN_LINE,
+        severity: Severity::Error,
+        title: "a sequence dialogue key names an unknown line",
+        explanation: "\
+A `dialogue` key names a line id no loaded `kind: dialogue` doc defines, or the game never opted in
+to dialogue with `.dialogue()`, so no line can be said.
+
+Fix: check the id against the `lines:` of your dialogue docs, and add `.dialogue(..)` to the
+engine builder.",
+    },
+    CodeEntry {
+        code: code::SEQUENCE_UNKNOWN,
+        severity: Severity::Error,
+        title: "no such sequence is loaded",
+        explanation: "\
+`sequences::play` was given a key that no loaded `kind: sequence` document has. A sequence is keyed
+by its path under the content root, such as `sequences/radar.yaml`.
+
+Fix: pass the document's content-root path exactly.",
+    },
+    CodeEntry {
+        code: code::SEQUENCE_BIND_INVALID,
+        severity: Severity::Error,
+        title: "a sequence binding is invalid",
+        explanation: "\
+`sequences::play` bound a role the document does not declare under `roles:`, or bound one role to
+two entities. Nothing was started.
+
+Fix: bind each declared role at most once, spelled as in the document.",
+    },
+    CodeEntry {
+        code: code::SEQUENCE_ROLE_MISSING,
+        severity: Severity::Warning,
+        title: "a sequence role has no live entity",
+        explanation: "\
+A role the document declares was left unbound by `play`, or its entity has despawned, so every key
+of that role is inert. Reported once per player and role; the rest of the sequence plays.
+
+Fix: bind every role the beat uses, and keep the entity alive until the beat ends.",
+    },
+    CodeEntry {
+        code: code::SEQUENCE_KEY_DEGRADED,
+        severity: Severity::Warning,
+        title: "a sequence key degraded",
+        explanation: "\
+A key could not do its job at run time: the role entity lacks the component the key writes
+(`CameraRig`, `Animation`), a `dialogue::say` was refused, or the document was unloaded while the
+sequence played (the sequence is cancelled). Reported once per player and reason; the other keys
+play.
+
+Fix: put the component on the bound entity, fix the line, and keep the document loaded.",
+    },
+    CodeEntry {
+        code: code::SEQUENCES_NOT_ENABLED,
+        severity: Severity::Error,
+        title: "sequences are not enabled",
+        explanation: "\
+A `sequences::play` call reached an engine that did not opt in, so there is no `kind: sequence`
+document type and no player system data.
+
+Fix: add `.sequences()` to `Engine::builder()` and schedule `sequence_update`.",
+    },
+    CodeEntry {
         code: code::PROTOCOL_CALL_TIMED_OUT,
         severity: Severity::Error,
         title: "a call timed out waiting for its reply",
@@ -13785,6 +13968,7 @@ mod tests {
         code::ANIMATION_LAYERS_TOO_MANY,
         code::ANIMATION_LAYER_INVALID,
         code::ANIMATION_LAYERS_ON_SKIN_BONE_SKIN,
+        code::IK_TARGET_INVALID,
         code::IMPORT_INVALID_GLTF,
         code::IMPORT_UNSUPPORTED_FEATURE,
         code::IMPORT_OUTPUT_IO,
@@ -14010,6 +14194,9 @@ mod tests {
         code::UI_RECT_VIEW_UNRESOLVED,
         code::UI_RECT_VIEW_CONFLICT,
         code::RENDER_VIEW_BUDGET,
+        code::RAIN_INVALID,
+        code::RAIN_DUPLICATE,
+        code::RAIN_STREAK_BUDGET,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,
@@ -14156,6 +14343,15 @@ mod tests {
         code::STRING_ARG_MISSING,
         code::DIALOGUE_SEQUENCE_INVALID,
         code::DIALOGUE_NOT_ENABLED,
+        code::SEQUENCE_INVALID,
+        code::SEQUENCE_UNKNOWN_ROLE,
+        code::SEQUENCE_EVENT_NAME,
+        code::SEQUENCE_UNKNOWN_LINE,
+        code::SEQUENCE_UNKNOWN,
+        code::SEQUENCE_BIND_INVALID,
+        code::SEQUENCE_ROLE_MISSING,
+        code::SEQUENCE_KEY_DEGRADED,
+        code::SEQUENCES_NOT_ENABLED,
     ];
 
     #[test]
@@ -14369,6 +14565,8 @@ mod tests {
             code::OCCLUDED_SILHOUETTE_STYLE_LIMIT,
             code::MESH_BLEND_ON_VIEWMODEL,
             code::RENDER_VIEW_BUDGET,
+            code::RAIN_DUPLICATE,
+            code::RAIN_STREAK_BUDGET,
             code::TRANSITION_CARRY_DEAD,
             code::TRANSITION_CARRY_ORPHANED,
             code::RESTORE_ENGINE_VERSION_DIFFERS,
@@ -14402,6 +14600,8 @@ mod tests {
             code::STRING_FELL_BACK,
             code::STRING_MISSING,
             code::STRING_ARG_MISSING,
+            code::SEQUENCE_ROLE_MISSING,
+            code::SEQUENCE_KEY_DEGRADED,
             code::SERVER_EVENTS_DROPPED,
         ];
         let registered: Vec<DiagnosticCode> = CODES

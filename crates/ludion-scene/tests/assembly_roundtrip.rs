@@ -150,6 +150,7 @@ fn assembly_doc() -> impl Strategy<Value = AssemblyDocument> {
                 joints: Vec::new(),
                 masks: Vec::new(),
                 blends: Vec::new(),
+                ik: Vec::new(),
             }
         })
 }
@@ -343,6 +344,7 @@ fn empty_collections_use_flow_empties() {
         joints: Vec::new(),
         masks: Vec::new(),
         blends: Vec::new(),
+        ik: Vec::new(),
     };
     let text = emit_assembly(&doc);
     assert_eq!(

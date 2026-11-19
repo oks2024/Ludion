@@ -60,7 +60,10 @@ use std::sync::Arc;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_renderer::MeshData;
-use ludion_scene::{AnimationDocument, AssemblyDocument, AssemblyPartEntry, PartDocument};
+use ludion_scene::{
+    AnimationDocument, AssemblyDocument, AssemblyJointKind, AssemblyPartEntry, IkHinge, IkKind,
+    PartDocument,
+};
 
 use crate::asset_cache::{SourceFiles, fold_source_hashes};
 use crate::blend_space::{BlendSpaceData, BoundClip, resolve_blends};
@@ -129,6 +132,47 @@ pub struct AssemblyData {
     /// The assembly's `blends:`, sorted by name, each resolved against the bound clips (speed 1, a
     /// clip's own events). Pose data like clips: outside the mesh content hash.
     pub blends: Vec<BlendSpaceData>,
+    /// The assembly's `ik:` chains and look-ats, sorted by name, resolved against the parts, masks
+    /// and joints. Pose data like clips: outside the mesh content hash.
+    pub ik: Vec<AssemblyIkData>,
+}
+
+/// One `ik:` entry resolved against the assembly (`Plan/animation-layers.md` decision 37).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssemblyIkData {
+    /// The name an `IkTargets` target selects by.
+    pub name: String,
+    /// The chain or look-at.
+    pub kind: AssemblyIkKind,
+}
+
+/// What a resolved `ik:` entry solves.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AssemblyIkKind {
+    /// A two-part chain.
+    Chain {
+        /// The upper and lower part indices into [`AssemblyData::parts`]; the lower is a child of
+        /// the upper.
+        parts: [usize; 2],
+        /// The effector relative to the lower part's mesh origin (the [`AssemblyPartData::pivot`]
+        /// frame, already mirrored for a `mirror: x` part).
+        effector: [f64; 3],
+        /// The flex axis in the upper part's frame.
+        axis: [f64; 3],
+        /// `1` or `-1`: the sign of the flex the target's distance asks for.
+        bend: f64,
+        /// The flex limits in degrees, `[min, max]`; `None` is unlimited.
+        limits: Option<[f64; 2]>,
+    },
+    /// A look-at.
+    LookAt {
+        /// One weight per part from the `aim` mask, in authored order.
+        weights: Vec<f32>,
+        /// The facing direction in the assembly frame.
+        forward: [f64; 3],
+        /// The yaw and pitch limits in degrees.
+        limits_deg: [f64; 2],
+    },
 }
 
 /// One part mask resolved against the assembly's parts (`Plan/animation-layers.md` decision 26).
@@ -455,7 +499,7 @@ pub fn mesh_assembly(
         .iter()
         .map(|part| (part.name.as_str(), part.parent.map(|p| p as u32)))
         .collect();
-    let masks = assembly
+    let masks: Vec<AssemblyMaskData> = assembly
         .masks
         .iter()
         .map(|mask| AssemblyMaskData {
@@ -489,9 +533,92 @@ pub fn mesh_assembly(
             })
             .collect(),
         joints: assembly.joints.clone(),
+        ik: resolve_ik(assembly, &masks, parts),
         masks,
         blends,
     }
+}
+
+/// Resolves the `ik:` entries against the meshed parts, masks and joints. An entry naming an
+/// unknown part or mask is skipped: validation reports it, and a resolver never sees one.
+fn resolve_ik(
+    assembly: &AssemblyDocument,
+    masks: &[AssemblyMaskData],
+    parts: &[PartDocument],
+) -> Vec<AssemblyIkData> {
+    let index = |name: &str| assembly.parts.iter().position(|p| p.name == name);
+    assembly
+        .ik
+        .iter()
+        .filter_map(|entry| {
+            let kind = match &entry.kind {
+                IkKind::Chain {
+                    parts: names,
+                    effector,
+                    hinge,
+                } => {
+                    let upper = index(&names[0])?;
+                    let lower = index(&names[1])?;
+                    let (axis, bend, limits) =
+                        resolve_hinge(assembly, hinge.as_ref(), &assembly.parts[lower].name);
+                    AssemblyIkKind::Chain {
+                        parts: [upper, lower],
+                        effector: point_in_part_mesh(
+                            &assembly.parts[lower],
+                            *effector,
+                            parts[lower].size,
+                        )
+                        .map(f64::from),
+                        axis,
+                        bend,
+                        limits,
+                    }
+                }
+                IkKind::LookAt {
+                    aim,
+                    forward,
+                    limits_deg,
+                } => AssemblyIkKind::LookAt {
+                    weights: masks
+                        .iter()
+                        .find(|mask| &mask.name == aim)
+                        .map(|mask| mask.weights.clone())?,
+                    forward: *forward,
+                    limits_deg: *limits_deg,
+                },
+            };
+            Some(AssemblyIkData {
+                name: entry.name.clone(),
+                kind,
+            })
+        })
+        .collect()
+}
+
+/// A chain's hinge: the authored `hinge:`, else the lower part's `joints:` hinge (its axis and
+/// limits; the bend from the naming convention), else the humanoid convention (axis +X; knee −X,
+/// elbow +X — `docs/voxel-assemblies.md`).
+fn resolve_hinge(
+    assembly: &AssemblyDocument,
+    authored: Option<&IkHinge>,
+    lower: &str,
+) -> ([f64; 3], f64, Option<[f64; 2]>) {
+    let convention_bend = if lower.starts_with("lower-leg-") {
+        -1.0
+    } else {
+        1.0
+    };
+    if let Some(hinge) = authored {
+        return (hinge.axis, f64::from(hinge.bend), None);
+    }
+    for joint in &assembly.joints {
+        if joint.part == lower
+            && let AssemblyJointKind::Hinge { axis, limits } = &joint.kind
+        {
+            return (*axis, convention_bend, *limits);
+        }
+    }
+    ([1.0, 0.0, 0.0], convention_bend, None)
 }
 
 /// The part mesh origin's rest position in the assembly frame — the module doc's `offset` formula.
@@ -508,7 +635,13 @@ fn rest_offset(assembly_size: [u32; 3], place: [u32; 3], part_size: [u32; 3]) ->
 /// The authored pivot relative to the part mesh origin — the module doc's `pivot` formula, taking
 /// the mirrored frame from [`AssemblyPartEntry::pivot_in_mesh_frame`] rather than branching here.
 fn pivot_in_part_mesh(entry: &AssemblyPartEntry, part_size: [u32; 3]) -> [f32; 3] {
-    let [px, py, pz] = entry.pivot_in_mesh_frame(part_size[0]);
+    point_in_part_mesh(entry, entry.pivot, part_size)
+}
+
+/// A part-local, unmirrored voxel point relative to the part mesh origin, through
+/// [`AssemblyPartEntry::point_in_mesh_frame`].
+fn point_in_part_mesh(entry: &AssemblyPartEntry, point: [f64; 3], part_size: [u32; 3]) -> [f32; 3] {
+    let [px, py, pz] = entry.point_in_mesh_frame(point, part_size[0]);
     [
         px - f64::from(part_size[0]) * 0.5,
         py,
@@ -604,6 +737,7 @@ mod tests {
             joints: Vec::new(),
             masks: Vec::new(),
             blends: Vec::new(),
+            ik: Vec::new(),
         }
     }
 
@@ -854,6 +988,79 @@ mod tests {
         // about the part's own center, not the authored value reused.
         assert_eq!(mirrored.pivot, [0.5, 0.0, 0.0]);
         assert_eq!(mirrored.parent, Some(0));
+    }
+
+    fn ik_rig(lower: &str, mirror: bool, hinge: Option<IkHinge>) -> AssemblyDocument {
+        let upper = part_entry("upper-arm-r", [0, 0, 0]);
+        let mut low = part_entry(lower, [2, 0, 0]);
+        low.parent = Some("upper-arm-r".to_string());
+        low.mirror_x = mirror;
+        let mut doc = assembly_doc([4, 1, 1], vec![upper, low]);
+        doc.ik = vec![ludion_scene::IkEntry {
+            name: "hand".to_string(),
+            kind: IkKind::Chain {
+                parts: ["upper-arm-r".to_string(), lower.to_string()],
+                effector: [1.5, 0.0, 0.5],
+                hinge,
+            },
+        }];
+        doc
+    }
+
+    fn resolved_chain(doc: &AssemblyDocument) -> ([f64; 3], [f64; 3], f64, Option<[f64; 2]>) {
+        let limb = part_doc([2, 1, 1], &[&["AA"]]);
+        let data = mesh_assembly(doc, &[limb.clone(), limb], &[], 1);
+        let AssemblyIkKind::Chain {
+            effector,
+            axis,
+            bend,
+            limits,
+            ..
+        } = data.ik[0].kind.clone()
+        else {
+            panic!("a chain");
+        };
+        (effector, axis, bend, limits)
+    }
+
+    #[test]
+    fn a_mirrored_part_resolves_its_effector_in_the_mesh_frame() {
+        let (plain, ..) = resolved_chain(&ik_rig("lower-arm-r", false, None));
+        // 1.5 − sx/2 (1) on x, 0.5 − sz/2 (0.5) on z.
+        assert_eq!(plain, [0.5, 0.0, 0.0]);
+        let (mirrored, ..) = resolved_chain(&ik_rig("lower-arm-r", true, None));
+        // The mirrored-frame point is sx − 1.5 = 0.5, so 0.5 − 1 = −0.5.
+        assert_eq!(mirrored, [-0.5, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn the_hinge_comes_from_the_entry_then_the_joint_then_the_convention() {
+        let authored = IkHinge {
+            axis: [0.0, 0.0, 1.0],
+            bend: -1,
+        };
+        let (_, axis, bend, limits) = resolved_chain(&ik_rig("lower-arm-r", false, Some(authored)));
+        assert_eq!((axis, bend, limits), ([0.0, 0.0, 1.0], -1.0, None));
+
+        let mut jointed = ik_rig("lower-arm-r", false, None);
+        jointed.joints = vec![ludion_scene::AssemblyJoint {
+            part: "lower-arm-r".to_string(),
+            kind: AssemblyJointKind::Hinge {
+                axis: [0.0, 1.0, 0.0],
+                limits: Some([0.0, 120.0]),
+            },
+            break_impulse: None,
+        }];
+        let (_, axis, bend, limits) = resolved_chain(&jointed);
+        assert_eq!(
+            (axis, bend, limits),
+            ([0.0, 1.0, 0.0], 1.0, Some([0.0, 120.0]))
+        );
+
+        let (_, axis, bend, limits) = resolved_chain(&ik_rig("lower-arm-r", false, None));
+        assert_eq!((axis, bend, limits), ([1.0, 0.0, 0.0], 1.0, None));
+        let (_, axis, bend, _) = resolved_chain(&ik_rig("lower-leg-r", false, None));
+        assert_eq!((axis, bend), ([1.0, 0.0, 0.0], -1.0));
     }
 
     /// A one-part assembly whose grid *is* the assembled grid, placed at the origin, meshes exactly

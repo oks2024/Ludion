@@ -1,0 +1,143 @@
+# Feature: surface tags, seen through the `surfaces` debug-draw category (goldens/manifest.json
+# renders it with `debug_draw: ["surfaces"]` after 2 ticks). Every collider outline is tinted by the
+# surface a hit there reports: a concrete floor with a metal_grate band (each triangle drawn inset,
+# so the two regions stay apart), a puddle overlay that tints the floor under it, a static crate
+# whose second part is metal_grate over a wood tag, a wood ball above the grating, and the walking
+# hero (default surface: concrete). Palette by declared index: concrete yellow, metal_grate magenta,
+# puddle cyan, wood green (docs/debug-draw.md).
+format: 1
+name: "surface-tags - debug draw: surfaces over a two-tag floor, a puddle and a crate"
+physics:
+  space: free
+  surfaces:
+    - concrete
+    - metal_grate
+    - puddle
+    - wood
+  default_surface: concrete
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.0
+          - 7.0
+        rotation:
+          - -42.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: sun
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.45
+          - -0.75
+          - -0.5
+        color:
+          - 1.0
+          - 0.96
+          - 0.86
+        intensity: 1.1
+  - name: floor
+    components:
+      Transform: {}
+      Mesh:
+        shape:
+          asset: meshes/surface-floor.mesh.yaml
+        color:
+          - 0.16
+          - 0.19
+          - 0.23
+          - 1.0
+      Collider:
+        shape:
+          mesh:
+            path: meshes/surface-floor.mesh.yaml
+        body: static
+  - name: puddle
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 0.0
+          - 0.5
+      Collider:
+        shape:
+          cylinder:
+            half_height: 0.05
+            radius: 0.6
+        body: static
+        sensor: true
+      SurfaceOverlay:
+        surface: puddle
+        priority: 10
+  - name: crate
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.5
+          - -1.2
+      Collider:
+        shape:
+          compound:
+            parts:
+              - shape:
+                  box:
+                    half_extents:
+                      - 0.3
+                      - 0.5
+                      - 0.5
+                translation:
+                  - -0.3
+                  - 0.0
+                  - 0.0
+              - shape:
+                  box:
+                    half_extents:
+                      - 0.3
+                      - 0.5
+                      - 0.5
+                translation:
+                  - 0.3
+                  - 0.0
+                  - 0.0
+        body: static
+      SurfaceTag:
+        surface: wood
+        parts:
+          - part: 1
+            surface: metal_grate
+  - name: ball
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 0.8
+          - -0.2
+      Collider:
+        shape:
+          sphere:
+            radius: 0.25
+        body:
+          rigid:
+            mass: 1.0
+      Velocity: {}
+      SurfaceTag:
+        surface: wood
+  - name: hero
+    components:
+      Transform:
+        translation:
+          - -3.475
+          - 0.0
+          - 0.5
+      CharacterMotor:
+        radius: 0.28
+        height: 0.9

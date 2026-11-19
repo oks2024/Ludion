@@ -1,0 +1,535 @@
+//! The `kind: sequence` document and its validation pass (`L1730`–`L1733`).
+
+use std::collections::BTreeSet;
+
+use ludion_camera::RigConfig;
+use ludion_components::ui::UiTweenTrack;
+use ludion_core::codes::code;
+use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
+use ludion_ecs::{SemanticValidate, World};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::dialogue::DialogueDoc;
+use crate::docs::DocStore;
+
+/// The `kind:` of a sequence document.
+pub(crate) const SEQUENCE_KIND: &str = "sequence";
+
+/// The reserved event name: the engine's own `Ended`.
+const RESERVED_EVENT: &str = "end";
+
+/// Which clock a sequence's `at` ticks count on.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SequenceClock {
+    /// The gameplay clock: a `GameClock` hold or time scale stretches the beat (default).
+    #[default]
+    Game,
+    /// The sim clock: runs through a hold, one `at` per tick whatever the scale.
+    Sim,
+}
+
+/// A linear timeline of keys (`kind: sequence`), played by [`play`](super::play).
+///
+/// ```yaml
+/// format: 1
+/// kind: sequence
+/// roles:
+///   - camera
+///   - radar
+/// length_ticks: 120
+/// tracks:
+///   camera:
+///     - at: 120
+///       role: camera
+///       restore: true
+///   event:
+///     - at: 60
+///       name: radar_online
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SequenceDoc {
+    /// The roles a game binds entities to, unique.
+    #[serde(default)]
+    pub roles: Vec<String>,
+    /// The beat's length in ticks, at least 1; it ends on the tick the playhead reaches it.
+    pub length_ticks: u32,
+    /// The clock `at` counts on (default `game`).
+    #[serde(default)]
+    pub clock: SequenceClock,
+    /// Whether [`skip`](super::skip) may cut the beat to its end state (default `true`).
+    #[serde(default = "yes")]
+    pub skippable: bool,
+    /// The keys, one list per track.
+    #[serde(default)]
+    pub tracks: SequenceTracks,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// A sequence's six track lists; each is in ascending `at` order.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SequenceTracks {
+    /// Writes a role's `CameraRig`.
+    #[serde(default)]
+    pub camera: Vec<CameraKey>,
+    /// Crossfades a role's `Animation`.
+    #[serde(default)]
+    pub animation: Vec<AnimationKey>,
+    /// Writes a role's `UiTween`.
+    #[serde(default)]
+    pub ui: Vec<UiKey>,
+    /// Plays a one-shot sound.
+    #[serde(default)]
+    pub audio: Vec<AudioKey>,
+    /// Says a dialogue line.
+    #[serde(default)]
+    pub dialogue: Vec<DialogueKey>,
+    /// Emits a named event.
+    #[serde(default)]
+    pub event: Vec<EventKey>,
+}
+
+/// One camera key: exactly one of `rig` and `restore`.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CameraKey {
+    /// The tick, counted from the start, the key applies on.
+    pub at: u32,
+    /// The role whose `CameraRig` it writes.
+    #[serde(default)]
+    pub role: String,
+    /// The rig to write; the first one saves the role's current rig for `restore`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rig: Option<RigConfig>,
+    /// Writes the saved rig back (default `false`).
+    #[serde(default)]
+    pub restore: bool,
+    /// Cuts to the pose instead of blending (default `false`).
+    #[serde(default)]
+    pub snap: bool,
+}
+
+/// One animation key.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AnimationKey {
+    /// The tick the key applies on.
+    pub at: u32,
+    /// The role whose `Animation` it crossfades.
+    #[serde(default)]
+    pub role: String,
+    /// The clip to fade to.
+    pub clip: String,
+    /// Crossfade seconds; `0` is a hard cut (default `0`).
+    #[serde(default)]
+    pub fade: f32,
+}
+
+/// One ui key.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct UiKey {
+    /// The tick the key applies on.
+    pub at: u32,
+    /// The role whose `UiTween` it writes.
+    #[serde(default)]
+    pub role: String,
+    /// The tracks; each `start` is a frame offset after the key applies, on the track's own clock.
+    pub tracks: Vec<UiTweenTrack>,
+}
+
+/// One audio key: a one-shot.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AudioKey {
+    /// The tick the key applies on.
+    pub at: u32,
+    /// The sound, a path relative to the content root.
+    pub play: String,
+    /// Linear gain (default `1.0`).
+    #[serde(default = "one")]
+    pub gain: f32,
+    /// Plays positionally at this role's entity (default: not positional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// The positional falloff range in metres (default `10.0`, the `AudioEmitter` default).
+    #[serde(default = "ten")]
+    pub range: f32,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+fn ten() -> f32 {
+    10.0
+}
+
+/// One dialogue key.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DialogueKey {
+    /// The tick the key applies on.
+    pub at: u32,
+    /// The line id in a `kind: dialogue` doc.
+    pub line: String,
+    /// The role whose entity speaks it (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+}
+
+/// What a skip does with an unfired event.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OnSkip {
+    /// Fires it, in order, at the skip (default).
+    #[default]
+    Fire,
+    /// Drops it.
+    Drop,
+}
+
+/// One event key.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EventKey {
+    /// The tick the key applies on.
+    pub at: u32,
+    /// The event name a game reads from `SequenceEvents`; not empty, not `end`.
+    pub name: String,
+    /// What a skip does with it (default `fire`).
+    #[serde(default)]
+    pub on_skip: OnSkip,
+}
+
+fn diagnostic(code: DiagnosticCode, message: String, path: String) -> Diagnostic {
+    Diagnostic::new(code, message)
+        .with_path(path)
+        .with_help("see `ludion docs sequences`")
+}
+
+/// `L1730`–`L1733` over every loaded `kind: sequence` doc, in store order. Paths are
+/// `sequence/{doc}` plus a JSON Pointer such as `/tracks/camera/2/at`.
+pub(crate) fn validate_sequence_docs(world: &World) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let Some(store) = world.resource::<DocStore<SequenceDoc>>() else {
+        return out;
+    };
+    // The config is not installed while the docs validate; the doc store exists iff `.dialogue()` ran.
+    let dialogue_on = world.resource::<DocStore<DialogueDoc>>().is_some();
+    let lines: BTreeSet<&str> = world
+        .resource::<DocStore<DialogueDoc>>()
+        .into_iter()
+        .flat_map(DocStore::iter)
+        .flat_map(|(_, doc)| doc.lines.keys().map(String::as_str))
+        .collect();
+    for (path, doc) in store.iter() {
+        validate_doc(path, doc, dialogue_on, &lines, &mut out);
+    }
+    out
+}
+
+fn validate_doc(
+    doc_path: &str,
+    doc: &SequenceDoc,
+    dialogue_on: bool,
+    lines: &BTreeSet<&str>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let at = |pointer: &str| format!("sequence/{doc_path}{pointer}");
+    if doc.length_ticks == 0 {
+        out.push(diagnostic(
+            code::SEQUENCE_INVALID,
+            format!("`{doc_path}` has `length_ticks: 0`; a sequence lasts at least one tick"),
+            at("/length_ticks"),
+        ));
+    }
+    let mut roles: BTreeSet<&str> = BTreeSet::new();
+    for (n, role) in doc.roles.iter().enumerate() {
+        if role.is_empty() || !roles.insert(role) {
+            out.push(diagnostic(
+                code::SEQUENCE_UNKNOWN_ROLE,
+                format!("role `{role}` of `{doc_path}` is empty or declared twice"),
+                at(&format!("/roles/{n}")),
+            ));
+        }
+    }
+    let tracks = &doc.tracks;
+    let length = doc.length_ticks;
+
+    // `(track, index, at)` per key, checked for range and order in one place.
+    let ats = |track: &str, keys: Vec<u32>, out: &mut Vec<Diagnostic>| {
+        let mut previous = 0;
+        for (n, key_at) in keys.into_iter().enumerate() {
+            if key_at > length {
+                out.push(diagnostic(
+                    code::SEQUENCE_INVALID,
+                    format!("a `{track}` key is at tick {key_at}, past `length_ticks` {length}"),
+                    at(&format!("/tracks/{track}/{n}/at")),
+                ));
+            }
+            if key_at < previous {
+                out.push(diagnostic(
+                    code::SEQUENCE_INVALID,
+                    format!(
+                        "a `{track}` key is at tick {key_at}, before the key above it at {previous}"
+                    ),
+                    at(&format!("/tracks/{track}/{n}/at")),
+                ));
+            }
+            previous = previous.max(key_at);
+        }
+    };
+    ats("camera", tracks.camera.iter().map(|k| k.at).collect(), out);
+    ats(
+        "animation",
+        tracks.animation.iter().map(|k| k.at).collect(),
+        out,
+    );
+    ats("ui", tracks.ui.iter().map(|k| k.at).collect(), out);
+    ats("audio", tracks.audio.iter().map(|k| k.at).collect(), out);
+    ats(
+        "dialogue",
+        tracks.dialogue.iter().map(|k| k.at).collect(),
+        out,
+    );
+    ats("event", tracks.event.iter().map(|k| k.at).collect(), out);
+
+    let role_of = |track: &str, n: usize, role: &str, required: bool, out: &mut Vec<Diagnostic>| {
+        if role.is_empty() {
+            if required {
+                out.push(diagnostic(
+                    code::SEQUENCE_UNKNOWN_ROLE,
+                    format!("a `{track}` key has no `role`"),
+                    at(&format!("/tracks/{track}/{n}/role")),
+                ));
+            }
+        } else if !roles.contains(role) {
+            out.push(diagnostic(
+                code::SEQUENCE_UNKNOWN_ROLE,
+                format!("a `{track}` key names role `{role}`, which `roles:` does not declare"),
+                at(&format!("/tracks/{track}/{n}/role")),
+            ));
+        }
+    };
+
+    for (n, key) in tracks.camera.iter().enumerate() {
+        role_of("camera", n, &key.role, true, out);
+        if key.rig.is_some() == key.restore {
+            out.push(diagnostic(
+                code::SEQUENCE_INVALID,
+                "a camera key needs exactly one of `rig:` and `restore: true`".to_owned(),
+                at(&format!("/tracks/camera/{n}")),
+            ));
+        }
+        if let Some(rig) = &key.rig
+            && let Ok(value) = serde_json::to_value(rig)
+        {
+            let prefix = format!("/tracks/camera/{n}/rig");
+            out.extend(prefixed(
+                RigConfig::validate_semantics(&value),
+                doc_path,
+                &prefix,
+            ));
+        }
+    }
+    for (n, key) in tracks.animation.iter().enumerate() {
+        role_of("animation", n, &key.role, true, out);
+        if !key.fade.is_finite() || key.fade < 0.0 {
+            out.push(diagnostic(
+                code::SEQUENCE_INVALID,
+                format!("`fade` is {}; it must be finite and not negative", key.fade),
+                at(&format!("/tracks/animation/{n}/fade")),
+            ));
+        }
+    }
+    for (n, key) in tracks.ui.iter().enumerate() {
+        role_of("ui", n, &key.role, true, out);
+        if let Ok(tracks) = serde_json::to_value(&key.tracks) {
+            let value = serde_json::json!({ "tracks": tracks });
+            let prefix = format!("/tracks/ui/{n}");
+            out.extend(prefixed(
+                ludion_components::ui::UiTween::validate_semantics(&value),
+                doc_path,
+                &prefix,
+            ));
+        }
+    }
+    for (n, key) in tracks.audio.iter().enumerate() {
+        if let Some(role) = &key.role {
+            role_of("audio", n, role, false, out);
+        }
+        for (field, value) in [("gain", key.gain), ("range", key.range)] {
+            if !value.is_finite() || value < 0.0 {
+                out.push(diagnostic(
+                    code::SEQUENCE_INVALID,
+                    format!("`{field}` is {value}; it must be finite and not negative"),
+                    at(&format!("/tracks/audio/{n}/{field}")),
+                ));
+            }
+        }
+    }
+    for (n, key) in tracks.dialogue.iter().enumerate() {
+        if let Some(role) = &key.speaker {
+            role_of("dialogue", n, role, false, out);
+        }
+        let problem = if !dialogue_on {
+            Some("the game did not opt in with `.dialogue()`".to_owned())
+        } else if !lines.contains(key.line.as_str()) {
+            Some("no `kind: dialogue` doc defines it".to_owned())
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            out.push(diagnostic(
+                code::SEQUENCE_UNKNOWN_LINE,
+                format!("dialogue key line `{}`: {problem}", key.line),
+                at(&format!("/tracks/dialogue/{n}/line")),
+            ));
+        }
+    }
+    for (n, key) in tracks.event.iter().enumerate() {
+        if key.name.trim().is_empty() || key.name == RESERVED_EVENT {
+            out.push(diagnostic(
+                code::SEQUENCE_EVENT_NAME,
+                format!(
+                    "event name `{}` is empty or the reserved `{RESERVED_EVENT}`",
+                    key.name
+                ),
+                at(&format!("/tracks/event/{n}/name")),
+            ));
+        }
+    }
+}
+
+/// Re-roots a nested validator's diagnostics: its pointer (relative to the embedded value) goes
+/// under `prefix` inside the document at `doc_path`.
+fn prefixed(found: Vec<Diagnostic>, doc_path: &str, prefix: &str) -> Vec<Diagnostic> {
+    found
+        .into_iter()
+        .map(|mut d| {
+            let inner = d.path.take().unwrap_or_default();
+            d.path = Some(format!("sequence/{doc_path}{prefix}{inner}"));
+            d
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn run(doc: serde_json::Value, dialogue_on: bool) -> Vec<Diagnostic> {
+        let doc: SequenceDoc = serde_json::from_value(doc).unwrap();
+        let lines: BTreeSet<&str> = ["hello"].into_iter().collect();
+        let mut out = Vec::new();
+        validate_doc("sequences/t.yaml", &doc, dialogue_on, &lines, &mut out);
+        out
+    }
+
+    fn codes(out: &[Diagnostic]) -> Vec<&str> {
+        out.iter().map(|d| d.code.as_str()).collect()
+    }
+
+    #[test]
+    fn a_key_at_the_length_is_valid_and_one_past_it_is_not() {
+        let doc = |at: u32| {
+            json!({ "roles": [], "length_ticks": 4,
+                "tracks": { "event": [{ "at": at, "name": "x" }] } })
+        };
+        assert!(run(doc(4), true).is_empty());
+        let out = run(doc(5), true);
+        assert_eq!(codes(&out), ["L1730"]);
+        assert_eq!(
+            out[0].path.as_deref(),
+            Some("sequence/sequences/t.yaml/tracks/event/0/at")
+        );
+    }
+
+    #[test]
+    fn equal_ats_are_in_order_and_a_decrease_is_not() {
+        let doc = |second: u32| {
+            json!({ "length_ticks": 9, "tracks": { "event": [
+                { "at": 3, "name": "a" }, { "at": second, "name": "b" } ] } })
+        };
+        assert!(run(doc(3), true).is_empty());
+        assert_eq!(codes(&run(doc(2), true)), ["L1730"]);
+    }
+
+    #[test]
+    fn a_camera_key_needs_exactly_one_of_rig_and_restore() {
+        let doc = |key: serde_json::Value| json!({ "roles": ["cam"], "length_ticks": 9, "tracks": { "camera": [key] } });
+        assert!(
+            run(
+                doc(json!({ "at": 0, "role": "cam", "restore": true })),
+                true
+            )
+            .is_empty()
+        );
+        assert!(run(doc(json!({ "at": 0, "role": "cam", "rig": {} })), true).is_empty());
+        assert_eq!(
+            codes(&run(doc(json!({ "at": 0, "role": "cam" })), true)),
+            ["L1730"]
+        );
+        assert_eq!(
+            codes(&run(
+                doc(json!({ "at": 0, "role": "cam", "rig": {}, "restore": true })),
+                true
+            )),
+            ["L1730"]
+        );
+    }
+
+    #[test]
+    fn roles_must_be_declared_once_and_present_where_required() {
+        let out = run(
+            json!({ "roles": ["a", "a"], "length_ticks": 9, "tracks": {
+                "animation": [{ "at": 0, "clip": "x" }],
+                "audio": [{ "at": 0, "play": "s.wav", "role": "ghost" }] } }),
+            true,
+        );
+        assert_eq!(codes(&out), ["L1731", "L1731", "L1731"]);
+    }
+
+    #[test]
+    fn a_dialogue_line_must_exist_and_dialogue_must_be_on() {
+        let doc = |line: &str| json!({ "length_ticks": 9, "tracks": { "dialogue": [{ "at": 0, "line": line }] } });
+        assert!(run(doc("hello"), true).is_empty());
+        assert_eq!(codes(&run(doc("nope"), true)), ["L1733"]);
+        assert_eq!(codes(&run(doc("hello"), false)), ["L1733"]);
+    }
+
+    #[test]
+    fn non_finite_numbers_and_reserved_event_names_are_refused() {
+        let doc = |gain: f64, name: &str| {
+            json!({ "length_ticks": 9, "tracks": {
+                "audio": [{ "at": 0, "play": "s.wav", "gain": gain }],
+                "event": [{ "at": 0, "name": name }] } })
+        };
+        assert!(run(doc(0.5, "ok"), true).is_empty());
+        assert_eq!(codes(&run(doc(-1.0, "ok"), true)), ["L1730"]);
+        assert_eq!(codes(&run(doc(0.5, "end"), true)), ["L1732"]);
+        assert_eq!(codes(&run(doc(0.5, ""), true)), ["L1732"]);
+    }
+
+    #[test]
+    fn nested_validators_report_under_the_key_pointer() {
+        let out = run(
+            json!({ "roles": ["p"], "length_ticks": 9, "tracks": { "ui": [{ "at": 0, "role": "p",
+                "tracks": [{ "field": "opacity", "from": [0.0, 1.0], "to": [1.0] }] }] } }),
+            true,
+        );
+        assert_eq!(codes(&out), ["L1610"]);
+        assert_eq!(
+            out[0].path.as_deref(),
+            Some("sequence/sequences/t.yaml/tracks/ui/0/tracks/0/from")
+        );
+    }
+}

@@ -2378,3 +2378,117 @@ fn a_per_cell_base_primitive_accepts_a_circle_collider() {
     assert_eq!(scene.entities.len(), 2);
     assert!(scene.entities.iter().all(has_collider));
 }
+
+// --- Collider surface tags ----------------------------------------------------------------------
+
+/// The one `#` cell of a one-row map, over a kit whose `#` primitive is `primitive` (block YAML).
+fn surface_scene(primitive: &str) -> Scene {
+    let kit = parse_map_kit(&format!(
+        "format: 1\nkind: map-kit\ntiles:\n  \"#\":\n{primitive}"
+    ))
+    .expect("the kit parses");
+    let map = parse_map(&TWO_BY_TWO_T.replace("  - \"TT\"\n  - \"TT\"\n", "  - \"#\"\n"))
+        .expect("the map parses");
+    generate(&map, &kit, &[], &Registry::new()).expect("generates")
+}
+
+fn surface_of(entity: &SceneEntity) -> Option<&Value> {
+    entity
+        .components
+        .iter()
+        .find(|(n, _)| n == "SurfaceTag")
+        .map(|(_, v)| v)
+}
+
+const BOX_SURFACE: &str = "        box:\n          - 1.0\n          - 1.0\n          - 1.0\n        surface: metal_grate\n";
+
+#[test]
+fn a_box_collider_surface_emits_a_surface_tag_on_the_collider_sibling() {
+    let scene = surface_scene(&format!(
+        "    - shape: cube\n      collider:\n{BOX_SURFACE}"
+    ));
+    assert_eq!(scene.entities.len(), 2);
+    assert!(surface_of(&scene.entities[0]).is_none());
+    assert_eq!(
+        surface_of(&scene.entities[1]),
+        Some(&serde_json::json!({ "surface": "metal_grate" }))
+    );
+    let names: Vec<_> = scene.entities[1]
+        .components
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert_eq!(names, ["Transform", "Collider", "SurfaceTag"]);
+}
+
+#[test]
+fn a_collider_only_box_surface_emits_the_tag_on_the_one_entity() {
+    let scene = surface_scene(&format!("    - collider:\n{BOX_SURFACE}"));
+    assert_eq!(scene.entities.len(), 1);
+    assert_eq!(
+        surface_of(&scene.entities[0]),
+        Some(&serde_json::json!({ "surface": "metal_grate" }))
+    );
+}
+
+#[test]
+fn a_merged_base_box_floor_tags_each_rects_sibling() {
+    let kit = merged_kit(
+        "        box:\n          - 1.0\n          - 0.25\n          - 1.0\n        surface: concrete\n",
+    );
+    let map = parse_map(TWO_BY_TWO_T).expect("the map parses");
+    let scene = generate(&map, &kit, &[], &Registry::new()).expect("generates");
+    let tagged = scene
+        .entities
+        .iter()
+        .filter(|e| e.name.as_deref().is_some_and(|n| n.ends_with("-collider")))
+        .inspect(|e| {
+            assert_eq!(
+                surface_of(e),
+                Some(&serde_json::json!({ "surface": "concrete" }))
+            );
+        })
+        .count();
+    assert_eq!(tagged, 1);
+    assert!(scene.entities.iter().all(|e| {
+        e.name.as_deref().is_some_and(|n| n.ends_with("-collider")) || surface_of(e).is_none()
+    }));
+}
+
+fn kit_parse_errors(collider: &str) -> Vec<Diagnostic> {
+    parse_map_kit(&format!(
+        "format: 1\nkind: map-kit\ntiles:\n  \"#\":\n    - shape: cube\n      collider:\n{collider}"
+    ))
+    .expect_err("the kit is refused")
+}
+
+#[test]
+fn a_surface_on_an_aabb_or_circle_or_an_empty_name_is_l1022_at_the_surface() {
+    for collider in [
+        "        aabb:\n          - 1.0\n          - 1.0\n        surface: metal_grate\n",
+        "        circle: 1.0\n        surface: metal_grate\n",
+        "        box:\n          - 1.0\n          - 1.0\n          - 1.0\n        surface: \"\"\n",
+    ] {
+        let diagnostics = kit_parse_errors(collider);
+        let d = diagnostics
+            .iter()
+            .find(|d| d.code == code::MAP_KIT_INVALID)
+            .unwrap_or_else(|| panic!("no kit diagnostic for {collider}: {diagnostics:?}"));
+        assert_eq!(d.path.as_deref(), Some("/tiles/#/0/collider/surface"));
+        assert!(d.help.is_some());
+    }
+}
+
+#[test]
+fn a_kit_without_a_surface_emits_the_components_it_always_did() {
+    let scene = surface_scene(
+        "    - shape: cube\n      collider:\n        box:\n          - 1.0\n          - 1.0\n          - 1.0\n",
+    );
+    assert!(scene.entities.iter().all(|e| surface_of(e).is_none()));
+    let names: Vec<_> = scene.entities[1]
+        .components
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert_eq!(names, ["Transform", "Collider"]);
+}

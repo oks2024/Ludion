@@ -1,0 +1,149 @@
+# Feature: Rain - a world-anchored field of velocity-stretched streaks. Open ground at night under one sodium spot: the
+# streaks inside the lit cone catch the light and the rest fall dark, slanted by the wind. A presentation entity holds
+# the rain, so it never enters the world hash. The camera sits at head height facing the cone.
+format: 1
+name: "rain-open - Rain: lit streaks in a sodium cone, wind-slanted"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.7
+          - 9.0
+        rotation:
+          - -6.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.01
+          - 0.015
+          - 0.03
+        sky_horizon:
+          - 0.03
+          - 0.04
+          - 0.06
+        sky_ground:
+          - 0.005
+          - 0.006
+          - 0.01
+        ibl_intensity: 0.4
+      PostProcess:
+        bloom_threshold: 0.8
+        bloom_strength: 0.1
+        exposure: 1.0
+        tonemap: aces
+        fog_density: 0.02
+        fog_color:
+          - 0.03
+          - 0.04
+          - 0.06
+        fog_start: 4.0
+        vignette: 0.4
+        vignette_radius: 0.9
+  - name: moon
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.3
+          - -0.8
+          - -0.5
+        color:
+          - 0.4
+          - 0.5
+          - 0.8
+        intensity: 0.15
+  - name: lamp
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.0
+          - 0.0
+      SpotLight:
+        color:
+          - 1.0
+          - 0.7
+          - 0.35
+        intensity: 12.0
+        range: 14.0
+        direction:
+          - 0.0
+          - -1.0
+          - 0.0
+        inner_angle: 18.0
+        outer_angle: 38.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 80.0
+          - 1.0
+          - 80.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.12
+          - 0.12
+          - 0.13
+          - 1.0
+        roughness: 0.85
+  - name: crate-left
+    components:
+      Transform:
+        translation:
+          - -2.2
+          - 0.6
+          - -1.0
+        scale:
+          - 1.2
+          - 1.2
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.45
+          - 0.3
+          - 0.2
+          - 1.0
+        roughness: 0.8
+  - name: crate-right
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 0.9
+          - 0.8
+        scale:
+          - 1.8
+          - 1.8
+          - 1.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.35
+          - 0.4
+          - 1.0
+        roughness: 0.8
+  - name: weather
+    presentation: true
+    components:
+      Rain:
+        wind:
+          - 1.2
+          - 0.0
+          - 0.4
+        color:
+          - 0.75
+          - 0.8
+          - 0.9
+          - 0.6

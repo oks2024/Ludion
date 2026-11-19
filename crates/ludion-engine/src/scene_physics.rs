@@ -64,6 +64,41 @@ pub(crate) fn collider_debug_lines(world: &World) -> Vec<DebugSegment> {
     lines
 }
 
+/// The `surfaces` category's colour per declared surface, indexed by `id % 8`; the table is in
+/// `docs/debug-draw.md`.
+pub(crate) const SURFACE_PALETTE: [[f32; 4]; 8] = [
+    [1.0, 0.85, 0.0, 1.0],
+    [1.0, 0.1, 0.8, 1.0],
+    [0.0, 0.8, 1.0, 1.0],
+    [0.2, 1.0, 0.2, 1.0],
+    [1.0, 0.45, 0.0, 1.0],
+    [0.55, 0.25, 1.0, 1.0],
+    [1.0, 0.1, 0.1, 1.0],
+    [0.0, 1.0, 0.6, 1.0],
+];
+
+/// What a hit reporting no surface draws as in the `surfaces` category.
+const UNTAGGED_COLOR: [f32; 4] = [0.35, 0.35, 0.35, 1.0];
+
+/// Every collider outline tinted by the surface a hit there reports (`surfaces` debug category), up
+/// to [`MAX_COLLIDER_SEGMENTS`].
+pub(crate) fn surface_debug_lines(world: &World) -> Vec<DebugSegment> {
+    let mut lines = Vec::new();
+    let Some(physics) = world.resource::<PhysicsWorld>() else {
+        return lines;
+    };
+    physics.surface_wireframe(&mut |surface, a, b| {
+        if lines.len() >= MAX_COLLIDER_SEGMENTS {
+            return;
+        }
+        let color = surface.map_or(UNTAGGED_COLOR, |id| {
+            SURFACE_PALETTE[usize::from(id.0) % SURFACE_PALETTE.len()]
+        });
+        lines.push(DebugSegment { a, b, color });
+    });
+    lines
+}
+
 /// Maps a scene's `physics:` block onto the solver tunables `ludion-physics` reads: the pinned
 /// defaults, with the block's present fields overriding them.
 pub(crate) fn settings(physics: &ScenePhysics) -> PhysicsSettings {

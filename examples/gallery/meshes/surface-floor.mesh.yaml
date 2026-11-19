@@ -1,0 +1,70 @@
+# An 8 x 4 floor at y = 0 (x -4..4, z -2..2) of four quads along x, eight triangles in x order, tagged by run:
+# concrete, then metal_grate over x -2..2, then concrete. The `surface-tags` gallery scene walks and drops onto it.
+format: 1
+kind: mesh
+positions:
+  - -4.0
+  - 0.0
+  - -2.0
+  - -4.0
+  - 0.0
+  - 2.0
+  - -2.0
+  - 0.0
+  - -2.0
+  - -2.0
+  - 0.0
+  - 2.0
+  - 0.0
+  - 0.0
+  - -2.0
+  - 0.0
+  - 0.0
+  - 2.0
+  - 2.0
+  - 0.0
+  - -2.0
+  - 2.0
+  - 0.0
+  - 2.0
+  - 4.0
+  - 0.0
+  - -2.0
+  - 4.0
+  - 0.0
+  - 2.0
+surfaces:
+  - concrete
+  - metal_grate
+triangle_surfaces:
+  - - 2
+    - 0
+  - - 4
+    - 1
+  - - 2
+    - 0
+indices:
+  - 0
+  - 1
+  - 2
+  - 1
+  - 3
+  - 2
+  - 2
+  - 3
+  - 4
+  - 3
+  - 5
+  - 4
+  - 4
+  - 5
+  - 6
+  - 5
+  - 7
+  - 6
+  - 6
+  - 7
+  - 8
+  - 7
+  - 9
+  - 8

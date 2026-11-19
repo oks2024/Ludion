@@ -138,6 +138,7 @@ mod physics_surfaces;
 mod prefab;
 mod profile;
 mod rig_blend;
+mod rig_ik;
 mod rig_mask;
 mod rim;
 mod scalar;
@@ -212,6 +213,7 @@ pub use physics_surfaces::MAX_SURFACES;
 pub use prefab::{PREFAB_FORMAT_VERSION, PrefabDocument};
 pub use profile::ProfileEnvelope;
 pub use rig_blend::{BlendAt, BlendPoint, BlendSpace};
+pub use rig_ik::{DEFAULT_LOOK_FORWARD, DEFAULT_LOOK_LIMITS_DEG, IkEntry, IkHinge, IkKind};
 pub use rig_mask::RigMask;
 pub use rim::DocRim;
 pub use sculpt::{

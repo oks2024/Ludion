@@ -42,6 +42,9 @@ pub(crate) const CULL: &str = "cull";
 /// The category [`segments`] draws from the live `PhysicsWorld`'s colliders.
 pub(crate) const COLLIDERS: &str = "colliders";
 
+/// The category [`segments`] draws from the live `PhysicsWorld`'s colliders, tinted by surface.
+pub(crate) const SURFACES: &str = "surfaces";
+
 /// The host-side `nav` category and its sub-filters; `nav` alone enables all three parts.
 pub(crate) const NAV: &str = "nav";
 pub(crate) const NAV_GRID: &str = "nav:grid";
@@ -639,6 +642,8 @@ pub(crate) fn pen_lines(
 /// tick's `PerceptionResults`: `perception:zones`, `perception:rays`, `perception:noises` and
 /// `perception:memory` pick one part. `local_shadows`
 /// is the exception: the engine appends it after extract, because it needs the camera's grants.
+/// `surfaces` is drawn from the live `PhysicsWorld` like `colliders`, each segment tinted by the
+/// surface a hit there reports.
 pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegment> {
     if *filter == DebugCategories::None {
         return Vec::new();
@@ -669,6 +674,12 @@ pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegm
             .entry(COLLIDERS)
             .or_default()
             .extend(crate::scene_physics::collider_debug_lines(world));
+    }
+    if filter.enables(SURFACES) {
+        categories
+            .entry(SURFACES)
+            .or_default()
+            .extend(crate::scene_physics::surface_debug_lines(world));
     }
     let parts = crate::nav::NavDebugParts {
         grid: filter.enables(NAV) || filter.enables(NAV_GRID),
@@ -701,7 +712,7 @@ pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegm
 
 /// The categories the world has drawn: what [`DebugDraw::drawn`] lists plus `hierarchy` when any
 /// entity has a `Parent`, `probes` when any has a `ReflectionProbe` and `colliders` when the
-/// physics world holds a body, `nav`, `nav:grid`, `nav:routes` and `nav:flow` when there is something
+/// physics world holds a body, `surfaces` when the scene declares surfaces, `nav`, `nav:grid`, `nav:routes` and `nav:flow` when there is something
 /// to draw for them, `perception` and its four sub-filters likewise, `local_shadows` when any point or spot light casts and `cull` when
 /// any entity has a `Mesh`, sorted.
 pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
@@ -716,6 +727,12 @@ pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
     }
     if crate::scene_physics::any_body(world) {
         names.push(COLLIDERS);
+    }
+    if world
+        .resource::<ludion_physics::PhysicsWorld>()
+        .is_some_and(|physics| !physics.surface_names().is_empty())
+    {
+        names.push(SURFACES);
     }
     names.extend(crate::nav::debug_present(world));
     names.extend(crate::perception_debug::debug_present(world));
@@ -1514,6 +1531,75 @@ mod tests {
 
         engine.set_debug_draw(DebugCategories::parse("path"));
         assert!(lines(&mut engine).is_empty());
+    }
+
+    /// Two static unit boxes under `physics.surfaces: [a, b]`: one tagged `b`, one untagged.
+    fn surface_engine(declare: bool) -> crate::Engine {
+        let root = std::env::temp_dir().join(format!(
+            "ludion-debug-draw-surfaces-{}-{declare}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut engine = crate::Engine::builder()
+            .project_root(&root)
+            .build()
+            .unwrap();
+        let surfaces = if declare {
+            "  surfaces:\n    - a\n    - b\n"
+        } else {
+            ""
+        };
+        let tag = if declare {
+            "      SurfaceTag:\n        surface: b\n"
+        } else {
+            ""
+        };
+        let boxed = "      Collider:\n        shape:\n          box:\n            half_extents:\n              \
+                     - 0.5\n              - 0.5\n              - 0.5\n        body: static\n";
+        engine
+            .load_inline_scene(&format!(
+                "format: 1\nphysics:\n  space: free\n{surfaces}entities:\n  - name: tagged\n    components:\n      \
+                 Transform: {{}}\n{boxed}{tag}  - name: plain\n    components:\n      Transform:\n        \
+                 translation:\n          - 4.0\n          - 0.0\n          - 0.0\n{boxed}"
+            ))
+            .unwrap();
+        engine.advance_live();
+        engine
+    }
+
+    #[test]
+    fn the_surfaces_category_tints_each_collider_by_its_surface() {
+        let mut engine = surface_engine(true);
+        engine.set_debug_draw(DebugCategories::parse("surfaces"));
+        let drawn = lines(&mut engine);
+        let tagged = crate::scene_physics::SURFACE_PALETTE[1];
+        let grey = [0.35, 0.35, 0.35, 1.0];
+        assert_eq!(drawn.iter().filter(|s| s.color == tagged).count(), 12);
+        assert_eq!(drawn.iter().filter(|s| s.color == grey).count(), 12);
+        assert!(engine.debug_draw_drawn().contains(&SURFACES));
+
+        let mut plain = surface_engine(false);
+        plain.set_debug_draw(DebugCategories::parse("surfaces"));
+        assert!(lines(&mut plain).is_empty());
+        assert!(!plain.debug_draw_drawn().contains(&SURFACES));
+    }
+
+    #[test]
+    fn the_surfaces_category_never_moves_the_world_hash_or_the_extract() {
+        let run = |enabled: bool| {
+            let mut engine = surface_engine(true);
+            let mut trace = Vec::new();
+            for _ in 0..10 {
+                if enabled {
+                    lines_under(&mut engine, "surfaces");
+                }
+                engine.advance_live();
+                trace.push(engine.world_hash().unwrap().as_u64());
+            }
+            engine.set_debug_draw(DebugCategories::None);
+            (trace, engine.extract_render_scene(64, 64).unwrap())
+        };
+        assert_eq!(run(true), run(false));
     }
 
     /// A block-style YAML 3-sequence at `indent` spaces.

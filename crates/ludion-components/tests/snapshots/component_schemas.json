@@ -4108,6 +4108,91 @@
       }
     }
   },
+  "IkTargets": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "IkTargets",
+    "description": "Targets for a voxel assembly's `ik:` entries, keyed by the entry's name.\n\nA chain reaches its target with its effector; a look-at turns its aim parts so `forward` faces\nit. Each target sets exactly one of `point` or `direction` (`L1673`); `weight` blends\nfrom the animated pose to the solved one and ramps over `fade` seconds from `changed`.\n\n**Presentation only.** Extract solves the IK after the clip and its layers; no system reads\nthe component, and a scene without it poses exactly as before. It is ordinary hashed sim state,\nso write it only when a choice changes (a `point` that follows a moving entity is rewritten\neach tick it moves). An entry with no target, or at weight `0`, is not solved. An assembly without `ik:`\nignores the component.\n\n```yaml\ncomponents:\n  IkTargets:\n    targets:\n      look:\n        direction: { yaw_deg: 30.0 }\n        weight: 1.0\n      hand_r:\n        point: [2.0, 1.0, -3.0]\n        weight: 1.0\n```\n\n```\nuse ludion_components::{IkTarget, IkTargets, fade_ik_target, ik_target_weight};\nuse ludion_core::time::{SimTime, TickRate};\n\nlet mut ik = IkTargets::default();\nik.targets.insert(\"look\".into(), IkTarget { point: Some([0.0, 1.0, -3.0]), ..Default::default() });\nlet now = SimTime::from_ticks(60, TickRate::DEFAULT);\nassert!(fade_ik_target(&mut ik, \"look\", 1.0, 0.5, now));\n// Half the fade later the target is half on.\nlet later = SimTime::from_ticks(75, TickRate::DEFAULT);\nassert_eq!(ik_target_weight(&ik.targets[\"look\"], later), 0.5);\n```",
+    "type": "object",
+    "properties": {
+      "targets": {
+        "description": "The targets by `ik:` entry name (default none).",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/IkTarget"
+        },
+        "default": {}
+      }
+    },
+    "$defs": {
+      "IkTarget": {
+        "description": "One target of an [`IkTargets`]: exactly one of a world point or a direction, and a weight that\nramps.\n\nThe weight is `weight` once `fade` seconds have passed since `changed`; before that it lerps from\n`from_weight`. Use [`fade_ik_target`] to change it without a jump.",
+        "type": "object",
+        "properties": {
+          "point": {
+            "description": "A world-space point to reach or face (default none). To follow an entity, write it from that\nentity's world position on each tick it moves.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "direction": {
+            "description": "A direction in the model's frame, in `Look`'s convention: positive yaw turns left, positive\npitch looks down (default none). A look-at only: a chain ignores it.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Look"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "weight": {
+            "description": "The target weight in `[0, 1]` (default `0` — the target is off; `L1673` outside the range).",
+            "type": "number",
+            "format": "float"
+          },
+          "from_weight": {
+            "description": "The weight the ramp starts from at `changed` (default `0`; `L1673` outside `[0, 1]`).",
+            "type": "number",
+            "format": "float"
+          },
+          "changed": {
+            "description": "The frame the weight ramp began at (default frame `0`).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "fade": {
+            "description": "The ramp's length in seconds; `0` (default) jumps straight to `weight` (`L1673` when negative\nor not finite).",
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
+      "Look": {
+        "description": "A facing offset from the entity's own rotation, in degrees. Yaw 0 looks along the entity's −Z,\n**positive yaw turns left** and **positive pitch looks down**: the camera rig's convention.\n\n```\nuse ludion_components::Look;\n\nlet look: Look = serde_json::from_value(serde_json::json!({ \"pitch_deg\": 10.0 })).unwrap();\nassert_eq!(look, Look { yaw_deg: 0.0, pitch_deg: 10.0 });\n```",
+        "type": "object",
+        "properties": {
+          "yaw_deg": {
+            "description": "Turn about +Y in degrees; positive turns left (default `0.0`).",
+            "type": "number",
+            "format": "float"
+          },
+          "pitch_deg": {
+            "description": "Tilt in degrees; positive looks down (default `0.0`).",
+            "type": "number",
+            "format": "float"
+          }
+        }
+      }
+    }
+  },
   "Joint": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Joint",
@@ -7331,6 +7416,138 @@
         "items": {
           "type": "string"
         }
+      }
+    }
+  },
+  "Rain": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Rain",
+    "description": "Falling rain drawn as streaks around the camera. A singleton: the lowest entity id wins. The\ndrops live on a world-space lattice, so nothing swims when the camera moves, and they move with\ngame time. `intensity: 0` draws nothing and leaves the frame identical to a scene without it.\n\n```\nuse ludion_components::Rain;\n\nlet rain: Rain = serde_json::from_value(serde_json::json!({\n    \"intensity\": 0.5,\n    \"wind\": [1.2, 0.0, 0.4],\n}))\n.unwrap();\nassert_eq!(rain.density, 1.5);\nassert_eq!(rain.fall_speed, [7.0, 9.0]);\n```",
+    "type": "object",
+    "properties": {
+      "intensity": {
+        "description": "Scales the drop count and fades the rain in and out, in `[0, 1]` (default 1).",
+        "type": "number",
+        "format": "float",
+        "default": 1.0
+      },
+      "density": {
+        "description": "Streaks per cubic metre at intensity 1, in `(0, 16]` (default 1.5).",
+        "type": "number",
+        "format": "float",
+        "default": 1.5
+      },
+      "radius": {
+        "description": "Horizontal reach around the camera in metres, in `[2, 64]` (default 16).",
+        "type": "number",
+        "format": "float",
+        "default": 16.0
+      },
+      "height": {
+        "description": "The vertical band `[low, high]` relative to the camera, low < high, span at most 64 (default `[-6, 14]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "default": [
+          -6.0,
+          14.0
+        ]
+      },
+      "cell": {
+        "description": "The lattice cube size in metres, in `[1, 8]` (default 4).",
+        "type": "number",
+        "format": "float",
+        "default": 4.0
+      },
+      "fall_speed": {
+        "description": "Fall speed range `[min, max]` in m/s, `0 < min <= max <= 40` (default `[7, 9]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "default": [
+          7.0,
+          9.0
+        ]
+      },
+      "wind": {
+        "description": "Horizontal wind in m/s `[x, 0, z]`; `y` must be 0, `|x|` and `|z|` at most 20 (default none).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3,
+        "default": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "gust": {
+        "description": "Per-drop wind variation, in `[0, 1]` (default 0.15).",
+        "type": "number",
+        "format": "float",
+        "default": 0.15000000596046448
+      },
+      "drop_width": {
+        "description": "Streak width in metres, in `(0, 0.05]`; widened to one output pixel when thinner (default 0.006).",
+        "type": "number",
+        "format": "float",
+        "default": 0.006000000052154064
+      },
+      "streak": {
+        "description": "Streak length scale, in `[0, 8]`; length is `speed * streak / 60` metres (default 1).",
+        "type": "number",
+        "format": "float",
+        "default": 1.0
+      },
+      "color": {
+        "description": "Display-referred colour `[r, g, b, a]`, each in `[0, 1]` (default `[0.55, 0.6, 0.65, 0.25]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4,
+        "default": [
+          0.550000011920929,
+          0.6000000238418579,
+          0.6499999761581421,
+          0.25
+        ]
+      },
+      "lit": {
+        "description": "Light each streak from the scene's lights, unshadowed (default true).",
+        "type": "boolean",
+        "default": true
+      },
+      "medium": {
+        "description": "How much fog and the transparent layer's medium reach the streaks, in `[0, 1]` (default 1).",
+        "type": "number",
+        "format": "float",
+        "default": 1.0
+      },
+      "occlusion": {
+        "description": "Hide streaks under roofs; read by the occlusion pass (default true).",
+        "type": "boolean",
+        "default": true
+      },
+      "seed": {
+        "description": "Varies the lattice hash (default 0).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0,
+        "default": 0
       }
     }
   },

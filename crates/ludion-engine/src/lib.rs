@@ -33,6 +33,7 @@
 
 mod ai;
 mod animation_events;
+mod assembly_ik;
 mod assembly_mesh;
 mod asset_cache;
 pub mod audio;
@@ -107,6 +108,7 @@ mod projectiles;
 mod quality;
 mod query_drift;
 pub mod ragdoll;
+mod rain;
 mod recording;
 mod render;
 pub mod render_extent;
@@ -125,6 +127,7 @@ mod scene_physics;
 mod scene_session;
 mod sculpt_mesh;
 mod secondary_view;
+pub mod sequences;
 mod settings;
 mod shutdown;
 mod silhouette;
@@ -191,6 +194,7 @@ pub use components::{
     Hearing, Look, NoiseZone, NoiseZoneShape, PendingNoise, PerceiverMemory, PerceiverStatus,
     PerceptionState, Sense, SightSampleRecord, StimulusRecord, SweepShape, ZoneSweep,
 };
+pub use components::{IkTarget, IkTargets, fade_ik_target, ik_target_weight, ik_target_weight_at};
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
@@ -232,6 +236,7 @@ pub use ludion_camera::{
     look_from_counts, orbit_eye, resolve_zone, set_look, snap_rig,
 };
 pub use ludion_components::MeshBlend;
+pub use ludion_components::Rain;
 pub use ludion_components::RenderView;
 pub use ludion_components::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
 pub use ludion_nav::PathStatus;
@@ -312,6 +317,7 @@ pub use quality::{
 };
 pub use query_drift::{QueryDriftReport, check_query_drift_replay, check_query_drift_with};
 pub use ragdoll::{LimitsFrom, RagdollSwitch, switch_to_ragdoll, switch_to_ragdoll_with};
+pub use rain::scene_rain_diagnostics;
 pub use render::{
     BuilderRenderOutcome, RenderOutcome, dump_scene_graph_json, engine_at_frame, gpu_uploads,
     render_scene, render_scene_with_builder, render_scene_with_registry,
@@ -346,6 +352,7 @@ pub use scene_check::{
 };
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
 pub use secondary_view::scene_render_view_diagnostics;
+pub use sequences::{SequenceEvents, sequence_update};
 pub use settings::{QualityPreset, Settings, SettingsView, WindowMode, settings_window_mode_at};
 pub use shutdown::Shutdown;
 pub use skin_bone::scene_skin_bone_diagnostics;

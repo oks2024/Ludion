@@ -44,3 +44,4 @@ components:
 - `ludion docs ui-world-anchor` — pin an element to a 3D target.
 - `ludion docs screen-ui` — the canvas and anchors a tween moves within.
 - `ludion docs game-clock` — the two clocks.
+- `ludion docs sequences` — a ui key writes a `UiTween` on a timeline.

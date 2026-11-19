@@ -238,6 +238,8 @@ pub struct Engine {
     /// The game's dialogue config ([`EngineBuilder::dialogue`](crate::EngineBuilder::dialogue)),
     /// already validated at build; `None` installs nothing.
     pub(crate) dialogue_config: Option<crate::DialogueConfig>,
+    /// Whether the game opted into sequences ([`EngineBuilder::sequences`](crate::EngineBuilder::sequences)).
+    pub(crate) sequences: bool,
     pub(crate) input_actions: bool,
     /// How the pool is drawn ([`EngineBuilder::projectile_visuals`](crate::EngineBuilder::projectile_visuals)).
     pub(crate) projectile_draw: crate::projectile_draw::ProjectileDraw,
@@ -923,6 +925,7 @@ impl Engine {
             nav_config: None,
             perception_config: None,
             dialogue_config: None,
+            sequences: false,
             input_actions: false,
             projectile_draw: crate::projectile_draw::ProjectileDraw::default(),
             doc_validation_warnings: Vec::new(),
@@ -4560,6 +4563,17 @@ impl Engine {
         world.insert_resource(crate::DialogueEvents::default());
         world.insert_resource(crate::Subtitles::default());
         world.insert_resource(crate::dialogue::StringIndex::default());
+    }
+
+    /// Installs empty [`SequenceEvents`](crate::SequenceEvents) into the current world. Called after
+    /// every world (re)build; the players themselves are entities, so a restored world keeps them. A
+    /// no-op for a game that did not opt in.
+    pub(crate) fn install_sequences(&mut self) {
+        if self.sequences {
+            self.driver
+                .world_mut()
+                .insert_resource(crate::SequenceEvents::default());
+        }
     }
 
     /// Installs a fresh (empty) [`Shutdown`](crate::Shutdown) resource into the current world so game
@@ -8755,6 +8769,7 @@ impl Engine {
         self.install_nav();
         self.install_perception();
         self.install_dialogue();
+        self.install_sequences();
         self.install_input_actions();
         if matches!(
             kind,

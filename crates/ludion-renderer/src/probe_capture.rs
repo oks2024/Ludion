@@ -79,6 +79,7 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
     }
     out.ui.clear();
     out.views.clear();
+    out.rain = None;
     out.debug_lines.clear();
     out.probes.clear();
     // A face is lit with the anchored box: a fit to a 90° face camera means nothing.

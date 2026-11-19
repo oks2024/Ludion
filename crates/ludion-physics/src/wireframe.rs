@@ -7,7 +7,11 @@ use std::sync::Arc;
 use rapier3d::parry::shape::Shape;
 use rapier3d::prelude::{Pose, Vector};
 
+use crate::surface_tag::SurfaceId;
 use crate::world::{BodyKind, PhysicsWorld};
+
+/// How far a triangle's corners keep from its centroid in the `surfaces` view (1 = not inset).
+const INSET: f32 = 0.9;
 
 /// Segments per circle of a ball, capsule or cylinder outline.
 const OUTLINE_SUBDIV: u32 = 16;
@@ -182,6 +186,77 @@ impl PhysicsWorld {
                 entry.mesh_hash,
                 emit,
             );
+        }
+    }
+
+    /// Calls `emit(surface, from, to)` once per wireframe segment, each tagged with the surface a
+    /// hit there reports. Emits nothing when the scene declares no surfaces.
+    ///
+    /// An overlay draws its outline in its own surface. A tagged mesh or heightfield draws each
+    /// triangle's edges inset 10% toward its centroid, in the surface of that centroid, so adjacent
+    /// regions stay apart. Every other collider draws its outline, each segment in the surface of
+    /// its midpoint; other sensors are skipped.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_physics::PhysicsWorld;
+    ///
+    /// let world = PhysicsWorld::new(TickRate::DEFAULT);
+    /// let mut segments = 0;
+    /// world.surface_wireframe(&mut |_, _, _| segments += 1);
+    /// assert_eq!(segments, 0);
+    /// ```
+    pub fn surface_wireframe(&self, emit: &mut dyn FnMut(Option<SurfaceId>, [f32; 3], [f32; 3])) {
+        if self.surface_names().is_empty() {
+            return;
+        }
+        for entry in &self.table {
+            let Some(collider) = self.rapier.colliders.get(entry.collider) else {
+                continue;
+            };
+            let entity = entry.entity;
+            if let Some(id) = self.overlay_surface(entity) {
+                let mut sink = |_: WireBody, a: [f32; 3], b: [f32; 3]| emit(Some(id), a, b);
+                let any = WireBody::Static;
+                self.shape_wireframe(collider.shape(), collider.position(), any, None, &mut sink);
+                continue;
+            }
+            if entry.source.sensor {
+                continue;
+            }
+            let pose = collider.position();
+            if self.has_face_tags(entity) {
+                let (vertices, triangles): (Vec<Vector>, Vec<[u32; 3]>) =
+                    if let Some(mesh) = collider.shape().as_trimesh() {
+                        (mesh.vertices().to_vec(), mesh.indices().to_vec())
+                    } else if let Some(field) = collider.shape().as_heightfield() {
+                        field.to_trimesh()
+                    } else {
+                        continue;
+                    };
+                for triangle in &triangles {
+                    let corners = triangle.map(|i| {
+                        let p = *pose * vertices[i as usize];
+                        [p.x, p.y, p.z]
+                    });
+                    let centroid =
+                        [0, 1, 2].map(|k| (corners[0][k] + corners[1][k] + corners[2][k]) / 3.0);
+                    let surface = self.surface_at(entity, centroid);
+                    let inset = corners
+                        .map(|c| [0, 1, 2].map(|k| centroid[k] + (c[k] - centroid[k]) * INSET));
+                    for k in 0..3 {
+                        emit(surface, inset[k], inset[(k + 1) % 3]);
+                    }
+                }
+            } else {
+                let mut sink = |_: WireBody, a: [f32; 3], b: [f32; 3]| {
+                    let mid = [0, 1, 2].map(|k| (a[k] + b[k]) * 0.5);
+                    emit(self.surface_at(entity, mid), a, b);
+                };
+                let any = WireBody::Static;
+                self.shape_wireframe(collider.shape(), pose, any, entry.mesh_hash, &mut sink);
+            }
         }
     }
 

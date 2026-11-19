@@ -144,6 +144,7 @@ pub struct EngineBuilder {
     nav_config: Option<crate::NavConfig>,
     perception_config: Option<crate::PerceptionConfig>,
     dialogue_config: Option<crate::DialogueConfig>,
+    sequences: bool,
     input_actions: bool,
     projectile_visuals: Option<crate::ProjectileVisuals>,
     profile_kind: Option<ProfileKind>,
@@ -195,6 +196,7 @@ impl EngineBuilder {
             nav_config: None,
             perception_config: None,
             dialogue_config: None,
+            sequences: false,
             input_actions: false,
             projectile_visuals: None,
             profile_kind: None,
@@ -1194,6 +1196,40 @@ impl EngineBuilder {
         .validate_docs(move |world| validate_dialogue_docs(world, &default_locale))
     }
 
+    /// Opts into sequences (`ludion docs sequences`): registers the `kind: sequence` document, its
+    /// validator, and the `SequencePlayer` and `SequenceBinding` components, and installs empty
+    /// [`SequenceEvents`](crate::SequenceEvents) at every world build. Schedule
+    /// [`sequence_update`](crate::sequence_update) before `dialogue_update` and before the systems
+    /// that read the events, and start a beat with [`sequences::play`](crate::sequences::play).
+    ///
+    /// Nothing here is a built-in component, so a game that never plays a sequence hashes exactly as
+    /// it did before opting in.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{Engine, sequence_update};
+    ///
+    /// let engine = Engine::builder()
+    ///     .sequences()
+    ///     .system("sequence_update", sequence_update)
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = engine;
+    /// ```
+    #[must_use]
+    pub fn sequences(mut self) -> Self {
+        use crate::sequences::{
+            SEQUENCE_KIND, SequenceBinding, SequenceDoc, SequencePlayer, validate_sequence_docs,
+        };
+        self.sequences = true;
+        self.components(|registry| {
+            registry.register::<SequencePlayer>("SequencePlayer")?;
+            registry.register::<SequenceBinding>("SequenceBinding")
+        })
+        .doc_kind_engine_owned::<SequenceDoc>(SEQUENCE_KIND)
+        .validate_docs(validate_sequence_docs)
+    }
+
     /// Sets how the projectile pool is drawn: a table from shot `tag` to a look (billboard streak,
     /// cube or sphere mesh, or hidden), with a fallback for unlisted tags. Shots draw through the
     /// scene pass's existing particle and mesh paths, so no pass is added. Without a table every
@@ -1421,6 +1457,7 @@ impl EngineBuilder {
         engine.nav_config = self.nav_config;
         engine.perception_config = self.perception_config;
         engine.dialogue_config = self.dialogue_config;
+        engine.sequences = self.sequences;
         engine.input_actions = self.input_actions;
         if let Some(visuals) = self.projectile_visuals {
             engine.projectile_draw.visuals = visuals;
@@ -1429,6 +1466,7 @@ impl EngineBuilder {
         engine.install_nav();
         engine.install_perception();
         engine.install_dialogue();
+        engine.install_sequences();
         // Populate the data-doc stores into the initial (pre-scene-load) world so a game driven
         // before any `scene.load` still sees its docs; a malformed doc — or a broken cross-reference
         // a registered validation pass reports as an error — fails the build here (the collapsed

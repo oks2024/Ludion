@@ -1491,11 +1491,14 @@ fn extract_inner(
                 let held_now = held_for(world, mesh.id, now);
                 let (pose, crossfade) = animation_pose(world, mesh.id, &data, held_now);
                 let layers = assembly_layer_poses(world, mesh.id, &data, held_now);
-                for (part, (local, local_normal)) in
-                    part_placements_layered(&data, pose, crossfade, &layers)
-                        .into_iter()
-                        .enumerate()
-                {
+                let mut placed = part_placements_layered(&data, pose, crossfade, &layers);
+                let ik_goals = crate::assembly_ik::assembly_ik_goals(
+                    world, mesh.id, &data, mesh.model, held_now,
+                );
+                if !ik_goals.is_empty() {
+                    crate::assembly_ik::apply_assembly_ik(&data, &ik_goals, &mut placed);
+                }
+                for (part, (local, local_normal)) in placed.into_iter().enumerate() {
                     let index = base + part;
                     let instance = MeshInstance {
                         shape: MeshShape::Asset(index),
@@ -1762,6 +1765,7 @@ fn extract_inner(
         bone_palette,
         viewmodel,
         views: view_table.views,
+        rain: crate::rain::extract_rain(world, &ids, now, degraded),
     };
     if let Some(data) = scene.viewmodel.as_mut() {
         data.particles = scene
@@ -9276,6 +9280,7 @@ mod tests {
                 joints: Vec::new(),
                 masks: Vec::new(),
                 blends: Vec::new(),
+                ik: Vec::new(),
             }
         }
 
@@ -9586,6 +9591,7 @@ mod tests {
                 joints: Vec::new(),
                 masks: Vec::new(),
                 blends: Vec::new(),
+                ik: Vec::new(),
             };
             let posed = part_placements(&data, Some((data.clip("walk").unwrap(), 1.0)));
             assert_eq!(posed[1].0, Mat4::from_translation(Vec3::new(0.0, 0.0, 3.0)));

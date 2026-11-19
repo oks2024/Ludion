@@ -1046,7 +1046,8 @@ impl PostChain {
             transparent_cover: !scene.sprites.is_empty()
                 || !scene.particles.is_empty()
                 || !scene.texts.is_empty()
-                || !scene.blended.is_empty(),
+                || !scene.blended.is_empty()
+                || scene.rain.is_some(),
             fog: scene.post.is_some_and(|post| post.fog_density > 0.0),
             mesh_medium: medium && scene.meshes.iter().any(|m| m.medium < 1.0),
             transparent_medium: medium
@@ -1055,7 +1056,8 @@ impl PostChain {
                         .particles
                         .iter()
                         .any(|p| !p.viewmodel && p.medium < 1.0)
-                    || scene.blended.iter().any(|b| b.instance.medium < 1.0)),
+                    || scene.blended.iter().any(|b| b.instance.medium < 1.0)
+                    || scene.rain.is_some_and(|r| r.medium < 1.0)),
             blended: !scene.blended.is_empty(),
             aa: AntiAliasing::Off,
             silhouette: !scene.silhouettes.meshes.is_empty(),

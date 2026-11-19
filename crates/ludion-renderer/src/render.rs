@@ -24,6 +24,7 @@ mod blended;
 mod medium_pass;
 mod mesh_batch;
 mod mesh_pipeline;
+mod rain;
 mod silhouette;
 mod static_batch;
 mod ui_text;
@@ -2268,6 +2269,7 @@ impl Renderer {
         let debug_line_draw = self.build_debug_line_draw(scene, device);
         let sprite_draws = self.build_sprite_draws(scene, device, &textures);
         let particle_draw = self.build_particle_draw(scene, device);
+        let rain_draw = self.build_rain_draw(scene, size, device);
         let text_draws = self.build_text_draws(scene, device, &textures);
         let ui_batches = self.build_ui_batches(scene, device, &textures, &view_targets);
 
@@ -2343,6 +2345,7 @@ impl Renderer {
             debug_line_draw,
             sprite_draws,
             particle_draw,
+            rain_draw,
             text_draws,
             ui_batches,
         })
@@ -3973,6 +3976,7 @@ struct FrameRecorder<'a> {
     /// The scene's particles, already sorted back-to-front, or `None` when it carries none — in
     /// which case the scene pass binds no particle pipeline and issues no particle draw.
     particle_draw: Option<ParticleDraw>,
+    rain_draw: Option<rain::RainDraw>,
     text_draws: Vec<TextDraw>,
     ui_batches: Vec<UiBatch>,
 }
@@ -5777,6 +5781,8 @@ impl FrameRecorder<'_> {
         }
 
         self.record_blended(&mut rp, pass.device, pass.inputs, None);
+        // Rain reaches farthest of the transparents, so it draws under the sprites and particles.
+        self.record_rain(&mut rp, None);
 
         // Sprites/billboards.
         rp.set_pipeline(self.r.pipeline(ShaderId::Sprite));
@@ -5856,6 +5862,7 @@ impl FrameRecorder<'_> {
         });
 
         self.record_blended(&mut rp, pass.device, pass.inputs, Some(format));
+        self.record_rain(&mut rp, Some(format));
 
         rp.set_pipeline(self.r.transparent_depth_pipeline(ShaderId::Sprite, format));
         rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
@@ -7296,6 +7303,7 @@ pub(crate) enum ShaderId {
     SmaaWeights,
     SmaaBlend,
     SilhouetteMask,
+    Rain,
 }
 
 /// Everything about one shader that is a constant: its file name, its compiled-in body, the shared
@@ -7321,7 +7329,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 43;
+const SHADER_COUNT: usize = 44;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -7811,6 +7819,25 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Some(LayoutId::MeshMaterial),
         ],
     },
+    ShaderDesc {
+        id: ShaderId::Rain,
+        file_name: "rain.wgsl",
+        body: include_str!("shaders/rain.wgsl"),
+        // The particle's inputs: the camera, and the light set a lit streak shades its centre with.
+        snippets: &[
+            Snippet::Camera,
+            Snippet::TransparentLayer,
+            Snippet::ClusterGrid,
+            Snippet::Lights,
+            Snippet::BillboardLight,
+            Snippet::Quad,
+        ],
+        layouts: &[
+            Some(LayoutId::Camera),
+            Some(LayoutId::Lights),
+            Some(LayoutId::Rain),
+        ],
+    },
 ];
 
 impl ShaderId {
@@ -8141,10 +8168,12 @@ enum LayoutId {
     MediumScatterGi,
     /// The ground-marker pass's group 1: the clipped markers' visibility profiles.
     GroundMarkerProfiles,
+    /// The rain pass's group 2: the lattice parameters.
+    Rain,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 46;
+const LAYOUT_COUNT: usize = 47;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -8342,6 +8371,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
         id: LayoutId::GroundMarkerProfiles,
         create: shader_gen::create_profiles_bgl,
     },
+    LayoutDesc {
+        id: LayoutId::Rain,
+        create: shader_gen::create_rain_bgl,
+    },
 ];
 
 /// Every bind group layout, built once and indexed by [`LayoutId`].
@@ -8494,6 +8527,7 @@ fn build_pipeline(
         ShaderId::Sprite => build_sprite_pipeline(device, label, src, &layout),
         ShaderId::Particle => build_particle_pipeline(device, label, src, &layout),
         ShaderId::Text => build_text_pipeline(device, label, src, &layout),
+        ShaderId::Rain => rain::build_rain_pipeline(device, label, src, &layout),
         // The AO, shaft and depth-of-field chains work in `Rgba16Float` like the bloom chain: a
         // half-float target keeps their intermediates linear and filterable with no new graph texture
         // format, where the only 8-bit format the graph offers is sRGB-encoded and would be outright
@@ -8648,30 +8682,36 @@ fn layer_draw(id: ShaderId) -> Option<LayerDraw<'static>> {
     Some(match id {
         ShaderId::Sprite => LayerDraw {
             vertex_entry: "vs_main",
-            buffer: wgpu::VertexBufferLayout {
+            buffer: Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<SpriteInstanceRaw>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &SPRITE_INSTANCE_ATTRS,
-            },
+            }),
             depth_compare: wgpu::CompareFunction::LessEqual,
         },
         ShaderId::Particle => LayerDraw {
             vertex_entry: "vs_depth",
-            buffer: wgpu::VertexBufferLayout {
+            buffer: Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<ParticleInstanceRaw>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &PARTICLE_INSTANCE_ATTRS,
-            },
+            }),
             depth_compare: wgpu::CompareFunction::LessEqual,
         },
         ShaderId::Text => LayerDraw {
             vertex_entry: "vs_depth",
-            buffer: wgpu::VertexBufferLayout {
+            buffer: Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<TextVertexRaw>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &TEXT_VERTEX_ATTRS,
-            },
+            }),
             depth_compare: wgpu::CompareFunction::Always,
+        },
+        ShaderId::Rain => LayerDraw {
+            vertex_entry: "vs_depth",
+            // The streaks are decoded from the instance index: no vertex data.
+            buffer: None,
+            depth_compare: wgpu::CompareFunction::LessEqual,
         },
         _ => return None,
     })
@@ -9269,7 +9309,8 @@ fn build_text_pipeline(
 /// What differs between the sprite, particle and text twins that draw into the transparent layer.
 struct LayerDraw<'a> {
     vertex_entry: &'static str,
-    buffer: wgpu::VertexBufferLayout<'a>,
+    /// The vertex buffer layout, `None` for a draw that decodes its quads from the instance index.
+    buffer: Option<wgpu::VertexBufferLayout<'a>>,
     /// The kind's own depth compare, so the layer is covered exactly where the colour was.
     depth_compare: wgpu::CompareFunction,
 }
@@ -9292,7 +9333,7 @@ fn build_layer_pipeline(
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some(draw.vertex_entry),
-            buffers: &[Some(draw.buffer)],
+            buffers: &draw.buffer.map(Some).into_iter().collect::<Vec<_>>(),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {

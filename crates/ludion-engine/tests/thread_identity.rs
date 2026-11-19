@@ -418,3 +418,104 @@ fn prefab_scene_hashes_are_thread_count_invariant() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The per-tick `WorldHash` trace of an engine that plays one sequence through (camera, animation,
+/// ui, dialogue and event keys) and ends it.
+fn sequence_trace(root: &Path) -> Vec<u64> {
+    use ludion_engine::{Animation, CameraRig, DialogueConfig, dialogue_update, sequence_update};
+    let mut engine = Engine::builder()
+        .project_root(root)
+        .dialogue(DialogueConfig::default())
+        .sequences()
+        .system("sequence_update", sequence_update)
+        .system("dialogue_update", dialogue_update)
+        .build()
+        .expect("the engine builds");
+    engine
+        .load_inline_scene("format: 1\nseed: 1\nentities: []\n")
+        .expect("the scene loads");
+    let world = engine.world_mut();
+    let (cam, actor, panel) = (world.spawn(), world.spawn(), world.spawn());
+    world.insert(cam, CameraRig::default()).unwrap();
+    world.insert(actor, Animation::default()).unwrap();
+    ludion_engine::sequences::play(
+        world,
+        "sequences/beat.yaml",
+        &[("cam", cam), ("actor", actor), ("panel", panel)],
+    )
+    .expect("the sequence starts");
+    (0..120)
+        .map(|_| {
+            engine.advance_live();
+            engine.world_hash().unwrap().as_u64()
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "thread-identity gate; run via check.mjs --full or CI"]
+fn sequence_hashes_are_thread_count_invariant() {
+    let root = std::env::temp_dir().join(format!(
+        "ludion-thread-identity-sequence-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("sequences")).unwrap();
+    std::fs::create_dir_all(root.join("strings")).unwrap();
+    std::fs::create_dir_all(root.join("dialogue")).unwrap();
+    std::fs::write(
+        root.join("strings/en.yaml"),
+        "format: 1\nkind: strings\nlocale: en\nstrings:\n  s.op: Operator\n  t.hi: Hi\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("dialogue/main.yaml"),
+        "format: 1\nkind: dialogue\nspeakers:\n  op:\n    name: s.op\n    channel: radio\nlines:\n  hi:\n    speaker: op\n    text: t.hi\n    duration_ticks: 20\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("sequences/beat.yaml"),
+        "format: 1
+kind: sequence
+roles:
+  - cam
+  - actor
+  - panel
+length_ticks: 60
+tracks:
+  camera:
+    - at: 5
+      role: cam
+      rig:
+        focus_offset:
+          - 0.0
+          - 1.0
+          - 0.0
+    - at: 50
+      role: cam
+      restore: true
+  animation:
+    - at: 10
+      role: actor
+      clip: run
+  ui:
+    - at: 15
+      role: panel
+      tracks:
+        - field: opacity
+          from:
+            - 0.0
+          to:
+            - 1.0
+  dialogue:
+    - at: 25
+      line: hi
+  event:
+    - at: 35
+      name: e
+",
+    )
+    .unwrap();
+    assert_traces_invariant("a played sequence", || sequence_trace(&root));
+    let _ = std::fs::remove_dir_all(&root);
+}

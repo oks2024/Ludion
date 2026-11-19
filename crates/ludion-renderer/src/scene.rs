@@ -1726,6 +1726,9 @@ pub struct RenderScene {
     /// [`MAX_RENDER_VIEWS`], in draw order. Empty for a scene that authors none, which adds no pass
     /// and leaves the frame byte-identical.
     pub views: Vec<RenderViewData>,
+    /// The scene's rain, `None` when it has none or its intensity is 0 (the frame is then identical to
+    /// one without the component).
+    pub rain: Option<crate::rain::RainData>,
 }
 
 impl RenderScene {
@@ -1768,6 +1771,7 @@ impl RenderScene {
             bone_palette: Vec::new(),
             viewmodel: None,
             views: Vec::new(),
+            rain: None,
         }
     }
 }

@@ -66,7 +66,7 @@ A motor that ended its last call grounded on a `static` or `kinematic` support (
 | --- | --- |
 | `grounded`, `landed` | walk or fall; `landed` = began airborne, ended grounded (the thud, the double-jump reset) |
 | `ground` (entity, point, normal, `walkable`, `distance`, `surface`) | what it stands on; a steep floor is reported with `walkable: false`; `surface` is the collider's `SurfaceTag` or the scene default (`ludion docs collision`) |
-| `ceiling`, `walls` | head bump (zero vertical speed); one wall per entity and plane, sorted by travel distance then entity; each `SurfaceHit` carries `surface` too |
+| `ceiling`, `walls` | head bump (zero vertical speed); one wall per entity and plane, sorted by travel distance then entity; each `SurfaceHit` carries `surface` too; the `motor` trace's `ground`, `ceiling` and `walls` carry the surface `name`, omitted when none |
 | `stepped` | the climb of this tick (above) |
 | `platform` (entity, translation, yaw, surface) | what carried it; default (no entity) when no carry ran or the move was stuck |
 | `moved`, `height`, `posture` | the feet's total movement incl. depenetration and carry; the capsule height used; the posture in force (`None` = the motor's own shape) |

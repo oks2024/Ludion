@@ -140,6 +140,10 @@ fn the_motor_channel_reports_each_tick_and_only_what_was_moved() {
     let last = hero.last().unwrap();
     assert_eq!(last["grounded"], true, "the hero landed on the floor");
     assert!(last["feet"][0].as_f64().unwrap() > 1.5, "and walked on");
+    assert!(
+        last["ground"].get("surface").is_none(),
+        "an untagged scene reports no surface name"
+    );
 
     let idle = motor("idle");
     assert_eq!(idle.len(), FRAMES as usize);

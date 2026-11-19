@@ -40,6 +40,7 @@ pub mod animation_layers;
 pub mod audio;
 pub mod blend_clock;
 pub mod ground_marker_clip;
+pub mod ik_targets;
 pub mod lane;
 pub mod light_exposure;
 pub mod mesh_blend;
@@ -52,6 +53,7 @@ pub mod patterns;
 pub mod perception;
 pub mod prefab;
 pub mod radial;
+pub mod rain;
 pub mod render_view;
 pub mod ui;
 pub mod validators;
@@ -63,6 +65,7 @@ pub use animation_layers::{
 pub use audio::{AudioListener, ListenerOrientation};
 pub use blend_clock::{BlendClock, LayerPhase};
 pub use ground_marker_clip::{GroundMarkerClip, MAX_CLIP_BINS, MIN_CLIP_BINS};
+pub use ik_targets::{IkTarget, IkTargets, fade_ik_target, ik_target_weight, ik_target_weight_at};
 pub use lane::{LaneConstraint, LaneEnds};
 pub use light_exposure::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
 pub use mesh_blend::MeshBlend;
@@ -81,6 +84,7 @@ pub use perception::{
 };
 pub use prefab::PrefabInstance;
 pub use radial::{AimKind, MAX_RADIAL_ITEMS, RadialEvent, UiRadial, UiRadialItem, UiRadialNav};
+pub use rain::{MAX_RAIN_HEIGHT_SPAN, Rain, rain_problems};
 pub use render_view::{RENDER_VIEW_SIZE_RANGE, RenderView};
 pub use ui::{
     TextOutline, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiNav,
@@ -6680,6 +6684,12 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<RenderView>("RenderView")
         .expect("unique");
+    // The assembly IK targets, appended after `RenderView`: read by `extract`, never a system.
+    registry
+        .register_validated::<IkTargets>("IkTargets")
+        .expect("unique");
+    // The rain field, appended after `IkTargets`: read by `extract` into the transparent layer's streak draw.
+    registry.register_validated::<Rain>("Rain").expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -7213,12 +7223,14 @@ mod tests {
                 "JointZero",
                 "UiRadial",
                 "RenderView",
+                "IkTargets",
+                "Rain",
             ]
         );
         assert_eq!(
             registry.len(),
-            82,
-            "appending `RenderView` grows the registry to 82"
+            84,
+            "appending `Rain` grows the registry to 84"
         );
     }
 

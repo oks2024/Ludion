@@ -284,6 +284,53 @@ blends:
 - `render --model --blend` sweeps the parameters with no `BlendClock`: a sheet's phase is the stateless
   `elapsed * rate(params)`, which is what an entity without a clock draws.
 
+### IK
+
+An assembly's `ik:` names two-part chains and look-ats; an `IkTargets` component aims them. Extract
+solves after the clip, crossfade and layers, so it is presentation only: the targets are hashed, the pose
+never is.
+
+```yaml
+ik:
+  hand_r:                       # a chain: parts (upper, then its child) + effector
+    parts:
+      - upper-arm-r
+      - lower-arm-r
+    effector:                   # part-local, unmirrored voxels on the second part
+      - 1.0
+      - 0.0
+      - 1.0
+    hinge:                      # optional: axis in the upper part's frame, bend 1 or -1
+      axis:
+        - 1.0
+        - 0.0
+        - 0.0
+      bend: 1
+  look:                         # a look-at: aim = a `masks:` entry, forward default -Z
+    aim: head_look
+    limits_deg:                 # yaw and pitch, each in (0, 180], default 180
+      yaw: 70.0
+      pitch: 40.0
+```
+
+- A chain has `parts` and `effector`, a look-at has `aim`; both or neither is `L1137`, as are a third
+  part and `ground` (not supported). `L1138`: an unknown part or mask, a second part that is not a child
+  of the first, or no `hinge:` where the second part has a non-hinge `joints:` entry or is not named
+  `lower-leg-*`/`lower-arm-*`.
+- The hinge is `hinge:`, else the second part's `joints:` hinge (its limits clamp the flex), else axis +X
+  with bend −1 for `lower-leg-*` and +1 for `lower-arm-*` (the humanoid convention).
+- `IkTargets.targets` maps an entry name to one of `point` (world) or `direction` (`Look`: +yaw turns
+  left, +pitch looks down, relative to `forward`), plus `weight` in `[0, 1]` that ramps over `fade`
+  seconds (`fade_ik_target`, no write when unchanged). Both or neither is `L1673`. A direction on a chain is
+  ignored. To follow an entity, write `point` from its world position each tick it moves.
+- Order: every look-at (name order), then every chain. A look-at turns its aim parts root-first, each by its
+  mask weight's share of the total; the yaw and pitch of the target clamp to `limits_deg`. A chain bends the
+  second part about the hinge to the right reach, then swings the first part to point at the target. A
+  target out of reach leaves the limb straight or folded, aimed at it (no pole vector). `weight` blends from
+  the animated pose to the solved one.
+- No `IkTargets`, no matching entry or weight 0 poses byte for byte as without IK. Not in the ragdoll
+  switch, the model sheet or `kind: character` skins.
+
 ### Live editing
 
 Under `ludion dev` (or any attached viewer) saving the assembly, **any** part, or **any** bound clip

@@ -185,6 +185,7 @@ const GPU_FILE_EXEMPT = new Map([
   ['crates/ludion-renderer/src/render/tests/viewmodel.rs','skip_or_renderer in render.rs puts the device up'],
   ['crates/ludion-renderer/src/render/tests/silhouette.rs','skip_or_renderer in render.rs puts the device up'],
   ['crates/ludion-renderer/src/render/tests/blended.rs','skip_or_renderer in render.rs puts the device up'],
+  ['crates/ludion-renderer/src/render/tests/rain.rs','skip_or_renderer in render.rs puts the device up'],
 ]);
 
 const normalize = (s) => s.replace(/\s+/g, ' ').trim();

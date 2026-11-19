@@ -10,6 +10,7 @@ mod gpu_cull;
 mod lit_additive;
 mod medium_scatter;
 mod mesh_medium;
+mod rain;
 mod rim;
 mod shaft_layer;
 mod silhouette;

@@ -61,7 +61,7 @@ interiors**. Large open water is not a driver.
 ### Shape of the system
 
 1. **Scope is reflection transport only.** The wet *look* (a wetness scalar, puddle masks, ripple
-   normals) belongs to a sibling plan. **Planar reflections are never built**: SSR plus probes is the
+   normals) belongs to `Plan/rain-and-wet.md`. **Planar reflections are never built**: SSR plus probes is the
    system.
 2. **Resolution chain, per pixel:**
    1. SSR, where the trace hits with confidence;

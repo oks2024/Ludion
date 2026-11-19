@@ -163,6 +163,7 @@ collinear 2D points, an unbound or non-looping point clip, or a `sync` event a p
   An assembly takes layers, plain or blend, with its own `masks:` (`ludion docs voxel-animation`);
   `ludion render --model --blend/--layer` previews both and `check-scene` lists them.
 - A layer raises no `AnimationEvents` unless it sets `events: true`.
+- IK over assembly parts (`ik:`, `IkTargets`) is separate, solved after layers: `ludion docs voxel-animation` §IK.
 - `ParentJoint` sockets and `posed_joint_world` read the layered pose.
 
 ## Next

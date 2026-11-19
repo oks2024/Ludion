@@ -79,7 +79,7 @@ settled plan, nothing built; **rejected** — closed by design.
   retargeting, morph targets, sockets — each deferred with a trigger (`Plan/animation-clips.md`
   non-goals). A data-driven state machine was rejected as a pillar violation
   (`Plan/voxel-animation.md`); the Rust-side shape is open.
-- Timeline / sequencer for cutscenes and tweening — absent (`kind: pattern` is bullet-volley only).
+- Timeline / sequencer for cutscenes — `kind: sequence` ships its first wave (`Plan/sequencer.md`).
 
 ### Physics
 

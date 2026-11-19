@@ -140,3 +140,4 @@ fn slow_while_aiming(world: &mut World, _ctx: &SystemCtx) {
 - `ludion docs sprite-animation` — flipbook/clip playback through `Animation`.
 - `ludion docs scene-transitions` — `carry_resource`, and what does and doesn't survive a switch.
 - `ludion docs dialogue` — a line with `holds_gameplay: true` holds this clock while it plays.
+- `ludion docs sequences` — a `clock: game` sequence stretches through a hold; `clock: sim` runs through it.

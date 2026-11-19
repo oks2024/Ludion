@@ -88,6 +88,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "probe_face.wgsl",
     "probe_relight.wgsl",
     "projector.wgsl",
+    "rain.wgsl",
     "reflections.wgsl",
     "resolve.wgsl",
     "shadow.wgsl",
@@ -319,6 +320,17 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "skin.wgsl",
             "bayer.wgsl",
             "mesh_material.wgsl",
+        ],
+    ),
+    (
+        "rain.wgsl",
+        &[
+            "camera.wgsl",
+            "transparent_layer.wgsl",
+            "cluster_grid.wgsl",
+            "lights.wgsl",
+            "billboard_light.wgsl",
+            "quad.wgsl",
         ],
     ),
     (

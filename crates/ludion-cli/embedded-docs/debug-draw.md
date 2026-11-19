@@ -27,7 +27,7 @@ radius)` (three great circles), `capsule(a, b, radius)` (`a == b` is a sphere). 
 ## Categories
 
 A category is a name a system draws under and a host enables: `motor` (the character motor's own: `ludion docs motor`), `lane` (its lane constraint: `ludion docs lane`), `ai`. The engine
-emits `camera` (the `CameraRig`: `ludion docs camera`), `path` — every `PathFollower`'s route, and an oriented follower's axes — `hierarchy` — a line from each parent's origin to its child's (`ludion docs hierarchy`) — and `probes` — each `ReflectionProbe`'s volume wireframe (box edges, three sphere great circles) and a cross at its capture point, coloured by rank like `--debug-view probe_index`, gray past the shaded cap — `local_shadows` — each opted-in light's shadow status, green granted and red skipped (`ludion docs local-shadows`) — `cull` — every world mesh's box from the camera view only, green kept and red culled by the CPU oracle of the GPU cull (a kept mesh with a `lods:` chain is tinted by its level: green 0, yellow 1, orange 2, magenta 3), plus a yellow cull frustum under `render.view`'s `cull_from` (`ludion docs wire-render`) — `colliders` — every body in the physics world as a wireframe in its world pose (below) — and `nav` — the nav grid, routes and flow arrows (below). `DebugCategories::parse("path,motor")` builds a
+emits `camera` (the `CameraRig`: `ludion docs camera`), `path` — every `PathFollower`'s route, and an oriented follower's axes — `hierarchy` — a line from each parent's origin to its child's (`ludion docs hierarchy`) — and `probes` — each `ReflectionProbe`'s volume wireframe (box edges, three sphere great circles) and a cross at its capture point, coloured by rank like `--debug-view probe_index`, gray past the shaded cap — `local_shadows` — each opted-in light's shadow status, green granted and red skipped (`ludion docs local-shadows`) — `cull` — every world mesh's box from the camera view only, green kept and red culled by the CPU oracle of the GPU cull (a kept mesh with a `lods:` chain is tinted by its level: green 0, yellow 1, orange 2, magenta 3), plus a yellow cull frustum under `render.view`'s `cull_from` (`ludion docs wire-render`) — `colliders` — every body in the physics world as a wireframe in its world pose (below) — `surfaces` — every collider tinted by the surface a hit there reports (below) — and `nav` — the nav grid, routes and flow arrows (below). `DebugCategories::parse("path,motor")` builds a
 filter; `all` enables every category, an empty list none (the default).
 
 ### `colliders`
@@ -42,9 +42,22 @@ cull (a level under 50k triangles is far below it). Non-`rigid` `circle`/`aabb` 
 2D spatial index, not the physics world, so they are **not drawn**; a `rigid` one is. Typical use:
 `ludion render --scene S --out o.png --frames 2 --debug-draw colliders`.
 
+### `surfaces`
+
+Host-side like `colliders`, and listed only when the scene declares `physics.surfaces`. Each segment takes the colour of the surface a hit there reports (`surface_at`: overlay, triangle or cell, part, tag, `default_surface`). Tagged mesh and heightfield colliders draw each triangle's edges **inset 10%** toward its centroid in the surface of that centroid, so adjacent regions stay apart (a puddle overlay tints the floor under it); an overlay draws its own outline, other sensors are skipped; every other collider draws its outline per segment. Debug lines carry no text, so the legend is this table, indexed by declared surface id mod 8 (linear RGBA); a hit with no surface is grey `[0.35, 0.35, 0.35]`:
+
+| id | colour | id | colour |
+| --- | --- | --- | --- |
+| 0 | yellow `[1, 0.85, 0]` | 4 | orange `[1, 0.45, 0]` |
+| 1 | magenta `[1, 0.1, 0.8]` | 5 | violet `[0.55, 0.25, 1]` |
+| 2 | cyan `[0, 0.8, 1]` | 6 | red `[1, 0.1, 0.1]` |
+| 3 | green `[0.2, 1, 0.2]` | 7 | teal `[0, 1, 0.6]` |
+
+Same 200,000-segment budget as `colliders`. `ludion render --scene S --frames 2 --debug-draw surfaces` (`examples/gallery/surface-tags.yaml`).
+
 ### `nav`
 
-Host-side, from the `Nav` resource and the `NavRoute`/`NavAgent` components at extraction: read-only, it never builds a flow field and never touches the sim. `nav` draws all three parts; `nav:grid`, `nav:routes` and `nav:flow` pick one (`--debug-draw nav:routes`). **Routes** (never culled): each routed agent's polyline from its position along the remaining waypoints, cyan `[0, 0.85, 0.85]` (orange `[1, 0.55, 0.1]` when the route is `partial`), the waypoints already passed dimmed to 40%, and a cross at the goal (red `[1, 0.15, 0.15]` when `unreachable`). **Flow**: an arrow per reached node of every cached field a walking agent without a `NavGoal` reads, yellow `[1, 0.85, 0.1]`. **Grid**: a cross per node (light grey) and each link once, grey when level and dark grey for a stepped link. Flow and grid draw only within 30 m of the game camera (everything when there is none; an editor stage camera does not move the centre); at most 200,000 segments, routes and flow first so only the grid is truncated. It needs the game's `.nav(..)`: the built-in `ludion render` host installs none, so `nav` draws nothing there and the summary names it. `ludion docs nav` has the grid.
+Host-side, from the `Nav` resource resource and the `NavRoute`/`NavAgent` components at extraction: read-only, it never builds a flow field and never touches the sim. `nav` draws all three parts; `nav:grid`, `nav:routes` and `nav:flow` pick one (`--debug-draw nav:routes`). **Routes** (never culled): each routed agent's polyline from its position along the remaining waypoints, cyan `[0, 0.85, 0.85]` (orange `[1, 0.55, 0.1]` when the route is `partial`), the waypoints already passed dimmed to 40%, and a cross at the goal (red `[1, 0.15, 0.15]` when `unreachable`). **Flow**: an arrow per reached node of every cached field a walking agent without a `NavGoal` reads, yellow `[1, 0.85, 0.1]`. **Grid**: a cross per node (light grey) and each link once, grey when level and dark grey for a stepped link. Flow and grid draw only within 30 m of the game camera (everything when there is none; an editor stage camera does not move the centre); at most 200,000 segments, routes and flow first so only the grid is truncated. It needs the game's `.nav(..)`: the built-in `ludion render` host installs none, so `nav` draws nothing there and the summary names it. `ludion docs nav` has the grid.
 
 ### `perception`
 

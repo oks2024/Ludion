@@ -3011,9 +3011,33 @@ impl PhysicsWorld {
         self.surfaces.as_ref()?.name(id)
     }
 
+    /// The surface of `entity`'s own `SurfaceOverlay`, if it has one that resolved.
+    pub(crate) fn overlay_surface(&self, entity: EntityId) -> Option<SurfaceId> {
+        self.overlay_ids
+            .iter()
+            .find(|o| o.0 == entity)
+            .map(|&(_, id, _)| id)
+    }
+
+    /// Whether `entity`'s mesh or heightfield collider tags individual triangles or cells.
+    pub(crate) fn has_face_tags(&self, entity: EntityId) -> bool {
+        self.mesh_surfaces
+            .binary_search_by_key(&entity, |&(e, _)| e)
+            .is_ok()
+            || self
+                .cell_ids
+                .binary_search_by_key(&entity, |&(e, _, _)| e)
+                .is_ok()
+    }
+
+    /// The declared surface names in id order; empty when the scene declares none.
+    pub fn surface_names(&self) -> &[String] {
+        self.surfaces.as_ref().map_or(&[], |t| t.names())
+    }
+
     /// The surface `entity`'s collider reports: its `SurfaceTag`, else the scene's
-    /// `default_surface`, else `None`. What a `ContactEvent` consumer calls to name a contact's
-    /// surface.
+    /// `default_surface`, else `None`. A contact consumer calls
+    /// [`contact_surfaces`](PhysicsWorld::contact_surfaces) instead.
     pub fn surface_of(&self, entity: EntityId) -> Option<SurfaceId> {
         self.surface_ids
             .binary_search_by_key(&entity, |&(e, _)| e)
@@ -3135,6 +3159,40 @@ impl PhysicsWorld {
             .or_else(|| self.face_at(entity, point))
             .or_else(|| self.part_at(entity, point))
             .or_else(|| self.surface_of(entity))
+    }
+
+    /// The surfaces a contact event reports, `[surface of a, surface of b]`.
+    ///
+    /// A [`Started`](ContactPhase::Started) event resolves each side with
+    /// [`surface_at`](PhysicsWorld::surface_at) at the event's point, so an overlay containing the
+    /// point answers for both sides. A [`Stopped`](ContactPhase::Stopped) event has no point and
+    /// answers `[None, None]`. A pure read of the last completed step: a restore answers identically.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::ids::EntityId;
+    /// use ludion_core::time::TickRate;
+    /// use ludion_physics::{ContactEvent, ContactPhase, PhysicsWorld};
+    ///
+    /// let world = PhysicsWorld::new(TickRate::DEFAULT);
+    /// let event = ContactEvent {
+    ///     a: EntityId::new(0, 0),
+    ///     b: EntityId::new(1, 0),
+    ///     phase: ContactPhase::Stopped,
+    ///     impulse: 0.0,
+    ///     point: [0.0; 3],
+    ///     normal: [0.0; 3],
+    /// };
+    /// assert_eq!(world.contact_surfaces(&event), [None, None]);
+    /// ```
+    pub fn contact_surfaces(&self, event: &ContactEvent) -> [Option<SurfaceId>; 2] {
+        match event.phase {
+            ContactPhase::Started => [
+                self.surface_at(event.a, event.point),
+                self.surface_at(event.b, event.point),
+            ],
+            ContactPhase::Stopped => [None, None],
+        }
     }
 
     /// The surface under `point`: an overlay containing it, else the surface of the nearest

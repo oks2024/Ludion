@@ -74,6 +74,7 @@ use crate::part::PartDocument;
 use crate::rig_blend::{
     BlendSpace, check_blend_points, emit_blends, parse_blends, validate_blends,
 };
+use crate::rig_ik::{IkEntry, emit_ik, parse_ik, validate_ik};
 use crate::rig_mask::{RigMask, emit_masks, parse_masks, validate_mask_names};
 use crate::scalar::{format_float, scalar_string};
 use crate::voxel::{PaletteEntry, VoxelDocument, single_glyph};
@@ -86,8 +87,9 @@ pub const ASSEMBLY_FORMAT_VERSION: u64 = 1;
 /// assembly's palette reads identically to a voxel model's.
 const EMPTY_GLYPH: char = '.';
 
-const ASSEMBLY_KEYS: [&str; 10] = [
+const ASSEMBLY_KEYS: [&str; 11] = [
     "format", "kind", "name", "size", "palette", "parts", "clips", "joints", "masks", "blends",
+    "ik",
 ];
 const PART_ENTRY_KEYS: [&str; 6] = ["name", "file", "parent", "place", "pivot", "mirror"];
 const ASSEMBLY_JOINT_KEYS: [&str; 4] = ["kind", "axis", "limits", "break_impulse"];
@@ -142,7 +144,14 @@ impl AssemblyPartEntry {
     /// in different frames, and every consumer that forgets it produces a limb that rotates about
     /// the wrong end.
     pub fn pivot_in_mesh_frame(&self, part_size_x: u32) -> [f64; 3] {
-        let [px, py, pz] = self.pivot;
+        self.point_in_mesh_frame(self.pivot, part_size_x)
+    }
+
+    /// Any part-local, unmirrored voxel point (an IK effector, say) in the frame
+    /// [`crate::assembly_part_voxel`] produces — [`Self::pivot_in_mesh_frame`]'s rule for a
+    /// point other than the pivot.
+    pub fn point_in_mesh_frame(&self, point: [f64; 3], part_size_x: u32) -> [f64; 3] {
+        let [px, py, pz] = point;
         if self.mirror_x {
             [f64::from(part_size_x) - px, py, pz]
         } else {
@@ -242,6 +251,9 @@ pub struct AssemblyDocument {
     /// Blend spaces over the bound clips, sorted by name (the canonical order `emit` writes). An
     /// absent `blends` is the empty list.
     pub blends: Vec<BlendSpace>,
+    /// Two-part IK chains and look-ats, sorted by name (the canonical order `emit` writes). An
+    /// absent `ik` is the empty list.
+    pub ik: Vec<IkEntry>,
 }
 
 // --- Parsing (`L1137`) --------------------------------------------------------------------------
@@ -361,6 +373,9 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
             "blends" => {
                 doc.blends =
                     parse_blends(entry, code::ASSEMBLY_DOCUMENT_STRUCTURE, &mut diagnostics);
+            }
+            "ik" => {
+                doc.ik = parse_ik(entry, &mut diagnostics);
             }
             unknown => diagnostics.push(envelope::unknown_key(
                 unknown,
@@ -1401,6 +1416,7 @@ pub(crate) fn validate(doc: &AssemblyDocument) -> Vec<Diagnostic> {
         code::ASSEMBLY_DATA_CONSISTENCY,
         &mut diagnostics,
     );
+    validate_ik(doc, &mut diagnostics);
     diagnostics
 }
 
@@ -2422,6 +2438,7 @@ pub(crate) fn emit(doc: &AssemblyDocument) -> String {
 
     emit_masks(&mut out, &doc.masks);
     emit_blends(&mut out, &doc.blends);
+    emit_ik(&mut out, &doc.ik);
 
     out
 }

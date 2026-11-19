@@ -179,10 +179,10 @@ fn all_repo_shaders_reflect_and_unify() {
     // normal + depth group, and the probe relight kernel's, and the SSR blend's fill + normal +
     // specular + depth + trace group, and the local-shadow atlas debug view's, and the decal
     // projector's map group, the receiver-id pass's draw group and the lit decal pass's group, and the
-    // three SMAA passes' groups (edges, weights, blend), and the cull's two buffer groups (inputs, outputs), and the local-light in-scatter pair's two, and its GI volumes' group, and the ground-marker clip's profile group. Of
+    // three SMAA passes' groups (edges, weights, blend), and the cull's two buffer groups (inputs, outputs), and the local-light in-scatter pair's two, and its GI volumes' group, and the ground-marker clip's profile group, and the rain's parameter group. Of
     // them exactly six are compute-only (gi_bake, gi_inject, probe_relight, the IBL prefilter trio, the cull's pair): the emitter
     // skips the BGLs of the texture-bearing ones because their compute pipelines keep auto-derived layouts.
-    assert_eq!(reflection.bind_groups.len(), 52);
+    assert_eq!(reflection.bind_groups.len(), 53);
     let mut compute_only: Vec<&str> = reflection
         .bind_groups
         .iter()

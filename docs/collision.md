@@ -225,7 +225,7 @@ so a reader scheduled before the rebuild continues exactly.
 so a live edit applies from the next write with no rebuild. Every hit naming a collider carries `surface: Option<SurfaceId>` — `QueryHit`,
 `PointHit`, `MoveReport.ground` and `walls`/`ceiling` — resolved tag, else `default_surface`, else `None`. A tag naming an undeclared surface is
 `L1690` (one rejection at runtime, hits report the default, the body is kept); a tag with no collider is `L1692` in `check-scene`.
-`physics.surface_of(entity)` names a contact's surface from a `ContactEvent`'s entity. The engine stores no per-surface scalar: footstep tables are game data.
+`physics.contact_surfaces(&event)` names a contact's two surfaces, `[a's, b's]`, resolved at the event's point (an overlay containing it answers for both; a stop answers `[None, None]`); `physics.surface_of(entity)` is the entity's own. The engine stores no per-surface scalar: footstep tables are game data.
 
 A puddle or rug is a `SurfaceOverlay { surface, priority }` on a solver-claimed sensor `Collider` (`L1693` otherwise): any hit whose point lies
 inside it reports the overlay's surface, ahead of the tag and the default. Overlapping overlays: highest `priority` (an `i32`, default 0), ties to the

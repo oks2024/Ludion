@@ -91,7 +91,7 @@ axis-aligned box of half-extents `extent`; `disc` releases uniformly across a di
   rotation. The uniform `Transform.scale.x` multiplies `extent`, both `speed` bounds, and both size
   fields — the `Sprite`/`GroundMarker` "authored × entity scale" convention.
 - **The trail idiom: one short-life burst emitter spawned where the thing was.** There is no
-  `space: world` option and none is coming — a trail behind a moving object is a fresh burst emitter
+  `space: world` option and none is coming (world-anchored weather is `Rain`, `ludion docs weather`) — a trail behind a moving object is a fresh burst emitter
   (or a re-stamped `started` on a small `duration`) placed at the object's position each time a
   segment is due, left to finish its own `life`, then reaped by a countdown-`f32` despawn like a
   `GroundMarker` warmup.

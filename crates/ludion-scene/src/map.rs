@@ -89,7 +89,7 @@ const PRIMITIVE_KEYS_EXTRA: [&str; 7] = [
     "metallic",
     "emissive",
 ];
-const COLLIDER_KEYS: [&str; 3] = ["aabb", "circle", "box"];
+const COLLIDER_KEYS: [&str; 4] = ["aabb", "circle", "box", "surface"];
 
 // --- Data model --------------------------------------------------------------------------------
 
@@ -441,6 +441,9 @@ pub struct KitPrimitive {
     pub color: Option<[f64; 4]>,
     /// Optional static collider.
     pub collider: Option<ColliderSpec>,
+    /// The `collider`'s surface tag (`collider: { box: [..], surface: name }`), emitted as a
+    /// `SurfaceTag` beside the `Collider`.
+    pub surface: Option<String>,
     /// Y offset of the emitted `Transform` (default `0`). Where the game bakes its floor rule.
     pub y: f64,
     /// Per-cell base scale (default `[1, 1, 1]`); `merge` multiplies the X/Z axes by the rect size.
@@ -469,6 +472,7 @@ impl Default for KitPrimitive {
             variants: Vec::new(),
             color: None,
             collider: None,
+            surface: None,
             y: 0.0,
             scale: [1.0, 1.0, 1.0],
             roughness: None,
@@ -1185,7 +1189,12 @@ fn parse_primitive(
             }
             "collider" => {
                 has_collider = true;
-                prim.collider = parse_collider(&entry.node, &child("collider"), diagnostics);
+                if let Some((spec, surface)) =
+                    parse_collider(&entry.node, &child("collider"), diagnostics)
+                {
+                    prim.collider = Some(spec);
+                    prim.surface = surface;
+                }
             }
             "y" => {
                 prim.y = expect_f64(&entry.node, &child("y"), "y", diagnostics).unwrap_or_default();
@@ -1263,7 +1272,7 @@ fn parse_collider(
     node: &Node,
     pointer: &str,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<ColliderSpec> {
+) -> Option<(ColliderSpec, Option<String>)> {
     let NodeValue::Mapping(entries) = &node.value else {
         diagnostics.push(
             structure(&format!(
@@ -1276,8 +1285,26 @@ fn parse_collider(
         return None;
     };
     let mut spec = None;
+    let mut surface = None;
     for entry in entries {
         match entry.key.as_str() {
+            "surface" => match &entry.node.value {
+                NodeValue::Scalar(Value::String(name)) if !name.is_empty() => {
+                    surface = Some(name.clone());
+                }
+                _ => diagnostics.push(
+                    Diagnostic::new(
+                        code::MAP_KIT_INVALID,
+                        format!(
+                            "a collider `surface` must be a non-empty surface name, found {} (line {})",
+                            entry.node.value.type_phrase(),
+                            entry.node.line
+                        ),
+                    )
+                    .with_help("name a surface declared under the scene's `physics.surfaces`")
+                    .with_path(format!("{pointer}/surface")),
+                ),
+            },
             "aabb" => {
                 spec = expect_number_array::<2>(
                     &entry.node,
@@ -1315,7 +1342,17 @@ fn parse_collider(
             )),
         }
     }
-    spec
+    if surface.is_some() && matches!(spec, Some(ColliderSpec::Aabb(_) | ColliderSpec::Circle(_))) {
+        diagnostics.push(
+            Diagnostic::new(
+                code::MAP_KIT_INVALID,
+                "a collider `surface` needs a 3D `box` collider: `aabb` and `circle` live in the 2D spatial index, which reports no surfaces",
+            )
+            .with_help("use `box: [x, y, z]`, or drop `surface`")
+            .with_path(format!("{pointer}/surface")),
+        );
+    }
+    spec.map(|spec| (spec, surface))
 }
 
 fn parse_variants(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>) -> Vec<MeshSpec> {
@@ -2072,6 +2109,7 @@ fn build_entity(
         )];
         if let Some(collider) = collider {
             components.push(("Collider".to_string(), collider_value(collider)));
+            components.extend(surface_tag(prim));
         }
         components.extend(extra.iter().cloned());
         return vec![SceneEntity {
@@ -2091,7 +2129,14 @@ fn build_entity(
     let mut sibling = None;
     match collider {
         Some(collider @ ColliderSpec::Box(_)) => {
-            sibling = Some(box_collider_entity(name, center, y, rotation, collider));
+            sibling = Some(box_collider_entity(
+                name,
+                center,
+                y,
+                rotation,
+                collider,
+                prim.surface.as_deref(),
+            ));
         }
         Some(collider) => components.push(("Collider".to_string(), collider_value(collider))),
         None => {}
@@ -2122,19 +2167,31 @@ fn box_collider_entity(
     y: f64,
     rotation: f64,
     collider: ColliderSpec,
+    surface: Option<&str>,
 ) -> SceneEntity {
+    let mut components = vec![
+        (
+            "Transform".to_string(),
+            transform_value(center, y, rotation, [1.0, 1.0, 1.0]),
+        ),
+        ("Collider".to_string(), collider_value(collider)),
+    ];
+    components.extend(surface.map(surface_tag_value));
     SceneEntity {
         presentation: false,
         name: Some(box_collider_name(name)),
-        components: vec![
-            (
-                "Transform".to_string(),
-                transform_value(center, y, rotation, [1.0, 1.0, 1.0]),
-            ),
-            ("Collider".to_string(), collider_value(collider)),
-        ],
+        components,
         instance: None,
     }
+}
+
+/// The `SurfaceTag` component riding beside a primitive's `Collider`, when it names a surface.
+fn surface_tag(prim: &KitPrimitive) -> Option<(String, Value)> {
+    prim.surface.as_deref().map(surface_tag_value)
+}
+
+fn surface_tag_value(surface: &str) -> (String, Value) {
+    ("SurfaceTag".to_string(), json!({ "surface": surface }))
 }
 
 /// Builds a passthrough-only marker entity: a `Transform` plus the verbatim components.

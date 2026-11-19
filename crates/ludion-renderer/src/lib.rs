@@ -72,6 +72,7 @@ mod probe_shade;
 mod probe_store;
 mod projector;
 mod quality;
+pub mod rain;
 mod render;
 mod scatter;
 mod scene;
@@ -119,6 +120,10 @@ pub use projector::{
     decal_stats, footprint_bound, occlusion_atlas, occlusion_bias, occlusion_view,
 };
 pub use quality::{MAX_SUN_CASCADES, Quality, QualityParams};
+pub use rain::{
+    MAX_RAIN_STREAKS, RAIN_TIME_WRAP_S, RainData, RainLayout, drop_position, rain_budget,
+    rain_layout, rain_per_tile, rain_tiles,
+};
 pub use render::{GpuUploads, Renderer, SHADER_SOURCE_DIR, view_scene};
 pub use scene::{
     BlendMode, BlendedMesh, CookedMap, DEFAULT_AMBIENT, DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment,

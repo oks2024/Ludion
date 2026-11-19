@@ -116,6 +116,8 @@ pub use ludion_ai as ai;
 pub use ludion_core::collections;
 /// String tables, the dialogue line queue and subtitles (`ludion docs dialogue`).
 pub use ludion_engine::dialogue;
+/// Timelines of camera, animation, ui, audio, dialogue and event keys (`ludion docs sequences`).
+pub use ludion_engine::sequences;
 /// The walkability grid and flow-field types behind [`prelude::Nav`].
 pub use ludion_nav as nav;
 

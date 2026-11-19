@@ -127,7 +127,7 @@ A **primitive** names one mesh source, or none for a collider-only blocker, and 
 | `variants` | further mesh sources; the primitive's own is candidate 0 |
 | `color` | `[r, g, b, a]` |
 | `roughness` / `metallic` / `emissive` | the `Mesh` fields, same ranges and defaults (`ludion docs components`); absent = not emitted |
-| `collider` | `aabb: [half_x, half_z]`, `circle: r` (2D) or `box: [half_x, half_y, half_z]` (3D: solver and nav see it; emitted on a unit-scale `<name>-collider` sibling) |
+| `collider` | `aabb: [half_x, half_z]`, `circle: r` (2D) or `box: [half_x, half_y, half_z]` (3D: solver and nav see it; emitted on a unit-scale `<name>-collider` sibling). `surface: name` beside `box` also emits `SurfaceTag: { surface: name }` there (box only: `aabb`/`circle` are `L1022`); map-check cannot see the scene's `physics.surfaces`, so `check-scene` on the generated scene checks the name (`L1690`) |
 | `y` | the vertical placement, and **where the game bakes its floor rule** — the engine never hardcodes one |
 | `scale` | `[x, y, z]` |
 | `name` | the generated entity's name stem |

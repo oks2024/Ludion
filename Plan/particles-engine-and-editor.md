@@ -454,6 +454,7 @@ scales every emitter's `rate` and `burst` at extract — masked per machine, nev
 FULL. Triggers, recorded here so the answer comes from a number: `ludion_core::par` over the emitter
 list when extract's particle share passes 1 ms at the stress population on the reference box; a
 stateless vertex-shader evaluation when even that does not hold the line. The first is built (2026-10-10: `extract_particles` in `crates/ludion-engine/src/extract.rs`); the second is not.
+*Amended (Neon Shroud request 0018):* the GPU evaluation is built for rain only, as a separate primitive (`Rain`, `Plan/rain-and-wet.md` D1), because rain is world-anchored and the sim never reads it; `ParticleEmitter` stays CPU-evaluated and emitter-relative.
 
 **10. `ludion render --scene` gains `--frames N`** (tick the built-in schedule N frames before
 extracting — the "zero ticks for now" the render module's header anticipates) and `--frames a,b,c`

@@ -6,7 +6,7 @@ description: Dialogue lines, string tables and subtitles: kind strings/dialogue,
 
 **Scope:** `kind: strings` (one locale's key to text map), `kind: dialogue` (speakers and lines), the
 deterministic line queue and the `Subtitles` your UI draws. Text only: voice, ducking, a drawn subtitle widget
-and `UiText` keys are not here yet. Holding gameplay time is `ludion docs game-clock`; the UI is `ludion docs screen-ui`.
+and `UiText` keys are not here yet. Holding gameplay time is `ludion docs game-clock`; the UI is `ludion docs screen-ui`. Playing lines on a timeline is `ludion docs sequences`.
 
 ## The loop
 

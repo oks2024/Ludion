@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1, W2a, W2b (sim), A1, A2, W2c and W2d mechanized (2026-11-18); A3 deferred; W3–W6 not started, W4 next; the macOS twins of the W2d goldens are owed to the M4.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d and W4a mechanized (2026-11-18); A3 deferred; W3, W4b–W6 and part sockets not started, W4b next; the macOS twins of the W2d goldens are owed to the M4.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -108,6 +108,19 @@ Both goldens are blessed on the RTX 3090 only; `goldens/macos/assembly-layers.pn
 `humanoid-locomotion-blend-strip.png` are owed to the M4. Every strip phase reports 1 component. No
 engine behaviour, component, `WorldHash`, replay, wire-schema or existing golden moved.
 
+### W4a — the assembly `ik:` key, `IkTargets`, look-at and two-part IK
+
+| file | role |
+|---|---|
+| `crates/ludion-scene/src/rig_ik.rs`, `assembly.rs` | the `ik:` key: parse, canonical emit, `L1137` structure and `L1138` cross checks; `AssemblyPartEntry::point_in_mesh_frame` |
+| `crates/ludion-engine/src/assembly_mesh.rs` | `AssemblyData.ik`: a chain's part indices, mesh-frame effector, hinge axis, bend and limits; a look-at's mask weights |
+| `crates/ludion-components/src/ik_targets.rs`, `codes.rs` | the hashed `IkTargets`, `fade_ik_target`, `ik_target_weight(_at)`, `L1673` |
+| `crates/ludion-engine/src/assembly_ik.rs`, `extract.rs` | the `f64` solver and `assembly_ik_goals`, applied after `part_placements_layered` |
+| `crates/ludion-engine/tests/assembly_ik.rs` | neutrality, a point target, a rewritten point, a direction and its yaw limit |
+
+No `WorldHash`, replay, wire-schema or golden moved; the component schema snapshot gained `IkTargets`.
+Tooling (`check-scene`, `render --look/--ik`, a golden) is W4b.
+
 ## Trigger
 
 The game's characters do locomotion plus something else on one skin: carry a body, aim, peek around a
@@ -156,7 +169,8 @@ share one driver shape.
    `AnimGraphState` component, replacing `CYCLE` in `crates/ludion-testkit/tests/common/mod.rs` with an
    identical switch log and `.lrp`. There is no animation asset language.
 10. **IK and look-at** (W4): `IkRig` and `IkTargets` components, a look-at chain and a two-bone solver, run
-    after layers; the final pose goes through `posed_joint_world` so sockets follow.
+    after layers; the final pose goes through `posed_joint_world` so sockets follow. (Decision 36 replaces
+    `IkRig` with the assembly's `ik:` key.)
 11. **Foot grounding** (W5): read-only physics casts in extract, the 32-character budget of ≤0.5 ms, and
     `ProfileReport` counters (a schema move, re-blessed there).
 12. **Root motion** (W6): a `ludion_root_motion` extras flag at import and `root_motion_delta`, a deterministic
@@ -238,6 +252,25 @@ share one driver shape.
     `--blend`. A sheet's blend phase is the stateless `elapsed · rate` (decision 18), and every assembly phase
     keeps the gap analysis. Refusals are `L1117`, the model sheet's own code.
 
+36. **The `ik:` key replaces decision 10's `IkRig` component**: the rig is authored with the assembly, so a
+    chain or look-at names parts, a `masks:` entry and an effector beside them. `L1137`/`L1138`.
+37. **Solver and order.** In extract, after layers, on the composed placements (the model sheet and the ragdoll
+    switch are untouched): every look-at in name order, then every chain. A chain is a ball at the upper pivot
+    plus a hinge at the lower: the closed-form flex ψ* = bend · acos((d² − |u|² − |v|² + 2u∥v∥) / (2|u⊥||v⊥|))
+    clamped to the limits, then the shortest-arc swing of the upper part; no pole vector, an out-of-reach
+    target leaves the limb straight or folded. The hinge is `hinge:`, else the second part's `joints:` hinge,
+    else the humanoid convention (+X; knee −1, elbow +1). A look-at clamps the target's yaw and pitch to
+    `limits_deg` and splits the turn over the aim parts by mask weight, root-first. All maths is `f64` through
+    `ludion_core::math::f64` and `ludion_scene::slerp`.
+38. **`IkTargets`** is a hashed map of entry name → one of `point` (world) or `direction` (`Look`'s
+    convention), with the layer weight ramp (`weight`, `from_weight`, `changed`, `fade`); `L1673`.
+    Entry-name keys also mean a dead target is a missing key, never a stale id.
+39. **Deferrals.** `rate_deg`: a look target's jump visibly snaps (needs presentation state; the request's open
+    question). Socket-part targets: request item 0, part sockets. A third chain part and `ground`: W5.
+    IK in the ragdoll switch: a ragdoll that must start from an IK'd pose. **Entity targets**: a target that
+    must follow an entity without per-tick writes — it needs registry support for entity references inside a
+    map (`L1392`); until then game code writes `point` from the entity's world position each tick it moves.
+
 ## Waves
 
 - **W1 (shipped).** Masks, `AnimationLayers`, composition in extract's `Skin` phase, `L1670`–`L1672`, docs.
@@ -256,7 +289,11 @@ share one driver shape.
   (`model_sheet.rs` + CLI; decision 35).
 - **W2d (shipped).** The gallery humanoid, `assembly-layers.yaml` and two goldens (macOS twins owed).
 - **W3.** `AnimGraph` and `AnimGraphState` (decision 9).
-- **W4.** Look-at and two-bone IK (decision 10).
+- **W4a (shipped).** The `ik:` key, `IkTargets`, look-at and two-part IK in extract (decisions 36–39).
+- **W4b.** `check-scene` lists `ik:`, `render --model --look/--ik`, `GoldenTest`, and the look-at-at-its-yaw-limit golden.
+- **Part sockets** (request 0007 item 0, after W4b). `ParentJoint` naming an assembly part, a child composing
+  on that part's final drawn pose (after layers and IK), and `posed_joint_world` for assemblies. Lifts
+  decision 39's socket-part deferral.
 - **W5.** Ground feet, the bench, profile counters (decision 11).
 - **W6.** Root motion import and `root_motion_delta` (decision 12).
 

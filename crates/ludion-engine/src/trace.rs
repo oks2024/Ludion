@@ -291,6 +291,9 @@ pub struct GroundRecord {
     pub walkable: bool,
     /// Cast distance from the final pose to the surface.
     pub distance: f32,
+    /// The surface name the hit reports; absent when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
 }
 
 /// A wall or ceiling hit.
@@ -302,6 +305,9 @@ pub struct SurfaceRecord {
     pub point: [f32; 3],
     /// World-space surface normal.
     pub normal: [f32; 3],
+    /// The surface name the hit reports; absent when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
 }
 
 /// What platform carry did.
@@ -374,11 +380,18 @@ fn label(world: &World, entity: EntityId) -> String {
     }
 }
 
+/// The declared name of the surface a motor hit reports.
+fn surface_label(world: &World, id: Option<ludion_physics::SurfaceId>) -> Option<String> {
+    let physics = world.resource::<PhysicsWorld>()?;
+    physics.surface_name(id?).map(str::to_owned)
+}
+
 fn surface(world: &World, hit: &SurfaceHit) -> SurfaceRecord {
     SurfaceRecord {
         entity: label(world, hit.entity),
         point: hit.point,
         normal: hit.normal,
+        surface: surface_label(world, hit.surface),
     }
 }
 
@@ -389,6 +402,7 @@ fn ground(world: &World, hit: &GroundHit) -> GroundRecord {
         normal: hit.normal,
         walkable: hit.walkable,
         distance: hit.distance,
+        surface: surface_label(world, hit.surface),
     }
 }
 
