@@ -44,17 +44,17 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
 - **Portals.** Trigger: a game needs a view through a doorway.
 - **Per-view shadow maps.** Trigger: a view looks at a region the main cascades do not cover.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- Narrowing `L2101` to cameras without `RenderView`.
-- The 4-view budget and the 16..=2048 size range.
-- A view at native size, which ignores `render_scale` (the request wanted it scaled).
-- Views are not interpolated by the windowed presenter (`blend.rs` takes `next`'s views), so a fast-moving view camera
+- Accepted. Narrowing `L2101` to cameras without `RenderView`.
+- Accepted. The 4-view budget and the 16..=2048 size range.
+- Accepted. A view at native size, which ignores `render_scale` (the request wanted it scaled).
+- Accepted. Views are not interpolated by the windowed presenter (`blend.rs` takes `next`'s views), so a fast-moving view camera
   may judder live.
-- The main camera's sun cascades only, with no per-view shadow fit.
-- Request differences: a disabled or over-budget view draws nothing where the request draws the clear colour; W1 has no
+- Accepted. The main camera's sun cascades only, with no per-view shadow fit.
+- Accepted. Request differences: a disabled or over-budget view draws nothing where the request draws the clear colour; W1 has no
   `background` field.
-- The `Plan/engine-gap-map.md` cameras line.
+- Accepted. The `Plan/engine-gap-map.md` cameras line.
 
 ## Status — request 0017
 

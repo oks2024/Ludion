@@ -236,6 +236,7 @@ so kerning needs a shaper or a GPOS reader.
     format, so a string-table collector is an additive key; `format` versions on both docs make
     tier B's glyph-id table an explicit bump. The `kind: strings` design (a `locale`, a flat key →
     text map, formatting in Rust) belongs to the post-M7 shipping-bundle grilling.
+    Amended 2026-11-19 (owner): localization (string tables, per-locale font overrides) is pulled forward into dialogue W3, see Plan/dialogue.md d13, d14.
 
 14. **World-space `Text` is in scope** with `UiText`: the same `font` field and the SDF path in
     `text.wgsl`, one gallery golden.

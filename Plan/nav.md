@@ -72,7 +72,7 @@
     node) pair, lowest entity first. A walker that reaches a link start stops with zero velocity and waits for
     `nav_link_done`; the engine never moves the body. A pending link that no longer resolves (disabled, removed,
     moved) replans under both `replan` modes; a route `at_link` is never replanned. Request amendment 2's link
-    half, flow fields ignoring links and a zero velocity while `at_link` are **Proposed — owner ruling owed**.
+    half, flow fields ignoring links and a zero velocity while `at_link` are **accepted by the owner 2026-11-19**.
 
 **Known second way (temporary):** vigil keeps its game-side 2D nav (`games/vigil/src/nav.rs`).
 Moving it to the layered grid moves its `WorldHash`; the exit is the owed migration, gated by
@@ -128,14 +128,14 @@ independently shippable; later ones add fields and components, never reshape ear
   (request §3). Amends `Plan/character-controller.md` decision 9 (patrols leave `kind: path`) — the Tech Lead
   ratified it. No gallery scene: `ludion render` runs no game systems, so a patrol would never move there.
 - **2 — agent classes:** a per-class grid (radius, height, step, slope) and `PathRequest.class`. Amends
-  decision 8 (one class per `Nav`); the trigger is met (walkers and forklifts) — **Proposed — owner ruling
-  owed**. Also `nav_random_point`, `nav_raycast` and the `nav` trace channel.
+  decision 8 (one class per `Nav`); the trigger is met (walkers and forklifts) — **accepted 2026-11-19, scheduled
+  (R13)**. Also `nav_random_point`, `nav_raycast` and the `nav` trace channel.
 - **3 — off-mesh links (shipped):** `NavLink`, `NavRouteStatus::AtLink`, `nav_link_done`; `L1526`, `L4145`, `L4146`
   (decisions 14–16).
 - **4 — dynamic blockers:** a `NavBlocker` overlay and `AtBlocker`, without re-sampling statics. Amends
-  decision 1 (statics only) — **Proposed — owner ruling owed**.
+  decision 1 (statics only) — **accepted 2026-11-19, scheduled (after wave 2)**.
 - **5 — avoidance:** `NavAgent.avoidance` and `NavObstacle`; brings "Avoidance beyond separation" into
-  scope and subsumes Serious Isaac draft 0029 — **Proposed — owner ruling owed**.
+  scope and subsumes Serious Isaac draft 0029 — **accepted 2026-11-19, scheduled (after wave 4)**.
 
 **Open questions, answered.** Planning is synchronous with a per-tick cap, not async (the cap bounds the
 cost and keeps the result a function of the tick). Waypoint entity references wait for wave 3: `NavRoute`

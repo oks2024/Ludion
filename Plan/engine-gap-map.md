@@ -64,7 +64,7 @@ settled plan, nothing built; **rejected** — closed by design.
 - **Game-authored shaders** — absent: no custom WGSL surface, no material graph
   (`dev-docs/ludion-shader-bindgen.md`).
 - **Cameras** — one main camera (`L2101`) plus up to 4 `RenderView` secondary views rendered into `UiRect`
-  textures (`Plan/secondary-views.md`; Proposed, owner ruling owed). No split screen or portals.
+  textures (`Plan/secondary-views.md`; accepted by the owner 2026-11-19). No split screen or portals.
 - **Geometry** — ~~no decals~~ (shipped, Clockout 0012; `GroundMarker` stays the analytic telegraph), terrain renderer, foliage,
   morph targets (L1202), GPU-driven or indirect draws. MRT deferred.
 - **Particles** — CPU, unlit camera-facing discs. No GPU simulation, mesh particles, collision;
@@ -79,6 +79,7 @@ settled plan, nothing built; **rejected** — closed by design.
   retargeting, morph targets, sockets — each deferred with a trigger (`Plan/animation-clips.md`
   non-goals). A data-driven state machine was rejected as a pillar violation
   (`Plan/voxel-animation.md`); the Rust-side shape is open.
+  Amended 2026-11-19 (owner): the Rust-side shape is `ludion-ai`'s `Machine`, see `Plan/ai-behaviour.md` d1.
 - Timeline / sequencer for cutscenes — `kind: sequence` ships its first wave (`Plan/sequencer.md`).
 
 ### Physics
@@ -94,6 +95,7 @@ settled plan, nothing built; **rejected** — closed by design.
 - Navmesh, pathfinding library, behaviour trees, steering, perception — absent in the engine. (perception: `Plan/perception.md`.)
   vigil runs game-side flow fields; `ludion-nav` deferred until a second consumer
   (a private plan). Trigger fired (the external FPS request 0007) → `Plan/nav.md`.
+  Amended 2026-11-19 (owner): perception ships in the engine (sight, hearing, memory), see `Plan/perception.md`.
 - Agent behaviour (HFSM, timers, squads): `Plan/ai-behaviour.md`.
 
 ### Audio

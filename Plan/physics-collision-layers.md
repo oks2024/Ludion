@@ -75,8 +75,8 @@ entities:
   moves; a scene that declares `layers:` but no `layer:` fields simulates identically, though its default
   colliders now carry explicit groups, so the physics blob's bytes differ.
 - **One *body* layer per collider.** Multi-membership (Godot's layer bitmask) is a second way to express the
-  same matrix, so the solver keeps one. Query-only memberships come from `QueryLayers` (W4). **Proposed —
-  owner ruling owed** (shipped additive).
+  same matrix, so the solver keeps one. Query-only memberships come from `QueryLayers` (W4). **accepted by
+  the owner 2026-11-19** (shipped additive).
 - Why a declared list rather than names discovered from colliders: a name is validated at check time
   with a nearest-match suggestion (a typo in `ignores` would otherwise silently collide), and a body
   spawned at runtime with a new name has no bit to take. The matrix also lives in one place, the way
@@ -118,7 +118,7 @@ let near = physics.overlap(&Shape::Sphere { radius: 0.3 }, hand, [0.0, 0.0, 0.0,
 - Result order is unchanged (casts by `(distance, entity)`, `overlap` by entity); the filter only drops.
 - **Include clause (W4).** `include_layer(name)` keeps only hits whose query membership intersects the included
   set; no includes means no clause. Every drop condition is an OR, so `ignore_layer` wins over include.
-  **Proposed — owner ruling owed** (shipped additive).
+  **accepted by the owner 2026-11-19** (shipped additive).
 
 ### 4. Diagnostics
 
@@ -193,8 +193,8 @@ Decisions:
 1. **A separate component, not a `Collider.query_layers` field.** `QueryLayers { layers: LayerSet }` sits beside a
    `Collider` or a `CharacterMotor`. `Collider` has ~124 struct literals across ~60 files a new field would break;
    a field would make every query-tag edit a body rebuild through `is_stale`, perturbing contacts; one component
-   covers the motor without touching `CharacterMotor`. Absent component means nothing changes. **Proposed — owner
-   ruling owed** (shipped additive).
+   covers the motor without touching `CharacterMotor`. Absent component means nothing changes. **accepted by the
+   owner 2026-11-19** (shipped additive).
 2. **Query membership = body-layer bit | `QueryLayers` bits.** The solver never sees the extra bits: rapier
    `InteractionGroups` stay exactly as `groups_for` builds them.
 3. **Both `include_layer` and `ignore_layer` test query membership.** Exception: the motor's own filters
@@ -219,7 +219,7 @@ resolve to a `LayerSet` internally at their filter sites (`QueryFilter::ignore_s
 snapshot document, and a bare `LayerSet` field would emit a `$ref` that moves `replay_content_hash`; a guard test in
 `snapshot.rs` pins the schema as a plain list.
 
-- **Proposed — owner ruling owed:** change the two `ignore_layers` field types to `LayerSet` (breaking public API; would
+- **Accepted 2026-11-19, scheduled (R13 API break round; the owner fixes the external games by hand, vigil in the same change):** change the two `ignore_layers` field types to `LayerSet` (breaking public API; would
   need `#[schemars(with = "Vec<String>")]` on `ProjectileConfig`). The external caller that would adapt is Serious Isaac
   `src/lib.rs:267` (`ignore_layers: vec![ENEMY_PHYSICS_LAYER.into()]` becomes
   `LayerSet::from(vec![ENEMY_PHYSICS_LAYER.to_string()])`). Serialized bytes would be unchanged.

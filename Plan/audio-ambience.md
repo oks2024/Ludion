@@ -225,7 +225,7 @@ Numbered on from Decision 6. Codes: L5100–29 sink and runtime, L1650–69 scen
 14. **Occlusion.** Ray occlusion on `ray_cast` with 0002's masks, a round-robin budget per frame, smoothing in the engine.
 15. **`AudioZone`.** Box or sphere, priority, blend, beds via `LoopId::ZoneBed`, `bus_gains`; resolved at the frame boundary from the listener point, not from sensors.
 16. **Reverb.** One algorithmic reverb send and named presets.
-17. **`music_crossfade`.** The §Decisions Proposed (0025) design; the second consumer has arrived, ruling still owed.
+17. **`music_crossfade`.** The §Decisions Proposed (0025) design; the second consumer has arrived, **accepted 2026-11-19, scheduled (A6)**.
 18. **`ludion_testkit::audio::audio_mix_at`.** A deterministic offline mix probe for tests.
 
 ## Waves — audio space and mix
@@ -234,20 +234,20 @@ Numbered on from Decision 6. Codes: L5100–29 sink and runtime, L1650–69 scen
 - **A2 — listener — SHIPPED 2026-11-18:** a new `crates/ludion-components/src/audio.rs`, `audio_listener` in `engine.rs`, a multi-carrier warning in L1650–69.
 - **A3a — attached voices — SHIPPED 2026-11-18** (decision 11: `play_on`, `VoiceId`, keyed voices in the sink, the WAV-length read).
 - **A3b — ducking — SHIPPED 2026-11-18** (decision 12: `AudioMessage::Duck`, `DuckRule`, `duck_start`/`duck_end`, `L5100`); reuses A3a's `voice_ticks` WAV-length cache.
-- **A4 — `VoiceSpatial`, sink filters, occlusion** (13, 14): needs 0002's masks; `VoiceSpatial` on `AudioEvent` is a struct-literal break, an owner ruling.
+- **A4 — `VoiceSpatial`, sink filters, occlusion** (13, 14): needs 0002's masks; `VoiceSpatial` on `AudioEvent` is a struct-literal break, **accepted 2026-11-19, scheduled (A4, R13)**.
 - **A5 — zones, reverb, presets** (15, 16, 18): gallery `examples/gallery/audio-zones.yaml`, `audio_mix_at`.
-- **A6 — `music_crossfade`** (17), after the ruling.
+- **A6 — `music_crossfade`** (17), **accepted 2026-11-19, scheduled (after A5)**.
 
-### Proposed — owner ruling owed
+### Owner rulings (2026-11-19)
 
-- **`CategoryGains` fields.** A1 ships without new fields: `gain_for(Voice | Ui)` reads `1.0` and the master's authored value is `1.0`, because new fields break struct literals (one in `builder.rs`). The ruling: fields vs `#[non_exhaustive]` plus a builder.
-- **`VoiceSpatial`'s struct-literal break** on `AudioEvent` (A4).
-- **The sim-side WAV read** for clip length (Decision 11).
-- **Reverb and occlusion in scope**, amending the Deferred bullet; HRTF and Doppler stay out.
-- **`music_crossfade`** (Decision 17).
-- **The duck depth default** of `-9 dB` (Decision 12; now `DuckRule::default()`).
-- **An attached voice ducks only while audible**: one out of earshot does not dip the music (Decision 12).
-- **The duck layer is sink-private**, not a `MixLayer` (Decision 12).
+- Accepted, scheduled (R13 API break round; `#[non_exhaustive]` plus a builder). **`CategoryGains` fields.** A1 ships without new fields: `gain_for(Voice | Ui)` reads `1.0` and the master's authored value is `1.0`, because new fields break struct literals (one in `builder.rs`). The ruling: fields vs `#[non_exhaustive]` plus a builder.
+- Accepted, scheduled (audio A4, R13). **`VoiceSpatial`'s struct-literal break** on `AudioEvent` (A4).
+- Accepted. **The sim-side WAV read** for clip length (Decision 11).
+- Accepted, scheduled (occlusion A4, R13; reverb A5). **Reverb and occlusion in scope**, amending the Deferred bullet; HRTF and Doppler stay out.
+- Accepted, scheduled (A6, after A5). **`music_crossfade`** (Decision 17).
+- Accepted. **The duck depth default** of `-9 dB` (Decision 12; now `DuckRule::default()`).
+- Accepted. **An attached voice ducks only while audible**: one out of earshot does not dip the music (Decision 12).
+- Accepted. **The duck layer is sink-private**, not a `MixLayer` (Decision 12).
 
 ## Waves
 
@@ -324,7 +324,7 @@ Wave 3 lands.
   the first `sync_ducks` after it re-derives each bus's target from voice liveness (the rules' live flags set
   from the restored voices, fade `0`) rather than waiting for an edge. Trigger: request 0012's restore that
   re-derives zone and duck state, or any voice that survives a restore.
-- **Reverb, geometry occlusion, HRTF, Doppler.** Reverb and occlusion proposed into scope (Decisions 14, 16; owner ruling owed); HRTF and Doppler stay out. Originally out of scope — §6.1 asks for "audible when near".
+- **Reverb, geometry occlusion, HRTF, Doppler.** Reverb and occlusion proposed into scope (Decisions 14, 16; **accepted 2026-11-19, scheduled (A4, A5)**); HRTF and Doppler stay out. Originally out of scope — §6.1 asks for "audible when near".
 
 ## Risks / open questions
 

@@ -59,7 +59,7 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 8. **Resolved against the camera as drawn** (after pixel-snap) and the target's world pose plus
    `world_offset`. A dead target or one with no `Transform` draws nothing, silently. **Known gap:** UI
    is never keyed in `BlendData`, so under `present_interpolation` an anchor follows the newest tick
-   while the 3D scene is blended and can lead by up to one tick. Proposed for W7; trigger: visible
+   while the 3D scene is blended and can lead by up to one tick. **Accepted by the owner 2026-11-19**; blend keys in W7, trigger: visible
    jitter at a live sitting.
 9. **`UiWorldAnchor` fields:** `target` (required entity ref; presentation to sim is allowed, the
    reverse is `L1036`), `world_offset`, `show: always | on_screen | off_screen`,
@@ -256,7 +256,7 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
   and the clip.
 - **W5a — text outline** (decisions 31–36): SDF from the field, bitmap by in-shader dilation; `ui-text-outline` golden.
 - **W5b — text shadow.**
-- Order, proposed: W6a → W3a → W3b → W6b.
+- Order, accepted by the owner 2026-11-19: W6a → W3a → W3b → W6b.
 - **W6a — `UiRadial`, `UiRadialNav`, `radial_layout`/`radial_hit`** (decisions 37–44): CPU only, no renderer change;
   item text, detail and icons through the existing UI instances; the 1/2/8-thread replay and the snapshot test
   (`tests/ui_radial.rs`); `L1619`; docs `ui-radial`; example `ui_radial`. Only the component schema snapshot moved.
@@ -264,22 +264,22 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
   `ui-radial` gallery golden. A rotated wheel is a rotated `UiGroup` (W3a).
 - **W7 — anchor blend keys under interpolation, `rotate_toward`, `distance.scale`, `camera`.**
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-Request amendments 1–7; the 12-o'clock clockwise angle convention (W3); the centre pivot for scale;
+Accepted. Request amendments 1–7; the 12-o'clock clockwise angle convention (W3); the centre pivot for scale;
 the `real` default clock; the separate `UiEase`; the interpolation gap (decision 8); W2: `uv_rect` beside `slice` warns and `slice` wins, stretch-only
 edges, the proportional texel clamp rather than an error; W4a: the 8-level cap, `order` global (no block sort),
 a world anchor only on the outermost group, `fill` ignoring `group`; W5a: the SDF max (spread less 1 px) with clamp-and-warn rather than an error, the bitmap dilation as a square kernel rounded with a minimum of 1, the cap of 4 source px, no outline on world `Text`, the shadow split to W5b; W4b: the 2-clip cap (innermost kept), circle
 = the inscribed circle, the 1 px AA band, `ui_hit` on a list tests the panel, `ui_hit` ignores `pixel_snap`.
-W6a: the clock-angle convention, the clockwise boundary rule, the gap ignored by stick selection, cancel beating activate,
+Accepted. W6a: the clock-angle convention, the clockwise boundary rule, the gap ignored by stick selection, cancel beating activate,
 the pointer reset on close, the 16-item cap and allowing one item, the first step from none landing on the first enabled item,
 a delta aim read +y down, the icon placement and the `icon_size` and `detail` sizes (fields the request does not name), icons tinted
 by the item colour, the W6a → W3 → W6b order.
-W3a: the clockwise-degrees convention (shared with decision 38), the centre pivot (request open question 2), the text pivot at
+Accepted. W3a: the clockwise-degrees convention (shared with decision 38), the centre pivot (request open question 2), the text pivot at
 the glyph-bounds centre rather than the measured block, the additive rotation tween, no `rotation` field on `UiList`/`UiRadial`,
 the W3a/W3b/W3c split. W3a request differences: `UiShape` and its rotation are W3b, the tween adds to the authored rotation,
 there is no rotation field on lists.
-Request differences: no polygon in `ui-groups` (W3c); `ui_hit` does not return list items; W6a draws no wedge or stroke (W6b)
+Accepted. Request differences: no polygon in `ui-groups` (W3c); `ui_hit` does not return list items; W6a draws no wedge or stroke (W6b)
 and adds `icon_size`, `selected_color`, `visible` and `outline`.
 
 ## Out of scope (triggers recorded)

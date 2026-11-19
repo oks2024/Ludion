@@ -405,6 +405,7 @@ wave is independently landable, one commit.
 ## Explicitly out of scope (triggers recorded)
 
 - **Input remapping / bindings config** — see `Plan/input-actions.md` (Neon Shroud request 0021).
+  Amended 2026-11-19 (owner): remapping and rumble are promoted out of this list, see `Plan/input-actions.md`.
 - **Touch input** — no target platform needs it in this arc. Trigger: a touch platform (E2 brief).
 - **Multiple gamepads** — player 1 only; the capture layer forwards the first connected pad. Trigger: a
   couch/local-multiplayer game (E2 brief non-goal).

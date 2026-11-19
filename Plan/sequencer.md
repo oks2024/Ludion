@@ -77,7 +77,7 @@
   `animation_events.rs`, `blend_clock.rs`, `camera_rig.rs`, `path_follow.rs` and the sequence's own animation stamp.
   At release the stamps each actor took during the hold (`Animation.started`, crossfades and layers, the rig blend
   start) shift back by the lead, so nothing jumps. `docs/game-clock.md`'s "no per-component opt-out" line is amended
-  there (request amendment 2, still Proposed).
+  there (request amendment 2, **accepted 2026-11-19, scheduled (W2b)**).
 - **W3:** the transform track (anchor pose and ease, `kind: path` spans), audio voices stopped on skip,
   `music_crossfade`, duck keys, the camera-zone override flag (with request 0010).
 - **W4:** built-in schedule placement, `ludion render --sequence --bind --at`, wire `sequence.play/seek/skip` (a
@@ -87,13 +87,13 @@
 
 - An editor timeline UI, branches and conditions: indefinitely (Pillar 6; the game's Rust decides what plays).
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- Request amendments 2 (a per-entity clock domain, W2b) and 3 (waits are not a state machine).
-- `SequenceDoc.clock` becomes an `Option` (a public field type; no game uses sequences, grep of both game roots
+- Accepted, scheduled (W2b, for amendment 2). Request amendments 2 (a per-entity clock domain, W2b) and 3 (waits are not a state machine).
+- Accepted. `SequenceDoc.clock` becomes an `Option` (a public field type; no game uses sequences, grep of both game roots
   2026-11-19), and `sequences::release` is a single latch taking a handle, not the request's `release(entity)`.
-- `skippable` defaults to `true`.
-- The API differs from the request (decision 4): free functions over `&mut World`, one entity per binding.
+- Accepted. `skippable` defaults to `true`.
+- Accepted. The API differs from the request (decision 4): free functions over `&mut World`, one entity per binding.
 
 ## Status
 

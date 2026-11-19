@@ -36,7 +36,7 @@ Codes: `L1670` `ANIMATION_LAYERS_TOO_MANY`, `L1671` `ANIMATION_LAYER_INVALID`, `
 
 Blend errors reuse `L1199`/`L1200`. A scene without a blend poses and hashes as before; `Animation` text
 and `component_schemas.json` are the only wire-visible moves. The d2 amendment ships in its opt-in form
-(only a blend-using entity hashes a `BlendClock`), still "Proposed — owner ruling owed".
+(only a blend-using entity hashes a `BlendClock`), **accepted by the owner 2026-11-19**.
 
 ### W2b (sim) — layer blends, layer `params`, `reference:`, layer events
 
@@ -208,7 +208,7 @@ share one driver shape.
    `crossfade`, on the base `Animation.hold` grid. `fade_layer` writes only on change, so a per-tick caller
    does not churn the hash; `play_layer` restamps only on a new clip. Games pass `ctx.game_time`.
 6. **W1 layers ignore `SkinBone`-driven skins (`L1672`) and assemblies and prefab parts.** One pose source
-   per skin stays true. Masks name skin joints, so assembly parts would need part-name masks (see Proposed).
+   per skin stays true. Masks name skin joints, so assembly parts would need part-name masks (see Owner rulings).
 7. **Layer events are not emitted in W1.** Replaced by decision 22 (W2b): an opt-in `events: true`.
 8. **Blend spaces** (W2): `blends:` in the character document, 1D by a scalar and 2D by a vector, driven by
    `Animation.params`, with phase sync through a hashed `BlendClock`. A blend emits the events of its
@@ -401,25 +401,25 @@ share one driver shape.
 - **W5b.** The bench and the profile counters (decision 11).
 - **W6.** Root motion import and `root_motion_delta` (decision 12).
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- Lifting `animation-clips` decision 5 ("masked layers, root motion and IK are non-goals"): W1 ships the
+- Accepted. Lifting `animation-clips` decision 5 ("masked layers, root motion and IK are non-goals"): W1 ships the
   conservative opt-in variant — absent component, identical bytes.
-- Amending `animation-clips` decision 2 ("the pose is visual-only"): W2's `BlendClock` and W6's root motion
+- Accepted. Amending `animation-clips` decision 2 ("the pose is visual-only"): W2's `BlendClock` and W6's root motion
   are sim reads of clip data (the trade decision 15 made for events).
-- The `AnimGraph` helper against `animation-clips` decision 4 and `voxel-animation` decision 6 (no state
+- Accepted. The `AnimGraph` helper against `animation-clips` decision 4 and `voxel-animation` decision 6 (no state
   machine asset): it is Rust, not data.
-- Lifting `voxel-animation`'s deferral "Assembly parts and prefab parts as socket targets" for assembly parts
+- Accepted. Lifting `voxel-animation`'s deferral "Assembly parts and prefab parts as socket targets" for assembly parts
   (prefab parts stay deferred).
-- A socketed prop's collider and every sim read follow the **rest** socket, not the animated part; posed-sim
+- Accepted. A socketed prop's collider and every sim read follow the **rest** socket, not the animated part; posed-sim
   sockets would need the pose in the sim (amending `animation-clips` decision 2).
-- The W5 budget (≤0.5 ms for 32 characters).
-- Ground `max_adjust` in the assembly's voxel units (the request's proposal) — Proposed, owner ruling owed.
-- Foot placement ships visual-only, amending `Plan/voxel-animation.md` decision 2 (trigger fired: ramps and
-  stairs) — Proposed, owner ruling owed.
-- An active `IkTargets` goal on a grounded chain wins over ground — Proposed, owner ruling owed.
-- `animation-clips` decision 10's merge trigger fired (a character feature assemblies also want); merging
-  `kind: character` and `kind: assembly` is not done here — Proposed, owner ruling owed.
+- Accepted. The W5 budget (≤0.5 ms for 32 characters).
+- Accepted. Ground `max_adjust` in the assembly's voxel units (the request's proposal).
+- Accepted. Foot placement ships visual-only, amending `Plan/voxel-animation.md` decision 2 (trigger fired: ramps and
+  stairs).
+- Accepted. An active `IkTargets` goal on a grounded chain wins over ground.
+- Accepted, scheduled (its own arc after the Neon Shroud queue empties). `animation-clips` decision 10's merge trigger fired (a character feature assemblies also want); merging
+  `kind: character` and `kind: assembly` is not done here.
 
 ## Non-goals
 

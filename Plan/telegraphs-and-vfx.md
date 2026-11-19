@@ -307,17 +307,17 @@ perception shares the function and filter construction but is not rewired to rea
     - (vii) The default ("skinned never") is unchanged.
     - (viii) Acceptance: a 200-hierarchy-decal bench row, and a gallery golden with a scorch on a skinned joint that paints only its character while the clean skinned character stays clean.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- (a) Ring's trigger firing (amends decision 2).
-- (b) Decision 3's "shape and colour and nothing else" now admits `inner_color` and `style` (W1) and a
+- Accepted. (a) Ring's trigger firing (amends decision 2).
+- Accepted. (b) Decision 3's "shape and colour and nothing else" now admits `inner_color` and `style` (W1) and a
   authored `GroundMarkerClip` component (W2).
-- (c) The engine owning the clip system and the renderer reading a profile buffer (the engine/game
+- Accepted. (c) The engine owning the clip system and the renderer reading a profile buffer (the engine/game
   boundary section).
-- (d) The Sector wave's "not clipped (follow-up)" becomes W2.
-- (e) An extract-time profile instead of a scheduled system and a hashed derived component.
-- (f) `GroundMarkerClip` as its own component.
-- (g) Perception (0001) shares the function and filter construction but is not rewired to read profiles.
+- Accepted. (d) The Sector wave's "not clipped (follow-up)" becomes W2.
+- Accepted. (e) An extract-time profile instead of a scheduled system and a hashed derived component.
+- Accepted. (f) `GroundMarkerClip` as its own component.
+- Accepted. (g) Perception (0001) shares the function and filter construction but is not rewired to read profiles.
 
 ## Risks / open questions
 

@@ -27,6 +27,7 @@ kinds:
 
 - **Kinds:** mesh, mesh-edit, voxel, voxel-ops, profile, map, map-kit, assembly, part, animation,
   sprite, palette, atlas, atlas-source, sculpt, generation, origin, touch-layout, pattern.
+  Amended 2026-11-19 (owner): `kind: paired` is one more `KINDS` row, see Plan/paired-animations.md d15.
 - **Each row** holds `name`, `noun`, `check: KindCheck` (`Here(fn)` or `Elsewhere`), `doc_store` and
   `model_sheet`.
 - **Readers:** the engine's content walk (`crates/ludion-engine/src/docs.rs`), `check-scene`'s fallback,

@@ -79,21 +79,21 @@ for the whole arc; W1a ships the streak field.
 - **Snow mode.** Trigger: a game asks for snow; the lattice already carries the shape of it.
 - **Gameplay rain zones.** Separate sim data, never read from the picture's rain.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- Density in streaks/m³ (the request's unit was per-tile) and its defaults.
-- The 65,536 streak ceiling.
-- Unsorted streaks within the draw.
-- Time kept in `RainData` with a 4096 s wrap.
-- Unshadowed light until W4.
-- Codes `L2380`–`L2382` in place of the request's `L2130`–`L2134`, which are taken; the request's `L2134` dropped.
-- The presenter takes `next`'s rain.
-- Porosity fixed at 0.5 until W2b.
-- The wet constants 0.6 (albedo) and 0.08 (roughness).
-- A vertical-surface facing of 0.5.
-- The 20 cm exposure fade.
-- Characters wet per pixel: they dry instantly under cover.
-- Coat decals and blended meshes are not wetted.
+- Accepted. Density in streaks/m³ (the request's unit was per-tile) and its defaults.
+- Accepted. The 65,536 streak ceiling.
+- Accepted. Unsorted streaks within the draw.
+- Accepted. Time kept in `RainData` with a 4096 s wrap.
+- Accepted. Unshadowed light until W4.
+- Accepted. Codes `L2380`–`L2382` in place of the request's `L2130`–`L2134`, which are taken; the request's `L2134` dropped.
+- Accepted. The presenter takes `next`'s rain.
+- Accepted. Porosity fixed at 0.5 until W2b.
+- Accepted. The wet constants 0.6 (albedo) and 0.08 (roughness).
+- Accepted. A vertical-surface facing of 0.5.
+- Accepted. The 20 cm exposure fade.
+- Accepted. Characters wet per pixel: they dry instantly under cover.
+- Accepted. Coat decals and blended meshes are not wetted.
 
 ## Status — request 0018
 

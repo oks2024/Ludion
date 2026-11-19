@@ -8,7 +8,7 @@
 1. **The sanctioned Rust-side form, not a DSL.** States are a Rust enum, the hierarchy a `parent` fn,
    transitions are Rust fns returning `Step`. Rust is the only Turing-complete layer (CLAUDE.md), so
    nothing here is data-driven behaviour; the request fills the "Rust-side shape is open" slot of
-   `Plan/engine-gap-map.md` (see Proposed below).
+   `Plan/engine-gap-map.md` (see Owner rulings below).
 2. **One `Machine` trait over a game enum; one generic system.** `ai_tick::<M>` runs every `Mind<M>`.
    A game registers one machine per enum with `register_machine::<M>`; nothing is a builtin, so an
    absent machine leaves the component schema snapshot, the protocol schema hash, goldens, replays and
@@ -86,23 +86,23 @@
 - **Blackboard timers via `Describe`.** Trigger: a tool needs timers without reading the blackboard
   component through `entity.get`.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- **The sanctioned form vs `Plan/voxel-animation.md` decision 6 and `Plan/engine-gap-map.md`.** A
+- Accepted. **The sanctioned form vs `Plan/voxel-animation.md` decision 6 and `Plan/engine-gap-map.md`.** A
   data-driven state machine was rejected there as a pillar violation; this plan ships the Rust-side shape
   those documents left open. The ruling confirms that reading.
-- **No behaviour trees** (above) is a position, not a measurement.
-- **Inbox capacity 16** is a default chosen without a game's numbers.
-- **An entity-ref collection type.** Sanctioning a list of entity refs touches the ref walker
+- Accepted. **No behaviour trees** (above) is a position, not a measurement.
+- Accepted. **Inbox capacity 16** is a default chosen without a game's numbers.
+- Accepted, scheduled (R13: the sanctioned collection type, then W3 and the 0007 IK entity targets). **An entity-ref collection type.** Sanctioning a list of entity refs touches the ref walker
   (`crates/ludion-ecs/src/entity_ref.rs`) and about ten consumer sites in `ludion-scene` (`expand.rs`,
   `validate.rs`, `instantiate.rs`) and `ludion-engine` (`collapse.rs`, `transition.rs`, `prefab_ops.rs`,
   `commands/entity.rs`): a cross-cutting subtask of its own, with request 0001's memory as the natural
   trigger. Not built here.
-- **An `ai.describe` command.** It rides the next replay-corpus re-record, because a `Command` variant
+- Accepted, scheduled (R14 re-record round). **An `ai.describe` command.** It rides the next replay-corpus re-record, because a `Command` variant
   moves `replay_schema_hash`; until then `engine.describe`'s `ai` key serves.
-- **Gallery placement of the squad scene.** A gallery scene needs a game-registered machine in the
+- Accepted. **Gallery placement of the squad scene.** A gallery scene needs a game-registered machine in the
   plain sweep, plus pinned goldens.
-- **`broadcast` excludes the sender** (`Cx::broadcast`); the free `members` lists everyone. A game that
+- Accepted. **`broadcast` excludes the sender** (`Cx::broadcast`); the free `members` lists everyone. A game that
   wants the sender included sends to itself explicitly.
 
 ## Status
@@ -116,4 +116,4 @@
   (`crates/ludion-engine/tests/fixtures/ai-squad.{yaml,trace.txt,ai.jsonl}`; blessed on the pinned
   Windows box, the M4 must reproduce both byte-identically), `ludion-ai` trace tests, `docs/ai.md`
   Tracing and describe. Deviations from the request: no `ai.describe` command and no gallery scene
-  (decisions 14, 15; both Proposed). No pinned artifact moved.
+  (decisions 14, 15; both ruled by the owner 2026-11-19). No pinned artifact moved.

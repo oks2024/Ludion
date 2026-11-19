@@ -50,7 +50,7 @@ Full detail in `engine-architecture.md`; headlines:
 
 ## Deferred — do not build yet
 
-Audio beyond WAV effects and streamed Ogg music (positional music, crossfades), networking, embedded scripting (indefinitely), mesh shaders / ray tracing, console ports (`Plan/console-strategy.md`), voxel texturing. Every renderer feature must justify itself by appearing in the current vertical slice. Environment lighting is a procedural sky, never an image asset.
+Audio beyond WAV effects, streamed Ogg music and `Plan/audio-ambience.md`'s spatial voices, occlusion, reverb zones and music crossfade (HRTF, Doppler, positional music), networking, embedded scripting (indefinitely), mesh shaders / ray tracing, console ports (`Plan/console-strategy.md`), voxel texturing. Every renderer feature must justify itself by appearing in the current vertical slice. Environment lighting is a procedural sky, never an image asset.
 
 ## Source control
 

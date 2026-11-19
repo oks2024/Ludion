@@ -83,7 +83,7 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
 
 1. **`JointZero` is a carrier component, not a `Joint.zero` field (the request's shape).** `Joint` is a plain
    pub struct and two external games build it with struct literals; a new field breaks both. The conservative
-   form is a component beside `Joint` on the carrier (the child part). Folding it into `Joint` is Proposed.
+   form is a component beside `Joint` on the carrier (the child part). Folding it into `Joint` is **accepted 2026-11-19, scheduled (R13 API break round)**.
 2. **`LimitsFrom::{SwitchPose (default), Rest}`.** `SwitchPose` is `switch_to_ragdoll` exactly. `Rest`
    inserts `JointZero` at the identity on each joint carrier (an assembly's parts have no rest rotation, so
    the rest relative rotation is the identity for every joint). `RagdollSwitch` is `#[non_exhaustive]` and
@@ -200,12 +200,12 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
   preferred rule; decision 10 is the engine's own, as documented.
 - **`LimitsFrom::Rest` as the default.** Not flipped here: it would move existing voxel ragdoll hashes.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- Folding `JointZero` into `Joint` (`Joint.zero`, the request's shape) at a breaking window, when the two
+- Accepted, scheduled (R13 API break round; the owner fixes the external games, vigil moves in the same change). Folding `JointZero` into `Joint` (`Joint.zero`, the request's shape) at a breaking window, when the two
   external games' struct literals can move.
-- `LimitsFrom::Rest` as the default for new content.
-- The request's three plan amendments: `Plan/physics.md` W3 joints and the pose-blend rule (`Joint` gains an
+- Accepted, read conservatively: `LimitsFrom::Rest` is the documented choice for new content, and the serde default is not flipped, so existing voxel ragdoll hashes stay put.
+- Accepted. The request's three plan amendments: `Plan/physics.md` W3 joints and the pose-blend rule (`Joint` gains an
   optional stored zero, here as a component); `Plan/animation-clips.md` decision 14 (the outgoing crossfade
   side may be a `PoseSnapshot`); `Plan/document-kinds.md` (`kind: paired` as one more `KINDS` row).
 
@@ -213,7 +213,7 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
 
 - A skinned rest-relative switch: `switch_skin_to_ragdoll` already switches at the rig rest pose.
 - Look-at, IK and ground placement in the switch pose.
-- A `Joint` field change, and flipping the default.
+- Flipping the `LimitsFrom` default. (The `Joint` field change, folding `JointZero` into `Joint.zero`, is accepted 2026-11-19, scheduled (R13 API break round).)
 
 ## Risks
 

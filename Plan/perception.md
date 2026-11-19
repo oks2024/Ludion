@@ -14,7 +14,7 @@
    first component that truly needs a list of refs.
 3. **Frames.** The zone frame is the entity's world rotation, then `look` (yaw about +Y, then pitch). It follows the
    camera convention: yaw 0 looks along −Z, positive yaw turns left, **positive pitch looks down**
-   (`ludion docs camera`). The game's example writes `pitch_deg: -5` for "down"; the sign differs and is an owner item.
+   (`ludion docs camera`). The game's example writes `pitch_deg: -5` for "down"; the sign differs; the engine convention is **accepted by the owner 2026-11-19**.
    Sweep yaw is added to `look.yaw_deg`.
 4. **Wedge test per point** in the zone frame: `h = atan2(x, -z)`, `v = atan2(y, hypot(x, z))`. A point is in the zone
    when `|h| <= half_angle`, `|v| <= vertical_half_angle` and its eye distance is within the effective range. `in_zone`
@@ -96,7 +96,7 @@
     first evaluation gets a status with `evaluated_tick = now - N`, so it is due every tick (its phase may slide) and
     `L4221` can measure its wait.
 30. **Budget `max_sight_rays_per_tick: Option<u32>`, default `None` (unlimited).** `Some(0)` is `L4220` at
-    `/max_sight_rays_per_tick`. The request's 2048 is the documented recommendation and stays Proposed as a default:
+    `/max_sight_rays_per_tick`. The request's 2048 is the documented recommendation, **accepted by the owner 2026-11-19** as an opt-in, not a default:
     any budget makes sight persisted hashed state (decision 31), which would reverse decision 11 in every perception
     world and move their hashes.
 31. **Carried samples are hashed entities** whenever they can be needed: for a perceiver with `period_ticks > 1`, or
@@ -139,7 +139,7 @@
     builtin, so the plain load succeeds.
 39. **The bench reports and does not gate.** `perception_bench.rs` is `#[ignore]` and run in release. It prints the
     median and p95 of `perception_update` plus `rays_cast` at 1 and 8 threads and asserts only that the two `WorldHash`
-    traces are identical. The 0.5 ms target stays Proposed. The request's game-side `tests/gameplay.rs` scripted route
+    traces are identical. The 0.5 ms target is replaced by ~0.65 ms, **accepted by the owner 2026-11-19**. The request's game-side `tests/gameplay.rs` scripted route
     is the game's work.
 40. **`perception` is a host-side category** (the `Plan/debug-draw.md` decision 2 precedent). It is drawn in
     `debug_draw::segments` from the world at extraction and is never in `DebugDraw`, so no system can draw or branch on
@@ -183,13 +183,22 @@
 - A true cone shape: trigger is a game whose wedge misses at the edges.
 - Nav-path sound occlusion: trigger is W3 landing with a game that needs it.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-`SurfaceSel::Under`: a `surface_under` convenience over request 0009 W2 so a game can name the surface at a point
+Accepted. `SurfaceSel::Under`: a `surface_under` convenience over request 0009 W2 so a game can name the surface at a point
 instead of passing `MoveReport.ground.surface`; not built, the game passes the id today.
 
-The gap-map pointer; the pitch sign (decision 3); the vertical default of 45 degrees; wedge versus cone; the default
-ray budget 2048 (decision 30) and the bench target 0.5 ms (W4b); no entity-ref collection (decision 2).
+- Accepted. The gap-map pointer.
+- Accepted. The pitch sign (decision 3).
+- Accepted. The vertical default of 45 degrees.
+- Accepted. Wedge versus cone.
+- Accepted. The default ray budget 2048 (decision 30): accepted as the opt-in budget; the default stays unlimited.
+- Accepted at ~0.65 ms. The bench target 0.5 ms (W4b) is replaced: the quiet re-measure on the RTX 3090 (2026-11-19,
+  release, the bench) gives a 0.627–0.634 ms median at 1 thread and 0.52–0.76 ms at 8. Optimization waits on a
+  trigger: a game profile shows perception among its top costs.
+- Accepted, scheduled (R13). No entity-ref collection (decision 2): memory stays one entity per record; the sanctioned
+  entity-ref collection (`L1392`) itself is accepted and built in R13 for 0003 W3 and the 0007 IK entity targets
+  (`Plan/ai-behaviour.md`).
 
 ## Status
 
@@ -222,8 +231,8 @@ ray budget 2048 (decision 30) and the bench target 0.5 ms (W4b); no entity-ref c
   tick 150, channel contents) and the ignored `perception_bench.rs`. Bench (release, 5950X + RTX 3090 box, 30 perceivers
   x 2 zones x 12 targets x 3 points, 1080 rays per tick): `perception_update` medians over four runs on a box shared
   with other builds: 0.68-1.21 ms at 1 thread, 0.64-0.96 ms at 8 threads (quietest run: 0.679 / p95 0.868 ms at 1,
-  0.644 / p95 0.815 ms at 8); an 8-thread run is not reliably faster at this size. The 0.5 ms target stays Proposed
-  and a quiet-box re-measure is owed. No wire schema, component
+  0.644 / p95 0.815 ms at 8); an 8-thread run is not reliably faster at this size. The 0.5 ms target was replaced
+  by the owner 2026-11-19 after a quiet-box re-measure (Owner rulings). No wire schema, component
   schema, replay or existing golden moved.
 - **W5 mechanized (2026-11-18):** `perception_debug.rs` (the `perception` category and its four sub-filters, drawn at
   extraction through `debug_draw::pen_lines`), `perception_check.rs` (`scene_perception_diagnostics`,

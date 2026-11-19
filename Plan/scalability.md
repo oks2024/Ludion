@@ -73,6 +73,7 @@ grow the other two into the same value.
    means rendering at a quality nobody chose, which is precisely the failure the knob exists to
    prevent. An explicit flag wins *without validating the environment*, so a flag still works on a
    box whose variable is broken.
+   Amended 2026-11-19 (owner): a persisted player-settings preset sits after the flag and env, before the resolved setting, see `Plan/settings.md` d12.
 3. **Per-machine, never a committed file.** How much GPU a box will spend is a property of the box.
    An override file is a local file the machine points at; the repo carries none, and no project
    manifest key selects one. The moment quality is committable it becomes a property of the project

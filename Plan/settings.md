@@ -65,6 +65,8 @@
   `settings`, from 0021 W2b) and replay install; `describe` settings section; desktop-window and
   quality docs.
 - **W3:** text settings with 0024, rumble with 0021 W4 (binds `set_rumble_intensity`), brightness with 0019.
+- **Live window mode (scheduled, owner ruling 2026-11-19):** the settings view reports the live window mode, so it
+  never disagrees with the window after a chord (decision 13); the chord stays non-persisting.
 
 ## Status
 
@@ -85,15 +87,15 @@ and the facade boot test. Live smoke is owed to a human: boot borderless from th
 macOS, and a menu request toggles the window. No `replay_content_hash`, `WorldHash`, replay, golden or
 protocol schema moved.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- The window chord writes `display.window` (reverses the Clockout 0023 ruling; W2 ships it
+- Rejected: the chord stays temporary, keeping the Clockout 0023 ruling; the settings view reports the live window mode instead (Waves). The window chord writes `display.window` (reverses the Clockout 0023 ruling; W2 ships it
   non-persisting).
-- Fold `RenderSettings::request_anti_aliasing` into `Settings` (breaking).
-- A snapshot field so keyframes carry the view (moves `replay_content_hash`; the corpus is re-recorded).
-- `mute_unfocused`.
-- Inline quality override objects in the file.
-- Amendments to `Plan/audio-ambience.md` decision 6, `Plan/scalability.md` / `docs/quality.md`
+- Accepted, scheduled (R13 API break round). Fold `RenderSettings::request_anti_aliasing` into `Settings` (breaking).
+- Accepted, scheduled (R14 re-record round). A snapshot field so keyframes carry the view (moves `replay_content_hash`; the corpus is re-recorded).
+- Accepted. `mute_unfocused`.
+- Accepted. Inline quality override objects in the file.
+- Accepted. Amendments to `Plan/audio-ambience.md` decision 6, `Plan/scalability.md` / `docs/quality.md`
   precedence and `docs/desktop-window.md` "nothing persists".
 
 ## Explicitly out of scope (triggers recorded)

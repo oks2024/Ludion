@@ -31,7 +31,7 @@
 10. **Suspend** freezes progress (no elapsed, no aging, no starts); cancels still apply; a holding line keeps holding.
 11. **Duration** (ticks), fixed at start: `duration_ticks` if authored, else `max(min_s, base_s + per_char_s * chars)`
     seconds over the formatted active-locale text, converted with `ceil(x - x * 1e-6)` (a private copy of the
-    `ludion-ai` rule). Defaults `base_s 1.0, per_char_s 0.06, min_s 1.5`: **Proposed, owner to confirm.**
+    `ludion-ai` rule). Defaults `base_s 1.0, per_char_s 0.06, min_s 1.5`: **accepted by the owner 2026-11-19**.
 12. **Timing:** a line started at frame F has `elapsed` 0 on F and ends `Completed` on frame F+D; its subtitle is
     present on F..F+D-1 with `end_frame = F + D` (exclusive). Cues fire on the tick `elapsed == at` (`at: 0` on the
     start tick); a suspended line fires none.
@@ -59,13 +59,13 @@
 - Choices: `UiList`. Lip sync: a portrait that needs more than `speaking()`.
 - Plurals, gender, RTL, CJK: the `Plan/font-assets.md` triggers.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- The reading-time constants (decision 11).
-- Localization pulled forward from `Plan/font-assets.md` Deferred into W3 (request amendment 1), and fallback chains
+- Accepted. The reading-time constants (decision 11).
+- Accepted, scheduled (W3). Localization pulled forward from `Plan/font-assets.md` Deferred into W3 (request amendment 1), and fallback chains
   (amendment 2, W3). `Plan/font-assets.md` is not edited here; this is the record.
-- Subtitles on by default (W2); band-pass values (W2).
-- The API shape (decision 2): free functions over `&mut World` (`dialogue::say`, `set_locale`, …) with state on hashed
+- Accepted. Subtitles on by default (W2); band-pass values (W2).
+- Accepted. The API shape (decision 2): free functions over `&mut World` (`dialogue::say`, `set_locale`, …) with state on hashed
   `DialogueLine`/`DialogueControl` entities, instead of the request's `Dialogue` and `Locale` resources, because
   resources reset on restore/checkpoint.
 

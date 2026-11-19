@@ -73,7 +73,7 @@ of one name in one frame restores what was just captured.
 store refuses with `L4207`. Wave 3 lifts both.
 
 **7. Event:** `Event::SceneChanged { kind: SceneChangeKind::Restore, path }` with the slot's scene path.
-A dedicated kind would move the wire schema hash (Proposed, Wave 3).
+A dedicated kind would move the wire schema hash (accepted 2026-11-19, scheduled (R14 re-record round)).
 
 **8. RNG rewinds to the slot.** No `restore(name, keep)`. Other game resources reset to fresh, as on every
 rebuild.
@@ -160,16 +160,16 @@ scene text, and held slots refuse arming, `L4207`).
 - **W4 — structured slots.** In-memory slots as erased column clones, the capture ≤ 4 ms / restore ≤ 50 ms
   budgets, the `checkpoint_capture` / `checkpoint_restore` profiler keys, `checkpoint.*` wire commands.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- **(a)** W3's replay corpus re-record (the snapshot gains a field).
-- **(b)** The slot digest joining `WorldHash` (additive term only when the store is non-empty).
-- **(c)** `SceneChangeKind::CheckpointRestore` (moves the wire schema hash).
-- **(d)** `Plan/phase-16-profile.md` decision 7 exception: a checkpoint keeps the live profile. Wave 1
+- Accepted, scheduled (R14 re-record round). **(a)** W3's replay corpus re-record (the snapshot gains a field).
+- Accepted, scheduled (R14 re-record round). **(b)** The slot digest joining `WorldHash` (additive term only when the store is non-empty).
+- Accepted, scheduled (R14 re-record round). **(c)** `SceneChangeKind::CheckpointRestore` (moves the wire schema hash).
+- Accepted. **(d)** `Plan/phase-16-profile.md` decision 7 exception: a checkpoint keeps the live profile. Wave 1
   ships this behaviour; the decision text is amended only by a note pointing here.
-- **(e)** `carry_resource` resources crossing a checkpoint restore, and the matching
+- Accepted. **(e)** `carry_resource` resources crossing a checkpoint restore, and the matching
   `docs/scene-transitions.md` line. Wave 1 ships this.
-- **(f)** The RNG rewinds on restore.
+- Accepted. **(f)** The RNG rewinds on restore.
 
 ## Out of scope
 

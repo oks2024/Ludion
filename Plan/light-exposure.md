@@ -16,7 +16,7 @@ engine answers from sim state, with the renderer's own formulas.
 1. **CPU twin location.** `crates/ludion-renderer/src/light_model.rs`: pure functions, no wgpu types.
    `ludion-engine` already depends on `ludion-renderer`, and the drift test sits beside the WGSL it
    pins. Extract's `point_light_data`/`spot_light_data` call it for the clamps, so each formula exists
-   once on the CPU. **Proposed, owner ruling owed** (the request's refactor decision). Additive; moves
+   once on the CPU. **accepted by the owner 2026-11-19** (the request's refactor decision). Additive; moves
    no pixel.
 2. **Drift pin.** A textual, statement-for-statement test (`light_model_matches_the_wgsl`) in the style
    of `kept_world_from_depth_copies_match_the_snippet`: it asserts the WGSL still contains the lines the
@@ -37,7 +37,7 @@ engine answers from sim state, with the renderer's own formulas.
    for `Normal(n)` the 64-sample Hammersley cosine-weighted `sky_irradiance(n)` (mirrors
    `ibl.wgsl:85-101`), for `Omni` the sphere mean `(zenith + horizon + ground) / 3`. Not applied:
    `GiVolume` sky visibility and bounce, SSAO, specular, the env-branch energy split, emissive,
-   `Mesh.wrap`, fog — documented as known differences. **Proposed, owner ruling owed** (GI in v1).
+   `Mesh.wrap`, fog — documented as known differences. **accepted by the owner 2026-11-19** (GI in v1).
 6. **Occlusion is opt-in and mirrors the renderer.**
    - Rays test only the sun and point/spot lights with `cast_shadows: true`; the camera budget and
      `shadow_distance` are ignored.
@@ -46,7 +46,7 @@ engine answers from sim state, with the renderer's own formulas.
      `≤ 0` casts no ray and nothing occludes.
    - The filter is the caller's `occluders` **as given**; no implicit `only_fixed`. The docs recommend
      `QueryFilter::new().only_fixed().exclude(subject)` or an `include_layer("light_occluder")`. The
-     request's implicit static-only default is **Proposed, owner ruling owed**; W2's component default
+     request's implicit static-only default is left out, **accepted by the owner 2026-11-19**; W2's component default
      re-raises it.
    - A hit on an entity whose inherited `Visibility` is hidden or has `cast_shadows: false` is skipped;
      the first remaining hit occludes. No `PhysicsWorld` means nothing occludes.
@@ -67,11 +67,11 @@ engine answers from sim state, with the renderer's own formulas.
     `light_exposure_update` rebuilds `LightExposureResults` every tick from hashed state, so it is not
     hashed and not snapshotted. One pattern for derived sensor state, no snapshot or schema field, and
     the replay is identical by construction. The request's hashed `LightExposureReading` component is
-    **Proposed, owner ruling owed**; trigger: a trace or HUD that must show the reading inside the hash.
+    left out, **accepted by the owner 2026-11-19**; trigger: a trace or HUD that must show the reading inside the hash.
 12. **The component's default occluders.** `occluder_layers` absent means static colliders only, the
     subject excluded (`QueryFilter::new().only_fixed().exclude(subject)`); present means
     `include_set(layers).exclude(subject)`. The request's default, applied at the authored layer; the
-    function keeps "the filter as given" (decision 6). **Proposed, owner ruling owed**, with decision 6.
+    function keeps "the filter as given" (decision 6). **accepted by the owner 2026-11-19**, with decision 6.
 13. **One type per concept.** `Facing` and `Combine` live in `ludion-components` with serde and
     `rename_all = "snake_case"` (`omni` | `{ normal: [x,y,z] }`, `max` | `mean`); `ludion_engine`
     re-exports them, so `ludion_engine::Facing` and the prelude are unchanged.
@@ -95,7 +95,7 @@ engine answers from sim state, with the renderer's own formulas.
     Blended meshes, sprites, decals, particles and the sky draw as usual.
 18. **Not on the wire.** A `RenderDebugView` variant feeds `replay_schema_hash`, which every committed
     `.lrp` carries, so adding one re-records the corpus. The view is renderer, Rust and CLI only:
-    `render.debug` reports no view for it. **Proposed, owner ruling owed**, trigger: the next sanctioned
+    `render.debug` reports no view for it. **accepted 2026-11-19, scheduled (R14 re-record round)**, trigger: the next sanctioned
     corpus re-record.
 19. **The gate's tolerances.** The request's, fixed constants, not a per-OS calibrated floor: both sides
     run one formula, so a floor would hide drift. A 32×32 grid of floor points of the gallery's
@@ -113,7 +113,7 @@ engine answers from sim state, with the renderer's own formulas.
   `L4250`, `docs/light-exposure.md`, the facade example, tests incl. determinism across thread counts.
 - **W2 — the component (shipped).** `LightExposure`, `light_exposure_update`, `LightExposureResults`,
   check-scene warnings (`L4251`, `L4252`), a WorldHash trace test. The hashed `LightExposureReading`
-  stays Proposed (decision 11).
+  stays left out (decision 11).
 - **W3 — the agreement gate (shipped on Windows).** `--debug-view irradiance`, a gallery scene, goldens
   pinned on both OSes and the rendered-vs-CPU agreement test. The macOS goldens and the test's M4 run are
   owed to the M4.

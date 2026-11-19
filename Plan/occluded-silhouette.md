@@ -48,12 +48,12 @@ decision and is not settled by this.
 - **Whole-frame stylized outlines.** Trigger: an art-direction decision (`Plan/post-process-pipeline.md`).
 - **A stencil or depth-format change.** Trigger: more than 8 styles in one frame, or a second consumer for stencil.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- The interplay with `Fade` on an occluder (interleaved).
-- Grain and vignette apply to the silhouette (the game's preferred position).
-- The note in `Plan/post-process-pipeline.md` that this does not settle stylized outlines.
-- 8 styles per frame.
+- Accepted. The interplay with `Fade` on an occluder (interleaved).
+- Accepted. Grain and vignette apply to the silhouette (the game's preferred position).
+- Accepted. The note in `Plan/post-process-pipeline.md` that this does not settle stylized outlines.
+- Accepted. 8 styles per frame.
 
 ## Status — request 0015
 

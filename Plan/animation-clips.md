@@ -127,14 +127,17 @@ the clip.
    platformer's gameplay is capsules and spheres, and re-animating must never move replays. A
    sim-side one-bone query can be added later without redesign, because the sampler is pure.
    *Proposed amendment (Serious Isaac 0016, not approved): see `Plan/skeletal-animation.md` §Decisions "Proposed"*.
+   Amended 2026-11-19 (owner): a blend's `BlendClock` and root motion are opt-in sim reads of clip data (the pose itself stays visual-only), see Plan/animation-layers.md d8, d12.
 3. **Clips are authored in Blender and imported to canonical text.** A committed bpy script keys the
    actions (the `Plan/asset-pipeline-blender.md` contract), `ludion import` writes text clips, and
    the glb stays derived. **Why:** Pillar 4, and baked skeletal curves are impractical to hand-author.
 4. **Game Rust drives playback; the engine provides primitives.** Play, crossfade, speed and events.
    There is no state-machine asset. **Why:** a transition-condition language drifts into scripting,
    and one character does not justify a graph.
+   Amended 2026-11-19 (owner): a Rust `AnimGraph` helper (code, not an asset) is admitted, see Plan/animation-layers.md d9.
 5. **v1 features: crossfade, scale tracks, events.** Masked layers, root motion and IK are
    non-goals, each with a trigger.
+   Amended 2026-11-19 (owner): masked layers, IK and root motion are lifted as opt-in components, see Plan/animation-layers.md d2, d10, d12.
 6. **Driving content:** the mannequin fixture with Blender-keyed clips proves the engine. The hero is
    a separate Blender brief, judged on its own. **Why:** it decouples this arc from the open Blender
    look verdict.
@@ -158,6 +161,7 @@ the clip.
     its own `clips:` map. **Why:** the mesh document is derived and can't hold a hand-kept map. The
     assembly is already the voxel model's hand-authored document. **Trigger to merge the two:** a
     character feature that assemblies also want.
+    Amended 2026-11-19 (owner): the trigger fired; the merge is accepted as its own arc after the Neon Shroud queue empties, see Plan/animation-layers.md §Owner rulings (2026-11-19).
 11. **Imported motion is derived; the character carries a per-clip overlay.** An imported clip bears
     `generated_from` and is drift-gated. A character's clip entry may add `events:` and `speed`.
     Import ignores Blender markers, so a derived clip never carries events. A hand-authored clip
@@ -177,6 +181,7 @@ the clip.
     same. One plain function, `crossfade(&mut Animation, clip, seconds, now)`, is the way games call
     it. Crossfading a sprite flipbook is a diagnostic. **Why:** a fade is part of what is playing;
     add/remove churn on a separate component complicates replays and snapshots.
+    Amended 2026-11-19 (owner): the outgoing crossfade side may be a `PoseSnapshot`, see Plan/paired-animations.md d12.
 15. **Events arrive in a per-tick resource.** A sim system, in registration order, appends each
     `(entity, clip, event)` crossing of the tick to `AnimationEvents`. A one-shot's end is an implicit
     `end` event. **Accepted trade:** clip timing (duration, event times, overlay speed) becomes sim

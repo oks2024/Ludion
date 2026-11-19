@@ -272,6 +272,7 @@
    *Rejected:* re-reading disk on restore — loses unsaved dev-reload state and may read a stale/newer
    file; a restore must be exact. *Rejected:* not snapshotting the profile — a `ludion dev` reload would
    silently reset accumulated meta-state and a seek would diverge from the linear replay.
+   Amended 2026-11-19 (owner): a checkpoint restore keeps the live profile, see `Plan/checkpoints.md` (d).
 
 8. **Default `<project_root>/save/profile.yaml`, overridable with `EngineBuilder::profile_path(rel)`;
    no CLI flag, no test-only API.** The default resolves root-relative like every asset/doc (project

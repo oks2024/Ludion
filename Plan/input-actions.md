@@ -5,7 +5,7 @@
 > the player means (`crouch`, `move`), bind it to several physical inputs, tell a tap from a hold from
 > a double-tap, let the player rebind, show the right glyph and shake the pad. Game-facing doc:
 > `ludion docs input`. Amends `Plan/phase-13-input.md`, which is closed: its out-of-scope list named
-> remapping and rumble; the promotion of both is **Proposed — owner ruling owed** (see below).
+> remapping and rumble; the promotion of both is **accepted by the owner 2026-11-19** (see below).
 
 ## Design decisions
 
@@ -48,7 +48,7 @@
    re-recorded. Wave 1a therefore binds only today's keys and ships a guard test (a serialized script of
    every existing key and button against a checked-in literal, plus pinned names and order). W3 appends
    the whole keyboard (and `MouseButton::Back`/`Forward`) beside the connection events, with one corpus
-   re-record (Proposed below).
+   re-record (accepted 2026-11-19, scheduled (R14 re-record round)).
 10. **The gesture state is part of the resource, not the hash.** `Actions::state()` /
     `restore_state` carry it for a snapshot (Wave 1b), so a hold continues across a restore on the same
     tick.
@@ -107,7 +107,7 @@
 25. **At-start overrides.** With the switch on, the file is read at build into the engine's at-start overrides,
     applied to every **fresh** `Actions` (a build, a load, a restore); a carried one (a switch, a checkpoint)
     keeps its own. So a restore after a mid-session rebind reverts to the at-start overrides; exact
-    continuation is the Proposed snapshot field. The apply warnings reach `boot_warnings` once, at build.
+    continuation is the snapshot field (accepted 2026-11-19, scheduled (R14 re-record round)). The apply warnings reach `boot_warnings` once, at build.
 26. **Recording and replay.** A recording's `ReplayHeader` carries the at-start overrides as canonical text in
     the generic `save_docs` map (key `input-bindings`), omitted when empty. `save_docs` is outside
     `replay_content_hash` and the protocol schema hash, so no pinned artifact moves; it is the one header slot
@@ -135,7 +135,7 @@
 - **W1b — engine opt-in (shipped):** `Engine::builder().input_actions()`, an engine-owned
   doc-singleton kind registered like `patterns()`, install beside `install_nav`,
   `carry_resource::<Actions>()`, the latch rule, unknown names drained into `Diagnostics` as `L4270`,
-  facade prelude, a runnable example. The snapshot field for `ActionState` moved to Proposed (below).
+  facade prelude, a runnable example. The snapshot field for `ActionState` moved to the owner rulings (below).
 - **W2a — rebinding, sim side (shipped):** rebind/unbind/reset, capture with conflict resolution,
   `locked` enforcement, `InputBindingsDoc` with lenient `apply_overrides`, the `save()` flag,
   `UiNav::from_actions`; `L4272`–`L4276`. No file, no engine change.
@@ -145,7 +145,7 @@
   installing it and never reading or writing the file, the doc walk skipping `<save_root>/save`, the `rebind_menu` example; `L1636`, `L4277`, `L4278`.
 - **W3 — devices, glyphs and the full key set:** the whole keyboard appended after `Alt` plus `Back`/`Forward` (one corpus re-record), the window keymap and mouse mapping for them, recorded `gamepad_connected{family}` / `gamepad_disconnected`,
   `last_device` / `device_changed`, `Actions::source`, a glyph table (`glyph_name`), a focus event
-  (Proposed).
+  (accepted 2026-11-19, scheduled (W3)).
 - **W4 — rumble (shipped):** the outbox, the validator, the pad-thread mixer and the gilrs backend on Windows (decisions 27–31); macOS is silent.
 
 ## Status
@@ -186,34 +186,34 @@ and without the playing system; the mixer is unit-tested. The pad thread polls e
 pad is connected and every 100 ms otherwise. No `WorldHash`, trace, replay, golden or schema moved.
 **Owed:** rumble felt on a real pad on the Windows box, and the silence confirmed on the M4.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- **A macOS rumble backend** (GameController / CHHaptics). It is platform-shaped code in `crates/`, which
+- Accepted, scheduled (behind a cargo feature). **A macOS rumble backend** (GameController / CHHaptics). It is platform-shaped code in `crates/`, which
   needs the owner's ruling (a cargo feature). Trigger: the game needs rumble on Mac.
-- **The 8 ms pad poll.** A rumble command waits at most one poll, so the thread wakes every 8 ms while a
+- Accepted. **The 8 ms pad poll.** A rumble command waits at most one poll, so the thread wakes every 8 ms while a
   primary pad is connected and every 100 ms without one. A pad event channel would remove the polling.
 
-- **`UiNav.back` (breaking).** `UiNav` is built by struct literal in games and docs, so a new field breaks
+- Accepted, scheduled (R13 API break round). **`UiNav.back` (breaking).** `UiNav` is built by struct literal in games and docs, so a new field breaks
   every one. W2a ships `from_actions` with no `back` field; games read `ui_back` through `actions.pressed`.
-- **Overrides in snapshot keyframes.** Mid-session overrides need a `SnapshotDoc` field, which moves
+- Accepted, scheduled (R14 re-record round). **Overrides in snapshot keyframes.** Mid-session overrides need a `SnapshotDoc` field, which moves
   `snapshot_schema()` and rides W3's one corpus re-record, like `ActionState`.
 
-- **A snapshot field for `ActionState`** (exact mid-gesture continuation across `engine.restore`, a
+- Accepted, scheduled (R14 re-record round). **A snapshot field for `ActionState`** (exact mid-gesture continuation across `engine.restore`, a
   replay seek and a bisect keyframe). A new `SnapshotDoc` field changes `snapshot_schema()`, which
   `replay_content_hash` covers, so it rides W3's one corpus re-record. Until then a restore installs a
   fresh `Actions` and the latch rule applies; a plain linear replay never restores, so it is exact.
   `Actions::state()` / `restore_state()` stay for it.
-- **One corpus re-record in W3** for the full key set: new `Key`/`MouseButton` variants move `replay_content_hash`, so every committed replay is re-recorded once, last, after the schema snapshot.
-- **Promote remapping and rumble out of `Plan/phase-13-input.md`'s out-of-scope list** (request
+- Accepted, scheduled (R14 re-record round). **One corpus re-record in W3** for the full key set: new `Key`/`MouseButton` variants move `replay_content_hash`, so every committed replay is re-recorded once, last, after the schema snapshot.
+- Accepted. **Promote remapping and rumble out of `Plan/phase-13-input.md`'s out-of-scope list** (request
   amendments 1–2). Wave 1a builds none of rebinding or rumble; it is the sim side they stand on.
-- **Sensitivity and invert are binding modifiers** (`scale`, `invert_x`, `invert_y`), so they persist
+- Accepted. **Sensitivity and invert are binding modifiers** (`scale`, `invert_x`, `invert_y`), so they persist
   with a player's rebinds in W2.
-- **A tap on an input that also has a `double_tap` binding is deferred** by `double_tap_window`. The
+- Accepted. **A tap on an input that also has a `double_tap` binding is deferred** by `double_tap_window`. The
   cost is that latency; the alternative (fire at once, then double-tap) cannot cancel the tap.
-- **Legacy `GamepadButton::*Trigger` keeps the fixed 0.5 with no hysteresis**; hysteresis is per
+- Accepted. **Legacy `GamepadButton::*Trigger` keeps the fixed 0.5 with no hysteresis**; hysteresis is per
   binding only, so no replay moves.
-- **`locked: true`** is parsed now and enforced by W2's rebinder.
-- **Axis combination: first non-zero binding in binding order.** Summing or taking the largest
+- Accepted. **`locked: true`** is parsed now and enforced by W2's rebinder.
+- Accepted. **Axis combination: first non-zero binding in binding order.** Summing or taking the largest
   magnitude are the alternatives.
 
 ## Explicitly out of scope (triggers recorded)

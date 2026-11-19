@@ -83,6 +83,7 @@ Game-side procedural writes remain legal and shipped (yaw-to-heading, pickup bob
 2. **Visual-only, hard line.** The sim keeps its single collision footprint and states. Pose is a
    pure function of (clip, sim time); pause freezes it, replays are byte-identical for free.
    Per-limb hitboxes / foot placement: trigger-gated later.
+   Amended 2026-11-19 (owner): the foot-placement trigger fired (ramps and stairs); ground feet ship visual-only, in extract, see Plan/animation-layers.md d49.
 3. **Storage: files-only assembly-of-parts.** A `kind: assembly` doc is the model of record; every
    part is its own file, always (no inline parts — one authoring shape, one path through every
    tool). Global vision comes from tooling, not from one mega-file.
@@ -97,6 +98,8 @@ Game-side procedural writes remain legal and shipped (yaw-to-heading, pickup bob
    `Animation { clip, started, speed }` — ordinary hashed sim state, written by game systems
    (movement sets `walk`, combat sets `attack`). No data-driven state machine (a behavior DSL —
    pillar violation). Transitions are hard cuts in v1.
+   Amended 2026-11-19 (owner): a Rust `AnimGraph` helper (code, not data) is admitted, see Plan/animation-layers.md d9.
+   Amended 2026-11-19 (owner): agent state machines take the Rust-side `ludion-ai` `Machine` shape (code, not data), see Plan/ai-behaviour.md d1.
 7. **Clips are separate files bound by short name.** `kind: animation`, one clip per file; the
    assembly declares `clips: { walk: anims/humanoid-walk.anim.yaml, … }`; the component uses the
    short name so game code is model-agnostic and clips are reusable across models sharing the
@@ -201,7 +204,7 @@ tracks:
   entity to a joint of a skinned parent, the draw follows the posed joint, `posed_joint_world` is the
   presentation-only pose read, and the `character-socket` gallery golden proves it.
 - **Prefab parts as socket targets** (imported prefab parts) — a consumer asks. Assembly parts shipped
-  as sockets (`Plan/animation-layers.md` decisions 41–44; owner ruling owed on lifting this deferral).
+  as sockets (`Plan/animation-layers.md` decisions 41–44; the owner lifted this deferral for assembly parts 2026-11-19).
 - **Scale channel** (squash-and-stretch) — a sitting asks for it.
 - **Part visibility keyframes** — first content that needs them.
 - **mp4 clip preview** — first clip that looked right as a strip but reads wrong in motion

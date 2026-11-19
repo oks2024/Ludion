@@ -25,10 +25,10 @@ hearing circles and a nav overlay while it tunes AI, and drew them from `line` l
    colon through). Flow arrows and grid nodes draw within a fixed 30 m of the game camera, routes are
    never culled, and a 200,000-segment cap truncates the grid last.
 3. **`perception` shipped in `Plan/perception.md` W5** (decisions 40-44), through these primitives.
-4. **Proposed — owner ruling owed:** amend `Plan/character-controller.md` decision 17 to list these
+4. **Accepted by the owner 2026-11-19:** amend `Plan/character-controller.md` decision 17 to list these
    primitives and categories (a one-line pointer to this plan is in it now).
-5. **Proposed:** `nav_view_radius` as a host tunable. Trigger: a level where 30 m is wrong.
-6. **Proposed:** a scene-level nav config so the built-in `ludion render` host can draw `nav`. Trigger: a
+5. **Accepted by the owner 2026-11-19:** `nav_view_radius` as a host tunable. Trigger: a level where 30 m is wrong.
+6. **Accepted by the owner 2026-11-19:** a scene-level nav config so the built-in `ludion render` host can draw `nav`. Trigger: a
    nav golden.
 
 ## Waves

@@ -352,6 +352,7 @@ The thinnest thing a game can run.
 - Hinge, ball, slider, fixed — limits and a break impulse each — as components, created and destroyed
   at runtime through the existing `entity.spawn`/`entity.destroy`/`component.*` commands, so a
   mid-flight grab can form one at runtime.
+  Amended 2026-11-19 (owner): a joint may carry a stored rest-relative zero (`JointZero`, folded into `Joint.zero` in the R13 API break round) that pose blends measure from, see Plan/paired-animations.md d1.
 - Ruled 2026-09-23: no joint commands — a joint is a component on a carrier entity, so `entity.spawn`
   is the one way; the schema hash does not move.
 - The ragdoll: an assembly's parts as rigid bodies under its joint list, and the clip-to-ragdoll switch
@@ -598,6 +599,7 @@ hit-stop and slow-motion blast `ludion docs physics` shows.
 
 Amended (Neon Shroud request 0011): a `GameClock::scale` drives `scale_time` automatically; a hold still
 does not reach physics. See `Plan/game-time-scale.md` decisions 15–18.
+Amended 2026-11-19 (owner): the amendment above is accepted, see `Plan/game-time-scale.md` (b).
 
 **Contact point and normal (external-game request 0007), 2026-09-25 (Lore rev 870).** What exists: a `Started`
 `ContactEvent` carries `point` and `normal` (`[f32; 3]`, `[0.0; 3]` on a `Stopped`), in `world.rs`'s

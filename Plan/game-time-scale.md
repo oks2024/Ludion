@@ -1,6 +1,6 @@
 # Gameplay time scale — a fractional `GameClock`
 
-> **Status:** Waves 1–4 shipped in the working tree (see Status). Owner rulings (a)–(f) below remain owed.
+> **Status:** Waves 1–4 shipped in the working tree (see Status). Owner rulings (a)–(f) below were made 2026-11-19.
 >
 > Neon Shroud request 0011 (`engine-requests/0011-gameplay-time-scale.md`, audited at engine r2369).
 > Siblings: `docs/game-clock.md` (the hold this extends), `Plan/checkpoints.md` decision 3 (`rebased`),
@@ -126,17 +126,17 @@ test pins them. The acceptance run lives in `tests/game_time_scale.rs`, not `gam
 Euler's error. The measured gaps are ~0.1 m on a fall (bound 0.15 m in the acceptance run), 0.03 m
 for the platform and 0.1 m for its rider. Closed forms match exactly.
 
-## Proposed — owner ruling owed
+## Owner rulings (2026-11-19)
 
-- (a) A `GameClock` `WorldHash` term when non-identity (moves no existing hash only if gated on
+- Accepted, scheduled (R14 re-record round). (a) A `GameClock` `WorldHash` term when non-identity (moves no existing hash only if gated on
   non-identity; a `WorldHash` design change).
-- (b) The `Plan/physics.md` §Time scale amendment, "a gameplay scale drives `scale_time`" (W3).
-- (c) The `docs/game-clock.md` rule extension to fractional time (shipped as docs in W1; binding only as
+- Accepted. (b) The `Plan/physics.md` §Time scale amendment, "a gameplay scale drives `scale_time`" (W3).
+- Accepted. (c) The `docs/game-clock.md` rule extension to fractional time (shipped as docs in W1; binding only as
   evaluators adopt it).
-- (d) `MIN_SCALE` 1/1024.
-- (e) Fold `slowed_q16`, `pending_q16` and `step_q16` into the snapshot schema at the next deliberate
+- Accepted. (d) `MIN_SCALE` 1/1024.
+- Accepted, scheduled (R14 re-record round). (e) Fold `slowed_q16`, `pending_q16` and `step_q16` into the snapshot schema at the next deliberate
   corpus re-record (decision 9); folding now would move `replay_content_hash` and force a corpus re-record.
-- (f) No GameClock::hold_reaches_physics opt-in (the request's §3 / open question 4): freeze() beside
+- Accepted. (f) No GameClock::hold_reaches_physics opt-in (the request's §3 / open question 4): freeze() beside
   hold() covers it (decision 16). If the owner wants the request's API: a GameClock bool that makes the
   step system call freeze() on a held tick; it touches GameClock's snapshot field.
 
@@ -155,5 +155,5 @@ reopens when a game needs it.
   follows the scale; W3's tests pin it.
 - **W3:** shipped, Lore rev 2378.
 - **W4:** shipped, Lore rev 2378.
-- **Owner rulings owed:** (a)–(f) in "Proposed" above. (b) is applied conservatively: `Plan/physics.md`
+- **Owner rulings (2026-11-19):** (a)–(f) in "Owner rulings" above. (b) is applied conservatively: `Plan/physics.md`
   §Time scale carries the amendment line.

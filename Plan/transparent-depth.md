@@ -89,15 +89,15 @@ Waves:
 - **Open, with trigger:** a merged distance sort with sprites and particles, if smoke behind office
   glass reads wrong.
 
-**Proposed — owner ruling owed:**
+**Owner rulings (2026-11-19):**
 
-- (a) The trigger firing (dock office glass after the water), and the mesh path in decision 1.
-- (b) Meshes draw before sprites and particles; decision 4's "unchanged by design" gains this ordering
+- Accepted. (a) The trigger firing (dock office glass after the water), and the mesh path in decision 1.
+- Accepted. (b) Meshes draw before sprites and particles; decision 4's "unchanged by design" gains this ordering
   limit: a sprite behind glass is drawn over the glass's depth-off layer in sprite order, not by
   distance.
-- (c) `Fade` multiplies opacity on a blended mesh instead of dithering.
-- (d) A blended mesh never casts a shadow, whatever `Visibility.cast_shadows` says.
-- (e) A blended mesh is never an SSR origin; it gets probe and sky specular in W2.
+- Accepted. (c) `Fade` multiplies opacity on a blended mesh instead of dithering.
+- Accepted. (d) A blended mesh never casts a shadow, whatever `Visibility.cast_shadows` says.
+- Accepted. (e) A blended mesh is never an SSR origin; it gets probe and sky specular in W2.
 
 ## Known errors
 
