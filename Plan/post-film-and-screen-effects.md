@@ -1,6 +1,6 @@
 # Plan: film post and screen effects
 
-> Status: **IN PROGRESS** (Neon Shroud request 0019, `engine-requests/0019-post-anamorphic-lut-autoexposure-ui-effects.md`,
+> Status: **MECHANIZED** (Neon Shroud request 0019, `engine-requests/0019-post-anamorphic-lut-autoexposure-ui-effects.md`,
 > read-only; audited at engine r2369, re-checked at Lore 2399). Six additions, all engine-owned and off by default:
 > anamorphic streaks, `.cube` LUT grading, metered exposure, animated grain, an authorable halation colour, and
 > `ScreenEffect` presets scoped to a UI region, the whole screen or a secondary view. Related: `Plan/post-process-pipeline.md`
@@ -145,7 +145,7 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
     analog_video | scan`, and the stages of the request (`scanlines`, `scanline_count`, `mask`, `mask_strength`,
     `curvature`, `phosphor`, `glow`, `chroma_bleed`, `noise`, `tracking`, `roll`, `jitter`, `flicker`, `interlace`,
     `posterize`, `sweep`, `sweep_period`, `seed`). Each stage is optional: unset takes the preset's value, so canonical
-    text carries only what the author overrode. Targets are `fill | region` for W4 (`view` arrives in W5). A phosphor of
+    text carries only what the author overrode. Targets are `fill | region` for W4 (`view` arrived in W5). A phosphor of
     `[0, 0, 0]`, a `posterize` below 2 and a `mask` at strength 0 are off; an effect with every stage off is not applied
     and not counted. A region lays out like a `UiRect` (`anchor`, `offset`, `size`, canvas units) and is clamped to the
     viewport at extract.
@@ -163,11 +163,16 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
     copying it would change its description in every graph. Pixels outside every rect match the no-effect frame exactly.
     A scene with no `ScreenEffect` keeps today's single overlay pass and declares no layer. The 3D frame's own chain is
     never touched.
-25. **Placement (view).** The effect is the last step of that `RenderView`'s own chain, so it is baked into the texture
-    before any `UiRect` samples it. It waits on request 0017's view chain.
-26. **Cap.** At most 4 applied per frame; the extra ones (highest `order`, then highest `EntityId`) are not applied and
-    raise `L2392` once per load, never silently. The applied ones are the lowest `(order, EntityId)` among the effects
-    that change a pixel and have a usable region. `L1761` for a non-positive region size or a `view` naming no
+25. **Placement (view).** The effect runs in that `RenderView`'s own graph as the same `overlay -> screen_fx_k` chain
+    decision 24 builds, over the whole view texture (`rect_px = [0, 0, w, h]`), so it is baked in before any `UiRect`
+    samples the view. It needs no per-view post profile (request 0017 W3): the view's derived scene carries the view's own
+    effect list and `PostChain::for_scene` counts it. Several effects on one view apply in `(order, EntityId)` order. A
+    `view` naming no `RenderView` is `L1761` and applied nowhere; a view that exists but does not render (disabled, or
+    past the view budget) drops its effects silently, uncounted. A view with no effect, and the frame, are byte-identical.
+26. **Cap.** At most 4 applied per frame across every target (fill, region and view together, so the frame never runs
+    more than 4 `screen_fx` passes summed over its graphs); the extra ones (highest `order`, then highest `EntityId`) are
+    not applied and raise `L2392` once per load, never silently. The applied ones are the lowest `(order, EntityId)`
+    among the effects that change a pixel and have a usable target. `L1761` for a non-positive region size or a `view` naming no
     `RenderView`. Animated stages are functions of game time (decision 3) and `seed`. Target cost ≤ 0.15 ms at 1080p for
     a 320² region plus a fullscreen `scan`, measured on the pinned machines.
 
@@ -201,7 +206,7 @@ The rest of both ranges is reserved for this plan.
   - **W4b** (F, shipped): `ScreenEffect`, presets, `L1761`/`L2392`, extract into `RenderScene.screen_effects`.
   - **W4c** (F, shipped): the `ScreenEffect` pass, the overlay split, `[post_groups] screen_fx`, `docs/screen-effects.md`, gallery
     `screen-effects.yaml` with a `--frames 0,1,2` strip.
-- **W5 — view targets** (F): `target: { view }` once request 0017's view chain closes.
+- **W5 — view targets** (F, shipped): `target: { view }`, the view's own `screen_fx` chain, the shared cap, gallery `screen-effect-view.yaml`.
 
 Goldens for every new scene are blessed on the pinned machines; budget twins are owed per pinned OS.
 
@@ -237,11 +242,13 @@ before the silhouette (decision 13); codes renumbered.
 - Planned 2026-11-20.
 - W1 (`halation_color`, `anamorphic*`, the `lens` group) mechanized on the M5 2026-11-21: absent fields left five gallery
   scenes (with and without SMAA) and their `dump-graph` byte-identical on that machine; the streak's half-length at the
-  default `anamorphic_length` measures about 0.30 of the frame width. Goldens and `lens` budgets owed on the pinned machines.
-- W2a (`.cube` parser, `lut` field, the composite step 7a) mechanized on the M5 2026-11-21; goldens owed on the pinned machines.
-- W2b (`ludion lut identity|bake|apply|stats`, the `grade_model` CPU twin of `grade()`) mechanized on the M5 2026-11-21: a LUT baked from a warm/teal analytic grade renders within 5 output steps (mean 0.05) of the analytic render of the same scene. Scratch scene `post-film-1982-lut` + its `.cube` owed a move into `examples/gallery/` and goldens on the pinned machines.
-- W3a (`exposure_mode`, `exposure_compensation`, `metering*`, `exposure_range`, `L1760`, the `exposure_meter` pass) mechanized on the M5 2026-11-21; goldens, the scratch scene `post-metered-exposure` and the `exposure` budget are owed on the pinned machines.
+  default `anamorphic_length` measures about 0.30 of the frame width. Windows goldens committed; macOS twins and the `lens` budgets owed on the pinned machines.
+- W2a (`.cube` parser, `lut` field, the composite step 7a) mechanized on the M5 2026-11-21; Windows golden committed; macOS twin owed.
+- W2b (`ludion lut identity|bake|apply|stats`, the `grade_model` CPU twin of `grade()`) mechanized on the M5 2026-11-21: a LUT baked from a warm/teal analytic grade renders within 5 output steps (mean 0.05) of the analytic render of the same scene. Scene `post-film-1982-lut` lives in `examples/gallery/` with its Windows golden; the macOS twin is owed.
+- W3a (`exposure_mode`, `exposure_compensation`, `metering*`, `exposure_range`, `L1760`, the `exposure_meter` pass) mechanized on the M5 2026-11-21; Windows goldens (`post-metered-exposure`) committed; the macOS twins and the `exposure` budget are owed.
 - W3b (`--debug-view exposure_meter`, the metered EV in the `ludion render` summary and `--frames` strip, the pan check `exposure_pan`) mechanized on the M5 2026-11-21: a metered frame and its manual twin render byte-identical with the readback armed or not, and manual scenes' graphs are unmoved. The `ProfileReport` EV field is an R14 item (it moves the protocol schema and `replay_schema_hash`). The view's look is judged by a human at the next sitting.
 - W4b (`ScreenEffect` component, presets, `L1761`/`L2392`, extract into `RenderScene.screen_effects`, check-scene's cap warning) mechanized on the M5 2026-11-21; no pass reads it yet, so every frame and `dump-graph` is unchanged.
 - W4c mechanized on the RTX 3090 2026-11-21: no-effect renders and `dump-graph` byte-identical (22 files: six gallery scenes plain and SMAA, `ui-hud` at both resamples); golden `screen-effects` blessed (Windows); `screen_fx` 0.072 ms at 1080p (median of three runs, fill `scan` 0.051 + 320x320 `crt` 0.021) vs the 0.15 ms target; macOS twin and the budget ceiling owed.
 - W4a (`grain_motion`) mechanized on the RTX 3090 2026-11-21: absent/static left 25 renders and `dump-graph` dumps (seven gallery scenes plain and SMAA, `post-full` at both resamples) byte-identical; animated grain moves per tick in all four owning passes. The M4 check is owed.
+- W5 (`target: { view }`) mechanized on the RTX 3090 2026-11-21: the effect runs in the view's own graph as the `overlay -> screen_fx_k` chain over the whole view texture, the cap is shared across fill, region and view, an unknown view is `L1761` at extract and in check-scene; with no view effect, 10 renders and `dump-graph` dumps (`render-view-radar`, `render-view-layers`, `render-view-portrait`, `screen-effects`, `ui-hud`) are byte-identical; golden `screen-effect-view` blessed (Windows). API break: `ScreenEffectTarget` is not `Copy`. macOS twin owed.
+- Owed across W1-W5: the macOS twins of the goldens (`post-film-1982`, `post-film-1982-lut`, `post-metered-exposure`, `screen-effects`, `screen-effect-view`); the `lens`, `exposure` and `screen_fx` budget ceilings on both pinned OSes; the game's live sittings (the grain motion trigger, the exposure-meter view's look).

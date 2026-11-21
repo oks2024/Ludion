@@ -4,7 +4,8 @@
 //! A view is a derived frame, as a probe face is ([`crate::probe_capture::face_scene`]); unlike a face
 //! it keeps the sprites, markers, particles, text, decals and blended meshes, and draws the ordinary
 //! frame graph with its cull. It drops what belongs to the screen (the UI, the viewmodel, silhouettes,
-//! the debug view) and the screen-space effects that need history or the main camera.
+//! the debug view) and the screen-space effects that need history or the main camera; a view's own
+//! `screen_effects` run as the last step of its frame.
 
 use super::{CacheEviction, Renderer};
 use crate::graph::{AntiAliasing, FrameSize, PostChain, build_frame_graph};
@@ -16,8 +17,9 @@ use ludion_render_graph::{RenderedImage, schedule};
 /// The scene `scene.views[index]` renders: `scene` seen through that view's camera, keeping the items
 /// the view's layers draw (from the full scene when the frame is layered), without the UI,
 /// other views, viewmodel, silhouettes, debug view, SSAO, SSR, depth of field, light shafts or light
-/// scatter. Everything else, lights with their shadows, the sun with the main camera's cascade fit,
-/// the environment, GI and the probes, stays.
+/// scatter, and with the view's own screen effects in place of the main frame's. Everything else,
+/// lights with their shadows, the sun with the main camera's cascade fit, the environment, GI and
+/// the probes, stays.
 ///
 /// # Panics
 /// If `index` is not a view of `scene`.
@@ -34,9 +36,11 @@ use ludion_render_graph::{RenderedImage, schedule};
 ///     layers: u32::MAX,
 ///     lights: u32::MAX,
 ///     sun: true,
+///     screen_effects: Vec::new(),
 /// });
 /// let derived = view_scene(&scene, 0);
 /// assert!(derived.views.is_empty() && derived.ui.is_empty());
+/// assert!(derived.screen_effects.is_empty());
 /// ```
 pub fn view_scene(scene: &RenderScene, index: usize) -> RenderScene {
     let source = scene.layered.as_deref();
@@ -95,7 +99,7 @@ pub fn view_scene(scene: &RenderScene, index: usize) -> RenderScene {
     out.silhouettes = Silhouettes::default();
     out.debug_view = None;
     out.ui.clear();
-    out.screen_effects.clear();
+    out.screen_effects = scene.views[index].screen_effects.clone();
     out.views.clear();
     for light in &mut out.lights {
         light.scatter = 0.0;
@@ -182,6 +186,7 @@ impl Renderer {
     ///     layers: u32::MAX,
     ///     lights: u32::MAX,
     ///     sun: true,
+    ///     screen_effects: Vec::new(),
     /// });
     /// let image = renderer.render_view(&scene, 0)?;
     /// assert_eq!((image.width, image.height), (256, 256));

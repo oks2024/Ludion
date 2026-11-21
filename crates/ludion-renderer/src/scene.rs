@@ -1834,6 +1834,9 @@ pub struct RenderViewData {
     pub lights: u32,
     /// Whether the sun lights the view.
     pub sun: bool,
+    /// Screen effects applied as the last step of the view's frame, in draw order; empty leaves the
+    /// view unchanged.
+    pub screen_effects: Vec<crate::screen_effect::ScreenEffectData>,
 }
 
 /// Everything the renderer needs to draw one frame — plain data, no ECS, no paths.

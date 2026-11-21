@@ -12,7 +12,7 @@ const W: u32 = 96;
 const H: u32 = 64;
 
 /// An effect over `rect_px` that changes nothing: every stage at its off value.
-fn neutral(rect_px: [f32; 4], ui_start: u32) -> ScreenEffectData {
+pub(super) fn neutral(rect_px: [f32; 4], ui_start: u32) -> ScreenEffectData {
     ScreenEffectData {
         rect_px,
         ui_start,

@@ -491,6 +491,7 @@ mod tests {
             layers,
             lights: layers,
             sun: true,
+            screen_effects: Vec::new(),
         });
         main
     }

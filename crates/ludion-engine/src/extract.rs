@@ -1879,6 +1879,19 @@ fn extract_inner(
     let post = extract_post(world, &ids, now);
     let lut = extract_lut(world, &ids, project_root, assets)?;
     assets.extract_end(ExtractPhase::Lights);
+    let screen_effects = crate::screen_effect::extract_screen_effects(
+        world,
+        &ids,
+        now,
+        viewport,
+        &ui_orders,
+        &view_table,
+        degraded,
+    );
+    let mut views = view_table.views;
+    for (view, effects) in views.iter_mut().zip(screen_effects.per_view) {
+        view.screen_effects = effects;
+    }
     let mut scene = RenderScene {
         prewarm: Vec::new(),
         camera,
@@ -1913,12 +1926,10 @@ fn extract_inner(
         gi,
         bone_palette,
         viewmodel,
-        views: view_table.views,
+        views,
         rain: crate::rain::extract_rain(world, &ids, now, degraded),
         layered: None,
-        screen_effects: crate::screen_effect::extract_screen_effects(
-            world, &ids, now, viewport, &ui_orders, degraded,
-        ),
+        screen_effects: screen_effects.frame,
     };
     if let Some(data) = scene.viewmodel.as_mut() {
         data.particles = scene

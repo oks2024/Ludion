@@ -1,6 +1,7 @@
 //! Screen effects at extract: each applied `ScreenEffect` becomes a [`ScreenEffectData`] with its
-//! output-pixel rectangle, UI split index, resolved stages and game time. The static half,
-//! [`scene_screen_effect_diagnostics`], reports the cap from scene text.
+//! output-pixel rectangle, UI split index, resolved stages and game time, routed to the frame or to
+//! the `RenderView` it targets. The static half, [`scene_screen_effect_diagnostics`], reports the cap
+//! and unknown view names from scene text.
 
 use ludion_components::{
     ScreenEffect, ScreenEffectTarget, ScreenMaskKind, screen_effect_target_problems,
@@ -13,23 +14,40 @@ use ludion_ecs::World;
 use ludion_renderer::{MAX_SCREEN_EFFECTS, RAIN_TIME_WRAP_S, ScreenEffectData, ScreenMask};
 use ludion_scene::Scene;
 
+use crate::secondary_view::ViewTable;
+
+/// The applied effects, split by where they draw.
+#[derive(Default)]
+pub(crate) struct ScreenEffectsOut {
+    /// Fill and region effects, in draw order: `RenderScene.screen_effects`.
+    pub(crate) frame: Vec<ScreenEffectData>,
+    /// Each rendered view's effects, indexed like `ViewTable.views`.
+    pub(crate) per_view: Vec<Vec<ScreenEffectData>>,
+}
+
 /// The frame's screen effects, in draw order: the (at most [`MAX_SCREEN_EFFECTS`]) lowest
-/// `(order, EntityId)` effects that change a pixel. An effect with every stage off is neither applied
-/// nor counted; one with an unusable region is `L1761`; each effect past the cap is `L2392`.
-/// `ui_orders` is `RenderScene.ui`'s sorted order column. `time_s` and `frame` are game time, so a
-/// held `GameClock` holds the effect.
+/// `(order, EntityId)` effects that change a pixel, fill, region and view targets together. An effect
+/// with every stage off is neither applied nor counted; one with an unusable region or a view naming
+/// no `RenderView` is `L1761`; a view that exists but does not render drops its effects silently;
+/// each effect past the cap is `L2392`. `ui_orders` is `RenderScene.ui`'s sorted order column.
+/// `time_s` and `frame` are game time, so a held `GameClock` holds the effect.
 pub(crate) fn extract_screen_effects(
     world: &World,
     ids: &[EntityId],
     now: GameTime,
     viewport: (u32, u32),
     ui_orders: &[i32],
+    views: &ViewTable,
     degraded: &mut Vec<(String, Diagnostic)>,
-) -> Vec<ScreenEffectData> {
+) -> ScreenEffectsOut {
+    let mut out = ScreenEffectsOut {
+        frame: Vec::new(),
+        per_view: vec![Vec::new(); views.views.len()],
+    };
     if world.component_count::<ScreenEffect>() == 0 {
-        return Vec::new();
+        return out;
     }
-    let mut candidates: Vec<(i32, EntityId, &ScreenEffect)> = Vec::new();
+    let mut candidates: Vec<(i32, EntityId, &ScreenEffect, Option<usize>)> = Vec::new();
     for &id in ids {
         let Some(effect) = world.get::<ScreenEffect>(id).ok().flatten() else {
             continue;
@@ -48,17 +66,34 @@ pub(crate) fn extract_screen_effects(
                 ),
                 Diagnostic::new(
                     code::SCREEN_EFFECT_INVALID_TARGET,
-                    format!("`ScreenEffect` region {what}"),
+                    format!("`ScreenEffect` target {what}"),
                 )
                 .with_path(path)
                 .with_help("see `ludion explain L1761` and `ludion docs screen-effects`"),
             ));
             continue;
         }
-        candidates.push((effect.order, id, effect));
+        let mut slot = None;
+        if let ScreenEffectTarget::View(name) = &effect.target {
+            match views.by_name.get(name) {
+                Some(Some(index)) => slot = Some(*index as usize),
+                Some(None) => continue,
+                None => {
+                    degraded.push((
+                        format!(
+                            "{}/screen-effect-target",
+                            crate::diagnostics::offender_key(world, id)
+                        ),
+                        unknown_view_diagnostic(name).with_path("/target/view"),
+                    ));
+                    continue;
+                }
+            }
+        }
+        candidates.push((effect.order, id, effect, slot));
     }
-    candidates.sort_by_key(|(order, id, _)| (*order, *id));
-    for (_, id, _) in candidates.iter().skip(MAX_SCREEN_EFFECTS) {
+    candidates.sort_by_key(|(order, id, _, _)| (*order, *id));
+    for (_, id, _, _) in candidates.iter().skip(MAX_SCREEN_EFFECTS) {
         degraded.push((
             format!(
                 "{}/screen-effect-cap",
@@ -69,14 +104,22 @@ pub(crate) fn extract_screen_effects(
     }
     let time_s = (now.seconds() % RAIN_TIME_WRAP_S) as f32;
     let frame = now.ticks_floor() as u32;
-    candidates
-        .into_iter()
-        .take(MAX_SCREEN_EFFECTS)
-        .map(|(order, _, effect)| {
+    for (order, _, effect, slot) in candidates.into_iter().take(MAX_SCREEN_EFFECTS) {
+        let (rect_px, ui_start) = match slot {
+            Some(slot) => {
+                let (w, h) = views.views[slot].size;
+                ([0.0, 0.0, w as f32, h as f32], 0)
+            }
+            None => (
+                rect_px(&effect.target, viewport),
+                ui_orders.partition_point(|&o| o < order) as u32,
+            ),
+        };
+        let data = {
             let s = effect.stages();
             ScreenEffectData {
-                rect_px: rect_px(&effect.target, viewport),
-                ui_start: ui_orders.partition_point(|&o| o < order) as u32,
+                rect_px,
+                ui_start,
                 time_s,
                 frame,
                 seed: effect.seed,
@@ -103,8 +146,21 @@ pub(crate) fn extract_screen_effects(
                 phosphor: s.phosphor,
                 interlace: s.interlace,
             }
-        })
-        .collect()
+        };
+        match slot {
+            Some(slot) => out.per_view[slot].push(data),
+            None => out.frame.push(data),
+        }
+    }
+    out
+}
+
+fn unknown_view_diagnostic(name: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::SCREEN_EFFECT_INVALID_TARGET,
+        format!("`ScreenEffect` target view `{name}` is named by no `RenderView`"),
+    )
+    .with_help("see `ludion explain L1761` and `ludion docs screen-effects`")
 }
 
 /// The target's rectangle `[x, y, w, h]` in output pixels, clamped to the viewport (an empty clamp
@@ -112,7 +168,7 @@ pub(crate) fn extract_screen_effects(
 fn rect_px(target: &ScreenEffectTarget, viewport: (u32, u32)) -> [f32; 4] {
     let (vw, vh) = (viewport.0 as f32, viewport.1 as f32);
     let [x, y, w, h] = match *target {
-        ScreenEffectTarget::Fill => return [0.0, 0.0, vw, vh],
+        ScreenEffectTarget::Fill | ScreenEffectTarget::View(_) => return [0.0, 0.0, vw, vh],
         ScreenEffectTarget::Region {
             anchor,
             offset,
@@ -134,10 +190,29 @@ fn cap_diagnostic(what: String) -> Diagnostic {
     .with_help("remove an effect or leave its stages off; `ludion explain L2392` and `ludion docs screen-effects`")
 }
 
-/// `L2392` at each non-neutral `ScreenEffect` past the cap, from scene text, in the order extract
-/// drops them (highest `order`, then highest entity position). An effect with every stage off or an
-/// unusable region (`L1761`, raised by component validation) is not counted.
+/// `L1761` at each `ScreenEffect` whose `view` target names no `RenderView`, and `L2392` at each
+/// non-neutral effect past the cap, from scene text, in the order extract drops them (highest `order`,
+/// then highest entity position). An effect with every stage off, an unusable target (`L1761`, raised
+/// by component validation), an unknown view or a view with `enabled: false` is not counted.
 pub fn scene_screen_effect_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
+    let mut views: std::collections::BTreeMap<&str, bool> = std::collections::BTreeMap::new();
+    for entity in &scene.entities {
+        let Some((_, view)) = entity
+            .components
+            .iter()
+            .find(|(name, _)| name == "RenderView")
+        else {
+            continue;
+        };
+        if let Some(name) = view.get("name").and_then(serde_json::Value::as_str) {
+            let enabled = view
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            views.entry(name).or_insert(enabled);
+        }
+    }
+    let mut out = Vec::new();
     let mut applied: Vec<(i32, usize)> = Vec::new();
     for (index, entity) in scene.entities.iter().enumerate() {
         let Some((_, value)) = entity
@@ -154,17 +229,31 @@ pub fn scene_screen_effect_diagnostics(scene: &Scene) -> Vec<Diagnostic> {
         {
             continue;
         }
+        if let ScreenEffectTarget::View(name) = &effect.target {
+            match views.get(name.as_str()) {
+                Some(true) => {}
+                Some(false) => continue,
+                None => {
+                    out.push(unknown_view_diagnostic(name).with_path(format!(
+                        "/entities/{index}/components/ScreenEffect/target/view"
+                    )));
+                    continue;
+                }
+            }
+        }
         applied.push((effect.order, index));
     }
     applied.sort();
-    applied
-        .into_iter()
-        .skip(MAX_SCREEN_EFFECTS)
-        .map(|(_, index)| {
-            cap_diagnostic(format!("the `ScreenEffect` at /entities/{index}"))
-                .with_path(format!("/entities/{index}/components/ScreenEffect"))
-        })
-        .collect()
+    out.extend(
+        applied
+            .into_iter()
+            .skip(MAX_SCREEN_EFFECTS)
+            .map(|(_, index)| {
+                cap_diagnostic(format!("the `ScreenEffect` at /entities/{index}"))
+                    .with_path(format!("/entities/{index}/components/ScreenEffect"))
+            }),
+    );
+    out
 }
 
 #[cfg(test)]
@@ -201,10 +290,52 @@ mod tests {
         ids: &[EntityId],
         ui_orders: &[i32],
     ) -> (Vec<ScreenEffectData>, Vec<(String, Diagnostic)>) {
+        let (out, degraded) = run_views(world, ids, ui_orders, &ViewTable::default());
+        (out.frame, degraded)
+    }
+
+    fn run_views(
+        world: &World,
+        ids: &[EntityId],
+        ui_orders: &[i32],
+        views: &ViewTable,
+    ) -> (ScreenEffectsOut, Vec<(String, Diagnostic)>) {
         let mut degraded = Vec::new();
         let now = GameTime::from_ticks(90, TickRate::DEFAULT);
-        let out = extract_screen_effects(world, ids, now, VIEWPORT, ui_orders, &mut degraded);
+        let out =
+            extract_screen_effects(world, ids, now, VIEWPORT, ui_orders, views, &mut degraded);
         (out, degraded)
+    }
+
+    /// A table of views `(name, size, rendered)`; an unrendered one is authored but maps to `None`.
+    fn table(views: &[(&str, (u32, u32), bool)]) -> ViewTable {
+        let mut table = ViewTable::default();
+        for &(name, size, rendered) in views {
+            if rendered {
+                table
+                    .by_name
+                    .insert(name.into(), Some(table.views.len() as u32));
+                table.views.push(ludion_renderer::RenderViewData {
+                    name: name.into(),
+                    size,
+                    camera: ludion_renderer::RenderScene::empty(size).camera,
+                    layers: u32::MAX,
+                    lights: u32::MAX,
+                    sun: true,
+                    screen_effects: Vec::new(),
+                });
+            } else {
+                table.by_name.insert(name.into(), None);
+            }
+        }
+        table
+    }
+
+    fn on_view(name: &str, order: i32) -> ScreenEffect {
+        ScreenEffect {
+            target: ScreenEffectTarget::View(name.into()),
+            ..crt(order)
+        }
     }
 
     #[test]
@@ -298,11 +429,151 @@ mod tests {
         let (world, ids) = world_of(vec![crt(0)]);
         let held = GameTime::from_ticks(90, TickRate::DEFAULT);
         let mut degraded = Vec::new();
-        let a = extract_screen_effects(&world, &ids, held, VIEWPORT, &[], &mut degraded);
-        let b = extract_screen_effects(&world, &ids, held, VIEWPORT, &[], &mut degraded);
-        assert_eq!(a, b);
-        assert_eq!(a[0].frame, 90);
-        assert!((a[0].time_s - 1.5).abs() < 1e-4);
+        let views = ViewTable::default();
+        let a = extract_screen_effects(&world, &ids, held, VIEWPORT, &[], &views, &mut degraded);
+        let b = extract_screen_effects(&world, &ids, held, VIEWPORT, &[], &views, &mut degraded);
+        assert_eq!(a.frame, b.frame);
+        assert_eq!(a.frame[0].frame, 90);
+        assert!((a.frame[0].time_s - 1.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_view_effect_lands_in_that_views_list_over_its_whole_texture() {
+        let (world, ids) = world_of(vec![on_view("radar", 7)]);
+        let views = table(&[("hud", (64, 64), true), ("radar", (256, 128), true)]);
+        let (out, degraded) = run_views(&world, &ids, &[0, 5], &views);
+        assert!(degraded.is_empty() && out.frame.is_empty());
+        assert!(out.per_view[0].is_empty());
+        assert_eq!(out.per_view[1].len(), 1);
+        assert_eq!(out.per_view[1][0].rect_px, [0.0, 0.0, 256.0, 128.0]);
+        assert_eq!(out.per_view[1][0].ui_start, 0);
+        assert_eq!(out.per_view[1][0].scanlines, 0.35);
+    }
+
+    #[test]
+    fn an_unknown_view_is_l1761_and_applied_nowhere() {
+        let (world, ids) = world_of(vec![on_view("nope", 0)]);
+        let views = table(&[("radar", (64, 64), true)]);
+        let (out, degraded) = run_views(&world, &ids, &[], &views);
+        assert!(out.frame.is_empty() && out.per_view[0].is_empty());
+        assert_eq!(degraded.len(), 1);
+        assert_eq!(degraded[0].1.code, code::SCREEN_EFFECT_INVALID_TARGET);
+        assert!(degraded[0].1.message.contains("nope"));
+        assert!(degraded[0].0.ends_with("/screen-effect-target"));
+    }
+
+    #[test]
+    fn a_view_that_does_not_render_drops_its_effect_silently_and_uncounted() {
+        let mut effects = vec![on_view("off", 0)];
+        effects.extend((1..5).map(crt));
+        let (world, ids) = world_of(effects);
+        let views = table(&[("off", (64, 64), false)]);
+        let (out, degraded) = run_views(&world, &ids, &[], &views);
+        assert_eq!(out.frame.len(), 4);
+        assert!(degraded.is_empty());
+    }
+
+    #[test]
+    fn the_cap_counts_fill_and_view_effects_together() {
+        let (world, ids) = world_of(vec![
+            crt(0),
+            on_view("radar", 1),
+            crt(2),
+            on_view("radar", 3),
+            crt(4),
+        ]);
+        let views = table(&[("radar", (64, 64), true)]);
+        let (out, degraded) = run_views(&world, &ids, &[], &views);
+        assert_eq!(out.frame.len(), 2);
+        assert_eq!(out.per_view[0].len(), 2);
+        assert_eq!(degraded.len(), 1);
+        assert_eq!(degraded[0].1.code, code::SCREEN_EFFECT_CAP);
+        assert!(degraded[0].0.contains(&format!("e{}", ids[4].index())));
+    }
+
+    fn scene_of(text: &str) -> Scene {
+        ludion_scene::check(text, &crate::builtin_registry()).unwrap_or_else(|d| panic!("{d:?}"))
+    }
+
+    #[test]
+    fn check_scene_flags_an_unknown_view_at_its_pointer() {
+        let scene = scene_of(
+            "format: 1
+seed: 1
+entities:
+  - name: v
+    components:
+      RenderView:
+        name: radar
+      Camera: {}
+  - name: ok
+    components:
+      ScreenEffect:
+        target:
+          view: radar
+        preset: crt
+  - name: bad
+    components:
+      ScreenEffect:
+        target:
+          view: radr
+        preset: crt
+",
+        );
+        let found = scene_screen_effect_diagnostics(&scene);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, code::SCREEN_EFFECT_INVALID_TARGET);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/2/components/ScreenEffect/target/view")
+        );
+    }
+
+    #[test]
+    fn check_scene_cap_mirrors_extract_for_views() {
+        let mut text = String::from(
+            "format: 1
+seed: 1
+entities:
+  - name: v
+    components:
+      RenderView:
+        name: radar
+      Camera: {}
+  - name: off
+    components:
+      RenderView:
+        name: dark
+        enabled: false
+      Camera: {}
+",
+        );
+        for (i, view) in ["radar", "dark", "radar", "radar", "radar", "radar", "radar"]
+            .iter()
+            .enumerate()
+        {
+            text.push_str(&format!(
+                "  - name: fx{i}
+    components:
+      ScreenEffect:
+        target:
+          view: {view}
+        preset: crt
+        order: {i}
+"
+            ));
+        }
+        let found = scene_screen_effect_diagnostics(&scene_of(&text));
+        let caps: Vec<_> = found
+            .iter()
+            .filter(|d| d.code == code::SCREEN_EFFECT_CAP)
+            .collect();
+        assert_eq!(found.len(), caps.len());
+        assert_eq!(caps.len(), 2);
+        assert_eq!(
+            caps[0].path.as_deref(),
+            Some("/entities/7/components/ScreenEffect")
+        );
     }
 
     #[test]

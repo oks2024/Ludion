@@ -1,8 +1,12 @@
 //! Secondary views: GPU tests over `views::render_views` and the UI pass's view rects.
 
+use super::screen_effect::neutral;
 use super::*;
+use crate::graph::{PostChain, build_frame_graph};
 use crate::probe::{ProbeData, ProbeVolume};
 use crate::scene::{RenderCamera, RenderViewData};
+use crate::screen_effect::ScreenEffectData;
+use crate::view_scene;
 use ludion_core::math::glam::Quat;
 
 const PX: u32 = 256;
@@ -25,6 +29,7 @@ fn scene() -> RenderScene {
         layers: u32::MAX,
         lights: u32::MAX,
         sun: true,
+        screen_effects: Vec::new(),
     }];
     scene
 }
@@ -302,4 +307,112 @@ fn frame_gpu_time_ms(json: &str) -> Option<f64> {
     let rest = rest.trim_start_matches([':', ' ', '\n']);
     let end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == 'e' || c == '-'))?;
     rest[..end].parse().ok()
+}
+
+/// A view-wide effect: every stage off but the one a test turns on.
+fn view_fx(stage: impl FnOnce(&mut ScreenEffectData)) -> ScreenEffectData {
+    let mut fx = neutral([0.0, 0.0, VIEW_PX as f32, VIEW_PX as f32], 0);
+    stage(&mut fx);
+    fx
+}
+
+fn with_view_effects(mut scene: RenderScene, effects: Vec<ScreenEffectData>) -> RenderScene {
+    scene.views[0].screen_effects = effects;
+    scene
+}
+
+/// A view's own effect list builds `overlay` and `screen_fx_0` in the view's graph; an empty list
+/// builds neither.
+#[test]
+fn a_view_effect_builds_the_screen_fx_chain_in_the_views_graph() {
+    let names = |scene: &RenderScene| {
+        let chain = PostChain::for_scene(&view_scene(scene, 0));
+        let (graph, _) = build_frame_graph(FrameSize::native(VIEW_PX, VIEW_PX), chain);
+        graph
+            .passes()
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect::<Vec<_>>()
+    };
+    let plain = names(&scene());
+    assert!(
+        !plain
+            .iter()
+            .any(|n| n == "overlay" || n.starts_with("screen_fx"))
+    );
+    let fx = with_view_effects(scene(), vec![view_fx(|f| f.scanlines = 0.5)]);
+    assert_eq!(PostChain::for_scene(&view_scene(&fx, 0)).screen_effects, 1);
+    let names = names(&fx);
+    assert_eq!(names[names.len() - 2..], ["overlay", "screen_fx_0"]);
+}
+
+/// A view's own effect is applied in its texture; with none the view is what it was. Skips with no GPU.
+#[test]
+fn needs_gpu_a_view_effect_changes_the_view_texture() {
+    let Some(renderer) = skip_or_renderer("a_view_effect_changes_the_view_texture") else {
+        return;
+    };
+    let plain = renderer.render_view(&scene(), 0).expect("plain");
+    let mut empty = scene();
+    empty.views[0].screen_effects = Vec::new();
+    assert_eq!(
+        plain.rgba,
+        renderer.render_view(&empty, 0).expect("empty").rgba
+    );
+    let fx = with_view_effects(scene(), vec![view_fx(|f| f.scanlines = 0.5)]);
+    let lined = renderer.render_view(&fx, 0).expect("lined");
+    assert_eq!((lined.width, lined.height), (VIEW_PX, VIEW_PX));
+    assert_ne!(plain.rgba, lined.rgba);
+}
+
+/// An animated stage is a function of the tick: frame 0 and 1 differ in the view, one frame twice is
+/// identical. Skips with no GPU.
+#[test]
+fn needs_gpu_a_view_effect_animates_from_the_tick() {
+    let Some(renderer) = skip_or_renderer("a_view_effect_animates_from_the_tick") else {
+        return;
+    };
+    let at = |frame: u32| {
+        let fx = with_view_effects(
+            scene(),
+            vec![view_fx(|f| {
+                f.noise = 0.5;
+                f.frame = frame;
+            })],
+        );
+        renderer.render_view(&fx, 0).expect("view").rgba
+    };
+    assert_eq!(at(0), at(0));
+    assert_ne!(at(0), at(1));
+}
+
+/// A view effect is baked into the texture the rect shows: the main frame differs from the
+/// effect-free one only inside that rect. Skips with no GPU.
+#[test]
+fn needs_gpu_a_view_effect_moves_only_the_rect_that_shows_it() {
+    let Some(renderer) = skip_or_renderer("a_view_effect_moves_only_the_rect_that_shows_it") else {
+        return;
+    };
+    let size = FrameSize::native(PX, PX);
+    let plain = renderer
+        .render(&with_rect(scene(), Some(0)), size)
+        .expect("plain");
+    let fx = with_view_effects(scene(), vec![view_fx(|f| f.scanlines = 0.9)]);
+    let lined = renderer
+        .render(&with_rect(fx, Some(0)), size)
+        .expect("lined");
+    let (mut inside, mut outside) = (0, 0);
+    for y in 0..PX {
+        for x in 0..PX {
+            if px(&plain, x, y) != px(&lined, x, y) {
+                if (64..192).contains(&x) && (64..192).contains(&y) {
+                    inside += 1;
+                } else {
+                    outside += 1;
+                }
+            }
+        }
+    }
+    assert!(inside > 0, "the rect shows the filtered view");
+    assert_eq!(outside, 0, "nothing outside the rect moves");
 }

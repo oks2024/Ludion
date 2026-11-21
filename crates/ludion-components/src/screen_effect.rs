@@ -1,5 +1,5 @@
 //! The [`ScreenEffect`] component: a display-look filter (CRT, analog video, scan bar) over the frame
-//! or a rectangle of it, drawn in UI order. Render-only; each stage is optional and an unset stage
+//! a rectangle of it, or a `RenderView`'s texture, drawn in UI order. Render-only; each stage is optional and an unset stage
 //! takes the preset's value.
 
 use crate::Anchor;
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Where a [`ScreenEffect`] draws.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ScreenEffectTarget {
     /// The whole output frame.
@@ -26,6 +26,8 @@ pub enum ScreenEffectTarget {
         /// Canvas-unit size `[width, height]`; both must be positive.
         size: [f32; 2],
     },
+    /// A RenderView's texture, named by RenderView.name.
+    View(String),
 }
 
 /// A named starting point for the stages.
@@ -338,6 +340,14 @@ pub fn screen_effect_target_problems(target: &ScreenEffectTarget) -> Vec<(String
             }
         }
     }
+    if let ScreenEffectTarget::View(name) = target
+        && name.is_empty()
+    {
+        out.push((
+            "/target/view".into(),
+            "name is empty; it must name a RenderView".into(),
+        ));
+    }
     out
 }
 
@@ -353,7 +363,7 @@ impl SemanticValidate for ScreenEffect {
             .map(|(path, what)| {
                 Diagnostic::new(
                     code::SCREEN_EFFECT_INVALID_TARGET,
-                    format!("`ScreenEffect` region {what}"),
+                    format!("`ScreenEffect` target {what}"),
                 )
                 .with_path(path)
                 .with_help("see `ludion explain L1761` and `ludion docs screen-effects`")
@@ -528,6 +538,19 @@ mod tests {
             .map(|(p, _)| p)
             .collect();
         assert_eq!(p, ["/target/region/offset/0", "/target/region/size/0"]);
+    }
+
+    #[test]
+    fn a_view_target_round_trips_and_an_empty_name_is_l1761() {
+        let v = json!({ "target": { "view": "radar" }, "preset": "crt" });
+        let fx: ScreenEffect = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(fx.target, ScreenEffectTarget::View("radar".into()));
+        assert_eq!(serde_json::to_value(&fx).unwrap(), v);
+        assert!(paths(v).is_empty());
+        assert_eq!(
+            paths(json!({ "target": { "view": "" } })),
+            [("L1761".into(), "/target/view".into())]
+        );
     }
 
     #[test]

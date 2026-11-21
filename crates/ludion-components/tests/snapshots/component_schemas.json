@@ -8894,6 +8894,19 @@
               "region"
             ],
             "additionalProperties": false
+          },
+          {
+            "description": "A RenderView's texture, named by RenderView.name.",
+            "type": "object",
+            "properties": {
+              "view": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "view"
+            ],
+            "additionalProperties": false
           }
         ]
       },

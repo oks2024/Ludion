@@ -1,0 +1,259 @@
+# Feature: a `ScreenEffect` on a secondary view - the radar window of `render-view-radar` seen through a CRT filter.
+# `target: { view: radar }` runs the effect as the last step of the radar view's own frame, so the scanlines and the
+# barrel curvature are baked into the texture the window shows; the room in perspective and the frame around the
+# window are unfiltered.
+# ludion docs screen-effects.
+format: 1
+name: "screen-effect-view - ScreenEffect: a CRT filter on a RenderView"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 9.0
+          - 16.0
+        rotation:
+          - -32.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: radar-cam
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 15.0
+          - 0.0
+        rotation:
+          - -90.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 13.0
+      RenderView:
+        name: radar
+        size:
+          - 256
+          - 256
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - -0.4
+          - -0.8
+          - -0.4
+        color:
+          - 1.0
+          - 0.95
+          - 0.9
+        intensity: 1.4
+  - name: lamp
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - 0.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.55
+        intensity: 3.0
+        range: 12.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.1
+          - 0.0
+        scale:
+          - 12.4
+          - 0.2
+          - 12.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.22
+          - 0.26
+          - 1.0
+        roughness: 0.9
+  - name: wall-back
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.7
+          - -6.0
+        scale:
+          - 12.4
+          - 1.4
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9
+  - name: wall-front
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.7
+          - 6.0
+        scale:
+          - 12.4
+          - 1.4
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9
+  - name: wall-left
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 0.7
+          - 0.0
+        scale:
+          - 0.4
+          - 1.4
+          - 12.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9
+  - name: wall-right
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 0.7
+          - 0.0
+        scale:
+          - 0.4
+          - 1.4
+          - 12.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9
+  - name: cover-a
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 0.6
+          - -1.5
+        scale:
+          - 2.0
+          - 1.2
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.25
+          - 0.45
+          - 0.6
+          - 1.0
+        roughness: 0.9
+  - name: cover-b
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 0.6
+          - 1.5
+        scale:
+          - 1.2
+          - 1.2
+          - 2.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.4
+          - 0.25
+          - 1.0
+        roughness: 0.9
+  - name: marker
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 1.2
+      GroundMarker:
+        shape:
+          type: disc
+          radius: 1.6
+        color:
+          - 1.6
+          - 0.2
+          - 0.1
+          - 0.6
+  - name: radar-frame
+    components:
+      UiRect:
+        anchor: top_right
+        offset:
+          - -24.0
+          - 24.0
+        size:
+          - 212.0
+          - 212.0
+        color:
+          - 0.04
+          - 0.05
+          - 0.07
+          - 1.0
+        order: 0
+  - name: radar-window
+    components:
+      UiRect:
+        anchor: top_right
+        offset:
+          - -30.0
+          - 30.0
+        size:
+          - 200.0
+          - 200.0
+        order: 1
+        view: radar
+  - name: radar-crt
+    components:
+      ScreenEffect:
+        target:
+          view: radar
+        preset: crt
+        curvature: 0.1
+        scanline_count: 96

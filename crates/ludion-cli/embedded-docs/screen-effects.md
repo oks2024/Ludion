@@ -1,12 +1,12 @@
 ---
-description: ScreenEffect: CRT, analog-video and scan filters over the frame or a region, in UI order
+description: ScreenEffect: CRT, analog-video and scan filters over the frame, a region or a view, in UI order
 ---
 
 # Screen effects: `ScreenEffect`
 
 **Scope:** `ScreenEffect` filters what is already drawn: the 3D frame and every UI element with a lower `order`, over
-the whole output (`target: fill`) or a rectangle of it (`target: region`). It is a backdrop filter in UI order, a look
-for a radar panel, a terminal or a whole retro screen. It is render-only: on a presentation entity it is never hashed,
+the whole output (`target: fill`), a rectangle of it (`target: region`) or a secondary view's texture (`target: view`). It
+is a backdrop filter in UI order, a look for a radar panel, a terminal or a whole retro screen. It is render-only: on a presentation entity it is never hashed,
 and a scene without one keeps the identical frame graph and the identical pixels. The imaging chain on the 3D frame is
 `ludion docs post-processing`; the UI it filters is `ludion docs screen-ui`.
 
@@ -29,13 +29,21 @@ and a scene without one keeps the identical frame graph and the identical pixels
 
 A scene file writes the lists block-style; flow style is shown here for brevity.
 
-- **`target`**: `fill` (the default, the whole frame) or `region { anchor, offset, size }`, laid out exactly like a
-  `UiRect` (`ludion docs screen-ui`). A non-positive or non-finite size is `L1761`. The view target is not available yet.
+- **`target`**: `fill` (the default, the whole frame), `region { anchor, offset, size }`, laid out exactly like a
+  `UiRect` (`ludion docs screen-ui`), or `view: <name>`, a `RenderView`'s texture (see On a view). A non-positive or
+  non-finite size, an empty view name, or a view named by no `RenderView` is `L1761`.
 - **`order`** (default 0): the effect filters the 3D frame and every UI element with a **lower** `order`; elements at
   the same `order` or above draw clean over it. Ties between effects break by entity position.
 - **`preset`**: the starting look; every unset stage takes the preset's value, so the scene text carries only what the
   author overrode. An effect with every stage off is not applied and costs nothing.
 - **`seed`**: varies the noise and jitter hash (default 0).
+
+## On a view
+
+`target: { view: radar }` runs the effect as the last step of that `RenderView`'s own frame, over its whole texture, so
+it is baked in before any `UiRect` shows the view (`ludion docs render-views`). The effect's `order` only sorts it among
+the effects on that view; it has no UI to sit under. The rest of the frame is unchanged. A view that exists but does not
+render (`enabled: false`, or past the view budget) drops its effects silently.
 
 ## Presets
 
@@ -76,7 +84,8 @@ replay reproduces it, and two processes render the same frame. `ludion render --
 
 ## The cap and the cost
 
-At most **4** effects are applied per frame: the lowest `(order, entity)` among those that change a pixel. Each one past
+At most **4** effects are applied per frame, fill, region and view together: the lowest `(order, entity)` among those
+that change a pixel. Each one past
 the cap is not applied and raises `L2392` once, never silently (`ludion explain L2392`). Each applied effect adds one
 `screen_fx_k` pass: the overlay writes a whole-frame layer instead of the output, and each pass copies the previous
 layer, draws its effect over its rectangle and then the next slice of UI. Pixels outside every rectangle are the plain
@@ -91,5 +100,6 @@ There is no custom-shader slot: the presets and their stages are the whole surfa
 ## Next
 
 - `ludion docs screen-ui` — the UI elements an effect filters and the order they draw in.
+- `ludion docs render-views` — the views a `view` target filters.
 - `ludion docs post-processing` — the imaging chain on the 3D frame.
 - `ludion docs components` — the built-in component set.

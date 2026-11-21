@@ -42,7 +42,8 @@ The ordinary frame graph through the view's camera, at `size` texels (not scaled
 anti-aliasing. It keeps meshes, voxels, sprites, ground markers, particles, text, decals, blended meshes, lights with
 shadows, the environment, GI and probes. It drops the UI, other views, the viewmodel, silhouettes, debug draw, and the
 screen-space effects SSAO, SSR, depth of field and light shafts, and light scattering. The sun's shadow cascades are
-fitted to the main camera, so a view that looks outside them sees unshadowed ground.
+fitted to the main camera, so a view that looks outside them sees unshadowed ground. A `ScreenEffect` with
+`target: { view: <name> }` filters the view's texture (`ludion docs screen-effects`).
 
 ## Render layers
 `RenderLayers: { layers: [radar] }` puts an entity, and every `Parent` descendant without its own `RenderLayers` (the
