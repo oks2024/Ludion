@@ -12693,7 +12693,7 @@ does not match anything the profiled engine could ever measure. Each table has i
   - `[passes]`: the frame graph's fixed pass names — `shadow`, `prepass`, `ssao`, `ssao_blur`,
     `scene`, `shafts`, `shafts_blur`, `dof_coc`, `dof`, `bloom_threshold`,
     `bloom_down_1`..`bloom_down_5`, `bloom_up_0`..`bloom_up_4`, `composite`, `resolve`, `overlay`.
-  - `[post_groups]`: the post-process effect groups — `bloom`, `ssao`, `shafts`, `dof`.
+  - `[post_groups]`: the post-process effect groups — `bloom`, `ssao`, `shafts`, `dof`, `lens`.
 
 This is different from a budgeted name that is simply absent from *this* report — a GPU pass a
 UI-free scene never schedules (`overlay`), one a native-scale run never schedules (`resolve`), the

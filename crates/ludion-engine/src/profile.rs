@@ -1460,11 +1460,11 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// shadow or a `multiply`/`add` decal, `decals_lit` only for an `alpha` or `coat` decal, `decal_receivers`
 /// only for a decal that lists receiver meshes, `transparent_depth` only for a scene with a
 /// sprite, particle or world text under fog or depth of field, `cull` only for a scene with a world
-/// mesh and culling on).
+/// mesh and culling on, `lens_down_1..5` and `lens_up_0..4` only for a scene with anamorphic streaks).
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 50] = [
+const KNOWN_PASS_NAMES: [&str; 60] = [
     ludion_renderer::graph::pass::CULL,
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::LOCAL_SHADOW,
@@ -1508,6 +1508,16 @@ const KNOWN_PASS_NAMES: [&str; 50] = [
     ludion_renderer::graph::pass::BLOOM_UP[2],
     ludion_renderer::graph::pass::BLOOM_UP[3],
     ludion_renderer::graph::pass::BLOOM_UP[4],
+    ludion_renderer::graph::pass::LENS_DOWN[0],
+    ludion_renderer::graph::pass::LENS_DOWN[1],
+    ludion_renderer::graph::pass::LENS_DOWN[2],
+    ludion_renderer::graph::pass::LENS_DOWN[3],
+    ludion_renderer::graph::pass::LENS_DOWN[4],
+    ludion_renderer::graph::pass::LENS_UP[0],
+    ludion_renderer::graph::pass::LENS_UP[1],
+    ludion_renderer::graph::pass::LENS_UP[2],
+    ludion_renderer::graph::pass::LENS_UP[3],
+    ludion_renderer::graph::pass::LENS_UP[4],
     ludion_renderer::graph::pass::COMPOSITE,
     ludion_renderer::graph::pass::SMAA_EDGES,
     ludion_renderer::graph::pass::SMAA_WEIGHTS,
@@ -1536,9 +1546,12 @@ const KNOWN_PASS_NAMES: [&str; 50] = [
 /// second consumer of the prepass ever arrives (depth/normal outlines are the recorded candidate), it
 /// stops being SSAO's cost alone and earns its own line.
 ///
+/// `lens` is the anamorphic streak chain's ten passes, present only when `PostProcess.anamorphic` is
+/// above zero.
+///
 /// `ssr` is the pyramids and the trace, not `reflections` (which runs every frame for the sky) and not
 /// the `ssr_debug` view.
-const POST_GROUPS: [(&str, &[&str]); 6] = [
+const POST_GROUPS: [(&str, &[&str]); 7] = [
     (
         "bloom",
         &[
@@ -1593,6 +1606,21 @@ const POST_GROUPS: [(&str, &[&str]); 6] = [
             ludion_renderer::graph::pass::SSR_COLOR_REDUCE,
             ludion_renderer::graph::pass::SSR_TRACE,
             ludion_renderer::graph::pass::SSR_BLEND,
+        ],
+    ),
+    (
+        "lens",
+        &[
+            ludion_renderer::graph::pass::LENS_DOWN[0],
+            ludion_renderer::graph::pass::LENS_DOWN[1],
+            ludion_renderer::graph::pass::LENS_DOWN[2],
+            ludion_renderer::graph::pass::LENS_DOWN[3],
+            ludion_renderer::graph::pass::LENS_DOWN[4],
+            ludion_renderer::graph::pass::LENS_UP[0],
+            ludion_renderer::graph::pass::LENS_UP[1],
+            ludion_renderer::graph::pass::LENS_UP[2],
+            ludion_renderer::graph::pass::LENS_UP[3],
+            ludion_renderer::graph::pass::LENS_UP[4],
         ],
     ),
 ];
@@ -4181,6 +4209,7 @@ gpu_frame_max_ms = 9.5
             mesh_medium: true,
             transparent_medium: true,
             dof: true,
+            anamorphic: true,
             gi_inject: Some([4, 4, 4]),
             cull: Some(ludion_renderer::CullShape::for_counts(1000, 8, 4, 1)),
             debug_lines: true,

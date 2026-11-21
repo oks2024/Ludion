@@ -1707,7 +1707,7 @@ pub enum TonemapOperator {
 /// Everything but the bloom chain happens in one pass, in one order, and that order is part of this
 /// component's contract:
 ///
-/// **chromatic aberration** (in the scene fetch) → `scene + bloom × bloom_strength + halation` →
+/// **chromatic aberration** (in the scene fetch) → `scene + bloom × bloom_strength + halation + anamorphic` →
 /// **fog** → `exposure` → `tonemap` → **grade** → **vignette** → **grain** → `dither`
 ///
 /// The split worth knowing is scene-referred against display-referred. Fog is atmospheric
@@ -2280,11 +2280,10 @@ pub struct PostProcess {
     /// puts a red-orange halo around a highlight; it is added into the same linear-HDR mix as bloom,
     /// scene-referred, before the fog.
     ///
-    /// **The colour is not authorable, deliberately.** Halation's hue is a property of the film stock
-    /// rather than of the shot, and what a `halation_color` would really control is achromatic glow
-    /// versus chromatic glow — achromatic glow being exactly what `bloom_strength` already spells. The
-    /// constant tint is normalized to Rec.709 luma, so this field is a *strength* on the same scale as
-    /// `bloom_strength` and trading one for the other does not change how much light is added.
+    /// **The default colour is the film stock's.** With no `halation_color` the tint is a constant
+    /// red-orange, normalized to Rec.709 luma, so this field is a *strength* on the same scale as
+    /// `bloom_strength` and trading one for the other does not change how much light is added. Set
+    /// `halation_color` to take over the hue (a sodium-amber or a cold-blue glow around a source).
     ///
     /// It reuses the bloom chain's blurred bright field rather than blurring again, which is what
     /// makes it near-free — and the consequence: it inherits `bloom_threshold`, the chain's radius
@@ -2294,6 +2293,59 @@ pub struct PostProcess {
     #[schemars(range(min = 0.0))]
     #[schemars(extend("x-ui-range" = [0.0, 0.5]))]
     pub halation: f32,
+    /// Film emulation: the halation tint as linear RGB, each element `>= 0` with a non-zero Rec.709
+    /// luma (`L1130`) (default none: the film stock's constant red-orange).
+    ///
+    /// The colour is normalized to Rec.709 luma on the CPU, so it changes the hue of the glow and
+    /// never its amount: `halation` stays the strength. Only the hue matters; `[1.0, 0.25, 0.08]` and
+    /// `[2.0, 0.5, 0.16]` give the same look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub halation_color: Option<[f32; 3]>,
+    /// Anamorphic lens streaks: strength of a horizontal-only glare off the bright sources, validated
+    /// `[0, 1]` (default `0.0` — off, and the gate; the 10-pass chain is not in the graph at zero).
+    ///
+    /// An anamorphic cinema lens squeezes the image, so a bright point smears into a thin horizontal
+    /// line. The chain blurs the bloom pyramid's first level along x only, through five downsample
+    /// and five upsample levels, so the streak is a hard horizontal line through the source and
+    /// nothing leaks up or down. It is added in the same linear-HDR mix as bloom and halation,
+    /// scene-referred, before the fog, and inherits `bloom_threshold`; `anamorphic_threshold` raises
+    /// it further for streaks off only the brightest sources.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 0.5]))]
+    pub anamorphic: f32,
+    /// Anamorphic lens streaks: how far the streak reaches, validated `[0, 1]` (default `0.35`,
+    /// inert while `anamorphic` is zero).
+    ///
+    /// `0.0` keeps the streak to the first level's reach; `1.0` carries the coarsest level's energy
+    /// all the way across the frame.
+    #[serde(
+        default = "anamorphic_length_default",
+        skip_serializing_if = "is_anamorphic_length_default"
+    )]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub anamorphic_length: f32,
+    /// Anamorphic lens streaks: the streak's tint as linear RGB, each element `>= 0` with a non-zero
+    /// Rec.709 luma (`L1130`) (default `[0.55, 0.7, 1.0]`, the classic cool blue).
+    ///
+    /// Normalized to Rec.709 luma on the CPU, so the tint changes the hue and never the amount:
+    /// `anamorphic` stays the strength.
+    #[serde(
+        default = "anamorphic_tint_default",
+        skip_serializing_if = "is_anamorphic_tint_default"
+    )]
+    pub anamorphic_tint: [f32; 3],
+    /// Anamorphic lens streaks: an extra threshold subtracted from the bright field before the
+    /// streak chain, in linear HDR, validated `>= 0` (default none: the streak shares
+    /// `bloom_threshold` alone).
+    ///
+    /// The streak chain reads the bloom pyramid, which is already thresholded at `bloom_threshold`;
+    /// a value here removes `max(c - anamorphic_threshold, 0)` per channel on top, so only the
+    /// brightest sources streak.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub anamorphic_threshold: Option<f32>,
     /// Film emulation: monochrome additive grain amplitude, as a signed offset in the **sRGB-encoded**
     /// `[0, 1]` range, validated `[0, 1]` (default `0.0` — off, and the gate).
     ///
@@ -2395,8 +2447,37 @@ impl SemanticValidate for PostProcess {
                 }
             }
         }
+        for field in ["anamorphic_tint", "halation_color"] {
+            post_process_tint_diagnostics(value, field, &mut out);
+        }
         post_process_ssr_diagnostics(value, &mut out);
         out
+    }
+}
+
+/// `L1130` for a tint (`anamorphic_tint`, `halation_color`): a negative element, or a Rec.709 luma
+/// of zero, which the CPU-side normalization would divide by.
+fn post_process_tint_diagnostics(value: &Value, field: &str, out: &mut Vec<Diagnostic>) {
+    let Some(triple) = value.get(field).and_then(Value::as_array) else {
+        return;
+    };
+    let mut luma = 0.0_f64;
+    let mut negative = false;
+    for (index, (element, weight)) in triple.iter().zip([0.2126, 0.7152, 0.0722]).enumerate() {
+        let Some(component) = as_stored_f32(element) else {
+            return;
+        };
+        if component < 0.0 {
+            negative = true;
+            out.push(post_process_invalid_triple(
+                field,
+                &format!("/{field}/{index}"),
+            ));
+        }
+        luma += component * weight;
+    }
+    if !negative && triple.len() == 3 && luma <= 0.0 {
+        out.push(post_process_invalid_triple(field, &format!("/{field}")));
     }
 }
 
@@ -2468,6 +2549,11 @@ fn post_process_invalid_triple(field: &str, pointer: &str) -> Diagnostic {
             "a fog colour is HDR (it may exceed 1.0) but negative light does not exist",
             "a neutral grey is `[0.5, 0.5, 0.5]`",
         ),
+        "anamorphic_tint" | "halation_color" => (
+            "0 or more, with at least one above 0",
+            "a tint is normalized by its Rec.709 luma, so a negative element or an all-zero tint has no hue to keep",
+            "a neutral tint is `[1, 1, 1]`",
+        ),
         _ => (
             "0 or more",
             "the CDL slope scales a channel, and a negative slope only clamps to black",
@@ -2518,6 +2604,11 @@ impl Default for PostProcess {
             focus_distance: focus_distance_default(),
             chromatic_aberration: 0.0,
             halation: 0.0,
+            halation_color: None,
+            anamorphic: 0.0,
+            anamorphic_length: anamorphic_length_default(),
+            anamorphic_tint: anamorphic_tint_default(),
+            anamorphic_threshold: None,
             grain: 0.0,
             grain_size: grain_size_default(),
             ssr: 0.0,
@@ -6302,6 +6393,12 @@ fn focus_distance_default() -> f32 {
 fn grain_size_default() -> f32 {
     0.002
 }
+fn anamorphic_length_default() -> f32 {
+    0.35
+}
+fn anamorphic_tint_default() -> [f32; 3] {
+    [0.55, 0.7, 1.0]
+}
 fn ssr_fade_default() -> [f32; 2] {
     [0.45, 0.65]
 }
@@ -6310,6 +6407,14 @@ fn ssr_max_distance_default() -> f32 {
 }
 fn ssr_thickness_default() -> f32 {
     0.5
+}
+#[allow(clippy::float_cmp)]
+fn is_anamorphic_length_default(value: &f32) -> bool {
+    *value == anamorphic_length_default()
+}
+#[allow(clippy::float_cmp)]
+fn is_anamorphic_tint_default(value: &[f32; 3]) -> bool {
+    *value == anamorphic_tint_default()
 }
 #[allow(clippy::float_cmp)]
 fn is_ssr_fade_default(value: &[f32; 2]) -> bool {
@@ -9729,6 +9834,11 @@ mod tests {
         // Film emulation all off, with the grain cell that would be used if it were turned on.
         assert_eq!(post.chromatic_aberration, 0.0);
         assert_eq!(post.halation, 0.0);
+        assert_eq!(post.halation_color, None);
+        assert_eq!(post.anamorphic, 0.0);
+        assert_eq!(post.anamorphic_length, 0.35);
+        assert_eq!(post.anamorphic_tint, [0.55, 0.7, 1.0]);
+        assert_eq!(post.anamorphic_threshold, None);
         assert_eq!(post.grain, 0.0);
         assert_eq!(post.grain_size, 0.002);
         // Screen-space reflections off (the gate), with the look that would be used if turned on.
@@ -9736,6 +9846,64 @@ mod tests {
         assert_eq!(post.ssr_fade, [0.45, 0.65]);
         assert_eq!(post.ssr_max_distance, 30.0);
         assert_eq!(post.ssr_thickness, 0.5);
+    }
+
+    /// The halation colour and the anamorphic streak serialize none of their keys at their defaults,
+    /// so a committed scene's text and `WorldHash` do not move; authored, each appears.
+    #[test]
+    fn an_unauthored_film_lens_serializes_nothing() {
+        let keys = [
+            "halation_color",
+            "anamorphic",
+            "anamorphic_length",
+            "anamorphic_tint",
+            "anamorphic_threshold",
+        ];
+        let json = serde_json::to_value(PostProcess::default()).unwrap();
+        for key in keys {
+            assert!(json.get(key).is_none(), "`{key}` leaked into {json}");
+        }
+        let authored = serde_json::to_value(PostProcess {
+            halation_color: Some([1.0, 0.25, 0.08]),
+            anamorphic: 0.2,
+            anamorphic_length: 0.6,
+            anamorphic_tint: [1.0, 0.5, 0.2],
+            anamorphic_threshold: Some(2.0),
+            ..PostProcess::default()
+        })
+        .unwrap();
+        for key in keys {
+            assert!(
+                authored.get(key).is_some(),
+                "`{key}` missing from {authored}"
+            );
+        }
+    }
+
+    /// A tint with a negative element or a zero Rec.709 luma is `L1130`, at the element or at the
+    /// field; a valid tint (any one channel above zero) adds nothing.
+    #[test]
+    fn a_degenerate_tint_is_a_semantic_error() {
+        for field in ["anamorphic_tint", "halation_color"] {
+            let negative = PostProcess::validate_semantics(&serde_json::json!({
+                field: [1.0, -0.1, 0.5],
+            }));
+            assert_eq!(negative.len(), 1, "{negative:?}");
+            assert_eq!(negative[0].code.as_str(), "L1130");
+            assert_eq!(negative[0].path, Some(format!("/{field}/1")));
+
+            let black = PostProcess::validate_semantics(&serde_json::json!({
+                field: [0.0, 0.0, 0.0],
+            }));
+            assert_eq!(black.len(), 1, "{black:?}");
+            assert_eq!(black[0].code.as_str(), "L1130");
+            assert_eq!(black[0].path, Some(format!("/{field}")));
+
+            let good = PostProcess::validate_semantics(&serde_json::json!({
+                field: [0.0, 0.0, 2.0],
+            }));
+            assert!(good.is_empty(), "{good:?}");
+        }
     }
 
     /// An unauthored SSR look serializes to none of its four keys, so the component's value in
@@ -9835,6 +10003,11 @@ mod tests {
             focus_distance: 12.5,
             chromatic_aberration: 0.003,
             halation: 0.25,
+            halation_color: Some([1.0, 0.3, 0.1]),
+            anamorphic: 0.2,
+            anamorphic_length: 0.5,
+            anamorphic_tint: [1.0, 0.6, 0.3],
+            anamorphic_threshold: Some(1.5),
             grain: 0.015,
             grain_size: 0.004,
             ssr: 0.8,
@@ -9925,6 +10098,11 @@ mod tests {
             ("chromatic_aberration", "-0.001"),
             ("chromatic_aberration", "0.2"),
             ("halation", "-0.1"),
+            ("anamorphic", "-0.1"),
+            ("anamorphic", "1.5"),
+            ("anamorphic_length", "-0.1"),
+            ("anamorphic_length", "1.5"),
+            ("anamorphic_threshold", "-1.0"),
             ("grain", "-0.01"),
             ("grain", "1.5"),
             ("grain_size", "-0.001"),

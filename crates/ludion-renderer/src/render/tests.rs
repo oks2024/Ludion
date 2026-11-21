@@ -6,6 +6,7 @@ use super::*;
 use crate::scene::{MeshInstance, RenderScene};
 
 mod blended;
+mod film;
 mod gpu_cull;
 mod lit_additive;
 mod medium_scatter;
@@ -109,10 +110,10 @@ fn fullscreen_layouts_follow_the_binding_convention() {
         ],
         [0, 1, 2],
     );
-    // Ten input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
+    // Eleven input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
     // the blurred shaft term, blends the depth-of-field gather, loads the transparent layer, adds the
     // local-light term, loads the mesh medium mask and the silhouette mask with its depth —
-    // the first three in the graph pass's declared read order, and the last seven the arc's
+    // the anamorphic streak field — the first three in the graph pass's declared read order, and the last eight the arc's
     // *optional* slots, whose bindings are fixed whether or not the scene enables them (see
     // `optional_inputs_hold_their_binding`).
     assert_eq!(
@@ -127,10 +128,11 @@ fn fullscreen_layouts_follow_the_binding_convention() {
             shader_gen::SCENE_MEDIUM_TEX_BINDING,
             shader_gen::SILHOUETTE_MASK_TEX_BINDING,
             shader_gen::SILHOUETTE_DEPTH_TEX_BINDING,
+            shader_gen::LENS_TEX_BINDING,
             shader_gen::SAMP_BINDING,
             shader_gen::COMPOSITE_BINDING,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
     );
     // Three input textures: the depth-of-field prefilter samples the scene, loads its depth, in
     // the graph pass's declared read order, and loads the transparent layer in the *optional* slot
@@ -288,6 +290,8 @@ fn fullscreen_layouts_follow_the_binding_convention() {
     assert_eq!(fullscreen_layout(ShaderId::Composite), LayoutId::Composite);
     assert_eq!(fullscreen_layout(ShaderId::BloomDown), LayoutId::BloomDown);
     assert_eq!(fullscreen_layout(ShaderId::BloomUp), LayoutId::BloomUp);
+    assert_eq!(fullscreen_layout(ShaderId::LensDown), LayoutId::LensDown);
+    assert_eq!(fullscreen_layout(ShaderId::LensUp), LayoutId::LensUp);
     assert_eq!(fullscreen_layout(ShaderId::Shafts), LayoutId::Shafts);
     assert_eq!(fullscreen_layout(ShaderId::BoxBlur), LayoutId::BoxBlur);
     assert_eq!(fullscreen_layout(ShaderId::DofCoc), LayoutId::DofCoc);
@@ -4110,6 +4114,11 @@ fn needs_gpu_a_fully_neutral_post_process_is_byte_identical_to_none() {
         focus_distance: 10.0,
         chromatic_aberration: 0.0,
         halation: 0.0,
+        halation_color: None,
+        anamorphic: 0.0,
+        anamorphic_length: 0.35,
+        anamorphic_tint: [0.55, 0.7, 1.0],
+        anamorphic_threshold: None,
         grain: 0.0,
         grain_size: 0.002,
         ssr: 0.0,

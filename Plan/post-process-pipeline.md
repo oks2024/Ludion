@@ -499,6 +499,8 @@
 > `extract()` has no access to one, and animating it wants a `frame` on `RenderScene` fed by the live
 > loop — deterministic world state, so **not** what decision 5's anti-TAA argument rules out.
 > **Trigger:** the first live build that authors grain and reads as fixed-pattern dirt in motion.
+> *Amended 2026-11-20 (Neon Shroud request 0019): opt-in `grain_motion: animated` folds the game tick into the hash;
+> static stays the default. `Plan/post-film-and-screen-effects.md` decision 21.*
 >
 > The `Composite` uniform grew **208 → 224 bytes with every pre-existing field offset unmoved** (the
 > aberration and halation scalars took `pad0`/`pad1` at 120/124; the grain pair opens a new block at
@@ -983,7 +985,8 @@ engine hard-codes. The engine ships neutral defaults and orthogonal operators.
   that cannot supersample, and answered by SMAA 1x (Clockout request 0009), not FXAA.
 - **`.cube` LUT colour grading** — trigger: a look analytic grading cannot express. Note a
   `.cube` file is ASCII, so it does not fire the binary-asset objection; the objection is that an
-  agent cannot author a 32³ LUT by hand.
+  agent cannot author a 32³ LUT by hand. *Amended 2026-11-20 (Neon Shroud request 0019): the trigger fired; the LUT
+  and the `ludion lut` tooling are planned in `Plan/post-film-and-screen-effects.md` decisions 11–14.*
 - **ID target / editor picking without a CPU raycast** — trigger: editor selection ergonomics or
   perf. Rides the MRT seam.
 - **Screen-space reflections** — trigger: content with wet or reflective surfaces. **Answered by

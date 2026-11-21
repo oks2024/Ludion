@@ -2443,6 +2443,7 @@ impl Renderer {
             scatter_lights,
             scatter_views,
             has_dof: chain.dof,
+            has_anamorphic: chain.anamorphic,
             has_transparent_depth: chain.transparent_depth_scheduled(),
             has_transparent_medium: chain.transparent_medium_scheduled(),
             has_smaa: chain.smaa_scheduled(),
@@ -4062,6 +4063,10 @@ struct FrameRecorder<'a> {
     /// graph's `dof` target against the 1×1 fallback), sets its uniform flag, and mirrors the two
     /// passes' presence.
     has_dof: bool,
+    /// Whether this frame runs the anamorphic streak chain. Picks the composite's optional `lens_tex`
+    /// (the chain's `lens_up_0` against the 1×1 fallback), sets its uniform flag, and mirrors the ten
+    /// passes' presence.
+    has_anamorphic: bool,
     /// Whether this frame draws the transparent layer ([`PostChain::transparent_depth_scheduled`]).
     /// Picks the composite's optional `transparent_depth_tex` (the layer target against the 1×1
     /// fallback), sets its uniform flag, and mirrors the pass's presence.
@@ -4302,6 +4307,20 @@ impl PassRecorder for FrameRecorder<'_> {
                     silhouette: self.silhouette_lanes.header,
                     silhouette_forward: self.silhouette_lanes.forward,
                     silhouette_styles: self.silhouette_lanes.styles,
+                    // Both gains are normalized by Rec.709 luma here, so `anamorphic` and `halation`
+                    // stay strengths on bloom's scale and the tints change only the hue.
+                    anamorphic_gain: if self.has_anamorphic {
+                        luma_normalized(self.post.anamorphic_tint)
+                            .map(|channel| channel * self.post.anamorphic)
+                    } else {
+                        [0.0; 3]
+                    },
+                    anamorphic: u32::from(self.has_anamorphic),
+                    halation_custom_gain: self
+                        .post
+                        .halation_color
+                        .map_or([0.0; 3], luma_normalized),
+                    halation_custom: u32::from(self.post.halation_color.is_some()),
                 };
                 // The composite's three optional inputs, each at the binding the WGSL itself declares,
                 // so neither can move the other and turning one off cannot shift the one behind it.
@@ -4341,6 +4360,11 @@ impl PassRecorder for FrameRecorder<'_> {
                         present: self.has_silhouette,
                         fallback: &self.r.fallback_shadow.view,
                     },
+                    OptionalInput {
+                        binding: shader_gen::LENS_TEX_BINDING,
+                        present: self.has_anamorphic,
+                        fallback: &self.r.fallback_hdr.view,
+                    },
                 ];
                 self.fullscreen_effect(
                     pass,
@@ -4355,13 +4379,17 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::RESOLVE => self.record_resolve(pass),
             pass::UPSCALE => self.record_upscale(pass),
             pass::OVERLAY => self.record_overlay(pass),
-            // The pyramid's ten passes are label arrays, not single constants, so they dispatch by
+            // The pyramid's ten passes (and the streak chain's) are label arrays, not single constants, so they dispatch by
             // position rather than by pattern. Only the *first* downsample Karis-averages.
             other => {
                 if let Some(level) = pass::BLOOM_DOWN.iter().position(|&name| name == other) {
                     self.record_bloom_down(pass, level == 0);
                 } else if pass::BLOOM_UP.contains(&other) {
                     self.record_bloom_up(pass);
+                } else if let Some(level) = pass::LENS_DOWN.iter().position(|&name| name == other) {
+                    self.record_lens_down(pass, level == 0);
+                } else if pass::LENS_UP.contains(&other) {
+                    self.record_lens_up(pass);
                 } else {
                     panic!("unknown frame-graph pass `{other}`");
                 }
@@ -6342,6 +6370,30 @@ impl FrameRecorder<'_> {
         self.fullscreen_effect(pass, ShaderId::BloomDown, &[], bytemuck::bytes_of(&params));
     }
 
+    /// One anamorphic streak downsample. `first` is `lens_down_1`, the only level that carries the
+    /// streak's own extra threshold on top of the bloom threshold the pyramid already applied.
+    fn record_lens_down(&self, pass: &mut RecordedPass<'_>, first: bool) {
+        let [u, v] = source_texel(pass.inputs[0]);
+        let cut = match self.post.anamorphic_threshold {
+            Some(threshold) if first => (threshold - self.post.bloom_threshold).max(0.0),
+            _ => 0.0,
+        };
+        let params = shader_gen::LensDownParams {
+            texel: [u, v, cut, 0.0],
+        };
+        self.fullscreen_effect(pass, ShaderId::LensDown, &[], bytemuck::bytes_of(&params));
+    }
+
+    /// One anamorphic streak upsample: the horizontal tent over the coarser level (declared first)
+    /// blended into this level's own downsample, by the authored `anamorphic_length`.
+    fn record_lens_up(&self, pass: &mut RecordedPass<'_>) {
+        let [u, v] = source_texel(pass.inputs[0]);
+        let params = shader_gen::LensUpParams {
+            texel: [u, v, self.post.anamorphic_length, 0.0],
+        };
+        self.fullscreen_effect(pass, ShaderId::LensUp, &[], bytemuck::bytes_of(&params));
+    }
+
     /// One Hi-Z pyramid mip: the per-cell minimum depth over the footprint in the source (scene
     /// depth for the seed, the mip above for a reduce).
     fn record_hiz(&self, pass: &mut RecordedPass<'_>) {
@@ -6695,6 +6747,26 @@ fn binding_plan(input_count: usize, absent: &[u32]) -> Vec<Option<usize>> {
             Some(input)
         })
         .collect()
+}
+
+/// One texel of a sampled input, in UV.
+fn source_texel(view: &wgpu::TextureView) -> [f32; 2] {
+    let texture = view.texture();
+    [
+        1.0 / texture.width().max(1) as f32,
+        1.0 / texture.height().max(1) as f32,
+    ]
+}
+
+/// A tint divided by its Rec.709 luma, so the light it adds equals the unit strength it multiplies;
+/// a zero-luma tint (which validation rejects) adds nothing.
+fn luma_normalized(tint: [f32; 3]) -> [f32; 3] {
+    let luma = tint[0] * 0.2126 + tint[1] * 0.7152 + tint[2] * 0.0722;
+    if luma > 0.0 {
+        tint.map(|channel| channel / luma)
+    } else {
+        [0.0; 3]
+    }
 }
 
 /// One texel of the pass's target, in UV. Every post parameter is expressed in these screen-relative
@@ -7511,6 +7583,8 @@ pub(crate) enum ShaderId {
     Threshold,
     BloomDown,
     BloomUp,
+    LensDown,
+    LensUp,
     Composite,
     Resolve,
     Upscale,
@@ -7562,7 +7636,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 45;
+const SHADER_COUNT: usize = 47;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -7785,6 +7859,20 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/bloom_up.wgsl"),
         snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
         layouts: &[Some(LayoutId::BloomUp)],
+    },
+    ShaderDesc {
+        id: ShaderId::LensDown,
+        file_name: "lens_down.wgsl",
+        body: include_str!("shaders/lens_down.wgsl"),
+        snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
+        layouts: &[Some(LayoutId::LensDown)],
+    },
+    ShaderDesc {
+        id: ShaderId::LensUp,
+        file_name: "lens_up.wgsl",
+        body: include_str!("shaders/lens_up.wgsl"),
+        snippets: &[Snippet::FullscreenVs, Snippet::Hdr],
+        layouts: &[Some(LayoutId::LensUp)],
     },
     ShaderDesc {
         id: ShaderId::Composite,
@@ -8375,6 +8463,8 @@ enum LayoutId {
     Src,
     BloomDown,
     BloomUp,
+    LensDown,
+    LensUp,
     Threshold,
     Composite,
     Resolve,
@@ -8424,7 +8514,7 @@ enum LayoutId {
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 48;
+const LAYOUT_COUNT: usize = 50;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -8494,13 +8584,21 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
         create: shader_gen::create_up_coarse_up_fine_up_samp_up_params_bgl,
     },
     LayoutDesc {
+        id: LayoutId::LensDown,
+        create: shader_gen::create_lens_down_src_lens_down_samp_lens_down_params_bgl,
+    },
+    LayoutDesc {
+        id: LayoutId::LensUp,
+        create: shader_gen::create_lens_up_coarse_lens_up_fine_lens_up_samp_lens_up_params_bgl,
+    },
+    LayoutDesc {
         id: LayoutId::Threshold,
         create: shader_gen::create_src_tex_src_sampler_bloom_bgl,
     },
     LayoutDesc {
         id: LayoutId::Composite,
         create:
-            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_samp_composite_bgl,
+            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_lens_tex_samp_composite_bgl,
     },
     LayoutDesc {
         id: LayoutId::Resolve,
@@ -8797,7 +8895,9 @@ fn build_pipeline(
         | ShaderId::BoxBlur
         | ShaderId::Threshold
         | ShaderId::BloomDown
-        | ShaderId::BloomUp => {
+        | ShaderId::BloomUp
+        | ShaderId::LensDown
+        | ShaderId::LensUp => {
             build_fullscreen_pipeline(device, label, src, &layout, HDR_FORMAT, None)
         }
         // The SMAA edge and weight passes write half-float linear transients (the blend writes the

@@ -719,6 +719,20 @@ pub struct PostData {
     /// Film emulation: how much warm halation to add on top of the bloom mix (`0.0` = off, and the
     /// gate). Reuses the bloom chain's blurred bright field, so it inherits its radius and threshold.
     pub halation: f32,
+    /// Film emulation: the halation tint as linear RGB, normalized to Rec.709 luma at record time
+    /// (`None` = the film stock's constant, today's look).
+    pub halation_color: Option<[f32; 3]>,
+    /// Anamorphic streaks: strength of the horizontal glare chain (`0.0` = off, and the gate that
+    /// adds the ten `lens_*` passes to the graph).
+    pub anamorphic: f32,
+    /// Anamorphic streaks: how far the streak reaches, in `[0, 1]` (blend of coarse into fine at
+    /// each upsample level).
+    pub anamorphic_length: f32,
+    /// Anamorphic streaks: the streak tint as linear RGB, normalized to Rec.709 luma at record time.
+    pub anamorphic_tint: [f32; 3],
+    /// Anamorphic streaks: an extra threshold taken off the bloom field before the chain
+    /// (`None` = the bloom threshold alone).
+    pub anamorphic_threshold: Option<f32>,
     /// Film emulation: grain amplitude, as a signed offset in the sRGB-**encoded** `[0, 1]` range
     /// (`0.0` = off, and the gate).
     pub grain: f32,
@@ -784,6 +798,11 @@ impl Default for PostData {
             focus_distance: 10.0,
             chromatic_aberration: 0.0,
             halation: 0.0,
+            halation_color: None,
+            anamorphic: 0.0,
+            anamorphic_length: 0.35,
+            anamorphic_tint: [0.55, 0.7, 1.0],
+            anamorphic_threshold: None,
             grain: 0.0,
             grain_size: 0.002,
             ssr: 0.0,

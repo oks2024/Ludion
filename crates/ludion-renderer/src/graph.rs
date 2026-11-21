@@ -41,6 +41,10 @@
 //!   bright pixel cannot ride the chain down as a firefly) and five 3×3 tent upsamples adding each
 //!   level back. It composites the sum of all six levels, which is why `bloom_strength` ships near
 //!   `0.1` rather than near `1`.
+//! - **lens_down_1..5 / lens_up_4..0** — the anamorphic streak chain, present only when
+//!   `PostProcess.anamorphic` is above zero: five x-only downsamples off `bloom_down_1` (extent
+//!   `width >> (2 + k)` by `height >> 2`) and five horizontal tent upsamples. `lens_up_0` is
+//!   `composite`'s last optional read.
 //! - **composite** — blends in the defocused scene, mixes scene + blurred bloom, then applies fog, the
 //!   light shafts, exposure, the selected tonemap operator, the colour grade, the vignette and the
 //!   optional output dither, HDR→sRGB into the read-back output. It also reads `scene_depth` —
@@ -277,6 +281,27 @@ pub mod pass {
         "bloom_up_2",
         "bloom_up_3",
         "bloom_up_4",
+    ];
+    /// The anamorphic streak chain's progressive x-only downsamples. **Index `i` is the pass that
+    /// writes level `i + 1`**, reading level `i` (`BLOOM_DOWN[0]`'s target is level 0 here), so
+    /// `LENS_DOWN[0]` halves `bloom_down_1` along x and `LENS_DOWN[4]` writes the coarsest level. They
+    /// execute in ascending index order.
+    pub const LENS_DOWN: [&str; 5] = [
+        "lens_down_1",
+        "lens_down_2",
+        "lens_down_3",
+        "lens_down_4",
+        "lens_down_5",
+    ];
+    /// The streak chain's horizontal tent upsamples. **Index `i` is the pass that writes level `i`**,
+    /// reading the coarser accumulation and level `i`'s own downsample result. They execute in
+    /// *descending* index order (4 → 0), so `LENS_UP[0]` runs last and is what `composite` mixes in.
+    pub const LENS_UP: [&str; 5] = [
+        "lens_up_0",
+        "lens_up_1",
+        "lens_up_2",
+        "lens_up_3",
+        "lens_up_4",
     ];
     /// The depth+normal prepass: every opaque mesh rasterized into its own depth attachment and a
     /// world-space normal target, ahead of the scene pass. Present only when the scene enables
@@ -814,6 +839,11 @@ pub struct PostChain {
     /// with neither, which is what makes an in-focus frame byte-identical by construction rather than
     /// by care.
     pub dof: bool,
+    /// The scene enables the anamorphic streaks: the ten [`pass::LENS_DOWN`]/[`pass::LENS_UP`] passes
+    /// are added behind the bloom chain and `composite` gains its eighth optional input. False leaves
+    /// the graph with neither, so a frame that authors no streak is graph-identical to one from before
+    /// the chain existed.
+    pub anamorphic: bool,
     /// The probe lattice the [`pass::GI_INJECT`] compute pass writes, or `None` when this frame
     /// schedules no injection at all — the whole scheduling predicate, in one value
     /// (`Plan/gi-wave3-dynamic-injection.md` §5).
@@ -1029,6 +1059,7 @@ impl PostChain {
             // focus, so the gather would return each pixel's own colour and the blend weight would be
             // zero everywhere — two passes to reproduce their own input.
             dof: scene.post.is_some_and(|post| post.dof > 0.0),
+            anamorphic: scene.post.is_some_and(|post| post.anamorphic > 0.0),
             // The injection's three-part predicate lives in `gi_inject.rs`, beside the pass that
             // implements it, so the graph and the recorder read one function rather than two copies
             // of a conjunction.
@@ -1302,6 +1333,15 @@ struct DofTargets {
 #[derive(Clone, Copy)]
 struct BloomTargets {
     /// Level `i + 1`'s downsample target.
+    down: [ResourceId; PYRAMID_LEVELS],
+    /// Level `i`'s upsample accumulation.
+    up: [ResourceId; PYRAMID_LEVELS],
+}
+
+/// The anamorphic streak chain's transient targets, declared with the bloom pyramid's discipline.
+#[derive(Clone, Copy)]
+struct LensTargets {
+    /// Level `i + 1`'s x-only downsample target.
     down: [ResourceId; PYRAMID_LEVELS],
     /// Level `i`'s upsample accumulation.
     up: [ResourceId; PYRAMID_LEVELS],
@@ -1581,6 +1621,22 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     let lit_normal = chain
         .lit_decals
         .then(|| graph.transient("lit_normal", TextureDesc::hdr_color(render_w, render_h)));
+    // The anamorphic streak chain: x-only levels off `bloom_down_1`, declared last before `final` so
+    // no existing resource handle moves.
+    let lens_targets = chain.anamorphic.then(|| {
+        let lens_extent = |k: usize| ((width >> (2 + k)).max(1), (height >> 2).max(1));
+        let (w1, h1) = level_extent(1);
+        LensTargets {
+            down: std::array::from_fn(|i| {
+                let (w, h) = lens_extent(i + 1);
+                graph.transient(pass::LENS_DOWN[i], TextureDesc::hdr_color(w, h))
+            }),
+            up: std::array::from_fn(|i| {
+                let (w, h) = if i == 0 { (w1, h1) } else { lens_extent(i) };
+                graph.transient(pass::LENS_UP[i], TextureDesc::hdr_color(w, h))
+            }),
+        }
+    });
     // Declared before any post-composite resource so the output's handle (and hence the minimal
     // graph's resource list) is identical to the pre-UI graph.
     let output = graph.output("final", TextureDesc::present_target(width, height));
@@ -1864,6 +1920,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         vec![bloom_bright],
     );
     // The chain ends in one half-res resource the composite pass mixes in: level 0's accumulation.
+    let first_level = bloom_targets.down[0];
     let bloom = {
         let BloomTargets { down, up } = bloom_targets;
         for level in 1..=PYRAMID_LEVELS {
@@ -1893,6 +1950,33 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         }
         up[0]
     };
+    // The streak chain reads the pyramid's first level and mirrors the pyramid's read order.
+    let lens_term = lens_targets.map(|LensTargets { down, up }| {
+        for level in 1..=PYRAMID_LEVELS {
+            let source = if level == 1 {
+                first_level
+            } else {
+                down[level - 2]
+            };
+            let label = pass::LENS_DOWN[level - 1];
+            graph.add_external_pass(label, label, vec![source], vec![down[level - 1]]);
+        }
+        for level in (0..PYRAMID_LEVELS).rev() {
+            let coarser = if level == PYRAMID_LEVELS - 1 {
+                down[PYRAMID_LEVELS - 1]
+            } else {
+                up[level + 1]
+            };
+            let same_level = if level == 0 {
+                first_level
+            } else {
+                down[level - 1]
+            };
+            let label = pass::LENS_UP[level];
+            graph.add_external_pass(label, label, vec![coarser, same_level], vec![up[level]]);
+        }
+        up[0]
+    });
     // The march reads the scene pass's depth (so foreground geometry occludes the beams behind it)
     // and the shadow pass's map; its blur then feeds `composite`, whose read is what orders the pair
     // in front of it. Both edges are the scheduler's, derived from these reads.
@@ -2000,6 +2084,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             .into_iter()
             .flat_map(|(mask, depth)| [mask, depth]),
     );
+    composite_reads.extend(lens_term);
     // A debug view stands in for the whole composite: the tail after it is unchanged. Bloom, shafts
     // and dof still schedule with unread outputs — acceptable for a debug frame.
     match (chain.ssr_view, &ssr) {
@@ -2750,6 +2835,8 @@ mod tests {
                 local_scatter: bits & 8 != 0,
                 medium_gi: bits & 4 != 0,
                 dof: bits & 16 != 0,
+                // Content like `ui`: no quality switch masks it, so it varies and survives.
+                anamorphic: bits & 8 != 0,
                 gi_inject: (bits & 32 != 0).then_some([4, 4, 4]),
                 cull: None,
                 // Content like `ui`, so masking leaves it alone (`ui` already varies over the walk).
@@ -3504,6 +3591,87 @@ mod tests {
         assert_eq!(reads("bloom_up_1"), ["bloom_up_2", "bloom_down_1"]);
         // Level 0's own "downsample result" is the shared bright pass.
         assert_eq!(reads("bloom_up_0"), ["bloom_up_1", "bloom_bright"]);
+    }
+
+    /// The streak chain is absent unless asked for: no `lens_*` pass or resource, and the default
+    /// chain's graph is the one it was. On, it adds ten passes in chain order whose extents halve in x
+    /// only off `bloom_down_1`, and `lens_up_0` is the composite's last read.
+    #[test]
+    fn the_anamorphic_chain_is_absent_off_and_x_only_on() {
+        let size = FrameSize::native(1920, 1080);
+        let (plain, _) = build_frame_graph(size, PostChain::default());
+        let is_lens = |name: &str| name.starts_with("lens_");
+        assert!(plain.passes().iter().all(|p| !is_lens(&p.name)));
+        assert!(plain.resources().iter().all(|r| !is_lens(&r.name)));
+
+        let (graph, _) = build_frame_graph(
+            size,
+            PostChain {
+                anamorphic: true,
+                ..PostChain::default()
+            },
+        );
+        let names = pass_names(&graph);
+        let lens: Vec<&str> = names.iter().copied().filter(|n| is_lens(n)).collect();
+        let expected: Vec<&str> = pass::LENS_DOWN
+            .iter()
+            .chain(pass::LENS_UP.iter().rev())
+            .copied()
+            .collect();
+        assert_eq!(lens, expected);
+        let at = |name: &str| names.iter().position(|n| *n == name).unwrap();
+        assert!(at("bloom_down_1") < at("lens_down_1"));
+        assert!(at("lens_up_0") < at("composite"));
+
+        let extent = |name: &str| {
+            let r = graph.resources().iter().find(|r| r.name == name).unwrap();
+            (r.desc.extent.width, r.desc.extent.height)
+        };
+        assert_eq!(extent("bloom_down_1"), (480, 270));
+        assert_eq!(extent("lens_up_0"), (480, 270));
+        for (k, width) in [(1, 240), (2, 120), (3, 60), (4, 30), (5, 15)] {
+            assert_eq!(extent(pass::LENS_DOWN[k - 1]), (width, 270));
+            if k < 5 {
+                assert_eq!(extent(pass::LENS_UP[k]), (width, 270));
+            }
+        }
+
+        let reads = |name: &str| {
+            graph
+                .passes()
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap()
+                .reads()
+                .iter()
+                .map(|r| graph.resources()[r.index()].name.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(reads("lens_down_1"), ["bloom_down_1"]);
+        assert_eq!(reads("lens_down_3"), ["lens_down_2"]);
+        assert_eq!(reads("lens_up_4"), ["lens_down_5", "lens_down_4"]);
+        assert_eq!(reads("lens_up_2"), ["lens_up_3", "lens_down_2"]);
+        assert_eq!(reads("lens_up_0"), ["lens_up_1", "bloom_down_1"]);
+        assert_eq!(reads("composite").last().copied(), Some("lens_up_0"));
+    }
+
+    /// The streak chain is derived from the scene's own gate (`anamorphic > 0`) and no quality switch
+    /// masks it.
+    #[test]
+    fn for_scene_gates_the_anamorphic_chain_on_the_strength() {
+        let with = |anamorphic: f32| {
+            let mut scene = sun_scene();
+            scene.post = Some(crate::scene::PostData {
+                anamorphic,
+                ..crate::scene::PostData::default()
+            });
+            PostChain::for_scene(&scene)
+        };
+        assert!(!PostChain::for_scene(&sun_scene()).anamorphic);
+        assert!(!with(0.0).anamorphic);
+        let on = with(0.01);
+        assert!(on.anamorphic);
+        assert!(on.masked(&Quality::LOW, &QualityParams::LOW).anamorphic);
     }
 
     fn ssr_chain() -> PostChain {

@@ -61,6 +61,7 @@ settled plan, nothing built; **rejected** — closed by design.
 - **Reflections and GI** — IBL of the procedural sky plus the opt-in voxel/probe diffuse GI. No SSR
   (deferred), no reflection probes, no specular GI.
 - **Exposure** — manual only; auto-exposure absent. `.cube` LUT grading deferred.
+  *Amended 2026-11-20 (Neon Shroud request 0019): same-frame metered exposure and `.cube` LUTs are planned in `Plan/post-film-and-screen-effects.md`; temporal adaptation stays out.*
 - **Game-authored shaders** — absent: no custom WGSL surface, no material graph
   (`dev-docs/ludion-shader-bindgen.md`).
 - **Cameras** — one main camera (`L2101`) plus up to 4 `RenderView` secondary views rendered into `UiRect`

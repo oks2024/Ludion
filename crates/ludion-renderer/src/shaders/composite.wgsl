@@ -12,7 +12,7 @@
 //
 //   0. chromatic aberration         — at the fetch: a radial, per-channel displacement of the scene
 //   1. depth of field               — the lens's defocus, blended over the sharp scene target
-//   2. + bloom * strength + halation — the mix
+//   2. + bloom * strength + halation + anamorphic streaks — the mix
 //   3. the medium's ambient in-scatter — scene-referred: extinction + sky-coloured haze, linear HDR
 //   4. the medium's sun in-scatter  — scene-referred: the marched beams, added to what survived
 //   5. exposure                     — the camera's own gain
@@ -154,7 +154,12 @@
 // `composite.silhouette.x` is zero, so `apply_silhouette` below never reads them.
 @group(0) @binding(8) var silhouette_mask_tex: texture_2d<f32>;
 @group(0) @binding(9) var silhouette_depth_tex: texture_depth_2d;
-@group(0) @binding(10) var samp: sampler;
+// The anamorphic streak field (`lens_up_0`, the `lens_down`/`lens_up` chain), at the bloom pyramid's
+// first extent — the eighth **optional** input, behind `silhouette_depth_tex`. It exists when
+// `PostProcess.anamorphic` is above zero; otherwise the recorder binds the 1x1 stand-in and
+// `composite.anamorphic` is zero, so step 2 below never reads it.
+@group(0) @binding(10) var lens_tex: texture_2d<f32>;
+@group(0) @binding(11) var samp: sampler;
 
 // The selector values `Composite.tonemap` carries, one per `PostProcess.tonemap` variant. The
 // shader-bindgen hoists integer consts into `shader_gen`, so the recorder maps its `TonemapOperator`
@@ -291,8 +296,16 @@ struct Composite {
     // Per style, two lanes: `color`, then `(outline radius in render pixels (0 = none), outline alpha,
     // bias, always)`. The `OccludedSilhouette`'s style index is 1-based into this table.
     silhouette_styles: array<vec4<f32>, 16>,
+    // The streak's gain: strength times the tint normalized by Rec.709 luma (zero when off); `anamorphic` is
+    // nonzero when `lens_tex` is real.
+    anamorphic_gain: vec3<f32>,
+    anamorphic: u32,
+    // The authored halation tint normalized by Rec.709 luma on the CPU; `halation_custom` is nonzero
+    // when one was authored. Zero keeps the constant stock tint below.
+    halation_custom_gain: vec3<f32>,
+    halation_custom: u32,
 };
-@group(0) @binding(11) var<uniform> composite: Composite;
+@group(0) @binding(12) var<uniform> composite: Composite;
 
 // The extinguished fraction of the same ray with its optical depth scaled by `m`: T^m = exp(-m·τ).
 fn medium_scaled(extinguished: f32, m: f32) -> f32 {
@@ -741,13 +754,9 @@ fn chromatic_scene(uv: vec2<f32>) -> vec3<f32> {
 //
 // Halation is light that passes through the emulsion, reflects off the film base behind it and
 // scatters back into the layers around a bright source. Its warm red-orange is a property of the
-// *stock* — of how far back the base sits and which layer the returning light still reaches — not of
-// the shot, so a constant is the faithful model, not the cheap one.
-//
-// It is also the Henyey–Greenstein `g` argument, which is the decisive half: what an authorable
-// `halation_color` would actually control is achromatic glow versus chromatic glow, and achromatic
-// glow is exactly what `bloom_strength` already spells. A colour field would be a second way to write
-// bloom, and the first way is not going anywhere.
+// *stock* — of how far back the base sits and which layer the returning light still reaches — so
+// this constant is the default stock; `PostProcess.halation_color` replaces it per shot, normalized
+// on the CPU (`halation_custom_gain`).
 const HALATION_TINT: vec3<f32> = vec3<f32>(1.0, 0.35, 0.12);
 
 // The tint **normalized by Rec.709 luma**, which is `white_balance`'s trick applied to the same
@@ -800,7 +809,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // `bloom_threshold` and the bloom chain's radius, and cannot be tuned apart from them. Trigger
     // for its own chain: a look verdict at the arc's closing sitting.
     if (composite.halation != 0.0) {
-        hdr = hdr + bloom * halation_gain() * composite.halation;
+        if (composite.halation_custom != 0u) {
+            hdr = hdr + bloom * composite.halation_custom_gain * composite.halation;
+        } else {
+            hdr = hdr + bloom * halation_gain() * composite.halation;
+        }
+    }
+    // The anamorphic streak field is a finished horizontal blur of the bloom pyramid's first level;
+    // its gain already carries the strength and the normalized tint.
+    if (composite.anamorphic != 0u) {
+        hdr = hdr + textureSample(lens_tex, samp, in.uv).rgb * composite.anamorphic_gain;
     }
     var ray_scale = 1.0;
     if (composite.fog_density > 0.0) {

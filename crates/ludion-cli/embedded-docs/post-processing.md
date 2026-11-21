@@ -33,7 +33,7 @@ the *image* the scene pass produced. One entity can carry both, as separate comp
 Most of the stack is branches in one `composite` pass, run in one pinned order:
 
 ```text
-chromatic aberration → depth of field → + bloom + halation → the medium (haze, then beams)
+chromatic aberration → depth of field → + bloom + halation + anamorphic → the medium (haze, then beams)
   → exposure → tonemap → grade → vignette → grain → dither
 ```
 
@@ -140,7 +140,19 @@ anisotropy.
 - **`halation`** — a warm bleed around bright sources, `>= 0` (default `0.0`). It reuses the bloom
   chain's blurred bright field rather than blurring again, so it inherits `bloom_threshold`, the
   chain's radius and its gain — and a useful value therefore sits near `bloom_strength`'s own `0.1`.
-  The colour is not authorable: halation's hue is a property of the film stock.
+  The default hue is the film stock's red-orange; **`halation_color`** (linear RGB, each element
+  `>= 0`, not all zero; default none) replaces it, e.g. `[1.0, 0.25, 0.08]` for a sodium-amber glow.
+  The colour is normalized by its Rec.709 luma, so it changes the hue and never the amount.
+- **`anamorphic`** — horizontal lens streaks off the bright sources, `[0, 1]` (default `0.0` — off,
+  and the gate: the ten-pass `lens` chain is not in the graph at zero). A hard horizontal line
+  through each source above `bloom_threshold`, added with the bloom mix; nothing leaks up or down.
+  **`anamorphic_length`** (`[0, 1]`, default `0.35`) is how far it reaches: at the default and
+  `anamorphic: 0.5` the visible half-length of a small bright source is about 0.3 of the frame's
+  width. **`anamorphic_tint`** (linear RGB, default `[0.55, 0.7, 1.0]`, luma-normalized like
+  `halation_color`) is its colour. **`anamorphic_threshold`** (`>= 0`, default none) is an extra
+  cutoff on top of `bloom_threshold`, so only the brightest sources streak. It costs the `lens`
+  budget group (`[post_groups] lens`). `--set` example:
+  `ludion render --scene s.yaml --set /entities/0/components/PostProcess/anamorphic=0.1 --out s.png`.
 - **`grain`** / **`grain_size`** — monochrome additive grain in the **sRGB-encoded** domain, `[0, 1]`
   (default `0.0` — off, and the gate), with a cell side as a fraction of the frame's height `[0, 1]`
   (default `0.002`, about two output pixels at 1080p; the cell is the same fraction of the frame at
