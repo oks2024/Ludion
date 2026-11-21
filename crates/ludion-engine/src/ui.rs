@@ -39,6 +39,7 @@ pub mod hud;
 pub(crate) mod polygon;
 pub(crate) mod radial;
 pub(crate) mod shape;
+pub(crate) mod subtitle;
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -58,7 +59,7 @@ use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::time::TickRate;
 pub use ludion_font::FontFace;
 use ludion_font::{GlyphQuad, TextLayout, YAxis, fold_line_breaks, layout};
-use ludion_renderer::GlyphOutline;
+use ludion_renderer::{FontDraw, GlyphOutline};
 
 /// The reference canvas is always this many units tall; width is `CANVAS_HEIGHT * aspect`.
 const CANVAS_HEIGHT: f32 = 1080.0;
@@ -317,6 +318,66 @@ pub(crate) fn ui_text_draw(face: &FontFace, text: &UiText, viewport: (u32, u32))
     let (laid, rect) = ui_text_block(face, text, viewport);
     let cell_px = text.size * pixel_scale(viewport);
     laid.quads([rect[0], rect[1]], cell_px, YAxis::Down)
+}
+
+/// One chain face's resolved atlas and outline, index-aligned with [`FontFace::chain`].
+pub(crate) type FaceDraw = (Option<FontDraw>, Option<GlyphOutline>);
+
+/// The chain faces `quads` draw with, ascending, face 0 always included.
+pub(crate) fn faces_in<'a>(quads: impl IntoIterator<Item = &'a GlyphQuad>) -> Vec<u8> {
+    let mut used = vec![0u8];
+    for quad in quads {
+        if !used.contains(&quad.face) {
+            used.push(quad.face);
+        }
+    }
+    used.sort_unstable();
+    used
+}
+
+/// The chain faces the chars of `texts` resolve to, ascending, face 0 always included.
+pub(crate) fn faces_for_text<'a>(
+    face: &FontFace,
+    texts: impl IntoIterator<Item = &'a str>,
+) -> Vec<u8> {
+    let mut used = vec![0u8];
+    for ch in texts.into_iter().flat_map(str::chars) {
+        let k = face.face_for(ch);
+        if !used.contains(&k) {
+            used.push(k);
+        }
+    }
+    used.sort_unstable();
+    used
+}
+
+/// `quads` split per chain face into the runs a renderer draws, ascending face order, each with its
+/// face's [`FaceDraw`]. A text on one face is exactly one run holding the original quads.
+pub(crate) fn text_runs(
+    quads: Vec<GlyphQuad>,
+    draws: &[FaceDraw],
+) -> Vec<(Vec<GlyphQuad>, Option<FontDraw>, Option<GlyphOutline>)> {
+    let draw_of = |face: u8| {
+        draws
+            .get(usize::from(face))
+            .copied()
+            .unwrap_or((None, None))
+    };
+    if quads.iter().all(|q| q.face == quads[0].face) {
+        let (font, outline) = draw_of(quads.first().map_or(0, |q| q.face));
+        return vec![(quads, font, outline)];
+    }
+    let mut faces: Vec<u8> = quads.iter().map(|q| q.face).collect();
+    faces.sort_unstable();
+    faces.dedup();
+    faces
+        .into_iter()
+        .map(|face| {
+            let (font, outline) = draw_of(face);
+            let run = quads.iter().copied().filter(|q| q.face == face).collect();
+            (run, font, outline)
+        })
+        .collect()
 }
 
 /// The most whole source pixels a bitmap outline dilates by.

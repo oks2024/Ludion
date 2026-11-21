@@ -252,3 +252,55 @@ fn a_scene_without_keys_ignores_the_string_tables() {
     let err = stderr(&output);
     assert!(!err.contains("L1715") && !err.contains("L1256"), "{err}");
 }
+
+/// A root whose `pixel` face (Silkscreen, ASCII only) falls back to `body` (Inter).
+fn chained_root(name: &str) -> PathBuf {
+    let dir = root(name);
+    let gallery = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/fonts");
+    for file in ["silkscreen.font.yaml", "silkscreen.png"] {
+        std::fs::copy(gallery.join(file), dir.join("fonts").join(file)).expect("copy face");
+    }
+    std::fs::write(
+        dir.join("fonts.yaml"),
+        "format: 1\nkind: fonts\nfonts:\n  body: fonts/inter.font.yaml\n  pixel:\n    path: \
+         fonts/silkscreen.font.yaml\n    fallback:\n      - body\n",
+    )
+    .expect("table");
+    dir
+}
+
+#[test]
+fn a_char_missing_from_the_primary_but_in_a_fallback_no_longer_warns() {
+    let dir = chained_root("chain-covered");
+    let text = |font: &str, shown: &str| {
+        format!(
+            "  - name: label\n    components:\n      UiText:\n        text: \"{shown}\"\n        font: {font}\n"
+        )
+    };
+    // Silkscreen alone lacks the accent; the chain has it from Inter.
+    let covered = check(&dir, &text("pixel", "CAF\u{C9}"));
+    assert!(covered.status.success(), "stderr was: {}", stderr(&covered));
+    assert!(!stderr(&covered).contains("L1256"), "{}", stderr(&covered));
+    // A char no chain face has still warns.
+    let uncovered = check(&dir, &text("pixel", "CAF\u{C9} \u{2603}"));
+    assert!(uncovered.status.success(), "{}", stderr(&uncovered));
+    let err = stderr(&uncovered);
+    assert!(err.contains("L1256"), "stderr was: {err}");
+    assert!(err.contains('\u{2603}'), "stderr was: {err}");
+}
+
+#[test]
+fn a_fallback_cycle_in_the_table_is_l1253() {
+    let dir = chained_root("chain-cycle");
+    std::fs::write(
+        dir.join("fonts.yaml"),
+        "format: 1\nkind: fonts\nfonts:\n  body:\n    path: fonts/inter.font.yaml\n    fallback:\n      - pixel\n  pixel:\n    path: fonts/silkscreen.font.yaml\n    fallback:\n      - body\n",
+    )
+    .expect("table");
+    let output = check(
+        &dir,
+        "  - name: label\n    components:\n      UiText:\n        text: HI\n        font: body\n",
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("L1253"), "{}", stderr(&output));
+}

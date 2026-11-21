@@ -61,12 +61,13 @@ lines:
 | `duration_ticks` | authored length, at least 1 | the reading rule |
 | `voice` | a WAV under the content root; `{locale}` is the active locale | silent |
 | `tail_ticks` | ticks the line outlasts its voice | the config's |
+| `subtitle_range` | `world` only: subtitled only while the listener is within this many units of the speaker | always |
 | `cues` | name to tick after the start | none |
 
 A speaker has `name` (a string key), `channel` (`radio`, `world`, `ui`), optional `portrait` (a string for your UI)
 and `color` (RGBA). Ids are unique across all dialogue docs (`L1712`, `L1713`); a line names a defined speaker
 (`L1714`); every `text` and speaker `name` key exists in the default locale (`L1715`); a translation uses the
-`duration_ticks` is not 0 and a cue is before the end (`L1717`); a `voice` reads for the default locale (`L1720`) and, with `{locale}`, for every other
+`duration_ticks` is not 0, a cue is before the end and a `subtitle_range` is above 0 on a `world` speaker (`L1717`); a `voice` reads for the default locale (`L1720`) and, with `{locale}`, for every other
 locale that has a strings doc (`L1721`, warning). An unknown field is `L1120`.
 
 ## The API
@@ -133,8 +134,20 @@ without `.dialogue`, with `L1719`.
 `DialogueEvents` (rewritten each tick): `Started { handle, line, speaker, channel }`, `Ended { reason }` (`Completed`, `Interrupted`, `Blocked`,
 `Dropped`) and `Cue { name }`, plus `started(handle)` and `ended(handle)`. Order within a tick: ends by enqueue order, starts by
 slot, cues by enqueue order. `Subtitles` lists what is on air: `handle`, `line`, `speaker_id`, `speaker` (the display
-name), `color`, `text` (resolved and placeholder-filled), `channel`, `portrait`, `start_frame`, `end_frame`. Drawing it is
-the game's job today (`UiText`).
+name), `color`, `text` (resolved and placeholder-filled), `channel`, `portrait`, `start_frame`, `end_frame`.
+
+**`SubtitleView`** draws `Subtitles` for you: add one entity with the component to the scene (none, no subtitles; a game with
+its own look omits it and reads `Subtitles`). It is on by default once present: `visible: true`, `speaker_label: true`.
+Fields: `anchor` (`bottom_center`) and `offset` (`[0, -64]`), `font`, `size` (`30`, `L1118`), `wrap_width` (`1100`; `0` no
+wrap), `max_lines` (`3`; `0` all), `color` (white), `background` (`[0, 0, 0, 0.55]`; alpha `0` no panel), `padding` (`12`),
+`channels` (all three), `order`, `visible`. Layout: each line on air is `"{speaker}: {text}"` wrapped like `UiText`, the rows
+of every line are stacked oldest first, and the last `max_lines` rows draw on one panel; the speaker label takes the
+speaker's `color`, the text the view's. Nothing on air draws nothing, panel included. A bare `ludion render` runs no
+dialogue, so it draws no subtitles.
+
+A `world` line with `subtitle_range` leaves `Subtitles` while the listener (the lowest `AudioListener`, else the camera) is
+farther than that from the speaker, and returns when it is near again; the line still plays and ends on time. With no
+listener it is shown.
 
 ## Strings
 

@@ -9767,6 +9767,199 @@
       }
     }
   },
+  "SubtitleView": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "SubtitleView",
+    "description": "A speaker-labelled, wrapped block of the dialogue lines on air, on a background panel.\n\nIt reads the engine's `Subtitles` list, so it draws only in a game that opts into dialogue; a\nscene without a `SubtitleView` shows no subtitles. A game with its own look reads `Subtitles`\nand omits the entity. An entity may carry a `Transform` alongside it; it is ignored.\n\n```\nuse ludion_components::SubtitleView;\n\nlet view: SubtitleView = serde_json::from_value(serde_json::json!({\n    \"anchor\": \"bottom_center\",\n    \"max_lines\": 2,\n    \"channels\": [\"radio\", \"ui\"],\n}))\n.unwrap();\nassert_eq!(view.max_lines, 2);\nassert_eq!(view.size, 30.0);\n```",
+    "type": "object",
+    "properties": {
+      "anchor": {
+        "description": "Which canvas point (and block pivot) the block is placed at (default `bottom_center`).",
+        "$ref": "#/$defs/Anchor",
+        "default": "bottom_center"
+      },
+      "offset": {
+        "description": "Offset from the anchor point, in canvas units, **+Y down** (default `[0, -64]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "default": [
+          0.0,
+          -64.0
+        ]
+      },
+      "font": {
+        "description": "Logical face name, resolved through the content root's `fonts.yaml`; absent → the table's\n`default` entry, else the built-in 8×8 face.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "size": {
+        "description": "Glyph cell height in canvas units (default `30.0`).",
+        "type": "number",
+        "format": "float",
+        "default": 30.0
+      },
+      "wrap_width": {
+        "description": "The widest a row may be before it wraps, in canvas units; `0` is no wrap (default `1100.0`).",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0,
+        "default": 1100.0
+      },
+      "max_lines": {
+        "description": "The most rows drawn, newest kept; `0` is all of them (default `3`).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0,
+        "default": 3
+      },
+      "speaker_label": {
+        "description": "Whether each line is prefixed with its speaker's name, in the speaker's colour (default\n`true`).",
+        "type": "boolean",
+        "default": true
+      },
+      "color": {
+        "description": "Linear RGBA of the line text (default opaque white).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4,
+        "default": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "background": {
+        "description": "Linear RGBA of the panel behind the block; alpha `0` draws no panel (default\n`[0, 0, 0, 0.55]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4,
+        "default": [
+          0.0,
+          0.0,
+          0.0,
+          0.550000011920929
+        ]
+      },
+      "padding": {
+        "description": "How far the panel extends beyond the text on every side, in canvas units (default `12.0`).",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0,
+        "default": 12.0
+      },
+      "channels": {
+        "description": "The channels shown (default all three).",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/Channel"
+        },
+        "default": [
+          "radio",
+          "world",
+          "ui"
+        ]
+      },
+      "order": {
+        "description": "Draw order: higher draws later, on top (default `0`).",
+        "type": "integer",
+        "format": "int32",
+        "default": 0
+      },
+      "visible": {
+        "description": "Whether the block draws at all (default `true`).",
+        "type": "boolean",
+        "default": true
+      }
+    },
+    "$defs": {
+      "Anchor": {
+        "description": "Which of the nine canvas points a screen-space UI element ([`UiRect`], [`UiText`]) pins to — and,\nequally, which point of the element's own extent sits on it (its own pivot). For example,\n[`Anchor::BottomRight`] pins the element's bottom-right corner to the canvas's bottom-right\ncorner (a corner HUD needs no size arithmetic); [`Anchor::Center`] centers the element on the\ncanvas center with zero offset. There is no separate `pivot` field — one anchor names both ends.\n\n**Every variant carries a doc comment.** This is load-bearing, not style: `schemars` only emits\nthe `oneOf`-of-`const` schema shape (which the editor inspector needs to render a dropdown) when\nevery variant of a unit-only enum is doc-commented — an undocumented variant collapses the whole\nschema to a bare `{\"enum\": [...]}`, which falls to the raw-JSON textarea instead.",
+        "oneOf": [
+          {
+            "description": "The canvas's top-left corner; the element's own top-left corner sits there.",
+            "type": "string",
+            "const": "top_left"
+          },
+          {
+            "description": "The canvas's top edge, horizontally centered; the element's own top-center point sits there.",
+            "type": "string",
+            "const": "top_center"
+          },
+          {
+            "description": "The canvas's top-right corner; the element's own top-right corner sits there.",
+            "type": "string",
+            "const": "top_right"
+          },
+          {
+            "description": "The canvas's left edge, vertically centered; the element's own center-left point sits there.",
+            "type": "string",
+            "const": "center_left"
+          },
+          {
+            "description": "The canvas's center; the element's own center sits there.",
+            "type": "string",
+            "const": "center"
+          },
+          {
+            "description": "The canvas's right edge, vertically centered; the element's own center-right point sits there.",
+            "type": "string",
+            "const": "center_right"
+          },
+          {
+            "description": "The canvas's bottom-left corner; the element's own bottom-left corner sits there.",
+            "type": "string",
+            "const": "bottom_left"
+          },
+          {
+            "description": "The canvas's bottom edge, horizontally centered; the element's own bottom-center point sits\nthere.",
+            "type": "string",
+            "const": "bottom_center"
+          },
+          {
+            "description": "The canvas's bottom-right corner; the element's own bottom-right corner sits there.",
+            "type": "string",
+            "const": "bottom_right"
+          }
+        ]
+      },
+      "Channel": {
+        "description": "The slot a speaker's lines queue on: one global `radio`, one global `ui`, and a `world` slot per\nspeaker entity.",
+        "oneOf": [
+          {
+            "description": "Comms: one line at a time across the game.",
+            "type": "string",
+            "const": "radio"
+          },
+          {
+            "description": "Spoken from a world entity: one line at a time per speaker.",
+            "type": "string",
+            "const": "world"
+          },
+          {
+            "description": "Interface voice: one line at a time across the game.",
+            "type": "string",
+            "const": "ui"
+          }
+        ]
+      }
+    }
+  },
   "SurfaceOverlay": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "SurfaceOverlay",

@@ -31,6 +31,9 @@ const KEYS: [&str; 4] = ["format", "kind", "fonts", "locales"];
 pub struct FontsDocument {
     /// `(name, path)` pairs, sorted by name; paths are relative to the content root.
     pub fonts: Vec<(String, String)>,
+    /// `(name, [fallback name, ..])` for entries written `{ path, fallback }`, sorted by name; the
+    /// order within a list is kept.
+    pub fallbacks: Vec<(String, Vec<String>)>,
     /// Per-locale overrides: `(locale tag, [(name, path)])`, tags and names sorted.
     pub locales: Vec<(String, Vec<(String, String)>)>,
 }
@@ -93,7 +96,17 @@ pub(crate) fn parse(source: &str) -> Result<FontsDocument, Vec<Diagnostic>> {
                 NodeValue::Mapping(faces) => {
                     for face in faces {
                         let pointer = format!("/fonts/{}", pointer_token(&face.key));
-                        if let Some(path) = envelope::expect_string(
+                        if let NodeValue::Mapping(fields) = &face.node.value {
+                            if let Some(path) = parse_face_mapping(
+                                face,
+                                fields,
+                                &pointer,
+                                &mut doc,
+                                &mut diagnostics,
+                            ) {
+                                doc.fonts.push((face.key.clone(), path));
+                            }
+                        } else if let Some(path) = envelope::expect_string(
                             &face.node,
                             &pointer,
                             "a face path",
@@ -191,6 +204,7 @@ pub(crate) fn parse(source: &str) -> Result<FontsDocument, Vec<Diagnostic>> {
 
     if diagnostics.is_empty() {
         doc.fonts.sort();
+        doc.fallbacks.sort_by(|a, b| a.0.cmp(&b.0));
         doc.locales.sort();
         Ok(doc)
     } else {
@@ -198,9 +212,183 @@ pub(crate) fn parse(source: &str) -> Result<FontsDocument, Vec<Diagnostic>> {
     }
 }
 
+/// Reads the `{ path, fallback }` form of a `fonts:` entry; records the chain in `doc.fallbacks`.
+fn parse_face_mapping(
+    face: &yaml::MapEntry,
+    fields: &[yaml::MapEntry],
+    pointer: &str,
+    doc: &mut FontsDocument,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<String> {
+    let mut path = None;
+    let mut missing_path = true;
+    for field in fields {
+        let field_pointer = format!("{pointer}/{}", pointer_token(&field.key));
+        match field.key.as_str() {
+            "path" => {
+                missing_path = false;
+                path = envelope::expect_string(
+                    &field.node,
+                    &field_pointer,
+                    "a face path",
+                    code::FONTS_TABLE_STRUCTURE,
+                    diagnostics,
+                );
+            }
+            "fallback" => {
+                let NodeValue::Sequence(items) = &field.node.value else {
+                    diagnostics.push(diag(
+                        &field_pointer,
+                        format!(
+                            "`fallback` of face `{}` must be a sequence of face names, found {} (line {})",
+                            face.key,
+                            field.node.value.type_phrase(),
+                            field.node.line
+                        ),
+                        "write `fallback:` then one `- name` per indented line",
+                    ));
+                    continue;
+                };
+                let mut names = Vec::new();
+                for (i, item) in items.iter().enumerate() {
+                    if let Some(name) = envelope::expect_string(
+                        item,
+                        &format!("{field_pointer}/{i}"),
+                        "a face name",
+                        code::FONTS_TABLE_STRUCTURE,
+                        diagnostics,
+                    ) {
+                        names.push(name);
+                    }
+                }
+                doc.fallbacks.push((face.key.clone(), names));
+            }
+            other => diagnostics.push(diag(
+                &field_pointer,
+                format!(
+                    "unknown key `{other}` in the entry of face `{}` (line {})",
+                    face.key, field.key_line
+                ),
+                "an entry holds `path:` and optionally `fallback:` with one `- name` per line",
+            )),
+        }
+    }
+    if missing_path {
+        diagnostics.push(diag(
+            pointer,
+            format!(
+                "the entry of face `{}` has no `path` (line {})",
+                face.key, face.node.line
+            ),
+            "add `path: fonts/x.font.yaml`, or write the entry as a plain path",
+        ));
+    }
+    path
+}
+
+/// Checks `fallback` lists: defined names, no self reference, no cycle, a non-empty list, a flattened
+/// chain of at most [`MAX_CHAIN`] faces.
+fn validate_fallbacks(doc: &FontsDocument, diagnostics: &mut Vec<Diagnostic>) {
+    let defined: Vec<&str> = doc.fonts.iter().map(|(n, _)| n.as_str()).collect();
+    for (name, list) in &doc.fallbacks {
+        let pointer = format!("/fonts/{}/fallback", pointer_token(name));
+        if list.is_empty() {
+            diagnostics.push(diag(
+                &pointer,
+                format!("the `fallback` list of face `{name}` is empty"),
+                "name at least one face, or drop the key",
+            ));
+            continue;
+        }
+        let mut broken = false;
+        for (i, target) in list.iter().enumerate() {
+            let item_pointer = format!("{pointer}/{i}");
+            if target == name {
+                broken = true;
+                diagnostics.push(diag(
+                    &item_pointer,
+                    format!("face `{name}` lists itself in its own `fallback`"),
+                    "a fallback chain names other faces",
+                ));
+            } else if !defined.contains(&target.as_str()) {
+                broken = true;
+                let help = match ludion_core::suggest::nearest(target, defined.iter().copied()) {
+                    Some(near) => format!("did you mean `{near}`?"),
+                    None => format!("defined: {}", defined.join(", ")),
+                };
+                diagnostics.push(diag(
+                    &item_pointer,
+                    format!("`fallback` of face `{name}` names `{target}`, which `fonts:` does not define"),
+                    &help,
+                ));
+            }
+        }
+        if broken {
+            continue;
+        }
+        let mut chain = vec![name.as_str()];
+        let mut cyclic = false;
+        flatten(doc, name, &mut chain, &mut cyclic);
+        if cyclic {
+            diagnostics.push(diag(
+                &pointer,
+                format!("the `fallback` chain of face `{name}` loops back to a face already in it"),
+                "break the cycle: a chain only reaches faces that do not reach back",
+            ));
+        } else if chain.len() > MAX_CHAIN {
+            diagnostics.push(diag(
+                &pointer,
+                format!(
+                    "the flattened `fallback` chain of face `{name}` holds {} faces; the limit is {MAX_CHAIN}",
+                    chain.len()
+                ),
+                "shorten the chain or drop nested fallbacks",
+            ));
+        }
+    }
+}
+
+/// The longest flattened fallback chain, the entry's own face included.
+pub const MAX_CHAIN: usize = 8;
+
+/// `name`'s own fallback list (empty when it has none).
+fn list_of<'a>(doc: &'a FontsDocument, name: &str) -> &'a [String] {
+    doc.fallbacks
+        .iter()
+        .find(|(n, _)| n == name)
+        .map_or(&[][..], |(_, l)| l.as_slice())
+}
+
+/// Depth-first flatten of `name`'s fallbacks into `chain` (deduped by name); sets `cyclic` on a
+/// back edge to a face on the current path.
+fn flatten<'a>(doc: &'a FontsDocument, name: &'a str, chain: &mut Vec<&'a str>, cyclic: &mut bool) {
+    fn walk<'a>(
+        doc: &'a FontsDocument,
+        name: &'a str,
+        path: &mut Vec<&'a str>,
+        chain: &mut Vec<&'a str>,
+        cyclic: &mut bool,
+    ) {
+        path.push(name);
+        for target in list_of(doc, name) {
+            if path.contains(&target.as_str()) {
+                *cyclic = true;
+                continue;
+            }
+            if !chain.contains(&target.as_str()) {
+                chain.push(target);
+            }
+            walk(doc, target, path, chain, cyclic);
+        }
+        path.pop();
+    }
+    walk(doc, name, &mut Vec::new(), chain, cyclic);
+}
+
 /// Checks every name and path of a parsed [`FontsDocument`] (`L1253`).
 pub(crate) fn validate(doc: &FontsDocument) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
+    validate_fallbacks(doc, &mut diagnostics);
     for (name, path) in &doc.fonts {
         let pointer = format!("/fonts/{}", pointer_token(name));
         if name.is_empty() || name.chars().any(|c| c.is_whitespace() || c == '/') {
@@ -278,11 +466,23 @@ pub(crate) fn emit(doc: &FontsDocument) -> String {
         let mut faces: Vec<&(String, String)> = doc.fonts.iter().collect();
         faces.sort();
         for (name, path) in faces {
-            out.push_str(&format!(
-                "  {}: {}\n",
-                scalar_string(name),
-                scalar_string(path)
-            ));
+            match doc.fallbacks.iter().find(|(n, _)| n == name) {
+                Some((_, list)) => {
+                    out.push_str(&format!(
+                        "  {}:\n    path: {}\n    fallback:\n",
+                        scalar_string(name),
+                        scalar_string(path)
+                    ));
+                    for target in list {
+                        out.push_str(&format!("      - {}\n", scalar_string(target)));
+                    }
+                }
+                None => out.push_str(&format!(
+                    "  {}: {}\n",
+                    scalar_string(name),
+                    scalar_string(path)
+                )),
+            }
         }
     }
     let mut locales: Vec<&(String, Vec<(String, String)>)> = doc.locales.iter().collect();

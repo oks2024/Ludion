@@ -4530,3 +4530,97 @@ fn a_skinned_mesh_documents_rim_reaches_the_instance() {
     );
     assert_eq!(lane, DOC_LANE);
 }
+
+/// A font root whose `pixel` face (Silkscreen, ASCII only) falls back to `body` (Inter).
+fn chained_font_root(tag: &str) -> std::path::PathBuf {
+    let dir = font_root(tag);
+    std::fs::write(
+        dir.join("fonts.yaml"),
+        "format: 1\nkind: fonts\nfonts:\n  body: fonts/inter.font.yaml\n  pixel:\n    path: \
+         fonts/silkscreen.font.yaml\n    fallback:\n      - body\n",
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn a_chained_ui_text_draws_one_instance_per_face_and_measures_the_whole() {
+    let root = chained_font_root("chain-ui");
+    let text = UiText {
+        text: "CAF\u{C9}".to_string(),
+        size: 30.0,
+        font: Some("pixel".to_string()),
+        ..UiText::default()
+    };
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, text.clone()).unwrap();
+    let scene = extract(&world, (640, 360), ludion_assets::AssetRoot::content(&root)).unwrap();
+    let runs: Vec<_> = scene
+        .ui
+        .iter()
+        .filter_map(|i| match i {
+            UiInstance::Text { quads, font, .. } => Some((quads, font.expect("a table face"))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(runs.len(), 2, "one instance per face");
+    assert!(
+        !runs[0].1.sdf && runs[1].1.sdf,
+        "Silkscreen first, Inter second"
+    );
+    assert_ne!(runs[0].1.texture, runs[1].1.texture);
+    assert!(runs[0].0.iter().all(|q| q.face == 0));
+    assert!(runs[1].0.iter().all(|q| q.face == 1));
+
+    let library = ludion_engine::FontLibrary::load(ludion_assets::AssetRoot::content(&root));
+    let face = library.face(Some("pixel"), None);
+    let rect = ludion_engine::ui::resolve_ui_text(face, &text, (640, 360));
+    let cell = rect[3];
+    let mut expected = ludion_font::layout(face, &text.text, cell, 0.0).quads(
+        [rect[0], rect[1]],
+        cell,
+        ludion_font::YAxis::Down,
+    );
+    let mut drawn: Vec<_> = runs.iter().flat_map(|(q, _)| q.iter().copied()).collect();
+    let by_left =
+        |a: &ludion_font::GlyphQuad, b: &ludion_font::GlyphQuad| a.pos[0].total_cmp(&b.pos[0]);
+    expected.sort_by(by_left);
+    drawn.sort_by(by_left);
+    assert_eq!(drawn, expected, "the runs together are the one layout");
+    assert_eq!(
+        [rect[2], rect[3]],
+        ludion_engine::ui::measure_ui_text(face, &text.text, cell),
+        "measure is the drawn extent"
+    );
+}
+
+#[test]
+fn a_chained_world_text_emits_one_run_per_face() {
+    let root = chained_font_root("chain-world");
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, Transform::default()).unwrap();
+    world
+        .insert(
+            e,
+            ludion_engine::Text {
+                text: "\u{C9}t\u{C9}".to_string(),
+                size: 2.0,
+                font: Some("pixel".to_string()),
+                ..ludion_engine::Text::default()
+            },
+        )
+        .unwrap();
+    let scene = extract(&world, (640, 360), ludion_assets::AssetRoot::content(&root)).unwrap();
+    assert_eq!(scene.texts.len(), 2);
+    assert!(scene.texts[0].quads.iter().all(|q| q.face == 0));
+    assert!(scene.texts[1].quads.iter().all(|q| q.face == 1));
+    assert_eq!(scene.texts[0].extent, scene.texts[1].extent);
+    let faces: Vec<bool> = scene
+        .texts
+        .iter()
+        .map(|t| t.font.expect("a table face").sdf)
+        .collect();
+    assert_eq!(faces, [false, true]);
+}

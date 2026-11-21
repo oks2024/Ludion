@@ -329,6 +329,7 @@ pub use ludion_engine::MeshBlend;
 pub use ludion_engine::Rain;
 pub use ludion_engine::RenderLayers;
 pub use ludion_engine::RenderView;
+pub use ludion_engine::SubtitleView;
 pub use ludion_engine::VoiceId;
 pub use ludion_engine::ui::UiNav;
 pub use ludion_engine::{AimKind, RadialEvent, UiRadial, UiRadialItem, UiRadialNav};

@@ -1,0 +1,8 @@
+format: 1
+kind: strings
+locale: en
+strings:
+  subtitles.speaker.handler: Handler
+  subtitles.speaker.terminal: Terminal
+  subtitles.handler_brief: Stay low and keep to the service corridor, the guards change shift in two minutes and the east door will not stay unlocked for long.
+  subtitles.terminal_ack: Route logged.

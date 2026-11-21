@@ -803,3 +803,22 @@ pub fn takedown_builder() -> EngineBuilder {
         .system("paired_update", ludion_engine::paired_update)
         .system("takedown_reaction", takedown_reaction)
 }
+
+/// Says the `subtitles` scene's radio line, then its ui line, on the first game tick.
+pub fn say_subtitles(world: &mut World, ctx: &SystemCtx) {
+    if ctx.game_frame.as_u64() == 0 {
+        ludion_engine::dialogue::say(world, "handler_brief", None).expect("the radio line queues");
+        ludion_engine::dialogue::say(world, "terminal_ack", None).expect("the ui line queues");
+    }
+}
+
+/// The `subtitles` engine: dialogue on, the lines said on tick 0, then `dialogue_update` fills
+/// `Subtitles` for the scene's `SubtitleView`.
+pub fn subtitles_builder() -> EngineBuilder {
+    Engine::builder()
+        .dialogue(ludion_engine::DialogueConfig::default())
+        .system("say_subtitles", say_subtitles)
+        .system("dialogue_update", ludion_engine::dialogue_update)
+        .query::<(&ludion_engine::dialogue::DialogueLine,)>()
+        .query::<(&ludion_engine::dialogue::DialogueControl,)>()
+}

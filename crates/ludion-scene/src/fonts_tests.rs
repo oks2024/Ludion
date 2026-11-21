@@ -50,6 +50,7 @@ fn emit_sorts_names() {
             ("zeta".into(), "z.font.yaml".into()),
             ("alpha".into(), "a.font.yaml".into()),
         ],
+        fallbacks: Vec::new(),
         locales: Vec::new(),
     };
     assert_eq!(
@@ -202,4 +203,94 @@ fn locales_must_be_a_mapping_of_mappings() {
 fn a_non_string_path_is_rejected() {
     let d = first(&with_entry("body", "12"));
     assert_eq!(d.path.as_deref(), Some("/fonts/body"));
+}
+
+const CHAINED: &str = "\
+format: 1
+kind: fonts
+fonts:
+  body: fonts/inter.font.yaml
+  emoji: fonts/emoji.font.yaml
+  pixel:
+    path: fonts/silkscreen.font.yaml
+    fallback:
+      - body
+      - emoji
+";
+
+fn chained(entries: &str) -> String {
+    format!("format: 1\nkind: fonts\nfonts:\n{entries}")
+}
+
+#[test]
+fn a_fallback_chain_round_trips_byte_identically() {
+    let doc = parse(CHAINED).expect("parses");
+    assert!(validate(&doc).is_empty());
+    assert_eq!(doc.fonts.len(), 3);
+    assert_eq!(
+        doc.fallbacks,
+        vec![(
+            "pixel".to_string(),
+            vec!["body".to_string(), "emoji".to_string()]
+        )]
+    );
+    assert_eq!(emit(&doc), CHAINED);
+    assert_eq!(emit(&parse(&emit(&doc)).expect("reparses")), CHAINED);
+}
+
+#[test]
+fn a_fallback_to_an_unknown_name_is_rejected_with_a_pointer() {
+    let d = first(&chained(
+        "  body: a.font.yaml\n  pixel:\n    path: b.font.yaml\n    fallback:\n      - bdoy\n",
+    ));
+    assert_eq!(d.path.as_deref(), Some("/fonts/pixel/fallback/0"));
+    assert_eq!(d.help.as_deref(), Some("did you mean `body`?"));
+}
+
+#[test]
+fn a_face_cannot_fall_back_to_itself() {
+    let d = first(&chained(
+        "  pixel:\n    path: b.font.yaml\n    fallback:\n      - pixel\n",
+    ));
+    assert_eq!(d.path.as_deref(), Some("/fonts/pixel/fallback/0"));
+}
+
+#[test]
+fn a_fallback_cycle_is_rejected() {
+    let d = first(&chained(
+        "  a:\n    path: a.font.yaml\n    fallback:\n      - b\n  b:\n    path: b.font.yaml\n    fallback:\n      - a\n",
+    ));
+    assert_eq!(d.path.as_deref(), Some("/fonts/a/fallback"));
+    assert!(d.message.contains("loops"), "{}", d.message);
+}
+
+#[test]
+fn an_empty_fallback_list_is_rejected() {
+    let d = first(&chained(
+        "  pixel:\n    path: b.font.yaml\n    fallback: []\n",
+    ));
+    assert_eq!(d.path.as_deref(), Some("/fonts/pixel/fallback"));
+}
+
+#[test]
+fn a_chain_longer_than_eight_faces_is_rejected() {
+    let mut entries = String::new();
+    for i in 0..8 {
+        entries.push_str(&format!("  f{i}: f{i}.font.yaml\n"));
+    }
+    entries.push_str("  top:\n    path: t.font.yaml\n    fallback:\n");
+    for i in 0..8 {
+        entries.push_str(&format!("      - f{i}\n"));
+    }
+    let d = first(&chained(&entries));
+    assert_eq!(d.path.as_deref(), Some("/fonts/top/fallback"));
+    assert!(d.message.contains("limit"), "{}", d.message);
+}
+
+#[test]
+fn a_mapping_entry_needs_a_path_and_known_keys() {
+    let d = first(&chained("  pixel:\n    fallback:\n      - body\n"));
+    assert_eq!(d.path.as_deref(), Some("/fonts/pixel"));
+    let d = first(&chained("  pixel:\n    path: a.font.yaml\n    bogus: 1\n"));
+    assert_eq!(d.path.as_deref(), Some("/fonts/pixel/bogus"));
 }

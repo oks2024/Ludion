@@ -62,6 +62,7 @@ pub mod rain;
 pub mod render_layers;
 pub mod render_view;
 pub mod screen_effect;
+pub mod subtitle;
 pub mod ui;
 pub mod ui_shape;
 pub mod validators;
@@ -107,6 +108,7 @@ pub use screen_effect::{
     ScreenEffect, ScreenEffectPreset, ScreenEffectStages, ScreenEffectTarget, ScreenMaskKind,
     screen_effect_target_problems,
 };
+pub use subtitle::{Channel, SubtitleView};
 pub use ui::{
     TextOutline, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiNav,
     UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
@@ -7149,6 +7151,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register::<NavObstacleState>("NavObstacleState")
         .expect("unique");
+    // The built-in subtitle block, appended after `NavObstacleState`: read by `extract` from the engine's `Subtitles`.
+    registry
+        .register_validated::<SubtitleView>("SubtitleView")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -7712,12 +7718,13 @@ mod tests {
                 "ScreenEffect",
                 "NavObstacle",
                 "NavObstacleState",
+                "SubtitleView",
             ]
         );
         assert_eq!(
             registry.len(),
-            94,
-            "appending `NavObstacleState` grows the registry to 94"
+            95,
+            "appending `SubtitleView` grows the registry to 95"
         );
     }
 

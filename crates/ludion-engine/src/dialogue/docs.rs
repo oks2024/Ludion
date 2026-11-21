@@ -88,25 +88,16 @@ pub struct LineDef {
     /// Ticks the line outlasts its voice; absent uses the config's `tail_ticks` (default absent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tail_ticks: Option<u32>,
+    /// A `world` line is subtitled only while the listener is within this many world units of the
+    /// speaker; the line still plays (default absent: always subtitled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_range: Option<f32>,
     /// Named cues, each the tick after the start it fires on (default none).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub cues: BTreeMap<String, u32>,
 }
 
-/// The slot a speaker's lines queue on: one global `radio`, one global `ui`, and a `world` slot per
-/// speaker entity.
-#[derive(
-    Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum Channel {
-    /// Comms: one line at a time across the game.
-    Radio,
-    /// Spoken from a world entity: one line at a time per speaker.
-    World,
-    /// Interface voice: one line at a time across the game.
-    Ui,
-}
+pub use ludion_components::subtitle::Channel;
 
 /// Queue priority; a higher one starts first and may cut a lower one.
 #[derive(
@@ -190,8 +181,12 @@ pub(crate) fn validate_dialogue_docs(world: &World, root: &Path) -> Vec<Diagnost
     let has_default = |key: &str| default.is_some_and(|table| table.contains(key));
     if let Some(store) = dialogue {
         let mut speakers: BTreeSet<&str> = BTreeSet::new();
+        let mut channels: BTreeMap<&str, Channel> = BTreeMap::new();
         for (_, doc) in store.iter() {
             speakers.extend(doc.speakers.keys().map(String::as_str));
+            for (id, speaker) in &doc.speakers {
+                channels.entry(id.as_str()).or_insert(speaker.channel);
+            }
         }
         let mut seen_speakers: BTreeSet<&str> = BTreeSet::new();
         let mut seen_lines: BTreeSet<&str> = BTreeSet::new();
@@ -274,6 +269,29 @@ pub(crate) fn validate_dialogue_docs(world: &World, root: &Path) -> Vec<Diagnost
                                 ));
                             }
                         }
+                    }
+                }
+                if let Some(range) = line.subtitle_range {
+                    let problem = if !range.is_finite() || range <= 0.0 {
+                        Some(format!(
+                            "line `{id}` has `subtitle_range: {range}`; it must be finite and above 0"
+                        ))
+                    } else if channels
+                        .get(line.speaker.as_str())
+                        .is_some_and(|channel| *channel != Channel::World)
+                    {
+                        Some(format!(
+                            "line `{id}` has a `subtitle_range`, which only applies to a world speaker"
+                        ))
+                    } else {
+                        None
+                    };
+                    if let Some(message) = problem {
+                        out.push(diagnostic(
+                            code::DIALOGUE_LINE_INVALID,
+                            message,
+                            format!("dialogue/{path}/lines/{id}/subtitle_range"),
+                        ));
                     }
                 }
                 if let Some(duration) = line.duration_ticks {

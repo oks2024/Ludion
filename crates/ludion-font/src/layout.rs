@@ -23,8 +23,10 @@ pub struct LaidGlyph {
     /// The character as authored, except a tab, which lays out as a space (aliases are resolved at
     /// quad time).
     pub ch: char,
-    /// Advance in font units, kerning to the next glyph of the line included.
+    /// Advance in the primary face's font units, kerning to the next glyph of the line included.
     pub advance_units: i32,
+    /// The chain index of the face that draws this glyph (0 is the primary).
+    pub face: u8,
 }
 
 /// One line of a [`TextLayout`].
@@ -45,6 +47,8 @@ pub struct GlyphQuad {
     pub pos: [f32; 4],
     /// `[u0, v0, u1, v1]`, `v0` the atlas row of the glyph's top.
     pub uv: [f32; 4],
+    /// The chain index of the face whose atlas `uv` addresses (0 is the primary).
+    pub face: u8,
 }
 
 /// Text shaped against a face: lines of glyphs, ready to measure or to turn into quads.
@@ -80,22 +84,64 @@ fn is_break_after(ch: char) -> bool {
     ch == '-' || ch == '\u{2014}'
 }
 
+/// `value` font units of `from` rescaled to `to` units, rounded half up: exact when the units agree.
+fn convert_units(value: i32, from: i32, to: i32) -> i32 {
+    if from == to {
+        return value;
+    }
+    ((i64::from(value) * i64::from(to) + i64::from(from) / 2).div_euclid(i64::from(from))) as i32
+}
+
+/// The advance of `ch` in the primary face's units: a fallback glyph's advance is converted.
+fn advance_primary(face: &FontFace, ch: char) -> i32 {
+    match face.face_for(ch) {
+        0 => face.advance(ch),
+        k => {
+            let fallback = &face.fallbacks()[usize::from(k) - 1];
+            convert_units(
+                fallback.advance(ch),
+                fallback.line_units(),
+                face.line_units(),
+            )
+        }
+    }
+}
+
+/// The kerning between two chars in the primary face's units; a pair across two faces has none.
+fn kerning_primary(face: &FontFace, left: char, right: char) -> i32 {
+    match (face.face_for(left), face.face_for(right)) {
+        (0, 0) => face.kerning(left, right),
+        (a, b) if a == b => {
+            let fallback = &face.fallbacks()[usize::from(a) - 1];
+            convert_units(
+                fallback.kerning(left, right),
+                fallback.line_units(),
+                face.line_units(),
+            )
+        }
+        _ => 0,
+    }
+}
+
+/// The advance of `ch` with the kerning toward `next` folded in, in primary units. The one place
+/// widths come from, so measure, wrap and layout cannot disagree.
+fn advance_in_primary(face: &FontFace, ch: char, next: Option<char>) -> i32 {
+    advance_primary(face, ch) + next.map_or(0, |next| kerning_primary(face, ch, next))
+}
+
 /// Width of `chars` as one line: advances plus the kerning between neighbours.
 fn width_units(face: &FontFace, chars: &[char]) -> i64 {
     let mut total = 0i64;
     for (i, &ch) in chars.iter().enumerate() {
-        total += i64::from(face.advance(ch));
-        if let Some(&next) = chars.get(i + 1) {
-            total += i64::from(face.kerning(ch, next));
-        }
+        total += i64::from(advance_in_primary(face, ch, chars.get(i + 1).copied()));
     }
     total
 }
 
 /// The greedy wrap over one paragraph; each returned line is a char run.
 fn wrap_paragraph(face: &FontFace, paragraph: &str, limit_units: i64, lines: &mut Vec<Vec<char>>) {
-    let advance = |ch: char| i64::from(face.advance(ch));
-    let kern = |a: char, b: char| i64::from(face.kerning(a, b));
+    let advance = |ch: char| i64::from(advance_primary(face, ch));
+    let kern = |a: char, b: char| i64::from(kerning_primary(face, a, b));
     let mut current: Vec<char> = Vec::new();
     let mut current_width = 0i64;
     for word in paragraph.split(' ').filter(|word| !word.is_empty()) {
@@ -163,8 +209,8 @@ fn laid_line(face: &FontFace, chars: &[char]) -> LayoutLine {
         .enumerate()
         .map(|(i, &ch)| LaidGlyph {
             ch,
-            advance_units: face.advance(ch)
-                + chars.get(i + 1).map_or(0, |&next| face.kerning(ch, next)),
+            advance_units: advance_in_primary(face, ch, chars.get(i + 1).copied()),
+            face: face.face_for(ch),
         })
         .collect();
     let width_units = glyphs.iter().map(|g| i64::from(g.advance_units)).sum();
@@ -244,7 +290,6 @@ impl TextLayout<'_> {
     pub fn quads(&self, origin: [f32; 2], size: f32, axis: YAxis) -> Vec<GlyphQuad> {
         let doc = self.face.document();
         let unit = size / self.face.line_units() as f32;
-        let (atlas_w, atlas_h) = (doc.atlas.width as f32, doc.atlas.height as f32);
         let ascender = doc.ascender;
         let mut quads = Vec::new();
         let mut pen_y = origin[1];
@@ -257,13 +302,36 @@ impl TextLayout<'_> {
             }
             let mut pen_x = origin[0];
             for laid in &line.glyphs {
-                let (bounds, rect) = match self.face.glyph(laid.ch) {
+                // A fallback face draws in its own unit and atlas, on the primary's baseline.
+                let (face_doc, face_unit) = match laid.face {
+                    0 => (doc, unit),
+                    k => {
+                        let fallback = &self.face.fallbacks()[usize::from(k) - 1];
+                        (fallback.document(), size / fallback.line_units() as f32)
+                    }
+                };
+                let (atlas_w, atlas_h) =
+                    (face_doc.atlas.width as f32, face_doc.atlas.height as f32);
+                let (bounds, rect) = match if laid.face == 0 {
+                    self.face.glyph(laid.ch)
+                } else {
+                    self.face.fallbacks()[usize::from(laid.face) - 1].glyph(laid.ch)
+                } {
                     Some(glyph) => (glyph.bounds, glyph.rect),
-                    None => (doc.notdef.bounds, doc.notdef.rect),
+                    None => (face_doc.notdef.bounds, face_doc.notdef.rect),
                 };
                 if let (Some(b), Some(r)) = (bounds, rect) {
-                    let top_off = (ascender - b[3]) as f32 * unit;
-                    let bottom_off = (ascender - b[1]) as f32 * unit;
+                    let (top_off, bottom_off) = if laid.face == 0 {
+                        (
+                            (ascender - b[3]) as f32 * unit,
+                            (ascender - b[1]) as f32 * unit,
+                        )
+                    } else {
+                        (
+                            ascender as f32 * unit - b[3] as f32 * face_unit,
+                            ascender as f32 * unit - b[1] as f32 * face_unit,
+                        )
+                    };
                     let (top, bottom) = match axis {
                         YAxis::Down => (pen_y + top_off, pen_y + bottom_off),
                         YAxis::Up => (pen_y - top_off, pen_y - bottom_off),
@@ -271,9 +339,9 @@ impl TextLayout<'_> {
                     quads.push(GlyphQuad {
                         ch: laid.ch,
                         pos: [
-                            pen_x + b[0] as f32 * unit,
+                            pen_x + b[0] as f32 * face_unit,
                             top,
-                            pen_x + b[2] as f32 * unit,
+                            pen_x + b[2] as f32 * face_unit,
                             bottom,
                         ],
                         uv: [
@@ -282,6 +350,7 @@ impl TextLayout<'_> {
                             (r[0] + r[2]) as f32 / atlas_w,
                             (r[1] + r[3]) as f32 / atlas_h,
                         ],
+                        face: laid.face,
                     });
                 }
                 pen_x += laid.advance_units as f32 * unit;
@@ -589,5 +658,195 @@ kerning:
             assert_eq!(d.pos[3], -u.pos[3]);
             assert_eq!(d.uv, u.uv);
         }
+    }
+
+    /// A face at half the em of `face()`, so a fallback glyph's units must be converted.
+    const LATIN: &str = "format: 1
+kind: font
+image: l.png
+mode: bitmap
+units_per_em: 500
+ascender: 400
+descender: -100
+line_gap: 0
+atlas:
+  width: 40
+  height: 24
+  em_px: 20
+notdef:
+  advance: 150
+glyphs:
+  - char: A
+    advance: 100
+  - char: \"\\u00C9\"
+    advance: 350
+    bounds:
+      - 5
+      - 0
+      - 345
+      - 420
+    rect:
+      - 0
+      - 0
+      - 17
+      - 21
+  - char: \"\\u00CB\"
+    advance: 350
+    bounds:
+      - 5
+      - 0
+      - 345
+      - 420
+    rect:
+      - 17
+      - 0
+      - 17
+      - 21
+kerning:
+  \"\\u00C9\":
+    \"\\u00CB\": -50
+";
+
+    fn chained() -> FontFace {
+        let latin = FontFace::new(ludion_scene::parse_font(LATIN).expect("parses")).expect("valid");
+        face().with_fallbacks(vec![latin])
+    }
+
+    /// The pre-chain quad arithmetic, frozen: a one-face layout must match it bit for bit.
+    fn reference_quads(
+        f: &FontFace,
+        l: &TextLayout,
+        size: f32,
+        axis: YAxis,
+    ) -> Vec<([f32; 4], [f32; 4])> {
+        let doc = f.document();
+        let unit = size / f.line_units() as f32;
+        let (aw, ah) = (doc.atlas.width as f32, doc.atlas.height as f32);
+        let mut out = Vec::new();
+        let mut pen_y = 7.5f32;
+        for (i, line) in l.lines().iter().enumerate() {
+            if i > 0 {
+                match axis {
+                    YAxis::Down => pen_y += size,
+                    YAxis::Up => pen_y -= size,
+                }
+            }
+            let mut pen_x = 3.25f32;
+            for g in &line.glyphs {
+                let (bounds, rect) = match f.glyph(g.ch) {
+                    Some(glyph) => (glyph.bounds, glyph.rect),
+                    None => (doc.notdef.bounds, doc.notdef.rect),
+                };
+                if let (Some(b), Some(r)) = (bounds, rect) {
+                    let t = (doc.ascender - b[3]) as f32 * unit;
+                    let bo = (doc.ascender - b[1]) as f32 * unit;
+                    let (top, bottom) = match axis {
+                        YAxis::Down => (pen_y + t, pen_y + bo),
+                        YAxis::Up => (pen_y - t, pen_y - bo),
+                    };
+                    out.push((
+                        [
+                            pen_x + b[0] as f32 * unit,
+                            top,
+                            pen_x + b[2] as f32 * unit,
+                            bottom,
+                        ],
+                        [
+                            r[0] as f32 / aw,
+                            r[1] as f32 / ah,
+                            (r[0] + r[2]) as f32 / aw,
+                            (r[1] + r[3]) as f32 / ah,
+                        ],
+                    ));
+                }
+                pen_x += g.advance_units as f32 * unit;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_one_face_layout_is_bit_identical_to_the_pre_chain_arithmetic() {
+        let f = face();
+        for axis in [YAxis::Down, YAxis::Up] {
+            for (text, size, wrap) in [
+                ("AVA BB", 13.0, 0.0),
+                ("AV BAB A-B~", 17.0, 60.0),
+                (
+                    "A
+B", 9.5, 0.0,
+                ),
+            ] {
+                let l = layout(&f, text, size, wrap);
+                let quads = l.quads([3.25, 7.5], size, axis);
+                let expect = reference_quads(&f, &l, size, axis);
+                assert_eq!(quads.len(), expect.len(), "{text}");
+                for (q, (pos, uv)) in quads.iter().zip(&expect) {
+                    assert_eq!(q.pos.map(f32::to_bits), pos.map(f32::to_bits), "{text}");
+                    assert_eq!(q.uv.map(f32::to_bits), uv.map(f32::to_bits), "{text}");
+                    assert_eq!(q.face, 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_glyph_the_primary_lacks_takes_the_fallback_advance_and_atlas() {
+        let f = chained();
+        let l = layout(&f, "AÉ", 10.0, 0.0);
+        let glyphs = l.lines()[0].glyphs.clone();
+        assert_eq!(glyphs[0].face, 0);
+        assert_eq!(glyphs[1].face, 1);
+        // 350 units of a 500-unit face is 700 of the primary's 1000.
+        assert_eq!(glyphs[1].advance_units, 700);
+        assert_eq!(glyphs[0].advance_units, 700);
+        let quads = l.quads([0.0, 0.0], 10.0, YAxis::Down);
+        assert_eq!(quads.len(), 2);
+        let accent = quads[1];
+        assert_eq!(accent.face, 1);
+        assert_eq!(accent.uv, [0.0, 0.0, 17.0 / 40.0, 21.0 / 24.0]);
+        // Bounds ride the fallback's unit (10 / 500); the baseline is the primary's (800 * 0.01).
+        assert_eq!(accent.pos[0], 7.0 + 5.0 * (10.0 / 500.0));
+        assert_eq!(accent.pos[1], 800.0 * 0.01 - 420.0 * (10.0 / 500.0));
+        assert_eq!(accent.pos[3], 800.0 * 0.01);
+    }
+
+    #[test]
+    fn wrap_counts_the_converted_width() {
+        let f = chained();
+        // Each accent is 700 units, so two need 1400 units, a width of 14 at size 10.
+        assert_eq!(texts(&layout(&f, "ÉÉ", 10.0, 14.0)), ["ÉÉ"]);
+        assert_eq!(texts(&layout(&f, "ÉÉ", 10.0, 13.9)), ["É", "É"]);
+    }
+
+    #[test]
+    fn kerning_applies_within_a_face_and_never_across_faces() {
+        let f = chained();
+        // Inside the fallback: -50 of 500 units is -100 of 1000.
+        let within = layout(&f, "ÉË", 10.0, 0.0);
+        assert_eq!(within.lines()[0].glyphs[0].advance_units, 700 - 100);
+        // The primary pair A-V kerns; A then an accent does not.
+        let across = layout(&f, "AÉ", 10.0, 0.0);
+        assert_eq!(across.lines()[0].glyphs[0].advance_units, 700);
+        let primary = layout(&f, "AV", 10.0, 0.0);
+        assert_eq!(primary.lines()[0].glyphs[0].advance_units, 700 - 100);
+    }
+
+    #[test]
+    fn a_char_no_face_has_draws_the_primary_notdef() {
+        let f = chained();
+        let l = layout(&f, "~", 10.0, 0.0);
+        assert_eq!(l.lines()[0].glyphs[0].face, 0);
+        assert_eq!(l.lines()[0].glyphs[0].advance_units, 300);
+        assert!(l.quads([0.0, 0.0], 10.0, YAxis::Down).is_empty());
+    }
+
+    #[test]
+    fn a_primary_glyph_wins_over_a_fallback_that_also_has_it() {
+        let f = chained();
+        // `A` is in both faces; the primary draws it.
+        assert_eq!(f.face_for('A'), 0);
+        assert_eq!(f.face_for('É'), 1);
+        assert_eq!(f.face_for('~'), 0);
     }
 }

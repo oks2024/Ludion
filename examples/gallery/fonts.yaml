@@ -2,11 +2,17 @@
 # `ui-fonts` scene draws with. No `default` entry: it would swap the face of every other scene.
 # `locales.fr` swaps `pixel` for Inter: Silkscreen has no accented glyphs, so the `localization`
 # scene's French title would otherwise draw notdef boxes.
+# `pixel-latin` is Silkscreen with Inter behind it (`fallback`): the `font-fallback` scene draws the
+# ASCII crisp and the accents and the em dash from Inter. A new name, so `pixel` stays one face.
 format: 1
 kind: fonts
 fonts:
   body: fonts/inter.font.yaml
   pixel: fonts/silkscreen.font.yaml
+  pixel-latin:
+    path: fonts/silkscreen.font.yaml
+    fallback:
+      - body
 locales:
   fr:
     pixel: fonts/inter.font.yaml

@@ -1261,9 +1261,9 @@ impl EngineBuilder {
             .doc_kind_engine_owned::<StringsDoc>(STRINGS_KIND)
             .doc_kind_engine_owned::<LocalesDoc>(LOCALES_KIND)
             .system("localize_text", localize_text);
-        builder
-            .doc_validators
-            .push(Box::new(|world, _root| validate_localization_docs(world)));
+        builder.doc_validators.push(Box::new(|world, root| {
+            validate_localization_docs(world, root)
+        }));
         builder
     }
 

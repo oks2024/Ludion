@@ -68,6 +68,28 @@ locales:
 locale's override of `default`, the base `default`, the embedded face. A face that fails to load counts as
 absent at each step. Pass `None` for no locale (the base table), or `localization::active_locale(world)`.
 
+**Fallback chains.** An entry may be a mapping, `path` plus a `fallback` list of other names. A char the
+first face lacks is laid out, measured, drawn and hit-tested with the first chain face that has it; `.notdef`
+comes only after the last face:
+
+```yaml
+fonts:
+  body: fonts/inter.font.yaml
+  pixel-latin:
+    path: fonts/silkscreen.font.yaml   # ASCII only
+    fallback:
+      - body                            # accents, the em dash
+```
+
+A fallback's own `fallback` joins the chain depth-first, a path reached twice joins once, a face that fails to
+load is skipped, and a chain holds at most 8 faces (an unknown name, itself, a cycle, an empty list: `L1253`).
+A `locales:` override replaces the primary and keeps the fallbacks. Chains may mix bitmap and SDF faces: a text
+draws one run per face, each with its own atlas and outline. Every face sits on the primary's baseline in its own
+size (`size` is the line height of each), and its advance is rounded into the primary's font units, so the width is
+the same integer arithmetic everywhere; kerning applies only between two glyphs of one face. A chain of one face
+is bit-identical to no chain. `FontFace::chain()` lists the faces (primary first), `face_for(ch)` names the one that
+draws `ch`, and each `GlyphQuad` carries its `face` index. `ludion docs localization` covers the string-table check.
+
 ## Rules
 
 - **`size` is the line height** (canvas units for UI, world units for `Text`), whatever the face, and must be
@@ -101,10 +123,10 @@ absent at each step. Pass `None` for no locale (the base table), or `localizatio
 |---|---|
 | `L1251` | `font-source` malformed (`em_px` range, `spread_px` vs mode, bad charset range, non-positive `line_height`, a charset over 4096 characters) |
 | `L1252` | the `.ttf` cannot be read or baked (a glyph flattening past 16384 segments is refused) |
-| `L1253` | `fonts.yaml` malformed (including a `locales:` override of an undefined name) |
+| `L1253` | `fonts.yaml` malformed (including a `locales:` override of an undefined name, or a bad `fallback`) |
 | `L1254` | a `font` name is not in the table (a `check-scene` error; runtime reports once per name) |
 | `L1255` | a listed face fails to load, or a reload is refused while recording |
-| `L1256` | authored text, or a keyed text's string in one locale, has characters the face lacks (warning) |
+| `L1256` | authored text, or a keyed text's string in one locale, has characters no face of the chain has (warning) |
 
 ## Next
 

@@ -329,3 +329,142 @@ fn holds_sees_an_override_path_and_a_table_without_overrides_reports_none() {
     let library = FontLibrary::load(ludion_assets::AssetRoot::content(&plain));
     assert!(!library.has_locale_overrides());
 }
+
+fn chained_table(dir: &Path, entries: &str, locales: &str) {
+    std::fs::write(
+        dir.join("fonts.yaml"),
+        format!("format: 1\nkind: fonts\nfonts:\n{entries}{locales}"),
+    )
+    .expect("write table");
+}
+
+/// A third distinct face document (a copy of Silkscreen) so a chain can hold three paths.
+fn copy_third(dir: &Path) {
+    std::fs::copy(
+        gallery_fonts().join("silkscreen.font.yaml"),
+        dir.join("fonts/third.font.yaml"),
+    )
+    .expect("copy");
+}
+
+fn chain_docs(library: &FontLibrary, name: &str, locale: Option<&str>) -> Vec<String> {
+    library
+        .chain_paths(Some(name), locale)
+        .into_iter()
+        .map(|(doc, _)| doc.to_string())
+        .collect()
+}
+
+#[test]
+fn a_fallback_chain_rides_inside_the_face_in_depth_first_order() {
+    let dir = scratch("chain-order");
+    copy_face(&dir, "inter");
+    copy_face(&dir, "silkscreen");
+    copy_third(&dir);
+    chained_table(
+        &dir,
+        "  body:\n    path: fonts/inter.font.yaml\n    fallback:\n      - third\n  \
+         pixel:\n    path: fonts/silkscreen.font.yaml\n    fallback:\n      - body\n  \
+         third: fonts/third.font.yaml\n",
+        "",
+    );
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
+    let pixel = library.face(Some("pixel"), None);
+    assert_eq!(pixel.chain().count(), 3);
+    assert_eq!(
+        chain_docs(&library, "pixel", None),
+        [
+            "fonts/silkscreen.font.yaml",
+            "fonts/inter.font.yaml",
+            "fonts/third.font.yaml"
+        ]
+    );
+    // `body` has its own two-face chain; `third` has none.
+    assert_eq!(library.face(Some("body"), None).chain().count(), 2);
+    assert_eq!(library.face(Some("third"), None).chain().count(), 1);
+}
+
+#[test]
+fn a_face_reached_twice_by_path_joins_the_chain_once() {
+    let dir = scratch("chain-dedup");
+    copy_face(&dir, "inter");
+    copy_face(&dir, "silkscreen");
+    chained_table(
+        &dir,
+        "  alias: fonts/inter.font.yaml\n  body: fonts/inter.font.yaml\n  pixel:\n    path: \
+         fonts/silkscreen.font.yaml\n    fallback:\n      - alias\n      - body\n",
+        "",
+    );
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
+    assert_eq!(
+        chain_docs(&library, "pixel", None),
+        ["fonts/silkscreen.font.yaml", "fonts/inter.font.yaml"]
+    );
+    assert_eq!(library.face(Some("pixel"), None).chain().count(), 2);
+}
+
+#[test]
+fn a_per_locale_primary_keeps_the_same_fallbacks() {
+    let dir = scratch("chain-locale");
+    copy_face(&dir, "inter");
+    copy_face(&dir, "silkscreen");
+    copy_third(&dir);
+    chained_table(
+        &dir,
+        "  body: fonts/inter.font.yaml\n  pixel:\n    path: fonts/silkscreen.font.yaml\n    \
+         fallback:\n      - body\n  third: fonts/third.font.yaml\n",
+        "locales:\n  fr:\n    pixel: fonts/third.font.yaml\n",
+    );
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
+    assert_eq!(
+        chain_docs(&library, "pixel", Some("fr")),
+        ["fonts/third.font.yaml", "fonts/inter.font.yaml"]
+    );
+    assert_eq!(
+        chain_docs(&library, "pixel", Some("en")),
+        ["fonts/silkscreen.font.yaml", "fonts/inter.font.yaml"]
+    );
+    assert_eq!(
+        chain_docs(&library, "pixel", None),
+        ["fonts/silkscreen.font.yaml", "fonts/inter.font.yaml"]
+    );
+    assert_eq!(library.face(Some("pixel"), Some("fr")).chain().count(), 2);
+}
+
+#[test]
+fn a_failed_fallback_is_skipped() {
+    let dir = scratch("chain-failed");
+    copy_face(&dir, "silkscreen");
+    chained_table(
+        &dir,
+        "  gone: fonts/missing.font.yaml\n  pixel:\n    path: fonts/silkscreen.font.yaml\n    \
+         fallback:\n      - gone\n",
+        "",
+    );
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
+    assert_eq!(library.face(Some("pixel"), None).chain().count(), 1);
+    assert_eq!(
+        chain_docs(&library, "pixel", None),
+        ["fonts/silkscreen.font.yaml"]
+    );
+    assert!(
+        library
+            .faults()
+            .any(|(path, _)| path == "fonts/missing.font.yaml")
+    );
+}
+
+#[test]
+fn a_table_without_fallback_builds_no_chain() {
+    let dir = scratch("chain-none");
+    copy_face(&dir, "inter");
+    table(&dir, "  body: fonts/inter.font.yaml\n");
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
+    assert!(library.inner.chains.is_empty());
+    assert_eq!(library.face(Some("body"), None).chain().count(), 1);
+    assert_eq!(
+        chain_docs(&library, "body", None),
+        ["fonts/inter.font.yaml"]
+    );
+    assert!(chain_docs(&FontLibrary::default(), "body", None).is_empty());
+}

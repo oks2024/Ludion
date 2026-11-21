@@ -7,10 +7,10 @@
 
 use ludion_core::math;
 use ludion_font::{GlyphQuad, YAxis, fold_line_breaks, layout};
-use ludion_renderer::{FontDraw, GlyphOutline, UiClip, UiInstance, UiRotation, UiShapeStroke};
+use ludion_renderer::{UiClip, UiInstance, UiRotation, UiShapeStroke};
 
 use super::shape::sector_instance;
-use super::{FontFace, pixel_scale, resolve_ui_rect};
+use super::{FaceDraw, FontFace, pixel_scale, resolve_ui_rect, text_runs};
 use crate::components::{UiRadial, UiRadialItem};
 
 const RADIANS_PER_DEGREE: f32 = 0.017_453_292;
@@ -176,8 +176,7 @@ pub(crate) fn radial_draw(
     face: &FontFace,
     radial: &UiRadial,
     viewport: (u32, u32),
-    font: Option<FontDraw>,
-    outline: Option<GlyphOutline>,
+    draws: &[FaceDraw],
     icon: &mut IconResolver<'_>,
 ) -> Vec<UiInstance> {
     let scale = pixel_scale(viewport);
@@ -218,15 +217,18 @@ pub(crate) fn radial_draw(
             if text.is_empty() {
                 return;
             }
-            out.push(UiInstance::Text {
-                color,
-                text: text.to_string(),
-                quads: centred_line(face, text, size, centre, scale),
-                font,
-                clip: UiClip::NONE,
-                outline,
-                rotation: UiRotation::NONE,
-            });
+            let quads = centred_line(face, text, size, centre, scale);
+            for (quads, font, outline) in text_runs(quads, draws) {
+                out.push(UiInstance::Text {
+                    color,
+                    text: text.to_string(),
+                    quads,
+                    font,
+                    clip: UiClip::NONE,
+                    outline,
+                    rotation: UiRotation::NONE,
+                });
+            }
         };
         line(&item.text, radial.size, [mx, my]);
         if let Some(detail) = &item.detail {
@@ -344,8 +346,7 @@ mod tests {
             FontFace::embedded(),
             &w,
             (1920, 1080),
-            None,
-            None,
+            &[(None, None)],
             &mut |i, item| {
                 asked.push(i);
                 item.atlas.as_ref().map(|_| (0usize, [0.0, 0.0, 1.0, 1.0]))
@@ -403,8 +404,7 @@ mod tests {
             FontFace::embedded(),
             &UiRadial::default(),
             (1920, 1080),
-            None,
-            None,
+            &[(None, None)],
             &mut |_, _| None,
         );
         assert!(drawn.is_empty());
@@ -415,8 +415,7 @@ mod tests {
             FontFace::embedded(),
             w,
             viewport,
-            None,
-            None,
+            &[(None, None)],
             &mut |_, _| None,
         )
     }

@@ -137,6 +137,11 @@ pub struct Subtitles {
 }
 
 impl Subtitles {
+    #[cfg(test)]
+    pub(crate) fn from_active(active: Vec<Subtitle>) -> Self {
+        Subtitles { active }
+    }
+
     /// The lines on air, by start frame then enqueue order.
     pub fn iter(&self) -> impl Iterator<Item = &Subtitle> {
         self.active.iter()
@@ -579,8 +584,24 @@ pub fn dialogue_update(world: &mut World, ctx: &SystemCtx) {
     let mut on_air: Vec<&Row> = rows.iter().filter(|row| row.playing()).collect();
     on_air.sort_by_key(|row| (row.line.started_frame, row.line.seq));
     let mut active = Vec::with_capacity(on_air.len());
+    let listener = on_air
+        .iter()
+        .any(|row| row.line.subtitle_range.is_some())
+        .then(|| crate::engine::listener_position(world))
+        .flatten();
     for row in on_air {
         let line = &row.line;
+        if let (Some(range), Some(speaker), Some(ear)) =
+            (line.subtitle_range, line.speaker, listener)
+            && let Some(pose) = crate::hierarchy::world_transform(world, speaker)
+        {
+            let at = pose.trs.translation;
+            let delta = [at[0] - ear[0], at[1] - ear[1], at[2] - ear[2]];
+            let distance_sq = delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2];
+            if distance_sq > range * range {
+                continue;
+            }
+        }
         let args: Vec<(&str, &str)> = line
             .args
             .iter()

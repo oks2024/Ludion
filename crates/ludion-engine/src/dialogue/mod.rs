@@ -188,6 +188,9 @@ pub struct DialogueLine {
     /// Authored ticks past the voice clip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tail_ticks: Option<u32>,
+    /// The listener distance past which a `world` line is not subtitled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_range: Option<f32>,
     /// Cues, by `at` then name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cues: Vec<LineCue>,
@@ -401,6 +404,7 @@ fn spawn_line(
         duration_ticks: def.duration_ticks,
         voice: def.voice.clone(),
         tail_ticks: def.tail_ticks,
+        subtitle_range: def.subtitle_range,
         cues,
         args: args
             .iter()

@@ -647,7 +647,8 @@ pub mod code {
     /// `L1716` — a translation uses different `{placeholders}` than the default locale's text. A
     /// warning.
     pub const STRINGS_PLACEHOLDER_MISMATCH: DiagnosticCode = DiagnosticCode::new("L1716");
-    /// `L1717` — an authored line is invalid: `duration_ticks: 0`, or a cue at or past its duration.
+    /// `L1717` — an authored line is invalid: `duration_ticks: 0`, a cue at or past its duration, or a
+    /// `subtitle_range` that is not finite and above 0 or sits on a non-world speaker.
     pub const DIALOGUE_LINE_INVALID: DiagnosticCode = DiagnosticCode::new("L1717");
     /// `L1718` — a `kind: strings` doc has an empty `locale`.
     pub const STRINGS_LOCALE_INVALID: DiagnosticCode = DiagnosticCode::new("L1718");

@@ -1,6 +1,6 @@
 # Plan: Dialogue — string tables, a line queue, subtitles
 
-> **Waves 1 and 2a mechanized — text and voice ship; subtitles' built-in widget (W2b), localization's render hosts (W3b-2) and fallback chains (W3c) are laid out below. W3a (localization, text side) and W3b-1 (per-locale faces, check-scene keys) are mechanized.**
+> **Waves 1, 2a and 2b mechanized — text, voice and the built-in `SubtitleView` ship (its macOS golden twins are owed to the M4); localization's render hosts (W3b-2) are laid out below. W3a (localization, text side), W3b-1 (per-locale faces, check-scene keys) and W3c (font fallback chains; the `font-fallback` golden is blessed on the RTX 3090, its macOS twin is owed to the M4) are mechanized.**
 > Driven by Neon Shroud request 0024 (dialogue, subtitles, localization). Game-facing doc: `ludion docs dialogue`.
 
 ## Design decisions
@@ -141,6 +141,19 @@
     (now given the content root) also checks every string of each locale, with placeholders removed, against
     `table_face(None, locale)`'s chain, one warning per (locale, key) at `strings/<doc path>/strings/<key>`; it is skipped
     without a font table `default`.
+44. **`Channel` moves** to `ludion_components::subtitle`, re-exported as `dialogue::Channel`; the serde is unchanged.
+45. **`SubtitleView` is builtin.** It reads `Subtitles`, so it draws only in a game that opts into dialogue. "On by default"
+    (owner ruling) means `visible: true` and `speaker_label: true`: the engine never draws subtitles without an authored
+    `SubtitleView`, because the scene text is the source of truth. A game with its own look reads `Subtitles` and omits it.
+46. **The layout rule.** Each on-air line of the view's `channels` is `"{speaker}: {text}"` wrapped like `UiText`; the rows of
+    every line are stacked oldest first and the last `max_lines` are drawn on one panel anchored with `resolve_ui_rect`. The
+    speaker label is told apart by quad count (wrapping drops only spaces), drawn in the speaker's colour; the rest in the view's.
+    Nothing on air draws nothing, panel included.
+47. **`subtitle_range`** (`world` lines only): the line is left out of `Subtitles` while the listener (the lowest `AudioListener`,
+    else the lowest-id camera, `engine::listener_position`) is farther than the range from the speaker. The line still plays and
+    ages; with no listener it is shown. A value not above 0, or on a non-`world` speaker, is `L1717`.
+48. **The gallery `subtitles` scene:** a discovered bare golden (no dialogue runs, so no panel) and the driven
+    `subtitles-driven` golden (a radio line wrapped to two rows plus a ui line).
 
 
 Validation codes: `L1719` bad channel table or `dialogue_channels` without `dialogue` (build); `L1720` a line's voice does not
@@ -156,9 +169,9 @@ locale without a strings table (warning).
 - **W2a voice (shipped):** `voice:` with default-locale fallback, duration from the WAV length plus `tail_ticks`, radio
   band-pass via `VoiceFilter`, world lines via `push_on`, `AudioQueue::push_voice`, ducking through the voice-bus
   `DuckRule`, suspend to `bus_pause`, `.dialogue_channels(...)`, `L1719`-`L1721`, `L5137`-`L5138`.
-- **W2b, cut in two.** Part 1 (audio): the voice start offset, pause-aware tracking and the restore resume (36-38).
-  Part 2 (subtitles): the built-in `SubtitleView` component and its golden in a new gallery scene (subtitles on by default,
-  per the owner ruling); `subtitle_range` against `AudioListener` (else the lowest-id camera).
+- **W2b, cut in two (mechanized).** Part 1 (audio): the voice start offset, pause-aware tracking and the restore resume (36-38).
+  Part 2 (subtitles; 44-48): the built-in `SubtitleView` component and its goldens in a new gallery scene (subtitles on by
+  default, per the owner ruling); `subtitle_range` against `AudioListener` (else the lowest-id camera).
 - **W3a localization, text side (shipped):** `kind: locales`, the `LocaleState` locale, keyed `UiText`/`Text` with `args`
   and `resolved`, `localization::*`, `L1722`, `L1723`, `L5139`, `L5140`, `ludion docs localization`. Engine-only, no golden.
 - **W3b-1 localization, font side (mechanized):** the `locales:` section (`ludion-scene` parser), `FontLibrary::face(name, locale)`,
@@ -166,7 +179,7 @@ locale without a strings table (warning).
   `L1256`.
 - **W3b-2 localization, render hosts:** strings loaded in bare hosts, `render_scene_with_registry(.., locale)`,
   `ludion render --locale`, and the `localization` gallery scene with `en` and `fr` goldens.
-- **W3c fallback chains (39-43):**
+- **W3c fallback chains (mechanized; 39-43):**
   - A `fonts:` value may be `{ path, fallback: [name, ..] }` (a block list).
   - `ludion-font` lays text out over a face chain in the primary's units, with each fallback advance rounded in (not an lcm),
     so a one-face chain is bit-identical. Kerning applies only within one face, and each glyph carries its face index.
@@ -220,3 +233,8 @@ locale without a strings table (warning).
   attached-voice tracking (`held_buses`), `DialogueLine.voice_file` and the first-update voice resume in `dialogue/queue.rs`,
   `tests/audio.rs`, `tests/dialogue_voice.rs`, the `ludion-audio` offset test, `docs/dialogue.md`, `docs/audio-space.md`. No
   protocol schema, component schema, golden or replay moved; only a world with a voiced line on air hashes differently.
+- W2b part 2 mechanized: `ludion-components/src/subtitle.rs` (`SubtitleView`, `Channel`), `ui/subtitle.rs` (`subtitle_draw`) and
+  one extract block, `LineDef`/`DialogueLine.subtitle_range`, `engine::listener_position`, `tests/dialogue_subtitles.rs`, the
+  gallery `subtitles` scene (`dialogue/subtitles.yaml`, `strings/subtitles-en.yaml`), `docs/dialogue.md`, `docs/components-ui.md`.
+  New Windows goldens blessed on the RTX 3090: `subtitles` (discovered) and `subtitles-driven`. The component schema snapshot is
+  re-blessed. Owed: the macOS twins of both goldens. No protocol schema, replay or existing golden moved.

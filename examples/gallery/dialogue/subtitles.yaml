@@ -1,0 +1,25 @@
+# The `subtitles` scene's speakers and lines (`kind: dialogue`): a radio handler in amber and a ui
+# terminal. The handler's text wraps to two rows in the SubtitleView's default 1100-unit measure.
+format: 1
+kind: dialogue
+speakers:
+  handler:
+    name: subtitles.speaker.handler
+    channel: radio
+    color:
+      - 1.0
+      - 0.72
+      - 0.3
+      - 1.0
+  terminal:
+    name: subtitles.speaker.terminal
+    channel: ui
+lines:
+  handler_brief:
+    speaker: handler
+    text: subtitles.handler_brief
+    duration_ticks: 600
+  terminal_ack:
+    speaker: terminal
+    text: subtitles.terminal_ack
+    duration_ticks: 600

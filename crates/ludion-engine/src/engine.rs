@@ -9470,6 +9470,22 @@ fn audio_listener(world: &mut World) -> Option<ListenerPose> {
     Some(listener_pose(ear, position, rotation))
 }
 
+/// Where the ear is, by the pick [`audio_listener`] makes (the lowest-id [`AudioListener`], else the
+/// lowest-id [`Camera`]), without reporting a duplicate listener.
+pub(crate) fn listener_position(world: &mut World) -> Option<[f32; 3]> {
+    let ear = world
+        .query_ids::<(&AudioListener,)>()
+        .map(|(id, _)| id)
+        .next();
+    match ear {
+        Some(ear) => Some(
+            crate::hierarchy::world_transform(world, ear)
+                .map_or([0.0; 3], |pose| pose.trs.translation),
+        ),
+        None => camera_ear(world).map(|(_, position, _)| position),
+    }
+}
+
 /// The lowest-`EntityId` [`Camera`], its world position and rotation (`None` rotation: no
 /// [`Transform`]), or `None` when the world has no camera.
 fn camera_ear(world: &mut World) -> Option<(EntityId, [f32; 3], Option<[f32; 4]>)> {

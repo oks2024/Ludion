@@ -689,6 +689,63 @@ fn needs_gpu_character_cycle_driven_matches_committed_golden_at_exactly_one() {
     }
 }
 
+/// The `subtitles` scene driven by `common::subtitles_builder` for five ticks: the radio line in amber
+/// and the ui line stand on the `SubtitleView` panel, the first wrapped to two rows. The bare
+/// discovered `subtitles.png` has no dialogue running, so no panel.
+fn subtitles_driven_test() -> GoldenTest {
+    let gallery = gallery_dir();
+    let mut test = GoldenTest::new(
+        gallery.join("subtitles.yaml"),
+        os_goldens().join("subtitles-driven.png"),
+    )
+    .with_builder(common::subtitles_builder)
+    .with_frames(5);
+    test.ssim_threshold = 1.0;
+    test
+}
+
+/// The driven `subtitles` render compares clean against its committed golden at exactly SSIM 1.0.
+/// Under `LUDION_BLESS`, (re)writes the golden instead. Skips gracefully with no GPU adapter.
+#[test]
+fn needs_gpu_subtitles_driven_matches_committed_golden_at_exactly_one() {
+    let test = subtitles_driven_test();
+
+    if bless_requested() {
+        match test.bless() {
+            Ok(GoldenOutcome::Blessed { .. }) => {}
+            Ok(_) => unreachable!("bless() only ever returns Blessed"),
+            Err(diagnostics) if is_skip(&diagnostics) => {
+                eprintln!(
+                    "SKIPPED subtitles_driven_matches_committed_golden_at_exactly_one (bless): {}",
+                    skip_note(&diagnostics)
+                );
+            }
+            Err(diagnostics) => panic!("blessing the subtitles golden failed: {diagnostics:?}"),
+        }
+        return;
+    }
+
+    let out_dir = scratch_dir("subtitles_driven_out");
+    match test.run(&out_dir) {
+        Ok(GoldenOutcome::Passed { report }) => assert_eq!(
+            report.ssim,
+            Some(1.0),
+            "the driven subtitles render must be byte-identical to its freshly-blessed golden"
+        ),
+        Ok(GoldenOutcome::Failed { report, .. }) => {
+            panic!("the driven subtitles golden failed: {}", report.summary)
+        }
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diagnostics) if is_skip(&diagnostics) => {
+            eprintln!(
+                "SKIPPED subtitles_driven_matches_committed_golden_at_exactly_one: {}",
+                skip_note(&diagnostics)
+            );
+        }
+        Err(diagnostics) => panic!("the driven subtitles render failed: {diagnostics:?}"),
+    }
+}
+
 /// The `ragdoll-skin-switch` scene driven by `common::skin_switch_builder` to the first frame after the
 /// switch (the 11 parts spawn on tick index `SWITCH_SKIN_TICK`; `ragdoll_skin_switch.rs` pins it): the
 /// mannequin stands in its rest A-pose, no longer mid-stride. The bare discovered

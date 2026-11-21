@@ -532,3 +532,60 @@ fn the_active_locale_picks_the_face_for_atlas_layout_and_hit_test() {
     assert!(hits(&engine, [right_fr - 1.0, mid_fr]));
     assert!(!hits(&engine, [right_fr + 40.0, mid_fr]));
 }
+
+fn fonts_root(name: &str, fonts_table: &str, en_extra: &str) -> PathBuf {
+    let root = root_with_tables(name);
+    let gallery = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/fonts");
+    for file in [
+        "inter.font.yaml",
+        "inter.png",
+        "silkscreen.font.yaml",
+        "silkscreen.png",
+    ] {
+        std::fs::create_dir_all(root.join("fonts")).unwrap();
+        std::fs::copy(gallery.join(file), root.join("fonts").join(file)).unwrap();
+    }
+    write(&root, "fonts.yaml", fonts_table);
+    write(
+        &root,
+        "strings/extra.yaml",
+        &format!("format: 1\nkind: strings\nlocale: en\nstrings:\n{en_extra}"),
+    );
+    root
+}
+
+fn glyph_warnings(root: &Path) -> Vec<String> {
+    let engine = game(root).build().expect("the tables are valid");
+    engine
+        .doc_validation_warnings()
+        .iter()
+        .filter(|d| d.code == ludion_core::codes::code::FONT_GLYPH_MISSING)
+        .map(|d| d.path.clone().unwrap_or_default())
+        .collect()
+}
+
+const CHAINED_DEFAULT: &str = "format: 1\nkind: fonts\nfonts:\n  body: fonts/inter.font.yaml\n  default:\n    path: fonts/silkscreen.font.yaml\n    fallback:\n      - body\n";
+
+#[test]
+fn a_string_table_is_checked_whole_against_the_default_face_chain() {
+    // The accent is in the fallback; the snowman is in no chain face.
+    let root = fonts_root(
+        "table-glyphs",
+        CHAINED_DEFAULT,
+        "  chain.covered: \"CAF\u{C9}\"\n  chain.missing: \"CAF\u{C9} \u{2603}\"\n",
+    );
+    assert_eq!(
+        glyph_warnings(&root),
+        ["strings/strings/extra.yaml/strings/chain.missing"]
+    );
+}
+
+#[test]
+fn a_font_table_without_a_default_skips_the_whole_table_check() {
+    let root = fonts_root(
+        "table-no-default",
+        "format: 1\nkind: fonts\nfonts:\n  body: fonts/inter.font.yaml\n",
+        "  chain.missing: \"\u{2603}\"\n",
+    );
+    assert!(glyph_warnings(&root).is_empty());
+}

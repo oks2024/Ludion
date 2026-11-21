@@ -47,6 +47,7 @@ use crate::assembly_mesh::AssemblyData;
 use crate::asset_cache::{AssetCache, AssetRefs, SourceFiles};
 use crate::character::CharacterData;
 use crate::components::PoseSnapshot;
+use crate::components::SubtitleView;
 use crate::components::{
     Animation, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
@@ -57,6 +58,7 @@ use crate::components::{
 };
 use crate::components::{AnimationLayer, AnimationLayers, BlendClock, LayerMode, layer_weight_at};
 use crate::components::{ExposureMode, Metering};
+use crate::dialogue::Subtitles;
 use crate::docs::DocStore;
 use crate::extract_observer::{ExtractPhase, SkinCounts};
 use crate::fonts::FontLibrary;
@@ -1124,38 +1126,40 @@ fn extract_inner(
             let text = &*text_motion;
             let face = fonts.face(text.font.as_deref(), locale);
             let quads = ui::ui_text_draw(face, text, viewport);
-            let font = resolve_font(
+            let draws = resolve_faces(
+                FaceSite {
+                    fonts: &fonts,
+                    name: text.font.as_deref(),
+                    locale,
+                    texture_site: TextureSite::Font(index, "UiText"),
+                    outline: text.outline.as_ref(),
+                    size: text.size,
+                    viewport,
+                    key: &crate::diagnostics::offender_key(world, id),
+                },
+                &ui::faces_in(&quads),
                 project_root,
-                placed_font(&fonts, text.font.as_deref(), locale).as_ref(),
-                TextureSite::Font(index, "UiText"),
                 assets,
                 &mut textures,
                 &mut path_index,
                 &mut errors,
-            );
-            let outline = ui::resolve_outline(
-                face,
-                text.font.as_deref().unwrap_or("embedded"),
-                font.map_or(0, |f| f.spread_px),
-                text.outline.as_ref(),
-                text.size,
-                viewport,
-                &crate::diagnostics::offender_key(world, id),
                 degraded,
             );
-            ui_entries.push((
-                text.order,
-                id,
-                UiInstance::Text {
-                    color: text.color,
-                    text: text.shown().to_owned(),
-                    quads,
-                    font,
-                    clip: UiClip::NONE,
-                    outline,
-                    rotation: UiRotation::NONE,
-                },
-            ));
+            for (quads, font, outline) in ui::text_runs(quads, &draws) {
+                ui_entries.push((
+                    text.order,
+                    id,
+                    UiInstance::Text {
+                        color: text.color,
+                        text: text.shown().to_owned(),
+                        quads,
+                        font,
+                        clip: UiClip::NONE,
+                        outline,
+                        rotation: UiRotation::NONE,
+                    },
+                ));
+            }
             let element = ui::hud::HudElement::Text;
             ui::hud::post(
                 &hud,
@@ -1185,23 +1189,23 @@ fn extract_inner(
             if !list.items.is_empty() {
                 let face = fonts.face(list.font.as_deref(), locale);
                 let (layout, lines) = ui::ui_list_draw(face, list, viewport);
-                let font = resolve_font(
+                let draws = resolve_faces(
+                    FaceSite {
+                        fonts: &fonts,
+                        name: list.font.as_deref(),
+                        locale,
+                        texture_site: TextureSite::Font(index, "UiList"),
+                        outline: list.outline.as_ref(),
+                        size: list.size,
+                        viewport,
+                        key: &crate::diagnostics::offender_key(world, id),
+                    },
+                    &ui::faces_in(lines.iter().flat_map(|(_, quads)| quads)),
                     project_root,
-                    placed_font(&fonts, list.font.as_deref(), locale).as_ref(),
-                    TextureSite::Font(index, "UiList"),
                     assets,
                     &mut textures,
                     &mut path_index,
                     &mut errors,
-                );
-                let outline = ui::resolve_outline(
-                    face,
-                    list.font.as_deref().unwrap_or("embedded"),
-                    font.map_or(0, |f| f.spread_px),
-                    list.outline.as_ref(),
-                    list.size,
-                    viewport,
-                    &crate::diagnostics::offender_key(world, id),
                     degraded,
                 );
                 // The background and every line share one `(order, EntityId)` key; the sort below is
@@ -1235,22 +1239,24 @@ fn extract_inner(
                         Some(item) if item == selected => list.selected_color,
                         Some(_) => list.color,
                     };
-                    ui_entries.push((
-                        list.order,
-                        id,
-                        UiInstance::Text {
-                            color,
-                            text: match item {
-                                None => list.title.clone(),
-                                Some(index) => list.items[index].text.clone(),
+                    for (quads, font, outline) in ui::text_runs(quads, &draws) {
+                        ui_entries.push((
+                            list.order,
+                            id,
+                            UiInstance::Text {
+                                color,
+                                text: match item {
+                                    None => list.title.clone(),
+                                    Some(index) => list.items[index].text.clone(),
+                                },
+                                quads,
+                                font,
+                                clip: UiClip::NONE,
+                                outline,
+                                rotation: UiRotation::NONE,
                             },
-                            quads,
-                            font,
-                            clip: UiClip::NONE,
-                            outline,
-                            rotation: UiRotation::NONE,
-                        },
-                    ));
+                        ));
+                    }
                 }
             }
             let element = ui::hud::HudElement::List;
@@ -1279,32 +1285,34 @@ fn extract_inner(
             // An empty wheel draws nothing, as an empty list does.
             if !radial.items.is_empty() {
                 let face = fonts.face(radial.font.as_deref(), locale);
-                let font = resolve_font(
+                let used = ui::faces_for_text(
+                    face,
+                    radial
+                        .items
+                        .iter()
+                        .flat_map(|i| std::iter::once(i.text.as_str()).chain(i.detail.as_deref())),
+                );
+                let draws = resolve_faces(
+                    FaceSite {
+                        fonts: &fonts,
+                        name: radial.font.as_deref(),
+                        locale,
+                        texture_site: TextureSite::Font(index, "UiRadial"),
+                        outline: radial.outline.as_ref(),
+                        size: radial.size,
+                        viewport,
+                        key: &crate::diagnostics::offender_key(world, id),
+                    },
+                    &used,
                     project_root,
-                    placed_font(&fonts, radial.font.as_deref(), locale).as_ref(),
-                    TextureSite::Font(index, "UiRadial"),
                     assets,
                     &mut textures,
                     &mut path_index,
                     &mut errors,
-                );
-                let outline = ui::resolve_outline(
-                    face,
-                    radial.font.as_deref().unwrap_or("embedded"),
-                    font.map_or(0, |f| f.spread_px),
-                    radial.outline.as_ref(),
-                    radial.size,
-                    viewport,
-                    &crate::diagnostics::offender_key(world, id),
                     degraded,
                 );
-                let drawn = ui::radial::radial_draw(
-                    face,
-                    radial,
-                    viewport,
-                    font,
-                    outline,
-                    &mut |item, entry| {
+                let drawn =
+                    ui::radial::radial_draw(face, radial, viewport, &draws, &mut |item, entry| {
                         let atlas = entry.atlas.as_deref()?;
                         resolve_atlas_frame(
                             project_root,
@@ -1317,8 +1325,7 @@ fn extract_inner(
                             &mut path_index,
                             &mut errors,
                         )
-                    },
-                );
+                    });
                 ui_entries.extend(drawn.into_iter().map(|row| (radial.order, id, row)));
             }
             ui::hud::post(
@@ -1337,6 +1344,66 @@ fn extract_inner(
                     degraded: &mut *degraded,
                 },
             );
+        }
+        if let Some(view) = get::<SubtitleView>(world, id)
+            && view.visible
+            && let Some(subtitles) = world.resource::<Subtitles>()
+        {
+            let face = fonts.face(view.font.as_deref(), locale);
+            let drawn = ui::subtitle::subtitle_draw(face, view, subtitles, viewport);
+            let draws = resolve_faces(
+                FaceSite {
+                    fonts: &fonts,
+                    name: view.font.as_deref(),
+                    locale,
+                    texture_site: TextureSite::Font(index, "SubtitleView"),
+                    outline: None,
+                    size: view.size,
+                    viewport,
+                    key: &crate::diagnostics::offender_key(world, id),
+                },
+                &ui::faces_in(drawn.runs.iter().flat_map(|(_, quads)| quads)),
+                project_root,
+                assets,
+                &mut textures,
+                &mut path_index,
+                &mut errors,
+                degraded,
+            );
+            // One `(order, id)` key and a stable sort: the panel, pushed first, stays behind the text.
+            if let Some(rect_px) = drawn.background_px {
+                ui_entries.push((
+                    view.order,
+                    id,
+                    UiInstance::Rect {
+                        rect_px,
+                        texture: None,
+                        color: view.background,
+                        uv: SpriteInstance::FULL_UV,
+                        clip: UiClip::NONE,
+                        view: None,
+                        rotation: UiRotation::NONE,
+                    },
+                ));
+            }
+            for (color, quads) in drawn.runs {
+                let text: String = quads.iter().map(|quad| quad.ch).collect();
+                for (quads, font, outline) in ui::text_runs(quads, &draws) {
+                    ui_entries.push((
+                        view.order,
+                        id,
+                        UiInstance::Text {
+                            color,
+                            text: text.clone(),
+                            quads,
+                            font,
+                            clip: UiClip::NONE,
+                            outline,
+                            rotation: UiRotation::NONE,
+                        },
+                    ));
+                }
+            }
         }
         if let Some(shape) = get::<UiShape>(world, id)
             && shape.visible
@@ -4280,20 +4347,25 @@ pub(crate) fn place_with<'w>(
                 text.size,
                 ludion_font::YAxis::Up,
             );
-            placed.texts.push((
-                id,
-                TextRun {
-                    position: translation,
-                    size: text.size,
-                    color: text.color,
-                    text: text.shown().to_owned(),
-                    quads,
-                    extent: laid.extent(),
-                    font: None,
-                },
-                placed_font(fonts, text.font.as_deref(), locale),
-                index,
-            ));
+            let mut chain = placed_fonts(fonts, text.font.as_deref(), locale);
+            // One run per chain face: the renderer draws one atlas per run.
+            for (quads, _, _) in ui::text_runs(quads, &[]) {
+                let face = quads.first().map_or(0, |q| usize::from(q.face));
+                placed.texts.push((
+                    id,
+                    TextRun {
+                        position: translation,
+                        size: text.size,
+                        color: text.color,
+                        text: text.shown().to_owned(),
+                        quads,
+                        extent: laid.extent(),
+                        font: None,
+                    },
+                    chain.get_mut(face).and_then(Option::take),
+                    index,
+                ));
+            }
         }
     }
 
@@ -5958,21 +6030,87 @@ pub(crate) struct PlacedFont {
     spread_px: u32,
 }
 
-fn placed_font(
+/// One [`PlacedFont`] per chain face, in chain order; `[None]` for the embedded face.
+fn placed_fonts(
     fonts: &FontLibrary,
     name: Option<&str>,
     locale: Option<&str>,
-) -> Option<PlacedFont> {
-    let face = fonts.table_face(name, locale)?;
-    let (doc, image) = fonts.paths(name, locale)?;
-    let atlas = &face.document().atlas;
-    Some(PlacedFont {
-        image: image.to_string(),
-        doc: doc.to_string(),
-        size: [atlas.width, atlas.height],
-        sdf: face.document().mode == FontMode::Sdf,
-        spread_px: atlas.spread_px.unwrap_or(0),
-    })
+) -> Vec<Option<PlacedFont>> {
+    let Some(face) = fonts.table_face(name, locale) else {
+        return vec![None];
+    };
+    fonts
+        .chain_paths(name, locale)
+        .into_iter()
+        .zip(face.chain())
+        .map(|((doc, image), face)| {
+            let atlas = &face.document().atlas;
+            Some(PlacedFont {
+                image: image.to_string(),
+                doc: doc.to_string(),
+                size: [atlas.width, atlas.height],
+                sdf: face.document().mode == FontMode::Sdf,
+                spread_px: atlas.spread_px.unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+/// What [`resolve_faces`] needs to know about one text component.
+struct FaceSite<'a> {
+    fonts: &'a FontLibrary,
+    name: Option<&'a str>,
+    locale: Option<&'a str>,
+    texture_site: TextureSite,
+    outline: Option<&'a crate::components::TextOutline>,
+    size: f32,
+    viewport: (u32, u32),
+    key: &'a str,
+}
+
+/// Resolves the atlas and outline of each chain face in `used`; the rest of the returned vector,
+/// indexed by chain face, stays empty.
+#[allow(clippy::too_many_arguments)]
+fn resolve_faces(
+    site: FaceSite<'_>,
+    used: &[u8],
+    project_root: AssetRoot<'_>,
+    assets: &mut dyn SceneAssets,
+    textures: &mut Vec<Arc<TextureImage>>,
+    path_index: &mut StableMap<String, usize>,
+    errors: &mut Vec<Diagnostic>,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) -> Vec<ui::FaceDraw> {
+    let face = site.fonts.face(site.name, site.locale);
+    let placed = placed_fonts(site.fonts, site.name, site.locale);
+    let mut draws = vec![(None, None); placed.len()];
+    for &k in used {
+        let k = usize::from(k);
+        let Some(chain_face) = face.chain().nth(k) else {
+            continue;
+        };
+        let font = resolve_font(
+            project_root,
+            placed.get(k).and_then(Option::as_ref),
+            site.texture_site,
+            assets,
+            textures,
+            path_index,
+            errors,
+        );
+        let outline = ui::resolve_outline(
+            chain_face,
+            site.name.unwrap_or("embedded"),
+            font.map_or(0, |f| f.spread_px),
+            site.outline,
+            site.size,
+            site.viewport,
+            site.key,
+            degraded,
+        );
+        draws[k] = (font, outline);
+    }
+    draws
 }
 
 /// Resolves a face's atlas image to a [`FontDraw`] through the shared texture dedup. A missing or

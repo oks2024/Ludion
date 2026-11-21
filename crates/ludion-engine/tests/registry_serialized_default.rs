@@ -55,6 +55,17 @@ fn fixtures(name: &str) -> Vec<Value> {
                 "rotation": 15.0,
             }),
         ],
+        "SubtitleView" => vec![
+            json!({}),
+            json!({
+                "anchor": "top_left",
+                "font": "body",
+                "max_lines": 0,
+                "speaker_label": false,
+                "channels": ["radio", "ui"],
+                "visible": false,
+            }),
+        ],
         "SightTarget" => vec![json!({ "class": "c" })],
         "StimulusRecord" => vec![
             json!({ "perceiver": entity_ref(), "sense": "sight", "last_position": [0.0, 0.0, 0.0] }),

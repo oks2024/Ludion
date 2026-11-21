@@ -914,6 +914,7 @@ mod tests {
                     ch: 'A',
                     pos,
                     uv: [0.0; 4],
+                    face: 0,
                 }],
                 font: None,
                 clip: UiClip::NONE,

@@ -1,0 +1,112 @@
+# Feature: font fallback chains — `pixel-latin` is Silkscreen (bitmap, ASCII only) with Inter (SDF)
+# behind it, so a char Silkscreen lacks is drawn from Inter on the same baseline.
+#
+# - A UiText "CAFÉ CRÈME — NOËL" with an outline: the ASCII is pixel-crisp Silkscreen, the accents and
+#   the em dash come from Inter. One draw per face.
+# - A UiList of two accented items, one chain per line.
+# - A world Text "Été".
+format: 1
+name: "font-fallback - a bitmap face with an SDF fallback on UiText, UiList and world Text"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.4
+          - 7.0
+        rotation:
+          - -12.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 12.0
+          - 1.0
+          - 12.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.3
+          - 0.32
+          - 0.36
+          - 1.0
+        roughness: 0.85
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 4.5
+          - 4.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 5.0
+        range: 20.0
+  - name: title
+    components:
+      UiText:
+        anchor: top_left
+        offset:
+          - 24.0
+          - 24.0
+        text: "CAFÉ CRÈME — NOËL"
+        size: 50.0
+        color:
+          - 1.0
+          - 0.85
+          - 0.4
+          - 1.0
+        outline:
+          color:
+            - 0.05
+            - 0.05
+            - 0.1
+            - 1.0
+          width: 2.0
+        font: pixel-latin
+        order: 0
+  - name: menu
+    components:
+      UiList:
+        anchor: top_left
+        offset:
+          - 24.0
+          - 130.0
+        items:
+          - text: "Château"
+          - text: "Hôtel"
+        selected: 0
+        size: 40.0
+        padding: 16.0
+        background:
+          - 0.05
+          - 0.05
+          - 0.08
+          - 0.85
+        font: pixel-latin
+  - name: world-text
+    components:
+      Transform:
+        translation:
+          - -0.6
+          - 0.4
+          - 0.0
+      Text:
+        text: "Été"
+        size: 0.6
+        font: pixel-latin
+        color:
+          - 0.1
+          - 0.12
+          - 0.3
+          - 1.0

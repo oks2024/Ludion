@@ -39,6 +39,14 @@ struct Loaded {
     image_path: String,
 }
 
+/// A base name's chain under one locale: the primary face with its fallbacks attached, and the
+/// root-relative `(document, image)` paths of every chain face, index-aligned with `face.chain()`.
+#[derive(Debug)]
+struct Chained {
+    face: FontFace,
+    paths: Vec<(String, String)>,
+}
+
 #[derive(Debug, Default)]
 struct Inner {
     /// `None` when the root has no `fonts.yaml` — not a fault.
@@ -47,6 +55,9 @@ struct Inner {
     faces: Vec<(String, Result<Loaded, Diagnostic>)>,
     /// A fault in the table itself.
     table_fault: Option<Diagnostic>,
+    /// One entry per base name that has a `fallback` and per locale (`None` for the base table),
+    /// sorted by `(locale, name)`.
+    chains: Vec<((Option<String>, String), Chained)>,
 }
 
 /// The loaded font table of a content root. Cloning is cheap, so a game system can clone it out of
@@ -94,6 +105,7 @@ impl FontLibrary {
                     .into_iter()
                     .map(|path| (path.to_string(), load_face(root, path)))
                     .collect();
+                inner.chains = build_chains(&table, &inner.faces);
                 inner.table = Some(table);
             }
             Err(diagnostics) => {
@@ -130,14 +142,57 @@ impl FontLibrary {
 
     /// The loaded table face `name` resolves to under `locale`, `None` where
     /// [`face`](FontLibrary::face) would fall back to the embedded one.
+    ///
+    /// A name with a `fallback` chain answers the primary face with its fallbacks attached.
     pub(crate) fn table_face(&self, name: Option<&str>, locale: Option<&str>) -> Option<&FontFace> {
-        self.resolved(name, locale).map(|loaded| &loaded.face)
+        let (used, loaded) = self.resolved_entry(name, locale)?;
+        Some(
+            self.chain_of(used, locale)
+                .map_or(&loaded.face, |chained| &chained.face),
+        )
     }
 
     /// The root-relative paths of the document and atlas image `name` resolves to under `locale`.
     pub(crate) fn paths(&self, name: Option<&str>, locale: Option<&str>) -> Option<(&str, &str)> {
         self.resolved(name, locale)
             .map(|loaded| (loaded.doc_path.as_str(), loaded.image_path.as_str()))
+    }
+
+    /// The `(document, image)` paths of every face `name` draws with under `locale`, index-aligned
+    /// with `face(name, locale).chain()`; empty where [`face`](FontLibrary::face) is the embedded one.
+    pub(crate) fn chain_paths(
+        &self,
+        name: Option<&str>,
+        locale: Option<&str>,
+    ) -> Vec<(&str, &str)> {
+        let Some((used, loaded)) = self.resolved_entry(name, locale) else {
+            return Vec::new();
+        };
+        match self.chain_of(used, locale) {
+            Some(chained) => chained
+                .paths
+                .iter()
+                .map(|(d, i)| (d.as_str(), i.as_str()))
+                .collect(),
+            None => vec![(loaded.doc_path.as_str(), loaded.image_path.as_str())],
+        }
+    }
+
+    /// The chain built for the base name `used` (`None` is `default`) under `locale`; a locale the
+    /// table does not list uses the base table's.
+    fn chain_of(&self, used: Option<&str>, locale: Option<&str>) -> Option<&Chained> {
+        if self.inner.chains.is_empty() {
+            return None;
+        }
+        let table = self.inner.table.as_ref()?;
+        let tag = locale.filter(|l| table.locales.iter().any(|(t, _)| t == l));
+        let key = (tag, used.unwrap_or(DEFAULT_NAME));
+        let i = self
+            .inner
+            .chains
+            .binary_search_by(|((l, n), _)| (l.as_deref(), n.as_str()).cmp(&key))
+            .ok()?;
+        Some(&self.inner.chains[i].1)
     }
 
     /// Whether any locale overrides a face, so a lookup needs the active locale at all.
@@ -162,11 +217,24 @@ impl FontLibrary {
     /// What `name` resolves to under `locale`: the locale's override, the base entry, then the same
     /// two for `default`, else `None` (the embedded face).
     fn resolved(&self, name: Option<&str>, locale: Option<&str>) -> Option<&Loaded> {
+        self.resolved_entry(name, locale).map(|(_, loaded)| loaded)
+    }
+
+    /// [`resolved`](FontLibrary::resolved) with the base name that answered (`None` is `default`).
+    fn resolved_entry<'n>(
+        &self,
+        name: Option<&'n str>,
+        locale: Option<&str>,
+    ) -> Option<(Option<&'n str>, &Loaded)> {
         let over = |n: Option<&str>| locale.and_then(|l| self.overridden(l, n));
         over(name)
             .or_else(|| self.loaded(name))
-            .or_else(|| over(None))
-            .or_else(|| self.loaded(None))
+            .map(|loaded| (name, loaded))
+            .or_else(|| {
+                over(None)
+                    .or_else(|| self.loaded(None))
+                    .map(|loaded| (None, loaded))
+            })
     }
 
     /// Whether `key` (a normalized content-root-relative path) is the table or one of its faces,
@@ -235,6 +303,79 @@ impl FontLibrary {
             .filter_map(|(path, loaded)| loaded.as_ref().err().map(|d| (path.as_str(), d)));
         table.chain(faces)
     }
+}
+
+/// The chain of every base name with a `fallback`, for the base table and each `locales:` tag.
+fn build_chains(
+    table: &FontsDocument,
+    faces: &[(String, Result<Loaded, Diagnostic>)],
+) -> Vec<((Option<String>, String), Chained)> {
+    let at_path = |path: &str| {
+        faces
+            .binary_search_by(|(p, _)| p.as_str().cmp(path))
+            .ok()
+            .and_then(|j| faces[j].1.as_ref().ok())
+    };
+    // The face `name` is under `tag`: the locale's override, else the base entry.
+    let face_of = |tag: Option<&str>, name: &str| -> Option<&Loaded> {
+        let over = tag.and_then(|tag| {
+            let (_, overrides) = table.locales.iter().find(|(t, _)| t == tag)?;
+            let i = overrides
+                .binary_search_by(|(n, _)| n.as_str().cmp(name))
+                .ok()?;
+            at_path(&overrides[i].1)
+        });
+        over.or_else(|| {
+            let i = table
+                .fonts
+                .binary_search_by(|(n, _)| n.as_str().cmp(name))
+                .ok()?;
+            at_path(&table.fonts[i].1)
+        })
+    };
+    fn flatten<'t>(table: &'t FontsDocument, name: &str, out: &mut Vec<&'t str>) {
+        if let Some((_, list)) = table.fallbacks.iter().find(|(n, _)| n == name) {
+            for target in list {
+                out.push(target);
+                flatten(table, target, out);
+            }
+        }
+    }
+    let tags = std::iter::once(None).chain(table.locales.iter().map(|(t, _)| Some(t.as_str())));
+    let mut chains = Vec::new();
+    for tag in tags {
+        for (name, _) in &table.fallbacks {
+            let Some(primary) = face_of(tag, name) else {
+                continue;
+            };
+            let mut names = Vec::new();
+            flatten(table, name, &mut names);
+            let mut paths = vec![(primary.doc_path.clone(), primary.image_path.clone())];
+            let mut fallbacks = Vec::new();
+            for target in names {
+                let Some(loaded) = face_of(tag, target) else {
+                    continue;
+                };
+                if paths.iter().any(|(d, _)| *d == loaded.doc_path) {
+                    continue;
+                }
+                paths.push((loaded.doc_path.clone(), loaded.image_path.clone()));
+                fallbacks.push(loaded.face.clone());
+            }
+            if fallbacks.is_empty() {
+                continue;
+            }
+            chains.push((
+                (tag.map(str::to_string), name.clone()),
+                Chained {
+                    face: primary.face.clone().with_fallbacks(fallbacks),
+                    paths,
+                },
+            ));
+        }
+    }
+    chains.sort_by(|a, b| a.0.cmp(&b.0));
+    chains
 }
 
 /// An `L1255` for `file`. A document that fails its checks keeps the first diagnostic's message

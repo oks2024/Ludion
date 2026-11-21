@@ -75,6 +75,9 @@ once per tag.
 measures or hit-tests text asks `FontLibrary::face(name, locale)` with `localization::active_locale(world)`, so the
 layout, the atlas and the hit test agree per locale. A world with no `locales:` overrides resolves exactly as before.
 
+A face with a `fallback` chain is checked whole: `validate_localization_docs` warns `L1256` once per (locale, key)
+whose string has characters that locale's `default` face chain lacks (skipped without a `default` entry).
+
 ## Render hosts
 
 A bare render host (`ludion render`, a `GoldenTest`, a gallery discovery run) has no engine builder, so it loads the

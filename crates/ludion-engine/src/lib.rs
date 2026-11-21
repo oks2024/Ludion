@@ -188,6 +188,7 @@ pub use character::{
 pub use checkpoints::{CheckpointConfig, CheckpointInfo, Checkpoints, RestoreOutcome};
 pub use commands::sim::step_in_batches;
 pub use components::PairedAction;
+pub use components::SubtitleView;
 pub use components::{AimKind, RadialEvent, UiRadial, UiRadialItem, UiRadialNav};
 pub use components::{
     Anchor, Animation, AudioEmitter, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend, DecalMap,

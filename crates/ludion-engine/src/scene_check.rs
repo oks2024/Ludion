@@ -1783,15 +1783,15 @@ fn keyed_text_diagnostics(
 }
 
 /// The face a text is checked against.
-struct GlyphCheck<'a> {
-    face: &'a ludion_font::FontFace,
-    font: Option<&'a str>,
-    locale: Option<&'a str>,
+pub(crate) struct GlyphCheck<'a> {
+    pub(crate) face: &'a ludion_font::FontFace,
+    pub(crate) font: Option<&'a str>,
+    pub(crate) locale: Option<&'a str>,
 }
 
 /// An `L1256` warning at `pointer` when `text` has characters the face lacks; `what` names the
 /// text in the message.
-fn glyph_diagnostic(
+pub(crate) fn glyph_diagnostic(
     library: &crate::FontLibrary,
     check: GlyphCheck<'_>,
     text: &str,
@@ -1802,7 +1802,7 @@ fn glyph_diagnostic(
     let mut missing: Vec<char> = text
         .chars()
         .map(|c| if c == '\t' { ' ' } else { c })
-        .filter(|&c| c != '\n' && c != '\r' && face.glyph(c).is_none())
+        .filter(|&c| c != '\n' && c != '\r' && face.chain().all(|f| f.glyph(c).is_none()))
         .collect();
     missing.sort_unstable();
     missing.dedup();

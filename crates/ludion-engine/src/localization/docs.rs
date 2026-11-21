@@ -165,7 +165,7 @@ fn read_doc<T: serde::de::DeserializeOwned>(
 
 /// `L1711`, `L1716`, `L1718`, `L1722` and `L1723` over every loaded `kind: strings` and
 /// `kind: locales` doc, in store order (a duplicate is reported at the later path).
-pub(crate) fn validate_localization_docs(world: &World) -> Vec<Diagnostic> {
+pub(crate) fn validate_localization_docs(world: &World, root: &Path) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let default = default_locale(world);
     let locales = world.resource::<DocStore<LocalesDoc>>();
@@ -252,6 +252,36 @@ pub(crate) fn validate_localization_docs(world: &World) -> Vec<Diagnostic> {
                     ));
                 }
             }
+        }
+    }
+    out.extend(table_glyph_coverage(&tables, root));
+    out
+}
+
+/// `L1256` once per (locale, key) whose text has characters that locale's `default` face chain
+/// lacks. Nothing without a font table `default`: what a text names is checked where it is used.
+fn table_glyph_coverage(
+    tables: &BTreeMap<&str, BTreeMap<&str, (&str, &str)>>,
+    root: &Path,
+) -> Vec<Diagnostic> {
+    let library = crate::FontLibrary::load(ludion_assets::AssetRoot::content(root));
+    let mut out = Vec::new();
+    for (locale, table) in tables {
+        let Some(face) = library.table_face(None, Some(locale)) else {
+            continue;
+        };
+        for (key, (path, text)) in table {
+            out.extend(crate::scene_check::glyph_diagnostic(
+                &library,
+                crate::scene_check::GlyphCheck {
+                    face,
+                    font: None,
+                    locale: Some(locale),
+                },
+                &super::strings::literals(text),
+                format!("in locale `{locale}`, the string `{key}`"),
+                format!("strings/{path}/strings/{key}"),
+            ));
         }
     }
     out

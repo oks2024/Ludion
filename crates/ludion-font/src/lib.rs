@@ -53,6 +53,7 @@ pub const EMBEDDED_PNG: &[u8] = include_bytes!("../assets/default.png");
 #[derive(Clone, Debug)]
 pub struct FontFace {
     doc: FontDocument,
+    fallbacks: Vec<FontFace>,
 }
 
 impl FontFace {
@@ -63,7 +64,10 @@ impl FontFace {
     pub fn new(doc: FontDocument) -> Result<FontFace, Vec<Diagnostic>> {
         let diagnostics = ludion_scene::validate_font(&doc);
         if diagnostics.is_empty() {
-            Ok(FontFace { doc })
+            Ok(FontFace {
+                doc,
+                fallbacks: Vec::new(),
+            })
         } else {
             Err(diagnostics)
         }
@@ -88,6 +92,59 @@ impl FontFace {
     /// The line height in font units: `ascender − descender + line_gap`.
     pub fn line_units(&self) -> i32 {
         self.doc.ascender - self.doc.descender + self.doc.line_gap
+    }
+
+    /// This face with `fallbacks` behind it: a char the face lacks is laid out, measured and drawn
+    /// with the first fallback that has it. A fallback's own fallbacks are ignored — pass the
+    /// flattened chain.
+    ///
+    /// ```
+    /// use ludion_font::FontFace;
+    ///
+    /// let face = FontFace::embedded().clone().with_fallbacks(vec![FontFace::embedded().clone()]);
+    /// assert_eq!(face.chain().count(), 2);
+    /// ```
+    pub fn with_fallbacks(mut self, fallbacks: Vec<FontFace>) -> FontFace {
+        self.fallbacks = fallbacks;
+        self
+    }
+
+    /// The fallback faces, in chain order (empty for a face with no chain).
+    ///
+    /// ```
+    /// assert!(ludion_font::FontFace::embedded().fallbacks().is_empty());
+    /// ```
+    pub fn fallbacks(&self) -> &[FontFace] {
+        &self.fallbacks
+    }
+
+    /// The chain: this face first, then its fallbacks.
+    ///
+    /// ```
+    /// assert_eq!(ludion_font::FontFace::embedded().chain().count(), 1);
+    /// ```
+    pub fn chain(&self) -> impl Iterator<Item = &FontFace> {
+        std::iter::once(self).chain(self.fallbacks.iter())
+    }
+
+    /// The chain index of the face that draws `ch`: the first whose [`glyph`](FontFace::glyph) is
+    /// `Some`, else 0 (the primary's notdef).
+    ///
+    /// ```
+    /// use ludion_font::FontFace;
+    ///
+    /// let face = FontFace::embedded().clone().with_fallbacks(vec![FontFace::embedded().clone()]);
+    /// assert_eq!(face.face_for('A'), 0); // the primary has it
+    /// assert_eq!(face.face_for('é'), 0); // no face has it: notdef
+    /// ```
+    pub fn face_for(&self, ch: char) -> u8 {
+        if self.fallbacks.is_empty() || self.glyph(ch).is_some() {
+            return 0;
+        }
+        self.fallbacks
+            .iter()
+            .position(|face| face.glyph(ch).is_some())
+            .map_or(0, |i| (i + 1) as u8)
     }
 
     /// The glyph for `ch`, resolving aliases; `None` means the face has none (draw notdef).
