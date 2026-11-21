@@ -80,6 +80,7 @@ A golden suite pins the mode per scene with the `goldens/manifest.json` key `ant
 - **The graph:** `smaa_edges → smaa_weights → smaa_blend` after `composite`, before `resolve`/`upscale`
   and `overlay`. Luma detection at fixed HIGH constants (threshold 0.1); nothing is authorable. UI is
   drawn after, so UI pixels match off.
+- **The LUT** is a step of `composite`, so SMAA sees the graded image (`ludion docs post-processing`).
 - **Chain order:** with SMAA on, composite writes grain 0 and dither 0, and `smaa_blend` applies grain
   then dither: `… vignette → SMAA → grain → dither`. Under a render scale the resample applies them instead, at
   the output size, after the SMAA blend.

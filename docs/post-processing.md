@@ -34,7 +34,7 @@ Most of the stack is branches in one `composite` pass, run in one pinned order:
 
 ```text
 chromatic aberration → depth of field → + bloom + halation + anamorphic → the medium (haze, then beams)
-  → exposure → tonemap → grade → vignette → grain → dither
+  → exposure → tonemap → grade → LUT → vignette → grain → dither
 ```
 
 With SMAA on, the tail is `… vignette → SMAA → grain → dither`: grain and dither move into the AA's
@@ -89,6 +89,20 @@ the reference and records why each default is its number.
 **The grade** — display-referred, applied after the tonemap. Grading has no canonical order, so this one is part of the contract: white balance, then lift/gamma/gain, then contrast,
 then saturation. Each step is skipped by its own comparison, so an all-identity grade is
 byte-identical to no grade.
+
+**The LUT** (step 7a) runs right after the grade and before the vignette, grain and dither. It is
+display-referred too, and its position is the point: it recolours the image the grade finished, and
+never the silhouette, vignette or grain drawn after it.
+
+- **`lut`** — `{ path, strength }` (default none — off, and the gate: the pixels and the frame graph are
+  byte-identical to a scene without it). `path` is a `.cube` 3D table under the content root, size
+  17, 33 or 65, red varying fastest, with optional `DOMAIN_MIN`/`DOMAIN_MAX` or Resolve's
+  `LUT_3D_INPUT_RANGE lo hi`; header keywords come before the first data row. `strength` (`[0, 1]`,
+  default `1.0`) mixes the graded colour in. The table is indexed by the **sRGB-encoded** colour, the
+  space a LUT authored in Resolve or Photoshop on an exported frame describes, and sampled trilinearly.
+  A missing file is `L1101`, a malformed one `L2390`, a 1D table or another size `L2391`; `ludion
+  check-scene` reports all three at `/entities/<i>/components/PostProcess/lut/path`.
+  `PostProcess: { lut: { path: luts/warm.cube, strength: 0.8 } }`.
 
 - **`temperature`** / **`tint`** — white balance, blue↔amber and green↔magenta, both `[-1, 1]`
   (default `0.0`), applied as one luminance-preserving channel scale.

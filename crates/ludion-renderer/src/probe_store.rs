@@ -139,6 +139,8 @@ pub(crate) fn world_key(
         // the capture graph has no composite, and the face scene zeroes the strengths that gate the
         // screen-space chains, so no pass of it reads `post`
         post: _,
+        // the LUT is a composite-only step, like `post`
+        lut: _,
         voxel,
         gi,
         // keyed through the instances that read it, by value rather than by offset

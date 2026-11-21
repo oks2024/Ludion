@@ -1679,6 +1679,19 @@ pub enum TonemapOperator {
     None,
 }
 
+/// A `.cube` 3D LUT applied by [`PostProcess::lut`].
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct PostLut {
+    /// Content-root-relative path of the `.cube` file (sizes 17, 33 or 65).
+    #[schemars(with = "ludion_ecs::AssetPathSchema")]
+    pub path: String,
+    /// How much of the graded colour replaces the original, mixed in the sRGB-encoded domain,
+    /// validated `[0, 1]` (default `1.0`).
+    #[serde(default = "one_f32", skip_serializing_if = "is_one_f32")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub strength: f32,
+}
+
 /// The scene's post-process (imaging) settings. **Opt-in singleton** — the lowest-`EntityId`
 /// `PostProcess` wins (the [`Environment`] / [`DirectionalLight`] precedent), and its **absence is
 /// meaningful**: a scene with no `PostProcess` renders through the engine's hardcoded post defaults
@@ -1708,7 +1721,7 @@ pub enum TonemapOperator {
 /// component's contract:
 ///
 /// **chromatic aberration** (in the scene fetch) → `scene + bloom × bloom_strength + halation + anamorphic` →
-/// **fog** → `exposure` → `tonemap` → **grade** → **vignette** → **grain** → `dither`
+/// **fog** → `exposure` → `tonemap` → **grade** → **LUT (7a)** → **vignette** → **grain** → `dither`
 ///
 /// The split worth knowing is scene-referred against display-referred. Fog is atmospheric
 /// scattering: it happens to the light on its way to the lens, so it blends in linear HDR before any
@@ -1883,7 +1896,7 @@ pub enum TonemapOperator {
 /// never a golden — regenerate it against current code rather than keeping one around.
 /// `examples/gallery/post-full.yaml` authors this whole roster and records, in its header, the sheet
 /// or the measurement behind every number in it.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct PostProcess {
     /// Bloom threshold: the luminance above which a pixel blooms, validated `>= 0` (default `1.0` —
     /// the engine's shipped threshold).
@@ -1985,6 +1998,15 @@ pub struct PostProcess {
     #[serde(default = "one3")]
     #[schemars(extend("x-ui-range" = [0.0, 2.0]))]
     pub gain: [f32; 3],
+    /// Grade step 7a — a `.cube` 3D LUT applied after the grade and before the vignette, grain and
+    /// dither (default none: the step is skipped and the pixels are byte-identical).
+    ///
+    /// `path` is content-root-relative, `strength` `[0, 1]` mixes the graded colour in. The LUT is
+    /// indexed by the **sRGB-encoded** colour, the space a LUT authored in Resolve or Photoshop on an
+    /// exported frame describes. A missing file is `L1101`; a malformed one `L2390`; a 1D table or
+    /// a size other than 17, 33 or 65 is `L2391`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lut: Option<PostLut>,
     /// Fog: **extinction per world unit**, validated `>= 0` (default `0.0` — no fog, and the gate for
     /// the whole fog step).
     ///
@@ -2597,6 +2619,7 @@ impl Default for PostProcess {
             vignette_radius: vignette_radius_default(),
             ssao: 0.0,
             ssao_radius: ssao_radius_default(),
+            lut: None,
             ssao_bias: ssao_bias_default(),
             ssao_direct: 0.0,
             shafts: 0.0,
@@ -9984,6 +10007,10 @@ mod tests {
             lift: [0.0, 0.01, 0.02],
             gamma: [1.2, 1.0, 0.85],
             gain: [1.0, 1.05, 1.1],
+            lut: Some(PostLut {
+                path: "luts/warm.cube".to_string(),
+                strength: 0.5,
+            }),
             fog_density: 0.03,
             fog_color: [0.08, 0.09, 0.14],
             fog_start: 4.0,
@@ -10015,7 +10042,7 @@ mod tests {
             ssr_max_distance: 12.0,
             ssr_thickness: 0.25,
         };
-        let json = serde_json::to_value(post).unwrap();
+        let json = serde_json::to_value(&post).unwrap();
         assert_eq!(json["tonemap"], serde_json::json!("aces"));
         assert_eq!(serde_json::from_value::<PostProcess>(json).unwrap(), post);
         assert_eq!(
@@ -10155,6 +10182,53 @@ mod tests {
                 "expected an L1014 at {pointer}: {diagnostics:?}"
             );
         }
+    }
+
+    /// `lut` is absent by default and costs the scene text nothing; a present one round-trips.
+    #[test]
+    fn the_lut_is_optional_and_unwritten_when_absent() {
+        let post: PostProcess = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(post.lut, None);
+        let text = serde_json::to_value(&post).unwrap();
+        assert!(text.get("lut").is_none(), "{text}");
+        let post: PostProcess =
+            serde_json::from_value(serde_json::json!({ "lut": { "path": "luts/a.cube" } }))
+                .unwrap();
+        assert_eq!(post.lut.as_ref().map(|l| l.strength), Some(1.0));
+        let text = serde_json::to_value(&post).unwrap();
+        assert_eq!(text["lut"], serde_json::json!({ "path": "luts/a.cube" }));
+    }
+
+    /// A LUT strength outside `[0, 1]` is the schema's ordinary `L1014`; the optional's `anyOf` reports it
+    /// at `lut` with the field-level error attached.
+    #[test]
+    fn an_out_of_range_lut_strength_is_l1014() {
+        let registry = builtin_registry();
+        let bad = "format: 1\nentities:\n  - components:\n      PostProcess:\n        lut:\n          \
+                   path: a.cube\n          strength: 1.5\n";
+        let diagnostics = ludion_scene::check(bad, &registry).unwrap_err();
+        assert!(
+            diagnostics
+                .iter()
+                .flat_map(|d| std::iter::once(d).chain(&d.related))
+                .any(|d| {
+                    d.code.as_str() == "L1014"
+                        && d.path.as_deref()
+                            == Some("/entities/0/components/PostProcess/lut/strength")
+                }),
+            "{diagnostics:?}"
+        );
+    }
+
+    /// The LUT path is an asset path, so the watcher and the dependency graph see it.
+    #[test]
+    fn the_lut_path_is_an_asset_path() {
+        let registry = builtin_registry();
+        let paths = registry
+            .get("PostProcess")
+            .expect("registered")
+            .asset_paths();
+        assert!(paths.iter().any(|p| p.as_str() == "/lut/path"), "{paths:?}");
     }
 
     /// An out-of-range triple element passes the schema (each element is a valid number, and
@@ -11603,6 +11677,7 @@ entities:
                 vec!["/legend/*/atlas".into(), "/legend/*/texture".into()],
             ),
             ("UiRect", vec!["/atlas".into(), "/texture".into()]),
+            ("PostProcess", vec!["/lut/path".into()]),
             ("AudioEmitter", vec!["/sound".into()]),
             ("PathFollower", vec!["/path".into()]),
             ("LaneConstraint", vec!["/path".into()]),

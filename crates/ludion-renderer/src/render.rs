@@ -572,6 +572,13 @@ pub struct Renderer {
     /// uniform flag is zero then and the shader takes the branch
     /// (`Plan/post-process-pipeline.md` decision 9).
     fallback_hdr: GpuTexture,
+    /// A persistent 1×1×1 3D [`HDR_FORMAT`] texture bound as the composite's `lut_tex` when the scene
+    /// has no LUT; never sampled (`composite.lut` is zero then).
+    fallback_lut: GpuTexture,
+    /// The scene's uploaded `.cube` LUT, keyed on [`CubeLut::hash`](ludion_assets::cube::CubeLut::hash):
+    /// a different hash replaces it and a scene without a LUT drops it. `RefCell` because the frame
+    /// is recorded through `&self`.
+    lut_cache: RefCell<Option<(u64, GpuTexture)>>,
     /// The cube-array view the reflections pass binds when no probe was captured; never sampled.
     fallback_probe_cubes: wgpu::TextureView,
     meshes: [MeshBuffer; 3],
@@ -755,6 +762,7 @@ impl Renderer {
         let fallback_shadow = depth_1x1(device);
         let fallback_receivers = receivers_1x1(device);
         let fallback_hdr = hdr_1x1(device);
+        let fallback_lut = lut_1x1(device);
         let fallback_probe_cubes = crate::probe_shade::fallback_cubes(device);
 
         let meshes = [
@@ -835,6 +843,8 @@ impl Renderer {
             fallback_shadow,
             fallback_receivers,
             fallback_hdr,
+            fallback_lut,
+            lut_cache: RefCell::new(None),
             fallback_probe_cubes,
             meshes,
             white,
@@ -2415,6 +2425,8 @@ impl Renderer {
         let text_draws = self.build_text_draws(scene, device, &textures);
         let ui_batches = self.build_ui_batches(scene, device, &textures, &view_targets);
 
+        let (lut_view, lut_params) = self.lut_view(scene);
+
         Ok(FrameRecorder {
             r: self,
             size,
@@ -2444,6 +2456,8 @@ impl Renderer {
             scatter_views,
             has_dof: chain.dof,
             has_anamorphic: chain.anamorphic,
+            lut_view,
+            lut_params,
             has_transparent_depth: chain.transparent_depth_scheduled(),
             has_transparent_medium: chain.transparent_medium_scheduled(),
             has_smaa: chain.smaa_scheduled(),
@@ -4067,6 +4081,11 @@ struct FrameRecorder<'a> {
     /// (the chain's `lens_up_0` against the 1×1 fallback), sets its uniform flag, and mirrors the ten
     /// passes' presence.
     has_anamorphic: bool,
+    /// The scene's uploaded `.cube` LUT, or `None` for the 1×1×1 fallback. Set by
+    /// [`Renderer::lut_view`]; the composite's uniform flag mirrors it.
+    lut_view: Option<wgpu::TextureView>,
+    /// The LUT's uniform parameters, present exactly when `lut_view` is.
+    lut_params: Option<LutParams>,
     /// Whether this frame draws the transparent layer ([`PostChain::transparent_depth_scheduled`]).
     /// Picks the composite's optional `transparent_depth_tex` (the layer target against the 1×1
     /// fallback), sets its uniform flag, and mirrors the pass's presence.
@@ -4321,6 +4340,10 @@ impl PassRecorder for FrameRecorder<'_> {
                         .halation_color
                         .map_or([0.0; 3], luma_normalized),
                     halation_custom: u32::from(self.post.halation_color.is_some()),
+                    lut_min: self.lut_params.map_or([0.0; 3], |p| p.min),
+                    lut: u32::from(self.lut_view.is_some()),
+                    lut_scale: self.lut_params.map_or([0.0; 3], |p| p.scale),
+                    lut_strength: self.lut_params.map_or(0.0, |p| p.strength),
                 };
                 // The composite's three optional inputs, each at the binding the WGSL itself declares,
                 // so neither can move the other and turning one off cannot shift the one behind it.
@@ -4365,6 +4388,10 @@ impl PassRecorder for FrameRecorder<'_> {
                         present: self.has_anamorphic,
                         fallback: &self.r.fallback_hdr.view,
                     },
+                    OptionalInput::fixed(
+                        shader_gen::LUT_TEX_BINDING,
+                        self.lut_view.as_ref().unwrap_or(&self.r.fallback_lut.view),
+                    ),
                 ];
                 self.fullscreen_effect(
                     pass,
@@ -7444,6 +7471,126 @@ fn receivers_1x1(device: &wgpu::Device) -> GpuTexture {
     GpuTexture { texture, view }
 }
 
+/// The composite uniform's LUT parameters: the domain minimum, `1 / (max - min)` per channel and the
+/// mix strength.
+#[derive(Clone, Copy)]
+struct LutParams {
+    min: [f32; 3],
+    scale: [f32; 3],
+    strength: f32,
+}
+
+/// The 1×1×1 3D stand-in for the composite's `lut_tex` on a frame without a LUT.
+fn lut_1x1(device: &wgpu::Device) -> GpuTexture {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("ludion fallback lut"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: HDR_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    GpuTexture { texture, view }
+}
+
+/// `v` clamped to `[0, 1]` as IEEE half-float bits, round-to-nearest-even; zero and subnormals
+/// included.
+fn unit_f32_to_f16_bits(v: f32) -> u16 {
+    let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+    let bits = v.to_bits();
+    let exponent = (bits >> 23) as i32 - 127;
+    if exponent < -25 {
+        return 0;
+    }
+    if exponent < -14 {
+        // Subnormal half: the value in units of 2^-24, rounded to nearest even.
+        let units = v * 16_777_216.0;
+        let floor = units.floor();
+        let tie = units - floor == 0.5;
+        let up = units - floor > 0.5 || (tie && (floor as u32) % 2 == 1);
+        return floor as u16 + u16::from(up);
+    }
+    let mantissa = bits & 0x007F_FFFF;
+    let mut half = (((exponent + 15) as u32) << 10) | (mantissa >> 13);
+    let rest = mantissa & 0x1FFF;
+    if rest > 0x1000 || (rest == 0x1000 && half & 1 == 1) {
+        half += 1;
+    }
+    half as u16
+}
+
+impl Renderer {
+    /// The view of the scene's `.cube` LUT as a 3D [`HDR_FORMAT`] texture, uploaded once per content
+    /// hash, plus the composite uniform's parameters. `None` (and the cache dropped) when the scene
+    /// has no LUT.
+    fn lut_view(&self, scene: &RenderScene) -> (Option<wgpu::TextureView>, Option<LutParams>) {
+        let Some(data) = &scene.lut else {
+            *self.lut_cache.borrow_mut() = None;
+            return (None, None);
+        };
+        let lut = &data.lut;
+        let mut cache = self.lut_cache.borrow_mut();
+        if cache.as_ref().is_none_or(|(hash, _)| *hash != lut.hash) {
+            let n = lut.size;
+            let mut texels: Vec<u16> = Vec::with_capacity(lut.rgb.len() * 4);
+            for row in &lut.rgb {
+                texels.extend(row.iter().map(|&c| unit_f32_to_f16_bits(c)));
+                texels.push(0x3C00);
+            }
+            let texture = self.gpu.device().create_texture(&wgpu::TextureDescriptor {
+                label: Some("ludion cube lut"),
+                size: wgpu::Extent3d {
+                    width: n,
+                    height: n,
+                    depth_or_array_layers: n,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format: HDR_FORMAT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            self.gpu.queue().write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(&texels),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(n * 8),
+                    rows_per_image: Some(n),
+                },
+                wgpu::Extent3d {
+                    width: n,
+                    height: n,
+                    depth_or_array_layers: n,
+                },
+            );
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            *cache = Some((lut.hash, GpuTexture { texture, view }));
+        }
+        let view = cache.as_ref().map(|(_, texture)| texture.view.clone());
+        let scale = std::array::from_fn(|c| 1.0 / (lut.domain_max[c] - lut.domain_min[c]));
+        let params = LutParams {
+            min: lut.domain_min,
+            scale,
+            strength: data.strength,
+        };
+        (view, Some(params))
+    }
+}
+
 /// A persistent 1×1 [`HDR_FORMAT`] texture for [`Renderer::fallback_hdr`]: the stand-in bound wherever
 /// a conditional HDR input's producing pass is absent from the graph, so a static layout always has a
 /// valid view. Its contents are undefined and never sampled — every consumer branches on its own
@@ -8598,7 +8745,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::Composite,
         create:
-            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_lens_tex_samp_composite_bgl,
+            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_lens_tex_lut_tex_samp_composite_bgl,
     },
     LayoutDesc {
         id: LayoutId::Resolve,

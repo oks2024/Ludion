@@ -40,6 +40,7 @@ use ludion_core::diagnostics::Diagnostic;
 use xxhash_rust::xxh3::xxh3_64;
 
 pub mod cooked;
+pub mod cube;
 pub mod import_sync;
 pub mod mips;
 pub mod shelf;

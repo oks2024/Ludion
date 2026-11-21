@@ -101,6 +101,7 @@ mod perception_debug;
 pub mod perf_live;
 mod player_profile;
 mod pose_blend;
+mod post_lut;
 mod prefab;
 mod prefab_clips;
 mod prefab_ops;
@@ -310,6 +311,7 @@ pub use perf_live::{
     ProfileSamples, ProfileWindowData,
 };
 pub use player_profile::{Profile, ProfileSaveEntry};
+pub use post_lut::scene_lut_diagnostics;
 pub use prefab::{
     MapSpawn, PrefabInstance, despawn_instance, prepare_map, prepare_prefab, spawn_map,
     spawn_prefab,

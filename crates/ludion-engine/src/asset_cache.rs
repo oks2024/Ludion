@@ -78,6 +78,7 @@ use crate::extract_observer::ExtractObserver;
 use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
 use crate::prefab_clips::{PartRests, PrefabClipData};
 use crate::voxel_mesh::VoxelStaticGrid;
+use ludion_assets::cube::CubeLut;
 
 /// How many extract passes a remembered load failure survives with no other clearer, so a host with
 /// no file watcher still retries within about a second at 60 fps.
@@ -113,6 +114,8 @@ enum AssetKind {
     Character,
     PrefabClips,
     Atlas,
+    /// A `.cube` LUT a `PostProcess` names.
+    Lut,
 }
 
 impl AssetKind {
@@ -127,6 +130,7 @@ impl AssetKind {
             AssetKind::Character => LoadKind::Character,
             AssetKind::PrefabClips => LoadKind::PrefabClips,
             AssetKind::Atlas => LoadKind::Atlas,
+            AssetKind::Lut => LoadKind::Texture,
         }
     }
 
@@ -146,6 +150,7 @@ impl AssetKind {
 pub(crate) struct AssetRefs {
     pub(crate) textures: BTreeSet<String>,
     pub(crate) atlases: BTreeSet<String>,
+    pub(crate) luts: BTreeSet<String>,
     pub(crate) meshes: BTreeSet<String>,
     pub(crate) voxels: BTreeSet<String>,
     pub(crate) sculpts: BTreeSet<String>,
@@ -170,6 +175,7 @@ enum Decoded {
     Character(CharacterData),
     PrefabClips(PrefabClipData),
     Atlas(AtlasAsset),
+    Lut(CubeLut),
 }
 
 /// Runs `kind`'s loader for `rel` with no access to the cache, returning the value and the files it
@@ -251,6 +257,11 @@ fn decode(
             let (asset, sources) = crate::extract::load_atlas_with_sources(project_root, rel)?;
             (Decoded::Atlas(asset), sources)
         }
+        AssetKind::Lut => {
+            let lut = ludion_assets::cube::load_cube(project_root, rel).map_err(|d| vec![d])?;
+            let hash = lut.hash;
+            (Decoded::Lut(lut), vec![(key.to_string(), hash)])
+        }
     })
 }
 
@@ -303,6 +314,7 @@ pub(crate) struct AssetCache {
     /// Extract passes since the memo was last cleared.
     failure_passes: u32,
     atlases: BTreeMap<String, Arc<AtlasAsset>>,
+    luts: BTreeMap<String, Arc<CubeLut>>,
     /// Which cached entries each **source file** feeds, as `(kind, entry key)`: an entry's own
     /// document key maps to itself, and every other file it read (an assembly's part or clip, a
     /// sculpt's voxel or mesh part, a mesh's texture, an atlas's colour map) maps to every entry that
@@ -365,6 +377,7 @@ impl AssetCache {
             failures: BTreeMap::new(),
             failure_passes: 0,
             atlases: BTreeMap::new(),
+            luts: BTreeMap::new(),
             dependents: BTreeMap::new(),
             source_hashes: BTreeMap::new(),
             voxelization: None,
@@ -795,6 +808,25 @@ impl AssetCache {
         Ok(self.atlases.get(&key).expect("just inserted on a miss"))
     }
 
+    /// The `.cube` LUT at `rel`, decoded once and shared; the dependency edge is the file itself.
+    ///
+    /// # Errors
+    /// `L1101`/`L2390`/`L2391` if a *missing* entry cannot be read or parsed; a cached entry never
+    /// errors.
+    pub(crate) fn load_lut(
+        &mut self,
+        project_root: AssetRoot<'_>,
+        rel: &str,
+    ) -> Result<&Arc<CubeLut>, Vec<Diagnostic>> {
+        let key = normalize_key(rel);
+        if !self.luts.contains_key(&key) {
+            self.load_entry(project_root, AssetKind::Lut, rel)?;
+        } else if let Some(observer) = self.observer.as_deref_mut() {
+            observer.reused(AssetKind::Lut.load_kind(), &key);
+        }
+        Ok(self.luts.get(&key).expect("just inserted on a miss"))
+    }
+
     /// Loads the `kind` entry at `rel` from disk, inserts it, and records the files it was read out
     /// of. The one place each kind's loader is named: a miss and a reload both run through it.
     fn load_entry(
@@ -981,6 +1013,7 @@ impl AssetCache {
             Decoded::Character(data) => self.characters.insert(key, Arc::new(data)).is_some(),
             Decoded::PrefabClips(data) => self.prefab_clips.insert(key, Arc::new(data)).is_some(),
             Decoded::Atlas(asset) => self.atlases.insert(key, Arc::new(asset)).is_some(),
+            Decoded::Lut(lut) => self.luts.insert(key, Arc::new(lut)).is_some(),
         };
     }
 
@@ -997,6 +1030,7 @@ impl AssetCache {
             AssetKind::Character => self.characters.contains_key(key),
             AssetKind::PrefabClips => self.prefab_clips.contains_key(key),
             AssetKind::Atlas => self.atlases.contains_key(key),
+            AssetKind::Lut => self.luts.contains_key(key),
         }
     }
 
@@ -1018,6 +1052,7 @@ impl AssetCache {
             AssetKind::Character => self.characters.remove(key).is_some(),
             AssetKind::PrefabClips => self.prefab_clips.remove(key).is_some(),
             AssetKind::Atlas => self.atlases.remove(key).is_some(),
+            AssetKind::Lut => self.luts.remove(key).is_some(),
         };
     }
 
@@ -1088,6 +1123,7 @@ impl AssetCache {
         }
         self.images.retain(|key, _| refs.textures.contains(key));
         self.atlases.retain(|key, _| refs.atlases.contains(key));
+        self.luts.retain(|key, _| refs.luts.contains(key));
         self.voxels.retain(|key, _| refs.voxels.contains(key));
         self.voxel_grids.retain(|key, _| refs.voxels.contains(key));
         self.sculpts.retain(|key, _| refs.sculpts.contains(key));
@@ -1182,8 +1218,9 @@ impl AssetCache {
     pub(crate) fn prefetch(&mut self, project_root: AssetRoot<'_>, refs: &AssetRefs) {
         // Stage 1: everything that is one file-set to one value.
         let mut jobs: Vec<(AssetKind, &str)> = Vec::new();
-        let others: [(AssetKind, &BTreeSet<String>); 6] = [
+        let others: [(AssetKind, &BTreeSet<String>); 7] = [
             (AssetKind::Atlas, &refs.atlases),
+            (AssetKind::Lut, &refs.luts),
             (AssetKind::Voxel, &refs.voxels),
             (AssetKind::Sculpt, &refs.sculpts),
             (AssetKind::Assembly, &refs.assemblies),

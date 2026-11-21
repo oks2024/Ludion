@@ -73,16 +73,18 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
 ### B — `.cube` LUT grading
 
 11. **Field.** `lut: Option<{ path, strength }>`: `path` relative to the content root, `strength` `[0, 1]` (default
-    1.0). A missing or unreadable file is the existing `L1101`.
+    1.0). A missing or unreadable file is the existing `L1101`. `PostProcess` stops being `Copy` (a `String` path); in-tree uses `.clone()`.
 12. **Parser.** In `ludion-assets` (no wgpu type): `TITLE`, `LUT_3D_SIZE` 17, 33 or 65, `DOMAIN_MIN`/`DOMAIN_MAX`,
-    comments, data rows. `L2390` for a malformed header or row (with its line number); `L2391` for `LUT_1D_SIZE` or any
+    `LUT_3D_INPUT_RANGE lo hi` (Resolve's spelling, read as a domain), comments, data rows; header keywords come before
+    the first data row. `L2390` for a malformed header or row (with its line number); `L2391` for `LUT_1D_SIZE` or any
     other size. ASCII and diffable, so the binary-asset objection does not apply.
 13. **Position and domain.** Chain step 7a: after the grade, before the silhouette (7b, a gameplay signal the look must
     not recolour), the vignette, grain and dither. The LUT is indexed by the **sRGB-encoded** colour (encode, sample,
     decode), because that is the space a LUT authored in Resolve or Photoshop on an exported frame describes, so
     `ludion lut apply` on a PNG is the in-engine operation. A 3D `Rgba16Float` texture, trilinear with a half-texel
     inset; tetrahedral interpolation is not built (trigger: a measured banding regression on a 17³ LUT). `strength`
-    mixes in the encoded domain.
+    mixes in the encoded domain. The LUT rides `RenderScene.lut`, renderer-owned, with no graph resource, so
+    `dump-graph` never changes.
 14. **Agent tooling** answers the authoring objection (`Plan/post-process-pipeline.md` "Deferred"): `ludion lut
     identity --size N --out x.cube`; `ludion lut bake --scene s.yaml --out x.cube [--size 33]` bakes the scene's analytic
     grade through a CPU twin of the WGSL grade, drift-pinned textually like `light_model.rs`; `ludion lut apply --lut
@@ -163,7 +165,8 @@ The rest of both ranges is reserved for this plan.
 - **W1 — halation colour and anamorphic streaks** (E, A): the fields, the `lens_*` chain and its two shaders, the
   composite's new optional input, `[post_groups] lens`, `docs/post-processing.md`, gallery
   `examples/gallery/post-film-1982.yaml`. No new code.
-- **W2 — `.cube` LUT** (B): the parser, `lut` field, the 3D input, `L2390`/`L2391`, `ludion lut
+- **W2 — `.cube` LUT** (B), split: **W2a** the parser, `lut` field, asset-cache kind, extract, the composite step 7a,
+  `L2390`/`L2391`; **W2b** the tools. Together: the parser, `lut` field, the 3D input, `L2390`/`L2391`, `ludion lut
   identity|bake|apply|stats` with the grade's CPU twin, a committed `.cube` in the gallery, `docs/post-processing.md`
   and `anti-aliasing.md` (where the LUT sits with SMAA on).
 - **W3 — metered exposure** (C): the fields, `L1760`, the two compute passes, `[post_groups] exposure`, the
@@ -208,3 +211,4 @@ before the silhouette (decision 13); codes renumbered.
 - W1 (`halation_color`, `anamorphic*`, the `lens` group) mechanized on the M5 2026-11-21: absent fields left five gallery
   scenes (with and without SMAA) and their `dump-graph` byte-identical on that machine; the streak's half-length at the
   default `anamorphic_length` measures about 0.30 of the frame width. Goldens and `lens` budgets owed on the pinned machines.
+- W2a (`.cube` parser, `lut` field, the composite step 7a) mechanized on the M5 2026-11-21; goldens owed on the pinned machines.

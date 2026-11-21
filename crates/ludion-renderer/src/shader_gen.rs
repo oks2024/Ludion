@@ -344,8 +344,12 @@ pub struct Composite {
     pub anamorphic: u32,
     pub halation_custom_gain: [f32; 3],
     pub halation_custom: u32,
+    pub lut_min: [f32; 3],
+    pub lut: u32,
+    pub lut_scale: [f32; 3],
+    pub lut_strength: f32,
 }
-const _: () = assert!(core::mem::size_of::<Composite>() == 624);
+const _: () = assert!(core::mem::size_of::<Composite>() == 656);
 const _: () = assert!(core::mem::offset_of!(Composite, strength) == 0);
 const _: () = assert!(core::mem::offset_of!(Composite, exposure) == 4);
 const _: () = assert!(core::mem::offset_of!(Composite, tonemap) == 8);
@@ -390,6 +394,10 @@ const _: () = assert!(core::mem::offset_of!(Composite, anamorphic_gain) == 592);
 const _: () = assert!(core::mem::offset_of!(Composite, anamorphic) == 604);
 const _: () = assert!(core::mem::offset_of!(Composite, halation_custom_gain) == 608);
 const _: () = assert!(core::mem::offset_of!(Composite, halation_custom) == 620);
+const _: () = assert!(core::mem::offset_of!(Composite, lut_min) == 624);
+const _: () = assert!(core::mem::offset_of!(Composite, lut) == 636);
+const _: () = assert!(core::mem::offset_of!(Composite, lut_scale) == 640);
+const _: () = assert!(core::mem::offset_of!(Composite, lut_strength) == 652);
 
 /// WGSL `struct CullBox`.
 ///
@@ -2131,21 +2139,25 @@ pub const LENS_TEX_BINDING: u32 = 10;
 pub const PROBE_LIST_GROUP: u32 = 0;
 pub const PROBE_LIST_BINDING: u32 = 10;
 
+/// `lut_tex` — `@group(0) @binding(11)`, in `composite.wgsl`.
+pub const LUT_TEX_GROUP: u32 = 0;
+pub const LUT_TEX_BINDING: u32 = 11;
+
 /// `probe_mask` — `@group(0) @binding(11)`, in `probe_debug.wgsl`, `reflections.wgsl`.
 pub const PROBE_MASK_GROUP: u32 = 0;
 pub const PROBE_MASK_BINDING: u32 = 11;
 
-/// `samp` — `@group(0) @binding(11)`, in `composite.wgsl`.
-pub const SAMP_GROUP: u32 = 0;
-pub const SAMP_BINDING: u32 = 11;
-
-/// `composite` — `@group(0) @binding(12)`, in `composite.wgsl`.
-pub const COMPOSITE_GROUP: u32 = 0;
-pub const COMPOSITE_BINDING: u32 = 12;
-
 /// `probe_live` — `@group(0) @binding(12)`, in `reflections.wgsl`.
 pub const PROBE_LIVE_GROUP: u32 = 0;
 pub const PROBE_LIVE_BINDING: u32 = 12;
+
+/// `samp` — `@group(0) @binding(12)`, in `composite.wgsl`.
+pub const SAMP_GROUP: u32 = 0;
+pub const SAMP_BINDING: u32 = 12;
+
+/// `composite` — `@group(0) @binding(13)`, in `composite.wgsl`.
+pub const COMPOSITE_GROUP: u32 = 0;
+pub const COMPOSITE_BINDING: u32 = 13;
 
 /// `refl_probe_emissive` — `@group(0) @binding(13)`, in `reflections.wgsl`.
 pub const REFL_PROBE_EMISSIVE_GROUP: u32 = 0;
@@ -4250,12 +4262,12 @@ pub fn create_scatter_gi_scatter_gi_r_scatter_gi_g_scatter_gi_b_bgl(
     })
 }
 
-/// Bind group layout `scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_lens_tex_samp_composite` (@group 0), from `composite.wgsl`.
-pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_lens_tex_samp_composite_bgl(
+/// Bind group layout `scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_lens_tex_lut_tex_samp_composite` (@group 0), from `composite.wgsl`.
+pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_lens_tex_lut_tex_samp_composite_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_lens_tex_samp_composite"),
+        label: Some("scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_lens_tex_lut_tex_samp_composite"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: SCENE_TEX_BINDING,
@@ -4368,6 +4380,16 @@ pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
+                binding: LUT_TEX_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
                 binding: SAMP_BINDING,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
@@ -4379,7 +4401,7 @@ pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(624),
+                    min_binding_size: wgpu::BufferSize::new(656),
                 },
                 count: None,
             },

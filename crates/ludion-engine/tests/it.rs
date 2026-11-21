@@ -116,6 +116,7 @@ mod physics_time_scale;
 mod platform_carry;
 mod player_profile;
 mod player_profile_replay;
+mod post_lut;
 mod prefab_animation;
 mod prefab_despawn_wire;
 mod prefab_edit_wire;

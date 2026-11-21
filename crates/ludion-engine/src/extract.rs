@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use ludion_assets::AssetRoot;
 use ludion_assets::Image;
+use ludion_assets::cube::CubeLut;
 use ludion_core::codes::code;
 use ludion_core::collections::StableMap;
 use ludion_core::diagnostics::{Diagnostic, pointer_token};
@@ -89,6 +90,8 @@ pub(crate) trait SceneAssets {
     /// document and packed colour image. `Arc`-shared like a mesh: a stage is one atlas, so every
     /// quad on screen resolves the same entry.
     fn atlas(&mut self, rel: &str) -> Result<Arc<AtlasAsset>, Vec<Diagnostic>>;
+    /// Resolves a `PostProcess.lut` path to its parsed `.cube` table, `Arc`-shared like an atlas.
+    fn lut(&mut self, rel: &str) -> Result<Arc<CubeLut>, Vec<Diagnostic>>;
     /// Resolves a `Mesh.shape: asset` path to renderer-ready [`MeshData`], `Arc`-shared so a cached
     /// hit is a refcount bump, not a buffer copy (`RenderScene::mesh_assets` holds the same `Arc`).
     fn mesh(&mut self, rel: &str) -> Result<Arc<MeshData>, Vec<Diagnostic>>;
@@ -173,6 +176,9 @@ impl SceneAssets for CachedAssets<'_> {
     }
     fn atlas(&mut self, rel: &str) -> Result<Arc<AtlasAsset>, Vec<Diagnostic>> {
         self.cache.load_atlas(self.root, rel).cloned()
+    }
+    fn lut(&mut self, rel: &str) -> Result<Arc<CubeLut>, Vec<Diagnostic>> {
+        self.cache.load_lut(self.root, rel).cloned()
     }
     fn mesh(&mut self, rel: &str) -> Result<Arc<MeshData>, Vec<Diagnostic>> {
         self.cache.load_mesh(self.root, rel).cloned()
@@ -1783,6 +1789,7 @@ fn extract_inner(
     let probes = extract_probes(world, &ids, &mut poses);
     let sun = extract_sun(world, &ids);
     let post = extract_post(world, &ids);
+    let lut = extract_lut(world, &ids, project_root, assets)?;
     assets.extract_end(ExtractPhase::Lights);
     let mut scene = RenderScene {
         prewarm: Vec::new(),
@@ -1811,6 +1818,7 @@ fn extract_inner(
         sun,
         environment,
         post,
+        lut,
         texts,
         ui,
         voxel,
@@ -2281,6 +2289,44 @@ fn extract_post(world: &World, ids: &[EntityId]) -> Option<PostData> {
         ssr_max_distance: post.ssr_max_distance,
         ssr_thickness: post.ssr_thickness,
     })
+}
+
+/// The `.cube` LUT of the lowest-`EntityId` `PostProcess`, resolved through `assets`. A load failure
+/// is reported at `/entities/{index}/components/PostProcess/lut/path`.
+fn extract_lut(
+    world: &World,
+    ids: &[EntityId],
+    project_root: AssetRoot<'_>,
+    assets: &mut dyn SceneAssets,
+) -> Result<Option<ludion_renderer::LutData>, Vec<Diagnostic>> {
+    let Some((index, post)) = ids
+        .iter()
+        .enumerate()
+        .find_map(|(index, &id)| get::<PostProcess>(world, id).map(|post| (index, post)))
+    else {
+        return Ok(None);
+    };
+    let Some(lut) = &post.lut else {
+        return Ok(None);
+    };
+    let rel = ludion_core::paths::normalize(&lut.path);
+    match assets.lut(&rel) {
+        Ok(table) => Ok(Some(ludion_renderer::LutData {
+            lut: table,
+            strength: lut.strength,
+        })),
+        Err(diagnostics) => Err(diagnostics
+            .into_iter()
+            .map(|base| {
+                let diagnostic =
+                    base.with_path(format!("/entities/{index}/components/PostProcess/lut/path"));
+                match suggest_asset(project_root, &rel) {
+                    Some(name) => diagnostic.append_help(format!("nearest match is `{name}`")),
+                    None => diagnostic,
+                }
+            })
+            .collect()),
+    }
 }
 
 /// Drops the placement tags from the collected point lights, handing the renderer **every** light
@@ -3708,6 +3754,9 @@ impl SceneAssets for RefLoader {
     fn atlas(&mut self, _: &str) -> Result<Arc<AtlasAsset>, Vec<Diagnostic>> {
         Err(Self::unresolved())
     }
+    fn lut(&mut self, _: &str) -> Result<Arc<CubeLut>, Vec<Diagnostic>> {
+        Err(Self::unresolved())
+    }
     fn mesh(&mut self, _: &str) -> Result<Arc<MeshData>, Vec<Diagnostic>> {
         Err(Self::unresolved())
     }
@@ -3772,6 +3821,11 @@ pub(crate) fn asset_refs(world: &World, project_root: AssetRoot<'_>) -> AssetRef
         GameTime::from_ticks(0, TickRate::DEFAULT),
     );
     let mut refs = AssetRefs::default();
+    if let Some(post) = ids.iter().find_map(|&id| get::<PostProcess>(world, id))
+        && let Some(lut) = &post.lut
+    {
+        refs.luts.insert(ludion_core::paths::normalize(&lut.path));
+    }
     for sprite in &placed.sprites {
         match (sprite.atlas, sprite.texture) {
             (Some(atlas), _) => refs.atlases.insert(ludion_core::paths::normalize(atlas)),
@@ -8912,6 +8966,7 @@ mod tests {
                     lift: [0.01, 0.02, 0.03],
                     gamma: [1.1, 1.0, 0.9],
                     gain: [1.05, 1.0, 0.95],
+                    lut: None,
                     fog_density: 0.02,
                     fog_color: [0.1, 0.12, 0.18],
                     fog_start: 6.0,

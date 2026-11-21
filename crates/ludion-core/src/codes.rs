@@ -2308,6 +2308,12 @@ pub mod code {
     /// `L2382` — a `Rain` asks for more streaks than the budget; the per-tile count is clamped.
     pub const RAIN_STREAK_BUDGET: DiagnosticCode = DiagnosticCode::new("L2382");
 
+    /// `L2390` — a `.cube` LUT file is malformed: a bad header, a bad data row or a wrong row count.
+    pub const CUBE_LUT_MALFORMED: DiagnosticCode = DiagnosticCode::new("L2390");
+
+    /// `L2391` — a `.cube` LUT is valid but unsupported: a 1D table or a 3D size other than 17, 33 or 65.
+    pub const CUBE_LUT_UNSUPPORTED: DiagnosticCode = DiagnosticCode::new("L2391");
+
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
     pub const RENDER_GOLDEN_MISSING: DiagnosticCode = DiagnosticCode::new("L2201");
@@ -11310,6 +11316,27 @@ per load by extract and by check-scene.
 Fix: lower `density`, `radius` or the `height` span.",
     },
     CodeEntry {
+        code: code::CUBE_LUT_MALFORMED,
+        severity: Severity::Error,
+        title: "malformed .cube LUT",
+        explanation: "A `.cube` LUT file does not parse; the message names the line. The accepted grammar is: empty
+lines and `#` comments; header keywords before the first data row (`TITLE \"name\"`, `LUT_3D_SIZE n`,
+`DOMAIN_MIN r g b`, `DOMAIN_MAX r g b`, `LUT_3D_INPUT_RANGE lo hi`); then exactly n^3 rows of three finite floats,
+red varying fastest. Also raised for an unknown keyword, a keyword after the first data row, a missing
+`LUT_3D_SIZE`, a domain whose max is not above its min, or a file that is not UTF-8.
+
+Fix: re-export the LUT as a 3D `.cube`, or write one with `ludion lut identity`.",
+    },
+    CodeEntry {
+        code: code::CUBE_LUT_UNSUPPORTED,
+        severity: Severity::Error,
+        title: "unsupported .cube LUT",
+        explanation: "The `.cube` file is well formed but the engine cannot use it: it is a 1D table (`LUT_1D_SIZE`) or its
+`LUT_3D_SIZE` is not 17, 33 or 65.
+
+Fix: re-export the LUT as a 3D table of size 17, 33 or 65.",
+    },
+    CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
         severity: Severity::Error,
         title: "golden image is missing",
@@ -14586,6 +14613,8 @@ mod tests {
         code::RAIN_INVALID,
         code::RAIN_DUPLICATE,
         code::RAIN_STREAK_BUDGET,
+        code::CUBE_LUT_MALFORMED,
+        code::CUBE_LUT_UNSUPPORTED,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,

@@ -18,6 +18,7 @@
 //   5. exposure                     — the camera's own gain
 //   6. tonemap                      — HDR to display
 //   7. grade                        — display-referred (see the grading section below)
+//   7a. LUT                         — display-referred, indexed by the sRGB-encoded colour (decision 13)
 //   7b. silhouette                  — display-referred: an `OccludedSilhouette`'s tint and outline, so
 //                                     it is not fogged, defocused or bloomed, yet is still vignetted
 //                                     and grained like the image it is drawn into
@@ -159,7 +160,11 @@
 // `PostProcess.anamorphic` is above zero; otherwise the recorder binds the 1x1 stand-in and
 // `composite.anamorphic` is zero, so step 2 below never reads it.
 @group(0) @binding(10) var lens_tex: texture_2d<f32>;
-@group(0) @binding(11) var samp: sampler;
+// The `.cube` LUT as a 3D texture (`PostProcess.lut`) — the ninth **optional** input, behind
+// `lens_tex`. It exists when a LUT is authored; otherwise the recorder binds a 1x1x1 stand-in and
+// `composite.lut` is zero, so step 7a never reads it.
+@group(0) @binding(11) var lut_tex: texture_3d<f32>;
+@group(0) @binding(12) var samp: sampler;
 
 // The selector values `Composite.tonemap` carries, one per `PostProcess.tonemap` variant. The
 // shader-bindgen hoists integer consts into `shader_gen`, so the recorder maps its `TonemapOperator`
@@ -304,8 +309,14 @@ struct Composite {
     // when one was authored. Zero keeps the constant stock tint below.
     halation_custom_gain: vec3<f32>,
     halation_custom: u32,
+    // The LUT's input domain minimum and `1 / (domain_max - domain_min)`, both zero when off; `lut` is
+    // nonzero when `lut_tex` is real, `lut_strength` mixes the graded colour in.
+    lut_min: vec3<f32>,
+    lut: u32,
+    lut_scale: vec3<f32>,
+    lut_strength: f32,
 };
-@group(0) @binding(12) var<uniform> composite: Composite;
+@group(0) @binding(13) var<uniform> composite: Composite;
 
 // The extinguished fraction of the same ray with its optical depth scaled by `m`: T^m = exp(-m·τ).
 fn medium_scaled(extinguished: f32, m: f32) -> f32 {
@@ -613,6 +624,19 @@ fn grade(color_in: vec3<f32>) -> vec3<f32> {
         color = apply_saturation(color, composite.saturation);
     }
     return color;
+}
+
+// --- LUT --------------------------------------------------------------------------------------
+//
+// Step 7a: a `.cube` LUT indexed by the sRGB-encoded colour, because that is the space a LUT authored
+// in Resolve or Photoshop on an exported frame describes (encode, sample, decode). The half-texel
+// inset keeps the first and last lattice points at the cube's faces under the linear sampler.
+fn apply_lut(color: vec3<f32>) -> vec3<f32> {
+    let encoded = clamp(linear_to_srgb(color), vec3<f32>(0.0), vec3<f32>(1.0));
+    let unit = clamp((encoded - composite.lut_min) * composite.lut_scale, vec3<f32>(0.0), vec3<f32>(1.0));
+    let n = f32(textureDimensions(lut_tex).x);
+    let graded = textureSampleLevel(lut_tex, samp, (unit * (n - 1.0) + 0.5) / n, 0.0).rgb;
+    return srgb_to_linear(mix(encoded, graded, composite.lut_strength));
 }
 
 // --- Vignette ---------------------------------------------------------------------------------
@@ -964,6 +988,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         hdr = hdr * composite.exposure;
     }
     var color = grade(apply_tonemap(composite.tonemap, hdr));
+    if (composite.lut != 0u) { color = apply_lut(color); }
     if (composite.silhouette.x != 0u) {
         color = apply_silhouette(color, vec2<i32>(in.pos.xy));
     }

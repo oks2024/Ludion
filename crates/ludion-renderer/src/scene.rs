@@ -629,6 +629,16 @@ pub struct EnvironmentData {
     pub ibl_intensity: f32,
 }
 
+/// A parsed `.cube` LUT and how strongly it is applied: the renderer uploads it once per
+/// [`CubeLut::hash`](ludion_assets::cube::CubeLut::hash) as a 3D texture.
+#[derive(Clone, PartialEq, Debug)]
+pub struct LutData {
+    /// The parsed table, `Arc`-shared with the engine's asset cache.
+    pub lut: Arc<ludion_assets::cube::CubeLut>,
+    /// Mix of the graded colour into the original, in the sRGB-encoded domain, `[0, 1]`.
+    pub strength: f32,
+}
+
 /// The scene's post-process (imaging) settings — plain data for the renderer, resolved from the
 /// lowest-`EntityId` `PostProcess` component (`None` for a scene with no `PostProcess`).
 ///
@@ -1829,6 +1839,9 @@ pub struct RenderScene {
     /// with no `PostProcess` — in which case the renderer's own shipped post defaults apply and the
     /// image is byte-identical to the pre-`PostProcess` pipeline.
     pub post: Option<PostData>,
+    /// The `.cube` LUT of the lowest-`EntityId` `PostProcess`, applied in the composite's step 7a.
+    /// `None` skips the step and the image is byte-identical to a scene without one.
+    pub lut: Option<LutData>,
     /// World-space text runs.
     pub texts: Vec<TextRun>,
     /// Resolved screen-space UI elements (rects and text), pre-sorted by `(order, EntityId)` — the
@@ -1902,6 +1915,7 @@ impl RenderScene {
             sun: None,
             environment: None,
             post: None,
+            lut: None,
             texts: Vec::new(),
             ui: Vec::new(),
             voxel: None,

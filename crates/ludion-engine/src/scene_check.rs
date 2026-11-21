@@ -1694,6 +1694,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(joints);
     diagnostics.extend(meshes);
     diagnostics.extend(scene_audio_diagnostics(project_root, scene));
+    diagnostics.extend(crate::post_lut::scene_lut_diagnostics(project_root, scene));
     diagnostics.extend(crate::probe_check::scene_probe_diagnostics(scene));
     diagnostics.extend(crate::static_check::scene_static_diagnostics(
         project_root,
