@@ -212,3 +212,4 @@ before the silhouette (decision 13); codes renumbered.
   scenes (with and without SMAA) and their `dump-graph` byte-identical on that machine; the streak's half-length at the
   default `anamorphic_length` measures about 0.30 of the frame width. Goldens and `lens` budgets owed on the pinned machines.
 - W2a (`.cube` parser, `lut` field, the composite step 7a) mechanized on the M5 2026-11-21; goldens owed on the pinned machines.
+- W2b (`ludion lut identity|bake|apply|stats`, the `grade_model` CPU twin of `grade()`) mechanized on the M5 2026-11-21: a LUT baked from a warm/teal analytic grade renders within 5 output steps (mean 0.05) of the analytic render of the same scene. Scratch scene `post-film-1982-lut` + its `.cube` owed a move into `examples/gallery/` and goldens on the pinned machines.

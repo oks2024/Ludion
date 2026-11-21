@@ -104,6 +104,14 @@ never the silhouette, vignette or grain drawn after it.
   check-scene` reports all three at `/entities/<i>/components/PostProcess/lut/path`.
   `PostProcess: { lut: { path: luts/warm.cube, strength: 0.8 } }`.
 
+  **Authoring a LUT** — `ludion lut` (each verb takes `--json`): `identity --size N --out x.cube` writes
+  a neutral table to grade in Resolve or Photoshop (indexed in sRGB, as above); `bake --scene s.yaml
+  --out x.cube` bakes the scene's analytic grade (white balance, lift/gamma/gain, contrast, saturation);
+  `apply --lut x.cube --image in.png --out out.png [--strength S]` runs the in-engine operation on a
+  still; `stats x.cube` prints the hue, saturation and lightness shift of six colour bands. The LUT
+  runs **after** the analytic grade, so to reproduce a baked grade reset those fields to identity and
+  point `lut` at the bake, or the grade lands twice.
+
 - **`temperature`** / **`tint`** — white balance, blue↔amber and green↔magenta, both `[-1, 1]`
   (default `0.0`), applied as one luminance-preserving channel scale.
 - **`lift`** / **`gamma`** / **`gain`** — the ASC CDL triples, `pow(max(x * gain + lift, 0), 1 /

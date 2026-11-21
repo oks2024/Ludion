@@ -37,9 +37,9 @@ ludion-assets          → core  [crossbeam-channel(watch), ktx2, notify(watch),
 ludion-audio           → assets, core  [cpal, crossbeam-channel, lewton]
 ludion-camera          → core, ecs, scene  [schemars, serde, serde_json]
 ludion-cli             → ludion, assets{watch}, client, cook, core, ecs, engine, font{bake}, gen,
-      import, mesh-edit, protocol, scene, sculpt, server, sim, spatial, sprite, testkit, texgen,
-      window  [clap, crossbeam-channel, serde, serde_json, toml]
-    dev: renderer  [png, tungstenite]
+      import, mesh-edit, protocol, renderer, scene, sculpt, server, sim, spatial, sprite, testkit,
+      texgen, window  [clap, crossbeam-channel, serde, serde_json, toml]
+    dev: (none)  [png, tungstenite]
 ludion-client          → core, protocol  [serde_json, tungstenite]
     dev: engine, server  [qoi]
 ludion-components      → camera, core, ecs, physics, scene, sim, spatial  [schemars, serde,

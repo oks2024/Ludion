@@ -59,6 +59,7 @@ mod generate_atlas;
 mod generate_map;
 mod image_stats;
 mod import;
+mod lut;
 mod map_check;
 mod map_drift;
 mod mesh;
@@ -147,7 +148,7 @@ struct Cli {
     /// the frame path costs in proportion to the pixel count, so this is the one knob that shrinks
     /// readback, encode, socket write, decode and blit at once — `--quality` lowers GPU work only.
     /// **Applied by `serve` alone.** It is resolved before every verb that reads a knob (all but
-    /// `explain`, `docs`, `devdocs`, `image-stats`, `new`, `gen`, `mesh`) so a malformed value
+    /// `explain`, `docs`, `devdocs`, `image-stats`, `new`, `gen`, `mesh`, `lut`) so a malformed value
     /// refuses to start there (`L0017`, the `--threads`/`--quality` posture), but `render` and
     /// `dump-graph` take their extent from their own `--width`/`--height`: a per-machine variable
     /// that silently moved those would move goldens and committed sheets with it. Render-only — no
@@ -1310,6 +1311,28 @@ enum Command {
         #[arg(long, hide = true)]
         render_size: Option<String>,
     },
+    /// Author and inspect the `.cube` 3D LUT that `PostProcess.lut` applies: write an identity
+    /// table, bake a scene's analytic grade into one, run one over a still, and report how it
+    /// shifts six colour bands. Pure CPU, no GPU and no sim; every verb takes `--json`.
+    Lut {
+        /// Which LUT verb to run.
+        #[command(subcommand)]
+        command: LutCommand,
+        /// Shadows the top-level `--threads`/`--quality`/`--render-size` so clap's global
+        /// propagation stops here instead of advertising a paragraph of unusable render knobs on
+        /// every `lut <verb> --help`; a value given anyway is refused (`knob_free`) — the `mesh`
+        /// posture, for the same reason.
+        #[arg(
+            long,
+            hide = true,
+            value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..)
+        )]
+        threads: Option<usize>,
+        #[arg(long, hide = true)]
+        quality: Option<String>,
+        #[arg(long, hide = true)]
+        render_size: Option<String>,
+    },
     /// Procedural textures: build a `kind: texture` recipe into its PBR map set and provenance
     /// sidecar (`build`), validate it and byte-compare the committed set (`check`), or copy an
     /// embedded `std:` recipe out to edit (`vendor`). Maps are generated, write-only output.
@@ -1746,6 +1769,70 @@ enum TextureCommand {
     },
 }
 
+/// The `ludion lut` verbs. Each takes `--json` (exactly one compact JSON object on one stdout line;
+/// diagnostics always render to stderr).
+#[derive(Debug, Subcommand)]
+enum LutCommand {
+    /// Write the identity LUT: a table that leaves every colour unchanged, the starting point to
+    /// grade in an external tool.
+    Identity {
+        /// Lattice points per axis: 17, 33 or 65.
+        #[arg(long, default_value_t = 33)]
+        size: u32,
+        /// The `.cube` file to write.
+        #[arg(long)]
+        out: PathBuf,
+        /// Print one JSON object instead of the default text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Bake a scene's analytic grade (white balance, lift/gamma/gain, contrast, saturation) into a
+    /// `.cube`. The LUT runs after the scene's own grade, so to reproduce the grade reset those
+    /// fields to identity and point `PostProcess.lut` at the baked file.
+    Bake {
+        /// The scene whose `PostProcess` grade is baked.
+        #[arg(long)]
+        scene: PathBuf,
+        /// The `.cube` file to write.
+        #[arg(long)]
+        out: PathBuf,
+        /// Lattice points per axis: 17, 33 or 65.
+        #[arg(long, default_value_t = 33)]
+        size: u32,
+        /// Print one JSON object instead of the default text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a LUT over a PNG still: the in-engine operation (the LUT indexed by the sRGB-encoded
+    /// colour, mixed by `--strength`), alpha kept.
+    Apply {
+        /// The `.cube` file to apply.
+        #[arg(long)]
+        lut: PathBuf,
+        /// The PNG to grade.
+        #[arg(long)]
+        image: PathBuf,
+        /// The PNG to write.
+        #[arg(long)]
+        out: PathBuf,
+        /// Mix of the graded colour into the original, 0 to 1.
+        #[arg(long, default_value_t = 1.0)]
+        strength: f32,
+        /// Print one JSON object instead of the default text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report how a LUT shifts six fixed colour bands (amber, cyan, green, magenta, skin, neutral
+    /// grey): the change in hue, saturation and lightness, in HSL over the encoded sRGB colour.
+    Stats {
+        /// The `.cube` file to measure.
+        lut: PathBuf,
+        /// Print one JSON object instead of the default text.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// The `ludion mesh` texture-editing verbs. Both take `--json` (exactly one compact JSON object on
 /// one stdout line; diagnostics always render to stderr).
 #[derive(Debug, Subcommand)]
@@ -1924,6 +2011,27 @@ fn render_size_was_requested(matches: &clap::ArgMatches) -> bool {
         .any(|name| render.value_source(name) == Some(clap::parser::ValueSource::CommandLine))
 }
 
+/// Runs one `ludion lut` verb.
+fn run_lut(command: &LutCommand) -> std::process::ExitCode {
+    match command {
+        LutCommand::Identity { size, out, json } => lut::run_identity(*size, out, *json),
+        LutCommand::Bake {
+            scene,
+            out,
+            size,
+            json,
+        } => lut::run_bake(scene, out, *size, *json),
+        LutCommand::Apply {
+            lut,
+            image,
+            out,
+            strength,
+            json,
+        } => lut::run_apply(lut, image, out, *strength, *json),
+        LutCommand::Stats { lut, json } => lut::run_stats(lut, *json),
+    }
+}
+
 /// Runs one `ludion mesh` verb.
 fn run_mesh(command: &MeshCommand) -> std::process::ExitCode {
     match command {
@@ -2063,6 +2171,19 @@ fn knob_free(cli: &Cli) -> Option<std::process::ExitCode> {
             };
             refuse_knobs(cli, "mesh", &shadows).unwrap_or_else(|| run_mesh(command))
         }
+        Command::Lut {
+            command,
+            threads,
+            quality,
+            render_size,
+        } => {
+            let shadows = Shadows {
+                threads,
+                quality,
+                render_size,
+            };
+            refuse_knobs(cli, "lut", &shadows).unwrap_or_else(|| run_lut(command))
+        }
         Command::Explain { code } => match code {
             Some(code) => explain::run(code),
             None => explain::list(),
@@ -2158,7 +2279,8 @@ fn main() -> std::process::ExitCode {
         | Command::ImageStats { .. }
         | Command::New { .. }
         | Command::Gen { .. }
-        | Command::Mesh { .. } => {
+        | Command::Mesh { .. }
+        | Command::Lut { .. } => {
             unreachable!("answered by `knob_free` before the knobs resolve")
         }
         Command::CheckScene {

@@ -56,6 +56,9 @@ ludion-import = { path = "../ludion-import", version = "0.1.0" }
 # does not know about.
 ludion-mesh-edit = { path = "../ludion-mesh-edit", version = "0.1.0" }
 ludion-protocol = { path = "../ludion-protocol", version = "0.1.0" }
+# `lut bake` evaluates the grade through the renderer's CPU twin (`grade_model`); the cooked-store test
+# also asks it whether this GPU offers BC7 or ASTC.
+ludion-renderer = { path = "../ludion-renderer", version = "0.1.0" }
 ludion-scene = { path = "../ludion-scene", version = "0.1.0" }
 ludion-server = { path = "../ludion-server", version = "0.1.0" }
 # `check-scene`'s `kind: sculpt` report (grid extent, triangles before/after decimation, the
@@ -82,8 +85,6 @@ serde_json.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
-# The cooked-store test asks the renderer whether this GPU offers BC7 or ASTC before it asserts reads.
-ludion-renderer = { path = "../ludion-renderer", version = "0.1.0" }
 png.workspace = true
 tungstenite.workspace = true
 

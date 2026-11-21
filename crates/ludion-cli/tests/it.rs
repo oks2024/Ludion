@@ -33,6 +33,7 @@ mod image_stats;
 mod import;
 mod import_sprite;
 mod import_unsupported_set;
+mod lut;
 mod map;
 mod map_drift;
 mod map_prefab;

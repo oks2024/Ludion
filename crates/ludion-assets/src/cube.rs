@@ -30,6 +30,72 @@ pub struct CubeLut {
     pub hash: u64,
 }
 
+impl CubeLut {
+    /// The table as `.cube` text: `TITLE` when set, `LUT_3D_SIZE`, `DOMAIN_MIN`/`DOMAIN_MAX` only when
+    /// not the default `0 0 0` / `1 1 1`, then one row per lattice point. Floats print shortest
+    /// round-trip (never fixed precision), so [`parse_cube`] reads back the exact table.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_assets::cube::{identity, parse_cube};
+    /// let lut = identity(17);
+    /// assert_eq!(parse_cube(&lut.to_text(), "id.cube", 0).unwrap().rgb, lut.rgb);
+    /// ```
+    #[must_use]
+    pub fn to_text(&self) -> String {
+        use std::fmt::Write as _;
+        let mut text = String::with_capacity(self.rgb.len() * 24 + 64);
+        if let Some(title) = &self.title {
+            let _ = writeln!(text, "TITLE \"{title}\"");
+        }
+        let _ = writeln!(text, "LUT_3D_SIZE {}", self.size);
+        let [a, b, c] = self.domain_min;
+        if self.domain_min != [0.0; 3] {
+            let _ = writeln!(text, "DOMAIN_MIN {a} {b} {c}");
+        }
+        let [a, b, c] = self.domain_max;
+        if self.domain_max != [1.0; 3] {
+            let _ = writeln!(text, "DOMAIN_MAX {a} {b} {c}");
+        }
+        for [r, g, b] in &self.rgb {
+            let _ = writeln!(text, "{r} {g} {b}");
+        }
+        text
+    }
+
+    /// The LUT's output for an sRGB-encoded colour: the domain remap, a clamp to the table, then
+    /// trilinear interpolation on lattice coordinates `unit · (size − 1)` — what the GPU's linear
+    /// sampler computes with its half-texel inset. A lattice point returns its row exactly.
+    ///
+    /// # Example
+    /// ```
+    /// let lut = ludion_assets::cube::identity(17);
+    /// assert_eq!(lut.sample([0.25, 0.5, 1.0]), [0.25, 0.5, 1.0]);
+    /// ```
+    #[must_use]
+    pub fn sample(&self, encoded: [f32; 3]) -> [f32; 3] {
+        let n = self.size as usize;
+        let mut index = [0usize; 3];
+        let mut frac = [0.0f32; 3];
+        for c in 0..3 {
+            let span = self.domain_max[c] - self.domain_min[c];
+            let unit = ((encoded[c] - self.domain_min[c]) / span).clamp(0.0, 1.0);
+            let coord = unit * (n - 1) as f32;
+            let base = (coord.floor() as usize).min(n - 2);
+            index[c] = base;
+            frac[c] = coord - base as f32;
+        }
+        let row = |r: usize, g: usize, b: usize| self.rgb[r + g * n + b * n * n];
+        let lerp = |a: [f32; 3], b: [f32; 3], t: f32| -> [f32; 3] {
+            std::array::from_fn(|i| a[i] * (1.0 - t) + b[i] * t)
+        };
+        let [r, g, b] = index;
+        let along_r = |g: usize, b: usize| lerp(row(r, g, b), row(r + 1, g, b), frac[0]);
+        let along_g = |b: usize| lerp(along_r(g, b), along_r(g + 1, b), frac[1]);
+        lerp(along_g(b), along_g(b + 1), frac[2])
+    }
+}
+
 fn malformed(label: &str, line: usize, why: impl std::fmt::Display) -> Diagnostic {
     Diagnostic::new(code::CUBE_LUT_MALFORMED, format!("{label}:{line}: {why}")).with_help(
         "a `.cube` file is header keywords (`LUT_3D_SIZE n`, optional `TITLE`, `DOMAIN_MIN`, `DOMAIN_MAX`, \
@@ -358,5 +424,52 @@ mod tests {
         let e = err(&text);
         assert_eq!(e.code.as_str(), "L2390");
         assert!(e.message.starts_with("t.cube:4915:"), "{}", e.message);
+    }
+
+    #[test]
+    fn to_text_round_trips_the_identity_and_a_domain() {
+        let lut = identity(17);
+        let parsed = parse_cube(&lut.to_text(), "t.cube", 0).unwrap();
+        assert_eq!(
+            (
+                parsed.size,
+                &parsed.rgb,
+                parsed.domain_min,
+                parsed.domain_max
+            ),
+            (17, &lut.rgb, [0.0; 3], [1.0; 3])
+        );
+        let mut custom = identity(17);
+        custom.title = Some("warm".into());
+        custom.domain_max = [2.0; 3];
+        let parsed = parse_cube(&custom.to_text(), "t.cube", 0).unwrap();
+        assert_eq!(
+            (parsed.title.as_deref(), parsed.domain_max),
+            (Some("warm"), [2.0; 3])
+        );
+    }
+
+    #[test]
+    fn sample_hits_lattice_rows_and_interpolates() {
+        let mut lut = identity(17);
+        for row in &mut lut.rgb {
+            *row = [row[0] * 0.5, row[1], 1.0 - row[2]];
+        }
+        let n = 17usize;
+        for (r, g, b) in [(0, 0, 0), (3, 5, 7), (16, 16, 16), (16, 0, 9)] {
+            let e = [r, g, b].map(|i| i as f32 / 16.0);
+            assert_eq!(lut.sample(e), lut.rgb[r + g * n + b * n * n]);
+        }
+        let mid = lut.sample([1.0 / 32.0, 0.0, 0.0]);
+        assert_eq!(mid[0], (lut.rgb[0][0] + lut.rgb[1][0]) / 2.0);
+    }
+
+    #[test]
+    fn sample_remaps_the_domain() {
+        let mut lut = identity(17);
+        lut.domain_min = [0.0; 3];
+        lut.domain_max = [2.0; 3];
+        assert_eq!(lut.sample([1.0, 1.0, 1.0]), [0.5; 3]);
+        assert_eq!(lut.sample([5.0, 5.0, 5.0]), [1.0; 3]);
     }
 }

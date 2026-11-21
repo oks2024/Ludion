@@ -56,6 +56,7 @@ mod gi_bake;
 mod gi_bin;
 mod gi_inject;
 mod gpu_cull;
+pub mod grade_model;
 pub mod graph;
 mod ibl;
 mod layers;
